@@ -8,6 +8,7 @@
 //! trips at Roaring's array/bitmap threshold.
 
 use super::cells::{self, Key};
+use crate::address::ShortcodeId;
 use super::stored::{self, State};
 use super::tests_ready::{done, new_ticket, random_write, rows, Rng, Tally};
 use super::*;
@@ -45,7 +46,7 @@ fn by_ticket(stored: &cells::Stored) -> BTreeMap<OrderKey, Key> {
     for ((epic, cell, hi), (card, raw)) in &stored.bits {
         let lows = cells::decode(*card, raw).unwrap();
         for low in lows {
-            let key = OrderKey { epic: epic.clone(), seq: (hi << 16) | u32::from(low) };
+            let key = OrderKey { shortcode: ShortcodeId::from(epic.clone()), seq: (hi << 16) | u32::from(low) };
             assert!(out.insert(key.clone(), stored.keys[cell]).is_none(), "{key:?} is stored in two cells");
         }
     }
@@ -95,7 +96,7 @@ fn announced(rx: &mut broadcast::Receiver<Change>, store: &Store) -> BTreeSet<(O
         match rx.try_recv() {
             Ok(Change::CellsMoved { moves }) => {
                 for mv in &moves.moves {
-                    let key = OrderKey { epic: mv.epic.to_string(), seq: mv.seq };
+                    let key = OrderKey { shortcode: ShortcodeId::from(mv.shortcode.clone()), seq: mv.seq };
                     assert!(
                         out.insert((key.clone(), mv.from.map(|c| keys[c as usize]), keys[mv.to as usize])),
                         "{key:?} moved twice in one write"
@@ -167,7 +168,7 @@ async fn the_cells_are_a_scan_on_a_seeded_store() {
     let store = Store::open(&path).unwrap();
     store.seed_synthetic(SeedSpec { count: 1_500, seed: 44, into_existing: false }).unwrap();
     assert_cells_are_a_scan(&store, Some(&path), "a seed");
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     let store = walk(store, &path, 0x5EED_F404, 200, &epics).await;
     store.seed_synthetic(SeedSpec { count: 700, seed: 9, into_existing: true }).unwrap();
@@ -186,7 +187,7 @@ async fn the_cells_are_a_scan_on_each_fixture() {
         std::fs::copy(format!("{fixtures}/{name}"), &path).unwrap();
         let store = Store::open(&path).unwrap();
         assert_cells_are_a_scan(&store, Some(&path), &format!("the first open of {name}"));
-        let mut epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+        let mut epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
         epics.push("NEW".into());
         let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
         walk(store, &path, 0xF1C5 + i as u64, 120, &epics).await;
@@ -204,7 +205,7 @@ async fn exactly_the_writes_that_change_a_cell_move_one() {
     let store = Store::open(&path).unwrap();
     let mut rx = store.subscribe_filtered();
     let ids = |set: &BTreeSet<(OrderKey, Option<Key>, Key)>| -> Vec<String> {
-        set.iter().map(|(k, _, _)| format!("{}-{}", k.epic, k.seq)).collect()
+        set.iter().map(|(k, _, _)| format!("{}-{}", k.shortcode, k.seq)).collect()
     };
     let key = |status, blocked, commits| Some(Key::new(status, Kind::Build, None, blocked, commits, false));
 
@@ -229,7 +230,7 @@ async fn exactly_the_writes_that_change_a_cell_move_one() {
     // A status change of the ticket itself.
     store.set_status("MV-3", Status::Ready).await.unwrap();
     let moved = announced(&mut rx, &store);
-    assert_eq!(moved.into_iter().collect::<Vec<_>>(), [(OrderKey { epic: "MV".into(), seq: 3 }, key(Status::Pending, true, false), key(Status::Ready, true, false).unwrap())]);
+    assert_eq!(moved.into_iter().collect::<Vec<_>>(), [(OrderKey { shortcode: ShortcodeId::from("MV"), seq: 3 }, key(Status::Pending, true, false), key(Status::Ready, true, false).unwrap())]);
     // To itself: a write, and no move.
     store.set_status("MV-3", Status::Ready).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "a status set to itself moves no cell");
@@ -300,9 +301,9 @@ async fn asking_and_labels_move_a_tickets_cell() {
     let store = Store::open(&path).unwrap();
     store.create(new_ticket("AS", Kind::Scope, None, vec![])).await.unwrap();
     let mut rx = store.subscribe_filtered();
-    let ids = |moves: &BTreeSet<(OrderKey, Option<Key>, Key)>| moves.iter().map(|(k, _, _)| format!("{}-{}", k.epic, k.seq)).collect::<Vec<_>>();
+    let ids = |moves: &BTreeSet<(OrderKey, Option<Key>, Key)>| moves.iter().map(|(k, _, _)| format!("{}-{}", k.shortcode, k.seq)).collect::<Vec<_>>();
     let text = |id: &str| format!("<m-input id=\"{id}\" kind=\"text\"><m-question>Anything?</m-question></m-input>\n");
-    let asking = |store: &Store, id: &str| store.tickets.read().unwrap().cells.cell_of(&OrderKey { epic: "AS".into(), seq: id[3..].parse().unwrap() }).unwrap().asking();
+    let asking = |store: &Store, id: &str| store.tickets.read().unwrap().cells.cell_of(&OrderKey { shortcode: ShortcodeId::from("AS"), seq: id[3..].parse().unwrap() }).unwrap().asking();
 
     // Born asking.
     let new = NewTicket { body: text("q"), ..new_ticket("AS", Kind::Build, None, vec![]) };
@@ -388,14 +389,14 @@ async fn asking_and_labels_move_a_tickets_cell() {
     )
     .unwrap();
     drop(conn);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 9; this build reads 10")));
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 9; this build reads 11")));
     let store = Store::open(&path).unwrap();
     assert!(asking(&store, "AS-2"));
     assert_cells_are_a_scan(&store, Some(&path), "the first open of a form-9 file");
     drop(store);
     let conn = Connection::open(&path).unwrap();
     assert!(db::has_column(&conn, "cells", "asking").unwrap() && db::has_column(&conn, "cells", "labels").unwrap());
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 10);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 11);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 4, .. }));
 }
@@ -424,9 +425,9 @@ async fn a_crossing_past_the_threshold_carries_the_counts_it_leaves() {
     }
     let counts = counts.expect("past the threshold, the counts ride with the moves");
     let kept = store.tickets.read().unwrap().cells.stored().counts;
-    let want: BTreeMap<String, Vec<(u32, u64)>> = ["FAN", "OTHER"]
+    let want: BTreeMap<ShortcodeId, Vec<(u32, u64)>> = ["FAN", "OTHER"]
         .into_iter()
-        .map(|e| (e.to_string(), kept.iter().filter(|((epic, _), _)| epic == e).map(|((_, c), n)| (*c, *n)).collect()))
+        .map(|e| (ShortcodeId::from(e), kept.iter().filter(|((epic, _), _)| epic == e).map(|((_, c), n)| (*c, *n)).collect()))
         .collect();
     assert_eq!(counts, want, "every count of each shortcode moved, as the write left it");
     store.set_status(&hub, Status::Ready).await.unwrap();
@@ -473,7 +474,7 @@ async fn a_file_in_form_3_gains_the_cells_once_on_first_open() {
         })
         .unwrap();
     let lows = cells::decode(card, &raw).unwrap();
-    let gone = OrderKey { epic: epic.clone(), seq: (hi << 16) | u32::from(lows[0]) };
+    let gone = OrderKey { shortcode: ShortcodeId::from(epic.clone()), seq: (hi << 16) | u32::from(lows[0]) };
     Connection::open(&path)
         .unwrap()
         .execute(
@@ -512,7 +513,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
                 let lens = Lens::parse(text).unwrap();
                 let q = Filtered { lens: lens.clone(), epic: None, status: None, parent: None, keep: None };
                 let page = store.filtered_page(&q, None, Some(3), Some(50)).unwrap();
-                (store.counts(&lens), page.tickets.into_iter().map(|t| t.id).collect())
+                (store.counts_text(&lens), page.tickets.into_iter().map(|t| t.id).collect())
             })
             .collect()
     };
@@ -559,7 +560,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 606, .. }));
     let conn = Connection::open(&path).unwrap();
     assert!(db::has_column(&conn, "cells", "menger").unwrap());
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 10, "MENGER-12: built to form 10");
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 11, "ORG-3: built to form 11");
     drop(conn);
     let store = Store::open(&path).unwrap();
     assert_eq!(answers(&store), before, "the next open reads what the first stored");

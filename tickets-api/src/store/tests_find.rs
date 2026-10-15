@@ -47,6 +47,8 @@ fn write_titled(path: &Path, rows: &[(&str, &str)]) {
                 labels: Vec::new(),
                 id: id.to_string(),
                 epic: epic.into(),
+                shortcode: epic.into(),
+                address: String::new(),
                 seq: seq.parse().unwrap(),
                 title: title.to_string(),
                 status: Status::Pending,

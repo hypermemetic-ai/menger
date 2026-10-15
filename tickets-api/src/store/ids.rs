@@ -1,5 +1,6 @@
 use super::stored::{Changes, RefKey, RunRow};
 use super::{OrderKey, Row, Rows};
+use crate::address::ShortcodeId;
 use std::collections::{BTreeMap, HashMap};
 
 pub(super) struct Ids {
@@ -9,7 +10,7 @@ pub(super) struct Ids {
     /// SCALE-19: kept as the shortcode's [`Run`], which says beside it how
     /// many tickets the shortcode holds — whether the sequence alone
     /// describes it.
-    runs: BTreeMap<String, Run>,
+    runs: BTreeMap<ShortcodeId, Run>,
     /// The dangling forward references, kept from the end they name: an
     /// id that some ticket's `blocked_by` names and that is no ticket yet
     /// → those tickets, in the store's order. An entry leaves when its id
@@ -69,13 +70,13 @@ impl Ids {
         let mut next = rows.order.keys().next();
         while let Some(first) = next {
             let end = OrderKey {
-                epic: first.epic.clone(),
+                shortcode: first.shortcode.clone(),
                 seq: u32::MAX,
             };
             let run = || rows.order.range::<OrderKey, _>((Included(first), Included(&end)));
             let (last, _) = run().next_back().expect("the run holds its own first key");
             ids.runs.insert(
-                end.epic.clone(),
+                end.shortcode.clone(),
                 Run {
                     first: first.seq,
                     last: last.seq,
@@ -96,7 +97,7 @@ impl Ids {
 
     /// The sequence `epic`'s next ticket gets: 1 for a shortcode that
     /// holds none.
-    pub(super) fn next_seq(&self, epic: &str) -> u32 {
+    pub(super) fn next_seq(&self, epic: &ShortcodeId) -> u32 {
         self.runs.get(epic).map_or(1, |run| run.last + 1)
     }
 
@@ -111,13 +112,13 @@ impl Ids {
 
     /// Every shortcode that holds a ticket, with its highest sequence, in
     /// shortcode order.
-    pub(super) fn last_seqs(&self) -> impl Iterator<Item = (&str, u32)> {
-        self.runs.iter().map(|(epic, run)| (epic.as_str(), run.last))
+    pub(super) fn last_seqs(&self) -> impl Iterator<Item = (&ShortcodeId, u32)> {
+        self.runs.iter().map(|(epic, run)| (epic, run.last))
     }
 
     /// SCALE-19: how many tickets `epic` holds — 0 for a shortcode that
     /// holds none.
-    pub(super) fn held(&self, epic: &str) -> u64 {
+    pub(super) fn held(&self, epic: &ShortcodeId) -> u64 {
         self.runs.get(epic).map_or(0, |run| run.held)
     }
 
@@ -125,10 +126,10 @@ impl Ids {
     /// together — the whole runs past it in the store's order. A step per
     /// shortcode, whatever each holds, and exact whether or not a run is
     /// dense: `held` is a count, not a sequence.
-    pub(super) fn held_after(&self, epic: &str) -> u64 {
+    pub(super) fn held_after(&self, epic: &ShortcodeId) -> u64 {
         use std::ops::Bound::{Excluded, Unbounded};
         self.runs
-            .range::<str, _>((Excluded(epic), Unbounded))
+            .range::<ShortcodeId, _>((Excluded(epic), Unbounded))
             .map(|(_, run)| run.held)
             .sum()
     }
@@ -138,7 +139,7 @@ impl Ids {
     /// the count. `None` when it is not: the sequence no longer says, and
     /// the caller counts.
     pub(super) fn after_in_run(&self, key: &OrderKey) -> Option<u64> {
-        let run = self.runs.get(&key.epic).filter(|run| run.dense())?;
+        let run = self.runs.get(&key.shortcode).filter(|run| run.dense())?;
         Some(u64::from(run.last.saturating_sub(key.seq)))
     }
 
@@ -159,7 +160,7 @@ impl Ids {
     /// ([`Birth::store`]) and what the cache becomes are one value, not two
     /// computations that could disagree.
     pub(super) fn birth(&self, rows: Rows<'_>, t: &Row) -> Birth {
-        let run = match self.runs.get(&t.epic) {
+        let run = match self.runs.get(&t.shortcode) {
             Some(run) => Run {
                 first: run.first.min(t.seq),
                 last: run.last.max(t.seq),
@@ -179,7 +180,7 @@ impl Ids {
             }
         }
         Birth {
-            epic: t.epic.clone(),
+            epic: t.shortcode.clone(),
             run,
             id: t.id.clone(),
             resolves: self.unborn.contains_key(&t.id),
@@ -231,7 +232,7 @@ impl Ids {
     }
 
     /// SCALE-28: from what is stored — at start, instead of [`Self::build`].
-    pub(super) fn from_stored(runs: BTreeMap<String, RunRow>, refs: BTreeMap<RefKey, String>) -> Self {
+    pub(super) fn from_stored(runs: BTreeMap<ShortcodeId, RunRow>, refs: BTreeMap<RefKey, String>) -> Self {
         let mut unborn: HashMap<String, BTreeMap<OrderKey, String>> = HashMap::new();
         for ((id, key), referrer) in refs {
             unborn.entry(id).or_default().insert(key, referrer);
@@ -247,7 +248,7 @@ impl Ids {
 
     /// SCALE-28: as stored — each shortcode's run, and each dangling forward
     /// reference keyed by the id it names and the naming ticket's position.
-    pub(super) fn stored(&self) -> (BTreeMap<String, RunRow>, BTreeMap<RefKey, String>) {
+    pub(super) fn stored(&self) -> (BTreeMap<ShortcodeId, RunRow>, BTreeMap<RefKey, String>) {
         let runs = self
             .runs
             .iter()
@@ -291,7 +292,7 @@ impl Ids {
     /// Every shortcode's run as `(lowest sequence, highest, how many it
     /// holds, dense)` — for the tests' comparison with a scan (SCALE-19).
     #[cfg(test)]
-    pub(super) fn runs(&self) -> BTreeMap<String, (u32, u32, u64, bool)> {
+    pub(super) fn runs(&self) -> BTreeMap<ShortcodeId, (u32, u32, u64, bool)> {
         self.runs
             .iter()
             .map(|(epic, run)| (epic.clone(), (run.first, run.last, run.held, run.dense())))
@@ -303,7 +304,7 @@ impl Ids {
 /// newborn's shortcode's run as it will stand, whether references to its id
 /// leave, and the ones it makes.
 pub(super) struct Birth {
-    epic: String,
+    epic: ShortcodeId,
     run: Run,
     id: String,
     /// Some ticket named the newborn's id before it existed.

@@ -1300,7 +1300,7 @@ pub(super) fn nav(store: &Store) -> Vec<Group> {
         .iter()
         .map(|t| Facts {
             id: t.id.clone(),
-            epic: t.epic.clone(),
+            epic: t.epic.to_string(),
             seq: t.seq,
             kind: t.kind.to_string(),
             parent: t.parent.clone(),
@@ -1314,7 +1314,10 @@ pub(super) fn nav(store: &Store) -> Vec<Group> {
     nav_plan::rows(&facts, &complete)
         .into_iter()
         .map(|r| Group {
-            epic: r.epic,
+            epic: r.epic.as_str().into(),
+            shortcode: r.epic.as_str().into(),
+            // ORG-3: the registry's — held to the rule in tests_shortcodes.
+            address: store.shortcode_named_by(&ShortcodeId::new(&r.epic)).1,
             total: r.total,
             done: r.done,
             docs: r.docs,
@@ -1331,10 +1334,18 @@ pub(super) fn nav(store: &Store) -> Vec<Group> {
         .collect()
 }
 
+/// ORG-3: a row as the file holds it — no address (the registry gives one),
+/// its letters its shortcode's id.
+pub(super) fn undressed(r: &Row) -> Row {
+    Row { address: String::new(), epic: crate::address::Code::stored(r.shortcode.as_str()), ..r.clone() }
+}
+
 /// AGS-23: groups as the literal fixtures below spell them — counts, root
 /// and host; the root's row is held to the oracle (`nav`) instead.
+///
+/// ORG-3: and without their full addresses, which the registry gives.
 fn bare(groups: Vec<Group>) -> Vec<Group> {
-    groups.into_iter().map(|g| Group { root_row: None, ..g }).collect()
+    groups.into_iter().map(|g| Group { root_row: None, address: String::new(), ..g }).collect()
 }
 
 /// Every `GroupChanged` waiting on `rx`, in the order sent (the ticket
@@ -1365,13 +1376,15 @@ fn moved(before: &[Group], after: &[Group]) -> Vec<Group> {
             });
         }
     }
-    out.sort_by(|a, b| a.epic.cmp(&b.epic));
+    out.sort_by(|a, b| a.epic.as_str().cmp(b.epic.as_str()));
     out
 }
 
 fn group(epic: &str, total: u64, done: u64, root: &str, host: Option<&str>) -> Group {
     Group {
         epic: epic.into(),
+        shortcode: epic.into(),
+        address: String::new(),
         total,
         done,
         docs: 0,
@@ -1504,13 +1517,13 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     // Superseded is not done (the nav's rule): back out the same way.
     store.set_status("WIRE-2", Status::Superseded).await.unwrap();
     let done: Vec<(String, u64)> =
-        group_changes(&mut rx).into_iter().map(|g| (g.epic, g.done)).collect();
+        group_changes(&mut rx).into_iter().map(|g| (g.epic.to_string(), g.done)).collect();
     assert_eq!(done, [("WIRE".into(), 0), ("TRAN".into(), 0), ("PLEX".into(), 0)]);
 
     // A birth deep inside counts in every row around it.
     store.create(new_ticket("WIRE", "more")).await.unwrap(); // WIRE-3
     let totals: Vec<(String, u64)> =
-        group_changes(&mut rx).into_iter().map(|g| (g.epic, g.total)).collect();
+        group_changes(&mut rx).into_iter().map(|g| (g.epic.to_string(), g.total)).collect();
     assert_eq!(totals, [("WIRE".into(), 3), ("TRAN".into(), 6), ("PLEX".into(), 8)]);
     assert_eq!(store.groups(), nav(&store));
 
@@ -1545,8 +1558,9 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
         ]
     );
     assert_eq!(store.groups(), nav(&store));
-    let epics: Vec<String> = group_changes(&mut rx).into_iter().map(|g| g.epic).collect();
-    assert_eq!(epics, ["SOLO", "PLEX"], "WIRE's own row did not move");
+    let epics: Vec<String> = group_changes(&mut rx).into_iter().map(|g| g.epic.to_string()).collect();
+    // ORG-3: WIRE's counts did not move, its address did — PLEX/SOLO/WIRE.
+    assert_eq!(epics, ["SOLO", "PLEX", "WIRE"], "WIRE's row moved by its address alone");
 }
 
 /// AGS-23: the nav draws a shortcode as its root's row, from `groups {}`
@@ -1628,6 +1642,8 @@ pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)])
                 labels: Vec::new(),
                 id: id.to_string(),
                 epic: epic.into(),
+                shortcode: epic.into(),
+                address: String::new(),
                 seq: seq.parse().unwrap(),
                 title: id.to_string(),
                 status: *status,
@@ -1756,7 +1772,7 @@ async fn hand_edited_shapes_roll_up_as_drawn_and_their_repair_rebuilds() {
         "innermost first"
     );
     let mut got = got;
-    got.sort_by(|a, b| a.epic.cmp(&b.epic));
+    got.sort_by(|a, b| a.epic.as_str().cmp(b.epic.as_str()));
     assert_eq!(got, moved(&before, &after));
 
     // The ghost is born: ORPH-2 now hangs under it, in GHOST's row.
@@ -1769,7 +1785,7 @@ async fn hand_edited_shapes_roll_up_as_drawn_and_their_repair_rebuilds() {
         Some((2, 1))
     );
     let mut got = group_changes(&mut rx);
-    got.sort_by(|a, b| a.epic.cmp(&b.epic));
+    got.sort_by(|a, b| a.epic.as_str().cmp(b.epic.as_str()));
     assert_eq!(got, moved(&before, &after));
     assert_eq!(got.iter().map(|g| g.epic.as_str()).collect::<Vec<_>>(), ["GHOST", "ORPH"]);
 }
@@ -1827,6 +1843,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                     2 | 3 if !mine.is_empty() => Some(mine[rng.below(mine.len())].id.clone()),
                     _ => Some(any(&mut rng)),
                 };
+                let parent = super::tests_ready::no_namesake(&store, epic, kind, parent);
                 let what = format!("create {epic} {kind} under {parent:?}");
                 let new = NewTicket {
                     path: None,
@@ -1888,7 +1905,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
         let after = nav(&store);
         assert_eq!(store.groups(), after, "step {step}: {what}");
         let mut got = group_changes(&mut rx);
-        got.sort_by(|a, b| a.epic.cmp(&b.epic));
+        got.sort_by(|a, b| a.epic.as_str().cmp(b.epic.as_str()));
         assert_eq!(got, moved(&before, &after), "step {step}: {what}");
     }
     assert!(writes > 400 && moves > 40 && rehosts > 5, "{writes} writes, {moves} moves, {rehosts} re-hosts");
@@ -1949,7 +1966,7 @@ pub(super) fn scanned(store: &Store) -> Scanned {
     let mut last: BTreeMap<String, u32> = BTreeMap::new();
     let mut unborn: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for t in &all {
-        let seq = last.entry(t.epic.clone()).or_insert(0);
+        let seq = last.entry(t.epic.to_string()).or_insert(0);
         *seq = (*seq).max(t.seq);
     }
     let named: BTreeSet<&str> = all
@@ -1972,7 +1989,7 @@ fn kept(store: &Store) -> Scanned {
     let last = cache
         .ids
         .last_seqs()
-        .map(|(epic, seq)| (epic.to_string(), seq))
+        .map(|(epic, seq)| (epic.as_str().to_string(), seq))
         .collect();
     (last, cache.ids.unborn())
 }
@@ -2001,6 +2018,8 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
                 labels: Vec::new(),
                 id: id.to_string(),
                 epic: epic.into(),
+                shortcode: epic.into(),
+                address: String::new(),
                 seq: seq.parse().unwrap(),
                 title: id.to_string(),
                 status: Status::Pending,
@@ -2377,7 +2396,7 @@ async fn concurrent_creates_take_every_id_once_with_no_gaps() {
     let mut seqs: HashMap<String, Vec<u32>> = HashMap::new();
     for h in handles {
         let t = h.await.unwrap();
-        seqs.entry(t.epic).or_default().push(t.seq);
+        seqs.entry(t.epic.to_string()).or_default().push(t.seq);
     }
     for (epic, mut got) in seqs {
         got.sort_unstable();
@@ -2441,8 +2460,11 @@ async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
         } else {
             Kind::Build
         };
+        // ORG-3: a scope under another shortcode's ticket roots a shortcode
+        // there — a namesake, not a ticket of this one; the walk files only
+        // a shortcode's first scope so (tests_shortcodes holds the rest).
         let parent = match rng.below(6) {
-            0 if !all.is_empty() => Some(all[rng.below(all.len())].id.clone()),
+            0 if !all.is_empty() && (kind != Kind::Scope || seq == 1) => Some(all[rng.below(all.len())].id.clone()),
             1 => Some(format!("{epic}-99")),
             _ => None,
         };
@@ -2519,7 +2541,7 @@ async fn the_default_parent_is_the_lowest_seq_scope_in_a_legacy_prefix_too() {
 async fn extents_are_each_shortcodes_highest_sequence_in_order() {
     let store = Store::new();
     let report = store.seed_synthetic(spec(10_000, 42)).unwrap();
-    let extents = store.extents();
+    let extents = store.extents_text();
     assert_eq!(extents.len(), report.epics);
     assert!(extents.windows(2).all(|w| w[0].0 < w[1].0), "shortcode order");
     assert_eq!(extents.iter().map(|(_, n)| *n as usize).sum::<usize>(), store.count());
@@ -2528,7 +2550,7 @@ async fn extents_are_each_shortcodes_highest_sequence_in_order() {
         for k in [1, last / 2, *last] {
             let page = store
                 .page(PageQuery {
-                    epic: Some(epic),
+                    epic: Some(epic.as_str()),
                     after: Some(&format!("{epic}-{k}")),
                     limit: Some(1),
                     ..PageQuery::default()
@@ -2546,7 +2568,7 @@ async fn extents_are_each_shortcodes_highest_sequence_in_order() {
         &[("GAP-1", Kind::Scope, &[]), ("GAP-3", Kind::Build, &[])],
     );
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.extents(), [("GAP".to_string(), 3)], "the highest, with a hole below it");
+    assert_eq!(store.extents_text(), [("GAP".to_string(), 3)], "the highest, with a hole below it");
     let after = |cursor: &str| {
         store.page(PageQuery {
             epic: Some("GAP"),
@@ -2562,7 +2584,7 @@ async fn extents_are_each_shortcodes_highest_sequence_in_order() {
     write_db(&path, &legacy());
     let store = Store::open(&path).unwrap();
     assert!(!store.groups().iter().any(|g| g.epic == "XPC"), "no row for XPC");
-    let extents = store.extents();
+    let extents = store.extents_text();
     assert!(extents.contains(&("XPC".to_string(), 2)), "but an extent: {extents:?}");
-    assert_eq!(extents.len(), store.list(None, None, None).await.unwrap().iter().map(|t| &t.epic).collect::<HashSet<_>>().len());
+    assert_eq!(extents.len(), store.list(None, None, None).await.unwrap().iter().map(|t| t.epic.as_str()).collect::<HashSet<_>>().len());
 }

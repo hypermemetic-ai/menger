@@ -25,6 +25,7 @@
 //! and it is what the kept placements are held equal to.
 
 use super::{satisfied, OrderKey, Row, Rows};
+use crate::address::ShortcodeId;
 use crate::types::{Kind, Placement, Status, TicketSummary};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -178,10 +179,10 @@ pub(super) fn place<'a>(rows: Rows<'a>, t: &'a Row, memo: &mut HashMap<&'a str, 
 /// WAVE-6: each ticket's placement is the one the store keeps on its row; a
 /// row that has none kept (none the store makes: only a doc has none, and a
 /// doc is never yielded) is placed by the rule, as before.
-pub(super) fn waves(rows: Rows<'_>, epics: &BTreeSet<String>, kinds: &[Kind]) -> Waves {
+pub(super) fn waves(rows: Rows<'_>, epics: &BTreeSet<ShortcodeId>, kinds: &[Kind]) -> Waves {
     let tickets = epics.iter().flat_map(|epic| {
-        let first = OrderKey { epic: epic.clone(), seq: 0 };
-        let last = OrderKey { epic: epic.clone(), seq: u32::MAX };
+        let first = OrderKey { shortcode: epic.clone(), seq: 0 };
+        let last = OrderKey { shortcode: epic.clone(), seq: u32::MAX };
         rows.order.range(first..=last).map(|(_, t)| t)
     });
     of(rows, tickets, kinds, &|_| true)

@@ -27,6 +27,7 @@
 //! where the one before it ended, each `cause` names an earlier transition,
 //! a cascade's names its cause.
 
+use crate::address::ShortcodeId;
 use super::{Cache, OrderKey};
 use super::times::{self, Times};
 use crate::filter::{Event, History, Moment, When, Who, Window};
@@ -162,8 +163,8 @@ impl Mark {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Log {
     marks: Vec<Mark>,
-    epics: Vec<String>,
-    epic_ix: HashMap<String, u32>,
+    epics: Vec<ShortcodeId>,
+    epic_ix: HashMap<ShortcodeId, u32>,
     actors: Vec<String>,
     actor_ix: HashMap<String, u32>,
     names: HashMap<u64, String>,
@@ -244,13 +245,24 @@ impl Log {
         i
     }
 
+    /// ORG-3: a shortcode's index in the log, interning it on first sight.
+    fn intern_shortcode(&mut self, sc: &ShortcodeId) -> u32 {
+        if let Some(i) = self.epic_ix.get(sc) {
+            return *i;
+        }
+        let i = self.epics.len() as u32;
+        self.epics.push(sc.clone());
+        self.epic_ix.insert(sc.clone(), i);
+        i
+    }
+
     /// The cache's half of a committed transition of the ticket at `key`.
     pub(crate) fn append(&mut self, t: &Transition, key: &OrderKey) {
         if self.entered.is_empty() {
             self.entered = vec![Vec::new(); Status::ALL.len()];
             self.left = vec![Vec::new(); Status::ALL.len()];
         }
-        let epic = Self::intern(&mut self.epic_ix, &mut self.epics, &key.epic);
+        let epic = self.intern_shortcode(&key.shortcode);
         let actor = Self::intern(&mut self.actor_ix, &mut self.actors, &t.actor);
         if t.field == TransitionField::Status {
             if let Ok(to) = t.to.parse::<Status>() {
@@ -305,8 +317,8 @@ impl Log {
     /// FILTER-27: `row` written — its times as its row and the log say
     /// ([`times::timed`]).
     pub(super) fn retime(&mut self, row: &TicketSummary) {
-        let epic = Self::intern(&mut self.epic_ix, &mut self.epics, &row.epic);
-        let latest = self.latest(&row.epic, row.seq, TransitionField::Status).map(|p| self.mark(p).at);
+        let epic = self.intern_shortcode(&row.shortcode);
+        let latest = self.latest(&row.shortcode, row.seq, TransitionField::Status).map(|p| self.mark(p).at);
         self.times.put(epic, row.seq, times::timed(row, latest, self.began));
     }
 
@@ -321,8 +333,8 @@ impl Log {
 
     /// FILTER-30: activity on the ticket `(epic, seq)` at `at` — a comment
     /// left on it, an answer to or a clear of one of its inputs.
-    pub(super) fn touch(&mut self, epic: &str, seq: u32, at: i64) {
-        let e = Self::intern(&mut self.epic_ix, &mut self.epics, epic);
+    pub(super) fn touch(&mut self, epic: &ShortcodeId, seq: u32, at: i64) {
+        let e = self.intern_shortcode(epic);
         self.times.touch(e, seq, at);
     }
 
@@ -330,17 +342,17 @@ impl Log {
     /// hold it ([`activity`]) — at open, and by `--verify-derived`.
     pub(super) fn touch_all(&mut self, activity: impl IntoIterator<Item = (OrderKey, i64)>) {
         for (key, at) in activity {
-            self.touch(&key.epic, key.seq, at);
+            self.touch(&key.shortcode, key.seq, at);
         }
     }
 
     /// FILTER-27: `(epic, seq)`'s times.
-    pub(crate) fn timed(&self, epic: &str, seq: u32) -> Option<times::Timed> {
+    pub(crate) fn timed(&self, epic: &ShortcodeId, seq: u32) -> Option<times::Timed> {
         self.epic_ix.get(epic).and_then(|e| self.times.get(*e, seq))
     }
 
     /// FILTER-27: the shortcode the log interned as `e`.
-    pub(super) fn epic_name(&self, e: u32) -> String {
+    pub(super) fn epic_name(&self, e: u32) -> ShortcodeId {
         self.epics.get(e as usize).cloned().unwrap_or_default()
     }
 
@@ -350,7 +362,7 @@ impl Log {
     }
 
     /// The ticket `(epic, seq)`'s marks, oldest first.
-    pub(super) fn of(&self, epic: &str, seq: u32) -> &[u32] {
+    pub(super) fn of(&self, epic: &ShortcodeId, seq: u32) -> &[u32] {
         self.epic_ix
             .get(epic)
             .and_then(|e| self.tickets.get(&(*e, seq)))
@@ -365,7 +377,7 @@ impl Log {
     /// The ticket `(epic, seq)` the mark at `pos` is of.
     pub(super) fn key_of(&self, pos: u32) -> OrderKey {
         let m = self.mark(pos);
-        OrderKey { epic: self.epics[m.epic as usize].clone(), seq: m.seq }
+        OrderKey { shortcode: self.epics[m.epic as usize].clone(), seq: m.seq }
     }
 
     /// The transition at `pos`, whole — its ticket's id `ticket`, its cause's
@@ -398,7 +410,7 @@ impl Log {
     }
 
     /// The latest mark of `(epic, seq)` that moved `field`.
-    pub(super) fn latest(&self, epic: &str, seq: u32, field: TransitionField) -> Option<u32> {
+    pub(super) fn latest(&self, epic: &ShortcodeId, seq: u32, field: TransitionField) -> Option<u32> {
         self.of(epic, seq).iter().rev().copied().find(|p| self.mark(*p).field == field)
     }
 
@@ -408,7 +420,7 @@ impl Log {
     /// entries or exits for `entered` / `left`, the actor's marks (or every
     /// mark) for `changed`; the actor tested on each mark in the range only
     /// when the range is not the actor's own.
-    pub(crate) fn holds(&self, pred: &History, clock: &Clock) -> BTreeMap<String, RoaringBitmap> {
+    pub(crate) fn holds(&self, pred: &History, clock: &Clock) -> BTreeMap<ShortcodeId, RoaringBitmap> {
         // FILTER-27: births and status-since, from the times. FILTER-30: and
         // last touches.
         let timed = match &pred.event {
@@ -420,7 +432,7 @@ impl Log {
         if let Some(by) = timed {
             return by.into_iter().map(|(e, b)| (self.epic_name(e), b)).collect();
         }
-        let mut out: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
+        let mut out: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
         let Some((lo, hi)) = clock.bounds(pred.window.as_ref()) else { return out };
         let actor: Option<Option<u32>> = pred.by.as_ref().map(|w| {
             let name = match w {
@@ -715,12 +727,11 @@ pub(crate) fn load<'r>(
     let started = std::time::Instant::now();
     let mut log = Log::began_at(began(conn)?);
     let mut stray = 0usize;
-    // ACT-5: a deleted ticket's transitions are kept, placed by its id.
-    let deleted = super::delete::deleted_ids(conn)?;
-    let place = |id: &str| -> Option<OrderKey> {
-        let (epic, seq) = id.rsplit_once('-')?;
-        deleted.contains(id).then(|| Some(OrderKey { epic: epic.to_string(), seq: seq.parse().ok()? })).flatten()
-    };
+    // ACT-5: a deleted ticket's transitions are kept, placed where its
+    // tombstone says it was — ORG-3: read from the tombstone, never parsed
+    // from the id (a key is opaque).
+    let deleted = super::delete::deleted_places(conn)?;
+    let place = |id: &str| -> Option<OrderKey> { deleted.get(id).cloned() };
     for t in read_all(conn)? {
         match at.get(&t.ticket).cloned().or_else(|| place(&t.ticket)) {
             Some(key) => log.append(&t, &key),
@@ -840,7 +851,7 @@ impl Log {
     pub(super) fn check_times<'r>(&self, rows: impl IntoIterator<Item = &'r TicketSummary>) -> Vec<String> {
         let mut fresh = Log { times: Times::with_active(self.times.clone().take_active()), ..self.clone() };
         fresh.time_all(rows);
-        let mut out = self.times.check(&fresh.times, |e| self.epic_name(e));
+        let mut out = self.times.check(&fresh.times, |e| self.epic_name(e).to_string());
         for (key, ps) in &self.tickets {
             let Some(t) = self.times.get(key.0, key.1) else { continue };
             let last = ps.iter().rev().map(|p| self.marks[*p as usize]).find(|m| m.field == TransitionField::Status);

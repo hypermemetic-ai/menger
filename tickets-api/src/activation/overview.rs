@@ -32,11 +32,19 @@ pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<Caller, String>,
             Ok(lens) => {
                 let lens = lens.with_clock(clock);
                 let keep = kept(&store, &caller, keep.as_deref());
-                for (epic, held) in store.counts_keeping(&lens, keep.as_deref()) {
-                    yield TicketsEvent::Count { epic, held };
+                // ORG-3: a count per shortcode, by its identity — its
+                // letters beside it; an `under` naming several is refused.
+                match store.counts_read(&lens, keep.as_deref()) {
+                    Ok(counts) => {
+                        for (shortcode, held) in counts {
+                            let epic = store.shortcode_named_by(&shortcode).0;
+                            yield TicketsEvent::Count { epic, shortcode, held };
+                        }
+                    }
+                    Err(e) => yield refusal(e),
                 }
             }
-            Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            Err(e) => yield refusal(e),
         }
     }
 }

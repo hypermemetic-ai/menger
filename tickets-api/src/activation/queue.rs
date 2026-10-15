@@ -22,6 +22,8 @@ fn wire(change: QueueChange) -> TicketsEvent {
 fn refused(store: &Store, caller: &Caller, id: String, e: StoreError) -> TicketsEvent {
     match e {
         StoreError::NotFound(_) => TicketsEvent::NotFound { id },
+        // ORG-3: a name that fits several, each by its full address.
+        e @ StoreError::Ambiguous { .. } => refusal(e),
         e => {
             let sight = sight_lens(caller).ok().flatten();
             TicketsEvent::Error { message: redacted(e, |id| sees_id(store, sight.as_ref(), id)) }

@@ -232,9 +232,16 @@ impl Tickets {
             // shortcode's root; a shortcode with neither needs it on `*`.
             // AUTH-7: the gate's own question, as it stands now (create
             // names no single target the gate could resolve beforehand).
+            // ORG-3: the shortcode by any short form of its address.
             let anchor = match parent.as_deref() {
                 Some(p) => Some(p.to_string()),
-                None => store.groups().into_iter().find(|g| g.epic.eq_ignore_ascii_case(&epic)).and_then(|g| g.root),
+                None => match store.root_of(&epic) {
+                    Ok(root) => root,
+                    Err(e) => {
+                        yield refusal(e);
+                        return;
+                    }
+                },
             };
             let allowed = match (&anchor, caller.grant.clone()) {
                 (_, None) => Ok(()),
@@ -265,7 +272,7 @@ impl Tickets {
                 }
             };
             if let Some(v) = &visible {
-                let hidden = blocked_by.iter().flatten().find(|b| !v.contains(&shortcode_of(b.trim()).to_ascii_uppercase()));
+                let hidden = blocked_by.iter().flatten().find(|b| store.shortcode_of(b.trim()).is_none_or(|sc| !v.contains(&sc)));
                 if let Some(b) = hidden {
                     yield TicketsEvent::Error { message: format!("blocked_by: {}", caller.lacks(&Grant::new(crate::access::SEES), Some(b.trim()))) };
                     return;
@@ -342,7 +349,7 @@ impl Tickets {
                 Ok(ticket) => yield TicketsEvent::Ticket { ticket },
                 // ACT-5: a deleted ticket answers its tombstone.
                 Err(StoreError::NotFound(_)) => yield store.tombstone(&id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+                Err(e) => yield refusal(e),
             }
         }
     }
@@ -450,7 +457,7 @@ impl Tickets {
                 let lens = match filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())) {
                     Ok(lens) => lens,
                     Err(e) => {
-                        yield TicketsEvent::Error { message: e.to_string() };
+                        yield refusal(e);
                         return;
                     }
                 };
@@ -567,7 +574,7 @@ impl Tickets {
             match store.set_status_by(&id, status, act, restore_children.unwrap_or(false)).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+                Err(e) => yield refusal(e),
             }
         }
     }
@@ -651,7 +658,7 @@ impl Tickets {
             match store.set_kind_by(&id, kind, status, act).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+                Err(e) => yield refusal(e),
             }
         }
     }
@@ -706,7 +713,7 @@ impl Tickets {
             match store.set_parent(&id, &parent).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+                Err(e) => yield refusal(e),
             }
         }
     }
@@ -754,7 +761,7 @@ impl Tickets {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+                Err(e) => yield refusal(e),
             }
         }
     }
@@ -830,7 +837,7 @@ impl Tickets {
             match store.unlink_commits(&id, commits).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+                Err(e) => yield refusal(e),
             }
         }
     }
@@ -1111,7 +1118,7 @@ impl Tickets {
             // FILTER-15: from the cells.
             match narrowing(filter.as_deref()).and_then(|f| f.map(|f| ready_and(&f, epic.clone())).transpose()) {
                 Err(e) => {
-                    yield TicketsEvent::Error { message: e.to_string() };
+                    yield refusal(e);
                     return;
                 }
                 Ok(Some(q)) => {
@@ -1272,7 +1279,7 @@ impl Tickets {
             let lens = match zoned_lens(&caller, filter.as_deref(), tz.as_deref()) {
                 Ok(lens) => lens,
                 Err(e) => {
-                    yield TicketsEvent::Error { message: e.to_string() };
+                    yield refusal(e);
                     return;
                 }
             };
@@ -1289,7 +1296,7 @@ impl Tickets {
                     }
                     yield TicketsEvent::Searched { matched, next, words };
                 }
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+                Err(e) => yield refusal(e),
             }
         }
     }
@@ -1340,7 +1347,7 @@ impl Tickets {
             let lens = match zoned_lens(&caller, Some(&filter), tz.as_deref()) {
                 Ok(lens) => lens.unwrap_or_else(Lens::all),
                 Err(e) => {
-                    yield TicketsEvent::Error { message: e.to_string() };
+                    yield refusal(e);
                     return;
                 }
             };
@@ -1387,12 +1394,12 @@ impl Tickets {
             };
             for mut group in store.groups() {
                 if let Some(v) = &visible {
-                    if !v.contains(&group.epic) {
+                    if !v.contains(&group.shortcode) {
                         continue;
                     }
                     // IDENTITY-21: hosted under a ticket out of reach, a
                     // shortcode stands at the top for this caller.
-                    if group.host.as_deref().is_some_and(|h| !v.contains(shortcode_of(h))) {
+                    if group.host.as_deref().is_some_and(|h| store.shortcode_of(h).is_none_or(|sc| !v.contains(&sc))) {
                         group.host = None;
                     }
                 }
@@ -1529,7 +1536,7 @@ impl Tickets {
                     }
                 }
                 Err(StoreError::NotFound(id)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+                Err(e) => yield refusal(e),
             }
         }
     }
@@ -1721,11 +1728,11 @@ impl Tickets {
                     return;
                 }
             };
-            for (epic, last_seq, holes) in store.extents_holed() {
-                if visible.as_ref().is_some_and(|v| !v.contains(&epic)) {
+            for (shortcode, epic, last_seq, holes) in store.extents_holed() {
+                if visible.as_ref().is_some_and(|v| !v.contains(&shortcode)) {
                     continue;
                 }
-                yield TicketsEvent::Extent { epic, last_seq, holes };
+                yield TicketsEvent::Extent { epic, shortcode, last_seq, holes };
             }
         }
     }
@@ -1860,7 +1867,7 @@ impl Tickets {
             let lens = match Lens::parse(&filter) {
                 Ok(lens) => lens,
                 Err(e) => {
-                    yield TicketsEvent::Error { message: e.to_string() };
+                    yield refusal(e);
                     return;
                 }
             };
@@ -2136,12 +2143,15 @@ impl Tickets {
         tz: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let membership = membership.unwrap_or(false);
-        let epic = epic.map(|e| e.to_ascii_uppercase());
+        let (epic, ambiguous) = sight::watched_shortcode(&self.store, epic.as_deref());
         // IDENTITY-19, IDENTITY-21: who is watching, and through what reach.
         let access = self.access.clone();
         let who = auth.cloned();
         let asked = filter;
         let opened = access.admit(who.as_ref(), &reach).and_then(|caller| {
+            if let Some(why) = &ambiguous {
+                return Err(why.clone());
+            }
             let filter = caller.scoped(asked.as_deref())?;
             // MENGER-13: how its filter reads time.
             let clock = clock_of(&caller, tz.as_deref())?;
@@ -2154,7 +2164,7 @@ impl Tickets {
         // FILTER-4: a filtered watch reads the filtered channel, which
         // carries every change and each write's cell moves after them.
         let filtered = (filter.is_some() || membership).then(|| {
-            (self.store.subscribe_filtered(), watcher_for(&self.store, filter.as_deref(), epic.as_deref(), &clock))
+            (self.store.subscribe_filtered(), watcher_for(&self.store, filter.as_deref(), epic.as_ref(), &clock))
         });
         let store = Arc::clone(&self.store);
         let plain = filtered.is_none().then(|| self.store.subscribe());
@@ -2191,8 +2201,8 @@ impl Tickets {
                         Some(rx.recv().await)
                     };
                     let Some(next) = next else {
-                        for m in watcher.tick(&store, epic.as_deref()) {
-                            yield membership_event(m);
+                        for m in watcher.tick(&store, epic.as_ref()) {
+                            yield membership_event(&store, m);
                         }
                         continue;
                     };
@@ -2204,7 +2214,7 @@ impl Tickets {
                         Ok(None) => {}
                         Ok(Some((caller, gone))) => {
                             // The filter again, under the reach as it stands.
-                            let rebuilt = caller.scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_deref(), epic.as_deref(), &clock));
+                            let rebuilt = caller.scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_deref(), epic.as_ref(), &clock));
                             match rebuilt {
                                 Ok(w) => watcher = w,
                                 Err(message) => {
@@ -2221,22 +2231,22 @@ impl Tickets {
                     }
                     match next {
                         Ok(Change::CellsMoved { moves }) => {
-                            for m in watcher.membership(&store, &moves, epic.as_deref()) {
-                                yield membership_event(m);
+                            for m in watcher.membership(&store, &moves, epic.as_ref()) {
+                                yield membership_event(&store, m);
                             }
                         }
                         // FILTER-13: a filter asking `under` — what the write
                         // worked out for this watch.
                         Ok(Change::UnderMoved { moves }) => {
                             for m in watcher.under_membership(&moves) {
-                                yield membership_event(m);
+                                yield membership_event(&store, m);
                             }
                         }
                         Ok(change) => {
                             if membership {
                                 continue;
                             }
-                            if let Some(ev) = change.in_epic(epic.as_deref()).and_then(wire_event) {
+                            if let Some(ev) = change.in_epic(epic.as_ref()).and_then(wire_event) {
                                 if let Some(ev) = sight.relay(&store, ev) {
                                     yield ev;
                                 }
@@ -2269,7 +2279,7 @@ impl Tickets {
                     Ok(change) => {
                         // WAVE-6: of a `placements_changed`, the changes in
                         // the epic.
-                        if let Some(ev) = change.in_epic(epic.as_deref()).and_then(wire_event) {
+                        if let Some(ev) = change.in_epic(epic.as_ref()).and_then(wire_event) {
                             if let Some(ev) = sight.relay(&store, ev) {
                                 yield ev;
                             }

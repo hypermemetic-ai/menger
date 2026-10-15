@@ -55,6 +55,16 @@ export declare function isAttrKindBoolean(e: AttrKind): e is AttrKindBoolean;
 export declare function isAttrKindShortcode(e: AttrKind): e is AttrKindShortcode;
 export declare function isAttrKindTicket(e: AttrKind): e is AttrKindTicket;
 export declare function isAttrKindEnum(e: AttrKind): e is AttrKindEnum;
+/** ORG-3: a shortcode's letters — ASCII letters and digits, upper case (a
+code is read case-blind and kept upper case), 1 to [`CODE_MAX`].
+
+Not an identity: two shortcodes of one code live in two namespaces. So
+it has no `Hash`, no `Ord` and no `Borrow<str>` — nothing can key a map
+or a set by it (the module's examples hold that to the compiler) — and its `Display` is
+its letters, never an address. It compares equal to another code of the
+same letters, which is what a search over the letters asks; the store
+compares shortcodes by [`ShortcodeId`]. */
+export type Code = string;
 /** COMP-3: one entry of the **component registry** — a custom element some
 ticket defined in a ` ```component <name> ` block (COMP-1 decisions 2, 3,
 pins 6–8), as the server keeps it.
@@ -159,15 +169,20 @@ kept current the way the counts are: a change to the root's title,
 status or kind (SDLC-13: `set_kind`) is a change to its group, and
 `group_changed` carries it. `None` exactly when `root` is. */
 export interface Group {
+    /** ORG-3: the shortcode's full address, `org:ROOT/…/SC`. */
+    address?: string;
     /** SDLC-11: the docs in the row's subtree, which `total` leaves out. */
     docs: number;
     done: number;
-    /** The shortcode (epic prefix), uppercase. */
-    epic: string;
+    /** The shortcode's letters, uppercase. ORG-3: what the row shows; two
+  namesakes are told apart by `shortcode` and `address`. */
+    epic: Code;
     host?: string | null;
     root?: string | null;
     /** AGS-23: what the root's own row shows. */
     rootRow?: RootRow | null;
+    /** ORG-3: the shortcode's identity — what a row of the nav is keyed by. */
+    shortcode?: ShortcodeId;
     total: number;
 }
 /** INPUT-3: one **input** — a component in a ticket's body that asks for an
@@ -375,6 +390,8 @@ export interface SearchWord {
     word: string;
 }
 export type Severity = "Critical" | "High" | "Medium" | "Low";
+/** A shortcode's identity, minted by the store: its code for a shortcode made before ORG-3, CODE.N for a namesake made after */
+export type ShortcodeId = string;
 /** COMP-8: one declared slot — `<slot name="title">Optional title
 markup.</slot>`; `name` is `null` for the default slot. */
 export interface SlotDoc {
@@ -385,6 +402,10 @@ export interface SlotDoc {
 so a ticket round-trips into a plans/ file unchanged. */
 export type Status = never;
 export interface Ticket {
+    /** ORG-3: the ticket's full address, `org:ROOT/…/SC-N`
+  (`hypermemetic:MENGER/THEME-3`) — what tells two `THEME-3`s apart,
+  and what a link may name it by. */
+    address?: string;
     /** Ticket ids that must complete before this one starts. */
     blockedBy: string[];
     /** Markdown body (Problem / Required behavior / Acceptance criteria …). */
@@ -403,9 +424,13 @@ export interface Ticket {
   lesson — a list on a row is bounded). */
     commits: string[];
     createdUnix: number;
-    /** Epic prefix, uppercase (e.g. `MNG`). */
-    epic: string;
-    /** `EPIC-N`, allocated by the store. */
+    /** The shortcode's letters, upper case (e.g. `MNG`). ORG-3: what a row
+  shows — two shortcodes of one code are told apart by `shortcode`
+  and `address`, never by this. */
+    epic: Code;
+    /** `EPIC-N`, allocated by the store. ORG-3: the ticket's key — opaque
+  and immutable ([`crate::TicketId`]): today's id for today's tickets,
+  its shortcode's id, `-` and its number for a newborn. */
     id: string;
     kind: Kind;
     /** MENGER-12: the ticket's labels — free-form tags (`needs-you`, …),
@@ -437,6 +462,10 @@ export interface Ticket {
     /** Sequence number within the epic (the `N` in `EPIC-N`). */
     seq: number;
     severity?: Severity | null;
+    /** ORG-3: the shortcode's identity ([`ShortcodeId`]) — what to key a
+  ticket's shortcode by. The code itself for a shortcode made before
+  ORG-3, `CODE.N` for a namesake. */
+    shortcode?: ShortcodeId;
     status: Status;
     title: string;
     /** Ticket ids that can start once this one completes. */
@@ -455,13 +484,15 @@ Unlike `Ticket`, `severity` and `parent` are written out as `null`
 rather than skipped: a row shape a client destructures should have
 the same keys in every row. */
 export interface TicketSummary {
+    /** ORG-3: as on [`Ticket`]. */
+    address?: string;
     blockedBy: string[];
     childCount: number;
     /** SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
   the ticket page all have it without a `get`. */
     commits: string[];
     createdUnix: number;
-    epic: string;
+    epic: Code;
     id: string;
     kind: Kind;
     /** MENGER-12: as on [`Ticket`] — on the row, so the board, the nav and
@@ -479,6 +510,8 @@ export interface TicketSummary {
     placement?: Placement | null;
     seq: number;
     severity?: Severity | null;
+    /** ORG-3: as on [`Ticket`]. */
+    shortcode?: ShortcodeId;
     status: Status;
     title: string;
     unlocks: string[];
@@ -744,21 +777,27 @@ shortcode's new `last_seq`.
 ACT-5: and the sequences below `last_seq` the shortcode no longer
 holds — deleted tickets (whose numbers are never reused), or a hand
 edit's hole — so a client's arithmetic skips them: the shortcode holds
-`last_seq - holes.len()` tickets. Absent when it holds every one. */
+`last_seq - holes.len()` tickets. Absent when it holds every one.
+ORG-3: `epic` the shortcode's letters, `shortcode` its identity —
+what a client keys the extent by, and what a row's id is built from
+(`{shortcode}-{seq}`, the key it was born with). */
 export interface TicketsEventExtent {
     type: 'extent';
-    epic: string;
+    epic: Code;
     holes: number[];
     lastSeq: number;
+    shortcode: ShortcodeId;
 }
 /** FILTER-4: how many tickets of one shortcode match a filter (yielded
 per shortcode by `counts`, in shortcode order, only for a shortcode
 that holds a match) — the filtered `extents`. A sum over the kept
-counts of the cells the filter admits, never a test of a ticket. */
+counts of the cells the filter admits, never a test of a ticket.
+ORG-3: `epic` the letters, `shortcode` the identity, as `extent`. */
 export interface TicketsEventCount {
     type: 'count';
-    epic: string;
+    epic: Code;
     held: number;
+    shortcode: ShortcodeId;
 }
 /** FILTER-4: one menu count (yielded by `facets`): how many tickets
 match `base` and `filter` once `filter`'s own groups for `field` are
@@ -776,21 +815,24 @@ export interface TicketsEventFacet {
 /** FILTER-4: a write moved this ticket into a `watch { filter }`'s
 filter — born into it, or its status, its blockers' or its commits
 moved it there (yielded by `watch { filter }` only, after every other
-event of the write). */
+event of the write).
+ORG-3: `epic` the letters, `shortcode` the identity, as `extent`. */
 export interface TicketsEventEntered {
     type: 'entered';
-    epic: string;
+    epic: Code;
     id: string;
     seq: number;
+    shortcode: ShortcodeId;
 }
 /** FILTER-4: a write moved this ticket out of a `watch { filter }`'s
 filter (yielded by `watch { filter }` only, after every other event
 of the write). */
 export interface TicketsEventLeft {
     type: 'left';
-    epic: string;
+    epic: Code;
     id: string;
     seq: number;
+    shortcode: ShortcodeId;
 }
 /** FILTER-4: one write moved more than 256 tickets into or out of a
 `watch { filter }`'s filter: instead of those `entered` and `left`,
@@ -799,8 +841,9 @@ shortcode as the write left it. A client sets its count and asks for
 its window again, as after `lagged`. */
 export interface TicketsEventRecount {
     type: 'recount';
-    epic: string;
+    epic: Code;
     held: number;
+    shortcode: ShortcodeId;
 }
 /** WAVE-4: one ticket's place in the order of work (yielded per ticket
 by `waves`): its row, its [`Placement`] — computed over the whole
@@ -915,6 +958,15 @@ export interface TicketsEventMember {
 /** Lookup miss. */
 export interface TicketsEventNotFound {
     type: 'not_found';
+    id: string;
+}
+/** ORG-3: `id` (an address as it was asked — a ticket or a shortcode)
+names more than one thing in the reader's reach: `candidates` are
+each one's full address, in the store's order. Nothing was read or
+written; name one of them in full, or by a short form only it has. */
+export interface TicketsEventAmbiguous {
+    type: 'ambiguous';
+    candidates: string[];
     id: string;
 }
 /** In-band error (bad enum value, invalid epic, blocked_by cycle, …).
@@ -1059,7 +1111,7 @@ export interface TicketsEventQueueRecord {
     type: 'queue_record';
     record: QueueRecord;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -1104,6 +1156,7 @@ export declare function isTicketsEventBlocker(e: TicketsEvent): e is TicketsEven
 export declare function isTicketsEventDanglingBlocker(e: TicketsEvent): e is TicketsEventDanglingBlocker;
 export declare function isTicketsEventMember(e: TicketsEvent): e is TicketsEventMember;
 export declare function isTicketsEventNotFound(e: TicketsEvent): e is TicketsEventNotFound;
+export declare function isTicketsEventAmbiguous(e: TicketsEvent): e is TicketsEventAmbiguous;
 export declare function isTicketsEventError(e: TicketsEvent): e is TicketsEventError;
 export declare function isTicketsEventBodyTooLarge(e: TicketsEvent): e is TicketsEventBodyTooLarge;
 export declare function isTicketsEventNode(e: TicketsEvent): e is TicketsEventNode;

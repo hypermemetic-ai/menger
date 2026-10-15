@@ -130,6 +130,26 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets set_status --id MNG-7 --status Canceled --message "folded into MNG-9"
   ```
 
+  **Addresses** (ORG-3): a shortcode is unique only within its namespace
+  (its org and the shortcode it is hosted under), so two THEMEs may exist
+  under different hosts. A ticket carries `epic` (the letters), `shortcode`
+  (the store's identity — the code itself for every shortcode older than
+  ORG-3, `CODE.N` for a namesake) and `address`
+  (`hypermemetic:MENGER/ACCESS/ORG-3`). Every `--id`, `--parent`,
+  `--blocked-by`, `--epic` and `under` takes any short form of the address
+  (`MENGER/ORG-3`, `ACCESS/ORG-3`, the bare id); every id older than ORG-3 is
+  pinned and keeps naming its ticket. A name that fits two is refused in-band
+  (`ambiguous { id, candidates }` — each by its full address; name one in
+  full). A create, rehome, kind change, note upgrade or undelete that would
+  put a second code into one namespace is refused, naming the one there.
+  `in THEME` matches the letters wherever hosted; `under X` binds one
+  shortcode (its identity first). README "Addresses and namespaces":
+
+  ```sh
+  synapse -P 4455 menger tickets get --id MENGER/ORG-3
+  synapse -P 4455 menger tickets create --epic PLEXUS/THEME --title "a build in PLEXUS's THEME"
+  ```
+
   **Search inside tickets** (SEARCH-2) is `search` — titles and bodies,
   every word required, prefixes and typos too, best first; each `hit`
   carries the passage that matched (`find` stays the jump by id or title).

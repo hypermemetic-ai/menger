@@ -11,6 +11,7 @@
 //! walks cross between the two representations both ways, again and again.
 
 use super::cells::{self, Key};
+use crate::address::ShortcodeId;
 use std::sync::Arc;
 use super::children::HOLD_OVER;
 use super::stored::{self, State};
@@ -50,7 +51,7 @@ pub(super) fn oracle(rows: &[Row], asking: &std::collections::BTreeSet<String>) 
     for t in rows {
         let k = cells[&OrderKey::of(t)];
         for a in ancestors_of(&by_id, t) {
-            *tallies.entry((a, t.epic.clone(), k)).or_insert(0) += 1;
+            *tallies.entry((a, t.epic.to_string(), k)).or_insert(0) += 1;
         }
     }
     let mut by_parent: BTreeMap<&str, Vec<(&str, Key)>> = BTreeMap::new();
@@ -60,7 +61,7 @@ pub(super) fn oracle(rows: &[Row], asking: &std::collections::BTreeSet<String>) 
     let mut lists: BTreeMap<(String, String), Vec<&Row>> = BTreeMap::new();
     for t in rows {
         if let Some(p) = &t.parent {
-            lists.entry((p.clone(), t.epic.clone())).or_default().push(t);
+            lists.entry((p.clone(), t.epic.to_string())).or_default().push(t);
         }
     }
     let mut holders = Holders::new();
@@ -115,10 +116,10 @@ fn filed(path: &Path) -> (State, Tallies, Holders, tree::Stored) {
     let state = stored::state(&tx).unwrap();
     let form = stored::read(&tx).unwrap();
     let keys = &form.cells.keys;
-    let tallies = form.tree.tallies.iter().map(|((p, e, c), n)| ((p.clone(), e.clone(), keys[c]), *n)).collect();
+    let tallies = form.tree.tallies.iter().map(|((p, e, c), n)| ((p.clone(), e.as_str().to_string(), keys[c]), *n)).collect();
     let mut holders = Holders::new();
     for ((p, l, e, c, hi), (card, raw)) in &form.tree.holders {
-        let v = holders.entry((p.clone(), l.clone(), e.clone(), keys[c])).or_default();
+        let v = holders.entry((p.clone(), l.as_str().to_string(), e.as_str().to_string(), keys[c])).or_default();
         v.extend(cells::decode(*card, raw).unwrap().into_iter().map(|low| (hi << 16) | u32::from(low)));
     }
     (state, tallies, holders, form.tree)
@@ -190,7 +191,7 @@ async fn the_kept_tree_is_a_scan_after_every_write_on_a_nested_seed() {
     assert_tree_is_a_scan(&store, Some(&path), "a nested seed");
     let (depth, many) = shape(&store);
     assert!(depth == 3 && many > 10, "root → execution → build → doc ({depth} deep), {many} bitmaps");
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     let store = walk(store, &path, 0x5EED_0013, 250, &epics).await;
     store.seed_synthetic_shaped(SeedSpec { count: 500, seed: 14, into_existing: true }, SeedShape::Nested).unwrap();
@@ -206,7 +207,7 @@ async fn the_kept_tree_is_a_scan_after_every_write_on_each_fixture() {
         std::fs::copy(format!("{fixtures}/{name}"), &path).unwrap();
         let store = Store::open(&path).unwrap();
         assert_tree_is_a_scan(&store, Some(&path), &format!("the first open of {name}"));
-        let mut epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+        let mut epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
         epics.push("NEW".into());
         let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
         walk(store, &path, 0x13F1 + i as u64, 120, &epics).await;
@@ -480,7 +481,7 @@ fn tree_kept_by_rule(
     let hosts: BTreeMap<String, String> = {
         let cache = store.tickets.read().unwrap();
         let epics: std::collections::BTreeSet<&str> = rows.iter().map(|t| t.epic.as_str()).collect();
-        epics.into_iter().filter_map(|e| cache.rollups.host(e).map(|h| (e.to_string(), h.to_string()))).collect()
+        epics.into_iter().filter_map(|e| cache.rollups.host(&ShortcodeId::from(e)).map(|h| (e.to_string(), h.to_string()))).collect()
     };
     let hosted: HashSet<usize> = hosts.keys().filter_map(|e| root_of(e)).collect();
     let mut kids: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -518,11 +519,11 @@ fn tree_kept_by_rule(
                 return None;
             }
             let t = &rows[i];
-            if root_of(&t.epic) == Some(i) || matches[i] {
+            if root_of(t.epic.as_str()) == Some(i) || matches[i] {
                 return Some(Placed::Ticket(t.id.clone()));
             }
             match &t.parent {
-                None => return Some(Placed::Top(t.epic.clone())),
+                None => return Some(Placed::Top(t.epic.to_string())),
                 Some(p) => cur = p.clone(),
             }
         }
@@ -637,7 +638,7 @@ fn assert_tree_reads_are_a_scan(store: &Store, rng: &mut Rng, seen: &mut TreeSee
         let p: std::collections::BTreeSet<&str> = rows.iter().filter_map(|t| t.parent.as_deref()).collect();
         p.into_iter().map(String::from).collect()
     };
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
     for _ in 0..6 {
         let filter = tree_filter(rng, &names);
         seen.with_under += usize::from(filter.format().contains("under"));
@@ -647,7 +648,7 @@ fn assert_tree_reads_are_a_scan(store: &Store, rng: &mut Rng, seen: &mut TreeSee
                 6 => (Some(rows[rng.below(rows.len())].id.clone()), None),
                 7 => (Some("NONE-1".to_string()), None),
                 8 if !epics.is_empty() => (None, Some(epics[rng.below(epics.len())].to_ascii_lowercase())),
-                9 => (Some(rows[0].id.clone()), Some(rows[0].epic.clone())),
+                9 => (Some(rows[0].id.clone()), Some(rows[0].epic.to_string())),
                 _ if !epics.is_empty() => (None, Some(epics[rng.below(epics.len())].clone())),
                 _ => (None, None),
             };
@@ -691,7 +692,7 @@ fn assert_tree_reads_are_a_scan(store: &Store, rng: &mut Rng, seen: &mut TreeSee
             let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
             let mut addresses: Vec<(Option<String>, Option<String>)> =
                 ancestors_of(&by_id, k).into_iter().take(8).map(|a| (Some(a), None)).collect();
-            addresses.push((None, Some(k.epic.clone())));
+            addresses.push((None, Some(k.epic.to_string())));
             addresses.push((Some(k.id.clone()), None));
             for (parent, epic) in addresses {
                 let after = match krng.below(4) {
@@ -790,13 +791,13 @@ async fn tree_and_under_equal_the_rule_on_a_nested_seed() {
     let path = dir.path().join("nested.db");
     let store = Store::open(&path).unwrap();
     store.seed_synthetic_shaped(SeedSpec { count: 1_200, seed: 131, into_existing: false }, SeedShape::Nested).unwrap();
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     // The seed only steers coverage (the answers are checked whatever it
     // is); SDLC-15's eleventh status reshuffled the walk, and A133 is a
     // walk that still draws matches away from their parent often enough —
-    // FILTER-27's six history predicates reshuffled it again: A137; FILTER-30's two `touched` ones: A139.
-    let seen = tree_walk(store, &path, 0x7EE_A139, 240, 12, &epics).await;
+    // FILTER-27's six history predicates reshuffled it again: A137; FILTER-30's two `touched` ones: A139; ORG-3's walks that file no namesake: A13A.
+    let seen = tree_walk(store, &path, 0x7EE_A13A, 240, 12, &epics).await;
     assert!(seen.pages > 300 && seen.matched > 100 && seen.holding > 10 && seen.with_under > 40, "{seen:?}");
     assert!(seen.only_pages > 300 && seen.moved_up > 20, "{seen:?}");
     assert!(seen.kept_pages > 300 && seen.kept_rows > 20, "{seen:?}");
@@ -809,7 +810,7 @@ async fn tree_and_under_equal_the_rule_on_a_nested_seed() {
 async fn every_address_of_a_nested_seed_answers_as_the_rule_does() {
     let store = Store::new();
     store.seed_synthetic_shaped(SeedSpec { count: 900, seed: 6, into_existing: false }, SeedShape::Nested).unwrap();
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(3).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(3).collect();
     let epic_refs: Vec<&str> = epics.iter().map(String::as_str).collect();
     let mut rng = Rng(0x5EE_E13);
     let mut tally = Tally::default();
@@ -846,7 +847,7 @@ async fn every_address_of_a_nested_seed_answers_as_the_rule_does() {
                 matched += rows.iter().filter(|r| r.1).count();
                 holding += rows.iter().filter(|r| !r.1 && r.2 > 0).count();
             }
-            for e in store.extents().into_iter().map(|(e, _)| e) {
+            for e in store.extents_text().into_iter().map(|(e, _)| e) {
                 assert_eq!(tree_answered(&store, &filter, None, Some(&e), None, None), tree_by_rule(&plain, &filter, None, Some(&e), None, None), "{e} `{text}`");
             }
             // FILTER-23: every address again, in the nav that shows only matches.
@@ -858,7 +859,7 @@ async fn every_address_of_a_nested_seed_answers_as_the_rule_does() {
                 assert!(rows.iter().all(|r| r.1), "a nested seed hosts nothing: every row matches");
                 moved += rows.iter().filter(|r| plain.rows.iter().find(|t| t.id == r.0).and_then(|t| t.parent.as_deref()) != Some(p.as_str())).count();
             }
-            for e in store.extents().into_iter().map(|(e, _)| e) {
+            for e in store.extents_text().into_iter().map(|(e, _)| e) {
                 let want = tree_matches_by_rule(&store, &plain, &filter, None, Some(&e), None, None);
                 assert_eq!(tree_answered_in(&store, &filter, None, Some(&e), None, None, true), want, "{e} matches only `{text}`");
                 tops += want.unwrap().0.len();
@@ -889,7 +890,7 @@ async fn tree_and_under_equal_the_rule_on_each_fixture() {
         let path = dir.path().join(name);
         std::fs::copy(format!("{fixtures}/{name}"), &path).unwrap();
         let store = Store::open(&path).unwrap();
-        let mut epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+        let mut epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
         epics.push("NEW".into());
         let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
         tree_walk(store, &path, 0x13F_0 + i as u64, 100, 20, &epics).await;
@@ -1124,7 +1125,7 @@ async fn under_membership_is_the_scans_difference_through_re_parents() {
     let path = dir.path().join("under.db");
     let store = Store::open(&path).unwrap();
     store.seed_synthetic_shaped(SeedSpec { count: 500, seed: 77, into_existing: false }, SeedShape::Nested).unwrap();
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(3).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(3).collect();
     let mut rng = Rng(0x0D3_13);
     let names = filter_names(&store);
     let filters: Vec<Filter> = (0..8)
@@ -1141,7 +1142,7 @@ async fn under_membership_is_the_scans_difference_through_re_parents() {
     let watchers: Vec<Watcher> = filters
         .iter()
         .enumerate()
-        .map(|(i, f)| store.watcher_in(Lens::of(f).unwrap(), (i == 7).then_some(epics[0].as_str())))
+        .map(|(i, f)| store.watcher_in(Lens::of(f).unwrap(), (i == 7).then_some(&ShortcodeId::from(epics[0].as_str()))))
         .collect();
     let mut rx = store.subscribe_filtered();
     let epic_refs: Vec<&str> = epics.iter().map(String::as_str).collect();
@@ -1183,22 +1184,22 @@ async fn under_membership_is_the_scans_difference_through_re_parents() {
             let mut want: Vec<(OrderKey, Membership)> = Vec::new();
             for (k, id) in &now {
                 if !was.contains_key(k) {
-                    want.push((k.clone(), Membership::Entered { id: id.clone(), epic: k.epic.clone(), seq: k.seq }));
+                    want.push((k.clone(), Membership::Entered { id: id.clone(), shortcode: k.shortcode.clone(), seq: k.seq }));
                 }
             }
             for (k, id) in &was {
                 if !now.contains_key(k) {
-                    want.push((k.clone(), Membership::Left { id: id.clone(), epic: k.epic.clone(), seq: k.seq }));
+                    want.push((k.clone(), Membership::Left { id: id.clone(), shortcode: k.shortcode.clone(), seq: k.seq }));
                 }
             }
             want.sort_by(|a, b| a.0.cmp(&b.0));
             let got: Vec<Membership> = writes.iter().flat_map(|m| w.under_membership(m)).collect();
             if want.len() > cells::RECOUNT_OVER {
-                let mut epics_moved: Vec<String> = want.iter().map(|(k, _)| k.epic.clone()).collect();
+                let mut epics_moved: Vec<ShortcodeId> = want.iter().map(|(k, _)| k.shortcode.clone()).collect();
                 epics_moved.dedup();
                 let recounts: Vec<Membership> = epics_moved
                     .into_iter()
-                    .map(|e| Membership::Recount { held: now.keys().filter(|k| k.epic == e).count() as u64, epic: e })
+                    .map(|e| Membership::Recount { held: now.keys().filter(|k| k.shortcode == e).count() as u64, shortcode: e })
                     .collect();
                 assert_eq!(got, recounts, "step {step}: {what}: `{}`", f.format());
             } else {

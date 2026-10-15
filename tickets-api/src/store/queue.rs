@@ -29,6 +29,7 @@
 //! An older build never looks at either. A deleted ticket's entry stays in
 //! the file and out of every read (its undo brings it back).
 
+use crate::address::ShortcodeId;
 use super::history::Act;
 use super::lineage::{self, UnderBefore};
 use super::{Cache, Change, OrderKey, Row, Store, StoreError};
@@ -130,11 +131,11 @@ impl Queue {
     /// (at `urgency`, when one is named) and placed by `at`. From the kept
     /// entries, never a scan of the tickets. A snooze does not take a ticket
     /// out: it is still queued, only off the alerting surfaces.
-    pub(super) fn holds(&self, urgency: Option<Urgency>, at: &HashMap<String, OrderKey>) -> BTreeMap<String, RoaringBitmap> {
-        let mut out: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
+    pub(super) fn holds(&self, urgency: Option<Urgency>, at: &HashMap<String, OrderKey>) -> BTreeMap<ShortcodeId, RoaringBitmap> {
+        let mut out: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
         for e in self.entries.values().filter(|e| urgency.is_none_or(|u| e.urgency == u)) {
             if let Some(key) = at.get(&e.ticket) {
-                out.entry(key.epic.clone()).or_default().insert(key.seq);
+                out.entry(key.shortcode.clone()).or_default().insert(key.seq);
             }
         }
         out
@@ -319,10 +320,10 @@ impl Closing {
     }
 
     /// …and on `watch`.
-    pub(super) fn change(self, epic: String) -> Change {
+    pub(super) fn change(self, shortcode: ShortcodeId) -> Change {
         let Closing { entry, record } = self;
         Change::Queue {
-            epic,
+            shortcode,
             change: QueueChange::Unqueued { id: entry.ticket.clone(), entry, action: QueueAction::Closed, by: record.actor, at_unix: record.at_unix },
         }
     }
@@ -336,7 +337,8 @@ impl Store {
     /// a snooze ended. One entry, one record, one write; answers the entry
     /// with its row and what the write was.
     pub async fn queue_by(&self, id: &str, urgency: Urgency, reason: &str, input: Option<&str>, act: Act) -> Result<QueueChange, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
+        // ORG-3: the ticket by any short form of its address.
+        let id = self.resolve(id)?;
         let reason = reason.trim().to_string();
         if reason.is_empty() {
             return Err(StoreError::Invalid("a queue entry says why: `reason` is blank".into()));
@@ -391,7 +393,8 @@ impl Store {
     /// the caller withdrawing it. `None`: it was not queued, and nothing is
     /// written.
     pub async fn unqueue_by(&self, id: &str, act: Act) -> Result<Option<QueueChange>, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
+        // ORG-3: the ticket by any short form of its address.
+        let id = self.resolve(id)?;
         let serial = self.serial().await;
         let now = chrono::Utc::now().timestamp();
         let (row, entry, record, under) = {
@@ -409,7 +412,8 @@ impl Store {
     /// MENGER-39: `id` off the alerting surfaces for `minutes` (1 to a
     /// week); still queued. Refused when it is not queued.
     pub async fn snooze_by(&self, id: &str, minutes: u32, act: Act) -> Result<QueueChange, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
+        // ORG-3: the ticket by any short form of its address.
+        let id = self.resolve(id)?;
         if minutes == 0 || minutes > SNOOZE_MAX_MINUTES {
             return Err(StoreError::Invalid(format!("`minutes` is 1 to {SNOOZE_MAX_MINUTES} (a week) — not {minutes}")));
         }
@@ -443,7 +447,7 @@ impl Store {
     ) -> Result<QueueChange, StoreError> {
         let tickets = Arc::clone(&self.tickets);
         let (stored, kept) = ((entry.clone(), record.clone()), (entry, record));
-        let (id, epic) = (row.id.clone(), row.epic.clone());
+        let (id, shortcode) = (row.id.clone(), row.shortcode.clone());
         let ticket = id.clone();
         self.write(
             serial,
@@ -453,7 +457,7 @@ impl Store {
             },
             move |cache, _| cache.queue.put(&ticket, kept.0, kept.1),
             move |(), (), tx| {
-                tx.send(Change::Queue { epic, change: change.clone() });
+                tx.send(Change::Queue { shortcode, change: change.clone() });
                 if let Some(c) = under.and_then(|u| u.after(&tickets)) {
                     tx.send(c);
                 }
@@ -466,7 +470,7 @@ impl Store {
     /// MENGER-39: the open watches whose filter asks `queued`, before a
     /// write that moves `row` in or out of it.
     fn queued_before(&self, cache: &Cache, row: &Row) -> Option<UnderBefore> {
-        lineage::queued_before_with(&self.unders, cache, &[(&row.epic, row.seq)])
+        lineage::queued_before_with(&self.unders, cache, &[(&row.shortcode, row.seq)])
     }
 
     /// MENGER-39: the queue, most urgent first, then the oldest — each entry
@@ -491,11 +495,13 @@ impl Store {
 
     /// MENGER-39: `id`'s queue entry, when it is queued. From the cache.
     pub fn queue_entry(&self, id: &str) -> Option<QueueEntry> {
-        self.tickets.read().expect("store lock poisoned").queue.get(&id.trim().to_ascii_uppercase()).cloned()
+        let cache = self.tickets.read().expect("store lock poisoned");
+        cache.resolve(id).ok().and_then(|key| cache.queue.get(&key).cloned())
     }
 
     /// MENGER-39: `id`'s queue history, oldest first. From the cache.
     pub fn queue_history(&self, id: &str) -> Vec<QueueRecord> {
-        self.tickets.read().expect("store lock poisoned").queue.records(&id.trim().to_ascii_uppercase()).to_vec()
+        let cache = self.tickets.read().expect("store lock poisoned");
+        cache.resolve(id).map(|key| cache.queue.records(&key).to_vec()).unwrap_or_default()
     }
 }

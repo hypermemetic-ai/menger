@@ -51,7 +51,7 @@ fn build(epic: &str) -> NewTicket {
 
 /// A create in `epic` — its scope root first if the shortcode is new.
 async fn create_in(store: &Store, epic: &str) -> Ticket {
-    let new = if store.extents().iter().any(|(e, _)| e == epic) {
+    let new = if store.extents_text().iter().any(|(e, _)| e == epic) {
         build(epic)
     } else {
         scope(epic)
@@ -70,7 +70,9 @@ pub(super) fn write_runs(path: &Path, rows: &[(&str, u32)]) {
             &Ticket {
                 labels: Vec::new(),
                 id: format!("{epic}-{seq}"),
-                epic: epic.to_string(),
+                epic: (*epic).into(),
+                shortcode: (*epic).into(),
+                address: String::new(),
                 seq: *seq,
                 title: format!("{epic}-{seq}"),
                 status: Status::Pending,
@@ -123,7 +125,7 @@ impl Oracle {
         let matching: Vec<&String> = self
             .rows
             .iter()
-            .filter(|(_, k)| epic.as_deref().is_none_or(|e| k.epic == e))
+            .filter(|(_, k)| epic.as_deref().is_none_or(|e| k.shortcode.as_str() == e))
             .filter(|(_, k)| cursor.as_ref().is_none_or(|c| k > c))
             .map(|(id, _)| id)
             .collect();
@@ -144,10 +146,10 @@ impl Oracle {
 
     /// Each shortcode as a scan finds it: `(lowest, highest, how many,
     /// every sequence 1..=highest)` — what the cache keeps, worked out.
-    pub(super) fn runs(&self) -> BTreeMap<String, (u32, u32, u64, bool)> {
-        let mut seqs: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+    pub(super) fn runs(&self) -> BTreeMap<ShortcodeId, (u32, u32, u64, bool)> {
+        let mut seqs: BTreeMap<ShortcodeId, BTreeSet<u32>> = BTreeMap::new();
         for (_, k) in &self.rows {
-            seqs.entry(k.epic.clone()).or_default().insert(k.seq);
+            seqs.entry(k.shortcode.clone()).or_default().insert(k.seq);
         }
         seqs.into_iter()
             .map(|(epic, s)| {
@@ -219,7 +221,7 @@ fn cursors(oracle: &Oracle, rng: &mut Rng) -> Vec<Option<String>> {
     let ids = oracle.ids();
     let mut by_epic: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (id, k) in &oracle.rows {
-        by_epic.entry(k.epic.as_str()).or_default().push(id);
+        by_epic.entry(k.shortcode.as_str()).or_default().push(id);
     }
     for run in by_epic.values() {
         out.push(Some(run[0].to_string()));
@@ -237,7 +239,7 @@ fn cursors(oracle: &Oracle, rng: &mut Rng) -> Vec<Option<String>> {
 /// Every epic worth filtering on: none, each one held, a lowercase spelling
 /// (filters are case-insensitive), and one that holds nothing.
 fn epics(oracle: &Oracle) -> Vec<Option<String>> {
-    let held: BTreeSet<&str> = oracle.rows.iter().map(|(_, k)| k.epic.as_str()).collect();
+    let held: BTreeSet<&str> = oracle.rows.iter().map(|(_, k)| k.shortcode.as_str()).collect();
     let mut out: Vec<Option<String>> = vec![None, Some("NOTHING".into())];
     for e in held {
         out.push(Some(e.to_string()));
@@ -304,8 +306,8 @@ async fn a_hole_in_a_shortcode_still_pages_by_the_count() {
     );
     let store = Store::open(&path).unwrap();
     let runs = store.tickets.read().unwrap().ids.runs();
-    assert_eq!(runs["GAP"], (1, 6, 4, false), "GAP holds 4 of 6: not dense");
-    assert_eq!(runs["AAA"], (1, 3, 3, true));
+    assert_eq!(runs[&ShortcodeId::new("GAP")], (1, 6, 4, false), "GAP holds 4 of 6: not dense");
+    assert_eq!(runs[&ShortcodeId::new("AAA")], (1, 3, 3, true));
 
     let oracle = Oracle::of(&store);
     for after in [None, Some("AAA-2"), Some("AAA-3"), Some("GAP-1"), Some("GAP-2"), Some("GAP-5"), Some("GAP-6"), Some("ZED-1"), Some("ZED-2")] {
@@ -352,8 +354,8 @@ async fn a_hole_in_a_shortcode_still_pages_by_the_count() {
         assert_every_page_is_counted(&store, &mut Rng(7), &format!("a create in {epic}"));
     }
     let runs = store.tickets.read().unwrap().ids.runs();
-    assert_eq!(runs["GAP"], (1, 8, 6, false));
-    assert_eq!(runs["NEW"], (1, 2, 2, true));
+    assert_eq!(runs[&ShortcodeId::new("GAP")], (1, 8, 6, false));
+    assert_eq!(runs[&ShortcodeId::new("NEW")], (1, 2, 2, true));
 }
 
 /// A sequence 0 is a hole of another shape: `ODD-0..ODD-2` holds three
@@ -368,8 +370,8 @@ async fn a_sequence_zero_is_not_dense() {
     write_runs(&path, &[("ODD", 0), ("ODD", 1), ("ODD", 2), ("ZRO", 0), ("ZRO", 1), ("ZRO", 3)]);
     let store = Store::open(&path).unwrap();
     let runs = store.tickets.read().unwrap().ids.runs();
-    assert_eq!(runs["ODD"], (0, 2, 3, false));
-    assert_eq!(runs["ZRO"], (0, 3, 3, false), "held == last, and still a hole");
+    assert_eq!(runs[&ShortcodeId::new("ODD")], (0, 2, 3, false));
+    assert_eq!(runs[&ShortcodeId::new("ZRO")], (0, 3, 3, false), "held == last, and still a hole");
     let page = store
         .page(PageQuery {
             after: Some("ZRO-0"),
@@ -478,7 +480,7 @@ async fn the_kept_runs_are_a_scan_after_every_path_that_brings_tickets_in() {
     }
     let store = Store::open(&path).unwrap();
     assert_runs_are_a_scan(&store, "the AGS-13 migration");
-    assert_eq!(store.tickets.read().unwrap().ids.runs()["LEG"], (1, 4, 3, false));
+    assert_eq!(store.tickets.read().unwrap().ids.runs()[&ShortcodeId::new("LEG")], (1, 4, 3, false));
     assert_every_page_is_counted(&store, &mut Rng(13), "the AGS-13 migration");
 
     let path = dir.path().join("pre-ags19.db");

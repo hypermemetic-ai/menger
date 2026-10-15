@@ -191,7 +191,7 @@ async fn the_filter_cells_are_answered_from_the_queue() {
     }
     assert_eq!(
         heard,
-        [Membership::Entered { id: "Q-3".into(), epic: "Q".into(), seq: 3 }, Membership::Left { id: "Q-3".into(), epic: "Q".into(), seq: 3 }]
+        [Membership::Entered { id: "Q-3".into(), shortcode: "Q".into(), seq: 3 }, Membership::Left { id: "Q-3".into(), shortcode: "Q".into(), seq: 3 }]
     );
 }
 

@@ -163,10 +163,13 @@ pub enum Field {
     /// [`crate::labels::normalize`]). A ticket holds many, so — as `under` —
     /// two inclusions never intersect.
     Label(String),
-    /// `in <SHORTCODE>`: its shortcode is the one named (upper case).
+    /// `in <SHORTCODE>`: its shortcode is the one named (upper case). ORG-3:
+    /// by its letters — every shortcode with them, wherever hosted.
     In(String),
     /// `under <ID or SHORTCODE>`: the one named is in its lineage — it is
     /// that ticket or below it, or in that shortcode or one hosted under it.
+    /// ORG-3: any address, resolved by the store to one ticket or shortcode
+    /// (or refused, naming each it could be).
     Under(String),
     /// `text "…"`: its id or title contains the text — find's rule
     /// (SCALE-6): trimmed, ASCII case folded; a blank text matches all.
@@ -986,13 +989,17 @@ fn read_field(rest: &str) -> Result<Field, String> {
                 false => Err(format!("`in` takes a shortcode, as `in SCALE` — not `{v}`")),
             }
         }
+        // ORG-3: an id, a shortcode or any address — `org:ROOT/…/SC-N`,
+        // `MENGER/THEME`, a path address — spelled as the store spells it
+        // ([`crate::address::folded`]: its codes upper case, its org and
+        // path as written); the store resolves it to one.
         "under" => {
             let v = value()?;
             let ok = v.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
-                && v.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+                && v.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':' | b'/'));
             match ok {
-                true => Ok(Field::Under(v.to_ascii_uppercase())),
-                false => Err(format!("`under` takes an id or a shortcode, as `under SCALE-13` — not `{v}`")),
+                true => Ok(Field::Under(crate::address::folded(v))),
+                false => Err(format!("`under` takes an id, a shortcode or an address, as `under SCALE-13` — not `{v}`")),
             }
         }
         // MENGER-13: the transition log.

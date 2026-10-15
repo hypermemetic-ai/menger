@@ -169,7 +169,7 @@ async fn health_create_list_watch_over_the_wire() {
     assert_eq!(
         ev["group"],
         json!({
-            "epic": "WIRE", "total": 1, "done": 0, "docs": 0, "root": "WIRE-1",
+            "epic": "WIRE", "shortcode": "WIRE", "address": "hypermemetic:WIRE", "total": 1, "done": 0, "docs": 0, "root": "WIRE-1",
             // AGS-23: the root's own row, which the nav draws at the top
             "root_row": {"title": "first over the wire", "status": "Pending", "kind": "scope"},
             "host": null
@@ -767,10 +767,10 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!(
         groups,
         vec![
-            json!({"epic": "DEEP", "total": 2, "done": 1, "docs": 0, "root": "DEEP-1", "root_row": root_row("deeper"), "host": "SUB-3"}),
-            json!({"epic": "HUB", "total": 8, "done": 3, "docs": 0, "root": "HUB-1", "root_row": root_row("the host"), "host": null}),
-            json!({"epic": "LONE", "total": 2, "done": 0, "docs": 0, "root": "LONE-1", "root_row": root_row("alone"), "host": null}),
-            json!({"epic": "SUB", "total": 5, "done": 2, "docs": 0, "root": "SUB-1", "root_row": root_row("hosted"), "host": "HUB-2"}),
+            json!({"epic": "DEEP", "shortcode": "DEEP", "address": "hypermemetic:HUB/SUB/DEEP", "total": 2, "done": 1, "docs": 0, "root": "DEEP-1", "root_row": root_row("deeper"), "host": "SUB-3"}),
+            json!({"epic": "HUB", "shortcode": "HUB", "address": "hypermemetic:HUB", "total": 8, "done": 3, "docs": 0, "root": "HUB-1", "root_row": root_row("the host"), "host": null}),
+            json!({"epic": "LONE", "shortcode": "LONE", "address": "hypermemetic:LONE", "total": 2, "done": 0, "docs": 0, "root": "LONE-1", "root_row": root_row("alone"), "host": null}),
+            json!({"epic": "SUB", "shortcode": "SUB", "address": "hypermemetic:HUB/SUB", "total": 5, "done": 2, "docs": 0, "root": "SUB-1", "root_row": root_row("hosted"), "host": "HUB-2"}),
         ]
     );
 
@@ -795,15 +795,25 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
         .filter(|ev| ev["summary"]["status"] == "Complete")
         .map(|ev| ev["summary"]["id"].as_str().unwrap().to_string())
         .collect();
-    let nav: Vec<Value> = nav_plan::rows(&facts, &complete)
-        .into_iter()
+    let nav_rows = nav_plan::rows(&facts, &complete);
+    let nav: Vec<Value> = nav_rows
+        .iter()
         .map(|r| {
             // AGS-23: the root's row, as the summary walk has it.
             let row = r.root.as_ref().map(|id| {
                 let s = &all.iter().find(|ev| ev["summary"]["id"] == json!(id)).expect("the root is a row")["summary"];
                 json!({"title": s["title"], "status": s["status"], "kind": s["kind"]})
             });
-            json!({"epic": r.epic, "total": r.total, "done": r.done, "docs": r.docs, "root": r.root, "root_row": row, "host": r.host})
+            // ORG-3: its full address — the codes of the shortcodes above it.
+            let mut chain = vec![r.epic.clone()];
+            let mut host = r.host.clone();
+            while let Some(h) = host {
+                let code = h.rsplit_once('-').expect("an id").0.to_string();
+                host = nav_rows.iter().find(|o| o.epic == code).and_then(|o| o.host.clone());
+                chain.insert(0, code);
+            }
+            let address = format!("hypermemetic:{}", chain.join("/"));
+            json!({"epic": r.epic, "shortcode": r.epic, "address": address, "total": r.total, "done": r.done, "docs": r.docs, "root": r.root, "root_row": row, "host": r.host})
         })
         .collect();
     assert_eq!(groups, nav, "the server's roll-ups are the nav's");
@@ -820,7 +830,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!(ev["type"], "group_changed");
     assert_eq!(
         ev["group"],
-        json!({"epic": "LONE", "total": 2, "done": 1, "docs": 0, "root": "LONE-1", "root_row": root_row("alone"), "host": null})
+        json!({"epic": "LONE", "shortcode": "LONE", "address": "hypermemetic:LONE", "total": 2, "done": 1, "docs": 0, "root": "LONE-1", "root_row": root_row("alone"), "host": null})
     );
     // WAVE-6: and, last, the placement it moved.
     let ev = content(watch.next().await.unwrap().unwrap());
@@ -866,7 +876,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!(
         ev["group"],
         json!({
-            "epic": "HUB", "total": 8, "done": 4, "docs": 0, "root": "HUB-1",
+            "epic": "HUB", "shortcode": "HUB", "address": "hypermemetic:HUB", "total": 8, "done": 4, "docs": 0, "root": "HUB-1",
             "root_row": {"title": "the host", "status": "Ready", "kind": "scope"},
             "host": null
         })
@@ -906,9 +916,9 @@ async fn extents_are_each_shortcodes_last_seq_and_a_row_is_a_cursor() {
     assert_eq!(
         items,
         vec![
-            json!({"type": "extent", "epic": "AAA", "last_seq": 1}),
-            json!({"type": "extent", "epic": "HUB", "last_seq": 3}),
-            json!({"type": "extent", "epic": "SUB", "last_seq": 3}),
+            json!({"type": "extent", "epic": "AAA", "shortcode": "AAA", "last_seq": 1}),
+            json!({"type": "extent", "epic": "HUB", "shortcode": "HUB", "last_seq": 3}),
+            json!({"type": "extent", "epic": "SUB", "shortcode": "SUB", "last_seq": 3}),
         ],
         "one flat extent per shortcode, in order, and nothing after them"
     );
@@ -940,7 +950,7 @@ async fn extents_are_each_shortcodes_last_seq_and_a_row_is_a_cursor() {
     let evs = collect(call(&client, "tickets.create", json!({"epic": "SUB", "title": "e"})).await).await;
     assert_eq!((evs[0]["ticket"]["epic"].as_str(), evs[0]["ticket"]["seq"].as_u64()), (Some("SUB"), Some(4)));
     let items = collect(call(&client, "tickets.extents", json!({})).await).await;
-    assert_eq!(items[2], json!({"type": "extent", "epic": "SUB", "last_seq": 4}));
+    assert_eq!(items[2], json!({"type": "extent", "epic": "SUB", "shortcode": "SUB", "last_seq": 4}));
 }
 
 #[tokio::test]
@@ -1313,7 +1323,7 @@ async fn docs_root_a_shortcode_refuse_set_status_in_band_and_are_never_ready() {
     assert_eq!(
         groups,
         [json!({
-            "epic": "MANIFEST", "total": 1, "done": 0, "docs": 2, "root": "MANIFEST-1",
+            "epic": "MANIFEST", "shortcode": "MANIFEST", "address": "hypermemetic:MANIFEST", "total": 1, "done": 0, "docs": 2, "root": "MANIFEST-1",
             // AGS-23: the root's row — a doc's, in `Doc`
             "root_row": {"title": "the findings", "status": "Doc", "kind": "doc"},
             "host": null
@@ -1855,8 +1865,8 @@ async fn watch_filter_says_entered_and_left_last() {
         ],
         "{evs:#?}"
     );
-    assert_eq!(evs[4], json!({"type": "entered", "id": "WF-2", "epic": "WF", "seq": 2}));
-    assert_eq!(evs[9], json!({"type": "entered", "id": "OTH-2", "epic": "OTH", "seq": 2}));
+    assert_eq!(evs[4], json!({"type": "entered", "id": "WF-2", "epic": "WF", "shortcode": "WF", "seq": 2}));
+    assert_eq!(evs[9], json!({"type": "entered", "id": "OTH-2", "epic": "OTH", "shortcode": "OTH", "seq": 2}));
     let plain_evs = until_marker(&mut plain).await;
     assert_eq!(
         kinds(&plain_evs),
@@ -1868,7 +1878,7 @@ async fn watch_filter_says_entered_and_left_last() {
     answer(&client, "tickets.amend", marker(2)).await;
     let evs = until_marker(&mut filtered).await;
     assert_eq!(kinds(&evs), ["status_changed", "transition", "left", "amended"], "{evs:#?}");
-    assert_eq!(evs[2], json!({"type": "left", "id": "WF-2", "epic": "WF", "seq": 2}));
+    assert_eq!(evs[2], json!({"type": "left", "id": "WF-2", "epic": "WF", "shortcode": "WF", "seq": 2}));
     assert_eq!(kinds(&until_marker(&mut plain).await), ["status_changed", "transition", "amended"], "watch {{}} sends none of the three");
 
     // `membership`: only the three; `epic`: only its shortcode's.
@@ -1934,7 +1944,7 @@ async fn set_kind_over_the_wire() {
     assert_eq!(
         evs[3]["group"],
         json!({
-            "epic": "IDW", "total": 3, "done": 0, "docs": 0, "root": "IDW-1",
+            "epic": "IDW", "shortcode": "IDW", "address": "hypermemetic:IDW", "total": 3, "done": 0, "docs": 0, "root": "IDW-1",
             "root_row": {"title": "identity", "status": "Epic", "kind": "scope"}, "host": null
         })
     );
@@ -1945,7 +1955,7 @@ async fn set_kind_over_the_wire() {
         ["kind_changed", "transition", "transition", "group_changed", "placements_changed", "entered", "amended"],
         "{evs:#?}"
     );
-    assert_eq!(evs[5], json!({"type": "entered", "id": "IDW-1", "epic": "IDW", "seq": 1}));
+    assert_eq!(evs[5], json!({"type": "entered", "id": "IDW-1", "epic": "IDW", "shortcode": "IDW", "seq": 1}));
 
     // A build made a complete gap: `done` moves, and what waited on it is
     // placed again.
@@ -2036,7 +2046,7 @@ async fn tree_and_under_over_the_wire() {
         assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("error")), "{bad}: {evs:?}");
     }
     let counts = collect(call(&client, "tickets.counts", json!({"filter": "under TW-2"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "TW", "held": 3})], "TW-2, TW-4, TW-6");
+    assert_eq!(counts, [json!({"type": "count", "epic": "TW", "shortcode": "TW", "held": 3})], "TW-2, TW-4, TW-6");
 
     // `watch { filter }` asking `under`: TW-5 moved under TW-2 enters; back, it leaves.
     let mut watch = call(&client, "tickets.watch", json!({"filter": "under TW-2"})).await;
@@ -2048,10 +2058,10 @@ async fn tree_and_under_over_the_wire() {
     let k = kinds(&evs);
     assert_eq!(k.first().map(String::as_str), Some("parent_changed"), "{evs:#?}");
     assert_eq!(&k[k.len() - 2..], ["entered", "amended"], "entered is the move's last event: {evs:#?}");
-    assert_eq!(evs[k.len() - 2], json!({"type": "entered", "id": "TW-5", "epic": "TW", "seq": 5}));
+    assert_eq!(evs[k.len() - 2], json!({"type": "entered", "id": "TW-5", "epic": "TW", "shortcode": "TW", "seq": 5}));
     answer(&client, "tickets.set_parent", json!({"id": "TW-5", "parent": "TW-3"})).await;
     let evs = next_events(&mut members, 2).await;
-    assert_eq!(evs, [json!({"type": "entered", "id": "TW-5", "epic": "TW", "seq": 5}), json!({"type": "left", "id": "TW-5", "epic": "TW", "seq": 5})]);
+    assert_eq!(evs, [json!({"type": "entered", "id": "TW-5", "epic": "TW", "shortcode": "TW", "seq": 5}), json!({"type": "left", "id": "TW-5", "epic": "TW", "shortcode": "TW", "seq": 5})]);
 }
 
 /// FILTER-23 over the real protocol: `tree { matches_only }` — the nav that
@@ -2226,10 +2236,10 @@ async fn a_crossing_that_unblocks_three_hundred_recounts() {
     answer(&client, "tickets.amend", json!({"id": "RA-1", "body": "marker"})).await;
     let evs = until_marker(&mut watch).await;
     let recounts: Vec<&Value> = evs.iter().filter(|e| e["type"] == "recount").collect();
-    assert_eq!(recounts, [&json!({"type": "recount", "epic": "RA", "held": 200}), &json!({"type": "recount", "epic": "RB", "held": 100})], "{evs:#?}");
+    assert_eq!(recounts, [&json!({"type": "recount", "epic": "RA", "shortcode": "RA", "held": 200}), &json!({"type": "recount", "epic": "RB", "shortcode": "RB", "held": 100})], "{evs:#?}");
     assert!(!evs.iter().any(|e| e["type"] == "entered" || e["type"] == "left"), "no entered past 256");
     let counts = collect(call(&client, "tickets.counts", json!({"filter": "ready"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "RA", "held": 200}), json!({"type": "count", "epic": "RB", "held": 100})]);
+    assert_eq!(counts, [json!({"type": "count", "epic": "RA", "shortcode": "RA", "held": 200}), json!({"type": "count", "epic": "RB", "shortcode": "RB", "held": 100})]);
     let plain_evs = until_marker(&mut plain).await;
     assert!(!plain_evs.iter().any(|e| matches!(e["type"].as_str(), Some("entered" | "left" | "recount"))), "watch {{}}");
 }
@@ -2276,9 +2286,9 @@ async fn counts_facets_and_filtered_pages_over_the_wire() {
     assert!(message.contains("`tag x`") && message.contains("`nonsense`"), "{message}");
 
     let counts = collect(call(&client, "tickets.counts", json!({"filter": "severity in (high, low)"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "FW", "held": 6})]);
+    assert_eq!(counts, [json!({"type": "count", "epic": "FW", "shortcode": "FW", "held": 6})]);
     let all = collect(call(&client, "tickets.counts", json!({})).await).await;
-    assert_eq!(all, [json!({"type": "count", "epic": "FW", "held": 7})]);
+    assert_eq!(all, [json!({"type": "count", "epic": "FW", "shortcode": "FW", "held": 7})]);
     let none = collect(call(&client, "tickets.counts", json!({"filter": "category active"})).await).await;
     assert!(none.is_empty(), "a shortcode with no match has no count");
 
@@ -2331,9 +2341,9 @@ async fn menger_doc_is_a_filter_on_every_read_over_the_wire() {
 
     // counts, and facets: a flag category, yes / no.
     let counts = collect(call(&client, "tickets.counts", json!({"filter": "menger doc"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "PLEXUS", "held": 1})]);
+    assert_eq!(counts, [json!({"type": "count", "epic": "PLEXUS", "shortcode": "PLEXUS", "held": 1})]);
     let counts = collect(call(&client, "tickets.counts", json!({"filter": "not menger doc and kind doc"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "PLEXUS", "held": 1})], "PLEXUS-3, the ordinary doc");
+    assert_eq!(counts, [json!({"type": "count", "epic": "PLEXUS", "shortcode": "PLEXUS", "held": 1})], "PLEXUS-3, the ordinary doc");
     let menu = |facets: &[Value], field: &str| -> Vec<(String, u64)> {
         facets
             .iter()
@@ -2439,12 +2449,12 @@ async fn labels_and_asking_are_filters_over_the_wire() {
         assert_eq!(ids(&rows), want, "{filter}");
     }
     let counts = collect(call(&client, "tickets.counts", json!({"filter": "asking or label needs-you"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "held": 2})]);
+    assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "shortcode": "HOME", "held": 2})]);
     // FILTER-24: `keep` holds the open ticket in, under these cells too.
     let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "asking or label needs-you", "keep": "HOME-4", "summary": true})).await).await;
     assert_eq!(ids(&rows), ["HOME-2", "HOME-3", "HOME-4"], "kept beside the matches");
     let counts = collect(call(&client, "tickets.counts", json!({"filter": "label needs-you", "keep": "HOME-4"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "held": 2})]);
+    assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "shortcode": "HOME", "held": 2})]);
     let menu = |facets: &[Value], field: &str| -> Vec<(String, u64)> {
         facets
             .iter()
@@ -3091,7 +3101,7 @@ async fn delete_over_the_wire() {
     let got = answer(&client, "tickets.get", json!({"id": "DEL-5"})).await;
     assert_eq!((&got["type"], &got["tombstones"][0]["by"]), (&json!("deleted"), &json!("anonymous")), "{got}");
     let extents = collect(call(&client, "tickets.extents", json!({})).await).await;
-    assert_eq!(extents, [json!({"type": "extent", "epic": "DEL", "last_seq": 5, "holes": [5]})], "the deleted last is a hole");
+    assert_eq!(extents, [json!({"type": "extent", "epic": "DEL", "shortcode": "DEL", "last_seq": 5, "holes": [5]})], "the deleted last is a hole");
 
     let refused = answer(&client, "tickets.delete", json!({"ids": ["DEL-2"]})).await;
     assert_eq!(refused["type"], "error", "{refused}");
@@ -3109,7 +3119,7 @@ async fn delete_over_the_wire() {
     let child = answer(&client, "tickets.get", json!({"id": "DEL-3"})).await;
     assert_eq!(child["ticket"]["parent"], "DEL-1", "moved to its grandparent");
     let extents = collect(call(&client, "tickets.extents", json!({})).await).await;
-    assert_eq!(extents, [json!({"type": "extent", "epic": "DEL", "last_seq": 5, "holes": [2, 5]})]);
+    assert_eq!(extents, [json!({"type": "extent", "epic": "DEL", "shortcode": "DEL", "last_seq": 5, "holes": [2, 5]})]);
 
     let back = answer(&client, "tickets.undelete", json!({"ids": ["DEL-2"]})).await;
     assert_eq!((&back["type"], &back["tickets"][0]["title"]), (&json!("undeleted"), &json!("an area")), "{back}");
@@ -3150,11 +3160,11 @@ async fn the_queue_over_the_wire() {
     assert_eq!((ev["ticket"]["id"].as_str(), ev["ticket"]["title"].as_str()), (Some("QUE-2"), Some("asks")), "its row, for the tray");
     let heard = watch_until(&mut watch, "queued").await;
     assert_eq!(heard.last().unwrap()["entry"], ev["entry"], "watch hears it at once");
-    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "entered", "id": "QUE-2", "epic": "QUE", "seq": 2})]);
+    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "entered", "id": "QUE-2", "epic": "QUE", "shortcode": "QUE", "seq": 2})]);
 
     // Today, then a lower requeue keeps it, a higher one raises it.
     answer(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "today", "reason": "the promote rolled back", "source": "pipeline"})).await;
-    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "entered", "id": "QUE-3", "epic": "QUE", "seq": 3})]);
+    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "entered", "id": "QUE-3", "epic": "QUE", "shortcode": "QUE", "seq": 3})]);
     let ev = answer(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "whenever", "reason": "still rolled back"})).await;
     assert_eq!((ev["action"].as_str(), ev["entry"]["urgency"].as_str()), (Some("requeued"), Some("today")), "{ev}");
     let ev = answer(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "now", "reason": "prod is down"})).await;
@@ -3168,7 +3178,7 @@ async fn the_queue_over_the_wire() {
     assert_eq!(order, [("QUE-2", "blocking"), ("QUE-3", "now")]);
     assert_eq!((rows[2]["type"].as_str(), rows[2]["count"].as_u64(), rows[2]["snoozed"].as_u64()), (Some("queue_end"), Some(2), Some(0)));
     let counts = collect(call(&client, "tickets.counts", json!({"filter": "queued now or queued blocking"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "QUE", "held": 2})]);
+    assert_eq!(counts, [json!({"type": "count", "epic": "QUE", "shortcode": "QUE", "held": 2})]);
 
     // Snooze: still queued, off the list without the snoozed.
     let ev = answer(&client, "tickets.snooze", json!({"id": "QUE-3", "minutes": 10, "source": "app"})).await;
@@ -3186,7 +3196,7 @@ async fn the_queue_over_the_wire() {
     let unq = heard.last().unwrap();
     assert_eq!((unq["id"].as_str(), unq["action"].as_str(), unq["by"].as_str()), (Some("QUE-2"), Some("closed"), Some("system")), "{unq}");
     assert!(heard.iter().any(|e| e["type"] == "input_changed" && e["input"]["state"] == "closed"), "{heard:?}");
-    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "left", "id": "QUE-2", "epic": "QUE", "seq": 2})]);
+    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "left", "id": "QUE-2", "epic": "QUE", "shortcode": "QUE", "seq": 2})]);
 
     // Unqueue; again: not_queued, nothing written.
     let ev = answer(&client, "tickets.unqueue", json!({"id": "QUE-3", "source": "app"})).await;

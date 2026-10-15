@@ -8,7 +8,7 @@ use super::*;
 /// FILTER-4: a filtered watch's watcher — `text` (already ANDed with the
 /// caller's reach) compiled, in `epic` alone when one is asked. MENGER-13:
 /// its history read by `clock`.
-pub(super) fn watcher_for(store: &Store, text: Option<&str>, epic: Option<&str>, clock: &Clock) -> Result<crate::store::Watcher, String> {
+pub(super) fn watcher_for(store: &Store, text: Option<&str>, epic: Option<&crate::address::ShortcodeId>, clock: &Clock) -> Result<crate::store::Watcher, String> {
     let lens = text.map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())).map_err(|e| e.to_string())?;
     Ok(store.watcher_in(lens.with_clock(clock.clone()), epic))
 }
@@ -201,8 +201,10 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         // ACT-5: a deleted ticket is no member of any reach any more — its
         // shortcode's is the reach's word; a ticket brought back, its own.
         TicketsEvent::Deleted { ids, tombstones } => {
-            let held: Vec<String> = store.counts(reach).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect();
-            let seen = |id: &str| id.rsplit_once('-').is_some_and(|(e, _)| held.iter().any(|h| h == e));
+            // ORG-3: a deleted ticket's shortcode is the one its key was
+            // minted in (a deleted ticket never moves).
+            let held: Vec<crate::address::ShortcodeId> = store.counts(reach).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect();
+            let seen = |id: &str| id.rsplit_once('-').is_some_and(|(e, _)| held.iter().any(|h| h.as_str() == e));
             let ids: Vec<String> = ids.iter().filter(|id| seen(id)).cloned().collect();
             let tombstones = tombstones.iter().filter(|t| seen(&t.id)).cloned().collect();
             return (!ids.is_empty()).then_some(TicketsEvent::Deleted { ids, tombstones });
@@ -219,8 +221,8 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         TicketsEvent::Unqueued { id, .. } | TicketsEvent::NotQueued { id } => Some(id.clone()),
         TicketsEvent::QueueRecord { record } => Some(record.ticket.clone()),
         TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
-        TicketsEvent::Extent { epic, .. } | TicketsEvent::Count { epic, .. } | TicketsEvent::Recount { epic, .. } => {
-            let seen = store.counts(reach).into_iter().any(|(e, n)| e == *epic && n > 0);
+        TicketsEvent::Extent { shortcode, .. } | TicketsEvent::Count { shortcode, .. } | TicketsEvent::Recount { shortcode, .. } => {
+            let seen = store.counts(reach).into_iter().any(|(e, n)| e == *shortcode && n > 0);
             return seen.then_some(ev);
         }
         // Without the owner in hand, nothing (Sight::relay places them).
@@ -232,6 +234,9 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         | TicketsEvent::Facet { .. }
         | TicketsEvent::WaveCounts { .. }
         | TicketsEvent::Error { .. }
+        // ORG-3: a refusal, its candidates the store's (ORG-4 gives the
+        // resolver the caller's reach).
+        | TicketsEvent::Ambiguous { .. }
         | TicketsEvent::BodyTooLarge { .. }
         | TicketsEvent::Searched { .. }
         | TicketsEvent::HistoryEnd { .. }
@@ -241,11 +246,6 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         Some(id) if !sees(&id) => None,
         _ => Some(ev),
     }
-}
-
-/// A ticket id's (or path address's) shortcode.
-pub(super) fn shortcode_of(id: &str) -> &str {
-    id.split(['-', '/']).next().unwrap_or(id)
 }
 
 /// IDENTITY-21: the lens a caller sees tickets through in this call —
@@ -354,17 +354,19 @@ fn redact(e: StoreError, sees: &dyn Fn(&str) -> bool) -> String {
 /// IDENTITY-21: the shortcodes a caller can see — `None`: all of them. A
 /// grant covers whole shortcodes (`under`), so a shortcode is visible
 /// exactly when the caller's reach admits any of its tickets.
-pub(super) fn visible_epics(store: &Store, caller: &Caller) -> Result<Option<std::collections::HashSet<String>>, String> {
+///
+/// ORG-3: by the shortcodes' identities.
+pub(super) fn visible_epics(store: &Store, caller: &Caller) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
     epics_under(store, caller.reach_filter()?)
 }
 
 /// AUTH-7: [`visible_epics`] by where `tickets.get` is held — what a write
 /// may name.
-pub(super) fn sight_epics(store: &Store, caller: &Caller) -> Result<Option<std::collections::HashSet<String>>, String> {
+pub(super) fn sight_epics(store: &Store, caller: &Caller) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
     epics_under(store, caller.sight_filter()?)
 }
 
-pub(super) fn epics_under(store: &Store, reach: Option<crate::filter::Filter>) -> Result<Option<std::collections::HashSet<String>>, String> {
+pub(super) fn epics_under(store: &Store, reach: Option<crate::filter::Filter>) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
     let Some(reach) = reach else { return Ok(None) };
     let lens = Lens::of(&reach).map_err(|e| e.to_string())?;
     Ok(Some(store.counts(&lens).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect()))
@@ -376,5 +378,17 @@ pub(super) fn visible_count(store: &Store, caller: &Caller) -> u64 {
         Ok(None) => store.count() as u64,
         Ok(Some(reach)) => Lens::of(&reach).map(|lens| store.counts(&lens).into_iter().map(|(_, n)| n).sum()).unwrap_or(0),
         Err(_) => 0,
+    }
+}
+
+/// ORG-3: the shortcode `watch { epic }` names, by any short form of its
+/// address — one naming several refuses the watch (the second, why); one
+/// naming none is a shortcode with no tickets, which nothing is said of.
+pub(super) fn watched_shortcode(store: &Store, epic: Option<&str>) -> (Option<crate::address::ShortcodeId>, Option<String>) {
+    let Some(e) = epic else { return (None, None) };
+    match store.shortcode(e) {
+        Ok(Some(sc)) => (Some(sc.id), None),
+        Ok(None) => (Some(crate::address::ShortcodeId::new(&e.trim().to_ascii_uppercase())), None),
+        Err(why) => (None, Some(why.to_string())),
     }
 }

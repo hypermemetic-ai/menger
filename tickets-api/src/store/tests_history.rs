@@ -3,6 +3,7 @@
 //! structure the store keeps held to a scan after cascades and restores.
 
 use super::history::{Act, Clock, Log};
+use crate::address::ShortcodeId;
 use super::tests::Changes;
 use super::tests_filtered::holds_by_rule;
 use super::tests_ready::{Rng, Tally};
@@ -424,7 +425,7 @@ fn the_kept_indexes_answer_as_a_scan() {
             if !kind {
                 now_of.insert(key.clone(), to);
             }
-            log.append(&t, &OrderKey { epic: key.0.clone(), seq: key.1 });
+            log.append(&t, &OrderKey { shortcode: ShortcodeId::from(key.0.clone()), seq: key.1 });
             by_ticket.entry(key).or_default().push(t);
         }
         let windows = ["", " within 3h", " within 2d", " today", " yesterday", " this week", " since 2026-10-01", " before 2026-09-30T12:00", " between 2026-09-25 and 2026-10-03"];
@@ -436,10 +437,10 @@ fn the_kept_indexes_answer_as_a_scan() {
                     for zone in ["UTC", "Europe/Berlin"] {
                         let clock = Clock { me: "key:bob".into(), ..at(base + rng.below(5 * 86_400) as i64 - 86_400) }.zoned(Some(zone)).unwrap();
                         let got = log.holds(&p, &clock);
-                        let mut want: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
+                        let mut want: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
                         for ((epic, seq), own) in &by_ticket {
                             if holds_by_rule(&p, own, &clock) {
-                                want.entry(epic.clone()).or_default().insert(*seq);
+                                want.entry(ShortcodeId::from(epic)).or_default().insert(*seq);
                             }
                         }
                         assert_eq!(got, want, "round {round}: `{}` at {:?} in {zone}", p.format(), clock.fixed);
@@ -485,8 +486,8 @@ async fn the_examples_read_the_log() {
     assert_eq!(
         aged,
         [
-            Membership::Left { id: "R-3".into(), epic: "R".into(), seq: 3 },
-            Membership::Left { id: "R-8".into(), epic: "R".into(), seq: 8 }
+            Membership::Left { id: "R-3".into(), shortcode: ShortcodeId::from("R"), seq: 3 },
+            Membership::Left { id: "R-8".into(), shortcode: ShortcodeId::from("R"), seq: 8 }
         ]
     );
     assert!(store.aged(&lens, now, now + 60, None).is_empty(), "nothing aged in a minute");
@@ -514,8 +515,8 @@ async fn a_history_watch_hears_each_writes_transition() {
             heard.extend(watcher.under_membership(&moves));
         }
     }
-    assert_eq!(heard, [Membership::Entered { id: "R-8".into(), epic: "R".into(), seq: 8 }]);
+    assert_eq!(heard, [Membership::Entered { id: "R-8".into(), shortcode: ShortcodeId::from("R"), seq: 8 }]);
     assert!(watcher.tick(&store, None).is_empty(), "no time has passed that moves it");
     let kept = store.counts_keeping(&Lens::parse("entered Coding within 1h").unwrap(), Some("R-1"));
-    assert_eq!(kept, [("R".to_string(), 3)], "R-4, R-8 and the kept R-1");
+    assert_eq!(kept, [(ShortcodeId::from("R"), 3)], "R-4, R-8 and the kept R-1");
 }

@@ -42,6 +42,7 @@
 
 use super::history::Clock;
 use super::{lineage, Cache, OrderKey, Row, Store, StoreError};
+use crate::address::ShortcodeId;
 use crate::deployments::{
     environment_of, project_of, rank, DeploySource, DeployState, Deployment, DeploymentsEvent, Environment, Record, RunningCell, COMMITS_MAX, TICKETS_MAX,
 };
@@ -391,8 +392,8 @@ impl Deploys {
     /// DEPLOY-11: the tickets `deployed <env> [window]` holds for, per
     /// shortcode — each running in an environment `env` names, since a
     /// moment in the window. From the kept cells, never a scan.
-    pub(super) fn holds(&self, env: &str, window: Option<&Window>, clock: &Clock, at: &HashMap<String, OrderKey>) -> BTreeMap<String, RoaringBitmap> {
-        let mut out: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
+    pub(super) fn holds(&self, env: &str, window: Option<&Window>, clock: &Clock, at: &HashMap<String, OrderKey>) -> BTreeMap<ShortcodeId, RoaringBitmap> {
+        let mut out: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
         let Some((lo, hi)) = clock.bounds(window) else { return out };
         for ((p, n), k) in &self.envs {
             if !Self::names(env, p, n) {
@@ -403,7 +404,7 @@ impl Deploys {
                     continue;
                 }
                 if let Some(key) = at.get(t) {
-                    out.entry(key.epic.clone()).or_default().insert(key.seq);
+                    out.entry(key.shortcode.clone()).or_default().insert(key.seq);
                 }
             }
         }
@@ -445,7 +446,7 @@ impl Cache {
     /// MENGER-13 / DEPLOY-11: the tickets a history predicate holds for, per
     /// shortcode — `deployed` from the deployments' cells, the rest from the
     /// transition log.
-    pub(super) fn holds(&self, h: &crate::filter::History, clock: &Clock) -> BTreeMap<String, RoaringBitmap> {
+    pub(super) fn holds(&self, h: &crate::filter::History, clock: &Clock) -> BTreeMap<ShortcodeId, RoaringBitmap> {
         match &h.event {
             crate::filter::Event::Deployed(env) => self.deploys.holds(env, h.window.as_ref(), clock, &self.at),
             // MENGER-39: `queued` from the queue's kept entries.
@@ -464,9 +465,11 @@ impl Cache {
         }
     }
 
-    /// Whether the store holds a ticket of `epic`.
+    /// Whether the store holds a ticket of `epic` — ORG-3: a project names a
+    /// shortcode by its identity (its code, for every one before ORG-3).
     fn holds_shortcode(&self, epic: &str) -> bool {
-        self.order.range(OrderKey { epic: epic.to_string(), seq: 0 }..).next().is_some_and(|(k, _)| k.epic == epic)
+        let sc = ShortcodeId::new(epic);
+        self.order.range(OrderKey { shortcode: sc.clone(), seq: 0 }..).next().is_some_and(|(k, _)| k.shortcode == sc)
     }
 
     /// `ids` that name tickets, each once, in the store's order.
@@ -677,7 +680,7 @@ impl Store {
                 .collect();
             let entered = cache.in_order(kept.running.keys().map(String::as_str).filter(|t| !before.contains_key(*t)));
             let left = cache.in_order(before.keys().map(String::as_str).filter(|t| !kept.running.contains_key(*t)));
-            let keys: Vec<(&str, u32)> = moved.iter().filter_map(|t| cache.at.get(*t)).map(|k| (k.epic.as_str(), k.seq)).collect();
+            let keys: Vec<(&ShortcodeId, u32)> = moved.iter().filter_map(|t| cache.at.get(*t)).map(|k| (&k.shortcode, k.seq)).collect();
             let under = lineage::deployed_before_with(&self.unders, &cache, &keys);
             (kept, entered, left, under)
         };
@@ -769,8 +772,8 @@ impl Store {
     pub fn for_ticket(&self, id: &str, allowed: Option<&HashSet<String>>) -> Result<Vec<DeploymentsEvent>, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let row = cache.get(id.trim()).ok_or_else(|| StoreError::NotFound(id.trim().to_string()))?;
-        let mut projects: BTreeSet<String> = BTreeSet::from([row.epic.clone()]);
-        projects.extend(lineage::host_chain(&cache, &row.epic));
+        let mut projects: BTreeSet<String> = BTreeSet::from([row.shortcode.as_str().to_string()]);
+        projects.extend(lineage::host_chain(&cache, &row.shortcode).iter().map(|h| h.as_str().to_string()));
         for ((p, _), k) in &cache.deploys.envs {
             if k.running.contains_key(&row.id) {
                 projects.insert(p.clone());

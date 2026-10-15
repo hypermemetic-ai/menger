@@ -12,6 +12,7 @@
 //! language is in) makes them from the language's own filters.
 
 use super::cells::Key;
+use crate::address::ShortcodeId;
 use super::tests_cells::scanned;
 use super::tests_ready::{random_write, rows, Rng, Tally};
 use super::*;
@@ -233,8 +234,8 @@ impl Plain {
                 .map(|e| {
                     let mut chain: Vec<String> = Vec::new();
                     let mut cur = e.to_string();
-                    while let Some(h) = cache.rollups.host(&cur) {
-                        let Some(he) = by_id.get(h).map(|r| r.epic.clone()) else { break };
+                    while let Some(h) = cache.rollups.host(&ShortcodeId::new(&cur)) {
+                        let Some(he) = by_id.get(h).map(|r| r.epic.to_string()) else { break };
                         if he == e || chain.contains(&he) {
                             break;
                         }
@@ -250,8 +251,8 @@ impl Plain {
             .map(|t| {
                 let mut l = vec![t.id.clone()];
                 l.extend(super::tests_tree::ancestors_of(&by_id, t));
-                l.push(t.epic.clone());
-                l.extend(hosts[&t.epic].iter().cloned());
+                l.push(t.epic.to_string());
+                l.extend(hosts[t.epic.as_str()].iter().cloned());
                 l
             })
             .collect();
@@ -282,7 +283,7 @@ impl Plain {
             asking: k.asking(),
             labels: t.labels.clone(),
             id: t.id.clone(),
-            epic: t.epic.clone(),
+            epic: t.epic.to_string(),
             title: t.title.clone(),
             status: t.status,
             kind: t.kind,
@@ -290,7 +291,7 @@ impl Plain {
             blocked: k.blocked(),
             has_commits: !t.commits.is_empty(),
             menger_doc: t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/")),
-            lineage: self.at.get(&t.id).map_or_else(|| vec![t.id.clone(), t.epic.clone()], |i| self.lineage[*i].clone()),
+            lineage: self.at.get(&t.id).map_or_else(|| vec![t.id.clone(), t.epic.to_string()], |i| self.lineage[*i].clone()),
             history: self.at.get(&t.id).map(|i| self.history[*i].clone()).unwrap_or_default(),
         }
     }
@@ -313,10 +314,10 @@ impl Plain {
     pub(super) fn counts(&self, judge: RowJudge<'_>) -> Vec<(String, u64)> {
         let mut out: Vec<(String, u64)> = Vec::new();
         for i in self.matches(judge, None, None, None) {
-            let e = &self.rows[i].epic;
+            let e = self.rows[i].epic.as_str();
             match out.last_mut() {
                 Some((last, n)) if last == e => *n += 1,
-                _ => out.push((e.clone(), 1)),
+                _ => out.push((e.to_string(), 1)),
             }
         }
         out
@@ -398,7 +399,7 @@ fn answered_keeping(
 pub(super) fn assert_lens_is_a_scan(store: &Store, plain: &Plain, lens: &Lens, judge: RowJudge<'_>, rng: &mut Rng, what: &str) {
     let what = format!("{what}: {lens:?}");
     let counts = plain.counts(judge);
-    assert_eq!(store.counts(lens), counts, "{what}: counts");
+    assert_eq!(store.counts_text(lens), counts, "{what}: counts");
     let total: u64 = counts.iter().map(|(_, n)| n).sum();
     let ids: Vec<&str> = plain.rows.iter().map(|t| t.id.as_str()).collect();
     let pick = |rng: &mut Rng| -> Option<String> { (!ids.is_empty()).then(|| ids[rng.below(ids.len())].to_string()) };
@@ -448,7 +449,8 @@ pub(super) fn assert_lens_is_a_scan(store: &Store, plain: &Plain, lens: &Lens, j
             let want = plain.page(kept, a.0, a.1, a.2, None, Some(at), limit);
             let got = answered_keeping(store, lens, a.0, a.1, a.2, None, Some(at), limit, Some(&keep));
             assert_eq!(got, want, "{what}: {a:?} keeping {keep} at {at} limit {limit:?}");
-            assert_eq!(store.counts_keeping(lens, Some(&keep)), plain.counts(kept), "{what}: counts keeping {keep}");
+            let counts: Vec<(String, u64)> = store.counts_keeping(lens, Some(&keep)).into_iter().map(|(e, n)| (e.as_str().to_string(), n)).collect();
+            assert_eq!(counts, plain.counts(kept), "{what}: counts keeping {keep}");
         }
     }
     if let Some(id) = ids.first() {
@@ -499,20 +501,20 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, every: usize,
         let what = random_write(&store, &mut rng, epics, &mut tally).await;
         if step % every == every - 1 {
             let plain = Plain::of(&store);
-            let held: Vec<String> = store.extents().into_iter().map(|(e, _)| e).chain(["NONE".into()]).collect();
+            let held: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).chain(["NONE".into()]).collect();
             for _ in 0..4 {
                 let (lens, f) = random_lens(&mut rng, &held);
-                assert_lens_is_a_scan(&store, &plain, &lens, &|t: &Row, k| f.holds(&t.epic, k), &mut rng, &format!("step {step}: {what}"));
+                assert_lens_is_a_scan(&store, &plain, &lens, &|t: &Row, k| f.holds(t.epic.as_str(), k), &mut rng, &format!("step {step}: {what}"));
             }
         }
     }
     drop(store);
     let store = Store::open(path).unwrap();
     let plain = Plain::of(&store);
-    let held: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+    let held: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
     for _ in 0..8 {
         let (lens, f) = random_lens(&mut rng, &held);
-        assert_lens_is_a_scan(&store, &plain, &lens, &|t: &Row, k| f.holds(&t.epic, k), &mut rng, "the reopen");
+        assert_lens_is_a_scan(&store, &plain, &lens, &|t: &Row, k| f.holds(t.epic.as_str(), k), &mut rng, "the reopen");
     }
     store
 }
@@ -533,7 +535,7 @@ async fn filtered_answers_are_a_scan_on_a_seeded_store() {
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
     store.seed_synthetic(SeedSpec { count: 2_000, seed: 41, into_existing: false }).unwrap();
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(5).chain(["NEW".into()]).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(5).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     walk(store, &path, 0x5EED_F4A2, 200, 20, &epics).await;
 }
@@ -546,7 +548,7 @@ async fn filtered_answers_are_a_scan_on_each_fixture() {
         let path = dir.path().join(name);
         std::fs::copy(format!("{fixtures}/{name}"), &path).unwrap();
         let store = Store::open(&path).unwrap();
-        let mut epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+        let mut epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
         epics.push("NEW".into());
         let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
         walk(store, &path, 0xF1A2 + i as u64, 100, 10, &epics).await;
@@ -562,7 +564,7 @@ async fn membership_is_the_scans_difference() {
     let path = dir.path().join("member.db");
     let store = Store::open(&path).unwrap();
     store.seed_synthetic(SeedSpec { count: 600, seed: 7, into_existing: false }).unwrap();
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(4).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).collect();
     let mut rng = Rng(0x3E3B);
     let lenses: Vec<(Lens, Formula)> = (0..6).map(|_| random_lens(&mut rng, &epics)).collect();
     let mut watchers: Vec<Watcher> = lenses.iter().map(|(l, _)| store.watcher(l.clone())).collect();
@@ -583,20 +585,20 @@ async fn membership_is_the_scans_difference() {
         }
         assert!(writes.len() <= 1, "one CellsMoved a write");
         for ((lens, f), watcher) in lenses.iter().zip(&mut watchers) {
-            let judge = |t: &Row, k: Key| f.holds(&t.epic, k);
+            let judge = |t: &Row, k: Key| f.holds(t.epic.as_str(), k);
             let inside = |p: &Plain| -> BTreeMap<String, (String, u32)> {
-                p.matches(&judge, None, None, None).into_iter().map(|i| (p.rows[i].id.clone(), (p.rows[i].epic.clone(), p.rows[i].seq))).collect()
+                p.matches(&judge, None, None, None).into_iter().map(|i| (p.rows[i].id.clone(), (p.rows[i].epic.to_string(), p.rows[i].seq))).collect()
             };
             let (was, now) = (inside(&before), inside(&after));
             let mut want: Vec<(OrderKey, Membership)> = Vec::new();
             for (id, (epic, seq)) in &now {
                 if !was.contains_key(id) {
-                    want.push((OrderKey { epic: epic.clone(), seq: *seq }, Membership::Entered { id: id.clone(), epic: epic.clone(), seq: *seq }));
+                    want.push((OrderKey { shortcode: ShortcodeId::from(epic.clone()), seq: *seq }, Membership::Entered { id: id.clone(), shortcode: ShortcodeId::from(epic.clone()), seq: *seq }));
                 }
             }
             for (id, (epic, seq)) in &was {
                 if !now.contains_key(id) {
-                    want.push((OrderKey { epic: epic.clone(), seq: *seq }, Membership::Left { id: id.clone(), epic: epic.clone(), seq: *seq }));
+                    want.push((OrderKey { shortcode: ShortcodeId::from(epic.clone()), seq: *seq }, Membership::Left { id: id.clone(), shortcode: ShortcodeId::from(epic.clone()), seq: *seq }));
                 }
             }
             want.sort_by(|a, b| a.0.cmp(&b.0));

@@ -8,6 +8,7 @@
 //! refusals, a reopen, and `--verify-derived`.
 
 use super::history::Clock;
+use crate::address::ShortcodeId;
 use super::tests::Changes;
 use super::*;
 use crate::deployments::{DeployState, DeploymentsEvent, Record};
@@ -252,8 +253,8 @@ async fn a_deployed_watch_hears_a_deploy_and_its_rollback() {
     assert_eq!(
         heard,
         [
-            Membership::Entered { id: "MENGER-2".into(), epic: "MENGER".into(), seq: 2 },
-            Membership::Left { id: "MENGER-2".into(), epic: "MENGER".into(), seq: 2 }
+            Membership::Entered { id: "MENGER-2".into(), shortcode: ShortcodeId::from("MENGER"), seq: 2 },
+            Membership::Left { id: "MENGER-2".into(), shortcode: ShortcodeId::from("MENGER"), seq: 2 }
         ]
     );
     let mut types = Vec::new();

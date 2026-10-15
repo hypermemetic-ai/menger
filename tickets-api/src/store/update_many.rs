@@ -88,9 +88,11 @@ fn named(ids: &[String]) -> Vec<String> {
 }
 
 /// A shortcode's part of an `UpdatedMany` — what `watch { epic }` passes
-/// on: the ids in `epic`, when any is.
-pub(super) fn in_epic(ids: Vec<String>, changed: Vec<String>, epic: &str) -> Option<Change> {
-    let ids: Vec<String> = ids.into_iter().filter(|id| id.rsplit_once('-').is_some_and(|(e, _)| e == epic)).collect();
+/// on: the ids in `epic`, when any is. ORG-3: a ticket's shortcode is the one
+/// its key was minted in — nothing in ORG-3 moves a ticket out of it (ACT-6,
+/// which will, carries the move on the change itself).
+pub(super) fn in_epic(ids: Vec<String>, changed: Vec<String>, epic: &ShortcodeId) -> Option<Change> {
+    let ids: Vec<String> = ids.into_iter().filter(|id| id.rsplit_once('-').is_some_and(|(e, _)| e == epic.as_str())).collect();
     (!ids.is_empty()).then_some(Change::UpdatedMany { ids, changed })
 }
 

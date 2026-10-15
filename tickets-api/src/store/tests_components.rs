@@ -359,8 +359,8 @@ async fn component_events_pass_any_epic_filter() {
     let store = store().await;
     born(&store, &def("m-x", "x")).await;
     let changed = Change::ComponentChanged { component: component("m-x", "x\n", Some("C-2"), &[]) };
-    assert!(changed.clone().in_epic(Some("OTHER")).is_some());
-    assert!(Change::ComponentRemoved { name: "m-x".into() }.in_epic(Some("OTHER")).is_some());
+    assert!(changed.clone().in_epic(Some(&ShortcodeId::from("OTHER"))).is_some());
+    assert!(Change::ComponentRemoved { name: "m-x".into() }.in_epic(Some(&ShortcodeId::from("OTHER"))).is_some());
     assert_eq!(changed.in_epic(None).map(|c| heard(&[c])), Some(vec![("changed", "m-x".to_string())]));
 }
 

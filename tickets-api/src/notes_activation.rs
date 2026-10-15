@@ -236,7 +236,14 @@ impl Notes {
             // And this method's grant there too.
             let anchor = match parent.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
                 Some(p) => Some(p.to_string()),
-                None => store.groups().into_iter().find(|g| g.epic.eq_ignore_ascii_case(epic.trim())).and_then(|g| g.root),
+                // ORG-3: the shortcode by any short form of its address.
+                None => match store.root_of(epic.trim()) {
+                    Ok(root) => root,
+                    Err(e) => {
+                        yield NotesEvent::Error { message: e.to_string() };
+                        return;
+                    }
+                },
             };
             if let Some(own) = caller.grant.clone() {
                 let create = Grant::new("tickets.create");

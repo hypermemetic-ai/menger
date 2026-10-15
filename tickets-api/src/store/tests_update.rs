@@ -113,7 +113,7 @@ fn unblocked(ids: &[&str]) -> Update {
 
 /// How many tickets of `epic` a filter admits.
 fn count(store: &Store, filter: &str, epic: &str) -> u64 {
-    store.counts(&Lens::parse(filter).unwrap()).into_iter().find(|(e, _)| e == epic).map_or(0, |(_, n)| n)
+    store.counts_text(&Lens::parse(filter).unwrap()).into_iter().find(|(e, _)| e == epic).map_or(0, |(_, n)| n)
 }
 
 fn ready(store: &Store) -> Vec<String> {

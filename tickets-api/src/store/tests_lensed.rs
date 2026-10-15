@@ -284,7 +284,7 @@ async fn reads_under_random_filters_equal_the_evaluator_on_a_seeded_store() {
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
     store.seed_synthetic(SeedSpec { count: 3_000, seed: 415, into_existing: false }).unwrap();
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(5).chain(["NEW".into()]).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(5).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     walk(store, &path, 0x5EED_F415, 200, 25, &epics).await;
 }
@@ -297,7 +297,7 @@ async fn reads_under_random_filters_equal_the_evaluator_on_each_fixture() {
         let path = dir.path().join(name);
         std::fs::copy(format!("{fixtures}/{name}"), &path).unwrap();
         let store = Store::open(&path).unwrap();
-        let mut epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+        let mut epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
         epics.push("NEW".into());
         let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
         walk(store, &path, 0xF415 + i as u64, 120, 12, &epics).await;
@@ -430,7 +430,7 @@ async fn a_filter_admitting_everything_answers_as_no_filter() {
         let filtered = store.find_filtered(&query, &lens, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
         let plain_find = store.find_page(&query, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
         assert_eq!(filtered, plain_find, "find {query:?} after {after:?} limit {limit:?}");
-        let epic = (rng.below(2) == 0).then(|| plain.rows[rng.below(plain.rows.len())].epic.clone());
+        let epic = (rng.below(2) == 0).then(|| plain.rows[rng.below(plain.rows.len())].epic.to_string());
         let q = ready_and(&all, epic.clone()).unwrap();
         let filtered = store.ready_filtered_page(&q, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
         let ready = store.ready_page(epic.as_deref(), after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
@@ -516,7 +516,7 @@ fn reads_at_a_million() {
         ts.sort_by(f64::total_cmp);
         ts[10]
     };
-    let extents = store.extents();
+    let extents = store.extents_text();
     let total: u64 = extents.iter().map(|(_, n)| u64::from(*n)).sum();
     let mut rng = Rng(0x15);
     let ids: Vec<String> = (0..MEMBER_MAX)
@@ -550,7 +550,7 @@ fn reads_at_a_million() {
         "category in (active, review)",
     ] {
         let lens = Lens::parse(text).unwrap();
-        let admits: u64 = store.counts(&lens).iter().map(|(_, n)| n).sum();
+        let admits: u64 = store.counts_text(&lens).iter().map(|(_, n)| n).sum();
         let finds: Vec<String> = queries
             .iter()
             .zip(&unfiltered)

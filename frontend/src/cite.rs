@@ -774,7 +774,7 @@ mod tests {
         Ticket {
             labels: Vec::new(),
             id: id.into(),
-            epic: epic.into(),
+            epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),
             title: title.into(),
             status: Status::Ready,

@@ -495,6 +495,7 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             transitions,
             tombstones,
             deployments,
+            shortcodes,
         }) => {
             // SEARCH-2: and the search index, when the file has one.
             let search = match indexed {
@@ -531,6 +532,14 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
                     "{}: {n} deployment(s): every environment is what its deployments fold to, and every deployed cell what a scan of the tickets against them gives (DEPLOY-11)",
                     db_path.display()
                 );
+            }
+            // ORG-3: the shortcodes and their namespaces.
+            match shortcodes {
+                Some(n) => println!(
+                    "{}: {n} shortcode(s), each in the namespace where its root hangs gives it, no two of one code in one namespace, every full address distinct, every ticket's shortcode one of them and every pin a ticket or a tombstone (ORG-3)",
+                    db_path.display()
+                ),
+                None => println!("{}: no shortcodes table yet (ORG-3) — the next open makes it", db_path.display()),
             }
             0
         }

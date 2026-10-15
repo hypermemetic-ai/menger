@@ -11,6 +11,7 @@
 //! reopened file the cache.
 
 use super::tests_update::assert_kept;
+use crate::address::ShortcodeId;
 use super::*;
 
 fn new(epic: &str, title: &str, kind: Kind, parent: Option<&str>) -> NewTicket {
@@ -115,7 +116,7 @@ async fn a_ticket_nothing_points_at_is_gone_from_every_read() {
     let mut rx = store.subscribe_filtered();
     let before = written(&store);
     let lens = Lens::parse("kind build").unwrap();
-    let builds = store.counts(&lens);
+    let builds = store.counts_text(&lens);
     let done = store.delete(ids(&["m-6"]), Deletion::default(), Some("filed twice".into())).await.unwrap();
     assert_eq!(written(&store), before + 1, "one write");
     assert_eq!(done.ids, ["M-6"]);
@@ -128,18 +129,18 @@ async fn a_ticket_nothing_points_at_is_gone_from_every_read() {
     assert!(listed.iter().all(|t| t.id != "M-6"), "off the list");
     assert!(store.find_page("build 6", None, None).unwrap().tickets.is_empty(), "off find");
     assert!(store.search("build", None, Some(50), None).await.unwrap().hits.iter().all(|h| h.summary.id != "M-6"), "off search");
-    let after = store.counts(&lens);
+    let after = store.counts_text(&lens);
     let m = |c: &[(String, u64)]| c.iter().find(|(e, _)| e == "M").map_or(0, |(_, n)| *n);
     assert_eq!(m(&after), m(&builds) - 1, "off every filter");
     assert!(store.ready_set(None).await.unwrap().iter().all(|t| t.id != "M-6"));
-    assert_eq!(store.holes("M", 9), [6], "a hole the extents name");
+    assert_eq!(store.holes(&ShortcodeId::from("M"), 9), [6], "a hole the extents name");
     assert_eq!(store.tickets.read().unwrap().children.of("M-1").len(), 5, "off its parent's children");
     let sent = drained(&mut rx);
     let k = kinds(&sent);
     assert_eq!(&k[..2], ["child_removed", "deleted"], "{k:?}");
     assert!(k.contains(&"group_changed") && k.last() == Some(&"cells_moved"), "{k:?}");
     let Some(Change::CellsMoved { moves }) = sent.last() else { unreachable!() };
-    assert_eq!(moves.moves.iter().map(|m| (&*m.epic, m.seq, m.to)).collect::<Vec<_>>(), [("M", 6, cells::GONE)]);
+    assert_eq!(moves.moves.iter().map(|m| (m.shortcode.as_str(), m.seq, m.to)).collect::<Vec<_>>(), [("M", 6, cells::GONE)]);
     assert_kept(&store, "a delete");
 }
 
@@ -157,7 +158,7 @@ async fn a_filtered_watch_hears_the_deleted_leave() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(w.membership(&store, &moves, None), [Membership::Left { id: "M-5".into(), epic: "M".into(), seq: 5 }]);
+    assert_eq!(w.membership(&store, &moves, None), [Membership::Left { id: "M-5".into(), shortcode: ShortcodeId::from("M"), seq: 5 }]);
     assert!(other.membership(&store, &moves, None).is_empty(), "never in it");
 }
 
@@ -223,7 +224,7 @@ async fn a_shortcodes_root_is_refused_while_it_holds_others() {
     let done = store.delete(ids(&["N-1"]), how(Some(Children::Delete), false), None).await.unwrap();
     assert_eq!(done.ids, ["N-1", "N-2"]);
     assert!(store.groups().iter().all(|g| g.epic != "N"), "no group for an empty shortcode");
-    let n = store.extents_holed().into_iter().find(|(e, _, _)| e == "N");
+    let n = store.extents_holed().into_iter().find(|(e, _, _, _)| e == "N").map(|(e, _, l, h)| (e.as_str().to_string(), l, h));
     assert_eq!(n, Some(("N".to_string(), 2, vec![1, 2])), "its numbers given out, none held");
     // The number is never reused: N's next is N-3, and it roots N again.
     let refused = store.create(new("N", "a build first", Kind::Build, None)).await.unwrap_err();
@@ -359,8 +360,8 @@ async fn watches_hear_the_deleted_leave_and_the_undeleted_enter() {
         (cells.unwrap(), unders.unwrap())
     };
     let m8 = |inn: bool| match inn {
-        true => Membership::Entered { id: "M-8".into(), epic: "M".into(), seq: 8 },
-        false => Membership::Left { id: "M-8".into(), epic: "M".into(), seq: 8 },
+        true => Membership::Entered { id: "M-8".into(), shortcode: ShortcodeId::from("M"), seq: 8 },
+        false => Membership::Left { id: "M-8".into(), shortcode: ShortcodeId::from("M"), seq: 8 },
     };
     store.delete(ids(&["M-8"]), Deletion::default(), None).await.unwrap();
     let (cells, unders) = moved(&mut rx);
@@ -380,7 +381,7 @@ async fn a_deleted_tickets_history_is_kept() {
     let h = store.history("M-5").unwrap();
     assert_eq!(h.own.iter().map(|t| t.to.as_str()).collect::<Vec<_>>(), ["Pending", "Ready"]);
     // And a history filter does not count it.
-    assert!(store.counts(&Lens::parse("entered Ready").unwrap()).iter().all(|(_, n)| *n == 0));
+    assert!(store.counts_text(&Lens::parse("entered Ready").unwrap()).iter().all(|(_, n)| *n == 0));
 }
 
 #[tokio::test]
@@ -400,7 +401,7 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
     store.delete(ids(&["M-39"]), Deletion::default(), None).await.unwrap();
     assert_kept(&store, "the deletes");
     let rows: Vec<Row> = store.tickets.read().unwrap().order.values().cloned().collect();
-    let (groups, extents) = (store.groups(), store.extents());
+    let (groups, extents) = (store.groups(), store.extents_text());
     drop(store);
     match Store::verify_derived(&path).unwrap() {
         Verdict::Consistent { tombstones: Some(4), .. } => {}
@@ -409,7 +410,7 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
     let again = Store::open(&path).unwrap();
     let reread: Vec<Row> = again.tickets.read().unwrap().order.values().cloned().collect();
     assert_eq!(reread, rows, "the file holds what the cache held");
-    assert_eq!((again.groups(), again.extents()), (groups, extents));
+    assert_eq!((again.groups(), again.extents_text()), (groups, extents));
     assert_eq!(again.tombstone("M-2").unwrap().unblocked, ["M-3"]);
     assert_eq!(again.history("M-2").unwrap().own.len(), 1, "its birth, kept");
     assert_eq!(again.create(new("M", "after", Kind::Build, None)).await.unwrap().id, "M-40", "past the deleted M-39");

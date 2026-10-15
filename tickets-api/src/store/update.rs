@@ -98,8 +98,20 @@ pub(super) struct Plan {
 
 /// Ids as a write keeps them — trimmed, upper-cased, each once — and the
 /// entries that are blank.
-fn ids_of(entries: &[String]) -> (Vec<String>, bool) {
-    let ids: Vec<String> = entries.iter().map(|e| e.trim().to_ascii_uppercase()).collect();
+///
+/// ORG-3: each by any short form, as the key it names — or will be born as;
+/// one naming several is a refusal, into `refusals`.
+fn ids_of(cache: &Cache, entries: &[String], refusals: &mut Vec<StoreError>) -> (Vec<String>, bool) {
+    let mut ids: Vec<String> = Vec::with_capacity(entries.len());
+    for e in entries {
+        match e.trim() {
+            "" => ids.push(String::new()),
+            t => match cache.name_ticket(t) {
+                Ok(key) => ids.push(key),
+                Err(refused) => refusals.push(refused),
+            },
+        }
+    }
     let blank = ids.iter().any(String::is_empty);
     (rules::distinct(&ids.into_iter().filter(|i| !i.is_empty()).collect::<Vec<_>>()), blank)
 }
@@ -153,7 +165,7 @@ impl Store {
     /// (the module doc). [`StoreError::NotFound`] for an id that names no
     /// ticket; a refusal writes nothing.
     pub async fn update_by(&self, id: &str, update: Update, act: Act) -> Result<Updated, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
+        let id = crate::address::folded(id);
         let mut refusals: Vec<StoreError> = update.refused.iter().cloned().map(StoreError::Invalid).collect();
         // amend's, on what is in hand before the lock.
         if update.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
@@ -291,8 +303,8 @@ pub(super) fn plan(
     }
     // The blockers as the update leaves them — what the kind is checked
     // against.
-    let (block, blank_block) = ids_of(&u.block);
-    let (unblock, blank_unblock) = ids_of(&u.unblock);
+    let (block, blank_block) = ids_of(cache, &u.block, refusals);
+    let (unblock, blank_unblock) = ids_of(cache, &u.unblock, refusals);
     if blank_block || blank_unblock {
         refusals.push(StoreError::Blockers { id: id.clone(), why: "a blank id in block or unblock".into() });
     }
@@ -332,7 +344,18 @@ pub(super) fn plan(
     }
     let final_kind = kind.map_or(row.kind, |(k, _)| k);
     // set_parent's.
-    let parent = u.parent.map(|p| p.trim().to_ascii_uppercase()).filter(|p| row.parent.as_deref() != Some(p.as_str()));
+    // ORG-3: the parent by any short form.
+    let parent = u
+        .parent
+        .map(|p| match cache.find_ticket(&p, shortcodes::OrgReach::All) {
+            shortcodes::Found::One(key) => key,
+            shortcodes::Found::Many(candidates) => {
+                refusals.push(StoreError::Ambiguous { text: p.trim().to_string(), candidates });
+                String::new()
+            }
+            shortcodes::Found::None => p.trim().to_ascii_uppercase(),
+        })
+        .filter(|p| !p.is_empty() && row.parent.as_deref() != Some(p.as_str()));
     if let Some(p) = &parent {
         changed.push("parent".into());
         if let Err(e) = rules::parent_refusal(cache, &row, p) {
@@ -467,7 +490,7 @@ fn amend_step(
         let more = cache.take(moved);
         debug_assert!(more.is_empty(), "an input moves no roll-up");
     }
-    let epic = row.epic.clone();
+    let epic = row.shortcode.clone();
     out.tickets.push(Change::Amended { ticket: whole(row, text), changed });
     out.groups(groups);
     out.components.extend(Change::components(registered));
@@ -498,7 +521,12 @@ fn kind_step(
     row.status = status;
     row.updated_unix = now;
     let (made, moved_inputs) = kind_moves(cache, &old, &row, act);
-    let derived = cache.kind_change(&row, &old, cache.inputs.asking_after(&row.id, &moved_inputs));
+    let derived = cache.kind_change(&row, &old, cache.inputs.asking_after(&row.id, &moved_inputs))?;
+    // ORG-3: a ticket that now roots its shortcode may move its namespace —
+    // its row takes the address the write leaves it.
+    if let Some(m) = &derived.moved.namespaces {
+        row = Cache::dressed(&m.after, row);
+    }
     let under = lineage::under_before_with(unders, cache, || {
         let mut t = lineage::Touched::of_moves(derived.announced().as_deref()).row(&row);
         if let Some(after) = &derived.moved.rollups {
@@ -522,7 +550,7 @@ fn kind_step(
     }
     let body = db::body(txn, id)?.ok_or_else(|| missing(id))?;
     let key = OrderKey::of(&row);
-    let epic = row.epic.clone();
+    let epic = row.shortcode.clone();
     let groups = cache.kind_changed(row.clone(), moved);
     for t in &made {
         cache.log.append(t, &key);
@@ -531,10 +559,10 @@ fn kind_step(
         cache.inputs.put(input.clone());
     }
     out.tickets.push(Change::KindChanged { ticket: whole(row, body), previous });
-    out.tickets.extend(made.into_iter().map(|transition| Change::Transition { epic: epic.clone(), transition }));
+    out.tickets.extend(made.into_iter().map(|transition| Change::Transition { shortcode: epic.clone(), transition }));
     out.groups(groups);
     out.placed(placed);
-    out.inputs.extend(moved_inputs.into_iter().map(|(input, _)| Change::InputChanged { epic: epic.clone(), input }));
+    out.inputs.extend(moved_inputs.into_iter().map(|(input, _)| Change::InputChanged { shortcode: epic.clone(), input }));
     out.filtered(announced, under.and_then(|u| u.after_in(cache)));
     Ok(())
 }
@@ -552,12 +580,17 @@ fn parent_step(
 ) -> Result<(), StoreError> {
     let mut child = cache.get(id).cloned().ok_or_else(|| StoreError::NotFound(id.to_string()))?;
     rules::parent_refusal(cache, &child, &parent)?;
-    let new_epic = cache.get(&parent).map(|p| p.epic.clone()).expect("the parent exists");
+    let new_epic = cache.get(&parent).map(|p| p.shortcode.clone()).expect("the parent exists");
     let previous = child.parent.take();
     child.parent = Some(parent.clone());
     child.updated_unix = now;
-    let old_epic = previous.as_deref().and_then(|p| cache.get(p)).map(|t| t.epic.clone());
-    let derived = cache.reparent(&child, previous.as_deref());
+    let old_epic = previous.as_deref().and_then(|p| cache.get(p)).map(|t| t.shortcode.clone());
+    let derived = cache.reparent(&child, previous.as_deref())?;
+    // ORG-3: a rehomed root's every row takes its new address — the child's
+    // own, as its event carries it, from the registry the write leaves.
+    if let Some(m) = &derived.moved.namespaces {
+        child = Cache::dressed(&m.after, child);
+    }
     let under = lineage::under_before_with(unders, cache, || {
         let mut t = lineage::Touched::default();
         t.subtree(cache, &child.id, cache.get(&child.id));
@@ -572,9 +605,9 @@ fn parent_step(
     let body = db::body(txn, id)?.ok_or_else(|| missing(id))?;
     let (groups, joined, left) = cache.reparented(child.clone(), previous.as_deref(), moved);
     out.tickets.push(Change::ParentChanged { ticket: whole(child, body), previous: previous.clone() });
-    out.tickets.push(Change::ChildrenChanged { id: parent, epic: new_epic, added: id.to_string(), child_count: joined });
+    out.tickets.push(Change::ChildrenChanged { id: parent, shortcode: new_epic, added: id.to_string(), child_count: joined });
     if let (Some(old), Some(epic)) = (previous, old_epic) {
-        out.tickets.push(Change::ChildRemoved { id: old, epic, removed: id.to_string(), child_count: left });
+        out.tickets.push(Change::ChildRemoved { id: old, shortcode: epic, removed: id.to_string(), child_count: left });
     }
     out.groups(groups);
     out.filtered(None, under.and_then(|u| u.after_in(cache)));

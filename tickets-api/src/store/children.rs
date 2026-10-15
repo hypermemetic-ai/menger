@@ -3,7 +3,7 @@ use roaring::RoaringBitmap;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Bound;
-use std::sync::Arc;
+use crate::address::ShortcodeId;
 
 /// FILTER-13: a parent's children in one shortcode are a sorted vector up to
 /// this many, and a Roaring bitmap past it — one that keeps its holders
@@ -30,37 +30,36 @@ pub(super) struct Children {
 /// wherever a cell of the kept tree names one. Only grows.
 #[derive(Default)]
 pub(super) struct Names {
-    all: Vec<Arc<str>>,
-    ix: HashMap<Arc<str>, u16>,
+    all: Vec<ShortcodeId>,
+    ix: HashMap<ShortcodeId, u16>,
 }
 
 impl Names {
     /// `epic`'s index, interning it on first sight.
-    pub(super) fn intern(&mut self, epic: &str) -> u16 {
+    pub(super) fn intern(&mut self, epic: &ShortcodeId) -> u16 {
         if let Some(i) = self.ix.get(epic) {
             return *i;
         }
         let i = u16::try_from(self.all.len()).expect("fewer than 65,536 shortcodes");
-        let name: Arc<str> = Arc::from(epic);
-        self.all.push(Arc::clone(&name));
-        self.ix.insert(name, i);
+        self.all.push(epic.clone());
+        self.ix.insert(epic.clone(), i);
         i
     }
 
     /// `epic`'s index, when it has one.
-    pub(super) fn get(&self, epic: &str) -> Option<u16> {
+    pub(super) fn get(&self, epic: &ShortcodeId) -> Option<u16> {
         self.ix.get(epic).copied()
     }
 
     /// The shortcode at `i`.
-    pub(super) fn name(&self, i: u16) -> &str {
+    pub(super) fn name(&self, i: u16) -> &ShortcodeId {
         &self.all[i as usize]
     }
 
     /// The shared name of `epic`, interning it.
-    fn shared(&mut self, epic: &str) -> Arc<str> {
+    fn shared(&mut self, epic: &ShortcodeId) -> ShortcodeId {
         let i = self.intern(epic);
-        Arc::clone(&self.all[i as usize])
+        self.all[i as usize].clone()
     }
 
     /// How many there are.
@@ -240,7 +239,7 @@ impl Seqs {
 /// index of the internal tickets.
 #[derive(Default)]
 pub(super) struct Kids {
-    lists: Vec<(Arc<str>, Seqs)>,
+    lists: Vec<(ShortcodeId, Seqs)>,
     /// Every list's length, summed — the parent's `child_count`.
     count: u64,
     /// FILTER-13: T(P) — how many of the parent's descendants are in each
@@ -253,71 +252,70 @@ impl Kids {
     /// with the stretch of sequences that can, inclusive: the epic bounds
     /// are the keys' (a key bound excluded still admits the rest of its
     /// shortcode).
-    fn cut<'a>(&'a self, start: Bound<&'a OrderKey>, end: Bound<&'a OrderKey>) -> impl Iterator<Item = (&'a str, &'a Seqs, u32, u32)> + 'a {
+    fn cut<'a>(&'a self, start: Bound<&'a OrderKey>, end: Bound<&'a OrderKey>) -> impl Iterator<Item = (&'a ShortcodeId, &'a Seqs, u32, u32)> + 'a {
         use Bound::{Excluded, Included, Unbounded};
         // A span never ends before it starts (`Span::of`); were one asked
         // for, it holds nothing — never a panic under the read lock.
         let inverted = matches!(
             (start, end),
-            (Included(a) | Excluded(a), Included(b) | Excluded(b)) if a.epic > b.epic
+            (Included(a) | Excluded(a), Included(b) | Excluded(b)) if a.shortcode > b.shortcode
         );
         let (lo, hi) = (
             match start {
                 Unbounded => None,
-                Included(k) | Excluded(k) => Some(k.epic.as_str()),
+                Included(k) | Excluded(k) => Some(&k.shortcode),
             },
             match end {
                 Unbounded => None,
-                Included(k) | Excluded(k) => Some(k.epic.as_str()),
+                Included(k) | Excluded(k) => Some(&k.shortcode),
             },
         );
         let lists = if inverted { &self.lists[..0] } else { &self.lists[..] };
         lists.iter().filter_map(move |(e, seqs)| {
-            let e: &str = e;
             if lo.is_some_and(|lo| e < lo) || hi.is_some_and(|hi| e > hi) {
                 return None;
             }
             let from = match start {
-                Included(k) if k.epic == e => Some(k.seq),
-                Excluded(k) if k.epic == e => k.seq.checked_add(1),
+                Included(k) if k.shortcode == *e => Some(k.seq),
+                Excluded(k) if k.shortcode == *e => k.seq.checked_add(1),
                 _ => Some(0),
             }?;
             let to = match end {
-                Included(k) if k.epic == e => Some(k.seq),
-                Excluded(k) if k.epic == e => k.seq.checked_sub(1),
+                Included(k) if k.shortcode == *e => Some(k.seq),
+                Excluded(k) if k.shortcode == *e => k.seq.checked_sub(1),
                 _ => Some(u32::MAX),
             }?;
             (from <= to).then_some((e, seqs, from, to))
         })
     }
 
-    fn at(&self, epic: &str) -> Result<usize, usize> {
-        self.lists.binary_search_by(|(e, _)| (**e).cmp(epic))
+    fn at(&self, epic: &ShortcodeId) -> Result<usize, usize> {
+        self.lists.binary_search_by(|(e, _)| e.cmp(epic))
     }
 
     /// The children in `epic`.
-    pub(super) fn list(&self, epic: &str) -> Option<&Seqs> {
+    pub(super) fn list(&self, epic: &ShortcodeId) -> Option<&Seqs> {
         self.at(epic).ok().map(|i| &self.lists[i].1)
     }
 
-    pub(super) fn list_mut(&mut self, epic: &str) -> Option<&mut Seqs> {
+    pub(super) fn list_mut(&mut self, epic: &ShortcodeId) -> Option<&mut Seqs> {
         self.at(epic).ok().map(|i| &mut self.lists[i].1)
     }
 
     /// Every list, in shortcode order.
-    pub(super) fn lists(&self) -> impl Iterator<Item = (&str, &Seqs)> {
-        self.lists.iter().map(|(e, s)| (&**e, s))
+    pub(super) fn lists(&self) -> impl Iterator<Item = (&ShortcodeId, &Seqs)> {
+        self.lists.iter().map(|(e, s)| (e, s))
     }
 
-    pub(super) fn lists_mut(&mut self) -> impl Iterator<Item = (&str, &mut Seqs)> {
-        self.lists.iter_mut().map(|(e, s)| (&**e, s))
+    pub(super) fn lists_mut(&mut self) -> impl Iterator<Item = (&ShortcodeId, &mut Seqs)> {
+        self.lists.iter_mut().map(|(e, s)| (&*e, s))
     }
 
     fn add(&mut self, names: &mut Names, key: &OrderKey) {
-        let i = match self.at(&key.epic) {
+        let i = match self.at(&key.shortcode) {
             Ok(i) => i,
             Err(i) => {
-                self.lists.insert(i, (names.shared(&key.epic), Seqs::Few(Vec::new())));
+                self.lists.insert(i, (names.shared(&key.shortcode), Seqs::Few(Vec::new())));
                 i
             }
         };
@@ -329,7 +327,7 @@ impl Kids {
     }
 
     fn remove(&mut self, key: &OrderKey) {
-        let Ok(i) = self.at(&key.epic) else { return };
+        let Ok(i) = self.at(&key.shortcode) else { return };
         if self.lists[i].1.remove(key.seq) {
             self.count -= 1;
             if self.lists[i].1.len() == 0 {
@@ -355,20 +353,20 @@ impl Children {
     /// lookup of its parent, not one each.
     pub(super) fn build<'a>(tickets: impl Iterator<Item = &'a Row>) -> Self {
         let mut c = Self::filling();
-        let mut run: Option<(&str, &str, Vec<u32>)> = None;
+        let mut run: Option<(&str, &ShortcodeId, Vec<u32>)> = None;
         for t in tickets {
             let Some(parent) = t.parent.as_deref() else {
                 continue;
             };
             match &mut run {
-                Some((p, e, seqs)) if *p == parent && *e == t.epic => seqs.push(t.seq),
+                Some((p, e, seqs)) if *p == parent && **e == t.shortcode => seqs.push(t.seq),
                 _ => {
                     if let Some((p, e, seqs)) = run.take() {
                         for s in seqs {
                             c.push(p, e, s);
                         }
                     }
-                    run = Some((parent, &t.epic, vec![t.seq]));
+                    run = Some((parent, &t.shortcode, vec![t.seq]));
                 }
             }
         }
@@ -393,13 +391,13 @@ impl Children {
     /// tickets. In that order every parent's children arrive together, each
     /// shortcode's ascending, so a child is a push; the parent's and the
     /// shortcode's names are only copied when they change.
-    pub(super) fn push(&mut self, parent: &str, epic: &str, seq: u32) {
+    pub(super) fn push(&mut self, parent: &str, epic: &ShortcodeId, seq: u32) {
         let kids = match self.of.get_mut(parent) {
             Some(kids) => kids,
             None => self.of.entry(parent.to_string()).or_default(),
         };
         let i = match kids.lists.last() {
-            Some((e, _)) if **e == *epic => kids.lists.len() - 1,
+            Some((e, _)) if e == epic => kids.lists.len() - 1,
             _ => match kids.at(epic) {
                 Ok(i) => i,
                 Err(i) => {
@@ -433,11 +431,11 @@ impl Children {
     }
 
     /// `parent`'s children as `(epic, seq)` keys, in the store's order.
-    pub(super) fn of(&self, parent: &str) -> Vec<(String, u32)> {
+    pub(super) fn of(&self, parent: &str) -> Vec<(ShortcodeId, u32)> {
         self.of.get(parent).map_or_else(Vec::new, |kids| {
             kids.lists
                 .iter()
-                .flat_map(|(e, seqs)| seqs.iter().map(move |s| (e.to_string(), s)))
+                .flat_map(|(e, seqs)| seqs.iter().map(move |s| (e.clone(), s)))
                 .collect()
         })
     }
@@ -481,7 +479,7 @@ impl Children {
 
     /// The sequences of `parent`'s children in shortcode `epic`, ascending
     /// — a subtree walk's step, which never leaves the shortcode.
-    pub(super) fn in_shortcode(&self, parent: &str, epic: &str) -> Option<&Seqs> {
+    pub(super) fn in_shortcode(&self, parent: &str, epic: &ShortcodeId) -> Option<&Seqs> {
         self.of.get(parent).and_then(|kids| kids.list(epic))
     }
 
@@ -500,7 +498,7 @@ impl Children {
             .flat_map(move |kids| kids.cut(start, end))
             .flat_map(|(epic, seqs, from, to)| {
                 seqs.range(from, to).map(move |seq| OrderKey {
-                    epic: epic.to_string(),
+                    shortcode: epic.clone(),
                     seq,
                 })
             })
@@ -544,7 +542,7 @@ impl Children {
     /// Every parent and its children as `(epic, seq)` keys, in the store's
     /// order, sorted by parent — for the tests' comparison with a scan.
     #[cfg(test)]
-    pub(super) fn all(&self) -> std::collections::BTreeMap<String, Vec<(String, u32)>> {
+    pub(super) fn all(&self) -> std::collections::BTreeMap<String, Vec<(ShortcodeId, u32)>> {
         self.of.keys().map(|p| (p.clone(), self.of(p))).collect()
     }
 }

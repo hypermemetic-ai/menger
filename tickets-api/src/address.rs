@@ -1,0 +1,585 @@
+//! ORG-3: what names a shortcode and a ticket — the identity types, and the
+//! one parser from text to an [`Address`].
+//!
+//! A shortcode is unique only within its **namespace** (ORG-1, owner
+//! 2026-10-13: *"shortcodes are generally not unique. they must be unique
+//! within their namespace"*): its organization and the shortcode it is
+//! hosted under — none for a root (ORG-2's input `namespace-host`, on its
+//! recommended answer: the host's *shortcode*, so the full address below is
+//! unique by construction). The types say so:
+//!
+//! - [`Code`] is a shortcode's letters and nothing more. It has no `Hash`
+//!   and no `Ord`, so it cannot key a map or a set — a bare code is never
+//!   identity; it is what a reader types and what a row shows.
+//!
+//!   A code keys no hash map:
+//!
+//! ```compile_fail
+//! use std::collections::HashMap;
+//! use menger_tickets_api::Code;
+//! let mut by_code: HashMap<Code, u32> = HashMap::new();
+//! by_code.insert(Code::parse("THEME").unwrap(), 1);
+//! ```
+//!
+//! nor an ordered one, nor a set:
+//!
+//! ```compile_fail
+//! use std::collections::BTreeSet;
+//! use menger_tickets_api::Code;
+//! let mut codes = BTreeSet::new();
+//! codes.insert(Code::parse("THEME").unwrap());
+//! ```
+//!
+//! while the identity does:
+//!
+//! ```
+//! use std::collections::HashMap;
+//! use menger_tickets_api::ShortcodeId;
+//! let mut by_id: HashMap<ShortcodeId, u32> = HashMap::new();
+//! by_id.insert(ShortcodeId::new("THEME"), 1);
+//! ```
+//!
+//! - [`ShortcodeId`] is the store's identity of one shortcode, minted once
+//!   and never parsed: the code itself for every shortcode made before
+//!   ORG-3 (so no stored row is rewritten), `CODE.N` for a namesake made
+//!   after. What the store keys on.
+//! - [`Namespace`] is `(org, host)`, and [`Shortcode`] is a shortcode's
+//!   record: its id, its namespace and its code.
+//! - [`TicketId`] is a ticket's key — today's id text, immutable and opaque
+//!   (ORG-6 finding 1): nothing keyed by ticket is rewritten, and a ticket
+//!   keeps its key wherever its shortcode moves.
+//!
+//! A ticket is written in full as `org:ROOT/…/SC-N` (ORG-1's `address`
+//! decision, `hypermemetic:MENGER/THEME-3`); a **short form** — `SC-N`,
+//! `ROOT/SC-N`, any hosts in order, an org or none — resolves when it names
+//! one ticket in the reader's reach (the store's resolver). A segment that
+//! begins with `_` begins a path (WAVE-10's `_MENGER/…`): `PLEXUS/_MENGER/board`
+//! is the path `_MENGER/board` in PLEXUS, with an org or without.
+//!
+//! Wasm-safe (serde, schemars, std): the browser app compiles these with
+//! `default-features = false`.
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::Arc;
+
+/// The longest code a shortcode may have (the gate's spelling of a scope
+/// already capped it at 32).
+pub const CODE_MAX: usize = 32;
+
+/// ORG-3: an organization's name — lower-case ASCII letters, digits and
+/// `-`, 1 to 63 of them, not starting or ending with `-`. Today's tracker is
+/// the one organization [`OrgId::HYPERMEMETIC`] (ORG-1's `org-name`); ORG-4
+/// makes more. Org names compare exactly: `Hypermemetic:` is no org.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct OrgId(String);
+
+impl OrgId {
+    /// The organization today's tracker is (ORG-1, decided 2026-10-13).
+    pub const HYPERMEMETIC: &'static str = "hypermemetic";
+
+    /// `name` as an org name, or why it is not one.
+    pub fn new(name: &str) -> Result<Self, String> {
+        let ok = !name.is_empty()
+            && name.len() <= 63
+            && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !name.starts_with('-')
+            && !name.ends_with('-');
+        match ok {
+            true => Ok(Self(name.to_string())),
+            false => Err(format!(
+                "`{name}` is not an organization's name: lower-case letters, digits and `-`, as `hypermemetic`"
+            )),
+        }
+    }
+
+    /// The one organization there is until ORG-4.
+    pub fn hypermemetic() -> Self {
+        Self(Self::HYPERMEMETIC.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for OrgId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// ORG-3: a shortcode's letters — ASCII letters and digits, upper case (a
+/// code is read case-blind and kept upper case), 1 to [`CODE_MAX`].
+///
+/// Not an identity: two shortcodes of one code live in two namespaces. So
+/// it has no `Hash`, no `Ord` and no `Borrow<str>` — nothing can key a map
+/// or a set by it (the module's examples hold that to the compiler) — and its `Display` is
+/// its letters, never an address. It compares equal to another code of the
+/// same letters, which is what a search over the letters asks; the store
+/// compares shortcodes by [`ShortcodeId`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct Code(String);
+
+impl Code {
+    /// `text` as a code — trimmed and upper-cased — or why it is not one.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let t = text.trim();
+        if t.is_empty() || t.len() > CODE_MAX || !t.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return Err(format!("`{t}` is not a shortcode: ASCII letters and digits, as MENGER"));
+        }
+        Ok(Self(t.to_ascii_uppercase()))
+    }
+
+    /// A code as stored — already upper case, never checked again.
+    pub fn stored(text: &str) -> Self {
+        Self(text.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// ORG-3 (owner: *"partial matches over just the shortcode"*): whether
+    /// `query`, ASCII case folded, is a part of these letters — `the` is a
+    /// part of THEME, wherever THEME is hosted.
+    pub fn contains_folded(&self, query: &str) -> bool {
+        let q = query.trim().to_ascii_uppercase();
+        !q.is_empty() && self.0.contains(&q)
+    }
+}
+
+impl fmt::Display for Code {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Its letters, read as text (`.len()`, `.starts_with(…)`) — never a key:
+/// a code has no `Hash` and no `Ord` of its own.
+impl std::ops::Deref for Code {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Its letters against written letters — what a row is shown or searched
+/// by, never what a shortcode is keyed by.
+impl PartialEq<str> for Code {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for Code {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+/// ORG-3: the store's identity of one shortcode — minted by the store when
+/// the shortcode is born, kept in its row, and never derived from what a
+/// reader types (that is an [`Address`], resolved). For every shortcode
+/// made before ORG-3 it is the code itself (`THEME`), so every table that
+/// names a shortcode — the tickets' `epic` column, the derived tables, the
+/// theme settings, the deployments — already holds it; a namesake made
+/// after is `CODE.N` (`THEME.62`), which no code can be (a code holds no
+/// `.`). A ticket's key is its shortcode's id, `-`, and its number, as it
+/// was born.
+///
+/// `Ord` is its text's: today's order of shortcodes is unchanged, and a
+/// namesake sorts right after the code it shares (`.` sorts before every
+/// letter and digit).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShortcodeId(Arc<str>);
+
+/// The empty id — no shortcode: what a row from a server before ORG-3
+/// deserializes with, and nothing the store mints.
+impl Default for ShortcodeId {
+    fn default() -> Self {
+        Self(Arc::from(""))
+    }
+}
+
+impl ShortcodeId {
+    /// The id the store minted, read back — from its table, a row, the wire.
+    pub fn new(text: &str) -> Self {
+        Self(Arc::from(text))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// ORG-3: the key a ticket of this shortcode born with number `seq`
+    /// takes — `THEME-3`, `THEME.62-3`. Minted once, at birth: the key
+    /// never moves with its shortcode afterwards.
+    pub fn key(&self, seq: u32) -> String {
+        format!("{}-{seq}", self.0)
+    }
+}
+
+/// Its text — what a log line or a refusal names it by (never an address:
+/// that is the registry's, `org:ROOT/…/SC`).
+impl fmt::Display for ShortcodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Serialize for ShortcodeId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ShortcodeId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(Self::new(&s))
+    }
+}
+
+impl JsonSchema for ShortcodeId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ShortcodeId".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = String::json_schema(generator);
+        schema.insert(
+            "description".into(),
+            "A shortcode's identity, minted by the store: its code for a shortcode made before ORG-3, CODE.N for a namesake made after"
+                .into(),
+        );
+        schema
+    }
+}
+
+/// ORG-3: where a shortcode is unique — its organization and the shortcode
+/// it is hosted under (`None`: a root of its org). The host is a shortcode,
+/// not a ticket (ORG-2 `namespace-host`): two THEMEs under DESIGN-1 and
+/// DESIGN-7 would share one address, so they share one namespace. The
+/// ticket a shortcode's root hangs under is still kept — it is where the
+/// root sits in the tree — but it is not part of the namespace.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct Namespace {
+    pub org: OrgId,
+    pub host: Option<ShortcodeId>,
+}
+
+/// ORG-3: one shortcode — its identity, its namespace and its letters. No
+/// two shortcodes share `(ns, code)`: every write that mints or moves one
+/// checks it, and the database's index on `(org, ifnull(host, ''), code)`
+/// holds it too.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Shortcode {
+    pub id: ShortcodeId,
+    pub ns: Namespace,
+    pub code: Code,
+}
+
+/// ORG-3: a ticket's key — the immutable, opaque identity a ticket keeps
+/// for good (ORG-6 finding 1): today's id text for today's tickets,
+/// [`ShortcodeId::key`] for a newborn. What every row that names a ticket
+/// names it by; an address resolves *to* one. Its JSON is the id string, as
+/// it always was.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct TicketId(String);
+
+impl TicketId {
+    /// A key the store holds, read back.
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for TicketId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// What an [`Address`] names inside its shortcode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum At {
+    /// The shortcode itself: `MENGER/THEME`.
+    Shortcode,
+    /// Its ticket of this number: `MENGER/THEME-3`.
+    Seq(u32),
+    /// WAVE-10: the ticket holding this path (`_MENGER/…`, exactly as
+    /// written): `PLEXUS/_MENGER/board`.
+    Path(String),
+}
+
+/// ORG-3: an address as a reader writes it — `[org:]ROOT/…/SC-N`, any
+/// prefix of the hosts left out — parsed, not yet resolved. The store's
+/// resolver turns one into a [`TicketId`] or a [`ShortcodeId`] in the
+/// reader's reach: one match is the answer, several are `ambiguous` with
+/// every candidate's full address, none is not found.
+///
+/// `hosts` are the hosting shortcodes named before the last, outermost
+/// first: a short form may skip any of them (`MENGER/THEME-3` finds
+/// `hypermemetic:MENGER/DESIGN/THEME-3`), but the ones it names appear in
+/// order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Address {
+    pub org: Option<OrgId>,
+    pub hosts: Vec<Code>,
+    pub code: Code,
+    pub at: At,
+}
+
+impl Address {
+    /// The one parser from text to an address (ORG-3; it replaces WAVE-10's
+    /// `path_address`, which read `MENGER/THEME-3` as the path `THEME-3` in
+    /// MENGER). An optional `org:`; then segments split on `/`; the first
+    /// that begins with `_` begins a path, which runs to the end; before it,
+    /// the last segment is `SC-N` (a ticket) or `SC` (a shortcode), and the
+    /// ones before that are hosts. Codes fold to upper case; an org name is
+    /// lower case or no org name. `Err` says what is wrong.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let t = text.trim();
+        if t.is_empty() {
+            return Err("an address names something: SC-N, ROOT/SC-N or org:ROOT/…/SC-N".into());
+        }
+        let (org, rest) = match t.split_once(':') {
+            Some((o, rest)) => (Some(OrgId::new(o)?), rest),
+            None => (None, t),
+        };
+        let segments: Vec<&str> = rest.split('/').collect();
+        let path_at = segments.iter().position(|s| s.starts_with('_'));
+        let (names, path) = match path_at {
+            Some(i) => (&segments[..i], Some(segments[i..].join("/"))),
+            None => (&segments[..], None),
+        };
+        let Some((last, hosts)) = names.split_last() else {
+            return Err(format!("`{t}` names a path in no shortcode: write SHORTCODE/{}", rest));
+        };
+        let hosts = hosts.iter().map(|h| Code::parse(h)).collect::<Result<Vec<_>, _>>()?;
+        if let Some(path) = path {
+            if path.len() <= "_".len() || path.ends_with('/') {
+                return Err(format!("`{t}`: a path names something after its `_`, as _MENGER/board"));
+            }
+            return Ok(Self { org, hosts, code: Code::parse(last)?, at: At::Path(path) });
+        }
+        if let Some((code, n)) = last.rsplit_once('-') {
+            if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) {
+                let seq = n.parse::<u32>().map_err(|_| format!("`{t}`: {n} is past the last number a ticket can have"))?;
+                return Ok(Self { org, hosts, code: Code::parse(code)?, at: At::Seq(seq) });
+            }
+            return Err(format!("`{t}` is not an address: a ticket is SC-N, its number digits"));
+        }
+        Ok(Self { org, hosts, code: Code::parse(last)?, at: At::Shortcode })
+    }
+
+    /// Whether this is the bare `SC-N` or `SC` a reader typed before ORG-3 —
+    /// no org, no host: the form today's ids are pinned in (ORG-2 `pinned`).
+    pub fn is_bare(&self) -> bool {
+        self.org.is_none() && self.hosts.is_empty()
+    }
+
+    /// Whether it names a ticket (a number or a path) rather than a
+    /// shortcode.
+    pub fn names_ticket(&self) -> bool {
+        !matches!(self.at, At::Shortcode)
+    }
+}
+
+impl fmt::Display for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(org) = &self.org {
+            write!(f, "{org}:")?;
+        }
+        for h in &self.hosts {
+            write!(f, "{h}/")?;
+        }
+        f.write_str(self.code.as_str())?;
+        match &self.at {
+            At::Shortcode => Ok(()),
+            At::Seq(n) => write!(f, "-{n}"),
+            At::Path(p) => write!(f, "/{p}"),
+        }
+    }
+}
+
+/// ORG-3: `text` as the store spells what it names — an address with its
+/// codes upper-cased (its org and its path as written), anything else
+/// upper-cased whole (a key the store minted, which is upper case). What a
+/// refusal names a ticket by, and what replaces the old upper-casing of
+/// a whole id (which would make `hypermemetic:` a code).
+pub fn folded(text: &str) -> String {
+    match Address::parse(text) {
+        Ok(a) => a.to_string(),
+        Err(_) => text.trim().to_ascii_uppercase(),
+    }
+}
+
+/// ORG-3: a shortcode's full address from its chain of codes, outermost
+/// first (its own last) — `hypermemetic:MENGER/THEME`.
+pub fn shortcode_address(org: &OrgId, chain: &[&str]) -> String {
+    format!("{org}:{}", chain.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn code(s: &str) -> Code {
+        Code::parse(s).unwrap()
+    }
+
+    #[test]
+    fn a_bare_id_is_a_code_and_a_number() {
+        let a = Address::parse("theme-3").unwrap();
+        assert_eq!(a, Address { org: None, hosts: vec![], code: code("THEME"), at: At::Seq(3) });
+        assert!(a.is_bare() && a.names_ticket());
+        assert_eq!(a.to_string(), "THEME-3");
+    }
+
+    #[test]
+    fn a_full_address_names_its_org_and_every_host() {
+        let a = Address::parse("hypermemetic:MENGER/DESIGN/THEME-3").unwrap();
+        assert_eq!(a.org, Some(OrgId::hypermemetic()));
+        assert_eq!(a.hosts, vec![code("MENGER"), code("DESIGN")]);
+        assert_eq!((a.code.as_str(), &a.at), ("THEME", &At::Seq(3)));
+        assert_eq!(a.to_string(), "hypermemetic:MENGER/DESIGN/THEME-3");
+    }
+
+    #[test]
+    fn menger_slash_theme_3_is_a_ticket_not_a_path() {
+        // ORG-6 finding 3: `path_address` read this as the path THEME-3 in MENGER.
+        let a = Address::parse("MENGER/THEME-3").unwrap();
+        assert_eq!((a.hosts.len(), a.code.as_str(), &a.at), (1, "THEME", &At::Seq(3)));
+    }
+
+    #[test]
+    fn a_path_begins_at_its_underscore_with_an_org_or_without() {
+        let a = Address::parse("PLEXUS/_MENGER/board").unwrap();
+        assert_eq!((a.code.as_str(), &a.at), ("PLEXUS", &At::Path("_MENGER/board".into())));
+        let a = Address::parse("hypermemetic:MENGER/PLEXUS/_MENGER/view/x").unwrap();
+        assert_eq!((a.hosts.len(), a.code.as_str(), &a.at), (1, "PLEXUS", &At::Path("_MENGER/view/x".into())));
+        assert!(Address::parse("_MENGER/board").is_err());
+        assert!(Address::parse("PLEXUS/_").is_err());
+    }
+
+    #[test]
+    fn a_shortcode_address_has_no_number() {
+        let a = Address::parse("menger/theme").unwrap();
+        assert_eq!((a.hosts, a.code.as_str(), a.at), (vec![code("MENGER")], "THEME", At::Shortcode));
+    }
+
+    #[test]
+    fn what_is_no_address_says_why() {
+        for bad in ["", "THE ME-3", "THEME-x", "Hypermemetic:MENGER-1", "MENGER//THEME-3", "THEME-", "THE.ME-3", "-3"] {
+            assert!(Address::parse(bad).is_err(), "{bad:?} parsed");
+        }
+        assert!(Address::parse("THEME-99999999999").is_err());
+    }
+
+    #[test]
+    fn an_org_name_is_lower_case_letters_digits_and_dashes() {
+        assert!(OrgId::new("acme-2").is_ok());
+        for bad in ["", "Acme", "-acme", "acme-", "ac me", "ac_me"] {
+            assert!(OrgId::new(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_shortcode_id_mints_the_key_and_sorts_a_namesake_beside_its_code() {
+        let (plain, namesake, next) = (ShortcodeId::new("THEME"), ShortcodeId::new("THEME.62"), ShortcodeId::new("THEME2"));
+        assert_eq!((plain.key(3), namesake.key(3)), ("THEME-3".to_string(), "THEME.62-3".to_string()));
+        assert!(plain < namesake && namesake < next);
+        assert_eq!(serde_json::to_string(&namesake).unwrap(), "\"THEME.62\"");
+    }
+
+    #[test]
+    fn a_code_matches_its_letters_in_part() {
+        assert!(code("THEME").contains_folded("the"));
+        assert!(code("THEME").contains_folded("EM"));
+        assert!(!code("THEME").contains_folded("x"));
+        assert!(!code("THEME").contains_folded(" "));
+    }
+}
+
+/// Test-only conveniences: a literal as a code or an id, and a comparison
+/// with one — so a test can write `"A".into()`. Never in a build that
+/// serves: there, text becomes an identity only through the resolver.
+#[cfg(test)]
+mod literals {
+    use super::{Code, ShortcodeId};
+
+    impl From<&str> for Code {
+        fn from(s: &str) -> Self {
+            Code::stored(s)
+        }
+    }
+    impl From<String> for Code {
+        fn from(s: String) -> Self {
+            Code::stored(&s)
+        }
+    }
+    impl From<&str> for ShortcodeId {
+        fn from(s: &str) -> Self {
+            ShortcodeId::new(s)
+        }
+    }
+    impl From<String> for ShortcodeId {
+        fn from(s: String) -> Self {
+            ShortcodeId::new(&s)
+        }
+    }
+    impl From<&String> for ShortcodeId {
+        fn from(s: &String) -> Self {
+            ShortcodeId::new(s)
+        }
+    }
+    impl From<&ShortcodeId> for ShortcodeId {
+        fn from(s: &ShortcodeId) -> Self {
+            s.clone()
+        }
+    }
+    impl From<Code> for ShortcodeId {
+        fn from(s: Code) -> Self {
+            ShortcodeId::new(s.as_str())
+        }
+    }
+    impl From<&Code> for ShortcodeId {
+        fn from(s: &Code) -> Self {
+            ShortcodeId::new(s.as_str())
+        }
+    }
+    impl PartialEq<String> for Code {
+        fn eq(&self, o: &String) -> bool {
+            self.as_str() == o
+        }
+    }
+    impl PartialEq<str> for ShortcodeId {
+        fn eq(&self, o: &str) -> bool {
+            self.as_str() == o
+        }
+    }
+    impl PartialEq<&str> for ShortcodeId {
+        fn eq(&self, o: &&str) -> bool {
+            self.as_str() == *o
+        }
+    }
+    impl PartialEq<String> for ShortcodeId {
+        fn eq(&self, o: &String) -> bool {
+            self.as_str() == o
+        }
+    }
+}

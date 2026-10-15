@@ -53,7 +53,7 @@ pub(super) fn walk_events(store: Arc<Store>, mut walk: Walk) -> impl Stream<Item
                     break;
                 }
                 Err(e) => {
-                    yield TicketsEvent::Error { message: e.to_string() };
+                    yield refusal(e);
                     break;
                 }
             }
@@ -167,7 +167,7 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
 /// else.
 pub(super) fn tree_events(page: Result<TreePage, StoreError>) -> Vec<TicketsEvent> {
     match page {
-        Err(e) => vec![TicketsEvent::Error { message: e.to_string() }],
+        Err(e) => vec![refusal(e)],
         Ok(page) => page
             .nodes
             .into_iter()
@@ -187,11 +187,24 @@ pub(super) fn tree_events(page: Result<TreePage, StoreError>) -> Vec<TicketsEven
 
 /// FILTER-4 / FILTER-13: a `watch { filter }`'s membership events as the
 /// wire carries them.
-pub(super) fn membership_event(m: Membership) -> TicketsEvent {
+///
+/// ORG-3: each with its shortcode's identity, and its letters beside it.
+pub(super) fn membership_event(store: &Store, m: Membership) -> TicketsEvent {
+    let code = |sc: &crate::address::ShortcodeId| store.shortcode_named_by(sc).0;
     match m {
-        Membership::Entered { id, epic, seq } => TicketsEvent::Entered { id, epic, seq },
-        Membership::Left { id, epic, seq } => TicketsEvent::Left { id, epic, seq },
-        Membership::Recount { epic, held } => TicketsEvent::Recount { epic, held },
+        Membership::Entered { id, shortcode, seq } => TicketsEvent::Entered { id, epic: code(&shortcode), shortcode, seq },
+        Membership::Left { id, shortcode, seq } => TicketsEvent::Left { id, epic: code(&shortcode), shortcode, seq },
+        Membership::Recount { shortcode, held } => TicketsEvent::Recount { epic: code(&shortcode), shortcode, held },
+    }
+}
+
+/// ORG-3: a refusal as its one event — `ambiguous { id, candidates }` for a
+/// name that names more than one in reach (each by its full address), the
+/// in-band `error` for every other.
+pub(super) fn refusal(e: StoreError) -> TicketsEvent {
+    match e {
+        StoreError::Ambiguous { text, candidates } => TicketsEvent::Ambiguous { id: text, candidates },
+        e => TicketsEvent::Error { message: e.to_string() },
     }
 }
 
@@ -209,6 +222,6 @@ pub(super) fn input_event(written: Result<InputWrite, StoreError>, ticket: Strin
         Ok(InputWrite::Changed(input)) => TicketsEvent::InputChanged { input },
         Ok(InputWrite::Unchanged(input)) => TicketsEvent::Input { input },
         Err(StoreError::NotFound(_)) => TicketsEvent::NotFound { id: ticket },
-        Err(e) => TicketsEvent::Error { message: e.to_string() },
+        Err(e) => refusal(e),
     }
 }

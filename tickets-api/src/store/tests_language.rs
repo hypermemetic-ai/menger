@@ -56,7 +56,7 @@ fn random_pred(rng: &mut Rng, names: &[String], menger: bool) -> Predicate {
 /// does not hold, and ticket ids: every parent (the subtrees `under` cuts),
 /// some leaves, and one that names nothing.
 pub(super) fn filter_names(store: &Store) -> Vec<String> {
-    let mut out: Vec<String> = store.extents().into_iter().map(|(e, _)| e).chain(["NONE".into()]).collect();
+    let mut out: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).chain(["NONE".into()]).collect();
     let rows = super::tests_ready::rows(store);
     let parents: std::collections::BTreeSet<&str> = rows.iter().filter_map(|t| t.parent.as_deref()).collect();
     out.extend(parents.iter().take(24).map(|p| p.to_string()));
@@ -147,7 +147,7 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
                 "has commits" => yes(!t.commits.is_empty()),
                 "menger doc" => yes(t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"))),
                 "asking" => yes(k.asking()),
-                _ => t.epic.clone(),
+                _ => t.epic.to_string(),
             });
         }
         // The answer's order: each field's own, written out.
@@ -249,7 +249,7 @@ async fn random_filters_equal_the_evaluator_on_a_seeded_store() {
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
     store.seed_synthetic(SeedSpec { count: 3_000, seed: 410, into_existing: false }).unwrap();
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(5).chain(["NEW".into()]).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(5).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     walk(store, &path, 0x5EED_F410, 250, 25, &epics).await;
 }
@@ -262,7 +262,7 @@ async fn random_filters_equal_the_evaluator_on_each_fixture() {
         let path = dir.path().join(name);
         std::fs::copy(format!("{fixtures}/{name}"), &path).unwrap();
         let store = Store::open(&path).unwrap();
-        let mut epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+        let mut epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
         epics.push("NEW".into());
         let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
         walk(store, &path, 0xF410 + i as u64, 120, 12, &epics).await;
@@ -275,7 +275,7 @@ async fn random_filters_equal_the_evaluator_on_each_fixture() {
 async fn every_filter_3_filter_is_answered_as_the_evaluator_answers() {
     let store = Store::new();
     store.seed_synthetic(SeedSpec { count: 4_000, seed: 1, into_existing: false }).unwrap();
-    let big = store.extents().into_iter().max_by_key(|(_, n)| *n).unwrap().0;
+    let big = store.extents_text().into_iter().max_by_key(|(_, n)| *n).unwrap().0;
     let plain = Plain::of(&store);
     let mut rng = Rng(0x3_62);
     for text in [
@@ -314,7 +314,7 @@ async fn ready_is_the_ready_set() {
     let store = Store::new();
     store.seed_synthetic(SeedSpec { count: 3_000, seed: 2, into_existing: false }).unwrap();
     let lens = Lens::parse("ready").unwrap();
-    for (epic, held) in store.counts(&lens) {
+    for (epic, held) in store.counts_text(&lens) {
         assert_eq!(held, store.ready_page(Some(&epic), None, Some(0)).unwrap().remaining, "{epic}");
     }
     let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
@@ -339,10 +339,10 @@ async fn ready_is_the_ready_set() {
 async fn the_empty_filter_counts_every_ticket_of_every_shortcode() {
     let store = Store::new();
     store.seed_synthetic(SeedSpec { count: 2_000, seed: 3, into_existing: false }).unwrap();
-    let extents: Vec<(String, u64)> = store.extents().into_iter().map(|(e, n)| (e, u64::from(n))).collect();
-    assert_eq!(store.counts(&Lens::all()), extents);
-    assert_eq!(store.counts(&Lens::parse("").unwrap()), extents);
-    assert_eq!(store.counts(&Lens::parse("· flat · order code").unwrap()), extents, "the display is ignored");
+    let extents: Vec<(String, u64)> = store.extents_text().into_iter().map(|(e, n)| (e, u64::from(n))).collect();
+    assert_eq!(store.counts_text(&Lens::all()), extents);
+    assert_eq!(store.counts_text(&Lens::parse("").unwrap()), extents);
+    assert_eq!(store.counts_text(&Lens::parse("· flat · order code").unwrap()), extents, "the display is ignored");
 }
 
 /// `text` is in the language and answered elsewhere: every filtered read
@@ -422,8 +422,8 @@ async fn hand_edited_shortcodes_are_read_as_the_language_reads_them() {
         .execute_batch("UPDATE tickets SET status = 'Ready'; UPDATE tickets SET blocked_by = '[\"HOLE-3\"]' WHERE id = 'low-2';")
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.counts(&Lens::parse("in LOW").unwrap()), [("low".to_string(), 2)]);
-    assert_eq!(store.counts(&Lens::parse("ready and in low").unwrap()), [("low".to_string(), 1)]);
+    assert_eq!(store.counts_text(&Lens::parse("in LOW").unwrap()), [("low".to_string(), 2)]);
+    assert_eq!(store.counts_text(&Lens::parse("ready and in low").unwrap()), [("low".to_string(), 1)]);
     let plain = Plain::of(&store);
     let mut rng = Rng(0x10E);
     let epics = vec!["low".to_string(), "HOLE".to_string(), "ZERO".to_string()];

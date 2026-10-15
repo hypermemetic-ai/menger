@@ -812,11 +812,11 @@ impl ScTree {
         let mut hosts = BTreeMap::new();
         for g in groups.values() {
             if let Some(h) = &g.host {
-                hosts.insert(g.epic.clone(), h.clone());
+                hosts.insert(g.shortcode.to_string(), h.clone());
             }
-            match g.host.as_deref().and_then(epic_of).filter(|h| *h != g.epic && known.contains(*h)) {
-                Some(h) => kids.entry(h.to_string()).or_default().push(g.epic.clone()),
-                None => top.push(g.epic.clone()),
+            match g.host.as_deref().and_then(epic_of).filter(|h| *h != g.shortcode.as_str() && known.contains(*h)) {
+                Some(h) => kids.entry(h.to_string()).or_default().push(g.shortcode.to_string()),
+                None => top.push(g.shortcode.to_string()),
             }
         }
         let mut t = ScTree { kids, top, known, hosts };
@@ -2746,7 +2746,7 @@ pub(crate) mod tests {
         (
             epic.to_string(),
             Group {
-                epic: epic.into(),
+                epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
                 total: 3,
                 done: 0,
                 docs: 0,

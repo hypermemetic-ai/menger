@@ -1638,8 +1638,8 @@ fn ticket_view(
                 <div>
                     <dt>"Shortcode"</dt>
                     <dd id="t-epic">
-                        <span class="code" data-tag=move || ticket.with(|t| tags::Tag::shortcode(&t.epic).attr())>
-                            {move || ticket.with(|t| t.epic.clone())}
+                        <span class="code" data-tag=move || ticket.with(|t| tags::Tag::shortcode(t.shortcode.as_str()).attr())>
+                            {move || ticket.with(|t| t.epic.to_string())}
                         </span>
                     </dd>
                 </div>

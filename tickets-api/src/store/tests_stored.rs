@@ -75,14 +75,14 @@ pub(super) fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
     // here instead.
     let cached: BTreeMap<String, Row> = {
         let cache = store.tickets.read().unwrap();
-        cache.order.values().map(|t| (t.id.clone(), Row { placement: None, ..t.clone() })).collect()
+        cache.order.values().map(|t| (t.id.clone(), Row { placement: None, ..tests::undressed(t) })).collect()
     };
     assert_eq!(file.rows, cached, "the file's rows are the cache's, after {after}");
     tests_placements::assert_kept_placements_are_the_rule(store, after);
 
     // SCALE-19's oracle: each shortcode's lowest and highest sequence and
     // how many it holds.
-    let runs: BTreeMap<String, RunRow> = tests_paging::Oracle::of(store)
+    let runs: BTreeMap<ShortcodeId, RunRow> = tests_paging::Oracle::of(store)
         .runs()
         .into_iter()
         .map(|(epic, (first, last, held, _))| (epic, (first, last, held)))
@@ -92,7 +92,7 @@ pub(super) fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
     // `blocked_by` names that is no ticket, with who names it in the store's
     // order.
     let (last, unborn) = tests::scanned(store);
-    let stored_last: BTreeMap<String, u32> = file.form.runs.iter().map(|(e, r)| (e.clone(), r.1)).collect();
+    let stored_last: BTreeMap<String, u32> = file.form.runs.iter().map(|(e, r)| (e.as_str().to_string(), r.1)).collect();
     assert_eq!(stored_last, last, "each shortcode's highest sequence, after {after}");
     let mut refs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for ((id, _), referrer) in &file.form.refs {
@@ -118,7 +118,9 @@ pub(super) fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
         .iter()
         .filter(|(_, g)| g.own.0 > 0 || g.own.2 > 0)
         .map(|(epic, g)| Group {
-            epic: epic.clone(),
+            epic: epic.as_str().into(),
+            shortcode: epic.clone(),
+            address: store.shortcode_named_by(epic).1,
             total: g.roll.0,
             done: g.roll.1,
             docs: g.roll.2,
@@ -182,7 +184,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
         .into_iter()
         .filter(|t| t.id == t.id.to_ascii_uppercase())
         .collect();
-    let extents: BTreeMap<String, u32> = store.extents().into_iter().collect();
+    let extents: BTreeMap<String, u32> = store.extents_text().into_iter().collect();
     let pick = |rng: &mut Rng| all[rng.below(all.len())].id.clone();
     // SDLC-13: every seventh write a kind changed — every pair of kinds, with
     // and without a status, legal or refused, held to the rules
@@ -221,6 +223,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
                 (true, 1 | 2) => Some(mine[rng.below(mine.len())].id.clone()),
                 (true, _) => Some(pick(rng)),
             };
+            let parent = super::tests_ready::no_namesake(store, epic, kind, parent);
             // Blockers: a ticket that exists, an id named before birth (the
             // next few of some shortcode — born later in the walk, or not),
             // or one that can never be.
@@ -356,11 +359,11 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str
         "every kind of write, and enough of them: {tally:?}"
     );
     let form = store.tickets.read().unwrap().form();
-    let (groups, extents) = (store.groups(), store.extents());
+    let (groups, extents) = (store.groups(), store.extents_text());
     drop(store);
     let store = Store::open(path).unwrap();
     assert_eq!(store.tickets.read().unwrap().form(), form, "a reopen reads what was kept");
-    assert_eq!((store.groups(), store.extents()), (groups, extents));
+    assert_eq!((store.groups(), store.extents_text()), (groups, extents));
     assert_stored_is_a_scan(&store, path, "the reopen");
     store
 }
@@ -390,7 +393,7 @@ async fn the_stored_state_is_a_scan_after_every_write_on_a_seeded_store() {
     let store = Store::open(&path).unwrap();
     store.seed_synthetic(SeedSpec { count: 1_500, seed: 28, into_existing: false }).unwrap();
     assert_stored_is_a_scan(&store, &path, "a seed");
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     let store = walk(store, &path, 0x5EED_0028, 250, &epics).await;
     store.seed_synthetic(SeedSpec { count: 700, seed: 3, into_existing: true }).unwrap();
@@ -411,7 +414,7 @@ async fn the_stored_state_is_a_scan_after_every_write_on_each_fixture_from_befor
         assert_eq!(read_state(&path), State::Absent, "{name} predates the stored state");
         let store = Store::open(&path).unwrap();
         assert_stored_is_a_scan(&store, &path, &format!("the first open of {name}"));
-        let mut epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+        let mut epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
         epics.push("NEW".into());
         let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
         walk(store, &path, 0xF128 + i as u64, 150, &epics).await;
@@ -484,7 +487,7 @@ async fn the_first_open_builds_once_and_every_later_open_reads_what_is_stored() 
     assert_eq!(read_state(&path), State::Absent);
     let store = Store::open(&path).unwrap();
     assert_eq!(read_state(&path), State::Current, "built, and committed, by the first open");
-    let (groups, extents) = (store.groups(), store.extents());
+    let (groups, extents) = (store.groups(), store.extents_text());
     let par1 = store.get("PAR-1").await.unwrap().child_count;
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 9, .. }));
@@ -503,7 +506,7 @@ async fn the_first_open_builds_once_and_every_later_open_reads_what_is_stored() 
     let store = Store::open(&path).unwrap();
     assert_eq!(read_state(&path), State::Current);
     let last_par = |e: &[(String, u32)]| e.iter().find(|(epic, _)| epic == "PAR").unwrap().1;
-    assert_eq!(last_par(&store.extents()), last_par(&extents) + 4, "the run as stored");
+    assert_eq!(last_par(&store.extents_text()), last_par(&extents) + 4, "the run as stored");
     let total = |g: &[Group]| g.iter().find(|g| g.epic == "PAR").unwrap().total;
     assert_eq!(total(&store.groups()), total(&groups) + 100, "the roll-up as stored");
     assert_eq!(store.get("PAR-1").await.unwrap().child_count, par1 + 50, "the count as stored");
@@ -672,7 +675,7 @@ async fn children_by_page_come_from_the_files_index_in_store_order() {
         let (from_epic, from_seq) = match &after {
             Some(id) => {
                 let key = store.tickets.read().unwrap().at[id].clone();
-                (key.epic, i64::from(key.seq))
+                (key.shortcode.as_str().to_string(), i64::from(key.seq))
             }
             None => (String::new(), -1),
         };

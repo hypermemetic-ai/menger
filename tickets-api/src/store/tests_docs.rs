@@ -71,6 +71,8 @@ async fn a_doc_is_born_in_doc_and_may_root_a_shortcode() {
         store.groups(),
         vec![Group {
             epic: "MAN".into(),
+            shortcode: "MAN".into(),
+            address: "hypermemetic:MAN".into(),
             total: 0,
             done: 0,
             docs: 1,
@@ -251,7 +253,7 @@ async fn the_ready_set_never_holds_a_doc_and_list_filters_on_doc() {
         let cache = store.tickets.read().unwrap();
         assert_eq!(cache.ready.size(), 2);
         assert!(cache.ready.counts().is_empty(), "no ticket waits on anything");
-        assert_eq!((cache.ready.held("R", Status::Doc), cache.ready.held("R", Status::Ready)), (2, 2));
+        assert_eq!((cache.ready.held(&ShortcodeId::from("R"), Status::Doc), cache.ready.held(&ShortcodeId::from("R"), Status::Ready)), (2, 2));
     }
 
     let docs = ids(store.list(None, Some(Status::Doc), None).await.unwrap().iter().map(|t| t.id.clone()));
@@ -280,7 +282,7 @@ async fn roll_ups_ignore_docs_and_count_them_apart() {
     store.create(work("P", Some("P-4"))).await.unwrap(); // P-6, work under a doc
     assert_eq!(
         group(&store, "P"),
-        Group { epic: "P".into(), total: 4, done: 0, docs: 2, root: Some("P-1".into()), root_row: Some(scope_row(Status::Pending)), host: None }
+        Group { epic: "P".into(), shortcode: "P".into(), address: "hypermemetic:P".into(), total: 4, done: 0, docs: 2, root: Some("P-1".into()), root_row: Some(scope_row(Status::Pending)), host: None }
     );
     assert_eq!(store.groups(), tests::nav(&store));
 
@@ -301,11 +303,11 @@ async fn roll_ups_ignore_docs_and_count_them_apart() {
     store.create(doc("P", Some("P-6"))).await.unwrap(); // P-7
     assert_eq!(
         group_changes(&mut rx),
-        vec![Group { epic: "P".into(), total: 4, done: 4, docs: 3, root: Some("P-1".into()), root_row: Some(scope_row(Status::Complete)), host: None }],
+        vec![Group { epic: "P".into(), shortcode: "P".into(), address: "hypermemetic:P".into(), total: 4, done: 4, docs: 3, root: Some("P-1".into()), root_row: Some(scope_row(Status::Complete)), host: None }],
         "a doc's birth moves docs, and nothing else"
     );
     let cache = store.tickets.read().unwrap();
-    assert_eq!((cache.ready.held("P", Status::Doc), cache.ready.held("P", Status::Complete)), (3, 4));
+    assert_eq!((cache.ready.held(&ShortcodeId::from("P"), Status::Doc), cache.ready.held(&ShortcodeId::from("P"), Status::Complete)), (3, 4));
 }
 
 /// Everything else a ticket has, a doc has: `amend` (title and body, the
@@ -373,7 +375,7 @@ async fn everything_else_works_for_a_doc() {
 
     let found = store.find_page("manifest", None, None).unwrap();
     assert_eq!(ids(found.tickets.iter().map(|t| t.id.clone())), ["E-2"]);
-    assert!(store.extents().contains(&("E".to_string(), 3)));
+    assert!(store.extents_text().contains(&("E".to_string(), 3)));
 }
 
 /// A store with docs, from a file: the derived state verifies (roll-ups with
@@ -404,8 +406,8 @@ async fn a_file_with_docs_verifies_and_reopens_as_it_was() {
         other => panic!("expected Consistent, got {other:?}"),
     }
     let form = stored::read(&Connection::open(&path).unwrap()).unwrap();
-    assert_eq!(form.statuses.get(&("MAN".to_string(), "Doc")), Some(&2));
-    assert_eq!(form.groups["LONE"].roll, (0, 0, 1));
+    assert_eq!(form.statuses.get(&(ShortcodeId::from("MAN".to_string()), "Doc")), Some(&2));
+    assert_eq!(form.groups[&ShortcodeId::from("LONE")].roll, (0, 0, 1));
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.groups(), groups, "the reopen reads what was stored");

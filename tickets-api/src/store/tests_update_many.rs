@@ -289,9 +289,9 @@ async fn link_commits_over_many_ids_is_one_write_all_or_none() {
 
 #[test]
 fn updated_many_in_an_epic_is_its_ids_there() {
-    let c = update_many::in_epic(vec!["M-2".into(), "N-2".into(), "MM-1".into()], vec!["status".into()], "M");
+    let c = update_many::in_epic(vec!["M-2".into(), "N-2".into(), "MM-1".into()], vec!["status".into()], &ShortcodeId::from("M"));
     assert!(matches!(c, Some(Change::UpdatedMany { ref ids, .. }) if ids == &["M-2"]), "{c:?}");
-    assert!(update_many::in_epic(vec!["N-2".into()], vec![], "M").is_none());
+    assert!(update_many::in_epic(vec!["N-2".into()], vec![], &ShortcodeId::from("M")).is_none());
 }
 
 /// A mixed write — a cancel that cascades, a parent, a blocker, a severity

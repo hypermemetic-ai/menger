@@ -27,7 +27,7 @@
 //! 6 gains it, empty, once, on its first open (form 7, [`super::stored`]); a
 //! file built from older forms, or new, gains it with the rest.
 
-use super::{lineage, tree, Cache, Needle, StoreError};
+use super::{lineage, shortcodes, tree, Cache, Needle, StoreError};
 use crate::comments::{Anchor, Comment, CommentState};
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, HashMap};
@@ -133,6 +133,9 @@ fn given(s: &Option<String>) -> Option<&str> {
 /// ([`crate::filter::Facts::lineage`]), from the same two walks its
 /// reference judgment takes (`lineage::Compiled::judge_row`). A ticket
 /// the cache does not hold has no lineage but its id.
+///
+/// ORG-3: `name` an identity — a ticket's key or a shortcode's id, the
+/// reader's text resolved first ([`under_identity`]).
 pub(super) fn under(cache: &Cache, id: &str, name: &str) -> bool {
     if id.eq_ignore_ascii_case(name) {
         return true;
@@ -141,8 +144,29 @@ pub(super) fn under(cache: &Cache, id: &str, name: &str) -> bool {
     tree::ancestors(cache.rows(), &row.id, row.parent.as_deref())
         .into_iter()
         .any(|a| a.eq_ignore_ascii_case(name))
-        || row.epic.eq_ignore_ascii_case(name)
-        || lineage::host_chain(cache, &row.epic).iter().any(|h| h.eq_ignore_ascii_case(name))
+        || row.shortcode.as_str() == name
+        || lineage::host_chain(cache, &row.shortcode).iter().any(|h| h.as_str() == name)
+}
+
+/// ORG-3: what a `comments list { under }` names, as an identity — a
+/// ticket by any short form (a number or a path), else a shortcode by its
+/// letters or address; one naming several is refused, naming each; one
+/// naming nothing stays as written (a ticket a hand edit names, or none).
+fn under_identity(cache: &Cache, name: &str) -> Result<String, StoreError> {
+    let names_ticket = crate::address::Address::parse(name).map_or(true, |a| a.names_ticket());
+    let found = match names_ticket {
+        true => cache.find_ticket(name, shortcodes::OrgReach::All),
+        false => match cache.shortcodes.find_shortcode(name, shortcodes::OrgReach::All) {
+            shortcodes::Found::One(sc) => shortcodes::Found::One(sc.as_str().to_string()),
+            shortcodes::Found::Many(c) => shortcodes::Found::Many(c),
+            shortcodes::Found::None => shortcodes::Found::None,
+        },
+    };
+    match found {
+        shortcodes::Found::One(id) => Ok(id),
+        shortcodes::Found::Many(candidates) => Err(StoreError::Ambiguous { text: name.trim().to_string(), candidates }),
+        shortcodes::Found::None => Ok(name.trim().to_ascii_uppercase()),
+    }
 }
 
 /// One page of the comments `q` admits, newest first: strictly older than
@@ -157,7 +181,8 @@ pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: O
         return Err(StoreError::CommentCursor(a));
     }
     let ticket = given(&q.ticket);
-    let under_name = given(&q.under);
+    let under_id = given(&q.under).map(|u| under_identity(cache, u)).transpose()?;
+    let under_name = under_id.as_deref();
     let (route, path, author) = (given(&q.route), given(&q.path), given(&q.author));
     let needle = q.text.as_deref().and_then(Needle::of);
     // `under`, judged once per ticket a comment names.
@@ -261,6 +286,7 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Comments> {
 }
 
 /// How many comments the file holds — for a log line.
+#[cfg(test)]
 pub(super) fn count(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row("SELECT count(*) FROM comments", [], |r| r.get(0))
 }

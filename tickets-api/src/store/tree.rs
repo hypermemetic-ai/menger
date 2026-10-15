@@ -34,6 +34,7 @@
 //! `--verify-derived`. A `set_parent` that breaks a hand-edited cycle builds
 //! the whole tree again, as the roll-ups do.
 
+use crate::address::ShortcodeId;
 use super::children::{Children, Seqs, HOLD_OVER};
 use super::stored::Changes;
 use super::{OrderKey, Row, Rows};
@@ -127,7 +128,7 @@ pub(super) fn build(rows: Rows<'_>, children: &mut Children, cell_of: impl Fn(&R
     let mut direct: HashMap<&str, HashMap<u32, u32>> = HashMap::new();
     for t in rows.tickets() {
         let Some(p) = t.parent.as_deref() else { continue };
-        let gg = g(children.names_mut().intern(&t.epic), cell_of(t));
+        let gg = g(children.names_mut().intern(&t.shortcode), cell_of(t));
         *direct.entry(p).or_default().entry(gg).or_insert(0) += 1;
     }
     let mut tally: HashMap<&str, HashMap<u32, u32>> = HashMap::new();
@@ -141,7 +142,7 @@ pub(super) fn build(rows: Rows<'_>, children: &mut Children, cell_of: impl Fn(&R
         }
         if let Some(lr) = chain.last().and_then(|l| rows.get(l)).filter(|r| r.parent.as_deref() == Some(*p)) {
             let last = lr.id.as_str();
-            let gg = g(children.names_mut().intern(&lr.epic), cell_of(lr));
+            let gg = g(children.names_mut().intern(&lr.shortcode), cell_of(lr));
             let n = tally.get_mut(last).and_then(|t| t.get_mut(&gg)).expect("counted above");
             *n -= 1;
         }
@@ -155,14 +156,14 @@ pub(super) fn build(rows: Rows<'_>, children: &mut Children, cell_of: impl Fn(&R
     }
     // H(P, g): for each internal ticket in a list kept as a bitmap, its bit
     // in each cell its tally holds.
-    let mut holders: HashMap<(&str, &str), BTreeMap<u32, RoaringBitmap>> = HashMap::new();
+    let mut holders: HashMap<(&str, &ShortcodeId), BTreeMap<u32, RoaringBitmap>> = HashMap::new();
     for (c, kids) in children.every() {
         let Some(row) = rows.get(c) else { continue };
         let Some(p) = row.parent.as_deref() else { continue };
-        if children.in_shortcode(p, &row.epic).and_then(Seqs::many).is_none() {
+        if children.in_shortcode(p, &row.shortcode).and_then(Seqs::many).is_none() {
             continue;
         }
-        let h = holders.entry((p, row.epic.as_str())).or_default();
+        let h = holders.entry((p, &row.shortcode)).or_default();
         for (gg, _) in &kids.tally {
             h.entry(*gg).or_default().insert(row.seq);
         }
@@ -182,16 +183,16 @@ pub(super) fn build(rows: Rows<'_>, children: &mut Children, cell_of: impl Fn(&R
 pub(super) struct Move {
     /// Each tally entry it changes, as it leaves it: (parent, shortcode,
     /// cell, count) — 0: gone.
-    tallies: Vec<(String, String, u32, u32)>,
+    tallies: Vec<(String, ShortcodeId, u32, u32)>,
     /// Each holder bitmap it changes in a list that keeps them across the
     /// write: (parent, the list's shortcode, the cell's shortcode, cell),
     /// who leaves it and who joins it.
-    flips: Vec<(String, String, String, u32, RoaringBitmap, RoaringBitmap)>,
+    flips: Vec<(String, ShortcodeId, ShortcodeId, u32, RoaringBitmap, RoaringBitmap)>,
     /// Each list that becomes a bitmap: its holders, whole.
-    built: Vec<(String, String, Vec<(String, u32, RoaringBitmap)>)>,
+    built: Vec<(String, ShortcodeId, Vec<(ShortcodeId, u32, RoaringBitmap)>)>,
     /// Each list whose stored holders all go (it becomes a vector, or is
     /// built afresh), before any is written.
-    cleared: Vec<(String, String)>,
+    cleared: Vec<(String, ShortcodeId)>,
     /// Each stored holder container it rewrites, as it is after: `None`
     /// when left empty.
     holder_rows: Vec<(HolderKey, Option<(u64, Vec<u8>)>)>,
@@ -202,13 +203,13 @@ pub(super) struct Move {
 
 /// A stored holder container: (parent, the list's shortcode, the cell's
 /// shortcode, cell, block).
-pub(super) type HolderKey = (String, String, String, u32, u32);
+pub(super) type HolderKey = (String, ShortcodeId, ShortcodeId, u32, u32);
 
 /// The stored form of the kept tree.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(super) struct Stored {
     /// (parent, shortcode, cell) → count.
-    pub(super) tallies: BTreeMap<(String, String, u32), u32>,
+    pub(super) tallies: BTreeMap<(String, ShortcodeId, u32), u32>,
     /// Each holder container → (card, bits).
     pub(super) holders: BTreeMap<HolderKey, (u64, Vec<u8>)>,
 }
@@ -219,14 +220,14 @@ pub(super) fn stored(children: &Children) -> Stored {
     let mut s = Stored::default();
     for (p, kids) in children.every() {
         for (gg, n) in &kids.tally {
-            s.tallies.insert((p.to_string(), names.name(g_epic(*gg)).to_string(), g_cell(*gg)), *n);
+            s.tallies.insert((p.to_string(), names.name(g_epic(*gg)).clone(), g_cell(*gg)), *n);
         }
         for (e, seqs) in kids.lists() {
             let Some(many) = seqs.many() else { continue };
             for (gg, bm) in &many.holders {
                 for (hi, card, bits) in super::cells::containers(bm) {
                     s.holders.insert(
-                        (p.to_string(), e.to_string(), names.name(g_epic(*gg)).to_string(), g_cell(*gg), hi),
+                        (p.to_string(), e.clone(), names.name(g_epic(*gg)).clone(), g_cell(*gg), hi),
                         (card, bits),
                     );
                 }
@@ -271,7 +272,7 @@ pub(super) fn take(children: &mut Children, m: Move) {
         *children = *rebuilt;
         return;
     }
-    let mut ix: HashMap<String, u16> = HashMap::new();
+    let mut ix: HashMap<ShortcodeId, u16> = HashMap::new();
     {
         let names = children.names_mut();
         let all = m
@@ -332,14 +333,14 @@ pub(super) struct Plan<'a> {
     /// Per parent, the counts of its children that move: (child, its
     /// shortcode, cell, by). Grouped so a fan-out of siblings walks their
     /// parent's chain once.
-    by_parent: HashMap<&'a str, Vec<(&'a str, &'a str, u32, i64)>>,
+    by_parent: HashMap<&'a str, Vec<(&'a str, &'a ShortcodeId, u32, i64)>>,
     /// Per ancestor, per (shortcode, cell): how its tally moves.
-    deltas: HashMap<&'a str, BTreeMap<(&'a str, u32), i64>>,
+    deltas: HashMap<&'a str, BTreeMap<(&'a ShortcodeId, u32), i64>>,
     /// Children that join a parent's list, and that leave one.
     joins: Vec<(&'a str, &'a Row)>,
     leaves: Vec<(&'a str, &'a Row)>,
     /// The rows of children who join (they are not the cache's yet).
-    joining: HashMap<(&'a str, u32), &'a Row>,
+    joining: HashMap<(&'a ShortcodeId, u32), &'a Row>,
 }
 
 impl<'a> Plan<'a> {
@@ -360,7 +361,7 @@ impl<'a> Plan<'a> {
     /// ancestors — a birth (+1), a cell move (−1 from, +1 to).
     pub(super) fn count(&mut self, t: &'a Row, cell: u32, by: i64) {
         if let Some(p) = t.parent.as_deref() {
-            self.by_parent.entry(p).or_default().push((t.id.as_str(), t.epic.as_str(), cell, by));
+            self.by_parent.entry(p).or_default().push((t.id.as_str(), &t.shortcode, cell, by));
         }
     }
 
@@ -373,7 +374,7 @@ impl<'a> Plan<'a> {
         for a in chain {
             let d = self.deltas.entry(*a).or_default();
             if let Some(cell) = cell {
-                *d.entry((x.epic.as_str(), cell)).or_insert(0) += by;
+                *d.entry((&x.shortcode, cell)).or_insert(0) += by;
             }
             for (gg, n) in tally {
                 *d.entry((names.name(g_epic(*gg)), g_cell(*gg))).or_insert(0) += by * i64::from(*n);
@@ -384,7 +385,7 @@ impl<'a> Plan<'a> {
     /// `child` joins `parent`'s list.
     pub(super) fn join(&mut self, parent: &'a str, child: &'a Row) {
         self.joins.push((parent, child));
-        self.joining.insert((child.epic.as_str(), child.seq), child);
+        self.joining.insert((&child.shortcode, child.seq), child);
     }
 
     /// `child` leaves `parent`'s list.
@@ -400,7 +401,7 @@ impl<'a> Plan<'a> {
         for (p, moved) in std::mem::take(&mut self.by_parent) {
             // The parent's children's moves summed once — a fan-out of
             // siblings is one sum, then one walk up the chain.
-            let mut sum: BTreeMap<(&'a str, u32), i64> = BTreeMap::new();
+            let mut sum: BTreeMap<(&'a ShortcodeId, u32), i64> = BTreeMap::new();
             for (_, epic, cell, by) in &moved {
                 *sum.entry((epic, *cell)).or_insert(0) += by;
             }
@@ -421,9 +422,9 @@ impl<'a> Plan<'a> {
     }
 
     /// `id`'s tally as the write leaves it, by (shortcode, cell).
-    fn final_tally(&self, id: &str) -> Vec<((&'a str, u32), u32)> {
+    fn final_tally(&self, id: &str) -> Vec<((&'a ShortcodeId, u32), u32)> {
         let names = self.children.names();
-        let mut out: BTreeMap<(&'a str, u32), i64> = BTreeMap::new();
+        let mut out: BTreeMap<(&'a ShortcodeId, u32), i64> = BTreeMap::new();
         if let Some(k) = self.children.kids(id) {
             for (gg, n) in &k.tally {
                 out.insert((names.name(g_epic(*gg)), g_cell(*gg)), i64::from(*n));
@@ -438,11 +439,11 @@ impl<'a> Plan<'a> {
     }
 
     /// The row at `(epic, seq)` as the write leaves it.
-    fn row_at(&self, epic: &'a str, seq: u32) -> Option<&'a Row> {
+    fn row_at(&self, epic: &'a ShortcodeId, seq: u32) -> Option<&'a Row> {
         if let Some(r) = self.joining.get(&(epic, seq)) {
             return Some(r);
         }
-        self.rows.order.get(&OrderKey { epic: epic.to_string(), seq })
+        self.rows.order.get(&OrderKey { shortcode: epic.clone(), seq })
     }
 
     /// The [`Move`]: each tally as it is left, and what the holders do — a
@@ -454,8 +455,8 @@ impl<'a> Plan<'a> {
         self.spread();
         let names = self.children.names();
         let mut m = Move::default();
-        let mut crossings: Vec<(&'a str, &'a str, u32, bool)> = Vec::new();
-        let mut deltas: Vec<(&'a str, &BTreeMap<(&'a str, u32), i64>)> = self.deltas.iter().map(|(a, d)| (*a, d)).collect();
+        let mut crossings: Vec<(&'a str, &'a ShortcodeId, u32, bool)> = Vec::new();
+        let mut deltas: Vec<(&'a str, &BTreeMap<(&'a ShortcodeId, u32), i64>)> = self.deltas.iter().map(|(a, d)| (*a, d)).collect();
         deltas.sort_by_key(|(a, _)| *a);
         for (a, d) in deltas {
             let kids = self.children.kids(a);
@@ -469,24 +470,24 @@ impl<'a> Plan<'a> {
                 let after = now + by;
                 debug_assert!(after >= 0, "{a}'s tally of ({epic}, {cell}): {now} {by:+}");
                 let after = after.max(0);
-                m.tallies.push((a.to_string(), epic.to_string(), *cell, after as u32));
+                m.tallies.push((a.to_string(), (*epic).clone(), *cell, after as u32));
                 if (now == 0) != (after == 0) {
                     crossings.push((a, epic, *cell, after > 0));
                 }
             }
         }
         // Each list whose length moves: is it a bitmap before, and after?
-        let mut lengths: BTreeMap<(&'a str, &'a str), i64> = BTreeMap::new();
+        let mut lengths: BTreeMap<(&'a str, &'a ShortcodeId), i64> = BTreeMap::new();
         for (p, c) in &self.joins {
-            *lengths.entry((p, c.epic.as_str())).or_insert(0) += 1;
+            *lengths.entry((p, &c.shortcode)).or_insert(0) += 1;
         }
         for (p, c) in &self.leaves {
-            *lengths.entry((p, c.epic.as_str())).or_insert(0) -= 1;
+            *lengths.entry((p, &c.shortcode)).or_insert(0) -= 1;
         }
-        let len_of = |p: &str, e: &str| self.children.in_shortcode(p, e).map_or(0, |s| s.len() as i64);
-        let many_before = |p: &str, e: &str| len_of(p, e) as usize > HOLD_OVER;
-        let many_after = |p: &str, e: &str| (len_of(p, e) + lengths.get(&(p, e)).copied().unwrap_or(0)) as usize > HOLD_OVER;
-        let keeps = |p: &str, e: &str| many_before(p, e) && many_after(p, e);
+        let len_of = |p: &str, e: &ShortcodeId| self.children.in_shortcode(p, e).map_or(0, |s| s.len() as i64);
+        let many_before = |p: &str, e: &ShortcodeId| len_of(p, e) as usize > HOLD_OVER;
+        let many_after = |p: &str, e: &ShortcodeId| (len_of(p, e) + lengths.get(&(p, e)).copied().unwrap_or(0)) as usize > HOLD_OVER;
+        let keeps = |p: &str, e: &ShortcodeId| many_before(p, e) && many_after(p, e);
         // Lists that become bitmaps: their holders from their children's
         // tallies as the write leaves them. Lists that become vectors: their
         // stored holders go.
@@ -494,38 +495,38 @@ impl<'a> Plan<'a> {
             match (many_before(p, e), many_after(p, e)) {
                 (false, true) => {
                     let mut members: Vec<u32> = self.children.in_shortcode(p, e).map(|s| s.iter().collect()).unwrap_or_default();
-                    members.extend(self.joins.iter().filter(|(q, c)| q == p && c.epic == *e).map(|(_, c)| c.seq));
-                    members.retain(|s| !self.leaves.iter().any(|(q, c)| q == p && c.epic == *e && c.seq == *s));
+                    members.extend(self.joins.iter().filter(|(q, c)| q == p && c.shortcode == **e).map(|(_, c)| c.seq));
+                    members.retain(|s| !self.leaves.iter().any(|(q, c)| q == p && c.shortcode == **e && c.seq == *s));
                     members.sort_unstable();
                     members.dedup();
-                    let mut h: BTreeMap<(&'a str, u32), RoaringBitmap> = BTreeMap::new();
+                    let mut h: BTreeMap<(&'a ShortcodeId, u32), RoaringBitmap> = BTreeMap::new();
                     for s in members {
                         let Some(row) = self.row_at(e, s) else { continue };
                         for (k, _) in self.final_tally(&row.id) {
                             h.entry(k).or_default().insert(s);
                         }
                     }
-                    m.cleared.push((p.to_string(), e.to_string()));
+                    m.cleared.push((p.to_string(), (*e).clone()));
                     for ((ge, c), bm) in &h {
                         for (hi, card, bits) in super::cells::containers(bm) {
-                            m.holder_rows.push(((p.to_string(), e.to_string(), ge.to_string(), *c, hi), Some((card, bits))));
+                            m.holder_rows.push(((p.to_string(), (*e).clone(), (*ge).clone(), *c, hi), Some((card, bits))));
                         }
                     }
-                    m.built.push((p.to_string(), e.to_string(), h.into_iter().map(|((ge, c), bm)| (ge.to_string(), c, bm)).collect()));
+                    m.built.push((p.to_string(), (*e).clone(), h.into_iter().map(|((ge, c), bm)| (ge.clone(), c, bm)).collect()));
                 }
-                (true, false) => m.cleared.push((p.to_string(), e.to_string())),
+                (true, false) => m.cleared.push((p.to_string(), (*e).clone())),
                 _ => {}
             }
         }
         // The bits that flip in lists that keep their holders.
-        let mut flips: BTreeMap<(&'a str, &'a str, &'a str, u32), (Vec<u32>, Vec<u32>)> = BTreeMap::new();
+        let mut flips: BTreeMap<(&'a str, &'a ShortcodeId, &'a ShortcodeId, u32), (Vec<u32>, Vec<u32>)> = BTreeMap::new();
         for (a, epic, cell, on) in crossings {
             let Some(ar) = self.rows.get(a) else { continue };
             let Some(p) = ar.parent.as_deref() else { continue };
-            if !keeps(p, &ar.epic) {
+            if !keeps(p, &ar.shortcode) {
                 continue;
             }
-            let f = flips.entry((p, ar.epic.as_str(), epic, cell)).or_default();
+            let f = flips.entry((p, &ar.shortcode, epic, cell)).or_default();
             if on {
                 f.1.push(ar.seq);
             } else {
@@ -533,19 +534,19 @@ impl<'a> Plan<'a> {
             }
         }
         for (p, x) in &self.leaves {
-            if !keeps(p, &x.epic) {
+            if !keeps(p, &x.shortcode) {
                 continue;
             }
             for (gg, _) in self.children.kids(&x.id).map(|k| k.tally.as_slice()).unwrap_or(&[]) {
-                flips.entry((p, x.epic.as_str(), names.name(g_epic(*gg)), g_cell(*gg))).or_default().0.push(x.seq);
+                flips.entry((p, &x.shortcode, names.name(g_epic(*gg)), g_cell(*gg))).or_default().0.push(x.seq);
             }
         }
         for (p, x) in &self.joins {
-            if !keeps(p, &x.epic) {
+            if !keeps(p, &x.shortcode) {
                 continue;
             }
             for (k, _) in self.final_tally(&x.id) {
-                flips.entry((p, x.epic.as_str(), k.0, k.1)).or_default().1.push(x.seq);
+                flips.entry((p, &x.shortcode, k.0, k.1)).or_default().1.push(x.seq);
             }
         }
         for ((p, e, ge, cell), (leave, join)) in flips {
@@ -575,9 +576,9 @@ impl<'a> Plan<'a> {
             let mut rows: BTreeMap<u32, (u64, Vec<u8>)> =
                 super::cells::containers(&after).into_iter().map(|(hi, card, bits)| (hi, (card, bits))).collect();
             for hi in blocks {
-                m.holder_rows.push(((p.to_string(), e.to_string(), ge.to_string(), cell, hi), rows.remove(&hi)));
+                m.holder_rows.push(((p.to_string(), e.clone(), ge.clone(), cell, hi), rows.remove(&hi)));
             }
-            m.flips.push((p.to_string(), e.to_string(), ge.to_string(), cell, leave, join));
+            m.flips.push((p.to_string(), e.clone(), ge.clone(), cell, leave, join));
         }
         m
     }
@@ -597,12 +598,12 @@ pub(super) fn differences(
     let name = |describe: &dyn Fn(u32) -> Option<String>, cell: u32| describe(cell).unwrap_or_else(|| format!("cell {cell}, which the cell table does not hold"));
     let mut tallies: BTreeMap<(String, String, String), (u32, u32)> = BTreeMap::new();
     for ((p, e, c), n) in &stored.tallies {
-        tallies.insert((p.clone(), e.clone(), name(&describe_stored, *c)), (*n, *c));
+        tallies.insert((p.clone(), e.to_string(), name(&describe_stored, *c)), (*n, *c));
     }
     let want: BTreeMap<(String, String, String), u32> = scanned
         .tallies
         .iter()
-        .map(|((p, e, c), n)| ((p.clone(), e.clone(), name(&describe_scanned, *c)), *n))
+        .map(|((p, e, c), n)| ((p.clone(), e.to_string(), name(&describe_scanned, *c)), *n))
         .collect();
     for ((p, e, k), (n, id)) in &tallies {
         match want.get(&(p.clone(), e.clone(), k.clone())) {
@@ -624,12 +625,12 @@ pub(super) fn differences(
     type Key = (String, String, String, String, u32);
     let mut holders: BTreeMap<Key, ((u64, &[u8]), u32)> = BTreeMap::new();
     for ((p, l, e, c, hi), (card, raw)) in &stored.holders {
-        holders.insert((p.clone(), l.clone(), e.clone(), name(&describe_stored, *c), *hi), ((*card, raw.as_slice()), *c));
+        holders.insert((p.clone(), l.to_string(), e.to_string(), name(&describe_stored, *c), *hi), ((*card, raw.as_slice()), *c));
     }
     let want: BTreeMap<Key, (u64, &[u8])> = scanned
         .holders
         .iter()
-        .map(|((p, l, e, c, hi), (card, raw))| ((p.clone(), l.clone(), e.clone(), name(&describe_scanned, *c), *hi), (*card, raw.as_slice())))
+        .map(|((p, l, e, c, hi), (card, raw))| ((p.clone(), l.to_string(), e.to_string(), name(&describe_scanned, *c), *hi), (*card, raw.as_slice())))
         .collect();
     for ((p, l, e, k, hi), (row, id)) in &holders {
         match want.get(&(p.clone(), l.clone(), e.clone(), k.clone(), *hi)) {

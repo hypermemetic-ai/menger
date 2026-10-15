@@ -5,6 +5,7 @@
 //! and moving a watch as time passes with no write.
 
 use super::history::{Clock, Log};
+use crate::address::ShortcodeId;
 use super::tests_filtered::holds_of_row;
 use super::tests_ready::Rng;
 use super::*;
@@ -29,6 +30,8 @@ fn row(epic: &str, seq: u32, status: Status, created: i64, updated: i64) -> Row 
     Row {
         id: format!("{epic}-{seq}"),
         epic: epic.into(),
+        shortcode: epic.into(),
+        address: format!("hypermemetic:{epic}-{seq}"),
         seq,
         title: String::new(),
         status,
@@ -128,7 +131,7 @@ fn created_and_for_answer_as_the_rule() {
                 log.retime(&r);
             }
             for t in &ts {
-                log.append(t, &OrderKey { epic: r.epic.clone(), seq });
+                log.append(t, &OrderKey { shortcode: ShortcodeId::from(r.epic.clone()), seq });
             }
             log.retime(&r);
             own.insert(r.id.clone(), ts);
@@ -160,10 +163,10 @@ fn created_and_for_answer_as_the_rule() {
             for zone in ["UTC", "Europe/Berlin", "America/Los_Angeles"] {
                 let clock = at(base + rng.below(3 * DAY as usize) as i64 - DAY).zoned(Some(zone)).unwrap();
                 let got = log.holds(&p, &clock);
-                let mut want: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
+                let mut want: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
                 for r in &rows {
                     if holds_of_row(&p, r, &own[&r.id], Some(began), &clock) {
-                        want.entry(r.epic.clone()).or_default().insert(r.seq);
+                        want.entry(r.shortcode.clone()).or_default().insert(r.seq);
                     }
                 }
                 assert_eq!(got, want, "round {round}: `{text}` at {:?} in {zone}", clock.fixed);
@@ -201,15 +204,15 @@ fn a_ticket_from_before_the_log_holds_its_status_since_at_least() {
     log.retime(&row("A", 1, Status::Pending, began - 40 * DAY, began - 20 * DAY));
     log.retime(&row("A", 2, Status::Pending, began - 40 * DAY, began + 2 * DAY));
     log.retime(&row("A", 3, Status::Pending, began - 40 * DAY, 0));
-    let t = |log: &Log, seq| log.timed("A", seq).unwrap();
+    let t = |log: &Log, seq| log.timed(&ShortcodeId::from("A"), seq).unwrap();
     assert_eq!((t(&log, 1).since, t(&log, 1).exact), (began - 20 * DAY, false), "its last update");
     assert_eq!((t(&log, 2).since, t(&log, 2).exact), (began, false), "updated since the log began: since the log began, at least");
     assert_eq!((t(&log, 3).since, t(&log, 3).exact), (began - 40 * DAY, false), "no update on record: its birth");
     let now = at(began + 3 * DAY);
-    let over = |log: &Log, text: &str| log.holds(&pred(text), &now).get("A").map(|b| b.iter().collect::<Vec<_>>()).unwrap_or_default();
+    let over = |log: &Log, text: &str| log.holds(&pred(text), &now).get(&ShortcodeId::from("A")).map(|b| b.iter().collect::<Vec<_>>()).unwrap_or_default();
     assert_eq!(over(&log, "status Pending for over 2w"), [1, 3]);
     assert_eq!(over(&log, "for under 2w"), [2]);
-    log.append(&transition(1, "A-1", Some(Status::Pending), Status::Ready, began + DAY), &OrderKey { epic: "A".into(), seq: 1 });
+    log.append(&transition(1, "A-1", Some(Status::Pending), Status::Ready, began + DAY), &OrderKey { shortcode: ShortcodeId::from("A"), seq: 1 });
     assert_eq!((t(&log, 1).since, t(&log, 1).exact, t(&log, 1).status), (began + DAY, true, Status::ALL.iter().position(|x| *x == Status::Ready).unwrap() as u8), "moved: exact, in Ready");
     assert_eq!(over(&log, "status Pending for over 2w"), [3]);
 }
@@ -333,10 +336,10 @@ async fn crossing_a_length_moves_a_watch_with_no_write() {
     let over = Lens::parse("kind build and status Pending for over 1h").unwrap().with_clock(at(born));
     assert_eq!(store.next_boundary(&over), Some(since + 3_600 + 1));
     assert!(store.aged(&over, born, since + 3_600, None).is_empty(), "not yet over the hour");
-    assert_eq!(store.aged(&over, born, since + 3_601, None), [Membership::Entered { id: "W-2".into(), epic: "W".into(), seq: 2 }]);
+    assert_eq!(store.aged(&over, born, since + 3_601, None), [Membership::Entered { id: "W-2".into(), shortcode: ShortcodeId::from("W"), seq: 2 }]);
     let fresh = Lens::parse("kind build and status Pending and created within 1h").unwrap().with_clock(at(born));
     assert_eq!(store.next_boundary(&fresh), Some(born + 3_600 + 1));
-    assert_eq!(store.aged(&fresh, born, born + 2 * 3_600, None), [Membership::Left { id: "W-2".into(), epic: "W".into(), seq: 2 }]);
+    assert_eq!(store.aged(&fresh, born, born + 2 * 3_600, None), [Membership::Left { id: "W-2".into(), shortcode: ShortcodeId::from("W"), seq: 2 }]);
     // A watch sleeps until the boundary (at most its cap).
     let watcher = store.watcher(over.clone());
     let wait = watcher.wait(&store, std::time::Duration::from_secs(7_200));

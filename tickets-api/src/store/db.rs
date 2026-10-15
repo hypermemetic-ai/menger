@@ -510,7 +510,9 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
                  labels = excluded.labels",
         params![
             t.id,
-            t.epic,
+            // ORG-3: the column holds the shortcode's identity — the code
+            // itself for every shortcode before ORG-3, so no row moved.
+            t.shortcode,
             t.seq,
             t.title,
             enum_str(&t.status),
@@ -551,7 +553,7 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
     for (t, open) in tickets.iter().zip(open) {
         stmt.execute(params![
             t.id,
-            t.epic,
+            t.shortcode,
             t.seq,
             t.title,
             enum_str(&t.status),
@@ -597,10 +599,18 @@ fn row_columns(conn: &Connection) -> rusqlite::Result<String> {
 }
 
 /// One row from a `SELECT` that starts with [`ROW_COLUMNS`].
+///
+/// ORG-3: the `epic` column is the shortcode's identity; the row's letters
+/// and full address are the registry's, which the cache gives every row it
+/// holds ([`super::Cache::readdress_all`]) — read here as the id's own text,
+/// and no address.
 fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
+    let shortcode: crate::address::ShortcodeId = row.get(1)?;
     Ok(Row {
         id: row.get(0)?,
-        epic: row.get(1)?,
+        epic: crate::address::Code::stored(shortcode.as_str()),
+        shortcode,
+        address: String::new(),
         seq: row.get(2)?,
         title: row.get(3)?,
         status: parse_col(4, &row.get::<_, String>(4)?)?,
@@ -696,7 +706,7 @@ pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
     )?
     .execute(params![
         t.id,
-        t.epic,
+        t.shortcode,
         t.seq,
         t.title,
         enum_str(&t.status),

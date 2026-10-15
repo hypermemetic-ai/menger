@@ -86,7 +86,8 @@ async fn heard(store: &Store, rx: &mut broadcast::Receiver<Change>) -> Vec<Chang
 /// WAVE-6: a cache row as the file holds it — every field but the
 /// placement, which is the cache's alone.
 fn unplaced(row: Row) -> Row {
-    Row { placement: None, ..row }
+    // ORG-3: as the file holds it — the address is the registry's.
+    Row { placement: None, ..super::tests::undressed(&row) }
 }
 
 fn row_of(stored: &Ticket, child_count: u64) -> Row {
@@ -142,7 +143,7 @@ async fn a_create_dropped_mid_commit_still_reaches_the_cache_and_watch_and_the_n
         ab2_after.title
     );
     assert!(
-        matches!(said.first(), Some(Change::Created { ticket }) if ticket.id == "AB-2" && ticket.placement.is_some() && Ticket { placement: None, ..ticket.clone() } == stored),
+        matches!(said.first(), Some(Change::Created { ticket }) if ticket.id == "AB-2" && ticket.placement.is_some() && Ticket { placement: None, address: String::new(), ..ticket.clone() } == stored),
         "watch carried created for AB-2: {:?}",
         kinds(&said)
     );
@@ -249,7 +250,7 @@ async fn an_amend_dropped_mid_commit_still_reaches_the_cache_and_watch() {
         matches!(
             said.as_slice(),
             [Change::Amended { ticket, changed }, Change::GroupChanged { group }]
-                if Ticket { placement: None, ..ticket.clone() } == stored
+                if Ticket { placement: None, address: String::new(), ..ticket.clone() } == stored
                     && changed == &["title", "body"]
                     && group.root_row.as_ref().is_some_and(|r| r.title == "amended")
         ),
@@ -297,7 +298,7 @@ async fn a_caller_that_stays_is_answered_after_all_three_and_a_failed_commit_cha
     let mut rx = store.subscribe();
     let t = store.create(new("ST", Kind::Scope, "stays")).await.unwrap();
     // WAVE-6: the file holds everything but the placement, the cache's alone.
-    let unplaced = Ticket { placement: None, ..t.clone() };
+    let unplaced = Ticket { placement: None, address: String::new(), ..t.clone() };
     assert_eq!(db::ticket(&store.db.lock().unwrap(), "ST-1").unwrap().as_ref(), Some(&unplaced), "durable when answered");
     assert!(store.row("ST-1").is_ok(), "in the cache when answered");
     assert!(matches!(rx.try_change(), Ok(Change::Created { ticket }) if ticket == t), "broadcast when answered");

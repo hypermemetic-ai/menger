@@ -94,7 +94,8 @@ fn waves_from_nothing_kept(store: &Store, epics: &BTreeSet<String>, kinds: &[Kin
         children: &cache.children,
         patch: None,
     };
-    let mut w = waves::waves(rows, epics, kinds);
+    let epics: std::collections::BTreeSet<ShortcodeId> = epics.iter().map(ShortcodeId::from).collect();
+    let mut w = waves::waves(rows, &epics, kinds);
     // The summaries differ by the kept placement alone; compare the rest.
     for p in &mut w.placed {
         p.summary.placement = None;
@@ -165,7 +166,7 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
                             0..=5 => ids[rng.below(ids.len())].clone(),
                             6..=8 => {
                                 let e = EPICS[rng.below(EPICS.len())];
-                                let last = store.extents().into_iter().find(|(x, _)| x == e).map_or(0, |(_, s)| s);
+                                let last = store.extents_text().into_iter().find(|(x, _)| x == e).map_or(0, |(_, s)| s);
                                 format!("{e}-{}", last + 1 + rng.below(4) as u32)
                             }
                             _ => "GHOST-1".to_string(),
@@ -461,9 +462,9 @@ async fn watch_by_epic_keeps_the_changes_in_its_shortcode() {
         None => Vec::new(),
     };
     assert_eq!(ids(change.clone().in_epic(None)), [up.clone(), near.clone(), far.clone()]);
-    assert_eq!(ids(change.clone().in_epic(Some("UP"))), [up, near]);
-    assert_eq!(ids(change.clone().in_epic(Some("DN"))), [far]);
-    assert!(change.in_epic(Some("NO")).is_none(), "nothing of it in NO: no event");
+    assert_eq!(ids(change.clone().in_epic(Some(&ShortcodeId::from("UP")))), [up, near]);
+    assert_eq!(ids(change.clone().in_epic(Some(&ShortcodeId::from("DN")))), [far]);
+    assert!(change.in_epic(Some(&ShortcodeId::from("NO"))).is_none(), "nothing of it in NO: no event");
     // The wire's form: the id and the placement.
     let c = PlacementChange { id: "DN-2".into(), placement: wave(2) };
     assert_eq!(

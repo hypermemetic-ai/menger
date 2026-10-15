@@ -58,6 +58,7 @@ use super::cascade::Gathered;
 use super::history::Act;
 use super::update_many::UPDATE_MANY_CEILING;
 use super::*;
+use crate::address::ShortcodeId;
 use crate::types::{InputState, Tombstone};
 use rusqlite::OptionalExtension;
 use roaring::RoaringBitmap;
@@ -140,7 +141,7 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Tombstones> {
             reparented: ids_of(9, &r.get::<_, String>(9)?)?,
             unblocked: ids_of(10, &r.get::<_, String>(10)?)?,
         };
-        out.put(t, r.get::<_, String>(1)?, r.get(2)?);
+        out.put(t, r.get::<_, ShortcodeId>(1)?, r.get(2)?);
     }
     Ok(out)
 }
@@ -154,6 +155,18 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> rusqlite::Result<Option
     let t = load(conn)?;
     let out = t.by_id.keys().filter(|id| cache.get(id).is_some()).map(|id| format!("tombstone {id}: the ticket is there too")).collect();
     Ok(Some((t.by_id.len(), out)))
+}
+
+/// ORG-3: where each deleted ticket was — its shortcode and number, as its
+/// tombstone keeps them — what the log places a deleted ticket's
+/// transitions by (a key is never parsed).
+pub(super) fn deleted_places(conn: &Connection) -> rusqlite::Result<HashMap<String, OrderKey>> {
+    if !has_table(conn)? {
+        return Ok(HashMap::new());
+    }
+    let mut stmt = conn.prepare("SELECT id, epic, seq FROM tombstones")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, OrderKey { shortcode: r.get(1)?, seq: r.get(2)? })))?;
+    rows.collect()
 }
 
 /// The ids of the tickets the file holds a tombstone of — what the log's
@@ -171,8 +184,8 @@ pub(super) fn deleted_ids(conn: &Connection) -> rusqlite::Result<HashSet<String>
 /// highest deleted sequence, which the next ticket of it is born past.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Tombstones {
-    by_id: HashMap<String, (Tombstone, String, u32)>,
-    last: HashMap<String, u32>,
+    by_id: HashMap<String, (Tombstone, ShortcodeId, u32)>,
+    last: HashMap<ShortcodeId, u32>,
 }
 
 impl Tombstones {
@@ -180,7 +193,7 @@ impl Tombstones {
         self.by_id.get(id).map(|(t, _, _)| t)
     }
 
-    fn put(&mut self, t: Tombstone, epic: String, seq: u32) {
+    fn put(&mut self, t: Tombstone, epic: ShortcodeId, seq: u32) {
         let last = self.last.entry(epic.clone()).or_insert(0);
         *last = (*last).max(seq);
         self.by_id.insert(t.id.clone(), (t, epic, seq));
@@ -196,8 +209,29 @@ impl Tombstones {
     }
 
     /// `epic`'s highest deleted sequence — 0 for none.
-    pub(super) fn after(&self, epic: &str) -> u32 {
+    pub(super) fn after(&self, epic: &ShortcodeId) -> u32 {
         self.last.get(epic).copied().unwrap_or(0)
+    }
+
+    /// ORG-3: where a deleted ticket was — its shortcode and number, as its
+    /// tombstone keeps them.
+    pub(super) fn place_of(&self, id: &str) -> Option<(&ShortcodeId, u32)> {
+        self.by_id.get(id).map(|(_, sc, seq)| (sc, *seq))
+    }
+
+    /// ORG-3: the shortcode a deleted ticket was in, as its tombstone keeps it.
+    pub(super) fn shortcode_of(&self, id: &str) -> Option<&ShortcodeId> {
+        self.by_id.get(id).map(|(_, sc, _)| sc)
+    }
+
+    /// ORG-3: every shortcode a tombstone is of — registered with the rest.
+    pub(super) fn shortcodes(&self) -> impl Iterator<Item = ShortcodeId> + '_ {
+        self.last.keys().cloned()
+    }
+
+    /// ORG-3: every deleted ticket's key — pinned, as a live one's is.
+    pub(super) fn ids(&self) -> impl Iterator<Item = String> + '_ {
+        self.by_id.keys().cloned()
     }
 
     /// A write that would have `id` wait on a deleted ticket, refused.
@@ -272,9 +306,11 @@ pub struct Undeleted {
 }
 
 /// What [`Change::in_epic`] passes on of a delete or an undelete: the ids
-/// (and their tombstones or tickets) in `epic`, when any is.
-pub(super) fn in_epic(change: Change, epic: &str) -> Option<Change> {
-    let mine = |id: &str| id.rsplit_once('-').is_some_and(|(e, _)| e == epic);
+/// (and their tombstones or tickets) in `epic`, when any is. ORG-3: a
+/// deleted ticket's shortcode is the one its key was minted in — a deleted
+/// ticket never moves (ACT-6, which moves live ones, keeps its own record).
+pub(super) fn in_epic(change: Change, epic: &ShortcodeId) -> Option<Change> {
+    let mine = |id: &str| id.rsplit_once('-').is_some_and(|(e, _)| e == epic.as_str());
     match change {
         Change::Deleted { ids, tombstones } => {
             let ids: Vec<String> = ids.into_iter().filter(|i| mine(i)).collect();
@@ -283,7 +319,7 @@ pub(super) fn in_epic(change: Change, epic: &str) -> Option<Change> {
         }
         Change::Undeleted { ids, tickets } => {
             let ids: Vec<String> = ids.into_iter().filter(|i| mine(i)).collect();
-            let tickets = tickets.into_iter().filter(|t| t.epic == epic).collect();
+            let tickets = tickets.into_iter().filter(|t| t.shortcode == *epic).collect();
             (!ids.is_empty()).then_some(Change::Undeleted { ids, tickets })
         }
         other => Some(other),
@@ -347,7 +383,7 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
         for r in &named {
             for (epic, seqs) in lineage::subtree(cache, &r.id, Some(r)) {
                 for seq in seqs {
-                    let key = OrderKey { epic: epic.clone(), seq };
+                    let key = OrderKey { shortcode: epic.clone(), seq };
                     if let Some(t) = cache.order.get(&key) {
                         gone.entry(key).or_insert_with(|| t.clone());
                     }
@@ -370,9 +406,9 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
         }
         by
     };
-    let mut held_gone: HashMap<&str, u64> = HashMap::new();
+    let mut held_gone: HashMap<&ShortcodeId, u64> = HashMap::new();
     for t in gone.values() {
-        *held_gone.entry(t.epic.as_str()).or_default() += 1;
+        *held_gone.entry(&t.shortcode).or_default() += 1;
     }
     let mut moves: Vec<(Row, String, Option<String>)> = Vec::new();
     let mut unblocks: BTreeMap<OrderKey, (String, Vec<String>)> = BTreeMap::new();
@@ -382,7 +418,7 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
             .children
             .of(&t.id)
             .into_iter()
-            .filter_map(|(epic, seq)| cache.order.get(&OrderKey { epic, seq }))
+            .filter_map(|(epic, seq)| cache.order.get(&OrderKey { shortcode: epic, seq }))
             .filter(|c| !leaving(&c.id))
             .collect();
         // The nearest ancestor that stays — where `reparent` moves them.
@@ -407,7 +443,7 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
                 ))),
                 Some(_) => {
                     for c in kids {
-                        if target.is_none() && c.epic != t.epic {
+                        if target.is_none() && c.shortcode != t.shortcode {
                             why.push(refuse(format!(
                                 "{} roots the shortcode {} hosted under {}, and a hosted root can't return to the top level — \
                                  move it first (set_parent), or delete it too",
@@ -441,8 +477,8 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
                 )));
             }
         }
-        if shortcode_root(cache, &t.epic).is_some_and(|r| r.id == t.id) {
-            let others = cache.ids.held(&t.epic).saturating_sub(held_gone.get(t.epic.as_str()).copied().unwrap_or(0));
+        if shortcode_root(cache, &t.shortcode).is_some_and(|r| r.id == t.id) {
+            let others = cache.ids.held(&t.shortcode).saturating_sub(held_gone.get(&t.shortcode).copied().unwrap_or(0));
             if others > 0 {
                 why.push(refuse(format!(
                     "{} roots the shortcode {}, which holds {others} other {} — delete them with it (children delete), or move them first",
@@ -502,10 +538,15 @@ fn unplan(cache: &Cache, found: Vec<(String, Option<Ticket>)>) -> Result<Vec<Bac
             refusals.push((id, vec![why]));
             continue;
         };
-        let Some(ticket) = ticket else {
+        let Some(mut ticket) = ticket else {
             refusals.push((id.clone(), vec![refuse(format!("{id}'s body was purged — a tombstone keeps it {} days", KEEP_BODY_FOR / 86_400))]));
             continue;
         };
+        // ORG-3: its shortcode as its tombstone keeps it — a ticket kept
+        // before ORG-3 says only its letters.
+        if let Some(sc) = cache.tombstones.shortcode_of(&id) {
+            ticket.shortcode = sc.clone();
+        }
         let mut why = Vec::new();
         let gone = |x: &str| cache.get(x).is_none() && !back.contains(x);
         if let Some(p) = ticket.parent.as_deref().filter(|p| gone(p)) {
@@ -517,8 +558,8 @@ fn unplan(cache: &Cache, found: Vec<(String, Option<Ticket>)>) -> Result<Vec<Bac
             why.push(refuse(format!("{id} waited on {}, deleted — undelete {} too", named(dead.iter().copied()), plural(dead.len(), "it", "them"))));
         }
         if let Some(path) = &ticket.path {
-            if let Some(holder) = cache.paths.get(&(ticket.epic.clone(), path.clone())) {
-                why.push(StoreError::PathTaken { epic: ticket.epic.clone(), path: path.clone(), holder: holder.clone() });
+            if let Some(holder) = cache.paths.get(&(ticket.shortcode.clone(), path.clone())) {
+                why.push(StoreError::PathTaken { epic: ticket.epic.to_string(), path: path.clone(), holder: holder.clone() });
             }
         }
         let (uses, _) = components::read(&ticket.body);
@@ -534,21 +575,21 @@ fn unplan(cache: &Cache, found: Vec<(String, Option<Ticket>)>) -> Result<Vec<Bac
     if !refusals.is_empty() {
         return Err(refusals);
     }
-    out.sort_by_key(|(t, _)| (t.epic.clone(), t.seq));
+    out.sort_by_key(|(t, _)| (t.shortcode.clone(), t.seq));
     Ok(out)
 }
 
 /// What a rebuilding write remembers of the cache before it: each group as
 /// drawn, each row's placement, and the cells of the tickets it touches.
 struct Before {
-    groups: HashMap<String, Group>,
+    groups: HashMap<ShortcodeId, Group>,
     placed: BTreeMap<OrderKey, Option<crate::types::Placement>>,
     cells: BTreeMap<OrderKey, u32>,
 }
 
 impl Before {
     fn of(cache: &Cache, touched: impl IntoIterator<Item = OrderKey>) -> Self {
-        let groups = cache.rollups.groups().into_iter().map(|g| (g.epic.clone(), cache.dress(g))).collect();
+        let groups = cache.rollups.groups().into_iter().map(|g| (g.shortcode.clone(), cache.dress(g))).collect();
         let placed = cache.order.iter().map(|(k, r)| (k.clone(), r.placement)).collect();
         let cells = touched
             .into_iter()
@@ -568,14 +609,14 @@ impl Before {
             .groups()
             .into_iter()
             .map(|g| cache.dress(g))
-            .filter(|g| self.groups.get(&g.epic) != Some(g))
+            .filter(|g| self.groups.get(&g.shortcode) != Some(g))
             .collect();
         out.groups(groups);
-        let shifts: Vec<(String, crate::types::PlacementChange)> = cache
+        let shifts: Vec<(ShortcodeId, crate::types::PlacementChange)> = cache
             .order
             .iter()
             .filter(|(k, r)| r.placement.is_some() && self.placed.get(*k).copied().flatten() != r.placement)
-            .map(|(k, r)| (k.epic.clone(), crate::types::PlacementChange { id: r.id.clone(), placement: r.placement.expect("filtered") }))
+            .map(|(k, r)| (k.shortcode.clone(), crate::types::PlacementChange { id: r.id.clone(), placement: r.placement.expect("filtered") }))
             .collect();
         if !shifts.is_empty() {
             out.placed(Some(Change::PlacementsChanged { changes: shifts }));
@@ -588,17 +629,17 @@ impl Before {
                 None => Some(cells::GONE),
             };
             if let Some(to) = to.filter(|to| from != Some(*to)) {
-                moves.push(cells::CellMove { epic: Arc::from(k.epic.as_str()), seq: k.seq, from, to });
+                moves.push(cells::CellMove { shortcode: k.shortcode.clone(), seq: k.seq, from, to });
             }
         }
         if moves.is_empty() {
             return None;
         }
         let counts = (moves.len() > cells::RECOUNT_OVER).then(|| {
-            let epics: BTreeSet<&str> = moves.iter().map(|m| &*m.epic).collect();
+            let epics: BTreeSet<&ShortcodeId> = moves.iter().map(|m| &m.shortcode).collect();
             epics
                 .into_iter()
-                .map(|e| (e.to_string(), cache.cells.held_in(e).map_or_else(Vec::new, |h| h.iter().map(|(c, b)| (*c, b.len())).collect())))
+                .map(|e| (e.clone(), cache.cells.held_in(e).map_or_else(Vec::new, |h| h.iter().map(|(c, b)| (*c, b.len())).collect())))
                 .collect()
         });
         Some(Arc::new(cells::Moves { moves, counts }))
@@ -610,7 +651,7 @@ impl Before {
 fn under_of(unders: &lineage::UnderWatches, cache: &Cache, keys: &[OrderKey], roots: &[&Row]) -> Option<lineage::UnderBefore> {
     lineage::under_before_with(unders, cache, || {
         let marks = cells::Moves {
-            moves: keys.iter().map(|k| cells::CellMove { epic: Arc::from(k.epic.as_str()), seq: k.seq, from: None, to: 0 }).collect(),
+            moves: keys.iter().map(|k| cells::CellMove { shortcode: k.shortcode.clone(), seq: k.seq, from: None, to: 0 }).collect(),
             counts: None,
         };
         let mut t = lineage::Touched::of_moves(Some(&marks));
@@ -624,18 +665,18 @@ fn under_of(unders: &lineage::UnderWatches, cache: &Cache, keys: &[OrderKey], ro
 impl Cache {
     /// ACT-5: the sequence `epic`'s next ticket gets — past its highest, and
     /// past every number a delete freed: none is reused.
-    pub(super) fn next_seq(&self, epic: &str) -> u32 {
+    pub(super) fn next_seq(&self, epic: &ShortcodeId) -> u32 {
         self.ids.next_seq(epic).max(self.tombstones.after(epic) + 1)
     }
 
     /// ACT-5: the sequences below `last` that `epic` does not hold — a
     /// deleted ticket's, or a hand edit's hole. Nothing for a dense run.
-    pub(super) fn holes(&self, epic: &str, last: u32) -> Vec<u32> {
+    pub(super) fn holes(&self, epic: &ShortcodeId, last: u32) -> Vec<u32> {
         if self.ids.held(epic) >= u64::from(last) {
             return Vec::new();
         }
-        let from = OrderKey { epic: epic.to_string(), seq: 1 };
-        let to = OrderKey { epic: epic.to_string(), seq: last };
+        let from = OrderKey { shortcode: epic.clone(), seq: 1 };
+        let to = OrderKey { shortcode: epic.clone(), seq: last };
         let held: RoaringBitmap = self.order.range(from..=to).map(|(k, _)| k.seq).collect();
         (1..=last).filter(|s| !held.contains(*s)).collect()
     }
@@ -645,13 +686,32 @@ impl Cache {
     /// placements and the log's times from the rows again. Every record
     /// beside the tickets (comments, notes, members, roles, themes and their
     /// channel, the log's marks) stays as it is.
+    ///
+    /// ORG-3: and the shortcodes as `built` has them — its rows dressed by
+    /// them, a namespace a reparented root moved included ([`Cache::rebuilt`]).
     fn rederive(&mut self, built: Cache, inputs: inputs::Inputs) {
-        let Cache { order, at, paths, rollups, ids, children, ready, cells, .. } = built;
+        let Cache { order, at, paths, rollups, ids, children, ready, cells, shortcodes, .. } = built;
         (self.order, self.at, self.paths, self.rollups, self.ids) = (order, at, paths, rollups, ids);
+        self.shortcodes = shortcodes;
         (self.children, self.ready, self.cells) = (children, ready, cells);
         self.inputs = inputs;
         self.place_all();
         self.log.time_all(self.order.values());
+    }
+
+    /// ORG-3: a rebuilding write's cache (`built`, from the rows its
+    /// transaction leaves) given the shortcodes — every namespace a moved
+    /// root changes, checked (refused, naming the one there, into a
+    /// namespace holding its code) and written in `txn` — and its rows
+    /// dressed by them.
+    fn rebuilt(&self, txn: &rusqlite::Transaction<'_>, mut built: Cache) -> Result<Cache, StoreError> {
+        built.shortcodes = self.shortcodes.clone();
+        if let Some(m) = self.namespaces(built.rows(), &built.rollups, None, None)? {
+            m.write(txn)?;
+            built.shortcodes = m.after;
+        }
+        built.readdress_all();
+        Ok(built)
     }
 }
 
@@ -673,14 +733,21 @@ fn after(txn: &rusqlite::Transaction<'_>, built: &Cache, id: &str) -> Result<Tic
 
 impl Store {
     /// ACT-5: `id`'s tombstone, when it names a deleted ticket.
+    ///
+    /// ORG-3: by any address the resolver takes to it (today's ids are
+    /// pinned, deleted or not).
     pub fn tombstone(&self, id: &str) -> Option<Tombstone> {
-        let id = id.trim().to_ascii_uppercase();
-        self.tickets.read().expect("store lock poisoned").tombstones.get(&id).cloned()
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let key = match cache.find_ticket(id, shortcodes::OrgReach::All) {
+            shortcodes::Found::One(key) => key,
+            _ => crate::address::folded(id),
+        };
+        cache.tombstones.get(&key).cloned()
     }
 
     /// ACT-5: the sequences below `last` that `epic` does not hold
     /// ([`Cache::holes`]).
-    pub fn holes(&self, epic: &str, last: u32) -> Vec<u32> {
+    pub fn holes(&self, epic: &ShortcodeId, last: u32) -> Vec<u32> {
         self.tickets.read().expect("store lock poisoned").holes(epic, last)
     }
 
@@ -690,14 +757,16 @@ impl Store {
     /// every ticket was deleted is still here) and the ones below it that it
     /// does not hold ([`Cache::holes`]). A walk only of a shortcode that is
     /// not dense; nothing else past [`Store::extents`].
-    pub fn extents_holed(&self) -> Vec<(String, u32, Vec<u32>)> {
+    ///
+    /// ORG-3: each with its letters, beside its identity.
+    pub fn extents_holed(&self) -> Vec<(ShortcodeId, crate::address::Code, u32, Vec<u32>)> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let mut last: BTreeMap<&str, u32> = cache.ids.last_seqs().collect();
+        let mut last: BTreeMap<&ShortcodeId, u32> = cache.ids.last_seqs().collect();
         for (epic, seq) in &cache.tombstones.last {
-            let l = last.entry(epic.as_str()).or_insert(0);
+            let l = last.entry(epic).or_insert(0);
             *l = (*l).max(*seq);
         }
-        last.into_iter().map(|(epic, l)| (epic.to_string(), l, cache.holes(epic, l))).collect()
+        last.into_iter().map(|(epic, l)| (epic.clone(), cache.shortcodes.code(epic), l, cache.holes(epic, l))).collect()
     }
 
     /// [`Store::delete_by`] as nobody signed in, through the API, with every
@@ -807,7 +876,7 @@ impl Store {
             )?
             .execute(rusqlite::params![
                 tomb.id,
-                t.epic,
+                t.shortcode,
                 t.seq,
                 tomb.title,
                 tomb.by,
@@ -829,13 +898,14 @@ impl Store {
             inputs.take(&t.id, Vec::new());
         }
         let built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, inputs.clone(), cache.cells.keys());
+        let built = cache.rebuilt(&txn, built)?;
         stored::write_all(&txn, &built.form())?;
         // The events of the tickets that stay and moved, as the write leaves them.
         let mut out = Gathered::default();
         for (c, from, to) in &p.moves {
             out.tickets.push(Change::ParentChanged { ticket: after(&txn, &built, &c.id)?, previous: Some(from.clone()) });
             if let Some(to) = to.as_deref().and_then(|t| built.get(t)) {
-                out.tickets.push(Change::ChildrenChanged { id: to.id.clone(), epic: to.epic.clone(), added: c.id.clone(), child_count: to.child_count });
+                out.tickets.push(Change::ChildrenChanged { id: to.id.clone(), shortcode: to.shortcode.clone(), added: c.id.clone(), child_count: to.child_count });
             }
         }
         for (x, from) in &p.unblocks {
@@ -845,7 +915,7 @@ impl Store {
             if let Some(parent) = t.parent.as_deref().filter(|q| !leaving.contains(q)).and_then(|q| built.get(q)) {
                 out.tickets.push(Change::ChildRemoved {
                     id: parent.id.clone(),
-                    epic: parent.epic.clone(),
+                    shortcode: parent.shortcode.clone(),
                     removed: t.id.clone(),
                     child_count: parent.child_count,
                 });
@@ -858,7 +928,7 @@ impl Store {
         let ids: Vec<String> = p.gone.iter().map(|t| t.id.clone()).collect();
         cache.rederive(built, inputs);
         for (t, tomb) in p.gone.iter().zip(&tombstones) {
-            cache.tombstones.put(tomb.clone(), t.epic.clone(), t.seq);
+            cache.tombstones.put(tomb.clone(), t.shortcode.clone(), t.seq);
         }
         out.tickets.push(Change::Deleted { ids: ids.clone(), tombstones: tombstones.clone() });
         out.components = registry;
@@ -987,11 +1057,11 @@ impl Store {
         let mut input_events = Vec::new();
         for t in &tickets {
             let list = kept.of(&t.id).to_vec();
-            input_events.extend(list.iter().map(|input| Change::InputChanged { epic: t.epic.clone(), input: input.clone() }));
+            input_events.extend(list.iter().map(|input| Change::InputChanged { shortcode: t.shortcode.clone(), input: input.clone() }));
             inputs.take(&t.id, list);
         }
         let keys: Vec<OrderKey> = {
-            let mut k: Vec<OrderKey> = tickets.iter().map(|t| OrderKey { epic: t.epic.clone(), seq: t.seq }).collect();
+            let mut k: Vec<OrderKey> = tickets.iter().map(|t| OrderKey { shortcode: t.shortcode.clone(), seq: t.seq }).collect();
             k.extend(reblocked.iter().filter_map(|(x, _)| cache.at.get(x).cloned()));
             k.sort();
             k.dedup();
@@ -1000,6 +1070,7 @@ impl Store {
         let under = under_of(unders, cache, &keys, &[]);
         let before = Before::of(cache, keys.iter().cloned());
         let built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, inputs.clone(), cache.cells.keys());
+        let built = cache.rebuilt(&txn, built)?;
         stored::write_all(&txn, &built.form())?;
         let mut out = Gathered::default();
         let ids: Vec<String> = tickets.iter().map(|t| t.id.clone()).collect();
@@ -1007,16 +1078,16 @@ impl Store {
         out.tickets.push(Change::Undeleted { ids: ids.clone(), tickets: whole.clone() });
         for t in &whole {
             if let Some(p) = t.parent.as_deref().and_then(|p| built.get(p)) {
-                out.tickets.push(Change::ChildrenChanged { id: p.id.clone(), epic: p.epic.clone(), added: t.id.clone(), child_count: p.child_count });
+                out.tickets.push(Change::ChildrenChanged { id: p.id.clone(), shortcode: p.shortcode.clone(), added: t.id.clone(), child_count: p.child_count });
             }
         }
         for (c, from, to) in &moved_back {
             out.tickets.push(Change::ParentChanged { ticket: after(&txn, &built, c)?, previous: from.clone() });
             if let Some(f) = from.as_deref().and_then(|f| built.get(f)) {
-                out.tickets.push(Change::ChildRemoved { id: f.id.clone(), epic: f.epic.clone(), removed: c.clone(), child_count: f.child_count });
+                out.tickets.push(Change::ChildRemoved { id: f.id.clone(), shortcode: f.shortcode.clone(), removed: c.clone(), child_count: f.child_count });
             }
             if let Some(n) = built.get(to) {
-                out.tickets.push(Change::ChildrenChanged { id: n.id.clone(), epic: n.epic.clone(), added: c.clone(), child_count: n.child_count });
+                out.tickets.push(Change::ChildrenChanged { id: n.id.clone(), shortcode: n.shortcode.clone(), added: c.clone(), child_count: n.child_count });
             }
         }
         for (x, b) in &reblocked {

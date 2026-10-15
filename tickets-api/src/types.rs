@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+pub use crate::address::{Address, At, Code, Namespace, OrgId, Shortcode, ShortcodeId, TicketId};
+
 /// Lifecycle status. Serialized with frontmatter casing (`Pending`, `Ready`, …)
 /// so a ticket round-trips into a plans/ file unchanged.
 ///
@@ -366,10 +368,24 @@ impl FromStr for Severity {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ticket {
-    /// `EPIC-N`, allocated by the store.
+    /// `EPIC-N`, allocated by the store. ORG-3: the ticket's key — opaque
+    /// and immutable ([`crate::TicketId`]): today's id for today's tickets,
+    /// its shortcode's id, `-` and its number for a newborn.
     pub id: String,
-    /// Epic prefix, uppercase (e.g. `MNG`).
-    pub epic: String,
+    /// The shortcode's letters, upper case (e.g. `MNG`). ORG-3: what a row
+    /// shows — two shortcodes of one code are told apart by `shortcode`
+    /// and `address`, never by this.
+    pub epic: Code,
+    /// ORG-3: the shortcode's identity ([`ShortcodeId`]) — what to key a
+    /// ticket's shortcode by. The code itself for a shortcode made before
+    /// ORG-3, `CODE.N` for a namesake.
+    #[serde(default)]
+    pub shortcode: ShortcodeId,
+    /// ORG-3: the ticket's full address, `org:ROOT/…/SC-N`
+    /// (`hypermemetic:MENGER/THEME-3`) — what tells two `THEME-3`s apart,
+    /// and what a link may name it by.
+    #[serde(default)]
+    pub address: String,
     /// Sequence number within the epic (the `N` in `EPIC-N`).
     pub seq: u32,
     pub title: String,
@@ -444,7 +460,13 @@ pub struct Ticket {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TicketSummary {
     pub id: String,
-    pub epic: String,
+    pub epic: Code,
+    /// ORG-3: as on [`Ticket`].
+    #[serde(default)]
+    pub shortcode: ShortcodeId,
+    /// ORG-3: as on [`Ticket`].
+    #[serde(default)]
+    pub address: String,
     pub seq: u32,
     pub title: String,
     pub status: Status,
@@ -481,6 +503,8 @@ impl From<Ticket> for TicketSummary {
         Self {
             id: t.id,
             epic: t.epic,
+            shortcode: t.shortcode,
+            address: t.address,
             seq: t.seq,
             title: t.title,
             status: t.status,
@@ -521,16 +545,21 @@ pub fn is_menger_doc(path: Option<&str>) -> bool {
 
 /// WAVE-10: a **path address** — `<SHORTCODE>/<path>` — split into the
 /// shortcode (upper-cased: shortcodes are case-insensitive) and the path
-/// (exactly as written). `None` for anything else — an `EPIC-N` id has no
-/// `/`, and an address needs a shortcode and a path on either side of the
-/// first one.
+/// (exactly as written). `None` for anything else.
+///
+/// ORG-3: read by [`Address::parse`], the one parser — a path begins at its
+/// `_` segment (`_MENGER/…`), so `MENGER/THEME-3` is a ticket's short form
+/// and no path (ORG-6 finding 3), and the hosts and org an address may name
+/// before the shortcode are the resolver's, not this function's: `None` for
+/// an address that names any.
 pub fn path_address(id: &str) -> Option<(String, &str)> {
-    let (shortcode, path) = id.split_once('/')?;
-    let shortcode = shortcode.trim();
-    if shortcode.is_empty() || path.is_empty() || !shortcode.chars().all(|c| c.is_ascii_alphanumeric()) {
+    let a = Address::parse(id).ok()?;
+    let At::Path(_) = &a.at else { return None };
+    if !a.is_bare() {
         return None;
     }
-    Some((shortcode.to_ascii_uppercase(), path))
+    let path = &id[id.find('/')? + 1..];
+    Some((a.code.as_str().to_string(), path))
 }
 
 /// MFE-9: the same narrowing from a borrowed ticket, for a consumer that
@@ -580,8 +609,15 @@ impl From<&Ticket> for TicketSummary {
 /// `group_changed` carries it. `None` exactly when `root` is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Group {
-    /// The shortcode (epic prefix), uppercase.
-    pub epic: String,
+    /// The shortcode's letters, uppercase. ORG-3: what the row shows; two
+    /// namesakes are told apart by `shortcode` and `address`.
+    pub epic: Code,
+    /// ORG-3: the shortcode's identity — what a row of the nav is keyed by.
+    #[serde(default)]
+    pub shortcode: ShortcodeId,
+    /// ORG-3: the shortcode's full address, `org:ROOT/…/SC`.
+    #[serde(default)]
+    pub address: String,
     pub total: u64,
     pub done: u64,
     /// SDLC-11: the docs in the row's subtree, which `total` leaves out.
@@ -1550,8 +1586,13 @@ pub enum TicketsEvent {
     /// holds — deleted tickets (whose numbers are never reused), or a hand
     /// edit's hole — so a client's arithmetic skips them: the shortcode holds
     /// `last_seq - holes.len()` tickets. Absent when it holds every one.
+    /// ORG-3: `epic` the shortcode's letters, `shortcode` its identity —
+    /// what a client keys the extent by, and what a row's id is built from
+    /// (`{shortcode}-{seq}`, the key it was born with).
     Extent {
-        epic: String,
+        epic: Code,
+        #[serde(default)]
+        shortcode: ShortcodeId,
         last_seq: u32,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         holes: Vec<u32>,
@@ -1560,7 +1601,13 @@ pub enum TicketsEvent {
     /// per shortcode by `counts`, in shortcode order, only for a shortcode
     /// that holds a match) — the filtered `extents`. A sum over the kept
     /// counts of the cells the filter admits, never a test of a ticket.
-    Count { epic: String, held: u64 },
+    /// ORG-3: `epic` the letters, `shortcode` the identity, as `extent`.
+    Count {
+        epic: Code,
+        #[serde(default)]
+        shortcode: ShortcodeId,
+        held: u64,
+    },
     /// FILTER-4: one menu count (yielded by `facets`): how many tickets
     /// match `base` and `filter` once `filter`'s own groups for `field` are
     /// set aside, among those whose `field` is `value`. `field` is spelled
@@ -1573,17 +1620,35 @@ pub enum TicketsEvent {
     /// filter — born into it, or its status, its blockers' or its commits
     /// moved it there (yielded by `watch { filter }` only, after every other
     /// event of the write).
-    Entered { id: String, epic: String, seq: u32 },
+    /// ORG-3: `epic` the letters, `shortcode` the identity, as `extent`.
+    Entered {
+        id: String,
+        epic: Code,
+        #[serde(default)]
+        shortcode: ShortcodeId,
+        seq: u32,
+    },
     /// FILTER-4: a write moved this ticket out of a `watch { filter }`'s
     /// filter (yielded by `watch { filter }` only, after every other event
     /// of the write).
-    Left { id: String, epic: String, seq: u32 },
+    Left {
+        id: String,
+        epic: Code,
+        #[serde(default)]
+        shortcode: ShortcodeId,
+        seq: u32,
+    },
     /// FILTER-4: one write moved more than 256 tickets into or out of a
     /// `watch { filter }`'s filter: instead of those `entered` and `left`,
     /// one of these per shortcode it moved, with the filter's count of that
     /// shortcode as the write left it. A client sets its count and asks for
     /// its window again, as after `lagged`.
-    Recount { epic: String, held: u64 },
+    Recount {
+        epic: Code,
+        #[serde(default)]
+        shortcode: ShortcodeId,
+        held: u64,
+    },
     /// WAVE-4: one ticket's place in the order of work (yielded per ticket
     /// by `waves`): its row, its [`Placement`] — computed over the whole
     /// `blocked_by` graph, whatever shortcodes were asked for — and
@@ -1663,6 +1728,11 @@ pub enum TicketsEvent {
     Member { id: String, matched: bool },
     /// Lookup miss.
     NotFound { id: String },
+    /// ORG-3: `id` (an address as it was asked — a ticket or a shortcode)
+    /// names more than one thing in the reader's reach: `candidates` are
+    /// each one's full address, in the store's order. Nothing was read or
+    /// written; name one of them in full, or by a short form only it has.
+    Ambiguous { id: String, candidates: Vec<String> },
     /// In-band error (bad enum value, invalid epic, blocked_by cycle, …).
     /// A *data* event: the call succeeded and the activation said no,
     /// which is not the same thing as a transport or remote failure.
@@ -1957,7 +2027,7 @@ mod tests {
     /// drawn.
     #[test]
     fn a_group_is_drawn_when_it_holds_work_or_docs() {
-        let g = |total, docs| Group { epic: "G".into(), total, done: 0, docs, root: None, root_row: None, host: None };
+        let g = |total, docs| Group { epic: "G".into(), shortcode: "G".into(), address: String::new(), total, done: 0, docs, root: None, root_row: None, host: None };
         assert!(g(1, 0).drawn());
         assert!(g(0, 3).drawn(), "a doc collection");
         assert!(!g(0, 0).drawn());
@@ -1985,6 +2055,8 @@ mod tests {
             labels: Vec::new(),
             id: "W-2".into(),
             epic: "W".into(),
+            shortcode: "W".into(),
+            address: "hypermemetic:W-2".into(),
             seq: 2,
             title: "t".into(),
             status: Status::Pending,
@@ -2054,6 +2126,8 @@ mod tests {
         let ticket = Ticket {
             id: "SUM-1".into(),
             epic: "SUM".into(),
+            shortcode: "SUM".into(),
+            address: "hypermemetic:SUM-1".into(),
             seq: 1,
             title: "every field populated".into(),
             status: Status::Ready,

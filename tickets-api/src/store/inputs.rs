@@ -297,7 +297,10 @@ impl Inputs {
     /// Every input of `ticket` (or of every ticket), whose ticket is in
     /// `epic`, in `state` — in the store's order of tickets, each ticket's
     /// in its order.
-    pub(crate) fn query(&self, ticket: Option<&str>, epic: Option<&str>, state: Option<InputState>) -> Vec<Input> {
+    ///
+    /// ORG-3: `epic` a shortcode's identity — a key is its shortcode's id,
+    /// `-` and its number as it was minted.
+    pub(crate) fn query(&self, ticket: Option<&str>, epic: Option<&crate::address::ShortcodeId>, state: Option<InputState>) -> Vec<Input> {
         self.query_where(ticket, epic, state, |_| true)
     }
 
@@ -306,7 +309,7 @@ impl Inputs {
     pub(crate) fn query_where(
         &self,
         ticket: Option<&str>,
-        epic: Option<&str>,
+        epic: Option<&crate::address::ShortcodeId>,
         state: Option<InputState>,
         keep: impl Fn(&str) -> bool,
     ) -> Vec<Input> {
@@ -314,7 +317,7 @@ impl Inputs {
             Some(t) => self.by_ticket.get_key_value(t).map(|(k, _)| k).into_iter().collect(),
             None => self.by_ticket.keys().collect(),
         };
-        tickets.retain(|t| epic.is_none_or(|e| super::db::by_epic_seq(t).0 == e) && keep(t));
+        tickets.retain(|t| epic.is_none_or(|e| super::db::by_epic_seq(t).0 == e.as_str()) && keep(t));
         tickets.sort_by_cached_key(|t| super::db::by_epic_seq(t));
         tickets
             .into_iter()

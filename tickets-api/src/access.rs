@@ -478,7 +478,11 @@ impl Caller {
     pub fn lacks(&self, grant: &GateGrant, id: Option<&str>) -> String {
         match id {
             Some(id) => {
-                let shortcode = id.split(['-', '/']).next().unwrap_or(id).to_ascii_uppercase();
+                // ORG-3: the shortcode the address names it in, by its
+                // letters — never the text before a `-` (an org's name).
+                let shortcode = crate::address::Address::parse(id)
+                    .map(|a| a.code.as_str().to_string())
+                    .unwrap_or_else(|_| id.split(['-', '/']).next().unwrap_or(id).to_ascii_uppercase());
                 format!("{} needs {grant} on {shortcode} for {id}", self.who())
             }
             None => format!("{} needs {grant} here", self.who()),

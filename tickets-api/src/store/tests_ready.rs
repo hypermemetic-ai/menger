@@ -64,9 +64,9 @@ struct Scan {
     unsatisfied: BTreeMap<String, u32>,
     /// MNG-4's ready set, by its own rule — `Ready`, and every entry of
     /// `blocked_by` a ticket that is done with — per shortcode.
-    members: BTreeMap<String, BTreeSet<u32>>,
-    statuses: BTreeMap<(String, &'static str), u64>,
-    ready: BTreeMap<String, u64>,
+    members: BTreeMap<ShortcodeId, BTreeSet<u32>>,
+    statuses: BTreeMap<(ShortcodeId, &'static str), u64>,
+    ready: BTreeMap<ShortcodeId, u64>,
 }
 
 fn scan(rows: &[Row]) -> Scan {
@@ -87,10 +87,10 @@ fn scan(rows: &[Row]) -> Scan {
         let member = t.status == Status::Ready && t.blocked_by.iter().all(|b| resolved(b));
         assert_eq!(member, t.status == Status::Ready && open == 0, "the count decides what the rule decides: {}", t.id);
         if member {
-            s.members.entry(t.epic.clone()).or_default().insert(t.seq);
-            *s.ready.entry(t.epic.clone()).or_default() += 1;
+            s.members.entry(t.shortcode.clone()).or_default().insert(t.seq);
+            *s.ready.entry(t.shortcode.clone()).or_default() += 1;
         }
-        *s.statuses.entry((t.epic.clone(), t.status.as_str())).or_default() += 1;
+        *s.statuses.entry((t.shortcode.clone(), t.status.as_str())).or_default() += 1;
     }
     s
 }
@@ -142,7 +142,7 @@ pub(super) fn assert_kept_is_a_scan(store: &Store, path: Option<&Path>, after: &
         let (stored_rows, state, stored) = filed(path);
         assert_eq!(state, State::Current, "after {after}");
         // WAVE-6: placements are the cache's alone — held to the rule instead.
-        let unplaced: Vec<Row> = rows.iter().map(|t| Row { placement: None, ..t.clone() }).collect();
+        let unplaced: Vec<Row> = rows.iter().map(|t| Row { placement: None, ..super::tests::undressed(t) }).collect();
         assert_eq!(stored_rows, unplaced, "the file's rows are the cache's, after {after}");
         super::tests_placements::assert_kept_placements_are_the_rule(store, after);
         assert_eq!(stored, want, "the file, after {after}");
@@ -172,7 +172,8 @@ fn before(store: &Store, asked: Asked, epic: Option<&str>, after: Option<&str>, 
     let epic = epic.map(str::to_ascii_uppercase);
     let after = after.map(str::to_ascii_uppercase);
     let cache = store.tickets.read().unwrap();
-    let span = Span::of(&cache, after.as_deref(), epic.as_deref()).map_err(|e| e.to_string())?;
+    let epic = epic.map(|e| ShortcodeId::new(&e));
+    let span = Span::of(&cache, after.as_deref(), epic.as_ref()).map_err(|e| e.to_string())?;
     let page = match asked {
         Asked::Ready => {
             let keep = |t: &Row| {
@@ -453,7 +454,7 @@ pub(super) async fn random_ask_or_label(store: &Store, own: &mut Rng, all: &[Row
 pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut Tally) -> String {
     // Ids the API can name (a lowercase one is folded by `amend` and its kin).
     let all: Vec<Row> = rows(store).into_iter().filter(|t| t.id == t.id.to_ascii_uppercase()).collect();
-    let extents: BTreeMap<String, u32> = store.extents().into_iter().collect();
+    let extents: BTreeMap<String, u32> = store.extents_text().into_iter().collect();
     let pick = |rng: &mut Rng| all[rng.below(all.len())].id.clone();
     let members_before = store.tickets.read().unwrap().ready.size();
     // SDLC-13: every seventh write a kind changed — every pair of kinds, with
@@ -499,6 +500,7 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
                 1 if !all.is_empty() => Some(pick(rng)),
                 _ => None,
             };
+            let parent = no_namesake(store, epic, kind, parent);
             // Blockers: tickets that exist, ids not born yet (the next few of
             // some shortcode — born later in the walk, or not), one that never
             // will be, and one named twice.
@@ -669,7 +671,7 @@ async fn the_kept_state_is_a_scan_and_every_page_is_the_old_one_on_a_seeded_stor
     assert_kept_is_a_scan(&store, Some(&path), "a seed");
     let mut rng = Rng(0x5EED);
     assert_every_page_is_before(&store, &mut rng, "a seed");
-    let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
+    let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     let store = walk(store, &path, 0x5EED_0032, 250, 125, &epics).await;
     store.seed_synthetic(SeedSpec { count: 600, seed: 5, into_existing: true }).unwrap();
@@ -692,7 +694,7 @@ async fn the_kept_state_is_a_scan_and_every_page_is_the_old_one_on_each_fixture(
         assert_kept_is_a_scan(&store, Some(&path), &format!("the first open of {name}"));
         let mut rng = Rng(i as u64);
         assert_every_page_is_before(&store, &mut rng, name);
-        let mut epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).collect();
+        let mut epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).collect();
         epics.push("NEW".into());
         let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
         walk(store, &path, 0xF132 + i as u64, 150, 50, &epics).await;
@@ -1061,7 +1063,7 @@ async fn a_page_of_the_ready_set_is_a_range_of_the_files_index() {
         let (from_epic, from_seq) = match &after {
             Some(id) => {
                 let key = store.tickets.read().unwrap().at[id].clone();
-                (key.epic, i64::from(key.seq))
+                (key.shortcode.as_str().to_string(), i64::from(key.seq))
             }
             None => (String::new(), -1),
         };
@@ -1111,4 +1113,17 @@ async fn a_walk_of_whole_tickets_answers_what_one_page_does() {
             assert_eq!((ids, end.0, end.1), answer(page), "{select:?} after {after:?} limit {limit:?}");
         }
     }
+}
+
+/// ORG-3: a scope or a doc filed under another shortcode's ticket, its
+/// letters already a shortcode's, roots a namesake there (`tests_shortcodes`
+/// holds those); the walks, whose oracles name tickets by their bare ids,
+/// file such a write at the top of its shortcode instead.
+pub(super) fn no_namesake(store: &Store, epic: &str, kind: Kind, parent: Option<String>) -> Option<String> {
+    let p = parent?;
+    if !matches!(kind, Kind::Scope | Kind::Doc) || store.shortcodes_in(epic).is_empty() {
+        return Some(p);
+    }
+    let letters = p.rsplit_once('-').map_or(p.as_str(), |(l, _)| l);
+    letters.eq_ignore_ascii_case(epic).then_some(p)
 }
