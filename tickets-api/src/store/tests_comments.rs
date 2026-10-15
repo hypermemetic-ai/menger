@@ -105,6 +105,7 @@ async fn add_keeps_the_comment_and_returns_it() {
             anchor: Anchor { ticket: Some("ROOT-2".into()), version: Some(root2.updated_unix), ..anchor(Some("ROOT-2")) },
             body: "show the parent's title too".into(),
             principal: None,
+            intent: crate::comments::CommentIntent::Comment,
         }
     );
     assert!(c.at >= before && c.at <= chrono::Utc::now().timestamp());
@@ -423,6 +424,7 @@ async fn every_filter_and_every_conjunction_is_the_reference() {
                 state: w.state,
                 author: w.author.clone(),
                 text: w.text.clone(),
+                intent: None,
             };
             let want = reference(&store, &held, &w);
             assert_eq!(all(&store, q.clone()), want, "step {step}: {w:?}");

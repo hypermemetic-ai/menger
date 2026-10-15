@@ -8,6 +8,8 @@ export interface TicketsClient {
     amend(id: TicketRef, body?: Body | null, title?: Title | null): AsyncGenerator<TicketsEvent>;
     /** Answer an input: record a value (checked against its kind and options) with a rationale, a source and the time; yields input_changed */
     answer(input: InputId, ticket: TicketRef, value: InputValue, rationale?: Message | null, source?: InputSource | null): AsyncGenerator<TicketsEvent>;
+    /** Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes */
+    awaitReply(id: TicketRef, input?: InputId | null, since?: number | null, timeoutMinutes?: number | null): AsyncGenerator<TicketsEvent>;
     /** One ticket's blockers resolved to current statuses; dangling ids marked */
     blockers(id: TicketRef): AsyncGenerator<TicketsEvent>;
     /** Clear an input's answer (open again; kept in its history, with a source); yields input_changed */
@@ -54,6 +56,8 @@ export interface TicketsClient {
     readySet(after?: Cursor | null, epic?: ShortcodeRef | null, filter?: FilterText | null, limit?: number | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
     /** Reopen a closed input; yields input_changed */
     reopenInput(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent>;
+    /** Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix } */
+    requestChanges(body: Body, id: TicketRef, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
     /** Move tickets into another shortcode, renumbered there in the order given (a scope moved into a new code becomes its root; --new-scope makes the shortcode first; a root moves with --with-children as a rename); old ids keep resolving (get says moved_from); all or none; yields reshortcoded { moves, tickets } */
     reshortcode(ids: TicketRef[], to: ShortcodeRef, message?: Message | null, newScope?: Title | null, parent?: TicketRef | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
     /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */

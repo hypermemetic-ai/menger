@@ -3,7 +3,7 @@
 //! that the vocabulary did not have: where a call comes from, what a
 //! severity change is, what becomes of a deleted ticket's children.
 
-use crate::comments::CommentState;
+use crate::comments::{CommentIntent, CommentState};
 use crate::deployments::DeployState;
 use crate::members::Role;
 use crate::notes::NoteState;
@@ -33,7 +33,7 @@ use std::fmt;
 use std::str::FromStr;
 
 lenient!(Status, Kind, Severity, InputState, AnswerSource, TransitionSource, Role, CommentState, NoteState, DeployState, Urgency, ThemeReach, Takeover);
-lenient!(CallerSource, InputSource, DeleteChildren, AmendedField);
+lenient!(CallerSource, InputSource, DeleteChildren, AmendedField, CommentIntent);
 
 closed_schema!(Status, "A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case", [
     Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Complete,
@@ -47,6 +47,7 @@ closed_schema!(InputState, "Where an input stands (any case)", [
     InputState::Open, InputState::Answered, InputState::Closed, InputState::Removed, InputState::Withdrawn,
 ]);
 closed_schema!(Role, "A role a grant gives (any case)", [Role::Viewer, Role::Deployer, Role::Editor, Role::Admin]);
+closed_schema!(CommentIntent, "What a comment is: a comment, or a change request (any case)", [CommentIntent::Comment, CommentIntent::Changes]);
 closed_schema!(CommentState, "Where a comment stands (any case)", [CommentState::Open, CommentState::Resolved]);
 closed_schema!(NoteState, "Where a note stands: still a note, or made a ticket (any case)", [NoteState::Open, NoteState::Upgraded]);
 closed_schema!(DeployState, "What a deployment did (any case; rolled-back too)", [

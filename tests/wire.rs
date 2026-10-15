@@ -3289,3 +3289,88 @@ async fn the_queue_over_the_wire() {
     assert_eq!((first["record"]["source"].as_str(), first["record"]["reason"].as_str()), (Some("pipeline"), Some("the promote rolled back")));
     assert_eq!(evs.last().unwrap()["type"], "history_end");
 }
+
+/// APP-24: `await_reply` over the real protocol — an agent queues a ticket
+/// and awaits; `waiting` comes at once; the owner answers from a second
+/// connection; the agent's stream yields one `replied` (kind `answered`)
+/// and ends. Then a second wait hears a change request as
+/// `changes_requested`.
+#[tokio::test]
+async fn await_reply_over_the_wire() {
+    let port = start_server().await;
+    let agent = connect(port).await;
+    let owner = connect(port).await;
+    collect(call(&agent, "tickets.create", json!({"epic": "AWR", "title": "root", "kind": "scope"})).await).await;
+    let body = "<m-decision data-field=\"decision\" id=\"agent-owner\">\n\n\
+                <m-question data-field=\"question\">Who owns an agent?</m-question>\n\n\
+                <m-option data-field=\"option\" name=\"The granter\" value=\"granter\"></m-option>\n\
+                <m-option data-field=\"option\" name=\"Its creator\" value=\"creator\"></m-option>\n\n\
+                </m-decision>\n";
+    collect(call(&agent, "tickets.create", json!({"epic": "AWR", "title": "asks", "body": body})).await).await;
+    answer(&agent, "tickets.queue", json!({"id": "AWR-2", "urgency": "blocking", "input": "agent-owner", "reason": "idle until decided"})).await;
+    let mut wait = call(&agent, "tickets.await_reply", json!({"id": "AWR-2", "timeout_minutes": 5})).await;
+    let first = next_events(&mut wait, 1).await.pop().unwrap();
+    assert_eq!((first["type"].as_str(), first["ticket"].as_str(), first["queued"]["urgency"].as_str()), (Some("waiting"), Some("AWR-2"), Some("blocking")), "{first}");
+    answer(&owner, "tickets.answer", json!({"ticket": "AWR-2", "input": "agent-owner", "value": {"type": "choice", "option": "granter"}, "source": "app"})).await;
+    let replied = next_events(&mut wait, 1).await.pop().unwrap();
+    assert_eq!(replied["type"], "replied", "{replied}");
+    assert_eq!(
+        (replied["ticket"].as_str(), replied["reply"]["kind"].as_str(), replied["reply"]["input"].as_str(), replied["reply"]["value"]["option"].as_str()),
+        (Some("AWR-2"), Some("answered"), Some("agent-owner"), Some("granter")),
+        "{replied}"
+    );
+    let rest = collect(wait).await;
+    assert!(rest.iter().all(|e| e["type"] != "replied"), "one replied, then the end: {rest:?}");
+
+    // Queued again; the owner requests changes instead.
+    answer(&agent, "tickets.queue", json!({"id": "AWR-2", "urgency": "now", "reason": "reworked; look again"})).await;
+    let mut wait = call(&agent, "tickets.await_reply", json!({"id": "AWR-2", "input": "agent-owner"})).await;
+    assert_eq!(next_events(&mut wait, 1).await[0]["type"], "waiting");
+    answer(&owner, "tickets.request_changes", json!({"id": "AWR-2", "body": "neither: the agent's owner is whoever signs for it"})).await;
+    let replied = next_events(&mut wait, 1).await.pop().unwrap();
+    assert_eq!((replied["reply"]["kind"].as_str(), replied["reply"]["comment"]["intent"].as_str()), (Some("changes_requested"), Some("changes")), "{replied}");
+}
+
+/// APP-23: `request_changes` over the real protocol — one write: its answer
+/// `changes_requested` carries the comment (intent `changes`, on the
+/// ticket's conversation) and the entry; `watch` hears `unqueued` (action
+/// `changes_requested`), `comments.watch` the comment's `added`, and
+/// `comments.list { intent: changes }` lists it; the named input stays open;
+/// a ticket not queued is refused.
+#[tokio::test]
+async fn request_changes_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    collect(call(&client, "tickets.create", json!({"epic": "RQC", "title": "root", "kind": "scope"})).await).await;
+    let body = "<m-decision data-field=\"decision\" id=\"landing\">\n\n\
+                <m-question data-field=\"question\">Archive or delete?</m-question>\n\n\
+                <m-option data-field=\"option\" name=\"Archive\" value=\"archive\"></m-option>\n\n\
+                </m-decision>\n";
+    collect(call(&client, "tickets.create", json!({"epic": "RQC", "title": "asks", "body": body})).await).await;
+    answer(&client, "tickets.queue", json!({"id": "RQC-2", "urgency": "blocking", "reason": "idle", "input": "landing"})).await;
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    let mut comments = call(&client, "comments.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let ev = answer(&client, "tickets.request_changes", json!({"id": "rqc-2", "body": "Neither: split it first.", "source": "app"})).await;
+    assert_eq!((ev["type"].as_str(), ev["id"].as_str(), ev["entry"]["input"].as_str()), (Some("changes_requested"), Some("RQC-2"), Some("landing")), "{ev}");
+    let c = &ev["comment"];
+    assert_eq!(
+        (c["intent"].as_str(), c["anchor"]["path"].as_str(), c["anchor"]["route"].as_str(), c["anchor"]["ticket"].as_str()),
+        (Some("changes"), Some("conversation"), Some("#/ticket/RQC-2"), Some("RQC-2")),
+        "{ev}"
+    );
+    let unq = watch_until(&mut watch, "unqueued").await.pop().unwrap();
+    assert_eq!((unq["id"].as_str(), unq["action"].as_str()), (Some("RQC-2"), Some("changes_requested")), "{unq}");
+    let added = next_events(&mut comments, 1).await.pop().unwrap();
+    assert_eq!((added["type"].as_str(), added["comment"]["id"].as_u64()), (Some("added"), c["id"].as_u64()), "{added}");
+    let listed = collect(call(&client, "comments.list", json!({"intent": "changes"})).await).await;
+    assert_eq!((listed.len(), listed[0]["id"].as_u64()), (2, c["id"].as_u64()), "{listed:?}");
+    assert_eq!(collect(call(&client, "comments.list", json!({"intent": "comment"})).await).await.len(), 1, "a page event alone");
+    let inputs = collect(call(&client, "tickets.inputs", json!({"ticket": "RQC-2"})).await).await;
+    assert_eq!(inputs[0]["input"]["state"], "open", "{inputs:?}");
+    assert_eq!(collect(call(&client, "tickets.queued", json!({})).await).await[0]["count"], 0);
+    let ev = answer(&client, "tickets.request_changes", json!({"id": "RQC-2", "body": "again"})).await;
+    assert_eq!(ev["type"], "error", "{ev}");
+    assert!(ev["message"].as_str().unwrap().contains("not queued"), "{ev}");
+}

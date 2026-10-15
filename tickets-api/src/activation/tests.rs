@@ -1427,9 +1427,76 @@ async fn comments_list_pages_by_default_and_never_past_the_most() {
         let next = evs.iter().find_map(|e| if let CommentsEvent::Page { next } = e { Some(*next) } else { None });
         (n, next.expect("a page"))
     };
-    let list = |limit| comments.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None, limit);
+    let list = |limit| comments.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None, None, limit);
     let (n, next) = count(Box::pin(list(None).await).collect().await);
     assert_eq!((n, next.is_some()), (500, true));
     let (n, next) = count(Box::pin(list(Some(5_000)).await).collect().await);
     assert_eq!((n, next.is_some()), (1_000, true));
+}
+
+/// APP-24: `await_reply` — `waiting` at once, then one `replied`, then the
+/// end. A write after the call subscribed and before its first ask is
+/// answered once (no gap, no duplicate); a live one wakes it; `since`
+/// answers what already happened; `timeout_minutes` ends it with
+/// `timed_out`; a ticket that is none is `not_found`.
+#[tokio::test]
+async fn await_reply_waits_then_answers_once() {
+    use crate::queue::{Reply, Urgency};
+    let store = Arc::new(Store::new());
+    let hub = Tickets::new(Arc::clone(&store));
+    let decision = "<m-decision data-field=\"decision\" id=\"landing\">\n<m-question data-field=\"question\">A or B?</m-question>\n\
+<m-option data-field=\"option\" name=\"A\" value=\"a\"></m-option>\n<m-option data-field=\"option\" name=\"B\" value=\"b\"></m-option>\n</m-decision>\n";
+    store.create(crate::store::NewTicket { epic: "AW".into(), title: "root".into(), kind: Kind::Scope, severity: None, blocked_by: vec![], parent: None, path: None, body: String::new() }).await.unwrap();
+    store.create(crate::store::NewTicket { epic: "AW".into(), title: "asks".into(), kind: Kind::Build, severity: None, blocked_by: vec![], parent: None, path: None, body: decision.into() }).await.unwrap();
+    store.queue_by("AW-2", Urgency::Blocking, "idle", Some("landing"), Act::default()).await.unwrap();
+
+    // Subscribed at the call; the answer lands before the first ask.
+    let mut s = Box::pin(hub.await_reply(None, Reach::everywhere(), "aw-2".into(), None, Some("landing".into()), None).await);
+    store.answer("AW-2", "landing", InputValue::Choice { option: "b".into() }, None, AnswerSource::App).await.unwrap();
+    match s.next().await {
+        Some(TicketsEvent::Waiting { ticket, queued }) => assert_eq!((ticket.as_str(), queued.map(|e| e.urgency)), ("AW-2", Some(Urgency::Blocking))),
+        other => panic!("expected waiting, got {other:?}"),
+    }
+    match s.next().await {
+        Some(TicketsEvent::Replied { ticket, reply: Reply::Answered { input, value, .. } }) => {
+            assert_eq!((ticket.as_str(), input.as_str(), value), ("AW-2", "landing", InputValue::Choice { option: "b".into() }))
+        }
+        other => panic!("expected replied, got {other:?}"),
+    }
+    assert!(s.next().await.is_none(), "once, then the end — the event still on the channel says nothing more");
+    // Called again without `since`: the answer already there (this very
+    // second, likely) is set aside — nothing new, so the timeout.
+    let mut s = Box::pin(hub.await_reply(None, Reach::everywhere(), "AW-2".into(), None, None, Some(0)).await);
+    assert!(matches!(s.next().await, Some(TicketsEvent::Waiting { .. })));
+    assert!(matches!(s.next().await, Some(TicketsEvent::TimedOut { .. })), "what came before the call is no reply");
+
+    // Live: nothing yet, then a comment wakes it.
+    let mut s = Box::pin(hub.await_reply(None, Reach::everywhere(), "AW-1".into(), None, None, None).await);
+    assert!(matches!(s.next().await, Some(TicketsEvent::Waiting { queued: None, .. })));
+    let writer = Arc::clone(&store);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        writer.add_comment(crate::store::conversation_anchor("AW-1"), "do X instead".into(), None).await.unwrap();
+    });
+    match tokio::time::timeout(std::time::Duration::from_secs(5), s.next()).await.expect("woken") {
+        Some(TicketsEvent::Replied { reply: Reply::Commented { comment }, .. }) => assert_eq!(comment.body, "do X instead"),
+        other => panic!("expected replied, got {other:?}"),
+    }
+    assert!(s.next().await.is_none());
+
+    // `since`: what already happened answers at once.
+    let at = store.comments(&Default::default(), None, None).unwrap().comments[0].at;
+    let mut s = Box::pin(hub.await_reply(None, Reach::everywhere(), "AW-1".into(), Some(at), None, None).await);
+    assert!(matches!(s.next().await, Some(TicketsEvent::Waiting { .. })));
+    assert!(matches!(s.next().await, Some(TicketsEvent::Replied { reply: Reply::Commented { .. }, .. })));
+
+    // A timeout with nothing: timed_out, the end.
+    let mut s = Box::pin(hub.await_reply(None, Reach::everywhere(), "AW-1".into(), Some(at + 3600), None, Some(0)).await);
+    assert!(matches!(s.next().await, Some(TicketsEvent::Waiting { .. })));
+    assert!(matches!(s.next().await, Some(TicketsEvent::TimedOut { ref ticket }) if ticket == "AW-1"));
+    assert!(s.next().await.is_none());
+
+    // None such.
+    let s = hub.await_reply(None, Reach::everywhere(), "AW-99".into(), None, None, None).await;
+    assert!(matches!(one(s).await, TicketsEvent::NotFound { ref id } if id == "AW-99"));
 }

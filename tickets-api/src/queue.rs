@@ -131,6 +131,9 @@ pub enum QueueAction {
     Unqueued,
     /// Taken out because its named input was closed.
     Closed,
+    /// APP-23: handed back — the owner requested changes (the record names
+    /// the comment that says which).
+    ChangesRequested,
 }
 
 impl QueueAction {
@@ -143,6 +146,7 @@ impl QueueAction {
             QueueAction::Snoozed => "snoozed",
             QueueAction::Unqueued => "unqueued",
             QueueAction::Closed => "closed",
+            QueueAction::ChangesRequested => "changes_requested",
         }
     }
 }
@@ -157,6 +161,7 @@ impl FromStr for QueueAction {
             "snoozed" => QueueAction::Snoozed,
             "unqueued" => QueueAction::Unqueued,
             "closed" => QueueAction::Closed,
+            "changes_requested" => QueueAction::ChangesRequested,
             other => return Err(format!("unknown queue action `{other}`")),
         })
     }
@@ -186,6 +191,55 @@ pub struct QueueRecord {
     /// A snooze's end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until_unix: Option<i64>,
+    /// APP-23: a change request's comment (its id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<u64>,
+}
+
+/// APP-24: what answered an agent waiting on a ticket (`tickets.await_reply`)
+/// — the first response on it since the call's `since`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Reply {
+    /// An input on the ticket was answered (with `input` named: that one):
+    /// the value, the rationale, from where (`app` — a reader's click — or
+    /// `api`), when.
+    Answered {
+        input: String,
+        value: crate::types::InputValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rationale: Option<String>,
+        source: crate::types::AnswerSource,
+        at_unix: i64,
+    },
+    /// APP-23: the owner requested changes — the comment that says which
+    /// (intent `changes`); the ticket is out of the queue.
+    ChangesRequested { comment: crate::comments::Comment },
+    /// Someone other than the caller commented on the ticket.
+    Commented { comment: crate::comments::Comment },
+    /// Someone other than the caller took the ticket out of the queue
+    /// (`action`: `unqueued`, or `closed` — its named input was closed).
+    Unqueued { action: QueueAction, by: String, at_unix: i64 },
+    /// The ticket was canceled or deleted (`how`): nothing more will come.
+    Ended { how: Ending, by: String, at_unix: i64 },
+}
+
+impl Reply {
+    /// When it happened, unix seconds.
+    pub fn at_unix(&self) -> i64 {
+        match self {
+            Reply::Answered { at_unix, .. } | Reply::Unqueued { at_unix, .. } | Reply::Ended { at_unix, .. } => *at_unix,
+            Reply::ChangesRequested { comment } | Reply::Commented { comment } => comment.at,
+        }
+    }
+}
+
+/// APP-24: how a ticket ended for an agent waiting on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Ending {
+    Canceled,
+    Deleted,
 }
 
 #[cfg(test)]
@@ -229,6 +283,25 @@ mod tests {
         for u in Urgency::ALL {
             assert_eq!(serde_json::to_value(u).unwrap(), serde_json::json!(u.as_str()));
         }
+    }
+
+    /// APP-24: the wire shape the ticket's example shows.
+    #[test]
+    fn a_reply_is_its_kind_beside_its_fields() {
+        let r = Reply::Answered {
+            input: "agent-owner".into(),
+            value: crate::types::InputValue::Choice { option: "granter".into() },
+            rationale: None,
+            source: crate::types::AnswerSource::App,
+            at_unix: 7,
+        };
+        assert_eq!(
+            serde_json::to_value(&r).unwrap(),
+            serde_json::json!({"kind": "answered", "input": "agent-owner", "value": {"type": "choice", "option": "granter"}, "source": "app", "at_unix": 7})
+        );
+        let e = Reply::Ended { how: Ending::Canceled, by: "idp:ada".into(), at_unix: 9 };
+        assert_eq!(serde_json::to_value(&e).unwrap(), serde_json::json!({"kind": "ended", "how": "canceled", "by": "idp:ada", "at_unix": 9}));
+        assert_eq!((r.at_unix(), e.at_unix()), (7, 9));
     }
 
     #[test]

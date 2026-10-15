@@ -790,7 +790,7 @@ async fn the_comments_through_the_generated_client() {
         other => panic!("expected `ticket`, got {other:?}"),
     };
     let mut watch = comments.watch();
-    let _ = comments.list_all(None, None, None, None, None, None, None, None, Some(1)).await.expect("round trip");
+    let _ = comments.list_all(None, None, None, None, None, None, None, None, None, Some(1)).await.expect("round trip");
     tokio::time::sleep(Duration::from_millis(250)).await;
 
     let anchor = Anchor {
@@ -814,6 +814,7 @@ async fn the_comments_through_the_generated_client() {
             anchor: Anchor { version: Some(version), ..anchor.clone() },
             body: p("show the parent's title too"),
             principal: None,
+            intent: menger_tickets_api::CommentIntent::Comment,
         }
     );
     let second = one(comments.add_all(Anchor { ticket: None, ..anchor.clone() }, p("on no ticket"), Some(p("agent"))).await.expect("add"))
@@ -821,13 +822,13 @@ async fn the_comments_through_the_generated_client() {
         .expect("a comment");
 
     let listed = comments
-        .list_all(Some(p("DEMAND-2")), None, None, None, Some(p("open")), None, None, None, None)
+        .list_all(Some(p("DEMAND-2")), None, None, None, Some(p("open")), None, None, None, None, None)
         .await
         .expect("list");
     assert_eq!(listed, [CommentsEvent::from(added.clone()), CommentsEvent::Page { next: None }]);
-    let page = comments.list_all(None, None, None, None, None, None, None, None, Some(1)).await.expect("list");
+    let page = comments.list_all(None, None, None, None, None, None, None, None, None, Some(1)).await.expect("list");
     assert_eq!(page, [CommentsEvent::from(second.clone()), CommentsEvent::Page { next: Some(2) }]);
-    let rest = comments.list_all(None, Some(p("DEMAND")), None, None, None, None, None, Some(CommentId::new(2)), Some(1)).await.expect("list");
+    let rest = comments.list_all(None, Some(p("DEMAND")), None, None, None, None, None, None, Some(CommentId::new(2)), Some(1)).await.expect("list");
     assert_eq!(rest, [CommentsEvent::from(added.clone()), CommentsEvent::Page { next: None }]);
 
     let resolved = one(comments.resolve_all(CommentId::new(1)).await.expect("resolve")).into_comment().expect("a comment");

@@ -107,7 +107,9 @@ impl Pin {
 /// place is not known yet has no pin until it is.
 pub(crate) fn pins(route: &str, comments: &[Comment], mut spot: impl FnMut(&Anchor) -> Spot) -> Vec<Pin> {
     let mut groups: Vec<(PinAt, Vec<u64>)> = Vec::new();
-    for c in comments.iter().filter(|c| c.state == CommentState::Open && c.anchor.route == route) {
+    // APP-22: a comment on the ticket as a whole is drawn in its Conversation,
+    // not pinned to anything.
+    for c in comments.iter().filter(|c| c.state == CommentState::Open && c.anchor.route == route && !crate::conversation::is_whole(c)) {
         let at = match spot(&c.anchor) {
             Spot::Found => PinAt::Element(c.anchor.path.clone()),
             Spot::Missing => PinAt::Heading(c.anchor.ticket.clone()),
@@ -762,7 +764,9 @@ fn reveal(a: Annot, id: u64) {
         while js_sys::Date::now() - since < 8000.0 {
             dom::sleep_ms(150).await;
             let Some(c) = comments::signal().with_untracked(|h| h.as_ref().and_then(|h| h.get(id).cloned())) else { continue };
-            let rect = match anchor::split(&c.anchor.path) {
+            // APP-22: a whole-ticket comment's place is its row in the Conversation.
+            let row = crate::conversation::is_whole(&c).then(|| crate::conversation::row_selector(id));
+            let rect = match row.as_deref().map_or_else(|| anchor::split(&c.anchor.path), |r| (None, r)) {
                 (None, path) => anchor::find_in_app(path).map(|el| {
                     let opts = web_sys::ScrollIntoViewOptions::new();
                     opts.set_block(web_sys::ScrollLogicalPosition::Center);
@@ -1134,6 +1138,10 @@ mod tests {
         let lone = vec![comment(1, "#/", "#gone", None)];
         assert_eq!(pins("#/", &lone, spot), vec![Pin { n: 1, ids: vec![1], at: PinAt::Heading(None) }]);
         assert!(pins("#/inputs", &all, spot).is_empty());
+        // APP-22: a comment on the ticket as a whole is in its Conversation, never pinned.
+        let mut whole = all.clone();
+        whole.insert(0, comment(11, page, crate::conversation::PATH, Some("DEMAND-2")));
+        assert_eq!(pins(page, &whole, spot), got);
     }
 
     /// A box goes under what it is for, inside the viewport — above it when

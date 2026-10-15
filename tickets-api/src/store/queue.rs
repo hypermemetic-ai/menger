@@ -66,7 +66,8 @@ pub(super) const TABLES: &str = "
             actor      TEXT NOT NULL,
             name       TEXT,
             source     TEXT NOT NULL,
-            until_unix INTEGER
+            until_unix INTEGER,
+            comment    INTEGER
         );
         CREATE INDEX IF NOT EXISTS queue_log_by_ticket ON queue_log (ticket, id);
     ";
@@ -85,6 +86,19 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
     conn.execute_batch(TABLES)?;
     tracing::warn!("MENGER-39: the file gained the queue's tables, empty, durably; every later open reads them");
     Ok(true)
+}
+
+/// APP-23: a file whose queue log has no `comment` gains it here, in place —
+/// the comment a change request was left as; on every open a no-op once it
+/// is there. One way: an older build reads `changes_requested` as no action
+/// it knows and refuses to open the file (promote's rollback restores the
+/// backup it took first).
+pub(crate) fn migrate_comment(conn: &Connection) -> anyhow::Result<()> {
+    if !super::db::has_column(conn, "queue_log", "comment")? {
+        conn.execute("ALTER TABLE queue_log ADD COLUMN comment INTEGER", [])?;
+        tracing::warn!("APP-23: the queue log gained its comment column, durably");
+    }
+    Ok(())
 }
 
 /// The queue as the cache holds it: each queued ticket's entry, and each
@@ -108,13 +122,13 @@ impl Queue {
     }
 
     /// The id the next record takes.
-    fn next_id(&self) -> u64 {
+    pub(super) fn next_id(&self) -> u64 {
         self.next_id.max(1)
     }
 
     /// The cache's half of a committed write: the entry as it leaves it
     /// (`None`: out of the queue) and its record.
-    fn put(&mut self, ticket: &str, entry: Option<QueueEntry>, record: QueueRecord) {
+    pub(super) fn put(&mut self, ticket: &str, entry: Option<QueueEntry>, record: QueueRecord) {
         match entry {
             Some(e) => {
                 self.entries.insert(ticket.to_string(), e);
@@ -168,7 +182,7 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Queue> {
         q.entries.insert(e.ticket.clone(), e);
     }
     let mut stmt = conn.prepare(
-        "SELECT id, ticket, action, urgency, reason, input, at_unix, actor, name, source, until_unix FROM queue_log ORDER BY id",
+        "SELECT id, ticket, action, urgency, reason, input, at_unix, actor, name, source, until_unix, comment FROM queue_log ORDER BY id",
     )?;
     let records = stmt.query_map([], |r| {
         Ok(QueueRecord {
@@ -183,6 +197,7 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Queue> {
             name: r.get(8)?,
             source: r.get::<_, String>(9)?.parse().map_err(|e| bad(9, e))?,
             until_unix: r.get(10)?,
+            comment: r.get::<_, Option<i64>>(11)?.map(|c| c as u64),
         })
     })?;
     for rec in records {
@@ -195,7 +210,7 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Queue> {
 
 /// The entry `ticket` holds after a write (`None`: none), and its record,
 /// inside the caller's transaction.
-fn store(tx: &Connection, ticket: &str, entry: Option<&QueueEntry>, record: &QueueRecord) -> rusqlite::Result<()> {
+pub(super) fn store(tx: &Connection, ticket: &str, entry: Option<&QueueEntry>, record: &QueueRecord) -> rusqlite::Result<()> {
     match entry {
         Some(e) => {
             tx.prepare_cached(
@@ -220,8 +235,8 @@ fn store(tx: &Connection, ticket: &str, entry: Option<&QueueEntry>, record: &Que
         }
     }
     tx.prepare_cached(
-        "INSERT INTO queue_log (id, ticket, action, urgency, reason, input, at_unix, actor, name, source, until_unix)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO queue_log (id, ticket, action, urgency, reason, input, at_unix, actor, name, source, until_unix, comment)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )?
     .execute(params![
         record.id as i64,
@@ -234,7 +249,8 @@ fn store(tx: &Connection, ticket: &str, entry: Option<&QueueEntry>, record: &Que
         record.actor,
         record.name,
         record.source.as_str(),
-        record.until_unix
+        record.until_unix,
+        record.comment.map(|c| c as i64)
     ])?;
     Ok(())
 }
@@ -255,7 +271,7 @@ pub enum QueueChange {
 }
 
 /// A record of `action` on `entry` by `act` at `at`.
-fn record_of(id: u64, entry: &QueueEntry, action: QueueAction, act: &Act, at: i64) -> QueueRecord {
+pub(super) fn record_of(id: u64, entry: &QueueEntry, action: QueueAction, act: &Act, at: i64) -> QueueRecord {
     QueueRecord {
         id,
         ticket: entry.ticket.clone(),
@@ -268,6 +284,7 @@ fn record_of(id: u64, entry: &QueueEntry, action: QueueAction, act: &Act, at: i6
         name: act.name.clone(),
         source: act.source,
         until_unix: (action == QueueAction::Snoozed).then_some(entry.snoozed_until_unix).flatten(),
+        comment: None,
     }
 }
 

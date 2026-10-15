@@ -69,6 +69,32 @@ pub(super) fn queue_stream(
     }
 }
 
+/// APP-23: `request_changes` — the caller (the gate held the grant on `id`),
+/// its act, the store's one write; exactly one event. The comment is signed
+/// as `comments.add` signs: the caller's name, else `owner`.
+pub(super) fn request_changes_stream(
+    store: Arc<Store>,
+    admitted: Result<Caller, String>,
+    id: String,
+    body: String,
+    source: Option<CallerSource>,
+) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    stream! {
+        let (caller, act) = match admitted.and_then(|c| act_of(&c, source, None).map(|a| (c, a))) {
+            Ok(x) => x,
+            Err(message) => {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+        };
+        match store.request_changes_by(&id, body, caller.name.clone(), caller.principal.clone(), act).await {
+            Ok((comment, QueueChange::Unqueued { id, entry, by, at_unix, .. })) => yield TicketsEvent::ChangesRequested { id, comment, entry, by, at_unix },
+            Ok((_, other)) => yield wire(other),
+            Err(e) => yield refused(&store, &caller, id, e),
+        }
+    }
+}
+
 /// MENGER-39: `queued` — the queue in the caller's reach, most urgent
 /// first, then the oldest; a `queue_row` each, then one `queue_end`.
 pub(super) fn queued_stream(store: Arc<Store>, admitted: Result<Caller, String>, snoozed: bool) -> impl Stream<Item = TicketsEvent> + Send + 'static {

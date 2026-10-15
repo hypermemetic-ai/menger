@@ -1,54 +1,8 @@
-/** Where a comment was left: the app page, the place on it, what was there
-in words, and the ticket the element belongs to (when it belongs to one).
-
-`route`, `path` and `label` are required and not blank; `excerpt` may be
-empty (an element with no text). Each is trimmed. They are `#[serde(default)]`
-so that one left out arrives as empty and is refused *in band*, naming
-it — not as a transport error before the method runs. */
-export interface Anchor {
-    /** What was there, in words: its text, e.g. `DEMAND-1` (may be empty). */
-    excerpt?: string;
-    /** What was there, in words: the element's name, e.g. `Parent chip`. */
-    label?: string;
-    /** Where on the page: the element's path, e.g.
-  `[data-tag="ticket DEMAND-1"]`. `list { path }` matches a prefix of it. */
-    path?: string;
-    /** The app page, as its route: `#/ticket/DEMAND-2`, `#/waves/RETURNS`,
-  `#/` (the board) — always beginning `#/`. */
-    route?: string;
-    /** The ticket the element belongs to, e.g. `DEMAND-2` — omitted when it
-  belongs to none. It must name a ticket; kept as that ticket's id. */
-    ticket?: string | null;
-    /** Set by the server, never by the caller: `ticket`'s `updated_unix`
-  when the comment was added — so a reader can tell the ticket has
-  changed since (its body may no longer hold `path`). Omitted with no
-  `ticket`; a value sent is replaced. */
-    version?: number | null;
-}
+import type { Anchor, Comment, CommentIntent, CommentState } from '../tickets/types';
 /** COMMENT-2: where on a page an anchor is — the element's path,
 `[data-tag="ticket DEMAND-1"]`; `comments.list --path` matches a
 prefix of it. */
 export type AnchorPath = string;
-/** One comment, as kept. */
-export interface Comment {
-    anchor: Anchor;
-    /** When it was added, unix seconds. */
-    at: number;
-    /** Who left it (`owner` unless `add` named someone). */
-    author: string;
-    /** What it says (markdown, as written). */
-    body: string;
-    /** Its id: 1, 2, … in the order comments were added, never reused. */
-    id: CommentId;
-    /** IDENTITY-21: the Plexus principal of who left it, when they were
-  signed in — `author` is only the name they go by. */
-    principal?: string | null;
-    state: CommentState;
-}
-/** COMMENT-2: a comment's number, from 1 in the order kept. */
-export type CommentId = number;
-/** Where a comment stands (any case) */
-export type CommentState = "open" | "resolved";
 /** One comment as it is now, its fields beside `type` — `add`'s,
 `resolve`'s and `reopen`'s answer, and each of `list`'s rows.
 [`CommentsEvent::into_comment`] gives the [`Comment`]. */
@@ -59,6 +13,8 @@ export interface CommentsEventComment {
     author: string;
     body: string;
     id: number;
+    /** APP-23: `changes` for a change request; omitted for a comment. */
+    intent: CommentIntent;
     /** IDENTITY-21: the signer's principal, when signed in. */
     principal: string | null;
     state: CommentState;

@@ -11,7 +11,7 @@
 //! `Arc<Store>` as `tickets`, so a comment's anchor is checked against the
 //! tickets it names and `under` reads the tickets' lineage.
 
-use crate::comments::{Anchor, CommentState, CommentsEvent};
+use crate::comments::{Anchor, CommentIntent, CommentState, CommentsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
 use crate::vocab::{AnchorPath, Author, Body, CommentId, Query, Route, TicketRef, Under};
 #[cfg(feature = "server")]
@@ -183,7 +183,7 @@ impl Comments {
     /// `under`, read as the tree stands now), `route` (exactly), `path` (a
     /// prefix of the anchor's), `state` (`open` or `resolved`), `author`
     /// (exactly) and `text` (in the body, the label or the excerpt, whatever
-    /// its ASCII case). A blank filter is none. An unknown `state`, or an
+    /// its ASCII case) and `intent` (APP-23: `comment` or `changes`). A blank filter is none. An unknown `state`, or an
     /// `after` that names no comment, is one in-band `error` and nothing
     /// else. From the cache.
     #[plexus_macros::method(
@@ -197,10 +197,11 @@ impl Comments {
             state = "Only comments in this state: open | resolved (optional)",
             author = "Only comments by this author, exactly (optional)",
             text = "Only comments with this text in the body, the label or the excerpt, any ASCII case (optional)",
+            intent = "Only comments of this intent: comment | changes (APP-23: a change request) (optional)",
             after = "Cursor: start strictly after (older than) this comment id (optional)",
             limit = "At most this many comments (default 500, at most 1000); the page event carries the next cursor (optional)"
         ),
-        values(state = ["open", "resolved"]),
+        values(state = ["open", "resolved"], intent = ["comment", "changes"]),
         example(note = "open comments under FILTER that mention a title", params = r#"{"under": "FILTER", "state": "open", "text": "title"}"#)
     )]
     pub async fn list(
@@ -212,6 +213,7 @@ impl Comments {
         state: Option<CommentState>,
         author: Option<Author>,
         text: Option<Query>,
+        intent: Option<CommentIntent>,
         after: Option<CommentId>,
         limit: Option<u32>,
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
@@ -241,6 +243,7 @@ impl Comments {
                 state,
                 author: author.map(String::from),
                 text: s(text.map(String::from)),
+                intent,
             };
             let limit = crate::limits::page(limit, crate::limits::COMMENTS_PAGE_DEFAULT, crate::limits::COMMENTS_PAGE_MAX);
             match store.comments(&q, after.map(CommentId::get), Some(limit)) {

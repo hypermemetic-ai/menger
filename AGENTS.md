@@ -484,11 +484,33 @@ synapse -P 4455 menger tickets unqueue --id MENGER-41       # withdrawn, or done
 synapse -P 4455 menger tickets list --filter 'queued now or queued blocking' --summary true
 ```
 
+**After queueing, listen** (owner, 2026-10-15, APP-24): run `tickets
+await_reply` on the ticket, in the background where the harness allows it.
+It yields `waiting` at once, then one `replied` when the owner responds, and
+ends. `reply.kind` is `answered` (an input; `--input` names which counts),
+`changes_requested` (the tray's *Request changes*, APP-23: the comment says
+what to change and the ticket is out of the queue), `commented`, `unqueued`
+(by someone else) or `ended` (canceled or deleted). Act on it, then close the
+input or queue again. A snooze is not a response. After a dropped connection,
+call again with `--since <unix>` and nothing is lost; `--timeout-minutes`
+ends with `timed_out`. An agent never queues and then just stops:
+
+```sh
+synapse -P 4455 -j menger tickets await_reply --id RETURNS-13 --input landing --timeout-minutes 240
+synapse -P 4455 menger tickets request_changes --id RETURNS-13 --body "neither: …"   # the owner, from a shell
+```
+
 `watch` carries `queued` / `unqueued` / `snoozed`; `history --id X` ends with
 the ticket's `queue_record`s (who queued it, why, at what urgency). `queued`
 and `queued <urgency>` are filter cells; the Needs you filter is `queued or
-asking or label needs-you`. Ask at `now` or `blocking` only when it is so —
-a queue that is always loud is a queue the owner learns to ignore.
+asking or label needs-you`.
+
+**Work the owner told you to do is urgent** (owner, 2026-10-15): a question
+that stops it is filed and then queued at once — `blocking` with `--input`
+when you are idle until it is answered, `now` when you can carry on around
+it. Elsewhere ask at `now` or `blocking` only when it is so — a queue that
+is always loud is a queue the owner learns to ignore. menger-skills
+`asking` has the table.
 
 ## Conventions
 

@@ -1841,6 +1841,25 @@ pub enum TicketsEvent {
     /// MENGER-39: a queued ticket snoozed until its entry's
     /// `snoozed_until_unix` — `snooze`'s answer, and on `watch`.
     Snoozed { entry: crate::queue::QueueEntry, ticket: TicketSummary },
+    /// APP-23: `request_changes`'s answer — the change request kept as a
+    /// comment on the ticket's conversation (intent `changes`), and the
+    /// ticket out of the queue (`entry` as it was, who, when). `watch`
+    /// carries the `unqueued` (action `changes_requested`); `comments.watch`
+    /// the comment's `added`.
+    ChangesRequested { id: String, comment: crate::comments::Comment, entry: crate::queue::QueueEntry, by: String, at_unix: i64 },
+    /// APP-24: `await_reply`'s first event, at once — the ticket it waits
+    /// on (its id as kept) and its queue entry, when it is queued.
+    Waiting {
+        ticket: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queued: Option<crate::queue::QueueEntry>,
+    },
+    /// APP-24: `await_reply`'s answer — the first response on the ticket
+    /// since `since`; the stream ends after it.
+    Replied { ticket: String, reply: crate::queue::Reply },
+    /// APP-24: `await_reply` waited `timeout_minutes` and nothing came; the
+    /// stream ends.
+    TimedOut { ticket: String },
     /// MENGER-39: `unqueue` of a ticket that is not queued — nothing written.
     NotQueued { id: String },
     /// MENGER-39: one row of `queued` — the entry and its ticket's row, most

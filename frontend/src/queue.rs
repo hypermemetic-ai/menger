@@ -19,6 +19,13 @@
 //!   the queue — the input itself stays the agent's to close), then *open
 //!   the ticket*, *snooze 10m* and *done with it*. A click on the open tab,
 //!   or Esc, lowers it.
+//! - **Request changes** (APP-23): beside the input's answer (alone when
+//!   none is named), a box for a short note — Ctrl+Enter (AGS-28's
+//!   `comment.save`) sends it as `tickets.request_changes`: the note goes on
+//!   the ticket's conversation as a change request and the ticket leaves the
+//!   queue, handed back to whoever queued it; the input stays open. Esc
+//!   closes the box. The draft is the tray's, so the clock's tick or an
+//!   answer elsewhere does not lose it.
 //! - **A hidden tab's title** carries the count: `(2) menger`.
 //! - **Motion** is DESIGN-39's setting: `calm` keeps the slide and drops the
 //!   nudge, `none` keeps the tray and moves nothing (index.html's rules).
@@ -85,6 +92,7 @@ impl Queue {
             TicketsEvent::Queued { .. }
                 | TicketsEvent::Snoozed { .. }
                 | TicketsEvent::Unqueued { .. }
+                | TicketsEvent::ChangesRequested { .. }
                 | TicketsEvent::Amended { .. }
                 | TicketsEvent::StatusChanged { .. }
                 | TicketsEvent::KindChanged { .. }
@@ -99,7 +107,8 @@ impl Queue {
             TicketsEvent::Queued { entry, ticket, .. } | TicketsEvent::Snoozed { entry, ticket } => {
                 self.upsert(Row { entry: entry.clone(), ticket: ticket.clone() })
             }
-            TicketsEvent::Unqueued { id, .. } => self.remove(id),
+            // APP-23: a change request's answer takes it out as `unqueued` does.
+            TicketsEvent::Unqueued { id, .. } | TicketsEvent::ChangesRequested { id, .. } => self.remove(id),
             TicketsEvent::Deleted { ids, .. } => {
                 let before = self.rows.len();
                 self.rows.retain(|r| !ids.contains(&r.entry.ticket));
@@ -434,6 +443,65 @@ fn snooze(id: String, problem: RwSignal<Option<String>>) {
     spawn_local(async move { write(problem, client.snooze_all(id, SNOOZE_MINUTES, Some(CallerSource::App)).await).await });
 }
 
+/// APP-23: `id` handed back with `body` — a change request (source `app`);
+/// on its answer the tab leaves at once and the box closes.
+fn request_changes(id: String, body: String, problem: RwSignal<Option<String>>, busy: RwSignal<bool>, draft: Draft) {
+    let Some(client) = session::client() else { return };
+    busy.set(true);
+    spawn_local(async move {
+        let asked = match (crate::typed::typed(&id), crate::typed::typed(&body)) {
+            (Ok(id), Ok(body)) => client.request_changes_all(id, body, Some(CallerSource::App)).await,
+            (Err(why), _) | (_, Err(why)) => {
+                problem.try_set(Some(why));
+                busy.try_set(false);
+                return;
+            }
+        };
+        match asked {
+            Ok(events) => {
+                for ev in events {
+                    match ev {
+                        TicketsEvent::Error { message } => {
+                            problem.try_set(Some(message));
+                        }
+                        ev @ TicketsEvent::ChangesRequested { .. } => {
+                            draft.clear();
+                            heard(&ev);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(e) => {
+                problem.try_set(Some(session::describe(&e)));
+            }
+        }
+        busy.try_set(false);
+    });
+}
+
+/// APP-23: the Request changes box — open or not, and what is written in
+/// it — held by the tray, not the sheet, so a re-drawn sheet keeps it.
+#[derive(Clone, Copy)]
+struct Draft {
+    open: RwSignal<bool>,
+    text: RwSignal<String>,
+}
+
+impl Draft {
+    fn new() -> Self {
+        Draft { open: RwSignal::new(false), text: RwSignal::new(String::new()) }
+    }
+
+    fn clear(self) {
+        self.open.try_set(false);
+        self.text.try_set(String::new());
+    }
+}
+
+/// What the Request changes box says while it is empty.
+pub(crate) const CHANGES_PLACEHOLDER: &str = "What should change? It goes on the ticket's conversation, and the ticket goes back to whoever queued it — Ctrl+Enter sends, Esc closes";
+
 /// Answer `input` of `id` with `value` (source `app`), then — the owner
 /// has answered what was asked — take the ticket out of the queue.
 fn answer(id: String, input: String, value: InputValue, problem: RwSignal<Option<String>>, busy: RwSignal<bool>) {
@@ -534,6 +602,7 @@ pub(crate) fn Tray() -> impl IntoView {
     let flash = RwSignal::new(None::<(Arrival, u32)>);
     let problem = RwSignal::new(None::<String>);
     let busy = RwSignal::new(false);
+    let draft = Draft::new();
     // Arrivals play once the page is visible: each tab loses `fresh` for a
     // frame and takes it again (a raise replays it), loses `seen` (a raised
     // tab nudges again) and takes the dot; the most urgent sweeps the edge
@@ -580,6 +649,7 @@ pub(crate) fn Tray() -> impl IntoView {
     });
     let toggle = move |id: String| {
         problem.set(None);
+        draft.clear();
         seen.update(|s| {
             s.insert(id.clone());
         });
@@ -593,7 +663,11 @@ pub(crate) fn Tray() -> impl IntoView {
         let row = rows.with(|r| r.iter().find(|x| x.entry.ticket == id).cloned())?;
         let e = row.entry.clone();
         let input = e.input.clone().and_then(|i| inputs_held.with(|h| h.as_ref().and_then(|h| h.list().iter().find(|x| x.ticket == e.ticket && x.id == i).cloned())));
-        let hd = format!("{} · {} · {}", e.urgency.as_str(), who(&e), ago(clock.get(), e.asked_unix));
+        // The time moves on its own: the sheet is not drawn again for it.
+        let hd = {
+            let e = e.clone();
+            move || format!("{} · {} · {}", e.urgency.as_str(), who(&e), ago(clock.get(), e.asked_unix))
+        };
         let (snooze_id, done_id) = (id.clone(), id.clone());
         Some(view! {
             <div class="qsheet-in" data-ticket-id=id.clone()>
@@ -601,6 +675,7 @@ pub(crate) fn Tray() -> impl IntoView {
                 <h4><a class="code" href=format!("#/ticket/{id}")>{id.clone()}</a>" · "{row.ticket.title.clone()}</h4>
                 <p class="qwhy">{e.reason.clone()}</p>
                 {input_view(id.clone(), e.input.clone(), input, problem, busy)}
+                {changes_view(id.clone(), problem, busy, draft)}
                 <div class="qacts">
                     <a class="qbtn fill" href=open_href(&e) on:click=move |_| open.set(None)>"open the ticket"</a>
                     <button type="button" class="qbtn" on:click=move |_| snooze(snooze_id.clone(), problem)>{format!("snooze {SNOOZE_MINUTES}m")}</button>
@@ -666,6 +741,74 @@ pub(crate) fn Tray() -> impl IntoView {
                 </For>
             </div>
         </div>
+    }
+}
+
+/// APP-23: Request changes — a button, or, once pressed, the box.
+fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bool>, draft: Draft) -> impl IntoView {
+    let send = {
+        let id = id.clone();
+        move || {
+            let body = draft.text.get_untracked();
+            if !body.trim().is_empty() && !busy.get_untracked() {
+                problem.set(None);
+                request_changes(id.clone(), body, problem, busy, draft);
+            }
+        }
+    };
+    let send_key = send.clone();
+    move || {
+        if !draft.open.get() {
+            return view! {
+                <div class="qchange">
+                    <button type="button" class="qbtn" data-act="request-changes" on:click=move |_| draft.open.set(true)>"request changes"</button>
+                </div>
+            }
+            .into_any();
+        }
+        let (send, send_key) = (send.clone(), send_key.clone());
+        // A box drawn is focused (one ref per drawing: a ref loads once).
+        let area = NodeRef::<leptos::html::Textarea>::new();
+        area.on_load(|el: web_sys::HtmlTextAreaElement| {
+            let _ = el.focus();
+        });
+        view! {
+            <div class="qchange open">
+                <textarea
+                    node_ref=area
+                    rows="3"
+                    aria-label="request changes"
+                    placeholder=CHANGES_PLACEHOLDER
+                    prop:value=move || draft.text.get()
+                    on:input=move |ev| draft.text.set(event_target_value(&ev))
+                    on:keydown=move |ev: web_sys::KeyboardEvent| match crate::bindings::hit(&ev, crate::bindings::Context::Field) {
+                        Some("comment.save") => {
+                            ev.prevent_default();
+                            send_key();
+                        }
+                        Some("form.cancel") => {
+                            // The box closes; the sheet stays.
+                            ev.prevent_default();
+                            ev.stop_propagation();
+                            draft.open.set(false);
+                        }
+                        _ => {}
+                    }
+                ></textarea>
+                <div class="qchange-acts">
+                    <button
+                        type="button"
+                        class="qbtn fill"
+                        disabled=move || busy.get() || draft.text.with(|t| t.trim().is_empty())
+                        on:click=move |_| send()
+                    >
+                        "send — request changes"
+                    </button>
+                    <button type="button" class="qbtn" on:click=move |_| draft.open.set(false)>"cancel"</button>
+                </div>
+            </div>
+        }
+        .into_any()
     }
 }
 
@@ -825,6 +968,22 @@ mod tests {
         assert_eq!(ids(&q), ["A-1", "A-2"]);
         assert!(q.apply(&TicketsEvent::Deleted { ids: vec!["A-2".into()], tombstones: Vec::new() }));
         assert_eq!(ids(&q), ["A-1"]);
+        // APP-23: handed back — the watch's `unqueued` (changes_requested) or
+        // the write's own answer — the tab leaves.
+        q.apply(&queued("A-4", Urgency::Now, 4));
+        let handed = TicketsEvent::Unqueued { id: "A-4".into(), entry: entry("A-4", Urgency::Now, 4), action: QueueAction::ChangesRequested, by: "owner".into(), at_unix: 9 };
+        assert!(Queue::concerns(&handed) && q.apply(&handed));
+        assert_eq!(ids(&q), ["A-1"]);
+        q.apply(&queued("A-4", Urgency::Now, 4));
+        let mut c = crate::comments::tests::comment(7, "#/ticket/A-4", "conversation", Some("A-4"));
+        c.intent = menger_tickets_api::CommentIntent::Changes;
+        let answered = TicketsEvent::ChangesRequested { id: "A-4".into(), comment: c, entry: entry("A-4", Urgency::Now, 4), by: "owner".into(), at_unix: 9 };
+        assert!(Queue::concerns(&answered) && q.apply(&answered));
+        assert_eq!(ids(&q), ["A-1"]);
+        // Queued again after acting: back, and an arrival (APP-20).
+        let before = q.rows().to_vec();
+        q.apply(&queued("A-4", Urgency::Now, 10));
+        assert_eq!(arrived(&before, q.rows()).iter().map(|a| a.ticket.as_str()).collect::<Vec<_>>(), ["A-4"]);
     }
 
     #[test]
