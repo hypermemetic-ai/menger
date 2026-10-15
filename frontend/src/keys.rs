@@ -910,7 +910,7 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
             let _ = dom::window().location().set_hash("/");
             true
         }
-        // MENGER-12: `g n` — Home, focus on Needs you.
+        // MENGER-43: `g n` — the nav under Needs you (again: its default).
         Some("go.needs") => {
             crate::needs::go();
             true

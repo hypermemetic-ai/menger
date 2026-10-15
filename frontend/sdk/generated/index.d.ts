@@ -5,6 +5,7 @@ export * as Comments from './comments';
 export * as Deployments from './deployments';
 export * as Members from './members';
 export * as Notes from './notes';
+export * as Orgs from './orgs';
 export * as Session from './session';
 export * as Themes from './themes';
 export * as Tickets from './tickets';

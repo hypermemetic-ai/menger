@@ -442,23 +442,23 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     assert_eq!(v["members"], names(&["mine"]), "no admin method");
     let schema = one(&agent, "tickets.schema", json!({})).await;
     let get = schema["methods"].as_array().unwrap().iter().find(|m| m["name"] == "list").unwrap();
-    assert_eq!((get["grant"].as_str(), get["held_on"].clone()), (Some("tickets.list"), json!(["A"])), "{get}");
+    assert_eq!((get["grant"].as_str(), get["held_on"].clone()), (Some("tickets.list"), json!(["hypermemetic:A"])), "{get}");
     assert!(schema.get("roles").is_none(), "declared roles are not shown in a view");
     let listed: BTreeSet<String> = call(&agent, "tickets.list", json!({ "summary": true })).await.iter().filter_map(|e| e["summary"]["id"].as_str().map(str::to_string)).collect();
     assert_eq!(listed, names(&["A-1", "A-2", "C-1", "C-2"]), "answered from where it is held (C is hosted under A)");
     let no = one(&agent, "tickets.set_status", json!({ "id": "A-2", "status": "Ready" })).await;
     assert_eq!(
         (no["error_kind"].as_str(), no["grant"].as_str(), no["scope"].as_str(), no["roles"].clone(), no["held_on"].clone()),
-        (Some("forbidden"), Some("tickets.set_status"), Some("A"), json!(["editor", "admin"]), json!([])),
+        (Some("forbidden"), Some("tickets.set_status"), Some("A-2"), json!(["editor", "admin"]), json!([])),
         "{no}"
     );
-    assert_eq!(no["message"], "needs tickets.set_status on A");
+    assert_eq!(no["message"], "needs tickets.set_status on A-2");
 
     // Editor on A: the writes there, typed refusals elsewhere, held_on said.
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "editor" })).await;
     assert_eq!(one(&agent, "tickets.set_status", json!({ "id": "C-2", "status": "Ready" })).await["type"], "status_changed");
     let no = one(&agent, "tickets.set_status", json!({ "id": "B-2", "status": "Ready" })).await;
-    assert_eq!((no["scope"].as_str(), no["held_on"].clone()), (Some("B"), json!(["A"])), "{no}");
+    assert_eq!((no["scope"].as_str(), no["held_on"].clone()), (Some("B-2"), json!(["hypermemetic:A"])), "{no}");
 
     // View hashes: by holdings — another key holding the same shares it.
     let other = as_key(s.port, &OTHER, "worker-2").await;
@@ -472,7 +472,7 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     let me = one(&agent, "auth.whoami", json!({})).await;
     assert_eq!(
         (me["principal"].as_str(), me["agent"].as_str(), me["memberships"].clone(), me["ceiling"].clone()),
-        (Some(principal(&AGENT).as_str()), Some("worker-1"), json!([{ "role": "editor", "scope": "A" }]), json!([])),
+        (Some(principal(&AGENT).as_str()), Some("worker-1"), json!([{ "role": "editor", "scope": "hypermemetic:A" }]), json!([])),
         "{me}"
     );
     let req = one(&agent, "auth.requires", json!({ "method": "tickets.set_status" })).await;
@@ -482,15 +482,15 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
 
     // A session's ceiling (IDENTITY-42's, minted by auth.login): the gate reads it.
     let session = one(&agent, "auth.login", json!({ "flow": { "session": { "ceiling": ["viewer@A"] } } })).await;
-    assert_eq!((session["type"].as_str(), session["ceiling"].clone()), (Some("session"), json!(["viewer@A"])), "{session}");
+    assert_eq!((session["type"].as_str(), session["ceiling"].clone()), (Some("session"), json!(["viewer@hypermemetic:A"])), "{session}");
     let scoped = connect(s.port, Some(session["token"].as_str().unwrap())).await;
     let no = one(&scoped, "tickets.set_status", json!({ "id": "A-2", "status": "Pending" })).await;
     assert_eq!((no["error_kind"].as_str(), no["held_on"].clone()), (Some("forbidden"), json!([])), "editor on A, within viewer@A: {no}");
     assert!(!view(&scoped).await["tickets"].contains("set_status"), "the view follows the ceiling");
-    assert_eq!(one(&scoped, "auth.whoami", json!({})).await["ceiling"], json!(["viewer@A"]));
+    assert_eq!(one(&scoped, "auth.whoami", json!({})).await["ceiling"], json!(["viewer@hypermemetic:A"]));
     // session.login (IDENTITY-42's, kept) mints the same way.
     let compat = one(&agent, "session.login", json!({ "scope": ["viewer@A"] })).await;
-    assert_eq!((compat["type"].as_str(), compat["scope"].clone()), (Some("login"), json!(["viewer@A"])));
+    assert_eq!((compat["type"].as_str(), compat["scope"].clone()), (Some("login"), json!(["viewer@hypermemetic:A"])));
 }
 
 /// FILTER-24: `keep` never answers a ticket outside the caller's reach — a
@@ -571,7 +571,7 @@ async fn an_agent_asks_for_access_with_auth_signup() {
     one(&boss, "auth.grant", json!({ "principal": principal(&AGENT), "role": "viewer", "scope": "A" })).await;
     assert!(call(&boss, "auth.waiting", json!({})).await.is_empty(), "granted: it waits no longer");
     let mine = call(&agent, "members.mine", json!({})).await;
-    assert_eq!((mine[1]["grant"]["scope"].as_str(), mine[1]["grant"]["role"].as_str()), (Some("A"), Some("viewer")), "{mine:?}");
+    assert_eq!((mine[1]["grant"]["scope"].as_str(), mine[1]["grant"]["role"].as_str()), (Some("hypermemetic:A"), Some("viewer")), "{mine:?}");
 }
 
 // ── Over the wire, login off ─────────────────────────────────────────────
@@ -588,7 +588,7 @@ async fn login_off_menger_is_as_it_was() {
     let hub = one(&c, "menger.schema", json!({})).await;
     assert!(hub.get("view").is_none());
     let kids: BTreeSet<String> = hub["children"].as_array().unwrap().iter().map(|k| k["namespace"].as_str().unwrap().to_string()).collect();
-    assert_eq!(kids, names(&["comments", "deployments", "members", "notes", "session", "themes", "tickets"]), "no auth activation without login");
+    assert_eq!(kids, names(&["comments", "deployments", "members", "notes", "orgs", "session", "themes", "tickets"]), "no auth activation without login");
     for ns in ["tickets", "comments", "notes", "members", "session", "themes", "deployments"] {
         let schema = one(&c, &format!("{ns}.schema"), json!({})).await;
         assert!(schema.get("view").is_none());

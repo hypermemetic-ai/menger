@@ -199,7 +199,7 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
 
     // Ada grants; Alice's next calls see IDENTITY and OUGHT, not PLEXUS.
     assert_eq!(call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await[0]["type"], "grant");
-    assert_eq!(call(&ada, "members.grant", grant(ALICE, "ought", "viewer")).await[0]["grant"]["scope"], "OUGHT");
+    assert_eq!(call(&ada, "members.grant", grant(ALICE, "ought", "viewer")).await[0]["grant"]["scope"], "hypermemetic:OUGHT");
     let seen = ids(&call(&alice, "tickets.list", json!({})).await);
     assert_eq!(seen, set(&["IDENTITY-1", "IDENTITY-2", "OUGHT-1", "OUGHT-2"]));
     let ready = ids(&call(&alice, "tickets.list", json!({ "filter": "kind build" })).await);
@@ -219,8 +219,10 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     let ok = call(&alice, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "renamed" })).await;
     assert_eq!(ok[0]["type"], "amended", "{ok:?}");
     let no = call(&alice, "tickets.amend", json!({ "id": "OUGHT-2", "title": "no" })).await;
-    assert_eq!(refused(&no), ("tickets.amend".to_string(), "OUGHT".to_string()), "AUTH-7: was \"needs editor on OUGHT\"");
-    assert_eq!(no[0]["held_on"], json!(["IDENTITY"]), "{no:?}");
+    // ORG-4: refused by the ticket as written — the same words for one out
+    // of reach as for none; held on IDENTITY in its organization.
+    assert_eq!(refused(&no), ("tickets.amend".to_string(), "OUGHT-2".to_string()), "AUTH-7: was \"needs editor on OUGHT\"");
+    assert_eq!(no[0]["held_on"], json!(["hypermemetic:IDENTITY"]), "{no:?}");
     assert_eq!(call(&alice, "tickets.set_status", json!({ "id": "PLEXUS-2", "status": "Ready" })).await[0]["type"], "error");
     assert_eq!(call(&alice, "tickets.create", json!({ "epic": "IDENTITY", "title": "new", "parent": "IDENTITY-1" })).await[0]["type"], "created");
     assert_eq!(call(&alice, "tickets.create", json!({ "epic": "OUGHT", "title": "no" })).await[0]["type"], "error");
@@ -517,4 +519,69 @@ async fn a_comment_on_a_ticket_s_page_is_that_ticket_s() {
     assert_eq!(call(&bob, "comments.add", app("#/")).await[0]["type"], "comment", "a comment on the board is the app's");
     let his: Vec<Value> = call(&bob, "comments.list", json!({})).await.into_iter().filter(|e| e["type"] == "comment").collect();
     assert_eq!(his.len(), 1, "{his:?}");
+}
+
+/// ORG-4: Ada (admin on `*`) makes the organization acme with Bob as its
+/// admin. Bob files acme's own root MENGER without naming the org (his
+/// only one), grants Alice viewer on acme, and can reach nothing of
+/// hypermemetic — its tickets, counts and names are not found to him, and
+/// a write there is refused naming only what he wrote.
+#[tokio::test]
+async fn org_4_a_reader_of_one_org_sees_nothing_of_the_other() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    for title in ["hypermemetic's menger", "a build in it"] {
+        let kind = if title.starts_with("hyper") { "scope" } else { "build" };
+        assert_eq!(call(&ada, "tickets.create", json!({ "epic": "MENGER", "title": title, "kind": kind })).await[0]["type"], "created");
+    }
+    let made = call(&ada, "orgs.create", json!({ "name": "acme", "admin": format!("idp:{BOB}") })).await;
+    assert_eq!((made[0]["type"].as_str(), made[0]["admin"]["scope"].as_str()), (Some("created"), Some("acme:")), "{made:?}");
+    assert_eq!(call(&ada, "orgs.create", json!({ "name": "acme" })).await[0]["type"], "error", "a name is unique");
+
+    let bob = as_(&w, BOB, "bob").await;
+    let orgs: Vec<String> = call(&bob, "orgs.list", json!({})).await.iter().filter_map(|e| e["org"]["name"].as_str().map(str::to_string)).collect();
+    assert_eq!(orgs, ["acme"], "Bob holds a role in acme alone");
+    // No --org: Bob's only organization — and acme has a root MENGER of its own.
+    let root = call(&bob, "tickets.create", json!({ "epic": "MENGER", "title": "acme's menger", "kind": "scope" })).await;
+    assert_eq!(root[0]["ticket"]["address"], "acme:MENGER-1", "{root:?}");
+    let build = call(&bob, "tickets.create", json!({ "epic": "acme:MENGER", "title": "acme's build" })).await;
+    assert_eq!(build[0]["ticket"]["address"], "acme:MENGER-2", "{build:?}");
+    let acme_ids = ids(&call(&bob, "tickets.list", json!({})).await);
+    assert_eq!(acme_ids.len(), 2, "{acme_ids:?}");
+    assert!(acme_ids.iter().all(|id| id.starts_with("MENGER.")), "acme's MENGER is a namesake: {acme_ids:?}");
+    assert_eq!(call(&bob, "tickets.get", json!({ "id": "PLEXUS-1" })).await[0]["type"], "not_found");
+    assert_eq!(call(&bob, "tickets.get", json!({ "id": "hypermemetic:MENGER-1" })).await[0]["type"], "not_found");
+    let counted: u64 = call(&bob, "tickets.counts", json!({})).await.iter().filter_map(|e| e["count"].as_u64().or(e["held"].as_u64())).sum();
+    assert_eq!(counted, 2, "counts: acme's alone");
+    // The bare id fits both orgs: read in Bob's, it is acme's; Ada, of `*`,
+    // is told both by their full addresses.
+    let his = call(&bob, "tickets.get", json!({ "id": "MENGER-2" })).await;
+    assert_eq!(his[0]["ticket"]["address"], "acme:MENGER-2", "{his:?}");
+    let both = call(&ada, "tickets.get", json!({ "id": "MENGER-2" })).await;
+    assert_eq!(both[0]["candidates"], json!(["hypermemetic:MENGER-2", "acme:MENGER-2"]), "{both:?}");
+    // A write in hypermemetic is refused by what Bob wrote, nothing more.
+    let refused_write = call(&bob, "tickets.set_status", json!({ "id": "PLEXUS-2", "status": "Ready" })).await;
+    assert_eq!(refused(&refused_write), ("tickets.set_status".to_string(), "PLEXUS-2".to_string()));
+    assert!(!refused_write[0].to_string().contains("hypermemetic:"), "{refused_write:?}");
+
+    // Bob grants inside acme, and cannot reach hypermemetic.
+    let g = call(&bob, "members.grant", grant(ALICE, "acme:", "viewer")).await;
+    assert_eq!(g[0]["grant"]["scope"], "acme:", "{g:?}");
+    assert_eq!(call(&bob, "members.grant", grant(ALICE, "hypermemetic:", "viewer")).await[0]["type"], "error");
+    assert_eq!(call(&bob, "members.grant", grant(ALICE, "IDENTITY", "viewer")).await[0]["type"], "error");
+    let listed: Vec<String> = call(&bob, "members.list", json!({})).await.iter().filter_map(|e| e["grant"]["scope"].as_str().map(str::to_string)).collect();
+    assert!(listed.iter().all(|s| s.starts_with("acme:")), "Bob lists acme's grants alone: {listed:?}");
+    assert_eq!(call(&bob, "orgs.rename", json!({ "name": "hypermemetic", "to": "mine" })).await[0]["type"], "not_found");
+    assert_eq!(call(&bob, "orgs.create", json!({ "name": "beta" })).await[0]["type"], "error", "a new org takes admin on *");
+    assert!(call(&bob, "orgs.delete", json!({ "name": "acme" })).await[0]["message"].as_str().unwrap().contains("holds 1 shortcode"));
+
+    let alice = as_(&w, ALICE, "alice").await;
+    assert_eq!(ids(&call(&alice, "tickets.list", json!({})).await), acme_ids, "a viewer of acme sees acme");
+    assert_eq!(call(&alice, "tickets.get", json!({ "id": "acme:MENGER-2" })).await[0]["ticket"]["title"], "acme's build");
+    // Ada reads both, and a filter reads one org.
+    assert_eq!(ids(&call(&ada, "tickets.list", json!({ "filter": "under acme:" })).await), acme_ids);
+    let renamed = call(&ada, "orgs.rename", json!({ "name": "acme", "to": "acme-co" })).await;
+    assert_eq!(renamed[0]["org"]["aliases"], json!(["acme"]), "{renamed:?}");
+    assert_eq!(call(&alice, "tickets.get", json!({ "id": "acme:MENGER-2" })).await[0]["ticket"]["address"], "acme-co:MENGER-2");
 }

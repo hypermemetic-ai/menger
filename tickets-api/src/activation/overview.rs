@@ -41,10 +41,10 @@ pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<Caller, String>,
                             yield TicketsEvent::Count { epic, shortcode, held };
                         }
                     }
-                    Err(e) => yield refusal(e),
+                    Err(e) => yield veiled(&caller, e),
                 }
             }
-            Err(e) => yield refusal(e),
+            Err(e) => yield veiled(&caller, e),
         }
     }
 }

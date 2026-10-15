@@ -49,10 +49,14 @@ pub(super) const TABLES: &str = "
             text   TEXT PRIMARY KEY,
             ticket TEXT NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS org_aliases (
+            name TEXT PRIMARY KEY,
+            org  INTEGER NOT NULL REFERENCES orgs (id)
+        ) WITHOUT ROWID;
     ";
 
-/// Which organizations a read may resolve in. `All` until ORG-4 gives a
-/// caller a list — with one organization there is nothing else to say.
+/// Which organizations a read may resolve in — ORG-4: a caller's, the
+/// organizations it holds a role in (`All` for `*`, and with login off).
 #[derive(Debug, Clone, Copy, Default)]
 pub enum OrgReach<'a> {
     #[default]
@@ -61,7 +65,7 @@ pub enum OrgReach<'a> {
 }
 
 impl OrgReach<'_> {
-    fn holds(&self, org: &OrgId) -> bool {
+    pub(super) fn holds(&self, org: &OrgId) -> bool {
         match self {
             Self::All => true,
             Self::Only(orgs) => orgs.contains(org),
@@ -74,12 +78,12 @@ impl OrgReach<'_> {
 pub(super) struct Entry {
     pub(super) sc: Shortcode,
     /// The org's row id.
-    org: i64,
+    pub(super) org: i64,
     /// Its bare code names it, whatever namesakes come (a shortcode the file
     /// held when it gained the table).
     pinned: bool,
     /// Its full address, `org:ROOT/…/SC`, kept with it.
-    address: String,
+    pub(super) address: String,
 }
 
 /// What a resolve found.
@@ -96,8 +100,11 @@ pub(super) enum Found<T> {
 /// only place text becomes a [`ShortcodeId`].
 #[derive(Debug, Clone, Default)]
 pub(super) struct Registry {
-    orgs: BTreeMap<i64, OrgId>,
-    entries: BTreeMap<ShortcodeId, Entry>,
+    pub(super) orgs: BTreeMap<i64, OrgId>,
+    /// ORG-4: every name an organization had before a rename, to its row —
+    /// an address written with it keeps resolving ([`super::orgs`]).
+    pub(super) aliases: BTreeMap<String, i64>,
+    pub(super) entries: BTreeMap<ShortcodeId, Entry>,
     /// The resolver's index from the letters to the shortcodes that have
     /// them — the one map keyed by a code's text, private to the resolver:
     /// it answers candidates, never an identity on its own.
@@ -107,7 +114,7 @@ pub(super) struct Registry {
     pins: HashMap<String, String>,
     /// ACT-6: each moved ticket's key → the ids it had, sorted — the
     /// pins whose text is another ticket's id ([`Registry::index_aliases`]).
-    aliases: HashMap<String, Vec<String>>,
+    moved_ids: HashMap<String, Vec<String>>,
     /// ACT-6: each shortcode's highest number a move took out of it — the
     /// next ticket of it is born past it, as past a deleted one's: an old id
     /// keeps naming the ticket that moved.
@@ -136,7 +143,7 @@ impl Registry {
 
     /// `id`'s full address, `org:ROOT/…/SC`.
     pub(super) fn address(&self, id: &ShortcodeId) -> String {
-        self.entries.get(id).map_or_else(|| format!("{}:{}", OrgId::HYPERMEMETIC, id.as_str()), |e| e.address.clone())
+        self.entries.get(id).map_or_else(|| format!("{}:{}", self.first_org(), id.as_str()), |e| e.address.clone())
     }
 
     /// The full address of `id`'s ticket numbered `seq`.
@@ -149,9 +156,10 @@ impl Registry {
         self.entries.get(id).map(|e| &e.sc.ns.org)
     }
 
-    /// The org of that name, if there is one.
-    fn org_row(&self, org: &OrgId) -> Option<i64> {
-        self.orgs.iter().find(|(_, o)| *o == org).map(|(id, _)| *id)
+    /// The org of that name, if there is one — ORG-4: or of that name
+    /// before a rename.
+    pub(super) fn org_row(&self, org: &OrgId) -> Option<i64> {
+        self.org_named(org.as_str()).map(|(id, _)| id)
     }
 
     /// The shortcode with `code` in `ns`, if one is there.
@@ -181,7 +189,7 @@ impl Registry {
     /// Every entry's full address, from the chain of hosts, again — after
     /// the registry is read or a write moved a namespace. Returns the
     /// shortcodes whose address it changed.
-    fn readdress(&mut self) -> Vec<ShortcodeId> {
+    pub(super) fn readdress(&mut self) -> Vec<ShortcodeId> {
         let fresh: Vec<(ShortcodeId, String)> = self
             .entries
             .keys()
@@ -258,7 +266,7 @@ impl Registry {
         ids.iter()
             .filter(|id| {
                 let e = &self.entries[*id];
-                if !reach.holds(&e.sc.ns.org) || a.org.as_ref().is_some_and(|o| *o != e.sc.ns.org) {
+                if !reach.holds(&e.sc.ns.org) || a.org.as_ref().is_some_and(|o| self.canonical(o) != Some(&e.sc.ns.org)) {
                     return false;
                 }
                 // The hosts named, in order, among the chain above it.
@@ -339,8 +347,8 @@ impl Registry {
     }
 
     /// ACT-6: the ids `key` had before a move named it anew, sorted.
-    pub(super) fn aliases_of(&self, key: &str) -> Vec<String> {
-        self.aliases.get(key).cloned().unwrap_or_default()
+    pub(super) fn moved_from(&self, key: &str) -> Vec<String> {
+        self.moved_ids.get(key).cloned().unwrap_or_default()
     }
 
     /// ACT-6: the highest number a move took out of `sc` — 0 for none.
@@ -367,7 +375,7 @@ impl Registry {
         self.moved_last = last;
         // Sorted: the pins keep no time, so a ticket moved twice lists both by
         // their text.
-        self.aliases = aliases
+        self.moved_ids = aliases
             .into_iter()
             .map(|(k, v)| {
                 let mut v: Vec<String> = v.into_iter().map(|(_, t)| t).collect();
@@ -443,6 +451,16 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Registry> {
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         r.pins.insert(row.get(0)?, row.get(1)?);
+    }
+    // ORG-4: an organization's old names (a file from before ORG-4 has none).
+    let aliased: i64 =
+        conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'org_aliases'", [], |row| row.get(0))?;
+    if aliased > 0 {
+        let mut stmt = conn.prepare("SELECT name, org FROM org_aliases")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            r.aliases.insert(row.get(0)?, row.get(1)?);
+        }
     }
     r.index_aliases();
     r.readdress();
@@ -611,7 +629,13 @@ impl Cache {
     pub(super) fn find_ticket(&self, text: &str, reach: OrgReach<'_>) -> Found<String> {
         let t = text.trim();
         let held = |key: &str| self.at.contains_key(key) || self.tombstones.get(key).is_some();
-        if let Some(key) = self.shortcodes.pin(t).filter(|k| held(k)) {
+        // ORG-4: a pin names its ticket to a reader who can reach its
+        // organization; to another, the text is any short form.
+        let reachable = |key: &str| match reach {
+            OrgReach::All => true,
+            OrgReach::Only(_) => self.get(key).and_then(|r| self.shortcodes.org(&r.shortcode)).is_some_and(|o| reach.holds(o)),
+        };
+        if let Some(key) = self.shortcodes.pin(t).filter(|k| held(k) && reachable(k)) {
             return Found::One(key.to_string());
         }
         let a = match Address::parse(t) {
@@ -721,7 +745,7 @@ pub(super) fn settle(conn: &mut Connection, cache: &mut Cache) -> anyhow::Result
         put(&tx, &r, sc).map_err(|e| anyhow::anyhow!("shortcode {}: {e}", sc.as_str()))?;
     }
     let added = adopted.len();
-    let org = OrgId::hypermemetic();
+    let org = r.first_org();
     if first {
         let mut keys: Vec<String> = cache.at.keys().cloned().collect();
         keys.extend(cache.tombstones.ids());
@@ -755,7 +779,8 @@ pub(super) fn settle(conn: &mut Connection, cache: &mut Cache) -> anyhow::Result
 /// open by ORG-3). Their code is their id's (an id the store did not mint is
 /// its code). Returns them, in the store's order.
 fn adopt(r: &mut Registry, cache: &Cache, pinned: bool) -> anyhow::Result<Vec<ShortcodeId>> {
-    let org = OrgId::hypermemetic();
+    // ORG-4: the first organization, whatever it is called now.
+    let org = r.first_org();
     let org_row = r.org_row(&org).ok_or_else(|| anyhow::anyhow!("no organization {org}"))?;
     let mut named: Vec<ShortcodeId> = cache.ids.last_seqs().map(|(sc, _)| sc.clone()).collect();
     named.extend(cache.tombstones.shortcodes());
@@ -928,11 +953,14 @@ impl Cache {
     /// its parent is outside it.
     pub(super) fn target(&self, asked: &Address, parent: Option<&super::Row>, roots: bool) -> Result<Target, StoreError> {
         let r = &self.shortcodes;
-        if let Some(org) = &asked.org {
-            if r.org_row(org).is_none() {
-                return Err(StoreError::Invalid(format!("no organization `{org}` (nothing was created)")));
-            }
-        }
+        // ORG-4: an org named by a name it had before a rename is that org.
+        let asked_org = match &asked.org {
+            Some(org) => match r.canonical(org) {
+                Some(o) => Some(o.clone()),
+                None => return Err(StoreError::Invalid(format!("no organization `{org}` (nothing was created)"))),
+            },
+            None => None,
+        };
         let Some(p) = parent else {
             return match r.find_shortcode(&asked.to_string(), OrgReach::All) {
                 Found::One(sc) => Ok(Target::In(sc)),
@@ -943,14 +971,14 @@ impl Cache {
                     asked.hosts.last().expect("not empty")
                 ))),
                 Found::None => {
-                    let org = asked.org.clone().unwrap_or_else(OrgId::hypermemetic);
+                    let org = asked_org.unwrap_or_else(|| r.first_org());
                     Ok(Target::Mint(r.mint(Namespace { org, host: None }, asked.code.clone())?))
                 }
             };
         };
         let psc = &p.shortcode;
-        let org = r.org(psc).cloned().unwrap_or_else(OrgId::hypermemetic);
-        if asked.org.as_ref().is_some_and(|o| *o != org) {
+        let org = r.org(psc).cloned().unwrap_or_else(|| r.first_org());
+        if asked_org.as_ref().is_some_and(|o| *o != org) {
             return Err(StoreError::Invalid(format!(
                 "{} is in the organization {org}, and {asked} names another (nothing was created)",
                 p.id

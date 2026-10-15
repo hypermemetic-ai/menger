@@ -293,6 +293,22 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   method gets a role by being listed in its activation's `roles(...)` —
   unlisted, only admin holds it. README "The AUTH protocol" has the rest.
 
+  **Organizations** (ORG-4) are the `orgs` activation: every ticket and
+  shortcode is in one (today's tracker is `hypermemetic`). `list` (the
+  caller's), `create --name N --admin P` (admin on `*`), `rename` (the old
+  name stays an alias), `delete` (only empty). A grant's scope is `*`,
+  `org:` (the whole org) or `org:SHORTCODE` (that shortcode and those
+  hosted under it); `members grant --scope IDENTITY` keeps it as
+  `hypermemetic:IDENTITY`. `tickets create --org acme` (or `--epic
+  acme:MENGER`); without it, the caller's only org. A reader sees only the
+  orgs it holds a role in — another org's tickets are `not_found`. README
+  "Organizations" has the rest:
+
+  ```sh
+  synapse -P 4455 menger orgs list
+  synapse -P 4455 menger members grant --principal key:4b… --scope acme: --role editor
+  ```
+
   **Limits** (ACCESS-29): connections in all, per IP, per principal and
   anonymous (`--max-connections` 1,024, `--max-connections-per-ip` 256,
   `--max-connections-per-principal` 64, `--max-anonymous-connections` 128,
@@ -422,9 +438,9 @@ nested parameter as one string (SYNAPSE-9).
 **A question for the owner is filed, never asked only in chat** (owner,
 2026-10-12, MENGER-12). Put it on its ticket as an input — or, when it is
 not a choice or a reply, label the ticket `needs-you` with the reason in its
-body — and only then mention it in chat, with the ticket id. Home's "Needs
-you" panel (filter `queued or asking or label needs-you`) is where the owner
-looks; when it cannot wait, queue it too (below, MENGER-39);
+body — and only then mention it in chat, with the ticket id. The nav under its
+Needs you filter (`queued or asking or label needs-you` — `g n`, or the
+header's count) is where the owner looks; when it cannot wait, queue it too (below, MENGER-39);
 a question that lives only in a chat transcript is never seen. Whoever acts
 on a `needs-you` takes the label off:
 
@@ -436,7 +452,7 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
 
 ## Queue — asking the owner urgently (MENGER-39)
 
-An input or a `needs-you` label waits on Home until the owner looks. When it
+An input or a `needs-you` label waits under Needs you until the owner looks. When it
 should not wait — an agent idle until it is answered, a promote that rolled
 back, a gap on prod — **queue the ticket**: it is put in front of the owner
 with an urgency and a reason, and every open app shows it at once as a tab
@@ -459,7 +475,7 @@ synapse -P 4455 menger tickets list --filter 'queued now or queued blocking' --s
 
 `watch` carries `queued` / `unqueued` / `snoozed`; `history --id X` ends with
 the ticket's `queue_record`s (who queued it, why, at what urgency). `queued`
-and `queued <urgency>` are filter cells; Home's "Needs you" is `queued or
+and `queued <urgency>` are filter cells; the Needs you filter is `queued or
 asking or label needs-you`. Ask at `now` or `blocking` only when it is so —
 a queue that is always loud is a queue the owner learns to ignore.
 
@@ -642,8 +658,8 @@ a queue that is always loud is a queue the owner learns to ignore.
   for the owner is an input on its ticket (or the `needs-you` label with
   the reason in the body), and is mentioned in chat with the ticket id —
   never asked only in chat. `asking` and `label <name>` are filter cells
-  (FILTER-3's language); Home's "Needs you" panel shows `queued or asking
-  or label needs-you`. An urgent one is queued too (MENGER-39, "Queue").
+  (FILTER-3's language); the nav under its Needs you filter (`g n`,
+  or the header's count) shows `queued or asking or label needs-you`. An urgent one is queued too (MENGER-39, "Queue").
 - Ticketing follows **menger-skills** (`../menger-skills`, the house
   methodology — its `ticketing/`, `planning/`, `asking/`, `building/`
   skills; `ought` is retired, owner 2026-10-14). Its lifecycle is

@@ -1,53 +1,54 @@
-//! MENGER-12: **Needs you** — what waits on the owner, first thing on Home.
+//! MENGER-43: **Needs you** is a filter on the nav, not a panel.
 //!
-//! - **What it shows** is the live result of a filter: by default
-//!   [`DEFAULT`], `asking or label needs-you` — every ticket with an open
-//!   input (`asking`, INPUT-1's questions) and every ticket labelled
-//!   `needs-you`. The filter is a **saved filter** (FILTER-6, src/saved.rs):
-//!   the one named "Needs you" (`VIEW/_MENGER/view/needs-you`) when one is
-//!   saved, else the default. The panel's `change` saves another under that
-//!   name — so `Saved ▾` lists it, and any level can apply it — and the
-//!   panel follows it from then on, in every browser.
+//! - **What waits on the owner** is the result of a filter: by default
+//!   [`DEFAULT`], `queued or asking or label needs-you` — every ticket in the
+//!   owner's queue (MENGER-39), every ticket with an open input (`asking`,
+//!   INPUT-1's questions) and every ticket labelled `needs-you`. The filter
+//!   is a **saved filter** (FILTER-6, src/saved.rs): the one named "Needs
+//!   you" (`VIEW/_MENGER/view/needs-you`) when one is saved, else the
+//!   default. It is changed as any saved filter is: apply it, edit the
+//!   pills, **Save as…** "Needs you" (replace) — the count follows the save
+//!   ([`saved_changed`]), and the next `g n` applies the new text.
+//! - **Where it is seen is the nav** ([`go`]): `g n`, or a click on the
+//!   header's `needs you N`, puts the saved filter on the nav's level
+//!   (`Level::Nav`, `n=` in the URL) exactly as `Saved ▾` puts one — the
+//!   nav's own clauses replaced, its pills, text and URL following — and
+//!   puts focus on the nav's first row; the route does not move. The nav's
+//!   effective filter is `global and nav` (FILTER-21), so the global filter
+//!   reaches Needs you by construction: filtered to one shortcode, the nav
+//!   shows what waits on the owner there. The same press while the nav
+//!   holds exactly that filter ([`is_applied`]) puts the nav's default back
+//!   — a toggle ([`plan`]).
 //! - **The header's count** ([`HeaderLink`]): `needs you N` beside
 //!   `inputs`, live from the moment the app is up (`counts { filter }` kept
-//!   by a membership watch — FILTER-12's [`LiveCounts`]); a click (or `g n`)
-//!   goes Home and puts focus on the panel.
-//! - **The panel** ([`Panel`]), above the board: "Needs you · N", then a row
-//!   per match — its id, its title, its status chip, and what it needs: each
-//!   open input's question, with `answer ›`, which opens the ticket at that
-//!   input (`#/ticket/<ID>?anchor=<input>`: its frame scrolls to it and
-//!   flashes it, COMP-14), and the ticket's labels as chips. Live: the rows
-//!   are asked again on every `entered` / `left` / `recount` of the filter's
-//!   membership watch, the rows' titles, statuses and labels are the row
-//!   cache's (moved by `watch`), and the questions are the app's copy of the
-//!   inputs (src/inputs.rs) — an answer in another window takes the input
-//!   off at once, and the ticket with it when it no longer asks. Nothing
-//!   matching says "Nothing needs you."
+//!   by a membership watch — FILTER-12's [`LiveCounts`]), whatever the lens
+//!   holds: it is the saved filter's count, never narrowed.
+//! - **The questions** live where they are answered: the ticket page (its
+//!   frame scrolls to the input, [`answer_href`], COMP-14), `#/inputs`, and
+//!   the tray for a queued ticket (src/queue.rs). MENGER-12's panel on Home,
+//!   which answered to no filter, is gone: Home is the board.
 //!
-//! What decides — the default, the saved filter's id, the answer link, the
-//! questions a row shows, the header's words — is pure and pinned by native
-//! tests.
+//! What decides — the default, the saved filter's id, what the count asks,
+//! the answer link, what a press does, the header's words — is pure and
+//! pinned by native tests.
+
+use std::cell::Cell;
 
 use leptos::prelude::*;
 use menger_tickets_api::filter::Filter;
-use menger_tickets_api::{Input, InputState, TicketSummary, TicketsEvent};
-use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::counts::{wire_text, LiveCounts};
-use crate::session::{self, Member};
-use crate::{cache, dom, inputs, labels, saved, st_class};
+use crate::lens::{self, Lens, Level};
+use crate::{dom, keys, saved, session};
 
-/// The panel's filter while none is saved: MENGER-39: every ticket in the
-/// owner's queue, every ticket asking the owner something, and every ticket
+/// The filter while none is saved: MENGER-39: every ticket in the owner's
+/// queue, every ticket asking the owner something, and every ticket
 /// labelled `needs-you`.
 pub(crate) const DEFAULT: &str = "queued or asking or label needs-you";
 
 /// The saved filter's name — its id (its doc's path) is the name's slug.
 pub(crate) const SAVED_NAME: &str = "Needs you";
-
-/// At most this many rows show; the rest are counted.
-pub(crate) const ROWS_MAX: u32 = 100;
 
 /// The default, parsed.
 pub(crate) fn default_filter() -> Filter {
@@ -59,28 +60,24 @@ pub(crate) fn saved_id() -> String {
     saved::slug(SAVED_NAME)
 }
 
-/// What the panel asks with: the filter's wire text — `None` for a filter
-/// that admits nothing (asked of no one). MENGER-13: a canceled ticket needs
-/// no one, nor does what its cancel canceled — `not status Canceled` is
-/// always beside the filter (its withdrawn inputs are no longer `asking`;
-/// this takes out a `needs-you` label on a canceled subtree too).
+/// What the header's count asks with: the filter's wire text — `None` for a
+/// filter that admits nothing (asked of no one). MENGER-13: a canceled
+/// ticket needs no one, nor does what its cancel canceled — `not status
+/// Canceled` is always beside the filter (its withdrawn inputs are no
+/// longer `asking`; this takes out a `needs-you` label on a canceled
+/// subtree too). The nav is given the saved filter itself, not this.
 pub(crate) fn asked(f: &Filter) -> Option<String> {
     let f = f.and(&Filter::parse(NOT_CANCELED).expect("parses"));
     f.admits_nothing().is_none().then(|| wire_text(&f))
 }
 
-/// MENGER-13: what the panel never shows.
+/// MENGER-13: what the count never counts.
 pub(crate) const NOT_CANCELED: &str = "not status Canceled";
 
 /// Where an input is answered: its ticket's page, its frame scrolled to the
 /// input (COMP-14's `?anchor=`, the element with the input's id).
 pub(crate) fn answer_href(ticket: &str, input: &str) -> String {
     format!("#/ticket/{ticket}?anchor={input}")
-}
-
-/// The open questions of `ticket` among `inputs`, in its body's order.
-pub(crate) fn open_of<'a>(inputs: &'a [Input], ticket: &str) -> Vec<&'a Input> {
-    inputs.iter().filter(|i| i.ticket == ticket && i.state == InputState::Open).collect()
 }
 
 /// The header's title for `n` waiting.
@@ -101,7 +98,44 @@ fn badge_class(n: usize) -> &'static str {
     }
 }
 
-/// Where the panel's filter came from.
+/// The header link's title: where it goes.
+pub(crate) const LINK_TITLE: &str =
+    "what waits on you — the nav under the saved filter \u{201c}Needs you\u{201d}, within the global filter (g n); again, the nav's default";
+
+// ---------------------------------------------------------------------
+// What a press does
+
+/// The canonical text of `text` — itself, trimmed, when it does not parse.
+fn canonical(text: &str) -> String {
+    Filter::parse(text).map(|f| f.format()).unwrap_or_else(|_| text.trim().to_string())
+}
+
+/// Whether the nav (its canonical text, [`Lens::text`]) holds exactly the
+/// Needs you filter (`needs_text`, in any spelling the language reads).
+pub(crate) fn is_applied(nav_text: &str, needs_text: &str) -> bool {
+    canonical(nav_text) == canonical(needs_text)
+}
+
+/// What `g n` (or the header's click) does to the nav.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Go {
+    /// The nav's filter becomes this canonical text, as `Saved ▾` applies it.
+    Apply(String),
+    /// The nav holds it already: back to the nav's default.
+    Reset,
+}
+
+/// The press, decided: apply the Needs you filter to the nav — or, the nav
+/// holding exactly it, put the nav's default back.
+pub(crate) fn plan(nav_text: &str, needs_text: &str) -> Go {
+    if is_applied(nav_text, needs_text) {
+        Go::Reset
+    } else {
+        Go::Apply(canonical(needs_text))
+    }
+}
+
+/// Where the filter came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Source {
     /// Not read yet (no connection).
@@ -110,55 +144,62 @@ pub(crate) enum Source {
     Default,
     /// The saved filter.
     Saved,
-    /// The saved filter could not be read — the default stands; why.
+    /// The saved filter could not be read — what was held stands; why.
     Unreadable(String),
 }
 
-/// The panel's state for the app's lifetime — every handle `Copy`.
+/// Needs you's state for the app's lifetime — every handle `Copy`.
 #[derive(Clone, Copy)]
 pub(crate) struct NeedsYou {
     pub(crate) filter: RwSignal<Filter>,
     pub(crate) source: RwSignal<Source>,
     pub(crate) count: LiveCounts,
-    text: Memo<Option<String>>,
+}
+
+thread_local! {
+    /// The app's Needs you and its lens — what `g n` (a key, outside any
+    /// view) acts through.
+    static HOOK: Cell<Option<(NeedsYou, Lens)>> = const { Cell::new(None) };
+}
+
+/// Read the saved filter into `filter` / `source`: the saved one, else the
+/// default; unreadable (or no connection), what was held stays.
+async fn reread(filter: RwSignal<Filter>, source: RwSignal<Source>) {
+    let next = match saved::load_if_saved(&saved_id()).await {
+        Ok(Some(f)) => (Some(f), Source::Saved),
+        Ok(None) => (Some(default_filter()), Source::Default),
+        Err(why) => (None, Source::Unreadable(why)),
+    };
+    if let Some(f) = next.0 {
+        if filter.try_get_untracked().is_some_and(|held| held != f) {
+            filter.try_set(f);
+        }
+    }
+    source.try_set(next.1);
 }
 
 impl NeedsYou {
-    /// Made once by the App: the default at first, the saved filter read on
-    /// every new connection, the count live from then on.
+    /// Made once by the App (after the lens): the default at first, the
+    /// saved filter read on every new connection, the count live from then
+    /// on.
     pub(crate) fn install() -> Self {
         let filter = RwSignal::new(default_filter());
         let source = RwSignal::new(Source::Unread);
-        let text = Memo::new(move |_| filter.with(asked));
+        // ORG-4: asked within the organization the reader chose.
+        let org = crate::lens::use_lens().org();
+        let text = Memo::new(move |_| org.with(|o| filter.with(|f| asked(&crate::orgs::within(o.as_deref(), f)))));
         let count = LiveCounts::new(text.into());
         let link = session::link();
         Effect::new(move |_| {
             if !link.get() {
                 return;
             }
-            spawn_local(async move {
-                match saved::load_if_saved(&saved_id()).await {
-                    Ok(Some(f)) => {
-                        filter.try_set(f);
-                        source.try_set(Source::Saved);
-                    }
-                    Ok(None) => {
-                        source.try_set(Source::Default);
-                    }
-                    Err(why) => {
-                        source.try_set(Source::Unreadable(why));
-                    }
-                }
-            });
+            spawn_local(reread(filter, source));
         });
-        let me = NeedsYou { filter, source, count, text };
+        let me = NeedsYou { filter, source, count };
         provide_context(me);
+        HOOK.with(|h| h.set(Some((me, lens::use_lens()))));
         me
-    }
-
-    /// The filter asked, as wire text.
-    pub(crate) fn text(self) -> Memo<Option<String>> {
-        self.text
     }
 }
 
@@ -167,42 +208,91 @@ pub(crate) fn use_needs() -> NeedsYou {
     use_context::<NeedsYou>().expect("Needs you is provided by the App")
 }
 
-/// Go Home and put focus on the panel — its first row, or its heading.
-pub(crate) fn go() {
-    let w = dom::window();
-    if w.location().hash().unwrap_or_default().trim_start_matches('#').trim_start_matches('/').split('?').next() != Some("") {
-        let _ = w.location().set_hash("/");
+/// FILTER-6's Save as… wrote saved filter `id` as `filter`: when it is
+/// Needs you's, the count follows at once.
+pub(crate) fn saved_changed(id: &str, filter: &Filter) {
+    if id != saved_id() {
+        return;
     }
-    spawn_local(async {
-        for _ in 0..20 {
-            dom::sleep_ms(50).await;
-            let Some(doc) = dom::window().document() else { return };
-            let target = doc
-                .query_selector("#needs-you .nrow a.code")
-                .ok()
-                .flatten()
-                .or_else(|| doc.query_selector("#needs-you h2").ok().flatten());
-            if let Some(el) = target.and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
-                let _ = el.focus();
-                el.scroll_into_view();
-                return;
+    if let Some((needs, _)) = HOOK.with(Cell::get) {
+        needs.filter.try_set(filter.clone());
+        needs.source.try_set(Source::Saved);
+    }
+}
+
+/// `g n` and the header's click: the saved filter (read again, so a save
+/// made elsewhere is taken; else the default) put on the nav as `Saved ▾`
+/// puts one — or, the nav holding exactly it, the nav's default — then
+/// focus on the nav's first row. The route stays.
+pub(crate) fn go() {
+    let Some((needs, lens)) = HOOK.with(Cell::get) else { return };
+    spawn_local(async move {
+        reread(needs.filter, needs.source).await;
+        let Some(f) = needs.filter.try_get_untracked() else { return };
+        let said = match plan(&lens.text(Level::Nav), &f.format()) {
+            Go::Apply(_) => {
+                lens.commit(Level::Nav, Some(saved::chosen(f)));
+                format!("\u{201c}{SAVED_NAME}\u{201d} applied")
             }
+            Go::Reset => {
+                lens.reset(Level::Nav);
+                "the nav's default filter".to_string()
+            }
+        };
+        if let Some(s) = saved::hook() {
+            s.say(Level::Nav, said);
         }
+        focus_first_row().await;
     });
 }
 
-/// The header's link: `needs you` and the live count.
+/// The nav's rows.
+const ROWS: &str = "#nav .tree [role=treeitem]";
+
+/// Focus on the nav's first row once the tree is drawn under the new
+/// filter: polled (the tree's answer comes from the server, as the panel's
+/// focus once was), the first visible row focused once it has held still
+/// for three polls — and again, for the rest of the window, if the tree
+/// replaced it and focus fell to nowhere.
+async fn focus_first_row() {
+    let first = || keys::query_all(ROWS).into_iter().find(keys::is_visible);
+    let mut last: Option<web_sys::HtmlElement> = None;
+    let mut still = 0;
+    let mut focused = false;
+    for _ in 0..60 {
+        dom::sleep_ms(50).await;
+        let now = first();
+        still = match (&now, &last) {
+            (Some(a), Some(b)) if a.is_same_node(Some(b)) => still + 1,
+            _ => 0,
+        };
+        last = now.clone();
+        let Some(row) = now else { continue };
+        let lost = dom::window()
+            .document()
+            .and_then(|d| d.active_element())
+            .is_none_or(|a| a.tag_name().eq_ignore_ascii_case("body") || !a.is_connected());
+        if (!focused && still >= 3) || (focused && lost) {
+            keys::focus_and_rove(&keys::query_all(ROWS), &row);
+            focused = true;
+        }
+    }
+}
+
+/// The header's link: `needs you` and the live count; its address is the
+/// nav under the filter (a click toggles it in place).
 #[component]
 pub(crate) fn HeaderLink() -> impl IntoView {
     let needs = use_needs();
     // DESIGN-39: the count ticks when it moves.
     crate::motion::tick_on_change("#needs-link .hbadge", move || needs.count.n());
+    let href = move || format!("#/?n={}", lens::enc(&needs.filter.with(Filter::format)));
     view! {
         <a
             class="hlink"
             id="needs-link"
-            href="#/"
-            title="what waits on you — the Needs you panel on Home (g n)"
+            href=href
+            title=LINK_TITLE
             on:click=move |ev| {
                 ev.prevent_default();
                 go();
@@ -215,222 +305,6 @@ pub(crate) fn HeaderLink() -> impl IntoView {
                 })
             }}
         </a>
-    }
-}
-
-/// The panel, first on Home.
-#[component]
-pub(crate) fn Panel() -> impl IntoView {
-    let needs = use_needs();
-    inputs::want();
-    let held = inputs::signal();
-    let holder = StoredValue::new(cache::Holder::new());
-    // The rows: the matches' ids, in the store's order — `None` until the
-    // first answer for this filter; the server's words when it refused.
-    let ids = RwSignal::new(None::<Vec<String>>);
-    let refused = RwSignal::new(None::<String>);
-    let asked_n = StoredValue::new(0u64);
-    let text = needs.text();
-    let ask = move || {
-        let Some(t) = text.get_untracked() else {
-            ids.set(Some(Vec::new()));
-            return;
-        };
-        let Some(client) = session::client() else { return };
-        let n = asked_n.get_value().wrapping_add(1);
-        asked_n.set_value(n);
-        spawn_local(async move {
-            let answer = client.list_all(None, None, None, None, Some(ROWS_MAX), Some(true), Some(t), None, None, crate::session::tz()).await;
-            if asked_n.try_get_value() != Some(n) {
-                return;
-            }
-            match answer {
-                Ok(events) => {
-                    let mut rows: Vec<TicketSummary> = Vec::new();
-                    let mut why = None;
-                    for ev in events {
-                        match ev {
-                            TicketsEvent::Summary { summary } => rows.push(summary),
-                            TicketsEvent::Error { message } => why = Some(message),
-                            _ => {}
-                        }
-                    }
-                    let order: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
-                    holder.get_value().hold_page(rows);
-                    refused.try_set(why);
-                    ids.try_set(Some(order));
-                }
-                Err(e) => leptos::logging::log!("needs you: {}", session::describe(&e)),
-            }
-        });
-    };
-    // A new filter: asked at once (the watch's `opened` asks again).
-    Effect::new(move |_| {
-        text.track();
-        ids.set(None);
-        ask();
-    });
-    session::follow_membership(move || text.get(), move |ev: &Member| match ev {
-        Member::Refused(why) => {
-            refused.try_set(Some(why.clone()));
-        }
-        _ => ask(),
-    });
-    // ACT-4: a `lagged` on the session's own `watch` — a bulk write's
-    // events (~6 a ticket) outrun it — may have lost the rows' changes
-    // (their statuses, their labels) while the membership watch saw nothing
-    // enter or leave: ask again.
-    let stale = session::stale();
-    Effect::new(move |prev: Option<u32>| {
-        let now = stale.get();
-        if prev.is_some_and(|p| p != now) {
-            ask();
-        }
-        now
-    });
-
-    let editing = RwSignal::new(false);
-    let draft = RwSignal::new(String::new());
-    let problem = RwSignal::new(None::<String>);
-    let busy = RwSignal::new(false);
-    let start = move |_| {
-        draft.set(needs.filter.with_untracked(Filter::format));
-        problem.set(None);
-        editing.set(true);
-    };
-    let save = move || {
-        let parsed = match Filter::parse(draft.get_untracked().trim()) {
-            Ok(f) => f,
-            Err(e) => {
-                problem.set(Some(e.to_string()));
-                return;
-            }
-        };
-        busy.set(true);
-        spawn_local(async move {
-            let done = saved::save_as(parsed.clone(), SAVED_NAME).await;
-            busy.try_set(false);
-            match done {
-                Ok(_) => {
-                    needs.filter.try_set(parsed);
-                    needs.source.try_set(Source::Saved);
-                    editing.try_set(false);
-                }
-                Err(why) => {
-                    problem.try_set(Some(why));
-                }
-            }
-        });
-    };
-
-    let source_words = move || match needs.source.get() {
-        Source::Saved => format!("saved filter \u{201c}{SAVED_NAME}\u{201d}"),
-        Source::Unreadable(why) => format!("the default — the saved filter could not be read: {why}"),
-        Source::Default | Source::Unread => "the default".to_string(),
-    };
-    let count_words = move || needs.count.n().or_else(|| ids.with(|i| i.as_ref().map(Vec::len))).map_or("…".to_string(), |n| n.to_string());
-    let more = move || {
-        let shown = ids.with(|i| i.as_ref().map_or(0, Vec::len));
-        needs.count.n().filter(|n| *n > shown).map(|n| {
-            let href = format!("#/?g={}", js_sys::encode_uri_component(&needs.filter.with(Filter::format)));
-            view! { <p class="nmore"><a href=href>{format!("{} more — on the board", n - shown)}</a></p> }
-        })
-    };
-    let rows = move || {
-        let Some(list) = ids.get() else {
-            return view! { <p class="none loading">"loading…"</p> }.into_any();
-        };
-        if list.is_empty() {
-            return view! { <p class="none nempty">"Nothing needs you."</p> }.into_any();
-        }
-        view! {
-            <ul class="nrows">
-                {list.into_iter().map(|id| row_view(id, held.clone())).collect_view()}
-            </ul>
-        }
-        .into_any()
-    };
-    view! {
-        <section id="needs-you" aria-labelledby="needs-you-h">
-            <div class="nhead">
-                <h2 id="needs-you-h" tabindex="-1">"Needs you"<span class="sep">" · "</span><span class="n">{count_words}</span></h2>
-                <span class="nsrc" title=move || needs.filter.with(Filter::format)>
-                    <code>{move || needs.filter.with(Filter::format)}</code>
-                    " — "{source_words}
-                </span>
-                <button class="hbtn" id="needs-change" on:click=start title="change what Needs you shows — saved as the filter “Needs you”">"change"</button>
-            </div>
-            {move || editing.get().then(|| view! {
-                <form class="nedit" on:submit=move |ev| { ev.prevent_default(); save(); }>
-                    <input
-                        id="needs-filter"
-                        type="text"
-                        aria-label="the filter Needs you shows"
-                        prop:value=move || draft.get()
-                        on:input=move |ev| { draft.set(event_target_value(&ev)); problem.set(None); }
-                        disabled=move || busy.get()
-                    />
-                    <button type="submit" class="hbtn" disabled=move || busy.get()>"save"</button>
-                    <button type="button" class="hbtn" on:click=move |_| draft.set(DEFAULT.to_string())>"default"</button>
-                    <button type="button" class="hbtn" on:click=move |_| editing.set(false)>"cancel"</button>
-                </form>
-            })}
-            {move || problem.get().map(|p| view! { <p class="lproblem" role="alert">{p}</p> })}
-            {move || refused.get().map(|p| view! { <p class="lproblem" role="alert">"The server did not take the filter: "{p}</p> })}
-            {rows}
-            {more}
-        </section>
-    }
-}
-
-/// One row: the ticket, its status, and what it needs.
-fn row_view(id: String, held: ArcRwSignal<Option<inputs::Inputs>>) -> impl IntoView {
-    let href = format!("#/ticket/{id}");
-    let row = {
-        let id = id.clone();
-        Memo::new(move |_| cache::find(&id).map(|r| r.get()))
-    };
-    let questions = {
-        let id = id.clone();
-        Memo::new(move |_| {
-            held.with(|h| {
-                h.as_ref().map(|h| open_of(h.list(), &id).into_iter().map(|i| (i.id.clone(), i.question.clone())).collect::<Vec<_>>())
-            })
-        })
-    };
-    let tid = id.clone();
-    view! {
-        <li class="nrow" data-ticket-id=id.clone()>
-            <div class="nline">
-                <a class="code" href=href.clone()>{id.clone()}</a>
-                <a class="ntitle" href=href>{move || row.with(|r| r.as_ref().map(|t| t.title.clone()).unwrap_or_default())}</a>
-                {move || row.with(|r| r.as_ref().map(|t| {
-                    let st = t.status;
-                    view! { <span class=format!("tag {}", st_class(st.as_str()))>{st.as_str()}</span> }
-                }))}
-                {labels::row_chips(move || row.with(|r| r.as_ref().map(|t| t.labels.clone()).unwrap_or_default()))}
-            </div>
-            {move || {
-                let tid = tid.clone();
-                questions.get().map(|qs| {
-                    (!qs.is_empty()).then(|| view! {
-                        <ul class="nqs">
-                            {qs.into_iter().map(|(input, q)| {
-                                let href = answer_href(&tid, &input);
-                                let q = q.unwrap_or_else(|| format!("#{input}"));
-                                view! {
-                                    <li class="nq" data-input=input.clone()>
-                                        <span class="iq">{q}</span>
-                                        " "
-                                        <a class="nanswer" href=href title="open the ticket at this input, and answer it there">"answer ›"</a>
-                                    </li>
-                                }
-                            }).collect_view()}
-                        </ul>
-                    })
-                })
-            }}
-        </li>
     }
 }
 
@@ -459,7 +333,7 @@ mod tests {
     }
 
     /// The default is the ticket's: MENGER-39: queued, asking, or labelled
-    /// `needs-you` — and it is asked as written.
+    /// `needs-you` — and the count asks it beside `not status Canceled`.
     #[test]
     fn the_default_is_queued_asking_or_needs_you() {
         let f = default_filter();
@@ -497,24 +371,75 @@ mod tests {
         assert_eq!(crate::inspect::anchor(&href), Some(crate::inspect::Anchor::Id("landing".into())));
     }
 
-    /// A row shows its ticket's open inputs only, in order.
-    #[test]
-    fn a_row_shows_its_open_questions() {
-        let mut a = crate::inputs::tests::input("T-1", "a");
-        let mut b = crate::inputs::tests::input("T-1", "b");
-        b.state = InputState::Answered;
-        let c = crate::inputs::tests::input("T-2", "c");
-        a.question = Some("archive or delete?".into());
-        let all = vec![a, b, c];
-        let open: Vec<&str> = open_of(&all, "T-1").into_iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(open, ["a"]);
-        assert!(open_of(&all, "T-3").is_empty());
-    }
-
     #[test]
     fn the_badge_says_how_many() {
         assert_eq!(badge_title(0), "nothing needs you");
         assert_eq!(badge_title(1), "1 ticket needs you");
         assert_eq!(badge_title(7), "7 tickets need you");
+    }
+
+    /// MENGER-43: the nav holds Needs you when its canonical text is the
+    /// filter's — whichever spelling either was written in.
+    #[test]
+    fn applied_is_the_same_canonical_text() {
+        let canon = default_filter().format();
+        assert!(is_applied(&canon, DEFAULT), "the lens's canonical text against the default as written");
+        assert!(is_applied(DEFAULT, &canon));
+        assert!(is_applied("  queued or asking or label needs-you ", DEFAULT));
+        assert!(is_applied("label Needs-You", "label needs-you"), "a label is read in its canonical case");
+        // The nav's default, another filter, or Needs you narrowed is not it.
+        let nav_default = lens::nav_default().filter.format();
+        assert_eq!(nav_default, "not menger doc");
+        assert!(!is_applied(&nav_default, DEFAULT));
+        assert!(!is_applied("", DEFAULT), "every ticket is not Needs you");
+        assert!(!is_applied(&format!("{canon} and kind build"), DEFAULT));
+        assert!(!is_applied("asking", DEFAULT));
+        // A shown display is part of the filter.
+        assert!(!is_applied(&format!("{canon} · flat"), DEFAULT));
+    }
+
+    /// MENGER-43: a press applies the filter (as canonical text); the same
+    /// press on a nav holding it puts the default back.
+    #[test]
+    fn a_press_applies_then_resets() {
+        let canon = default_filter().format();
+        let nav_default = lens::nav_default().filter.format();
+        assert_eq!(plan(&nav_default, DEFAULT), Go::Apply(canon.clone()));
+        assert_eq!(plan("", DEFAULT), Go::Apply(canon.clone()));
+        assert_eq!(plan("kind build", DEFAULT), Go::Apply(canon.clone()), "the nav's own clauses are replaced, as Saved ▾ replaces them");
+        assert_eq!(plan(&canon, DEFAULT), Go::Reset);
+        // A saved filter's text is applied, not the count's wire text.
+        let saved = "label needs-you or label blocked";
+        let applied = match plan(&nav_default, saved) {
+            Go::Apply(t) => t,
+            Go::Reset => panic!("not held yet"),
+        };
+        assert_eq!(applied, Filter::parse(saved).unwrap().format());
+        assert!(!applied.contains("Canceled"));
+        assert_eq!(plan(&applied, saved), Go::Reset);
+        // Applied, read back as the lens reads `n=`: still held.
+        let read = lens::kept_of(&applied, &[], Level::Nav).expect("reads").filter.format();
+        assert_eq!(plan(&read, saved), Go::Reset);
+    }
+
+    /// MENGER-43: the nav shows `global and nav` (FILTER-21) — under a
+    /// global filter of one shortcode, Needs you admits only what both
+    /// admit, as the lens's effective filter composes them.
+    #[test]
+    fn the_global_filter_narrows_needs_you() {
+        let global = Filter::parse("in T").expect("parses");
+        let effective = global.and(&default_filter());
+        let mut there = facts(true, &[]);
+        assert!(effective.matches(&there), "asking, in T");
+        there.labels = vec!["needs-you".into()];
+        there.asking = false;
+        assert!(effective.matches(&there), "labelled, in T");
+        let mut elsewhere = facts(true, &["needs-you"]);
+        elsewhere.id = "U-1".into();
+        elsewhere.epic = "U".into();
+        elsewhere.lineage = vec!["U-1".into(), "U".into()];
+        assert!(default_filter().matches(&elsewhere), "Needs you alone admits it");
+        assert!(!effective.matches(&elsewhere), "the global filter takes it out");
+        assert!(!effective.matches(&facts(false, &[])), "in T, waiting on no one");
     }
 }

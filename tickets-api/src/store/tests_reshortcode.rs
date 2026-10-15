@@ -345,3 +345,24 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
     assert_eq!(again.get("PAL-3").await.unwrap().blocked_by, ["PAL-2"]);
     assert_eq!(again.get("AREA-3").await.unwrap().commits, ["abcdef1"]);
 }
+
+/// ORG-4: a move keeps a ticket in its organization, and `to` is read in the
+/// caller's organizations — a code two of them hold is refused, naming both,
+/// for a caller in both; one in the other's alone is not its to name.
+#[tokio::test]
+async fn a_move_keeps_its_organization_and_to_is_read_in_the_callers() {
+    let store = store().await;
+    store.create_org("acme", None).await.unwrap();
+    store.create(new("acme:N", "acme's n", Kind::Scope, None)).await.unwrap();
+    let hyper = vec![crate::address::OrgId::hypermemetic()];
+    let both = vec![crate::address::OrgId::hypermemetic(), crate::address::OrgId::new("acme").unwrap()];
+    // Across organizations: refused.
+    let e = store.reshortcode(ask(&["M-2"], "acme:N")).await.unwrap_err();
+    assert!(refused(e)["M-2"].contains("a move keeps a ticket in its organization"));
+    // `N` for a caller in both: two shortcodes, refused naming each.
+    let e = store.reshortcode(Reshortcode { orgs: Some(both), ..ask(&["M-2"], "N") }).await.unwrap_err();
+    assert!(matches!(&e, StoreError::Ambiguous { candidates, .. } if candidates.len() == 2), "{e:?}");
+    // In hypermemetic alone: its own N.
+    let r = store.reshortcode(Reshortcode { orgs: Some(hyper), ..ask(&["M-2"], "N") }).await.unwrap();
+    assert_eq!(r.moves[0].to, "N-3");
+}

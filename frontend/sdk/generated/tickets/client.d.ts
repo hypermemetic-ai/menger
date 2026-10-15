@@ -17,7 +17,7 @@ export interface TicketsClient {
     /** Each shortcode's number of tickets matching a filter, in shortcode order — the filtered extents (every ticket without one) */
     counts(filter?: string | null, keep?: string | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
     /** Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc */
-    create(epic: string, title: string, blockedBy?: string[] | null, body?: string | null, kind?: string | null, parent?: string | null, path?: string | null, severity?: string | null): AsyncGenerator<TicketsEvent>;
+    create(epic: string, title: string, blockedBy?: string[] | null, body?: string | null, kind?: string | null, org?: string | null, parent?: string | null, path?: string | null, severity?: string | null): AsyncGenerator<TicketsEvent>;
     /** Delete tickets for good (admin): refused while children, blockers, a shortcode, a component, a theme or a live input point at one, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones } */
     delete(children?: string | null, filter?: string | null, ids?: string[] | null, max?: number | null, message?: string | null, tz?: string | null, unblock?: boolean | null): AsyncGenerator<TicketsEvent>;
     /** Each shortcode's last sequence (a deleted ticket's too: numbers are never reused) and the holes below it, in shortcode order — where each shortcode ends in the store's order */

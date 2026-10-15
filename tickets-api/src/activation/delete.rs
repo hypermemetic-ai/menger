@@ -73,7 +73,7 @@ pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<Caller, String
         let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
         match store.undelete_by(&ids, act, may).await {
             Ok(Undeleted { ids, tickets }) => yield TicketsEvent::Undeleted { ids, tickets },
-            Err(e) => yield refusal(e),
+            Err(e) => yield veiled(&caller, e),
         }
     }
 }
@@ -82,7 +82,7 @@ pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<Caller, String
 pub(super) fn reshortcode_stream(
     store: Arc<Store>,
     admitted: Result<Caller, String>,
-    ask: Reshortcode,
+    mut ask: Reshortcode,
     message: Option<String>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
@@ -93,6 +93,8 @@ pub(super) fn reshortcode_stream(
                 return;
             }
         };
+        // ORG-4: the ids, `to` and `parent` read in the caller's organizations.
+        ask.orgs = caller.orgs();
         let sight = sight_lens(&caller).ok().flatten();
         let (gate, at) = (caller.clone(), store.clone());
         let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);

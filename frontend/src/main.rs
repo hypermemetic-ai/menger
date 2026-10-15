@@ -292,6 +292,8 @@ mod queue;
 mod mermaid;
 mod motion;
 mod needs;
+// ORG-4: the organizations held, and the header's switcher.
+mod orgs;
 mod registry;
 mod rowclick;
 mod saved;
@@ -2143,7 +2145,7 @@ fn App() -> impl IntoView {
     // FILTER-6: saved filters — each level's `Saved ▾` and Save as….
     saved::Saved::new(lens);
     // MENGER-12: Needs you — its saved filter and its live count, for the
-    // header's link and Home's panel.
+    // header's link; MENGER-43: `g n` puts it on the nav.
     needs::NeedsYou::install();
     // MENGER-39: a hidden tab's title carries the queue's count.
     queue::install_title();
@@ -2294,6 +2296,9 @@ fn App() -> impl IntoView {
                     // DESIGN-38: the wordmark — the carpet in the lifecycle's
                     // colours, then the name in the display face.
                     <h1><a href="#/" class="wordmark"><carpet::Carpet class="mark" /><span>"menger"</span></a></h1>
+                    // ORG-4: the organization every page reads within — when
+                    // the reader holds more than one.
+                    <orgs::OrgSwitcher />
                     // DESIGN-38: the board and a ticket, the bar's first word.
                     <a
                         class="hlink"
@@ -2466,8 +2471,9 @@ fn App() -> impl IntoView {
                                 view! { <signin::Checking /> }.into_any()
                             }
                         }
-                        // MENGER-12: Needs you, first thing on Home.
-                        Route::Board => view! { <needs::Panel /> <Board board last_error viewport /> }.into_any(),
+                        // MENGER-43: Home is the board — Needs you is a
+                        // filter on the nav (`g n`, src/needs.rs).
+                        Route::Board => view! { <Board board last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
                         }

@@ -103,6 +103,21 @@
         "title"
       ]
     },
+    "orgs": {
+      "create": [
+        "admin",
+        "name"
+      ],
+      "delete": [
+        "name"
+      ],
+      "list": [],
+      "rename": [
+        "name",
+        "to"
+      ],
+      "schema": []
+    },
     "session": {
       "login": [
         "scope",
@@ -171,6 +186,7 @@
         "body",
         "epic",
         "kind",
+        "org",
         "parent",
         "path",
         "severity",

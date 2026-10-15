@@ -14,6 +14,7 @@
 //! | `admin` | also grant and revoke roles on the scope |
 //! | `deployer` | read under the scope, and record its deployments — a CI's key (DEPLOY-14) |
 
+use crate::address::{Address, OrgId, ShortcodeId};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -67,18 +68,92 @@ impl FromStr for Role {
 /// Every ticket: the scope a grant names to cover all of them.
 pub const EVERYWHERE: &str = "*";
 
-/// A scope as stored: `*`, or a shortcode in upper case. Anything else is
-/// refused.
+/// ORG-4: a grant's scope as stored (ACCESS-37's grammar) — `*`; an
+/// organization, `org:`, every ticket in it; or a shortcode in one,
+/// `org:ID`, by the shortcode's identity ([`ShortcodeId`]: its code for
+/// every shortcode made before ORG-3, `CODE.N` for a namesake), covering
+/// it and every shortcode hosted under it. A reader writes a shortcode by
+/// any short form of its address (`acme:MENGER/THEME`, `IDENTITY`); the
+/// store keeps it by identity, so a grant follows its shortcode wherever
+/// its root moves, and an org's rename rewrites the org part.
+///
+/// ACCESS-21 adds the last two of ACCESS-37's forms — `under ID` (a ticket
+/// and its subtree) and `ID` (one ticket) — as variants here: every place
+/// that reads a scope matches on this enum, so a new form does not compile
+/// until each says what it means.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Scope {
+    Everywhere,
+    Org(OrgId),
+    Shortcode { org: OrgId, id: ShortcodeId },
+}
+
+impl Scope {
+    /// A stored scope's text read back — `None` for text that is not one
+    /// (a grant from before ORG-4, `IDENTITY`, which the first open
+    /// rewrites as `hypermemetic:IDENTITY`).
+    pub fn stored(text: &str) -> Option<Self> {
+        let t = text.trim();
+        if t == EVERYWHERE {
+            return Some(Self::Everywhere);
+        }
+        let (org, rest) = t.split_once(':')?;
+        let org = OrgId::new(org).ok()?;
+        if rest.is_empty() {
+            return Some(Self::Org(org));
+        }
+        let ok = rest.len() <= 48 && rest.split('.').next().is_some_and(|c| !c.is_empty())
+            && rest.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'.');
+        ok.then(|| Self::Shortcode { org, id: ShortcodeId::new(rest) })
+    }
+
+    /// The text it is stored as, and the gate compares.
+    pub fn text(&self) -> String {
+        match self {
+            Self::Everywhere => EVERYWHERE.to_string(),
+            Self::Org(org) => format!("{org}:"),
+            Self::Shortcode { org, id } => format!("{org}:{id}"),
+        }
+    }
+
+    /// The organization it is inside — `None` for `*`.
+    pub fn org(&self) -> Option<&OrgId> {
+        match self {
+            Self::Everywhere => None,
+            Self::Org(org) | Self::Shortcode { org, .. } => Some(org),
+        }
+    }
+}
+
+impl fmt::Display for Scope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text())
+    }
+}
+
+/// A scope as a reader writes it, checked for its spelling only: `*`, an
+/// organization (`acme:`), or a shortcode by any short form of its address
+/// (`acme:MENGER/THEME`, `MENGER/THEME`, `IDENTITY`) — its codes upper
+/// case. ORG-4: which shortcode it names, and in which organization, is
+/// the store's to say ([`crate::store::Store::scope_named`]), which keeps
+/// it as a [`Scope`]. Anything else is refused.
 pub fn scope_of(text: &str) -> Result<String, String> {
     let t = text.trim();
     if t == EVERYWHERE {
         return Ok(t.to_string());
     }
-    let ok = !t.is_empty() && t.len() <= 32 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if ok {
-        Ok(t.to_ascii_uppercase())
-    } else {
-        Err(format!("`{t}` is not a scope: a shortcode (e.g. IDENTITY) or `*`"))
+    let refused = || {
+        format!("`{t}` is not a scope: `*`, an organization (`acme:`), or a shortcode in one (`acme:MENGER`, or `IDENTITY` where one organization has it)")
+    };
+    if let Some(org) = t.strip_suffix(':') {
+        return OrgId::new(org).map(|o| format!("{o}:")).map_err(|_| refused());
+    }
+    if Scope::stored(t).is_some_and(|s| matches!(s, Scope::Shortcode { .. })) {
+        return Ok(t.to_string());
+    }
+    match Address::parse(t) {
+        Ok(a) if !a.names_ticket() && t.len() <= 160 => Ok(a.to_string()),
+        _ => Err(refused()),
     }
 }
 
@@ -87,7 +162,8 @@ pub fn scope_of(text: &str) -> Result<String, String> {
 pub struct Grant {
     /// The Plexus principal: `idp:<uuid>`, `oidc:<provider>/<sub>`, `nostr:<hex>`.
     pub principal: String,
-    /// A shortcode, or `*`.
+    /// ORG-4: `*`, an organization (`acme:`), or a shortcode in one
+    /// (`acme:MENGER`, by its identity) — a [`Scope`]'s text.
     pub scope: String,
     pub role: Role,
     /// The principal who granted it, or `--admin` for the operator's.
@@ -136,8 +212,23 @@ mod tests {
     fn a_scope_is_a_shortcode_or_everywhere() {
         assert_eq!(scope_of("identity").unwrap(), "IDENTITY");
         assert_eq!(scope_of("*").unwrap(), "*");
-        for bad in ["", "a b", "x)", "under X", &"A".repeat(33)] {
+        for bad in ["", "a b", "x)", "under X", &"A".repeat(33), "IDENTITY-3", "Acme:", "acme:MENGER-1"] {
             assert!(scope_of(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn org_4_a_scope_names_an_org_or_a_shortcode_in_one() {
+        assert_eq!(scope_of("acme:").unwrap(), "acme:");
+        assert_eq!(scope_of("acme:menger/theme").unwrap(), "acme:MENGER/THEME");
+        assert_eq!(scope_of("hypermemetic:MENGER.12").unwrap(), "hypermemetic:MENGER.12");
+        assert_eq!(Scope::stored("*"), Some(Scope::Everywhere));
+        assert_eq!(Scope::stored("acme:"), Some(Scope::Org(OrgId::new("acme").unwrap())));
+        let sc = Scope::stored("hypermemetic:THEME.62").unwrap();
+        assert_eq!((sc.text(), sc.org().map(OrgId::as_str)), ("hypermemetic:THEME.62".to_string(), Some("hypermemetic")));
+        // A grant from before ORG-4, and anything that is no stored form.
+        for old in ["IDENTITY", "acme:menger", "acme:MENGER/THEME", "Acme:"] {
+            assert_eq!(Scope::stored(old), None, "{old}");
         }
     }
 }

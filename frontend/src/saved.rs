@@ -568,7 +568,7 @@ async fn amend(client: &session::Client, id: &str, title: Option<String>, body: 
 /// `create { epic, title, kind: doc, body, parent, path }`.
 async fn create_doc(client: &session::Client, title: &str, body: String, parent: &str, path: Option<String>) -> Result<Ticket, String> {
     let events = client
-        .create_all(EPIC.into(), title.into(), Some("doc".into()), None, None, Some(body), Some(parent.into()), path)
+        .create_all(EPIC.into(), title.into(), Some("doc".into()), None, None, Some(body), Some(parent.into()), path, None)
         .await
         .map_err(|e| session::describe(&e))?;
     ticket_of(events).map_err(|m| format!("create: {m}"))
@@ -625,6 +625,8 @@ async fn save(filter: Filter, name: String, replace: bool) -> Result<(Entry, Vec
         Plan::Replace(e) => with_renamed(&view.body, &e.id, &e.name).unwrap_or_else(|| view.body.clone()),
     };
     let after = if next != view.body { amend(&client, &view.id, None, Some(next)).await.map_err(failed)?.body } else { view.body };
+    // MENGER-43: Needs you's count follows a save of its filter.
+    crate::needs::saved_changed(&entry.id, &filter);
     Ok((entry, entries(&after)))
 }
 
@@ -656,8 +658,8 @@ async fn remove(id: String) -> Result<Vec<Entry>, String> {
 }
 
 /// MENGER-12: the filter `id`'s doc holds, or `None` while nothing is saved
-/// under it — Home's "Needs you" reads its saved filter this way, and falls
-/// back to its default.
+/// under it — Needs you reads its saved filter this way (MENGER-43: on every
+/// `g n` too), and falls back to its default.
 pub(crate) async fn load_if_saved(id: &str) -> Result<Option<Filter>, String> {
     let client = connected()?;
     let address = address_of(id);
@@ -668,8 +670,7 @@ pub(crate) async fn load_if_saved(id: &str) -> Result<Option<Filter>, String> {
 }
 
 /// MENGER-12: Save as… `name` with `filter`, replacing what that name holds —
-/// the entry saved. Home's "Needs you" saves its filter through here, so it
-/// is one of the saved filters (`Saved ▾` lists it, any level applies it).
+/// the entry saved (FILTER-27's `keep`).
 pub(crate) async fn save_as(filter: Filter, name: &str) -> Result<Entry, String> {
     save(filter, name.to_string(), true).await.map(|(e, _)| e).map_err(|f| match f {
         Failure::Refused(r) => r.words(),
@@ -736,6 +737,17 @@ pub(crate) struct Saved {
     flashes: StoredValue<u32>,
 }
 
+thread_local! {
+    /// MENGER-43: the app's saved filters, for `g n` (a key, outside any
+    /// view).
+    static HOOK: std::cell::Cell<Option<Saved>> = const { std::cell::Cell::new(None) };
+}
+
+/// The app's saved filters, from anywhere (`None` before the App made them).
+pub(crate) fn hook() -> Option<Saved> {
+    HOOK.with(std::cell::Cell::get)
+}
+
 /// The app's saved filters.
 pub(crate) fn use_saved() -> Saved {
     use_context::<Saved>().expect("saved filters are provided by the App")
@@ -799,6 +811,7 @@ impl Saved {
             }
         });
         provide_context(s);
+        HOOK.with(|h| h.set(Some(s)));
         s
     }
 
@@ -843,7 +856,9 @@ impl Saved {
         }
     }
 
-    fn say(self, level: Level, words: String) {
+    /// Words flashed beside `level`'s `Saved ▾` — MENGER-43's `g n` says
+    /// what it applied there too.
+    pub(crate) fn say(self, level: Level, words: String) {
         let n = self.flashes.get_value() + 1;
         self.flashes.set_value(n);
         self.flash.set(Some((level, words)));

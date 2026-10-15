@@ -21,6 +21,7 @@ const BUDGETS: &[(&str, usize)] = &[
     ("tickets-api/src/comments_activation.rs", 450),
     ("tickets-api/src/notes_activation.rs", 330),
     ("tickets-api/src/members_activation.rs", 280),
+    ("tickets-api/src/orgs_activation.rs", 240),
     ("tickets-api/src/session_activation.rs", 250),
     ("diagrams/src/activation.rs", 140),
     ("plexus-shell/toy/src/lib.rs", 60),

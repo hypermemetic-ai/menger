@@ -228,11 +228,16 @@ impl Table {
         if map.len() < self.cap {
             return;
         }
-        let mut per_agg: HashMap<u64, usize> = HashMap::new();
+        // ACCESS-45: the top neighbourhood is the largest, and among equals
+        // the one most recently active — a spread flood is the newest, so a
+        // tie never falls to an owner's older network by the map's order.
+        let mut per_agg: HashMap<u64, (usize, i64)> = HashMap::new();
         for e in map.values() {
-            *per_agg.entry(e.agg).or_default() += 1;
+            let slot = per_agg.entry(e.agg).or_insert((0, i64::MIN));
+            slot.0 += 1;
+            slot.1 = slot.1.max(e.last());
         }
-        let top = per_agg.into_iter().max_by_key(|&(_, n)| n).map(|(a, _)| a).unwrap_or(0);
+        let top = per_agg.into_iter().max_by_key(|&(a, (n, last))| (n, last, a)).map(|(a, _)| a).unwrap_or(0);
         // Unlocked from the top neighbourhood, then unlocked anywhere, then
         // the top neighbourhood's locks, then anything — **newest first**
         // (AUTH-26 R3): a flood is the newest, and an owner's remembered

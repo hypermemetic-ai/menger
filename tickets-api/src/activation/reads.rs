@@ -16,15 +16,17 @@ pub(super) fn get_stream(store: Arc<Store>, admitted: Result<Caller, String>, id
                 return;
             }
         };
-        if caller.require(&[id.as_str()], &store).is_err() {
+        // ORG-4: a short form read in the caller's organizations.
+        let named = named_in(&store, &caller, id.clone());
+        if caller.require(&[named.as_str()], &store).is_err() {
             yield TicketsEvent::NotFound { id };
             return;
         }
-        match store.get(&id).await {
+        match store.get(&named).await {
             Ok(ticket) => yield TicketsEvent::Ticket { ticket },
             // ACT-5: a deleted ticket answers its tombstone.
             Err(StoreError::NotFound(_)) => yield store.tombstone(&id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
-            Err(e) => yield refusal(e),
+            Err(e) => yield veiled(&caller, e),
         }
     }
 }
@@ -62,7 +64,7 @@ pub(super) fn blockers_stream(store: Arc<Store>, admitted: Result<Caller, String
                 }
             }
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-            Err(e) => yield refusal(e),
+            Err(e) => yield veiled(&caller, e),
         }
     }
 }
@@ -107,7 +109,7 @@ pub(super) fn history_stream(store: Arc<Store>, admitted: Result<Caller, String>
                 yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable, status_since_unix, status_since_exact, deletions: h.deletions };
             }
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-            Err(e) => yield refusal(e),
+            Err(e) => yield veiled(&caller, e),
         }
     }
 }

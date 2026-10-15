@@ -443,19 +443,24 @@ their set of labels — answered from the cells on every filtered read and on
 `labels` columns: a form-9 (or older) file is built again once on first
 open, and an older build cannot open it after.
 
-**Needs you** (MENGER-12): the first thing on Home is a panel of what
-waits on the owner — the live result of the saved filter named "Needs you"
+**Needs you** (MENGER-12, MENGER-43) is a filter on the nav: what waits
+on the owner is the saved filter named "Needs you"
 (`VIEW/_MENGER/view/needs-you`; until one is saved, the default
-`(queued or asking or label needs-you)` — MENGER-39's queue first). Its header says "Needs you · N", and the
-header nav's **needs you N** link goes to it; each row is the ticket (id,
-title, status chip, label chips) and what it needs: each open input's
-question, with **answer ›** opening the ticket's frame at that input. It
-follows `watch` (`entered` / `left` / `recount` for its filter,
-`input_changed`, `labels_changed`), so an answer or a label in another
-window moves it at once; with nothing waiting it says "Nothing needs you."
-**change** edits its filter and saves it under that name — an ordinary
-saved filter, in `Saved ▾` at every level. `g n` focuses it (listed in
-`?`). Labels are chips on every row (board, nav, flat, wave cards) and on
+`(queued or asking or label needs-you)` — MENGER-39's queue first). `g n`,
+or a click on the header's **needs you N**, puts it on the nav exactly as
+`Saved ▾` puts a saved filter there (the nav's own clauses replaced; its
+pills, its text and the URL's `n=` following), focuses the nav's first row,
+and leaves the route where it is. The nav shows `global and nav`
+(FILTER-21), so the global filter reaches it: filtered to one shortcode,
+the nav shows what waits on the owner there. The same press while the nav
+holds exactly that filter puts the nav's default back. The header's count
+is the saved filter's, live (`entered` / `left` / `recount` of a membership
+watch), whatever the lens holds. The filter is changed as any saved filter
+is — apply it, edit the pills, **Save as…** "Needs you" (replace); the next
+`g n` applies the new text. The questions are where they are answered: the
+ticket page (its frame scrolls to the input), `#/inputs`, and the tray for
+a queued ticket. Home is the board; MENGER-12's panel, which answered to
+no filter, is gone. Labels are chips on every row (board, nav, flat, wave cards) and on
 the ticket page, where an editor adds and removes them; the menus offer
 **Asking** (yes / no) and **Label** (a value per label, with `facets`'
 counts), and the palette takes `filter <text>` — `filter label needs-you`,
@@ -863,9 +868,9 @@ call that moves nothing answers `labels_changed` with `added: []` and
 `removed: []` and writes nothing; an entry that is not a label (or a result
 past 16) is one in-band `error` naming it, and nothing is written. Labelling
 moves `updated_unix` and the ticket's cell (`label <name>`), nothing else.
-**`needs-you`** is the label that puts a ticket in front of the owner: Home's
-"Needs you" panel shows every ticket labelled `needs-you` beside every
-ticket `asking`. A database written before MENGER-12 gains the `labels`
+**`needs-you`** is the label that puts a ticket in front of the owner: the
+Needs you filter (`g n` puts it on the nav) admits every ticket labelled
+`needs-you` beside every ticket `asking` and queued. A database written before MENGER-12 gains the `labels`
 column on first open, durably — `ADD COLUMN … DEFAULT '[]'`, instant at any
 size.
 
@@ -1780,6 +1785,84 @@ every ticket's shortcode registered, no two of one code in one namespace,
 each stored host where its root hangs, every full address distinct, every
 pin a ticket or a tombstone.
 
+### Organizations (ORG-4)
+
+Every ticket and every shortcode is in exactly one **organization**;
+today's tracker is `hypermemetic` (ORG-1). Owner, 2026-10-13: *"we need to
+be able to easily create new orgs and scope roles to them."* An
+organization is a name — lower-case letters, digits and `-`, unique
+app-wide among every name an organization has or had — and one call to
+make (the `orgs` activation; its logic is `tickets-api/src/store/orgs.rs`):
+
+| method | who | yields |
+|---|---|---|
+| `orgs.list {}` | any member (viewer, editor) | one `org { name, aliases, roots, shortcodes, tickets }` per organization the caller holds a role in — every one for a role on `*`, and with login off |
+| `orgs.create { name, admin? }` | admin on `*` | `created { org, admin }`: the organization, empty, and `admin`'s grant of admin on `name:` (in one transaction) |
+| `orgs.rename { name, to }` | admin on the org, or on `*` | `renamed { from, org }`: the old name becomes an alias — every address and grant scope written with it keeps resolving; every grant on the org and every full address moves to the new name |
+| `orgs.delete { name }` | admin on the org, or on `*` | `deleted { name, grants }` — refused while it holds a shortcode (a ticket, or a deleted ticket kept for its undo), and for the first organization; its grants go with it |
+
+An organization the caller holds no role in is `not_found` to it (never
+refused by name). Tickets go into one by their address — `--epic acme:MENGER`
+— or by `tickets.create --org acme`; with neither, a create goes to the
+caller's **only** organization, and is refused, naming them, when it holds
+roles in several and the epic names no shortcode in exactly one of them. A
+new root in an organization takes `tickets.create` on it (`acme:`), not on
+`*`. Login off: one organization, as before, and nothing needs naming.
+
+```sh
+synapse -P 4460 -t "$ADMIN" menger orgs create --name acme --admin key:9f86…
+synapse -P 4460 -t "$ACME" menger tickets create --epic MENGER --kind scope --title "acme's menger"   # acme:MENGER-1
+synapse -P 4460 -t "$ACME" menger members grant --principal key:4b… --scope acme: --role editor
+synapse -P 4460 -t "$ACME" menger members grant --principal key:4b… --scope acme:MENGER --role viewer
+synapse -P 4460 -t "$ADMIN" menger orgs rename --name acme --to acme-co
+```
+
+**A grant's scope** (ACCESS-37's grammar, stored as text in `members`):
+`*` — every ticket; `org:` — every ticket in that organization; `org:ID` —
+a shortcode in it, by its identity (`hypermemetic:IDENTITY`,
+`acme:MENGER.12` for a namesake), and every shortcode hosted under it. A
+reader writes a shortcode by any short form of its address (`IDENTITY`,
+`acme:MENGER/THEME`), and `members.grant` / `auth.grant` keep it by
+identity, so a grant follows its shortcode wherever its root moves.
+ACCESS-21 adds `under ID` and `ID` (`members::Scope`, one variant each). An
+org admin (admin on `acme:`) grants and revokes inside acme and nowhere
+else; `members.list` shows them acme's grants.
+
+**What a reader sees.** A reader holds roles in some organizations; every
+read answers from where its grant is held, as before — `under acme:` is the
+filter language's every ticket in acme (bound to its roots), so another
+organization's tickets, shortcodes, counts and groups are not in the
+answer, and `get` of one is `not_found`. A short form is read in the
+reader's organizations: `get --id MENGER-2` by a reader of acme alone is
+acme's MENGER-2 even where hypermemetic's is pinned to the same text; an
+`ambiguous` answer names only candidates in the reader's organizations
+(none left: `not_found`). The gate decides a **write** before the method
+reads anything, from the whole store, so a short form there must fit one
+ticket (`acme:MENGER-2` always does); a write on another organization's
+ticket is refused naming the ticket as written — the same words as for a
+ticket that does not exist (`needs tickets.set_status on PLEXUS-2`).
+
+**Where a target lives** (the gate's `Resolve::chain`): the ticket as
+written, its shortcode `org:ID` and bare `ID`, itself and its ancestors,
+each hosting shortcode the same way, and last its organization, `org:` —
+so a membership on `acme:` reaches every ticket in acme, and a session's
+ceiling minted before ORG-4 (`editor@IDENTITY`) still holds.
+
+**Migration.** No stored form moves (ORG-3's form 11 made `orgs`); the file
+gains `org_aliases` beside it. The first open by this build moves every
+grant from before organizations into its own — `IDENTITY` becomes
+`hypermemetic:IDENTITY`, `*` stays site-wide — durably, once (`ORG-4:
+moved N grant(s) …`). An older build reads the moved grants as scopes it
+cannot place: it holds them nowhere (fail closed); promote's rollback
+restores the backup it took first.
+
+**In the app**: the header shows an organization switcher when the reader
+holds roles in more than one; the URL carries the choice (`o=acme`, carried
+from route to route as `g=` is, and kept per viewer), and every surface the
+lens filters reads within it (`under acme:` ANDed into each level's
+effective filter: the board, the nav, the wave boards, the inputs page, the
+palette).
+
 ### Search (SEARCH-2)
 
 `find` jumps to a ticket by its id or title; **`search`** looks inside
@@ -1930,8 +2013,8 @@ when history began). In the nav a canceled ticket is drawn closed with its
 count ("3 hidden"); its descendants are not shown under it unless the reader
 opens it there (for this view only) or the open ticket is below it. `under
 X` still finds them everywhere. The board draws done-with rows (complete,
-superseded, canceled) quieter. Needs you never shows a canceled ticket
-(`not status Canceled` beside its filter).
+superseded, canceled) quieter. Needs you's count never counts a canceled
+ticket (`not status Canceled` beside its filter).
 
 **Filtering by history.** The language has four more predicates, answered
 from the log's kept indexes (each status's entries and exits, every
@@ -2083,8 +2166,8 @@ A `close_input` of the input an entry names takes it out in the same write:
 system`. `watch` carries `queued`, `unqueued` and `snoozed` as they happen.
 `queued` and `queued <urgency>` are filter cells (FILTER-3's language),
 answered from the queue's kept entries — a snoozed ticket is still queued —
-on every filtered read and watch; Home's Needs you is `queued or asking or
-label needs-you`. `history { id }` yields the ticket's **queue records**
+on every filtered read and watch; the Needs you filter (`g n`, on the nav)
+is `queued or asking or label needs-you`. `history { id }` yields the ticket's **queue records**
 after its transitions — `queue_record { record }`: `action` (queued,
 raised, requeued, snoozed, unqueued, closed), `urgency`, `reason`, `input`,
 `actor`, `name`, `source`, `at_unix`, `until_unix` for a snooze. They are a
@@ -2744,7 +2827,8 @@ With login on, **menger's own members** decide what each person sees and
 changes. The IdP only proves who someone is. A grant gives a principal a
 role on a **scope**: a shortcode, which covers the shortcodes hosted under
 it (the filter language's `under`, so a grant on PLEXUS reaches IDENTITY),
-or `*`.
+or `*`. ORG-4: or an organization (`acme:`), and a shortcode is kept in its
+organization (`hypermemetic:PLEXUS`) — "Organizations" above.
 
 | role | may |
 |---|---|
@@ -2843,9 +2927,9 @@ activation — every method answers everyone, as before; schemas only gain
 
 | role | its grants (declared with `roles(...)` on each activation) |
 |---|---|
-| `viewer` | the reads: `tickets.{health, get, list, ready_set, find, search, member, groups, components, inputs, extents, counts, facets, tree, waves, blockers, watch, history}`, `comments.{add, list, watch}` |
+| `viewer` | the reads: `tickets.{health, get, list, ready_set, find, search, member, groups, components, inputs, extents, counts, facets, tree, waves, blockers, watch, history}`, `comments.{add, list, watch}`, `orgs.list` (ORG-4) |
 | `editor` | viewer's, and the writes: `tickets.{create, set_status, set_kind, set_parent, amend, link_commits, unlink_commits, label, update, update_many, reshortcode, answer, clear_answer, close_input, reopen_input}`, `comments.{resolve, reopen}` |
-| `admin` | every grant (built in): `tickets.{delete, undelete}` (ACT-5), `members.{list, grant, revoke, requests}`, `auth.{roles, role_set, grant, revoke, waiting}` |
+| `admin` | every grant (built in): `tickets.{delete, undelete}` (ACT-5), `members.{list, grant, revoke, requests}`, `orgs.{create, rename, delete}` (ORG-4), `auth.{roles, role_set, grant, revoke, waiting}` |
 | any signed-in caller | `session.*`, `members.mine`, `auth.{whoami, logout, requires}` |
 
 A **write's target** is the ticket it acts on (`id`, or `ticket` for an

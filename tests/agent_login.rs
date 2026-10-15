@@ -207,7 +207,8 @@ async fn a_scope_is_a_ceiling_on_every_check() {
     // The boss's key is admin on *; its session asked editor on A writes
     // only in A (C is hosted under A-1), and administers nothing.
     let scoped = login(&boss, json!({ "scope": ["editor@A"] })).await;
-    assert_eq!(scoped["scope"], json!(["editor@A"]));
+    // ORG-4: kept as the store keeps a scope — the shortcode in its org.
+    assert_eq!(scoped["scope"], json!(["editor@hypermemetic:A"]));
     let s = bearer(port, scoped["token"].as_str().unwrap()).await;
     assert_eq!(amend(&s, "A-2").await["type"], "amended");
     assert_eq!(amend(&s, "C-2").await["type"], "amended", "C is hosted under A");
@@ -215,11 +216,12 @@ async fn a_scope_is_a_ceiling_on_every_check() {
     // AUTH-7: the gate's typed refusal, where IDENTITY-42 said "needs editor on B".
     assert_eq!(
         (no["error_kind"].as_str(), no["grant"].as_str(), no["scope"].as_str()),
-        (Some("forbidden"), Some("tickets.amend"), Some("B")),
+        (Some("forbidden"), Some("tickets.amend"), Some("B-2")),
         "{no}"
     );
-    assert_eq!(no["message"], "needs tickets.amend on B", "{no}");
-    assert_eq!(no["held_on"], json!(["A"]), "held on A, within the session's editor@A: {no}");
+    // ORG-4: the ticket as written — the same words for one out of reach as for none.
+    assert_eq!(no["message"], "needs tickets.amend on B-2", "{no}");
+    assert_eq!(no["held_on"], json!(["hypermemetic:A"]), "held on A, within the session's editor@A: {no}");
     assert_eq!(one(&s, "tickets.get", json!({ "id": "B-2" })).await["type"], "not_found", "B is out of sight");
     let all = call(&s, "tickets.list", json!({})).await;
     let listed: Vec<String> = all.iter().filter_map(|e| e["ticket"]["id"].as_str().or(e["summary"]["id"].as_str()).map(str::to_string)).collect();
@@ -239,7 +241,7 @@ async fn a_scope_is_a_ceiling_on_every_check() {
     assert_eq!(amend(&w, "A-2").await["type"], "amended");
     assert_eq!(amend(&w, "B-2").await["type"], "error", "never wider than the session it came from");
     let inherited = login(&s, json!({})).await;
-    assert_eq!(inherited["scope"], json!(["editor@A"]));
+    assert_eq!(inherited["scope"], json!(["editor@hypermemetic:A"]));
     assert_eq!(amend(&bearer(port, inherited["token"].as_str().unwrap()).await, "B-2").await["type"], "error");
 
     // The boss's own unscoped session is admin everywhere.

@@ -74,6 +74,10 @@ pub struct Reshortcode {
     pub parent: Option<String>,
     /// Each one's descendants in its own shortcode move with it.
     pub with_children: bool,
+    /// ORG-4: the organizations the caller holds a role in — where `ids`,
+    /// `to` and `parent` are read (a short form fitting two refused, as
+    /// ORG-4's resolver does); `None`: every one.
+    pub orgs: Option<Vec<crate::address::OrgId>>,
 }
 
 /// ACT-6: a `reshortcode`'s answer — each move in the order numbered, and
@@ -158,11 +162,15 @@ fn descendants(cache: &Cache, row: &Row) -> Vec<Row> {
 /// ACT-6: the move `ask` describes — every refusal, or the plan (the module
 /// doc). Pure: the cache as it stands.
 pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError> {
+    let reach = match &ask.orgs {
+        Some(orgs) => shortcodes::OrgReach::Only(orgs),
+        None => shortcodes::OrgReach::All,
+    };
     // The tickets, each by any short form, once each, in the order given.
     let mut refusals: Vec<(String, Vec<StoreError>)> = Vec::new();
     let mut given: Vec<Row> = Vec::new();
     for text in ask.ids.iter().map(|i| i.trim()).filter(|i| !i.is_empty()) {
-        match cache.resolve(text) {
+        match cache.resolve_in(text, reach) {
             Ok(key) => match cache.get(&key) {
                 Some(r) if !given.iter().any(|g| g.id == r.id) => given.push(r.clone()),
                 Some(_) => {}
@@ -217,7 +225,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
     let parent_row = match ask.parent.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         None => None,
         Some(p) => {
-            let key = cache.resolve(p).map_err(|e| match e {
+            let key = cache.resolve_in(p, reach).map_err(|e| match e {
                 StoreError::NotFound(_) => refuse(format!("parent {p}: no such ticket — nothing written")),
                 e => e,
             })?;
@@ -252,7 +260,12 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
                 }
             }
         } else {
-            match cache.shortcode_named(&ask.to)? {
+            let named = match cache.shortcodes.find_shortcode(&ask.to, reach) {
+                shortcodes::Found::One(sc) => Some(sc),
+                shortcodes::Found::Many(candidates) => return Err(StoreError::Ambiguous { text: ask.to.trim().to_string(), candidates }),
+                shortcodes::Found::None => None,
+            };
+            match named {
                 Some(sc) => {
                     let home = match &parent_row {
                         Some(p) if p.shortcode != sc => {
@@ -283,6 +296,22 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
             }
         };
     let mut refusals: Vec<(String, Vec<StoreError>)> = Vec::new();
+    // ORG-4: a move keeps every ticket in its organization.
+    let target_org = minted.as_ref().map(|m| m.ns.org.clone()).or_else(|| cache.shortcodes.org(&target).cloned());
+    for m in &moving {
+        let org = cache.shortcodes.org(&m.shortcode).cloned();
+        if target_org.is_some() && org.is_some() && org != target_org {
+            refusals.push((m.id.clone(), vec![refuse(format!(
+                "{} is in the organization {}, and {to} in {}: a move keeps a ticket in its organization",
+                m.id,
+                org.expect("some"),
+                target_org.as_ref().expect("some")
+            ))]));
+        }
+    }
+    if !refusals.is_empty() {
+        return Err(StoreError::RefusedMany { refusals });
+    }
     // Each moved ticket's new key, in the order given.
     let mut map: HashMap<String, String> = HashMap::new();
     let mut steps: Vec<Step> = Vec::with_capacity(moving.len());
