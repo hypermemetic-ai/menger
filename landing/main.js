@@ -1,10 +1,10 @@
 // menger.sh — DESIGN-48 (DESIGN-45, DESIGN-37, MENGER-10 beneath). Progressive
-// enhancement only: the page reads whole without this file. It (1) points the
-// Log in links at the app named by <html data-app-url>, (2) runs the boot,
+// enhancement only: the page reads whole without this file. It (2) runs the boot,
 // (3) types the install line as it comes into view, (4) reveals sections on
-// view and develops pictures as they arrive, (5) types the terminal, (6)
-// offers the visitor's OS first in the Download section, (7) adds copy
-// buttons to commands. Shared by the landing page and guide/. It requests
+// view and develops pictures as they arrive, (5) types the terminal, (7) adds
+// copy buttons to commands. (1, the Log in links, and 6, the visitor's OS
+// first in Download, went with DESIGN-51; the tag landing-full-2026-10-15
+// has them.) Shared by the landing page and guide/. It requests
 // nothing but the page's own media. No inline style: every value it sets
 // goes through the CSSOM (the CSP allows no attribute). (The carpet wall of
 // DESIGN-37–45 lived here as section 3; DESIGN-48 took it off the hero.)
@@ -12,10 +12,6 @@
   "use strict";
   var root = document.documentElement;
   root.classList.add("js");
-
-  // (1) the hosted app, set in one place
-  var APP_URL = (root.getAttribute("data-app-url") || "https://app.menger.sh").replace(/\/+$/, "");
-  document.querySelectorAll("a[data-login]").forEach(function (a) { a.href = APP_URL + "/login"; });
 
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
   function near(el, fn, margin, threshold) {
@@ -84,40 +80,6 @@
       })();
     }, "0px", 0.3);
   });
-
-  // (6) the visitor's OS first in Download -----------------------------------
-  function detectOS() {
-    var p = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "").toLowerCase();
-    var ua = (navigator.userAgent || "").toLowerCase();
-    if (/android|iphone|ipad|ipod/.test(ua)) return "mobile";
-    if (/mac/.test(p) || /mac os x/.test(ua)) return "mac";
-    if (/win/.test(p) || /windows/.test(ua)) return "windows";
-    if (/linux|x11|cros/.test(p) || /linux|x11/.test(ua)) return "linux";
-    return null;
-  }
-  var NAMES = { linux: "Linux", mac: "macOS", windows: "Windows" };
-  var HINTS = {
-    linux: "AppImage, .deb and .rpm — pick yours on the release page.",
-    mac: "Apple Silicon (aarch64) or Intel (x64) .dmg — on the release page.",
-    windows: "The x64 installer (.exe) or the .msi — on the release page."
-  };
-  var os = detectOS();
-  var main = document.getElementById("dl-main"), hint = document.getElementById("dl-hint");
-  if (os && NAMES[os]) {
-    var card = document.querySelector('.os[data-os="' + os + '"]');
-    if (card) { card.classList.add("detected"); card.parentNode.insertBefore(card, card.parentNode.firstChild); }
-    if (main) main.textContent = "Download for " + NAMES[os] + " ↓";
-    if (hint) hint.textContent = HINTS[os];
-    document.querySelectorAll("a[data-download]").forEach(function (a) { a.textContent = (a.classList.contains("btn-small") ? "" : "Download for ") + (a.classList.contains("btn-small") ? "Download" : NAMES[os]); });
-    if (os === "mac" && hint && navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
-      navigator.userAgentData.getHighEntropyValues(["architecture"]).then(function (v) {
-        if (v.architecture === "arm") hint.textContent = "Apple Silicon: the aarch64 .dmg, on the release page.";
-        else if (v.architecture === "x86") hint.textContent = "Intel: the x64 .dmg, on the release page.";
-      }, function () {});
-    }
-  } else if (os === "mobile" && hint) {
-    hint.textContent = "The desktop app is for Linux, macOS and Windows; mobile apps are coming.";
-  }
 
   // (7) copy buttons ----------------------------------------------------------
   if (navigator.clipboard && window.isSecureContext) {

@@ -2,13 +2,14 @@
 <!-- menger.sh/guide — MENGER-10. The reference that MENGER-7 put on the
      front page, now its own page: same style.css and main.js as the landing
      page (one level up). The front page makes the case; this page is the
-     manual. Log in links follow <html data-app-url>, as on the front page. -->
-<html lang="en" data-app-url="https://app.menger.sh">
+     manual. DESIGN-51: signing in and the desktop app are out until they are
+     stable (the tag landing-full-2026-10-15 has them). -->
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The menger guide</title>
-<meta name="description" content="How to use menger: shortcodes and kinds, signing in, the board and the lifecycle, filters and keys, inputs, comments, the command line, the desktop app and running your own.">
+<meta name="description" content="How to use menger: shortcodes and kinds, the board and the lifecycle, filters and keys, inputs, comments, the command line and running your own.">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#fbfbf9" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#101014" media="(prefers-color-scheme: dark)">
@@ -31,7 +32,7 @@
       <a href="../#get">Get it</a>
       <a href="./" aria-current="page">Guide</a>
     </nav>
-    <a class="btn btn-primary btn-small" data-login href="https://app.menger.sh/login">Log in</a>
+    <a class="btn btn-primary btn-small" href="#self-host">Run your own</a>
   </div>
 </header>
 
@@ -42,13 +43,12 @@
   <p class="eyebrow">The guide</p>
   <h1>How to use menger</h1>
   <p class="lede">Everything the front page shows, in the order you meet it.
-    Twelve parts; each stands on its own.</p>
+    Ten parts; each stands on its own.</p>
 </header>
 
 <nav class="toc" aria-label="Parts of the guide">
   <ol>
     <li><a href="#what">What it is</a></li>
-    <li><a href="#sign-in">Signing in</a></li>
     <li><a href="#board">The board and a ticket</a></li>
     <li><a href="#inside">Inside a ticket</a></li>
     <li><a href="#find">Finding things</a></li>
@@ -57,7 +57,6 @@
     <li><a href="#comments">Comments and notes</a></li>
     <li><a href="#deploys">Deployments</a></li>
     <li><a href="#cli">From the command line</a></li>
-    <li><a href="#download">Desktop app</a></li>
     <li><a href="#self-host">Run your own</a></li>
   </ol>
 </nav>
@@ -85,36 +84,8 @@
     may hold diagrams, HTML and live components.</p>
 </section>
 
-<section class="step" id="sign-in" aria-labelledby="sign-in-h">
-  <p class="num" aria-hidden="true">2</p>
-  <h2 id="sign-in-h">Signing in</h2>
-  <ol class="steps">
-    <li><strong>Press <a data-login href="https://app.menger.sh/login">Log in</a>.</strong>
-      You land on menger's own sign-in page.</li>
-    <li><strong>Choose how.</strong> Type your email and receive a code, or
-      continue with Google, GitHub or Apple. A company email goes to your
-      company's single sign-on, found by its domain. If you have turned on an
-      authenticator app, it asks for that code too.</li>
-    <li><strong>The first time, wait for a role.</strong> Signing in proves who
-      you are; menger's members decide what you see. Until an admin grants you
-      a role you see nothing, and you are listed as waiting on the admin's
-      <code>#/members</code> page.</li>
-  </ol>
-  <table class="roles">
-    <caption>Roles, each held on a shortcode (and everything under it) or on everything</caption>
-    <thead><tr><th scope="col">Role</th><th scope="col">May</th></tr></thead>
-    <tbody>
-      <tr><th scope="row">viewer</th><td>read under the scope, and comment</td></tr>
-      <tr><th scope="row">editor</th><td>also create and change tickets, and answer inputs</td></tr>
-      <tr><th scope="row">admin</th><td>also grant and revoke roles on the scope</td></tr>
-    </tbody>
-  </table>
-  <p class="note">A sign-in lasts 12 hours by default. Signing out ends the
-    session, and its open tabs stop answering.</p>
-</section>
-
 <section class="step" id="board" aria-labelledby="board-h">
-  <p class="num" aria-hidden="true">3</p>
+  <p class="num" aria-hidden="true">2</p>
   <h2 id="board-h">The board and a ticket</h2>
   <p>The app opens on the <strong>board</strong>: every ticket you can read,
     one line each, beside the <strong>nav</strong> — the tree of shortcodes,
@@ -153,7 +124,7 @@
 </section>
 
 <section class="step" id="inside" aria-labelledby="inside-h">
-  <p class="num" aria-hidden="true">4</p>
+  <p class="num" aria-hidden="true">3</p>
   <h2 id="inside-h">Inside a ticket: mockups, diagrams, pages</h2>
   <p>A body is markdown, and may hold more: a <code>```mermaid</code>
     diagram, drawn in place; HTML with its own styles and scripts; and the
@@ -202,7 +173,7 @@
 </section>
 
 <section class="step" id="find" aria-labelledby="find-h">
-  <p class="num" aria-hidden="true">5</p>
+  <p class="num" aria-hidden="true">4</p>
   <h2 id="find-h">Finding things</h2>
   <p><strong>Filters</strong> reach every view. The header's
     <em>Filter</em> button (<kbd>F</kbd>) filters everything; each view —
@@ -257,7 +228,7 @@
 </section>
 
 <section class="step" id="inputs" aria-labelledby="inputs-h">
-  <p class="num" aria-hidden="true">6</p>
+  <p class="num" aria-hidden="true">5</p>
   <h2 id="inputs-h">Inputs: questions asked inside a ticket</h2>
   <p>A ticket can ask its owner something and keep the answer: a
     <strong>decision</strong> (pick one), a <strong>multi</strong> (tick any)
@@ -270,11 +241,11 @@
   <p>Whoever asked acts on the answer, then closes the input, which freezes
     it: <em>DECIDED</em>. <code>#/inputs</code> lists everything waiting on
     you across every ticket; once you have opened it, the header counts what
-    is still open. Answering needs the editor role.</p>
+    is still open.</p>
 </section>
 
 <section class="step" id="queue" aria-labelledby="queue-h">
-  <p class="num" aria-hidden="true">7</p>
+  <p class="num" aria-hidden="true">6</p>
   <h2 id="queue-h">The queue: a question put in front of you</h2>
   <p>An input waits under <em>Needs you</em> until you look. When it should
     not wait — an agent idle until it is answered, a deploy that rolled back
@@ -297,7 +268,7 @@ synapse -P 4455 menger tickets list --filter 'queued now or queued blocking' --s
 </section>
 
 <section class="step" id="comments" aria-labelledby="comments-h">
-  <p class="num" aria-hidden="true">8</p>
+  <p class="num" aria-hidden="true">7</p>
   <h2 id="comments-h">Comments and notes</h2>
   <p><strong>Comments</strong> are a reader's notes on the app itself. Press
     <kbd>a</kbd> (or <em>Annotate</em> in the header): every element is
@@ -315,7 +286,7 @@ synapse -P 4455 menger tickets list --filter 'queued now or queued blocking' --s
 </section>
 
 <section class="step" id="deploys" aria-labelledby="deploys-h">
-  <p class="num" aria-hidden="true">9</p>
+  <p class="num" aria-hidden="true">8</p>
   <h2 id="deploys-h">Deployments: where the work runs</h2>
   <p>Your CI records each deploy with one call — the project, the
     environment, its state, the revision and the commits it carries — and
@@ -335,12 +306,11 @@ synapse -P 4455 menger deployments for_ticket --id OFFLINE-5
 synapse -P 4455 menger tickets list --filter 'category done and not deployed prod' --summary true</code></pre>
   <p class="note"><code>deployed prod</code> and <code>not deployed prod</code>
     are filter cells, so a board, a wave board or a saved filter can show
-    what reached an environment and what did not. Recording needs the
-    deployer role.</p>
+    what reached an environment and what did not.</p>
 </section>
 
 <section class="step" id="cli" aria-labelledby="cli-h">
-  <p class="num" aria-hidden="true">10</p>
+  <p class="num" aria-hidden="true">9</p>
   <h2 id="cli-h">From the command line</h2>
   <p>Everything menger does is a Plexus RPC method — there is no side door,
     so the app, scripts and agents make the same calls.
@@ -369,58 +339,8 @@ synapse -P 4455 menger notes upgrade --id 1 --epic HOME</code></pre>
     <code>menger</code>.</p>
 </section>
 
-<section class="step" id="download" aria-labelledby="download-h">
-  <p class="num" aria-hidden="true">11</p>
-  <h2 id="download-h">Desktop app</h2>
-  <p>menger for the desktop starts with a choice: <strong>Local</strong> —
-    your tickets on this computer, a menger running inside the app, nothing
-    leaving the machine — or <strong>Remote</strong>, a menger server at an
-    address you give (such as <code>https://app.menger.sh</code>). Once
-    installed, <strong>it updates itself</strong>: it checks for a new version
-    when it starts, and asks before installing.</p>
-  <p class="actions dl-primary">
-    <a class="btn btn-primary" id="dl-main" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Download menger</a>
-    <span class="dl-hint" id="dl-hint">Every build is on the latest release page.</span>
-  </p>
-  <div class="oses">
-    <article class="os" data-os="linux" aria-labelledby="os-linux">
-      <h3 id="os-linux">Linux</h3>
-      <ul>
-        <li><b>AppImage</b> — runs on most distributions: <code>chmod +x menger_*_amd64.AppImage</code>, then run it</li>
-        <li><b>.deb</b> — Debian, Ubuntu</li>
-        <li><b>.rpm</b> — Fedora, openSUSE</li>
-      </ul>
-      <a class="btn btn-ghost btn-small" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Linux builds</a>
-    </article>
-    <article class="os" data-os="mac" aria-labelledby="os-mac">
-      <h3 id="os-mac">macOS</h3>
-      <ul>
-        <li><b>Apple Silicon</b> — <code>menger_*_aarch64.dmg</code></li>
-        <li><b>Intel</b> — <code>menger_*_x64.dmg</code></li>
-      </ul>
-      <p class="warn">First open: macOS says the developer cannot be verified.
-        Control-click the app, choose <em>Open</em>, then <em>Open</em> again
-        (or <em>System Settings → Privacy &amp; Security → Open Anyway</em>).</p>
-      <a class="btn btn-ghost btn-small" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">macOS builds</a>
-    </article>
-    <article class="os" data-os="windows" aria-labelledby="os-win">
-      <h3 id="os-win">Windows</h3>
-      <ul>
-        <li><b>Installer</b> — <code>menger_*_x64-setup.exe</code></li>
-        <li><b>MSI</b> — <code>menger_*_x64_en-US.msi</code>, for managed installs</li>
-      </ul>
-      <p class="warn">First run: SmartScreen says it protected your PC. Choose
-        <em>More info</em>, then <em>Run anyway</em>.</p>
-      <a class="btn btn-ghost btn-small" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Windows builds</a>
-    </article>
-  </div>
-  <p class="note">The builds are signed for the self-updater, not yet by
-    Apple or Microsoft — hence the warning on first open. Mobile apps are
-    coming.</p>
-</section>
-
 <section class="step" id="self-host" aria-labelledby="self-host-h">
-  <p class="num" aria-hidden="true">12</p>
+  <p class="num" aria-hidden="true">10</p>
   <h2 id="self-host-h">Run your own</h2>
   <p>menger is one binary and a SQLite file as its system of record.
     <code>--features embedded-app</code> builds the web app into that binary,
@@ -433,11 +353,9 @@ menger --db-path ~/menger/tickets.db
 # REST + SSE    http://127.0.0.1:4457 (--no-rest turns it off)</code></pre>
   <p>Other ports: <code>--port</code> (WebSocket), <code>--shell-port</code>
     (the app), <code>--rest-port</code>. Open the app in two windows, change a
-    status in one, and watch the other follow. With no
-    <code>--auth-provider</code> there is no login: everyone who can reach it
-    can use it. <code>menger --help</code> lists the sign-in flags
-    (<code>--auth-provider</code>, <code>--require-login</code>,
-    <code>--admin</code>, <code>--public-url</code>). Before a deploy,
+    status in one, and watch the other follow. Everyone who can reach the
+    ports can use it, so keep them on the machine or behind your own network.
+    Before a deploy,
     <code>menger --verify-derived --db-path …</code> checks the file.</p>
 </section>
 
@@ -451,9 +369,7 @@ menger --db-path ~/menger/tickets.db
       <ul class="foot-links">
         <li><a href="../">menger.sh</a></li>
         <li><a href="https://github.com/hypermemetic-ai/menger">menger on GitHub</a></li>
-        <li><a href="https://github.com/hypermemetic-ai/menger-desktop">menger-desktop</a></li>
         <li><a href="https://crates.io/crates/menger">crates.io</a></li>
-        <li><a data-login href="https://app.menger.sh/login">Log in</a></li>
       </ul>
     </nav>
   </div>

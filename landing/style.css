@@ -274,6 +274,7 @@ pre.cmd .c { color: var(--night-dim); } pre.cmd .o { color: #8fd39a; }
 .get-card { position: relative; padding-top: 34px !important; display: flex; flex-direction: column; align-items: flex-start; }
 .get-card .label { position: absolute; top: 0; left: 0; border-radius: 0 0 3px 0; background: color-mix(in srgb, var(--tone) calc(var(--alpha) * 100%), var(--ink)); color: var(--bg); }
 .get-card .btn { margin-top: auto; }
+.cards.one { grid-template-columns: minmax(0, 1fr); max-width: 680px; } /* DESIGN-51: the one way to get it */
 .get-card .btn-primary { background: var(--tone); border-color: var(--tone); color: var(--bg); }
 .get-card .btn-ghost { color: var(--ink); }
 .get-card pre.cmd { width: 100%; margin: 12px 0 16px; font-size: 12px; min-height: 0; padding: 12px 14px; }

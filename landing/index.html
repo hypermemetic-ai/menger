@@ -15,11 +15,10 @@
      with a sample project) and guide/ (the reference). No inline style or
      script: the CSP (menger.sh.caddy) allows neither, and nothing from
      another origin.
-     The hosted app's address lives in ONE place for the script: data-app-url
-     below. main.js points every [data-login] link at <data-app-url>/login;
-     the hrefs written here are what a reader without JavaScript follows, so
-     keep them equal to it. -->
-<html lang="en" data-app-url="https://app.menger.sh">
+     DESIGN-51: only the self-hosted server is offered — the browser sign-in,
+     the desktop download and Log in are out until they are stable; the page
+     with them is the tag landing-full-2026-10-15. -->
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -60,7 +59,7 @@
       <a href="guide/">Guide</a>
     </nav>
     <div class="top-actions">
-      <a class="btn btn-primary btn-small" data-login href="https://app.menger.sh/login">Log in →</a>
+      <a class="btn btn-primary btn-small" href="#get">Run your own →</a>
     </div>
   </div>
 </header>
@@ -76,7 +75,7 @@
       <h1 id="hero-title" class="lines"><span class="l"><span class="l1">Agents <em>show you</em></span></span><span class="l"><span class="l2">what they'd <em>build,</em></span></span><span class="l"><span class="l3">and <em>ask.</em></span></span></h1>
       <p class="lede after a2">The page itself, built in the ticket and shown at phone and desktop width; the map it came from; the question that decides the rest. The team notes and answers in place; the work goes on.</p>
       <div class="actions after a2">
-        <a class="btn btn-primary" data-login href="https://app.menger.sh/login">Log in to menger →</a>
+        <a class="btn btn-primary" href="#get">Run your own →</a>
       </div>
       <p class="fine after a2">open source · MIT licence</p>
     </div>
@@ -163,13 +162,11 @@ synapse -P 4455 menger tickets queue --id OFFLINE-15 --urgency now --input shape
 <!-- 4 · how do I get it: one row -->
 <section class="band get" id="get" data-tone="complete" data-n="03" aria-labelledby="get-h">
   <div class="wrap">
-    <div class="head reveal"><span class="n">03 — get menger</span><h2 id="get-h" class="lines"><span class="l"><span>In the browser, on your desktop, or your own machine.</span></span></h2></div>
-    <div class="cards reveal">
-      <article class="get-card" data-tone="ready" aria-labelledby="get-web"><span class="label">Browser</span><h3 id="get-web">Sign in on menger's own page.</h3><a class="btn btn-primary" data-login href="https://app.menger.sh/login">Log in →</a></article>
-      <article class="get-card" data-tone="coding" aria-labelledby="get-desk"><span class="label">Desktop · Linux · macOS · Windows</span><h3 id="get-desk">Your tickets on this computer, or a server's.</h3><a class="btn btn-primary" id="dl-main" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Download menger ↓</a><p class="dl-hint" id="dl-hint">Every build is on the latest release page.</p></article>
+    <div class="head reveal"><span class="n">03 — get menger</span><h2 id="get-h" class="lines"><span class="l"><span>On your own machine.</span></span></h2></div>
+    <div class="cards one reveal">
       <article class="get-card" data-tone="complete" aria-labelledby="get-own"><span class="label">Your own machine</span><h3 id="get-own">Two commands with Rust installed.</h3><div class="cmdline"><span class="p" aria-hidden="true">$</span><code id="typed" data-line="cargo install menger --features embedded-app">cargo install menger --features embedded-app</code></div><div class="cmdline"><span class="p" aria-hidden="true">$</span><code>menger --db-path ~/menger/tickets.db</code></div><p class="dl-hint">The web app is built into the binary. Then open <code>127.0.0.1:4456</code>.</p></article>
     </div>
-    <p class="fine reveal">Which file, the first-open warning, running your own: <a href="guide/">the guide →</a></p>
+    <p class="fine reveal">The ports, the flags and checking the file: <a href="guide/#self-host">the guide →</a></p>
   </div>
 </section>
 
@@ -183,9 +180,7 @@ synapse -P 4455 menger tickets queue --id OFFLINE-15 --urgency now --input shape
       <ul class="foot-links">
         <li><a href="guide/">The guide</a></li>
         <li><a href="https://github.com/hypermemetic-ai/menger">GitHub</a></li>
-        <li><a href="https://github.com/hypermemetic-ai/menger-desktop">menger-desktop</a></li>
         <li><a href="https://crates.io/crates/menger">crates.io</a></li>
-        <li><a data-login href="https://app.menger.sh/login">Log in</a></li>
       </ul>
     </nav>
   </div>
