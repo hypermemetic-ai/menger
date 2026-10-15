@@ -7,6 +7,9 @@
 # nothing real: no unit, no port, no database, no tracker. The stand-in
 # synapse keeps what it is sent and answers as DEPLOY-11 does — a record it
 # already has (project, environment, state, revision, run) is `duplicate`.
+# ACCESS-27: and `install`'s split of the settings into their templated and
+# local halves, and the smoke's login-mode assertion (STUB_MODE is the
+# server's mode), with no secret in any argv.
 # `cargo test` runs it (tests/deploy_record.rs).
 #
 #   deploy/tests/pipeline       exit 1 if any check failed
@@ -32,15 +35,32 @@ D=$HOME/.local/share/menger-deploy
 OUT=$D/outbox
 mkdir -p "$SCRATCH/bin" "$HOME/.config/menger" "$D/releases"
 for e in prod test; do
-  printf 'MENGER_DB_PATH=%s\nMENGER_WS_PORT=1\nMENGER_SHELL_PORT=2\nMENGER_REST_PORT=3\nMENGER_DIAGRAMS_PORT=4\n' \
+  printf 'MENGER_DB_PATH=%s\nMENGER_WS_PORT=1\nMENGER_SHELL_PORT=2\nMENGER_REST_PORT=3\nMENGER_DIAGRAMS_PORT=4\nMENGER_EXPECT_LOGIN=off\n' \
     "$SCRATCH/data/$e/tickets.db" >"$HOME/.config/menger/$e.env"
+  ( umask 077; echo '# the local half (ACCESS-27)' >"$HOME/.config/menger/$e.local.env" )
 done
 
 stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$SCRATCH/bin/$1"; chmod +x "$SCRATCH/bin/$1"; }
 stub systemctl '[[ ${STUB_RESTART_FAILS:-} == 1 && " $* " == *" restart "* ]] && exit 1
 [[ " $* " == *" is-active "* ]] && { [[ " $* " == *" --quiet "* ]] || echo active; }; exit 0'
-for t in ss node npm sqlite3; do stub $t 'exit 0'; done
-stub curl 'echo "<meta name=\"menger-ws-port\" content=\"1\">"'
+for t in ss npm sqlite3; do stub $t 'exit 0'; done
+# ACCESS-27: node answers the smoke's mode probe as STUB_MODE says (the
+# server's login mode), and health for a token read from stdin; curl signs the
+# smoke account in (its form read from stdin) and serves the login page. Both
+# keep their argv in $STUB_ARGV, and curl its stdin in $STUB_STDIN, so a
+# check can say no secret rode in argv.
+stub node 'echo "node $*" >>"$STUB_ARGV"
+case " $* " in
+  *smoke-mode.mjs*) echo "login: ${STUB_MODE:-off}" ;;
+  *smoke-health.mjs*" - "*) read -r t; [[ -n $t ]] && echo "ticket_count: 3" ;;
+esac; exit 0'
+stub curl 'echo "curl $*" >>"$STUB_ARGV"
+case " $* " in
+  *" -X POST "*) cat >>"$STUB_STDIN"; echo "{\"access_token\":\"tok-$STUB_SECRET\"}" ;;
+  *redirect_url*) printf "http://127.0.0.1:2/login?next=%%2F" ;;
+  */login" "*) echo "<h1>Sign in</h1>" ;;
+  *) echo "<meta name=\"menger-ws-port\" content=\"1\">" ;;
+esac'
 # synapse: the smoke's reads answered; deployments.record kept in $SCRATCH/sent.ndjson
 # and answered as DEPLOY-11 does, or as STUB_TRACKER says (down, refuse, hang).
 stub synapse 'args=" $* "
@@ -55,7 +75,8 @@ while [[ $# -gt 0 ]]; do [[ $1 == -p ]] && rec=$2; shift; done
 key=$(jq -c "[.project, .environment, .state, .revision, (.source.run // .at)]" <<<"$rec")
 grep -qxF -- "$key" "$STUB_KEYS" 2>/dev/null && dup=true || { dup=false; echo "$key" >>"$STUB_KEYS"; echo "$rec" >>"$STUB_SENT"; }
 printf "deployment: \n  id: 1\nduplicate: %s\ntype: deployed\n" "$dup"'
-export PATH=$SCRATCH/bin:$PATH STUB_SENT=$SCRATCH/sent.ndjson STUB_KEYS=$SCRATCH/keys
+export PATH=$SCRATCH/bin:$PATH STUB_SENT=$SCRATCH/sent.ndjson STUB_KEYS=$SCRATCH/keys \
+  STUB_ARGV=$SCRATCH/argv STUB_STDIN=$SCRATCH/stdin STUB_SECRET=s3cret-Pw-7f3a
 [[ $(command -v systemctl) == "$SCRATCH/bin/systemctl" && $(command -v synapse) == "$SCRATCH/bin/synapse" ]] \
   || { echo "the stand-ins are not first on PATH — refusing to run the pipeline" >&2; exit 1; }
 
@@ -218,6 +239,86 @@ run status
 out=$(<"$SCRATCH/out")
 has "status: the edge's pin" "$out" "landing   $S2"
 has "status: the edge's last record" "$out" "record    failed $S1"
+
+# ── ACCESS-27: the smoke asserts the login mode the env expects ────────────
+C=$HOME/.config/menger
+cp "$C/test.env" "$SCRATCH/test.env.keep"
+run smoke test
+same "smoke, off as expected: exits 0" "$code" 0
+has "smoke: the local half is 0600" "$err" "ok   test.local.env is the owner's alone"
+has "smoke: the server's mode read" "$err" "ok   the server on :1 is in login: off"
+STUB_MODE=required run smoke test
+same "smoke, the server requires login, off expected: exits 1" "$code" 1
+has "smoke: the mismatch said" "$err" "FAIL the server on :1 says login: required, but MENGER_EXPECT_LOGIN says off"
+# test as it is meant to be: behind its login, the smoke account in its own file
+sed -i 's/^MENGER_EXPECT_LOGIN=.*/MENGER_EXPECT_LOGIN=required/' "$C/test.env"
+printf 'MENGER_AUTH_PROVIDERS=key\nMENGER_REQUIRE_LOGIN=1\nMENGER_NO_REST=1\n' >>"$C/test.local.env"
+( umask 077; printf 'MENGER_SMOKE_USER=smoke\nMENGER_SMOKE_PASSWORD=%s\nMENGER_SMOKE_TOKEN_URL=http://127.0.0.1:9/token\nMENGER_SMOKE_AUDIENCE=menger\n' \
+    "$STUB_SECRET" >"$C/test.smoke.env" )
+: >"$STUB_ARGV"; : >"$STUB_STDIN"
+STUB_MODE=required run smoke test
+same "smoke, login required as expected: exits 0" "$code" 0
+has "smoke: the settings agree" "$err" "ok   the settings configure login: required, as MENGER_EXPECT_LOGIN says"
+has "smoke: signed in" "$err" "ok   the smoke account signs in"
+has "smoke: health with the token" "$err" "ok   tickets.health on :1 — 3 tickets"
+has "smoke: behind the login page" "$err" "ok   app on :2 behind its login page"
+[[ $(<"$STUB_ARGV") != *"$STUB_SECRET"* ]] && ok || bad "the smoke password or token rode in argv: $(grep -- "$STUB_SECRET" "$STUB_ARGV")"
+has "the password went to curl on stdin" "$(<"$STUB_STDIN")" "password=$STUB_SECRET"
+has "the token went to smoke-health on stdin" "$(<"$STUB_ARGV")" "smoke-health.mjs 1 -"
+# … and with its local half lost (the H3 install): the smoke fails
+cp "$C/test.local.env" "$SCRATCH/local.keep"; echo '# lost' >"$C/test.local.env"
+STUB_MODE=off run smoke test
+same "smoke, the local half lost: exits 1" "$code" 1
+has "smoke: the settings disagree" "$err" "FAIL the settings configure login: off, but MENGER_EXPECT_LOGIN says required"
+has "smoke: the open server caught" "$err" "FAIL the server on :1 says login: off, but MENGER_EXPECT_LOGIN says required"
+cp "$SCRATCH/local.keep" "$C/test.local.env"
+chmod 0644 "$C/test.smoke.env"; STUB_MODE=required run smoke test
+same "smoke, the smoke account readable by others: exits 1" "$code" 1
+has "smoke: its mode said" "$err" "FAIL $C/test.smoke.env is readable by others (644; 0600)"
+rm "$C/test.local.env"; STUB_MODE=required run smoke test
+has "smoke, no local half: said" "$err" "FAIL no $C/test.local.env — run: deploy/pipeline install"
+sed -i '/^MENGER_EXPECT_LOGIN=/d' "$C/test.env"; run smoke test
+has "smoke, no MENGER_EXPECT_LOGIN: said" "$err" "FAIL MENGER_EXPECT_LOGIN is '' in $C/test.env"
+cp "$SCRATCH/test.env.keep" "$C/test.env"; rm -f "$C/test.smoke.env"; cp "$SCRATCH/local.keep" "$C/test.local.env"
+
+# ── ACCESS-27: install keeps the local half — the lossless split ────────────
+H2=$SCRATCH/home2; C2=$H2/.config/menger; mkdir -p "$C2"
+node2=$(readlink -f "$SCRATCH/bin/node")
+# test's file as an install before ACCESS-27 left it, then edited by hand:
+# the template, then login, admins, secrets and the notes beside them.
+{ sed -e "s|@HOME@|$H2|g" -e "s|@NODE@|$node2|g" -e '/^# ACCESS-27/,$d' "$REPO/deploy/env/test.env"
+  printf '# IDENTITY-18: test behind login.\nMENGER_AUTH_PROVIDERS=key\nMENGER_REQUIRE_LOGIN=1\nMENGER_NO_REST=1\n'
+  printf '# the dev sign-in\nMENGER_DEV_LOGIN=plexus-idp\nMENGER_DEV_PASSWORD=%s\n' "$STUB_SECRET"
+  printf 'MENGER_SMOKE_USER=smoke\nMENGER_SMOKE_PASSWORD=%s\n' "$STUB_SECRET"
+} >"$C2/test.env"
+sed -e "s|@HOME@|$H2|g" -e "s|@NODE@|$node2|g" -e '/^# ACCESS-27/,$d' "$REPO/deploy/env/prod.env" >"$C2/prod.env"
+chmod 0600 "$C2/test.env"; cp "$C2/test.env" "$SCRATCH/test.env.orig"
+HOME=$H2 run install
+same "install (migrating): exits 0" "$code" 0
+[[ "$(<"$SCRATCH/out")$err" != *"$STUB_SECRET"* ]] && ok || bad "install printed a secret: $err"
+has "install: says what moved, by name" "$err" "test: made test.local.env (0600) with MENGER_AUTH_PROVIDERS MENGER_DEV_LOGIN MENGER_DEV_PASSWORD MENGER_NO_REST MENGER_REQUIRE_LOGIN; test.smoke.env (0600) with MENGER_SMOKE_PASSWORD MENGER_SMOKE_USER"
+same "the local half is 0600" "$(stat -c %a "$C2/test.local.env") $(stat -c %a "$C2/test.smoke.env") $(stat -c %a "$C2/test.env.before-local")" "600 600 600"
+has "the local half: login, verbatim" "$(<"$C2/test.local.env")" $'MENGER_AUTH_PROVIDERS=key\nMENGER_REQUIRE_LOGIN=1\nMENGER_NO_REST=1'
+has "the local half: the secret, verbatim, with its note" "$(<"$C2/test.local.env")" $'# the dev sign-in\nMENGER_DEV_LOGIN=plexus-idp\nMENGER_DEV_PASSWORD='"$STUB_SECRET"
+has "the smoke half" "$(<"$C2/test.smoke.env")" $'MENGER_SMOKE_USER=smoke\nMENGER_SMOKE_PASSWORD='"$STUB_SECRET"
+[[ $(<"$C2/test.env") != *REQUIRE_LOGIN* && $(<"$C2/test.env") != *"$STUB_SECRET"* ]] && ok || bad "the templated half kept login or a secret"
+same "the templated half is the template" "$(<"$C2/test.env")" "$(sed -e "s|@HOME@|$H2|g" -e "s|@NODE@|$node2|g" "$REPO/deploy/env/test.env")"
+cmp -s "$C2/test.env.before-local" "$SCRATCH/test.env.orig" && ok || bad "the old file is not kept as it was"
+same "the merged env keeps login on (test)" "$(set -a; . "$C2/test.env"; . "$C2/test.local.env"; echo "$MENGER_REQUIRE_LOGIN $MENGER_EXPECT_LOGIN")" "1 required"
+U2=$H2/.config/systemd/user
+same "the unit's writable path: the database's directory" "$(grep ReadWritePaths "$U2/menger@test.service.d/50-data.conf")" "ReadWritePaths=$H2/.local/share/menger-test"
+same "diagrams sees Node" "$(grep BindReadOnlyPaths "$U2/menger-diagrams@test.service.d/50-paths.conf")" "BindReadOnlyPaths=$SCRATCH"
+has "the unit loads the local half" "$(<"$U2/menger@.service")" 'EnvironmentFile=%h/.config/menger/%i.local.env'
+[[ $(grep ^EnvironmentFile "$U2/menger-diagrams@.service") != *local.env* ]] && ok || bad "diagrams loads the local half"
+sums() { (cd "$C2" && md5sum -- * .[!.]* 2>/dev/null | sort -k2); }
+before=$(sums); HOME=$H2 run install
+same "install again: exits 0" "$code" 0
+same "install again: nothing changes" "$(sums)" "$before"
+echo 'MENGER_PUBLIC_URL=https://example.test' >>"$C2/test.env"; before=$(sums)
+HOME=$H2 run install
+same "install, a hand-added setting in the templated half: refused" "$code" 1
+has "install: the setting named" "$err" "sets what its template does not (MENGER_PUBLIC_URL)"
+same "install, refused: nothing changes" "$(sums)" "$before"
 
 printf 'deploy/pipeline records: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]

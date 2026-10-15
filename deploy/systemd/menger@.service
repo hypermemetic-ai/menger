@@ -7,8 +7,13 @@ After=network.target
 
 [Service]
 Type=simple
-# Ports, database, registry: the environment's own file.
+# Ports, database, registry, the login mode the smoke expects: the
+# environment's templated file, rewritten by every `pipeline install`.
 EnvironmentFile=%h/.config/menger/%i.env
+# ACCESS-27: login and secrets — the local half, 0600, never templated: no
+# install rewrites it. Required: a missing local half stops the service
+# rather than starting it without its login.
+EnvironmentFile=%h/.config/menger/%i.local.env
 # The release this environment runs: `current` is switched by the pipeline,
 # and the launcher resolves it when the service starts, so a running server
 # keeps the release it started with until it is restarted.
@@ -17,6 +22,47 @@ Restart=on-failure
 RestartSec=2
 # A graceful stop before the kill: the store finishes its write.
 TimeoutStopSec=20
+
+# ── ACCESS-27: the least the OS will give it (deploy/README.md "Hardening") ──
+# The whole file system read-only; the one place it writes — the database's
+# directory — is ReadWritePaths= in the drop-in `pipeline install` writes
+# beside this unit (menger@<env>.service.d/50-data.conf).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectProc=invisible
+ProcSubset=pid
+KeyringMode=private
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# tokio, SQLite and outbound HTTPS (login providers' JWKS) are all
+# @system-service; anything else is refused with EPERM, not a kill.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+# Listening and the login providers: IP; journald and resolved: unix.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+# prod peaks near 600 MB; a runaway is stopped at 2 GB, well before the
+# machine (32 GB) is at risk.
+MemoryHigh=1536M
+MemoryMax=2G
+TasksMax=512
 
 [Install]
 WantedBy=default.target

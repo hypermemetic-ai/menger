@@ -3,7 +3,9 @@
 // the proof that a caller without one reaches nothing. synapse does the same
 // once its first probe carries a token (IDENTITY-16).
 //
-//   node deploy/smoke-health.mjs <ws port> [token]
+//   node deploy/smoke-health.mjs <ws port> [token | -]
+// ACCESS-27 (L3): `-` reads the token from stdin, so it never rides in argv
+// (`ps` shows argv to every user); the pipeline's smoke always passes it so.
 // With a token: prints `ticket_count: N` and exits 0. AUTH-7: the token's
 // principal needs `tickets.health` (viewer somewhere); a typed refusal is
 // printed, and exits 1.
@@ -12,10 +14,17 @@
 // auth.login, auth.signup), and `tickets.health` is refused unauthenticated;
 // prints `anonymous view` and exits 0, or what was wrong and exits 1. A
 // release from before AUTH-7 refuses the upgrade outright: `refused`, 0.
-const [port, token] = process.argv.slice(2);
+import { readFileSync } from 'node:fs';
+
+const [port, given] = process.argv.slice(2);
 if (!port) {
-  console.error('usage: smoke-health.mjs <ws port> [token]');
+  console.error('usage: smoke-health.mjs <ws port> [token | -]');
   process.exit(2);
+}
+const token = given === '-' ? readFileSync(0, 'utf8').trim() : given;
+if (given === '-' && !token) {
+  console.error('health: no token on stdin');
+  process.exit(1);
 }
 const DOOR = ['auth.providers', 'auth.login', 'auth.signup'];
 const ws = new WebSocket(`ws://127.0.0.1:${port}`, token ? { headers: { authorization: `Bearer ${token}` } } : undefined);

@@ -4,6 +4,10 @@
 # promote to prod — test and prod both running locally under systemd --user.
 #
 #   deploy/pipeline install                 units + env files; enable both envs
+#                                           (ACCESS-27: the templated half only —
+#                                           <env>.local.env and <env>.smoke.env
+#                                           are made once, from the old file, and
+#                                           never rewritten)
 #   deploy/pipeline build [REV]             gate + release (default REV: main)
 #   deploy/pipeline deploy test [RELEASE]   prod data → test; switch; restart; smoke
 #   deploy/pipeline sync test               prod data → test, same release; restart; smoke
@@ -73,12 +77,27 @@ record() { # env action release result — one line of deployments.log, a run's 
 }
 need() { command -v "$1" >/dev/null || die "needs $1 on PATH"; }
 
-env_file() { echo "$CONFIG/$1.env"; }
-load_env() { # ENV → exports the env file's variables
-  local f; f=$(env_file "$1")
+# ACCESS-27: an environment's settings are three files in $CONFIG.
+#   <env>.env        the templated half (deploy/env/<env>.env): ports, database,
+#                    registry, MENGER_EXPECT_LOGIN — rewritten by every install
+#   <env>.local.env  menger's login and secrets, 0600, never templated; the
+#                    unit loads it after <env>.env
+#   <env>.smoke.env  the smoke account (MENGER_SMOKE_*), 0600, read by the
+#                    smoke alone — never in menger's environment
+env_file()   { echo "$CONFIG/$1.env"; }
+local_file() { echo "$CONFIG/$1.local.env"; }
+smoke_file() { echo "$CONFIG/$1.smoke.env"; }
+load_env() { # ENV → exports the templated half; reads the local half without exporting it
+  local f l v; f=$(env_file "$1"); l=$(local_file "$1")
   [[ -f $f ]] || die "no $f — run: deploy/pipeline install"
+  # Each load starts clean: one env's login settings never linger into the next's.
+  for v in $(compgen -v MENGER_); do [[ $v == MENGER_DEPLOY_* ]] || unset "$v"; done
   set -a; # shellcheck disable=SC1090
   source "$f"; set +a
+  # The local half is read (the smoke asks what login it configures), never
+  # exported: menger's secrets stay out of every command the pipeline runs.
+  # shellcheck disable=SC1090
+  if [[ -f $l ]]; then source "$l"; fi
 }
 check_env() { [[ $1 == prod || $1 == test ]] || die "unknown environment '$1' (prod or test)"; }
 envdir() { echo "$HOME_DIR/envs/$1"; }
@@ -186,13 +205,100 @@ flush_outbox() {
 }
 
 # ── install ─────────────────────────────────────────────────────────────────
+# ACCESS-27 (ACCESS-4 H3): install rewrites only the templated half. Where an
+# environment has no <env>.local.env yet, it is made — once, 0600 — from what
+# the old <env>.env held beyond its template (login, admins, secrets, and the
+# notes beside them), the smoke account's MENGER_SMOKE_* going to
+# <env>.smoke.env; the old file is kept as <env>.env.before-local (0600).
+# Values are never printed, only names. A later install leaves both alone, and
+# refuses — changing nothing — if <env>.env has since gained a setting its
+# template lacks (it would be dropped): move it into the local half.
+assign_re='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)='
+keys_of() { sed -nE "s/$assign_re.*/\2/p" "$1" | sort -u; }
+extras_of() { # OLD TEMPLATE → the keys OLD sets that TEMPLATE does not
+  comm -23 <(keys_of "$1") <(keys_of "$2")
+}
+render_env() { # ENV NODE → deploy/env/ENV.env, filled in
+  sed -e "s|@HOME@|$HOME|g" -e "s|@NODE@|$2|g" "$REPO/deploy/env/$1.env"
+}
+# split_old OLD TEMPLATE LOCAL SMOKE — the lines of OLD beyond TEMPLATE into
+# LOCAL (MENGER_SMOKE_* into SMOKE). Comments go with them, except the header
+# before the first setting (the template's, whichever version wrote it) and
+# lines the template itself has.
+split_old() {
+  local old=$1 tpl=$2 lo=$3 sm=$4 line key seen=0
+  while IFS= read -r line || [[ -n $line ]]; do
+    if [[ $line =~ $assign_re ]]; then
+      seen=1; key=${BASH_REMATCH[2]}
+      grep -qxF -- "$key" <(keys_of "$tpl") && continue
+      if [[ $key == MENGER_SMOKE_* ]]; then printf '%s\n' "$line" >>"$sm"; else printf '%s\n' "$line" >>"$lo"; fi
+    elif [[ $seen == 1 && -n ${line// /} ]] && ! grep -qxF -- "$line" "$tpl"; then
+      printf '%s\n' "$line" >>"$lo"
+    fi
+  done <"$old"
+}
+local_header() { # ENV WHAT
+  printf '# ACCESS-27: %s for %s — never templated. `deploy/pipeline install` makes\n' "$2" "$1"
+  printf '# this file once (0600) and never rewrites it; deploy/README.md "Settings".\n'
+}
+
 cmd_install() {
   need systemctl; need sqlite3; need node
-  local node; node=$(command -v node)
+  # Node by its real path: the diagrams unit sees no home but what it binds.
+  local node; node=$(readlink -f "$(command -v node)")
   mkdir -p "$CONFIG" "$UNITS" "$HOME_DIR/envs/prod" "$HOME_DIR/envs/test" "$RELEASES" "$BACKUPS" \
            "$HOME/.local/share/menger-test"
+  chmod 0700 "$CONFIG"
+  local e cur lo sm new x
+  # First every check, then every write: a refusal changes nothing.
   for e in prod test; do
-    sed -e "s|@HOME@|$HOME|g" -e "s|@NODE@|$node|g" "$REPO/deploy/env/$e.env" > "$CONFIG/$e.env"
+    cur=$(env_file $e) lo=$(local_file $e) sm=$(smoke_file $e) new=$CONFIG/.$e.env.new
+    ( umask 077; render_env $e "$node" >"$new" )
+    [[ -f $cur ]] || continue
+    x=$(extras_of "$cur" "$new" | paste -sd' ')
+    if [[ -f $lo && -n $x ]]; then
+      rm -f "$CONFIG"/.*.env.new
+      die "$cur sets what its template does not ($x) and $lo exists already — move them into $lo (or ${sm##*/} for MENGER_SMOKE_*), then install again; nothing was changed"
+    fi
+    if [[ ! -f $lo && -f $sm ]] && grep -qE '^[[:space:]]*(export[[:space:]]+)?MENGER_SMOKE_' "$cur"; then
+      rm -f "$CONFIG"/.*.env.new
+      die "$cur sets MENGER_SMOKE_* and $sm exists already — merge them by hand, then install again; nothing was changed"
+    fi
+  done
+  for e in prod test; do
+    cur=$(env_file $e) lo=$(local_file $e) sm=$(smoke_file $e) new=$CONFIG/.$e.env.new
+    if [[ ! -f $lo ]]; then
+      ( umask 077
+        local_header $e "menger's login and secrets" >"$lo.tmp"
+        if [[ -f $cur ]]; then
+          [[ -e $cur.before-local ]] || cp "$cur" "$cur.before-local"
+          chmod 0600 "$cur.before-local"
+          [[ -f $sm ]] || local_header $e "the smoke account (MENGER_SMOKE_*), read by the smoke alone," >"$sm.tmp"
+          split_old "$cur" "$new" "$lo.tmp" "$sm.tmp"
+        fi )
+      chmod 0600 "$lo.tmp"; mv "$lo.tmp" "$lo"
+      local moved smoked; moved=$(keys_of "$lo" | paste -sd' ')
+      if [[ -f $sm.tmp ]] && [[ -n $(keys_of "$sm.tmp") ]]; then
+        smoked=$(keys_of "$sm.tmp" | paste -sd' '); chmod 0600 "$sm.tmp"; mv "$sm.tmp" "$sm"
+      else smoked=""; rm -f "$sm.tmp"; fi
+      say "$e: made ${lo##*/} (0600)${moved:+ with $moved}${smoked:+; ${sm##*/} (0600) with $smoked}${moved:+ — the old file is ${cur##*/}.before-local (0600)}"
+    fi
+    if [[ -f $cur ]]; then
+      x=$(comm -12 <(keys_of "$cur") <(keys_of "$new") | while read -r k; do
+            [[ $(grep -E "^[[:space:]]*(export[[:space:]]+)?$k=" "$cur" | tail -n 1) == "$(grep -E "^$k=" "$new" | tail -n 1)" ]] || echo "$k"
+          done | paste -sd' ')
+      [[ -n $x ]] && say "$e: the template's $x replace(s) the old file's"
+    fi
+    mv "$new" "$cur"
+    # The unit's writable path and the diagrams unit's view of Node, per
+    # environment (unit drop-ins; deploy/README.md "Hardening").
+    local db; db=$(set -a; source "$cur"; echo "$MENGER_DB_PATH")
+    mkdir -p "$(dirname "$db")"
+    mkdir -p "$UNITS/menger@$e.service.d" "$UNITS/menger-diagrams@$e.service.d"
+    printf '# ACCESS-27: written by deploy/pipeline install — the one place menger@%s writes.\n[Service]\nReadWritePaths=%s\n' \
+      "$e" "$(dirname "$db")" >"$UNITS/menger@$e.service.d/50-data.conf"
+    printf '# ACCESS-27: written by deploy/pipeline install — the Node menger-diagrams@%s runs.\n[Service]\nBindReadOnlyPaths=%s\n' \
+      "$e" "$(dirname "$(dirname "$node")")" >"$UNITS/menger-diagrams@$e.service.d/50-paths.conf"
   done
   install -m 0644 "$REPO/deploy/systemd/menger@.service" "$REPO/deploy/systemd/menger-diagrams@.service" "$UNITS/"
   install -m 0644 "$REPO/deploy/README.md" "$HOME_DIR/README.md"
@@ -200,7 +306,7 @@ cmd_install() {
   # Enabled means started at boot (lingering is on); an env with no release
   # yet is enabled but not started.
   systemctl --user enable menger@prod menger-diagrams@prod menger@test menger-diagrams@test >/dev/null 2>&1
-  say "installed: $CONFIG/{prod,test}.env, $UNITS/menger{,-diagrams}@.service; enabled for prod and test"
+  say "installed: $CONFIG/{prod,test}.env (+ .local.env, .smoke.env kept), $UNITS/menger{,-diagrams}@.service and their drop-ins; enabled for prod and test"
 }
 
 # ── build: commit → gate → release ──────────────────────────────────────────
@@ -310,20 +416,51 @@ cmd_smoke() {
   for u in $(units_of "$env"); do
     systemctl --user is-active --quiet "$u" && say "ok   $u active" || { say "FAIL $u not active"; fail=1; }
   done
-  local h="" login=""
+  local h="" login="" mode="" expect=${MENGER_EXPECT_LOGIN:-} lo sm
+  lo=$(local_file "$env") sm=$(smoke_file "$env")
+  # ACCESS-27: the settings' secrets are 0600 files, the local half there.
+  if [[ ! -f $lo ]]; then say "FAIL no $lo — run: deploy/pipeline install"; fail=1
+  elif [[ $(stat -c %a "$lo") != [46]00 ]]; then say "FAIL $lo is readable by others ($(stat -c %a "$lo"); 0600)"; fail=1
+  else say "ok   ${lo##*/} is the owner's alone"; fi
+  if [[ -f $sm ]]; then
+    if [[ $(stat -c %a "$sm") != [46]00 ]]; then say "FAIL $sm is readable by others ($(stat -c %a "$sm"); 0600)"; fail=1; fi
+    # shellcheck disable=SC1090
+    source "$sm" # not exported: the smoke hands each value to the one command that needs it
+  fi
+  # ACCESS-27 (ACCESS-4 H3): the login mode this environment must be in is
+  # its templated half's MENGER_EXPECT_LOGIN — not the local half, which is
+  # what an install could once lose. The settings must configure it, and the
+  # server must be in it; the checks below follow it, never the server.
+  case $expect in
+    off|on|required) ;;
+    *) say "FAIL MENGER_EXPECT_LOGIN is '${expect}' in $(env_file "$env") — off, on or required (run: deploy/pipeline install)"; fail=1; expect=off ;;
+  esac
+  local configured=off
+  [[ -n ${MENGER_AUTH_PROVIDERS:-}${MENGER_IDENTITY:-} ]] && configured=on
+  [[ ${MENGER_REQUIRE_LOGIN:-} =~ ^(1|true|yes)$ ]] && configured=required
+  if [[ $configured == "$expect" ]]; then say "ok   the settings configure login: $expect, as MENGER_EXPECT_LOGIN says"
+  else say "FAIL the settings configure login: $configured, but MENGER_EXPECT_LOGIN says $expect — is ${lo##*/} the one $env had?"; fail=1; fi
+  for _ in $(seq 1 60); do
+    mode=$(timeout 12 node "$REPO/deploy/smoke-mode.mjs" "$MENGER_WS_PORT" "$MENGER_SHELL_PORT" 2>/dev/null | grep -E '^login: ' || true)
+    [[ -n $mode ]] && break; sleep 0.5
+  done
+  if [[ $mode == "login: $expect" ]]; then say "ok   the server on :$MENGER_WS_PORT is in login: $expect"
+  else say "FAIL the server on :$MENGER_WS_PORT says ${mode:-nothing}, but MENGER_EXPECT_LOGIN says $expect"; fail=1; fi
   # IDENTITY-23: an environment that requires login is checked as a person
   # would meet it — signed in as the smoke account (AUTH-7: which needs
   # tickets.health, viewer somewhere), and without it: AUTH-7 admits that
   # upgrade into the anonymous view, which reaches nothing but the auth door.
-  [[ ${MENGER_REQUIRE_LOGIN:-} =~ ^(1|true|yes)$ ]] && login=1
+  [[ $expect == required ]] && login=1
   if [[ -n $login ]]; then
     local token=""
-    token=$(curl -fsS -m 5 -X POST "${MENGER_SMOKE_TOKEN_URL:-}" -d grant_type=password \
-              --data-urlencode "username=${MENGER_SMOKE_USER:-}" --data-urlencode "password=${MENGER_SMOKE_PASSWORD:-}" \
-              --data-urlencode "audience=${MENGER_SMOKE_AUDIENCE:-}" 2>/dev/null | jq -r '.access_token // empty' || true)
-    [[ -n $token ]] && say "ok   the smoke account signs in" || { say "FAIL the smoke account signs in (MENGER_SMOKE_*)"; fail=1; }
+    # ACCESS-27 (L3): the password and the token never ride in argv — the
+    # form goes to curl on stdin, the token to smoke-health.mjs on stdin.
+    token=$(printf '%s\n%s\n%s' "${MENGER_SMOKE_USER:-}" "${MENGER_SMOKE_PASSWORD:-}" "${MENGER_SMOKE_AUDIENCE:-}" \
+              | jq -rRs 'split("\n") as [$u, $p, $a] | "grant_type=password&username=\($u|@uri)&password=\($p|@uri)&audience=\($a // "" | @uri)"' \
+              | curl -fsS -m 5 -X POST "${MENGER_SMOKE_TOKEN_URL:-}" --data-binary @- 2>/dev/null | jq -r '.access_token // empty' || true)
+    [[ -n $token ]] && say "ok   the smoke account signs in" || { say "FAIL the smoke account signs in (MENGER_SMOKE_* in ${sm##*/})"; fail=1; }
     for _ in $(seq 1 60); do
-      h=$(timeout 12 node "$REPO/deploy/smoke-health.mjs" "$MENGER_WS_PORT" "$token" 2>/dev/null | grep -E 'ticket_count' || true)
+      h=$(timeout 12 node "$REPO/deploy/smoke-health.mjs" "$MENGER_WS_PORT" - <<<"$token" 2>/dev/null | grep -E 'ticket_count' || true)
       [[ -n $h ]] && break; sleep 0.5
     done
     if node "$REPO/deploy/smoke-health.mjs" "$MENGER_WS_PORT" >/dev/null 2>&1; then
@@ -365,7 +502,9 @@ cmd_smoke() {
   done
   [[ -n $d ]] && say "ok   diagrams on :$MENGER_DIAGRAMS_PORT parses" || { say "FAIL diagrams on :$MENGER_DIAGRAMS_PORT"; fail=1; }
   [[ -d $REPO/perf/node_modules/playwright ]] || (cd "$REPO/perf" && npm ci --silent >/dev/null)
-  if node "$REPO/deploy/smoke-browser.mjs" "http://127.0.0.1:$MENGER_SHELL_PORT/" >&2; then :; else fail=1; fi
+  # The smoke account reaches the browser through its environment, never argv.
+  if MENGER_SMOKE_USER=${MENGER_SMOKE_USER:-} MENGER_SMOKE_PASSWORD=${MENGER_SMOKE_PASSWORD:-} \
+       node "$REPO/deploy/smoke-browser.mjs" "http://127.0.0.1:$MENGER_SHELL_PORT/" >&2; then :; else fail=1; fi
   # IDENTITY-38: where the dev sign-in lets the smoke be anyone (test), it
   # plays the login's known attacks against the live server; any that
   # works fails the smoke, so no release reaches prod with one open.
