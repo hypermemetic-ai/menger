@@ -11,7 +11,7 @@
 // printed, and exits 1.
 // Without a token: AUTH-7 admits the upgrade into the anonymous view — `_info`
 // says `view: anonymous` and names only the auth door (auth.providers,
-// auth.login, auth.signup), and `tickets.health` is refused unauthenticated;
+// auth.login, auth.signup; session.providers since ACCESS-19), and `tickets.health` is refused unauthenticated;
 // prints `anonymous view` and exits 0, or what was wrong and exits 1. A
 // release from before AUTH-7 refuses the upgrade outright: `refused`, 0.
 import { readFileSync } from 'node:fs';
@@ -26,7 +26,7 @@ if (given === '-' && !token) {
   console.error('health: no token on stdin');
   process.exit(1);
 }
-const DOOR = ['auth.providers', 'auth.login', 'auth.signup'];
+const DOOR = ['auth.providers', 'auth.login', 'auth.signup', 'session.providers'];
 const ws = new WebSocket(`ws://127.0.0.1:${port}`, token ? { headers: { authorization: `Bearer ${token}` } } : undefined);
 const timer = setTimeout(() => {
   console.error('health: no answer in 10 s');

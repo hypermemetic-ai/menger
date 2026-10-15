@@ -150,14 +150,14 @@ const tag = `probe-${Date.now().toString(36)}`;
 
 // The door. AUTH-7: an anonymous upgrade is admitted — into the anonymous
 // view, which shows only how to sign in and reaches nothing else.
-const DOOR = ['auth.providers', 'auth.login', 'auth.signup'];
+const DOOR = ['auth.providers', 'auth.login', 'auth.signup', 'session.providers'];
 const anon = (await open({ origin: null })).ws;
 check(anon, 'an anonymous upgrade is admitted into the anonymous view (AUTH-6)');
 if (anon) {
   const i = await info(anon);
   check(i.view === 'anonymous' && JSON.stringify(i.auth?.methods) === JSON.stringify(DOOR), `an anonymous _info names only the door: ${DOOR.join(', ')}`);
   const v = await viewOf(anon);
-  check(JSON.stringify(v) === JSON.stringify({ auth: ['login', 'providers', 'signup'] }), `an anonymous schema shows only the auth door (${JSON.stringify(v)})`);
+  check(JSON.stringify(v) === JSON.stringify({ auth: ['login', 'providers', 'signup'], session: ['providers'] }), `an anonymous schema shows only the auth door (${JSON.stringify(v)})`);
   let reached = [];
   for (const m of ['tickets.health', 'tickets.list', 'comments.list', 'members.mine', 'session.whoami', 'auth.whoami', 'auth.roles']) {
     if (refusalOf(await call(anon, m)).error_kind !== 'unauthenticated') reached.push(m);
