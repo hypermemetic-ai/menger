@@ -157,6 +157,8 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
         });
     };
     let send_key = send.clone();
+    let area = NodeRef::<leptos::html::Textarea>::new();
+    crate::grow::follow(area, move || body.track());
     let count = move || rows.with(|r| r.as_ref().map(|r| r.len()));
     view! {
         <section class="convsec" id="conversation" data-ticket-id=ticket.clone()>
@@ -176,7 +178,8 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
             }}
             <div class="cnew">
                 <textarea
-                    class="cbox"
+                    node_ref=area
+                    class="cbox grow"
                     rows="3"
                     aria-label=format!("Comment on {ticket}")
                     placeholder=placeholder(&ticket)

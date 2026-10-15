@@ -2081,6 +2081,7 @@
   #annot-layer textarea {
     display: block; width: 100%; resize: vertical; font: calc(13px * var(--text-scale))/1.45 var(--sans); color: var(--ink);
     background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); padding: .35rem .45rem;
+    min-height: calc(4lh + .7rem + 2 * var(--border));
   }
   #annot-layer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   #annot-layer .annot-acts { display: flex; gap: .45rem; justify-content: flex-end; align-items: center; margin-top: .45rem; }
@@ -2196,9 +2197,15 @@
   section.convsec .cnew { display: flex; flex-direction: column; gap: .35rem; }
   section.convsec textarea.cbox {
     font: inherit; color: var(--ink); background: var(--bg); resize: vertical; min-height: 4.2em;
+    min-height: calc(3lh + .8rem + 2 * var(--border));
     border: var(--border) solid var(--line); border-radius: var(--radius); padding: .4rem .55rem;
   }
   section.convsec textarea.cbox:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  /* APP-27: an answer box grows with what is typed — from its resting height
+     (each box's min-height: its rows) to half the viewport, then it scrolls.
+     field-sizing where the engine has it; src/grow.rs fits it elsewhere. */
+  textarea.grow { max-height: 50vh; overflow-y: auto; }
+  @supports (field-sizing: content) { textarea.grow { field-sizing: content; } }
   section.convsec .cnewacts { display: flex; align-items: center; justify-content: flex-end; gap: .6rem; }
   section.convsec .csend { padding: .15rem .9rem; }
   section.convsec .csend:disabled { opacity: .5; cursor: default; }
@@ -2634,7 +2641,7 @@
     letter-spacing: .12em; text-transform: uppercase; background: var(--accent); color: var(--bg);
   }
   #qtray .qopts.multi, #qtray .qopts.text { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
-  #qtray .qopts.text textarea { flex: 1 1 320px; min-height: 3em; font-family: var(--sans); }
+  #qtray .qopts.text textarea { flex: 1 1 320px; min-height: 3em; min-height: calc(2lh + 4px + 2 * var(--border)); font-family: var(--sans); }
   #qtray .qtick { display: inline-flex; align-items: center; gap: 6px; }
   #qtray .qdone { color: var(--live); margin: 0 0 12px; }
   #qtray .qacts { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -2652,6 +2659,7 @@
   #qtray .qchange.open { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
   #qtray .qchange textarea {
     font: inherit; font-family: var(--sans); color: var(--ink); background: var(--bg); min-height: 4.2em; resize: vertical;
+    min-height: calc(3lh + 16px + 2 * var(--border));
     border: var(--border) solid var(--tree-line); border-radius: var(--radius); padding: 8px 10px;
   }
   #qtray .qchange textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }

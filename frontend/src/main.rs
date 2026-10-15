@@ -271,6 +271,7 @@ mod dom;
 mod filter;
 mod flat;
 mod frame;
+mod grow;
 mod gesture;
 mod highlight;
 mod history;
