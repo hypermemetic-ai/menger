@@ -69,7 +69,7 @@ pub use types::{
     PlacementChange, RootRow, SearchWord, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
 // MENGER-13: the transition log's vocabulary.
-pub use types::{Tombstone, Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, SYSTEM_ACTOR};
+pub use types::{ShortcodeMove, Tombstone, Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, SYSTEM_ACTOR};
 
 /// IDENTITY-19: the rule every method asks first — who a call acts as, or
 /// why it is refused. Server-only.

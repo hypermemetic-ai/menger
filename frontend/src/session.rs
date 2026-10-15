@@ -594,6 +594,37 @@ fn deleted(ids: &[String], tombstones: Vec<Tombstone>, board: board::Board) {
     }
 }
 
+/// ACT-6: `reshortcoded`: each old id gone from every view as a delete's,
+/// each new ticket arrived as a birth's — and the open page, if it was one
+/// of them, follows it to its new id.
+fn reshortcoded(moves: &[menger_tickets_api::ShortcodeMove], tickets: Vec<Ticket>, board: board::Board) {
+    let gone: Vec<String> = moves.iter().map(|m| m.from.clone()).collect();
+    board.deleted(&gone);
+    for id in &gone {
+        if let Some((epic, _)) = crate::kids::key(id) {
+            nav::departed(id, epic);
+        }
+        cache::forget(id);
+    }
+    for ticket in tickets {
+        let summary = TicketSummary::from(&ticket);
+        remember(&summary);
+        nav::arrived(&summary, true);
+        wanted(&summary);
+        board.created(&summary);
+    }
+    let open = OPEN_BODY.with(|b| b.borrow().as_ref().map(|(id, _)| id.clone()));
+    if let Some(m) = open.and_then(|open| moves.iter().find(|m| m.from == open)) {
+        follow(&m.to);
+    }
+}
+
+/// ACT-6: the ticket page at `id` instead of the one it is on — in place, so
+/// Back does not return to an id that only names this one.
+fn follow(id: &str) {
+    let _ = crate::dom::window().location().replace(&format!("#/ticket/{id}"));
+}
+
 /// ACT-5: `undeleted`: each ticket back as if born — its tombstone forgotten.
 fn undeleted(tickets: Vec<Ticket>, board: board::Board) {
     TOMBSTONES.with(|t| t.update(|t| tickets.iter().for_each(|x| drop(t.remove(&x.id)))));
@@ -993,6 +1024,8 @@ async fn session(
             // ACT-5: tickets gone for good, and back.
             ClientEvent::Data(TicketsEvent::Deleted { ids, tombstones }) => deleted(&ids, tombstones, board),
             ClientEvent::Data(TicketsEvent::Undeleted { tickets, .. }) => undeleted(tickets, board),
+            // ACT-6: tickets moved into another shortcode, renumbered.
+            ClientEvent::Data(TicketsEvent::Reshortcoded { moves, tickets }) => reshortcoded(&moves, tickets, board),
             // SCALE-24 (MNG-10): a shortcode row's roll-up moved.
             ClientEvent::Data(TicketsEvent::GroupChanged { group }) => tree.group_changed(group),
             // WAVE-6: kept placements a write moved — on each row a view
@@ -1231,6 +1264,12 @@ pub(crate) fn load_ticket(
                         // `try_`: the page can have been left while `get`
                         // was out (SCALE-25's palette opens one and moves on
                         // in a breath), and its signals with it.
+                        // ACT-6: an old id names a moved ticket — the page
+                        // goes to its id now (the old URL keeps working).
+                        TicketsEvent::Ticket { ticket } if ticket.id != id && ticket.moved_from.iter().any(|m| m.eq_ignore_ascii_case(&id)) => {
+                            holder.hold(TicketSummary::from(&ticket));
+                            follow(&ticket.id);
+                        }
                         TicketsEvent::Ticket { ticket } => {
                             body.try_set(Some(ticket.body.clone()));
                             holder.hold(TicketSummary::from(&ticket));
@@ -1508,6 +1547,7 @@ mod tests {
             body: String::new(),
             created_unix: 0,
             updated_unix: 0,
+            moved_from: Vec::new(),
         }
     }
 

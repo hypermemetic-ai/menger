@@ -697,6 +697,66 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
     assert_eq!(rows[3], ("PT-4".to_string(), None), "a doc is placed nowhere");
 }
 
+/// ACT-6: `reshortcode` on the real wire — three tickets moved with a
+/// blocker between them, each reached by its old id afterwards: `get`
+/// answers the new ticket with `moved_from` (what the app's old URL asks,
+/// and what a chip in a body asks for the ref it names), the blocker named
+/// anew, and `watch` saying `reshortcoded`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
+    let port = start_server().await;
+    let transport = connect(port).await;
+    let client = TicketsClient::new(&transport);
+    let mut watch = client.watch(None, None, None, None);
+    let make = |epic: &str, kind: &str, blocked_by: Option<Vec<String>>, body: Option<&str>| {
+        client.create_all(epic.into(), "t".into(), Some(kind.into()), None, blocked_by, body.map(Into::into), None, None)
+    };
+    created(make("RS", "scope", None, None).await.expect("create")); // RS-1
+    created(make("RS", "build", None, None).await.expect("create")); // RS-2
+    created(make("RS", "build", Some(vec!["RS-2".into()]), None).await.expect("create")); // RS-3
+    created(make("RS", "build", None, None).await.expect("create")); // RS-4
+    created(make("TO", "scope", None, None).await.expect("create")); // TO-1
+    // A body that cites one of them by the id it has now.
+    let citing = created(make("RS", "doc", None, Some(r#"See <m-ticket ref="RS-3"></m-ticket>."#)).await.expect("create"));
+    let moved = client
+        .reshortcode_all(vec!["RS-2".into(), "RS-3".into(), "RS-4".into()], "TO".into(), None, None, None, Some("wire".into()))
+        .await
+        .expect("reshortcode");
+    match one(moved) {
+        TicketsEvent::Reshortcoded { moves, tickets } => {
+            let pairs: Vec<(String, String)> = moves.into_iter().map(|m| (m.from, m.to)).collect();
+            assert_eq!(pairs, [("RS-2", "TO-2"), ("RS-3", "TO-3"), ("RS-4", "TO-4")].map(|(a, b)| (a.to_string(), b.to_string())));
+            assert_eq!(tickets[1].blocked_by, ["TO-2"], "the block between them, by identity");
+        }
+        other => panic!("expected reshortcoded, got {other:?}"),
+    }
+    for (old, new) in [("RS-2", "TO-2"), ("RS-3", "TO-3"), ("rs-4", "TO-4")] {
+        match one(client.get_all(old.into()).await.expect("get")) {
+            TicketsEvent::Ticket { ticket } => {
+                assert_eq!(ticket.id, new, "{old}");
+                assert_eq!(ticket.moved_from, [old.to_ascii_uppercase()], "{old}");
+                assert_eq!(ticket.parent.as_deref(), Some("TO-1"));
+            }
+            other => panic!("expected the ticket for {old}, got {other:?}"),
+        }
+    }
+    // The chip's ref, as the body still writes it, reaches the moved ticket.
+    let body = match one(client.get_all(citing.id.clone()).await.expect("get")) {
+        TicketsEvent::Ticket { ticket } => ticket.body,
+        other => panic!("{other:?}"),
+    };
+    let cited = body.split("ref=\"").nth(1).and_then(|r| r.split('"').next()).expect("a ref").to_string();
+    match one(client.get_all(cited).await.expect("get")) {
+        TicketsEvent::Ticket { ticket } => assert_eq!(ticket.id, "TO-3"),
+        other => panic!("{other:?}"),
+    }
+    let mut heard = false;
+    while !heard {
+        let ev = tokio::time::timeout(Duration::from_secs(5), watch.next()).await.expect("watch").expect("open");
+        heard = matches!(ev, Ok(ClientEvent::Data(TicketsEvent::Reshortcoded { .. })));
+    }
+}
+
 /// COMMENT-2: the `comments` activation through its emitted client —
 /// `CommentsClient<&WsTransport>`, from the activation's own `impl` in
 /// `menger-tickets-api`, as the browser app takes it: `add` with a typed

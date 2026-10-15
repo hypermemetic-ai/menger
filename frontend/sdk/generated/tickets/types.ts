@@ -437,6 +437,13 @@ export type Severity = "Critical" | "High" | "Medium" | "Low";
 /** A shortcode's identity, minted by the store: its code for a shortcode made before ORG-3, CODE.N for a namesake made after */
 export type ShortcodeId = string;
 
+/** ACT-6: one ticket a `reshortcode` moved — the id it had and the id it
+has. The old one keeps naming it (the store's pins). */
+export interface ShortcodeMove {
+  from: string;
+  to: string;
+}
+
 /** COMP-8: one declared slot — `<slot name="title">Optional title
 markup.</slot>`; `name` is `null` for the default slot. */
 export interface SlotDoc {
@@ -486,6 +493,12 @@ each once, at most 16; `[]` when none. Moved by `tickets.label`
 alone, and asked by the filter cell `label <name>`. `default`: a
 server from before MENGER-12 sends none. */
   labels?: string[];
+  /** ACT-6: the ids this ticket had before a `reshortcode` moved it,
+sorted — each still names it (`get THEME-9` answers LOOK-3). Filled
+by `get` alone; omitted on the wire when there is none, and never on
+a summary (the row is the cache's, and an alias is not one of its
+fields). */
+  movedFrom?: string[];
   /** AGS-19: the ticket this one is an output of, if any. Any epic; the
 parent must exist at creation and the chain is acyclic. */
   parent?: string | null;
@@ -766,6 +779,18 @@ children and blocks put back where nothing has moved them since. */
 export interface TicketsEventUndeleted {
   type: 'undeleted';
   ids: string[];
+  tickets: Ticket[];
+}
+
+/** ACT-6: `reshortcode`'s answer, and its write's event on `watch` —
+each moved ticket's old id and new one (`moves`, in the order they
+were numbered), and every moved ticket as the write left it
+(`tickets`, the same order; a scope `new_scope` made first of all).
+An old id names its new ticket from then on. After it on `watch`: the
+groups and placements that moved, and a filter's `left` / `entered`. */
+export interface TicketsEventReshortcoded {
+  type: 'reshortcoded';
+  moves: ShortcodeMove[];
   tickets: Ticket[];
 }
 
@@ -1219,7 +1244,7 @@ export interface TicketsEventQueueRecord {
   record: QueueRecord;
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -1240,6 +1265,7 @@ export function isTicketsEventUpdated(e: TicketsEvent): e is TicketsEventUpdated
 export function isTicketsEventUpdatedMany(e: TicketsEvent): e is TicketsEventUpdatedMany { return e.type === 'updated_many'; }
 export function isTicketsEventDeleted(e: TicketsEvent): e is TicketsEventDeleted { return e.type === 'deleted'; }
 export function isTicketsEventUndeleted(e: TicketsEvent): e is TicketsEventUndeleted { return e.type === 'undeleted'; }
+export function isTicketsEventReshortcoded(e: TicketsEvent): e is TicketsEventReshortcoded { return e.type === 'reshortcoded'; }
 export function isTicketsEventChildrenChanged(e: TicketsEvent): e is TicketsEventChildrenChanged { return e.type === 'children_changed'; }
 export function isTicketsEventParentChanged(e: TicketsEvent): e is TicketsEventParentChanged { return e.type === 'parent_changed'; }
 export function isTicketsEventChildRemoved(e: TicketsEvent): e is TicketsEventChildRemoved { return e.type === 'child_removed'; }

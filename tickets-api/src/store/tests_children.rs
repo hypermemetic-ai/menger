@@ -293,6 +293,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
                     body: String::new(),
                     created_unix: 0,
                     updated_unix: 0,
+                    moved_from: Vec::new(),
                 },
             )
             .unwrap();

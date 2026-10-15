@@ -584,6 +584,20 @@ a queue that is always loud is a queue the owner learns to ignore.
   synapse -P 4455 menger tickets delete --ids THEME-12 --children reparent
   synapse -P 4455 menger tickets undelete --ids MENGER-40
   ```
+
+  **`tickets.reshortcode`** (ACT-6) moves tickets into another shortcode,
+  renumbered in the order given, all or none — into one there is (under
+  its root, or `--parent`), one `--new-scope TITLE --parent P` mints first,
+  or, for a scope moved into a code that does not exist, a shortcode it
+  roots itself; a root moves only with `--with-children` and its whole
+  shortcode (a rename). The old id is pinned to the new ticket — `get`,
+  blockers, filters, URLs and body chips follow it, `get` says
+  `moved_from` — and every record moves with it:
+
+  ```sh
+  synapse -P 4455 menger tickets reshortcode --ids THEME-9,THEME-10 --to LOOK
+  synapse -P 4455 menger tickets reshortcode --ids MENGER-2 --to APP --with-children true
+  ```
 - Architecture (owner-pinned): a service-wide in-memory cache
   (`src/store.rs`) is the ONLY interface the application has to tickets.
   Reads hit the cache, never storage; reads are async-safe (no lock

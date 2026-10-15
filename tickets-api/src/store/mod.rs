@@ -231,6 +231,7 @@ fn whole(row: Row, body: String) -> Ticket {
         body,
         created_unix,
         updated_unix,
+        moved_from: Vec::new(),
     }
 }
 
@@ -808,6 +809,10 @@ pub enum Change {
     Deleted { ids: Vec<String>, tombstones: Vec<crate::types::Tombstone> },
     /// ACT-5: an `undelete` brought `tickets` back — first of its write.
     Undeleted { ids: Vec<String>, tickets: Vec<Ticket> },
+    /// ACT-6: a `reshortcode` moved each ticket of `moves` from its old id to
+    /// its new one — `tickets` as the write left them — first of its write
+    /// ([`reshortcode`]).
+    Reshortcoded { moves: Vec<crate::types::ShortcodeMove>, tickets: Vec<Ticket> },
     /// FILTER-4: every ticket whose cell the write moved — a birth, a status
     /// change and the blocker crossings it fans out to, a first commit or a
     /// last, SDLC-13: a kind changed — worked out once per write before it
@@ -868,6 +873,8 @@ impl Change {
             Self::UnderMoved { .. } | Self::UpdatedMany { .. } => None,
             // ACT-5: its ids in any shortcode — see `in_epic`.
             Self::Deleted { .. } | Self::Undeleted { .. } => None,
+            // ACT-6: its tickets in two shortcodes or more — see `in_epic`.
+            Self::Reshortcoded { .. } => None,
         }
     }
 
@@ -887,6 +894,7 @@ impl Change {
             Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => Some(self),
             Self::UpdatedMany { ids, changed } => update_many::in_epic(ids, changed, epic),
             Self::Deleted { .. } | Self::Undeleted { .. } => delete::in_epic(self, epic),
+            Self::Reshortcoded { moves, tickets } => reshortcode::in_epic(moves, tickets, epic),
             // FILTER-4: each move filtered where it is turned into events.
             Self::CellsMoved { .. } | Self::UnderMoved { .. } => Some(self),
             other => (other.shortcode() == Some(epic)).then_some(other),
@@ -3540,7 +3548,11 @@ impl Store {
     /// [`StoreError::Ambiguous`], each by its full address.
     pub async fn get(&self, id: &str) -> Result<Ticket, StoreError> {
         let (row, written) = self.addressed(id)?;
-        self.full_one(row, written).await
+        // ACT-6: and the ids it had, when a move named it anew.
+        let moved_from = self.tickets.read().expect("store lock poisoned").shortcodes.aliases_of(&row.id);
+        let mut ticket = self.full_one(row, written).await?;
+        ticket.moved_from = moved_from;
+        Ok(ticket)
     }
 
     /// ORG-3: the row any address names, and the cache's count of writes —
@@ -5417,6 +5429,10 @@ pub use update_many::{refused as refused_many, Selection, UpdatedMany, UPDATE_MA
 /// ACT-5: `delete` and `undelete` — tombstones, the purge, the rebuild.
 mod delete;
 pub use delete::{Children, Deleted, Deletion, Undeleted, KEEP_BODY_FOR, PURGE_EVERY};
+
+// ACT-6: tickets moved into another shortcode, renumbered, their old ids kept.
+mod reshortcode;
+pub use reshortcode::{Reshortcode, Reshortcoded};
 /// THEME-8: the themes and what the site and each shortcode say.
 mod themes;
 pub use themes::ThemeChange;
@@ -5695,3 +5711,6 @@ mod tests_update_many;
 /// ACT-5: `delete`, `undelete`, the purge — every derived structure after.
 #[cfg(test)]
 mod tests_delete;
+/// ACT-6: `reshortcode` — a test per row of the ticket's table.
+#[cfg(test)]
+mod tests_reshortcode;

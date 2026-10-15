@@ -685,6 +685,10 @@
       const stream = this.rpc.call("tickets.reopen_input", { input, ticket });
       yield* extractData(stream);
     }
+    async* reshortcode(ids, to, message, newScope, parent, withChildren) {
+      const stream = this.rpc.call("tickets.reshortcode", { ids, message, new_scope: newScope, parent, to, with_children: withChildren });
+      yield* extractData(stream);
+    }
     async schema() {
       const stream = this.rpc.call("tickets.schema", {});
       return collectOne(stream);

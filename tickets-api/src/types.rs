@@ -444,6 +444,13 @@ pub struct Ticket {
     pub body: String,
     pub created_unix: i64,
     pub updated_unix: i64,
+    /// ACT-6: the ids this ticket had before a `reshortcode` moved it,
+    /// sorted — each still names it (`get THEME-9` answers LOOK-3). Filled
+    /// by `get` alone; omitted on the wire when there is none, and never on
+    /// a summary (the row is the cache's, and an alias is not one of its
+    /// fields).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moved_from: Vec<String>,
 }
 
 /// MNG-9: a ticket row without its body — every field of [`Ticket`]
@@ -1404,6 +1411,14 @@ pub struct Tombstone {
     pub unblocked: Vec<String>,
 }
 
+/// ACT-6: one ticket a `reshortcode` moved — the id it had and the id it
+/// has. The old one keeps naming it (the store's pins).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ShortcodeMove {
+    pub from: String,
+    pub to: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TicketsEvent {
@@ -1521,6 +1536,13 @@ pub enum TicketsEvent {
     /// tickets brought back (whole), in the store's order, with their
     /// children and blocks put back where nothing has moved them since.
     Undeleted { ids: Vec<String>, tickets: Vec<Ticket> },
+    /// ACT-6: `reshortcode`'s answer, and its write's event on `watch` —
+    /// each moved ticket's old id and new one (`moves`, in the order they
+    /// were numbered), and every moved ticket as the write left it
+    /// (`tickets`, the same order; a scope `new_scope` made first of all).
+    /// An old id names its new ticket from then on. After it on `watch`: the
+    /// groups and placements that moved, and a filter's `left` / `entered`.
+    Reshortcoded { moves: Vec<ShortcodeMove>, tickets: Vec<Ticket> },
     /// AGS-19: the ticket `id` gained the child `added` — a child was born
     /// naming it as `parent`, or was moved under it by `set_parent`
     /// (yielded by `watch`). SCALE-4: the parent's id and its new
@@ -2144,6 +2166,7 @@ mod tests {
             body: "## Problem\n\nthe weight of a list".into(),
             created_unix: 1,
             updated_unix: 2,
+            moved_from: vec!["OLD-9".into()],
         };
         let summary = TicketSummary::from(ticket.clone());
 
@@ -2155,8 +2178,9 @@ mod tests {
         let full = serde_json::to_value(&ticket).unwrap();
         let slim = serde_json::to_value(&summary).unwrap();
         let mut expected = keys(&full);
-        expected.retain(|k| k != "body");
-        assert_eq!(keys(&slim), expected, "a summary is a ticket minus the body");
+        // ACT-6: and `moved_from`, which `get` alone says.
+        expected.retain(|k| k != "body" && k != "moved_from");
+        assert_eq!(keys(&slim), expected, "a summary is a ticket minus the body (and get's moved_from)");
 
         // …and every shared field carries the same value.
         for k in keys(&slim) {

@@ -790,6 +790,7 @@ mod tests {
             body: body.into(),
             created_unix: 0,
             updated_unix: 0,
+            moved_from: Vec::new(),
         }
     }
 

@@ -263,6 +263,14 @@
         "input",
         "ticket"
       ],
+      "reshortcode": [
+        "ids",
+        "message",
+        "new_scope",
+        "parent",
+        "to",
+        "with_children"
+      ],
       "schema": [],
       "search": [
         "filter",

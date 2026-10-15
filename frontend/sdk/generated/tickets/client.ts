@@ -57,6 +57,8 @@ export interface TicketsClient {
   readySet(after?: string | null, epic?: string | null, filter?: string | null, limit?: number | null, summary?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
   /** Reopen a closed input; yields input_changed */
   reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
+  /** Move tickets into another shortcode, renumbered there in the order given (a scope moved into a new code becomes its root; --new-scope makes the shortcode first; a root moves with --with-children as a rename); old ids keep resolving (get says moved_from); all or none; yields reshortcoded { moves, tickets } */
+  reshortcode(ids: string[], to: string, message?: string | null, newScope?: string | null, parent?: string | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
   /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
   schema(): Promise<unknown>;
   /** Search inside tickets: the tickets whose title or body holds every word of the query (prefixes and typos too), best first, each with the passage that matched; optionally under a filter, paged with offset + limit */
@@ -81,7 +83,7 @@ export interface TicketsClient {
   update(id: string, block?: string[] | null, body?: string | null, kind?: string | null, message?: string | null, parent?: string | null, severity?: string | null, source?: string | null, status?: string | null, title?: string | null, unblock?: string[] | null): AsyncGenerator<TicketsEvent>;
   /** The same update to many tickets in one write — kind, status, parent, severity, blockers, labels; by ids or a filter; all lands or none does; yields updated_many { ids, changed, tickets, unchanged } */
   updateMany(block?: string[] | null, filter?: string | null, ids?: string[] | null, kind?: string | null, label?: string[] | null, max?: number | null, message?: string | null, parent?: string | null, severity?: string | null, source?: string | null, status?: string | null, tz?: string | null, unblock?: string[] | null, unlabel?: string[] | null): AsyncGenerator<TicketsEvent>;
-  /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
+  /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
   watch(epic?: string | null, filter?: string | null, membership?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
   /** The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts */
   waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent>;
@@ -218,6 +220,11 @@ class TicketsClientImpl implements TicketsClient {
 
   async *reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.reopen_input', { input, ticket });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *reshortcode(ids: string[], to: string, message?: string | null, newScope?: string | null, parent?: string | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.reshortcode', { ids, message, new_scope: newScope, parent, to, with_children: withChildren });
     yield* extractData<TicketsEvent>(stream);
   }
 

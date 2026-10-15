@@ -214,6 +214,12 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
             let tickets = tickets.iter().filter(|t| sees(&t.id)).cloned().collect();
             return (!ids.is_empty()).then_some(TicketsEvent::Undeleted { ids, tickets });
         }
+        // ACT-6: a move, of the tickets the reach holds where they are now.
+        TicketsEvent::Reshortcoded { moves, tickets } => {
+            let moves: Vec<crate::types::ShortcodeMove> = moves.iter().filter(|m| sees(&m.to)).cloned().collect();
+            let tickets = tickets.iter().filter(|t| sees(&t.id)).cloned().collect();
+            return (!moves.is_empty()).then_some(TicketsEvent::Reshortcoded { moves, tickets });
+        }
         TicketsEvent::Hit { summary, .. } => Some(summary.id.clone()),
         // MENGER-39: a queue write, a queue row and a history line are their
         // ticket's.

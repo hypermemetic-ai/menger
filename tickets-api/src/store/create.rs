@@ -248,6 +248,7 @@ impl Store {
                 body: new.body,
                 created_unix: now,
                 updated_unix: now,
+                moved_from: Vec::new(),
             };
 
             // Symmetry, in one place: every existing ticket this create

@@ -542,6 +542,12 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
             let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(t.shortcode.as_str())).collect();
             (!ids.is_empty()).then_some(E::Undeleted { ids, tickets })
         }
+        // ACT-6: a move, of the tickets the frame reaches where they are now.
+        E::Reshortcoded { moves, tickets } => {
+            let moves: Vec<_> = moves.into_iter().filter(|m| reach.holds_id(&m.to)).collect();
+            let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(t.shortcode.as_str())).collect();
+            (!moves.is_empty()).then_some(E::Reshortcoded { moves, tickets })
+        }
         // The reach's own count, never the viewer's whole store.
         E::Health { version, unix_now, .. } => Some(E::Health { version, unix_now, ticket_count: reach.tickets }),
         // A dangling blocker's id names no ticket: nothing to read.
@@ -1152,6 +1158,7 @@ mod tests {
             body: format!("the body of {id}"),
             created_unix: 0,
             updated_unix: 0,
+            moved_from: Vec::new(),
         }
     }
 

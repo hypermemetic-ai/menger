@@ -1,8 +1,33 @@
-//! Two reads as their streams, beside the activation so its file keeps only
-//! its methods (MENGER-29): `blockers`, and `history` — MENGER-13's, with
-//! MENGER-39's queue records after its transitions.
+//! Three reads as their streams, beside the activation so its file keeps
+//! only its methods (MENGER-29): `get`, `blockers`, and `history` —
+//! MENGER-13's, with MENGER-39's queue records after its transitions.
 
 use super::*;
+
+/// `get` — one ticket by any address, in the caller's reach: `ticket` (ACT-6:
+/// with `moved_from` when an old id named it), a deleted one's tombstone
+/// (ACT-5), or `not_found`.
+pub(super) fn get_stream(store: Arc<Store>, admitted: Result<Caller, String>, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    stream! {
+        let caller = match admitted {
+            Ok(caller) => caller,
+            Err(message) => {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+        };
+        if caller.require(&[id.as_str()], &store).is_err() {
+            yield TicketsEvent::NotFound { id };
+            return;
+        }
+        match store.get(&id).await {
+            Ok(ticket) => yield TicketsEvent::Ticket { ticket },
+            // ACT-5: a deleted ticket answers its tombstone.
+            Err(StoreError::NotFound(_)) => yield store.tombstone(&id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
+            Err(e) => yield refusal(e),
+        }
+    }
+}
 
 /// `blockers` — the ticket's blockers in its reach, each resolved or
 /// dangling.
