@@ -63,8 +63,8 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
 - **`synapse`** (`../synapse`; on PATH) — the CLI over any Plexus backend.
   This is how an agent, a worker or a shell script reads and writes
   tickets; prefer it to hand-rolled curl against the REST bridge.
-  **Read `../ought/synapse/SKILL.md` before issuing synapse commands** —
-  it is the house's invocation contract (where flags go, how to navigate
+  **Read `../menger-skills/reaching/SKILL.md` before issuing synapse
+  commands** — it is the house's invocation contract (where flags go, how to navigate
   to a method, how to discover its parameters from the CLI itself); what
   follows here is only what is particular to menger.
 
@@ -336,8 +336,8 @@ id refuses the write):
 
 An option's value is its `value`, else its `name`.
 
-**The owner answers; an agent doesn't** (ought: an agent never answers its
-own decision). A reader's click records the answer with source `app`; a
+**The owner answers; an agent doesn't** (menger-skills `asking`: an agent
+never answers its own decision). A reader's click records the answer with source `app`; a
 reader may change or clear it until the input is closed.
 
 **Read what's waiting, act, then close:**
@@ -534,10 +534,11 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   never asked only in chat. `asking` and `label <name>` are filter cells
   (FILTER-3's language); Home's "Needs you" panel shows `asking or label
   needs-you`.
-- Ticketing follows **ought** (`../ought`, the house methodology — its
-  `ticketing/`, `building/`, `methodology/` skills). Its lifecycle is
-  `Pending → Ready → active → in review → done` (+ `archived`, always
-  with a pointer). Workers move their ticket across it (owner,
+- Ticketing follows **menger-skills** (`../menger-skills`, the house
+  methodology — its `ticketing/`, `planning/`, `asking/`, `building/`
+  skills; `ought` is retired, owner 2026-10-14). Its lifecycle is
+  `Pending → Ready → Coding → In Review → Complete` (+ `Superseded` /
+  `Canceled`). Workers move their ticket across it (owner,
   2026-09-06): mark `active` the moment work starts (so no leaf is
   double-claimed) and record the branch on the ticket (`tickets.amend`
   rewrites its body — MNG-16); flip to `in review` in the commit that
@@ -549,10 +550,8 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   shows where the work is. The server holds both worker states (SDLC-7)
   under menger's names: set **`Coding`** when work starts and **`In
   Review`** in the commit that finishes it. `set_status` also takes
-  ought's words — `active` is `Coding`, `in review` is `In Review` — and
-  stores the canonical spelling. The merge still sets `Complete`
-  (menger's current name for `done`; SDLC-2 reconciles the vocabulary
-  with ought's). **Link the commit** (SDLC-9): in the step that flips the
+  the legacy words — `active` is `Coding`, `in review` is `In Review` —
+  and stores the canonical spelling. The merge sets `Complete`. **Link the commit** (SDLC-9): in the step that flips the
   ticket to `In Review`, the worker links its commit(s) with
   `tickets.link_commits` (`synapse -P 4455 menger tickets link_commits
   --id MNG-10 --commits 77df9a0`, the flag repeated per commit;
