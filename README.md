@@ -2444,7 +2444,9 @@ sheet above the tray — the urgency, who queued it and when, the reason, the
 named input's question answerable in place (recorded with source `app`;
 answering takes the ticket out of the queue, the input stays the agent's to
 close), **request changes** (APP-23, below), *open the ticket*, *snooze 10m*
-and *done with it*. A hidden tab's
+and *done with it*. The open tab again, Esc, or a press anywhere outside
+the tray — in a ticket's framed body too — lowers the sheet (APP-26; never
+while a submit is out). A hidden tab's
 title carries the count, `(2) menger`. Motion follows the setting: `calm`
 keeps the slide and drops the nudge, `none` moves nothing.
 
