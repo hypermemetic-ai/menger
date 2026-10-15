@@ -501,6 +501,18 @@ cmd_smoke() {
     [[ -n $d ]] && break; sleep 0.5
   done
   [[ -n $d ]] && say "ok   diagrams on :$MENGER_DIAGRAMS_PORT parses" || { say "FAIL diagrams on :$MENGER_DIAGRAMS_PORT"; fail=1; }
+  # ACCESS-25: every port answers only its own names — a page that rebinds
+  # its name to 127.0.0.1 is refused 421 before anything routes. A release
+  # from before ACCESS-25 answers any name (a rollback to one still passes):
+  # checked where the release's menger knows --allowed-host.
+  if "$bin/menger" --help 2>/dev/null | grep -e --allowed-host >/dev/null; then
+    local p code ports="$MENGER_WS_PORT $MENGER_SHELL_PORT $MENGER_DIAGRAMS_PORT"
+    [[ ${MENGER_NO_REST:-} =~ ^(1|true|yes)$ ]] || ports="$ports $MENGER_REST_PORT"
+    for p in $ports; do
+      code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -H 'Host: evil.example' "http://127.0.0.1:$p/" || true)
+      [[ $code == 421 ]] && say "ok   :$p refuses Host: evil.example (421)" || { say "FAIL :$p answers Host: evil.example ($code)"; fail=1; }
+    done
+  fi
   [[ -d $REPO/perf/node_modules/playwright ]] || (cd "$REPO/perf" && npm ci --silent >/dev/null)
   # The smoke account reaches the browser through its environment, never argv.
   if MENGER_SMOKE_USER=${MENGER_SMOKE_USER:-} MENGER_SMOKE_PASSWORD=${MENGER_SMOKE_PASSWORD:-} \

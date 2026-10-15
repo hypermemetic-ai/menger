@@ -97,7 +97,13 @@ async fn main() -> anyhow::Result<()> {
         builder = builder.with_stdio();
         tracing::info!("Starting stdio transport");
     } else {
-        builder = builder.with_websocket(args.port).with_allowed_origins(no_browser_origins());
+        // ACCESS-25: loopback only — bound to 127.0.0.1, and answering only
+        // the names loopback has, so a page that rebinds its own name here
+        // is refused 421 before anything else is read.
+        builder = builder
+            .with_websocket(args.port)
+            .with_allowed_origins(no_browser_origins())
+            .with_allowed_hosts(plexus_transport::host::loopback_hosts(args.port));
         tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
     }
     let served = builder.build().await?.serve().await;

@@ -114,7 +114,10 @@ anonymous socket reaches nothing); `tickets.health` answers on
 the env's port; `--verify-derived` is consistent; the app is served stamped
 with the env's WebSocket port; `diagrams` parses a diagram; a headless browser
 loads the app to `live · WS` with the nav drawn and no page errors, its page
-under its Content-Security-Policy and nothing refused by one (ACCESS-28). On test,
+under its Content-Security-Policy and nothing refused by one (ACCESS-28); every port
+(WebSocket, shell, REST unless `MENGER_NO_REST`, diagrams) refuses a request
+naming `Host: evil.example` with 421 (ACCESS-25; skipped for a release whose
+menger predates `--allowed-host`, so a rollback to one still passes). On test,
 behind the login with the dev sign-in, `deploy/probe-auth.mjs` then plays the
 login's known attacks against the live server (IDENTITY-38): foreign and
 anonymous sockets, framing, reads and writes across shortcodes, a blocker in a

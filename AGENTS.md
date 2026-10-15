@@ -17,6 +17,12 @@ Bare `cargo run` takes prod's ports (4455–4457) **and prod's database**
 (the default `--db-path` is `~/.local/share/menger/tickets.db`) — never run
 it that way while prod is installed.
 
+Every listener answers only its own names (ACCESS-25): `127.0.0.1:<port>`,
+`localhost:<port>`, `--public-url`'s host, and each `--allowed-host`
+(repeatable; `MENGER_ALLOWED_HOSTS`, `;`-separated); any other `Host` is
+refused 421 before routing — reach a server by those names (synapse, curl
+and the scripts do). README "Run" → Hosts.
+
 ## Deploying
 
 menger runs in two environments on this machine, **prod** (4455–4458) and
