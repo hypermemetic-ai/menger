@@ -28,10 +28,10 @@ pub(super) fn ancestors_of(by_id: &HashMap<&str, &Row>, t: &Row) -> Vec<String> 
     let mut out: Vec<String> = Vec::new();
     let mut cur = t.parent.clone();
     while let Some(p) = cur {
-        if p == t.id || out.contains(&p) {
+        if p == t.id || out.contains(&p.to_string()) {
             break;
         }
-        out.push(p.clone());
+        out.push(p.to_string());
         cur = by_id.get(p.as_str()).and_then(|r| r.parent.clone());
     }
     out
@@ -61,7 +61,7 @@ pub(super) fn oracle(rows: &[Row], asking: &std::collections::BTreeSet<String>) 
     let mut lists: BTreeMap<(String, String), Vec<&Row>> = BTreeMap::new();
     for t in rows {
         if let Some(p) = &t.parent {
-            lists.entry((p.clone(), t.epic.to_string())).or_default().push(t);
+            lists.entry((p.to_string(), t.epic.to_string())).or_default().push(t);
         }
     }
     let mut holders = Holders::new();
@@ -370,7 +370,7 @@ fn tree_by_rule(
         }
         _ => return Err("tree: give `parent` or `epic`".into()),
     };
-    let shown: Vec<usize> = address.into_iter().filter(|i| matches[*i] || below.get(&rows[*i].id).copied().unwrap_or(0) > 0).collect();
+    let shown: Vec<usize> = address.into_iter().filter(|i| matches[*i] || below.get(rows[*i].id.as_str()).copied().unwrap_or(0) > 0).collect();
     let after = after.map(|a| a.trim().to_ascii_uppercase());
     let from = match after.as_deref() {
         None => 0,
@@ -383,7 +383,7 @@ fn tree_by_rule(
     let to = limit.map_or(shown.len(), |n| (from + n as usize).min(shown.len()));
     let page: Vec<(String, bool, u64)> = shown[from..to]
         .iter()
-        .map(|i| (rows[*i].id.clone(), matches[*i], below.get(&rows[*i].id).copied().unwrap_or(0)))
+        .map(|i| (rows[*i].id.to_string(), matches[*i], below.get(rows[*i].id.as_str()).copied().unwrap_or(0)))
         .collect();
     let remaining = (shown.len() - to) as u64;
     let next = if remaining == 0 { None } else { page.last().map(|p| p.0.clone()).or(after) };
@@ -477,7 +477,7 @@ fn tree_kept_by_rule(
         below
     };
     let (below, read) = (below_of(&real), below_of(&matches));
-    let holds = |i: usize| read.get(&rows[i].id).copied().unwrap_or(0) > 0;
+    let holds = |i: usize| read.get(rows[i].id.as_str()).copied().unwrap_or(0) > 0;
     let hosts: BTreeMap<String, String> = {
         let cache = store.tickets.read().unwrap();
         let epics: std::collections::BTreeSet<&str> = rows.iter().map(|t| t.epic.as_str()).collect();
@@ -501,8 +501,8 @@ fn tree_kept_by_rule(
                 }
                 if matches[c] {
                     out.insert(c);
-                } else if holds(c) && seen.insert(rows[c].id.clone()) {
-                    stack.push(rows[c].id.clone());
+                } else if holds(c) && seen.insert(rows[c].id.to_string()) {
+                    stack.push(rows[c].id.to_string());
                 }
             }
         }
@@ -520,11 +520,11 @@ fn tree_kept_by_rule(
             }
             let t = &rows[i];
             if root_of(t.epic.as_str()) == Some(i) || matches[i] {
-                return Some(Placed::Ticket(t.id.clone()));
+                return Some(Placed::Ticket(t.id.to_string()));
             }
             match &t.parent {
                 None => return Some(Placed::Top(t.epic.to_string())),
-                Some(p) => cur = p.clone(),
+                Some(p) => cur = p.to_string(),
             }
         }
     };
@@ -533,7 +533,7 @@ fn tree_kept_by_rule(
         (Some(p), None) => (nearest(&p), tail(Placed::Ticket(p.clone()))),
         (None, Some(e)) => match root_of(&e) {
             Some(r) if matches[r] => (vec![r], Vec::new()),
-            Some(r) => (nearest(&rows[r].id), tail(Placed::Ticket(rows[r].id.clone()))),
+            Some(r) => (nearest(&rows[r].id), tail(Placed::Ticket(rows[r].id.to_string()))),
             None => ((0..rows.len()).filter(|i| rows[*i].epic == e && matches[*i]).collect(), tail(Placed::Top(e.clone()))),
         },
         _ => return Err("tree: give `parent` or `epic`".into()),
@@ -556,7 +556,7 @@ fn tree_kept_by_rule(
     let to = limit.map_or(shown.len(), |n| (from + n as usize).min(shown.len()));
     let page: Vec<(String, bool, u64)> = shown[from..to]
         .iter()
-        .map(|i| (rows[*i].id.clone(), real[*i], below.get(&rows[*i].id).copied().unwrap_or(0)))
+        .map(|i| (rows[*i].id.to_string(), real[*i], below.get(rows[*i].id.as_str()).copied().unwrap_or(0)))
         .collect();
     let remaining = (shown.len() - to) as u64;
     let next = if remaining == 0 { None } else { page.last().map(|p| p.0.clone()).or(after) };
@@ -600,7 +600,7 @@ fn tree_asked(
     let q = TreeQuery { parent: parent.map(String::from), epic: epic.map(String::from), lens: Lens::of(filter).unwrap(), matches_only, keep: keep.map(String::from) };
     store
         .tree_page(&q, after, limit)
-        .map(|p| (p.nodes.into_iter().map(|n| (n.summary.id, n.matched, n.below)).collect(), p.next, p.remaining))
+        .map(|p| (p.nodes.into_iter().map(|n| (n.summary.id.into_string(), n.matched, n.below)).collect(), p.next, p.remaining))
         .map_err(|e| e.to_string())
 }
 
@@ -645,15 +645,15 @@ fn assert_tree_reads_are_a_scan(store: &Store, rng: &mut Rng, seen: &mut TreeSee
         for _ in 0..5 {
             let (parent, epic) = match rng.below(12) {
                 0..=5 if !parents.is_empty() => (Some(parents[rng.below(parents.len())].clone()), None),
-                6 => (Some(rows[rng.below(rows.len())].id.clone()), None),
+                6 => (Some(rows[rng.below(rows.len())].id.to_string()), None),
                 7 => (Some("NONE-1".to_string()), None),
                 8 if !epics.is_empty() => (None, Some(epics[rng.below(epics.len())].to_ascii_lowercase())),
-                9 => (Some(rows[0].id.clone()), Some(rows[0].epic.to_string())),
+                9 => (Some(rows[0].id.to_string()), Some(rows[0].epic.to_string())),
                 _ if !epics.is_empty() => (None, Some(epics[rng.below(epics.len())].clone())),
                 _ => (None, None),
             };
             let after = match rng.below(4) {
-                0 => Some(rows[rng.below(rows.len())].id.clone()),
+                0 => Some(rows[rng.below(rows.len())].id.to_string()),
                 1 => Some("NO-SUCH-1".to_string()),
                 _ => None,
             };
@@ -693,7 +693,7 @@ fn assert_tree_reads_are_a_scan(store: &Store, rng: &mut Rng, seen: &mut TreeSee
             let mut addresses: Vec<(Option<String>, Option<String>)> =
                 ancestors_of(&by_id, k).into_iter().take(8).map(|a| (Some(a), None)).collect();
             addresses.push((None, Some(k.epic.to_string())));
-            addresses.push((Some(k.id.clone()), None));
+            addresses.push((Some(k.id.to_string()), None));
             for (parent, epic) in addresses {
                 let after = match krng.below(4) {
                     0 => Some(rows[krng.below(rows.len())].id.clone()),
@@ -818,8 +818,8 @@ async fn every_address_of_a_nested_seed_answers_as_the_rule_does() {
     let (mut moved, mut tops) = (0, 0);
     for round in 0..3 {
         let plain = Plain::of(&store);
-        let parents: std::collections::BTreeSet<String> = plain.rows.iter().filter_map(|t| t.parent.clone()).collect();
-        let big = plain.rows.iter().find(|t| t.kind == Kind::Execution && parents.contains(&t.id)).map(|t| t.id.clone()).unwrap();
+        let parents: std::collections::BTreeSet<String> = plain.rows.iter().filter_map(|t| t.parent.as_deref().map(String::from)).collect();
+        let big = plain.rows.iter().find(|t| t.kind == Kind::Execution && parents.contains(t.id.as_str())).map(|t| t.id.clone()).unwrap();
         let root = plain.rows[0].id.clone();
         let mut texts: Vec<String> = [
             "status Ready",
@@ -1095,7 +1095,7 @@ async fn a_kept_ticket_is_drawn_where_a_match_would_be() {
         }
     }
     let q = TreeQuery { parent: None, epic: Some("FILTER".into()), lens: Lens::of(&filter).unwrap(), matches_only: false, keep: Some("FILTER-3".into()) };
-    let off = store.tree_page(&q, None, None).unwrap().nodes.into_iter().map(|n| (n.summary.id, n.matched, n.below)).collect::<Vec<_>>();
+    let off = store.tree_page(&q, None, None).unwrap().nodes.into_iter().map(|n| (n.summary.id.into_string(), n.matched, n.below)).collect::<Vec<_>>();
     assert_eq!(Ok(off), tree_answered(&store, &filter, None, Some("FILTER"), None, None).map(|a| a.0), "keep is the nav's that shows only matches");
 }
 
@@ -1179,7 +1179,7 @@ async fn under_membership_is_the_scans_difference_through_re_parents() {
                     .iter()
                     .zip(&p.cells)
                     .filter(|(t, k)| only.is_none_or(|e| t.epic == e) && f.matches(&p.facts(t, **k)))
-                    .map(|(t, _)| (OrderKey::of(t), t.id.clone()))
+                    .map(|(t, _)| (OrderKey::of(t), t.id.to_string()))
                     .collect()
             };
             let (was, now) = (inside(&before), inside(&after));

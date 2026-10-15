@@ -17,13 +17,14 @@
 //! a ticket: it asks what `tickets.create` asks, where the ticket lands —
 //! the parent, else the shortcode's root, else `*` for a new shortcode.
 
-use crate::notes::NotesEvent;
+use crate::notes::{NoteState, NotesEvent};
+// ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
+use crate::types::Kind;
+use crate::vocab::{Author, Body, NoteId, Query, ShortcodeRef, TicketRef, Title};
 #[cfg(feature = "server")]
 use crate::access::Access;
 #[cfg(feature = "server")]
-use crate::notes::NoteState;
-#[cfg(feature = "server")]
-use crate::store::{Kind, NewTicket, NoteQuery, Store, StoreError};
+use crate::store::{NewTicket, NoteQuery, Store, StoreError};
 #[cfg(feature = "server")]
 use async_stream::stream;
 #[cfg(feature = "server")]
@@ -69,6 +70,7 @@ fn answer(note: Result<crate::notes::Note, StoreError>) -> NotesEvent {
     namespace = "notes",
     description = "Notes: dated, untitled thoughts in one place; add, list, get, upgrade to a ticket",
     client,
+    typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core",
     // AUTH-7: a member's notes are any member's to read and write; making
@@ -95,7 +97,7 @@ impl Notes {
         ),
         example(note = "a thought to keep", params = r#"{"body": "the palette should remember its last query"}"#)
     )]
-    pub async fn add(&self, auth: Option<&AuthContext>, reach: Reach, body: String, author: Option<String>) -> impl Stream<Item = NotesEvent> + Send + 'static {
+    pub async fn add(&self, auth: Option<&AuthContext>, reach: Reach, body: Body, author: Option<Author>) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -106,8 +108,8 @@ impl Notes {
                     return;
                 }
             };
-            let author = caller.name.clone().or(author);
-            yield answer(store.add_note_as(body, author, caller.principal.clone()).await);
+            let author = caller.name.clone().or(author.map(String::from));
+            yield answer(store.add_note_as(body.into_string(), author, caller.principal.clone()).await);
         }
     }
 
@@ -134,10 +136,10 @@ impl Notes {
     )]
     pub async fn list(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        state: Option<String>,
-        author: Option<String>,
-        text: Option<String>,
-        after: Option<u64>,
+        state: Option<NoteState>,
+        author: Option<Author>,
+        text: Option<Query>,
+        after: Option<NoteId>,
         limit: Option<u32>,
     ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let store = self.store.clone();
@@ -147,15 +149,8 @@ impl Notes {
                 yield NotesEvent::Error { message };
                 return;
             }
-            let state = match state.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::parse::<NoteState>) {
-                None => None,
-                Some(Ok(s)) => Some(s),
-                Some(Err(e)) => {
-                    yield NotesEvent::Error { message: e };
-                    return;
-                }
-            };
-            match store.notes(&NoteQuery { state, author, text }, after, limit) {
+            let (author, text) = (author.map(String::from), text.map(String::from).filter(|t| !t.trim().is_empty()));
+            match store.notes(&NoteQuery { state, author, text }, after.map(NoteId::get), limit) {
                 Ok(page) => {
                     for note in page.notes {
                         yield note.into();
@@ -175,7 +170,8 @@ impl Notes {
         params(id = "The note's id, e.g. 7"),
         example(note = "note 7", params = r#"{"id": 7}"#)
     )]
-    pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, id: u64) -> impl Stream<Item = NotesEvent> + Send + 'static {
+    pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, id: NoteId) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let id = id.get();
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -215,12 +211,13 @@ impl Notes {
     )]
     pub async fn upgrade(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: u64,
-        epic: String,
-        title: Option<String>,
-        kind: Option<String>,
-        parent: Option<String>,
+        id: NoteId,
+        epic: ShortcodeRef,
+        title: Option<Title>,
+        kind: Option<Kind>,
+        parent: Option<TicketRef>,
     ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (id, epic, parent) = (id.get(), epic.into_string(), parent.map(String::from));
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -266,16 +263,9 @@ impl Notes {
                     return;
                 }
             };
-            let kind = match kind.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(str::parse::<Kind>) {
-                None => Kind::Build,
-                Some(Ok(k)) => k,
-                Some(Err(e)) => {
-                    yield NotesEvent::Error { message: e };
-                    return;
-                }
-            };
+            let kind = kind.unwrap_or(Kind::Build);
             let (derived, body) = Store::note_ticket_text(&note);
-            let title = title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).unwrap_or(derived);
+            let title = title.map(|t| t.trim().to_string()).unwrap_or(derived);
             let new = NewTicket {
                 epic,
                 title,

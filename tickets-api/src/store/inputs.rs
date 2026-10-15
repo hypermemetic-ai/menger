@@ -350,13 +350,13 @@ impl Inputs {
             gone.push(input);
         }
         for d in declared {
-            let prev = before.iter().find(|i| i.id == d.id);
+            let prev = before.iter().find(|i| i.id == *d.id);
             let history = prev.map(|p| p.history.clone()).unwrap_or_default();
             let input = Input {
-                ticket: ticket.to_string(),
+                ticket: crate::address::TicketId::new(ticket),
                 answer: answer_of(&history),
                 state: state_of(true, &history),
-                id: d.id,
+                id: crate::vocab::InputId::stored(d.id),
                 kind: d.kind,
                 question: d.question,
                 options: d.options,
@@ -428,7 +428,7 @@ impl Inputs {
     pub(crate) fn put(&mut self, input: Input) {
         if let Some(slot) = self
             .by_ticket
-            .get_mut(&input.ticket)
+            .get_mut(input.ticket.as_str())
             .and_then(|list| list.iter_mut().find(|i| i.id == input.id))
         {
             *slot = input;
@@ -514,8 +514,8 @@ pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Inputs> {
     while let Some(r) = rows.next()? {
         let ticket: String = r.get(0)?;
         let input = Input {
-            ticket: ticket.clone(),
-            id: r.get(1)?,
+            ticket: crate::address::TicketId::new(ticket.clone()),
+            id: crate::vocab::InputId::stored(r.get::<_, String>(1)?),
             kind: column(r, 2, |s| s.parse::<InputKind>())?,
             question: r.get(3)?,
             options: column(r, 4, json)?,

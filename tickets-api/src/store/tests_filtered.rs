@@ -22,7 +22,7 @@ use crate::filter::{Field, Filter};
 pub(super) type Answer = (Vec<String>, Option<String>, u64, Option<u64>);
 
 fn answer(page: Page) -> Answer {
-    (page.tickets.into_iter().map(|t| t.id).collect(), page.next, page.remaining, page.first)
+    (page.tickets.into_iter().map(|t| t.id.into_string()).collect(), page.next, page.remaining, page.first)
 }
 
 /// A random formula over a cell and a shortcode — every field a cell has,
@@ -224,7 +224,7 @@ impl Plain {
         let asking = super::tests_cells::asking(store);
         let by = scanned(&rows, &asking);
         let cells = rows.iter().map(|t| by[&OrderKey::of(t)]).collect();
-        let at = rows.iter().enumerate().map(|(i, t)| (t.id.clone(), i)).collect();
+        let at = rows.iter().enumerate().map(|(i, t)| (t.id.to_string(), i)).collect();
         let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
         let hosts: HashMap<String, Vec<String>> = {
             let cache = store.tickets.read().unwrap();
@@ -249,7 +249,7 @@ impl Plain {
         let lineage = rows
             .iter()
             .map(|t| {
-                let mut l = vec![t.id.clone()];
+                let mut l = vec![t.id.to_string()];
                 l.extend(super::tests_tree::ancestors_of(&by_id, t));
                 l.push(t.epic.to_string());
                 l.extend(hosts[t.epic.as_str()].iter().cloned());
@@ -282,7 +282,7 @@ impl Plain {
         crate::filter::Facts {
             asking: k.asking(),
             labels: t.labels.clone(),
-            id: t.id.clone(),
+            id: t.id.to_string(),
             epic: t.epic.to_string(),
             title: t.title.clone(),
             status: t.status,
@@ -291,8 +291,8 @@ impl Plain {
             blocked: k.blocked(),
             has_commits: !t.commits.is_empty(),
             menger_doc: t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/")),
-            lineage: self.at.get(&t.id).map_or_else(|| vec![t.id.clone(), t.epic.to_string()], |i| self.lineage[*i].clone()),
-            history: self.at.get(&t.id).map(|i| self.history[*i].clone()).unwrap_or_default(),
+            lineage: self.at.get(t.id.as_str()).map_or_else(|| vec![t.id.to_string(), t.epic.to_string()], |i| self.lineage[*i].clone()),
+            history: self.at.get(t.id.as_str()).map(|i| self.history[*i].clone()).unwrap_or_default(),
         }
     }
 
@@ -354,7 +354,7 @@ impl Plain {
         };
         let from = (first as usize).min(m.len());
         let to = limit.map_or(m.len(), |n| (from + n as usize).min(m.len()));
-        let page: Vec<String> = m[from..to].iter().map(|i| self.rows[*i].id.clone()).collect();
+        let page: Vec<String> = m[from..to].iter().map(|i| self.rows[*i].id.to_string()).collect();
         let remaining = (m.len() as u64).saturating_sub(first).saturating_sub(page.len() as u64);
         let next = if remaining == 0 {
             None
@@ -362,7 +362,7 @@ impl Plain {
             page.last().cloned().or_else(|| match after {
                 Some(id) => Some(id.to_ascii_uppercase()),
                 None if first == 0 => None,
-                None => Some(self.rows[m[first as usize - 1]].id.clone()),
+                None => Some(self.rows[m[first as usize - 1]].id.to_string()),
             })
         };
         Ok((page, next, remaining, Some(first)))
@@ -414,7 +414,7 @@ pub(super) fn assert_lens_is_a_scan(store: &Store, plain: &Plain, lens: &Lens, j
         let status = (rng.below(4) == 0).then(|| Status::ALL[rng.below(Status::ALL.len())]);
         let parent = match rng.below(6) {
             0 => pick(rng),
-            1 => plain.rows.iter().find(|t| t.seq == 1).map(|t| t.id.clone()),
+            1 => plain.rows.iter().find(|t| t.seq == 1).map(|t| t.id.clone()).map(String::from),
             _ => None,
         };
         let limit = [None, Some(0), Some(1), Some(3), Some(200)][rng.below(5)];
@@ -587,7 +587,7 @@ async fn membership_is_the_scans_difference() {
         for ((lens, f), watcher) in lenses.iter().zip(&mut watchers) {
             let judge = |t: &Row, k: Key| f.holds(t.epic.as_str(), k);
             let inside = |p: &Plain| -> BTreeMap<String, (String, u32)> {
-                p.matches(&judge, None, None, None).into_iter().map(|i| (p.rows[i].id.clone(), (p.rows[i].epic.to_string(), p.rows[i].seq))).collect()
+                p.matches(&judge, None, None, None).into_iter().map(|i| (p.rows[i].id.to_string(), (p.rows[i].epic.to_string(), p.rows[i].seq))).collect()
             };
             let (was, now) = (inside(&before), inside(&after));
             let mut want: Vec<(OrderKey, Membership)> = Vec::new();

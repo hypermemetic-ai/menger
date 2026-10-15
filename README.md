@@ -1704,6 +1704,50 @@ know is unaffected; one that keeps a copy should treat it as "fetch again
 what you show" — the Leptos app asks `extents` and its board's window again
 (SCALE-26), as after a reconnect.
 
+### Typed parameters (ACCESS-8)
+
+Every parameter of every activation is a type (owner, 2026-10-12: *"no
+more raw string passing in"*): a ticket is a `TicketRef`, a shortcode a
+`ShortcodeRef`, a filter a `FilterText`, a status a `Status`, a title a
+`Title` — `menger_tickets_api::vocab` holds them, each with **one rule**,
+and every `#[plexus_macros::activation]` is declared `typed_params`
+(MACRO-12), so a bare `String` parameter does not compile
+(`tickets-api/tests/param_types.rs` holds the flag on). The JSON is the
+string it always was (`tests/golden_wire.rs` holds every item a script of
+calls answers to main's bytes); the schema names the type (`$defs/TicketRef
+{ type: string }` behind a `$ref`), so synapse's `--help` and the SDK say
+it (`id: TicketRef`).
+
+| type | its rule |
+|---|---|
+| `TicketRef` | a ticket's key or any short form of its address, codes upper-cased: `mng-1` is `MNG-1` |
+| `ShortcodeRef`, `Under`, `Cursor` | a shortcode's code or address; a ticket or a shortcode; a page's `next` |
+| `MengerPath`, `CommitRef`, `Label`, `InputId` | `_MENGER/…`; a hex object name, `repo@` optional; a label; an input's id |
+| `Principal`, `ScopeRef`, `Ceiling`, `OrgId` | the identity layer's grammar; `*` / `acme:` / a shortcode; `role@SCOPE`; an org's name |
+| `Title`, `Body`, `Message`, `Reason`, `Query`, `Author` | not blank, ≤ 1 KiB; ≤ 64 MiB; trimmed, blank none; a message, not blank; a query; trimmed, not blank |
+| `FilterText`, `Zone`, `Timestamp` | the filter language reads it; an IANA name, UTC or an offset; RFC 3339 or unix seconds |
+| `Project`, `EnvironmentName`, `Release`, `ThemeName`, `ThemeScope`, `TokenName`, `TokenValue` | the deployments' and themes' own rules |
+| `Status`, `Kind`, `Severity`, `SeverityChange`, `CallerSource`, `InputSource`, `Role`, … | a closed enum of the canonical spellings, read leniently (`active`, `in review`, any case) |
+
+**A bad value is refused before the method runs** — `-32602
+invalid_params`, naming the parameter (MACRO-15), where it was an in-band
+`error`:
+
+```json
+{"code": "-32602", "error_kind": "invalid_params", "message": "Invalid params: status: unknown status 'wibble' (expected Pending, Ready, …)", "type": "error"}
+```
+
+An anonymous or refused caller still gets the auth refusal first. What
+needs the store — a ticket that is none, a doc's lifecycle, a cycle, a
+blocker out of reach — stays the in-band `error` it was; `update` still
+names every such reason at once, and an unknown kind, status or severity
+is refused at dispatch, alone. A blank optional value (`--ticket ""`) is no
+value of its type and is refused where it was none (a blank `text` or
+`filter` is still no filter). synapse checks an enum flag itself: `--status
+active` is refused before it is sent (`-p '{"status": "active"}'`, the app
+and REST still send it); every invocation in this file and AGENTS.md is
+canonical.
+
 ### Addresses and namespaces (ORG-3)
 
 A shortcode is unique only within its **namespace** — its organization and
@@ -2998,10 +3042,10 @@ limit is a flag (and its `MENGER_*` variable) or a named constant:
 | the waiting list | `WAITING_MAX` 1,000 (`tickets-api/src/access.rs`) | the one waiting longest is forgotten |
 | `/login/start`, `POST /login`, `POST /login/nostr`, from one client | a sign-in flow each — 60 per 10 min per /32 (/64), 600 per /24 (/48), 3,000 per /16 (/32) (AUTH-22's `flows_per_client`) | 429 + `Retry-After`, the page's own words ("Too many attempts…") |
 | passwords tried at `POST /login` | reserved before the IdP sees them: 5 per account per neighbourhood, 30 per client, then a backoff (AUTH-22's `try_per_user_network`, `try_per_client`) | 429; a right answer forgives the account, an IdP that is down gives the guess back |
-| a ticket's title | `TITLE_MAX` 1,024 bytes (`tickets-api/src/limits.rs`) | in-band `error`, nothing written |
+| a ticket's title | `TITLE_MAX` 1,024 bytes (`tickets-api/src/limits.rs`) | `invalid_params` naming `title` (ACCESS-8: a `Title`), nothing run |
 | a ticket's body | `--max-body-bytes` (8 MiB, MENGER-15) | typed `body_too_large` |
 | a comment's or a note's body | 64 KiB (`comments::BODY_MAX`, `notes::BODY_MAX`) | in-band `error` |
-| a filter's text | `FILTER_MAX` 4,096 bytes | in-band `error` |
+| a filter's text | `FILTER_MAX` 4,096 bytes | `invalid_params` naming `filter` (ACCESS-8: a `FilterText`) |
 | `tickets.list`'s page | 1,000 unless `limit`, at most 10,000 (`LIST_PAGE_DEFAULT`, `LIST_PAGE_MAX`) | the `page` event's `next` carries on |
 | `comments.list`'s page | 500 unless `limit`, at most 1,000 | `page.next` |
 

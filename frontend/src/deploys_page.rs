@@ -165,8 +165,9 @@ fn ProjectView(project: String, picked: Option<u64>) -> impl IntoView {
 /// One filtered `list`: its first `limit` rows and how many match in all.
 async fn matching(filter: String, limit: u32) -> Result<(Vec<TicketSummary>, u64), String> {
     let client = session::client().ok_or_else(|| "not connected".to_string())?;
+    let filter = crate::typed::typed(&filter)?;
     let events = client
-        .list_all(None, None, None, None, Some(limit), Some(true), Some(filter), None, None, session::tz())
+        .list_all(None, None, None, None, Some(limit), Some(true), Some(filter), None, None, session::zone())
         .await
         .map_err(|e| session::describe(&e))?;
     let mut out = Vec::new();
@@ -267,11 +268,11 @@ fn Waiting(project: String, last: Memo<Option<String>>) -> impl IntoView {
                             {w.listed.into_iter().map(|t| {
                                 let href = format!("#/ticket/{}", t.id);
                                 view! {
-                                    <li data-ticket-id=t.id.clone()>
-                                        <a class="code" href=href.clone()>{t.id.clone()}</a>
+                                    <li data-ticket-id=t.id.to_string()>
+                                        <a class="code" href=href.clone()>{t.id.to_string()}</a>
                                         <a class="dtitle" href=href>{t.title.clone()}</a>
                                         <span class=format!("tag {}", st_class(t.status.as_str()))>{t.status.as_str()}</span>
-                                        {deploys::row_marks(t.id.clone())}
+                                        {deploys::row_marks(t.id.to_string())}
                                     </li>
                                 }
                             }).collect_view()}
@@ -297,6 +298,8 @@ struct Row {
 
 async fn page(project: String, name: String, after: Option<u64>) -> Result<(Vec<Row>, Option<u64>), String> {
     let client = session::deployments_client().ok_or_else(|| "not connected".to_string())?;
+    let (project, name) = (crate::typed::typed(&project)?, crate::typed::typed(&name)?);
+    let after = after.map(menger_tickets_api::vocab::DeploymentId::new);
     let events = client
         .list_all(Some(project), Some(name), None, None, after, Some(PAGE))
         .await

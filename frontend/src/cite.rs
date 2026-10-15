@@ -610,7 +610,10 @@ fn fetch_into(k: String) {
     };
     spawn_local(async move {
         let answer = match session::client() {
-            Some(client) => client.get_all(id).await.map_err(|e| session::describe(&e)),
+            Some(client) => match crate::typed::typed(&id) {
+                Ok(id) => client.get_all(id).await.map_err(|e| session::describe(&e)),
+                Err(why) => Err(why),
+            },
             None => Err("not connected".to_string()),
         };
         let fetched = classify(answer);
@@ -773,7 +776,7 @@ mod tests {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         Ticket {
             labels: Vec::new(),
-            id: id.into(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),
             title: title.into(),

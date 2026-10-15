@@ -115,7 +115,7 @@ enum Bucket {
 impl Bucket {
     fn of(top: &Row, exit: Option<&Row>) -> Self {
         match exit {
-            Some(_) => Self::Cross(top.id.clone()),
+            Some(_) => Self::Cross(top.id.to_string()),
             None => Self::Base(top.shortcode.clone()),
         }
     }
@@ -213,11 +213,11 @@ impl Rollups {
             let tally = Tally::of(t);
             let s = &mut here.as_mut().expect("entered above").1;
             if exit.is_some() {
-                match r.cross.get_mut(&top.id) {
+                match r.cross.get_mut(top.id.as_str()) {
                     Some(c) => c.tally.shift(tally, true),
                     None => {
                         r.cross.insert(
-                            top.id.clone(),
+                            top.id.to_string(),
                             Cross {
                                 tally,
                                 home: ShortcodeId::default(),
@@ -235,7 +235,7 @@ impl Rollups {
             // (epic, seq) order: the first scope met is the lowest-seq.
             // SDLC-11: or doc — a doc collection's root.
             if t.kind.roots_a_shortcode() && s.root.is_none() {
-                s.root = Some(t.id.clone());
+                s.root = Some(t.id.to_string());
             }
         }
         if let Some((epic, s)) = here {
@@ -278,7 +278,7 @@ impl Rollups {
         }
         let mut x = hare;
         for _ in 0..length {
-            self.on_cycle.insert(x.id.clone());
+            self.on_cycle.insert(x.id.to_string());
             x = up(rows, x).expect("on the cycle");
         }
     }
@@ -424,7 +424,7 @@ impl Rollups {
 
     /// A newborn (already in `rows`) is counted where it is drawn.
     pub(super) fn created(&mut self, rows: Rows<'_>, t: &Row) -> Vec<Group> {
-        if self.dangling.contains(&t.id) {
+        if self.dangling.contains(t.id.as_str()) {
             let before = self.snapshot();
             let why = format!("{} was named as a parent before it existed", t.id);
             return self.rebuild(rows, before, &why);
@@ -439,12 +439,12 @@ impl Rollups {
         let s = self.shortcodes.entry(t.shortcode.clone()).or_default();
         let new_root = t.kind.roots_a_shortcode() && s.root.is_none();
         if new_root {
-            s.root = Some(t.id.clone());
+            s.root = Some(t.id.to_string());
         }
         let tally = Tally::of(t);
         if let Some(before) = before {
             self.cross.insert(
-                t.id.clone(),
+                t.id.to_string(),
                 Cross {
                     tally,
                     home: ShortcodeId::default(),
@@ -527,7 +527,7 @@ impl Rollups {
         let before = self.snapshot();
         self.count(rows, t, was, false);
         self.count(rows, t, now, true);
-        self.shortcodes.get_mut(&t.shortcode).expect("every epic has a shortcode").root = Some(t.id.clone());
+        self.shortcodes.get_mut(&t.shortcode).expect("every epic has a shortcode").root = Some(t.id.to_string());
         self.settle(rows);
         Some(self.diff(before))
     }
@@ -562,7 +562,7 @@ impl Rollups {
         new_parent: &Row,
     ) -> Reparenting {
         let before = self.snapshot();
-        if self.on_cycle.contains(&child.id) {
+        if self.on_cycle.contains(child.id.as_str()) {
             return Reparenting {
                 before,
                 rebuild: Some(format!("{} was moved off a parent cycle", child.id)),
@@ -578,14 +578,14 @@ impl Rollups {
             let (top, exit) = self.top(rows, new_parent);
             Bucket::of(top, exit)
         } else {
-            Bucket::Cross(child.id.clone())
+            Bucket::Cross(child.id.to_string())
         };
         let base_top = top.id == child.id && exit.is_none();
         if from != to {
             let tally = if top.id == child.id && exit.is_some() {
                 // A cross top's entry is exactly its tree.
                 self.cross
-                    .remove(&child.id)
+                    .remove(child.id.as_str())
                     .expect("a cross top has an entry")
                     .tally
             } else {
@@ -689,7 +689,7 @@ impl Rollups {
         if exit.is_some() {
             let c = self
                 .cross
-                .get_mut(&top.id)
+                .get_mut(top.id.as_str())
                 .expect("a cross top has an entry");
             c.tally.shift(by, gain);
             return c.home.clone();
@@ -792,7 +792,7 @@ impl Rollups {
                 continue;
             };
             // A root on a parent cycle has no parent as plan() sees it.
-            if self.on_cycle.contains(&root.id) {
+            if self.on_cycle.contains(root.id.as_str()) {
                 continue;
             }
             let Some(host) = root.parent.as_deref().and_then(|p| rows.get(p)) else {
@@ -801,7 +801,7 @@ impl Rollups {
             if host.shortcode == *epic {
                 continue; // ordinary nesting inside the shortcode
             }
-            self.shortcodes.get_mut(epic).expect("listed").host = Some(host.id.clone());
+            self.shortcodes.get_mut(epic).expect("listed").host = Some(host.id.to_string());
             if self.nests_inside(rows, host, epic) {
                 self.shortcodes.get_mut(epic).expect("listed").host = None;
             }

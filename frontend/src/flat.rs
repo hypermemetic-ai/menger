@@ -301,7 +301,12 @@ enum Counted {
 }
 
 async fn count(client: &Client, filter: &str, keep: Option<String>) -> Counted {
-    match client.counts_all(Some(filter.to_string()), keep, crate::session::tz()).await {
+    let typed = || -> Result<_, String> { Ok((crate::typed::typed(filter)?, crate::typed::opt(keep)?)) };
+    let (filter, keep) = match typed() {
+        Ok(t) => t,
+        Err(why) => return Counted::Refused(why),
+    };
+    match client.counts_all(Some(filter), keep, crate::session::zone()).await {
         Ok(events) => {
             let mut runs = Vec::new();
             for ev in events {
@@ -331,8 +336,13 @@ enum Window {
 /// a filter is given).
 async fn ask_page(client: &Client, filter: &str, keep: Option<String>, cursor: &Cursor, from: usize, limit: usize) -> Window {
     let (after, at) = cursor.params();
+    let typed = || -> Result<_, String> { Ok((crate::typed::opt(after)?, crate::typed::typed(filter)?, crate::typed::opt(keep)?)) };
+    let (after, filter, keep) = match typed() {
+        Ok(t) => t,
+        Err(why) => return Window::Refused(why),
+    };
     match client
-        .list_all(None, None, None, after, Some(limit as u32), Some(true), Some(filter.to_string()), at, keep, crate::session::tz())
+        .list_all(None, None, None, after, Some(limit as u32), Some(true), Some(filter), at, keep, crate::session::zone())
         .await
     {
         Ok(events) => {
@@ -364,8 +374,9 @@ async fn locate(client: &Client, filter: &str, keep: Option<String>, id: &str) -
     if keep.as_deref() != Some(id) && !is_member(client, filter, id).await? {
         return None;
     }
+    let (after, filter, keep) = (crate::typed::typed(id).ok()?, crate::typed::typed(filter).ok()?, crate::typed::opt(keep).ok()?);
     let events = client
-        .list_all(None, None, None, Some(id.to_string()), Some(0), Some(true), Some(filter.to_string()), None, keep, crate::session::tz())
+        .list_all(None, None, None, Some(after), Some(0), Some(true), Some(filter), None, keep, crate::session::zone())
         .await
         .ok()?;
     let first = events.into_iter().find_map(|ev| match ev {
@@ -377,7 +388,8 @@ async fn locate(client: &Client, filter: &str, keep: Option<String>, id: &str) -
 
 /// Whether `filter` admits `id` (`member`) — `None` when no answer came.
 async fn is_member(client: &Client, filter: &str, id: &str) -> Option<bool> {
-    let events = client.member_all(vec![id.to_string()], filter.to_string(), crate::session::tz()).await.ok()?;
+    let (id, filter) = (crate::typed::typed(id).ok()?, crate::typed::typed(filter).ok()?);
+    let events = client.member_all(vec![id], filter, crate::session::zone()).await.ok()?;
     Some(events.into_iter().any(|ev| matches!(ev, TicketsEvent::Member { matched: true, .. })))
 }
 
@@ -645,7 +657,7 @@ impl Flat {
         if !self.holder.with_value(|h| h.hold_page(rows.clone())) {
             return Ok(false);
         }
-        let page: Vec<(Key, Row)> = rows.into_iter().filter_map(|t| cache::get(&t.id).map(|sig| ((t.shortcode.to_string(), t.seq), (t.id, sig)))).collect();
+        let page: Vec<(Key, Row)> = rows.into_iter().filter_map(|t| cache::get(&t.id).map(|sig| ((t.shortcode.to_string(), t.seq), (t.id.into_string(), sig)))).collect();
         let placed = self.matches.with_untracked(|m| {
             let m = m.as_ref()?;
             self.ranked.try_update(|r| r.place(m, first, Some(total), page))
@@ -1198,7 +1210,7 @@ mod tests {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         TicketSummary {
             labels: Vec::new(),
-            id: id.to_string(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: String::new(),

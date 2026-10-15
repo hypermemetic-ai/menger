@@ -13,13 +13,13 @@
 //! the whole site's), `set` on the shortcode it names — and the site's
 //! theme takes admin on `*`.
 
-use crate::themes::ThemesEvent;
+use crate::themes::{Takeover, ThemeReach, ThemesEvent};
+// ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
+use crate::vocab::{ThemeName, ThemeScope, TicketRef, TokenName, TokenValue};
 #[cfg(feature = "server")]
 use crate::access::{Access, ADMINISTER};
 #[cfg(feature = "server")]
 use crate::store::{Store, StoreError, ThemeChange};
-#[cfg(feature = "server")]
-use crate::themes::{Takeover, ThemeReach, SITE};
 #[cfg(feature = "server")]
 use async_stream::stream;
 #[cfg(feature = "server")]
@@ -62,6 +62,7 @@ fn refused(e: StoreError) -> ThemesEvent {
     namespace = "themes",
     description = "Themes: token overrides the site, a shortcode, a ticket or a frame adopts",
     client,
+    typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core",
     // AUTH-7: reading is a viewer's; defining and setting an editor's (the
@@ -97,10 +98,14 @@ impl Themes {
     )]
     pub async fn define(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        name: String,
-        light: Option<BTreeMap<String, String>>,
-        dark: Option<BTreeMap<String, String>>,
+        name: ThemeName,
+        light: Option<BTreeMap<TokenName, TokenValue>>,
+        dark: Option<BTreeMap<TokenName, TokenValue>>,
     ) -> impl Stream<Item = ThemesEvent> + Send + 'static {
+        let text = |m: Option<BTreeMap<TokenName, TokenValue>>| -> BTreeMap<String, String> {
+            m.unwrap_or_default().into_iter().map(|(k, v)| (k.into_string(), v.into_string())).collect()
+        };
+        let (light, dark) = (text(light), text(dark));
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -117,7 +122,7 @@ impl Themes {
                     return;
                 }
             }
-            match store.define_theme(&name, light.unwrap_or_default(), dark.unwrap_or_default()).await {
+            match store.define_theme(&name, light, dark).await {
                 Ok(theme) => yield ThemesEvent::Theme { theme },
                 Err(e) => yield refused(e),
             }
@@ -153,7 +158,7 @@ impl Themes {
         params(name = "The theme's name, e.g. ocean"),
         example(note = "the ocean theme", params = r#"{"name": "ocean"}"#)
     )]
-    pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, name: String) -> impl Stream<Item = ThemesEvent> + Send + 'static {
+    pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, name: ThemeName) -> impl Stream<Item = ThemesEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -194,10 +199,10 @@ impl Themes {
     )]
     pub async fn set(
         &self, auth: Option<&AuthContext>,
-        scope: String,
-        theme: Option<String>,
-        reach: Option<String>,
-        takeover: Option<String>,
+        scope: ThemeScope,
+        theme: Option<ThemeName>,
+        reach: Option<ThemeReach>,
+        takeover: Option<Takeover>,
     ) -> impl Stream<Item = ThemesEvent> + Send + 'static {
         let store = self.store.clone();
         // Its parameter `reach` is the setting's, so the gate's answer is
@@ -212,28 +217,17 @@ impl Themes {
                     return;
                 }
             };
-            let site = scope.trim().eq_ignore_ascii_case(SITE);
+            let site = scope.is_site();
             {
                 let g = Grant::new(if site { ADMINISTER } else { "themes.set" });
-                let target = if site { "*".to_string() } else { scope.trim().to_ascii_uppercase() };
+                let target = if site { "*".to_string() } else { scope.to_string() };
                 if let Err(message) = caller.check(&g, &target) {
                     let message = if site { format!("the site's theme is everyone's: setting it takes admin on *: {message}") } else { message };
                     yield ThemesEvent::Error { message };
                     return;
                 }
             }
-            let parsed = (
-                reach.as_deref().map(str::trim).filter(|r| !r.is_empty()).map(ThemeReach::parse).transpose(),
-                takeover.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(Takeover::parse).transpose(),
-            );
-            let (r, t) = match parsed {
-                (Ok(r), Ok(t)) => (r, t),
-                (Err(message), _) | (_, Err(message)) => {
-                    yield ThemesEvent::Error { message };
-                    return;
-                }
-            };
-            match store.set_theme(&scope, theme.as_deref(), r, t).await {
+            match store.set_theme(&scope, theme.as_deref(), reach, takeover).await {
                 Ok(setting) => yield ThemesEvent::Setting { setting },
                 Err(e) => yield refused(e),
             }
@@ -254,7 +248,7 @@ impl Themes {
         params(id = "Ticket id, e.g. PANTRY-4"),
         example(note = "PANTRY-4's regions", params = r#"{"id": "PANTRY-4"}"#)
     )]
-    pub async fn theme_for(&self, auth: Option<&AuthContext>, reach: Reach, id: String) -> impl Stream<Item = ThemesEvent> + Send + 'static {
+    pub async fn theme_for(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef) -> impl Stream<Item = ThemesEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {

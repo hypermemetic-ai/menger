@@ -5,7 +5,6 @@
 //! so its file keeps only its methods (MENGER-29).
 
 use super::*;
-use crate::queue::Urgency;
 use crate::store::QueueChange;
 
 /// A queue write's answer as its wire event.
@@ -33,7 +32,7 @@ fn refused(store: &Store, caller: &Caller, id: String, e: StoreError) -> Tickets
 
 /// What a queue write asks: `queue`, `unqueue` or `snooze`.
 pub(super) enum Ask {
-    Queue { urgency: String, reason: String, input: Option<String> },
+    Queue { urgency: Urgency, reason: Reason, input: Option<InputId> },
     Unqueue,
     Snooze { minutes: u32 },
 }
@@ -45,10 +44,10 @@ pub(super) fn queue_stream(
     admitted: Result<Caller, String>,
     id: String,
     ask: Ask,
-    source: Option<String>,
+    source: Option<CallerSource>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let (caller, act) = match admitted.and_then(|c| act_of(&c, source.as_deref(), None).map(|a| (c, a))) {
+        let (caller, act) = match admitted.and_then(|c| act_of(&c, source, None).map(|a| (c, a))) {
             Ok(x) => x,
             Err(message) => {
                 yield TicketsEvent::Error { message };
@@ -56,13 +55,7 @@ pub(super) fn queue_stream(
             }
         };
         let answer = match ask {
-            Ask::Queue { urgency, reason, input } => match urgency.parse::<Urgency>() {
-                Ok(u) => store.queue_by(&id, u, &reason, input.as_deref(), act).await.map(wire),
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            },
+            Ask::Queue { urgency, reason, input } => store.queue_by(&id, urgency, &reason, input.as_deref(), act).await.map(wire),
             Ask::Unqueue => store
                 .unqueue_by(&id, act)
                 .await

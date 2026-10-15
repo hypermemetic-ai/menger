@@ -66,7 +66,7 @@ async fn without_node_the_service_starts_and_says_so() {
     let client = MermaidClient::new(&transport);
 
     let events = client
-        .parse_all("graph LR\n  A --> B".into())
+        .parse_all("graph LR\n  A --> B".try_into().unwrap())
         .await
         .expect("the call succeeds");
     let [MermaidEvent::Error { message }] = events.as_slice() else {
@@ -80,7 +80,7 @@ async fn without_node_the_service_starts_and_says_so() {
     assert!(message.contains("--node"), "{message}");
 
     let events = client
-        .check_all("# T\n\n```mermaid\ngraph LR\n```\n".into())
+        .check_all("# T\n\n```mermaid\ngraph LR\n```\n".try_into().unwrap())
         .await
         .unwrap();
     assert!(
@@ -88,13 +88,13 @@ async fn without_node_the_service_starts_and_says_so() {
         "{events:?}"
     );
     assert!(client
-        .check_all("no diagrams".into())
+        .check_all("no diagrams".try_into().unwrap())
         .await
         .unwrap()
         .is_empty());
 
     // Still serving after all of that.
-    assert_eq!(client.parse_all("pie".into()).await.unwrap().len(), 1);
+    assert_eq!(client.parse_all("pie".try_into().unwrap()).await.unwrap().len(), 1);
 }
 
 // -- ACCESS-25 ----------------------------------------------------------------------
@@ -141,7 +141,7 @@ async fn killed_outright_the_service_leaves_no_node_behind() {
     let transport = connect(port).await;
     let client = MermaidClient::new(&transport);
     let events = client
-        .parse_all("graph LR\n  A --> B".into())
+        .parse_all("graph LR\n  A --> B".try_into().unwrap())
         .await
         .unwrap();
     assert!(

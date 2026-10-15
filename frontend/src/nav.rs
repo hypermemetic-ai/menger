@@ -504,7 +504,7 @@ pub(crate) fn face(g: &Group) -> Option<TicketSummary> {
 fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, status: Status, kind: Kind) -> TicketSummary {
     TicketSummary {
         labels: Vec::new(),
-        id: id.to_string(),
+        id: menger_tickets_api::TicketId::new(id),
         // ORG-3: `epic` is the shortcode's identity (THEME, or a namesake's
         // THEME.5); its letters are what precedes a namesake's dot.
         epic: menger_tickets_api::Code::stored(epic.split('.').next().unwrap_or(epic)),
@@ -515,7 +515,7 @@ fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, statu
         status,
         kind,
         severity: None,
-        parent: host,
+        parent: host.map(menger_tickets_api::TicketId::new),
         child_count: 0,
         blocked_by: Vec::new(),
         unlocks: Vec::new(),
@@ -575,7 +575,7 @@ pub(crate) fn climb(g: Option<&Group>, cur: &TicketSummary) -> Climb {
         },
         Some(g) if g.root.is_none() => Climb::Flat(g.shortcode.to_string()),
         _ => match &cur.parent {
-            Some(p) => Climb::Parent(p.clone()),
+            Some(p) => Climb::Parent(p.to_string()),
             None => Climb::Lost,
         },
     }
@@ -1496,9 +1496,9 @@ async fn chain_ids(id: &str) -> Vec<String> {
     let mut cur = id.to_string();
     for _ in 0..64 {
         match row_of(&cur).await.and_then(|t| t.parent) {
-            Some(p) if !out.contains(&p) => {
-                out.push(p.clone());
-                cur = p;
+            Some(p) if !out.contains(&p.to_string()) => {
+                out.push(p.to_string());
+                cur = String::from(p);
             }
             _ => break,
         }
@@ -1600,7 +1600,9 @@ async fn ask_page(source: &Source, after: Option<String>, limit: usize) -> Asked
         Source::Parent(p) => (None, Some(p.clone())),
         Source::Epic(e) => (Some(e.clone()), None),
     };
-    match client.list_all(epic, None, parent, after, Some(limit as u32), Some(true), None, None, None, crate::session::tz()).await {
+    let typed = || -> Result<_, String> { Ok((crate::typed::opt(epic)?, crate::typed::opt(parent)?, crate::typed::opt(after)?)) };
+    let Ok((epic, parent, after)) = typed() else { return Asked::Offline };
+    match client.list_all(epic, None, parent, after, Some(limit as u32), Some(true), None, None, None, crate::session::zone()).await {
         Ok(events) => {
             let mut rows = Vec::new();
             let mut remaining = None;
@@ -1633,7 +1635,11 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
         Source::Epic(e) => (Some(e.clone()), None),
     };
     let keep = KEPT.with(|k| k.borrow().clone());
-    match client.tree_all(parent, epic, filter.to_string(), after, Some(limit as u32), Some(true), keep, crate::session::tz()).await {
+    let typed = || -> Result<_, String> {
+        Ok((crate::typed::opt(parent)?, crate::typed::opt(epic)?, crate::typed::typed(filter)?, crate::typed::opt(after)?, crate::typed::opt(keep)?))
+    };
+    let Ok((parent, epic, filter, after, keep)) = typed() else { return Asked::Offline };
+    match client.tree_all(parent, epic, filter, after, Some(limit as u32), Some(true), keep, crate::session::zone()).await {
         Ok(events) => {
             let mut rows = Vec::new();
             let mut marks = Vec::new();
@@ -1641,7 +1647,7 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
             for ev in events {
                 match ev {
                     TicketsEvent::Node { summary, matched, below } => {
-                        marks.push((summary.id.clone(), Mark { matched, below }));
+                        marks.push((summary.id.to_string(), Mark { matched, below }));
                         rows.push(summary);
                     }
                     TicketsEvent::Page { remaining: r, .. } => remaining = Some(r as usize),
@@ -1668,7 +1674,8 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
 /// the shortcode matches), or no answer came.
 async fn ask_root(epic: &str, root: &str, filter: &str) -> Option<Mark> {
     let client = session::client()?;
-    let events = client.tree_all(None, Some(epic.to_string()), filter.to_string(), None, Some(1), None, None, crate::session::tz()).await.ok()?;
+    let (epic, filter) = (crate::typed::typed(epic).ok()?, crate::typed::typed(filter).ok()?);
+    let events = client.tree_all(None, Some(epic), filter, None, Some(1), None, None, crate::session::zone()).await.ok()?;
     events.into_iter().find_map(|ev| match ev {
         TicketsEvent::Node { summary, matched, below } if summary.id == root => Some(Mark { matched, below }),
         _ => None,
@@ -1687,7 +1694,7 @@ async fn ask_list(source: &Source, lensed: Option<&str>, after: Option<String>, 
 /// deep link's chain.
 async fn get_summary(id: &str) -> Option<TicketSummary> {
     let client = session::client()?;
-    client.get_all(id.to_string()).await.ok()?.into_iter().find_map(|ev| match ev {
+    client.get_all(crate::typed::typed(id).ok()?).await.ok()?.into_iter().find_map(|ev| match ev {
         TicketsEvent::Ticket { ticket } => Some(TicketSummary::from(ticket)),
         _ => None,
     })
@@ -2446,7 +2453,7 @@ fn widen(lens: Lens, tree: Tree) {
     spawn_local(async move {
         let up = if key(&t).is_some() {
             match get_summary(&t).await {
-                Some(s) => s.parent,
+                Some(s) => s.parent.map(String::from),
                 None => return, // the server could not say: the filter stays
             }
         } else {
@@ -2689,7 +2696,7 @@ async fn reveal(ctx: Ctx, leaf: String, gen: u32) {
 async fn drawn_chain(ctx: Ctx, filter: &str, leaf: &str, steps: Vec<(Node, Option<TicketSummary>)>) -> Option<(Vec<(Node, Option<TicketSummary>)>, String)> {
     let mut chain: Vec<Node> = vec![Node::Ticket(leaf.to_string())];
     chain.extend(steps.iter().map(|(n, _)| n.clone()));
-    let mut rows: HashMap<String, TicketSummary> = steps.into_iter().filter_map(|(_, c)| c).map(|t| (t.id.clone(), t)).collect();
+    let mut rows: HashMap<String, TicketSummary> = steps.into_iter().filter_map(|(_, c)| c).map(|t| (t.id.to_string(), t)).collect();
     let ids: Vec<String> = chain
         .iter()
         .filter_map(|n| match n {
@@ -2769,7 +2776,8 @@ fn pip_mix(tree: Tree, lens: Lens) -> RwSignal<Option<[usize; 8]>> {
                 }
             }
             let Some(client) = session::client() else { return };
-            let Ok(events) = client.facets_all(text, None, session::tz()).await else { return };
+            let Ok(text) = crate::typed::opt(text) else { return };
+            let Ok(events) = client.facets_all(text, None, session::zone()).await else { return };
             let mut counts = [0u64; 5];
             for ev in events {
                 if let TicketsEvent::Facet { field, value, held } = ev {
@@ -3765,7 +3773,7 @@ fn list_view(
                 }
                 match answer {
                     Asked::Page(rows, remaining, marks) => {
-                        let ids: Vec<String> = rows.iter().map(|t| t.id.clone()).collect();
+                        let ids: Vec<String> = rows.iter().map(|t| t.id.to_string()).collect();
                         // Rows it did not hold are news too: a scroll back
                         // over children it had let go of.
                         let newly = ids.iter().any(|id| !holder.holds(id));
@@ -3836,20 +3844,20 @@ fn list_view(
                         // FILTER-14: under the lens the child is one the
                         // tree draws (the reveal opened no further), and
                         // the page after it is the tree's.
-                        let Asked::Page(rows, remaining, marks) = ask_list(&source, lensed.as_deref(), Some(child.id.clone()), PAGE).await else {
+                        let Asked::Page(rows, remaining, marks) = ask_list(&source, lensed.as_deref(), Some(child.id.to_string()), PAGE).await else {
                             return;
                         };
                         if !marks.is_empty() {
                             under.marks.try_update(|m| m.extend(marks));
                         }
-                        let ids: Vec<String> = rows.iter().map(|t| t.id.clone()).collect();
+                        let ids: Vec<String> = rows.iter().map(|t| t.id.to_string()).collect();
                         let Some(n) = list.try_with_untracked(|l| l.n) else { return };
                         let i = n.saturating_sub(remaining + ids.len() + 1);
                         if !holder.hold_page(rows) {
                             return;
                         }
                         list.try_update(|l| {
-                            l.place(i, vec![child.id.clone()]);
+                            l.place(i, vec![child.id.to_string()]);
                             l.place(i + 1, ids);
                         });
                         i
@@ -4353,14 +4361,14 @@ mod tests {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
             labels: Vec::new(),
-            id: id.into(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),
             title: id.into(),
             status: Status::Pending,
             kind: Kind::Build,
             severity: None,
-            parent: parent.map(Into::into),
+            parent: parent.map(menger_tickets_api::TicketId::new),
             child_count: 0,
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
@@ -4488,7 +4496,7 @@ mod tests {
             row("LEGACY-3", None),
         ]
         .into_iter()
-        .map(|t| (t.id.clone(), t))
+        .map(|t| (t.id.to_string(), t))
         .collect();
         let chain = |leaf: &str| -> Option<Vec<Node>> {
             let mut out = Vec::new();

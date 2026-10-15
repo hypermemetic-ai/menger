@@ -28,7 +28,7 @@ fn at(now: i64) -> Clock {
 
 fn row(epic: &str, seq: u32, status: Status, created: i64, updated: i64) -> Row {
     Row {
-        id: format!("{epic}-{seq}"),
+        id: format!("{epic}-{seq}").into(),
         epic: epic.into(),
         shortcode: epic.into(),
         address: format!("hypermemetic:{epic}-{seq}"),
@@ -84,7 +84,7 @@ fn scope(epic: &str) -> NewTicket {
 fn ids(store: &Store, text: &str, clock: Clock) -> Vec<String> {
     let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")).with_clock(clock);
     let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
-    store.filtered_page(&q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id).collect()
+    store.filtered_page(&q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
 }
 
 /// Random tickets — born over two months, some from before the log (no
@@ -134,7 +134,7 @@ fn created_and_for_answer_as_the_rule() {
                 log.append(t, &OrderKey { shortcode: ShortcodeId::from(r.epic.clone()), seq });
             }
             log.retime(&r);
-            own.insert(r.id.clone(), ts);
+            own.insert(r.id.to_string(), ts);
             rows.push(r);
         }
         assert!(log.check_times(rows.iter()).is_empty(), "round {round}: {:?}", log.check_times(rows.iter()));
@@ -165,7 +165,7 @@ fn created_and_for_answer_as_the_rule() {
                 let got = log.holds(&p, &clock);
                 let mut want: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
                 for r in &rows {
-                    if holds_of_row(&p, r, &own[&r.id], Some(began), &clock) {
+                    if holds_of_row(&p, r, &own[r.id.as_str()], Some(began), &clock) {
                         want.entry(r.shortcode.clone()).or_default().insert(r.seq);
                     }
                 }

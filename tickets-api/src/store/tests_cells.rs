@@ -28,7 +28,7 @@ pub(super) fn scanned(rows: &[Row], asking: &BTreeSet<String>) -> BTreeMap<Order
             let blocked = named.iter().any(|b| !by_id.get(b).is_some_and(|bt| done(bt.status)));
             let menger = t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"));
             let key = Key::new(t.status, t.kind, t.severity, blocked, !t.commits.is_empty(), menger)
-                .with(asking.contains(&t.id), cells::LabelSet::of(&t.labels));
+                .with(asking.contains(t.id.as_str()), cells::LabelSet::of(&t.labels));
             (OrderKey::of(t), key)
         })
         .collect()
@@ -37,7 +37,7 @@ pub(super) fn scanned(rows: &[Row], asking: &BTreeSet<String>) -> BTreeMap<Order
 /// MENGER-12: the tickets with an open input, by the inputs store's own
 /// answer (`inputs { state: open }`) — what the oracle's `asking` reads.
 pub(super) fn asking(store: &Store) -> BTreeSet<String> {
-    store.inputs(None, None, Some(InputState::Open)).unwrap().into_iter().map(|i| i.ticket).collect()
+    store.inputs(None, None, Some(InputState::Open)).unwrap().into_iter().map(|i| i.ticket.into_string()).collect()
 }
 
 /// The cells a stored form holds, by ticket.
@@ -83,7 +83,7 @@ pub(super) fn assert_cells_are_a_scan(store: &Store, path: Option<&Path>, after:
         assert_eq!(state, State::Current, "after {after}");
         assert_eq!(by_ticket(&file), want, "the file's cells, after {after}");
         assert_eq!(file, kept, "the cache's cells are the file's, ids and all, after {after}");
-        let scan = Cache::new(stored_rows.into_iter().map(|t| (t.id.clone(), t)).collect(), inputs);
+        let scan = Cache::new(stored_rows.into_iter().map(|t| (t.id.to_string(), t)).collect(), inputs);
         assert_eq!(stored::cell_differences(&file, &scan.cells.stored()), Vec::<String>::new(), "after {after}");
     }
 }
@@ -412,7 +412,7 @@ async fn a_crossing_past_the_threshold_carries_the_counts_it_leaves() {
     let hub = store.create(new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
     for i in 0..300 {
         let epic = if i % 3 == 0 { "OTHER" } else { "FAN" };
-        store.create(new_ticket(epic, Kind::Build, None, vec![hub.clone()])).await.unwrap();
+        store.create(new_ticket(epic, Kind::Build, None, vec![hub.to_string()])).await.unwrap();
     }
     let mut rx = store.subscribe_filtered();
     store.set_status(&hub, Status::Complete).await.unwrap();
@@ -501,7 +501,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
     for epic in ["PLX", "MNG"] {
         let root = store.create(new_ticket(epic, Kind::Scope, None, vec![])).await.unwrap().id;
         store.create(NewTicket { path: Some("_MENGER/board".into()), ..new_ticket(epic, Kind::Doc, None, vec![]) }).await.unwrap();
-        store.create(new_ticket(epic, Kind::Doc, Some(root), vec![])).await.unwrap();
+        store.create(new_ticket(epic, Kind::Doc, Some(String::from(root)), vec![])).await.unwrap();
     }
     let want = scanned(&rows(&store), &asking(&store));
     assert_eq!(want.values().filter(|k| k.menger()).count(), 2);
@@ -513,7 +513,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
                 let lens = Lens::parse(text).unwrap();
                 let q = Filtered { lens: lens.clone(), epic: None, status: None, parent: None, keep: None };
                 let page = store.filtered_page(&q, None, Some(3), Some(50)).unwrap();
-                (store.counts_text(&lens), page.tickets.into_iter().map(|t| t.id).collect())
+                (store.counts_text(&lens), page.tickets.into_iter().map(|t| t.id.into_string()).collect())
             })
             .collect()
     };

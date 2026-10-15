@@ -72,9 +72,32 @@ pub const CODE_MAX: usize = 32;
 /// `-`, 1 to 63 of them, not starting or ending with `-`. Today's tracker is
 /// the one organization [`OrgId::HYPERMEMETIC`] (ORG-1's `org-name`); ORG-4
 /// makes more. Org names compare exactly: `Hypermemetic:` is no org.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+///
+/// ACCESS-8: deserializing one checks it ([`OrgId::new`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[serde(transparent)]
 pub struct OrgId(String);
+
+impl<'de> Deserialize<'de> for OrgId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::new(&String::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Its name, read as text, as [`Code`]'s letters are.
+impl std::ops::Deref for OrgId {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::str::FromStr for OrgId {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        Self::new(s.trim())
+    }
+}
 
 impl OrgId {
     /// The organization today's tracker is (ORG-1, decided 2026-10-13).
@@ -307,6 +330,78 @@ impl TicketId {
     }
 }
 
+/// ACCESS-8: its key, read as text (`&t.id` where the store takes `&str`),
+/// as [`Code`] is.
+impl std::ops::Deref for TicketId {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for TicketId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for TicketId {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for TicketId {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for TicketId {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<String> for TicketId {
+    fn eq(&self, other: &String) -> bool {
+        &self.0 == other
+    }
+}
+
+impl PartialEq<TicketId> for String {
+    fn eq(&self, other: &TicketId) -> bool {
+        *self == other.0
+    }
+}
+
+impl PartialEq<TicketId> for &str {
+    fn eq(&self, other: &TicketId) -> bool {
+        *self == other.0
+    }
+}
+
+impl From<TicketId> for String {
+    fn from(id: TicketId) -> String {
+        id.0
+    }
+}
+
+/// ACCESS-8: a key is stored as its text.
+#[cfg(feature = "server")]
+impl rusqlite::ToSql for TicketId {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.0.to_sql()
+    }
+}
+
+#[cfg(feature = "server")]
+impl rusqlite::types::FromSql for TicketId {
+    fn column_result(v: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        String::column_result(v).map(Self)
+    }
+}
+
 impl fmt::Display for TicketId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -520,7 +615,23 @@ mod tests {
 /// serves: there, text becomes an identity only through the resolver.
 #[cfg(test)]
 mod literals {
-    use super::{Code, ShortcodeId};
+    use super::{Code, ShortcodeId, TicketId};
+
+    impl From<&str> for TicketId {
+        fn from(s: &str) -> Self {
+            TicketId::new(s)
+        }
+    }
+    impl From<String> for TicketId {
+        fn from(s: String) -> Self {
+            TicketId::new(s)
+        }
+    }
+    impl From<&String> for TicketId {
+        fn from(s: &String) -> Self {
+            TicketId::new(s.as_str())
+        }
+    }
 
     impl From<&str> for Code {
         fn from(s: &str) -> Self {

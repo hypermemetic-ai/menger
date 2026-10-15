@@ -655,7 +655,7 @@ impl Walk {
         let Some(last) = rows.last() else {
             return Ok(None);
         };
-        self.after = Some(last.id.clone());
+        self.after = Some(last.id.to_string());
         self.left = self.left.map(|n| n - rows.len() as u32);
         Ok(Some(tokio::spawn(store.full_owned(rows, written))))
     }
@@ -719,7 +719,7 @@ pub enum Change {
     /// included, so an open page can show the new one without a `get`.
     /// Only broadcast when something changed: a no-op amend writes and
     /// emits nothing.
-    Amended { ticket: Ticket, changed: Vec<String> },
+    Amended { ticket: Ticket, changed: Vec<crate::vocab::AmendedField> },
     /// SDLC-9: commits were linked to a ticket (`link_commits`); `added` is
     /// what was newly linked, in the order given. Carries the full ticket,
     /// as every write after birth does. Only broadcast when something was
@@ -1600,8 +1600,8 @@ fn find_parent_cycle(
             return None;
         }
         let next = tickets.get(&current).and_then(|t| t.parent.clone())?;
-        path.push(next.clone());
-        current = next;
+        path.push(next.to_string());
+        current = String::from(next);
     }
 }
 
@@ -1888,7 +1888,7 @@ impl<'a> Rows<'a> {
     }
 
     fn len(&self) -> usize {
-        self.at.len() + usize::from(self.patch.is_some_and(|p| !self.at.contains_key(&p.id)))
+        self.at.len() + usize::from(self.patch.is_some_and(|p| !self.at.contains_key(p.id.as_str())))
     }
 
     /// Every row in the store's order — SCALE-28: the patch in its place,
@@ -2051,9 +2051,9 @@ fn ordered(loaded: HashMap<String, Row>) -> (BTreeMap<OrderKey, Row>, HashMap<St
         .values()
         .map(|t| {
             if let Some(p) = &t.path {
-                paths.insert((t.shortcode.clone(), p.clone()), t.id.clone());
+                paths.insert((t.shortcode.clone(), p.clone()), t.id.to_string());
             }
-            (t.id.clone(), OrderKey::of(t))
+            (t.id.to_string(), OrderKey::of(t))
         })
         .collect();
     (order, at, paths)
@@ -2288,7 +2288,7 @@ impl Cache {
             .order
             .values()
             .filter(|t| t.child_count > 0)
-            .map(|t| (t.id.clone(), t.child_count))
+            .map(|t| (t.id.to_string(), t.child_count))
             .collect();
         let (unsatisfied, statuses, ready) = self.ready.stored();
         stored::Form {
@@ -2364,7 +2364,7 @@ impl Cache {
         // DEPLOY-11: the join is kept — its commits, wherever they run.
         self.deploys.relink(&ticket.id, &ticket.commits);
         let key = OrderKey::of(&ticket);
-        self.at.insert(ticket.id.clone(), key.clone());
+        self.at.insert(ticket.id.to_string(), key.clone());
         self.order.insert(key, ticket);
     }
 
@@ -2397,7 +2397,7 @@ impl Cache {
             Derived::rolled(self, rollups, groups).readied(ready).celled(cells).treed(tree).namespaced(namespaces);
         birth.store(&mut derived.stored);
         if let Some(p) = &newborn.parent {
-            derived.stored.counts.push((p.clone(), self.children.count(p) + 1));
+            derived.stored.counts.push((p.to_string(), self.children.count(p) + 1));
         }
         derived.moved.birth = Some(birth);
         derived.moved.placed = Some(Self::replace(rows, newborn, true));
@@ -2440,7 +2440,7 @@ impl Cache {
         // WAVE-10: its address, if it has one — checked free under the
         // write-serial lock before the commit.
         if let Some(p) = &ticket.path {
-            self.paths.insert((ticket.shortcode.clone(), p.clone()), ticket.id.clone());
+            self.paths.insert((ticket.shortcode.clone(), p.clone()), ticket.id.to_string());
         }
         self.insert(ticket);
         let count = parent.map(|p| {
@@ -3537,7 +3537,7 @@ impl Store {
         let id = cache.resolve(id)?;
         let row = cache.get(&id).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
         if row.kind == Kind::Doc {
-            return Err(StoreError::DocHasNoLifecycle { id: row.id.clone() });
+            return Err(StoreError::DocHasNoLifecycle { id: row.id.to_string() });
         }
         let sub = lineage::subtree(&cache, &row.id, None);
         let descendants = sub
@@ -3961,7 +3961,7 @@ impl Store {
             // The page's last id, or — for the degenerate empty page
             // (`limit: 0`) — the cursor it was cut with: either way, where
             // the next page resumes.
-            tickets.last().map(|t| t.id.clone()).or(cursor)
+            tickets.last().map(|t| t.id.to_string()).or(cursor)
         };
         Page {
             tickets,
@@ -4178,7 +4178,7 @@ impl Store {
             rules::parent_refusal(&tickets, &child, &parent)?;
             let now = chrono::Utc::now().timestamp();
             let previous = child.parent.take();
-            child.parent = Some(parent.clone());
+            child.parent = Some(crate::address::TicketId::new(parent.clone()));
             child.updated_unix = now;
 
             // A previous parent that names no ticket (a hand-edited
@@ -4226,7 +4226,7 @@ impl Store {
             move |(child, body), (groups, joined, left), tx| {
                 let change = Change::ParentChanged {
                     ticket: whole(child, body),
-                    previous: previous.clone(),
+                    previous: previous.clone().map(String::from),
                 };
                 let _ = tx.send(change.clone());
                 let _ = tx.send(Change::ChildrenChanged {
@@ -4237,7 +4237,7 @@ impl Store {
                 });
                 if let (Some(old), Some(epic)) = (previous, old_epic) {
                     let _ = tx.send(Change::ChildRemoved {
-                        id: old,
+                        id: String::from(old),
                         shortcode: epic,
                         removed: id,
                         child_count: left,
@@ -4300,14 +4300,14 @@ impl Store {
         let declares = body.as_deref().map(crate::inputs::read);
         let serial = self.serial().await;
         let mut ticket = self.get(&id).await?;
-        let mut changed: Vec<String> = Vec::new();
+        let mut changed = Vec::new();
         if let Some(title) = title.filter(|t| *t != ticket.title) {
             ticket.title = title;
-            changed.push("title".into());
+            changed.push(crate::vocab::AmendedField::Title);
         }
         if let Some(body) = body.filter(|b| *b != ticket.body) {
             ticket.body = body;
-            changed.push("body".into());
+            changed.push(crate::vocab::AmendedField::Body);
         }
         if changed.is_empty() {
             return Ok(Change::Amended { ticket, changed });
@@ -4315,7 +4315,7 @@ impl Store {
         // COMP-3: a new body moves the registry — the whole amend refused,
         // title too, when a block is malformed or defines a name another
         // ticket owns.
-        let mut registered = match uses.filter(|_| changed.iter().any(|c| c == "body")) {
+        let mut registered = match uses.filter(|_| changed.contains(&crate::vocab::AmendedField::Body)) {
             None => components::Plan::default(),
             Some((uses, problems)) => {
                 if let Some(problem) = problems.into_iter().next() {
@@ -4327,7 +4327,7 @@ impl Store {
         };
         // INPUT-3: and its inputs — the whole amend refused, title too, when
         // the markup is malformed.
-        let mut asked = match declares.filter(|_| changed.iter().any(|c| c == "body")) {
+        let mut asked = match declares.filter(|_| changed.contains(&crate::vocab::AmendedField::Body)) {
             None => inputs::Plan::default(),
             Some((declared, problems)) => {
                 if let Some(problem) = problems.into_iter().next() {
@@ -4350,8 +4350,8 @@ impl Store {
         };
 
         let row = Row::from(&ticket);
-        let body = changed.iter().any(|c| c == "body").then(|| ticket.body.clone());
-        let title_changed = changed.iter().any(|c| c == "title");
+        let body = changed.contains(&crate::vocab::AmendedField::Body).then(|| ticket.body.clone());
+        let title_changed = changed.contains(&crate::vocab::AmendedField::Title);
         // SEARCH-2: the title and body the search index holds from now on.
         let indexed = (ticket.title.clone(), ticket.body.clone());
         let registry_moves = std::mem::take(&mut registered.moves);
@@ -4524,7 +4524,7 @@ impl Store {
             let current = cache.inputs.get(&ticket, &input).cloned().ok_or_else(|| StoreError::InputUnknown {
                 ticket: ticket.clone(),
                 input: input.clone(),
-                known: cache.inputs.of(&ticket).iter().map(|i| i.id.clone()).collect(),
+                known: cache.inputs.of(&ticket).iter().map(|i| i.id.to_string()).collect(),
             })?;
             (row.shortcode.clone(), current, row.clone())
         };
@@ -4653,11 +4653,11 @@ impl Store {
                     Err(_) => None,
                 };
                 let row = row.ok_or_else(|| StoreError::CommentTicket { ticket: id.clone() })?;
-                anchor.ticket = Some(row.id.clone());
+                anchor.ticket = Some(row.id.to_string());
                 anchor.version = Some(row.updated_unix);
             }
             crate::comments::Comment {
-                id: cache.comments.next_id(),
+                id: crate::vocab::CommentId::new(cache.comments.next_id()),
                 state: crate::comments::CommentState::Open,
                 author,
                 at: chrono::Utc::now().timestamp(),
@@ -4709,7 +4709,7 @@ impl Store {
         let author = crate::notes::check(&body, author.as_deref()).map_err(StoreError::NoteRefused)?;
         let serial = self.serial().await;
         let note = crate::notes::Note {
-            id: self.tickets.read().expect("store lock poisoned").notes.next_id(),
+            id: crate::vocab::NoteId::new(self.tickets.read().expect("store lock poisoned").notes.next_id()),
             at: chrono::Utc::now().timestamp(),
             author,
             body,
@@ -4841,7 +4841,7 @@ impl Store {
         };
         let ticket_chain = |key: &str| -> Option<Vec<String>> {
             let row = cache.get(key)?;
-            let mut out = vec![row.shortcode.as_str().to_string(), row.id.clone()];
+            let mut out = vec![row.shortcode.as_str().to_string(), row.id.to_string()];
             for a in tree::ancestors(cache.rows(), &row.id, row.parent.as_deref()) {
                 if !out.iter().any(|o| o == a) {
                     out.push(a.to_string());

@@ -101,7 +101,7 @@ pub(super) fn view(
             let change = match f {
                 Form::MoveUnder | Form::BlockedBy => {
                     // The first found, else what was typed as an id.
-                    let first = found.with_untracked(|r| r.first().map(|r| r.id.clone()));
+                    let first = found.with_untracked(|r| r.first().map(|r| r.id.to_string()));
                     let typed = text.trim().to_ascii_uppercase();
                     match first.or_else(|| (!typed.is_empty()).then_some(typed)) {
                         Some(id) if model::pickable(&ids, &id) => pick_change(id),
@@ -213,11 +213,11 @@ pub(super) fn view(
                             .get()
                             .into_iter()
                             .map(|r| {
-                                let id = r.id.clone();
+                                let id = r.id.to_string();
                                 let done = done.clone();
                                 view! {
-                                    <button class="item pick" role="menuitem" data-pick-id=id.clone() on:click=move |_| done(pick_change(id.clone()))>
-                                        <span class="code">{r.id.clone()}</span>
+                                    <button class="item pick" role="menuitem" data-pick-id=id.clone() on:click=move |_| done(pick_change(id.to_string()))>
+                                        <span class="code">{r.id.to_string()}</span>
                                         " "
                                         <span class=format!("tag {}", st_class(r.status.as_str()))>{r.status.to_string()}</span>
                                         " "

@@ -145,7 +145,7 @@ fn row(t: Transition, show_ticket: bool) -> impl IntoView {
     let what = if field == TransitionField::Kind { "kind" } else { "" };
     let ticket = show_ticket.then(|| {
         let href = format!("#/ticket/{}", t.ticket);
-        view! { <a class="code" href=href data-ticket-id=t.ticket.clone()>{t.ticket.clone()}</a> }
+        view! { <a class="code" href=href data-ticket-id=t.ticket.to_string()>{t.ticket.to_string()}</a> }
     });
     let cause = t.cause_ticket.clone().filter(|_| !show_ticket).map(|c| {
         let href = format!("#/ticket/{c}");
@@ -181,7 +181,8 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
         let n = asked.get_value().wrapping_add(1);
         asked.set_value(n);
         spawn_local(async move {
-            let Ok(events) = client.history_all(id.clone()).await else { return };
+            let Ok(ticket) = crate::typed::typed(&id) else { return };
+            let Ok(events) = client.history_all(ticket).await else { return };
             // Only the newest question's answer.
             if asked.try_get_value() == Some(n) {
                 answer.try_set(answer_of(&id, events));
@@ -259,7 +260,7 @@ mod tests {
     fn t(id: u64, ticket: &str, from: Option<&str>, to: &str, actor: &str, cause: Option<(u64, &str)>) -> Transition {
         Transition {
             id,
-            ticket: ticket.into(),
+            ticket: menger_tickets_api::TicketId::new(ticket),
             field: TransitionField::Status,
             from: from.map(String::from),
             to: to.into(),

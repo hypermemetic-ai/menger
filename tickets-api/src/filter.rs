@@ -984,9 +984,10 @@ fn read_field(rest: &str) -> Result<Field, String> {
         }
         "in" => {
             let v = value()?;
-            match !v.is_empty() && v.bytes().all(|b| b.is_ascii_alphanumeric()) {
-                true => Ok(Field::In(v.to_ascii_uppercase())),
-                false => Err(format!("`in` takes a shortcode, as `in SCALE` — not `{v}`")),
+            // ACCESS-8: the one shortcode rule, `Code`'s.
+            match crate::address::Code::parse(v) {
+                Ok(code) => Ok(Field::In(code.as_str().to_string())),
+                Err(_) => Err(format!("`in` takes a shortcode, as `in SCALE` — not `{v}`")),
             }
         }
         // ORG-3: an id, a shortcode or any address — `org:ROOT/…/SC-N`,

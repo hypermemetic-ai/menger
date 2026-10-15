@@ -257,8 +257,8 @@ pub(super) fn subtree(cache: &Cache, name: &str, row: Option<&Row>) -> BTreeMap<
             };
             for s in inner {
                 let Some(c) = cache.order.get(&OrderKey { shortcode: e.clone(), seq: s }) else { continue };
-                if cache.children.kids(&c.id).is_some() && seen.insert(c.id.clone()) {
-                    stack.push(c.id.clone());
+                if cache.children.kids(&c.id).is_some() && seen.insert(c.id.to_string()) {
+                    stack.push(c.id.to_string());
                 }
             }
         }
@@ -469,7 +469,7 @@ impl<'c> Compiled<'c> {
     fn corrected(&self, t: &Row, (matched, below): (bool, u64)) -> (bool, u64) {
         let Some(delta) = self.delta() else { return (matched, below) };
         let matched = if self.spoken(t) { self.judge_row(t) } else { matched };
-        let below = (below as i64 + delta.get(&t.id).copied().unwrap_or(0)).max(0) as u64;
+        let below = (below as i64 + delta.get(t.id.as_str()).copied().unwrap_or(0)).max(0) as u64;
         (matched, below)
     }
 
@@ -1521,8 +1521,8 @@ impl<'c> Compiled<'c> {
             nodes.push(Node { summary: r.clone(), matched, below });
         }
         let remaining = total.saturating_sub(nodes.len() as u64);
-        let next = if remaining == 0 { None } else { nodes.last().map(|n| n.summary.id.clone()).or(after) };
-        TreePage { nodes, next, remaining }
+        let next = if remaining == 0 { None } else { nodes.last().map(|n| n.summary.id.to_string()).or(after) };
+        TreePage { nodes, next: next.map(String::from), remaining }
     }
 }
 
@@ -1805,7 +1805,7 @@ impl UnderBefore {
                     .into_iter()
                     .map(|(e, seq, inn)| {
                         let key = OrderKey { shortcode: e.clone(), seq };
-                        let id = cache.order.get(&key).map_or_else(|| e.key(seq), |t| t.id.clone());
+                        let id = cache.order.get(&key).map_or_else(|| e.key(seq), |t| t.id.to_string());
                         let shortcode = e.clone();
                         if inn {
                             Membership::Entered { id, shortcode, seq }

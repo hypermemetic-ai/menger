@@ -16,6 +16,9 @@
 //! caller reaches every organization, as everything else.
 
 use crate::orgs::OrgsEvent;
+// ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
+use crate::address::OrgId;
+use crate::vocab::Principal;
 #[cfg(feature = "server")]
 use crate::access::{Access, Caller, OPERATOR};
 #[cfg(feature = "server")]
@@ -81,6 +84,7 @@ fn administered(store: &Store, caller: &Caller, name: &str) -> Result<crate::org
     namespace = "orgs",
     description = "Organizations: every ticket and shortcode is in one; list yours, and (admin) create, rename, delete",
     client,
+    typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core",
     // AUTH-7: any member lists the organizations it is in; create, rename and
@@ -128,7 +132,7 @@ impl Orgs {
         ),
         example(note = "acme, administered by one key", params = r#"{"name": "acme", "admin": "key:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}"#)
     )]
-    pub async fn create(&self, auth: Option<&AuthContext>, reach: Reach, name: String, admin: Option<String>) -> impl Stream<Item = OrgsEvent> + Send + 'static {
+    pub async fn create(&self, auth: Option<&AuthContext>, reach: Reach, name: OrgId, admin: Option<Principal>) -> impl Stream<Item = OrgsEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
         let (store, access) = (self.store.clone(), self.access.clone());
         stream! {
@@ -143,14 +147,7 @@ impl Orgs {
                 yield OrgsEvent::Error { message: "a new organization needs admin on *".into() };
                 return;
             }
-            let admin = match admin.map(|a| a.trim().to_string()).filter(|a| !a.is_empty()) {
-                Some(p) if p.parse::<plexus_auth_core::identity::Principal>().is_err() => {
-                    yield OrgsEvent::Error { message: format!("admin: `{p}` is not a Plexus principal") };
-                    return;
-                }
-                Some(p) => Some((p, caller.principal.clone().unwrap_or_else(|| OPERATOR.into()))),
-                None => None,
-            };
+            let admin = admin.map(|p| (p.into_string(), caller.principal.clone().unwrap_or_else(|| OPERATOR.into())));
             match store.create_org(&name, admin).await {
                 Ok((org, admin)) => {
                     if let Some(g) = &admin {
@@ -172,7 +169,7 @@ impl Orgs {
         description = "Rename an organization; its old name keeps resolving",
         params(name = "The organization, e.g. acme", to = "Its new name: lower-case letters, digits and -, unique")
     )]
-    pub async fn rename(&self, auth: Option<&AuthContext>, reach: Reach, name: String, to: String) -> impl Stream<Item = OrgsEvent> + Send + 'static {
+    pub async fn rename(&self, auth: Option<&AuthContext>, reach: Reach, name: OrgId, to: OrgId) -> impl Stream<Item = OrgsEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
         let store = self.store.clone();
         stream! {
@@ -206,7 +203,7 @@ impl Orgs {
         description = "Delete an empty organization, and every grant on it",
         params(name = "The organization, e.g. acme")
     )]
-    pub async fn delete(&self, auth: Option<&AuthContext>, reach: Reach, name: String) -> impl Stream<Item = OrgsEvent> + Send + 'static {
+    pub async fn delete(&self, auth: Option<&AuthContext>, reach: Reach, name: OrgId) -> impl Stream<Item = OrgsEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
         let store = self.store.clone();
         stream! {

@@ -271,24 +271,9 @@ pub fn refuse(filter: &Filter) -> Result<(), StoreError> {
     }
 }
 
-/// FILTER-4: the fields `facets` counts, in the order it answers them — each
-/// as the language spells it. FILTER-21: `menger doc` after the other flags.
-/// MENGER-12: `asking` after it, then `label` — a count per label held, in
-/// name order (a ticket with two labels is counted under each) — before
-/// `in`.
-pub const FACET_FIELDS: [&str; 11] = [
-    "status",
-    "category",
-    "kind",
-    "severity",
-    "blocked",
-    "ready",
-    "has commits",
-    "menger doc",
-    "asking",
-    "label",
-    "in",
-];
+/// FILTER-4: the fields `facets` counts, in order — the vocabulary's list
+/// (ACCESS-8), which [`crate::vocab::FacetField`] is checked against.
+pub use crate::vocab::FACET_FIELDS;
 
 /// One field's tally: a count per value, in the order `facets` answers.
 fn tally(field: &str) -> Vec<(String, u64)> {
@@ -662,13 +647,13 @@ impl Store {
             // The page's last id; for an empty page, the cursor it was cut
             // with — or, cut at a position, the match before it, which is
             // where `after` resumes at that position (none before the first).
-            tickets.last().map(|t| t.id.clone()).or_else(|| match (after, first) {
+            tickets.last().map(|t| t.id.to_string()).or_else(|| match (after, first) {
                 (Some(id), _) => Some(id.to_string()),
                 (None, 0) => None,
                 (None, p) => view
                     .select(p - 1)
                     .and_then(|(epic, seq)| cache.order.get(&OrderKey { shortcode: epic.clone(), seq }))
-                    .map(|t| t.id.clone()),
+                    .map(|t| t.id.to_string()),
             })
         };
         Ok(Page {
@@ -769,7 +754,7 @@ impl Store {
         moved
             .into_iter()
             .map(|(shortcode, seq, now)| {
-                let id = cache.order.get(&OrderKey { shortcode: shortcode.clone(), seq }).map_or_else(|| shortcode.key(seq), |t| t.id.clone());
+                let id = cache.order.get(&OrderKey { shortcode: shortcode.clone(), seq }).map_or_else(|| shortcode.key(seq), |t| t.id.to_string());
                 if now {
                     Membership::Entered { id, shortcode, seq }
                 } else {
@@ -852,7 +837,7 @@ impl Watcher {
                 .map(|(m, now)| {
                     let (shortcode, seq) = (m.shortcode.clone(), m.seq);
                     let key = OrderKey { shortcode, seq };
-                    let id = cache.order.get(&key).map_or_else(|| key.shortcode.key(seq), |t| t.id.clone());
+                    let id = cache.order.get(&key).map_or_else(|| key.shortcode.key(seq), |t| t.id.to_string());
                     let shortcode = key.shortcode;
                     if now {
                         Membership::Entered { id, shortcode, seq }

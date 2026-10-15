@@ -108,7 +108,7 @@ impl Filter {
             && self.state.is_none_or(|s| c.state == s)
             && self.author.as_deref().is_none_or(|a| c.author == a)
             && self.text.as_deref().is_none_or(|t| has(&c.body, t) || has(&c.anchor.label, t) || has(&c.anchor.excerpt, t))
-            && (self.under.is_none() || under_ids.is_some_and(|ids| ids.contains(&c.id)))
+            && (self.under.is_none() || under_ids.is_some_and(|ids| ids.contains(&c.id.get())))
     }
 }
 
@@ -304,7 +304,7 @@ fn row(c: Comment) -> impl IntoView {
     let flip = move |_| {
         busy.set(true);
         spawn_local(async move {
-            let r = if open { comments::resolve(id).await } else { comments::reopen(id).await };
+            let r = if open { comments::resolve(id.get()).await } else { comments::reopen(id.get()).await };
             busy.try_set(false);
             err.try_set(r.err());
         });
@@ -317,7 +317,7 @@ fn row(c: Comment) -> impl IntoView {
                 <span class="cstate" data-state=c.state.as_str()>{c.state.as_str()}</span>
                 <span class="cwho">{c.author.clone()}</span>
                 <span class="cwhen" title=fmt_unix(c.at)>{fmt_relative(now_unix(), c.at)}</span>
-                <span class="cid">"#"{id}</span>
+                <span class="cid">"#"{id.get()}</span>
             </div>
             // MENGER-14: its bare URLs are links, followed by the app.
             <div class="cbody" data-links="comment" data-ticket=c.anchor.ticket.clone()><crate::highlight::CommentText text=c.body.clone() /></div>

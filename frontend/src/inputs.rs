@@ -196,7 +196,7 @@ fn fetch() {
     });
     HEARD.with(|h| *h.borrow_mut() = Some(Vec::new()));
     spawn_local(async move {
-        let answer = client.inputs_all(None, None, None, None, crate::session::tz()).await;
+        let answer = client.inputs_all(None, None, None, None, crate::session::zone()).await;
         if FETCH.with(Cell::get) != n {
             return; // a newer fetch went out; its answer is the one kept
         }
@@ -224,8 +224,8 @@ pub(crate) mod tests {
     /// A choice input, `open` — the fixtures' starting point.
     pub(crate) fn input(ticket: &str, id: &str) -> Input {
         Input {
-            ticket: ticket.into(),
-            id: id.into(),
+            ticket: menger_tickets_api::TicketId::new(ticket),
+            id: id.parse().unwrap(),
             kind: InputKind::Choice,
             question: Some(format!("{id}?")),
             options: vec![

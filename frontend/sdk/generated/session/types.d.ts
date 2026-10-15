@@ -1,3 +1,8 @@
+/** IDENTITY-42: one entry of a session's ceiling — `role@SCOPE`
+(`editor@IDENTITY`, `viewer@*`) or `grant@SCOPE` (`tickets.get@MENGER-12`),
+the scope by [`ceiling_scope_of`]. Which roles there are, and the
+shortcode a scope names, are the server's to say. */
+export type Ceiling = string;
 /** How a provider proves a caller. */
 export type ProviderKind = "oidc" | "nostr";
 /** The connection proved who it is. */

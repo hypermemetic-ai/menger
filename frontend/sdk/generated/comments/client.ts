@@ -3,18 +3,19 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { Anchor, CommentsEvent } from './types';
+import type { Anchor, AnchorPath, CommentId, CommentState, CommentsEvent, Route, Under } from './types';
+import type { Author, Body, Query, TicketRef } from '../notes/types';
 
 /** Typed client interface for comments plugin */
 export interface CommentsClient {
   /** Leave a comment at an anchor (route, path, label, excerpt, and ticket when the element belongs to one); yields the comment */
-  add(anchor: Anchor, body: string, author?: string | null): AsyncGenerator<CommentsEvent>;
+  add(anchor: Anchor, body: Body, author?: Author | null): AsyncGenerator<CommentsEvent>;
   /** List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit */
-  list(after?: number | null, author?: string | null, limit?: number | null, path?: string | null, route?: string | null, state?: string | null, text?: string | null, ticket?: string | null, under?: string | null): AsyncGenerator<CommentsEvent>;
+  list(after?: CommentId | null, author?: Author | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent>;
   /** Reopen a resolved comment; yields the comment, open */
-  reopen(id: number): AsyncGenerator<CommentsEvent>;
+  reopen(id: CommentId): AsyncGenerator<CommentsEvent>;
   /** Resolve a comment; yields the comment, resolved */
-  resolve(id: number): AsyncGenerator<CommentsEvent>;
+  resolve(id: CommentId): AsyncGenerator<CommentsEvent>;
   /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
   schema(): Promise<unknown>;
   /** Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes */
@@ -26,22 +27,22 @@ class CommentsClientImpl implements CommentsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *add(anchor: Anchor, body: string, author?: string | null): AsyncGenerator<CommentsEvent> {
+  async *add(anchor: Anchor, body: Body, author?: Author | null): AsyncGenerator<CommentsEvent> {
     const stream = this.rpc.call('comments.add', { anchor, author, body });
     yield* extractData<CommentsEvent>(stream);
   }
 
-  async *list(after?: number | null, author?: string | null, limit?: number | null, path?: string | null, route?: string | null, state?: string | null, text?: string | null, ticket?: string | null, under?: string | null): AsyncGenerator<CommentsEvent> {
+  async *list(after?: CommentId | null, author?: Author | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent> {
     const stream = this.rpc.call('comments.list', { after, author, limit, path, route, state, text, ticket, under });
     yield* extractData<CommentsEvent>(stream);
   }
 
-  async *reopen(id: number): AsyncGenerator<CommentsEvent> {
+  async *reopen(id: CommentId): AsyncGenerator<CommentsEvent> {
     const stream = this.rpc.call('comments.reopen', { id });
     yield* extractData<CommentsEvent>(stream);
   }
 
-  async *resolve(id: number): AsyncGenerator<CommentsEvent> {
+  async *resolve(id: CommentId): AsyncGenerator<CommentsEvent> {
     const stream = this.rpc.call('comments.resolve', { id });
     yield* extractData<CommentsEvent>(stream);
   }

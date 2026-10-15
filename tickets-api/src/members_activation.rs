@@ -15,11 +15,13 @@
 //! holds every grant), `grant` and `revoke` held on their `scope` (the
 //! target); `mine` is any signed-in caller's (the hub's signed-in grants).
 
-use crate::members::MembersEvent;
+use crate::members::{MembersEvent, Role};
+// ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
+use crate::vocab::{Principal, ScopeRef};
 #[cfg(feature = "server")]
 use crate::access::{Access, OPERATOR};
 #[cfg(feature = "server")]
-use crate::members::{Grant, Role};
+use crate::members::Grant;
 #[cfg(feature = "server")]
 use crate::store::Store;
 #[cfg(feature = "server")]
@@ -56,6 +58,7 @@ fn grant_event(grant: Grant) -> MembersEvent {
     namespace = "members",
     description = "Who holds which role on which shortcode, and the way admins change it",
     client,
+    typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core"
 )]
@@ -96,7 +99,7 @@ impl Members {
         description = "The grants on the scopes you administer, by principal then scope",
         params(scope = "Only this organization (acme:), shortcode, or * (optional)")
     )]
-    pub async fn list(&self, auth: Option<&AuthContext>, reach: Reach, scope: Option<String>) -> impl Stream<Item = MembersEvent> + Send + 'static {
+    pub async fn list(&self, auth: Option<&AuthContext>, reach: Reach, scope: Option<ScopeRef>) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
         let (store, access) = (self.store.clone(), self.access.clone());
         stream! {
@@ -144,7 +147,7 @@ impl Members {
         values(role = ["viewer", "editor", "admin", "deployer"]),
         example(note = "make a person an editor on IDENTITY", params = r#"{"principal": "oidc:workos/user_01M4", "scope": "IDENTITY", "role": "editor"}"#)
     )]
-    pub async fn grant(&self, auth: Option<&AuthContext>, reach: Reach, principal: String, scope: String, role: String) -> impl Stream<Item = MembersEvent> + Send + 'static {
+    pub async fn grant(&self, auth: Option<&AuthContext>, reach: Reach, principal: Principal, scope: ScopeRef, role: Role) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
         let (store, access) = (self.store.clone(), self.access.clone());
         stream! {
@@ -155,20 +158,15 @@ impl Members {
                     return;
                 }
             };
-            let (scope, role) = match (store.scope_named(&scope).map_err(|e| e.to_string()), role.parse::<Role>()) {
-                (Ok(s), Ok(r)) => (s, r),
-                (Err(message), _) | (_, Err(message)) => {
-                    yield MembersEvent::Error { message };
+            let scope = match store.scope_named(&scope) {
+                Ok(s) => s,
+                Err(e) => {
+                    yield MembersEvent::Error { message: e.to_string() };
                     return;
                 }
             };
-            let principal = principal.trim().to_string();
-            if principal.is_empty() || principal.parse::<plexus_auth_core::identity::Principal>().is_err() {
-                yield MembersEvent::Error { message: format!("`{principal}` is not a Plexus principal") };
-                return;
-            }
             let grant = Grant {
-                principal,
+                principal: principal.into_string(),
                 scope,
                 role,
                 granted_by: caller.principal.clone().unwrap_or_else(|| OPERATOR.into()),
@@ -192,7 +190,7 @@ impl Members {
         description = "Take a principal's role on a shortcode or * away",
         params(principal = "The Plexus principal", scope = "An organization (acme:), a shortcode in one, or *")
     )]
-    pub async fn revoke(&self, auth: Option<&AuthContext>, reach: Reach, principal: String, scope: String) -> impl Stream<Item = MembersEvent> + Send + 'static {
+    pub async fn revoke(&self, auth: Option<&AuthContext>, reach: Reach, principal: Principal, scope: ScopeRef) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
         let store = self.store.clone();
         stream! {
@@ -207,7 +205,7 @@ impl Members {
                     return;
                 }
             };
-            let principal = principal.trim().to_string();
+            let principal = principal.into_string();
             match store.revoke(principal.clone(), scope.clone()).await {
                 Ok(existed) => yield MembersEvent::Revoked { principal, scope, existed },
                 Err(e) => yield MembersEvent::Error { message: e.to_string() },

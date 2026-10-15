@@ -118,7 +118,7 @@ impl Comments {
 
     /// The cache's half of a committed write: `comment` as it is now.
     pub(crate) fn put(&mut self, comment: Comment) {
-        self.by_id.insert(comment.id, comment);
+        self.by_id.insert(comment.id.get(), comment);
     }
 }
 
@@ -225,7 +225,7 @@ pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: O
     let mut matches = newest_first.filter(|c| admits(c));
     let page: Vec<Comment> = matches.by_ref().take(take).cloned().collect();
     let more = limit.is_some() && matches.next().is_some();
-    let next = more.then(|| page.last().map(|c| c.id).or(after)).flatten();
+    let next = more.then(|| page.last().map(|c| c.id.get()).or(after)).flatten();
     Ok(CommentPage { comments: page, next })
 }
 
@@ -238,7 +238,7 @@ pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
              ON CONFLICT (id) DO UPDATE SET state = excluded.state",
     )?
     .execute(params![
-        c.id as i64,
+        c.id.get() as i64,
         c.state.as_str(),
         c.author,
         c.at,
@@ -266,7 +266,7 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Comments> {
             rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, e.into())
         })?;
         comments.put(Comment {
-            id: r.get::<_, i64>(0)? as u64,
+            id: crate::vocab::CommentId::new(r.get::<_, i64>(0)? as u64),
             state,
             author: r.get(2)?,
             at: r.get(3)?,

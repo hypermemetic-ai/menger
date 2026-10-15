@@ -19,7 +19,7 @@ fn ticket(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> 
     }
 }
 
-fn amended(change: Change) -> (Ticket, Vec<String>) {
+fn amended(change: Change) -> (Ticket, Vec<crate::vocab::AmendedField>) {
     match change {
         Change::Amended { ticket, changed } => (ticket, changed),
         other => panic!("expected Amended, got {other:?}"),

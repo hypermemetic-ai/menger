@@ -43,7 +43,7 @@ pub(super) fn named_in(store: &Store, caller: &Caller, id: String) -> String {
 ///   organizations; else the one organization of the caller's that holds a
 ///   shortcode of that name; else — a new shortcode — the caller's only
 ///   organization, or refused, naming them.
-pub(super) fn epic_in(store: &Store, caller: &Caller, epic: String, org: Option<String>, parent: Option<&str>) -> Result<String, TicketsEvent> {
+pub(super) fn epic_in(store: &Store, caller: &Caller, epic: String, org: Option<crate::address::OrgId>, parent: Option<&str>) -> Result<String, TicketsEvent> {
     let error = |message: String| TicketsEvent::Error { message };
     let Ok(asked) = crate::address::Address::parse(&epic) else { return Ok(epic) };
     let held: Vec<crate::address::OrgId> = match caller.orgs() {
@@ -51,7 +51,7 @@ pub(super) fn epic_in(store: &Store, caller: &Caller, epic: String, org: Option<
         None => store.orgs().into_iter().map(|o| o.name).collect(),
     };
     let qualified = |o: &crate::address::OrgId| crate::address::Address { org: Some(o.clone()), ..asked.clone() }.to_string();
-    if let Some(o) = org.as_deref().map(str::trim).filter(|o| !o.is_empty()) {
+    if let Some(o) = org.as_ref().map(crate::address::OrgId::as_str) {
         let found = store.org(o).map(|x| x.name).filter(|n| held.contains(n));
         let Some(o) = found else { return Err(error(format!("no organization '{o}' (nothing was created)"))) };
         if asked.org.as_ref().is_some_and(|a| store.org(a.as_str()).map(|x| x.name).as_ref() != Some(&o)) {

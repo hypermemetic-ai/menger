@@ -173,7 +173,7 @@ impl Store {
                 plan(&cache, &current, update.clone(), None, None, &mut refused)
             };
             if !refused.is_empty() {
-                refusals.push((current.id, refused));
+                refusals.push((String::from(current.id), refused));
             } else if p.changed.is_empty() {
                 unchanged.push(current.id);
             } else {
@@ -188,7 +188,7 @@ impl Store {
             for id in &ids {
                 tickets.push(self.get(id).await?);
             }
-            return Ok(UpdatedMany { tickets, ids: Vec::new(), unchanged, changed: Vec::new() });
+            return Ok(UpdatedMany { tickets, ids: Vec::new(), unchanged: unchanged.into_iter().map(String::from).collect::<Vec<String>>(), changed: Vec::new() });
         }
         self.in_one_write(serial, move |conn, cache, unders| {
             let txn = conn.transaction()?;
@@ -211,7 +211,7 @@ impl Store {
             }
             txn.commit()?;
             let changes = out.finish_with(Change::UpdatedMany { ids: moved.clone(), changed: changed.clone() });
-            Ok((UpdatedMany { tickets, ids: moved, unchanged, changed }, changes))
+            Ok((UpdatedMany { tickets, ids: moved, unchanged: unchanged.into_iter().map(String::from).collect::<Vec<String>>(), changed }, changes))
         })
         .await
     }
@@ -242,7 +242,7 @@ impl Store {
                         "the filter admits {n} tickets, over the {max} one write takes (raise max, or narrow the filter); nothing written"
                     )));
                 }
-                Ok(page.tickets.into_iter().map(|t| t.id).collect())
+                Ok(page.tickets.into_iter().map(|t| t.id.into_string()).collect())
             }
         }
     }
@@ -255,7 +255,7 @@ impl Store {
     pub async fn label_many(&self, ids: &[String], add: Vec<String>, remove: Vec<String>) -> Result<Vec<Change>, StoreError> {
         self.cells_many(ids, |row| {
             let (after, added, removed) =
-                crate::labels::apply(&row.labels, &add, &remove).map_err(|why| StoreError::Labels { id: row.id.clone(), why })?;
+                crate::labels::apply(&row.labels, &add, &remove).map_err(|why| StoreError::Labels { id: row.id.to_string(), why })?;
             let mut row = row.clone();
             row.labels = after;
             Ok((row, Moved::Labels { added, removed }))
@@ -273,7 +273,7 @@ impl Store {
             let mut known: HashSet<String> = row.commits.iter().cloned().collect();
             let added: Vec<String> = refs.iter().filter(|r| known.insert((*r).clone())).cloned().collect();
             if row.commits.len() + added.len() > commits::MAX_PER_TICKET {
-                return Err(StoreError::TooManyCommits { id: row.id.clone(), linked: row.commits.len(), adding: added.len() });
+                return Err(StoreError::TooManyCommits { id: row.id.to_string(), linked: row.commits.len(), adding: added.len() });
             }
             let mut row = row.clone();
             row.commits.extend(added.iter().cloned());

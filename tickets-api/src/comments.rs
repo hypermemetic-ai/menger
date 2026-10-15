@@ -67,7 +67,7 @@ pub struct Anchor {
 
 /// Where a comment stands: `open` until it is resolved; `resolve` and
 /// `reopen` flip it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommentState {
     Open,
@@ -107,7 +107,7 @@ impl FromStr for CommentState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Comment {
     /// Its id: 1, 2, … in the order comments were added, never reused.
-    pub id: u64,
+    pub id: crate::vocab::CommentId,
     pub state: CommentState,
     /// Who left it (`owner` unless `add` named someone).
     pub author: String,
@@ -161,7 +161,7 @@ pub enum CommentsEvent {
 impl From<Comment> for CommentsEvent {
     fn from(c: Comment) -> Self {
         let Comment { id, state, author, at, anchor, body, principal } = c;
-        CommentsEvent::Comment { id, state, author, at, anchor, body, principal }
+        CommentsEvent::Comment { id: id.get(), state, author, at, anchor, body, principal }
     }
 }
 
@@ -171,7 +171,7 @@ impl CommentsEvent {
     pub fn into_comment(self) -> Option<Comment> {
         match self {
             CommentsEvent::Comment { id, state, author, at, anchor, body, principal } => {
-                Some(Comment { id, state, author, at, anchor, body, principal })
+                Some(Comment { id: crate::vocab::CommentId::new(id), state, author, at, anchor, body, principal })
             }
             CommentsEvent::Added { comment } | CommentsEvent::Resolved { comment } | CommentsEvent::Reopened { comment } => {
                 Some(comment)
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn a_comment_event_is_the_comment_beside_its_type() {
         let c = Comment {
-            id: 1,
+            id: crate::vocab::CommentId::new(1),
             state: CommentState::Open,
             author: "owner".into(),
             at: 1_791_510_000,

@@ -64,6 +64,8 @@ fn outcome(evs: Result<Vec<MembersEvent>, plexus_client::ClientError>) -> Result
 }
 
 async fn grant(client: MembersClient<std::rc::Rc<plexus_client::WsTransport>>, principal: String, scope: String, role: String) -> Result<(), String> {
+    let typed = || -> Result<_, String> { Ok((crate::typed::typed(&principal)?, crate::typed::typed(&scope)?, crate::typed::typed(&role)?)) };
+    let (principal, scope, role) = typed()?;
     outcome(client.grant_all(principal, scope, role).await)
 }
 
@@ -140,7 +142,10 @@ pub(crate) fn MembersPage() -> impl IntoView {
                         let revoke = move |_| {
                             let (p, s) = (p.clone(), s.clone());
                             let Some(client) = session::members_client() else { return };
-                            act(format!("revoked {p} on {s}"), Box::pin(async move { outcome(client.revoke_all(p, s).await) }));
+                            act(format!("revoked {p} on {s}"), Box::pin(async move {
+                                let (principal, scope) = (crate::typed::typed(&p)?, crate::typed::typed(&s)?);
+                                outcome(client.revoke_all(principal, scope).await)
+                            }));
                         };
                         view! {
                             <tr>

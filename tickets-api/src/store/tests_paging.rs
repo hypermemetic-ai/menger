@@ -69,7 +69,7 @@ pub(super) fn write_runs(path: &Path, rows: &[(&str, u32)]) {
             &conn,
             &Ticket {
                 labels: Vec::new(),
-                id: format!("{epic}-{seq}"),
+                id: format!("{epic}-{seq}").into(),
                 epic: (*epic).into(),
                 shortcode: (*epic).into(),
                 address: String::new(),
@@ -108,7 +108,7 @@ impl Oracle {
     pub(super) fn of(store: &Store) -> Self {
         let cache = store.tickets.read().unwrap();
         Self {
-            rows: cache.order.iter().map(|(k, t)| (t.id.clone(), k.clone())).collect(),
+            rows: cache.order.iter().map(|(k, t)| (t.id.to_string(), k.clone())).collect(),
         }
     }
 
@@ -165,7 +165,7 @@ impl Oracle {
 fn answered(store: &Store, q: &PageQuery<'_>) -> Result<Answer, String> {
     store
         .page(*q)
-        .map(|p| (p.tickets.iter().map(|t| t.id.clone()).collect(), p.next, p.remaining))
+        .map(|p| (p.tickets.iter().map(|t| t.id.to_string()).collect(), p.next, p.remaining))
         .map_err(|e| e.to_string())
 }
 
@@ -206,7 +206,7 @@ fn walk(store: &Store, oracle: &Oracle, epic: Option<&str>, limit: u32, what: &s
         let Ok(page) = store.page(q) else {
             return seen;
         };
-        seen.extend(page.tickets.iter().map(|t| t.id.clone()));
+        seen.extend(page.tickets.iter().map(|t| t.id.to_string()));
         match page.next {
             Some(next) => after = Some(next),
             None => return seen,

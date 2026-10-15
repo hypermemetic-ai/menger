@@ -48,8 +48,32 @@ fn put_answered(events: &[TicketsEvent]) {
     }
 }
 
-fn some_list(v: Option<Vec<String>>) -> Option<Vec<String>> {
-    v.filter(|v| !v.is_empty())
+/// A list the call names, as its type — none when empty (ACCESS-8).
+fn some_list<T: std::str::FromStr<Err = String>>(v: Option<Vec<String>>) -> Result<Option<Vec<T>>, String> {
+    crate::typed::opt_many(v.filter(|v| !v.is_empty()))
+}
+
+/// The menu's `Args` as the parameter types `update` and `update_many`
+/// take (ACCESS-8), or the first value that is none.
+#[allow(clippy::type_complexity)]
+fn typed_args(
+    a: Args,
+) -> Result<
+    (
+        Option<menger_tickets_api::vocab::Title>,
+        Option<menger_tickets_api::Kind>,
+        Option<menger_tickets_api::Status>,
+        Option<menger_tickets_api::vocab::TicketRef>,
+        Option<menger_tickets_api::vocab::SeverityChange>,
+        Option<Vec<menger_tickets_api::vocab::TicketRef>>,
+        Option<Vec<menger_tickets_api::vocab::TicketRef>>,
+        Option<Vec<menger_tickets_api::vocab::Label>>,
+        Option<Vec<menger_tickets_api::vocab::Label>>,
+    ),
+    String,
+> {
+    use crate::typed::opt;
+    Ok((opt(a.title)?, opt(a.kind)?, opt(a.status)?, opt(a.parent)?, opt(a.severity)?, some_list(a.block)?, some_list(a.unblock)?, some_list(a.label)?, some_list(a.unlabel)?))
 }
 
 /// Send `call` — `change` to `ids` — and put what went wrong in the banner.
@@ -68,34 +92,32 @@ pub(crate) fn send(call: Call, change: Change, last_error: RwSignal<Option<Strin
             last_error.set(Some(format!("{what}: not connected yet")));
             return;
         };
-        let source = Some("app".to_string());
-        let answer = match call {
-            Call::Update(id, Args { title, kind, status, parent, severity, block, unblock, .. }) => {
-                client.update_all(id, title, None, kind, status, parent, severity, some_list(block), some_list(unblock), source, None).await
+        let source = Some(menger_tickets_api::vocab::CallerSource::App);
+        // ACCESS-8: the menu's text as the parameter types, at the edge.
+        let asked = async {
+            use crate::typed::{many, typed};
+            Ok::<_, String>(match call {
+                Call::Update(id, args) => {
+                    let (title, kind, status, parent, severity, block, unblock, _, _) = typed_args(args)?;
+                    client.update_all(typed(&id)?, title, None, kind, status, parent, severity, block, unblock, source, None).await
+                }
+                Call::Many(ids, args) => {
+                    let (_, kind, status, parent, severity, block, unblock, label, unlabel) = typed_args(args)?;
+                    client
+                        .update_many_all(Some(many(ids)?), None, None, None, kind, status, parent, severity, block, unblock, label, unlabel, source, None)
+                        .await
+                }
+                Call::Label { id, add, remove } => client.label_all(Some(typed(&id)?), None, some_list(Some(add))?, some_list(Some(remove))?).await,
+                Call::Commits(id, commits) => client.link_commits_all(Some(typed(&id)?), None, many(commits)?).await,
+                Call::SetStatus(..) => unreachable!("sent above"),
+            })
+        };
+        let answer = match asked.await {
+            Ok(answer) => answer,
+            Err(why) => {
+                last_error.set(Some(format!("{what}: {why}")));
+                return;
             }
-            Call::Many(ids, Args { kind, status, parent, severity, block, unblock, label, unlabel, .. }) => {
-                client
-                    .update_many_all(
-                        Some(ids),
-                        None,
-                        None,
-                        None,
-                        kind,
-                        status,
-                        parent,
-                        severity,
-                        some_list(block),
-                        some_list(unblock),
-                        some_list(label),
-                        some_list(unlabel),
-                        source,
-                        None,
-                    )
-                    .await
-            }
-            Call::Label { id, add, remove } => client.label_all(Some(id), None, some_list(Some(add)), some_list(Some(remove))).await,
-            Call::Commits(id, commits) => client.link_commits_all(Some(id), None, commits).await,
-            Call::SetStatus(..) => unreachable!("sent above"),
         };
         match answer {
             Ok(events) => match refusal(&events) {
@@ -111,8 +133,9 @@ pub(crate) fn send(call: Call, change: Change, last_error: RwSignal<Option<Strin
 /// words.
 pub(crate) async fn delete(ids: Vec<String>, children: Option<String>, unblock: Option<bool>) -> Result<Vec<String>, String> {
     let client = session::client().ok_or_else(|| "not connected".to_string())?;
+    let (ids, children) = (crate::typed::many(ids)?, crate::typed::opt(children)?);
     let events = client
-        .delete_all(Some(ids), None, None, None, children, unblock, Some("deleted from the app's menu".into()))
+        .delete_all(Some(ids), None, None, None, children, unblock, Some(crate::typed::typed("deleted from the app's menu")?))
         .await
         .map_err(|e| session::describe(&e))?;
     if let Some(msg) = refusal(&events) {
@@ -133,7 +156,7 @@ pub(crate) async fn delete(ids: Vec<String>, children: Option<String>, unblock: 
 /// `undelete { ids }`: back as they were, while the tombstones keep them.
 pub(crate) async fn undelete(ids: Vec<String>) -> Result<(), String> {
     let client = session::client().ok_or_else(|| "not connected".to_string())?;
-    let events = client.undelete_all(ids).await.map_err(|e| session::describe(&e))?;
+    let events = client.undelete_all(crate::typed::many(ids)?).await.map_err(|e| session::describe(&e))?;
     match refusal(&events) {
         Some(msg) => Err(msg),
         None => Ok(()),

@@ -45,7 +45,7 @@ fn new(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
 }
 
 async fn build(store: &Store, epic: &str, blocked_by: &[&str]) -> String {
-    store.create(new(epic, Kind::Build, blocked_by)).await.unwrap().id
+    String::from(store.create(new(epic, Kind::Build, blocked_by)).await.unwrap().id)
 }
 
 fn wave(n: u32) -> Placement {
@@ -139,8 +139,8 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
         let mut ids: Vec<String> = Vec::new();
         for e in EPICS {
             let t = store.create(new(e, Kind::Scope, &[])).await.unwrap();
-            mirror.insert(t.id.clone(), t.placement);
-            ids.push(t.id);
+            mirror.insert(t.id.to_string(), t.placement);
+            ids.push(String::from(t.id));
         }
         let mut rx = store.subscribe();
         let mut moved_total = 0usize;
@@ -181,7 +181,7 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
                 // A cycle, a doc named, a doc born as an awaited id: refused,
                 // as `create` refuses them — nothing changed.
                 match store.create(new(epic, kind, &refs)).await {
-                    Ok(t) => ids.push(t.id),
+                    Ok(t) => ids.push(String::from(t.id)),
                     Err(e) => {
                         let heard = drain(&mut rx);
                         assert!(heard.is_empty(), "a refusal says nothing: {what}: {e}: {heard:?}");
@@ -208,7 +208,7 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
             for c in &heard {
                 match c {
                     Change::Created { ticket } | Change::StatusChanged { ticket, .. } | Change::UnlocksChanged { ticket, .. } => {
-                        mirror.insert(ticket.id.clone(), ticket.placement);
+                        mirror.insert(ticket.id.to_string(), ticket.placement);
                     }
                     _ => {}
                 }
@@ -223,7 +223,7 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
             assert_kept_placements_are_the_rule(&store, &after);
             let kept_all: BTreeMap<String, Option<Placement>> = {
                 let cache = store.tickets.read().unwrap();
-                cache.order.values().map(|t| (t.id.clone(), t.placement)).collect()
+                cache.order.values().map(|t| (t.id.to_string(), t.placement)).collect()
             };
             for (id, p) in &mirror {
                 assert_eq!(kept_all.get(id), Some(p), "watch's {id}, after {after}");
@@ -425,12 +425,12 @@ async fn placements_are_placed_again_at_open() {
         store.set_status(&a, Status::Superseded).await.unwrap();
         build(&store, "RO", &[&c]).await;
         let cache = store.tickets.read().unwrap();
-        cache.order.values().map(|t| (t.id.clone(), t.placement)).collect()
+        cache.order.values().map(|t| (t.id.to_string(), t.placement)).collect()
     };
     let store = Store::open(&path).unwrap();
     let after: BTreeMap<String, Option<Placement>> = {
         let cache = store.tickets.read().unwrap();
-        cache.order.values().map(|t| (t.id.clone(), t.placement)).collect()
+        cache.order.values().map(|t| (t.id.to_string(), t.placement)).collect()
     };
     assert_eq!(after, before);
     assert_eq!(after["RO-6"], None, "a doc");

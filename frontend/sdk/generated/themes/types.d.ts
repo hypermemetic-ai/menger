@@ -24,8 +24,7 @@ export interface Said {
     /** The theme it adopts, if any. */
     theme?: string | null;
 }
-/** Whether a level takes the themes from above (`on`, the default) or
-ignores them (`off`). */
+/** Whether a level takes the themes from above (any case; true/yes, false/no too) */
 export type Takeover = "on" | "off";
 /** A theme as the server keeps it: its name and its overrides, by token
 name (`--accent`), for light and for dark — what it says itself; the
@@ -54,8 +53,14 @@ export interface Theme {
 }
 /** The level a region's theme came from. */
 export type ThemeLevel = never;
-/** How far an adoption reaches. */
+/** THEME-8: a theme's name — lower case letters, digits and `-`,
+starting with a letter, at most 40 (`ocean`): [`crate::themes::name_of`]. */
+export type ThemeName = string;
+/** How far a theme's adoption reaches (any case) */
 export type ThemeReach = "frame" | "ticket" | "site";
+/** THEME-4: where a theme is adopted — `site`, or a shortcode by any
+name [`ShortcodeRef`] takes. */
+export type ThemeScope = string;
 /** What the site or a shortcode says, as `themes.set` keeps it. */
 export interface ThemeSetting {
     reach: ThemeReach;
@@ -116,6 +121,10 @@ export declare function isThemesEventSetting(e: ThemesEvent): e is ThemesEventSe
 export declare function isThemesEventRegions(e: ThemesEvent): e is ThemesEventRegions;
 export declare function isThemesEventLagged(e: ThemesEvent): e is ThemesEventLagged;
 export declare function isThemesEventError(e: ThemesEvent): e is ThemesEventError;
+/** THEME-8: what a theme sets a token to (`#00796b`) — not blank, at
+most 200 bytes, nothing that could end its declaration:
+[`crate::themes::value_ok`]. */
+export type TokenValue = string;
 /** What a region wears, and the level it came from. */
 export interface Worn {
     /** The shortcode, for a shortcode's theme. */

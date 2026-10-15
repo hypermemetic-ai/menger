@@ -122,7 +122,7 @@ impl Ready {
         for t in rows.tickets() {
             let open = unsatisfied_of(rows, t);
             if open > 0 {
-                r.unsatisfied.insert(t.id.clone(), open);
+                r.unsatisfied.insert(t.id.to_string(), open);
             }
             if t.status == Status::Ready && open == 0 {
                 r.members.entry(t.shortcode.clone()).or_default().insert(t.seq);
@@ -216,7 +216,7 @@ impl Ready {
         let mut m = Move::default();
         let open = unsatisfied_of(rows, t);
         if open > 0 {
-            m.counts.push((t.id.clone(), open));
+            m.counts.push((t.id.to_string(), open));
         }
         self.restatus(t, None, &mut m);
         let mut touched: Vec<Touched<'a>> = vec![(t, 0, open)];
@@ -271,7 +271,7 @@ impl Ready {
         let was = self.count(&t.id);
         let now = unsatisfied_of(rows, t);
         if now != was {
-            m.counts.push((t.id.clone(), now));
+            m.counts.push((t.id.to_string(), now));
         }
         let touched: Vec<Touched<'a>> = vec![(t, was, now)];
         self.settle(&touched, &mut m);
@@ -308,7 +308,7 @@ impl Ready {
                 continue;
             }
             let Some(r) = rows.get(id) else { continue };
-            if !r.blocked_by.contains(&t.id) {
+            if !r.blocked_by.contains(&t.id.to_string()) {
                 continue;
             }
             let was = self.count(id);

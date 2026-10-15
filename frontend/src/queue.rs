@@ -35,6 +35,7 @@
 //! when a snooze ends, the title, the words — is pure and pinned by native
 //! tests; the rest is the session's socket and the DOM.
 
+use menger_tickets_api::vocab::CallerSource;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
@@ -422,13 +423,15 @@ async fn write(problem: RwSignal<Option<String>>, ev: Result<Vec<TicketsEvent>, 
 /// The owner done with `id`: out of the queue.
 fn done(id: String, problem: RwSignal<Option<String>>) {
     let Some(client) = session::client() else { return };
-    spawn_local(async move { write(problem, client.unqueue_all(id, Some("app".into())).await).await });
+    let Ok(id) = crate::typed::typed(&id) else { return };
+    spawn_local(async move { write(problem, client.unqueue_all(id, Some(CallerSource::App)).await).await });
 }
 
 /// `id` away for [`SNOOZE_MINUTES`].
 fn snooze(id: String, problem: RwSignal<Option<String>>) {
     let Some(client) = session::client() else { return };
-    spawn_local(async move { write(problem, client.snooze_all(id, SNOOZE_MINUTES, Some("app".into())).await).await });
+    let Ok(id) = crate::typed::typed(&id) else { return };
+    spawn_local(async move { write(problem, client.snooze_all(id, SNOOZE_MINUTES, Some(CallerSource::App)).await).await });
 }
 
 /// Answer `input` of `id` with `value` (source `app`), then — the owner
@@ -439,7 +442,12 @@ fn answer(id: String, input: String, value: InputValue, problem: RwSignal<Option
     spawn_local(async move {
         let sent = bridge::submit(&client, id.clone(), bridge::Submit { input, value, rationale: None }).await;
         match sent {
-            Ok(_) => write(problem, client.unqueue_all(id, Some("app".into())).await).await,
+            Ok(_) => match crate::typed::typed(&id) {
+                Ok(id) => write(problem, client.unqueue_all(id, Some(CallerSource::App)).await).await,
+                Err(why) => {
+                    problem.try_set(Some(why));
+                }
+            },
             Err(why) => {
                 problem.try_set(Some(why));
             }
@@ -759,7 +767,7 @@ mod tests {
     fn summary(id: &str, title: &str) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
-            id: id.into(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),
             title: title.into(),
@@ -873,7 +881,7 @@ mod tests {
             updated_unix: 0,
             moved_from: Vec::new(),
         };
-        let heard = vec![queued("A-2", Urgency::Now, 3), TicketsEvent::Amended { ticket: renamed, changed: vec!["title".into()] }];
+        let heard = vec![queued("A-2", Urgency::Now, 3), TicketsEvent::Amended { ticket: renamed, changed: vec![menger_tickets_api::vocab::AmendedField::Title] }];
         let q = settle(answer, &heard);
         assert_eq!(ids(&q), ["A-2", "A-1"]);
         assert_eq!(q.get("A-1").unwrap().ticket.title, "new", "a row event moves the title");

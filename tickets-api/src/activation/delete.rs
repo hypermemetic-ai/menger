@@ -12,18 +12,18 @@ use crate::store::{Children, Deleted, Deletion, Reshortcode, Reshortcoded, Selec
 pub(super) fn delete_stream(
     store: Arc<Store>,
     admitted: Result<Caller, String>,
-    ids: Option<Vec<String>>,
-    filter: Option<String>,
+    ids: Option<Vec<TicketRef>>,
+    filter: Option<FilterText>,
     max: Option<u32>,
-    tz: Option<String>,
-    children: Option<String>,
+    tz: Option<Zone>,
+    children: Option<DeleteChildren>,
     unblock: Option<bool>,
-    message: Option<String>,
+    message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let chosen = admitted.and_then(|caller| {
             let select = match (ids, filter) {
-                (Some(ids), None) if !ids.is_empty() => Selection::Ids(ids),
+                (Some(ids), None) if !ids.is_empty() => Selection::Ids(texts(ids)),
                 (None, Some(filter)) => {
                     let text = caller.scoped_text(&filter)?;
                     let lens = zoned_lens(&caller, Some(&text), tz.as_deref()).map_err(|e| e.to_string())?.unwrap_or_else(Lens::all);
@@ -31,7 +31,10 @@ pub(super) fn delete_stream(
                 }
                 _ => return Err("name the tickets: ids, or a filter — one of them".to_string()),
             };
-            let children = children.as_deref().map(str::parse::<Children>).transpose()?;
+            let children = children.map(|c| match c {
+                DeleteChildren::Reparent => Children::Reparent,
+                DeleteChildren::Delete => Children::Delete,
+            });
             let act = act_of(&caller, None, message)?;
             Ok((caller, select, Deletion { children, unblock: unblock.unwrap_or(false) }, act))
         });
@@ -83,7 +86,7 @@ pub(super) fn reshortcode_stream(
     store: Arc<Store>,
     admitted: Result<Caller, String>,
     mut ask: Reshortcode,
-    message: Option<String>,
+    message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let (caller, act) = match admitted.and_then(|caller| act_of(&caller, None, message).map(|act| (caller, act))) {

@@ -47,7 +47,7 @@ const ASKS: &str = "<m-input id=\"notes\" kind=\"text\"><m-question>Anything els
 fn ids(store: &Store, text: &str) -> BTreeSet<String> {
     let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")).with_clock(Clock::default());
     let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
-    store.filtered_page(&q, None, None, Some(10_000)).unwrap().tickets.into_iter().map(|t| t.id).collect()
+    store.filtered_page(&q, None, None, Some(10_000)).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
 }
 
 /// The rule, ticket by ticket, from the rows, the comments and the inputs'
@@ -56,7 +56,7 @@ fn ids(store: &Store, text: &str) -> BTreeSet<String> {
 fn touched_by_rule(store: &Store) -> BTreeSet<String> {
     let since = chrono::Utc::now().timestamp() - DAY;
     let cache = store.tickets.read().unwrap();
-    let mut last: HashMap<String, i64> = cache.order.values().map(|r| (r.id.clone(), r.updated_unix.max(r.created_unix))).collect();
+    let mut last: HashMap<String, i64> = cache.order.values().map(|r| (r.id.to_string(), r.updated_unix.max(r.created_unix))).collect();
     for (id, at) in cache.comments.activity().chain(cache.inputs.activity()) {
         if let Some(l) = last.get_mut(id) {
             *l = (*l).max(at);
@@ -112,7 +112,7 @@ async fn each_kind_of_edit_touches_and_a_rollup_does_not() {
         want.extend(add.iter().map(|s| s.to_string()));
         assert_eq!(ids(store, "touched within 1d"), want, "after {label}");
         assert_eq!(touched_by_rule(store), want, "the rule, after {label}");
-        let every: BTreeSet<String> = store.tickets.read().unwrap().order.values().map(|r| r.id.clone()).collect();
+        let every: BTreeSet<String> = store.tickets.read().unwrap().order.values().map(|r| r.id.to_string()).collect();
         let untouched = ids(store, "not touched within 1d");
         assert_eq!(untouched, every.difference(&want).cloned().collect(), "its negation, after {label}");
     };

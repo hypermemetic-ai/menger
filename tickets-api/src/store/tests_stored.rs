@@ -75,7 +75,7 @@ pub(super) fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
     // here instead.
     let cached: BTreeMap<String, Row> = {
         let cache = store.tickets.read().unwrap();
-        cache.order.values().map(|t| (t.id.clone(), Row { placement: None, ..tests::undressed(t) })).collect()
+        cache.order.values().map(|t| (t.id.to_string(), Row { placement: None, ..tests::undressed(t) })).collect()
     };
     assert_eq!(file.rows, cached, "the file's rows are the cache's, after {after}");
     tests_placements::assert_kept_placements_are_the_rule(store, after);
@@ -185,7 +185,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
         .filter(|t| t.id == t.id.to_ascii_uppercase())
         .collect();
     let extents: BTreeMap<String, u32> = store.extents_text().into_iter().collect();
-    let pick = |rng: &mut Rng| all[rng.below(all.len())].id.clone();
+    let pick = |rng: &mut Rng| all[rng.below(all.len())].id.to_string();
     // SDLC-13: every seventh write a kind changed — every pair of kinds, with
     // and without a status, legal or refused, held to the rules
     // (`tests_kinds`); on the hand-edited shapes, re-rooting a shortcode that
@@ -228,7 +228,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
                 (false, 0 | 1) | (true, 0) => None,
                 (false, _) => (!all.is_empty()).then(|| pick(rng)),
                 // Inside the shortcode, or (refused) outside it.
-                (true, 1 | 2) => Some(mine[rng.below(mine.len())].id.clone()),
+                (true, 1 | 2) => Some(mine[rng.below(mine.len())].id.to_string()),
                 (true, _) => Some(pick(rng)),
             };
             let parent = super::tests_ready::no_namesake(store, epic, kind, parent);
@@ -301,7 +301,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
             let epic = store.row(&child).unwrap().0.epic;
             let mine: Vec<&Row> = all.iter().filter(|t| t.epic == epic).collect();
             let parent = if rng.below(3) > 0 {
-                mine[rng.below(mine.len())].id.clone()
+                mine[rng.below(mine.len())].id.to_string()
             } else {
                 pick(rng)
             };

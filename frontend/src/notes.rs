@@ -349,17 +349,22 @@ pub(crate) fn BodyEditor(
         saving.set(true);
         problem.set(None);
         spawn_local(async move {
-            let answer = match action {
-                Save::Amend { id: tid, body: b } => client.amend_all(tid, None, Some(b)).await,
-                Save::Create { create: c, body: b } => {
-                    client.create_all(c.epic, c.title, Some("doc".into()), None, None, Some(b), None, Some(c.path), None).await
-                }
+            // ACCESS-8: the note's text as the parameter types, at the edge.
+            let asked = async {
+                use crate::typed::typed;
+                Ok::<_, String>(match action {
+                    Save::Amend { id: tid, body: b } => client.amend_all(typed(&tid)?, None, Some(typed(&b)?)).await,
+                    Save::Create { create: c, body: b } => {
+                        let (epic, title, path) = (typed(&c.epic)?, typed(&c.title)?, typed(&c.path)?);
+                        client.create_all(epic, title, Some(menger_tickets_api::Kind::Doc), None, None, Some(typed(&b)?), None, Some(path), None).await
+                    }
+                })
             };
-            let answer = answer.map_err(|e| session::describe(&e)).and_then(ticket_of);
+            let answer = asked.await.and_then(|a| a.map_err(|e| session::describe(&e))).and_then(ticket_of);
             saving.try_set(false);
             match answer {
                 Ok(t) => {
-                    id.try_set(Some(t.id.clone()));
+                    id.try_set(Some(t.id.to_string()));
                     base.try_set(Some(t.body.clone()));
                     body.try_set(Some(t.body));
                     editing.try_set(false);
@@ -454,12 +459,13 @@ enum Doc {
 /// `get` the annotation by its address: the document, or none yet.
 async fn load(address: String, id: RwSignal<Option<String>>, body: RwSignal<Option<String>>, doc: RwSignal<Doc>, last_error: RwSignal<Option<String>>) {
     let Some(client) = session::client() else { return };
-    match client.get_all(address.clone()).await {
+    let Ok(asked) = crate::typed::typed(&address) else { return };
+    match client.get_all(asked).await {
         Ok(events) => {
             for ev in events {
                 match ev {
                     TicketsEvent::Ticket { ticket } => {
-                        id.try_set(Some(ticket.id));
+                        id.try_set(Some(String::from(ticket.id)));
                         body.try_set(Some(ticket.body));
                         doc.try_set(Doc::Here);
                     }
@@ -525,7 +531,7 @@ pub(crate) fn BoardNotes(
             TicketsEvent::Created { ticket }
                 if ticket.shortcode.as_str() == root.as_str() && ticket.path.as_deref() == Some(BOARD_PATH) && id.try_get_untracked().flatten().is_none() =>
             {
-                id.try_set(Some(ticket.id.clone()));
+                id.try_set(Some(ticket.id.to_string()));
                 body.try_set(Some(ticket.body.clone()));
                 doc.try_set(Doc::Here);
             }

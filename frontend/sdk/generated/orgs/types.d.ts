@@ -29,7 +29,9 @@ export interface Org {
 /** ORG-3: an organization's name — lower-case ASCII letters, digits and
 `-`, 1 to 63 of them, not starting or ending with `-`. Today's tracker is
 the one organization [`OrgId::HYPERMEMETIC`] (ORG-1's `org-name`); ORG-4
-makes more. Org names compare exactly: `Hypermemetic:` is no org. */
+makes more. Org names compare exactly: `Hypermemetic:` is no org.
+
+ACCESS-8: deserializing one checks it ([`OrgId::new`]). */
 export type OrgId = string;
 /** `list`: one organization the caller holds a role in. */
 export interface OrgsEventOrg {
@@ -74,11 +76,10 @@ export declare function isOrgsEventRenamed(e: OrgsEvent): e is OrgsEventRenamed;
 export declare function isOrgsEventDeleted(e: OrgsEvent): e is OrgsEventDeleted;
 export declare function isOrgsEventNotFound(e: OrgsEvent): e is OrgsEventNotFound;
 export declare function isOrgsEventError(e: OrgsEvent): e is OrgsEventError;
-/** A role. Viewer, editor and admin are ordered, each including the ones
-before it. DEPLOY-14: `deployer` stands beside that line — a viewer's
-reads and `deployments.record`, nothing an editor may do — so a CI's key
-can be granted exactly what recording a deployment needs; its place in
-the order is only for sorting. (What each role may is the gate's,
-declared on each activation with `roles(...)`; this names the role a
-membership holds.) */
+/** IDENTITY-21: a Plexus principal — `idp:<uuid>`, `oidc:<provider>/<sub>`,
+`nostr:<hex>`, `key:<hex>`, `apikey:<id>` — checked by the identity
+layer's grammar, wasm-safe. On the server it converts to and from
+`plexus_auth_core::identity::Principal` (`TryFrom` both ways). */
+export type Principal = string;
+/** A role a grant gives (any case) */
 export type Role = "viewer" | "deployer" | "editor" | "admin";

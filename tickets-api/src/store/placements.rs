@@ -153,7 +153,7 @@ impl<'a> Pass<'a> {
         if !(written && self.born) {
             self.shifts.push(Shift {
                 key: OrderKey::of(r),
-                id: r.id.clone(),
+                id: r.id.to_string(),
                 placement: p,
             });
         }
@@ -356,7 +356,7 @@ fn whole(rows: Rows<'_>, written: &Row, born: bool) -> Replaced {
         if t.placement != Some(p) {
             out.shifts.push(Shift {
                 key: OrderKey::of(t),
-                id: t.id.clone(),
+                id: t.id.to_string(),
                 placement: p,
             });
         }

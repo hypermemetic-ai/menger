@@ -356,7 +356,7 @@ async fn windows_cross_from_the_typed_matches_to_the_corrected_ones() {
     let whole = store.search("plcement", Some(everything.clone()), Some(100), None).await.unwrap();
     assert_eq!(whole.matched, 26);
     assert!(whole.hits[..3].iter().all(|h| !h.corrected) && whole.hits[3..].iter().all(|h| h.corrected));
-    let order: Vec<String> = whole.hits.iter().map(|h| h.summary.id.clone()).collect();
+    let order: Vec<String> = whole.hits.iter().map(|h| h.summary.id.to_string()).collect();
     for size in [1, 2, 3, 4, 7, 25, 26] {
         for lens in [None, Some(everything.clone())] {
             let (mut walked, mut offset) = (Vec::new(), Some(0));

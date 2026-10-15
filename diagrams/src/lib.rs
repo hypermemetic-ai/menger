@@ -22,7 +22,7 @@
 //!
 //! let transport = WsTransport::connect("ws://127.0.0.1:4458", "diagrams").await?;
 //! let client = MermaidClient::new(&transport);
-//! for event in client.check_all("```mermaid\ngraph LR\n  A --> B\n```\n".into()).await? {
+//! for event in client.check_all("```mermaid\ngraph LR\n  A --> B\n```\n".try_into()?).await? {
 //!     if let MermaidEvent::Diagram { index, line, result } = event {
 //!         println!("diagram {index} (line {line}): {result:?}");
 //!     }
@@ -32,7 +32,7 @@
 //! ```
 
 pub mod types;
-pub use types::{MermaidEvent, Verdict};
+pub use types::{Markdown, MermaidEvent, MermaidSource, Verdict};
 
 pub mod activation;
 #[cfg(feature = "server")]

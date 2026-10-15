@@ -29,7 +29,7 @@ use crate::filter::Filter;
 type Answer = (Vec<String>, Option<String>, u64, Option<u64>);
 
 fn answer(page: Page) -> Answer {
-    (page.tickets.into_iter().map(|t| t.id).collect(), page.next, page.remaining, page.first)
+    (page.tickets.into_iter().map(|t| t.id.into_string()).collect(), page.next, page.remaining, page.first)
 }
 
 /// The palette's rule, written out: the trimmed query, ASCII case folded, a
@@ -67,7 +67,7 @@ fn cut(plain: &Plain, matched: &[usize], after: Option<&str>, limit: Option<u32>
         }
     };
     let to = limit.map_or(matched.len(), |n| (from + n as usize).min(matched.len()));
-    let page: Vec<String> = matched[from..to].iter().map(|i| plain.rows[*i].id.clone()).collect();
+    let page: Vec<String> = matched[from..to].iter().map(|i| plain.rows[*i].id.to_string()).collect();
     let remaining = (matched.len() - to) as u64;
     let next = if remaining == 0 { None } else { page.last().cloned().or(after) };
     Ok((page, next, remaining, None))
@@ -98,7 +98,7 @@ fn random_query(rng: &mut Rng, plain: &Plain) -> String {
             let id = pick(rng).id.clone();
             part(rng, &id)
         }
-        (_, 7) => pick(rng).id.clone(),
+        (_, 7) => pick(rng).id.to_string(),
         _ => format!(" {} ", pick(rng).title),
     };
     match rng.below(3) {
@@ -113,7 +113,7 @@ fn random_after(rng: &mut Rng, plain: &Plain) -> Option<String> {
     match (plain.rows.is_empty(), rng.below(4)) {
         (true, _) | (_, 0) => None,
         (_, 1) => Some(plain.rows[rng.below(plain.rows.len())].id.to_ascii_lowercase()),
-        _ => Some(plain.rows[rng.below(plain.rows.len())].id.clone()),
+        _ => Some(plain.rows[rng.below(plain.rows.len())].id.to_string()),
     }
 }
 
@@ -172,7 +172,7 @@ fn assert_find_is_a_scan(store: &Store, plain: &Plain, filter: &Filter, rng: &mu
             None => break,
         }
     }
-    let want: Vec<String> = m.iter().map(|i| plain.rows[*i].id.clone()).collect();
+    let want: Vec<String> = m.iter().map(|i| plain.rows[*i].id.to_string()).collect();
     if want.iter().all(|id| *id == id.to_ascii_uppercase()) {
         assert_eq!(seen, want, "{what}: a walk of find {query:?} under `{}`", filter.format());
     }
@@ -214,7 +214,7 @@ fn assert_member_is_a_scan(store: &Store, plain: &Plain, filter: &Filter, rng: &
             (true, _) | (_, 0) => format!("NONE-{}", rng.below(9)),
             (_, 1) => plain.rows[rng.below(plain.rows.len())].id.to_ascii_lowercase(),
             (_, 2) => format!(" {} ", plain.rows[rng.below(plain.rows.len())].id),
-            _ => plain.rows[rng.below(plain.rows.len())].id.clone(),
+            _ => plain.rows[rng.below(plain.rows.len())].id.to_string(),
         });
     }
     let want: Vec<bool> = ids
@@ -338,7 +338,7 @@ async fn inputs_under_random_filters_are_the_inputs_of_the_tickets_the_filter_ad
                 let mut t = new_ticket(epic, Kind::Build, None, vec![]);
                 t.body = format!("{}{}", decision("pick"), if rng.below(2) == 0 { decision("second") } else { String::new() });
                 let id = store.create(t).await.unwrap().id;
-                declared.push(id.clone());
+                declared.push(id.to_string());
                 format!("create {id} with inputs")
             }
             1 if !declared.is_empty() => {
@@ -447,7 +447,7 @@ async fn find_under_a_filter_pages_by_position() {
         store.create(new_ticket(epic, kind, None, vec![])).await.unwrap();
     }
     let lens = Lens::parse("kind build").unwrap();
-    let ids = |p: &Page| p.tickets.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+    let ids = |p: &Page| p.tickets.iter().map(|t| t.id.to_string()).collect::<Vec<_>>();
     let page = store.find_filtered("a", &lens, None, Some(2)).unwrap();
     assert_eq!((ids(&page), page.next.as_deref(), page.remaining, page.first), (vec!["A-2".into(), "A-3".into()], Some("A-3"), 1, None));
     let page = store.find_filtered("a", &lens, Some("b-1"), None).unwrap();

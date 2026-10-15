@@ -84,7 +84,7 @@ pub fn name_of(raw: &str) -> Result<String, String> {
 }
 
 /// How far an adoption reaches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemeReach {
     /// Only the frames inside the level that adopts it.
@@ -118,7 +118,7 @@ impl ThemeReach {
 
 /// Whether a level takes the themes from above (`on`, the default) or
 /// ignores them (`off`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Takeover {
     #[default]
@@ -140,6 +140,23 @@ impl Takeover {
             "off" | "false" | "no" => Ok(Self::Off),
             other => Err(format!("unknown takeover '{other}' (expected on or off)")),
         }
+    }
+}
+
+/// ACCESS-8: read as [`ThemeReach::parse`] reads, so a parameter and the
+/// wire take every spelling it takes.
+impl std::str::FromStr for ThemeReach {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        Self::parse(s)
+    }
+}
+
+/// ACCESS-8: read as [`Takeover::parse`] reads.
+impl std::str::FromStr for Takeover {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        Self::parse(s)
     }
 }
 

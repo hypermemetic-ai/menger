@@ -552,14 +552,14 @@ pub(crate) fn kinds(eff: &Filter) -> Vec<String> {
 /// knows them, its shortcode, and what hosts that shortcode (`tree`).
 pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&str) -> Option<String>) -> Facts {
     let s = &card.summary;
-    let mut lineage = vec![s.id.clone()];
+    let mut lineage = vec![s.id.to_string()];
     let mut at = s.parent.clone();
     while let Some(p) = at.take() {
-        if lineage.contains(&p) {
+        if lineage.contains(&p.to_string()) {
             break;
         }
-        at = parent_of(&p);
-        lineage.push(p);
+        at = parent_of(&p).map(menger_tickets_api::TicketId::new);
+        lineage.push(String::from(p));
     }
     lineage.push(s.shortcode.to_string());
     if let Some(t) = tree {
@@ -571,7 +571,7 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         // are on its row.
         asking: false,
         labels: s.labels.clone(),
-        id: s.id.clone(),
+        id: s.id.to_string(),
         epic: s.epic.to_string(),
         title: s.title.clone(),
         status: s.status,
@@ -631,7 +631,7 @@ pub(crate) fn admits_local(k: &Clauses, card: &Card, off: bool) -> bool {
 }
 
 fn ids(a: &Answer) -> HashSet<String> {
-    a.cards.iter().map(|c| c.summary.id.clone()).collect()
+    a.cards.iter().map(|c| c.summary.id.to_string()).collect()
 }
 
 /// The answer narrowed to the cards the effective filter admits — every
@@ -642,7 +642,7 @@ pub(crate) fn narrow(a: &Answer, eff: &Effective, tree: Option<&ScTree>) -> Answ
     let on = ids(a);
     let parents: HashMap<&str, &str> = a.cards.iter().filter_map(|c| Some((c.summary.id.as_str(), c.summary.parent.as_deref()?))).collect();
     let parent_of = |id: &str| -> Option<String> {
-        parents.get(id).map(|p| p.to_string()).or_else(|| cache::get(id).and_then(|r| r.try_with_untracked(|t| t.parent.clone()).flatten()))
+        parents.get(id).map(|p| p.to_string()).or_else(|| cache::get(id).and_then(|r| r.try_with_untracked(|t| t.parent.clone()).flatten()).map(String::from))
     };
     let (filter, local) = eff;
     // MENGER-12: a filter that asks `asking` reads the app's inputs — the
@@ -660,7 +660,7 @@ pub(crate) fn narrow(a: &Answer, eff: &Effective, tree: Option<&ScTree>) -> Answ
                         i.list()
                             .iter()
                             .filter(|x| x.state == menger_tickets_api::InputState::Open)
-                            .map(|x| x.ticket.clone())
+                            .map(|x| x.ticket.to_string())
                             .collect()
                     })
                     .unwrap_or_default()
@@ -674,7 +674,7 @@ pub(crate) fn narrow(a: &Answer, eff: &Effective, tree: Option<&ScTree>) -> Answ
                 let off = !off_board(c, &on).is_empty();
                 let mut facts = facts_of(c, tree, &parent_of);
                 if let Some(asks) = &asks {
-                    facts.asking = asks.contains(&c.summary.id);
+                    facts.asking = asks.contains(c.summary.id.as_str());
                 }
                 admits_local(local, c, off) && filter.matches(&facts)
             })
@@ -760,7 +760,11 @@ async fn fetch(ctx: Ctx) {
             ctx.coalesce.try_update_value(|c| *c = Coalesce::default());
             return;
         };
-        match client.waves_all(epics.into_iter().collect(), Some(kinds)).await {
+        let (Ok(epics), Ok(kinds)) = (crate::typed::many(epics), crate::typed::many(kinds)) else {
+            ctx.coalesce.try_update_value(|c| *c = Coalesce::default());
+            return;
+        };
+        match client.waves_all(epics, Some(kinds)).await {
             Ok(events) => match answer_of(events) {
                 Ok(a) => take(ctx, a),
                 Err(message) => {
@@ -781,7 +785,7 @@ async fn fetch(ctx: Ctx) {
 /// drawn.
 fn take(ctx: Ctx, a: Answer) {
     let Some(holder) = ctx.holder.try_get_value() else { return };
-    let ids: HashSet<String> = a.cards.iter().map(|c| c.summary.id.clone()).collect();
+    let ids: HashSet<String> = a.cards.iter().map(|c| c.summary.id.to_string()).collect();
     holder.hold_page(a.cards.iter().map(|c| c.summary.clone()).collect());
     holder.retain(|id| ids.contains(id));
     ctx.answer.try_set(Some(a));
@@ -887,12 +891,12 @@ pub(crate) fn WaveBoard(
     });
 
     let on_board = Memo::new(move |_| {
-        ctx.answer.with(|a| a.iter().flat_map(|a| a.cards.iter()).map(|c| c.summary.id.clone()).collect::<HashSet<String>>())
+        ctx.answer.with(|a| a.iter().flat_map(|a| a.cards.iter()).map(|c| c.summary.id.to_string()).collect::<HashSet<String>>())
     });
     // WAVE-11: what the annotation's `{wave: ID}`s read for a card.
     let placements = Memo::new(move |_| {
         ctx.answer.with(|a| {
-            a.iter().flat_map(|a| a.cards.iter()).map(|c| (c.summary.id.clone(), c.placement)).collect::<HashMap<String, Placement>>()
+            a.iter().flat_map(|a| a.cards.iter()).map(|c| (c.summary.id.to_string(), c.placement)).collect::<HashMap<String, Placement>>()
         })
     });
     // WAVE-12: what the filter admits — the columns, the tally, the Done
@@ -1061,7 +1065,7 @@ fn severity_mark(s: Severity) -> &'static str {
 /// shown), so a status or a title moves in place.
 fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
     let Placed { card, badge } = p;
-    let id = card.summary.id.clone();
+    let id = card.summary.id.to_string();
     let row: Signal<TicketSummary> = match cache::get(&id) {
         Some(sig) => Signal::from(sig),
         None => {
@@ -1097,7 +1101,7 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
             // off-board blocker are tags; the rest of the card keeps the
             // ticket menu.
             <div class="top">
-                <a class="code" href=href.clone() data-tag=Tag::ticket(&id).attr()>{id.clone()}</a>
+                <a class="code" href=href.clone() data-tag=Tag::ticket(&id).attr()>{id.to_string()}</a>
                 <span class="kind" title=kind data-tag=Tag::kind(card.summary.kind).attr()>{kind_glyph(kind)}" "{kind}</span>
                 {move || row.with(|t| t.severity).map(|s| view! {
                     <span class="sev" data-sev=s.as_str() title=format!("severity: {}", s.as_str()) data-tag=Tag::severity(s).attr()>{severity_mark(s)}</span>
@@ -1116,7 +1120,7 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
                     view! { <span class=format!("tag {}", st_class(st.as_str())) data-tag=Tag::status(st).attr()>{st.as_str()}</span> }
                 }}
                 // DEPLOY-13: where it runs, a mark per environment.
-                {crate::deploys::row_marks(id.clone())}
+                {crate::deploys::row_marks(id.to_string())}
                 {off.into_iter().map(|b| {
                     let href = format!("#/ticket/{b}");
                     view! { <a class="off" href=href title=format!("waits on {b}, not on this board") data-tag=Tag::ticket(&b).attr()>"⧖ "{b.clone()}" ↗"</a> }
@@ -1291,10 +1295,16 @@ async fn fetch_scoped(ctx: ScopedCtx) {
         };
         // Every kind is asked (the subtree board shows work; what it holds
         // beside is what tells it when its set moved).
-        let all: Vec<String> = ["scope", "execution", "build", "gap", "spike"].map(String::from).to_vec();
-        let (name, got) = match &scope {
-            Scope::Under(id) => ("waves_under", client.waves_under_all(id.clone(), Some(all)).await),
-            Scope::To(id) => ("waves_to", client.waves_to_all(id.clone(), Some(all)).await),
+        use menger_tickets_api::Kind;
+        let all = vec![Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike];
+        let (name, id) = match &scope {
+            Scope::Under(id) => ("waves_under", id),
+            Scope::To(id) => ("waves_to", id),
+        };
+        let Ok(ticket) = crate::typed::typed(id) else { return };
+        let got = match &scope {
+            Scope::Under(_) => client.waves_under_all(ticket, Some(all)).await,
+            Scope::To(_) => client.waves_to_all(ticket, Some(all)).await,
         };
         match got {
             Ok(events) => {
@@ -1305,7 +1315,7 @@ async fn fetch_scoped(ctx: ScopedCtx) {
                     Ok(a) => {
                         ctx.cycles.try_set(cycles);
                         let Some(holder) = ctx.holder.try_get_value() else { return };
-                        let ids: HashSet<String> = a.cards.iter().map(|c| c.summary.id.clone()).collect();
+                        let ids: HashSet<String> = a.cards.iter().map(|c| c.summary.id.to_string()).collect();
                         holder.hold_page(a.cards.iter().map(|c| c.summary.clone()).collect());
                         holder.retain(|id| ids.contains(id));
                         ctx.answer.try_set(Some(a));
@@ -1367,7 +1377,7 @@ pub(crate) fn ScopedBoard(scope: Scope, socket: RwSignal<u32>, last_error: RwSig
     {
         let scope = scope.clone();
         session::listen(move |ev| {
-            let held = ctx.answer.try_with_untracked(|a| a.iter().flat_map(|a| a.cards.iter()).map(|c| c.summary.id.clone()).collect::<HashSet<String>>());
+            let held = ctx.answer.try_with_untracked(|a| a.iter().flat_map(|a| a.cards.iter()).map(|c| c.summary.id.to_string()).collect::<HashSet<String>>());
             let Some(held) = held else { return };
             let (apply_it, ask_it) = heard_scoped(ev, &scope, &held);
             if apply_it {
@@ -1400,7 +1410,7 @@ pub(crate) fn ScopedBoard(scope: Scope, socket: RwSignal<u32>, last_error: RwSig
             })
         })
     };
-    let on_board = Memo::new(move |_| shown.with(|a| a.iter().flat_map(|a| a.cards.iter()).map(|c| c.summary.id.clone()).collect::<HashSet<String>>()));
+    let on_board = Memo::new(move |_| shown.with(|a| a.iter().flat_map(|a| a.cards.iter()).map(|c| c.summary.id.to_string()).collect::<HashSet<String>>()));
     let cols = Memo::new(move |_| {
         let l = layout.get();
         shown.with(|a| a.as_ref().map(|a| columns(&a.cards, l)).unwrap_or_default())
@@ -1551,7 +1561,7 @@ mod tests {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
             labels: Vec::new(),
-            id: id.into(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),
             title: id.into(),
@@ -1660,7 +1670,7 @@ mod tests {
     #[test]
     fn a_blocker_not_on_the_board_is_off_board() {
         let cards = placed();
-        let on: HashSet<String> = cards.iter().map(|c| c.summary.id.clone()).collect();
+        let on: HashSet<String> = cards.iter().map(|c| c.summary.id.to_string()).collect();
         let of = |id: &str| off_board(cards.iter().find(|c| c.summary.id == id).unwrap(), &on);
         assert_eq!(of("A-7"), ["X-9"]);
         assert_eq!(of("A-8"), ["X-9"], "A-2 is on the board");
@@ -1714,7 +1724,7 @@ mod tests {
         assert_eq!(heard(&moved("MNG-4"), &epics), Heard::Apply, "moved elsewhere: a card may wait on it");
         let placed = TicketsEvent::PlacementsChanged { changes: vec![] };
         assert_eq!(heard(&placed, &epics), Heard::Apply);
-        let amended = TicketsEvent::Amended { ticket: ticket("PLEXUS-3"), changed: vec!["title".into()] };
+        let amended = TicketsEvent::Amended { ticket: ticket("PLEXUS-3"), changed: vec![menger_tickets_api::vocab::AmendedField::Title] };
         assert_eq!(heard(&amended, &epics), Heard::Nothing, "a new title moves no card (its row repaints in place)");
         let unlocks = TicketsEvent::UnlocksChanged { ticket: ticket("PLEXUS-3"), added: "PLEXUS-9".into() };
         assert_eq!(heard(&unlocks, &epics), Heard::Nothing);
@@ -1748,7 +1758,7 @@ mod tests {
     fn lanes(a: &Answer) -> Vec<(Lane, Vec<String>)> {
         columns(&a.cards, Layout::Waves)
             .into_iter()
-            .map(|c| (c.lane, c.cards.into_iter().map(|p| p.card.summary.id).collect()))
+            .map(|c| (c.lane, c.cards.into_iter().map(|p| p.card.summary.id.into_string()).collect()))
             .collect()
     }
 
@@ -1914,14 +1924,14 @@ mod tests {
             rich("CONTEXT-1", Status::Superseded, Kind::Spike, None, Done, &[], "first try"),
         ];
         cards[0].summary.commits = vec!["abc1234".into()];
-        cards[2].summary.parent = Some("RETURNS-4".into());
+        cards[2].summary.parent = Some(menger_tickets_api::TicketId::new("RETURNS-4"));
         let mut a = Answer { cards, ..Answer::default() };
         retally(&mut a);
         a
     }
 
     fn shown_by(k: &Kept) -> Vec<String> {
-        narrow(&fixture(), &(k.filter.clone(), k.local.clone()), Some(&platform())).cards.into_iter().map(|c| c.summary.id).collect()
+        narrow(&fixture(), &(k.filter.clone(), k.local.clone()), Some(&platform())).cards.into_iter().map(|c| c.summary.id.into_string()).collect()
     }
 
     fn one(c: Cat, op: Op, v: &[&str]) -> Vec<String> {
@@ -1992,7 +2002,7 @@ mod tests {
     #[test]
     fn the_effective_filter_is_evaluated_on_the_cards() {
         let show = |f: &str| -> Vec<String> {
-            narrow(&fixture(), &(eff(f), Clauses::default()), Some(&platform())).cards.into_iter().map(|c| c.summary.id).collect()
+            narrow(&fixture(), &(eff(f), Clauses::default()), Some(&platform())).cards.into_iter().map(|c| c.summary.id.into_string()).collect()
         };
         assert_eq!(show("status Ready"), strs(&["RETURNS-4"]));
         assert_eq!(show("(blocked or status Ready)"), strs(&["RETURNS-4", "RETURNS-6", "CONTEXT-4", "RETURNS-7", "RETURNS-9"]));
@@ -2119,12 +2129,12 @@ mod tests {
         assert_eq!(heard_scoped(&TicketsEvent::Lagged { missed: 1 }, &to, &held), (false, true));
         assert_eq!(heard_scoped(&status("A-2"), &to, &held), (true, true));
         assert_eq!(heard_scoped(&status("Z-9"), &to, &held), (true, false), "applied (it may be waited on), asks nothing");
-        let amended = TicketsEvent::Amended { ticket: ticket("A-2"), changed: vec!["blocked_by".into()] };
+        let amended = TicketsEvent::Amended { ticket: ticket("A-2"), changed: vec![menger_tickets_api::vocab::AmendedField::Body] };
         assert_eq!(heard_scoped(&amended, &to, &held), (false, true));
         let mut born = ticket("A-9");
-        born.parent = Some("A-1".into());
+        born.parent = Some(menger_tickets_api::TicketId::new("A-1"));
         assert_eq!(heard_scoped(&TicketsEvent::Created { ticket: born.clone() }, &under, &held), (false, true), "born under the board's own");
-        born.parent = Some("B-1".into());
+        born.parent = Some(menger_tickets_api::TicketId::new("B-1"));
         assert_eq!(heard_scoped(&TicketsEvent::Created { ticket: born }, &under, &held), (false, false));
         let moved = TicketsEvent::PlacementsChanged { changes: vec![change("A-2", Placement::Wave { n: 1 })] };
         assert_eq!(heard_scoped(&moved, &to, &held), (true, true));

@@ -49,3 +49,10 @@ export function isMembersEventRevoked(e: MembersEvent): e is MembersEventRevoked
 export function isMembersEventWaiting(e: MembersEvent): e is MembersEventWaiting { return e.type === 'waiting'; }
 export function isMembersEventMe(e: MembersEvent): e is MembersEventMe { return e.type === 'me'; }
 export function isMembersEventError(e: MembersEvent): e is MembersEventError { return e.type === 'error'; }
+
+/** ORG-4: a scope as a call writes it (ACCESS-37's grammar) — `*`, an
+organization (`acme:`), or a shortcode in one by any short form of
+its address (`acme:MENGER/THEME`, `IDENTITY`), its codes upper case:
+[`crate::members::scope_of`]. The store resolves it to the
+[`crate::members::Scope`] it keeps. */
+export type ScopeRef = string;

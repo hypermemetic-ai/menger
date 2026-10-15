@@ -162,3 +162,73 @@ mod tests {
         }
     }
 }
+
+/// ACCESS-8: the shape of the activation's text parameters — a transparent
+/// `String` whose `Deserialize` checks it (a bad one is `InvalidParams`
+/// naming the parameter), `Display`, `as_str()`, no public field.
+macro_rules! capped_text {
+    ($(#[$doc:meta])* $name:ident, $what:literal, $max:expr) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            /// The most it may be, in bytes.
+            pub const MAX: usize = $max;
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+
+            pub fn into_string(self) -> String {
+                self.0
+            }
+        }
+
+        impl TryFrom<String> for $name {
+            type Error = String;
+            fn try_from(text: String) -> Result<Self, String> {
+                match text.len() <= Self::MAX {
+                    true => Ok(Self(text)),
+                    false => Err(format!("{} is {} bytes; at most {}", $what, text.len(), Self::MAX)),
+                }
+            }
+        }
+
+        impl TryFrom<&str> for $name {
+            type Error = String;
+            fn try_from(text: &str) -> Result<Self, String> {
+                Self::try_from(text.to_string())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                Self::try_from(String::deserialize(d)?).map_err(serde::de::Error::custom)
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+    };
+}
+
+capped_text!(
+    /// One diagram's source — what goes between the ` ```mermaid ` fences —
+    /// exactly as written, at most 1 MiB.
+    MermaidSource,
+    "a diagram's source",
+    1024 * 1024
+);
+
+capped_text!(
+    /// A ticket body — markdown, HTML, or markdown with HTML — exactly as
+    /// written, at most 64 MiB (a body menger keeps is smaller).
+    Markdown,
+    "a body",
+    64 * 1024 * 1024
+);

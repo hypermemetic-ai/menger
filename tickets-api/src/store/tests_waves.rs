@@ -29,11 +29,11 @@ fn new(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
 
 /// A shortcode's root — every shortcode starts with a scope (MNG-12).
 async fn root(store: &Store, epic: &str) -> String {
-    store.create(new(epic, Kind::Scope, &[])).await.unwrap().id
+    String::from(store.create(new(epic, Kind::Scope, &[])).await.unwrap().id)
 }
 
 async fn build(store: &Store, epic: &str, blocked_by: &[&str]) -> String {
-    store.create(new(epic, Kind::Build, blocked_by)).await.unwrap().id
+    String::from(store.create(new(epic, Kind::Build, blocked_by)).await.unwrap().id)
 }
 
 fn ask(store: &Store, epics: &[&str], kinds: &[Kind]) -> Waves {
@@ -46,7 +46,7 @@ fn placements(store: &Store, epics: &[&str]) -> BTreeMap<String, Placement> {
     ask(store, epics, &DEFAULT_KINDS)
         .placed
         .into_iter()
-        .map(|p| (p.summary.id, p.placement))
+        .map(|p| (p.summary.id.into_string(), p.placement))
         .collect()
 }
 
@@ -219,7 +219,7 @@ async fn kinds_filter_what_is_yielded_not_what_is_followed() {
     let work = ask(&store, &["KI"], &DEFAULT_KINDS);
     assert_eq!(ids(&work.placed), [s.as_str(), g.as_str(), b.as_str()], "build, spike, gap by default");
     let p: BTreeMap<_, _> = work.placed.iter().map(|p| (p.summary.id.clone(), p.placement)).collect();
-    assert_eq!((p[&s], p[&g], p[&b]), (wave(2), wave(3), wave(5)), "the scope and the execution still count");
+    assert_eq!((p[&s], p[&g], p[b.as_str()]), (wave(2), wave(3), wave(5)), "the scope and the execution still count");
     assert_eq!(work.waves, [0, 1, 1, 0, 1]);
 
     let only = ask(&store, &["KI"], &[Kind::Scope, Kind::Execution]);
@@ -333,7 +333,7 @@ async fn a_blocked_status_and_a_parent_order_nothing() {
         .unwrap()
         .id;
     let p = placements(&store, &["PO"]);
-    assert_eq!((p[&marked], p[&parent], p[&child]), (wave(1), wave(1), wave(1)));
+    assert_eq!((p[&marked], p[&parent], p[child.as_str()]), (wave(1), wave(1), wave(1)));
 }
 
 /// A `blocked_by` cycle — `create` refuses one, so made here by hand in the
@@ -385,7 +385,7 @@ fn a_chain_longer_than_any_call_stack_is_placed() {
     const N: u32 = 200_000;
     let row = |seq: u32| Row {
         labels: Vec::new(),
-        id: format!("LONG-{seq}"),
+        id: format!("LONG-{seq}").into(),
         epic: "LONG".into(),
         shortcode: "LONG".into(),
         address: String::new(),

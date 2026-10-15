@@ -175,12 +175,18 @@ async fn update_over_the_wire_one_write_its_events_in_order() {
     let seen = watch_until(&mut watch, "labels_changed").await;
     assert_eq!(types(&seen), ["labels_changed"], "the no-op sent nothing");
 
-    // A refusal names every reason and writes nothing — a valid title
-    // beside a status refused and an unknown severity.
-    let ev = one(&client, "tickets.update", json!({"id": "UPD-3", "title": "fine", "status": "Doc", "severity": "Huge"})).await;
+    // ACCESS-8: an unknown severity is no `SeverityChange` — refused at
+    // dispatch, naming the parameter, before anything is asked.
+    let mut sub = call(&client, "tickets.update", json!({"id": "UPD-3", "title": "fine", "status": "Doc", "severity": "Huge"})).await;
+    let item = sub.next().await.expect("an item").unwrap();
+    assert_eq!((item["code"].as_str(), item["error_kind"].as_str()), (Some("-32602"), Some("invalid_params")), "{item}");
+    assert!(item["message"].as_str().unwrap().contains("severity: unknown severity 'huge'"), "{item}");
+    // A refusal names every reason the store holds and writes nothing — a
+    // valid title beside a status refused and a block on itself.
+    let ev = one(&client, "tickets.update", json!({"id": "UPD-3", "title": "fine", "status": "Doc", "block": ["UPD-3"]})).await;
     assert_eq!(ev["type"], "error", "{ev}");
     let message = ev["message"].as_str().unwrap();
-    assert!(message.contains("Doc is a doc's own status") && message.contains("unknown severity"), "{message}");
+    assert!(message.contains("Doc is a doc's own status") && message.contains("UPD-3"), "{message}");
     let got = one(&client, "tickets.get", json!({"id": "UPD-3"})).await;
     assert_eq!(got["ticket"]["title"], "second, updated", "nothing written");
     let ev = one(&client, "tickets.update", json!({"id": "UPD-2", "block": ["UPD-3"], "unblock": []})).await;

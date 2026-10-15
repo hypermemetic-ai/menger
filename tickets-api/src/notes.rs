@@ -25,7 +25,7 @@ pub const AUTHOR_MAX: usize = 256;
 pub const TITLE_MAX: usize = 80;
 
 /// Where a note stands: still a note, or made a ticket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NoteState {
     /// Not yet a ticket.
@@ -65,7 +65,7 @@ impl FromStr for NoteState {
 /// that wrote it, when login is on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Note {
-    pub id: u64,
+    pub id: crate::vocab::NoteId,
     /// When it was taken, unix seconds.
     pub at: i64,
     pub author: String,
@@ -113,7 +113,7 @@ pub enum NotesEvent {
 impl From<Note> for NotesEvent {
     fn from(n: Note) -> Self {
         let Note { id, at, author, body, ticket, upgraded_at, principal } = n;
-        NotesEvent::Note { id, at, author, body, ticket, upgraded_at, principal }
+        NotesEvent::Note { id: id.get(), at, author, body, ticket, upgraded_at, principal }
     }
 }
 
@@ -122,7 +122,7 @@ impl NotesEvent {
     pub fn into_note(self) -> Option<Note> {
         match self {
             NotesEvent::Note { id, at, author, body, ticket, upgraded_at, principal } => {
-                Some(Note { id, at, author, body, ticket, upgraded_at, principal })
+                Some(Note { id: crate::vocab::NoteId::new(id), at, author, body, ticket, upgraded_at, principal })
             }
             NotesEvent::Page { .. } | NotesEvent::Error { .. } => None,
         }
@@ -240,7 +240,7 @@ mod tests {
     fn a_state_reads_its_word_and_an_event_carries_its_note() {
         assert_eq!("Upgraded".parse::<NoteState>(), Ok(NoteState::Upgraded));
         assert!("closed".parse::<NoteState>().unwrap_err().contains("open or upgraded"));
-        let n = Note { id: 7, at: 1, author: "owner".into(), body: "b".into(), ticket: None, upgraded_at: None, principal: None };
+        let n = Note { id: crate::vocab::NoteId::new(7), at: 1, author: "owner".into(), body: "b".into(), ticket: None, upgraded_at: None, principal: None };
         assert_eq!(n.state(), NoteState::Open);
         assert_eq!(NotesEvent::from(n.clone()).into_note(), Some(n.clone()));
         let json = serde_json::to_value(NotesEvent::from(n)).unwrap();

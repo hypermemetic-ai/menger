@@ -388,7 +388,7 @@ fn cycles(open: &[&Row]) -> Vec<Vec<String>> {
         scc.sort_by_key(|i| order(*i));
     }
     found.sort_by_key(|scc| order(scc[0]));
-    found.into_iter().map(|scc| scc.into_iter().map(|i| open[i].id.clone()).collect()).collect()
+    found.into_iter().map(|scc| scc.into_iter().map(|i| open[i].id.to_string()).collect()).collect()
 }
 
 /// The keyed tickets in yield order, and their tally.

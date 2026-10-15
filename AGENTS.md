@@ -340,6 +340,17 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   the shell did not expand arrives literally. Both need synapse ≥ 3.14.2
   (SYNAPSE-4, SYNAPSE-6; this machine has it); `--key=value` works too.
 
+  **Every parameter is a type** (ACCESS-8, `tickets-api/src/vocab/`): a
+  value its type refuses is `-32602 invalid_params` naming the parameter,
+  before the method runs (`id: \`x\` is not a ticket …`), where it was an
+  in-band `error`; domain refusals stay in band. An enum flag takes its
+  canonical spelling only — synapse checks it before sending, so `--status
+  active` is refused (`--status Coding`; `-p '{"status":"active"}'` still
+  reads), and `--kind` is lower case. A blank optional flag is refused, not
+  none. A new parameter gets a type in the vocabulary — every activation is
+  `typed_params` (MACRO-12) and `tickets-api/tests/param_types.rs` holds the
+  flag. README "Typed parameters".
+
   Global options go **before** the backend name — after the path they are
   read as a subcommand ("Method 'create' cannot have subcommands"). `-j`
   prints the raw JSON stream items (for a script that parses the reply),
@@ -677,7 +688,9 @@ a queue that is always loud is a queue the owner learns to ignore.
   under menger's names: set **`Coding`** when work starts and **`In
   Review`** in the commit that finishes it. `set_status` also takes
   the legacy words — `active` is `Coding`, `in review` is `In Review` —
-  and stores the canonical spelling. The merge sets `Complete`. **Link the commit** (SDLC-9): in the step that flips the
+  and stores the canonical spelling (through `-p`, the app and REST;
+  synapse's own `--status` flag takes the canonical spelling only,
+  ACCESS-8). The merge sets `Complete`. **Link the commit** (SDLC-9): in the step that flips the
   ticket to `In Review`, the worker links its commit(s) with
   `tickets.link_commits` (`synapse -P 4455 menger tickets link_commits
   --id MNG-10 --commits 77df9a0`, the flag repeated per commit;

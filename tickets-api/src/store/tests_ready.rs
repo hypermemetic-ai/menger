@@ -82,7 +82,7 @@ fn scan(rows: &[Row]) -> Scan {
         let named: BTreeSet<&str> = t.blocked_by.iter().map(String::as_str).collect();
         let open = named.iter().filter(|b| !resolved(b)).count() as u32;
         if open > 0 {
-            s.unsatisfied.insert(t.id.clone(), open);
+            s.unsatisfied.insert(t.id.to_string(), open);
         }
         let member = t.status == Status::Ready && t.blocked_by.iter().all(|b| resolved(b));
         assert_eq!(member, t.status == Status::Ready && open == 0, "the count decides what the rule decides: {}", t.id);
@@ -153,7 +153,7 @@ pub(super) fn assert_kept_is_a_scan(store: &Store, path: Option<&Path>, after: &
 type Answer = (Vec<String>, Option<String>, u64);
 
 fn answer(page: Page) -> Answer {
-    (page.tickets.into_iter().map(|t| t.id).collect(), page.next, page.remaining)
+    (page.tickets.into_iter().map(|t| t.id.into_string()).collect(), page.next, page.remaining)
 }
 
 /// What is paged: the ready set, or `list` with a status.
@@ -204,7 +204,7 @@ struct Plain {
 impl Plain {
     fn of(store: &Store) -> Self {
         let rows = rows(store);
-        let at: HashMap<String, usize> = rows.iter().enumerate().map(|(i, t)| (t.id.clone(), i)).collect();
+        let at: HashMap<String, usize> = rows.iter().enumerate().map(|(i, t)| (t.id.to_string(), i)).collect();
         let ready = rows
             .iter()
             .map(|t| t.status == Status::Ready && t.blocked_by.iter().all(|b| at.get(b).is_some_and(|i| done(rows[*i].status))))
@@ -238,7 +238,7 @@ impl Plain {
             .map(|(t, _)| t)
             .collect();
         let take = limit.map_or(matching.len(), |n| (n as usize).min(matching.len()));
-        let page: Vec<String> = matching[..take].iter().map(|t| t.id.clone()).collect();
+        let page: Vec<String> = matching[..take].iter().map(|t| t.id.to_string()).collect();
         let remaining = (matching.len() - take) as u64;
         let next = if remaining == 0 { None } else { page.last().cloned().or(after) };
         Ok((page, next, remaining))
@@ -293,7 +293,7 @@ fn epics_and_cursors(plain: &Plain, rng: &mut Rng) -> (Vec<Option<String>>, Vec<
     for _ in 0..6 {
         if !plain.rows.is_empty() {
             let id = &plain.rows[rng.below(plain.rows.len())].id;
-            cursors.push(Some(if rng.below(4) == 0 { id.to_lowercase() } else { id.clone() }));
+            cursors.push(Some(if rng.below(4) == 0 { id.to_lowercase() } else { id.to_string() }));
         }
     }
     (epics, cursors)
@@ -403,7 +403,7 @@ pub(super) async fn random_ask_or_label(store: &Store, own: &mut Rng, all: &[Row
     let decision = "<m-decision data-field=\"decision\" id=\"d\">\n\n<m-question data-field=\"question\">Which?</m-question>\n\n\
                     <m-option data-field=\"option\" name=\"A\" value=\"a\"></m-option>\n\
                     <m-option data-field=\"option\" name=\"B\" value=\"b\"></m-option>\n\n</m-decision>\n";
-    let held: Vec<String> = store.inputs(Some(&id), None, None).unwrap().into_iter().map(|i| i.id).collect();
+    let held: Vec<String> = store.inputs(Some(&id), None, None).unwrap().into_iter().map(|i| i.id.into_string()).collect();
     match own.below(10) {
         0..=2 => {
             let body = match own.below(4) {
@@ -500,14 +500,14 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
                 1 if !all.is_empty() => Some(pick(rng)),
                 _ => None,
             };
-            let parent = no_namesake(store, epic, kind, parent);
+            let parent = no_namesake(store, epic, kind, parent.map(String::from));
             // Blockers: tickets that exist, ids not born yet (the next few of
             // some shortcode — born later in the walk, or not), one that never
             // will be, and one named twice.
             let mut blocked_by: Vec<String> = Vec::new();
             for _ in 0..rng.below(4) {
                 blocked_by.push(match rng.below(10) {
-                    0..=5 if !all.is_empty() => pick(rng),
+                    0..=5 if !all.is_empty() => String::from(pick(rng)),
                     0..=7 => {
                         let e = epics[rng.below(epics.len())];
                         format!("{e}-{}", extents.get(e).copied().unwrap_or(0) + 1 + rng.below(3) as u32)
@@ -775,7 +775,7 @@ async fn membership_moves_on_exactly_the_three_writes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("three.db");
     let store = Store::open(&path).unwrap();
-    let ids = |store: &Store| -> Vec<String> { store.ready_page(None, None, None).unwrap().tickets.into_iter().map(|t| t.id).collect() };
+    let ids = |store: &Store| -> Vec<String> { store.ready_page(None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect() };
     let count = |store: &Store, id: &str| store.tickets.read().unwrap().ready.counts().get(id).copied().unwrap_or(0);
     store.create(new_ticket("TH", Kind::Scope, None, vec![])).await.unwrap();
     // TH-2 names TH-5 (not born) twice, and TH-1.
@@ -845,7 +845,7 @@ async fn completing_a_ticket_that_blocks_many_moves_each_of_them_once() {
     for i in 0..k {
         // A third also wait on another ticket; every one is Ready.
         let blocked_by = if i % 3 == 0 { vec![hub.clone(), other.clone()] } else { vec![hub.clone()] };
-        let id = store.create(new_ticket("FAN", Kind::Build, None, blocked_by)).await.unwrap().id;
+        let id = store.create(new_ticket("FAN", Kind::Build, None, blocked_by.into_iter().map(String::from).collect::<Vec<String>>())).await.unwrap().id;
         store.set_status(&id, Status::Ready).await.unwrap();
     }
     let ready = |store: &Store| store.ready_page(Some("fan"), None, Some(0)).unwrap().remaining;
@@ -871,7 +871,7 @@ async fn a_canceled_blocker_is_done_with_and_survives_a_reopen() {
     let store = Store::open(&path).unwrap();
     store.create(new_ticket("CAN", Kind::Scope, None, vec![])).await.unwrap();
     let dropped = store.create(new_ticket("CAN", Kind::Build, None, vec![])).await.unwrap().id;
-    let waiting = store.create(new_ticket("CAN", Kind::Build, None, vec![dropped.clone()])).await.unwrap().id;
+    let waiting = store.create(new_ticket("CAN", Kind::Build, None, vec![dropped.to_string()])).await.unwrap().id;
     store.set_status(&waiting, Status::Ready).await.unwrap();
     let ready = |store: &Store| store.ready_page(Some("can"), None, Some(0)).unwrap().remaining;
     assert_eq!(ready(&store), 0);
@@ -916,7 +916,7 @@ async fn a_hand_edit_that_breaks_the_unlocks_mirror_is_named_by_verify() {
     let store = Store::open(&path).unwrap();
     assert_kept_is_a_scan(&store, Some(&path), "the first open, a scan");
     store.set_status("MI-1", Status::Complete).await.unwrap();
-    let ids: Vec<String> = store.ready_page(None, None, None).unwrap().tickets.into_iter().map(|t| t.id).collect();
+    let ids: Vec<String> = store.ready_page(None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect();
     assert_eq!(ids, ["MI-3", "MI-4"], "MI-3 once; MI-4 does not name MI-1 and is not moved; MI-2 is not found");
     drop(store);
     let Verdict::Differs(found) = Store::verify_derived(&path).unwrap() else {
@@ -1101,7 +1101,7 @@ async fn a_walk_of_whole_tickets_answers_what_one_page_does() {
             let mut ids = Vec::new();
             let end = loop {
                 match walk.next(&store).await.unwrap() {
-                    Step::Tickets(t) => ids.extend(t.into_iter().map(|t| t.id)),
+                    Step::Tickets(t) => ids.extend(t.into_iter().map(|t| t.id.into_string())),
                     Step::End { next, remaining, .. } => break (next, remaining),
                 }
             };

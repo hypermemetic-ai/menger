@@ -1,6 +1,5 @@
 //! MENGER-30: what `tickets.update` asks before the store — the call's
-//! fields as the store's [`Update`] (an unknown kind, status or severity
-//! named with the store's refusals), and the reach a parent or a blocker in
+//! fields as the store's [`Update`] (ACCESS-8: typed at dispatch), and the reach a parent or a blocker in
 //! another shortcode takes. ACT-2: and the writes over many tickets —
 //! `update_many`, `label` and `link_commits` given `ids` — as their streams,
 //! so the activation keeps only its methods (MENGER-29).
@@ -8,46 +7,32 @@
 use super::*;
 use crate::store::{Selection, Update, UpdatedMany, UPDATE_MANY_MAX};
 
-/// The call's fields as an [`Update`]. `severity` `none` clears it.
+/// The call's fields as an [`Update`]. ACCESS-8: each one already a type
+/// — an unknown kind, status or severity was refused at dispatch, naming
+/// its parameter — so the store's collected refusal holds only the rules
+/// that need the cache; `severity` `none` clears it.
 pub(super) fn update_of(
-    title: Option<String>,
-    body: Option<String>,
-    kind: Option<String>,
-    status: Option<String>,
-    parent: Option<String>,
-    severity: Option<String>,
-    block: Option<Vec<String>>,
-    unblock: Option<Vec<String>>,
+    title: Option<Title>,
+    body: Option<Body>,
+    kind: Option<Kind>,
+    status: Option<Status>,
+    parent: Option<TicketRef>,
+    severity: Option<SeverityChange>,
+    block: Option<Vec<TicketRef>>,
+    unblock: Option<Vec<TicketRef>>,
 ) -> Update {
-    fn parsed<T>(r: Option<Result<T, String>>, refused: &mut Vec<String>) -> Option<T> {
-        match r {
-            Some(Err(e)) => {
-                refused.push(e);
-                None
-            }
-            Some(Ok(v)) => Some(v),
-            None => None,
-        }
-    }
-    let mut refused = Vec::new();
-    let kind = parsed(kind.as_deref().map(str::parse::<Kind>), &mut refused);
-    let status = parsed(status.as_deref().map(str::parse::<Status>), &mut refused);
-    let severity = parsed(severity.as_deref().map(|s| match s.trim() {
-        s if s.eq_ignore_ascii_case("none") => Ok(None),
-        s => s.parse::<Severity>().map(Some).map_err(|e| format!("{e} — or none, to clear it")),
-    }), &mut refused);
     Update {
-        title,
-        body,
+        title: title.map(String::from),
+        body: body.map(String::from),
         kind,
         status,
-        parent,
-        severity,
-        block: block.unwrap_or_default(),
-        unblock: unblock.unwrap_or_default(),
+        parent: parent.map(String::from),
+        severity: severity.map(SeverityChange::severity),
+        block: texts(block.unwrap_or_default()),
+        unblock: texts(unblock.unwrap_or_default()),
         label: Vec::new(),
         unlabel: Vec::new(),
-        refused,
+        refused: Vec::new(),
     }
 }
 
@@ -90,8 +75,8 @@ pub(super) fn update_reach(store: &Store, caller: &Caller, id: &str, update: &Up
 /// ACT-2: a write `label` or `link_commits` makes, to one ticket or many.
 pub(super) enum CellWrite {
     /// `add`, `remove`.
-    Labels(Vec<String>, Vec<String>),
-    Commits(Vec<String>),
+    Labels(Vec<Label>, Vec<Label>),
+    Commits(Vec<CommitRef>),
 }
 
 /// ACT-2: `label` and `link_commits`, over `id` or `ids` — exactly one. One
@@ -102,12 +87,12 @@ pub(super) enum CellWrite {
 pub(super) fn cells_stream(
     store: Arc<Store>,
     admitted: Result<Caller, String>,
-    id: Option<String>,
-    ids: Option<Vec<String>>,
+    id: Option<TicketRef>,
+    ids: Option<Vec<TicketRef>>,
     write: CellWrite,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let (caller, target) = match admitted.and_then(|c| one_or_many(id, ids).map(|t| (c, t))) {
+        let (caller, target) = match admitted.and_then(|c| one_or_many(id.map(String::from), ids.map(texts)).map(|t| (c, t))) {
             Ok(c) => c,
             Err(message) => {
                 yield TicketsEvent::Error { message };
@@ -123,8 +108,8 @@ pub(super) fn cells_stream(
                 }
                 let sight = sight_lens(&caller).ok().flatten();
                 let written = match write {
-                    CellWrite::Labels(add, remove) => store.label_many(&ids, add, remove).await,
-                    CellWrite::Commits(commits) => store.link_commits_many(&ids, commits).await,
+                    CellWrite::Labels(add, remove) => store.label_many(&ids, texts(add), texts(remove)).await,
+                    CellWrite::Commits(commits) => store.link_commits_many(&ids, texts(commits)).await,
                 };
                 match written {
                     Ok(changes) => {
@@ -138,8 +123,8 @@ pub(super) fn cells_stream(
             }
         };
         let written = match write {
-            CellWrite::Labels(add, remove) => store.label(&id, add, remove).await,
-            CellWrite::Commits(commits) => store.link_commits(&id, commits).await,
+            CellWrite::Labels(add, remove) => store.label(&id, texts(add), texts(remove)).await,
+            CellWrite::Commits(commits) => store.link_commits(&id, texts(commits)).await,
         };
         match written {
             Ok(change) => yield change_event(change),
@@ -165,18 +150,18 @@ fn one_or_many(id: Option<String>, ids: Option<Vec<String>>) -> Result<Result<St
 pub(super) fn update_many_stream(
     store: Arc<Store>,
     admitted: Result<Caller, String>,
-    ids: Option<Vec<String>>,
-    filter: Option<String>,
+    ids: Option<Vec<TicketRef>>,
+    filter: Option<FilterText>,
     max: Option<u32>,
-    tz: Option<String>,
+    tz: Option<Zone>,
     asked: Update,
-    source: Option<String>,
-    message: Option<String>,
+    source: Option<CallerSource>,
+    message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let chosen = admitted.and_then(|caller| {
             let select = match (ids, filter) {
-                (Some(ids), None) => Selection::Ids(ids),
+                (Some(ids), None) => Selection::Ids(texts(ids)),
                 (None, Some(filter)) => {
                     let text = caller.scoped_text(&filter)?;
                     let lens = zoned_lens(&caller, Some(&text), tz.as_deref()).map_err(|e| e.to_string())?.unwrap_or_else(Lens::all);
@@ -184,7 +169,7 @@ pub(super) fn update_many_stream(
                 }
                 _ => return Err("name the tickets: ids, or a filter — one of them".to_string()),
             };
-            let act = act_of(&caller, source.as_deref(), message)?;
+            let act = act_of(&caller, source, message)?;
             Ok((caller, select, act))
         });
         let (caller, select, act) = match chosen {

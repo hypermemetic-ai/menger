@@ -337,7 +337,7 @@ impl Store {
             }
         };
         let regions = themes::resolve(&levels, &themes::Reader::default());
-        Ok((ticket.id, regions, levels))
+        Ok((String::from(ticket.id), regions, levels))
     }
 
     /// THEME-8: `themes.watch`'s channel — every define and set, in the

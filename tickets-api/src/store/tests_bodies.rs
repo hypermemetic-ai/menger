@@ -141,7 +141,7 @@ async fn every_event_that_carries_a_ticket_carries_its_stored_body() {
     store.amend("EV-3", Some("retitled".into()), None).await.unwrap();
     store.amend("EV-2", None, Some(awkward("EV-2, amended"))).await.unwrap();
     let seen: Vec<(String, String)> =
-        seen.into_iter().chain(whole_tickets(&mut rx)).map(|t| (t.id, t.body)).collect();
+        seen.into_iter().chain(whole_tickets(&mut rx)).map(|t| (t.id.into_string(), t.body)).collect();
     let expect = [
         ("EV-3", "EV-3"), // created
         ("EV-1", "EV-1"), // unlocks_changed
@@ -192,7 +192,7 @@ async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
         Select::List { epic: None, status: None, parent: None },
         Select::List { epic: Some(epic.to_ascii_lowercase()), status: None, parent: None },
         Select::List { epic: None, status: Some(Status::Ready), parent: None },
-        Select::List { epic: None, status: None, parent: Some(root.clone()) },
+        Select::List { epic: None, status: None, parent: Some(root.to_string()) },
         Select::Ready { epic: None },
         // FILTER-4: a filtered walk — every ticket, then a status by a lens
         // with the old parameters beside it.
@@ -201,7 +201,7 @@ async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
             lens: Lens::new("ready-or-blocked".into(), vec![], |_, k| matches!(k.status(), Status::Ready | Status::Blocked)),
             epic: Some(epic.to_ascii_lowercase()),
             status: None,
-            parent: Some(root.clone()),
+            parent: Some(root.to_string()),
             keep: None,
         }),
     ];

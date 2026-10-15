@@ -30,7 +30,7 @@ async fn store() -> Store {
 }
 
 async fn born(store: &Store, body: &str) -> String {
-    store.create(ticket("Q", Kind::Build, body)).await.unwrap().id
+    String::from(store.create(ticket("Q", Kind::Build, body)).await.unwrap().id)
 }
 
 async fn amend(store: &Store, id: &str, body: &str) {
@@ -95,7 +95,7 @@ fn heard(changes: &[Change]) -> Vec<(String, InputState)> {
     changes
         .iter()
         .filter_map(|c| match c {
-            Change::InputChanged { input, .. } => Some((input.id.clone(), input.state)),
+            Change::InputChanged { input, .. } => Some((input.id.to_string(), input.state)),
             _ => None,
         })
         .collect()
@@ -297,7 +297,7 @@ async fn inputs_answers_in_the_stores_order_and_filters() {
     store.create(ticket("R", Kind::Scope, &text("r"))).await.unwrap();
     changed(store.answer(&q9, "a", choice("a"), None, AnswerSource::Api).await.unwrap());
 
-    let all: Vec<(String, String)> = store.inputs(None, None, None).unwrap().into_iter().map(|i| (i.ticket, i.id)).collect();
+    let all: Vec<(String, String)> = store.inputs(None, None, None).unwrap().into_iter().map(|i| (i.ticket.into_string(), i.id.into_string())).collect();
     let pairs = |v: &[(&str, &str)]| v.iter().map(|(t, i)| (t.to_string(), i.to_string())).collect::<Vec<_>>();
     assert_eq!(all, pairs(&[("Q-9", "b"), ("Q-9", "a"), ("Q-10", "c"), ("R-1", "r")]));
     let ids = |v: Vec<Input>| v.into_iter().map(|i| i.id).collect::<Vec<_>>();

@@ -64,7 +64,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use menger_tickets_api::filter::Filter;
-use menger_tickets_api::{inputs, Answer, AnswerSource, Input, InputState, InputValue, TicketsEvent};
+use menger_tickets_api::{inputs, Answer, Input, InputState, InputValue, TicketsEvent};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
@@ -242,20 +242,42 @@ pub(crate) fn parse_call(method: &str, params: &str) -> Result<Call, String> {
 
 /// Make the call over the app's connection: the stream's items, or why
 /// there are none. Unscoped — a frame's call is [`run_scoped`]'s.
+/// ACCESS-8: a frame's text becomes the parameter types here, the
+/// bridge's edge to the wire; one that is not a value of its type is the
+/// call's refusal, nothing sent.
 async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>, String> {
+    use crate::typed::{many, opt, opt_many, typed};
+    let zone = crate::session::zone();
+    fn named(method: &'static str) -> impl Fn(String) -> String {
+        move |e| format!("{method}: {e}")
+    }
     let answer = match call {
-        Call::Get { id } => client.get_all(id).await,
+        Call::Get { id } => client.get_all(typed(&id).map_err(named("get"))?).await,
         Call::List { epic, status, parent, after, limit, summary, filter } => {
-            client.list_all(epic, status, parent, after, limit, summary, filter, None, None, crate::session::tz()).await
+            let typed_list = || -> Result<_, String> { Ok((opt(epic)?, opt(status)?, opt(parent)?, opt(after)?, opt(filter)?)) };
+            let (epic, status, parent, after, filter) = typed_list().map_err(named("list"))?;
+            client.list_all(epic, status, parent, after, limit, summary, filter, None, None, zone).await
         }
-        Call::Find { query, after, limit, filter } => client.find_all(query, after, limit, filter, crate::session::tz()).await,
-        Call::Waves { epics, kinds } => client.waves_all(epics, kinds).await,
+        Call::Find { query, after, limit, filter } => {
+            let typed_find = || -> Result<_, String> { Ok((typed(&query)?, opt(after)?, opt(filter)?)) };
+            let (query, after, filter) = typed_find().map_err(named("find"))?;
+            client.find_all(query, after, limit, filter, zone).await
+        }
+        Call::Waves { epics, kinds } => {
+            let typed_waves = || -> Result<_, String> { Ok((many(epics)?, opt_many(kinds)?)) };
+            let (epics, kinds) = typed_waves().map_err(named("waves"))?;
+            client.waves_all(epics, kinds).await
+        }
         Call::Groups => client.groups_all().await,
         Call::Extents => client.extents_all().await,
-        Call::Blockers { id } => client.blockers_all(id).await,
+        Call::Blockers { id } => client.blockers_all(typed(&id).map_err(named("blockers"))?).await,
         Call::Health => client.health_all().await,
         Call::Components => client.components_all().await,
-        Call::Inputs { ticket, epic, state, filter } => client.inputs_all(ticket, epic, state, filter, crate::session::tz()).await,
+        Call::Inputs { ticket, epic, state, filter } => {
+            let typed_inputs = || -> Result<_, String> { Ok((opt(ticket)?, opt(epic)?, opt(state)?, opt(filter)?)) };
+            let (ticket, epic, state, filter) = typed_inputs().map_err(named("inputs"))?;
+            client.inputs_all(ticket, epic, state, filter, zone).await
+        }
     };
     answer.map_err(|e| crate::session::describe(&e))
 }
@@ -396,8 +418,8 @@ pub(crate) fn moved(reaches: &mut HashMap<String, Reach>, group: &menger_tickets
 
 /// Ask the server how far `epic` reaches for this viewer, and remember it.
 pub(crate) async fn reach_of(client: &Client, epic: &str) -> Result<Reach, String> {
-    let filter = scoped_filter(None, epic)?;
-    let events = client.counts_all(Some(filter), None, crate::session::tz()).await.map_err(|e| crate::session::describe(&e))?;
+    let filter = crate::typed::typed(&scoped_filter(None, epic)?)?;
+    let events = client.counts_all(Some(filter), None, crate::session::zone()).await.map_err(|e| crate::session::describe(&e))?;
     let reach = Reach::from_counts(epic, events)?;
     REACHES.with(|r| r.borrow_mut().insert(reach.epic.clone(), reach.clone()));
     Ok(reach)
@@ -730,10 +752,13 @@ pub(crate) fn recorded(events: Vec<TicketsEvent>) -> Result<Answer, String> {
 /// `tickets.answer` with source `app` — the recorded answer, or why not.
 pub(crate) async fn submit(client: &Client, ticket: String, submit: Submit) -> Result<Answer, String> {
     let described = |e: plexus_client::ClientError| format!("{SUBMIT}: {}", crate::session::describe(&e));
-    let held = inputs_of(SUBMIT, client.inputs_all(Some(ticket.clone()), None, None, None, crate::session::tz()).await.map_err(described)?)?;
+    let named = |e: String| format!("{SUBMIT}: {e}");
+    let id: menger_tickets_api::vocab::TicketRef = crate::typed::typed(&ticket).map_err(named)?;
+    let held = inputs_of(SUBMIT, client.inputs_all(Some(id.clone()), None, None, None, crate::session::zone()).await.map_err(described)?)?;
     let value = check_submit(&ticket, &submit, &held)?;
-    let source = Some(AnswerSource::App.as_str().to_string());
-    recorded(client.answer_all(ticket, submit.input, value, submit.rationale, source).await.map_err(described)?)
+    let (input, rationale) = (crate::typed::typed(&submit.input).map_err(named)?, crate::typed::opt(submit.rationale).map_err(named)?);
+    let source = Some(menger_tickets_api::vocab::InputSource::App);
+    recorded(client.answer_all(id, input, value, rationale, source).await.map_err(described)?)
 }
 
 // -- INPUT-9: the second write ----------------------------------------------
@@ -779,15 +804,18 @@ pub(crate) fn cleared(events: Vec<TicketsEvent>) -> Result<Input, String> {
 /// `tickets.clear_answer` with source `app` — the input, or why not.
 pub(crate) async fn clear(client: &Client, ticket: String, clear: Clear) -> Result<Input, String> {
     let described = |e: plexus_client::ClientError| format!("{CLEAR}: {}", crate::session::describe(&e));
-    let held = inputs_of(CLEAR, client.inputs_all(Some(ticket.clone()), None, None, None, crate::session::tz()).await.map_err(described)?)?;
+    let named = |e: String| format!("{CLEAR}: {e}");
+    let id: menger_tickets_api::vocab::TicketRef = crate::typed::typed(&ticket).map_err(named)?;
+    let held = inputs_of(CLEAR, client.inputs_all(Some(id.clone()), None, None, None, crate::session::zone()).await.map_err(described)?)?;
     check_clear(&ticket, &clear, &held)?;
-    let source = Some(AnswerSource::App.as_str().to_string());
-    cleared(client.clear_answer_all(ticket, clear.input, source).await.map_err(described)?)
+    let source = Some(menger_tickets_api::vocab::InputSource::App);
+    cleared(client.clear_answer_all(id, crate::typed::typed(&clear.input).map_err(named)?, source).await.map_err(described)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use menger_tickets_api::AnswerSource;
 
     /// COMP-1 pin 9: the reads — INPUT-4: ten, `inputs` among them — each
     /// with the activation's parameter names, and nothing else.
@@ -909,8 +937,8 @@ mod tests {
 
     fn input(ticket: &str, id: &str, kind: InputKind, options: &[&str], state: InputState) -> Input {
         Input {
-            ticket: ticket.into(),
-            id: id.into(),
+            ticket: menger_tickets_api::TicketId::new(ticket),
+            id: id.parse().unwrap(),
             kind,
             question: None,
             options: options.iter().map(|o| option(o)).collect(),
@@ -1144,7 +1172,7 @@ mod tests {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         Ticket {
             labels: Vec::new(),
-            id: id.to_string(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: format!("the title of {id}"),
@@ -1325,7 +1353,7 @@ mod tests {
     fn only_the_reach_reaches_a_frame() {
         for id in ["AREA-2", "SUB-1"] {
             assert!(kept(TicketsEvent::Ticket { ticket: tkt(id) }).is_some(), "{id}");
-            assert!(kept(TicketsEvent::Amended { ticket: tkt(id), changed: vec!["body".into()] }).is_some());
+            assert!(kept(TicketsEvent::Amended { ticket: tkt(id), changed: vec![menger_tickets_api::vocab::AmendedField::Body] }).is_some());
             assert!(kept(TicketsEvent::Summary { summary: row(id) }).is_some());
         }
         let outside = || tkt("OTHER-7");
@@ -1334,7 +1362,7 @@ mod tests {
             TicketsEvent::Created { ticket: outside() },
             TicketsEvent::StatusChanged { ticket: outside(), previous: Status::Pending },
             TicketsEvent::KindChanged { ticket: outside(), previous: Kind::Gap },
-            TicketsEvent::Amended { ticket: outside(), changed: vec!["body".into()] },
+            TicketsEvent::Amended { ticket: outside(), changed: vec![menger_tickets_api::vocab::AmendedField::Body] },
             TicketsEvent::CommitsLinked { ticket: outside(), added: vec![] },
             TicketsEvent::CommitsUnlinked { ticket: outside(), removed: vec![] },
             TicketsEvent::LabelsChanged { ticket: outside(), added: vec!["needs-you".into()], removed: vec![] },
@@ -1358,7 +1386,7 @@ mod tests {
             TicketsEvent::Left { id: "OTHER-7".into(), epic: menger_tickets_api::Code::stored("OTHER"), shortcode: menger_tickets_api::ShortcodeId::new("OTHER"), seq: 7 },
             TicketsEvent::Recount { epic: menger_tickets_api::Code::stored("OTHER"), shortcode: menger_tickets_api::ShortcodeId::new("OTHER"), held: 9 },
             TicketsEvent::PlacementsChanged { changes: vec![PlacementChange { id: "OTHER-7".into(), placement: Placement::Done }] },
-            TicketsEvent::Facet { field: "status".into(), value: "Ready".into(), held: 40 },
+            TicketsEvent::Facet { field: "status".parse().unwrap(), value: "Ready".into(), held: 40 },
             TicketsEvent::Searched { matched: 40, next: None, words: vec![] },
         ] {
             let json = serde_json::to_string(&ev).unwrap();
@@ -1437,7 +1465,7 @@ mod tests {
         let ids: Vec<String> = got
             .iter()
             .map(|e| match e {
-                TicketsEvent::Blocker { ticket } => ticket.id.clone(),
+                TicketsEvent::Blocker { ticket } => ticket.id.to_string(),
                 TicketsEvent::DanglingBlocker { id } => id.clone(),
                 other => panic!("{other:?}"),
             })

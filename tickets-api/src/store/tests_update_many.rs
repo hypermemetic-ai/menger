@@ -191,7 +191,7 @@ async fn the_message_is_on_every_transition_with_one_shared_cause() {
         assert_eq!((t.cause, t.cause_ticket.as_deref()), (Some(first.id), Some("M-2")), "{id}");
     }
     // The first's history names what it caused: the write.
-    let caused: Vec<String> = store.history("M-2").unwrap().caused.into_iter().map(|t| t.ticket).collect();
+    let caused: Vec<String> = store.history("M-2").unwrap().caused.into_iter().map(|t| t.ticket.into_string()).collect();
     assert_eq!(caused, ["M-3", "M-4"]);
 }
 
@@ -254,7 +254,7 @@ async fn labels_move_with_update_many_and_with_label_over_many_ids() {
     let said: Vec<(String, Vec<String>, Vec<String>)> = changes
         .into_iter()
         .map(|c| match c {
-            Change::LabelsChanged { ticket, added, removed } => (ticket.id, added, removed),
+            Change::LabelsChanged { ticket, added, removed } => (ticket.id.into_string(), added, removed),
             other => panic!("{other:?}"),
         })
         .collect();

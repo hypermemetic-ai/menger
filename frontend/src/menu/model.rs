@@ -690,7 +690,7 @@ mod tests {
     fn row(id: &str, status: Status, kind: Kind) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
-            id: id.into(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),
             title: format!("{id} title"),
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn one_ticket_holds_its_actions_every_update_and_its_filter_items() {
         let mut r = row("DEMAND-4", Status::Ready, Kind::Build);
-        r.parent = Some("DEMAND-1".into());
+        r.parent = Some(menger_tickets_api::TicketId::new("DEMAND-1"));
         r.blocked_by = ids(&["DEMAND-2"]);
         let (i, rows) = (ids(&["DEMAND-4"]), vec![r]);
         assert_eq!(

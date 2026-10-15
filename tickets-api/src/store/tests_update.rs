@@ -85,18 +85,18 @@ pub(super) fn assert_kept(store: &Store, after: &str) {
     assert_eq!(store.groups(), tests::nav(store), "the roll-ups the nav draws, after {after}");
     tests_placements::assert_kept_placements_are_the_rule(store, after);
     let cache = store.tickets.read().unwrap();
-    let scanned = Cache::new(cache.order.values().map(|t| (t.id.clone(), t.clone())).collect(), cache.inputs.clone());
+    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect(), cache.inputs.clone());
     assert_eq!(stored::compare(&cache.form(), &scanned.form()), Vec::<String>::new(), "after {after}");
     // Every blocker that exists mirrors who names it.
     for t in cache.order.values() {
         for b in &t.blocked_by {
             if let Some(bt) = cache.get(b) {
-                assert!(bt.unlocks.contains(&t.id), "{b}'s unlocks name {}, after {after}", t.id);
+                assert!(bt.unlocks.contains(&t.id.to_string()), "{b}'s unlocks name {}, after {after}", t.id);
             }
         }
         for u in &t.unlocks {
             let ut = cache.get(u).unwrap_or_else(|| panic!("{u} in {}'s unlocks is a ticket, after {after}", t.id));
-            assert!(ut.blocked_by.contains(&t.id), "{u} names {} it unlocks, after {after}", t.id);
+            assert!(ut.blocked_by.contains(&t.id.to_string()), "{u} names {} it unlocks, after {after}", t.id);
         }
     }
     drop(cache);
@@ -250,7 +250,7 @@ async fn nothing_to_change_writes_and_sends_nothing() {
             body: Some(before.body.clone()),
             kind: Some(before.kind),
             status: Some(before.status),
-            parent: before.parent.clone(),
+            parent: before.parent.clone().map(String::from),
             severity: Some(before.severity),
             unblock: vec!["U-3".into()], // not a blocker of U-2: nothing to take off
             ..Update::default()
@@ -440,7 +440,7 @@ async fn random_updates_leave_verify_derived_consistent() {
     };
     let (mut done, mut refused) = (0, 0);
     for step in 0..300 {
-        let ids: Vec<String> = store.tickets.read().unwrap().order.values().map(|t| t.id.clone()).collect();
+        let ids: Vec<String> = store.tickets.read().unwrap().order.values().map(|t| t.id.to_string()).collect();
         let pick = |below: &mut dyn FnMut(usize) -> usize| ids[below(ids.len())].clone();
         let mut u = Update::default();
         if below(5) == 0 {

@@ -224,7 +224,7 @@ impl Lensed {
     /// `inputs { filter }`'s answer.
     pub(crate) fn from_answer(events: impl IntoIterator<Item = TicketsEvent>) -> Self {
         let held = Inputs::from_events(events);
-        let inside = held.list().iter().map(|i| i.ticket.clone()).collect();
+        let inside = held.list().iter().map(|i| i.ticket.to_string()).collect();
         Lensed { held, inside, outside: BTreeSet::new() }
     }
 
@@ -235,12 +235,12 @@ impl Lensed {
 
     /// An `input_changed`.
     pub(crate) fn changed(&mut self, input: &Input) -> Heard {
-        if self.inside.contains(&input.ticket) {
+        if self.inside.contains(input.ticket.as_str()) {
             Heard::Moved(self.held.upsert(input.clone()))
-        } else if self.outside.contains(&input.ticket) {
+        } else if self.outside.contains(input.ticket.as_str()) {
             Heard::Moved(false)
         } else {
-            Heard::Ask(input.ticket.clone())
+            Heard::Ask(input.ticket.to_string())
         }
     }
 
@@ -376,8 +376,8 @@ pub(crate) fn row(i: &Input) -> Row {
         })
         .collect();
     Row {
-        ticket: i.ticket.clone(),
-        id: i.id.clone(),
+        ticket: i.ticket.to_string(),
+        id: i.id.to_string(),
         kind: i.kind,
         state: i.state,
         question: i.question.clone(),

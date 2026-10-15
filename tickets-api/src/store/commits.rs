@@ -20,23 +20,9 @@
 /// hundreds.
 pub const MAX_PER_TICKET: usize = 256;
 
-/// The shortest and longest object name a reference may carry.
-const HASH_LEN: std::ops::RangeInclusive<usize> = 7..=64;
-
 /// `entry` as a commit reference, in the form it is stored and compared in;
-/// `None` when it is not one.
+/// `None` when it is not one — [`crate::vocab::CommitRef`]'s rule, the one
+/// (ACCESS-8 moved it to the wasm-safe half).
 pub(super) fn reference(entry: &str) -> Option<String> {
-    let (repo, hash) = match entry.split_once('@') {
-        Some((repo, hash)) => (Some(repo), hash),
-        None => (None, entry),
-    };
-    let repo_ok = repo.is_none_or(|r| {
-        !r.is_empty() && r.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-    });
-    // A second `@` is in `hash`, which no hex digit is.
-    let hash_ok = HASH_LEN.contains(&hash.len()) && hash.bytes().all(|b| b.is_ascii_hexdigit());
-    (repo_ok && hash_ok).then(|| match repo {
-        Some(repo) => format!("{repo}@{}", hash.to_ascii_lowercase()),
-        None => hash.to_ascii_lowercase(),
-    })
+    entry.parse::<crate::vocab::CommitRef>().ok().map(crate::vocab::CommitRef::into_string)
 }

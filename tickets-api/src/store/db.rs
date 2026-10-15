@@ -624,7 +624,7 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         unlocks: parse_ids(8, &row.get::<_, String>(8)?)?,
         created_unix: row.get(9)?,
         updated_unix: row.get(10)?,
-        parent: row.get::<_, Option<String>>(11)?,
+        parent: row.get::<_, Option<String>>(11)?.map(crate::address::TicketId::new),
         // SCALE-28: stored, moved by the transaction of every birth or move
         // under this ticket (SCALE-4 counted it from the parents at load).
         child_count: row.get(13)?,
@@ -647,7 +647,7 @@ pub(super) fn load_rows(conn: &Connection) -> anyhow::Result<HashMap<String, Row
     let mut out = HashMap::new();
     for row in rows {
         let row = row?;
-        out.insert(row.id.clone(), row);
+        out.insert(row.id.to_string(), row);
     }
     Ok(out)
 }
@@ -666,9 +666,9 @@ pub(super) fn load_rows_counted(
     for row in rows {
         let (row, n) = row?;
         if n > 0 {
-            open.insert(row.id.clone(), n);
+            open.insert(row.id.to_string(), n);
         }
-        out.insert(row.id.clone(), row);
+        out.insert(row.id.to_string(), row);
     }
     Ok((out, open))
 }

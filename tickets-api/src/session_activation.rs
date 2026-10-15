@@ -17,6 +17,8 @@
 //! signed-in caller reaches (the hub's signed-in grants), whatever it holds.
 
 use crate::session::SessionEvent;
+// ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
+use crate::vocab::Ceiling;
 #[cfg(feature = "server")]
 use crate::session::ProviderOffer;
 #[cfg(feature = "server")]
@@ -84,6 +86,7 @@ pub fn identity(auth: Option<&AuthContext>) -> SessionEvent {
     namespace = "session",
     description = "Who this connection is: its Plexus principal, name, roles and tenant",
     client,
+    typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core"
 )]
@@ -127,8 +130,9 @@ impl Session {
         &self,
         auth: Option<&AuthContext>,
         ttl_secs: Option<u64>,
-        scope: Option<Vec<String>>,
+        scope: Option<Vec<Ceiling>>,
     ) -> impl Stream<Item = SessionEvent> + Send + 'static {
+        let scope = scope.map(|s| s.into_iter().map(String::from).collect());
         let event = match &self.access {
             None => SessionEvent::Error { message: "login is off on this menger: there is no session to log in".into() },
             Some(a) => match a.mint(auth, ttl_secs, scope) {

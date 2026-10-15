@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::TransitionSource;
 
 /// How soon the owner should look — in rising order, so `max` raises.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Urgency {
     /// When there is time.

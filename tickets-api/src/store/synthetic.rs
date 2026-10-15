@@ -289,8 +289,8 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
                 // …nor a blocker.
                 if let Some(c) = candidate.filter(|c| out[*c].kind != Kind::Doc) {
                     let bid = out[c].id.clone();
-                    if !blocked_by.contains(&bid) {
-                        blocked_by.push(bid);
+                    if !blocked_by.contains(&bid.to_string()) {
+                        blocked_by.push(String::from(bid));
                     }
                 }
             }
@@ -342,7 +342,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
         index.insert(id.clone(), i);
         out.push(Ticket {
             labels: Vec::new(),
-            id,
+            id: crate::address::TicketId::new(id),
             // ORG-3: a seed's codes are shortcodes of their own, each its
             // code's first — its id is its code; the store registers them
             // and gives every row its address when the seed lands.
@@ -356,7 +356,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
             severity,
             blocked_by,
             unlocks: Vec::new(),
-            parent,
+            parent: parent.map(crate::address::TicketId::new),
             child_count: 0,
             // SDLC-9: none — a commit is linked after birth, as `create`
             // leaves it; the generator stays byte-identical per seed value.

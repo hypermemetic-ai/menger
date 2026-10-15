@@ -552,7 +552,7 @@ fn ticket_of(events: Vec<TicketsEvent>) -> Result<Ticket, String> {
 
 /// `get { id }` — `None` when nothing is there.
 async fn get(client: &session::Client, id: &str) -> Result<Option<Ticket>, String> {
-    let events = client.get_all(id.to_string()).await.map_err(|e| session::describe(&e))?;
+    let events = client.get_all(crate::typed::typed(id)?).await.map_err(|e| session::describe(&e))?;
     if events.iter().any(|e| matches!(e, TicketsEvent::NotFound { .. })) {
         return Ok(None);
     }
@@ -561,14 +561,16 @@ async fn get(client: &session::Client, id: &str) -> Result<Option<Ticket>, Strin
 
 /// `amend { id, title, body }` — the ticket as it is after.
 async fn amend(client: &session::Client, id: &str, title: Option<String>, body: Option<String>) -> Result<Ticket, String> {
-    let events = client.amend_all(id.to_string(), title, body).await.map_err(|e| session::describe(&e))?;
+    let (ticket, title, body) = (crate::typed::typed(id)?, crate::typed::opt(title)?, body.map(|b| crate::typed::typed(&b)).transpose()?);
+    let events = client.amend_all(ticket, title, body).await.map_err(|e| session::describe(&e))?;
     ticket_of(events).map_err(|m| format!("amend {id}: {m}"))
 }
 
 /// `create { epic, title, kind: doc, body, parent, path }`.
 async fn create_doc(client: &session::Client, title: &str, body: String, parent: &str, path: Option<String>) -> Result<Ticket, String> {
+    use crate::typed::{opt, typed};
     let events = client
-        .create_all(EPIC.into(), title.into(), Some("doc".into()), None, None, Some(body), Some(parent.into()), path, None)
+        .create_all(typed(EPIC)?, typed(title)?, Some(menger_tickets_api::Kind::Doc), None, None, Some(typed(&body)?), Some(typed(parent)?), opt(path)?, None)
         .await
         .map_err(|e| session::describe(&e))?;
     ticket_of(events).map_err(|m| format!("create: {m}"))

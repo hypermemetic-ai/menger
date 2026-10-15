@@ -60,7 +60,7 @@ pub(super) fn filter_names(store: &Store) -> Vec<String> {
     let rows = super::tests_ready::rows(store);
     let parents: std::collections::BTreeSet<&str> = rows.iter().filter_map(|t| t.parent.as_deref()).collect();
     out.extend(parents.iter().take(24).map(|p| p.to_string()));
-    out.extend(rows.iter().filter(|t| !parents.contains(t.id.as_str())).step_by(7).take(8).map(|t| t.id.clone()));
+    out.extend(rows.iter().filter(|t| !parents.contains(t.id.as_str())).step_by(7).take(8).map(|t| t.id.to_string()));
     out.push("NONE-1".into());
     out
 }

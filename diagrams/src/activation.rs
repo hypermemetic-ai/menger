@@ -16,7 +16,7 @@
 use crate::blocks::mermaid_blocks;
 #[cfg(feature = "server")]
 use crate::node::{Driver, Unavailable};
-use crate::types::MermaidEvent;
+use crate::types::{Markdown, MermaidEvent, MermaidSource};
 #[cfg(feature = "server")]
 use async_stream::stream;
 #[cfg(feature = "server")]
@@ -42,6 +42,7 @@ impl Mermaid {
     namespace = "mermaid",
     description = "Parse mermaid diagrams with the bundle the app serves, alone or in markdown",
     client,
+    typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core"
 )]
@@ -60,10 +61,10 @@ impl Mermaid {
         description = "Parse one mermaid diagram: parsed { diagram_type } | parse_error { message, line } | error { message }",
         params(source = "The diagram's source — what goes between the ```mermaid fences")
     )]
-    pub async fn parse(&self, source: String) -> impl Stream<Item = MermaidEvent> + Send + 'static {
+    pub async fn parse(&self, source: MermaidSource) -> impl Stream<Item = MermaidEvent> + Send + 'static {
         let driver = self.driver.clone();
         stream! {
-            yield match driver.parse(source).await {
+            yield match driver.parse(source.into_string()).await {
                 Ok(verdict) => verdict.into(),
                 Err(Unavailable(message)) => MermaidEvent::Error { message },
             };
@@ -88,11 +89,11 @@ impl Mermaid {
     )]
     pub async fn check(
         &self,
-        markdown: String,
+        markdown: Markdown,
     ) -> impl Stream<Item = MermaidEvent> + Send + 'static {
         let driver = self.driver.clone();
         stream! {
-            for block in mermaid_blocks(&markdown) {
+            for block in mermaid_blocks(markdown.as_str()) {
                 match driver.parse(block.source).await {
                     Ok(result) => yield MermaidEvent::Diagram {
                         index: block.index,

@@ -30,7 +30,7 @@ pub const TICKETS_MAX: usize = 1_000;
 pub const ENVIRONMENT_MAX: usize = 64;
 
 /// What a deployment did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeployState {
     /// Under way: recorded and shown; nothing runs because of it yet.
@@ -274,14 +274,12 @@ pub fn environment_of(text: &str) -> Result<String, String> {
 }
 
 /// A project as kept — its shortcode, upper case — or why not.
+/// ACCESS-8: the one shortcode rule, [`crate::address::Code::parse`]'s (a
+/// `_` it once took is in no shortcode).
 pub fn project_of(text: &str) -> Result<String, String> {
-    let t = text.trim();
-    let ok = !t.is_empty() && t.len() <= 32 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if ok {
-        Ok(t.to_ascii_uppercase())
-    } else {
-        Err(format!("`{t}` is not a project: a project is a shortcode (e.g. menger, MENGER)"))
-    }
+    crate::address::Code::parse(text)
+        .map(|c| c.as_str().to_string())
+        .map_err(|_| format!("`{}` is not a project: a project is a shortcode (e.g. menger, MENGER)", text.trim()))
 }
 
 #[cfg(test)]

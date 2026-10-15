@@ -21,7 +21,7 @@ fn ticket(epic: &str, kind: Kind, title: &str) -> NewTicket {
 }
 
 fn ids(page: &NotePage) -> Vec<u64> {
-    page.notes.iter().map(|n| n.id).collect()
+    page.notes.iter().map(|n| n.id.get()).collect()
 }
 
 fn all(store: &Store, q: NoteQuery) -> Vec<u64> {
@@ -41,7 +41,7 @@ async fn a_note_is_kept_dated_untitled_and_listed_newest_first() {
     let a = store.add_note_as("the palette should remember its query".into(), None, None).await.unwrap();
     let b = store.add_note_as("Watch drops events".into(), Some(" ada ".into()), Some("idp:ada".into())).await.unwrap();
     let c = store.add_note_as("  indented, as written  ".into(), None, None).await.unwrap();
-    assert_eq!((a.id, b.id, c.id), (1, 2, 3));
+    assert_eq!((a.id.get(), b.id.get(), c.id.get()), (1, 2, 3));
     assert_eq!((a.author.as_str(), b.author.as_str(), b.principal.as_deref()), ("owner", "ada", Some("idp:ada")));
     assert_eq!(c.body, "  indented, as written  ", "the body as written");
     assert!(a.at > 0 && a.ticket.is_none() && a.upgraded_at.is_none() && a.state() == NoteState::Open);
@@ -75,7 +75,7 @@ async fn an_upgrade_makes_the_ticket_and_marks_the_note_in_one_write() {
     let note = store.add_note_as("## watch drops **events**\nseen twice".into(), None, None).await.unwrap();
     let mut watch = store.subscribe();
 
-    let (made, marked) = store.upgrade_note(note.id, from_note(&store, note.id, "sr")).await.unwrap();
+    let (made, marked) = store.upgrade_note(note.id.get(), from_note(&store, note.id.get(), "sr")).await.unwrap();
     assert_eq!((made.id.as_str(), made.title.as_str(), made.parent.as_deref()), ("SR-2", "watch drops events", Some("SR-1")));
     assert!(made.body.starts_with("## watch drops **events**\nseen twice\n\nNoted ") && made.body.ends_with(" — note 1."), "{}", made.body);
     assert_eq!(marked, Note { ticket: Some("SR-2".into()), upgraded_at: Some(made.created_unix), ..note.clone() });
@@ -95,10 +95,10 @@ async fn an_upgrade_makes_the_ticket_and_marks_the_note_in_one_write() {
 
     // A ticket create refuses: the note stays open, no id is spent.
     let open = store.add_note_as("a second thought".into(), None, None).await.unwrap();
-    assert!(matches!(store.upgrade_note(open.id, from_note(&store, open.id, "BAD EPIC")).await, Err(StoreError::InvalidEpic(_))));
-    let parented = NewTicket { parent: Some("NOPE-1".into()), ..from_note(&store, open.id, "SR") };
-    assert!(store.upgrade_note(open.id, parented).await.is_err(), "a parent that is none");
-    assert_eq!(store.note(open.id).unwrap(), open, "still open, untouched");
+    assert!(matches!(store.upgrade_note(open.id.get(), from_note(&store, open.id.get(), "BAD EPIC")).await, Err(StoreError::InvalidEpic(_))));
+    let parented = NewTicket { parent: Some("NOPE-1".into()), ..from_note(&store, open.id.get(), "SR") };
+    assert!(store.upgrade_note(open.id.get(), parented).await.is_err(), "a parent that is none");
+    assert_eq!(store.note(open.id.get()).unwrap(), open, "still open, untouched");
     assert_eq!(store.create(ticket("SR", Kind::Build, "next")).await.unwrap().id, "SR-3", "no id was spent");
 }
 
@@ -126,13 +126,13 @@ async fn notes_and_their_tickets_survive_a_reopen_and_an_older_file_gains_the_ta
         store.create(ticket("SR", Kind::Scope, "the root")).await.unwrap();
         let kept = store.add_note_as("kept as written".into(), Some("ada".into()), None).await.unwrap();
         let other = store.add_note_as("made a ticket".into(), None, None).await.unwrap();
-        let (_, marked) = store.upgrade_note(other.id, from_note(&store, other.id, "SR")).await.unwrap();
+        let (_, marked) = store.upgrade_note(other.id.get(), from_note(&store, other.id.get(), "SR")).await.unwrap();
         (kept, marked)
     };
     {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.note(kept.id).unwrap(), kept);
-        assert_eq!(store.note(marked.id).unwrap(), marked);
+        assert_eq!(store.note(kept.id.get()).unwrap(), kept);
+        assert_eq!(store.note(marked.id.get()).unwrap(), marked);
         assert_eq!(store.get("SR-2").await.unwrap().title, "made a ticket");
         assert_eq!(store.add_note_as("after".into(), None, None).await.unwrap().id, 3, "ids go on from the file");
     }

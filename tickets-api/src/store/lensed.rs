@@ -196,7 +196,7 @@ impl Store {
         // empty page with matches past it (`limit: 0`) — the cursor.
         let next = match remaining {
             0 => None,
-            _ => tickets.last().map(|t| t.id.clone()).or(after),
+            _ => tickets.last().map(|t| t.id.to_string()).or(after),
         };
         Ok(Page {
             tickets,
@@ -253,6 +253,6 @@ impl Store {
     pub fn ticket_id(&self, id: &str) -> Option<String> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let key = locate(&cache, id)?;
-        cache.order.get(key).map(|t| t.id.clone())
+        cache.order.get(key).map(|t| t.id.clone()).map(String::from)
     }
 }

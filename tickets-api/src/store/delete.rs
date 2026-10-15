@@ -423,9 +423,9 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
             .collect();
         // The nearest ancestor that stays — where `reparent` moves them.
         let mut target = t.parent.clone();
-        let mut seen = HashSet::from([t.id.clone()]);
+        let mut seen = HashSet::from([t.id.to_string()]);
         while let Some(p) = target.clone().filter(|p| leaving(p)) {
-            if !seen.insert(p.clone()) {
+            if !seen.insert(p.to_string()) {
                 target = None;
                 break;
             }
@@ -450,7 +450,7 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
                                 c.id, c.epic, t.id
                             )));
                         } else {
-                            moves.push((c.clone(), t.id.clone(), target.clone()));
+                            moves.push((c.clone(), t.id.to_string(), target.clone().map(String::from)));
                         }
                     }
                 }
@@ -461,12 +461,12 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
             .iter()
             .filter(|u| !leaving(u))
             .filter_map(|u| cache.get(u))
-            .filter(|w| w.blocked_by.contains(&t.id))
+            .filter(|w| w.blocked_by.contains(&t.id.to_string()))
             .collect();
         if !waiting.is_empty() {
             if how.unblock {
                 for w in waiting {
-                    unblocks.entry(OrderKey::of(w)).or_insert_with(|| (w.id.clone(), Vec::new())).1.push(t.id.clone());
+                    unblocks.entry(OrderKey::of(w)).or_insert_with(|| (w.id.to_string(), Vec::new())).1.push(t.id.to_string());
                 }
             } else {
                 why.push(refuse(format!(
@@ -488,7 +488,7 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
                 )));
             }
         }
-        if let Some(owned) = owners.get(&t.id) {
+        if let Some(owned) = owners.get(t.id.as_str()) {
             why.push(refuse(format!("{} defines {} — move the definition to another ticket first", t.id, owned.join(", "))));
         }
         let live: Vec<&str> = cache
@@ -508,7 +508,7 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
             )));
         }
         if !why.is_empty() {
-            refusals.push((t.id.clone(), why));
+            refusals.push((t.id.to_string(), why));
         }
     }
     if !refusals.is_empty() {
@@ -616,7 +616,7 @@ impl Before {
             .order
             .iter()
             .filter(|(k, r)| r.placement.is_some() && self.placed.get(*k).copied().flatten() != r.placement)
-            .map(|(k, r)| (k.shortcode.clone(), crate::types::PlacementChange { id: r.id.clone(), placement: r.placement.expect("filtered") }))
+            .map(|(k, r)| (k.shortcode.clone(), crate::types::PlacementChange { id: r.id.to_string(), placement: r.placement.expect("filtered") }))
             .collect();
         if !shifts.is_empty() {
             out.placed(Some(Change::PlacementsChanged { changes: shifts }));
@@ -797,7 +797,7 @@ impl Store {
             plan(&cache, &ids, how)
         };
         let p = planned.map_err(|refusals| StoreError::RefusedMany { refusals })?;
-        let all: Vec<String> = p.gone.iter().map(|t| t.id.clone()).collect();
+        let all: Vec<String> = p.gone.iter().map(|t| t.id.to_string()).collect();
         may(&all).map_err(StoreError::Invalid)?;
         self.in_one_write(serial, move |conn, cache, unders| Self::deleting(conn, cache, unders, p, act)).await
     }
@@ -824,7 +824,7 @@ impl Store {
         let mut rows: BTreeMap<String, Row> = BTreeMap::new();
         for (c, _, to) in &p.moves {
             let r = edited(&mut rows, cache, &c.id).ok_or_else(|| missing(&c.id))?;
-            (r.parent, r.updated_unix) = (to.clone(), now);
+            (r.parent, r.updated_unix) = (to.clone().map(crate::address::TicketId::new), now);
         }
         for (x, from) in &p.unblocks {
             let r = edited(&mut rows, cache, x).ok_or_else(|| missing(x))?;
@@ -835,10 +835,10 @@ impl Store {
         for t in &p.gone {
             for b in t.blocked_by.iter().filter(|b| !leaving.contains(b.as_str())) {
                 if let Some(r) = edited(&mut rows, cache, b) {
-                    if r.unlocks.contains(&t.id) {
+                    if r.unlocks.contains(&t.id.to_string()) {
                         r.unlocks.retain(|u| u != &t.id);
                         r.updated_unix = now;
-                        unlocks.push((b.clone(), t.id.clone()));
+                        unlocks.push((b.clone(), t.id.to_string()));
                     }
                 }
             }
@@ -860,16 +860,16 @@ impl Store {
         for t in &p.gone {
             let whole = db::ticket(&txn, &t.id)?.ok_or_else(|| missing(&t.id))?;
             let tomb = Tombstone {
-                id: t.id.clone(),
+                id: t.id.to_string(),
                 title: t.title.clone(),
                 by: act.actor.clone(),
                 name: act.name.clone(),
                 at_unix: now,
                 message: act.message.clone(),
                 restorable_until_unix: Some(now + KEEP_BODY_FOR),
-                parent: t.parent.clone(),
-                reparented: p.moves.iter().filter(|(_, from, _)| *from == t.id).map(|(c, _, _)| c.id.clone()).collect(),
-                unblocked: p.unblocks.iter().filter(|(_, from)| from.contains(&t.id)).map(|(x, _)| x.clone()).collect(),
+                parent: t.parent.clone().map(String::from),
+                reparented: p.moves.iter().filter(|(_, from, _)| *from == t.id).map(|(c, _, _)| c.id.to_string()).collect(),
+                unblocked: p.unblocks.iter().filter(|(_, from)| from.contains(&t.id.to_string())).map(|(x, _)| x.clone()).collect(),
             };
             txn.prepare_cached(
                 "INSERT INTO tombstones (id, epic, seq, title, actor, name, at_unix, message, parent, reparented, unblocked, ticket)
@@ -906,7 +906,7 @@ impl Store {
         for (c, from, to) in &p.moves {
             out.tickets.push(Change::ParentChanged { ticket: after(&txn, &built, &c.id)?, previous: Some(from.clone()) });
             if let Some(to) = to.as_deref().and_then(|t| built.get(t)) {
-                out.tickets.push(Change::ChildrenChanged { id: to.id.clone(), shortcode: to.shortcode.clone(), added: c.id.clone(), child_count: to.child_count });
+                out.tickets.push(Change::ChildrenChanged { id: to.id.to_string(), shortcode: to.shortcode.clone(), added: c.id.to_string(), child_count: to.child_count });
             }
         }
         for (x, from) in &p.unblocks {
@@ -915,9 +915,9 @@ impl Store {
         for t in &p.gone {
             if let Some(parent) = t.parent.as_deref().filter(|q| !leaving.contains(q)).and_then(|q| built.get(q)) {
                 out.tickets.push(Change::ChildRemoved {
-                    id: parent.id.clone(),
+                    id: parent.id.to_string(),
                     shortcode: parent.shortcode.clone(),
-                    removed: t.id.clone(),
+                    removed: t.id.to_string(),
                     child_count: parent.child_count,
                 });
             }
@@ -926,7 +926,7 @@ impl Store {
             out.tickets.push(Change::UnlocksRemoved { ticket: after(&txn, &built, &b)?, removed });
         }
         txn.commit()?;
-        let ids: Vec<String> = p.gone.iter().map(|t| t.id.clone()).collect();
+        let ids: Vec<String> = p.gone.iter().map(|t| t.id.to_string()).collect();
         cache.rederive(built, inputs);
         for (t, tomb) in p.gone.iter().zip(&tombstones) {
             cache.tombstones.put(tomb.clone(), t.shortcode.clone(), t.seq);
@@ -994,28 +994,28 @@ impl Store {
     ) -> Result<(Undeleted, Vec<Change>), StoreError> {
         let txn = conn.transaction()?;
         let now = chrono::Utc::now().timestamp();
-        let coming: HashSet<String> = back.iter().map(|(t, _)| t.id.clone()).collect();
+        let coming: HashSet<String> = back.iter().map(|(t, _)| t.id.to_string()).collect();
         let exists = |cache: &Cache, id: &str| cache.get(id).is_some() || coming.contains(id);
         let mut rows: BTreeMap<String, Row> = BTreeMap::new();
         let (mut moved_back, mut reblocked, mut unlocked) = (Vec::new(), Vec::new(), Vec::new());
         let mut tickets: Vec<Ticket> = Vec::with_capacity(back.len());
         for (ticket, tomb) in &back {
             for c in &tomb.reparented {
-                if let Some(r) = edited(&mut rows, cache, c).filter(|r| r.parent == tomb.parent) {
+                if let Some(r) = edited(&mut rows, cache, c).filter(|r| r.parent.as_deref() == tomb.parent.as_deref()) {
                     (r.parent, r.updated_unix) = (Some(ticket.id.clone()), now);
                     moved_back.push((c.clone(), tomb.parent.clone(), ticket.id.clone()));
                 }
             }
             for x in &tomb.unblocked {
-                if let Some(r) = edited(&mut rows, cache, x).filter(|r| !r.blocked_by.contains(&ticket.id)) {
-                    r.blocked_by.push(ticket.id.clone());
+                if let Some(r) = edited(&mut rows, cache, x).filter(|r| !r.blocked_by.contains(&ticket.id.to_string())) {
+                    r.blocked_by.push(ticket.id.to_string());
                     r.updated_unix = now;
                     reblocked.push((x.clone(), ticket.id.clone()));
                 }
             }
             for b in &ticket.blocked_by {
-                if let Some(r) = edited(&mut rows, cache, b).filter(|r| !r.unlocks.contains(&ticket.id)) {
-                    r.unlocks.push(ticket.id.clone());
+                if let Some(r) = edited(&mut rows, cache, b).filter(|r| !r.unlocks.contains(&ticket.id.to_string())) {
+                    r.unlocks.push(ticket.id.to_string());
                     r.updated_unix = now;
                     unlocked.push((b.clone(), ticket.id.clone()));
                 }
@@ -1028,10 +1028,10 @@ impl Store {
             // that still names it.
             let mut waits: Vec<String> = t.unlocks.clone();
             waits.extend(reblocked.iter().filter(|(_, b)| *b == t.id).map(|(x, _)| x.clone()));
-            waits.extend(back.iter().filter(|(o, _)| o.blocked_by.contains(&t.id)).map(|(o, _)| o.id.clone()));
+            waits.extend(back.iter().filter(|(o, _)| o.blocked_by.contains(&t.id.to_string())).map(|(o, _)| o.id.to_string()));
             let names = |w: &str| match back.iter().find(|(o, _)| o.id == w) {
-                Some((o, _)) => o.blocked_by.contains(&t.id),
-                None => rows.get(w).or_else(|| cache.get(w)).is_some_and(|r| r.blocked_by.contains(&t.id)),
+                Some((o, _)) => o.blocked_by.contains(&t.id.to_string()),
+                None => rows.get(w).or_else(|| cache.get(w)).is_some_and(|r| r.blocked_by.contains(&t.id.to_string())),
             };
             waits.retain(|w| exists(cache, w) && names(w));
             t.unlocks = rules::distinct(&waits);
@@ -1041,7 +1041,7 @@ impl Store {
             txn.prepare_cached("DELETE FROM tombstones WHERE id = ?1")?.execute([&t.id])?;
             tickets.push(t);
         }
-        for r in rows.values().filter(|r| !coming.contains(&r.id)) {
+        for r in rows.values().filter(|r| !coming.contains(r.id.as_str())) {
             db::update_row(&txn, r)?;
         }
         let mut registry = Vec::new();
@@ -1074,28 +1074,28 @@ impl Store {
         let built = cache.rebuilt(&txn, built)?;
         stored::write_all(&txn, &built.form())?;
         let mut out = Gathered::default();
-        let ids: Vec<String> = tickets.iter().map(|t| t.id.clone()).collect();
+        let ids: Vec<String> = tickets.iter().map(|t| t.id.to_string()).collect();
         let whole: Vec<Ticket> = ids.iter().map(|id| after(&txn, &built, id)).collect::<Result<_, _>>()?;
         out.tickets.push(Change::Undeleted { ids: ids.clone(), tickets: whole.clone() });
         for t in &whole {
             if let Some(p) = t.parent.as_deref().and_then(|p| built.get(p)) {
-                out.tickets.push(Change::ChildrenChanged { id: p.id.clone(), shortcode: p.shortcode.clone(), added: t.id.clone(), child_count: p.child_count });
+                out.tickets.push(Change::ChildrenChanged { id: p.id.to_string(), shortcode: p.shortcode.clone(), added: t.id.to_string(), child_count: p.child_count });
             }
         }
         for (c, from, to) in &moved_back {
             out.tickets.push(Change::ParentChanged { ticket: after(&txn, &built, c)?, previous: from.clone() });
             if let Some(f) = from.as_deref().and_then(|f| built.get(f)) {
-                out.tickets.push(Change::ChildRemoved { id: f.id.clone(), shortcode: f.shortcode.clone(), removed: c.clone(), child_count: f.child_count });
+                out.tickets.push(Change::ChildRemoved { id: f.id.to_string(), shortcode: f.shortcode.clone(), removed: c.clone(), child_count: f.child_count });
             }
             if let Some(n) = built.get(to) {
-                out.tickets.push(Change::ChildrenChanged { id: n.id.clone(), shortcode: n.shortcode.clone(), added: c.clone(), child_count: n.child_count });
+                out.tickets.push(Change::ChildrenChanged { id: n.id.to_string(), shortcode: n.shortcode.clone(), added: c.clone(), child_count: n.child_count });
             }
         }
         for (x, b) in &reblocked {
-            out.tickets.push(Change::BlockersChanged { ticket: after(&txn, &built, x)?, added: vec![b.clone()], removed: Vec::new() });
+            out.tickets.push(Change::BlockersChanged { ticket: after(&txn, &built, x)?, added: vec![b.to_string()], removed: Vec::new() });
         }
         for (b, added) in unlocked.into_iter().filter(|(b, _)| !coming.contains(b)) {
-            out.tickets.push(Change::UnlocksChanged { ticket: after(&txn, &built, &b)?, added });
+            out.tickets.push(Change::UnlocksChanged { ticket: after(&txn, &built, &b)?, added: String::from(added) });
         }
         txn.commit()?;
         cache.rederive(built, inputs);
