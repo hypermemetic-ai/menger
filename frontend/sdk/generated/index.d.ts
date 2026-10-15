@@ -11,4 +11,5 @@ export * as Themes from './themes';
 export * as Tickets from './tickets';
 export * as TicketsCommits from './tickets/commits';
 export * as TicketsInputs from './tickets/inputs';
+export * as TicketsNav from './tickets/nav';
 export * as TicketsWork from './tickets/work';

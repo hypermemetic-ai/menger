@@ -106,7 +106,7 @@ pub(crate) fn counts_of(facets: impl IntoIterator<Item = (String, String, u64)>,
 async fn ask_facets(filter: Option<String>, base: Option<String>, tree: Option<ScTree>) -> Option<Counts> {
     let client = session::client()?;
     let (filter, base) = (crate::typed::opt(filter).ok()?, crate::typed::opt(base).ok()?);
-    let events = client.facets_all(filter, base, crate::session::zone()).await.ok()?;
+    let events = client.nav().facets_all(filter, base, crate::session::zone()).await.ok()?;
     let mut facets = Vec::new();
     for ev in events {
         match ev {
@@ -241,7 +241,7 @@ impl LiveCounts {
         self.asked.set_value(n);
         spawn_local(async move {
             let Ok(filter) = crate::typed::typed(&text) else { return };
-            let Ok(events) = client.counts_all(Some(filter), None, crate::session::zone()).await else { return };
+            let Ok(events) = client.nav().counts_all(Some(filter), None, crate::session::zone()).await else { return };
             let mut runs = Vec::new();
             for ev in events {
                 match ev {

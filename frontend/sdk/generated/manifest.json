@@ -171,11 +171,6 @@
         "timeout_minutes"
       ],
       "components": [],
-      "counts": [
-        "filter",
-        "keep",
-        "tz"
-      ],
       "create": [
         "blocked_by",
         "body",
@@ -196,12 +191,6 @@
         "tz",
         "unblock"
       ],
-      "extents": [],
-      "facets": [
-        "base",
-        "filter",
-        "tz"
-      ],
       "find": [
         "after",
         "filter",
@@ -212,7 +201,6 @@
       "get": [
         "id"
       ],
-      "groups": [],
       "health": [],
       "history": [
         "id"
@@ -233,11 +221,6 @@
         "parent",
         "status",
         "summary",
-        "tz"
-      ],
-      "member": [
-        "filter",
-        "ids",
         "tz"
       ],
       "queue": [
@@ -302,16 +285,6 @@
         "id",
         "minutes",
         "source"
-      ],
-      "tree": [
-        "after",
-        "epic",
-        "filter",
-        "keep",
-        "limit",
-        "matches_only",
-        "parent",
-        "tz"
       ],
       "undelete": [
         "ids"
@@ -395,6 +368,36 @@
         "ticket"
       ],
       "schema": []
+    },
+    "tickets.nav": {
+      "counts": [
+        "filter",
+        "keep",
+        "tz"
+      ],
+      "extents": [],
+      "facets": [
+        "base",
+        "filter",
+        "tz"
+      ],
+      "groups": [],
+      "member": [
+        "filter",
+        "ids",
+        "tz"
+      ],
+      "schema": [],
+      "tree": [
+        "after",
+        "epic",
+        "filter",
+        "keep",
+        "limit",
+        "matches_only",
+        "parent",
+        "tz"
+      ]
     },
     "tickets.work": {
       "blockers": [

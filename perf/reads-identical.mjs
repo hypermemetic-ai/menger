@@ -44,7 +44,7 @@ function caller(ws) {
 
 const [a, b] = [caller(await open(before)), caller(await open(after))];
 const content = (t) => JSON.parse(t.replace('"subscription":_', '"subscription":0')).params.result.content;
-const epics = (await a("tickets.extents", {})).map(content).map((e) => [e.epic, e.last_seq]);
+const epics = (await a("tickets.nav.extents", {})).map(content).map((e) => [e.epic, e.last_seq]);
 const anyId = () => { const [e, n] = epics[rand(epics.length)]; return `${e}-${1 + rand(n)}`; };
 const inputs = (await a("tickets.inputs.list", {})).map(content).map((e) => e.input);
 const nothing = () => [{}, { filter: "" }, { filter: "· flat" }][rand(3)];

@@ -1121,7 +1121,7 @@ async fn session(
 /// shortcodes (252 at 10^6), not tickets: 2.1 ms at 10^6 (MNG-17).
 async fn groups(client: &Client, tree: nav::Tree, last_error: RwSignal<Option<String>>) -> Result<(), String> {
     let mut all = Vec::new();
-    for ev in client.groups_all().await.map_err(|e| describe(&e))? {
+    for ev in client.nav().groups_all().await.map_err(|e| describe(&e))? {
         match ev {
             TicketsEvent::Group { group } => all.push(group),
             TicketsEvent::Error { message } => last_error.set(Some(format!("groups: {message}"))),
@@ -1137,7 +1137,7 @@ async fn groups(client: &Client, tree: nav::Tree, last_error: RwSignal<Option<St
 /// shortcodes (252 at 10^6), not tickets: 1.9 ms at 10^6 (SCALE-18).
 async fn extents(client: &Client, board: board::Board, last_error: RwSignal<Option<String>>) -> Result<(), String> {
     let mut runs = Vec::new();
-    for ev in client.extents_all().await.map_err(|e| describe(&e))? {
+    for ev in client.nav().extents_all().await.map_err(|e| describe(&e))? {
         match ev {
             TicketsEvent::Extent { shortcode: epic, last_seq, holes, .. } => runs.push((epic.to_string(), last_seq, holes)),
             TicketsEvent::Error { message } => last_error.set(Some(format!("extents: {message}"))),
@@ -1467,7 +1467,7 @@ pub(crate) async fn member(ids: Vec<String>, filter: String) -> Result<Vec<(Stri
     let mut out = Vec::with_capacity(ids.len());
     let filter: menger_tickets_api::vocab::FilterText = crate::typed::typed(&filter)?;
     for part in ids.chunks(MEMBER_MAX) {
-        for ev in client.member_all(crate::typed::many(part)?, filter.clone(), crate::session::zone()).await.map_err(|e| describe(&e))? {
+        for ev in client.nav().member_all(crate::typed::many(part)?, filter.clone(), crate::session::zone()).await.map_err(|e| describe(&e))? {
             match ev {
                 TicketsEvent::Member { id, matched } => out.push((id.to_string(), matched)),
                 TicketsEvent::Error { message } => return Err(message),

@@ -14,6 +14,11 @@
 //!
 //! The data is synthetic: the script makes it (DEPLOY-5: no snapshot of the
 //! tracker is a fixture).
+//!
+//! A build that moves a method updates the fixture deliberately, its calls
+//! only: ACCESS-16 moved `groups`, `extents`, `tree`, `counts`, `facets` and
+//! `member` to `tickets.nav.<method>` — the six `call`s renamed, every item
+//! they answer byte for byte as before.
 
 use futures::StreamExt;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
@@ -208,14 +213,14 @@ fn script() -> Vec<(&'static str, Value)> {
         ("tickets.work.ready", json!({"summary": true})),
         ("tickets.find", json!({"query": "gap"})),
         ("tickets.search", json!({"query": "platform"})),
-        ("tickets.member", json!({"ids": ["GOLD-2", "NOPE-1"], "filter": "kind build"})),
-        ("tickets.groups", json!({})),
+        ("tickets.nav.member", json!({"ids": ["GOLD-2", "NOPE-1"], "filter": "kind build"})),
+        ("tickets.nav.groups", json!({})),
         ("tickets.components", json!({})),
         ("tickets.inputs.list", json!({})),
-        ("tickets.extents", json!({})),
-        ("tickets.counts", json!({"filter": "not kind doc"})),
-        ("tickets.facets", json!({"filter": "kind build"})),
-        ("tickets.tree", json!({"epic": "GOLD", "filter": "not kind doc"})),
+        ("tickets.nav.extents", json!({})),
+        ("tickets.nav.counts", json!({"filter": "not kind doc"})),
+        ("tickets.nav.facets", json!({"filter": "kind build"})),
+        ("tickets.nav.tree", json!({"epic": "GOLD", "filter": "not kind doc"})),
         ("tickets.work.waves", json!({"epics": ["GOLD", "PLAT"]})),
         ("tickets.work.waves_under", json!({"id": "GOLD-1"})),
         ("tickets.work.waves_to", json!({"id": "GOLD-3"})),

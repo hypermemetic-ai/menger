@@ -229,7 +229,7 @@ async fn extents_of_a_seeded_store_sum_to_its_count_and_turn_rows_into_cursors()
         .and_then(|n| n.parse().ok())
         .unwrap_or_else(|| panic!("the seed logs its epic count:\n{log}"));
 
-    let extents = collect(&c, "tickets.extents", json!({})).await;
+    let extents = collect(&c, "tickets.nav.extents", json!({})).await;
     assert_eq!(extents.len(), epics, "one per shortcode");
     assert!(extents.iter().all(|ev| ev["type"] == "extent"), "{extents:?}");
     let named: Vec<&str> = extents.iter().map(|ev| ev["epic"].as_str().unwrap()).collect();
@@ -255,5 +255,5 @@ async fn extents_of_a_seeded_store_sum_to_its_count_and_turn_rows_into_cursors()
 
     let s = spawn_server(&db, dir.path(), "reload", &[], &[], free_port().await);
     let c = connect(s.port).await;
-    assert_eq!(collect(&c, "tickets.extents", json!({})).await, extents, "rebuilt from the file");
+    assert_eq!(collect(&c, "tickets.nav.extents", json!({})).await, extents, "rebuilt from the file");
 }

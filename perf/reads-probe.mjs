@@ -75,7 +75,7 @@ const rand = (n) => {
   z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & 0xffffffffffffffffn;
   return Number((z ^ (z >> 31n)) % BigInt(n));
 };
-const extents = (await call("tickets.extents", {})).events.map((e) => [e.epic, e.last_seq]);
+const extents = (await call("tickets.nav.extents", {})).events.map((e) => [e.epic, e.last_seq]);
 const total = extents.reduce((a, [, n]) => a + n, 0);
 const anyId = () => {
   // Uniform over tickets, not shortcodes.
@@ -98,7 +98,7 @@ for (const query of QUERIES) {
     matches: page.remaining + t.last.events.length - 1 }));
 }
 for (const filter of NINE) {
-  const counts = (await call("tickets.counts", { filter })).events.reduce((a, e) => a + e.held, 0);
+  const counts = (await call("tickets.nav.counts", { filter })).events.reduce((a, e) => a + e.held, 0);
   const out = { filter, admits: counts, admits_pct: +(100 * counts / total).toFixed(2) };
   for (const query of QUERIES) {
     const t = await time("tickets.find", { query, filter });
@@ -107,7 +107,7 @@ for (const filter of NINE) {
     out[`find ${query} matches`] = page.remaining + t.last.events.length - 1;
     out[`find ${query} / unfiltered`] = +(t.median_ms / base[query]).toFixed(4);
   }
-  const m = await time("tickets.member", { ids, filter }, "done");
+  const m = await time("tickets.nav.member", { ids, filter }, "done");
   out.member_1000 = m.median_ms;
   out.member_1000_max = m.max_ms;
   out.member_matched = m.last.events.filter((e) => e.type === "member" && e.matched).length;
@@ -117,7 +117,7 @@ for (const filter of NINE) {
   out.ready_after_map1 = map.median_ms;
   console.log(JSON.stringify(out));
 }
-const empty = await time("tickets.member", { ids, filter: "" }, "done");
+const empty = await time("tickets.nav.member", { ids, filter: "" }, "done");
 console.log(JSON.stringify({ probe: "member 1000, empty filter", median_ms: empty.median_ms, max_ms: empty.max_ms }));
 ws.close();
 process.exit(0);

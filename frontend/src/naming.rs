@@ -626,7 +626,7 @@ impl Naming {
         let text = saved_text_of(name);
         spawn_local(async move {
             let Ok(filter) = crate::typed::typed(&text) else { return };
-            let Ok(events) = client.counts_all(Some(filter), None, session::zone()).await else { return };
+            let Ok(events) = client.nav().counts_all(Some(filter), None, session::zone()).await else { return };
             let mut n = 0usize;
             for ev in events {
                 match ev {

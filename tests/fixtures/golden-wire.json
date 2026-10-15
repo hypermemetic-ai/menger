@@ -1979,7 +1979,7 @@
     }
   },
   {
-    "call": "tickets.member",
+    "call": "tickets.nav.member",
     "items": [
       {
         "id": "GOLD-2",
@@ -2001,7 +2001,7 @@
     }
   },
   {
-    "call": "tickets.groups",
+    "call": "tickets.nav.groups",
     "items": [
       {
         "group": {
@@ -2123,7 +2123,7 @@
     "params": {}
   },
   {
-    "call": "tickets.extents",
+    "call": "tickets.nav.extents",
     "items": [
       {
         "epic": "GOLD",
@@ -2141,7 +2141,7 @@
     "params": {}
   },
   {
-    "call": "tickets.counts",
+    "call": "tickets.nav.counts",
     "items": [
       {
         "epic": "GOLD",
@@ -2161,7 +2161,7 @@
     }
   },
   {
-    "call": "tickets.facets",
+    "call": "tickets.nav.facets",
     "items": [
       {
         "field": "status",
@@ -2289,7 +2289,7 @@
     }
   },
   {
-    "call": "tickets.tree",
+    "call": "tickets.nav.tree",
     "items": [
       {
         "below": 3,

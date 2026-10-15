@@ -322,6 +322,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     );
     assert_eq!(rows(client.find_all(p(" OVER the "), None, None, Some(p("ready")), None).await.expect("find")).len(), 1);
     let members = client
+        .nav()
         .member_all(vec![p("WIRE-1"), p("NOPE-1"), p("wire-1")], p("status Ready"), None)
         .await
         .expect("member");
@@ -542,6 +543,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // One typed `Group` per shortcode row — and a client that only watched
     // holds the same roll-ups, built from `GroupChanged` alone.
     let groups: Vec<Group> = client
+        .nav()
         .groups_all()
         .await
         .expect("groups")
@@ -575,6 +577,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // The generated client's `extents`: each shortcode's last sequence,
     // typed, in shortcode order — the same numbers the watch mirror holds.
     let extents: Vec<(String, u32)> = client
+        .nav()
         .extents_all()
         .await
         .expect("extents")

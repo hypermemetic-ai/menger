@@ -80,10 +80,10 @@ console.log(JSON.stringify({ probe: `list { parent: ${ROOT}, summary, limit: 200
 if (mode === "after") {
   let worst = 0;
   for (const filter of NINE) {
-    const t = await time("tickets.tree", { parent: ROOT, filter, limit: 200 });
+    const t = await time("tickets.nav.tree", { parent: ROOT, filter, limit: 200 });
     const nodes = t.last.events.filter((e) => e.type === "node");
     const page = t.last.events.at(-1);
-    const top = await time("tickets.tree", { epic: EPIC, filter });
+    const top = await time("tickets.nav.tree", { epic: EPIC, filter });
     const rootNode = top.last.events.find((e) => e.type === "node");
     worst = Math.max(worst, t.median_ms);
     console.log(JSON.stringify({
@@ -94,17 +94,17 @@ if (mode === "after") {
   }
   console.log(JSON.stringify({ probe: "the slowest first tree page of the nine", median_ms: worst }));
   // `under`: ROOT's child with the most below it.
-  const all = await call("tickets.tree", { parent: ROOT, filter: "" });
+  const all = await call("tickets.nav.tree", { parent: ROOT, filter: "" });
   const x = all.events.filter((e) => e.type === "node").sort((a, b) => b.below - a.below)[0];
   const X = x.summary.id;
   const under = {};
-  const c = await time("tickets.counts", { filter: `under ${X}` }, "done");
+  const c = await time("tickets.nav.counts", { filter: `under ${X}` }, "done");
   under.counts_under_x = c.median_ms;
   under.under_x_held = c.last.events.reduce((a, e) => a + (e.held || 0), 0);
   under.list_ready_under_x = (await time("tickets.list", { filter: `ready and under ${X}`, summary: true, limit: 200 })).median_ms;
-  under.tree_root_ready_under_x = (await time("tickets.tree", { parent: ROOT, filter: `status Ready and under ${X}`, limit: 200 })).median_ms;
-  under.tree_x_ready = (await time("tickets.tree", { parent: X, filter: "status Ready", limit: 200 })).median_ms;
-  const ce = await time("tickets.counts", { filter: `under ${EPIC}` }, "done");
+  under.tree_root_ready_under_x = (await time("tickets.nav.tree", { parent: ROOT, filter: `status Ready and under ${X}`, limit: 200 })).median_ms;
+  under.tree_x_ready = (await time("tickets.nav.tree", { parent: X, filter: "status Ready", limit: 200 })).median_ms;
+  const ce = await time("tickets.nav.counts", { filter: `under ${EPIC}` }, "done");
   under.counts_under_epic = ce.median_ms;
   under.list_ready_under_epic = (await time("tickets.list", { filter: `ready and under ${EPIC}`, summary: true, limit: 200 })).median_ms;
   console.log(JSON.stringify({ probe: "under", x: X, x_below: x.below, ...under }));

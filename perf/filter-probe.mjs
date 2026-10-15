@@ -75,7 +75,7 @@ console.log(JSON.stringify({ probe: "list {} (the floor)", median_ms: floor.medi
 if (mode === "after") {
   for (const filter of NINE) {
     const out = { filter };
-    const counts = await time("tickets.counts", { filter }, "done");
+    const counts = await time("tickets.nav.counts", { filter }, "done");
     const held = counts.last.events.reduce((a, e) => a + e.held, 0);
     out.matches = held;
     out.counts = counts.median_ms;
@@ -88,7 +88,7 @@ if (mode === "after") {
     const mid = await time("tickets.list", { filter, summary: true, limit: 200, at });
     out.at_half = mid.median_ms;
     out.at_half_first = mid.last.events.at(-1).first;
-    const facets = await time("tickets.facets", { filter }, "done");
+    const facets = await time("tickets.nav.facets", { filter }, "done");
     out.facets = facets.median_ms;
     out.max_of_the_five_ms = Math.max(out.counts, out.head, out.after_map1, out.at_half, out.facets);
     console.log(JSON.stringify(out));

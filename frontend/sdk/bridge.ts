@@ -37,6 +37,7 @@ import type { PlexusStreamItem, StreamMetadata } from './generated/types';
 import { createTicketsClient, type TicketsClient } from './generated/tickets/client';
 import { createTicketsInputsClient, type TicketsInputsClient } from './generated/tickets/inputs/client';
 import { createTicketsWorkClient, type TicketsWorkClient } from './generated/tickets/work/client';
+import { createTicketsNavClient, type TicketsNavClient } from './generated/tickets/nav/client';
 
 /** ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
  *  (`list`, and the writes, which the host refuses), and callable as
@@ -50,9 +51,13 @@ export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
  *  no client of its own on the parent — and (ACCESS-17) `tickets work` as
  *  `work`, with that child's `waves` and `blockers` kept where a body has
  *  always called them (`menger.tickets.waves([…])`) until ACCESS-20 moves
- *  the frames' SDK. */
-export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work'> &
-  Pick<TicketsWorkClient, 'waves' | 'blockers'> & { readonly inputs: InputsChild; readonly work: TicketsWorkClient };
+ *  the frames' SDK — and (ACCESS-16) its child `nav` (`tickets.nav.groups`, …). */
+export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work' | 'nav'> &
+  Pick<TicketsWorkClient, 'waves' | 'blockers'> & {
+    readonly inputs: InputsChild;
+    readonly work: TicketsWorkClient;
+    readonly nav: TicketsNavClient;
+  };
 
 /** The shell's `menger.call`: a read over the bridge, answered with the
  *  call's items (the wire's spelling), or rejected with the reason. */
@@ -68,8 +73,11 @@ export interface Typed {
 }
 
 /** The activation the generated client addresses (`tickets.get`, …); the
- *  host's methods are its bare names (`get`). */
+ *  host's methods are its bare names (`get`). ACCESS-16: its child's too
+ *  (`tickets.nav.groups` → `groups`), as the host's `menger.call` names
+ *  them. */
 const NAMESPACE = 'tickets.';
+const NAV = 'tickets.nav.';
 
 /** ACCESS-14 / ACCESS-17: a child's method by the host's name for it — the
  *  frame's read of inputs is still the host's `inputs`, and `work`'s `waves`
@@ -87,7 +95,7 @@ function bridgeRpc(call: BridgeCall): RpcClient {
   return {
     async *call(method: string, params?: unknown): AsyncGenerator<PlexusStreamItem> {
       const bare = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
-      const name = HOST_NAMES[bare] ?? bare;
+      const name = HOST_NAMES[bare] ?? (method.startsWith(NAV) ? method.slice(NAV.length) : bare);
       let items: unknown[];
       try {
         items = await call(name, params ?? null);
@@ -113,7 +121,7 @@ async function* one(content: unknown): AsyncGenerator<PlexusStreamItem> {
 declare let mengerTyped: Typed | null;
 
 /** ACCESS-14: the generated client with `inputs` the child's ([`InputsChild`]);
- *  ACCESS-17: and `work`. */
+ *  ACCESS-17: and `work`; ACCESS-16: and `nav`. */
 function frameTickets(rpc: RpcClient): FrameTickets {
   const tickets = createTicketsClient(rpc);
   const child = createTicketsInputsClient(rpc);
@@ -129,6 +137,8 @@ function frameTickets(rpc: RpcClient): FrameTickets {
   // ACCESS-17: `tickets work`, and its `waves` / `blockers` where they were.
   const work = createTicketsWorkClient(rpc);
   Object.assign(tickets, { work, waves: work.waves.bind(work), blockers: work.blockers.bind(work) });
+  // ACCESS-16: `tickets nav`.
+  Object.defineProperty(tickets, 'nav', { value: createTicketsNavClient(rpc) });
   return tickets as unknown as FrameTickets;
 }
 

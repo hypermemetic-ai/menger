@@ -3,7 +3,8 @@ import type { Kind, ShortcodeRef, TicketRef } from '../../notes/types';
 import type { Cursor, FilterText, TicketsEvent, Zone } from '../../tickets/types';
 /** Typed client interface for tickets.work plugin */
 export interface TicketsWorkClient {
-    /** One ticket's blockers resolved to current statuses; dangling ids marked; those out of your reach counted, never named.
+    /**
+     * One ticket's blockers resolved to current statuses; dangling ids marked; those out of your reach counted, never named.
   
   "Why can't this start?" in one call. Yields, in `blocked_by`
   order, one `Blocker` event per blocker that exists (the full
@@ -14,9 +15,12 @@ export interface TicketsWorkClient {
   caller may not see — and, to a reader restricted to part of the
   store, an id that names no ticket — is neither resolved nor named:
   the answer ends with one `HiddenBlockers { count }` saying how many,
-  yielded only when there are any. */
+  yielded only when there are any.
+     * @requires `work.blockers` anywhere it is held
+     */
     blockers(id: TicketRef): AsyncGenerator<TicketsEvent>;
-    /** Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter.
+    /**
+     * Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter.
   
   The DAG query: which tickets can start now? Yields one row event
   per member of the ready set — status `Ready` and every
@@ -33,11 +37,17 @@ export interface TicketsWorkClient {
   as without it, the page event without `first`. A filter not taken,
   or one that asks `under` or `text`, is one in-band `error`; one that
   narrows nothing (empty, a display part alone) is no filter.
-  ACCESS-17: was `tickets ready_set`. */
+  ACCESS-17: was `tickets ready_set`.
+     * @requires `work.ready` anywhere it is held
+     */
     ready(after?: Cursor | null, epic?: ShortcodeRef | null, filter?: FilterText | null, limit?: number | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
-    /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
+    /**
+     * Get plugin or method schema. Pass {"method": "name"} for a specific method.
+     * @requires `work.schema` anywhere it is held
+     */
     schema(): Promise<unknown>;
-    /** The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts.
+    /**
+     * The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts.
   
   WAVE-4: the order of work, for a board. Yields one `Placed` per
   ticket of the shortcodes `epics` (case-insensitive; one with no
@@ -57,16 +67,56 @@ export interface TicketsWorkClient {
   empty, or a kind outside the six, is one in-band `Error` and
   nothing else. WAVE-6: each placement is the one the store keeps on the
   row (the same rule, kept current by every write that moves one); rows
-  only. */
+  only.
+     * @requires `work.waves` anywhere it is held
+     */
     waves(epics: ShortcodeRef[], kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
-    /** The wave board whose final state is one ticket: its blockers transitively (and a scope's open descendants) placed in waves, done blockers done, the ticket alone in the last wave; cycles named; then the wave counts.
+    /**
+     * The wave board whose final state is one ticket: its blockers transitively (and a scope's open descendants) placed in waves, done blockers done, the ticket alone in the last wave; cycles named; then the wave counts.
   
-  MENGER-31: the wave board whose final state is `id` (activation/waves.rs). */
+  MENGER-31: the wave board whose final state is `id` (activation/waves.rs).
+     * @requires `work.waves_to` anywhere it is held
+     */
     wavesTo(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
-    /** The order of work under one ticket: each ticket of its subtree placed in its wave (or missing_blocker, or done) with what it waits on, then the wave counts.
+    /**
+     * The order of work under one ticket: each ticket of its subtree placed in its wave (or missing_blocker, or done) with what it waits on, then the wave counts.
   
-  MENGER-31: the wave board of `id`'s subtree (activation/waves.rs). */
+  MENGER-31: the wave board of `id`'s subtree (activation/waves.rs).
+     * @requires `work.waves_under` anywhere it is held
+     */
     wavesUnder(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
 }
 /** Create a typed tickets.work client from an RPC client */
 export declare function createTicketsWorkClient(rpc: RpcClient): TicketsWorkClient;
+/** What each tickets.work method needs (AUTH-9): its grant, and the param that locates what it acts on (`null`: allowed wherever the grant is held). The gate decides, server-side. */
+export declare const requires: {
+    readonly "work.blockers": {
+        readonly grant: "work.blockers";
+        readonly target: null;
+    };
+    readonly "work.ready": {
+        readonly grant: "work.ready";
+        readonly target: null;
+    };
+    readonly "work.schema": {
+        readonly grant: "work.schema";
+        readonly target: null;
+    };
+    readonly "work.waves": {
+        readonly grant: "work.waves";
+        readonly target: null;
+    };
+    readonly "work.waves_to": {
+        readonly grant: "work.waves_to";
+        readonly target: null;
+    };
+    readonly "work.waves_under": {
+        readonly grant: "work.waves_under";
+        readonly target: null;
+    };
+};
+/** The tickets.work activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
+export declare const defaultRoles: {
+    readonly editor: readonly ["work.ready", "work.waves", "work.waves_under", "work.waves_to", "work.blockers"];
+    readonly viewer: readonly ["work.ready", "work.waves", "work.waves_under", "work.waves_to", "work.blockers"];
+};

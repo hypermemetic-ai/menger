@@ -306,7 +306,7 @@ async fn count(client: &Client, filter: &str, keep: Option<String>) -> Counted {
         Ok(t) => t,
         Err(why) => return Counted::Refused(why),
     };
-    match client.counts_all(Some(filter), keep, crate::session::zone()).await {
+    match client.nav().counts_all(Some(filter), keep, crate::session::zone()).await {
         Ok(events) => {
             let mut runs = Vec::new();
             for ev in events {
@@ -389,7 +389,7 @@ async fn locate(client: &Client, filter: &str, keep: Option<String>, id: &str) -
 /// Whether `filter` admits `id` (`member`) — `None` when no answer came.
 async fn is_member(client: &Client, filter: &str, id: &str) -> Option<bool> {
     let (id, filter) = (crate::typed::typed(id).ok()?, crate::typed::typed(filter).ok()?);
-    let events = client.member_all(vec![id], filter, crate::session::zone()).await.ok()?;
+    let events = client.nav().member_all(vec![id], filter, crate::session::zone()).await.ok()?;
     Some(events.into_iter().any(|ev| matches!(ev, TicketsEvent::Member { matched: true, .. })))
 }
 
