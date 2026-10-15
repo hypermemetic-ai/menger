@@ -1,10 +1,12 @@
 <!doctype html>
-<!-- menger.sh — DESIGN-37 (the page of DESIGN-36, on MENGER-10's branch).
-     Static: this file, style.css, main.js, favicon.svg, fonts/ (Geist and
-     Geist Mono, OFL, latin), media/ (stills and clips of the real app, made
-     by scripts/landing-media.sh from a throwaway menger seeded with a sample
-     project) and guide/ (the reference). No inline style or script: the CSP
-     (menger.sh.caddy) allows neither, and nothing from another origin.
+<!-- menger.sh — DESIGN-45 (the page of DESIGN-44, on DESIGN-37's build; its
+     media DESIGN-41's). One promise, one story, three claims, one row to get
+     it; the guide holds the rest. Static: this file, style.css, main.js,
+     favicon.svg, grain.svg, fonts/ (Geist and Geist Mono, OFL, latin), media/
+     (stills and clips of the real app, made by scripts/landing-media.sh from
+     a throwaway menger seeded with a sample project) and guide/ (the
+     reference). No inline style or script: the CSP (menger.sh.caddy) allows
+     neither, and nothing from another origin.
      The hosted app's address lives in ONE place for the script: data-app-url
      below. main.js points every [data-login] link at <data-app-url>/login;
      the hrefs written here are what a reader without JavaScript follows, so
@@ -14,7 +16,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>menger — one live plan for people and agents</title>
-<meta name="description" content="menger keeps a software team's plan as a live tree of tickets. People decide what is ready; people and agents pick it up; every change reaches every screen as it happens.">
+<meta name="description" content="menger keeps a software team's plan as a live tree of tickets. You decide what is ready; people and agents claim it over the same wire; every screen shows it as it happens.">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#fbfbf9" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#101014" media="(prefers-color-scheme: dark)">
@@ -44,14 +46,12 @@
       <span>menger</span>
     </a>
     <nav class="top-nav" aria-label="Sections">
-      <a href="#how">How</a>
-      <a href="#tour">Tour</a>
-      <a href="#principles">Principles</a>
+      <a href="#story">Story</a>
+      <a href="#why">Why</a>
       <a href="#get">Get it</a>
       <a href="guide/">Guide</a>
     </nav>
     <div class="top-actions">
-      <a class="btn btn-ghost btn-small" data-download href="#get">Download</a>
       <a class="btn btn-primary btn-small" data-login href="https://app.menger.sh/login">Log in →</a>
     </div>
   </div>
@@ -59,21 +59,17 @@
 
 <main id="main">
 
-<!-- 1 · the hero: who it is for, the promise, the action — and the wall -->
+<!-- 1 · what is it: the promise, the action — and the wall -->
 <section class="hero" id="top" aria-labelledby="hero-title">
   <div class="wrap hero-grid">
     <div class="hero-copy">
       <p class="kicker after a1">For software teams of people and AI agents</p>
       <h1 id="hero-title" class="lines"><span class="l"><span class="l1"><em>One live plan</em> for</span></span><span class="l"><span class="l2"><em>everyone</em> doing</span></span><span class="l"><span class="l3">the <em>work.</em></span></span></h1>
-      <p class="lede after a2">menger keeps your plan as a tree of tickets. You decide
-        what is ready; people and agents pick it up; every change reaches every
-        open screen the moment it happens.</p>
+      <p class="lede after a2">You decide what is ready. People and agents claim it over the same wire. Every screen shows it as it happens.</p>
       <div class="actions after a2">
         <a class="btn btn-primary" data-login href="https://app.menger.sh/login">Log in to menger →</a>
-        <a class="btn btn-ghost" data-download href="#get">Download the desktop app</a>
       </div>
-      <div class="cmdline after a2"><span class="p" aria-hidden="true">$</span><code id="typed" data-line="cargo install menger --features embedded-app">cargo install menger --features embedded-app</code></div>
-      <p class="fine after a2"><a href="#tour">Watch the 60-second tour ↓</a> · open source · MIT licence</p>
+      <p class="fine after a2">open source · MIT licence</p>
     </div>
     <!-- The wall: the Menger carpet (MENGER-7's chains, flat). A scope
          divides into 8, then 64, then 512 pieces of work, and each cell
@@ -85,228 +81,78 @@
         <path class="carpet-still" d="M0 0h27v3h-27zM0 3h3v3h-3zM6 3h6v3h-6zM15 3h6v3h-6zM24 3h3v3h-3zM0 6h27v3h-27zM0 9h9v3h-9zM18 9h9v3h-9zM0 12h3v3h-3zM6 12h3v3h-3zM18 12h3v3h-3zM24 12h3v3h-3zM0 15h9v3h-9zM18 15h9v3h-9zM0 18h27v3h-27zM0 21h3v3h-3zM6 21h6v3h-6zM15 21h6v3h-6zM24 21h3v3h-3zM0 24h27v3h-27z"/>
       </svg>
       <div class="legend" aria-hidden="true"><span class="chip st-epic">scope</span><span class="chip st-pending">Pending</span><span class="chip st-ready">Ready</span><span class="chip st-coding">Coding</span><span class="chip st-in-review">In review</span><span class="chip st-complete">Complete</span></div>
-      <figcaption class="fig" id="wall-cap">[ <b>fig. 1</b> — one scope divides into 8, then 64, then 512 pieces of work; each cell takes the colour of its status; move the cursor over it ]</figcaption>
+      <figcaption class="fig" id="wall-cap">[ <b>fig. 1</b> — a scope divides into 8, 64, 512 pieces of work; each cell is the colour of its status ]</figcaption>
     </figure>
   </div>
 </section>
 
-<!-- 2 · the product, in a night window -->
-<section class="band board" data-tone="scope" aria-label="The app">
+<!-- 2 · show me: one ticket, start to finish -->
+<section class="band" id="story" data-tone="ready" data-n="01" aria-labelledby="story-h">
   <div class="wrap">
+    <div class="head reveal"><span class="n">01 — one ticket, start to finish</span><h2 id="story-h" class="lines"><span class="l"><span>Filed, promoted, claimed, merged.</span></span></h2></div>
     <figure class="panel reveal">
       <div class="window develop">
-        <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>menger — the board · app.menger.sh</span></div>
-        <picture><source type="image/avif" srcset="media/board.dark.1200.avif 1200w, media/board.dark.2400.avif 2400w" sizes="(min-width: 1248px) 1104px, calc(100vw - 48px)"><img src="media/board.dark.1200.webp" srcset="media/board.dark.1200.webp 1200w, media/board.dark.2400.webp 2400w" sizes="(min-width: 1248px) 1104px, calc(100vw - 48px)" width="1200" height="750" alt="The menger app: on the left, the nav — the plan as a tree, OFFLINE and SYNC with their tickets and statuses; on the right, the board — every ticket with its kind, status and what blocks it." fetchpriority="high" decoding="async"></picture>
+        <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-10 · the lifecycle</span></div>
+        <video class="clip" data-auto data-poster="media/tour-2-lifecycle.poster.webp" muted loop playsinline preload="none" controls width="1000" height="626" aria-label="A ticket page: OFFLINE-10 goes from Ready to Coding, gains a commit, goes to In Review, then Complete."><source src="media/tour-2-lifecycle.mp4" type="video/mp4"><source src="media/tour-2-lifecycle.webm" type="video/webm"></video>
       </div>
-      <figcaption class="fig">[ <b>fig. 2</b> — the real app, with a sample project: a mobile team shipping offline mode ]</figcaption>
+      <figcaption class="fig">[ <b>fig. 2</b> — OFFLINE-10, recorded from the real app: promoted, claimed, committed, reviewed, merged ]</figcaption>
     </figure>
-    <div class="stats reveal" aria-label="In numbers">
-      <div><b data-count="1">1</b><span>open connection per screen</span></div>
-      <div><b data-count="5">5</b><span>statuses, one owner each</span></div>
-      <div><b data-count="6">6</b><span>kinds of ticket</span></div>
-      <div><b data-count="0">0</b><span>refreshes, ever</span></div>
+    <div class="steps reveal" aria-label="The three moves">
+      <article data-tone="ready"><span class="num">01 · you</span><h3>You promote.</h3><p>Nothing starts until a person says so.</p><p class="chips"><span class="chip st-pending">Pending</span><i>→</i><span class="chip st-ready">Ready</span></p></article>
+      <article data-tone="coding"><span class="num">02 · an agent</span><h3>An agent claims.</h3><p>Coding the moment it starts; nothing is picked up twice.</p><p class="chips"><span class="chip st-ready">Ready</span><i>→</i><span class="chip st-coding">Coding</span></p></article>
+      <article data-tone="complete"><span class="num">03 · the merge</span><h3>The merge completes it.</h3><p>Every open screen shows it the same instant.</p><p class="chips"><span class="chip st-in-review">In review</span><i>→</i><span class="chip st-complete">Complete</span></p></article>
     </div>
   </div>
 </section>
 
-<!-- 3 · the problem -->
-<section class="band" id="problem" data-tone="pending" data-n="01" aria-labelledby="problem-h">
+<!-- 3 · what is different: three claims, each with its proof -->
+<section class="band" id="why" data-tone="scope" data-n="02" aria-labelledby="why-h">
   <div class="wrap">
-    <div class="head reveal"><span class="n">01 — the problem</span><h2 id="problem-h" class="lines"><span class="l"><span>Plans drift away from the work.</span></span></h2><p>Three ways a plan stops being true, and what menger does about each.</p></div>
-    <div class="cards reveal">
-      <article><span class="num">01.1</span><h3>The plan lives in one place, the work in another.</h3><p>The plan is a document or a board from last month. What is really being built lives in branches, chat and someone's head.</p></article>
-      <article><span class="num">01.2</span><h3>Status is whatever someone last typed.</h3><p>A ticket says “in progress” for three weeks. Is it blocked, finished, or forgotten? You find out by asking.</p></article>
-      <article><span class="num">01.3</span><h3>People and agents work blind to each other.</h3><p>An agent starts work a teammate already claimed. A teammate waits on a question an agent asked in a log nobody read.</p></article>
-    </div>
-  </div>
-</section>
-
-<!-- 4 · how it works: a pinned story — one ticket moves through the steps -->
-<section class="band how" id="how" data-tone="ready" data-n="02" aria-labelledby="how-h">
-  <div class="wrap"><div class="head reveal"><span class="n">02 — how it works</span><h2 id="how-h" class="lines"><span class="l"><span>Write the plan. Promote what's ready. Watch it land.</span></span></h2><p>Scroll: one ticket, OFFLINE-10, moves through the three steps on the right.</p></div></div>
-  <div class="pin" id="pin">
-    <div class="stage wrap">
-      <div class="left">
-        <div class="step on"><span class="n">step 01</span><h2>Write the plan as a tree.</h2><p>Start with a scope: the goal. Break it into builds, spikes, fixes and rollouts, and say what waits on what. Every piece is Pending until you say otherwise.</p></div>
-        <div class="step"><span class="n">step 02</span><h2>Promote what's ready.</h2><p>You move a ticket to Ready. Whoever starts it — a teammate or an agent — marks it Coding, so nothing is picked up twice.</p></div>
-        <div class="step"><span class="n">step 03</span><h2>Watch it land.</h2><p>Each commit links to the ticket it finishes. Review and merge move it to Complete, and every board and page shows it at once.</p></div>
-        <div class="prog" aria-hidden="true"><i id="prog"></i></div>
-      </div>
-      <div class="right">
-        <div class="mini" id="mini" aria-label="A sample board">
-          <div class="row"><span class="id">OFFLINE-1</span><span class="t">Offline mode</span><span class="k k-scope">scope</span><span class="chip st-epic">Epic</span></div>
-          <div class="row"><span class="id">OFFLINE-4</span><span class="t">Local SQLite cache</span><span class="k k-build">build</span><span class="chip st-complete">Complete</span></div>
-          <div class="row" data-ticket="OFFLINE-10"><span class="id">OFFLINE-10</span><span class="t">Photos attached offline are lost if the app is killed</span><span class="k k-gap">gap</span><span class="chip st-pending" id="st">Pending</span></div>
-          <div class="row"><span class="id">OFFLINE-11</span><span class="t">Background sync on iOS</span><span class="k k-build">build</span><span class="chip st-pending">Pending</span></div>
-          <div class="row"><span class="id">SYNC-2</span><span class="t">Delta endpoint</span><span class="k k-build">build</span><span class="chip st-coding">Coding</span></div>
-          <div class="cap" id="cap">the board — <b>OFFLINE-10</b> is Pending: filed, not yet promoted</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- 5 · the 60-second tour -->
-<section class="band tour" id="tour" data-tone="review" data-n="03" aria-labelledby="tour-h">
-  <div class="wrap">
-    <div class="head reveal"><span class="n">03 — the 60-second tour</span><h2 id="tour-h" class="lines"><span class="l"><span>Five short clips, recorded from the real app.</span></span></h2></div>
-    <div class="tour-grid reveal">
-      <figure class="panel tour-stage">
-        <div class="window develop">
-          <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span id="tour-title">Find what can start</span></div>
-          <video id="tour-video" controls muted playsinline preload="none" width="1200" height="750"
-                 poster="media/tour-1-find.poster.webp" aria-describedby="tour-cap">
-            <source src="media/tour-1-find.mp4" type="video/mp4">
-            <source src="media/tour-1-find.webm" type="video/webm">
-          </video>
-        </div>
-        <figcaption class="fig" id="tour-cap">[ <b>fig. 3</b> — type <code>ready</code> into the board's filter: it narrows to the four tickets that can start now ]</figcaption>
-      </figure>
-      <ol class="chapters" aria-label="Chapters">
-        <li><a href="media/tour-1-find.mp4" data-clip="tour-1-find" data-w="1200" data-h="750" aria-current="true"
-               data-cap="[ &lt;b&gt;fig. 3&lt;/b&gt; — type &lt;code&gt;ready&lt;/code&gt; into the board's filter: it narrows to the four tickets that can start now ]"><b>Find what can start</b><span>a filter, typed</span></a></li>
-        <li><a href="media/tour-2-lifecycle.mp4" data-clip="tour-2-lifecycle" data-w="1000" data-h="626"
-               data-cap="[ &lt;b&gt;fig. 3&lt;/b&gt; — an agent claims OFFLINE-10, links its commit and hands it to review; the merge marks it Complete, and the page follows without a reload ]"><b>Work moves through its lifecycle</b><span>coding → review → complete</span></a></li>
-        <li><a href="media/tour-3-live.mp4" data-clip="tour-3-live" data-w="1280" data-h="606"
-               data-cap="[ &lt;b&gt;fig. 3&lt;/b&gt; — two windows: a status changed on the board (left) moves the cards on the wave board (right) the same instant ]"><b>Every screen, live</b><span>two windows, one change</span></a></li>
-        <li><a href="media/tour-4-decide.mp4" data-clip="tour-4-decide" data-w="1200" data-h="800"
-               data-cap="[ &lt;b&gt;fig. 3&lt;/b&gt; — the ticket asks which conflict policy to use; the owner picks one and submits, and the answer is recorded in the ticket ]"><b>Decide inside the ticket</b><span>a question, answered</span></a></li>
-        <li><a href="media/tour-5-jump.mp4" data-clip="tour-5-jump" data-w="1200" data-h="750"
-               data-cap="[ &lt;b&gt;fig. 3&lt;/b&gt; — press / and type a few letters: the palette finds the ticket by title and opens it ]"><b>Jump anywhere</b><span>the palette, from the keyboard</span></a></li>
-      </ol>
-    </div>
-    <!-- MENGER-11 · the live-demo slot: stays hidden and empty until the
-         spike finds a safe way to put the working app on this page. -->
-    <div id="live-demo" class="demo-slot" data-slot="MENGER-11" hidden></div>
-  </div>
-</section>
-
-<!-- 6 · six principles: a numbered ledger, each in its colour -->
-<section class="band" id="principles" data-tone="scope" data-n="04" aria-labelledby="principles-h">
-  <div class="wrap">
-    <div class="head reveal"><span class="n">04 — six principles</span><h2 id="principles-h" class="lines"><span class="l"><span>menger has opinions about how a plan should behave.</span></span></h2><p>Each one is something you can see in the app.</p></div>
+    <div class="head reveal"><span class="n">02 — what is different</span><h2 id="why-h" class="lines"><span class="l"><span>Three opinions, each visible in the app.</span></span></h2></div>
     <div class="ledger">
       <article class="row reveal" data-tone="scope" id="p-tree" aria-labelledby="p-tree-h">
         <span class="n" aria-hidden="true">01</span>
-        <div class="p-text"><h3 id="p-tree-h">A plan is a tree.</h3><p>Scopes break into work, and work breaks down until each piece fits one person or one agent. What a piece produces — a spike's answer, a benchmark, a report — is filed beneath it, so every result shows where it came from.</p><a class="more" href="guide/#what">Learn more about tickets and kinds</a></div>
+        <div class="p-text"><h3 id="p-tree-h">A plan is a tree.</h3><p>Work breaks down until a piece fits one person or one agent; what it produces is filed beneath it.</p><a class="more" href="guide/#what">Tickets and kinds</a></div>
         <figure class="panel p-visual">
           <div class="window develop"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the nav</span></div>
-            <picture><source type="image/avif" srcset="media/nav.dark.720.avif"><img src="media/nav.dark.720.webp" width="720" height="960" alt="The nav: the OFFLINE scope with its builds, spikes and gaps beneath it, its findings doc under the spike that produced it, and the SYNC scope nested inside." loading="lazy" decoding="async"></picture></div>
-          <figcaption class="fig">[ <b>fig. 4</b> — the OFFLINE plan as a tree: the work under the goal, the spike's findings filed beneath the spike, SYNC nested inside ]</figcaption>
-        </figure>
-      </article>
-      <article class="row reveal" data-tone="pending" id="p-status" aria-labelledby="p-status-h">
-        <span class="n" aria-hidden="true">02</span>
-        <div class="p-text"><h3 id="p-status-h">Status is a contract.</h3><p>Each status means one thing and has one owner: people promote <span class="chip st-pending">Pending</span> to <span class="chip st-ready">Ready</span>, a worker sets <span class="chip st-coding">Coding</span> the moment they start and <span class="chip st-in-review">In Review</span> when the work is committed, and whoever merges marks it <span class="chip st-complete">Complete</span>. So when the board says Coding, someone really is.</p><a class="more" href="guide/#board">Learn more about the lifecycle</a></div>
-        <figure class="panel p-visual">
-          <div class="window develop"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-10 · the lifecycle</span></div>
-            <video class="clip" data-auto data-poster="media/tour-2-lifecycle.poster.webp" muted loop playsinline preload="none" controls width="1000" height="626" aria-label="A ticket page: OFFLINE-10 goes from Ready to Coding, gains a commit, goes to In Review, then Complete."><source src="media/tour-2-lifecycle.mp4" type="video/mp4"><source src="media/tour-2-lifecycle.webm" type="video/webm"></video></div>
-          <figcaption class="fig">[ <b>fig. 5</b> — an agent claims OFFLINE-10, links its commit and hands it to review; the merge completes it ]</figcaption>
-        </figure>
-      </article>
-      <article class="row reveal" data-tone="ready" id="p-live" aria-labelledby="p-live-h">
-        <span class="n" aria-hidden="true">03</span>
-        <div class="p-text"><h3 id="p-live-h">Everything is live.</h3><p>Every screen holds one open connection, and the server pushes each change down it as it happens: nothing polls, nothing waits for a refresh. Everyone looking at the plan sees the same plan.</p><a class="more" href="guide/#board">Learn more about the board</a></div>
-        <figure class="panel p-visual">
-          <div class="window develop"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>two windows</span></div>
-            <video class="clip" data-auto data-poster="media/tour-3-live.poster.webp" muted loop playsinline preload="none" controls width="1280" height="606" aria-label="Two browser windows side by side: OFFLINE-6 is set to Complete on the board on the left, and the wave board on the right moves it to done and pulls the work it unblocked forward."><source src="media/tour-3-live.mp4" type="video/mp4"><source src="media/tour-3-live.webm" type="video/webm"></video></div>
-          <figcaption class="fig">[ <b>fig. 6</b> — left: a status changed on the board; right: the wave board moves in the same instant ]</figcaption>
+            <picture><source type="image/avif" srcset="media/nav.dark.720.avif"><img class="portrait" src="media/nav.dark.720.webp" width="720" height="960" alt="The nav: the OFFLINE scope with its builds, spikes and gaps beneath it, its findings doc under the spike that produced it, and the SYNC scope nested inside." loading="lazy" decoding="async"></picture></div>
+          <figcaption class="fig">[ <b>fig. 3</b> — the OFFLINE plan as a tree, SYNC nested inside ]</figcaption>
         </figure>
       </article>
       <article class="row reveal" data-tone="coding" id="p-wire" aria-labelledby="p-wire-h">
-        <span class="n" aria-hidden="true">04</span>
-        <div class="p-text"><h3 id="p-wire-h">One wire for people, scripts and agents.</h3><p>Everything menger does is a method on one Plexus RPC connection, and the app has no private side door. The web app, the <code>synapse</code> command line and your agents make the same calls, so anything you can click, a script can do.</p><a class="more" href="guide/#cli">Learn more about the command line</a></div>
+        <span class="n" aria-hidden="true">02</span>
+        <div class="p-text"><h3 id="p-wire-h">One wire for people, scripts and agents.</h3><p>Everything menger does is a method on one connection; the app has no side door. Anything you can click, an agent can call.</p><a class="more" href="guide/#cli">The command line</a></div>
         <figure class="term p-visual" aria-labelledby="wire-cap">
-<pre class="cmd" data-type><code><span class="c"># what can start now?</span>
-synapse -P 4455 menger tickets ready_set --summary true
-<span class="o">summary:
-  id: OFFLINE-7
-  kind: spike
-  status: Ready
-  title: Conflict policy for a note edited on two devices
-  …</span>
-<span class="c"># claim one, do the work, hand it over</span>
+<pre class="cmd" data-type><code><span class="c"># claim it, do the work, hand it over</span>
 synapse -P 4455 menger tickets set_status --id OFFLINE-10 --status Coding
 synapse -P 4455 menger tickets link_commits --id OFFLINE-10 --commits a7c31f0
 synapse -P 4455 menger tickets set_status --id OFFLINE-10 --status 'In Review'</code></pre>
-          <figcaption class="fig" id="wire-cap">[ <b>fig. 7</b> — the calls behind the lifecycle clip, typed as an agent would make them; the answer cut after its first ticket ]</figcaption>
+          <figcaption class="fig" id="wire-cap">[ <b>fig. 4</b> — the calls behind fig. 2 ]</figcaption>
         </figure>
       </article>
       <article class="row reveal" data-tone="review" id="p-decide" aria-labelledby="p-decide-h">
-        <span class="n" aria-hidden="true">05</span>
-        <div class="p-text"><h3 id="p-decide-h">Decisions live inside the work.</h3><p>When a ticket needs a call, it asks the owner right there: one choice, several, or a written reply, with each option's cost and a recommendation. The answer is kept with its history, next to the work that depends on it.</p><a class="more" href="guide/#inputs">Learn more about inputs</a></div>
+        <span class="n" aria-hidden="true">03</span>
+        <div class="p-text"><h3 id="p-decide-h">Decisions live inside the work.</h3><p>A ticket asks the owner right there, each option with its cost; the answer stays with the work.</p><a class="more" href="guide/#inputs">Inputs</a></div>
         <figure class="panel p-visual">
           <div class="window develop"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-7 · a decision</span></div>
-            <video class="clip" data-auto data-poster="media/tour-4-decide.poster.webp" muted loop playsinline preload="none" controls width="1200" height="800" aria-label="A ticket asks: when two offline edits collide, which one wins? The owner picks Merge per field, the recommended option, and submits; the decision shows as answered."><source src="media/tour-4-decide.mp4" type="video/mp4"><source src="media/tour-4-decide.webm" type="video/webm"></video></div>
-          <figcaption class="fig">[ <b>fig. 8</b> — the owner picks an option and submits; agents ask, the owner answers ]</figcaption>
-        </figure>
-      </article>
-      <article class="row reveal" data-tone="complete" id="p-run" aria-labelledby="p-run-h">
-        <span class="n" aria-hidden="true">06</span>
-        <div class="p-text"><h3 id="p-run-h">Yours to run.</h3><p>Use the hosted app, the desktop app — on its own or connected to a server — or one binary on your own machine with a SQLite file. menger is open source under the MIT licence, so you can always run it yourself.</p><a class="more" href="guide/#self-host">Learn more about running your own</a></div>
-        <figure class="term p-visual" aria-labelledby="run-cap">
-<pre class="cmd"><code>cargo install menger --features embedded-app
-menger --db-path ~/menger/tickets.db
-<span class="c"># the app      http://127.0.0.1:4456/
-# WebSocket    ws://127.0.0.1:4455   (synapse -P 4455 …)
-# REST + SSE   http://127.0.0.1:4457</span></code></pre>
-          <figcaption class="fig" id="run-cap">[ <b>fig. 9</b> — one binary, the web app built in, one SQLite file as the record ]</figcaption>
+            <picture><source type="image/avif" srcset="media/decision.dark.1200.avif 1200w, media/decision.dark.2400.avif 2400w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)"><img src="media/decision.dark.1200.webp" srcset="media/decision.dark.1200.webp 1200w, media/decision.dark.2400.webp 2400w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)" width="1200" height="750" alt="A ticket asks: when two offline edits collide, which one wins? Three options with their costs, one recommended." loading="lazy" decoding="async"></picture></div>
+          <figcaption class="fig">[ <b>fig. 5</b> — agents ask, the owner answers ]</figcaption>
         </figure>
       </article>
     </div>
   </div>
 </section>
 
-<!-- 7 · get it -->
-<section class="band get" id="get" data-tone="complete" data-n="05" aria-labelledby="get-h">
+<!-- 4 · how do I get it: one row -->
+<section class="band get" id="get" data-tone="complete" data-n="03" aria-labelledby="get-h">
   <div class="wrap">
-    <div class="head reveal"><span class="n">05 — get menger</span><h2 id="get-h" class="lines"><span class="l"><span>In the browser, on your desktop, or on your own machine.</span></span></h2></div>
+    <div class="head reveal"><span class="n">03 — get menger</span><h2 id="get-h" class="lines"><span class="l"><span>In the browser, on your desktop, or your own machine.</span></span></h2></div>
     <div class="cards reveal">
-      <article class="get-card" data-tone="ready" aria-labelledby="get-web"><span class="label">Browser</span><h3 id="get-web">Sign in on menger's own page.</h3><p>An email code, Google, GitHub or Apple, or your company's single sign-on. Add an authenticator app if you like.</p><a class="btn btn-primary" data-login href="https://app.menger.sh/login">Log in →</a></article>
-      <article class="get-card" data-tone="coding" aria-labelledby="get-desk"><span class="label">Desktop · Linux · macOS · Windows</span><h3 id="get-desk">Keep your tickets on this computer, or connect to a server.</h3><p>It updates itself, and asks first.</p><a class="btn btn-primary" id="dl-main" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Download menger ↓</a><p class="dl-hint" id="dl-hint">Every build is on the latest release page.</p></article>
-      <article class="get-card" data-tone="complete" aria-labelledby="get-own"><span class="label">Your own machine</span><h3 id="get-own">One command with Rust installed.</h3><p>Then open <code>http://127.0.0.1:4456/</code>.</p>
-<pre class="cmd"><code>cargo install menger --features embedded-app</code></pre>
-        <a class="btn btn-ghost" href="guide/#self-host">How to run it</a></article>
+      <article class="get-card" data-tone="ready" aria-labelledby="get-web"><span class="label">Browser</span><h3 id="get-web">Sign in on menger's own page.</h3><a class="btn btn-primary" data-login href="https://app.menger.sh/login">Log in →</a></article>
+      <article class="get-card" data-tone="coding" aria-labelledby="get-desk"><span class="label">Desktop · Linux · macOS · Windows</span><h3 id="get-desk">Your tickets on this computer, or a server's.</h3><a class="btn btn-primary" id="dl-main" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Download menger ↓</a><p class="dl-hint" id="dl-hint">Every build is on the latest release page.</p></article>
+      <article class="get-card" data-tone="complete" aria-labelledby="get-own"><span class="label">Your own machine</span><h3 id="get-own">One command with Rust installed.</h3><div class="cmdline"><span class="p" aria-hidden="true">$</span><code id="typed" data-line="cargo install menger --features embedded-app">cargo install menger --features embedded-app</code></div><p class="dl-hint">Then open <code>127.0.0.1:4456</code>.</p></article>
     </div>
-
-    <details class="builds reveal">
-      <summary>Which file to download, and the first-open warning</summary>
-      <div class="oses">
-        <article class="os" data-os="linux" aria-labelledby="os-linux">
-          <h3 id="os-linux">Linux</h3>
-          <ul>
-            <li><b>AppImage</b> — most distributions: <code>chmod +x menger_*_amd64.AppImage</code>, then run it</li>
-            <li><b>.deb</b> — Debian, Ubuntu</li>
-            <li><b>.rpm</b> — Fedora, openSUSE</li>
-          </ul>
-          <a class="btn btn-ghost btn-small" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Linux builds</a>
-        </article>
-        <article class="os" data-os="mac" aria-labelledby="os-mac">
-          <h3 id="os-mac">macOS</h3>
-          <ul>
-            <li><b>Apple Silicon</b> — <code>menger_*_aarch64.dmg</code></li>
-            <li><b>Intel</b> — <code>menger_*_x64.dmg</code></li>
-          </ul>
-          <p class="warn">First open: macOS says the developer cannot be verified.
-            Control-click the app, choose <em>Open</em>, then <em>Open</em> again
-            (or <em>System Settings → Privacy &amp; Security → Open Anyway</em>).</p>
-          <a class="btn btn-ghost btn-small" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">macOS builds</a>
-        </article>
-        <article class="os" data-os="windows" aria-labelledby="os-win">
-          <h3 id="os-win">Windows</h3>
-          <ul>
-            <li><b>Installer</b> — <code>menger_*_x64-setup.exe</code></li>
-            <li><b>MSI</b> — <code>menger_*_x64_en-US.msi</code>, for managed installs</li>
-          </ul>
-          <p class="warn">First run: SmartScreen says it protected your PC. Choose
-            <em>More info</em>, then <em>Run anyway</em>.</p>
-          <a class="btn btn-ghost btn-small" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Windows builds</a>
-        </article>
-      </div>
-      <p class="note">The builds are signed for the self-updater, not yet by
-        Apple or Microsoft — hence the warning on first open. Mobile apps are
-        coming.</p>
-    </details>
+    <p class="fine reveal">Which file, the first-open warning, running your own: <a href="guide/">the guide →</a></p>
   </div>
 </section>
 
@@ -314,10 +160,6 @@ menger --db-path ~/menger/tickets.db
 
 <footer class="foot">
   <div class="wrap">
-    <div class="close reveal">
-      <div><h2>Put your next plan in menger.</h2><p>Start with one goal and the work under it. Promote what is ready, and watch it land.</p></div>
-      <div class="actions"><a class="btn btn-primary" data-login href="https://app.menger.sh/login">Log in to menger →</a><a class="btn btn-ghost" href="guide/">Read the guide</a></div>
-    </div>
     <p class="giant reveal" aria-hidden="true"><svg class="mark" viewBox="0 0 27 27" focusable="false"><rect class="c1" x="0" y="0" width="9" height="9"/><rect class="c2" x="9" y="0" width="9" height="9"/><rect class="c3" x="18" y="0" width="9" height="9"/><rect class="c4" x="0" y="9" width="9" height="9"/><rect class="c6" x="18" y="9" width="9" height="9"/><rect class="c7" x="0" y="18" width="9" height="9"/><rect class="c8" x="9" y="18" width="9" height="9"/><rect class="c9" x="18" y="18" width="9" height="9"/></svg><span>menger</span></p>
     <nav class="foot-row" aria-label="Elsewhere">
       <span class="foot-brand">menger — MIT licence</span>
