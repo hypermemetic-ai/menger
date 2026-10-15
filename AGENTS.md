@@ -476,8 +476,14 @@ synapse -P 4455 menger tickets list --filter 'queued now or queued blocking' --s
 `watch` carries `queued` / `unqueued` / `snoozed`; `history --id X` ends with
 the ticket's `queue_record`s (who queued it, why, at what urgency). `queued`
 and `queued <urgency>` are filter cells; the Needs you filter is `queued or
-asking or label needs-you`. Ask at `now` or `blocking` only when it is so —
-a queue that is always loud is a queue the owner learns to ignore.
+asking or label needs-you`.
+
+**Work the owner told you to do is urgent** (owner, 2026-10-15): a question
+that stops it is filed and then queued at once — `blocking` with `--input`
+when you are idle until it is answered, `now` when you can carry on around
+it. Elsewhere ask at `now` or `blocking` only when it is so — a queue that
+is always loud is a queue the owner learns to ignore. menger-skills
+`asking` has the table.
 
 ## Conventions
 
