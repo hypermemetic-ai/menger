@@ -1722,6 +1722,19 @@ pub(super) fn queued_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(
     })
 }
 
+/// APP-23: one write that touches the tickets at `keys` and moves them out
+/// of the queue — the watches asking either, before it, once each.
+pub(super) fn touch_or_queued_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched() || w.lens.asks_queued()).collect();
+    before_of(watches, cache, || {
+        let mut t = Touched::default();
+        for (e, s) in keys {
+            t.ticket(e, *s);
+        }
+        t
+    })
+}
+
 impl Store {
     /// FILTER-30: [`touch_before_with`] over the store's watches.
     pub(super) fn touch_before(&self, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {

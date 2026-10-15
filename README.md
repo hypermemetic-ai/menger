@@ -1922,7 +1922,7 @@ ticket's write does touches a comment.
 | method | yields |
 |---|---|
 | `comments.add { anchor, body, author? }` | `comment { id, state, author, at, anchor, body }` — the comment as kept: the next id, `open`, the time (unix seconds), `owner` unless `author` is given. An empty body, a blank author, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept |
-| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case). Blank is none. A page is 500 unless `limit` says, never more than 1,000 (ACCESS-29). An unknown state, or an `after` naming no comment, is one in-band `error` |
+| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, intent?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `intent` `comment` / `changes` (APP-23: a change request — a comment carries `intent: changes`, a plain one carries no `intent`); `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case). Blank is none. A page is 500 unless `limit` says, never more than 1,000 (ACCESS-29). An unknown state, or an `after` naming no comment, is one in-band `error` |
 | `comments.resolve { id }` · `comments.reopen { id }` | `comment` — the state flipped; already there, the comment as it is (nothing written or broadcast); an id naming no comment is an in-band `error` |
 | `comments.watch {}` | open-ended stream of `added { comment }`, `resolved { comment }`, `reopened { comment }`; `lagged { missed }` as `tickets.watch` |
 
@@ -1957,6 +1957,23 @@ marked "moved" and pinned to its ticket's heading. `#/comments` lists every
 comment, filtered by the route's query (`?ticket=&under=&state=&author=&text=`),
 each linking back to its page and element (`…?comment=<id>`); a ticket page's
 side panel counts its open ones. All of it is live through `comments.watch`.
+
+**A ticket's Conversation** (APP-22): a ticket page ends with its comments,
+oldest first — every comment whose anchor names the ticket, whole-ticket and
+pinned alike (a pinned one says what it is on and links to its pin), each
+with its author, time, body as markdown and Resolve / Reopen — then a box,
+"Comment on <ID> — Ctrl+Enter sends" (`c` on the page focuses it; Esc
+leaves it). A comment sent there is on the ticket as a whole: its anchor is
+`{ route: "#/ticket/<ID>", path: "conversation", label: "Conversation",
+ticket: "<ID>" }`, no pin is drawn for it in annotation mode, and its link
+back (`?comment=<id>`) flashes its row. Agents read them as any comment:
+
+```sh
+synapse -P 4455 menger comments list --ticket APP-22
+synapse -P 4455 -p '{"ticket": "APP-22", "path": "conversation"}' menger comments list   # whole-ticket only
+synapse -P 4455 menger comments add --anchor.route '#/ticket/APP-22' --anchor.path conversation \
+  --anchor.label Conversation --anchor.ticket APP-22 --body "not what I meant: do X instead"
+```
 
 ### History and cancellation (MENGER-13)
 
@@ -2142,7 +2159,8 @@ seconds until opened); a new one slides up into place. A click raises a
 sheet above the tray — the urgency, who queued it and when, the reason, the
 named input's question answerable in place (recorded with source `app`;
 answering takes the ticket out of the queue, the input stays the agent's to
-close), *open the ticket*, *snooze 10m* and *done with it*. A hidden tab's
+close), **request changes** (APP-23, below), *open the ticket*, *snooze 10m*
+and *done with it*. A hidden tab's
 title carries the count, `(2) menger`. Motion follows the setting: `calm`
 keeps the slide and drops the nudge, `none` moves nothing.
 
@@ -2159,6 +2177,8 @@ synapse -P 4455 menger tickets unqueue --id MENGER-41
 | `tickets.queue { id, urgency, reason, input?, source? }` | `queued { entry, ticket, action }` — the entry as the write leaves it (`ticket`, `urgency`, `reason`, `input`, `by`, `name`, `source`, `queued_unix` — when first queued —, `asked_unix`, `snoozed_until_unix`), its ticket's row, and `action`: `queued`, `raised` (a higher urgency) or `requeued` (the urgency kept: never lowered; the reason and an input given are the new ones; a snooze ends). `blocking` requires `input`, an input the ticket declares and has not closed. A blank reason, an unknown urgency, an input the ticket does not hold or has closed is one `error`; a ticket that is none `not_found` |
 | `tickets.unqueue { id, source? }` | `unqueued { id, entry, action: unqueued, by, at_unix }`, or `not_queued { id }` (nothing written) |
 | `tickets.snooze { id, minutes, source? }` | `snoozed { entry, ticket }` — off the tray until `snoozed_until_unix` (1 minute to a week), still queued (`queued` holds). Not queued: one `error` |
+| `tickets.request_changes { id, body, source? }` | APP-23: `changes_requested { id, comment, entry, by, at_unix }` — one write: `body` kept as a comment on the ticket's conversation (APP-22's anchor, `path: conversation`) with `intent: changes`, signed as `comments.add` signs, and the entry taken out with `action: changes_requested`, its queue record naming the comment (`comment`). The named input stays open: a change request is not an answer. `watch` hears `unqueued` (that action), `comments.watch` the comment's `added`. A ticket not queued, a blank body: one `error`, nothing written |
+| `tickets.await_reply { id, since?, input?, timeout_minutes? }` | APP-24: `waiting { ticket, queued? }`, then one `replied { ticket, reply }` (`reply.kind`: `answered`, `changes_requested`, `commented`, `unqueued`, `ended`) or `timed_out { ticket }`, then the end; a ticket that is none `not_found`. Below |
 | `tickets.queued { snoozed? }` | a `queue_row { entry, ticket }` per entry in the caller's reach, most urgent first, then the oldest — without the snoozed ones when `snoozed: false` — then `queue_end { count, snoozed, now_unix }` |
 
 A `close_input` of the input an entry names takes it out in the same write:
@@ -2169,13 +2189,59 @@ answered from the queue's kept entries — a snoozed ticket is still queued —
 on every filtered read and watch; the Needs you filter (`g n`, on the nav)
 is `queued or asking or label needs-you`. `history { id }` yields the ticket's **queue records**
 after its transitions — `queue_record { record }`: `action` (queued,
-raised, requeued, snoozed, unqueued, closed), `urgency`, `reason`, `input`,
-`actor`, `name`, `source`, `at_unix`, `until_unix` for a snooze. They are a
+raised, requeued, snoozed, unqueued, closed, changes_requested), `urgency`, `reason`, `input`,
+`actor`, `name`, `source`, `at_unix`, `until_unix` for a snooze, `comment`
+for a change request. They are a
 log of their own (`queue_log`), not transitions: `changed` and `by` do not
 read them, and an older release, which never looks at the queue's tables
 (`queue`, `queue_log`, gained empty on open), still opens the file. Under
-login `queue`, `unqueue` and `snooze` are an editor's, on the ticket;
+login `queue`, `unqueue`, `snooze` and `request_changes` are an editor's, on the ticket;
 `queued` a viewer's, answering only from where it is held.
+
+**Request changes** (APP-23; owner, 2026-10-15: *"the queue should give me
+the option to request changes to the underlying ticket"*): in the sheet,
+beside the input's answer (alone when none is named), *request changes*
+opens a box — Ctrl+Enter sends, Esc closes it — and the note becomes
+`tickets.request_changes`: drawn on the ticket page's Conversation with a
+"changes requested" mark, the tab gone, the ticket handed back. The agent
+that queued it hears `unqueued` (action `changes_requested`) and the
+comment, acts, and queues it again — a new arrival in the tray. A file
+gains the comments' `intent` and the queue log's `comment` columns in place
+on its first open; one way: an older release reads `changes_requested` as no
+action it knows and refuses the file (promote's rollback restores the backup
+it took first).
+
+```sh
+synapse -P 4455 menger tickets request_changes --id APP-21 --body "Not a granter: the agent's owner. Rework the options."
+synapse -P 4455 menger comments list --intent changes --state open
+```
+
+**After queueing, an agent waits** (APP-24; owner, 2026-10-15: *"when
+queued an agent should then listen to that ticket for a response"*):
+`tickets.await_reply { id, since?, input?, timeout_minutes? }` streams
+`waiting { ticket, queued? }` at once, then nothing until a response, then
+one `replied { ticket, reply }`, and ends. A response, at or after `since`
+(default: the call's own time, what was already there set aside), is the
+first of: an input on the ticket answered (`kind: answered` — `input`,
+`value`, `rationale`, `source`, `at_unix`; with `input` given, only that
+one), a change request (`kind: changes_requested`, the `comment`), a comment
+on the ticket by someone other than the caller (`kind: commented`), the
+ticket unqueued by someone other than the caller (`kind: unqueued` —
+`action`, `by`, `at_unix`), the ticket canceled or deleted (`kind: ended` —
+`how`, `by`, `at_unix`). A snooze, a queueing or a raise is none. "Other
+than the caller" is by principal; with login off everyone is `anonymous`
+and nothing is set aside. `timeout_minutes` ends a wait with nothing as
+`timed_out { ticket }`. It is answered from the cache, asked again at every
+change on either channel (both subscribed before the first ask), so a
+response between the lookup and the subscription is neither lost nor said
+twice; a dropped connection loses nothing when the agent calls again with
+`since`. Under login it is a viewer's: the caller must see the ticket, and
+hears only the comments it may see.
+
+```sh
+synapse -P 4455 -j menger tickets await_reply --id APP-21 --input agent-owner --timeout-minutes 240
+synapse -P 4455 -j menger tickets await_reply --id APP-21 --since 1792072000
+```
 
 ### Deployments (DEPLOY-11)
 

@@ -262,6 +262,7 @@ mod carpet;
 mod cite;
 mod comments;
 mod comments_page;
+mod conversation;
 mod components;
 mod counts;
 mod deploys;
@@ -1539,6 +1540,7 @@ fn ticket_view(
     let me = header_id.clone();
     // MENGER-13: its history, under its children.
     let history_id = header_id.clone();
+    let conversation_id = header_id.clone();
     // ACT-10: the aside's status, kind and severity are the page's ticket
     // too — a right-click on one opens the one menu, its chooser first.
     let (status_host, kind_host, sev_host) = (header_id.clone(), header_id.clone(), header_id.clone());
@@ -1578,6 +1580,8 @@ fn ticket_view(
                 {hidden_view}
             </section>
             <history::HistoryView ticket=history_id />
+            // APP-22: the ticket's comments, and a box for one on it as a whole.
+            <conversation::Conversation ticket=conversation_id />
         </article>
         <aside class="props">
             <dl class="meta">

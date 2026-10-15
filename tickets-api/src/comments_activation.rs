@@ -182,7 +182,7 @@ impl Comments {
     /// `under`, read as the tree stands now), `route` (exactly), `path` (a
     /// prefix of the anchor's), `state` (`open` or `resolved`), `author`
     /// (exactly) and `text` (in the body, the label or the excerpt, whatever
-    /// its ASCII case). A blank filter is none. An unknown `state`, or an
+    /// its ASCII case) and `intent` (APP-23: `comment` or `changes`). A blank filter is none. An unknown `state`, or an
     /// `after` that names no comment, is one in-band `error` and nothing
     /// else. From the cache.
     #[plexus_macros::method(
@@ -196,10 +196,11 @@ impl Comments {
             state = "Only comments in this state: open | resolved (optional)",
             author = "Only comments by this author, exactly (optional)",
             text = "Only comments with this text in the body, the label or the excerpt, any ASCII case (optional)",
+            intent = "Only comments of this intent: comment | changes (APP-23: a change request) (optional)",
             after = "Cursor: start strictly after (older than) this comment id (optional)",
             limit = "At most this many comments (default 500, at most 1000); the page event carries the next cursor (optional)"
         ),
-        values(state = ["open", "resolved"]),
+        values(state = ["open", "resolved"], intent = ["comment", "changes"]),
         example(note = "open comments under FILTER that mention a title", params = r#"{"under": "FILTER", "state": "open", "text": "title"}"#)
     )]
     pub async fn list(
@@ -211,6 +212,7 @@ impl Comments {
         state: Option<String>,
         author: Option<String>,
         text: Option<String>,
+        intent: Option<String>,
         after: Option<u64>,
         limit: Option<u32>,
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
@@ -239,7 +241,15 @@ impl Comments {
                     return;
                 }
             };
-            let q = CommentQuery { ticket, under, route, path, state, author, text };
+            let intent = match intent.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::parse::<crate::comments::CommentIntent>) {
+                None => None,
+                Some(Ok(i)) => Some(i),
+                Some(Err(message)) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
+            let q = CommentQuery { ticket, under, route, path, state, author, text, intent };
             let limit = crate::limits::page(limit, crate::limits::COMMENTS_PAGE_DEFAULT, crate::limits::COMMENTS_PAGE_MAX);
             match store.comments(&q, after, Some(limit)) {
                 Ok(page) => {

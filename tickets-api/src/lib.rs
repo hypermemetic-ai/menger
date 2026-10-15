@@ -62,7 +62,7 @@ pub mod labels;
 /// MENGER-39: the queue — a ticket put in front of the owner with an
 /// urgency. Wasm-safe: the store keeps it, the app's tray draws it.
 pub mod queue;
-pub use queue::{QueueAction, QueueEntry, QueueRecord, Urgency};
+pub use queue::{Ending, QueueAction, QueueEntry, QueueRecord, Reply, Urgency};
 pub use types::{
     is_menger_doc, is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
     InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, PartDoc, SlotDoc, Kind, Marked, Placement,
@@ -96,7 +96,7 @@ pub use activation::Tickets;
 /// [`CommentState`], [`CommentsEvent`] — and the rules `add` keeps them by.
 /// Wasm-safe, like [`types`].
 pub mod comments;
-pub use comments::{Anchor, Comment, CommentState, CommentsEvent};
+pub use comments::{Anchor, Comment, CommentIntent, CommentState, CommentsEvent};
 /// COMMENT-2: the `comments` activation, declared once as `tickets` is: the
 /// server's [`Comments`] and the browser's [`CommentsClient`].
 pub mod comments_activation;

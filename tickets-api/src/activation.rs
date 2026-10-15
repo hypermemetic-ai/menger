@@ -102,6 +102,10 @@ mod delete;
 #[cfg(feature = "server")]
 use delete::*;
 #[cfg(feature = "server")]
+mod await_reply;
+#[cfg(feature = "server")]
+use await_reply::await_reply_stream;
+#[cfg(feature = "server")]
 mod queue;
 #[cfg(feature = "server")]
 use queue::*;
@@ -133,12 +137,12 @@ mod tests;
         viewer = [
             "health", "get", "list", "ready_set", "find", "search", "member", "groups", "components",
             "inputs", "extents", "counts", "facets", "tree", "waves", "waves_under", "waves_to", "blockers", "watch", "history",
-            "queued"
+            "queued", "await_reply"
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
             "unlink_commits", "label", "update", "update_many", "answer", "clear_answer", "close_input", "reopen_input",
-            "queue", "unqueue", "snooze", "reshortcode"
+            "queue", "unqueue", "snooze", "request_changes", "reshortcode"
         ],
     )
 )]
@@ -2016,6 +2020,29 @@ impl Tickets {
     )]
     pub async fn snooze(&self, auth: Option<&AuthContext>, reach: Reach, id: String, minutes: u32, source: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         queue_stream(self.store.clone(), self.access.admit(auth, &reach), id, Ask::Snooze { minutes }, source)
+    }
+
+    /// APP-23: hands a queued ticket back — a comment (intent `changes`) on its conversation and the entry unqueued, one write.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        description = "Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix }",
+        params(id = "The queued ticket, e.g. APP-21", body = "What to change (markdown)", source = "app | api | pipeline (optional, default api)"),
+        values(source = ["app", "api", "pipeline"])
+    )]
+    pub async fn request_changes(&self, auth: Option<&AuthContext>, reach: Reach, id: String, body: String, source: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        request_changes_stream(self.store.clone(), self.access.admit(auth, &reach), id, body, source)
+    }
+
+    /// APP-24: after queueing, an agent waits here — `waiting`, then one `replied` (or `timed_out`), then the end.
+    #[plexus_macros::method(
+        group = "read",
+        streaming,
+        description = "Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes",
+        params(id = "The ticket, e.g. APP-21", since = "Responses from this unix time, so a reconnect loses nothing (optional; default now)", input = "Only this input's answer counts as answered (optional)", timeout_minutes = "Give up after this many minutes with timed_out (optional; default never)")
+    )]
+    pub async fn await_reply(&self, auth: Option<&AuthContext>, reach: Reach, id: String, since: Option<i64>, input: Option<String>, timeout_minutes: Option<u32>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        await_reply_stream(self.store.clone(), self.access.clone(), auth.cloned(), reach, await_reply::Ask { id, since, input, timeout_minutes })
     }
 
     /// MENGER-39: the owner's queue, most urgent first, then the oldest.

@@ -11,6 +11,8 @@ export interface TicketsClient {
   amend(id: string, body?: string | null, title?: string | null): AsyncGenerator<TicketsEvent>;
   /** Answer an input: record a value (checked against its kind and options) with a rationale, a source and the time; yields input_changed */
   answer(input: string, ticket: string, value: InputValue, rationale?: string | null, source?: string | null): AsyncGenerator<TicketsEvent>;
+  /** Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes */
+  awaitReply(id: string, input?: string | null, since?: number | null, timeoutMinutes?: number | null): AsyncGenerator<TicketsEvent>;
   /** One ticket's blockers resolved to current statuses; dangling ids marked */
   blockers(id: string): AsyncGenerator<TicketsEvent>;
   /** Clear an input's answer (open again; kept in its history, with a source); yields input_changed */
@@ -57,6 +59,8 @@ export interface TicketsClient {
   readySet(after?: string | null, epic?: string | null, filter?: string | null, limit?: number | null, summary?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
   /** Reopen a closed input; yields input_changed */
   reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
+  /** Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix } */
+  requestChanges(body: string, id: string, source?: string | null): AsyncGenerator<TicketsEvent>;
   /** Move tickets into another shortcode, renumbered there in the order given (a scope moved into a new code becomes its root; --new-scope makes the shortcode first; a root moves with --with-children as a rename); old ids keep resolving (get says moved_from); all or none; yields reshortcoded { moves, tickets } */
   reshortcode(ids: string[], to: string, message?: string | null, newScope?: string | null, parent?: string | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
   /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
@@ -105,6 +109,11 @@ class TicketsClientImpl implements TicketsClient {
 
   async *answer(input: string, ticket: string, value: InputValue, rationale?: string | null, source?: string | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.answer', { input, rationale, source, ticket, value });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *awaitReply(id: string, input?: string | null, since?: number | null, timeoutMinutes?: number | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.await_reply', { id, input, since, timeout_minutes: timeoutMinutes });
     yield* extractData<TicketsEvent>(stream);
   }
 
@@ -220,6 +229,11 @@ class TicketsClientImpl implements TicketsClient {
 
   async *reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.reopen_input', { input, ticket });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *requestChanges(body: string, id: string, source?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.request_changes', { body, id, source });
     yield* extractData<TicketsEvent>(stream);
   }
 

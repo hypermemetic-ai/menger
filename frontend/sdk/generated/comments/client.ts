@@ -3,14 +3,15 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { Anchor, CommentsEvent } from './types';
+import type { CommentsEvent } from './types';
+import type { Anchor } from '../tickets/types';
 
 /** Typed client interface for comments plugin */
 export interface CommentsClient {
   /** Leave a comment at an anchor (route, path, label, excerpt, and ticket when the element belongs to one); yields the comment */
   add(anchor: Anchor, body: string, author?: string | null): AsyncGenerator<CommentsEvent>;
   /** List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit */
-  list(after?: number | null, author?: string | null, limit?: number | null, path?: string | null, route?: string | null, state?: string | null, text?: string | null, ticket?: string | null, under?: string | null): AsyncGenerator<CommentsEvent>;
+  list(after?: number | null, author?: string | null, intent?: string | null, limit?: number | null, path?: string | null, route?: string | null, state?: string | null, text?: string | null, ticket?: string | null, under?: string | null): AsyncGenerator<CommentsEvent>;
   /** Reopen a resolved comment; yields the comment, open */
   reopen(id: number): AsyncGenerator<CommentsEvent>;
   /** Resolve a comment; yields the comment, resolved */
@@ -31,8 +32,8 @@ class CommentsClientImpl implements CommentsClient {
     yield* extractData<CommentsEvent>(stream);
   }
 
-  async *list(after?: number | null, author?: string | null, limit?: number | null, path?: string | null, route?: string | null, state?: string | null, text?: string | null, ticket?: string | null, under?: string | null): AsyncGenerator<CommentsEvent> {
-    const stream = this.rpc.call('comments.list', { after, author, limit, path, route, state, text, ticket, under });
+  async *list(after?: number | null, author?: string | null, intent?: string | null, limit?: number | null, path?: string | null, route?: string | null, state?: string | null, text?: string | null, ticket?: string | null, under?: string | null): AsyncGenerator<CommentsEvent> {
+    const stream = this.rpc.call('comments.list', { after, author, intent, limit, path, route, state, text, ticket, under });
     yield* extractData<CommentsEvent>(stream);
   }
 

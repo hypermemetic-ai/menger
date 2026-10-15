@@ -223,7 +223,7 @@ fn fetch() {
         let mut answer = Vec::new();
         let mut after = None;
         loop {
-            match client.list_all(None, None, None, None, None, None, None, after, Some(PAGE)).await {
+            match client.list_all(None, None, None, None, None, None, None, None, after, Some(PAGE)).await {
                 Ok(events) => {
                     let mut next = None;
                     for ev in events {
@@ -296,7 +296,7 @@ pub(crate) async fn ids_under(under: String) -> Result<std::collections::HashSet
     let mut after = None;
     loop {
         let events = client
-            .list_all(None, Some(under.clone()), None, None, None, None, None, after, Some(PAGE))
+            .list_all(None, Some(under.clone()), None, None, None, None, None, None, after, Some(PAGE))
             .await
             .map_err(|e| session::describe(&e))?;
         let mut next = None;
@@ -338,6 +338,7 @@ pub(crate) mod tests {
             },
             body: format!("body {id}"),
             principal: None,
+            intent: menger_tickets_api::CommentIntent::Comment,
         }
     }
 

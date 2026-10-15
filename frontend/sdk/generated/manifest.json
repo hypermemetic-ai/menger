@@ -10,6 +10,7 @@
       "list": [
         "after",
         "author",
+        "intent",
         "limit",
         "path",
         "route",
@@ -163,6 +164,12 @@
         "ticket",
         "value"
       ],
+      "await_reply": [
+        "id",
+        "input",
+        "since",
+        "timeout_minutes"
+      ],
       "blockers": [
         "id"
       ],
@@ -278,6 +285,11 @@
       "reopen_input": [
         "input",
         "ticket"
+      ],
+      "request_changes": [
+        "body",
+        "id",
+        "source"
       ],
       "reshortcode": [
         "ids",

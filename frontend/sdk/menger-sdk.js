@@ -593,6 +593,10 @@
       const stream = this.rpc.call("tickets.answer", { input, rationale, source, ticket, value });
       yield* extractData(stream);
     }
+    async* awaitReply(id, input, since, timeoutMinutes) {
+      const stream = this.rpc.call("tickets.await_reply", { id, input, since, timeout_minutes: timeoutMinutes });
+      yield* extractData(stream);
+    }
     async* blockers(id) {
       const stream = this.rpc.call("tickets.blockers", { id });
       yield* extractData(stream);
@@ -683,6 +687,10 @@
     }
     async* reopenInput(input, ticket) {
       const stream = this.rpc.call("tickets.reopen_input", { input, ticket });
+      yield* extractData(stream);
+    }
+    async* requestChanges(body, id, source) {
+      const stream = this.rpc.call("tickets.request_changes", { body, id, source });
       yield* extractData(stream);
     }
     async* reshortcode(ids, to, message, newScope, parent, withChildren) {

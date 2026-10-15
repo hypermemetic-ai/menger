@@ -28,7 +28,7 @@
 //! file built from older forms, or new, gains it with the rest.
 
 use super::{lineage, shortcodes, tree, Cache, Needle, StoreError};
-use crate::comments::{Anchor, Comment, CommentState};
+use crate::comments::{Anchor, Comment, CommentIntent, CommentState};
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, HashMap};
 
@@ -47,9 +47,24 @@ pub(super) const TABLE: &str = "
             ticket  TEXT,
             version INTEGER,
             body    TEXT NOT NULL,
-            principal TEXT
+            principal TEXT,
+            intent  TEXT
         );
     ";
+
+/// APP-23: a file whose comments table has no `intent` gains it here, in
+/// place — NULL is a comment, `changes` a change request; on every open a
+/// no-op once it is there. Nothing derived moves and the form stays: an
+/// older build names the columns it reads and writes, and never sees this
+/// one (a change request reads there as a comment).
+pub(crate) fn migrate(conn: &Connection) -> anyhow::Result<()> {
+    let table: i64 = conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'comments'", [], |r| r.get(0))?;
+    if table > 0 && !super::db::has_column(conn, "comments", "intent")? {
+        conn.execute("ALTER TABLE comments ADD COLUMN intent TEXT", [])?;
+        tracing::warn!("APP-23: the comments table gained its intent column, durably");
+    }
+    Ok(())
+}
 
 /// A change to the comments, as `watch` hears it — the comment as the
 /// change left it.
@@ -78,6 +93,8 @@ pub struct CommentQuery {
     /// In the body, the label or the excerpt — `find`'s match: a substring,
     /// whatever its ASCII case.
     pub text: Option<String>,
+    /// APP-23: a comment or a change request.
+    pub intent: Option<CommentIntent>,
 }
 
 /// One page of `list`: the comments, newest first, and the cursor to pass
@@ -114,6 +131,11 @@ impl Comments {
     /// that ticket (a resolve or a reopen is not one: it keeps no time).
     pub(crate) fn activity(&self) -> impl Iterator<Item = (&str, i64)> + '_ {
         self.by_id.values().filter_map(|c| Some((c.anchor.ticket.as_deref()?, c.at)))
+    }
+
+    /// APP-24: the comments left at or after `at`, oldest first.
+    pub(crate) fn since(&self, at: i64) -> impl Iterator<Item = &Comment> + '_ {
+        self.by_id.values().filter(move |c| c.at >= at)
     }
 
     /// The cache's half of a committed write: `comment` as it is now.
@@ -189,6 +211,7 @@ pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: O
     let mut lineage_holds: HashMap<String, bool> = HashMap::new();
     let mut admits = |c: &Comment| -> bool {
         if q.state.is_some_and(|s| c.state != s)
+            || q.intent.is_some_and(|i| c.intent != i)
             || route.is_some_and(|r| c.anchor.route != r)
             || path.is_some_and(|p| !c.anchor.path.starts_with(p))
             || author.is_some_and(|a| c.author != a)
@@ -233,8 +256,8 @@ pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: O
 /// caller's transaction.
 pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO comments (id, state, author, at, route, path, label, excerpt, ticket, version, body, principal)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "INSERT INTO comments (id, state, author, at, route, path, label, excerpt, ticket, version, body, principal, intent)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT (id) DO UPDATE SET state = excluded.state",
     )?
     .execute(params![
@@ -250,6 +273,7 @@ pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
         c.anchor.version,
         c.body,
         c.principal,
+        (!c.intent.is_comment()).then_some(c.intent.as_str()),
     ])?;
     Ok(())
 }
@@ -257,7 +281,7 @@ pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
 /// Every comment as stored — what a start reads.
 pub(super) fn load(conn: &Connection) -> rusqlite::Result<Comments> {
     let mut stmt = conn.prepare(
-        "SELECT id, state, author, at, route, path, label, excerpt, ticket, version, body, principal FROM comments ORDER BY id",
+        "SELECT id, state, author, at, route, path, label, excerpt, ticket, version, body, principal, intent FROM comments ORDER BY id",
     )?;
     let mut rows = stmt.query([])?;
     let mut comments = Comments::default();
@@ -280,6 +304,10 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Comments> {
             },
             body: r.get(10)?,
             principal: r.get(11)?,
+            intent: match r.get_ref(12)?.as_str_or_null()? {
+                None => CommentIntent::Comment,
+                Some(i) => i.parse().map_err(|e: String| rusqlite::Error::FromSqlConversionFailure(12, rusqlite::types::Type::Text, e.into()))?,
+            },
         });
     }
     Ok(comments)

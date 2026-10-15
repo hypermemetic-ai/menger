@@ -942,6 +942,13 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         }
         return;
     }
+    // APP-22: `c` — the ticket page's Conversation box.
+    if bindings::is(ev, Context::TicketPage, "comment.focus") {
+        if crate::conversation::focus_box() {
+            ev.prevent_default();
+        }
+        return;
+    }
     if board_key(ev, target.as_ref(), board) {
         ev.prevent_default();
     }

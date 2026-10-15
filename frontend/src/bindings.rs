@@ -307,7 +307,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
     // -- Annotate
     b("annotate.toggle", &[C::Global, C::Frame], &["a", "Shift+a"], G::Annotate, "annotation mode: outline the page, click anything to comment on it; again, it ends"),
     b("annotate.pick", &[C::Annotate], &["Click"], G::Annotate, "comment on what was clicked"),
-    b("comment.save", &[C::Dialog], &["Mod+Enter"], G::Annotate, "save the comment being written"),
+    b("comment.save", &[C::Dialog, C::Field], &["Mod+Enter"], G::Annotate, "save the comment being written — in a comment box, or send it from a ticket's Conversation"),
+    // APP-22: the ticket page's Conversation box.
+    b("comment.focus", &[C::TicketPage], &["c"], G::Annotate, "comment on the ticket as a whole: its Conversation box, focused"),
     // -- View
     b("view.full-screen", &[C::TicketPage, C::Frame], &["z"], G::View, "the ticket's framed body full screen, and back (from inside the body too)"),
     b("app.escape", &[C::Global, C::Frame], &["Escape"], G::View, "close the palette or this list; leave annotation mode; leave full screen; clear the selection"),
