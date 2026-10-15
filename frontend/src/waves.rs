@@ -766,7 +766,7 @@ async fn fetch(ctx: Ctx) {
             ctx.coalesce.try_update_value(|c| *c = Coalesce::default());
             return;
         };
-        match client.waves_all(epics, Some(kinds)).await {
+        match client.work().waves_all(epics, Some(kinds)).await {
             Ok(events) => match answer_of(events) {
                 Ok(a) => take(ctx, a),
                 Err(message) => {
@@ -1138,7 +1138,7 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
 /// A wave board of one ticket's (MENGER-31), from the ticket menu: its
 /// subtree's — `#/waves/under/<ID>`, "Wave board for <parent>" — or the one
 /// whose final state it is — `#/waves/to/<ID>`, "Waves to <ticket>". Each is
-/// one server read (`tickets.waves_under`, `tickets.waves_to`) over the kept
+/// one server read (`tickets.work.waves_under`, `tickets.work.waves_to`) over the kept
 /// graph; the columns, the layouts, the cards and the live moves are the
 /// shortcode board's. `?at=<ID>` (the menu's ticket) is scrolled to and
 /// highlighted.
@@ -1305,8 +1305,8 @@ async fn fetch_scoped(ctx: ScopedCtx) {
         };
         let Ok(ticket) = crate::typed::typed(id) else { return };
         let got = match &scope {
-            Scope::Under(_) => client.waves_under_all(ticket, Some(all)).await,
-            Scope::To(_) => client.waves_to_all(ticket, Some(all)).await,
+            Scope::Under(_) => client.work().waves_under_all(ticket, Some(all)).await,
+            Scope::To(_) => client.work().waves_to_all(ticket, Some(all)).await,
         };
         match got {
             Ok(events) => {

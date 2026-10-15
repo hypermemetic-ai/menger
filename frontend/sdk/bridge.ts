@@ -36,6 +36,7 @@ import { collectOne, type RpcClient } from './generated/rpc';
 import type { PlexusStreamItem, StreamMetadata } from './generated/types';
 import { createTicketsClient, type TicketsClient } from './generated/tickets/client';
 import { createTicketsInputsClient, type TicketsInputsClient } from './generated/tickets/inputs/client';
+import { createTicketsWorkClient, type TicketsWorkClient } from './generated/tickets/work/client';
 
 /** ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
  *  (`list`, and the writes, which the host refuses), and callable as
@@ -46,8 +47,12 @@ export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
 
 /** The typed `tickets` a frame gets: the generated client, its `inputs`
  *  the child's ([`InputsChild`]) — hub-codegen gives a `#[child]` accessor
- *  no client of its own on the parent. */
-export type FrameTickets = Omit<TicketsClient, 'inputs'> & { readonly inputs: InputsChild };
+ *  no client of its own on the parent — and (ACCESS-17) `tickets work` as
+ *  `work`, with that child's `waves` and `blockers` kept where a body has
+ *  always called them (`menger.tickets.waves([…])`) until ACCESS-20 moves
+ *  the frames' SDK. */
+export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work'> &
+  Pick<TicketsWorkClient, 'waves' | 'blockers'> & { readonly inputs: InputsChild; readonly work: TicketsWorkClient };
 
 /** The shell's `menger.call`: a read over the bridge, answered with the
  *  call's items (the wire's spelling), or rejected with the reason. */
@@ -62,14 +67,16 @@ export interface Typed {
   typed<T>(content: unknown): Promise<T>;
 }
 
-/** The activation the generated client addresses (`tickets.waves`, …); the
- *  host's methods are its bare names (`waves`). */
+/** The activation the generated client addresses (`tickets.get`, …); the
+ *  host's methods are its bare names (`get`). */
 const NAMESPACE = 'tickets.';
 
-/** ACCESS-14: a child's method by the host's name for it — the frame's
- *  read of inputs is still the host's `inputs` (its `menger.call` names
- *  move with every client in ACCESS-20). */
-const HOST_NAMES: Record<string, string> = { 'inputs.list': 'inputs' };
+/** ACCESS-14 / ACCESS-17: a child's method by the host's name for it — the
+ *  frame's read of inputs is still the host's `inputs`, and `work`'s `waves`
+ *  and `blockers` the host's `waves` / `blockers` (its `menger.call` names
+ *  move with every client in ACCESS-20); any other child method goes as
+ *  `<child>.<method>`, which the host refuses. */
+const HOST_NAMES: Record<string, string> = { 'inputs.list': 'inputs', 'work.waves': 'waves', 'work.blockers': 'blockers' };
 
 function metadata(method: string): StreamMetadata {
   return { provenance: ['menger', 'bridge', method], plexusHash: '', timestamp: Math.floor(Date.now() / 1000) };
@@ -105,7 +112,8 @@ async function* one(content: unknown): AsyncGenerator<PlexusStreamItem> {
 /** The shell's variable (menger-sdk.js declares it just above the region). */
 declare let mengerTyped: Typed | null;
 
-/** ACCESS-14: the generated client with `inputs` the child's ([`InputsChild`]). */
+/** ACCESS-14: the generated client with `inputs` the child's ([`InputsChild`]);
+ *  ACCESS-17: and `work`. */
 function frameTickets(rpc: RpcClient): FrameTickets {
   const tickets = createTicketsClient(rpc);
   const child = createTicketsInputsClient(rpc);
@@ -118,6 +126,9 @@ function frameTickets(rpc: RpcClient): FrameTickets {
     schema: child.schema.bind(child),
   });
   Object.defineProperty(tickets, 'inputs', { value: inputs });
+  // ACCESS-17: `tickets work`, and its `waves` / `blockers` where they were.
+  const work = createTicketsWorkClient(rpc);
+  Object.assign(tickets, { work, waves: work.waves.bind(work), blockers: work.blockers.bind(work) });
   return tickets as unknown as FrameTickets;
 }
 

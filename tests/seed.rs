@@ -145,7 +145,7 @@ async fn seed_flag_seeds_logs_persists_and_refuses_existing_unless_allowed() {
         "log reports count + time:\n{log}"
     );
     assert!(log.contains("seed value 5"), "{log}");
-    let mut sub = call(&c1, "tickets.ready_set", json!({})).await;
+    let mut sub = call(&c1, "tickets.work.ready", json!({})).await;
     let first = sub.next().await.unwrap().unwrap();
     assert_eq!(first["type"], "data", "ready_set non-empty, got {first}");
     assert_eq!(first["content"]["ticket"]["status"], "Ready");

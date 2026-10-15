@@ -265,11 +265,11 @@ async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>, String> {
         Call::Waves { epics, kinds } => {
             let typed_waves = || -> Result<_, String> { Ok((many(epics)?, opt_many(kinds)?)) };
             let (epics, kinds) = typed_waves().map_err(named("waves"))?;
-            client.waves_all(epics, kinds).await
+            client.work().waves_all(epics, kinds).await
         }
         Call::Groups => client.groups_all().await,
         Call::Extents => client.extents_all().await,
-        Call::Blockers { id } => client.blockers_all(typed(&id).map_err(named("blockers"))?).await,
+        Call::Blockers { id } => client.work().blockers_all(typed(&id).map_err(named("blockers"))?).await,
         Call::Health => client.health_all().await,
         Call::Components => client.components_all().await,
         Call::Inputs { ticket, epic, state, filter } => {
@@ -610,8 +610,9 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::Component { .. }
         | E::ComponentChanged { .. }
         | E::ComponentRemoved { .. } => Some(ev),
-        // Aggregates over the viewer's whole store: no frame's.
-        E::Facet { .. } | E::Searched { .. } => None,
+        // Aggregates over the viewer's whole store: no frame's (ACCESS-17:
+        // the viewer's count of blockers it is not shown, too).
+        E::Facet { .. } | E::Searched { .. } | E::HiddenBlockers { .. } => None,
     }
 }
 

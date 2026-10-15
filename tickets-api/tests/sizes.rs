@@ -182,14 +182,21 @@ fn comments_members_and_session_are_declarations() {
     }
 }
 
-/// ACCESS-14: and each child mounted on it — `tickets commits`,
-/// `tickets inputs` (a child built later adds its file).
+/// ACCESS-17: every child of `tickets` mounted on the frame
+/// (`activation/<name>.rs` with an activation in it — `work.rs`, …) is
+/// declarations too: no body over [`BODY_MAX`], no `description =`.
 #[test]
-fn the_tickets_children_are_declarations() {
-    for file in ["tickets-api/src/activation/commits.rs", "tickets-api/src/activation/inputs.rs"] {
-        let found = off_the_frame(&std::fs::read_to_string(root().join(file)).unwrap());
-        assert!(found.is_empty(), "{file} is off the frame (ACCESS-13): {}\n{}", advice(file), found.join("\n"));
+fn every_child_of_tickets_is_declarations() {
+    let dir = root().join("tickets-api/src/activation");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let path = entry.path();
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        if path.file_name().is_some_and(|n| n != "mod.rs") && path.extension().is_some_and(|e| e == "rs") && declares_activation(&text) {
+            found.extend(off_the_frame(&text).into_iter().map(|f| format!("{}: {f}", path.display())));
+        }
     }
+    assert!(found.is_empty(), "a child of tickets is off the frame (ACCESS-13): {}\n{}", advice("activation/"), found.join("\n"));
 }
 
 #[test]

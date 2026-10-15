@@ -1890,6 +1890,11 @@ pub enum TicketsEvent {
     /// A blocker id that names no existing ticket — a dangling forward
     /// reference (yielded per-entry by `blockers`).
     DanglingBlocker { id: TicketName },
+    /// ACCESS-17: how many blockers of the queried ticket the caller is not
+    /// shown — out of its reach (or, to a restricted reader, naming no
+    /// ticket); counted, never named or resolved. Yielded once, last, by
+    /// `work blockers`, and only when there are any.
+    HiddenBlockers { count: u32 },
     /// FILTER-15: whether a filter admits one ticket (yielded by `member`,
     /// one per id asked, in the order asked): `id` as it was asked,
     /// `matched` whether the filter admits the ticket it names — `false`

@@ -349,8 +349,10 @@ impl Store {
     /// everything) dangling — of `id`, when `who` sees it
     /// ([`Store::blockers_unscoped`]). A blocker it may not see is not
     /// answered, nor, to a restricted reader, one that is no ticket: both
-    /// are a blocker it is not shown (the ticket's `hidden_blocked_by`
-    /// counts them). ACCESS-3 #1: a hidden blocker's body is never read.
+    /// are a blocker it is not shown, each a [`BlockerRef::Hidden`] after
+    /// the shown ones (ACCESS-17: counted, never named or resolved).
+    /// ACCESS-3 #1: a hidden blocker's
+    /// body is never read.
     pub async fn blockers(&self, who: &(impl Reader + ?Sized), id: &str) -> Result<Vec<BlockerRef>, StoreError> {
         let seen = Seen::of(who)?;
         let key = {
@@ -364,18 +366,19 @@ impl Store {
         if seen.all() {
             return self.blockers_unscoped(&key).await;
         }
-        let (rows, written) = {
+        let (rows, asked, written) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let sees = seen.sees(&cache);
             let ticket = cache.get(&key).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
             let rows: Vec<Row> = ticket.blocked_by.iter().filter(|b| sees.id(b)).filter_map(|b| cache.get(b).cloned()).collect();
-            (rows, cache.written)
+            (rows, ticket.blocked_by.len(), cache.written)
         };
         let mut tickets = self.full(rows, written).await?;
         let cache = self.tickets.read().expect("store lock poisoned");
         let sees = seen.sees(&cache);
         tickets.iter_mut().for_each(|t| sees.ticket(t));
-        Ok(tickets.into_iter().map(BlockerRef::Resolved).collect())
+        let hidden = asked.saturating_sub(tickets.len());
+        Ok(tickets.into_iter().map(BlockerRef::Resolved).chain(std::iter::repeat_n(BlockerRef::Hidden, hidden)).collect())
     }
 
     /// How many tickets `who` sees.

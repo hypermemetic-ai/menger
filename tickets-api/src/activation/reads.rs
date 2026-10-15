@@ -24,18 +24,23 @@ pub(super) fn get_stream(store: Arc<Store>, caller: VerifiedUser, id: String) ->
     }
 }
 
-/// `blockers` — the ticket's blockers in its reach, each resolved or
-/// dangling.
+/// `work blockers` — the ticket's blockers in its reach, each resolved or
+/// dangling; ACCESS-17: then how many it is not shown, when any.
 pub(super) fn blockers_stream(store: Arc<Store>, caller: VerifiedUser, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        // ACCESS-10: the blockers in reach, a hidden one not named.
+        // ACCESS-10: the blockers in reach, a hidden one counted, not named.
         match store.blockers(&caller, &id).await {
             Ok(refs) => {
+                let mut hidden = 0u32;
                 for r in refs {
-                    yield match r {
-                        BlockerRef::Resolved(ticket) => TicketsEvent::Blocker { ticket },
-                        BlockerRef::Dangling(id) => TicketsEvent::DanglingBlocker { id },
-                    };
+                    match r {
+                        BlockerRef::Resolved(ticket) => yield TicketsEvent::Blocker { ticket },
+                        BlockerRef::Dangling(id) => yield TicketsEvent::DanglingBlocker { id },
+                        BlockerRef::Hidden => hidden += 1,
+                    }
+                }
+                if hidden > 0 {
+                    yield TicketsEvent::HiddenBlockers { count: hidden };
                 }
             }
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },

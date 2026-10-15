@@ -996,6 +996,10 @@ pub enum BlockerRef {
     Resolved(Ticket),
     /// The id names no existing ticket (a dangling forward reference).
     Dangling(TicketName),
+    /// ACCESS-17: one blocker the reader is not shown (out of its reach, or
+    /// to a restricted reader one that is no ticket) — counted, never named
+    /// or resolved.
+    Hidden,
 }
 
 pub struct NewTicket {

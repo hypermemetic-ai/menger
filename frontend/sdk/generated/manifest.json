@@ -170,9 +170,6 @@
         "since",
         "timeout_minutes"
       ],
-      "blockers": [
-        "id"
-      ],
       "components": [],
       "counts": [
         "filter",
@@ -252,14 +249,6 @@
       ],
       "queued": [
         "snoozed"
-      ],
-      "ready_set": [
-        "after",
-        "epic",
-        "filter",
-        "limit",
-        "summary",
-        "tz"
       ],
       "request_changes": [
         "body",
@@ -365,18 +354,6 @@
         "filter",
         "membership",
         "tz"
-      ],
-      "waves": [
-        "epics",
-        "kinds"
-      ],
-      "waves_to": [
-        "id",
-        "kinds"
-      ],
-      "waves_under": [
-        "id",
-        "kinds"
       ]
     },
     "tickets.commits": {
@@ -418,6 +395,32 @@
         "ticket"
       ],
       "schema": []
+    },
+    "tickets.work": {
+      "blockers": [
+        "id"
+      ],
+      "ready": [
+        "after",
+        "epic",
+        "filter",
+        "limit",
+        "summary",
+        "tz"
+      ],
+      "schema": [],
+      "waves": [
+        "epics",
+        "kinds"
+      ],
+      "waves_to": [
+        "id",
+        "kinds"
+      ],
+      "waves_under": [
+        "id",
+        "kinds"
+      ]
     }
   }
 }

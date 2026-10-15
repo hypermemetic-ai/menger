@@ -27,10 +27,12 @@
 
 import type { TicketsClient } from './generated/tickets/client';
 import type { TicketsInputsClient } from './generated/tickets/inputs/client';
+import type { TicketsWorkClient } from './generated/tickets/work/client';
 import type { Answer, Input, InputValue } from './generated/tickets/types';
 
 export type { TicketsClient } from './generated/tickets/client';
 export type { TicketsInputsClient } from './generated/tickets/inputs/client';
+export type { TicketsWorkClient } from './generated/tickets/work/client';
 
 /**
  * ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
@@ -39,8 +41,14 @@ export type { TicketsInputsClient } from './generated/tickets/inputs/client';
  */
 export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
 
-/** The typed `tickets` a frame gets: its `inputs` the child's. */
-export type FrameTickets = Omit<TicketsClient, 'inputs'> & { readonly inputs: InputsChild };
+/**
+ * The typed `tickets` a frame gets: its `inputs` the child's, and
+ * (ACCESS-17) its child `tickets work` as `work`, with that child's `waves`
+ * and `blockers` where a body has always called them, until ACCESS-20
+ * moves the SDK.
+ */
+export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work'> &
+  Pick<TicketsWorkClient, 'waves' | 'blockers'> & { readonly inputs: InputsChild; readonly work: TicketsWorkClient };
 export type * from './generated/tickets/types';
 
 /**

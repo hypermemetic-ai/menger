@@ -2356,13 +2356,18 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("generated/manifest.json")).unwrap()).unwrap();
         // COMMENT-2: the manifest holds every activation; the bundle is the
-        // bridge's, which reaches `tickets`.
+        // bridge's, which reaches `tickets` — ACCESS-17: and its child
+        // `tickets work`.
         let methods = manifest["activations"]["tickets"].as_object().expect("the tickets activation's methods");
-        assert!(methods.contains_key("waves") && methods.contains_key("set_status"), "{methods:?}");
-        for name in methods.keys() {
-            assert!(bundle.contains(&format!("\"tickets.{name}\"")), "the bundle calls tickets.{name}");
+        assert!(methods.contains_key("set_status"), "{methods:?}");
+        let work = manifest["activations"]["tickets.work"].as_object().expect("tickets work's methods");
+        assert!(work.contains_key("waves") && work.contains_key("blockers"), "{work:?}");
+        for (ns, methods) in [("tickets", methods), ("tickets.work", work)] {
+            for name in methods.keys() {
+                assert!(bundle.contains(&format!("\"{ns}.{name}\"")), "the bundle calls {ns}.{name}");
+            }
         }
-        for published in ["menger.d.ts", "generated/tickets/client.d.ts", "generated/tickets/types.d.ts"] {
+        for published in ["menger.d.ts", "generated/tickets/client.d.ts", "generated/tickets/types.d.ts", "generated/tickets/work/client.d.ts"] {
             assert!(dir.join(published).is_file(), "{published}");
         }
         let index = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("index.html")).unwrap();
