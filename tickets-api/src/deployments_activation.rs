@@ -361,25 +361,35 @@ impl Deployments {
     )]
     pub async fn watch(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let mut rx = self.store.subscribe_deployments();
-        let access = self.access.clone();
-        let who = auth.cloned();
+        // ACCESS-12: the caller followed — verified again when the grants
+        // generation moves, a sign-out or the expiry comes.
+        let opened = crate::access::Following::open(&self.access, &self.store, auth, &reach);
         let store = self.store.clone();
         stream! {
-            if let Err(message) = access.verify_call(who.as_ref(), &reach) {
-                yield DeploymentsEvent::Error { message };
-                return;
-            }
-            loop {
-                let next = rx.recv().await;
-                // The grants as they stand now: held nowhere, the watch ends.
-                let Some(now) = reach.current() else {
-                    yield DeploymentsEvent::Error { message: "your access changed: you hold this nowhere any more".into() };
+            let mut following = match opened {
+                Ok(f) => f,
+                Err(message) => {
+                    yield DeploymentsEvent::Error { message };
                     return;
+                }
+            };
+            loop {
+                let next = tokio::select! {
+                    biased;
+                    () = following.changed() => None,
+                    r = rx.recv() => Some(r),
                 };
-                let allowed = match access.verify_call(who.as_ref(), &now).and_then(|c| allowed(&c, &store)) {
+                if let Err(closed) = following.again() {
+                    yield DeploymentsEvent::WatchClosed { reason: closed.reason, message: closed.message };
+                    return;
+                }
+                let Some(next) = next else { continue };
+                // The projects it sees, as its grants stand (a project
+                // recorded since included).
+                let allowed = match allowed(following.user(), &store) {
                     Ok(a) => a,
                     Err(message) => {
-                        yield DeploymentsEvent::Error { message };
+                        yield DeploymentsEvent::WatchClosed { reason: crate::types::WatchEnd::Revoked, message };
                         return;
                     }
                 };

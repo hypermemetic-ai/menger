@@ -581,6 +581,8 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::Page { .. }
         | E::WaveCounts { .. }
         | E::Lagged { .. }
+        // ACCESS-12: the app's watch ended; it names no ticket.
+        | E::WatchClosed { .. }
         | E::NotFound { .. }
         | E::Error { .. }
         | E::Ambiguous { .. }

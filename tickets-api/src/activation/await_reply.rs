@@ -13,6 +13,7 @@
 //! at its first `replied`.
 
 use super::*;
+use crate::access::Following;
 use crate::store::{reply_key, Awaiting};
 use std::collections::HashSet;
 use tokio::sync::broadcast::error::RecvError;
@@ -43,12 +44,14 @@ pub(super) fn await_reply_stream(
     ask: Ask,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     let started = chrono::Utc::now().timestamp();
-    let opened = access.verify_call(who.as_ref(), &reach).and_then(|c| c.read_filter().map(|_| c));
-    let prepared = opened.map(|caller| {
+    // ACCESS-12: the caller followed — verified again when the grants move.
+    let opened = Following::open(&access, &store, who.as_ref(), &reach).and_then(|f| f.user().read_filter().map(|_| f));
+    let prepared = opened.map(|following| {
+        let caller = following.user();
         // The ticket as kept — or a deleted one's id.
         let held = store.ticket_id(&ask.id);
-        let ticket = match held.clone().or_else(|| store.tombstone(&caller, &ask.id).map(|t| t.id)) {
-            Some(t) if held.is_none() || sees_id(&store, &caller, &t) => t,
+        let ticket = match held.clone().or_else(|| store.tombstone(caller, &ask.id).map(|t| t.id)) {
+            Some(t) if held.is_none() || sees_id(&store, caller, &t) => t,
             _ => return None,
         };
         let w = Awaiting {
@@ -59,15 +62,15 @@ pub(super) fn await_reply_stream(
         };
         let before: HashSet<String> = match ask.since {
             Some(_) => HashSet::new(),
-            None => store.replies_since(&w, |id| sees_id(&store, &caller, id)).iter().map(reply_key).collect(),
+            None => store.replies_since(&w, |id| sees_id(&store, caller, id)).iter().map(reply_key).collect(),
         };
-        Some((w, caller, before))
+        Some((w, following, before))
     });
     // Subscribed before the first ask.
     let mut tickets = store.subscribe();
     let mut comments = store.subscribe_comments();
     stream! {
-        let (w, caller, before) = match prepared {
+        let (w, mut following, before) = match prepared {
             Ok(Some(p)) => p,
             Ok(None) => {
                 yield TicketsEvent::NotFound { id: ask.id.trim().to_ascii_uppercase() };
@@ -79,18 +82,21 @@ pub(super) fn await_reply_stream(
             }
         };
         let ticket = w.ticket.clone();
-        yield TicketsEvent::Waiting { ticket: ticket.clone(), queued: store.queue_entry(&caller, &ticket) };
+        yield TicketsEvent::Waiting { ticket: ticket.clone(), queued: store.queue_entry(following.user(), &ticket) };
         let deadline = ask.timeout_minutes.map(|m| tokio::time::Instant::now() + std::time::Duration::from_secs(u64::from(m) * 60));
         let sleep = tokio::time::sleep_until(deadline.unwrap_or_else(|| tokio::time::Instant::now() + std::time::Duration::from_secs(10 * 365 * 24 * 3600)));
         tokio::pin!(sleep);
         loop {
-            let sees = |id: &str| sees_id(&store, &caller, id);
+            let caller = following.user();
+            let sees = |id: &str| sees_id(&store, caller, id);
             if let Some(reply) = store.replies_since(&w, sees).into_iter().find(|r| !before.contains(&reply_key(r))) {
                 yield TicketsEvent::Replied { ticket: ticket.clone(), reply };
                 return;
             }
             // Wait for a change, either channel; a lag asks again too.
             let woke = tokio::select! {
+                biased;
+                () = following.changed() => Woke::Changed,
                 r = tickets.recv() => if matches!(r, Err(RecvError::Closed)) { Woke::Closed } else { Woke::Changed },
                 r = comments.recv() => if matches!(r, Err(RecvError::Closed)) { Woke::Closed } else { Woke::Changed },
                 () = &mut sleep, if deadline.is_some() => Woke::Timeout,
@@ -103,10 +109,18 @@ pub(super) fn await_reply_stream(
                     return;
                 }
             }
-            // AUTH-7: the gate's live reach — held nowhere any more, it ends.
-            if reach.current().is_none() {
-                yield TicketsEvent::Error { message: "your access changed: you hold this nowhere any more".into() };
-                return;
+            // ACCESS-12: the caller as it stands — refused, or its reach no
+            // longer holding the ticket, the wait ends saying why.
+            match following.again() {
+                Err(closed) => {
+                    yield TicketsEvent::WatchClosed { reason: closed.reason, message: closed.message };
+                    return;
+                }
+                Ok(crate::access::Followed::Moved { .. }) if store.ticket_id(&ticket).is_some() && !sees_id(&store, following.user(), &ticket) => {
+                    yield TicketsEvent::WatchClosed { reason: crate::types::WatchEnd::Revoked, message: format!("your access changed: {ticket} is out of your reach") };
+                    return;
+                }
+                Ok(_) => {}
             }
         }
     }

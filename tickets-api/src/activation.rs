@@ -124,6 +124,11 @@ use reads::*;
 mod orgs;
 #[cfg(feature = "server")]
 use orgs::*;
+// ACCESS-12: `watch` as its stream — the caller followed, every change cut.
+#[cfg(feature = "server")]
+mod watch;
+#[cfg(feature = "server")]
+use watch::{watch_stream, WatchAsk};
 #[cfg(all(test, feature = "server"))]
 mod tests;
 
@@ -2049,10 +2054,16 @@ impl Tickets {
     /// unfiltered `watch`. Without a filter or `membership`, the stream is
     /// exactly what it was. A filter not taken, or one that asks `under` or
     /// `text`, is one in-band `error` and the stream ends.
+    ///
+    /// ACCESS-12: it hears only what the caller's reach admits, each row
+    /// redacted as a read's is, and follows the caller's grants: when they
+    /// move it says what entered and left (`entered` / `left`, past 256
+    /// `recount`) and hears through the new reach; refused — signed out,
+    /// expired, held nowhere — it ends with `watch_closed { reason, message }`.
     #[plexus_macros::method(
         group = "read",
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
+        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it",
         params(
             epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
             filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",
@@ -2069,159 +2080,9 @@ impl Tickets {
         membership: Option<bool>,
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let membership = membership.unwrap_or(false);
-        let (epic, ambiguous) = sight::watched_shortcode(&self.store, epic.as_deref());
-        // IDENTITY-19, IDENTITY-21: who is watching, and through what reach.
-        let access = self.access.clone();
-        let who = auth.cloned();
-        let asked = filter;
-        let opened = access.verify_call(who.as_ref(), &reach).and_then(|caller| {
-            if let Some(why) = &ambiguous {
-                return Err(why.clone());
-            }
-            let filter = caller.scoped(asked.as_deref())?;
-            // MENGER-13: how its filter reads time.
-            let clock = clock_of(&caller, tz.as_deref())?;
-            Ok((filter, Sight::of(&self.store, caller)?, clock))
-        });
-        let (filter, sight, clock, refused) = match opened {
-            Ok((filter, sight, clock)) => (filter, Some(sight), clock, None),
-            Err(e) => (None, None, Clock::default(), Some(e)),
-        };
-        // FILTER-4: a filtered watch reads the filtered channel, which
-        // carries every change and each write's cell moves after them.
-        let filtered = (filter.is_some() || membership).then(|| {
-            (self.store.subscribe_filtered(), watcher_for(&self.store, filter.as_ref(), epic.as_ref(), &clock))
-        });
-        let store = Arc::clone(&self.store);
-        let plain = filtered.is_none().then(|| self.store.subscribe());
-        // IDENTITY-19: admitted now, and asked again at every change it
-        // relays, so a watch ends when its session does. IDENTITY-21: and a
-        // restricted caller hears only of the tickets it can see.
-        // IDENTITY-37: as its grants stand at that change — a grant made
-        // or revoked moves what the watch relays (and a filtered watch's
-        // filter) from the next change on, and a watch whose caller can
-        // see nothing any more ends with an in-band `error`.
-        stream! {
-            if let Some(message) = refused {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-            let Some(mut sight) = sight else { return };
-            if let Some((mut rx, watcher)) = filtered {
-                let mut watcher = match watcher {
-                    Ok(w) => w,
-                    Err(message) => {
-                        yield TicketsEvent::Error { message };
-                        return;
-                    }
-                };
-                loop {
-                    // MENGER-13: a filter with a relative window is read
-                    // again as time passes, between writes.
-                    let next = if watcher.relative() {
-                        tokio::select! {
-                            r = rx.recv() => Some(r),
-                            _ = tokio::time::sleep(watcher.wait(&store, AGE_AT_MOST)) => None,
-                        }
-                    } else {
-                        Some(rx.recv().await)
-                    };
-                    let Some(next) = next else {
-                        for m in watcher.tick(&store, epic.as_ref()) {
-                            yield membership_event(&store, m);
-                        }
-                        continue;
-                    };
-                    match sight.again(&access, who.as_ref(), &reach, &store) {
-                        Err(message) => {
-                            yield TicketsEvent::Error { message };
-                            return;
-                        }
-                        Ok(None) => {}
-                        Ok(Some(gone)) => {
-                            // The filter again, under the reach as it stands.
-                            let rebuilt = sight.caller().scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_ref(), epic.as_ref(), &clock));
-                            match rebuilt {
-                                Ok(w) => watcher = w,
-                                Err(message) => {
-                                    yield TicketsEvent::Error { message };
-                                    return;
-                                }
-                            }
-                            if !membership {
-                                for name in gone {
-                                    yield TicketsEvent::ComponentRemoved { name };
-                                }
-                            }
-                        }
-                    }
-                    match next {
-                        Ok(Change::CellsMoved { moves }) => {
-                            for m in watcher.membership(&store, &moves, epic.as_ref()) {
-                                yield membership_event(&store, m);
-                            }
-                        }
-                        // FILTER-13: a filter asking `under` — what the write
-                        // worked out for this watch.
-                        Ok(Change::UnderMoved { moves }) => {
-                            for m in watcher.under_membership(&moves) {
-                                yield membership_event(&store, m);
-                            }
-                        }
-                        Ok(change) if !membership => {
-                            if let Some(ev) = change.in_epic(epic.as_ref()).and_then(wire_event) {
-                                if let Some(ev) = sight.relay(&store, ev) {
-                                    yield ev;
-                                }
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
-                            yield TicketsEvent::Lagged { missed };
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                    // FILTER-36: a saved filter it names, changed — said
-                    // after the change that changed it.
-                    match watcher.resaved(&store, epic.as_ref()) {
-                        Ok(moved) => for m in moved { yield membership_event(&store, m); },
-                        Err(message) => { yield TicketsEvent::Error { message }; return; }
-                    }
-                }
-                return;
-            }
-            let Some(mut rx) = plain else { return };
-            loop {
-                let next = rx.recv().await;
-                match sight.again(&access, who.as_ref(), &reach, &store) {
-                    Err(message) => {
-                        yield TicketsEvent::Error { message };
-                        return;
-                    }
-                    Ok(None) => {}
-                    Ok(Some(gone)) => {
-                        for name in gone {
-                            yield TicketsEvent::ComponentRemoved { name };
-                        }
-                    }
-                }
-                match next {
-                    Ok(change) => {
-                        // WAVE-6: of a `placements_changed`, the changes in
-                        // the epic.
-                        if let Some(ev) = change.in_epic(epic.as_ref()).and_then(wire_event) {
-                            if let Some(ev) = sight.relay(&store, ev) {
-                                yield ev;
-                            }
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
-                        yield TicketsEvent::Lagged { missed };
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        }
+        // ACCESS-12: the caller followed as the grants move, every change cut
+        // to its reach (activation/watch.rs).
+        let ask = WatchAsk { epic, filter, membership: membership.unwrap_or(false), tz };
+        watch_stream(Arc::clone(&self.store), self.access.clone(), auth.cloned(), reach, ask)
     }
 }

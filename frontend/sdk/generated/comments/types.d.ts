@@ -1,3 +1,4 @@
+import type { WatchEnd } from '../themes/types';
 import type { Anchor, Comment, CommentIntent, CommentState } from '../tickets/types';
 /** COMMENT-2: where on a page an anchor is — the element's path,
 `[data-tag="ticket DEMAND-1"]`; `comments.list --path` matches a
@@ -47,6 +48,13 @@ export interface CommentsEventLagged {
     type: 'lagged';
     missed: number;
 }
+/** ACCESS-12 (`watch`): the watch ended — its caller, verified again
+when the grants moved or its sign-in ended, was refused. Last. */
+export interface CommentsEventWatchClosed {
+    type: 'watch_closed';
+    message: string;
+    reason: WatchEnd;
+}
 /** A refusal, naming the problem; nothing was kept or changed. */
 export interface CommentsEventError {
     type: 'error';
@@ -54,13 +62,14 @@ export interface CommentsEventError {
 }
 /** What the `comments` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's. */
-export type CommentsEvent = CommentsEventComment | CommentsEventPage | CommentsEventAdded | CommentsEventResolved | CommentsEventReopened | CommentsEventLagged | CommentsEventError;
+export type CommentsEvent = CommentsEventComment | CommentsEventPage | CommentsEventAdded | CommentsEventResolved | CommentsEventReopened | CommentsEventLagged | CommentsEventWatchClosed | CommentsEventError;
 export declare function isCommentsEventComment(e: CommentsEvent): e is CommentsEventComment;
 export declare function isCommentsEventPage(e: CommentsEvent): e is CommentsEventPage;
 export declare function isCommentsEventAdded(e: CommentsEvent): e is CommentsEventAdded;
 export declare function isCommentsEventResolved(e: CommentsEvent): e is CommentsEventResolved;
 export declare function isCommentsEventReopened(e: CommentsEvent): e is CommentsEventReopened;
 export declare function isCommentsEventLagged(e: CommentsEvent): e is CommentsEventLagged;
+export declare function isCommentsEventWatchClosed(e: CommentsEvent): e is CommentsEventWatchClosed;
 export declare function isCommentsEventError(e: CommentsEvent): e is CommentsEventError;
 /** COMMENT-2: an app page, as its route — `#/ticket/DEMAND-2`, `#/` (the
 board) — always beginning `#/`. */

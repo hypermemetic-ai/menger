@@ -385,9 +385,11 @@ async fn a_watch_follows_the_grants_as_they_stand_and_ends_when_nothing_is_left(
     let (heard, ended) = drain(&mut watch, Duration::from_millis(500)).await;
     assert_eq!((amended(&heard), ended), (vec!["OUGHT-2".to_string()], false));
 
-    // OUGHT revoked, IDENTITY granted: the open watch follows.
-    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "OUGHT" })).await;
+    // IDENTITY granted, OUGHT revoked: the open watch follows (ACCESS-12:
+    // at once — revoked first, Bob would hold nothing for a moment, and
+    // the watch would end then).
     call(&ada, "members.grant", grant(BOB, "IDENTITY", "viewer")).await;
+    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "OUGHT" })).await;
     call(&ada, "tickets.amend", json!({ "id": "OUGHT-2", "title": "no longer Bob's", "body": "secret" })).await;
     call(&ada, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "now Bob's" })).await;
     let (heard, ended) = drain(&mut watch, Duration::from_millis(500)).await;
@@ -410,8 +412,104 @@ async fn a_watch_follows_the_grants_as_they_stand_and_ends_when_nothing_is_left(
     assert!(ended, "the watch ends: {heard:?}");
     assert!(amended(&heard).is_empty(), "{heard:?}");
     assert!(heard.last().unwrap()["message"].as_str().unwrap().contains("your access changed"), "{heard:?}");
+    // ACCESS-12: typed — the reason beside the words.
+    assert_eq!((heard.last().unwrap()["type"].as_str(), heard.last().unwrap()["reason"].as_str()), (Some("watch_closed"), Some("revoked")), "{heard:?}");
     let (heard, ended) = drain(&mut comments, Duration::from_millis(800)).await;
-    assert!(ended && heard.last().unwrap()["type"] == "error", "{heard:?}");
+    assert!(ended && heard.last().unwrap()["type"] == "watch_closed" && heard.last().unwrap()["reason"] == "revoked", "{heard:?}");
+}
+
+/// ACCESS-12's acceptance: a viewer's watches (tickets, a filtered
+/// membership one, comments) hear a shortcode; its grant revoked, they hear
+/// nothing of it from that moment — the tickets watch says what left, with
+/// no write needed to wake it — and a re-grant resumes them, saying what
+/// entered. Every grant revoked, each ends with a typed `watch_closed`.
+#[tokio::test]
+async fn a_revoke_stops_a_watch_at_once_and_a_regrant_resumes_it() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
+    call(&ada, "members.grant", grant(BOB, "IDENTITY", "viewer")).await;
+    let bob = as_(&w, BOB, "bob").await;
+    let mut watch = sub(&bob, "tickets.watch", json!({})).await;
+    let mut builds = sub(&bob, "tickets.watch", json!({ "filter": "kind build", "membership": true })).await;
+    let mut comments = sub(&bob, "comments.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let on = |t: &str, what: &str| json!({ "anchor": { "route": format!("#/ticket/{t}"), "path": "main", "label": "body", "excerpt": "", "ticket": t }, "body": format!("{what} on {t}") });
+    let typed = |heard: &[Value], ty: &str| -> Vec<String> { heard.iter().filter(|e| e["type"] == ty).filter_map(|e| e["ticket"]["id"].as_str().or(e["id"].as_str()).map(str::to_string)).collect() };
+    let bodies = |heard: &[Value]| -> Vec<String> { heard.iter().filter_map(|e| e["comment"]["body"].as_str().map(str::to_string)).collect() };
+
+    // Held: a birth in OUGHT is heard, and a comment on it.
+    call(&ada, "tickets.create", json!({ "epic": "OUGHT", "title": "first", "parent": "OUGHT-1" })).await;
+    call(&ada, "comments.add", on("OUGHT-2", "before")).await;
+    let (heard, _) = drain(&mut watch, Duration::from_millis(400)).await;
+    assert_eq!(typed(&heard, "created"), ["OUGHT-3"], "{heard:?}");
+    let (heard, _) = drain(&mut builds, Duration::from_millis(200)).await;
+    assert_eq!(typed(&heard, "entered"), ["OUGHT-3"], "{heard:?}");
+    assert_eq!(bodies(&drain(&mut comments, Duration::from_millis(200)).await.0), ["before on OUGHT-2"]);
+
+    // Revoked: at once — no write wakes the watch — what left is said.
+    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "OUGHT" })).await;
+    let (heard, ended) = drain(&mut watch, Duration::from_millis(400)).await;
+    assert!(!ended, "IDENTITY is still Bob's: {heard:?}");
+    assert_eq!(typed(&heard, "left"), ["OUGHT-1", "OUGHT-2", "OUGHT-3"], "{heard:?}");
+    let (heard, _) = drain(&mut builds, Duration::from_millis(200)).await;
+    assert_eq!(typed(&heard, "left"), ["OUGHT-2", "OUGHT-3"], "{heard:?}");
+    // …and nothing of OUGHT reaches him from then on.
+    call(&ada, "tickets.create", json!({ "epic": "OUGHT", "title": "second", "parent": "OUGHT-1", "kind": "build" })).await;
+    call(&ada, "comments.add", on("OUGHT-2", "while revoked")).await;
+    call(&ada, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "still Bob's" })).await;
+    call(&ada, "comments.add", on("IDENTITY-2", "seen")).await;
+    let (heard, _) = drain(&mut watch, Duration::from_millis(400)).await;
+    assert!(!heard.iter().any(|e| e.to_string().contains("OUGHT-")), "{heard:?}");
+    assert_eq!(amended(&heard), ["IDENTITY-2"], "{heard:?}");
+    let (heard, _) = drain(&mut builds, Duration::from_millis(200)).await;
+    assert!(!heard.iter().any(|e| e.to_string().contains("OUGHT-")), "{heard:?}");
+    assert_eq!(bodies(&drain(&mut comments, Duration::from_millis(200)).await.0), ["seen on IDENTITY-2"]);
+
+    // Granted again: what entered is said, and OUGHT is heard again.
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
+    let (heard, _) = drain(&mut watch, Duration::from_millis(400)).await;
+    assert_eq!(typed(&heard, "entered"), ["OUGHT-1", "OUGHT-2", "OUGHT-3", "OUGHT-4"], "{heard:?}");
+    let (heard, _) = drain(&mut builds, Duration::from_millis(200)).await;
+    assert_eq!(typed(&heard, "entered"), ["OUGHT-2", "OUGHT-3", "OUGHT-4"], "{heard:?}");
+    call(&ada, "tickets.create", json!({ "epic": "OUGHT", "title": "third", "parent": "OUGHT-1" })).await;
+    call(&ada, "comments.add", on("OUGHT-2", "after")).await;
+    let (heard, _) = drain(&mut watch, Duration::from_millis(400)).await;
+    assert_eq!(typed(&heard, "created"), ["OUGHT-5"], "{heard:?}");
+    assert_eq!(bodies(&drain(&mut comments, Duration::from_millis(200)).await.0), ["after on OUGHT-2"]);
+
+    // Every grant revoked: each watch ends at once, typed.
+    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "OUGHT" })).await;
+    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "IDENTITY" })).await;
+    for w in [&mut watch, &mut builds, &mut comments] {
+        let (heard, ended) = drain(w, Duration::from_millis(600)).await;
+        assert!(ended, "{heard:?}");
+        let last = heard.last().unwrap();
+        assert_eq!((last["type"].as_str(), last["reason"].as_str()), (Some("watch_closed"), Some("revoked")), "{heard:?}");
+    }
+}
+
+/// ACCESS-12: a row a narrow watcher hears names no ticket it cannot see —
+/// a visible ticket blocked by a hidden one says how many it hides.
+#[tokio::test]
+async fn a_watched_row_blocked_by_a_hidden_ticket_is_redacted() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(BOB, "IDENTITY", "viewer")).await;
+    let bob = as_(&w, BOB, "bob").await;
+    let mut watch = sub(&bob, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    call(&ada, "tickets.create", json!({ "epic": "IDENTITY", "title": "waits", "parent": "IDENTITY-1", "blocked_by": ["OUGHT-2", "IDENTITY-2"] })).await;
+    call(&ada, "tickets.create", json!({ "epic": "OUGHT", "title": "hidden waiter", "parent": "OUGHT-1", "blocked_by": ["IDENTITY-2"] })).await;
+    let (heard, _) = drain(&mut watch, Duration::from_millis(500)).await;
+    assert!(!heard.iter().any(|e| e.to_string().contains("OUGHT-")), "{heard:?}");
+    let born = heard.iter().find(|e| e["type"] == "created").expect("IDENTITY-3's birth");
+    assert_eq!((born["ticket"]["blocked_by"].clone(), born["ticket"]["hidden_blocked_by"].clone()), (json!(["IDENTITY-2"]), json!(1)), "{born:?}");
+    // IDENTITY-2 now unlocks a hidden ticket: blanked, and counted.
+    let hidden = heard.iter().filter(|e| e["type"] == "unlocks_changed").last().expect("IDENTITY-2's unlocks");
+    assert_eq!((hidden["added"].as_str(), hidden["ticket"]["hidden_unlocks"].clone()), (Some(""), json!(1)), "{hidden:?}");
 }
 
 #[tokio::test]
@@ -423,14 +521,18 @@ async fn a_filtered_watch_is_refiltered_when_the_grants_move() {
     let bob = as_(&w, BOB, "bob").await;
     let mut watch = sub(&bob, "tickets.watch", json!({ "filter": "kind build" })).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "OUGHT" })).await;
     call(&ada, "members.grant", grant(BOB, "IDENTITY", "viewer")).await;
-    // The first change after the grants moved re-filters the watch.
+    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "OUGHT" })).await;
+    // ACCESS-12: the grants moving re-filters the watch, at once.
     call(&ada, "tickets.create", json!({ "epic": "OUGHT", "title": "hidden", "parent": "OUGHT-1" })).await;
     call(&ada, "tickets.create", json!({ "epic": "IDENTITY", "title": "seen", "parent": "IDENTITY-1" })).await;
     let (heard, ended) = drain(&mut watch, Duration::from_millis(600)).await;
     assert!(!ended);
-    let named: Vec<String> = heard
+    // ACCESS-12: the reach moving is said first — IDENTITY-2 entered,
+    // OUGHT-2 left — and OUGHT is named nowhere after that.
+    assert_eq!((heard[0]["type"].as_str(), heard[0]["id"].as_str()), (Some("entered"), Some("IDENTITY-2")), "{heard:?}");
+    assert_eq!((heard[1]["type"].as_str(), heard[1]["id"].as_str()), (Some("left"), Some("OUGHT-2")), "{heard:?}");
+    let named: Vec<String> = heard[2..]
         .iter()
         .filter_map(|e| e["ticket"]["id"].as_str().or(e["id"].as_str()).map(str::to_string))
         .collect();

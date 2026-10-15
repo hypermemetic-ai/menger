@@ -1,3 +1,4 @@
+import type { WatchEnd } from '../themes/types';
 /** Where to read the run that made a deployment. */
 export interface DeploySource {
     /** Its run, as the CI names it — what a retry of the same record repeats. */
@@ -112,6 +113,13 @@ export interface DeploymentsEventLagged {
     type: 'lagged';
     missed: number;
 }
+/** ACCESS-12 (`watch`): the watch ended — its caller, verified again
+when the grants moved or its sign-in ended, was refused. Last. */
+export interface DeploymentsEventWatchClosed {
+    type: 'watch_closed';
+    message: string;
+    reason: WatchEnd;
+}
 /** In-band refusal, naming the problem; nothing was written. */
 export interface DeploymentsEventError {
     type: 'error';
@@ -119,7 +127,7 @@ export interface DeploymentsEventError {
 }
 /** What the `deployments` activation streams. Every method returns
 `impl Stream<Item = DeploymentsEvent>`; a refusal is the in-band `Error`. */
-export type DeploymentsEvent = DeploymentsEventDeployment | DeploymentsEventDeployed | DeploymentsEventEnvironment | DeploymentsEventEnvironmentChanged | DeploymentsEventRunning | DeploymentsEventNotRunning | DeploymentsEventCells | DeploymentsEventPage | DeploymentsEventLagged | DeploymentsEventError;
+export type DeploymentsEvent = DeploymentsEventDeployment | DeploymentsEventDeployed | DeploymentsEventEnvironment | DeploymentsEventEnvironmentChanged | DeploymentsEventRunning | DeploymentsEventNotRunning | DeploymentsEventCells | DeploymentsEventPage | DeploymentsEventLagged | DeploymentsEventWatchClosed | DeploymentsEventError;
 export declare function isDeploymentsEventDeployment(e: DeploymentsEvent): e is DeploymentsEventDeployment;
 export declare function isDeploymentsEventDeployed(e: DeploymentsEvent): e is DeploymentsEventDeployed;
 export declare function isDeploymentsEventEnvironment(e: DeploymentsEvent): e is DeploymentsEventEnvironment;
@@ -129,6 +137,7 @@ export declare function isDeploymentsEventNotRunning(e: DeploymentsEvent): e is 
 export declare function isDeploymentsEventCells(e: DeploymentsEvent): e is DeploymentsEventCells;
 export declare function isDeploymentsEventPage(e: DeploymentsEvent): e is DeploymentsEventPage;
 export declare function isDeploymentsEventLagged(e: DeploymentsEvent): e is DeploymentsEventLagged;
+export declare function isDeploymentsEventWatchClosed(e: DeploymentsEvent): e is DeploymentsEventWatchClosed;
 export declare function isDeploymentsEventError(e: DeploymentsEvent): e is DeploymentsEventError;
 /** An environment as it stands. */
 export interface Environment {

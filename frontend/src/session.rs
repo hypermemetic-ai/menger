@@ -525,7 +525,8 @@ fn pump(client: Client, filter: &str, then: Option<futures::future::AbortHandle>
                     leptos::logging::log!("membership watch lagged: {missed} change(s) missed; counting again");
                     Member::Lagged
                 }
-                Ok(ClientEvent::Data(TicketsEvent::Error { message })) => Member::Refused(message),
+                // ACCESS-12: the watch ended — the reader's grants moved.
+                Ok(ClientEvent::Data(TicketsEvent::Error { message } | TicketsEvent::WatchClosed { message, .. })) => Member::Refused(message),
                 Ok(_) => continue,
                 Err(_) => break, // the socket: the next session opens it again
             };

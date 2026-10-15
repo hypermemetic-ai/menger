@@ -285,6 +285,10 @@ pub(crate) struct Broadcast {
     comments: broadcast::Sender<CommentChange>,
     /// DEPLOY-11: `deployments.watch`'s — `deployed`, `environment_changed`.
     deployments: broadcast::Sender<crate::deployments::DeploymentsEvent>,
+    /// ACCESS-12: the grants generation, as the last write left it — what
+    /// wakes an open watch to verify its caller again (never a value it
+    /// trusts: it reads [`Store::grants_generation`]).
+    grants: Arc<tokio::sync::watch::Sender<u64>>,
 }
 
 /// How many changes a subscriber may fall behind before it lags (SCALE-5).
@@ -297,7 +301,14 @@ impl Broadcast {
             filtered: broadcast::channel(BROADCAST_CAPACITY).0,
             comments: broadcast::channel(BROADCAST_CAPACITY).0,
             deployments: broadcast::channel(BROADCAST_CAPACITY).0,
+            grants: Arc::new(tokio::sync::watch::channel(0).0),
         }
+    }
+
+    /// ACCESS-12: the grants generation is `generation` now — the open
+    /// watches woken when it moved.
+    pub(super) fn grants_at(&self, generation: u64) {
+        self.grants.send_if_modified(|g| std::mem::replace(g, generation) != generation);
     }
 
     /// COMMENT-2: a comment's change, to `comments.watch`.
@@ -3306,6 +3317,9 @@ impl Store {
                 }
             };
             let applied = self::apply(&tickets, |cache| apply(cache, &out));
+            // ACCESS-12: a write that moved who holds what wakes the watches
+            // before anything it broadcasts reaches them.
+            tx.grants_at(tickets.read().expect("store lock poisoned").members.generation());
             Ok(publish(out, applied, &tx))
         })
         .await
@@ -4730,6 +4744,8 @@ impl Store {
             move |tx| Ok(roles::store(tx, &role, &grants, at)?),
             move |cache, _| {
                 cache.roles.insert(r, g);
+                // ACCESS-12: a role's grants are who holds what, too.
+                cache.members.moved();
             },
             move |(), (), _| (),
         )
@@ -5402,6 +5418,10 @@ pub use lineage::{Node, TreePage, TreeQuery, UnderMoves, UNDERS_MAX};
 mod seen;
 use seen::Seen;
 pub use seen::Reader;
+/// ACCESS-12: what an open watch hears — every change classified, cut to
+/// the reach and redacted as a read is; a moved reach's entered and left.
+mod watching;
+pub use watching::WatchSight;
 mod reads;
 mod lensed;
 pub use lensed::{narrowing, narrowing_lens, narrowing_of, ready_and, MEMBER_MAX};
@@ -5448,6 +5468,8 @@ pub use waves::{Placed, Waves};
 mod tests;
 #[cfg(test)]
 mod tests_reach;
+#[cfg(test)]
+mod tests_watching;
 
 /// SCALE-4: the children index against a scan of every ticket's `parent`
 /// after every path that sets one, `child_count` against both, pages of

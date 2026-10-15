@@ -1456,6 +1456,35 @@ pub struct ShortcodeMove {
     pub to: String,
 }
 
+/// ACCESS-12: why an open watch ended — its caller verified again when the
+/// grants moved (or its sign-in ended), and refused. Every watch (`tickets`,
+/// `comments`, `themes`, `deployments`) ends with one `watch_closed { reason,
+/// message }` and nothing after it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchEnd {
+    /// Its session was signed out.
+    SignedOut,
+    /// Its sign-in's expiry passed.
+    Expired,
+    /// Its grants changed: it holds the watch's grant nowhere any more, or
+    /// what it holds reaches nothing.
+    Revoked,
+    /// Verified again, it was refused for another reason (named in `message`).
+    Refused,
+}
+
+impl WatchEnd {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SignedOut => "signed_out",
+            Self::Expired => "expired",
+            Self::Revoked => "revoked",
+            Self::Refused => "refused",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TicketsEvent {
@@ -1616,6 +1645,10 @@ pub enum TicketsEvent {
     /// with the oldest change still held. Not an error and not an end:
     /// it means "what you hold may be stale — fetch again what you show".
     Lagged { missed: u64 },
+    /// ACCESS-12: this `watch` ended — its caller, verified again when the
+    /// grants moved or its sign-in ended, was refused (`reason`, and why in
+    /// words). The last event of the stream.
+    WatchClosed { reason: WatchEnd, message: String },
     /// MNG-10: one shortcode's roll-up (yielded per shortcode by `groups`,
     /// in shortcode order).
     Group { group: Group },

@@ -279,14 +279,28 @@ impl Themes {
     )]
     pub async fn watch(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = ThemesEvent> + Send + 'static {
         let mut rx = self.store.subscribe_themes();
-        let admitted = self.access.verify_call(auth, &reach);
+        // ACCESS-12: the caller followed — a revoke or sign-out ends it.
+        let opened = crate::access::Following::open(&self.access, &self.store, auth, &reach);
         stream! {
-            if let Err(message) = admitted {
-                yield ThemesEvent::Error { message };
-                return;
-            }
+            let mut following = match opened {
+                Ok(f) => f,
+                Err(message) => {
+                    yield ThemesEvent::Error { message };
+                    return;
+                }
+            };
             loop {
-                match rx.recv().await {
+                let next = tokio::select! {
+                    biased;
+                    () = following.changed() => None,
+                    r = rx.recv() => Some(r),
+                };
+                if let Err(closed) = following.again() {
+                    yield ThemesEvent::WatchClosed { reason: closed.reason, message: closed.message };
+                    return;
+                }
+                let Some(next) = next else { continue };
+                match next {
                     Ok(ThemeChange::Changed(theme)) => yield ThemesEvent::ThemeChanged { theme },
                     Ok(ThemeChange::Removed(name)) => yield ThemesEvent::ThemeRemoved { name },
                     Ok(ThemeChange::Set(setting)) => yield ThemesEvent::Setting { setting },

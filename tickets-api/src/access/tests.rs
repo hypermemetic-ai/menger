@@ -645,3 +645,69 @@ async fn the_store_hands_out_its_system_once() {
     assert!(fresh.system().is_none());
     assert!(a.book().system.get().is_some());
 }
+
+/// ACCESS-12: whether a [`Following`]'s wake comes within `ms`.
+async fn wakes(f: &mut Following, ms: u64) -> bool {
+    tokio::time::timeout(std::time::Duration::from_millis(ms), f.changed()).await.is_ok()
+}
+
+#[tokio::test]
+async fn a_followed_caller_is_verified_again_only_when_the_grants_move() {
+    let a = login(vec![]);
+    let s = store().await;
+    s.grant(grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
+    a.attach(s.clone());
+    let me = ctx(json!({}));
+    let mut f = Following::open(&a, &s, Some(&me), &reach_of(&a, &me, "tickets.list")).unwrap();
+    // Nothing moved: no wake, the same caller.
+    assert!(!wakes(&mut f, 50).await);
+    assert!(matches!(f.again(), Ok(Followed::Same)));
+    // A ticket write moves no grant: still no wake.
+    s.amend("OUGHT-2", Some("t".into()), None).await.unwrap();
+    assert!(!wakes(&mut f, 50).await);
+    // A grant: woken, verified again, the reach moved.
+    s.grant(grant(ALICE, "IDENTITY", Role::Viewer)).await.unwrap();
+    assert!(wakes(&mut f, 500).await, "a grant wakes the watch");
+    assert!(matches!(f.again(), Ok(Followed::Moved { .. })));
+    assert_eq!(f.user().reach_filter().unwrap().unwrap().format(), "under in (IDENTITY, OUGHT)");
+    // A role's grants edited moves the generation too.
+    let before = s.grants_generation();
+    s.set_role("viewer".into(), vec!["tickets.get".into(), "tickets.list".into()]).await.unwrap();
+    assert!(s.grants_generation() > before);
+    assert!(wakes(&mut f, 500).await);
+    assert!(matches!(f.again(), Ok(Followed::Same)), "the same reach: nothing to recompute");
+    // Every grant revoked: the watch ends, typed.
+    s.revoke(ALICE.into(), "OUGHT".into()).await.unwrap();
+    s.revoke(ALICE.into(), "IDENTITY".into()).await.unwrap();
+    assert!(wakes(&mut f, 500).await);
+    let closed = f.again().unwrap_err();
+    assert_eq!(closed.reason, crate::types::WatchEnd::Revoked, "{closed:?}");
+    assert!(closed.message.starts_with("your access changed"), "{closed:?}");
+}
+
+#[tokio::test]
+async fn a_followed_caller_signed_out_or_expired_ends_typed() {
+    let live = Arc::new(Live::default());
+    live.0.lock().unwrap().insert("k1".into());
+    let a = Access::with_login(live.clone(), true, vec![]);
+    a.book().seed(declared());
+    let s = store().await;
+    s.grant(grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
+    a.attach(s.clone());
+    // Signed out in the table: the next change it hears ends it.
+    let me = ctx(json!({ SESSION_KEY: "k1" }));
+    let mut f = Following::open(&a, &s, Some(&me), &reach_of(&a, &me, "tickets.list")).unwrap();
+    assert!(matches!(f.again(), Ok(Followed::Same)));
+    live.0.lock().unwrap().clear();
+    assert_eq!(f.again().unwrap_err().reason, crate::types::WatchEnd::SignedOut);
+    // Its expiry comes: woken then, and ended.
+    let soon = ctx(json!({ "expires_at": now() + 1 }));
+    let mut f = Following::open(&a, &s, Some(&soon), &reach_of(&a, &soon, "tickets.list")).unwrap();
+    assert!(wakes(&mut f, 3000).await, "the expiry wakes it");
+    assert_eq!(f.again().unwrap_err().reason, crate::types::WatchEnd::Expired);
+    // Login off: never woken, never refused.
+    let open = Access::open();
+    let mut f = Following::open(&open, &s, None, &GateReach::everywhere()).unwrap();
+    assert!(!wakes(&mut f, 50).await);
+    assert!(matches!(f.again(), Ok(Followed::Same)));
+}

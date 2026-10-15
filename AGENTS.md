@@ -310,7 +310,13 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   (`user.sight()` to read as `tickets.get`), or the `System` for what acts
   for no user — and answers only its reach, a hidden ticket not found and
   never named in a visible row (ACCESS-10, README "Reads through a
-  reach"); store tests read as `SYS` or `tests_reach::viewer_of`.
+  reach"); store tests read as `SYS` or `tests_reach::viewer_of`. A
+  watch holds its caller (`access::Following`), is verified again when the
+  grants generation moves, a sign-out or the expiry comes, and ends with a
+  typed `watch_closed { reason }`; a moved reach says `entered` / `left`;
+  every change is cut by `Store::heard`, whose `match` has no `_` arm — a
+  new `Change` is classified there or does not compile (ACCESS-12, README
+  "Watches through a reach").
 
   **Organizations** (ORG-4) are the `orgs` activation: every ticket and
   shortcode is in one (today's tracker is `hypermemetic`). `list` (the

@@ -106,6 +106,13 @@ export interface ThemesEventLagged {
     type: 'lagged';
     missed: number;
 }
+/** ACCESS-12 (`watch`): the watch ended — its caller, verified again
+when the grants moved or its sign-in ended, was refused. Last. */
+export interface ThemesEventWatchClosed {
+    type: 'watch_closed';
+    message: string;
+    reason: WatchEnd;
+}
 /** In-band refusal, naming the problem; nothing was written. */
 export interface ThemesEventError {
     type: 'error';
@@ -113,18 +120,24 @@ export interface ThemesEventError {
 }
 /** What the `themes` activation streams. Every method returns
 `impl Stream<Item = ThemesEvent>`; a refusal is the in-band `Error`. */
-export type ThemesEvent = ThemesEventTheme | ThemesEventThemeChanged | ThemesEventThemeRemoved | ThemesEventSetting | ThemesEventRegions | ThemesEventLagged | ThemesEventError;
+export type ThemesEvent = ThemesEventTheme | ThemesEventThemeChanged | ThemesEventThemeRemoved | ThemesEventSetting | ThemesEventRegions | ThemesEventLagged | ThemesEventWatchClosed | ThemesEventError;
 export declare function isThemesEventTheme(e: ThemesEvent): e is ThemesEventTheme;
 export declare function isThemesEventThemeChanged(e: ThemesEvent): e is ThemesEventThemeChanged;
 export declare function isThemesEventThemeRemoved(e: ThemesEvent): e is ThemesEventThemeRemoved;
 export declare function isThemesEventSetting(e: ThemesEvent): e is ThemesEventSetting;
 export declare function isThemesEventRegions(e: ThemesEvent): e is ThemesEventRegions;
 export declare function isThemesEventLagged(e: ThemesEvent): e is ThemesEventLagged;
+export declare function isThemesEventWatchClosed(e: ThemesEvent): e is ThemesEventWatchClosed;
 export declare function isThemesEventError(e: ThemesEvent): e is ThemesEventError;
 /** THEME-8: what a theme sets a token to (`#00796b`) — not blank, at
 most 200 bytes, nothing that could end its declaration:
 [`crate::themes::value_ok`]. */
 export type TokenValue = string;
+/** ACCESS-12: why an open watch ended — its caller verified again when the
+grants moved (or its sign-in ended), and refused. Every watch (`tickets`,
+`comments`, `themes`, `deployments`) ends with one `watch_closed { reason,
+message }` and nothing after it. */
+export type WatchEnd = "signed_out" | "expired" | "revoked" | "refused";
 /** What a region wears, and the level it came from. */
 export interface Worn {
     /** The shortcode, for a shortcode's theme. */
