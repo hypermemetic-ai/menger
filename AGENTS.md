@@ -31,6 +31,10 @@ deploy/pipeline sync test      # test's data refreshed from prod, same release (
 deploy/pipeline promote        # the release test passed → prod; smoke; automatic rollback on failure
 deploy/pipeline status         # what each env runs, whether it is healthy, its last deployment record
 deploy/pipeline backfill       # deployments.log → menger's deployments (DEPLOY-12; idempotent)
+deploy/pipeline landing        # DEPLOY-17: main's landing/ → gate → menger.sh (infra's pin moved, the
+                               # edge applied, the live page verified, recorded as env `edge`)
+deploy/pipeline landing --check  # the gate and infra's dry run, nothing written
+deploy/pipeline media          # landing/media regenerated from the release prod runs; then commit
 ```
 
 - **Every deploy test, sync, promote and rollback records itself in menger**
@@ -41,6 +45,10 @@ deploy/pipeline backfill       # deployments.log → menger's deployments (DEPLO
   deploy. A test of the pipeline runs it on a throwaway root
   (`deploy/tests/pipeline`), never against the real environments.
 
+- **menger.sh changes only through `deploy/pipeline landing`** (DEPLOY-17):
+  never by editing infra's pin or running `bin/infra` by hand. It deploys a
+  commit on main, so merge first; a change to the app's look is followed by
+  `deploy/pipeline media`, its files committed, then `landing`.
 - **Production changes only through `promote`**, and only to a release that
   passed the test environment. A `cargo build` or `trunk build` in a checkout
   changes nothing that is serving.

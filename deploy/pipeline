@@ -18,6 +18,12 @@
 #   deploy/pipeline logs ENV [journalctl args…]
 #   deploy/pipeline backfill                deployments.log → menger's deployments
 #                                           (idempotent: a record kept is not kept twice)
+#   deploy/pipeline landing [REV] [--check] DEPLOY-17: landing/ at REV (default main) → gate →
+#                                           infra's pin moved, the edge applied, the live page
+#                                           verified, the pin committed; recorded as env `edge`
+#                                           (--check: the gate and infra's dry run, nothing written)
+#   deploy/pipeline media [RELEASE]         landing/media regenerated from a release's own binary
+#                                           (default: what prod runs); the worker commits them
 #
 # DEPLOY-12: deploy test, sync, promote and rollback each tell menger what they
 # did — a deployment record (deploy/record → deployments.record): `started`
@@ -49,6 +55,14 @@ OUTBOX=${MENGER_DEPLOY_OUTBOX:-$HOME_DIR/outbox}
 SENT=$HOME_DIR/sent
 SEND_TIMEOUT=${MENGER_DEPLOY_RECORD_TIMEOUT:-10}
 RUN="" RUN_AT="" # this run's id and when it began (begin_run): its records and its log line carry the id
+# DEPLOY-17: the landing page — menger.sh is landing/ at the commit pinned in
+# hypermemetic-infra (menger_landing_commit), which the edge role reads with
+# git show and git archive from this checkout, never a working tree.
+INFRA=${MENGER_INFRA_DIR:-$(dirname "$REPO")/hypermemetic-infra}
+INFRA_PIN=inventory/group_vars/all/main.yml
+LANDING_URL=${MENGER_LANDING_URL:-https://menger.sh}   # `none`: no live verification
+LANDING_CHECK=$REPO/deploy/landing-check.mjs
+LANDING_EXPORT="" # the export a landing run made, removed on exit
 
 say()  { printf '%s\n' "$*" >&2; }
 die()  { say "pipeline: $*"; exit 1; }
@@ -89,7 +103,11 @@ units_of() { echo "menger@$1.service menger-diagrams@$1.service"; }
 # sent (same environment, state, revision and run: menger keeps one).
 begin_run() { RUN_AT=$(date -u +%FT%TZ); RUN="$1@$RUN_AT#$$"; } # e.g. promote@2026-10-12T22:04:02Z#4242
 PENDING=() # ENV RELEASE PREVIOUS of a run that told `started` and has not ended
-on_exit() { [[ ${#PENDING[@]} -eq 3 ]] && tell "${PENDING[0]}" failed "${PENDING[1]}" "${PENDING[2]}"; return 0; }
+on_exit() {
+  [[ ${#PENDING[@]} -eq 3 ]] && tell "${PENDING[0]}" failed "${PENDING[1]}" "${PENDING[2]}"
+  [[ -n $LANDING_EXPORT && -d $LANDING_EXPORT ]] && rm -rf "$LANDING_EXPORT"
+  return 0
+}
 trap on_exit EXIT
 sha_of() { [[ ${1:-} =~ -([0-9a-f]{7,40})$ ]] && echo "${BASH_REMATCH[1]}" || true; }
 git_repo() { if git -C "$BUILD" rev-parse --git-dir >/dev/null 2>&1; then echo "$BUILD"; else echo "$REPO"; fi; }
@@ -543,6 +561,128 @@ cmd_backfill() {
 }
 
 # ── status, releases, logs ──────────────────────────────────────────────────
+# ── the landing page (DEPLOY-17) ────────────────────────────────────────────
+# One command from a commit on main to menger.sh: landing/ exported at the
+# commit, gated (the CSP's constraints, every referenced file present, both
+# pages rendered clean), infra's pin moved to it, the edge applied by infra's
+# own role (which validates, reloads and puts the old files back on a failed
+# check), the live page compared byte for byte with the commit's, the pin
+# committed in infra, and the whole thing recorded in menger as the `edge`
+# environment of project menger, like a deploy to test or prod.
+pinned_landing() { sed -n 's/^menger_landing_commit: *\([0-9a-f]\{7,40\}\).*/\1/p' "$INFRA/$INFRA_PIN" | head -n 1; }
+set_pin() { sed -i "s/^menger_landing_commit: .*/menger_landing_commit: $1/" "$INFRA/$INFRA_PIN"; }
+landing_gate() { # DIR (landing/ at the commit) — dies at the first failure
+  local dir=$1 page ref f
+  step "gate: the page's constraints"
+  node --check "$dir/main.js" || die "gate: main.js does not parse"
+  for page in index.html guide/index.html; do
+    [[ -f $dir/$page ]] || die "gate: no $page in the commit"
+    grep -q ' style="' "$dir/$page" && die "gate: $page has an inline style attribute — the CSP allows none"
+    grep -q '<script>' "$dir/$page" && die "gate: $page has an inline script — the CSP allows none"
+    # every file a page names on its own origin is in the commit
+    while read -r ref; do
+      [[ -z $ref || $ref =~ ^(https?:|data:|mailto:|#|\.\./#|\./$) ]] && continue
+      f=$dir/$(dirname "$page")/${ref%%[?#]*}; f=${f%/}
+      [[ -e $f ]] || die "gate: $page refers to $ref, which the commit does not hold"
+    done < <(grep -o '\(src\|srcset\|href\)="[^"]*"' "$dir/$page" | sed 's/^[a-z]*="//; s/"$//' | tr ',' '\n' | awk '{print $1}' | sort -u)
+  done
+  step "gate: both pages render (deploy/landing-check.mjs)"
+  node "$LANDING_CHECK" "$dir" >&2 || die "gate: the pages do not render clean"
+}
+cmd_landing() {
+  local rev=main check=0 a
+  for a in "$@"; do case $a in --check) check=1 ;; -*) die "unknown flag $a" ;; *) rev=$a ;; esac; done
+  need git; need node; need jq
+  [[ -x $INFRA/bin/infra && -f $INFRA/$INFRA_PIN ]] || die "no infra at $INFRA — MENGER_INFRA_DIR names a hypermemetic-infra checkout with bin/infra and $INFRA_PIN"
+  local sha short was rel subject
+  sha=$(git -C "$REPO" rev-parse --verify "$rev^{commit}" 2>/dev/null) || die "no commit '$rev'"
+  short=${sha:0:7}
+  subject=$(git -C "$REPO" log -1 --format=%s "$sha" | cut -c1-80)
+  was=$(pinned_landing); [[ -n $was ]] || die "no menger_landing_commit in $INFRA/$INFRA_PIN"
+  step "landing $short — $subject"
+  [[ $was == "$sha" ]] && say "the pin already holds $short"
+
+  # infra reads the commit from a checkout it mounts read-only: the main
+  # repository, not a worktree (whose .git is a file pointing outside the
+  # mount); every worktree's commits are in it. Playwright for the render
+  # gate comes from the same place when this checkout has none installed.
+  local src; src=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")
+  [[ -d $REPO/perf/node_modules/playwright ]] || export PLAYWRIGHT_FROM=${PLAYWRIGHT_FROM:-$src/perf}
+
+  LANDING_EXPORT=$(mktemp -d)
+  git -C "$REPO" archive "$sha" landing | tar -x -C "$LANDING_EXPORT" || die "no landing/ at $short"
+  landing_gate "$LANDING_EXPORT/landing"
+
+  if [[ $check == 1 ]]; then
+    step "infra: what would change (bin/infra edge.yml --check --diff)"
+    INFRA_MENGER_DIR=$src "$INFRA/bin/infra" edge.yml --check --diff -e "menger_landing_commit=$sha" >&2 \
+      || die "infra's dry run failed"
+    say "checked: $short passes the gate and infra would take it; nothing written"
+    return 0
+  fi
+
+  rel=landing-$(date -u +%Y%m%dT%H%M%SZ)-$short
+  begin_run landing
+  tell edge started "$rel" "pin-${was:0:7}"
+  step "infra: pin $short, apply the edge (bin/infra edge.yml)"
+  set_pin "$sha"
+  if ! INFRA_MENGER_DIR=$src "$INFRA/bin/infra" edge.yml >&2; then
+    set_pin "$was"
+    record edge deploy "$rel" "infra apply failed; pin restored to ${was:0:7}"
+    tell edge failed "$rel" "pin-${was:0:7}"
+    die "the edge did not take $short — infra put the old files back; the pin holds ${was:0:7} again"
+  fi
+  if [[ $LANDING_URL != none ]]; then
+    step "verify: $LANDING_URL/ serves the commit's index.html"
+    local want got
+    want=$(git -C "$REPO" show "$sha:landing/index.html" | sha256sum | cut -d' ' -f1)
+    got=$(curl -fsS -H 'Cache-Control: no-cache' "$LANDING_URL/" 2>/dev/null | sha256sum | cut -d' ' -f1)
+    if [[ $want != "$got" ]]; then
+      record edge deploy "$rel" "applied, but $LANDING_URL/ does not serve the commit's index.html"
+      tell edge failed "$rel" "pin-${was:0:7}"
+      die "$LANDING_URL/ does not serve $short's index.html — the pin is moved and infra's checks passed; see: bin/infra status.yml"
+    fi
+  fi
+  git -C "$INFRA" add "$INFRA_PIN"
+  if git -C "$INFRA" diff --cached --quiet; then
+    say "infra: the pin already held $short — nothing to commit"
+  else
+    git -C "$INFRA" commit -q -m "menger.sh at $short — $subject (deploy/pipeline landing)" \
+      || die "infra: the pin changed but could not be committed — commit $INFRA/$INFRA_PIN by hand"
+  fi
+  record edge deploy "$rel" ok
+  tell edge succeeded "$rel" "pin-${was:0:7}"
+  say "menger.sh serves $short"
+}
+cmd_media() {
+  local rel; rel=$(resolve_release "${1:-$(running_release prod)}")
+  step "media from $rel — $(sed -n 's/^subject: *//p' "$RELEASES/$rel/RELEASE" | cut -c1-70)"
+  MENGER_BIN=$RELEASES/$rel/bin/menger MENGER_APP_DIST=$RELEASES/$rel/app PLAYWRIGHT_FROM=$REPO/perf \
+    "$REPO/scripts/landing-media.sh" all || die "scripts/landing-media.sh failed"
+  say "changed under landing/media:"
+  git -C "$REPO" status --short landing/media | sed 's/^/  /' >&2
+  say "commit them, merge, then: deploy/pipeline landing"
+}
+edge_status() {
+  [[ -f $INFRA/$INFRA_PIN ]] || return 0
+  local pin behind title
+  pin=$(pinned_landing)
+  printf 'edge\n'
+  if [[ -n $pin ]] && git -C "$REPO" cat-file -e "$pin^{commit}" 2>/dev/null; then
+    printf '  landing   %s  %s\n' "${pin:0:7}" "$(git -C "$REPO" log -1 --format=%s "$pin" | cut -c1-70)"
+    behind=$(git -C "$REPO" rev-list --count "$pin..main" -- landing 2>/dev/null || echo "?")
+    printf '  main      %s commit(s) touching landing/ since the pin\n' "$behind"
+  else
+    printf '  landing   %s (not a commit this checkout has)\n' "${pin:-no pin}"
+  fi
+  if [[ $LANDING_URL != none ]]; then
+    title=$(timeout 10 curl -fsS "$LANDING_URL/" 2>/dev/null | sed -n 's/.*<title>\([^<]*\).*/\1/p' | head -n 1)
+    if [[ -n $title ]]; then printf '  live      %s/ — %s\n' "$LANDING_URL" "$title"
+    else printf '  live      no answer from %s/\n' "$LANDING_URL"; fi
+  fi
+  record_status edge
+}
+
 cmd_status() {
   for env in prod test; do
     [[ -f $(env_file $env) ]] || { say "$env: not installed"; continue; }
@@ -556,13 +696,15 @@ cmd_status() {
       printf '  %-28s %s since %s\n' "$u" "$(systemctl --user is-active "$u" 2>/dev/null || true)" \
         "$(systemctl --user show -p ActiveEnterTimestamp --value "$u" 2>/dev/null)"
     done
-    local h; h=$(timeout 5 synapse -P "$MENGER_WS_PORT" menger tickets health 2>/dev/null | sed -n 's/^ *ticket_count: *//p')
+    # a refused or silent health (test behind its login) is a line, never the end of status
+    local h; h=$(timeout 5 synapse -P "$MENGER_WS_PORT" menger tickets health 2>/dev/null | sed -n 's/^ *ticket_count: *//p' || true)
     if [[ -n $h ]]; then printf '  health    %s tickets on :%s\n' "$h" "$MENGER_WS_PORT"
     else printf '  health    no answer on :%s\n' "$MENGER_WS_PORT"; fi
     printf '  app       http://127.0.0.1:%s/\n' "$MENGER_SHELL_PORT"
     local f; f=$(foreign_holders "$env"); [[ -n $f ]] && printf '  outside   pids %s hold its ports outside systemd\n' "$f"
     record_status "$env"
   done
+  edge_status
 }
 record_status() { # ENV → its last deployment record sent (DEPLOY-12), and what waits to be
   local f=$SENT/${1//\//_}.json n=0 q
@@ -601,5 +743,7 @@ case $cmd in
   releases) cmd_releases ;;
   logs)     cmd_logs "$@" ;;
   backfill) cmd_backfill ;;
+  landing)  cmd_landing "$@" ;;
+  media)    cmd_media "$@" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

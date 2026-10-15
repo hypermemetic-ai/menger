@@ -165,5 +165,59 @@ STUB_TRACKER=down run backfill
 same "backfill, tracker down: exits 0" "$code" 0
 has "backfill, tracker down: queued" "$err" "wait in $OUT"
 
+# ── DEPLOY-17: the landing page — infra a stand-in, the export of landing/ real ──
+INFRA=$SCRATCH/infra; mkdir -p "$INFRA/bin" "$INFRA/inventory/group_vars/all"
+printf '# pins\nmenger_landing_commit: %s\nedge_www: []\n' "${C[0]}" >"$INFRA/inventory/group_vars/all/main.yml"
+# the stand-in infra keeps every call; STUB_INFRA=fail fails an apply (never a --check)
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$STUB_INFRA_LOG"\n[[ ${STUB_INFRA:-ok} == fail && " $* " != *" --check "* ]] && exit 1\nexit 0\n' >"$INFRA/bin/infra"
+chmod +x "$INFRA/bin/infra"
+export GIT_AUTHOR_NAME=pipeline-test GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=pipeline-test GIT_COMMITTER_EMAIL=t@t
+git -C "$INFRA" init -q && git -C "$INFRA" add -A && git -C "$INFRA" commit -qm "the pins"
+export MENGER_INFRA_DIR=$INFRA MENGER_LANDING_URL=none STUB_INFRA_LOG=$SCRATCH/infra.log
+pin() { sed -n 's/^menger_landing_commit: *//p' "$INFRA/inventory/group_vars/all/main.yml"; }
+: >"$STUB_INFRA_LOG"
+
+# --check: the gate, then infra's dry run with the commit as an extra var; nothing written, nothing recorded
+m=$(mark); run landing --check "${C[2]}"
+same "landing --check exits 0" "$code" 0
+has "landing --check: infra's dry run, the commit as an extra var" "$(<"$STUB_INFRA_LOG")" "edge.yml --check --diff -e menger_landing_commit=${C[2]}"
+same "landing --check: the pin untouched" "$(pin)" "${C[0]}"
+same "landing --check: nothing recorded" "$(mark)" "$m"
+has "landing --check: says" "$err" "checked: $S2 passes the gate and infra would take it; nothing written"
+
+# the deploy: the pin moved, infra applied, the pin committed, recorded as edge with the old pin as previous
+: >"$STUB_INFRA_LOG"; m=$(mark); run landing "${C[2]}"
+same "landing exits 0" "$code" 0
+same "landing: infra applied" "$(<"$STUB_INFRA_LOG")" "edge.yml"
+same "landing: the pin is the commit" "$(pin)" "${C[2]}"
+has "landing: the pin committed in infra" "$(git -C "$INFRA" log -1 --format=%s)" "menger.sh at $S2 — "
+n=$(git -C "$REPO" rev-list --count "${C[0]}..${C[2]}")
+same "landing: started, succeeded for edge; previous the old pin; commits from git" \
+  "$(since "$m" '[.environment, .state, .revision, .previous, (.commits | length)]')" \
+  "[\"edge\",\"started\",\"$S2\",\"$S0\",$n] [\"edge\",\"succeeded\",\"$S2\",\"$S0\",$n]"
+same "landing: the log line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'edge\tdeploy\tok'
+has "landing: says" "$err" "menger.sh serves $S2"
+# the same commit again: nothing to commit in infra, still recorded
+m=$(mark); run landing "${C[2]}"
+same "landing again exits 0" "$code" 0
+has "landing again: the pin already held it" "$err" "the pin already held $S2 — nothing to commit"
+same "landing again: recorded with itself as previous" "$(since "$m" '[.state, .revision, .previous]')" \
+  "[\"started\",\"$S2\",\"$S2\"] [\"succeeded\",\"$S2\",\"$S2\"]"
+
+# a failed apply: infra's role has put the old files back; the pin restored, failed recorded, exit 1
+k=$(git -C "$INFRA" rev-parse HEAD)
+m=$(mark); STUB_INFRA=fail run landing "${C[1]}"
+same "failed apply exits 1" "$code" 1
+same "failed apply: the pin restored" "$(pin)" "${C[2]}"
+same "failed apply: nothing committed in infra" "$(git -C "$INFRA" rev-parse HEAD)" "$k"
+same "failed apply: started, failed" "$(since "$m" '[.state, .revision, .previous]')" "[\"started\",\"$S1\",\"$S2\"] [\"failed\",\"$S1\",\"$S2\"]"
+has "failed apply: says" "$err" "the edge did not take $S1"
+
+# status shows the edge
+run status
+out=$(<"$SCRATCH/out")
+has "status: the edge's pin" "$out" "landing   $S2"
+has "status: the edge's last record" "$out" "record    failed $S1"
+
 printf 'deploy/pipeline records: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]

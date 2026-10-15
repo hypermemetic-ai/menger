@@ -31,6 +31,9 @@ deploy/pipeline sync test            # test's data refreshed from prod; test kee
 deploy/pipeline promote              # the release test runs → prod
 deploy/pipeline status               # what each env runs, whether it is up, its health, its last record
 deploy/pipeline backfill             # deployments.log → menger's deployments (idempotent)
+deploy/pipeline landing              # main's landing/ → gate → the edge (menger.sh); recorded as env `edge`
+deploy/pipeline landing --check      # the gate and infra's dry run, nothing written
+deploy/pipeline media                # landing/media regenerated from the release prod runs
 ```
 
 1. **Build** (`build [REV]`, default `main`). A commit, never a working
@@ -81,6 +84,46 @@ database, which the next `deploy test` or `sync test` replaces. Run it alone:
 
 **Drills.** `DEPLOY_SMOKE_FAIL=test deploy/pipeline promote --to test` fails
 the first smoke on purpose, so the automatic rollback can be watched on test.
+
+### The landing page (DEPLOY-17)
+
+menger.sh is `landing/` at one commit, pinned in hypermemetic-infra
+(`menger_landing_commit` in `inventory/group_vars/all/main.yml`) and read by
+the edge role from this checkout with `git show` and `git archive` — never a
+working tree (SCAFFOLD-19). `deploy/pipeline landing [REV]` (default `main`)
+takes a commit there in one run:
+
+1. **Export.** `landing/` at the commit, into a scratch directory.
+2. **Gate.** `main.js` parses; neither page carries an inline style or
+   script (the CSP allows none); every file a page names on its own origin —
+   stills, clips, fonts, the grain — is in the commit; `deploy/landing-check.mjs`
+   serves the export and loads `/` and `/guide/` in Chromium at 390 and 1440:
+   no console error, page error, failed request, answer of 400 or more,
+   horizontal scroll or missing title.
+3. **Pin and apply.** The pin set to the commit, `bin/infra edge.yml` run with
+   this checkout as infra's menger source. The role validates, writes, reloads,
+   and on a failed check puts the old files back by itself; then the pipeline
+   restores the pin, records `failed` and exits 1.
+4. **Verify.** `https://menger.sh/` (`MENGER_LANDING_URL`; `none` skips it)
+   must serve the commit's `index.html` byte for byte.
+5. **Commit and record.** The pin committed in infra (`menger.sh at <sha> —
+   <subject> (deploy/pipeline landing)`); one line in `deployments.log`
+   (`edge deploy landing-<when>-<sha>`); `started` then `succeeded` or
+   `failed` sent to menger as project `menger`, environment `edge`, the
+   previous pin as `previous`, the commits between from `git log`. The app
+   shows it at `#/deployments` like any other environment.
+
+`landing --check` runs the gate and infra's dry run (`edge.yml --check
+--diff`, the commit as an extra var) and writes nothing. `status` adds an
+`edge` block: the pin, how many commits on main touch `landing/` since it,
+whether the live page answers, the last record sent.
+
+**Media.** The stills and clips are recorded from the real app, so they go
+stale when the app's look changes. `deploy/pipeline media [RELEASE]` runs
+`scripts/landing-media.sh` on a release's own binary and app (default: what
+prod runs — the pictures show exactly what prod serves) and lists the changed
+files under `landing/media/`; commit them, merge, then `landing`. Infra is
+found at `MENGER_INFRA_DIR` (default `../hypermemetic-infra`).
 
 ## Recording deployments
 
