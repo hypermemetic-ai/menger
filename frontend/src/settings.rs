@@ -204,7 +204,7 @@ fn authority(scheme: &str, rest: &str) -> Result<(String, Option<u16>), String> 
 // The record
 
 /// The app's settings: the typed record behind [`KEY`].
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Settings {
     /// The backend's WebSocket URL when it is not this page's server
     /// (`None`: the page's server — the default).
@@ -220,6 +220,22 @@ pub(crate) struct Settings {
     /// DESIGN-43: how fast framed code types itself in (`Normal`: the
     /// default).
     pub(crate) typing: crate::motion::Typing,
+    /// APP-25: whether hovering (or focusing) a tray tab shows its full
+    /// question in a card (`true`: the default).
+    pub(crate) queue_hover: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            ws_url: None,
+            recent: Vec::new(),
+            test_url: None,
+            motion: crate::motion::Pref::default(),
+            typing: crate::motion::Typing::default(),
+            queue_hover: true,
+        }
+    }
 }
 
 /// The record as stored. Its own type, so the stored shape is one place.
@@ -242,6 +258,10 @@ struct Record {
     /// so a record without it reads and writes as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     typing: Option<String>,
+    /// APP-25: `false` when the tray's hover card is off; omitted while it
+    /// is on, so a record without it reads and writes as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    queue_hover: Option<bool>,
 }
 
 /// Only the version — read first, so a record of another version reads as
@@ -278,7 +298,8 @@ impl Settings {
             .filter(|u| u != TEST_URL_DEFAULT);
         let motion = crate::motion::Pref::parse(record.motion.as_deref());
         let typing = crate::motion::Typing::parse(record.typing.as_deref());
-        Settings { ws_url, recent, test_url, motion, typing }
+        let queue_hover = record.queue_hover.unwrap_or(true);
+        Settings { ws_url, recent, test_url, motion, typing, queue_hover }
     }
 
     /// The stored string.
@@ -290,6 +311,7 @@ impl Settings {
             test_url: self.test_url.clone(),
             motion: self.motion.word().map(str::to_string),
             typing: self.typing.word().map(str::to_string),
+            queue_hover: (!self.queue_hover).then_some(false),
         })
         .expect("a record of strings serializes")
     }
@@ -319,6 +341,12 @@ impl Settings {
     /// DESIGN-43: the record with the Typed text speed `t`.
     pub(crate) fn with_typing(mut self, t: crate::motion::Typing) -> Self {
         self.typing = t;
+        self
+    }
+
+    /// APP-25: the record with the tray's hover card on or off.
+    pub(crate) fn with_queue_hover(mut self, on: bool) -> Self {
+        self.queue_hover = on;
         self
     }
 
@@ -774,6 +802,8 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
             <crate::links::TrustGroup />
             // DESIGN-39: how much the app moves.
             <MotionGroup />
+            // APP-25: the tray — the question on hover.
+            <QueueGroup />
             // AGS-28: every key and gesture — the table the `?` sheet draws.
             <KeyboardGroup />
         </section>
@@ -879,6 +909,42 @@ fn TypingField() -> impl IntoView {
             </div>
             {move || problem.get().map(|p| view! { <p class="problem" role="alert">{p}</p> })}
         </div>
+    }
+}
+
+/// APP-25: Settings → Queue — whether hovering (or focusing) a tab in the
+/// tray shows its full question in a card above it; on by default. Kept in
+/// the record at once, and followed live by the tray (src/queue.rs).
+#[component]
+fn QueueGroup() -> impl IntoView {
+    let on = crate::queue::hover_setting();
+    let problem = RwSignal::new(None::<String>);
+    let pick = {
+        let on = on.clone();
+        move |v: bool| {
+            on.set(v);
+            problem.set(store(&load().with_queue_hover(v)).err());
+        }
+    };
+    let checked = on.clone();
+    view! {
+        <fieldset class="group" id="settings-queue">
+            <legend>"Queue"</legend>
+            <p class="now">"The tray of tickets queued for you, along the bottom edge."</p>
+            <div class="field">
+                <label for="queue-hover">"Show the question on hover"</label>
+                <div class="control">
+                    <input
+                        id="queue-hover"
+                        type="checkbox"
+                        prop:checked=move || checked.get()
+                        on:change=move |ev| pick(event_target_checked(&ev))
+                    />
+                    <span class="hint">" hovering or focusing a tab shows a card with its full question, its urgency and who queued it"</span>
+                </div>
+            </div>
+            {move || problem.get().map(|p| view! { <p class="problem" role="alert">{p}</p> })}
+        </fieldset>
     }
 }
 
@@ -1009,6 +1075,15 @@ mod tests {
             assert_eq!(Settings::decode(Some(&s.encode())).typing, t, "{t:?} is restored");
         }
         assert_eq!(Settings::decode(Some(r#"{"version":1,"typing":"warp"}"#)).typing, crate::motion::Typing::Normal);
+        // APP-25: the tray's hover card is on by default — a record without
+        // the field reads as on, and on is not written; off is.
+        assert!(Settings::default().queue_hover, "on by default");
+        assert!(Settings::decode(Some(r#"{"version":1}"#)).queue_hover, "an older record reads as on");
+        assert!(Settings::decode(None).queue_hover);
+        let off = Settings::default().with_queue_hover(false);
+        assert_eq!(off.encode(), r#"{"version":1,"ws_url":null,"recent":[],"queue_hover":false}"#);
+        assert_eq!(Settings::decode(Some(&off.encode())), off);
+        assert_eq!(Settings::default().with_queue_hover(true).encode(), r#"{"version":1,"ws_url":null,"recent":[]}"#);
 
         for raw in [
             None,
