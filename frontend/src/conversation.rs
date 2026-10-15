@@ -24,11 +24,15 @@
 //! src/comments.rs's, which `comments.watch` keeps: a comment sent from any
 //! page, or by an agent, shows on every open page.
 //!
-//! What decides — the thread, a row's place, the anchor — is pure and pinned
+//! **A change request** (APP-23: the tray's Request changes,
+//! `tickets.request_changes`) is a comment here like any other, with intent
+//! `changes`: its row is marked "changes requested" ([`mark`]).
+//!
+//! What decides — the thread, a row's place, its mark, the anchor — is pure and pinned
 //! by native tests; the rest is the DOM.
 
 use leptos::prelude::*;
-use menger_tickets_api::{Anchor, Comment, CommentState};
+use menger_tickets_api::{Anchor, Comment, CommentIntent, CommentState};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
@@ -82,6 +86,12 @@ pub(crate) fn place(c: &Comment) -> Place {
     } else {
         Place::Pinned { label: c.anchor.label.clone(), href: comments_page::link(c) }
     }
+}
+
+/// APP-23: the mark a row wears for what the comment is — a change request
+/// says so; a comment wears none.
+pub(crate) fn mark(c: &Comment) -> Option<&'static str> {
+    (c.intent == CommentIntent::Changes).then_some("changes requested")
 }
 
 /// The selector of comment `id`'s row in the conversation — where its link
@@ -226,8 +236,9 @@ fn row(c: Comment, fresh: bool) -> impl IntoView {
         }
     };
     view! {
-        <li class="cpost" class:fresh=fresh class:pinned=!is_whole(&c) data-comment-id=id.to_string() data-state=c.state.as_str()>
+        <li class="cpost" class:fresh=fresh class:pinned=!is_whole(&c) class:changes=mark(&c).is_some() data-comment-id=id.to_string() data-state=c.state.as_str()>
             <div class="chead">
+                {mark(&c).map(|m| view! { <span class="cmark">{m}</span> })}
                 <span class="cwho">{c.author.clone()}</span>
                 <span class="cwhen" title=fmt_unix(c.at)>{fmt_relative(now_unix(), c.at)}</span>
                 {place}
@@ -292,6 +303,10 @@ mod tests {
         assert!(!is_whole(&pinned));
         assert_eq!(place(&pinned), Place::Pinned { label: "Status".into(), href: "#/ticket/APP-22?comment=2".into() });
         assert_eq!(row_selector(1), "#conversation li[data-comment-id=\"1\"]");
+        // APP-23: a change request is marked; a comment is not.
+        assert_eq!(mark(&whole), None);
+        whole.intent = CommentIntent::Changes;
+        assert_eq!(mark(&whole), Some("changes requested"));
         assert_eq!(placeholder("APP-22"), "Comment on APP-22 — Ctrl+Enter sends");
     }
 

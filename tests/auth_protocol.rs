@@ -274,6 +274,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.queue", Today::Editor, Some("id")),
     ("tickets.unqueue", Today::Editor, Some("id")),
     ("tickets.snooze", Today::Editor, Some("id")),
+    // APP-23: a change request unqueues — an editor's, on the ticket.
+    ("tickets.request_changes", Today::Editor, Some("id")),
     ("tickets.queued", Today::Viewer, None),
     ("comments.add", Today::Viewer, None),
     ("comments.list", Today::Viewer, None),

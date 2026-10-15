@@ -138,7 +138,7 @@ mod tests;
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
             "unlink_commits", "label", "update", "update_many", "answer", "clear_answer", "close_input", "reopen_input",
-            "queue", "unqueue", "snooze", "reshortcode"
+            "queue", "unqueue", "snooze", "request_changes", "reshortcode"
         ],
     )
 )]
@@ -2016,6 +2016,18 @@ impl Tickets {
     )]
     pub async fn snooze(&self, auth: Option<&AuthContext>, reach: Reach, id: String, minutes: u32, source: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         queue_stream(self.store.clone(), self.access.admit(auth, &reach), id, Ask::Snooze { minutes }, source)
+    }
+
+    /// APP-23: hands a queued ticket back — a comment (intent `changes`) on its conversation and the entry unqueued, one write.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        description = "Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix }",
+        params(id = "The queued ticket, e.g. APP-21", body = "What to change (markdown)", source = "app | api | pipeline (optional, default api)"),
+        values(source = ["app", "api", "pipeline"])
+    )]
+    pub async fn request_changes(&self, auth: Option<&AuthContext>, reach: Reach, id: String, body: String, source: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        request_changes_stream(self.store.clone(), self.access.admit(auth, &reach), id, body, source)
     }
 
     /// MENGER-39: the owner's queue, most urgent first, then the oldest.

@@ -96,7 +96,7 @@ pub use activation::Tickets;
 /// [`CommentState`], [`CommentsEvent`] — and the rules `add` keeps them by.
 /// Wasm-safe, like [`types`].
 pub mod comments;
-pub use comments::{Anchor, Comment, CommentState, CommentsEvent};
+pub use comments::{Anchor, Comment, CommentIntent, CommentState, CommentsEvent};
 /// COMMENT-2: the `comments` activation, declared once as `tickets` is: the
 /// server's [`Comments`] and the browser's [`CommentsClient`].
 pub mod comments_activation;

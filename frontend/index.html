@@ -2103,6 +2103,11 @@
   }
   section.convsec li.cpost.pinned { border-left-color: var(--line); }
   section.convsec li.cpost[data-state="resolved"] { opacity: .75; border-left-color: var(--live); }
+  section.convsec li.cpost.changes { border-left-color: var(--urgent); }
+  section.convsec .cmark {
+    font: var(--weight-medium) calc(10.5px * var(--text-scale))/1.5 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--urgent); border: var(--border) solid var(--urgent); border-radius: var(--radius-lg); padding: 0 5px;
+  }
   section.convsec li.cpost.fresh { animation: menger-cpost-in .32s ease-out both; }
   @keyframes menger-cpost-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
   section.convsec .chead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem; }
@@ -2570,6 +2575,15 @@
   #qtray .qbtn:hover { transform: translateY(-1px); }
   #qtray .qbtn.fill { background: var(--ink); color: var(--bg); }
   #qtray .qbtn:disabled { opacity: .5; cursor: default; }
+  /* APP-23: Request changes — the button beside the answer, then its box. */
+  #qtray .qchange { margin: 0 0 14px; }
+  #qtray .qchange.open { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+  #qtray .qchange textarea {
+    font: inherit; font-family: var(--sans); color: var(--ink); background: var(--bg); min-height: 4.2em; resize: vertical;
+    border: var(--border) solid var(--tree-line); border-radius: var(--radius); padding: 8px 10px;
+  }
+  #qtray .qchange textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  #qtray .qchange-acts { display: flex; gap: 8px; }
   #qtray .qproblem { color: var(--err-fg); margin: 10px 0 0; }
   /* Motion: calm keeps the slide and drops the nudge (none stops both,
      with everything else, below). */

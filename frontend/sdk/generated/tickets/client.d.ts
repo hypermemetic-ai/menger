@@ -52,6 +52,8 @@ export interface TicketsClient {
     readySet(after?: string | null, epic?: string | null, filter?: string | null, limit?: number | null, summary?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
     /** Reopen a closed input; yields input_changed */
     reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
+    /** Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix } */
+    requestChanges(body: string, id: string, source?: string | null): AsyncGenerator<TicketsEvent>;
     /** Move tickets into another shortcode, renumbered there in the order given (a scope moved into a new code becomes its root; --new-scope makes the shortcode first; a root moves with --with-children as a rename); old ids keep resolving (get says moved_from); all or none; yields reshortcoded { moves, tickets } */
     reshortcode(ids: string[], to: string, message?: string | null, newScope?: string | null, parent?: string | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
     /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */

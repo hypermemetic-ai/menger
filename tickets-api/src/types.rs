@@ -1840,6 +1840,12 @@ pub enum TicketsEvent {
     /// MENGER-39: a queued ticket snoozed until its entry's
     /// `snoozed_until_unix` — `snooze`'s answer, and on `watch`.
     Snoozed { entry: crate::queue::QueueEntry, ticket: TicketSummary },
+    /// APP-23: `request_changes`'s answer — the change request kept as a
+    /// comment on the ticket's conversation (intent `changes`), and the
+    /// ticket out of the queue (`entry` as it was, who, when). `watch`
+    /// carries the `unqueued` (action `changes_requested`); `comments.watch`
+    /// the comment's `added`.
+    ChangesRequested { id: String, comment: crate::comments::Comment, entry: crate::queue::QueueEntry, by: String, at_unix: i64 },
     /// MENGER-39: `unqueue` of a ticket that is not queued — nothing written.
     NotQueued { id: String },
     /// MENGER-39: one row of `queued` — the entry and its ticket's row, most

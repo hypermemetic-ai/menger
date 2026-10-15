@@ -224,7 +224,7 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         // MENGER-39: a queue write, a queue row and a history line are their
         // ticket's.
         TicketsEvent::Queued { entry, .. } | TicketsEvent::Snoozed { entry, .. } | TicketsEvent::QueueRow { entry, .. } => Some(entry.ticket.clone()),
-        TicketsEvent::Unqueued { id, .. } | TicketsEvent::NotQueued { id } => Some(id.clone()),
+        TicketsEvent::Unqueued { id, .. } | TicketsEvent::NotQueued { id } | TicketsEvent::ChangesRequested { id, .. } => Some(id.clone()),
         TicketsEvent::QueueRecord { record } => Some(record.ticket.clone()),
         TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
         TicketsEvent::Extent { shortcode, .. } | TicketsEvent::Count { shortcode, .. } | TicketsEvent::Recount { shortcode, .. } => {

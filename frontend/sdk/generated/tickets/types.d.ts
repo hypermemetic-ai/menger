@@ -1,3 +1,30 @@
+/** Where a comment was left: the app page, the place on it, what was there
+in words, and the ticket the element belongs to (when it belongs to one).
+
+`route`, `path` and `label` are required and not blank; `excerpt` may be
+empty (an element with no text). Each is trimmed. They are `#[serde(default)]`
+so that one left out arrives as empty and is refused *in band*, naming
+it — not as a transport error before the method runs. */
+export interface Anchor {
+    /** What was there, in words: its text, e.g. `DEMAND-1` (may be empty). */
+    excerpt?: string;
+    /** What was there, in words: the element's name, e.g. `Parent chip`. */
+    label?: string;
+    /** Where on the page: the element's path, e.g.
+  `[data-tag="ticket DEMAND-1"]`. `list { path }` matches a prefix of it. */
+    path?: string;
+    /** The app page, as its route: `#/ticket/DEMAND-2`, `#/waves/RETURNS`,
+  `#/` (the board) — always beginning `#/`. */
+    route?: string;
+    /** The ticket the element belongs to, e.g. `DEMAND-2` — omitted when it
+  belongs to none. It must name a ticket; kept as that ticket's id. */
+    ticket?: string | null;
+    /** Set by the server, never by the caller: `ticket`'s `updated_unix`
+  when the comment was added — so a reader can tell the ticket has
+  changed since (its body may no longer hold `path`). Omitted with no
+  `ticket`; a value sent is replaced. */
+    version?: number | null;
+}
 /** INPUT-3: an input's current answer — the value, its rationale (`null`
 when none was given), who gave it and when (unix seconds). The latest
 `answered` of its history, unless a `cleared` came after it. */
@@ -65,6 +92,31 @@ its letters, never an address. It compares equal to another code of the
 same letters, which is what a search over the letters asks; the store
 compares shortcodes by [`ShortcodeId`]. */
 export type Code = string;
+/** One comment, as kept. */
+export interface Comment {
+    anchor: Anchor;
+    /** When it was added, unix seconds. */
+    at: number;
+    /** Who left it (`owner` unless `add` named someone). */
+    author: string;
+    /** What it says (markdown, as written). */
+    body: string;
+    /** Its id: 1, 2, … in the order comments were added, never reused. */
+    id: number;
+    /** APP-23: `changes` for a change request; omitted for a comment. */
+    intent?: CommentIntent;
+    /** IDENTITY-21: the Plexus principal of who left it, when they were
+  signed in — `author` is only the name they go by. */
+    principal?: string | null;
+    state: CommentState;
+}
+/** APP-23: what a comment is for — a comment (the default), or a change
+request: the owner handing a queued ticket back to whoever queued it
+(`tickets.request_changes`, the tray's Request changes). */
+export type CommentIntent = "comment" | "changes";
+/** Where a comment stands: `open` until it is resolved; `resolve` and
+`reopen` flip it. */
+export type CommentState = "open" | "resolved";
 /** COMP-3: one entry of the **component registry** — a custom element some
 ticket defined in a ` ```component <name> ` block (COMP-1 decisions 2, 3,
 pins 6–8), as the server keeps it.
@@ -329,7 +381,7 @@ export interface PlacementChange {
     placement: Placement;
 }
 /** What one queue write did — a [`QueueRecord`]'s action. */
-export type QueueAction = "queued" | "raised" | "requeued" | "snoozed" | "unqueued" | "closed";
+export type QueueAction = "queued" | "raised" | "requeued" | "snoozed" | "unqueued" | "closed" | "changes_requested";
 /** A ticket in the queue, as it stands. */
 export interface QueueEntry {
     /** When it was last queued (a requeue moves it; a snooze does not). */
@@ -358,6 +410,8 @@ export interface QueueRecord {
     action: QueueAction;
     actor: string;
     atUnix: number;
+    /** APP-23: a change request's comment (its id). */
+    comment?: number | null;
     /** The queue log's order (its own, not the transitions'). */
     id: number;
     input?: string | null;
@@ -1106,6 +1160,19 @@ export interface TicketsEventSnoozed {
     entry: QueueEntry;
     ticket: TicketSummary;
 }
+/** APP-23: `request_changes`'s answer — the change request kept as a
+comment on the ticket's conversation (intent `changes`), and the
+ticket out of the queue (`entry` as it was, who, when). `watch`
+carries the `unqueued` (action `changes_requested`); `comments.watch`
+the comment's `added`. */
+export interface TicketsEventChangesRequested {
+    type: 'changes_requested';
+    atUnix: number;
+    by: string;
+    comment: Comment;
+    entry: QueueEntry;
+    id: string;
+}
 /** MENGER-39: `unqueue` of a ticket that is not queued — nothing written. */
 export interface TicketsEventNotQueued {
     type: 'not_queued';
@@ -1134,7 +1201,7 @@ export interface TicketsEventQueueRecord {
     type: 'queue_record';
     record: QueueRecord;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -1191,6 +1258,7 @@ export declare function isTicketsEventHistoryEnd(e: TicketsEvent): e is TicketsE
 export declare function isTicketsEventQueued(e: TicketsEvent): e is TicketsEventQueued;
 export declare function isTicketsEventUnqueued(e: TicketsEvent): e is TicketsEventUnqueued;
 export declare function isTicketsEventSnoozed(e: TicketsEvent): e is TicketsEventSnoozed;
+export declare function isTicketsEventChangesRequested(e: TicketsEvent): e is TicketsEventChangesRequested;
 export declare function isTicketsEventNotQueued(e: TicketsEvent): e is TicketsEventNotQueued;
 export declare function isTicketsEventQueueRow(e: TicketsEvent): e is TicketsEventQueueRow;
 export declare function isTicketsEventQueueEnd(e: TicketsEvent): e is TicketsEventQueueEnd;

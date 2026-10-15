@@ -131,6 +131,9 @@ pub enum QueueAction {
     Unqueued,
     /// Taken out because its named input was closed.
     Closed,
+    /// APP-23: handed back — the owner requested changes (the record names
+    /// the comment that says which).
+    ChangesRequested,
 }
 
 impl QueueAction {
@@ -143,6 +146,7 @@ impl QueueAction {
             QueueAction::Snoozed => "snoozed",
             QueueAction::Unqueued => "unqueued",
             QueueAction::Closed => "closed",
+            QueueAction::ChangesRequested => "changes_requested",
         }
     }
 }
@@ -157,6 +161,7 @@ impl FromStr for QueueAction {
             "snoozed" => QueueAction::Snoozed,
             "unqueued" => QueueAction::Unqueued,
             "closed" => QueueAction::Closed,
+            "changes_requested" => QueueAction::ChangesRequested,
             other => return Err(format!("unknown queue action `{other}`")),
         })
     }
@@ -186,6 +191,9 @@ pub struct QueueRecord {
     /// A snooze's end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until_unix: Option<i64>,
+    /// APP-23: a change request's comment (its id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<u64>,
 }
 
 #[cfg(test)]

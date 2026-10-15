@@ -3064,6 +3064,10 @@ impl Store {
         deployments::migrate(&mut conn)?;
         // MENGER-39: and one without the queue's tables gains them, empty.
         queue::migrate(&mut conn)?;
+        // APP-23: and comments without an intent, and queue records without
+        // the comment that answered them, gain the columns.
+        comments::migrate(&conn)?;
+        queue::migrate_comment(&conn)?;
         let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -4664,6 +4668,7 @@ impl Store {
                 anchor,
                 body,
                 principal,
+                intent: crate::comments::CommentIntent::Comment,
             }
         };
         // FILTER-30: a comment on a ticket touches it.
@@ -5457,6 +5462,9 @@ mod theme_registry;
 mod deployments;
 mod queue;
 pub use queue::QueueChange;
+/// APP-23: a change request — a comment and an unqueue, one write.
+mod changes;
+pub use changes::{conversation_anchor, CONVERSATION_PATH};
 pub use deployments::{DeployPage, DeployQuery};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
@@ -5564,6 +5572,9 @@ mod tests_themes;
 /// MENGER-39: the queue.
 #[cfg(test)]
 mod tests_queue;
+/// APP-23: a change request.
+#[cfg(test)]
+mod tests_changes;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

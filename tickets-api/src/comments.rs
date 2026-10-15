@@ -103,6 +103,44 @@ impl FromStr for CommentState {
     }
 }
 
+/// APP-23: what a comment is for — a comment (the default), or a change
+/// request: the owner handing a queued ticket back to whoever queued it
+/// (`tickets.request_changes`, the tray's Request changes).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentIntent {
+    #[default]
+    Comment,
+    Changes,
+}
+
+impl CommentIntent {
+    pub const ALL: [CommentIntent; 2] = [CommentIntent::Comment, CommentIntent::Changes];
+
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            CommentIntent::Comment => "comment",
+            CommentIntent::Changes => "changes",
+        }
+    }
+
+    /// The default: left off the wire, so a plain comment is as it was.
+    pub fn is_comment(&self) -> bool {
+        *self == CommentIntent::Comment
+    }
+}
+
+impl FromStr for CommentIntent {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        CommentIntent::ALL
+            .into_iter()
+            .find(|i| i.as_str().eq_ignore_ascii_case(s.trim()))
+            .ok_or_else(|| format!("unknown comment intent '{}' (expected comment or changes)", s.trim()))
+    }
+}
+
 /// One comment, as kept.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Comment {
@@ -120,6 +158,9 @@ pub struct Comment {
     /// signed in — `author` is only the name they go by.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub principal: Option<String>,
+    /// APP-23: `changes` for a change request; omitted for a comment.
+    #[serde(default, skip_serializing_if = "CommentIntent::is_comment")]
+    pub intent: CommentIntent,
 }
 
 /// What the `comments` activation's methods yield. In-band errors are
@@ -140,6 +181,9 @@ pub enum CommentsEvent {
         /// IDENTITY-21: the signer's principal, when signed in.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         principal: Option<String>,
+        /// APP-23: `changes` for a change request; omitted for a comment.
+        #[serde(default, skip_serializing_if = "CommentIntent::is_comment")]
+        intent: CommentIntent,
     },
     /// Where a `list` stands, once, after its rows: `next` is the cursor to
     /// pass as the next call's `after` (a comment id), `null` when nothing
@@ -160,8 +204,8 @@ pub enum CommentsEvent {
 
 impl From<Comment> for CommentsEvent {
     fn from(c: Comment) -> Self {
-        let Comment { id, state, author, at, anchor, body, principal } = c;
-        CommentsEvent::Comment { id, state, author, at, anchor, body, principal }
+        let Comment { id, state, author, at, anchor, body, principal, intent } = c;
+        CommentsEvent::Comment { id, state, author, at, anchor, body, principal, intent }
     }
 }
 
@@ -170,8 +214,8 @@ impl CommentsEvent {
     /// `added`, `resolved` and `reopened` carry — and `None` for the rest.
     pub fn into_comment(self) -> Option<Comment> {
         match self {
-            CommentsEvent::Comment { id, state, author, at, anchor, body, principal } => {
-                Some(Comment { id, state, author, at, anchor, body, principal })
+            CommentsEvent::Comment { id, state, author, at, anchor, body, principal, intent } => {
+                Some(Comment { id, state, author, at, anchor, body, principal, intent })
             }
             CommentsEvent::Added { comment } | CommentsEvent::Resolved { comment } | CommentsEvent::Reopened { comment } => {
                 Some(comment)
@@ -295,6 +339,7 @@ mod tests {
             anchor: Anchor { version: Some(1_791_500_000), ..anchor() },
             body: "show the parent's title too".into(),
             principal: None,
+            intent: CommentIntent::Comment,
         };
         let ev = serde_json::to_value(CommentsEvent::from(c.clone())).unwrap();
         assert_eq!(
@@ -318,6 +363,11 @@ mod tests {
         assert_eq!(serde_json::to_value(CommentsEvent::Page { next: None }).unwrap(), json!({"type": "page", "next": null}));
         let bare = Anchor { ticket: None, ..anchor() };
         assert_eq!(serde_json::to_value(&bare).unwrap().as_object().unwrap().len(), 4, "no ticket, no version");
+        // APP-23: a change request says so; a comment says nothing of it.
+        let changes = serde_json::to_value(CommentsEvent::from(Comment { intent: CommentIntent::Changes, ..c.clone() })).unwrap();
+        assert_eq!(changes["intent"], json!("changes"));
+        assert_eq!("Changes".parse::<CommentIntent>(), Ok(CommentIntent::Changes));
+        assert!("praise".parse::<CommentIntent>().unwrap_err().contains("comment or changes"));
         let resolved = serde_json::to_value(CommentState::Resolved).unwrap();
         assert_eq!(resolved, json!("resolved"));
     }
