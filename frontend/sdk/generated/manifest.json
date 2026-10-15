@@ -156,13 +156,6 @@
         "id",
         "title"
       ],
-      "answer": [
-        "input",
-        "rationale",
-        "source",
-        "ticket",
-        "value"
-      ],
       "archive": [
         "dry_run",
         "filter",
@@ -179,15 +172,6 @@
       ],
       "blockers": [
         "id"
-      ],
-      "clear_answer": [
-        "input",
-        "source",
-        "ticket"
-      ],
-      "close_input": [
-        "input",
-        "ticket"
       ],
       "components": [],
       "counts": [
@@ -236,13 +220,6 @@
       "history": [
         "id"
       ],
-      "inputs": [
-        "epic",
-        "filter",
-        "state",
-        "ticket",
-        "tz"
-      ],
       "label": [
         "add",
         "id",
@@ -283,10 +260,6 @@
         "limit",
         "summary",
         "tz"
-      ],
-      "reopen_input": [
-        "input",
-        "ticket"
       ],
       "request_changes": [
         "body",
@@ -417,6 +390,34 @@
         "commits",
         "id"
       ]
+    },
+    "tickets.inputs": {
+      "answer": [
+        "input",
+        "rationale",
+        "ticket",
+        "value"
+      ],
+      "clear": [
+        "input",
+        "ticket"
+      ],
+      "close": [
+        "input",
+        "ticket"
+      ],
+      "list": [
+        "epic",
+        "filter",
+        "state",
+        "ticket",
+        "tz"
+      ],
+      "reopen": [
+        "input",
+        "ticket"
+      ],
+      "schema": []
     }
   }
 }

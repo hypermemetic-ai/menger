@@ -93,7 +93,7 @@
 //! frame, the pointer or a Tab brought there since the app's own last
 //! gesture — never just any click in the app), then answers
 //! `menger:submitted { id, answer }` or `{ id, error }` after the bridge's
-//! checks and `tickets.answer` with source `app` (src/bridge.rs). Every
+//! checks and `tickets.inputs.answer` (src/bridge.rs). Every
 //! `watch` event, `input_changed` among them, reaches the frames as
 //! `menger:change` as ever.
 //!
@@ -102,7 +102,7 @@
 //! check, the host's own reading of a gesture on that frame, the frame's stamped
 //! ticket — and the host answers `menger:cleared { id, input }` (the input
 //! as the clear left it, the wire's spelling) or `{ id, error }` after the
-//! bridge's checks and `tickets.clear_answer` with source `app`.
+//! bridge's checks and `tickets.inputs.clear`.
 //!
 //! IDENTITY-36: **a frame reads its own subtree.** The host stamps every
 //! frame with its scope (`<iframe data-scope>`): the shortcode of the ticket
@@ -1018,10 +1018,10 @@ fn answer_call(
 /// }`: refused unless a gesture on this frame is under way (`gesture`,
 /// IDENTITY-36: [`gesture::on_frame`]) and the frame
 /// renders a ticket (`ticket`, from its `data-ticket`), then the bridge's
-/// checks against that ticket's inputs, then `tickets.answer` with source
-/// `app`. INPUT-9: and (`write` [`Msg::Clear`]) its `menger.input.clear` —
+/// checks against that ticket's inputs, then `tickets.inputs.answer`.
+/// INPUT-9: and (`write` [`Msg::Clear`]) its `menger.input.clear` —
 /// `menger:cleared { id, input }` or `{ id, error }`, the same way, then
-/// `tickets.clear_answer` with source `app`. A frame replaced meanwhile is
+/// `tickets.inputs.clear`. A frame replaced meanwhile is
 /// not answered.
 fn answer_write(
     write: Msg,

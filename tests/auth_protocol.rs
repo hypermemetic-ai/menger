@@ -235,7 +235,6 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.member", Today::Viewer, None),
     ("tickets.groups", Today::Viewer, None),
     ("tickets.components", Today::Viewer, None),
-    ("tickets.inputs", Today::Viewer, None),
     ("tickets.extents", Today::Viewer, None),
     ("tickets.counts", Today::Viewer, None),
     ("tickets.facets", Today::Viewer, None),
@@ -268,10 +267,12 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     // ACT-5: gone for good, and back — admin's alone.
     ("tickets.delete", Today::Admin, Some("ids")),
     ("tickets.undelete", Today::Admin, Some("ids")),
-    ("tickets.answer", Today::Editor, Some("ticket")),
-    ("tickets.clear_answer", Today::Editor, Some("ticket")),
-    ("tickets.close_input", Today::Editor, Some("ticket")),
-    ("tickets.reopen_input", Today::Editor, Some("ticket")),
+    // ACCESS-14: tickets' inputs child, gated by its whole path.
+    ("tickets.inputs.list", Today::Viewer, None),
+    ("tickets.inputs.answer", Today::Editor, Some("ticket")),
+    ("tickets.inputs.clear", Today::Editor, Some("ticket")),
+    ("tickets.inputs.close", Today::Editor, Some("ticket")),
+    ("tickets.inputs.reopen", Today::Editor, Some("ticket")),
     // MENGER-39: the owner's queue — a write an editor's, on the ticket; the
     // queue itself a read.
     ("tickets.queue", Today::Editor, Some("id")),
@@ -578,6 +579,45 @@ async fn a_child_s_methods_are_held_by_their_path() {
 
     // The old names are gone.
     let gone = one(&boss, "tickets.link_commits", json!({ "id": "A-2", "commits": ["77df9a0"] })).await;
+    assert_eq!(gone["type"], "error", "{gone}");
+}
+
+/// ACCESS-14: the inputs child's methods (`tickets.inputs.*`) are gated by
+/// their whole path — the grant the hub checks, what the roles hold — and
+/// the ticket is asked by the method's permit: a viewer on A lists A's
+/// inputs and is refused an answer; an editor on A answers there (its
+/// source `api`, the server's word for an agent's key — ACCESS-3 #12), is
+/// refused on B; the old names are gone.
+#[tokio::test]
+async fn the_inputs_child_is_held_by_its_path() {
+    let dir = tmp();
+    let s = spawn(&dir.path().join("t.db"), true).await;
+    let boss = as_key(s.port, &BOSS, "boss").await;
+    tickets(&boss).await;
+    let body = "<m-input id=\"notes\" kind=\"text\"><m-question data-field=\"question\">Anything?</m-question></m-input>";
+    for id in ["A-2", "B-2"] {
+        assert_eq!(one(&boss, "tickets.amend", json!({ "id": id, "body": body })).await["type"], "amended");
+    }
+    let agent = as_key(s.port, &AGENT, "worker-1").await;
+    let answer = |id: &str| json!({ "ticket": id, "input": "notes", "value": { "type": "text", "text": "yes" } });
+
+    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
+    let listed = call(&agent, "tickets.inputs.list", json!({})).await;
+    assert_eq!(listed.iter().map(|e| e["input"]["ticket"].as_str()).collect::<Vec<_>>(), vec![Some("A-2")], "{listed:?}");
+    let no = one(&agent, "tickets.inputs.answer", answer("A-2")).await;
+    assert_eq!((no["error_kind"].as_str(), no["grant"].as_str()), (Some("forbidden"), Some("tickets.inputs.answer")), "{no}");
+
+    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "editor" })).await;
+    let answered = one(&agent, "tickets.inputs.answer", answer("A-2")).await;
+    assert_eq!((answered["type"].as_str(), answered["input"]["answer"]["source"].as_str()), (Some("input_changed"), Some("api")), "{answered}");
+    for method in ["tickets.inputs.close", "tickets.inputs.reopen", "tickets.inputs.clear"] {
+        let ev = one(&agent, method, json!({ "ticket": "A-2", "input": "notes" })).await;
+        assert_eq!(ev["type"], "input_changed", "{method}: {ev}");
+    }
+    let no = one(&agent, "tickets.inputs.answer", answer("B-2")).await;
+    assert_ne!(no["type"], "input_changed", "not on B: {no}");
+    // The old names are gone.
+    let gone = one(&boss, "tickets.answer", answer("A-2")).await;
     assert_eq!(gone["type"], "error", "{gone}");
 }
 

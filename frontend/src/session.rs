@@ -1545,7 +1545,7 @@ pub(crate) async fn search_under(
 pub(crate) async fn inputs_under(filter: String) -> Result<Vec<TicketsEvent>, String> {
     let client = client().ok_or_else(|| "not connected".to_string())?;
     let filter = crate::typed::typed(&filter)?;
-    let events = client.inputs_all(None, None, None, Some(filter), crate::session::zone()).await.map_err(|e| describe(&e))?;
+    let events = client.inputs().list_all(None, None, None, Some(filter), crate::session::zone()).await.map_err(|e| describe(&e))?;
     if let Some(message) = events.iter().find_map(|ev| match ev {
         TicketsEvent::Error { message } => Some(message.clone()),
         _ => None,

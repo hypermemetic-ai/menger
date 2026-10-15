@@ -605,10 +605,6 @@
       const stream = this.rpc.call("tickets.amend", { body, id, title });
       yield* extractData(stream);
     }
-    async* answer(input, ticket, value, rationale, source) {
-      const stream = this.rpc.call("tickets.answer", { input, rationale, source, ticket, value });
-      yield* extractData(stream);
-    }
     async* archive(dryRun, filter, ids, max, message, tz) {
       const stream = this.rpc.call("tickets.archive", { dry_run: dryRun, filter, ids, max, message, tz });
       yield* extractData(stream);
@@ -619,14 +615,6 @@
     }
     async* blockers(id) {
       const stream = this.rpc.call("tickets.blockers", { id });
-      yield* extractData(stream);
-    }
-    async* clearAnswer(input, ticket, source) {
-      const stream = this.rpc.call("tickets.clear_answer", { input, source, ticket });
-      yield* extractData(stream);
-    }
-    async* closeInput(input, ticket) {
-      const stream = this.rpc.call("tickets.close_input", { input, ticket });
       yield* extractData(stream);
     }
     async* components() {
@@ -673,10 +661,6 @@
       const stream = this.rpc.call("tickets.history", { id });
       yield* extractData(stream);
     }
-    async* inputs(epic, filter, state, ticket, tz) {
-      const stream = this.rpc.call("tickets.inputs", { epic, filter, state, ticket, tz });
-      yield* extractData(stream);
-    }
     async* label(add, id, ids, remove) {
       const stream = this.rpc.call("tickets.label", { add, id, ids, remove });
       yield* extractData(stream);
@@ -699,10 +683,6 @@
     }
     async* readySet(after, epic, filter, limit, summary, tz) {
       const stream = this.rpc.call("tickets.ready_set", { after, epic, filter, limit, summary, tz });
-      yield* extractData(stream);
-    }
-    async* reopenInput(input, ticket) {
-      const stream = this.rpc.call("tickets.reopen_input", { input, ticket });
       yield* extractData(stream);
     }
     async* requestChanges(body, id, source) {
@@ -782,15 +762,52 @@
     return new TicketsClientImpl(rpc);
   }
 
+  // generated/tickets/inputs/client.ts
+  class TicketsInputsClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* answer(input, ticket, value, rationale) {
+      const stream = this.rpc.call("tickets.inputs.answer", { input, rationale, ticket, value });
+      yield* extractData(stream);
+    }
+    async* clear(input, ticket) {
+      const stream = this.rpc.call("tickets.inputs.clear", { input, ticket });
+      yield* extractData(stream);
+    }
+    async* close(input, ticket) {
+      const stream = this.rpc.call("tickets.inputs.close", { input, ticket });
+      yield* extractData(stream);
+    }
+    async* list(epic, filter, state, ticket, tz) {
+      const stream = this.rpc.call("tickets.inputs.list", { epic, filter, state, ticket, tz });
+      yield* extractData(stream);
+    }
+    async* reopen(input, ticket) {
+      const stream = this.rpc.call("tickets.inputs.reopen", { input, ticket });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.inputs.schema", {});
+      return collectOne(stream);
+    }
+  }
+  function createTicketsInputsClient(rpc) {
+    return new TicketsInputsClientImpl(rpc);
+  }
+
   // bridge.ts
   var NAMESPACE = "tickets.";
+  var HOST_NAMES = { "inputs.list": "inputs" };
   function metadata(method) {
     return { provenance: ["menger", "bridge", method], plexusHash: "", timestamp: Math.floor(Date.now() / 1000) };
   }
   function bridgeRpc(call) {
     return {
       async* call(method, params) {
-        const name = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
+        const bare = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
+        const name = HOST_NAMES[bare] ?? bare;
         let items;
         try {
           items = await call(name, params ?? null);
@@ -809,8 +826,22 @@
   async function* one(content) {
     yield { type: "data", metadata: metadata("typed"), contentType: "typed", content };
   }
+  function frameTickets(rpc) {
+    const tickets = createTicketsClient(rpc);
+    const child = createTicketsInputsClient(rpc);
+    const inputs = Object.assign(child.list.bind(child), {
+      list: child.list.bind(child),
+      answer: child.answer.bind(child),
+      clear: child.clear.bind(child),
+      close: child.close.bind(child),
+      reopen: child.reopen.bind(child),
+      schema: child.schema.bind(child)
+    });
+    Object.defineProperty(tickets, "inputs", { value: inputs });
+    return tickets;
+  }
   mengerTyped = {
-    tickets: (call) => createTicketsClient(bridgeRpc(call)),
+    tickets: (call) => frameTickets(bridgeRpc(call)),
     typed: (content) => collectOne(one(content))
   };
 })();

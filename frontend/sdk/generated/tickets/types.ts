@@ -382,9 +382,6 @@ export interface InputOption {
   value: string;
 }
 
-/** Who answers or clears an input: app (a viewer's click) or api (default) */
-export type InputSource = "app" | "api";
-
 /** Where an input stands (any case) */
 export type InputState = "open" | "answered" | "closed" | "removed" | "withdrawn";
 

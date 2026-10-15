@@ -2108,6 +2108,15 @@ impl Tickets {
   (`SameService`: principal, session, ceiling); a child that must not see
   the caller's session says `#[plexus_macros::child(forward =
   "identity_only")]`.
+- **`tickets inputs`** (ACCESS-14) is mounted: `list` (was `tickets.inputs`),
+  `answer`, `clear` (was `clear_answer`), `close` (was `close_input`),
+  `reopen` (was `reopen_input`), at `tickets.inputs.<method>` —
+  `synapse -P 4455 menger tickets inputs list --state open` — and
+  `client.inputs()` on the Rust client (MACRO-16). An answer's and a clear's
+  `source` is no parameter any more: the server says it from the verified
+  caller (ACCESS-3 #12) — `app` for a person signed in through a provider,
+  `api` for an agent's key and for every call with login off. Its grants and
+  what it inherits are a child's, as above.
 - The schema lists what the server injects (`auth`, `user`) with an
   `x-plexus-source`; synapse shows them as server-supplied, and the SDK's
   drift guard (`sdk_manifest.rs`, `scripts/sdk-codegen.sh`) drops them.

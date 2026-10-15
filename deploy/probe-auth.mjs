@@ -257,7 +257,7 @@ check(errorOf(await call(e, 'members.requests')), 'only an admin of * sees who h
   const shapes = [
     ['tickets.set_status', homeId],
     ['tickets.set_status', [homeId, 'Ready']],
-    ['tickets.close_input', homeId],
+    ['tickets.inputs.close', homeId],
     ['members.revoke', HOME],
     ['tickets.set_status', { id: { id: homeId }, status: 'Ready' }],
   ];

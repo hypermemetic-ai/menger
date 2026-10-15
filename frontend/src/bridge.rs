@@ -21,8 +21,8 @@
 //! INPUT-4: **the first write.** A frame records an answer to one of its own
 //! ticket's inputs — `menger.input.submit(id, value, rationale?)`, sent as
 //! `menger:submit { id, params: { input, value, rationale? } }` — and never
-//! through `menger.call`. The host makes `tickets.answer` for it, with
-//! source `app`, only when every check here passes ([`admit`],
+//! through `menger.call`. The host makes `tickets.inputs.answer` for it
+//! (ACCESS-14: its source the server's, from the viewer), only when every check here passes ([`admit`],
 //! [`parse_submit`], [`check_submit`]): a viewer's gesture on that very frame
 //! is under way (IDENTITY-36, src/gesture.rs — not merely the app's own
 //! transient activation, which any click anywhere in the app turns on); the frame renders a ticket's stored body (the host
@@ -34,8 +34,7 @@
 //!
 //! INPUT-9: **the second write.** `menger.input.clear(id)`, sent as
 //! `menger:clear { id, params: { input } }`, clears the answer recorded on
-//! one of the frame's own ticket's inputs: `tickets.clear_answer` with
-//! source `app`, under the same checks as a submit but for the value
+//! one of the frame's own ticket's inputs: `tickets.inputs.clear`, under the same checks as a submit but for the value
 //! ([`admit`], [`parse_clear`], [`check_clear`]) — a gesture under way, a
 //! frame that renders a ticket, the input declared there and neither
 //! closed nor removed. The answer ([`cleared`]) is the input as the clear
@@ -276,7 +275,7 @@ async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>, String> {
         Call::Inputs { ticket, epic, state, filter } => {
             let typed_inputs = || -> Result<_, String> { Ok((opt(ticket)?, opt(epic)?, opt(state)?, opt(filter)?)) };
             let (ticket, epic, state, filter) = typed_inputs().map_err(named("inputs"))?;
-            client.inputs_all(ticket, epic, state, filter, zone).await
+            client.inputs().list_all(ticket, epic, state, filter, zone).await
         }
     };
     answer.map_err(|e| crate::session::describe(&e))
@@ -765,7 +764,7 @@ pub(crate) fn check_submit(ticket: &str, submit: &Submit, held: &[Input]) -> Res
         .map_err(|why| format!("{SUBMIT}: not an answer to {ticket}'s '{id}': {why} (nothing sent)"))
 }
 
-/// `tickets.answer`'s reply: the answer it recorded, or its refusal.
+/// `tickets.inputs.answer`'s reply: the answer it recorded, or its refusal.
 pub(crate) fn recorded(events: Vec<TicketsEvent>) -> Result<Answer, String> {
     for ev in events {
         match ev {
@@ -782,16 +781,16 @@ pub(crate) fn recorded(events: Vec<TicketsEvent>) -> Result<Answer, String> {
 
 /// Answer `submit` against `ticket`'s inputs over the app's connection: the
 /// store's inputs for it, the checks ([`check_submit`]), then
-/// `tickets.answer` with source `app` — the recorded answer, or why not.
+/// `tickets.inputs.answer` (ACCESS-14: its source the server's, from the
+/// caller) — the recorded answer, or why not.
 pub(crate) async fn submit(client: &Client, ticket: String, submit: Submit) -> Result<Answer, String> {
     let described = |e: plexus_client::ClientError| format!("{SUBMIT}: {}", crate::session::describe(&e));
     let named = |e: String| format!("{SUBMIT}: {e}");
     let id: menger_tickets_api::vocab::TicketRef = crate::typed::typed(&ticket).map_err(named)?;
-    let held = inputs_of(SUBMIT, client.inputs_all(Some(id.clone()), None, None, None, crate::session::zone()).await.map_err(described)?)?;
+    let held = inputs_of(SUBMIT, client.inputs().list_all(Some(id.clone()), None, None, None, crate::session::zone()).await.map_err(described)?)?;
     let value = check_submit(&ticket, &submit, &held)?;
     let (input, rationale) = (crate::typed::typed(&submit.input).map_err(named)?, crate::typed::opt(submit.rationale).map_err(named)?);
-    let source = Some(menger_tickets_api::vocab::InputSource::App);
-    recorded(client.answer_all(id, input, value, rationale, source).await.map_err(described)?)
+    recorded(client.inputs().answer_all(id, input, value, rationale).await.map_err(described)?)
 }
 
 // -- INPUT-9: the second write ----------------------------------------------
@@ -817,7 +816,7 @@ pub(crate) fn check_clear(ticket: &str, clear: &Clear, held: &[Input]) -> Result
     open_input(CLEAR, ticket, &clear.input, held).map(|_| ())
 }
 
-/// `tickets.clear_answer`'s reply: the input as the clear left it (`open`,
+/// `tickets.inputs.clear`'s reply: the input as the clear left it (`open`,
 /// the clear in its history; as it was when it held no answer), or the
 /// server's refusal.
 pub(crate) fn cleared(events: Vec<TicketsEvent>) -> Result<Input, String> {
@@ -834,15 +833,15 @@ pub(crate) fn cleared(events: Vec<TicketsEvent>) -> Result<Input, String> {
 
 /// Clear `clear` against `ticket`'s inputs over the app's connection: the
 /// store's inputs for it, the checks ([`check_clear`]), then
-/// `tickets.clear_answer` with source `app` — the input, or why not.
+/// `tickets.inputs.clear` (ACCESS-14: its source the server's) — the input,
+/// or why not.
 pub(crate) async fn clear(client: &Client, ticket: String, clear: Clear) -> Result<Input, String> {
     let described = |e: plexus_client::ClientError| format!("{CLEAR}: {}", crate::session::describe(&e));
     let named = |e: String| format!("{CLEAR}: {e}");
     let id: menger_tickets_api::vocab::TicketRef = crate::typed::typed(&ticket).map_err(named)?;
-    let held = inputs_of(CLEAR, client.inputs_all(Some(id.clone()), None, None, None, crate::session::zone()).await.map_err(described)?)?;
+    let held = inputs_of(CLEAR, client.inputs().list_all(Some(id.clone()), None, None, None, crate::session::zone()).await.map_err(described)?)?;
     check_clear(&ticket, &clear, &held)?;
-    let source = Some(menger_tickets_api::vocab::InputSource::App);
-    cleared(client.clear_answer_all(id, crate::typed::typed(&clear.input).map_err(named)?, source).await.map_err(described)?)
+    cleared(client.inputs().clear_all(id, crate::typed::typed(&clear.input).map_err(named)?).await.map_err(described)?)
 }
 
 #[cfg(test)]

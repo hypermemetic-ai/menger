@@ -26,9 +26,21 @@
  */
 
 import type { TicketsClient } from './generated/tickets/client';
+import type { TicketsInputsClient } from './generated/tickets/inputs/client';
 import type { Answer, Input, InputValue } from './generated/tickets/types';
 
 export type { TicketsClient } from './generated/tickets/client';
+export type { TicketsInputsClient } from './generated/tickets/inputs/client';
+
+/**
+ * ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
+ * (`list(epic?, filter?, state?, ticket?, tz?)`; its writes are refused
+ * "read-only"), and callable as `list` itself, as before the move.
+ */
+export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
+
+/** The typed `tickets` a frame gets: its `inputs` the child's. */
+export type FrameTickets = Omit<TicketsClient, 'inputs'> & { readonly inputs: InputsChild };
 export type * from './generated/tickets/types';
 
 /**
@@ -53,7 +65,7 @@ export interface MengerInput {
   /**
    * The ticket whose stored body this frame renders — what `submit`
    * answers against, and what to read this ticket's inputs with:
-   * `menger.tickets.inputs(undefined, undefined, undefined, menger.input.ticket)`
+   * `menger.tickets.inputs.list(undefined, undefined, undefined, menger.input.ticket)`
    * (the typed client's parameters are in name order: `epic`, `filter`,
    * `state`, `ticket`).
    * `null` in a frame that renders no ticket's stored body (an editor's
@@ -71,8 +83,9 @@ export interface MengerInput {
   readonly displayOnly: boolean;
 
   /**
-   * Answer the input `id` of this frame's ticket — `tickets.answer`, made
-   * by the host with source `app` — and resolve to the answer recorded
+   * Answer the input `id` of this frame's ticket — `tickets.inputs.answer`,
+   * made by the host (ACCESS-14: the server records its source from the
+   * signed-in viewer) — and resolve to the answer recorded
    * (the typed client's spelling: `atUnix`). The change also reaches every
    * frame as an `input_changed` on `on('change')`.
    *
@@ -97,8 +110,8 @@ export interface MengerInput {
 
   /**
    * INPUT-9 (1.4): clear the answer recorded on the input `id` of this
-   * frame's ticket — `tickets.clear_answer`, made by the host with source
-   * `app` — and resolve to the input as the clear left it (the typed
+   * frame's ticket — `tickets.inputs.clear`, made by the host (its source
+   * the server's, as for `submit`) — and resolve to the input as the clear left it (the typed
    * client's spelling): `open`, no answer, the `cleared` entry last in its
    * history. One that held no answer resolves as it is (nothing written).
    * The change also reaches every frame as an `input_changed` on
@@ -148,14 +161,15 @@ export interface Menger {
    *
    * Answered by the app over its own connection, read-only: `get`, `list`,
    * `find`, `waves`, `groups`, `extents`, `blockers`, `health`,
-   * `components`, `inputs` (INPUT-4 — `inputs(epic?, state?, ticket?)`,
-   * one `{ type: 'input', input }` per input, its answer and history
-   * included). Every other method is present and throws a `PlexusError`
-   * whose message starts "read-only" when iterated — `answer` and
-   * `clearAnswer` too: a frame answers through `input.submit` and clears
-   * through `input.clear`.
+   * `components`, `inputs.list` (INPUT-4; ACCESS-14: the `tickets inputs`
+   * child — `inputs.list(epic?, filter?, state?, ticket?)`, and
+   * `inputs(…)` the same — one `{ type: 'input', input }` per input, its
+   * answer and history included). Every other method is present and
+   * throws a `PlexusError` whose message starts "read-only" when iterated
+   * — `inputs.answer` and `inputs.clear` too: a frame answers through
+   * `input.submit` and clears through `input.clear`.
    */
-  readonly tickets: TicketsClient;
+  readonly tickets: FrameTickets;
 
   /**
    * The untyped escape hatch: `method` by its bare wire name (`waves`) with
