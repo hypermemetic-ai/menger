@@ -22,6 +22,14 @@
 //! - **A hidden tab's title** carries the count: `(2) menger`.
 //! - **Motion** is DESIGN-39's setting: `calm` keeps the slide and drops the
 //!   nudge, `none` keeps the tray and moves nothing (index.html's rules).
+//! - **An arrival** (MENGER-45, MENGER-40's variant C′): a tab that shows up
+//!   in front of the reader — a new entry heard on `watch`, one raised to a
+//!   higher urgency, one whose snooze ended — flashes in its urgency's
+//!   colour (`fresh`), a line sweeps the tray's bottom edge, a label says
+//!   "queued · <urgency> · <who>" for ~3s, and a dot (`unseen`) stays on the
+//!   tab until it is opened. What a fetch brings (the first load, a
+//!   reconnect's refetch) was not arriving in front of anyone: no flash, no
+//!   dot ([`step`]). While the page is hidden the flash waits for it to show.
 //!
 //! What decides — applying an event, the order, what shows at a moment,
 //! when a snooze ends, the title, the words — is pure and pinned by native
@@ -32,7 +40,7 @@ use std::collections::HashSet;
 
 use leptos::prelude::*;
 use menger_tickets_api::queue::order;
-use menger_tickets_api::{Input, InputKind, InputState, InputValue, QueueEntry, TicketSummary, TicketsEvent};
+use menger_tickets_api::{Input, InputKind, InputState, InputValue, QueueEntry, TicketSummary, TicketsEvent, Urgency};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -152,6 +160,69 @@ impl Queue {
     }
 }
 
+/// MENGER-45: a tab that showed up in front of the reader — what flashes,
+/// in which colour, and what the label says.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Arrival {
+    pub(crate) ticket: String,
+    pub(crate) urgency: Urgency,
+    pub(crate) who: String,
+}
+
+impl Arrival {
+    /// The label beside the tray: `queued · today · Ada`.
+    pub(crate) fn label(&self) -> String {
+        format!("queued · {} · {}", self.urgency.as_str(), self.who)
+    }
+}
+
+/// What moved the app's copy of the queue.
+pub(crate) enum Cause<'a> {
+    /// A `watch` event, heard live.
+    Heard(&'a TicketsEvent),
+    /// A fetch landed — the first load, or a reconnect's (or a `lagged`'s)
+    /// refetch: its answer, then the events heard while it was out.
+    Fetched(Vec<TicketsEvent>, &'a [TicketsEvent]),
+    /// The tray's clock moved from one moment to the next (a snooze may
+    /// have ended between them).
+    Tick(i64, i64),
+}
+
+/// The tabs in `after` that were not in `before`, or are there at a higher
+/// urgency than they were.
+pub(crate) fn arrived(before: &[Row], after: &[Row]) -> Vec<Arrival> {
+    after
+        .iter()
+        .filter(|r| before.iter().find(|b| b.entry.ticket == r.entry.ticket).is_none_or(|b| r.entry.urgency > b.entry.urgency))
+        .map(|r| Arrival { ticket: r.entry.ticket.clone(), urgency: r.entry.urgency, who: who(&r.entry).to_string() })
+        .collect()
+}
+
+/// One move of the copy at `now`: whether it moved, and what arrived in
+/// front of the reader. Only a live event or a snooze ending arrives; a
+/// fetch replaces the copy and announces nothing, and nothing arrives
+/// before the first fetch has landed.
+pub(crate) fn step(held: &mut Option<Queue>, cause: Cause<'_>, now: i64) -> (bool, Vec<Arrival>) {
+    match cause {
+        Cause::Heard(ev) => {
+            let Some(q) = held.as_mut() else { return (false, Vec::new()) };
+            let before = q.showing(now);
+            if !q.apply(ev) {
+                return (false, Vec::new());
+            }
+            (true, arrived(&before, &q.showing(now)))
+        }
+        Cause::Fetched(answer, heard) => {
+            *held = Some(settle(answer, heard));
+            (true, Vec::new())
+        }
+        Cause::Tick(from, to) => match held.as_ref() {
+            Some(q) if to > from => (false, arrived(&q.showing(from), &q.showing(to))),
+            _ => (false, Vec::new()),
+        },
+    }
+}
+
 /// The fetch's rule: `answer`, then every event heard while it was out.
 pub(crate) fn settle(answer: Vec<TicketsEvent>, heard: &[TicketsEvent]) -> Queue {
     let mut q = Queue::from_events(answer);
@@ -185,18 +256,27 @@ pub(crate) fn who(e: &QueueEntry) -> &str {
     e.name.as_deref().unwrap_or(&e.by)
 }
 
+/// How a tab stands: its sheet up, opened since it arrived, flashing its
+/// arrival, arrived and not yet opened (the dot).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Mark {
+    pub(crate) open: bool,
+    pub(crate) seen: bool,
+    pub(crate) fresh: bool,
+    pub(crate) unseen: bool,
+}
+
 /// A tab's classes: its urgency, `loud` for now and blocking, `open` while
-/// its sheet is up, `seen` once the owner has opened it (no more nudging).
-pub(crate) fn tab_class(e: &QueueEntry, open: bool, seen: bool) -> String {
+/// its sheet is up, `seen` once the owner has opened it (no more nudging),
+/// `fresh` while it plays its arrival, `unseen` (the dot) from its arrival
+/// until it is opened.
+pub(crate) fn tab_class(e: &QueueEntry, m: Mark) -> String {
     let mut c = format!("qtab {}", e.urgency.as_str());
-    if e.urgency.loud() {
-        c.push_str(" loud");
-    }
-    if open {
-        c.push_str(" open");
-    }
-    if seen {
-        c.push_str(" seen");
+    for (on, word) in [(e.urgency.loud(), "loud"), (m.open, "open"), (m.seen, "seen"), (m.fresh, "fresh"), (m.unseen && !m.seen, "unseen")] {
+        if on {
+            c.push(' ');
+            c.push_str(word);
+        }
     }
     c
 }
@@ -228,6 +308,17 @@ thread_local! {
     static FETCH: Cell<u32> = const { Cell::new(0) };
     /// While a fetch is out: the events heard since it went.
     static HEARD: RefCell<Option<Vec<TicketsEvent>>> = const { RefCell::new(None) };
+    /// MENGER-45: arrivals not yet played — they wait while the page is hidden.
+    static ARRIVING: ArcRwSignal<Vec<Arrival>> = ArcRwSignal::new(Vec::new());
+    /// Whether the page is hidden (`visibilitychange`).
+    static HIDDEN: ArcRwSignal<bool> = ArcRwSignal::new(false);
+}
+
+/// Arrivals to play, once the page is visible.
+fn announce(arrivals: Vec<Arrival>) {
+    if !arrivals.is_empty() {
+        ARRIVING.with(|a| a.update(|q| q.extend(arrivals)));
+    }
 }
 
 /// The queue, as a signal.
@@ -255,9 +346,15 @@ pub(crate) fn heard(ev: &TicketsEvent) {
             buf.push(ev.clone());
         }
     });
+    let mut arrivals = Vec::new();
     QUEUE.with(|s| {
-        s.maybe_update(|held| held.as_mut().is_some_and(|q| q.apply(ev)));
+        s.maybe_update(|held| {
+            let (moved, a) = step(held, Cause::Heard(ev), now());
+            arrivals = a;
+            moved
+        });
     });
+    announce(arrivals);
 }
 
 fn fetch() {
@@ -283,7 +380,8 @@ fn fetch() {
                         _ => {}
                     }
                 }
-                QUEUE.with(|s| s.set(Some(settle(events, &heard))));
+                let t = now();
+                QUEUE.with(|s| s.update(|held| drop(step(held, Cause::Fetched(events, &heard), t))));
             }
             Err(e) => leptos::logging::log!("queue: {}", session::describe(&e)),
         }
@@ -340,10 +438,14 @@ fn answer(id: String, input: String, value: InputValue, problem: RwSignal<Option
 pub(crate) fn install_title() {
     let Some(doc) = dom::window().document() else { return };
     let base = doc.title();
-    let hidden = RwSignal::new(doc.hidden());
-    let on = Closure::<dyn Fn()>::new(move || {
-        if let Some(d) = dom::window().document() {
-            hidden.try_set(d.hidden());
+    let hidden = HIDDEN.with(Clone::clone);
+    hidden.set(doc.hidden());
+    let on = Closure::<dyn Fn()>::new({
+        let hidden = hidden.clone();
+        move || {
+            if let Some(d) = dom::window().document() {
+                hidden.try_set(d.hidden());
+            }
         }
     });
     let _ = doc.add_event_listener_with_callback("visibilitychange", on.as_ref().unchecked_ref());
@@ -380,9 +482,13 @@ fn clock() -> RwSignal<i64> {
             let wake = held.with_untracked(|q| q.as_ref().and_then(|q| q.next_wake(t)));
             let wait = wake.map_or(30, |w| (w - t).clamp(1, 30));
             dom::sleep_ms((wait * 1000) as i32).await;
-            if c.try_set(now()).is_some() {
+            let (from, to) = (c.try_get_untracked().unwrap_or(t), now());
+            if c.try_set(to).is_some() {
                 return;
             }
+            // A snooze that ended is an arrival.
+            let arrivals = held.try_update_untracked(|h| step(h, Cause::Tick(from, to), to).1).unwrap_or_default();
+            announce(arrivals);
         }
     });
     c
@@ -398,8 +504,45 @@ pub(crate) fn Tray() -> impl IntoView {
     let inputs_held = inputs::signal();
     let open = RwSignal::new(None::<String>);
     let seen = RwSignal::new(HashSet::<String>::new());
+    // MENGER-45: the tabs playing an arrival, the tabs with a dot, and the
+    // edge's sweep and the label (the arrival they say, a generation).
+    let fresh = RwSignal::new(HashSet::<String>::new());
+    let unseen = RwSignal::new(HashSet::<String>::new());
+    let flash = RwSignal::new(None::<(Arrival, u32)>);
     let problem = RwSignal::new(None::<String>);
     let busy = RwSignal::new(false);
+    // Arrivals play once the page is visible: each tab loses `fresh` for a
+    // frame and takes it again (a raise replays it), loses `seen` (a raised
+    // tab nudges again) and takes the dot; the most urgent sweeps the edge
+    // and is the label.
+    {
+        let arriving = ARRIVING.with(Clone::clone);
+        let hidden = HIDDEN.with(Clone::clone);
+        let generation = std::rc::Rc::new(Cell::new(0u32));
+        Effect::new(move |_| {
+            if hidden.get() || arriving.with(Vec::is_empty) {
+                return;
+            }
+            let got = arriving.try_update_untracked(std::mem::take).unwrap_or_default();
+            let ids: Vec<String> = got.iter().map(|a| a.ticket.clone()).collect();
+            seen.update(|s| s.retain(|id| !ids.contains(id)));
+            unseen.update(|s| s.extend(ids.iter().cloned()));
+            fresh.update(|s| s.retain(|id| !ids.contains(id)));
+            let Some(top) = got.into_iter().max_by_key(|a| a.urgency) else { return };
+            let n = generation.get().wrapping_add(1);
+            generation.set(n);
+            let generation = generation.clone();
+            spawn_local(async move {
+                dom::sleep_ms(40).await;
+                fresh.try_update(|s| s.extend(ids));
+                flash.try_set(Some((top, n)));
+                dom::sleep_ms(3_600).await;
+                if generation.get() == n {
+                    flash.try_set(None);
+                }
+            });
+        });
+    }
     let rows = {
         let held = held.clone();
         Memo::new(move |_| held.with(|q| q.as_ref().map(|q| q.showing(clock.get())).unwrap_or_default()))
@@ -416,6 +559,9 @@ pub(crate) fn Tray() -> impl IntoView {
         problem.set(None);
         seen.update(|s| {
             s.insert(id.clone());
+        });
+        unseen.update(|s| {
+            s.remove(&id);
         });
         open.update(|o| *o = if o.as_deref() == Some(id.as_str()) { None } else { Some(id) });
     };
@@ -461,6 +607,10 @@ pub(crate) fn Tray() -> impl IntoView {
             >
                 <div class="qsheet-clip">{sheet}</div>
             </div>
+            {move || flash.get().map(|(a, n)| view! {
+                <i class=format!("qedge {}", a.urgency.as_str()) data-gen=n.to_string() aria-hidden="true"></i>
+                <div class="qarrived" role="status">{a.label()}</div>
+            })}
             <div class="qtabs" role="toolbar" aria-label="queued for you">
                 <For each=move || rows.get() key=|r| r.entry.ticket.clone() let:row>
                     {
@@ -473,7 +623,12 @@ pub(crate) fn Tray() -> impl IntoView {
                         view! {
                             <button
                                 type="button"
-                                class=move || now_row.with(|r| r.as_ref().map(|r| tab_class(&r.entry, open.with(|o| o.as_deref() == Some(cid.as_str())), seen.with(|s| s.contains(&cid)))).unwrap_or_default())
+                                class=move || now_row.with(|r| r.as_ref().map(|r| tab_class(&r.entry, Mark {
+                                    open: open.with(|o| o.as_deref() == Some(cid.as_str())),
+                                    seen: seen.with(|s| s.contains(&cid)),
+                                    fresh: fresh.with(|s| s.contains(&cid)),
+                                    unseen: unseen.with(|s| s.contains(&cid)),
+                                })).unwrap_or_default())
                                 data-ticket-id=id.clone()
                                 aria-expanded=move || open.with(|o| o.as_deref() == Some(tid.as_str())).to_string()
                                 title=move || now_row.with(|r| r.as_ref().map(|r| format!("{} — {} ({})", r.entry.ticket, r.entry.reason, r.entry.urgency.as_str())).unwrap_or_default())
@@ -699,6 +854,79 @@ mod tests {
         assert_eq!(q.get("A-1").unwrap().ticket.title, "new", "a row event moves the title");
     }
 
+    fn landed(rows: Vec<TicketsEvent>) -> Option<Queue> {
+        let mut held = None;
+        let answer = rows
+            .into_iter()
+            .filter_map(|ev| match ev {
+                TicketsEvent::Queued { entry, ticket, .. } => Some(TicketsEvent::QueueRow { entry, ticket }),
+                _ => None,
+            })
+            .collect();
+        let (_, a) = step(&mut held, Cause::Fetched(answer, &[]), 10);
+        assert!(a.is_empty());
+        held
+    }
+
+    fn arrivals(a: &[Arrival]) -> Vec<(&str, Urgency)> {
+        a.iter().map(|a| (a.ticket.as_str(), a.urgency)).collect()
+    }
+
+    #[test]
+    fn a_new_entry_heard_live_arrives() {
+        let mut held = landed(vec![queued("A-1", Urgency::Whenever, 1)]);
+        let (moved, a) = step(&mut held, Cause::Heard(&queued("A-2", Urgency::Today, 20)), 20);
+        assert!(moved);
+        assert_eq!(arrivals(&a), [("A-2", Urgency::Today)]);
+        assert_eq!(a[0].label(), "queued · today · idp:agent");
+    }
+
+    #[test]
+    fn a_raise_arrives_again_and_a_requeue_does_not() {
+        let mut held = landed(vec![queued("A-1", Urgency::Today, 1)]);
+        let (_, a) = step(&mut held, Cause::Heard(&queued("A-1", Urgency::Now, 1)), 20);
+        assert_eq!(arrivals(&a), [("A-1", Urgency::Now)], "raised: it flashes at the new urgency");
+        let mut same = entry("A-1", Urgency::Now, 1);
+        same.reason = "a new reason".into();
+        let ev = TicketsEvent::Queued { entry: same, ticket: summary("A-1", "t"), action: QueueAction::Requeued };
+        let (moved, a) = step(&mut held, Cause::Heard(&ev), 21);
+        assert!(moved, "the reason moved");
+        assert!(a.is_empty(), "the same urgency is no arrival");
+        let (_, a) = step(&mut held, Cause::Heard(&queued("A-1", Urgency::Whenever, 1)), 22);
+        assert!(a.is_empty(), "nor a lower one");
+    }
+
+    #[test]
+    fn a_snooze_ending_arrives() {
+        let mut held = landed(vec![queued("A-1", Urgency::Now, 1)]);
+        let mut e = entry("A-1", Urgency::Now, 1);
+        e.snoozed_until_unix = Some(700);
+        let (moved, a) = step(&mut held, Cause::Heard(&TicketsEvent::Snoozed { entry: e, ticket: summary("A-1", "t") }), 100);
+        assert!(moved && a.is_empty(), "snoozing takes it out: nothing arrives");
+        assert!(step(&mut held, Cause::Tick(100, 650), 650).1.is_empty(), "still snoozed");
+        let (_, a) = step(&mut held, Cause::Tick(650, 700), 700);
+        assert_eq!(arrivals(&a), [("A-1", Urgency::Now)]);
+        assert!(step(&mut held, Cause::Tick(700, 730), 730).1.is_empty(), "once");
+    }
+
+    #[test]
+    fn load_and_refetch_do_not_arrive() {
+        let mut held = None;
+        assert_eq!(step(&mut held, Cause::Heard(&queued("A-9", Urgency::Now, 1)), 5), (false, Vec::new()), "before the first fetch: nothing");
+        let first = vec![TicketsEvent::QueueRow { entry: entry("A-1", Urgency::Now, 1), ticket: summary("A-1", "t") }];
+        let (moved, a) = step(&mut held, Cause::Fetched(first, &[]), 10);
+        assert!(moved && a.is_empty(), "the first load");
+        let refetch = vec![
+            TicketsEvent::QueueRow { entry: entry("A-1", Urgency::Blocking, 1), ticket: summary("A-1", "t") },
+            TicketsEvent::QueueRow { entry: entry("A-2", Urgency::Today, 2), ticket: summary("A-2", "t") },
+        ];
+        let heard = [queued("A-3", Urgency::Now, 3)];
+        let (_, a) = step(&mut held, Cause::Fetched(refetch, &heard), 20);
+        assert!(a.is_empty(), "a reconnect's refetch, new rows, a raise and replayed events included");
+        assert_eq!(ids(held.as_ref().unwrap()), ["A-1", "A-3", "A-2"]);
+        assert!(step(&mut held, Cause::Tick(20, 50), 50).1.is_empty(), "the clock alone moves nothing");
+    }
+
     #[test]
     fn the_words() {
         assert_eq!(titled("menger", 0), "menger");
@@ -708,10 +936,12 @@ mod tests {
         assert_eq!(ago(7_300, 100), "2h ago");
         assert_eq!(ago(300_000, 100), "3d ago");
         let mut e = entry("A-1", Urgency::Blocking, 0);
-        assert_eq!(tab_class(&e, false, false), "qtab blocking loud");
-        assert_eq!(tab_class(&e, true, true), "qtab blocking loud open seen");
+        assert_eq!(tab_class(&e, Mark::default()), "qtab blocking loud");
+        assert_eq!(tab_class(&e, Mark { open: true, seen: true, ..Mark::default() }), "qtab blocking loud open seen");
+        assert_eq!(tab_class(&e, Mark { fresh: true, unseen: true, ..Mark::default() }), "qtab blocking loud fresh unseen");
+        assert_eq!(tab_class(&e, Mark { seen: true, fresh: true, unseen: true, ..Mark::default() }), "qtab blocking loud seen fresh", "opened: no dot");
         e.urgency = Urgency::Today;
-        assert_eq!(tab_class(&e, false, false), "qtab today");
+        assert_eq!(tab_class(&e, Mark::default()), "qtab today");
         assert_eq!(who(&e), "idp:agent");
         e.name = Some("Ada".into());
         assert_eq!(who(&e), "Ada");

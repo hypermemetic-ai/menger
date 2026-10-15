@@ -2383,7 +2383,7 @@
      nav shows; only its tabs and its sheet take the pointer. ── */
   #qtray {
     grid-column: -2 / -1; grid-row: 1; align-self: end; z-index: 900; min-width: 0;
-    display: flex; flex-direction: column; margin-right: 14px;
+    display: flex; flex-direction: column; margin-right: 14px; position: relative;
     padding: 0 calc(20px * var(--space)); pointer-events: none;
   }
   #qtray.empty { display: none; }
@@ -2429,6 +2429,45 @@
     93% { transform: translateY(-5px) rotate(1.2deg); }
     96% { transform: translateY(-2px); }
   }
+  /* MENGER-45: an arrival (MENGER-40's C′). A tab that shows up while the
+     page is visible blinks in its urgency's colour (--flash) — whenever
+     once, today three times, now and blocking four times faster and then
+     nudges — a line sweeps the tray's bottom edge, a label fades in and out
+     above the tabs, and a dot stays before its id until it is opened. */
+  #qtray .qtab, #qtray .qedge { --flash: var(--st-doc-fg); }
+  #qtray .qtab.today, #qtray .qedge.today { --flash: var(--st-coding-fg); }
+  #qtray .qtab.loud, #qtray .qedge.now, #qtray .qedge.blocking { --flash: var(--urgent); }
+  #qtray .qtab.fresh { animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both, menger-arrive .7s ease-in-out .5s 1; }
+  #qtray .qtab.fresh.today { animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both, menger-arrive .6s ease-in-out .5s 3; }
+  #qtray .qtab.fresh.loud {
+    animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both, menger-arrive .42s ease-in-out .5s 4,
+      menger-nudge 4s ease-in-out 2.4s infinite;
+  }
+  #qtray .qtab.fresh.loud.seen { animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both, menger-arrive .42s ease-in-out .5s 4; }
+  @keyframes menger-arrive {
+    50% {
+      background: color-mix(in srgb, var(--flash) 32%, var(--panel)); border-color: var(--flash);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--flash) 28%, transparent), 0 -8px 26px color-mix(in srgb, var(--flash) 40%, transparent);
+      transform: translateY(-4px);
+    }
+  }
+  #qtray .qtab.unseen .id::before {
+    content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--flash); margin-right: 6px; vertical-align: 1px;
+  }
+  #qtray .qedge {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 3px; z-index: 1; pointer-events: none;
+    background: linear-gradient(90deg, transparent, var(--flash)); transform-origin: left; transform: scaleX(0);
+    animation: menger-edge 1s cubic-bezier(.4, 0, .2, 1) forwards;
+  }
+  @keyframes menger-edge { 55% { transform: scaleX(1); opacity: 1; } 100% { transform: scaleX(1); opacity: 0; } }
+  #qtray .qarrived {
+    position: absolute; left: calc(20px * var(--space)); bottom: 54px; z-index: 1; pointer-events: none;
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: .08em;
+    color: var(--muted); background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-sm);
+    padding: 4px 8px; white-space: nowrap; opacity: 0; animation: menger-hint 3.2s ease .3s forwards;
+  }
+  @keyframes menger-hint { 10%, 80% { opacity: 1; } 100% { opacity: 0; } }
   /* The sheet: raised above the tabs by the open one; as tall as it says. */
   #qtray .qsheet {
     display: grid; grid-template-rows: 0fr; background: var(--card);
@@ -2485,6 +2524,13 @@
   /* Motion: calm keeps the slide and drops the nudge (none stops both,
      with everything else, below). */
   html[data-motion="calm"] #qtray .qtab.loud { animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both; }
+  /* MENGER-45: calm keeps an arrival's blinks and drops the edge's sweep
+     and the nudge; none moves nothing — the arriving tab is outlined in its
+     colour until it is opened, and keeps its dot. */
+  html[data-motion="calm"] #qtray .qtab.fresh.loud { animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both, menger-arrive .42s ease-in-out .5s 4; }
+  html[data-motion="calm"] #qtray .qedge { display: none; }
+  html[data-motion="none"] #qtray :is(.qedge, .qarrived) { display: none; }
+  html[data-motion="none"] #qtray .qtab.fresh.unseen { outline: 2px solid var(--flash); outline-offset: -2px; }
   /* Motion: none — nothing the app animates moves; calm — the state
      changes stay, the ambient moves (the breathe, the pulse) go (the boot
      and the counters are the script's to skip). */
@@ -2498,6 +2544,9 @@
     html:not([data-motion]) :is(#conn.live .cell, #nav .carpet.pip) { animation: none; }
     html:not([data-motion]) :is(tbody#board td, #nav .row) { transition: none; }
     html:not([data-motion]) #qtray .qtab.loud { animation: none; }
+    html:not([data-motion]) #qtray .qtab.fresh { animation: none; }
+    html:not([data-motion]) #qtray .qtab.fresh.unseen { outline: 2px solid var(--flash); outline-offset: -2px; }
+    html:not([data-motion]) #qtray :is(.qedge, .qarrived) { display: none; }
   }
 </style>
 </head>
