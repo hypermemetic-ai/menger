@@ -19,7 +19,40 @@ commit on main → build → gate → release → deploy test → smoke → prom
 | app | http://127.0.0.1:4456/ | http://127.0.0.1:4451/ |
 | database | `~/.local/share/menger/tickets.db` | `~/.local/share/menger-test/tickets.db` — prod's, copied at each deploy |
 | units | `menger@prod`, `menger-diagrams@prod` | `menger@test`, `menger-diagrams@test` |
-| settings | `~/.config/menger/prod.env` | `~/.config/menger/test.env` (`PLEXUS_NO_REGISTRY=1`) |
+| settings | `~/.config/menger/prod.env` + `prod.local.env` | `~/.config/menger/test.env` (`PLEXUS_NO_REGISTRY=1`) + `test.local.env` + `test.smoke.env` |
+| login the smoke requires | `MENGER_EXPECT_LOGIN=off` (until ACCESS-24) | `MENGER_EXPECT_LOGIN=required` |
+
+## Settings (ACCESS-27)
+
+An environment's settings are three files in `~/.config/menger/`; the names
+are stable (ACCESS-24 and ACCESS-7 read them):
+
+| file | holds | written by | mode | read by |
+|---|---|---|---|---|
+| `<env>.env` | ports, database, registry, `MENGER_EXPECT_LOGIN` — `deploy/env/<env>.env` filled in | **every** `pipeline install` | 0600 | both units; the pipeline |
+| `<env>.local.env` | menger's login and secrets: `MENGER_AUTH_PROVIDERS`, `MENGER_REQUIRE_LOGIN`, `MENGER_NO_REST`, `MENGER_ADMINS`, `MENGER_LOGIN_*`, `MENGER_DEV_*`, `MENGER_PUBLIC_URL` … | you, by hand (made once by `install`) | 0600 | `menger@<env>` (after `<env>.env`, so it wins); the smoke reads it, never exports it |
+| `<env>.smoke.env` | the smoke account: `MENGER_SMOKE_USER`, `MENGER_SMOKE_PASSWORD`, `MENGER_SMOKE_TOKEN_URL`, `MENGER_SMOKE_AUDIENCE` | you, by hand (made once by `install`) | 0600 | the smoke alone — never in menger's environment |
+
+- **`install` never rewrites the local halves.** Where `<env>.local.env` does
+  not exist, it is made from what the old `<env>.env` held beyond its
+  template — each setting verbatim, the notes beside it — the
+  `MENGER_SMOKE_*` going to `<env>.smoke.env`, and the old file kept as
+  `<env>.env.before-local` (0600). It says what moved by name, never a value.
+  A second `install` leaves both alone. If `<env>.env` has since gained a
+  setting its template lacks, `install` refuses and changes nothing, naming
+  it: move it into the local half (ACCESS-4 H3 was an install silently
+  dropping test's login).
+- **`menger@<env>` requires its local half**: without the file the unit does
+  not start — never starts without its login. `menger-diagrams@<env>` reads
+  only `<env>.env`.
+- **The mode the smoke requires** is `MENGER_EXPECT_LOGIN` (`off`, `on` or
+  `required`) in the templated half, so losing the local half cannot also
+  lose the expectation. The smoke fails when the settings configure another
+  mode, and when the server is in another (`deploy/smoke-mode.mjs`, below).
+- **No secret in argv.** The smoke's password reaches curl on stdin, its
+  token reaches `deploy/smoke-health.mjs` on stdin (`-`), the browser check
+  gets the account through its environment; the smoke fails if
+  `<env>.local.env` or `<env>.smoke.env` is readable by anyone but you.
 
 ## The pipeline
 
@@ -67,7 +100,14 @@ the release it already runs and must pass the smoke checks. One way only:
    newer one wrote (SDLC-11's docs did that) — so a rollback across one needs
    `--restore` with the backup taken before the promote.
 
-**Smoke checks** (`smoke ENV`): both units active; `tickets.health` answers on
+**Smoke checks** (`smoke ENV`): both units active; the local half is
+there and 0600 (the smoke account's file too); the login mode — the settings
+configure `MENGER_EXPECT_LOGIN`'s, and the server is in it, as
+`deploy/smoke-mode.mjs` reads it from outside (`off`: an anonymous `_info`
+is the whole hub; `on`: it is AUTH-7's anonymous view; `required`: that, and
+the app behind its login page), a mismatch failing the smoke; then the
+checks for that mode (behind the login: the smoke account signs in, and an
+anonymous socket reaches nothing); `tickets.health` answers on
 the env's port; `--verify-derived` is consistent; the app is served stamped
 with the env's WebSocket port; `diagrams` parses a diagram; a headless browser
 loads the app to `live · WS` with the nav drawn and no page errors. On test,
@@ -81,6 +121,82 @@ database, which the next `deploy test` or `sync test` replaces. Run it alone:
 
 **Drills.** `DEPLOY_SMOKE_FAIL=test deploy/pipeline promote --to test` fails
 the first smoke on purpose, so the automatic rollback can be watched on test.
+
+## Hardening (ACCESS-27)
+
+Both units run with the least the OS gives a service, `systemd --user` as on
+this machine (user namespaces do the mounts; no root):
+
+| | `menger@` | `menger-diagrams@` — it runs mermaid in a Node `vm`, which is no sandbox |
+|---|---|---|
+| file system | `ProtectSystem=strict`, `ProtectHome=read-only`; writes only `ReadWritePaths=` the database's directory (drop-in `menger@<env>.service.d/50-data.conf`, written by `install`) | `ProtectHome=tmpfs`: no home but the releases and Node, read-only (`BindReadOnlyPaths=`, drop-in `…/50-paths.conf`); writes nowhere |
+| privileges | `NoNewPrivileges`, empty `CapabilityBoundingSet`, `RestrictSUIDSGID`, `LockPersonality`, `MemoryDenyWriteExecute`, `RestrictNamespaces`, `RestrictRealtime` | the same, but no `MemoryDenyWriteExecute` (V8's JIT needs it) |
+| kernel and devices | `PrivateTmp`, `PrivateDevices`, `PrivateIPC`, `ProtectKernel{Tunables,Modules,Logs}`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc=invisible`, `ProcSubset=pid`, `KeyringMode=private` | the same |
+| system calls | `SystemCallFilter=@system-service ~@privileged ~@resources`, `SystemCallErrorNumber=EPERM`, `SystemCallArchitectures=native` | the same |
+| network | `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX` (it listens, and fetches login providers' keys over HTTPS) | the same, and `IPAddressDeny=any` + `IPAddressAllow=localhost` — enforced only by the system manager (below); `--user` logs "configures an IP firewall, but not running as root" and goes on |
+| memory | `MemoryHigh=1536M`, `MemoryMax=2G`, `TasksMax=512` — prod peaks near 600 MB | `MemoryHigh=512M`, `MemoryMax=768M`, `TasksMax=64` — it peaks near 200 MB |
+| files it creates | `UMask=0077` | `UMask=0077` |
+
+Node is named by its real path in `MENGER_DIAGRAMS_NODE` (install resolves
+the symlinks), because the diagrams unit binds only that installation: after
+moving Node, run `install` again.
+
+`systemd-analyze security` (exposure, 10 = unsafe):
+
+| unit | before | after |
+|---|---|---|
+| `menger@test` | 9.4 UNSAFE (`--user`, the installed unit, live); 9.2 (`--offline=true`, the old unit file) | 1.3 OK (`--offline=true`, `deploy/systemd/menger@.service`) |
+| `menger-diagrams@test` | 9.4 UNSAFE (live) | 1.1 OK (`--offline=true`) |
+
+```sh
+systemd-analyze security --user menger@test.service                     # live, read-only
+cp deploy/systemd/menger@.service /tmp/u/menger@test.service && cd /tmp/u && \
+  systemd-analyze security --offline=true --user menger@test.service    # a unit file, before it is installed
+```
+
+The smoke's headless browser, `--verify-derived` and the probe run outside
+the units (the pipeline runs them), so none of this constrains them.
+
+### A public host: a dedicated system user
+
+This machine stays on `systemd --user`. On a host that serves the internet,
+run menger as its own system user, so a compromise of it holds nothing of
+any person's: no home, no keys, no other service's files. The pipeline here
+drives `--user` units; on such a host the units below take their place (the
+pipeline's `install` does not write them).
+
+```sh
+sudo useradd --system --user-group --home-dir /var/lib/menger --shell /usr/sbin/nologin menger
+sudo install -d -o root -g menger -m 0750 /etc/menger                  # settings: root writes, menger reads
+sudo install -o root -g menger -m 0640 prod.env prod.local.env /etc/menger/
+sudo install -d -o root -g root -m 0755 /opt/menger/releases /opt/menger/envs/prod   # releases: read-only to menger
+```
+
+`/etc/systemd/system/menger@.service` — the unit above, with:
+
+```ini
+[Service]
+User=menger
+Group=menger
+EnvironmentFile=/etc/menger/%i.env
+EnvironmentFile=/etc/menger/%i.local.env
+ExecStart=/opt/menger/envs/%i/current/bin/run-menger
+# its database: /var/lib/menger/%i/tickets.db (MENGER_DB_PATH in %i.env),
+# made and owned by systemd — no ReadWritePaths drop-in
+StateDirectory=menger/%i
+StateDirectoryMode=0700
+ProtectHome=yes
+PrivateUsers=yes
+# the system manager enforces these (the user manager cannot)
+IPAddressDeny=any
+IPAddressAllow=localhost
+# + everything under "ACCESS-27" in deploy/systemd/menger@.service
+```
+
+and `menger-diagrams@.service` the same way (`User=menger`, no
+`StateDirectory`, `ProtectHome=yes` — Node from `/usr/bin/node` or `/opt`,
+no bind needed). REST and diagrams stay on loopback; the public origin is a
+TLS proxy in front of the shell and the WebSocket (ACCESS-30).
 
 ## Recording deployments
 
@@ -131,7 +247,10 @@ synapse -P 4455 menger deployments for_ticket --id MENGER-34
 Tests: `deploy/tests/pipeline` runs the pipeline itself on a throwaway root —
 `HOME` a scratch directory, `systemctl`, `synapse` and the rest stand-ins —
 through every row above, a tracker down, hung and refusing, `status` and
-`backfill`; `cargo test` runs it.
+`backfill`; and (ACCESS-27) `install`'s split of an old test file (login
+kept, nothing printed, a second install a no-op, a hand-added setting
+refused) and the smoke's login mode (a mismatch either way fails, the local
+half lost fails, no secret in any argv); `cargo test` runs it.
 
 ## The deployment record
 
