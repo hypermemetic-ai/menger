@@ -180,6 +180,17 @@ impl Bound {
     pub(super) fn of(cache: &Cache, lens: &Lens, strict: bool) -> Result<Self, StoreError> {
         let mut names = Vec::new();
         for u in lens.unders() {
+            // ORG-4: `under acme:` is every ticket in the organization — bound
+            // to each of its roots (every shortcode in it is one, or hosted
+            // under one); an org with none, or no org, holds nowhere.
+            if let Some(org) = u.trim().strip_suffix(':') {
+                let roots = cache.shortcodes.org_named(&org.to_ascii_lowercase()).map(|(_, o)| cache.shortcodes.roots_of(o));
+                match roots.filter(|r| !r.is_empty()) {
+                    Some(roots) => names.extend(roots.into_iter().map(|id| (id.as_str().to_string(), u.clone()))),
+                    None => names.push((u.trim().to_ascii_uppercase(), u.clone())),
+                }
+                continue;
+            }
             let exact = u.trim().to_ascii_uppercase();
             if cache.at.contains_key(&exact) || cache.shortcodes.get(&ShortcodeId::new(&exact)).is_some() {
                 names.push((exact, u.clone()));

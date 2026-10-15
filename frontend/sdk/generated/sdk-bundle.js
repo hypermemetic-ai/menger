@@ -151,8 +151,8 @@
       const stream = this.rpc.call("tickets.counts", { filter, keep, tz });
       yield* extractData(stream);
     }
-    async* create(epic, title, blockedBy, body, kind, parent, path, severity) {
-      const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, epic, kind, parent, path, severity, title });
+    async* create(epic, title, blockedBy, body, kind, org, parent, path, severity) {
+      const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, epic, kind, org, parent, path, severity, title });
       yield* extractData(stream);
     }
     async* delete(children, filter, ids, max, message, tz, unblock) {

@@ -763,6 +763,11 @@ pub(crate) struct Lens {
     filters: [Memo<Filter>; 5],
     effective: [Memo<Filter>; 5],
     clashes: [Memo<Option<Vec<(String, Vec<Level>)>>>; 5],
+    /// ORG-4: the organization the reader chose (the URL's `o=`, else
+    /// storage), and what it means among those held ([`crate::orgs`]):
+    /// every effective filter reads within it.
+    org_choice: RwSignal<Option<String>>,
+    org: Memo<Option<String>>,
 }
 
 /// The app's lens.
@@ -802,8 +807,15 @@ impl Lens {
             })
         });
         let g = Level::Global.index();
+        // ORG-4: the organization every page reads within.
+        let org_choice = RwSignal::new(load_stored(crate::orgs::STORAGE_KEY));
+        let held = crate::orgs::held();
+        let org = Memo::new(move |_| held.with(|h| crate::orgs::chosen_of(org_choice.get().as_deref(), h)));
         let effective: [Memo<Filter>; 5] = std::array::from_fn(|i| {
-            Memo::new(move |_| if i == g { filters[g].get() } else { filters[g].with(|gf| filters[i].with(|own| gf.and(own))) })
+            Memo::new(move |_| {
+                let f = if i == g { filters[g].get() } else { filters[g].with(|gf| filters[i].with(|own| gf.and(own))) };
+                org.with(|o| crate::orgs::within(o.as_deref(), &f))
+            })
         });
         let clashes = Level::ALL.map(|level| {
             Memo::new(move |_| filters[g].with(|gf| filters[level.index()].with(|own| clash_of(gf, own, level))))
@@ -819,6 +831,8 @@ impl Lens {
             filters,
             effective,
             clashes,
+            org_choice,
+            org,
         };
         // A default that moves (the groups came in) onto what was chosen
         // makes the choice the default.
@@ -845,6 +859,13 @@ impl Lens {
                 Some(k) => self.set_kept(level, k, false),
                 None => {}
             }
+        }
+        // ORG-4: the URL's organization, when it says one, wins; one it
+        // does not say is carried into it.
+        if let Said::Text(t) = said(&q, crate::orgs::KEY) {
+            let t = Some(t).filter(|t| !t.is_empty());
+            store(crate::orgs::STORAGE_KEY, t.as_deref());
+            self.org_choice.set(t);
         }
         let route = crate::parse_route(hash);
         let surface = surface_of(&route);
@@ -909,7 +930,22 @@ impl Lens {
         };
         let part = surface.map(|l| (f.as_deref(), local.as_slice(), owned_keys(Some(l))));
         let next = lens_hash(&hash, text(Level::Global).as_deref(), text(Level::Nav).as_deref(), part);
+        let next = write_key(&next, crate::orgs::KEY, self.org_choice.get_untracked().as_deref());
         replace(&win, &hash, &next);
+    }
+
+    /// ORG-4: the organization every page reads within — `None`: every one
+    /// the reader holds. Tracked.
+    pub(crate) fn org(self) -> Memo<Option<String>> {
+        self.org
+    }
+
+    /// ORG-4: the reader chose `org` (`None`: every one) — kept, and in the
+    /// URL.
+    pub(crate) fn set_org(self, org: Option<String>) {
+        store(crate::orgs::STORAGE_KEY, org.as_deref());
+        self.org_choice.set(org);
+        self.write_url();
     }
 
     /// What `level` keeps — what was chosen, else its default (`None` until

@@ -293,6 +293,22 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   method gets a role by being listed in its activation's `roles(...)` —
   unlisted, only admin holds it. README "The AUTH protocol" has the rest.
 
+  **Organizations** (ORG-4) are the `orgs` activation: every ticket and
+  shortcode is in one (today's tracker is `hypermemetic`). `list` (the
+  caller's), `create --name N --admin P` (admin on `*`), `rename` (the old
+  name stays an alias), `delete` (only empty). A grant's scope is `*`,
+  `org:` (the whole org) or `org:SHORTCODE` (that shortcode and those
+  hosted under it); `members grant --scope IDENTITY` keeps it as
+  `hypermemetic:IDENTITY`. `tickets create --org acme` (or `--epic
+  acme:MENGER`); without it, the caller's only org. A reader sees only the
+  orgs it holds a role in — another org's tickets are `not_found`. README
+  "Organizations" has the rest:
+
+  ```sh
+  synapse -P 4455 menger orgs list
+  synapse -P 4455 menger members grant --principal key:4b… --scope acme: --role editor
+  ```
+
   **Limits** (ACCESS-29): connections in all, per IP, per principal and
   anonymous (`--max-connections` 1,024, `--max-connections-per-ip` 256,
   `--max-connections-per-principal` 64, `--max-anonymous-connections` 128,

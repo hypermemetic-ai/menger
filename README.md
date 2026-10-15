@@ -1733,6 +1733,84 @@ every ticket's shortcode registered, no two of one code in one namespace,
 each stored host where its root hangs, every full address distinct, every
 pin a ticket or a tombstone.
 
+### Organizations (ORG-4)
+
+Every ticket and every shortcode is in exactly one **organization**;
+today's tracker is `hypermemetic` (ORG-1). Owner, 2026-10-13: *"we need to
+be able to easily create new orgs and scope roles to them."* An
+organization is a name — lower-case letters, digits and `-`, unique
+app-wide among every name an organization has or had — and one call to
+make (the `orgs` activation; its logic is `tickets-api/src/store/orgs.rs`):
+
+| method | who | yields |
+|---|---|---|
+| `orgs.list {}` | any member (viewer, editor) | one `org { name, aliases, roots, shortcodes, tickets }` per organization the caller holds a role in — every one for a role on `*`, and with login off |
+| `orgs.create { name, admin? }` | admin on `*` | `created { org, admin }`: the organization, empty, and `admin`'s grant of admin on `name:` (in one transaction) |
+| `orgs.rename { name, to }` | admin on the org, or on `*` | `renamed { from, org }`: the old name becomes an alias — every address and grant scope written with it keeps resolving; every grant on the org and every full address moves to the new name |
+| `orgs.delete { name }` | admin on the org, or on `*` | `deleted { name, grants }` — refused while it holds a shortcode (a ticket, or a deleted ticket kept for its undo), and for the first organization; its grants go with it |
+
+An organization the caller holds no role in is `not_found` to it (never
+refused by name). Tickets go into one by their address — `--epic acme:MENGER`
+— or by `tickets.create --org acme`; with neither, a create goes to the
+caller's **only** organization, and is refused, naming them, when it holds
+roles in several and the epic names no shortcode in exactly one of them. A
+new root in an organization takes `tickets.create` on it (`acme:`), not on
+`*`. Login off: one organization, as before, and nothing needs naming.
+
+```sh
+synapse -P 4460 -t "$ADMIN" menger orgs create --name acme --admin key:9f86…
+synapse -P 4460 -t "$ACME" menger tickets create --epic MENGER --kind scope --title "acme's menger"   # acme:MENGER-1
+synapse -P 4460 -t "$ACME" menger members grant --principal key:4b… --scope acme: --role editor
+synapse -P 4460 -t "$ACME" menger members grant --principal key:4b… --scope acme:MENGER --role viewer
+synapse -P 4460 -t "$ADMIN" menger orgs rename --name acme --to acme-co
+```
+
+**A grant's scope** (ACCESS-37's grammar, stored as text in `members`):
+`*` — every ticket; `org:` — every ticket in that organization; `org:ID` —
+a shortcode in it, by its identity (`hypermemetic:IDENTITY`,
+`acme:MENGER.12` for a namesake), and every shortcode hosted under it. A
+reader writes a shortcode by any short form of its address (`IDENTITY`,
+`acme:MENGER/THEME`), and `members.grant` / `auth.grant` keep it by
+identity, so a grant follows its shortcode wherever its root moves.
+ACCESS-21 adds `under ID` and `ID` (`members::Scope`, one variant each). An
+org admin (admin on `acme:`) grants and revokes inside acme and nowhere
+else; `members.list` shows them acme's grants.
+
+**What a reader sees.** A reader holds roles in some organizations; every
+read answers from where its grant is held, as before — `under acme:` is the
+filter language's every ticket in acme (bound to its roots), so another
+organization's tickets, shortcodes, counts and groups are not in the
+answer, and `get` of one is `not_found`. A short form is read in the
+reader's organizations: `get --id MENGER-2` by a reader of acme alone is
+acme's MENGER-2 even where hypermemetic's is pinned to the same text; an
+`ambiguous` answer names only candidates in the reader's organizations
+(none left: `not_found`). The gate decides a **write** before the method
+reads anything, from the whole store, so a short form there must fit one
+ticket (`acme:MENGER-2` always does); a write on another organization's
+ticket is refused naming the ticket as written — the same words as for a
+ticket that does not exist (`needs tickets.set_status on PLEXUS-2`).
+
+**Where a target lives** (the gate's `Resolve::chain`): the ticket as
+written, its shortcode `org:ID` and bare `ID`, itself and its ancestors,
+each hosting shortcode the same way, and last its organization, `org:` —
+so a membership on `acme:` reaches every ticket in acme, and a session's
+ceiling minted before ORG-4 (`editor@IDENTITY`) still holds.
+
+**Migration.** No stored form moves (ORG-3's form 11 made `orgs`); the file
+gains `org_aliases` beside it. The first open by this build moves every
+grant from before organizations into its own — `IDENTITY` becomes
+`hypermemetic:IDENTITY`, `*` stays site-wide — durably, once (`ORG-4:
+moved N grant(s) …`). An older build reads the moved grants as scopes it
+cannot place: it holds them nowhere (fail closed); promote's rollback
+restores the backup it took first.
+
+**In the app**: the header shows an organization switcher when the reader
+holds roles in more than one; the URL carries the choice (`o=acme`, carried
+from route to route as `g=` is, and kept per viewer), and every surface the
+lens filters reads within it (`under acme:` ANDed into each level's
+effective filter: the board, the nav, the wave boards, the inputs page, the
+palette).
+
 ### Search (SEARCH-2)
 
 `find` jumps to a ticket by its id or title; **`search`** looks inside
@@ -2697,7 +2775,8 @@ With login on, **menger's own members** decide what each person sees and
 changes. The IdP only proves who someone is. A grant gives a principal a
 role on a **scope**: a shortcode, which covers the shortcodes hosted under
 it (the filter language's `under`, so a grant on PLEXUS reaches IDENTITY),
-or `*`.
+or `*`. ORG-4: or an organization (`acme:`), and a shortcode is kept in its
+organization (`hypermemetic:PLEXUS`) — "Organizations" above.
 
 | role | may |
 |---|---|
@@ -2796,9 +2875,9 @@ activation — every method answers everyone, as before; schemas only gain
 
 | role | its grants (declared with `roles(...)` on each activation) |
 |---|---|
-| `viewer` | the reads: `tickets.{health, get, list, ready_set, find, search, member, groups, components, inputs, extents, counts, facets, tree, waves, blockers, watch, history}`, `comments.{add, list, watch}` |
+| `viewer` | the reads: `tickets.{health, get, list, ready_set, find, search, member, groups, components, inputs, extents, counts, facets, tree, waves, blockers, watch, history}`, `comments.{add, list, watch}`, `orgs.list` (ORG-4) |
 | `editor` | viewer's, and the writes: `tickets.{create, set_status, set_kind, set_parent, amend, link_commits, unlink_commits, label, update, update_many, answer, clear_answer, close_input, reopen_input}`, `comments.{resolve, reopen}` |
-| `admin` | every grant (built in): `tickets.{delete, undelete}` (ACT-5), `members.{list, grant, revoke, requests}`, `auth.{roles, role_set, grant, revoke, waiting}` |
+| `admin` | every grant (built in): `tickets.{delete, undelete}` (ACT-5), `members.{list, grant, revoke, requests}`, `orgs.{create, rename, delete}` (ORG-4), `auth.{roles, role_set, grant, revoke, waiting}` |
 | any signed-in caller | `session.*`, `members.mine`, `auth.{whoami, logout, requires}` |
 
 A **write's target** is the ticket it acts on (`id`, or `ticket` for an

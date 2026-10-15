@@ -7,7 +7,7 @@ import type { MembersEvent } from './types';
 
 /** Typed client interface for members plugin */
 export interface MembersClient {
-  /** Give a principal a role (viewer, editor, admin; deployer for a CI's key) on a shortcode or * */
+  /** Give a principal a role (viewer, editor, admin; deployer for a CI's key) on an organization, a shortcode in one, or * */
   grant(principal: string, role: string, scope: string): AsyncGenerator<MembersEvent>;
   /** The grants on the scopes you administer, by principal then scope */
   list(scope?: string | null): AsyncGenerator<MembersEvent>;

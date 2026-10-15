@@ -109,6 +109,10 @@ use queue::*;
 mod reads;
 #[cfg(feature = "server")]
 use reads::*;
+#[cfg(feature = "server")]
+mod orgs;
+#[cfg(feature = "server")]
+use orgs::*;
 #[cfg(all(test, feature = "server"))]
 mod tests;
 
@@ -201,7 +205,8 @@ impl Tickets {
             blocked_by = "Ticket ids that must complete first (optional; never a doc, and not for a doc)",
             body = "Markdown body (optional)",
             parent = "Id of the ticket this one is an output of; must exist and be in the same shortcode (default: the shortcode's scope root). The shortcode's own scope root may name a ticket in another shortcode: the one it hangs under",
-            path = "Path address inside the shortcode, e.g. _MENGER/board — then `get` finds it as SHORTCODE/_MENGER/board (optional; only _MENGER/… on a doc directly under the shortcode's scope root, unique in the shortcode)"
+            path = "Path address inside the shortcode, e.g. _MENGER/board — then `get` finds it as SHORTCODE/_MENGER/board (optional; only _MENGER/… on a doc directly under the shortcode's scope root, unique in the shortcode)",
+            org = "ORG-4: the organization, e.g. acme (optional: your only one; refused, naming them, when you hold roles in several and the epic is new)"
         ),
         values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], severity = ["Critical", "High", "Medium", "Low"]),
         example(note = "a build ticket under MENGER-2", params = r#"{"epic": "MENGER", "title": "Wrap long titles on the board", "kind": "build", "parent": "MENGER-2"}"#),
@@ -217,6 +222,7 @@ impl Tickets {
         body: Option<String>,
         parent: Option<String>,
         path: Option<String>,
+        org: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -228,56 +234,23 @@ impl Tickets {
                     return;
                 }
             };
-            // IDENTITY-21: `tickets.create` held on the parent, or on the
-            // shortcode's root; a shortcode with neither needs it on `*`.
-            // AUTH-7: the gate's own question, as it stands now (create
-            // names no single target the gate could resolve beforehand).
-            // ORG-3: the shortcode by any short form of its address.
-            let anchor = match parent.as_deref() {
-                Some(p) => Some(p.to_string()),
-                None => match store.root_of(&epic) {
-                    Ok(root) => root,
-                    Err(e) => {
-                        yield refusal(e);
-                        return;
-                    }
-                },
+            // ORG-4: the organization first — `--org`, the caller's only
+            // one, or refused naming them (activation/orgs.rs) — then
+            // IDENTITY-21's `tickets.create` where it lands.
+            let epic = match epic_in(&store, &caller, epic, org, parent.as_deref()) {
+                Ok(e) => e,
+                Err(ev) => {
+                    yield ev;
+                    return;
+                }
             };
-            let allowed = match (&anchor, caller.grant.clone()) {
-                (_, None) => Ok(()),
-                (Some(a), Some(g)) => caller.check(&g, a),
-                (None, Some(g)) => caller
-                    .check(&g, "*")
-                    .map_err(|_| format!("a new shortcode {} needs {g} on *", epic.to_ascii_uppercase())),
-            };
-            if let Err(message) = allowed {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-            // IDENTITY-37: a blocker the caller cannot view is refused —
-            // by its shortcode, read from the id, so a hidden ticket and an
-            // id naming none get the same answer.
-            let reach = match sight_lens(&caller) {
+            let reach = match create_admits(&store, &caller, &epic, parent.as_deref(), blocked_by.as_deref()) {
                 Ok(r) => r,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
+                Err(ev) => {
+                    yield ev;
                     return;
                 }
             };
-            let visible = match sight_epics(&store, &caller) {
-                Ok(v) => v,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Some(v) = &visible {
-                let hidden = blocked_by.iter().flatten().find(|b| store.shortcode_of(b.trim()).is_none_or(|sc| !v.contains(&sc)));
-                if let Some(b) = hidden {
-                    yield TicketsEvent::Error { message: format!("blocked_by: {}", caller.lacks(&Grant::new(crate::access::SEES), Some(b.trim()))) };
-                    return;
-                }
-            }
             let kind = match kind.as_deref().map(str::parse::<Kind>) {
                 None => Kind::Build,
                 Some(Ok(k)) => k,
@@ -341,15 +314,16 @@ impl Tickets {
                     return;
                 }
             };
-            if caller.require(&[id.as_str()], &store).is_err() {
+            let named = named_in(&store, &caller, id.clone());
+            if caller.require(&[named.as_str()], &store).is_err() {
                 yield TicketsEvent::NotFound { id: id };
                 return;
             }
-            match store.get(&id).await {
+            match store.get(&named).await {
                 Ok(ticket) => yield TicketsEvent::Ticket { ticket },
                 // ACT-5: a deleted ticket answers its tombstone.
                 Err(StoreError::NotFound(_)) => yield store.tombstone(&id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
-                Err(e) => yield refusal(e),
+                Err(e) => yield veiled(&caller, e),
             }
         }
     }
@@ -457,7 +431,7 @@ impl Tickets {
                 let lens = match filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())) {
                     Ok(lens) => lens,
                     Err(e) => {
-                        yield refusal(e);
+                        yield veiled(&caller, e);
                         return;
                     }
                 };
@@ -574,7 +548,7 @@ impl Tickets {
             match store.set_status_by(&id, status, act, restore_children.unwrap_or(false)).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield refusal(e),
+                Err(e) => yield veiled(&caller, e),
             }
         }
     }
@@ -658,7 +632,7 @@ impl Tickets {
             match store.set_kind_by(&id, kind, status, act).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield refusal(e),
+                Err(e) => yield veiled(&caller, e),
             }
         }
     }
@@ -713,7 +687,7 @@ impl Tickets {
             match store.set_parent(&id, &parent).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield refusal(e),
+                Err(e) => yield veiled(&caller, e),
             }
         }
     }
@@ -1118,7 +1092,7 @@ impl Tickets {
             // FILTER-15: from the cells.
             match narrowing(filter.as_deref()).and_then(|f| f.map(|f| ready_and(&f, epic.clone())).transpose()) {
                 Err(e) => {
-                    yield refusal(e);
+                    yield veiled(&caller, e);
                     return;
                 }
                 Ok(Some(q)) => {
@@ -1279,7 +1253,7 @@ impl Tickets {
             let lens = match zoned_lens(&caller, filter.as_deref(), tz.as_deref()) {
                 Ok(lens) => lens,
                 Err(e) => {
-                    yield refusal(e);
+                    yield veiled(&caller, e);
                     return;
                 }
             };
@@ -1296,7 +1270,7 @@ impl Tickets {
                     }
                     yield TicketsEvent::Searched { matched, next, words };
                 }
-                Err(e) => yield refusal(e),
+                Err(e) => yield veiled(&caller, e),
             }
         }
     }
@@ -1347,7 +1321,7 @@ impl Tickets {
             let lens = match zoned_lens(&caller, Some(&filter), tz.as_deref()) {
                 Ok(lens) => lens.unwrap_or_else(Lens::all),
                 Err(e) => {
-                    yield refusal(e);
+                    yield veiled(&caller, e);
                     return;
                 }
             };
@@ -1536,7 +1510,7 @@ impl Tickets {
                     }
                 }
                 Err(StoreError::NotFound(id)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield refusal(e),
+                Err(e) => yield veiled(&caller, e),
             }
         }
     }
@@ -1867,7 +1841,7 @@ impl Tickets {
             let lens = match Lens::parse(&filter) {
                 Ok(lens) => lens,
                 Err(e) => {
-                    yield refusal(e);
+                    yield veiled(&caller, e);
                     return;
                 }
             };

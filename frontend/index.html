@@ -1148,6 +1148,13 @@
      below it); the fallback here only covers the first frame. */
   header .hlink { color: var(--muted); font-size: calc(.8rem * var(--text-scale)); text-decoration: none; }
   header .hlink:hover, header .hlink[aria-current] { color: var(--accent); }
+  /* ORG-4: the organization every page reads within — shown only to a
+     reader who holds roles in more than one. */
+  header .org-switch {
+    font: inherit; font-size: calc(.8rem * var(--text-scale)); color: var(--muted);
+    background: transparent; border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 .25rem;
+  }
+  header .org-switch:hover, header .org-switch:focus-visible { color: var(--accent); }
   main:has(#waves) { max-width: none; }
   #waves .wbar {
     position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem;

@@ -761,6 +761,12 @@ pub(crate) fn deployments_client() -> Option<menger_tickets_api::DeploymentsClie
     TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::DeploymentsClient::new)
 }
 
+/// ORG-4: the `orgs` activation's typed client, over the same connection
+/// — the header's org switcher.
+pub(crate) fn orgs_client() -> Option<menger_tickets_api::OrgsClient<Rc<WsTransport>>> {
+    TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::OrgsClient::new)
+}
+
 /// IDENTITY-22: the `members` activation's typed client, over the same
 /// connection.
 pub(crate) fn members_client() -> Option<menger_tickets_api::MembersClient<Rc<WsTransport>>> {
@@ -873,6 +879,9 @@ async fn session(
     // `themes.watch`, then the list — on every connection: the site theme
     // holds on every page.
     scopes::refresh();
+    // ORG-4: the organizations the reader holds a role in — the header's
+    // switcher, on every connection.
+    crate::orgs::refresh();
 
     // 2. The dock.
     for ev in client.health_all().await.map_err(|e| describe(&e))? {

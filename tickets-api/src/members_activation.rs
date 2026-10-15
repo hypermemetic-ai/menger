@@ -19,7 +19,7 @@ use crate::members::MembersEvent;
 #[cfg(feature = "server")]
 use crate::access::{Access, OPERATOR};
 #[cfg(feature = "server")]
-use crate::members::{scope_of, Grant, Role};
+use crate::members::{Grant, Role};
 #[cfg(feature = "server")]
 use crate::store::Store;
 #[cfg(feature = "server")]
@@ -94,7 +94,7 @@ impl Members {
     #[plexus_macros::method(
         group = "read",
         description = "The grants on the scopes you administer, by principal then scope",
-        params(scope = "Only this shortcode, or * (optional)")
+        params(scope = "Only this organization (acme:), shortcode, or * (optional)")
     )]
     pub async fn list(&self, auth: Option<&AuthContext>, reach: Reach, scope: Option<String>) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
@@ -107,10 +107,11 @@ impl Members {
                 yield MembersEvent::Error { message };
                 return;
             }
-            let only = match scope.as_deref().map(scope_of).transpose() {
+            // ORG-4: a scope as the store keeps it (`hypermemetic:IDENTITY`).
+            let only = match scope.as_deref().map(|s| store.scope_named(s)).transpose() {
                 Ok(s) => s,
-                Err(message) => {
-                    yield MembersEvent::Error { message };
+                Err(e) => {
+                    yield MembersEvent::Error { message: e.to_string() };
                     return;
                 }
             };
@@ -134,10 +135,10 @@ impl Members {
     #[plexus_macros::method(
         group = "admin",
         target = "scope",
-        description = "Give a principal a role (viewer, editor, admin; deployer for a CI's key) on a shortcode or *",
+        description = "Give a principal a role (viewer, editor, admin; deployer for a CI's key) on an organization, a shortcode in one, or *",
         params(
             principal = "The Plexus principal, e.g. idp:c952acd3-…, oidc:auth0/google-oauth2|…, nostr:<hex>",
-            scope = "A shortcode, e.g. IDENTITY (covers the shortcodes hosted under it), or *",
+            scope = "An organization (acme:), a shortcode in one (hypermemetic:IDENTITY, or IDENTITY — covers the shortcodes hosted under it), or *",
             role = "viewer | editor | admin | deployer (a CI's key: the reads and deployments.record, DEPLOY-14)"
         ),
         values(role = ["viewer", "editor", "admin", "deployer"]),
@@ -154,7 +155,7 @@ impl Members {
                     return;
                 }
             };
-            let (scope, role) = match (scope_of(&scope), role.parse::<Role>()) {
+            let (scope, role) = match (store.scope_named(&scope).map_err(|e| e.to_string()), role.parse::<Role>()) {
                 (Ok(s), Ok(r)) => (s, r),
                 (Err(message), _) | (_, Err(message)) => {
                     yield MembersEvent::Error { message };
@@ -189,7 +190,7 @@ impl Members {
         group = "admin",
         target = "scope",
         description = "Take a principal's role on a shortcode or * away",
-        params(principal = "The Plexus principal", scope = "A shortcode, or *")
+        params(principal = "The Plexus principal", scope = "An organization (acme:), a shortcode in one, or *")
     )]
     pub async fn revoke(&self, auth: Option<&AuthContext>, reach: Reach, principal: String, scope: String) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
@@ -199,10 +200,10 @@ impl Members {
                 yield MembersEvent::Error { message };
                 return;
             }
-            let scope = match scope_of(&scope) {
+            let scope = match store.scope_named(&scope) {
                 Ok(s) => s,
-                Err(message) => {
-                    yield MembersEvent::Error { message };
+                Err(e) => {
+                    yield MembersEvent::Error { message: e.to_string() };
                     return;
                 }
             };

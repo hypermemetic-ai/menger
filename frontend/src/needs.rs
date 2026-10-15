@@ -185,7 +185,9 @@ impl NeedsYou {
     pub(crate) fn install() -> Self {
         let filter = RwSignal::new(default_filter());
         let source = RwSignal::new(Source::Unread);
-        let text = Memo::new(move |_| filter.with(asked));
+        // ORG-4: asked within the organization the reader chose.
+        let org = crate::lens::use_lens().org();
+        let text = Memo::new(move |_| org.with(|o| filter.with(|f| asked(&crate::orgs::within(o.as_deref(), f)))));
         let count = LiveCounts::new(text.into());
         let link = session::link();
         Effect::new(move |_| {

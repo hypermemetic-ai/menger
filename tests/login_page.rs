@@ -766,7 +766,7 @@ async fn a_seeded_user_signs_in_with_its_roles() {
         .collect();
     assert_eq!(
         grants,
-        vec![("OUGHT".into(), "editor".into(), "dev-login".into()), ("PLEXUS".into(), "viewer".into(), "dev-login".into())],
+        vec![("hypermemetic:OUGHT".into(), "editor".into(), "dev-login".into()), ("hypermemetic:PLEXUS".into(), "viewer".into(), "dev-login".into())],
         "the roster's roles, not the form's"
     );
 }
@@ -778,7 +778,7 @@ async fn anyone_signs_in_with_the_role_asked_for() {
     assert_eq!(r.status(), 303, "{}", r.text().await.unwrap());
     let ws = socket(&m, Some(&session_from(&r).unwrap()), Some(&m.origin())).await.unwrap();
     let mine = call(&ws, "members.mine").await;
-    assert!(mine.iter().any(|e| e["grant"]["scope"] == "IDENTITY" && e["grant"]["role"] == "editor"), "{mine:?}");
+    assert!(mine.iter().any(|e| e["grant"]["scope"] == "hypermemetic:IDENTITY" && e["grant"]["role"] == "editor"), "{mine:?}");
 
     // An account plexus-idp lacks is registered there; this one's socket is
     // down, and the page says so.
