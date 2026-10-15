@@ -2081,7 +2081,7 @@
   #comments .cflip:hover { border-color: var(--accent); color: var(--accent); }
   #comments .cerr { color: var(--err-fg); font-size: calc(.75rem * var(--text-scale)); }
   /* MENGER-12: a ticket's labels — chips on its rows and its page;
-     `needs-you` wears the accent (it puts the ticket on Needs you). */
+     `needs-you` wears the accent (it puts the ticket under Needs you, on the nav). */
   .lchips { display: inline-flex; flex-wrap: nowrap; gap: .25rem; margin-left: .4rem; vertical-align: 1px; }
   .lchip {
     display: inline-block; font-family: var(--sans); font-size: calc(10px * var(--text-scale)); line-height: 1.5; white-space: nowrap;
@@ -2103,42 +2103,6 @@
   /* MENGER-12: the header's `needs you` count — the accent while anything
      waits, quiet at 0 (the inputs badge's look). */
   header .hlink .hbadge.needs { background: var(--accent); color: var(--bg); }
-  /* MENGER-12: Needs you, first on Home — a card per ticket, its open
-     questions under it, each with `answer ›`. */
-  #needs-you {
-    margin: 0 0 1rem; padding: .6rem .75rem .7rem; background: var(--panel);
-    border: var(--border) solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-xl);
-  }
-  #needs-you .nhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .6rem; margin: 0 0 .45rem; }
-  #needs-you h2 { font-size: calc(1rem * var(--text-scale)); margin: 0; }
-  #needs-you h2 .sep, #needs-you h2 .n { font-weight: var(--weight-normal); color: var(--muted); }
-  #needs-you h2 .n { color: var(--accent); font-weight: var(--weight-strong); }
-  #needs-you .nsrc { color: var(--muted); font-size: calc(.75rem * var(--text-scale)); min-width: 0; overflow-wrap: anywhere; }
-  #needs-you .nsrc code { font-family: var(--mono); font-size: calc(11px * var(--text-scale)); }
-  #needs-you #needs-change { margin-left: auto; }
-  #needs-you .nedit { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 .45rem; }
-  #needs-you .nedit input {
-    flex: 1 1 16rem; min-width: 0; font-family: var(--mono); font-size: calc(12px * var(--text-scale)); padding: 2px 6px;
-    background: var(--card); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius);
-  }
-  #needs-you .none { margin: 0; color: var(--muted); font-size: calc(.85rem * var(--text-scale)); }
-  #needs-you ul.nrows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
-  #needs-you .nrow { background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); padding: .35rem .6rem; font-size: calc(13px * var(--text-scale)); }
-  #needs-you .nline { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .45rem; min-width: 0; }
-  #needs-you .nline .code {
-    font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: .02em; color: var(--chip-fg); background: var(--chip-bg);
-    border: var(--border) solid var(--chip-line); border-radius: var(--radius-md); padding: 0 5px; white-space: nowrap; text-decoration: none;
-  }
-  #needs-you .nline a.code:hover, #needs-you .nline a.code:focus-visible { color: var(--accent); border-color: var(--accent); }
-  #needs-you .ntitle { color: var(--ink); text-decoration: none; min-width: 0; overflow-wrap: anywhere; flex: 1 1 12rem; }
-  #needs-you .ntitle:hover { color: var(--accent); }
-  #needs-you .nline .tag { font-size: calc(10px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-lg); white-space: nowrap; }
-  #needs-you .nline .lchips { margin-left: 0; flex-wrap: wrap; }
-  #needs-you ul.nqs { list-style: none; margin: .3rem 0 0; padding: 0 0 0 .6rem; border-left: 2px solid var(--line); }
-  #needs-you .nq { margin: .15rem 0; font-family: var(--sans); font-size: calc(13px * var(--text-scale)); overflow-wrap: anywhere; }
-  #needs-you .nanswer { white-space: nowrap; color: var(--accent); font-size: calc(12px * var(--text-scale)); font-weight: var(--weight-strong); text-decoration: none; }
-  #needs-you .nanswer:hover, #needs-you .nanswer:focus-visible { text-decoration: underline; }
-  #needs-you .nmore { margin: .4rem 0 0; font-size: calc(.8rem * var(--text-scale)); }
   /* DEPLOY-13: where work runs — a mark per environment on a board row and
      a wave card, the ticket page's Running, and #/deployments. */
   .envmarks { display: inline-flex; flex-wrap: nowrap; gap: .2rem; margin-left: .35rem; vertical-align: 1px; }

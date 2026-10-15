@@ -1123,8 +1123,8 @@ pub(crate) fn offered(c: Cat, k: &MenuFacts) -> Vec<Row> {
     }
 }
 
-/// MENGER-12: Label's values, in name order — `needs-you` always (Home's
-/// panel asks for it), every label the counts name, and the clause's own.
+/// MENGER-12: Label's values, in name order — `needs-you` always (the Needs
+/// you filter asks for it), every label the counts name, and the clause's own.
 pub(crate) fn label_values(k: &MenuFacts) -> Vec<String> {
     let mut out: BTreeSet<String> = BTreeSet::from([menger_tickets_api::labels::NEEDS_YOU.to_string()]);
     out.extend(k.counts.get(&Cat::Label).into_iter().flat_map(|m| m.keys().cloned()));
