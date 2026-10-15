@@ -42,10 +42,10 @@ pub(super) fn update_of(
 /// both sides —, and a blocker as `create` takes it (one the caller cannot
 /// view is refused, by its shortcode) and, in another shortcode, the grant
 /// there too.
-pub(super) fn update_reach(store: &Store, caller: &Caller, id: &str, update: &Update) -> Result<(), String> {
+pub(super) fn update_reach(store: &Store, caller: &VerifiedUser, id: &str, update: &Update) -> Result<(), String> {
     if let Some(parent) = &update.parent {
         let root = store.groups().into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
-        let wanted = if root { Some(Grant::new(ADMINISTER)) } else { caller.grant.clone() };
+        let wanted = if root { Some(Grant::new(ADMINISTER)) } else { caller.grant().cloned() };
         if let Some(g) = wanted {
             caller.check(&g, id).and_then(|()| caller.check(&g, parent.trim())).map_err(|message| {
                 if root {
@@ -65,7 +65,7 @@ pub(super) fn update_reach(store: &Store, caller: &Caller, id: &str, update: &Up
         if visible.as_ref().is_some_and(|v| epic.as_ref().is_none_or(|e| !v.contains(e))) {
             return Err(format!("blocked_by: {}", caller.lacks(&Grant::new(crate::access::SEES), Some(b))));
         }
-        if let (true, Some(g), Some(ticket)) = (epic != home, caller.grant.as_ref(), store.ticket_id(b)) {
+        if let (true, Some(g), Some(ticket)) = (epic != home, caller.grant(), store.ticket_id(b)) {
             caller.check(g, &ticket)?;
         }
     }
@@ -86,7 +86,7 @@ pub(super) enum CellWrite {
 /// or none — one event per ticket, in the order named.
 pub(super) fn cells_stream(
     store: Arc<Store>,
-    admitted: Result<Caller, String>,
+    admitted: Result<VerifiedUser, String>,
     id: Option<TicketRef>,
     ids: Option<Vec<TicketRef>>,
     write: CellWrite,
@@ -149,7 +149,7 @@ fn one_or_many(id: Option<String>, ids: Option<Vec<String>>) -> Result<Result<St
 /// reach on every ticket selected, then the store's one write.
 pub(super) fn update_many_stream(
     store: Arc<Store>,
-    admitted: Result<Caller, String>,
+    admitted: Result<VerifiedUser, String>,
     ids: Option<Vec<TicketRef>>,
     filter: Option<FilterText>,
     max: Option<u32>,
@@ -180,7 +180,8 @@ pub(super) fn update_many_stream(
             }
         };
         let sight = sight_lens(&caller).ok().flatten();
-        let (gate, reach_of, at) = (caller.clone(), asked.clone(), store.clone());
+        let caller = Arc::new(caller);
+        let (gate, reach_of, at) = (Arc::clone(&caller), asked.clone(), store.clone());
         let may = move |ids: &[String]| -> Result<(), String> {
             gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at)?;
             if reach_of.parent.is_some() || !reach_of.block.is_empty() || !reach_of.unblock.is_empty() {

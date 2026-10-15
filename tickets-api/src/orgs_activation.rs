@@ -20,7 +20,7 @@ use crate::orgs::OrgsEvent;
 use crate::address::OrgId;
 use crate::vocab::Principal;
 #[cfg(feature = "server")]
-use crate::access::{Access, Caller, OPERATOR};
+use crate::access::{Access, VerifiedUser, OPERATOR};
 #[cfg(feature = "server")]
 use crate::store::{Store, StoreError};
 #[cfg(feature = "server")]
@@ -67,7 +67,7 @@ fn refused(e: StoreError, name: &str) -> OrgsEvent {
 /// `Err` is the event to answer — `not_found` when it holds no role there
 /// (or there is none), a refusal when it holds one but not admin.
 #[cfg(feature = "server")]
-fn administered(store: &Store, caller: &Caller, name: &str) -> Result<crate::orgs::Org, OrgsEvent> {
+fn administered(store: &Store, caller: &VerifiedUser, name: &str) -> Result<crate::orgs::Org, OrgsEvent> {
     let not_found = || OrgsEvent::NotFound { name: name.trim().to_string() };
     let org = store.org(name).ok_or_else(not_found)?;
     if caller.orgs().is_some_and(|held| !held.contains(&org.name)) {
@@ -75,7 +75,7 @@ fn administered(store: &Store, caller: &Caller, name: &str) -> Result<crate::org
     }
     match caller.administers(&format!("{}:", org.name)) {
         true => Ok(org),
-        false => Err(OrgsEvent::Error { message: format!("{} needs admin on {}: (or on *)", caller.principal.as_deref().unwrap_or("you"), org.name) }),
+        false => Err(OrgsEvent::Error { message: format!("{} needs admin on {}: (or on *)", caller.principal().map(|p| p.as_str()).unwrap_or("you"), org.name) }),
     }
 }
 
@@ -100,7 +100,7 @@ impl Orgs {
     /// { name, aliases, roots, shortcodes, tickets }` each.
     #[plexus_macros::method(group = "read", description = "The organizations you hold a role in")]
     pub async fn list(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = OrgsEvent> + Send + 'static {
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let store = self.store.clone();
         stream! {
             let caller = match admitted {
@@ -133,7 +133,7 @@ impl Orgs {
         example(note = "acme, administered by one key", params = r#"{"name": "acme", "admin": "key:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"}"#)
     )]
     pub async fn create(&self, auth: Option<&AuthContext>, reach: Reach, name: OrgId, admin: Option<Principal>) -> impl Stream<Item = OrgsEvent> + Send + 'static {
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let (store, access) = (self.store.clone(), self.access.clone());
         stream! {
             let caller = match admitted {
@@ -147,7 +147,7 @@ impl Orgs {
                 yield OrgsEvent::Error { message: "a new organization needs admin on *".into() };
                 return;
             }
-            let admin = admin.map(|p| (p.into_string(), caller.principal.clone().unwrap_or_else(|| OPERATOR.into())));
+            let admin = admin.map(|p| (p.into_string(), caller.principal_text().unwrap_or_else(|| OPERATOR.into())));
             match store.create_org(&name, admin).await {
                 Ok((org, admin)) => {
                     if let Some(g) = &admin {
@@ -170,7 +170,7 @@ impl Orgs {
         params(name = "The organization, e.g. acme", to = "Its new name: lower-case letters, digits and -, unique")
     )]
     pub async fn rename(&self, auth: Option<&AuthContext>, reach: Reach, name: OrgId, to: OrgId) -> impl Stream<Item = OrgsEvent> + Send + 'static {
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let store = self.store.clone();
         stream! {
             let caller = match admitted {
@@ -204,7 +204,7 @@ impl Orgs {
         params(name = "The organization, e.g. acme")
     )]
     pub async fn delete(&self, auth: Option<&AuthContext>, reach: Reach, name: OrgId) -> impl Stream<Item = OrgsEvent> + Send + 'static {
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let store = self.store.clone();
         stream! {
             let caller = match admitted {

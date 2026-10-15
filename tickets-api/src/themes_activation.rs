@@ -107,7 +107,7 @@ impl Themes {
         };
         let (light, dark) = (text(light), text(dark));
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(c) => c,
@@ -116,7 +116,7 @@ impl Themes {
                     return;
                 }
             };
-            if let Some(g) = caller.grant.clone() {
+            if let Some(g) = caller.grant().cloned() {
                 if let Err(message) = caller.check(&g, "*") {
                     yield ThemesEvent::Error { message: format!("a theme is the whole site's: defining one takes themes.define on *: {message}") };
                     return;
@@ -135,7 +135,7 @@ impl Themes {
     #[plexus_macros::method(group = "read", description = "Every theme, then what the site and each shortcode say")]
     pub async fn list(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = ThemesEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             if let Err(message) = admitted {
                 yield ThemesEvent::Error { message };
@@ -160,7 +160,7 @@ impl Themes {
     )]
     pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, name: ThemeName) -> impl Stream<Item = ThemesEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             if let Err(message) = admitted {
                 yield ThemesEvent::Error { message };
@@ -208,7 +208,7 @@ impl Themes {
         // Its parameter `reach` is the setting's, so the gate's answer is
         // not taken: the gate admitted the call, and the grant is asked
         // here, where the scope is (`*` for the site).
-        let admitted = self.access.admit(auth, &Reach::everywhere());
+        let admitted = self.access.verify_call(auth, &Reach::everywhere());
         stream! {
             let caller = match admitted {
                 Ok(c) => c,
@@ -250,7 +250,7 @@ impl Themes {
     )]
     pub async fn theme_for(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef) -> impl Stream<Item = ThemesEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             if let Err(message) = admitted {
                 yield ThemesEvent::Error { message };
@@ -276,7 +276,7 @@ impl Themes {
     )]
     pub async fn watch(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = ThemesEvent> + Send + 'static {
         let mut rx = self.store.subscribe_themes();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             if let Err(message) = admitted {
                 yield ThemesEvent::Error { message };

@@ -43,7 +43,7 @@ pub(super) fn await_reply_stream(
     ask: Ask,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     let started = chrono::Utc::now().timestamp();
-    let opened = access.admit(who.as_ref(), &reach).and_then(|c| view_lens(&c).map(|l| (c, l)));
+    let opened = access.verify_call(who.as_ref(), &reach).and_then(|c| view_lens(&c).map(|l| (c, l)));
     let prepared = opened.map(|(caller, lens)| {
         // The ticket as kept — or a deleted one's id.
         let held = store.ticket_id(&ask.id);
@@ -55,7 +55,7 @@ pub(super) fn await_reply_stream(
             ticket,
             since: ask.since.unwrap_or(started),
             input: ask.input.clone().map(|i| i.trim().to_string()).filter(|i| !i.is_empty()),
-            me: caller.principal.clone(),
+            me: caller.principal_text(),
         };
         let before: HashSet<String> = match ask.since {
             Some(_) => HashSet::new(),

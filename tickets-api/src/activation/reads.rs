@@ -7,7 +7,7 @@ use super::*;
 /// `get` — one ticket by any address, in the caller's reach: `ticket` (ACT-6:
 /// with `moved_from` when an old id named it), a deleted one's tombstone
 /// (ACT-5), or `not_found`.
-pub(super) fn get_stream(store: Arc<Store>, admitted: Result<Caller, String>, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn get_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let caller = match admitted {
             Ok(caller) => caller,
@@ -33,7 +33,7 @@ pub(super) fn get_stream(store: Arc<Store>, admitted: Result<Caller, String>, id
 
 /// `blockers` — the ticket's blockers in its reach, each resolved or
 /// dangling.
-pub(super) fn blockers_stream(store: Arc<Store>, admitted: Result<Caller, String>, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn blockers_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let caller = match admitted {
             Ok(caller) => caller,
@@ -71,7 +71,7 @@ pub(super) fn blockers_stream(store: Arc<Store>, admitted: Result<Caller, String
 
 /// MENGER-13: `history` — the ticket's transitions, those they caused where
 /// the caller can see, MENGER-39: its queue history, then `history_end`.
-pub(super) fn history_stream(store: Arc<Store>, admitted: Result<Caller, String>, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn history_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let caller = match admitted {
             Ok(caller) => caller,

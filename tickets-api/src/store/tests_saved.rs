@@ -80,8 +80,8 @@ async fn a_name_is_its_saved_filter_and_two_join_by_or_and_and() {
     let lens = store.lens("saved \"Needs you\" or saved Plexus-Ready").unwrap();
     assert_eq!(store.counts(&lens).iter().map(|(_, n)| n).sum::<u64>(), 3);
     // a read narrowed by it (FILTER-15) and facets' filter resolve too.
-    assert!(store.narrowing(Some("saved Plexus-Ready")).unwrap().is_some_and(|f| f.saved_names().is_empty()));
-    assert_eq!(store.resolved(Some("saved Plexus-Ready")).unwrap().format(), "in PLEXUS and status Ready");
+    assert!(store.narrowing(Some(&Filter::parse("saved Plexus-Ready").unwrap())).unwrap().is_some_and(|f| f.saved_names().is_empty()));
+    assert_eq!(store.resolved(Some(&Filter::parse("saved Plexus-Ready").unwrap())).unwrap().format(), "in PLEXUS and status Ready");
     // refused in words: a name nothing holds; the static lens names it unresolved.
     assert_eq!(refusal(&store, "saved Nope"), "not resolved: `saved Nope` — no saved filter named \"Nope\"");
     assert!(Lens::parse("saved Plexus-Ready").unwrap_err().to_string().contains("resolved by the store first"));
@@ -150,7 +150,7 @@ async fn a_watch_naming_a_filter_hears_what_its_amend_did() {
     let store = Store::new();
     let (_, plexus) = seeded(&store).await;
     let text = "saved \"Needs you\" or saved Plexus-Ready";
-    let mut watcher = store.watcher_in(store.lens(text).unwrap(), None).naming(Some(text));
+    let mut watcher = store.watcher_in(store.lens(text).unwrap(), None).naming(Some(&Filter::parse(text).unwrap()));
     assert!(watcher.names_saved());
     assert!(watcher.resaved(&store, None).unwrap().is_empty(), "nothing moved yet");
     // Plexus-Ready now says Pending: PLEXUS-2 leaves, PLEXUS-1 (the root, Pending) enters; 3 and 4 stay, through Needs you.
@@ -171,7 +171,7 @@ async fn a_watch_naming_a_filter_hears_what_its_amend_did() {
     store.delete(Selection::Ids(vec![plexus]), Deletion::default(), None).await.unwrap();
     assert!(watcher.resaved(&store, None).unwrap_err().contains("no saved filter named \"Plexus-Ready\""));
     // a watch naming none is never read again.
-    let plain = store.watcher_in(store.lens("blocked").unwrap(), None).naming(Some("blocked"));
+    let plain = store.watcher_in(store.lens("blocked").unwrap(), None).naming(Some(&Filter::parse("blocked").unwrap()));
     assert!(!plain.names_saved());
 }
 
@@ -181,7 +181,7 @@ async fn needs_you_means_the_apps_default_until_one_is_saved() {
     store.create(ticket("PLEXUS", "the platform", Kind::Scope, None, None, "")).await.unwrap();
     store.create(ticket("PLEXUS", "work", Kind::Build, Some("PLEXUS-1"), None, "")).await.unwrap();
     store.label("PLEXUS-2", vec!["needs-you".into()], Vec::new()).await.unwrap();
-    assert_eq!(store.resolved(Some("saved \"Needs you\"")).unwrap().format(), "(queued or asking or label needs-you)");
+    assert_eq!(store.resolved(Some(&Filter::parse("saved \"Needs you\"").unwrap())).unwrap().format(), "(queued or asking or label needs-you)");
     assert_eq!(ids(&store, "saved \"needs you\""), ["PLEXUS-2"]);
     assert!(refusal(&store, "saved Plexus-Ready").contains("no saved filter named"), "no other name has a default");
 }

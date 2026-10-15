@@ -4,21 +4,22 @@
 //! `activation.rs` as they were, so that file holds the methods alone.
 
 use super::*;
+use crate::filter::Filter;
 
-/// FILTER-4: a filtered watch's watcher — `text` (already ANDed with the
+/// FILTER-4: a filtered watch's watcher — `filter` (already ANDed with the
 /// caller's reach) compiled, in `epic` alone when one is asked. MENGER-13:
 /// its history read by `clock`.
-/// FILTER-36: its saved names resolved, and the text kept to resolve again.
-pub(super) fn watcher_for(store: &Store, text: Option<&str>, epic: Option<&crate::address::ShortcodeId>, clock: &Clock) -> Result<crate::store::Watcher, String> {
-    let lens = store.lens_or_all(text).map_err(|e| e.to_string())?;
-    Ok(store.watcher_in(lens.with_clock(clock.clone()), epic).naming(text))
+/// FILTER-36: its saved names resolved, and the filter kept to resolve again.
+pub(super) fn watcher_for(store: &Store, filter: Option<&Filter>, epic: Option<&crate::address::ShortcodeId>, clock: &Clock) -> Result<crate::store::Watcher, String> {
+    let lens = store.lens_or_all(filter).map_err(|e| e.to_string())?;
+    Ok(store.watcher_in(lens.with_clock(clock.clone()), epic).naming(filter))
 }
 
 /// MENGER-13: how a read's filter reads time — in `tz` (an IANA name, UTC,
 /// or an offset; none: UTC), now, with `me` the caller's principal
 /// (`anonymous` with login off). A zone the server cannot read is refused.
-pub(super) fn clock_of(caller: &Caller, tz: Option<&str>) -> Result<Clock, String> {
-    let me = caller.principal.clone().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
+pub(super) fn clock_of(caller: &VerifiedUser, tz: Option<&str>) -> Result<Clock, String> {
+    let me = caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
     Clock { me, ..Clock::default() }.zoned(tz)
 }
 
@@ -30,7 +31,7 @@ pub(super) fn texts<T: Into<String>>(values: Vec<T>) -> Vec<String> {
 
 /// FILTER-15's [`narrowing_lens`], MENGER-13: its history read by the
 /// caller's clock in `tz`. FILTER-36: its saved names resolved by `store`.
-pub(super) fn zoned_lens(store: &Store, caller: &Caller, filter: Option<&str>, tz: Option<&str>) -> Result<Option<Lens>, StoreError> {
+pub(super) fn zoned_lens(store: &Store, caller: &VerifiedUser, filter: Option<&Filter>, tz: Option<&str>) -> Result<Option<Lens>, StoreError> {
     let clock = clock_of(caller, tz).map_err(StoreError::Filter)?;
     Ok(store.narrowing_lens(filter)?.map(|l| l.with_clock(clock)))
 }
@@ -39,10 +40,10 @@ pub(super) fn zoned_lens(store: &Store, caller: &Caller, filter: Option<&str>, t
 /// (`anonymous` with login off), from `source` (`app`, `api` — the default
 /// —, `pipeline`; ACCESS-8: `cascade`, the store's own, is no
 /// [`CallerSource`]), saying `message` (blank: none).
-pub(super) fn act_of(caller: &Caller, source: Option<CallerSource>, message: Option<Message>) -> Result<Act, String> {
+pub(super) fn act_of(caller: &VerifiedUser, source: Option<CallerSource>, message: Option<Message>) -> Result<Act, String> {
     Ok(Act {
-        actor: caller.principal.clone().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string()),
-        name: caller.name.clone(),
+        actor: caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string()),
+        name: caller.name().map(str::to_string),
         source: TransitionSource::from(source.unwrap_or_default()),
         message: message.and_then(Message::given),
         cause: None,
@@ -54,8 +55,9 @@ pub(super) fn act_of(caller: &Caller, source: Option<CallerSource>, message: Opt
 /// Asked again at every change ([`Sight::again`]): rebuilt only when the
 /// grants moved, which is a comparison of the caller's few grants.
 pub(super) struct Sight {
-    /// AUTH-7: the reach's filter, as text — what moves when the grants do.
-    reach: Option<String>,
+    /// AUTH-7: where the call's grant is held — what moves when the grants
+    /// do. ACCESS-9: compiled and compared, not formatted.
+    reach: Option<crate::access::ReachKey>,
     /// `None`: everything.
     lens: Option<Lens>,
     /// The components this caller can see now (by name) — with a lens only.
@@ -64,7 +66,7 @@ pub(super) struct Sight {
 
 impl Sight {
     /// `caller`'s sight; `Err` when it sees nothing.
-    pub(super) fn of(store: &Store, caller: &Caller) -> Result<Self, String> {
+    pub(super) fn of(store: &Store, caller: &VerifiedUser) -> Result<Self, String> {
         let lens = view_lens(caller)?;
         let shown = match &lens {
             None => Default::default(),
@@ -77,11 +79,11 @@ impl Sight {
     /// `Ok(Some((caller, gone)))` when it moved — the sight rebuilt, and the
     /// components it no longer sees; `Err` when it is refused, or now sees
     /// nothing (the watch ends).
-    pub(super) fn again(&mut self, access: &Access, who: Option<&AuthContext>, reach: &Reach, store: &Store) -> Result<Option<(Caller, Vec<String>)>, String> {
+    pub(super) fn again(&mut self, access: &Access, who: Option<&AuthContext>, reach: &Reach, store: &Store) -> Result<Option<(VerifiedUser, Vec<String>)>, String> {
         // AUTH-7: the gate's live reach first — held nowhere any more, the
         // watch ends.
         let reach = reach.current().ok_or_else(|| "your access changed: you hold this nowhere any more".to_string())?;
-        let caller = access.admit(who, &reach)?;
+        let caller = access.verify_call(who, &reach)?;
         let key = caller.reach_key().map_err(|why| format!("your access changed: {why}"))?;
         if key == self.reach {
             return Ok(None);
@@ -251,13 +253,13 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
 /// `under` where it holds the call's grant (AUTH-7) — `None`: all; `Err`:
 /// nothing. IDENTITY-37: a reach that does not compile is refused, never
 /// read as "all".
-pub(super) fn view_lens(caller: &Caller) -> Result<Option<Lens>, String> {
+pub(super) fn view_lens(caller: &VerifiedUser) -> Result<Option<Lens>, String> {
     caller.reach_filter()?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
 }
 
 /// AUTH-7: the lens a write sees the tickets it names through — where the
 /// caller holds `tickets.get` ([`crate::access::SEES`]).
-pub(super) fn sight_lens(caller: &Caller) -> Result<Option<Lens>, String> {
+pub(super) fn sight_lens(caller: &VerifiedUser) -> Result<Option<Lens>, String> {
     caller.sight_filter()?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
 }
 
@@ -265,7 +267,7 @@ pub(super) fn sight_lens(caller: &Caller) -> Result<Option<Lens>, String> {
 /// caller's reach covers it: keeping never answers a ticket the caller
 /// could not read. Blank, naming no ticket, or outside the reach: `None`
 /// (the read answers as without it).
-pub(super) fn kept(store: &Store, caller: &Caller, keep: Option<&str>) -> Option<String> {
+pub(super) fn kept(store: &Store, caller: &VerifiedUser, keep: Option<&str>) -> Option<String> {
     let id = store.ticket_id(keep.map(str::trim).filter(|k| !k.is_empty())?)?;
     match view_lens(caller) {
         Ok(None) => Some(id),
@@ -355,13 +357,13 @@ fn redact(e: StoreError, sees: &dyn Fn(&str) -> bool) -> String {
 /// exactly when the caller's reach admits any of its tickets.
 ///
 /// ORG-3: by the shortcodes' identities.
-pub(super) fn visible_epics(store: &Store, caller: &Caller) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
+pub(super) fn visible_epics(store: &Store, caller: &VerifiedUser) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
     epics_under(store, caller.reach_filter()?)
 }
 
 /// AUTH-7: [`visible_epics`] by where `tickets.get` is held — what a write
 /// may name.
-pub(super) fn sight_epics(store: &Store, caller: &Caller) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
+pub(super) fn sight_epics(store: &Store, caller: &VerifiedUser) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
     epics_under(store, caller.sight_filter()?)
 }
 
@@ -372,7 +374,7 @@ pub(super) fn epics_under(store: &Store, reach: Option<crate::filter::Filter>) -
 }
 
 /// IDENTITY-21: how many tickets a caller can see.
-pub(super) fn visible_count(store: &Store, caller: &Caller) -> u64 {
+pub(super) fn visible_count(store: &Store, caller: &VerifiedUser) -> u64 {
     match caller.reach_filter() {
         Ok(None) => store.count() as u64,
         Ok(Some(reach)) => Lens::of(&reach).map(|lens| store.counts(&lens).into_iter().map(|(_, n)| n).sum()).unwrap_or(0),

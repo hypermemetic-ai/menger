@@ -2973,6 +2973,9 @@ pub struct Store {
     /// MENGER-15: the longest body `create` and `amend` store, in bytes
     /// ([`BODY_MAX_DEFAULT`] unless [`Store::with_body_max`] said).
     body_max: usize,
+    /// ACCESS-9: the one [`System`] this store mints at its open, until
+    /// whoever opened it takes it ([`Store::system`]).
+    system: StdMutex<Option<System>>,
 }
 
 /// MENGER-15: the default cap on a ticket body — 8 MiB, room for a whole
@@ -3092,6 +3095,7 @@ impl Store {
             unders: Arc::default(),
             write_serial: Arc::new(AsyncMutex::new(())),
             body_max: BODY_MAX_DEFAULT,
+            system: StdMutex::new(Some(System::minted())),
         })
     }
 
@@ -5434,6 +5438,9 @@ pub use notes::{NotePage, NoteQuery};
 /// IDENTITY-21: the members store — every grant of a role on a scope, kept
 /// beside the tickets, behind the cache.
 mod members;
+// ACCESS-9: the capability of acting for no user, minted here alone.
+mod system;
+pub use system::System;
 pub use members::Members;
 // AUTH-7: an admin's edits of a role's grants.
 mod roles;
@@ -5513,7 +5520,7 @@ pub use lineage::{Node, TreePage, TreeQuery, UnderMoves, UNDERS_MAX};
 /// candidates the cells admit, the ready set a filtered page of `ready and
 /// (filter)`. Never a walk of the store.
 mod lensed;
-pub use lensed::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
+pub use lensed::{narrowing, narrowing_lens, narrowing_of, ready_and, MEMBER_MAX};
 
 /// FILTER-36: `saved "Name"` — the saved filters' texts kept in the cache,
 /// and every filter a read, a count or a watch is asked resolved through

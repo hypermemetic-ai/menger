@@ -9,7 +9,7 @@ use super::*;
 /// and with login off); none left, `not_found`: another organization's
 /// tickets and shortcodes are not a stranger's to learn. Every other
 /// refusal as [`refusal`] says it.
-pub(super) fn veiled(caller: &Caller, e: StoreError) -> TicketsEvent {
+pub(super) fn veiled(caller: &VerifiedUser, e: StoreError) -> TicketsEvent {
     let (StoreError::Ambiguous { text, candidates }, Some(held)) = (&e, caller.orgs()) else { return refusal(e) };
     let ours = |c: &String| c.split_once(':').is_some_and(|(o, _)| held.iter().any(|h| h.as_str() == o));
     let kept: Vec<String> = candidates.iter().filter(|c| ours(c)).cloned().collect();
@@ -24,7 +24,7 @@ pub(super) fn veiled(caller: &Caller, e: StoreError) -> TicketsEvent {
 /// names there (another org's namesake, or a pin to one, is not in its
 /// way); else `id` as given. Every caller of `*` (and login off) reads the
 /// whole store, so `id` is its own.
-pub(super) fn named_in(store: &Store, caller: &Caller, id: String) -> String {
+pub(super) fn named_in(store: &Store, caller: &VerifiedUser, id: String) -> String {
     match caller.orgs() {
         Some(orgs) => store.address_in(&id, &orgs).unwrap_or(id),
         None => id,
@@ -43,7 +43,7 @@ pub(super) fn named_in(store: &Store, caller: &Caller, id: String) -> String {
 ///   organizations; else the one organization of the caller's that holds a
 ///   shortcode of that name; else — a new shortcode — the caller's only
 ///   organization, or refused, naming them.
-pub(super) fn epic_in(store: &Store, caller: &Caller, epic: String, org: Option<crate::address::OrgId>, parent: Option<&str>) -> Result<String, TicketsEvent> {
+pub(super) fn epic_in(store: &Store, caller: &VerifiedUser, epic: String, org: Option<crate::address::OrgId>, parent: Option<&str>) -> Result<String, TicketsEvent> {
     let error = |message: String| TicketsEvent::Error { message };
     let Ok(asked) = crate::address::Address::parse(&epic) else { return Ok(epic) };
     let held: Vec<crate::address::OrgId> = match caller.orgs() {
@@ -89,14 +89,14 @@ pub(super) fn epic_in(store: &Store, caller: &Caller, epic: String, org: Option<
 /// cannot view is refused by its shortcode, read from the id, so a hidden
 /// ticket and an id naming none get the same answer. The caller's sight,
 /// for the store's refusals, or the event to answer.
-pub(super) fn create_admits(store: &Store, caller: &Caller, epic: &str, parent: Option<&str>, blocked_by: Option<&[String]>) -> Result<Option<Lens>, TicketsEvent> {
+pub(super) fn create_admits(store: &Store, caller: &VerifiedUser, epic: &str, parent: Option<&str>, blocked_by: Option<&[String]>) -> Result<Option<Lens>, TicketsEvent> {
     let anchor = match parent {
         Some(p) => Some(p.to_string()),
         None => store.root_of(epic).map_err(|e| veiled(caller, e))?,
     };
     // A new shortcode in a named organization is held on it (`acme:`).
     let org = crate::address::Address::parse(epic).ok().and_then(|a| a.org).map(|o| format!("{o}:"));
-    let allowed = match (&anchor, caller.grant.clone()) {
+    let allowed = match (&anchor, caller.grant().cloned()) {
         (_, None) => Ok(()),
         (Some(a), Some(g)) => caller.check(&g, a),
         (None, Some(g)) => caller

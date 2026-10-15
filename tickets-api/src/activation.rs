@@ -54,7 +54,7 @@ use futures::{Stream, StreamExt};
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
-use crate::access::{Access, Caller, ADMINISTER};
+use crate::access::{Access, VerifiedUser, ADMINISTER};
 #[cfg(feature = "server")]
 use plexus_core::plexus::{AuthContext, Grant, Reach};
 
@@ -160,7 +160,7 @@ impl Tickets {
     #[plexus_macros::method(group = "read", description = "Heartbeat — version, unix time, ticket count")]
     pub async fn health(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -238,7 +238,7 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let blocked_by = blocked_by.map(texts);
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -302,7 +302,7 @@ impl Tickets {
         example(note = "a doc by its path address", params = r#"{"id": "PLEXUS/_MENGER/board"}"#)
     )]
     pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        get_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string())
+        get_stream(self.store.clone(), self.access.verify_call(auth, &reach), id.into_string())
     }
 
     /// Yields one row event per match, ordered by (epic, seq), then
@@ -374,7 +374,7 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let (epic, parent) = (epic.map(String::from), parent.map(String::from));
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let limit = Some(crate::limits::page(limit, crate::limits::LIST_PAGE_DEFAULT, crate::limits::LIST_PAGE_MAX));
         stream! {
             let caller = match admitted {
@@ -398,7 +398,7 @@ impl Tickets {
                     yield TicketsEvent::Error { message: StoreError::AtAndAfter.to_string() };
                     return;
                 }
-                let lens = match store.lens_or_all(filter.as_deref()) {
+                let lens = match store.lens_or_all(filter.as_ref()) {
                     Ok(lens) => lens,
                     Err(e) => {
                         yield veiled(&caller, e);
@@ -490,7 +490,7 @@ impl Tickets {
         message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
@@ -558,7 +558,7 @@ impl Tickets {
         message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
@@ -608,7 +608,7 @@ impl Tickets {
         parent: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -624,7 +624,7 @@ impl Tickets {
             // both sides. AUTH-7: the gate held the grant on `id` (the
             // target); the rest is its own question, as it stands now.
             let root = store.groups().into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
-            let wanted = if root { Some(Grant::new(ADMINISTER)) } else { caller.grant.clone() };
+            let wanted = if root { Some(Grant::new(ADMINISTER)) } else { caller.grant().cloned() };
             if let Some(g) = wanted {
                 if let Err(message) = caller.check(&g, &id).and_then(|()| caller.check(&g, &parent)) {
                     let message = if root { format!("moving a shortcode's root takes admin on it and on its new host: {message}") } else { message };
@@ -671,7 +671,7 @@ impl Tickets {
         body: Option<Body>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
@@ -723,7 +723,7 @@ impl Tickets {
         commits: Vec<CommitRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
-        cells_stream(self.store.clone(), self.access.admit(auth, &reach), id, ids, CellWrite::Commits(commits))
+        cells_stream(self.store.clone(), self.access.verify_call(auth, &reach), id, ids, CellWrite::Commits(commits))
     }
 
     /// SDLC-9: the inverse of `link_commits` — every entry the ticket
@@ -748,7 +748,7 @@ impl Tickets {
         commits: Vec<CommitRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
@@ -800,7 +800,7 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
         let write = CellWrite::Labels(add.unwrap_or_default(), remove.unwrap_or_default());
-        cells_stream(self.store.clone(), self.access.admit(auth, &reach), id, ids, write)
+        cells_stream(self.store.clone(), self.access.verify_call(auth, &reach), id, ids, write)
     }
 
     /// MENGER-30: any part of a ticket in one write, all of it or none — the
@@ -845,7 +845,7 @@ impl Tickets {
         message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; a parent or a
             // blocker beyond it is asked here (`update_reach`).
@@ -923,7 +923,7 @@ impl Tickets {
         // tickets, and a parent or blocker beyond them, are asked there.
         let mut asked = update_of(None, None, kind, status, parent, severity, block, unblock);
         (asked.label, asked.unlabel) = (texts(label.unwrap_or_default()), texts(unlabel.unwrap_or_default()));
-        update_many_stream(self.store.clone(), self.access.admit(auth, &reach), ids, filter, max, tz, asked, source, message)
+        update_many_stream(self.store.clone(), self.access.verify_call(auth, &reach), ids, filter, max, tz, asked, source, message)
     }
 
     /// ACT-5: tickets gone for good — refused while something points at
@@ -958,7 +958,7 @@ impl Tickets {
         unblock: Option<bool>,
         message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        delete_stream(self.store.clone(), self.access.admit(auth, &reach), ids, filter, max, tz, children, unblock, message)
+        delete_stream(self.store.clone(), self.access.verify_call(auth, &reach), ids, filter, max, tz, children, unblock, message)
     }
 
     /// ACT-5: deleted tickets brought back while their tombstones keep the
@@ -973,7 +973,7 @@ impl Tickets {
         example(note = "undo a delete", params = r#"{"ids": ["MENGER-40"]}"#)
     )]
     pub async fn undelete(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<TicketRef>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        undelete_stream(self.store.clone(), self.access.admit(auth, &reach), texts(ids))
+        undelete_stream(self.store.clone(), self.access.verify_call(auth, &reach), texts(ids))
     }
 
     /// ACT-6: tickets moved into another shortcode ([`crate::store::Reshortcoded`]'s module).
@@ -997,7 +997,7 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let (ids, to, new_scope, parent) = (texts(ids), to.into_string(), new_scope.map(String::from), parent.map(String::from));
         let ask = crate::store::Reshortcode { ids, to, new_scope, parent, with_children: with_children.unwrap_or(false), orgs: None };
-        reshortcode_stream(self.store.clone(), self.access.admit(auth, &reach), ask, message)
+        reshortcode_stream(self.store.clone(), self.access.verify_call(auth, &reach), ask, message)
     }
 
     /// The DAG query: which tickets can start now? Yields one row event
@@ -1039,7 +1039,7 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let epic = epic.map(String::from);
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1063,7 +1063,7 @@ impl Tickets {
                 }
             };
             // FILTER-15: from the cells.
-            match store.narrowing(filter.as_deref()).and_then(|f| f.map(|f| ready_and(&f, epic.clone())).transpose()) {
+            match store.narrowing(filter.as_ref()).and_then(|f| f.map(|f| ready_and(&f, epic.clone())).transpose()) {
                 Err(e) => {
                     yield veiled(&caller, e);
                     return;
@@ -1139,7 +1139,7 @@ impl Tickets {
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1156,7 +1156,7 @@ impl Tickets {
                 }
             };
             let limit = Some(limit.unwrap_or(FIND_LIMIT));
-            let page = match zoned_lens(&store, &caller, filter.as_deref(), tz.as_deref()) {
+            let page = match zoned_lens(&store, &caller, filter.as_ref(), tz.as_deref()) {
                 Err(e) => Err(e),
                 // FILTER-15: the candidates the cells admit.
                 Ok(Some(lens)) => store.find_filtered(&query, &lens, after.as_deref(), limit),
@@ -1205,7 +1205,7 @@ impl Tickets {
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // IDENTITY-21: only what this caller can see — its filter ANDed
             // with the shortcodes it holds a role on, as `find`'s is.
@@ -1223,7 +1223,7 @@ impl Tickets {
                     return;
                 }
             };
-            let lens = match zoned_lens(&store, &caller, filter.as_deref(), tz.as_deref()) {
+            let lens = match zoned_lens(&store, &caller, filter.as_ref(), tz.as_deref()) {
                 Ok(lens) => lens,
                 Err(e) => {
                     yield veiled(&caller, e);
@@ -1270,7 +1270,7 @@ impl Tickets {
     pub async fn member(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<TicketRef>, filter: FilterText, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let ids = texts(ids);
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1324,7 +1324,7 @@ impl Tickets {
     )]
     pub async fn groups(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1377,7 +1377,7 @@ impl Tickets {
     )]
     pub async fn components(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1441,7 +1441,7 @@ impl Tickets {
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1464,7 +1464,7 @@ impl Tickets {
                 }
             }
             // FILTER-15: of the tickets the filter admits, by the cells.
-            let answer = match zoned_lens(&store, &caller, filter.as_deref(), tz.as_deref()) {
+            let answer = match zoned_lens(&store, &caller, filter.as_ref(), tz.as_deref()) {
                 Err(e) => Err(e),
                 Ok(Some(lens)) => store.inputs_filtered(ticket.as_deref(), epic.as_deref(), state, &lens),
                 Ok(None) => store.inputs(ticket.as_deref(), epic.as_deref(), state),
@@ -1520,7 +1520,7 @@ impl Tickets {
         source: Option<InputSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
@@ -1557,7 +1557,7 @@ impl Tickets {
         source: Option<InputSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
@@ -1583,7 +1583,7 @@ impl Tickets {
     )]
     pub async fn close_input(&self, auth: Option<&AuthContext>, reach: Reach, ticket: TicketRef, input: InputId) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
@@ -1607,7 +1607,7 @@ impl Tickets {
     )]
     pub async fn reopen_input(&self, auth: Option<&AuthContext>, reach: Reach, ticket: TicketRef, input: InputId) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
@@ -1638,7 +1638,7 @@ impl Tickets {
     )]
     pub async fn extents(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1685,7 +1685,7 @@ impl Tickets {
         )
     )]
     pub async fn counts(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<FilterText>, keep: Option<TicketRef>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        counts_stream(self.store.clone(), self.access.admit(auth, &reach), filter, keep, tz)
+        counts_stream(self.store.clone(), self.access.verify_call(auth, &reach), filter, keep, tz)
     }
 
     /// FILTER-4: the counts behind every menu (Linear's facets). For each
@@ -1711,7 +1711,7 @@ impl Tickets {
         )
     )]
     pub async fn facets(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<FilterText>, base: Option<FilterText>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        facets_stream(self.store.clone(), self.access.admit(auth, &reach), filter, base, tz)
+        facets_stream(self.store.clone(), self.access.verify_call(auth, &reach), filter, base, tz)
     }
 
     /// FILTER-13: the nav under a filter — the rows the nav would show at an
@@ -1775,7 +1775,7 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let (parent, epic) = (parent.map(String::from), epic.map(String::from));
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1791,7 +1791,7 @@ impl Tickets {
                     return;
                 }
             };
-            let lens = match store.lens(&filter) {
+            let lens = match store.lens_of(&filter) {
                 Ok(lens) => lens,
                 Err(e) => {
                     yield veiled(&caller, e);
@@ -1845,7 +1845,7 @@ impl Tickets {
         epics: Vec<ShortcodeRef>,
         kinds: Option<Vec<Kind>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(waves_answer(&self.store, self.access.admit(auth, &reach), texts(epics), kinds))
+        futures::stream::iter(waves_answer(&self.store, self.access.verify_call(auth, &reach), texts(epics), kinds))
     }
 
     /// MENGER-31: the wave board of `id`'s subtree (activation/waves.rs).
@@ -1859,7 +1859,7 @@ impl Tickets {
         values(kinds = ["scope", "execution", "build", "gap", "spike"])
     )]
     pub async fn waves_under(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, kinds: Option<Vec<Kind>>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(waves_under_answer(&self.store, self.access.admit(auth, &reach), id.into_string(), kinds))
+        futures::stream::iter(waves_under_answer(&self.store, self.access.verify_call(auth, &reach), id.into_string(), kinds))
     }
 
     /// MENGER-31: the wave board whose final state is `id` (activation/waves.rs).
@@ -1873,7 +1873,7 @@ impl Tickets {
         values(kinds = ["scope", "execution", "build", "gap", "spike"])
     )]
     pub async fn waves_to(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, kinds: Option<Vec<Kind>>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(waves_to_answer(&self.store, self.access.admit(auth, &reach), id.into_string(), kinds))
+        futures::stream::iter(waves_to_answer(&self.store, self.access.verify_call(auth, &reach), id.into_string(), kinds))
     }
 
     /// "Why can't this start?" in one call. Yields, in `blocked_by`
@@ -1893,7 +1893,7 @@ impl Tickets {
         &self, auth: Option<&AuthContext>, reach: Reach,
         id: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        blockers_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string())
+        blockers_stream(self.store.clone(), self.access.verify_call(auth, &reach), id.into_string())
     }
 
     /// MENGER-13: a ticket's history — every change of its status and its
@@ -1916,7 +1916,7 @@ impl Tickets {
         example(note = "who moved MENGER-7, and what its cancel canceled", params = r#"{"id": "MENGER-7"}"#)
     )]
     pub async fn history(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        history_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string())
+        history_stream(self.store.clone(), self.access.verify_call(auth, &reach), id.into_string())
     }
 
     /// MENGER-39: puts a ticket in front of the owner — at an urgency, for a
@@ -1940,7 +1940,7 @@ impl Tickets {
         &self, auth: Option<&AuthContext>, reach: Reach,
         id: TicketRef, urgency: Urgency, reason: Reason, input: Option<InputId>, source: Option<CallerSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string(), Ask::Queue { urgency, reason, input }, source)
+        queue_stream(self.store.clone(), self.access.verify_call(auth, &reach), id.into_string(), Ask::Queue { urgency, reason, input }, source)
     }
 
     /// MENGER-39: takes a ticket out of the queue. Yields one `unqueued`,
@@ -1953,7 +1953,7 @@ impl Tickets {
         values(source = ["app", "api", "pipeline"])
     )]
     pub async fn unqueue(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, source: Option<CallerSource>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string(), Ask::Unqueue, source)
+        queue_stream(self.store.clone(), self.access.verify_call(auth, &reach), id.into_string(), Ask::Unqueue, source)
     }
 
     /// MENGER-39: a queued ticket off the alerting surfaces for a while; it
@@ -1966,7 +1966,7 @@ impl Tickets {
         values(source = ["app", "api", "pipeline"])
     )]
     pub async fn snooze(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, minutes: u32, source: Option<CallerSource>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string(), Ask::Snooze { minutes }, source)
+        queue_stream(self.store.clone(), self.access.verify_call(auth, &reach), id.into_string(), Ask::Snooze { minutes }, source)
     }
 
     /// APP-23: hands a queued ticket back — a comment (intent `changes`) on its conversation and the entry unqueued, one write.
@@ -1978,7 +1978,7 @@ impl Tickets {
         values(source = ["app", "api", "pipeline"])
     )]
     pub async fn request_changes(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, body: Body, source: Option<CallerSource>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        request_changes_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string(), body.into_string(), source)
+        request_changes_stream(self.store.clone(), self.access.verify_call(auth, &reach), id.into_string(), body.into_string(), source)
     }
 
     /// APP-24: after queueing, an agent waits here — `waiting`, then one `replied` (or `timed_out`), then the end.
@@ -2000,7 +2000,7 @@ impl Tickets {
         params(snoozed = "Include the snoozed ones (optional; default true — each marked by its snoozed_until_unix)")
     )]
     pub async fn queued(&self, auth: Option<&AuthContext>, reach: Reach, snoozed: Option<bool>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queued_stream(self.store.clone(), self.access.admit(auth, &reach), snoozed.unwrap_or(true))
+        queued_stream(self.store.clone(), self.access.verify_call(auth, &reach), snoozed.unwrap_or(true))
     }
 
     /// The reactive primitive: an open-ended stream of every mutation, as
@@ -2099,7 +2099,7 @@ impl Tickets {
         let access = self.access.clone();
         let who = auth.cloned();
         let asked = filter;
-        let opened = access.admit(who.as_ref(), &reach).and_then(|caller| {
+        let opened = access.verify_call(who.as_ref(), &reach).and_then(|caller| {
             if let Some(why) = &ambiguous {
                 return Err(why.clone());
             }
@@ -2115,7 +2115,7 @@ impl Tickets {
         // FILTER-4: a filtered watch reads the filtered channel, which
         // carries every change and each write's cell moves after them.
         let filtered = (filter.is_some() || membership).then(|| {
-            (self.store.subscribe_filtered(), watcher_for(&self.store, filter.as_deref(), epic.as_ref(), &clock))
+            (self.store.subscribe_filtered(), watcher_for(&self.store, filter.as_ref(), epic.as_ref(), &clock))
         });
         let store = Arc::clone(&self.store);
         let plain = filtered.is_none().then(|| self.store.subscribe());
@@ -2165,7 +2165,7 @@ impl Tickets {
                         Ok(None) => {}
                         Ok(Some((caller, gone))) => {
                             // The filter again, under the reach as it stands.
-                            let rebuilt = caller.scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_deref(), epic.as_ref(), &clock));
+                            let rebuilt = caller.scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_ref(), epic.as_ref(), &clock));
                             match rebuilt {
                                 Ok(w) => watcher = w,
                                 Err(message) => {

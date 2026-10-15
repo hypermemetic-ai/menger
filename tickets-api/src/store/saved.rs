@@ -47,7 +47,7 @@
 //! in-band `error`.
 
 use super::cells::RECOUNT_OVER;
-use super::filtered::{refuse, Lens, Membership, Watcher};
+use super::filtered::{Lens, Membership, Watcher};
 use super::lineage::Compiled;
 use super::*;
 use crate::address::ShortcodeId;
@@ -138,35 +138,36 @@ impl Store {
     /// resolved first.
     pub fn lens(&self, text: &str) -> Result<Lens, StoreError> {
         let filter = Filter::parse(text).map_err(|e| StoreError::Filter(e.to_string()))?;
-        Lens::of(&self.resolve_saved(&filter)?)
+        self.lens_of(&filter)
     }
 
-    /// FILTER-36: [`Store::lens`] of a filter that may be absent — every
+    /// FILTER-36, ACCESS-9: [`Store::lens`] of a filter already read.
+    pub fn lens_of(&self, filter: &Filter) -> Result<Lens, StoreError> {
+        Lens::of(&self.resolve_saved(filter)?)
+    }
+
+    /// FILTER-36: [`Store::lens_of`] of a filter that may be absent — every
     /// ticket.
-    pub fn lens_or_all(&self, text: Option<&str>) -> Result<Lens, StoreError> {
-        text.map_or_else(|| Ok(Lens::all()), |t| self.lens(t))
+    pub fn lens_or_all(&self, filter: Option<&Filter>) -> Result<Lens, StoreError> {
+        filter.map_or_else(|| Ok(Lens::all()), |f| self.lens_of(f))
     }
 
-    /// FILTER-36: FILTER-15's [`super::narrowing`], its names resolved.
-    pub fn narrowing(&self, text: Option<&str>) -> Result<Option<Filter>, StoreError> {
-        let Some(text) = text else { return Ok(None) };
-        let filter = Filter::parse(text).map_err(|e| StoreError::Filter(e.to_string()))?;
-        let filter = self.resolve_saved(&filter)?;
-        refuse(&filter)?;
-        Ok((!filter.groups.is_empty()).then_some(filter))
+    /// FILTER-36: FILTER-15's [`super::narrowing_of`], its names resolved.
+    pub fn narrowing(&self, filter: Option<&Filter>) -> Result<Option<Filter>, StoreError> {
+        let Some(filter) = filter else { return Ok(None) };
+        super::narrowing_of(Some(&self.resolve_saved(filter)?))
     }
 
     /// FILTER-36: FILTER-15's [`super::narrowing_lens`], its names resolved.
-    pub fn narrowing_lens(&self, text: Option<&str>) -> Result<Option<Lens>, StoreError> {
-        self.narrowing(text)?.map(|f| Lens::of(&f)).transpose()
+    pub fn narrowing_lens(&self, filter: Option<&Filter>) -> Result<Option<Lens>, StoreError> {
+        self.narrowing(filter)?.map(|f| Lens::of(&f)).transpose()
     }
 
-    /// FILTER-36: a filter's text read and resolved — the empty filter when
-    /// there is none (`facets`' `filter` and `base`).
-    pub fn resolved(&self, text: Option<&str>) -> Result<Filter, String> {
-        let Some(text) = text else { return Ok(Filter::default()) };
-        let filter = Filter::parse(text).map_err(|e| e.to_string())?;
-        self.resolve_saved(&filter).map_err(|e| e.to_string())
+    /// FILTER-36: a filter resolved — the empty filter when there is none
+    /// (`facets`' `filter` and `base`).
+    pub fn resolved(&self, filter: Option<&Filter>) -> Result<Filter, String> {
+        let Some(filter) = filter else { return Ok(Filter::default()) };
+        self.resolve_saved(filter).map_err(|e| e.to_string())
     }
 
     /// FILTER-36: what a filter changing from `before` to `after` did to a
@@ -210,8 +211,8 @@ impl Store {
 impl Watcher {
     /// FILTER-36: this watch asked as `text` — kept when it names saved
     /// filters, for [`Watcher::resaved`] to read again.
-    pub fn naming(mut self, text: Option<&str>) -> Self {
-        self.source = text.filter(|t| Filter::parse(t).is_ok_and(|f| !f.saved_names().is_empty())).map(str::to_string);
+    pub fn naming(mut self, filter: Option<&Filter>) -> Self {
+        self.source = filter.filter(|f| !f.saved_names().is_empty()).map(Filter::format);
         self
     }
 

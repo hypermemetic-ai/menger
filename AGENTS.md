@@ -302,6 +302,10 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   sits beside `session.*` and `members.*`, which stay for the app. A new
   method gets a role by being listed in its activation's `roles(...)` —
   unlisted, only admin holds it. README "The AUTH protocol" has the rest.
+  Beside the gate, a method verifies its caller into a capability —
+  `Access::verify` → `VerifiedUser` (its `Reach`), then `permit` /
+  `admin_of`; `Hidden` for not-found ≡ not-yours (ACCESS-9, README
+  "Capabilities"). Never build one by hand, and never read `ctx.user_id`.
 
   **Organizations** (ORG-4) are the `orgs` activation: every ticket and
   shortcode is in one (today's tracker is `hypermemetic`). `list` (the
