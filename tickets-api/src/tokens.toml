@@ -57,6 +57,12 @@
 "--err-bg" = ['#fdecec', '#2b1517', 'a failure: its ground']
 "--err-fg" = ['#a23', '#e89393', 'a failure: its text']
 "--err-line" = ['#f3c5c5', '#5a2626', 'a failure: its edge']
+# MENGER-39: the queue's loud urgencies (now, blocking) — the tray's tall
+# tab, its chip and its sheet's edge; --urgent-ink over --urgent and --urgent
+# over --urgent-bg each over 4.5:1 in both modes.
+"--urgent" = ['#c4262e', '#ff6b6b', "urgent: the queue's now and blocking"]
+"--urgent-bg" = ['#fbe3e1', '#3d1a1d', "urgent: its ground (the tray's loud tab)"]
+"--urgent-ink" = ['#fff', '#101014', 'text on --urgent (the chip)']
 
 # The status table (AGS-15, SDLC-7, SDLC-11, SDLC-15): one chip per status,
 # ground and text, each pair over 4.5:1 in both modes. `.st-<status>` reads

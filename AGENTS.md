@@ -403,7 +403,8 @@ nested parameter as one string (SYNAPSE-9).
 2026-10-12, MENGER-12). Put it on its ticket as an input — or, when it is
 not a choice or a reply, label the ticket `needs-you` with the reason in its
 body — and only then mention it in chat, with the ticket id. Home's "Needs
-you" panel (filter `asking or label needs-you`) is where the owner looks;
+you" panel (filter `queued or asking or label needs-you`) is where the owner
+looks; when it cannot wait, queue it too (below, MENGER-39);
 a question that lives only in a chat transcript is never seen. Whoever acts
 on a `needs-you` takes the label off:
 
@@ -412,6 +413,35 @@ synapse -P 4455 menger tickets label --id MENGER-40 --add needs-you      # the r
 synapse -P 4455 menger tickets list --filter 'asking or label needs-you' --summary
 synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once acted on
 ```
+
+## Queue — asking the owner urgently (MENGER-39)
+
+An input or a `needs-you` label waits on Home until the owner looks. When it
+should not wait — an agent idle until it is answered, a promote that rolled
+back, a gap on prod — **queue the ticket**: it is put in front of the owner
+with an urgency and a reason, and every open app shows it at once as a tab
+in the tray along the bottom edge (`now` and `blocking` red, taller, and
+nudging until opened). The urgencies are `whenever` · `today` · `now` ·
+`blocking`; `blocking` means the caller is idle until the named `--input`
+(one on that ticket) is answered. A ticket is queued once: queueing it again
+raises the urgency, never lowers it. Closing the named input unqueues it;
+the owner answering in the tray takes it out too (the input stays yours to
+close, as always). Queue the question first — the input — then the ticket:
+
+```sh
+synapse -P 4455 menger tickets queue --id RETURNS-13 --urgency blocking --input landing --reason "the import is idle until this is decided"
+synapse -P 4455 menger tickets queue --id MENGER-41 --urgency now --reason "the promote rolled back"
+synapse -P 4455 menger tickets queued                       # most urgent first, then oldest
+synapse -P 4455 menger tickets snooze --id MENGER-41 --minutes 30
+synapse -P 4455 menger tickets unqueue --id MENGER-41       # withdrawn, or done with
+synapse -P 4455 menger tickets list --filter 'queued now or queued blocking' --summary true
+```
+
+`watch` carries `queued` / `unqueued` / `snoozed`; `history --id X` ends with
+the ticket's `queue_record`s (who queued it, why, at what urgency). `queued`
+and `queued <urgency>` are filter cells; Home's "Needs you" is `queued or
+asking or label needs-you`. Ask at `now` or `blocking` only when it is so —
+a queue that is always loud is a queue the owner learns to ignore.
 
 ## Conventions
 
@@ -571,8 +601,8 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   for the owner is an input on its ticket (or the `needs-you` label with
   the reason in the body), and is mentioned in chat with the ticket id —
   never asked only in chat. `asking` and `label <name>` are filter cells
-  (FILTER-3's language); Home's "Needs you" panel shows `asking or label
-  needs-you`.
+  (FILTER-3's language); Home's "Needs you" panel shows `queued or asking
+  or label needs-you`. An urgent one is queued too (MENGER-39, "Queue").
 - Ticketing follows **menger-skills** (`../menger-skills`, the house
   methodology — its `ticketing/`, `planning/`, `asking/`, `building/`
   skills; `ought` is retired, owner 2026-10-14). Its lifecycle is

@@ -1736,6 +1736,31 @@ pub enum TicketsEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         deletions: Vec<Tombstone>,
     },
+    /// MENGER-39: a ticket put in front of the owner, or queued again
+    /// (`action`: `queued`, `raised` — a higher urgency —, `requeued` — the
+    /// urgency kept) — `queue`'s answer, and on `watch`; the entry as the
+    /// write leaves it and its ticket's row.
+    Queued { entry: crate::queue::QueueEntry, ticket: TicketSummary, action: crate::queue::QueueAction },
+    /// MENGER-39: a ticket out of the queue — `unqueue`'s answer, and on
+    /// `watch`; `action` `unqueued`, or `closed` (the input the entry named
+    /// was closed); the entry as it was, who took it out, when.
+    Unqueued { id: String, entry: crate::queue::QueueEntry, action: crate::queue::QueueAction, by: String, at_unix: i64 },
+    /// MENGER-39: a queued ticket snoozed until its entry's
+    /// `snoozed_until_unix` — `snooze`'s answer, and on `watch`.
+    Snoozed { entry: crate::queue::QueueEntry, ticket: TicketSummary },
+    /// MENGER-39: `unqueue` of a ticket that is not queued — nothing written.
+    NotQueued { id: String },
+    /// MENGER-39: one row of `queued` — the entry and its ticket's row, most
+    /// urgent first, then the oldest.
+    QueueRow { entry: crate::queue::QueueEntry, ticket: TicketSummary },
+    /// MENGER-39: the last event of `queued` — how many rows it sent, how
+    /// many of them are snoozed, and the server's clock (a snooze's end is
+    /// read against it).
+    QueueEnd { count: u64, snoozed: u64, now_unix: i64 },
+    /// MENGER-39: a line of the ticket's queue history (yielded by `history`
+    /// after its transitions, oldest first): who queued it, why and at what
+    /// urgency; who snoozed it until when; who took it out.
+    QueueRecord { record: crate::queue::QueueRecord },
 }
 
 #[cfg(test)]

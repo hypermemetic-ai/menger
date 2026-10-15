@@ -38,9 +38,10 @@ use crate::counts::{wire_text, LiveCounts};
 use crate::session::{self, Member};
 use crate::{cache, dom, inputs, labels, saved, st_class};
 
-/// The panel's filter while none is saved: every ticket asking the owner
-/// something, and every ticket labelled `needs-you`.
-pub(crate) const DEFAULT: &str = "asking or label needs-you";
+/// The panel's filter while none is saved: MENGER-39: every ticket in the
+/// owner's queue, every ticket asking the owner something, and every ticket
+/// labelled `needs-you`.
+pub(crate) const DEFAULT: &str = "queued or asking or label needs-you";
 
 /// The saved filter's name — its id (its doc's path) is the name's slug.
 pub(crate) const SAVED_NAME: &str = "Needs you";
@@ -457,20 +458,27 @@ mod tests {
         }
     }
 
-    /// The default is the ticket's: asking, or labelled `needs-you` — and it
-    /// is asked as written.
+    /// The default is the ticket's: MENGER-39: queued, asking, or labelled
+    /// `needs-you` — and it is asked as written.
     #[test]
-    fn the_default_is_asking_or_needs_you() {
+    fn the_default_is_queued_asking_or_needs_you() {
         let f = default_filter();
         // Canonical, an `or` group is parenthesized.
-        assert_eq!(f.format(), "(asking or label needs-you)");
-        assert_eq!(asked(&f).as_deref(), Some("(asking or label needs-you) and not status Canceled"), "MENGER-13: never a canceled ticket");
+        assert_eq!(f.format(), "(queued or asking or label needs-you)");
+        assert_eq!(
+            asked(&f).as_deref(),
+            Some("(queued or asking or label needs-you) and not status Canceled"),
+            "MENGER-13: never a canceled ticket"
+        );
         assert_eq!(Filter::parse(&f.format()).unwrap(), f, "the canonical text reads back");
         assert!(f.matches(&facts(true, &[])));
         assert!(f.matches(&facts(false, &["needs-you"])));
         assert!(f.matches(&facts(true, &["p1", "needs-you"])));
         assert!(!f.matches(&facts(false, &["p1"])));
         assert!(!f.matches(&facts(false, &[])));
+        let mut queued = facts(false, &[]);
+        queued.history = vec!["queued".into()];
+        assert!(f.matches(&queued), "queued: the store says so, as for every history predicate");
         assert_eq!(asked(&Filter::parse("asking and not asking").unwrap()), None, "admits nothing: asked of no one");
     }
 

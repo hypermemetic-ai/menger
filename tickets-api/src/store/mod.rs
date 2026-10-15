@@ -813,6 +813,9 @@ pub enum Change {
     #[serde(skip)]
     #[schemars(skip)]
     UnderMoved { moves: std::sync::Arc<lineage::UnderMoves> },
+    /// MENGER-39: a queue write — `queued`, `unqueued`, `snoozed` on the
+    /// wire; `epic` is its ticket's, what `watch { epic }` filters by.
+    Queue { epic: String, change: queue::QueueChange },
 }
 
 impl Change {
@@ -844,7 +847,7 @@ impl Change {
             // INPUT-3: its ticket's.
             Self::InputChanged { epic, .. } => epic,
             // MENGER-13: its ticket's.
-            Self::Transition { epic, .. } => epic,
+            Self::Transition { epic, .. } | Self::Queue { epic, .. } => epic,
             // FILTER-4: one per write, its moves in any shortcode.
             Self::CellsMoved { .. } => "",
             // FILTER-13: one per write, each watch's events already in its epic.
@@ -1719,6 +1722,8 @@ struct Cache {
     /// ([`deployments::Deploys`]) — read at open, moved by a record and by
     /// every row written (its links).
     deploys: deployments::Deploys,
+    /// MENGER-39: the queue and its history ([`queue::Queue`]).
+    queue: queue::Queue,
     written: u64,
 }
 
@@ -2068,6 +2073,7 @@ impl Cache {
             themes: themes::Themes::default(),
             tombstones: Default::default(),
             deploys,
+            queue: Default::default(),
             written: 0,
         }
     }
@@ -2148,6 +2154,7 @@ impl Cache {
             themes: themes::Themes::default(),
             tombstones: Default::default(),
             deploys,
+            queue: Default::default(),
             written: 0,
         }
     }
@@ -2900,6 +2907,8 @@ impl Store {
         delete::migrate(&mut conn)?;
         // DEPLOY-11: and one without the deployments tables gains them, empty.
         deployments::migrate(&mut conn)?;
+        // MENGER-39: and one without the queue's tables gains them, empty.
+        queue::migrate(&mut conn)?;
         let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -3004,6 +3013,8 @@ impl Store {
         themes::load(conn, &mut cache.themes)?;
         // DEPLOY-11: the deployments, folded, over the rows' links.
         cache.deploys.load(conn)?;
+        // MENGER-39: the queue, as stored.
+        cache.queue = queue::load(conn)?;
         Ok(cache)
     }
 
@@ -4685,7 +4696,12 @@ impl Store {
         };
         // FILTER-30: an answer or a clear touches the ticket.
         let touches = inputs::touches(&entry);
-        let (derived, under) = match asked != asks {
+        // MENGER-39: closing the input a queue entry names takes it out.
+        let closing = (next.state == InputState::Closed).then(|| {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            queue::Closing::of(&cache, &row.id, &next.id, entry.at_unix)
+        });
+        let (derived, mut under) = match asked != asks {
             true => {
                 let (d, u) = self.cell_derived(&row, Some(asks));
                 (Some(d), u)
@@ -4696,6 +4712,12 @@ impl Store {
             }
             false => (None, None),
         };
+        if let (Some(Some(_)), None) = (&closing, &derived) {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            under = self.under_before(&cache, || lineage::Touched::default().row(&row));
+        }
+        let closing = closing.flatten();
+        let (closing_tx, closing_cache, queue_epic) = (closing.clone(), closing.clone(), epic.clone());
         let at = entry.at_unix;
         let announced = derived.as_ref().and_then(Derived::announced);
         let (cells_stored, moved) = match derived {
@@ -4711,10 +4733,16 @@ impl Store {
                 if let Some(cells) = &cells_stored {
                     cells.write(tx)?;
                 }
+                if let Some(c) = &closing_tx {
+                    c.commit(tx)?;
+                }
                 Ok(())
             },
             move |cache, _| {
                 cache.inputs.put(kept);
+                if let Some(c) = &closing_cache {
+                    c.apply(cache);
+                }
                 if touches {
                     cache.log.touch(&row.epic, row.seq, at);
                 }
@@ -4728,6 +4756,9 @@ impl Store {
                     epic,
                     input: next.clone(),
                 });
+                if let Some(c) = closing {
+                    tx.send(c.change(queue_epic));
+                }
                 if let Some(moves) = announced {
                     tx.send(Change::CellsMoved { moves });
                 }
@@ -5559,6 +5590,8 @@ mod theme_registry;
 /// DEPLOY-11: every deployment, what each environment runs, and where each
 /// ticket's work runs — the `deployed` cells.
 mod deployments;
+mod queue;
+pub use queue::QueueChange;
 pub use deployments::{DeployPage, DeployQuery};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
@@ -5647,6 +5680,9 @@ mod tests_deployments;
 /// THEME-8: define, set, theme_for (every row), refusals, a reopen.
 #[cfg(test)]
 mod tests_themes;
+/// MENGER-39: the queue.
+#[cfg(test)]
+mod tests_queue;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

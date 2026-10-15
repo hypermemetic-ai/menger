@@ -195,8 +195,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// `menger.motion`, and declares the house faces (`<style id="menger-fonts">`);
 /// DESIGN-43's 1.19 carries the app's Typed text setting the same way
 /// (`typing` in the init block, `menger:typing`, `typing` on `menger:theme`)
-/// as `html[data-typing]`, and adds `menger.typing`.
-pub(crate) const SDK_VERSION: &str = "1.19.0";
+/// as `html[data-typing]`, and adds `menger.typing`. MENGER-39's 1.20 is
+/// the generated client's: `menger.tickets.queue`, `unqueue`, `snooze` and
+/// `queued`, and the `--urgent` tokens a frame receives.
+pub(crate) const SDK_VERSION: &str = "1.20.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is

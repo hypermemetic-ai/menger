@@ -101,6 +101,14 @@ use overview::*;
 mod delete;
 #[cfg(feature = "server")]
 use delete::*;
+#[cfg(feature = "server")]
+mod queue;
+#[cfg(feature = "server")]
+use queue::*;
+#[cfg(feature = "server")]
+mod reads;
+#[cfg(feature = "server")]
+use reads::*;
 #[cfg(all(test, feature = "server"))]
 mod tests;
 
@@ -120,11 +128,13 @@ mod tests;
     roles(
         viewer = [
             "health", "get", "list", "ready_set", "find", "search", "member", "groups", "components",
-            "inputs", "extents", "counts", "facets", "tree", "waves", "waves_under", "waves_to", "blockers", "watch", "history"
+            "inputs", "extents", "counts", "facets", "tree", "waves", "waves_under", "waves_to", "blockers", "watch", "history",
+            "queued"
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
-            "unlink_commits", "label", "update", "update_many", "answer", "clear_answer", "close_input", "reopen_input"
+            "unlink_commits", "label", "update", "update_many", "answer", "clear_answer", "close_input", "reopen_input",
+            "queue", "unqueue", "snooze"
         ],
     )
 )]
@@ -1949,41 +1959,7 @@ impl Tickets {
         &self, auth: Option<&AuthContext>, reach: Reach,
         id: String,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
-        stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if caller.require(&[id.as_str()], &store).is_err() {
-                yield TicketsEvent::NotFound { id };
-                return;
-            }
-            let reach = match view_lens(&caller) {
-                Ok(r) => r,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            match store.blockers(&id).await {
-                Ok(refs) => {
-                    for r in refs {
-                        yield match r {
-                            BlockerRef::Resolved(ticket) if sees_id(&store, reach.as_ref(), &ticket.id) => TicketsEvent::Blocker { ticket },
-                            BlockerRef::Resolved(ticket) => TicketsEvent::DanglingBlocker { id: ticket.id },
-                            BlockerRef::Dangling(id) => TicketsEvent::DanglingBlocker { id },
-                        };
-                    }
-                }
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
-            }
-        }
+        blockers_stream(self.store.clone(), self.access.admit(auth, &reach), id)
     }
 
     /// MENGER-13: a ticket's history — every change of its status and its
@@ -2001,49 +1977,72 @@ impl Tickets {
     /// the cache; `watch` carries each new `Transition`.
     #[plexus_macros::method(
         group = "read",
-        description = "A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then history_end (when the log began; what a restore would put back; since when it has held its status)",
+        description = "A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then its queue records (MENGER-39), then history_end (when the log began; what a restore would put back; since when it has held its status)",
         params(id = "Ticket id, e.g. MENGER-7"),
         example(note = "who moved MENGER-7, and what its cancel canceled", params = r#"{"id": "MENGER-7"}"#)
     )]
     pub async fn history(&self, auth: Option<&AuthContext>, reach: Reach, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
-        stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if caller.require(&[id.as_str()], &store).is_err() {
-                yield TicketsEvent::NotFound { id };
-                return;
-            }
-            let reach = match view_lens(&caller) {
-                Ok(r) => r,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            match store.history(&id) {
-                Ok(h) => {
-                    for transition in h.own {
-                        yield TicketsEvent::Transition { transition };
-                    }
-                    // IDENTITY-21: what it caused, where the caller can see.
-                    for transition in h.caused.into_iter().filter(|t| sees_id(&store, reach.as_ref(), &t.ticket)) {
-                        yield TicketsEvent::Transition { transition };
-                    }
-                    let restorable = h.restorable.into_iter().filter(|t| sees_id(&store, reach.as_ref(), t)).collect();
-                    let (status_since_unix, status_since_exact) = (h.since.map(|s| s.0), h.since.map(|s| s.1));
-                    yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable, status_since_unix, status_since_exact, deletions: h.deletions };
-                }
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
-            }
-        }
+        history_stream(self.store.clone(), self.access.admit(auth, &reach), id)
+    }
+
+    /// MENGER-39: puts a ticket in front of the owner — at an urgency, for a
+    /// reason; `blocking` names the input that answers it. Queued again: the
+    /// urgency raised, never lowered. Yields one `queued`, or an `error`.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        description = "Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why; queued again it is raised, never lowered; yields queued { entry, ticket, action }",
+        params(
+            id = "Ticket id, e.g. MENGER-39",
+            urgency = "whenever | today | now | blocking",
+            reason = "Why the owner should look (required)",
+            input = "The input on the ticket whose answer is asked (required for blocking); closing it unqueues the ticket",
+            source = "app | api | pipeline (optional, default api)"
+        ),
+        values(urgency = ["whenever", "today", "now", "blocking"], source = ["app", "api", "pipeline"]),
+        example(note = "an agent idle until a decision is answered", params = r#"{"id": "RETURNS-13", "urgency": "blocking", "reason": "the import waits on this", "input": "landing"}"#)
+    )]
+    pub async fn queue(
+        &self, auth: Option<&AuthContext>, reach: Reach,
+        id: String, urgency: String, reason: String, input: Option<String>, source: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id, Ask::Queue { urgency, reason, input }, source)
+    }
+
+    /// MENGER-39: takes a ticket out of the queue. Yields one `unqueued`,
+    /// `not_queued` (nothing written), or an `error`.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        description = "Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued",
+        params(id = "Ticket id, e.g. MENGER-39", source = "app | api | pipeline (optional, default api)"),
+        values(source = ["app", "api", "pipeline"])
+    )]
+    pub async fn unqueue(&self, auth: Option<&AuthContext>, reach: Reach, id: String, source: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id, Ask::Unqueue, source)
+    }
+
+    /// MENGER-39: a queued ticket off the alerting surfaces for a while; it
+    /// stays queued. Yields one `snoozed`, or an `error`.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        description = "Snooze a queued ticket for some minutes (1 to a week): off the alerting surfaces, still queued; yields snoozed { entry, ticket }",
+        params(id = "Ticket id, e.g. MENGER-39", minutes = "How long, in minutes", source = "app | api | pipeline (optional, default api)"),
+        values(source = ["app", "api", "pipeline"])
+    )]
+    pub async fn snooze(&self, auth: Option<&AuthContext>, reach: Reach, id: String, minutes: u32, source: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id, Ask::Snooze { minutes }, source)
+    }
+
+    /// MENGER-39: the owner's queue, most urgent first, then the oldest.
+    #[plexus_macros::method(
+        group = "read",
+        description = "The owner's queue, most urgent first, then oldest: a queue_row { entry, ticket } each, then queue_end { count, snoozed, now_unix }",
+        params(snoozed = "Include the snoozed ones (optional; default true — each marked by its snoozed_until_unix)")
+    )]
+    pub async fn queued(&self, auth: Option<&AuthContext>, reach: Reach, snoozed: Option<bool>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        queued_stream(self.store.clone(), self.access.admit(auth, &reach), snoozed.unwrap_or(true))
     }
 
     /// The reactive primitive: an open-ended stream of every mutation, as

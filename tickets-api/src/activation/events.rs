@@ -3,6 +3,7 @@
 //! `activation.rs` as they were, so that file holds the methods alone.
 
 use super::*;
+use crate::store::QueueChange;
 
 /// MNG-9: one page of the store, as the events that carry it — a row per
 /// ticket and then exactly one `page` event, which is what tells a client
@@ -148,6 +149,13 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         // MENGER-13: its ticket's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the transition.
         Change::Transition { transition, .. } => TicketsEvent::Transition { transition },
+        // MENGER-39: its ticket's shortcode filtered `watch { epic }` on the
+        // way here; the wire carries the queue write.
+        Change::Queue { change, .. } => match change {
+            QueueChange::Queued { entry, ticket, action } => TicketsEvent::Queued { entry, ticket, action },
+            QueueChange::Unqueued { id, entry, action, by, at_unix } => TicketsEvent::Unqueued { id, entry, action, by, at_unix },
+            QueueChange::Snoozed { entry, ticket } => TicketsEvent::Snoozed { entry, ticket },
+        },
         Change::CellsMoved { .. } => return None,
         // FILTER-13: each `watch { filter }` asking `under` takes its own.
         Change::UnderMoved { .. } => return None,
