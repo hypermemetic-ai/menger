@@ -21,13 +21,10 @@ pub(super) fn clock_of(caller: &Caller, tz: Option<&str>) -> Result<Clock, Strin
     Clock { me, ..Clock::default() }.zoned(tz)
 }
 
-/// MENGER-13: an answer's or a clear's `source`, as a caller may say it —
-/// `app` or `api`; `system` is the store's own (a withdrawal, a restore).
-pub(super) fn caller_source(s: AnswerSource) -> Result<AnswerSource, String> {
-    match s {
-        AnswerSource::System => Err("unknown answer source 'system' (expected app or api: system is the store's own)".into()),
-        s => Ok(s),
-    }
+/// ACCESS-8: typed values as the text the store still takes (ACCESS-10
+/// and ACCESS-11 type the store's own signatures).
+pub(super) fn texts<T: Into<String>>(values: Vec<T>) -> Vec<String> {
+    values.into_iter().map(Into::into).collect()
 }
 
 /// FILTER-15's [`narrowing_lens`], MENGER-13: its history read by the
@@ -39,21 +36,14 @@ pub(super) fn zoned_lens(caller: &Caller, filter: Option<&str>, tz: Option<&str>
 
 /// MENGER-13: who a write acts as — the caller's principal and name
 /// (`anonymous` with login off), from `source` (`app`, `api` — the default
-/// —, `pipeline`; never `cascade`, the store's own), saying `message`.
-pub(super) fn act_of(caller: &Caller, source: Option<&str>, message: Option<String>) -> Result<Act, String> {
-    let source = match source.map(str::parse::<TransitionSource>) {
-        None => TransitionSource::Api,
-        Some(Ok(TransitionSource::Cascade)) => {
-            return Err("source: `cascade` is the store's own — a call is app, api or pipeline".into());
-        }
-        Some(Ok(s)) => s,
-        Some(Err(e)) => return Err(e),
-    };
+/// —, `pipeline`; ACCESS-8: `cascade`, the store's own, is no
+/// [`CallerSource`]), saying `message` (blank: none).
+pub(super) fn act_of(caller: &Caller, source: Option<CallerSource>, message: Option<Message>) -> Result<Act, String> {
     Ok(Act {
         actor: caller.principal.clone().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string()),
         name: caller.name.clone(),
-        source,
-        message: message.map(|m| m.trim().to_string()).filter(|m| !m.is_empty()),
+        source: TransitionSource::from(source.unwrap_or_default()),
+        message: message.and_then(Message::given),
         cause: None,
     })
 }
@@ -156,9 +146,9 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         | TicketsEvent::SeverityChanged { ticket, .. }
         | TicketsEvent::Updated { ticket, .. }
         | TicketsEvent::ParentChanged { ticket, .. }
-        | TicketsEvent::Blocker { ticket } => Some(ticket.id.clone()),
+        | TicketsEvent::Blocker { ticket } => Some(ticket.id.to_string()),
         TicketsEvent::Summary { summary } | TicketsEvent::Placed { summary, .. } | TicketsEvent::Node { summary, .. } => {
-            Some(summary.id.clone())
+            Some(summary.id.to_string())
         }
         TicketsEvent::ChildrenChanged { id, .. }
         | TicketsEvent::ChildRemoved { id, .. }
@@ -178,9 +168,9 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
                 _ => TicketsEvent::GroupChanged { group },
             });
         }
-        TicketsEvent::InputChanged { input } | TicketsEvent::Input { input } => Some(input.ticket.clone()),
+        TicketsEvent::InputChanged { input } | TicketsEvent::Input { input } => Some(input.ticket.to_string()),
         // MENGER-13: a transition is its ticket's.
-        TicketsEvent::Transition { transition } => Some(transition.ticket.clone()),
+        TicketsEvent::Transition { transition } => Some(transition.ticket.to_string()),
         TicketsEvent::PlacementsChanged { changes } => {
             let kept: Vec<_> = changes.iter().filter(|c| sees(&c.id)).cloned().collect();
             return (!kept.is_empty()).then_some(TicketsEvent::PlacementsChanged { changes: kept });
@@ -220,7 +210,7 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
             let tickets = tickets.iter().filter(|t| sees(&t.id)).cloned().collect();
             return (!moves.is_empty()).then_some(TicketsEvent::Reshortcoded { moves, tickets });
         }
-        TicketsEvent::Hit { summary, .. } => Some(summary.id.clone()),
+        TicketsEvent::Hit { summary, .. } => Some(summary.id.to_string()),
         // MENGER-39: a queue write, a queue row and a history line are their
         // ticket's.
         TicketsEvent::Queued { entry, .. } | TicketsEvent::Snoozed { entry, .. } | TicketsEvent::QueueRow { entry, .. } => Some(entry.ticket.clone()),

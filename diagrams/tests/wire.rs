@@ -78,7 +78,7 @@ fn one(events: Vec<MermaidEvent>) -> MermaidEvent {
 
 async fn parse(client: &MermaidClient<&WsTransport>, source: &str) -> MermaidEvent {
     one(client
-        .parse_all(source.into())
+        .parse_all(source.try_into().unwrap())
         .await
         .expect("the call succeeds"))
 }
@@ -287,7 +287,7 @@ sequenceDiagram
   A->>B: hi
 ```
 ";
-    let events = client.check_all(markdown.into()).await.expect("check");
+    let events = client.check_all(markdown.try_into().unwrap()).await.expect("check");
     let diagrams: Vec<(u32, u32, Verdict)> = events
         .into_iter()
         .map(|e| match e {
@@ -333,7 +333,7 @@ sequenceDiagram
 
     assert!(
         client
-            .check_all("no diagrams\n\n```rust\nfn main() {}\n```\n".into())
+            .check_all("no diagrams\n\n```rust\nfn main() {}\n```\n".try_into().unwrap())
             .await
             .unwrap()
             .is_empty(),
@@ -384,7 +384,7 @@ flowchart LR
 </m-dag>
 ";
     let diagrams: Vec<(u32, u32, Verdict)> = client
-        .check_all(body.into())
+        .check_all(body.try_into().unwrap())
         .await
         .expect("check")
         .into_iter()
@@ -410,7 +410,7 @@ flowchart LR
     );
     // The same diagram in a fence: the same verdict, word for word.
     let fenced = client
-        .check_all("```mermaid\nflowchart LR\n  A --> B\n  C -->> [[[\n```\n".into())
+        .check_all("```mermaid\nflowchart LR\n  A --> B\n  C -->> [[[\n```\n".try_into().unwrap())
         .await
         .expect("check");
     let [MermaidEvent::Diagram { result, .. }] = fenced.as_slice() else {
@@ -606,7 +606,7 @@ async fn fifty_at_once_then_warm_round_trips() {
         let transport = &connections[i % 5];
         async move {
             MermaidClient::new(transport)
-                .parse_all(d.src.clone())
+                .parse_all(d.src.clone().try_into().unwrap())
                 .await
                 .expect("the call succeeds")
         }
@@ -661,7 +661,7 @@ async fn without_jsdom_each_call_names_it_and_the_command() {
     let client = MermaidClient::new(&transport);
     for _ in 0..2 {
         let events = client
-            .parse_all("graph LR\n  A --> B".into())
+            .parse_all("graph LR\n  A --> B".try_into().unwrap())
             .await
             .unwrap();
         let [MermaidEvent::Error { message }] = events.as_slice() else {

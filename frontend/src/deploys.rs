@@ -336,7 +336,8 @@ pub(crate) fn relinked(ticket: &str) {
     let ids = vec![ticket.to_string()];
     let n = next_ask();
     spawn_local(async move {
-        let Ok(events) = client.running_all(None, None, Some(ids.clone())).await else { return };
+        let Ok(asked) = crate::typed::many(&ids) else { return };
+        let Ok(events) = client.running_all(None, None, Some(asked)).await else { return };
         if WHOLE.with(Cell::get) > n {
             return;
         }
@@ -415,6 +416,7 @@ fn ask_env(project: String, name: String) {
     let key = (project.clone(), name.clone());
     ENV_ASK.with(|m| m.borrow_mut().insert(key.clone(), n));
     spawn_local(async move {
+        let (Ok(project), Ok(name)) = (crate::typed::typed(&project), crate::typed::typed(&name)) else { return };
         let Ok(events) = client.running_all(Some(project), Some(name), None).await else { return };
         let newest = ENV_ASK.with(|m| m.borrow().get(&key).copied()) == Some(n);
         if !newest || WHOLE.with(Cell::get) > n {
@@ -548,9 +550,12 @@ pub(crate) fn Running(id: String, commits: Memo<Vec<String>>) -> impl IntoView {
             let Some(client) = session::deployments_client() else { return };
             let id = id.clone();
             spawn_local(async move {
-                let got = match client.for_ticket_all(id).await {
-                    Ok(events) => where_of(events),
-                    Err(e) => Err(session::describe(&e)),
+                let got = match crate::typed::typed(&id) {
+                    Ok(id) => match client.for_ticket_all(id).await {
+                        Ok(events) => where_of(events),
+                        Err(e) => Err(session::describe(&e)),
+                    },
+                    Err(why) => Err(why),
                 };
                 answer.try_set(Some(got));
             });

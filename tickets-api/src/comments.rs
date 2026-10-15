@@ -67,7 +67,7 @@ pub struct Anchor {
 
 /// Where a comment stands: `open` until it is resolved; `resolve` and
 /// `reopen` flip it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommentState {
     Open,
@@ -106,7 +106,7 @@ impl FromStr for CommentState {
 /// APP-23: what a comment is for — a comment (the default), or a change
 /// request: the owner handing a queued ticket back to whoever queued it
 /// (`tickets.request_changes`, the tray's Request changes).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommentIntent {
     #[default]
@@ -145,7 +145,7 @@ impl FromStr for CommentIntent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Comment {
     /// Its id: 1, 2, … in the order comments were added, never reused.
-    pub id: u64,
+    pub id: crate::vocab::CommentId,
     pub state: CommentState,
     /// Who left it (`owner` unless `add` named someone).
     pub author: String,
@@ -205,7 +205,7 @@ pub enum CommentsEvent {
 impl From<Comment> for CommentsEvent {
     fn from(c: Comment) -> Self {
         let Comment { id, state, author, at, anchor, body, principal, intent } = c;
-        CommentsEvent::Comment { id, state, author, at, anchor, body, principal, intent }
+        CommentsEvent::Comment { id: id.get(), state, author, at, anchor, body, principal, intent }
     }
 }
 
@@ -215,7 +215,7 @@ impl CommentsEvent {
     pub fn into_comment(self) -> Option<Comment> {
         match self {
             CommentsEvent::Comment { id, state, author, at, anchor, body, principal, intent } => {
-                Some(Comment { id, state, author, at, anchor, body, principal, intent })
+                Some(Comment { id: crate::vocab::CommentId::new(id), state, author, at, anchor, body, principal, intent })
             }
             CommentsEvent::Added { comment } | CommentsEvent::Resolved { comment } | CommentsEvent::Reopened { comment } => {
                 Some(comment)
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn a_comment_event_is_the_comment_beside_its_type() {
         let c = Comment {
-            id: 1,
+            id: crate::vocab::CommentId::new(1),
             state: CommentState::Open,
             author: "owner".into(),
             at: 1_791_510_000,

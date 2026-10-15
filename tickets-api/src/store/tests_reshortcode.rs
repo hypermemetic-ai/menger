@@ -215,7 +215,7 @@ async fn commits_inputs_comments_history_and_the_queue_move_by_identity() {
     assert_eq!(t.commits, ["77df9a0"]);
     assert_eq!(store.inputs(Some("N-3"), None, None).unwrap().iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["notes"]);
     assert_eq!(store.inputs(Some("M-4"), None, None).unwrap().len(), 1, "by the old id too");
-    let c = store.comment(c.id).unwrap();
+    let c = store.comment(c.id.get()).unwrap();
     assert_eq!((c.anchor.ticket.as_deref(), c.anchor.route.as_str()), (Some("N-3"), "#/ticket/N-3"));
     let h = store.history("N-3").unwrap();
     assert_eq!(h.own.iter().map(|t| t.to.as_str()).collect::<Vec<_>>(), ["Pending", "Ready"], "its history, kept");

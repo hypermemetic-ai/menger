@@ -17,11 +17,13 @@
 //! projects where the caller holds them; `for_ticket` where it holds it on
 //! the ticket.
 
-use crate::deployments::{DeploySource, DeploymentsEvent};
+use crate::deployments::{DeploySource, DeployState, DeploymentsEvent};
+// ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
+use crate::vocab::{CommitRef, DeploymentId, EnvironmentName, Project, Release, TicketRef, Timestamp};
 #[cfg(feature = "server")]
 use crate::access::{Access, Caller};
 #[cfg(feature = "server")]
-use crate::deployments::{DeployState, Record};
+use crate::deployments::Record;
 #[cfg(feature = "server")]
 use crate::store::{DeployQuery, Store, StoreError};
 #[cfg(feature = "server")]
@@ -89,6 +91,7 @@ fn refused(e: StoreError) -> DeploymentsEvent {
     namespace = "deployments",
     description = "Deployments: every deploy to any environment — record, list, environments, for_ticket, running, watch",
     client,
+    typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core",
     // AUTH-7: reads are a viewer's; recording is a deployer's alone (a
@@ -140,17 +143,18 @@ impl Deployments {
     )]
     pub async fn record(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        project: String,
-        environment: String,
-        state: String,
-        revision: String,
-        previous: Option<String>,
-        commits: Option<Vec<String>>,
-        tickets: Option<Vec<String>>,
-        release: Option<String>,
-        at: Option<String>,
+        project: Project,
+        environment: EnvironmentName,
+        state: DeployState,
+        revision: CommitRef,
+        previous: Option<CommitRef>,
+        commits: Option<Vec<CommitRef>>,
+        tickets: Option<Vec<TicketRef>>,
+        release: Option<Release>,
+        at: Option<Timestamp>,
         source: Option<DeploySource>,
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+        let texts = |v: Option<Vec<_>>| v.unwrap_or_default().into_iter().map(String::from).collect::<Vec<String>>();
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -163,10 +167,16 @@ impl Deployments {
             };
             let by = caller.principal.clone().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
             let rec = Record {
-                project, environment, state, revision, previous,
-                commits: commits.unwrap_or_default(),
-                tickets: tickets.unwrap_or_default(),
-                release, at, source,
+                project: project.into_string(),
+                environment: environment.into_string(),
+                state: state.as_str().to_string(),
+                revision: revision.into_string(),
+                previous: previous.map(String::from),
+                commits: texts(commits),
+                tickets: tickets.unwrap_or_default().into_iter().map(String::from).collect(),
+                release: release.map(String::from),
+                at: at.map(String::from),
+                source,
             };
             yield store.record_deployment(rec, by).await.unwrap_or_else(refused);
         }
@@ -193,11 +203,11 @@ impl Deployments {
     )]
     pub async fn list(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        project: Option<String>,
-        environment: Option<String>,
-        state: Option<String>,
-        ticket: Option<String>,
-        after: Option<u64>,
+        project: Option<Project>,
+        environment: Option<EnvironmentName>,
+        state: Option<DeployState>,
+        ticket: Option<TicketRef>,
+        after: Option<DeploymentId>,
         limit: Option<u32>,
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let store = self.store.clone();
@@ -210,16 +220,13 @@ impl Deployments {
                     return;
                 }
             };
-            let state = match state.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::parse::<DeployState>).transpose() {
-                Ok(s) => s,
-                Err(message) => {
-                    yield DeploymentsEvent::Error { message };
-                    return;
-                }
+            let q = DeployQuery {
+                project: project.map(String::from),
+                environment: environment.map(String::from),
+                state,
+                ticket: ticket.map(String::from),
             };
-            let blank = |v: Option<String>| v.filter(|v| !v.trim().is_empty());
-            let q = DeployQuery { project: blank(project), environment: blank(environment), state, ticket: blank(ticket) };
-            match store.deployments(&q, allowed.as_ref(), after, limit) {
+            match store.deployments(&q, allowed.as_ref(), after.map(DeploymentId::get), limit) {
                 Ok(page) => {
                     for row in page.rows {
                         yield row;
@@ -241,7 +248,7 @@ impl Deployments {
         params(project = "Only this project's (a shortcode) (optional)"),
         example(note = "menger's environments", params = r#"{"project": "menger"}"#)
     )]
-    pub async fn environments(&self, auth: Option<&AuthContext>, reach: Reach, project: Option<String>) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+    pub async fn environments(&self, auth: Option<&AuthContext>, reach: Reach, project: Option<Project>) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -275,7 +282,7 @@ impl Deployments {
         params(id = "Ticket id, e.g. MENGER-34"),
         example(note = "where MENGER-34 runs", params = r#"{"id": "MENGER-34"}"#)
     )]
-    pub async fn for_ticket(&self, auth: Option<&AuthContext>, reach: Reach, id: String) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+    pub async fn for_ticket(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -316,10 +323,11 @@ impl Deployments {
     )]
     pub async fn running(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        project: Option<String>,
-        environment: Option<String>,
-        ids: Option<Vec<String>>,
+        project: Option<Project>,
+        environment: Option<EnvironmentName>,
+        ids: Option<Vec<TicketRef>>,
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+        let ids: Option<Vec<String>> = ids.map(|v| v.into_iter().map(String::from).collect());
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {

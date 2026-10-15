@@ -1,9 +1,9 @@
 import type { RpcClient } from '../rpc';
-import type { SessionEvent } from './types';
+import type { Ceiling, SessionEvent } from './types';
 /** Typed client interface for session plugin */
 export interface SessionClient {
     /** Mint a session for this identity: login { token, principal, agent, expires_at, scope } */
-    login(scope?: string[] | null, ttlSecs?: number | null): AsyncGenerator<SessionEvent>;
+    login(scope?: Ceiling[] | null, ttlSecs?: number | null): AsyncGenerator<SessionEvent>;
     /** End this connection's session: logged_out */
     logout(): AsyncGenerator<SessionEvent>;
     /** The providers this menger admits callers through: provider { name, kind, issuer, audience } */

@@ -25,6 +25,7 @@
 //! What decides — the order, applying an event, the replay, the counts — is
 //! pure and pinned by native tests; the rest is the session's socket.
 
+use menger_tickets_api::vocab::CommentId;
 use std::cell::{Cell, RefCell};
 
 use futures::StreamExt;
@@ -234,7 +235,7 @@ fn fetch() {
                         }
                     }
                     match next {
-                        Some(n) => after = Some(n),
+                        Some(n) => after = Some(CommentId::new(n)),
                         None => break,
                     }
                 }
@@ -273,19 +274,19 @@ fn answer_of(what: &str, events: Result<Vec<CommentsEvent>, plexus_client::Clien
 /// `comments.add { anchor, body }` — the comment as kept.
 pub(crate) async fn add(anchor: Anchor, body: String) -> Result<Comment, String> {
     let client = session::comments_client().ok_or_else(|| "not connected — nothing was kept".to_string())?;
-    answer_of("add", client.add_all(anchor, body, None).await)
+    answer_of("add", client.add_all(anchor, crate::typed::typed(&body)?, None).await)
 }
 
 /// `comments.resolve { id }`.
 pub(crate) async fn resolve(id: u64) -> Result<Comment, String> {
     let client = session::comments_client().ok_or_else(|| "not connected".to_string())?;
-    answer_of("resolve", client.resolve_all(id).await)
+    answer_of("resolve", client.resolve_all(CommentId::new(id)).await)
 }
 
 /// `comments.reopen { id }`.
 pub(crate) async fn reopen(id: u64) -> Result<Comment, String> {
     let client = session::comments_client().ok_or_else(|| "not connected".to_string())?;
-    answer_of("reopen", client.reopen_all(id).await)
+    answer_of("reopen", client.reopen_all(CommentId::new(id)).await)
 }
 
 /// `comments.list { under }` — the ids of every comment whose ticket is in
@@ -294,6 +295,7 @@ pub(crate) async fn ids_under(under: String) -> Result<std::collections::HashSet
     let client = session::comments_client().ok_or_else(|| "not connected".to_string())?;
     let mut out = std::collections::HashSet::new();
     let mut after = None;
+    let under: menger_tickets_api::vocab::Under = crate::typed::typed(&under)?;
     loop {
         let events = client
             .list_all(None, Some(under.clone()), None, None, None, None, None, None, after, Some(PAGE))
@@ -311,7 +313,7 @@ pub(crate) async fn ids_under(under: String) -> Result<std::collections::HashSet
             }
         }
         match next {
-            Some(n) => after = Some(n),
+            Some(n) => after = Some(CommentId::new(n)),
             None => return Ok(out),
         }
     }
@@ -324,7 +326,7 @@ pub(crate) mod tests {
     /// A comment on `ticket` (none: `None`) at `path`, open.
     pub(crate) fn comment(id: u64, route: &str, path: &str, ticket: Option<&str>) -> Comment {
         Comment {
-            id,
+            id: menger_tickets_api::vocab::CommentId::new(id),
             state: CommentState::Open,
             author: "owner".into(),
             at: 1_791_510_000 + id as i64,
@@ -348,7 +350,7 @@ pub(crate) mod tests {
     }
 
     fn ids(h: &Held) -> Vec<u64> {
-        h.list().iter().map(|c| c.id).collect()
+        h.list().iter().map(|c| c.id.get()).collect()
     }
 
     /// The copy is newest first, whatever order its comments came in; an

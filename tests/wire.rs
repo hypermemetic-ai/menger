@@ -111,6 +111,20 @@ async fn rows(sub: Subscription<Value>) -> Vec<Value> {
     paged(sub).await.0
 }
 
+/// ACCESS-8: a parameter that is not its type is refused at dispatch,
+/// before the method runs — one `error` item, `-32602 invalid_params`, its
+/// message naming the parameter (MACRO-15). Its message.
+async fn invalid(client: &WsClient, method: &str, params: Value) -> String {
+    let mut sub = call(client, method, params.clone()).await;
+    let item = sub.next().await.expect("an item").unwrap();
+    assert_eq!(
+        (item["type"].as_str(), item["code"].as_str(), item["error_kind"].as_str()),
+        (Some("error"), Some("-32602"), Some("invalid_params")),
+        "{method} {params}: {item}"
+    );
+    item["message"].as_str().unwrap().to_string()
+}
+
 /// Drains a finite call: collects every `data` item's content until `done`.
 async fn collect(mut sub: Subscription<Value>) -> Vec<Value> {
     let mut out = Vec::new();
@@ -212,15 +226,17 @@ async fn in_band_errors_cross_the_wire() {
     let port = start_server().await;
     let client = connect(port).await;
 
-    let mut sub = call(
-        &client,
-        "tickets.set_status",
-        json!({"id": "X-1", "status": "wibble"}),
-    )
-    .await;
-    let ev = content(sub.next().await.unwrap().unwrap());
-    assert_eq!(ev["type"], "error");
-    assert!(ev["message"].as_str().unwrap().contains("wibble"));
+    // ACCESS-8: a status that is none is no `Status` — refused at dispatch,
+    // naming the parameter; a domain refusal stays in band.
+    let message = invalid(&client, "tickets.set_status", json!({"id": "X-1", "status": "wibble"})).await;
+    assert!(message.contains("status: unknown status 'wibble'"), "{message}");
+    let message = invalid(&client, "tickets.set_status", json!({"id": "not an id", "status": "Ready"})).await;
+    assert!(message.starts_with("Invalid params: id: `not an id` is not a ticket"), "{message}");
+    // An alias still reads: `active` is Coding, `mng-1` is MNG-1.
+    let ev = content(call(&client, "tickets.set_status", json!({"id": "x-1", "status": "active"})).await.next().await.unwrap().unwrap());
+    assert_eq!(ev, json!({"type": "not_found", "id": "X-1"}));
+    let ev = content(call(&client, "tickets.set_parent", json!({"id": "X-1", "parent": "X-2"})).await.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "not_found", "{ev}");
 }
 
 /// A watch-only client's local mirror: every mutation event carries the
@@ -1413,15 +1429,13 @@ async fn waves_over_the_wire() {
     assert_eq!(evs.last().unwrap(), &json!({"type": "wave_counts", "waves": [1, 1], "missing": 0, "done": 2}));
 
     // In-band errors: one data item, then done.
-    for (params, needle) in [
-        (json!({"epics": []}), "epics"),
-        (json!({"epics": ["WV"], "kinds": ["bug"]}), "'bug'"),
-    ] {
-        let evs = collect(call(&client, "tickets.waves", params.clone()).await).await;
-        assert_eq!(evs.len(), 1, "{params}: {evs:?}");
-        assert_eq!(evs[0]["type"], "error");
-        assert!(evs[0]["message"].as_str().unwrap().contains(needle), "{params}: {}", evs[0]);
-    }
+    let evs = collect(call(&client, "tickets.waves", json!({"epics": []})).await).await;
+    assert_eq!(evs.len(), 1, "{evs:?}");
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("epics"), "{}", evs[0]);
+    // ACCESS-8: a kind outside the six is refused at dispatch.
+    let message = invalid(&client, "tickets.waves", json!({"epics": ["WV"], "kinds": ["bug"]})).await;
+    assert!(message.contains("kinds: unknown kind 'bug'"), "{message}");
 }
 
 /// WAVE-10 acceptance 2: a path address over the real protocol — a
@@ -1756,14 +1770,20 @@ async fn inputs_over_the_wire() {
         ("tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "archive"}}), "is closed"),
         ("tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing"}), "is closed"),
         ("tickets.reopen_input", json!({"ticket": "ASK-2", "input": "nope"}), "declares no input 'nope'"),
-        ("tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "x"}, "source": "robot"}), "unknown answer source 'robot'"),
-        ("tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing", "source": "robot"}), "unknown answer source 'robot'"),
-        ("tickets.inputs", json!({"state": "pending"}), "unknown input state 'pending'"),
     ] {
         let evs = collect(call(&client, method, params).await).await;
         assert_eq!(evs.len(), 1, "{method}: {evs:?}");
         assert_eq!(evs[0]["type"], "error", "{method}: {evs:?}");
         assert!(evs[0]["message"].as_str().unwrap().contains(says), "{method}: {}", evs[0]);
+    }
+    // ACCESS-8: a source or a state that is none is refused at dispatch.
+    for (method, params, says) in [
+        ("tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "x"}, "source": "robot"}), "source: unknown answer source 'robot'"),
+        ("tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing", "source": "system"}), "source: unknown answer source 'system'"),
+        ("tickets.inputs", json!({"state": "pending"}), "state: unknown input state 'pending'"),
+    ] {
+        let message = invalid(&client, method, params).await;
+        assert!(message.contains(says), "{method}: {message}");
     }
     collect(call(&client, "tickets.reopen_input", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
     let evs = collect(call(&client, "tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "text", "text": "x"}})).await).await;
@@ -1983,13 +2003,19 @@ async fn set_kind_over_the_wire() {
         (json!({"id": "IDW-2", "kind": "doc"}), "'IDW-3' waits on it"),
         (json!({"id": "IDW-1", "kind": "build"}), "'IDW-1' is the root of IDW"),
         (json!({"id": "IDW-3", "kind": "spike", "status": "Doc"}), "Doc is a doc's own status"),
-        (json!({"id": "IDW-3", "kind": "bug"}), "unknown kind 'bug'"),
-        (json!({"id": "IDW-3", "kind": "gap", "status": "Shipped"}), "unknown status 'shipped'"),
     ] {
         let evs = collect(call(&client, "tickets.set_kind", params.clone()).await).await;
         assert_eq!(evs.len(), 1, "{params}: {evs:?}");
         assert_eq!(evs[0]["type"], "error", "{params}");
         assert!(evs[0]["message"].as_str().unwrap().contains(says), "{params}: {evs:?}");
+    }
+    // ACCESS-8: an unknown kind or status, refused at dispatch.
+    for (params, says) in [
+        (json!({"id": "IDW-3", "kind": "bug"}), "kind: unknown kind 'bug'"),
+        (json!({"id": "IDW-3", "kind": "gap", "status": "Shipped"}), "status: unknown status 'shipped'"),
+    ] {
+        let message = invalid(&client, "tickets.set_kind", params.clone()).await;
+        assert!(message.contains(says), "{params}: {message}");
     }
     let ev = answer(&client, "tickets.set_kind", json!({"id": "IDW-9", "kind": "gap"})).await;
     assert_eq!(ev, json!({"type": "not_found", "id": "IDW-9"}));
@@ -2157,7 +2183,9 @@ async fn keep_over_the_wire() {
     assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
     let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TK-2", "filter": "kind build", "matches_only": true, "keep": "tk-2"})).await).await;
     assert_eq!(nodes(&rows), [row("TK-3", true, 0), row("TL-1", false, 1)], "its build and TL's row under it");
-    for keep in ["TK-3", "TK-1", "NONE-1", ""] {
+    // ACCESS-8: a blank `keep` is no ticket — refused at dispatch (it was none).
+    assert!(invalid(&client, "tickets.tree", tree(json!({"keep": ""}))).await.contains("keep: "));
+    for keep in ["TK-3", "TK-1", "NONE-1"] {
         let (rows, _) = paged(call(&client, "tickets.tree", tree(json!({"keep": keep}))).await).await;
         assert_eq!(nodes(&rows), [row("TK-3", true, 0), row("TK-4", true, 0), row("TL-1", false, 1)], "keep {keep:?}");
     }
@@ -2280,10 +2308,10 @@ async fn counts_facets_and_filtered_pages_over_the_wire() {
     let both = collect(call(&client, "tickets.list", json!({"at": 1, "after": "FW-1"})).await).await;
     assert_eq!(both.len(), 1);
     assert_eq!(both[0]["type"], "error");
-    let bad = collect(call(&client, "tickets.list", json!({"filter": "tag x and ready and nonsense"})).await).await;
-    assert_eq!(bad.len(), 1, "one error, nothing else: {bad:?}");
-    let message = bad[0]["message"].as_str().unwrap();
-    assert!(message.contains("`tag x`") && message.contains("`nonsense`"), "{message}");
+    // ACCESS-8: a filter the language does not read is no FilterText —
+    // refused at dispatch, every bad chunk named.
+    let message = invalid(&client, "tickets.list", json!({"filter": "tag x and ready and nonsense"})).await;
+    assert!(message.contains("filter: ") && message.contains("`tag x`") && message.contains("`nonsense`"), "{message}");
 
     let counts = collect(call(&client, "tickets.counts", json!({"filter": "severity in (high, low)"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "FW", "shortcode": "FW", "held": 6})]);
@@ -2426,9 +2454,9 @@ async fn labels_and_asking_are_filters_over_the_wire() {
     assert_eq!((ev["type"].as_str(), ev["added"].clone(), ev["removed"].clone()), (Some("labels_changed"), json!([]), json!([])), "a no-op");
     let ev = answer(&client, "tickets.label", json!({"id": "HOME-3", "remove": ["P1"]})).await;
     assert_eq!((ev["removed"].clone(), ev["ticket"]["labels"].clone()), (json!(["p1"]), json!(["needs-you"])));
-    let ev = answer(&client, "tickets.label", json!({"id": "HOME-3", "add": ["two words"]})).await;
-    assert_eq!(ev["type"], "error", "{ev}");
-    assert!(ev["message"].as_str().unwrap().contains("`two words` is not a label"), "{ev}");
+    // ACCESS-8: a label that is none is no `Label` — refused at dispatch.
+    let message = invalid(&client, "tickets.label", json!({"id": "HOME-3", "add": ["two words"]})).await;
+    assert!(message.contains("add: `two words` is not a label"), "{message}");
     let ev = answer(&client, "tickets.label", json!({"id": "HOME-99", "add": ["x"]})).await;
     assert_eq!(ev["type"], "not_found", "{ev}");
     let got = answer(&client, "tickets.get", json!({"id": "HOME-3"})).await;
@@ -2610,7 +2638,8 @@ async fn reads_take_the_lens_over_the_wire() {
             json!({"type": "member", "id": "LN-4", "matched": true}),
             json!({"type": "member", "id": "LN-2", "matched": true}),
             json!({"type": "member", "id": "NOPE-1", "matched": false}),
-            json!({"type": "member", "id": "ln-6", "matched": true}),
+            // ACCESS-8: an id is a `TicketRef`, folded at the wire.
+            json!({"type": "member", "id": "LN-6", "matched": true}),
             json!({"type": "member", "id": "LN-7", "matched": false}),
             json!({"type": "member", "id": "LN-2", "matched": true}),
         ]
@@ -2638,10 +2667,25 @@ async fn reads_take_the_lens_over_the_wire() {
         ("tickets.member", json!({"ids": ["LN-2"], "filter": "status Bogus"})),
         ("tickets.find", json!({"query": "x", "filter": "nonsense"})),
     ] {
-        let refused = collect(call(&client, method, params.clone()).await).await;
-        assert_eq!(refused.len(), 1, "{method} {params}: one error, nothing else: {refused:?}");
-        assert_eq!(refused[0]["type"], "error", "{method} {params}");
-        let listed = collect(call(&client, "tickets.list", json!({"filter": params["filter"]})).await).await;
+        // ACCESS-8: a filter the language does not read is refused at
+        // dispatch (`invalid_params`), one it reads but a read does not take
+        // (`text`) in band — each read's refusal list's own.
+        let first = |method: &'static str, params: Value| {
+            let client = &client;
+            async move {
+                let mut sub = call(client, method, params).await;
+                let mut item = sub.next().await.expect("an item").unwrap();
+                if item["type"] == "data" {
+                    assert_eq!(sub.next().await.expect("done").unwrap()["type"], "done", "one error, nothing else");
+                    item = item["content"].clone();
+                }
+                item.as_object_mut().expect("an object").remove("metadata");
+                item
+            }
+        };
+        let refused = first(method, params.clone()).await;
+        assert_eq!(refused["type"], "error", "{method} {params}: {refused}");
+        let listed = first("tickets.list", json!({"filter": params["filter"]})).await;
         assert_eq!(refused, listed, "{method} {params}: list's own refusal");
     }
 }
@@ -2760,7 +2804,7 @@ async fn notes_over_the_wire() {
     assert_eq!((&paged[0]["id"], &paged[1]), (&json!(2), &json!({"type": "page", "next": 2})));
     let by_ada = collect(call(&client, "notes.list", json!({"author": "ada", "text": "PALETTE"})).await).await;
     assert_eq!((by_ada.len(), &by_ada[0]["id"]), (2, &json!(2)));
-    assert_eq!(collect(call(&client, "notes.list", json!({"state": "closed"})).await).await[0]["type"], "error");
+    assert!(invalid(&client, "notes.list", json!({"state": "closed"})).await.contains("state: unknown note state 'closed'"));
     assert_eq!(answer(&client, "notes.get", json!({"id": 1})).await, first);
     assert_eq!(answer(&client, "notes.get", json!({"id": 9})).await["type"], "error");
 
@@ -2777,7 +2821,10 @@ async fn notes_over_the_wire() {
     assert_eq!(open[0]["id"], 2, "only note 2 is still open");
 
     // A ticket refused: the note stays open; a title given wins.
-    let bad = answer(&client, "notes.upgrade", json!({"id": 2, "epic": "BAD EPIC"})).await;
+    // ACCESS-8: an epic that is no shortcode is refused at dispatch; one
+    // the store refuses (a parent that is none) in band.
+    assert!(invalid(&client, "notes.upgrade", json!({"id": 2, "epic": "BAD EPIC"})).await.contains("epic: "));
+    let bad = answer(&client, "notes.upgrade", json!({"id": 2, "epic": "SR", "parent": "SR-99"})).await;
     assert_eq!(bad["type"], "error", "{bad}");
     assert!(answer(&client, "notes.get", json!({"id": 2})).await["ticket"].is_null());
     let titled = answer(&client, "notes.upgrade", json!({"id": 2, "epic": "SR", "title": "Remember the query", "kind": "gap"})).await;
@@ -2925,7 +2972,14 @@ async fn comments_list_filters_and_pages_over_the_wire() {
         [c1],
         "every filter at once"
     );
-    assert_eq!(ids(json!({"ticket": "", "under": " ", "route": "", "path": "", "state": "", "author": " ", "text": ""})).await.len(), 5, "blank is none");
+    // ACCESS-8: a blank `text` is no filter; a blank ticket, shortcode,
+    // route, path, state or author is no value of its type — refused at
+    // dispatch, naming it (it was none).
+    assert_eq!(ids(json!({"text": ""})).await.len(), 5, "blank text is none");
+    for field in ["ticket", "under", "route", "path", "state", "author"] {
+        let message = invalid(&client, "comments.list", json!({field: " "})).await;
+        assert!(message.contains(&format!("{field}: ")), "{field}: {message}");
+    }
 
     // Paging: newest first, `after` exclusive, `next` the page's last.
     let (page_ids, page) = comment_ids(&client, json!({"limit": 2})).await;
@@ -2937,14 +2991,11 @@ async fn comments_list_filters_and_pages_over_the_wire() {
     let (page_ids, page) = comment_ids(&client, json!({"limit": 1, "after": c5, "state": "open"})).await;
     assert_eq!((page_ids, page), (vec![c4], json!({"type": "page", "next": c4})));
 
-    // Refusals: one error, nothing else.
-    for (params, says) in [
-        (json!({"state": "closed"}), "unknown comment state 'closed' (expected open or resolved)"),
-        (json!({"after": 99}), "after: no comment 99 to resume after"),
-    ] {
-        let evs = collect(call(&client, "comments.list", params.clone()).await).await;
-        assert_eq!(evs, [json!({"type": "error", "message": says})], "{params}");
-    }
+    // Refusals: one error, nothing else — an unknown state at dispatch.
+    let message = invalid(&client, "comments.list", json!({"state": "closed"})).await;
+    assert!(message.contains("state: unknown comment state 'closed' (expected open or resolved)"), "{message}");
+    let evs = collect(call(&client, "comments.list", json!({"after": 99})).await).await;
+    assert_eq!(evs, [json!({"type": "error", "message": "after: no comment 99 to resume after"})]);
 }
 
 /// COMMENT-2, row 6 over the wire: an unknown id, an empty body and a
@@ -2987,11 +3038,13 @@ async fn comment_refusals_are_in_band_and_keep_nothing_over_the_wire() {
             json!({"anchor": with("ticket", json!("DEMAND-9")), "body": "x"}),
             "malformed anchor: ticket DEMAND-9 names no ticket — leave it out when the element belongs to none (nothing was kept)",
         ),
-        ("comments.add", json!({"anchor": chip("DEMAND-1"), "body": "x", "author": " "}), "author is blank (leave it out for `owner`) (nothing was kept)"),
     ] {
         let evs = collect(call(&client, method, params.clone()).await).await;
         assert_eq!(evs, [json!({"type": "error", "message": says})], "{method} {params}");
     }
+    // ACCESS-8: a blank author is no `Author` — refused at dispatch.
+    let message = invalid(&client, "comments.add", json!({"anchor": chip("DEMAND-1"), "body": "x", "author": " "})).await;
+    assert!(message.contains("author: author is blank (leave it out for `owner`)"), "{message}");
     assert_eq!(comment_ids(&client, json!({})).await.0, Vec::<u64>::new(), "nothing kept");
     let kept = answer(&client, "comments.add", json!({"anchor": anchor_without("excerpt"), "body": "an excerpt may be left out"})).await;
     assert_eq!((kept["id"].as_u64(), kept["anchor"]["excerpt"].as_str()), (Some(1), Some("")));
@@ -3209,8 +3262,6 @@ async fn the_queue_over_the_wire() {
     // Refusals, one in-band event each.
     for (method, params, says) in [
         ("tickets.queue", json!({"id": "QUE-3", "urgency": "blocking", "reason": "idle"}), "names the input"),
-        ("tickets.queue", json!({"id": "QUE-3", "urgency": "soon", "reason": "x"}), "unknown urgency"),
-        ("tickets.queue", json!({"id": "QUE-3", "urgency": "now", "reason": " "}), "reason"),
         ("tickets.queue", json!({"id": "QUE-2", "urgency": "blocking", "reason": "again", "input": "landing"}), "is closed"),
         ("tickets.snooze", json!({"id": "QUE-3", "minutes": 10}), "not queued"),
     ] {
@@ -3218,6 +3269,9 @@ async fn the_queue_over_the_wire() {
         assert_eq!(ev["type"], "error", "{method}: {ev}");
         assert!(ev["message"].as_str().unwrap().contains(says), "{method}: {ev}");
     }
+    // ACCESS-8: an urgency that is none, a blank reason — at dispatch.
+    assert!(invalid(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "soon", "reason": "x"})).await.contains("urgency: unknown urgency"));
+    assert!(invalid(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "now", "reason": " "})).await.contains("reason: "));
     assert_eq!(
         answer(&client, "tickets.queue", json!({"id": "QUE-99", "urgency": "now", "reason": "x"})).await,
         json!({"type": "not_found", "id": "QUE-99"})

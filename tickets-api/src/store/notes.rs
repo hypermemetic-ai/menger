@@ -94,7 +94,7 @@ impl Notes {
 
     /// The cache's half of a committed write: `note` as it is now.
     pub(crate) fn put(&mut self, note: Note) {
-        self.by_id.insert(note.id, note);
+        self.by_id.insert(note.id.get(), note);
     }
 }
 
@@ -123,7 +123,7 @@ pub(super) fn page(cache: &Cache, q: &NoteQuery, after: Option<u64>, limit: Opti
     let mut matches = newest_first.filter(|n| admits(n));
     let page: Vec<Note> = matches.by_ref().take(take).cloned().collect();
     let more = limit.is_some() && matches.next().is_some();
-    let next = more.then(|| page.last().map(|n| n.id).or(after)).flatten();
+    let next = more.then(|| page.last().map(|n| n.id.get()).or(after)).flatten();
     Ok(NotePage { notes: page, next })
 }
 
@@ -135,7 +135,7 @@ pub(super) fn store(conn: &Connection, n: &Note) -> rusqlite::Result<()> {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT (id) DO UPDATE SET ticket = excluded.ticket, upgraded_at = excluded.upgraded_at",
     )?
-    .execute(params![n.id as i64, n.at, n.author, n.principal, n.body, n.ticket, n.upgraded_at])?;
+    .execute(params![n.id.get() as i64, n.at, n.author, n.principal, n.body, n.ticket, n.upgraded_at])?;
     Ok(())
 }
 
@@ -146,7 +146,7 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Notes> {
     let mut notes = Notes::default();
     while let Some(r) = rows.next()? {
         notes.put(Note {
-            id: r.get::<_, i64>(0)? as u64,
+            id: crate::vocab::NoteId::new(r.get::<_, i64>(0)? as u64),
             at: r.get(1)?,
             author: r.get(2)?,
             principal: r.get(3)?,

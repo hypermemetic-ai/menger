@@ -82,9 +82,9 @@ pub(crate) fn may_write() -> bool {
 /// `tickets.label { id, add, remove }`, with what went wrong.
 async fn label(id: String, add: Vec<String>, remove: Vec<String>) -> Result<(), String> {
     let client = session::client().ok_or_else(|| "not connected".to_string())?;
-    let add = (!add.is_empty()).then_some(add);
-    let remove = (!remove.is_empty()).then_some(remove);
-    let events = client.label_all(Some(id), None, add, remove).await.map_err(|e| session::describe(&e))?;
+    let add = (!add.is_empty()).then_some(crate::typed::many(add)?);
+    let remove = (!remove.is_empty()).then_some(crate::typed::many(remove)?);
+    let events = client.label_all(Some(crate::typed::typed(&id)?), None, add, remove).await.map_err(|e| session::describe(&e))?;
     for ev in events {
         match ev {
             TicketsEvent::LabelsChanged { ticket, .. } => {
@@ -113,7 +113,7 @@ pub(crate) fn Editor(ticket: RwSignal<TicketSummary>) -> impl IntoView {
         busy.set(true);
         problem.set(None);
         spawn_local(async move {
-            let done = label(id, add, remove).await;
+            let done = label(String::from(id), add, remove).await;
             busy.try_set(false);
             match done {
                 Ok(()) => {

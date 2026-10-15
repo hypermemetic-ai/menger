@@ -75,7 +75,7 @@ async fn tree(store: &Store) {
 }
 
 fn ids(page: &CommentPage) -> Vec<u64> {
-    page.comments.iter().map(|c| c.id).collect()
+    page.comments.iter().map(|c| c.id.get()).collect()
 }
 
 fn all(store: &Store, q: CommentQuery) -> Vec<u64> {
@@ -98,7 +98,7 @@ async fn add_keeps_the_comment_and_returns_it() {
     assert_eq!(
         c,
         Comment {
-            id: 1,
+            id: crate::vocab::CommentId::new(1),
             state: CommentState::Open,
             author: "owner".into(),
             at: c.at,
@@ -113,7 +113,7 @@ async fn add_keeps_the_comment_and_returns_it() {
 
     let sent = Anchor { version: Some(42), ..anchor(None) };
     let d = store.add_comment(sent, "on the board".into(), Some(" agent-7 ".into())).await.unwrap();
-    assert_eq!((d.id, d.author.as_str(), d.anchor.ticket.as_deref(), d.anchor.version), (2, "agent-7", None, None), "a version sent is replaced");
+    assert_eq!((d.id.get(), d.author.as_str(), d.anchor.ticket.as_deref(), d.anchor.version), (2, "agent-7", None, None), "a version sent is replaced");
     assert_eq!(store.comment(2), Some(d.clone()));
     assert_eq!(all(&store, CommentQuery::default()), [2, 1]);
     assert_eq!(rx.try_recv().unwrap(), CommentChange::Added(d));
@@ -180,24 +180,24 @@ async fn resolve_and_reopen_flip_the_state_once() {
     let b = store.add_comment(anchor(None), "two".into(), Some("agent".into())).await.unwrap();
     let mut rx = store.subscribe_comments();
     let committed = |store: &Store| store.committing.load(Ordering::SeqCst);
-    let resolved = store.resolve_comment(a.id).await.unwrap();
+    let resolved = store.resolve_comment(a.id.get()).await.unwrap();
     assert_eq!(resolved, Comment { state: CommentState::Resolved, ..a.clone() });
     assert_eq!(rx.try_recv().unwrap(), CommentChange::Resolved(resolved.clone()));
     let writes = committed(&store);
-    assert_eq!(store.resolve_comment(a.id).await.unwrap(), resolved, "resolved already");
-    assert_eq!(store.reopen_comment(b.id).await.unwrap(), b, "open already");
+    assert_eq!(store.resolve_comment(a.id.get()).await.unwrap(), resolved, "resolved already");
+    assert_eq!(store.reopen_comment(b.id.get()).await.unwrap(), b, "open already");
     assert_eq!(committed(&store), writes, "nothing written");
     assert!(rx.try_recv().is_err(), "nothing said");
-    let reopened = store.reopen_comment(a.id).await.unwrap();
+    let reopened = store.reopen_comment(a.id.get()).await.unwrap();
     assert_eq!(reopened, a);
     assert_eq!(rx.try_recv().unwrap(), CommentChange::Reopened(a.clone()));
-    store.resolve_comment(b.id).await.unwrap();
+    store.resolve_comment(b.id.get()).await.unwrap();
     let held = store.comments(&CommentQuery::default(), None, None).unwrap();
     drop(store);
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.comments(&CommentQuery::default(), None, None).unwrap(), held, "as stored");
-    assert_eq!(store.comment(b.id).unwrap().state, CommentState::Resolved);
+    assert_eq!(store.comment(b.id.get()).unwrap().state, CommentState::Resolved);
     assert_eq!(store.add_comment(anchor(None), "three".into(), None).await.unwrap().id, 3, "ids go on from the file's");
 }
 
@@ -212,7 +212,7 @@ async fn list_is_newest_first_and_pages_with_after_and_limit() {
         let state_resolved = i % 3 == 0;
         let c = store.add_comment(anchor(Some("ROOT-2")), format!("comment {i}"), None).await.unwrap();
         if state_resolved {
-            store.resolve_comment(c.id).await.unwrap();
+            store.resolve_comment(c.id.get()).await.unwrap();
         }
     }
     let q = CommentQuery::default();
@@ -252,7 +252,7 @@ async fn each_filter_admits_what_it_names() {
     let c3 = add(Some("DEEP-2"), "#/ticket/DEEP-2", "[data-tag=\"m-wave\"]", "Wave summary", "WAVE 2", "numbers look off", None).await;
     let c4 = add(Some("SOLO-2"), "#/ticket/SOLO-2", "main > h1", "Title", "a TITLE here", "fine", Some("agent-1")).await;
     let c5 = add(None, "#/", "nav > ul", "Nav", "", "the nav is slow", None).await;
-    store.resolve_comment(c2).await.unwrap();
+    store.resolve_comment(c2.get()).await.unwrap();
     let q = |f: fn(&mut CommentQuery)| {
         let mut q = CommentQuery::default();
         f(&mut q);
@@ -337,7 +337,7 @@ fn reference(store: &Store, comments: &[Comment], w: &Want) -> Vec<u64> {
         .filter(|c| {
             lens.as_ref().is_none_or(|lens| c.anchor.ticket.as_ref().is_some_and(|t| store.member(std::slice::from_ref(t), lens)[0]))
         })
-        .map(|c| c.id)
+        .map(|c| c.id.get())
         .collect();
     out.sort_unstable_by(|a, b| b.cmp(a));
     out
@@ -387,8 +387,8 @@ async fn every_filter_and_every_conjunction_is_the_reference() {
             }
             6 if !held.is_empty() => {
                 let id = held[rng.below(held.len())].id;
-                let c = if rng.below(2) == 0 { store.resolve_comment(id).await } else { store.reopen_comment(id).await }.unwrap();
-                held[id as usize - 1] = c;
+                let c = if rng.below(2) == 0 { store.resolve_comment(id.get()).await } else { store.reopen_comment(id.get()).await }.unwrap();
+                held[id.get() as usize - 1] = c;
             }
             7 => {
                 let (child, parent) = moves[rng.below(moves.len())];
@@ -480,13 +480,13 @@ async fn a_comment_keeps_its_anchor_whatever_its_ticket_goes_through() {
     store.link_commits("ROOT-4", vec!["77df9a0".into()]).await.unwrap();
     let now = store.get("ROOT-4").await.unwrap();
     assert!(now.updated_unix > born, "the ticket moved on");
-    assert_eq!(store.comment(c.id), Some(c.clone()), "the comment did not");
+    assert_eq!(store.comment(c.id.get()), Some(c.clone()), "the comment did not");
     assert_eq!(all(&store, CommentQuery { under: Some("ROOT-3".into()), ..CommentQuery::default() }), Vec::<u64>::new(), "no longer under ROOT-3");
     assert_eq!(all(&store, CommentQuery { under: Some("ROOT-2".into()), ..CommentQuery::default() }), [c.id], "under where it is now");
     assert_eq!(all(&store, CommentQuery { ticket: Some("ROOT-4".into()), ..CommentQuery::default() }), [c.id]);
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.comment(c.id), Some(c), "and as stored");
+    assert_eq!(store.comment(c.id.get()), Some(c), "and as stored");
 }
 
 /// Where a file's stored derived state stands, read without opening a store.
@@ -558,7 +558,7 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     let store = Store::open(&path).unwrap();
     let solo = |g: &[Group]| g.iter().find(|g| g.epic == "SOLO").unwrap().total;
     assert_eq!(solo(&store.groups()), solo(&before.1), "built again, not read as stored");
-    assert_eq!(store.comment(c.id), Some(c.clone()), "a form-7 file stored as form 6 again keeps its comments");
+    assert_eq!(store.comment(c.id.get()), Some(c.clone()), "a form-7 file stored as form 6 again keeps its comments");
     assert_eq!(all(&store, CommentQuery::default()), [c.id]);
     drop(store);
     assert_eq!(read_state(&path), State::Current);
@@ -599,7 +599,7 @@ async fn a_form_7_file_gains_form_8_in_place_and_keeps_its_comments() {
     assert_eq!(read_state(&path), State::Older(7));
     let store = Store::open(&path).unwrap();
     assert_eq!(read_state(&path), State::Current);
-    assert_eq!(store.comment(c.id), Some(c), "the comment kept, unsigned");
+    assert_eq!(store.comment(c.id.get()), Some(c), "the comment kept, unsigned");
     let signed = store
         .add_comment_as(anchor(Some("ROOT-4")), "after".into(), Some("alice".into()), Some("idp:alice".into()))
         .await
@@ -607,5 +607,5 @@ async fn a_form_7_file_gains_form_8_in_place_and_keeps_its_comments() {
     assert_eq!(signed.principal.as_deref(), Some("idp:alice"));
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.comment(signed.id).unwrap().principal.as_deref(), Some("idp:alice"), "the signer is stored");
+    assert_eq!(store.comment(signed.id.get()).unwrap().principal.as_deref(), Some("idp:alice"), "the signer is stored");
 }

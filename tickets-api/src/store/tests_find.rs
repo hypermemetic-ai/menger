@@ -45,7 +45,7 @@ fn write_titled(path: &Path, rows: &[(&str, &str)]) {
             &conn,
             &Ticket {
                 labels: Vec::new(),
-                id: id.to_string(),
+                id: (*id).into(),
                 epic: epic.into(),
                 shortcode: epic.into(),
                 address: String::new(),
@@ -244,14 +244,14 @@ fn oracle(store: &Store, query: &str, after: Option<&str>, limit: Option<u32>) -
     };
     let matching: Vec<&TicketSummary> = all[start..].iter().filter(|t| palette_match(&t.id, &t.title, query)).collect();
     let take = limit.map_or(matching.len(), |n| (n as usize).min(matching.len()));
-    let rows: Vec<String> = matching[..take].iter().map(|t| t.id.clone()).collect();
+    let rows: Vec<String> = matching[..take].iter().map(|t| t.id.to_string()).collect();
     let remaining = (matching.len() - take) as u64;
     let next = if remaining == 0 { None } else { rows.last().cloned().or(after.map(str::to_ascii_uppercase)) };
     (rows, next, remaining)
 }
 
 fn answered(page: Page) -> (Vec<String>, Option<String>, u64) {
-    (page.tickets.into_iter().map(|t| t.id).collect(), page.next, page.remaining)
+    (page.tickets.into_iter().map(|t| t.id.into_string()).collect(), page.next, page.remaining)
 }
 
 /// Acceptance 3, and MNG-9's cursor rules: on a seeded store, `limit: 2`
@@ -292,7 +292,7 @@ fn find_pages_every_match_exactly_once_by_mng9s_rules() {
         loop {
             let page = store.find_page(query, after.as_deref(), Some(2)).unwrap();
             assert!(page.tickets.len() <= 2);
-            walked.extend(page.tickets.iter().map(|t| t.id.clone()));
+            walked.extend(page.tickets.iter().map(|t| t.id.to_string()));
             assert_eq!(page.remaining as usize, expected.len() - walked.len(), "{query:?} after {after:?}");
             match page.next {
                 Some(next) => {

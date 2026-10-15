@@ -63,9 +63,9 @@ async fn a_change_request_is_a_comment_and_an_unqueue_in_one_write() {
         other => panic!("expected unqueued, got {other:?}"),
     }
     assert!(store.queue_entry("Q-2").is_none(), "out of the queue");
-    assert_eq!(store.comment(c.id), Some(c.clone()));
+    assert_eq!(store.comment(c.id.get()), Some(c.clone()));
     let rec = store.queue_history("Q-2").pop().unwrap();
-    assert_eq!((rec.action, rec.comment, rec.actor.as_str(), rec.source), (QueueAction::ChangesRequested, Some(c.id), "idp:owner", TransitionSource::App));
+    assert_eq!((rec.action, rec.comment, rec.actor.as_str(), rec.source), (QueueAction::ChangesRequested, Some(c.id.get()), "idp:owner", TransitionSource::App));
     // The named input is untouched: requesting changes is no answer.
     let input = store.inputs(Some("Q-2"), None, None).unwrap().into_iter().find(|i| i.id == "landing").unwrap();
     assert_eq!(input.state, InputState::Open);
@@ -84,7 +84,7 @@ async fn a_change_request_is_a_comment_and_an_unqueue_in_one_write() {
     let only = |i| CommentQuery { intent: Some(i), ..CommentQuery::default() };
     let ids = |q: &CommentQuery| store.comments(q, None, None).unwrap().comments.into_iter().map(|c| c.id).collect::<Vec<_>>();
     assert_eq!(ids(&only(CommentIntent::Changes)), [c.id]);
-    assert_eq!(ids(&only(CommentIntent::Comment)), [c.id + 1]);
+    assert_eq!(ids(&only(CommentIntent::Comment)), [c.id.get() + 1]);
     // Re-queued after acting: back in the queue, a new entry.
     let again = store.queue_by("Q-2", Urgency::Now, "split it; look again", None, act("idp:agent")).await.unwrap();
     assert!(matches!(again, QueueChange::Queued { action: QueueAction::Queued, .. }));
@@ -130,8 +130,8 @@ async fn a_change_request_is_kept_across_a_restart_and_an_older_file_gains_the_c
         store.request_changes_by("Q-2", "split it".into(), Some("ada".into()), None, act("idp:ada")).await.unwrap().0
     };
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.comment(c.id).map(|c| (c.intent, c.author)), Some((CommentIntent::Changes, "ada".to_string())));
+    assert_eq!(store.comment(c.id.get()).map(|c| (c.intent, c.author)), Some((CommentIntent::Changes, "ada".to_string())));
     let rec = store.queue_history("Q-2").pop().unwrap();
-    assert_eq!((rec.action, rec.comment), (QueueAction::ChangesRequested, Some(c.id)));
+    assert_eq!((rec.action, rec.comment), (QueueAction::ChangesRequested, Some(c.id.get())));
     assert!(store.queue_entry("Q-2").is_none());
 }

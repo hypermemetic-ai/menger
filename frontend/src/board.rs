@@ -762,8 +762,9 @@ enum Answer {
 }
 
 async fn ask(client: &Client, after: Option<String>, limit: usize) -> Answer {
+    let Ok(after) = crate::typed::opt(after) else { return Answer::Refused };
     match client
-        .list_all(None, None, None, after, Some(limit.max(1) as u32), Some(true), None, None, None, crate::session::tz())
+        .list_all(None, None, None, after, Some(limit.max(1) as u32), Some(true), None, None, None, crate::session::zone())
         .await
     {
         Ok(events) => {
@@ -796,7 +797,11 @@ enum Counted {
 }
 
 async fn count(client: &Client, filter: &str) -> Counted {
-    match client.counts_all(Some(filter.to_string()), None, crate::session::tz()).await {
+    let filter = match crate::typed::typed(filter) {
+        Ok(f) => f,
+        Err(why) => return Counted::Refused(why),
+    };
+    match client.counts_all(Some(filter), None, crate::session::zone()).await {
         Ok(events) => {
             let mut runs = Vec::new();
             for ev in events {
@@ -822,8 +827,12 @@ enum Window {
 }
 
 async fn ask_at(client: &Client, filter: &str, at: usize, limit: usize) -> Window {
+    let filter = match crate::typed::typed(filter) {
+        Ok(f) => f,
+        Err(why) => return Window::Refused(why),
+    };
     match client
-        .list_all(None, None, None, None, Some(limit.max(1) as u32), Some(true), Some(filter.to_string()), Some(at as u64), None, crate::session::tz())
+        .list_all(None, None, None, None, Some(limit.max(1) as u32), Some(true), Some(filter), Some(at as u64), None, crate::session::zone())
         .await
     {
         Ok(events) => {
@@ -850,8 +859,9 @@ async fn ask_at(client: &Client, filter: &str, at: usize, limit: usize) -> Windo
 /// position among the matches (its `first`, less one when X is a match —
 /// the page after X starts right after it).
 async fn ask_place(client: &Client, filter: &str, id: &str) -> Option<usize> {
+    let (id, filter) = (crate::typed::typed(id).ok()?, crate::typed::typed(filter).ok()?);
     let events = client
-        .list_all(None, None, None, Some(id.to_string()), Some(0), Some(true), Some(filter.to_string()), None, None, crate::session::tz())
+        .list_all(None, None, None, Some(id), Some(0), Some(true), Some(filter), None, None, crate::session::zone())
         .await
         .ok()?;
     events.into_iter().find_map(|ev| match ev {
@@ -1116,7 +1126,7 @@ impl Board {
         if near == Some(true) {
             if let Some(sig) = self.holder.with_value(|h| h.hold(t.clone())) {
                 self.held.update(|h| {
-                    h.rows.insert((t.shortcode.to_string(), t.seq), (t.id.clone(), sig));
+                    h.rows.insert((t.shortcode.to_string(), t.seq), (t.id.to_string(), sig));
                 });
             }
         } else {
@@ -1162,7 +1172,7 @@ impl Board {
                 }
             });
         }
-        let keys: Vec<(Key, String)> = rows.iter().map(|t| ((t.shortcode.to_string(), t.seq), t.id.clone())).collect();
+        let keys: Vec<(Key, String)> = rows.iter().map(|t| ((t.shortcode.to_string(), t.seq), t.id.to_string())).collect();
         let fresh = self.held.with_untracked(|h| keys.iter().any(|(k, _)| !h.rows.contains_key(k)));
         let page: Vec<Key> = keys.iter().map(|(k, _)| k.clone()).collect();
         let gaps = self.ext.with_untracked(|e| e.as_ref().map_or_else(Vec::new, |e| holes(e, after, &page)));
@@ -1541,7 +1551,7 @@ impl Board {
         if !self.holder.with_value(|h| h.hold_page(rows.clone())) {
             return Ok(false);
         }
-        let page: Vec<(Key, Row)> = rows.into_iter().filter_map(|t| cache::get(&t.id).map(|sig| ((t.shortcode.to_string(), t.seq), (t.id, sig)))).collect();
+        let page: Vec<(Key, Row)> = rows.into_iter().filter_map(|t| cache::get(&t.id).map(|sig| ((t.shortcode.to_string(), t.seq), (t.id.into_string(), sig)))).collect();
         let placed = self.matches.with_untracked(|m| {
             let m = m.as_ref()?;
             self.ranked.try_update(|r| r.place(m, first, Some(total), page))
@@ -1901,7 +1911,7 @@ mod tests {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         TicketSummary {
             labels: Vec::new(),
-            id: id.to_string(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: String::new(),
@@ -1924,7 +1934,7 @@ mod tests {
         let mut h = Held::default();
         for id in ids {
             let t = row(id);
-            h.rows.insert((t.shortcode.to_string(), t.seq), (t.id.clone(), ArcRwSignal::new(t)));
+            h.rows.insert((t.shortcode.to_string(), t.seq), (t.id.to_string(), ArcRwSignal::new(t)));
         }
         h
     }

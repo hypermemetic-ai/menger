@@ -1262,7 +1262,7 @@ fn ask_find(found: RwSignal<Found>, n: u32, query: String, pass: Pass, then: imp
             Ok(Ok((rows, remaining))) => {
                 let mut outside = HashSet::new();
                 if let (Some(mark), false) = (pass.mark, rows.is_empty()) {
-                    match session::member(rows.iter().map(|t| t.id.clone()).collect(), mark).await {
+                    match session::member(rows.iter().map(|t| t.id.to_string()).collect(), mark).await {
                         Ok(answer) => outside.extend(answer.into_iter().filter(|(_, m)| !m).map(|(id, _)| id)),
                         Err(why) => leptos::logging::log!("palette: member: {why}"),
                     }
@@ -1309,7 +1309,7 @@ fn ask_search(found: RwSignal<Found>, n: u32, query: String, pass: Pass) {
         };
         let mut outside = HashSet::new();
         if let (Some(mark), false) = (pass.mark, hits.is_empty()) {
-            match session::member(hits.iter().map(|h| h.summary.id.clone()).collect(), mark).await {
+            match session::member(hits.iter().map(|h| h.summary.id.to_string()).collect(), mark).await {
                 Ok(answer) => outside.extend(answer.into_iter().filter(|(_, m)| !m).map(|(id, _)| id)),
                 Err(why) => leptos::logging::log!("palette: member: {why}"),
             }
@@ -1646,9 +1646,9 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                 .enumerate()
                                 .map(|(k, h)| {
                                     let i = base + len + k;
-                                    let id = h.summary.id.clone();
+                                    let id = h.summary.id.to_string();
                                     let status = h.summary.status;
-                                    let out = outside.contains(&id);
+                                    let out = outside.contains(id.as_str());
                                     view! {
                                         <li
                                             id=format!("pal-{i}")
@@ -1661,7 +1661,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                             on:click=move |_| open_at(i)
                                         >
                                             <span class="pal-line">
-                                                <span class="code">{id.clone()}</span>
+                                                <span class="code">{id.to_string()}</span>
                                                 <span class="label">{marked(h.title)}</span>
                                                 {out.then(|| view! { <span class="pal-out">"outside the filter"</span> })}
                                                 <span class=format!("tag {}", st_class(status.as_str()))>{status.to_string()}</span>
@@ -1698,9 +1698,9 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                             .into_iter()
                             .enumerate()
                             .map(|(i, t)| {
-                                let id = t.id.clone();
+                                let id = t.id.to_string();
                                 let (title, status) = (t.title.clone(), t.status);
-                                let out = outside.contains(&id);
+                                let out = outside.contains(id.as_str());
                                 let i = base + i;
                                 view! {
                                     <li
@@ -1712,7 +1712,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                         data-pal-id=id.clone()
                                         on:click=move |_| open_at(i)
                                     >
-                                        <span class="code">{id.clone()}</span>
+                                        <span class="code">{id.to_string()}</span>
                                         <span class="label">{title}</span>
                                         {out.then(|| view! { <span class="pal-out">"outside the filter"</span> })}
                                         <span class=format!("tag {}", st_class(status.as_str()))>{status.to_string()}</span>
@@ -1916,7 +1916,7 @@ mod tests {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         TicketSummary {
             labels: Vec::new(),
-            id: id.to_string(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: title.to_string(),
@@ -1936,7 +1936,7 @@ mod tests {
     }
 
     fn ids(rows: Vec<TicketSummary>) -> Vec<String> {
-        rows.into_iter().map(|t| t.id).collect()
+        rows.into_iter().map(|t| t.id.into_string()).collect()
     }
 
     /// SEARCH-3: a hit in bodies — its passage one marked word.
@@ -1950,7 +1950,7 @@ mod tests {
     }
 
     fn hit_ids(hits: Vec<crate::session::Hit>) -> Vec<String> {
-        hits.into_iter().map(|h| h.summary.id).collect()
+        hits.into_iter().map(|h| h.summary.id.into_string()).collect()
     }
 
     /// SEARCH-3: the hits in bodies are numbered as `find`'s answers are —

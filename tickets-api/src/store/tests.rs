@@ -82,7 +82,7 @@ async fn the_index_pages_the_whole_store_in_order_exactly_once() {
     store.create(scope("B", "b")).await.unwrap();
     store.create(scope("AB", "ab")).await.unwrap();
 
-    let all: Vec<String> = store.list(None, None, None).await.unwrap().iter().map(|t| t.id.clone()).collect();
+    let all: Vec<String> = store.list(None, None, None).await.unwrap().iter().map(|t| t.id.to_string()).collect();
     assert_eq!(
         all,
         ["A-1", "A-2", "A-3", "A-4", "A-5", "A-6", "A-7", "A-8", "A-9", "A-10", "A-11",
@@ -101,7 +101,7 @@ async fn the_index_pages_the_whole_store_in_order_exactly_once() {
             })
             .unwrap();
         assert_eq!(page.remaining as usize, all.len() - walked.len() - page.tickets.len());
-        walked.extend(page.tickets.iter().map(|t| t.id.clone()));
+        walked.extend(page.tickets.iter().map(|t| t.id.to_string()));
         match page.next {
             Some(next) => {
                 assert_eq!(Some(&next), walked.last(), "the cursor is the last row");
@@ -591,7 +591,7 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
             .unwrap()
             .tickets
             .into_iter()
-            .map(|t| (t.id.clone(), t))
+            .map(|t| (t.id.to_string(), t))
             .collect(),
         Default::default(),
     );
@@ -914,7 +914,7 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
 
     let all = store.list(None, None, None).await.unwrap();
     assert_eq!(all.len(), 10_000);
-    let by_id: HashMap<String, Ticket> = all.iter().map(|t| (t.id.clone(), t.clone())).collect();
+    let by_id: HashMap<String, Ticket> = all.iter().map(|t| (t.id.to_string(), t.clone())).collect();
 
     // Shape: every status and kind occurs; ids are EPIC-N with N
     // contiguous per epic from 1.
@@ -954,12 +954,12 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
     for t in &all {
         for b in &t.blocked_by {
             let blocker = by_id.get(b).unwrap_or_else(|| panic!("{}: dangling blocker {b}", t.id));
-            assert!(blocker.unlocks.contains(&t.id), "{b}.unlocks lacks {}", t.id);
+            assert!(blocker.unlocks.contains(&t.id.to_string()), "{b}.unlocks lacks {}", t.id);
             edges += 1;
         }
         for u in &t.unlocks {
             let dependent = by_id.get(u).unwrap_or_else(|| panic!("{}: unlocks names {u}", t.id));
-            assert!(dependent.blocked_by.contains(&t.id), "{u}.blocked_by lacks {}", t.id);
+            assert!(dependent.blocked_by.contains(&t.id.to_string()), "{u}.blocked_by lacks {}", t.id);
         }
     }
     assert_eq!(edges, report.edges);
@@ -970,9 +970,9 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
         .iter()
         .filter(|t| t.status == Status::Ready)
         .filter(|t| t.blocked_by.iter().all(|b| satisfied(by_id[b].status)))
-        .map(|t| t.id.clone())
+        .map(|t| t.id.to_string())
         .collect();
-    let got: Vec<String> = store.ready_set(None).await.unwrap().into_iter().map(|t| t.id).collect();
+    let got: Vec<String> = store.ready_set(None).await.unwrap().into_iter().map(|t| t.id.into_string()).collect();
     assert!(!got.is_empty());
     assert_eq!(got, expected);
     // ...and it is doing real work: some Ready tickets are held back.
@@ -1299,17 +1299,17 @@ pub(super) fn nav(store: &Store) -> Vec<Group> {
     let facts: Vec<Facts> = all
         .iter()
         .map(|t| Facts {
-            id: t.id.clone(),
+            id: t.id.to_string(),
             epic: t.epic.to_string(),
             seq: t.seq,
             kind: t.kind.to_string(),
-            parent: t.parent.clone(),
+            parent: t.parent.clone().map(String::from),
         })
         .collect();
     let complete: BTreeSet<String> = all
         .iter()
         .filter(|t| t.status == Status::Complete)
-        .map(|t| t.id.clone())
+        .map(|t| t.id.to_string())
         .collect();
     nav_plan::rows(&facts, &complete)
         .into_iter()
@@ -1640,7 +1640,7 @@ pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)])
             let (epic, seq) = id.rsplit_once('-').unwrap();
             Ticket {
                 labels: Vec::new(),
-                id: id.to_string(),
+                id: (*id).into(),
                 epic: epic.into(),
                 shortcode: epic.into(),
                 address: String::new(),
@@ -1844,7 +1844,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                     2 | 3 if !mine.is_empty() => Some(mine[rng.below(mine.len())].id.clone()),
                     _ => Some(any(&mut rng)),
                 };
-                let parent = super::tests_ready::no_namesake(&store, epic, kind, parent);
+                let parent = super::tests_ready::no_namesake(&store, epic, kind, parent.map(String::from));
                 let what = format!("create {epic} {kind} under {parent:?}");
                 let new = NewTicket {
                     path: None,
@@ -1879,9 +1879,9 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                 // A root a third of the time: re-hosting shortcodes is
                 // the reshaping the roll-ups must follow.
                 let child = if rng.below(3) == 0 {
-                    before[rng.below(before.len())].root.clone().unwrap_or_else(|| any(&mut rng))
+                    before[rng.below(before.len())].root.clone().unwrap_or_else(|| String::from(any(&mut rng)))
                 } else {
-                    any(&mut rng)
+                    String::from(any(&mut rng))
                 };
                 let epic = store.get(&child).await.unwrap().epic;
                 let mine: Vec<&Ticket> = all.iter().filter(|t| t.epic == epic).collect();
@@ -1979,7 +1979,7 @@ pub(super) fn scanned(store: &Store) -> Scanned {
         let mut waiting: Vec<&TicketSummary> =
             all.iter().filter(|t| t.blocked_by.iter().any(|b| b == id)).collect();
         waiting.sort_by_key(|t| at[t.id.as_str()]);
-        unborn.insert(id.to_string(), waiting.iter().map(|t| t.id.clone()).collect());
+        unborn.insert(id.to_string(), waiting.iter().map(|t| t.id.to_string()).collect());
     }
     (last, unborn)
 }
@@ -2017,7 +2017,7 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
             &conn,
             &Ticket {
                 labels: Vec::new(),
-                id: id.to_string(),
+                id: (*id).into(),
                 epic: epic.into(),
                 shortcode: epic.into(),
                 address: String::new(),
@@ -2261,12 +2261,12 @@ async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing()
     store
         .create(NewTicket {
             path: None,
-            blocked_by: vec![seeded.clone(), "REAL-9".into()],
+            blocked_by: vec![seeded.to_string(), "REAL-9".into()],
             ..new_ticket("REAL", "names an id the seed will make")
         })
         .await
         .unwrap();
-    assert!(kept(&store).1.contains_key(&seeded));
+    assert!(kept(&store).1.contains_key(seeded.as_str()));
     store
         .seed_synthetic(SeedSpec {
             into_existing: true,
@@ -2275,7 +2275,7 @@ async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing()
         .unwrap();
     assert!(store.get(&seeded).await.is_ok(), "the seed made {seeded}");
     assert_kept_is_a_scan(&store, "a seed into an existing store");
-    assert!(!kept(&store).1.contains_key(&seeded), "{seeded} is born");
+    assert!(!kept(&store).1.contains_key(seeded.as_str()), "{seeded} is born");
 
     // Again over itself: every seeded shortcode continues its numbering.
     store
@@ -2453,7 +2453,7 @@ async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
                     let e = EPICS[rng.below(EPICS.len())];
                     format!("{e}-{}", last.get(e).copied().unwrap_or(0) + 1 + rng.below(3) as u32)
                 }
-                _ if !all.is_empty() => all[rng.below(all.len())].id.clone(),
+                _ if !all.is_empty() => all[rng.below(all.len())].id.to_string(),
                 _ => format!("{epic}-{seq}"),
             });
         }
@@ -2466,7 +2466,7 @@ async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
         // there — a namesake, not a ticket of this one; the walk files only
         // a shortcode's first scope so (tests_shortcodes holds the rest).
         let parent = match rng.below(6) {
-            0 if !all.is_empty() && (kind != Kind::Scope || seq == 1) => Some(all[rng.below(all.len())].id.clone()),
+            0 if !all.is_empty() && (kind != Kind::Scope || seq == 1) => Some(all[rng.below(all.len())].id.to_string()),
             1 => Some(format!("{epic}-99")),
             _ => None,
         };
@@ -2483,7 +2483,7 @@ async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
             Ok(t) => {
                 born += 1;
                 assert_eq!(t.seq, seq, "{what}");
-                let expected = unborn.get(&t.id).cloned().unwrap_or_default();
+                let expected = unborn.get(t.id.as_str()).cloned().unwrap_or_default();
                 resolved += usize::from(!expected.is_empty());
                 assert_eq!(t.unlocks, expected, "{what}");
             }
@@ -2559,7 +2559,7 @@ async fn extents_are_each_shortcodes_highest_sequence_in_order() {
                 })
                 .unwrap();
             let want = (k < *last).then(|| format!("{epic}-{}", k + 1));
-            assert_eq!(page.tickets.first().map(|t| t.id.clone()), want, "{epic} after row {k}");
+            assert_eq!(page.tickets.first().map(|t| t.id.to_string()), want, "{epic} after row {k}");
         }
     }
 

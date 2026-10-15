@@ -61,7 +61,7 @@ fn pred(text: &str) -> History {
 fn admitted(store: &Store, text: &str, clock: Clock) -> Vec<String> {
     let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")).with_clock(clock);
     let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
-    store.filtered_page(&q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id).collect()
+    store.filtered_page(&q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
 }
 
 fn at(clock_now: i64) -> Clock {
@@ -410,7 +410,7 @@ fn the_kept_indexes_answer_as_a_scan() {
             let at_unix = base - 20 * 86_400 + (id as i64) * 4_000 - if rng.below(10) == 0 { 50_000 } else { 0 };
             let t = Transition {
                 id,
-                ticket: format!("{}-{}", key.0, key.1),
+                ticket: format!("{}-{}", key.0, key.1).into(),
                 field: if kind { TransitionField::Kind } else { TransitionField::Status },
                 from: if kind { Some("build".into()) } else { from.map(|s| s.as_str().into()) },
                 to: if kind { "gap".into() } else { to.as_str().into() },

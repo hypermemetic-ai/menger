@@ -191,7 +191,7 @@ impl Store {
             return Err(refusals.pop().expect("one refusal"));
         }
         if !refusals.is_empty() {
-            return Err(StoreError::Refused { id: current.id, refusals });
+            return Err(StoreError::Refused { id: String::from(current.id), refusals });
         }
         if plan.changed.is_empty() {
             return Ok(Updated { ticket: current, changed: Vec::new() });
@@ -296,7 +296,7 @@ pub(super) fn plan(
         }
         if let Some((declared, problems)) = declares {
             match problems.into_iter().next() {
-                Some(problem) => refusals.push(StoreError::InputMarkup { id: Some(id.clone()), problem }),
+                Some(problem) => refusals.push(StoreError::InputMarkup { id: Some(id.to_string()), problem }),
                 None => asked = cache.inputs.plan(&id, declared),
             }
         }
@@ -306,11 +306,11 @@ pub(super) fn plan(
     let (block, blank_block) = ids_of(cache, &u.block, refusals);
     let (unblock, blank_unblock) = ids_of(cache, &u.unblock, refusals);
     if blank_block || blank_unblock {
-        refusals.push(StoreError::Blockers { id: id.clone(), why: "a blank id in block or unblock".into() });
+        refusals.push(StoreError::Blockers { id: id.to_string(), why: "a blank id in block or unblock".into() });
     }
     let both: Vec<String> = block.iter().filter(|b| unblock.contains(b)).cloned().collect();
     if !both.is_empty() {
-        refusals.push(StoreError::Blockers { id: id.clone(), why: format!("{} both blocked and unblocked", both.join(", ")) });
+        refusals.push(StoreError::Blockers { id: id.to_string(), why: format!("{} both blocked and unblocked", both.join(", ")) });
     }
     let added: Vec<String> = block.into_iter().filter(|b| !row.blocked_by.contains(b) && !both.contains(b)).collect();
     let removed: Vec<String> = unblock.into_iter().filter(|b| row.blocked_by.contains(b) && !both.contains(b)).collect();
@@ -373,14 +373,14 @@ pub(super) fn plan(
     }
     if !added.is_empty() {
         if !final_kind.has_lifecycle() && kind.is_none() {
-            refusals.push(StoreError::DocInGraph { id: id.clone(), blocked_by: added.clone(), unlocks: Vec::new() });
+            refusals.push(StoreError::DocInGraph { id: id.to_string(), blocked_by: added.clone(), unlocks: Vec::new() });
         }
         let docs = rules::docs_among(cache, &added);
         if !docs.is_empty() {
-            refusals.push(StoreError::BlockedByDoc { id: id.clone(), docs });
+            refusals.push(StoreError::BlockedByDoc { id: id.to_string(), docs });
         }
         if let Some(path) = find_cycle(cache, &id, &added) {
-            refusals.push(StoreError::BlockCycle { id: id.clone(), path });
+            refusals.push(StoreError::BlockCycle { id: id.to_string(), path });
         }
         // ACT-5: and never a deleted ticket.
         if let Err(e) = cache.tombstones.refuse_blockers(&id, &added) {
@@ -391,7 +391,7 @@ pub(super) fn plan(
     let mut labels = None;
     if !u.label.is_empty() || !u.unlabel.is_empty() {
         match crate::labels::apply(&row.labels, &u.label, &u.unlabel) {
-            Err(why) => refusals.push(StoreError::Labels { id: id.clone(), why }),
+            Err(why) => refusals.push(StoreError::Labels { id: id.to_string(), why }),
             Ok((after, added, removed)) if !added.is_empty() || !removed.is_empty() => {
                 changed.push("labels".into());
                 labels = Some(after);
@@ -400,7 +400,7 @@ pub(super) fn plan(
         }
     }
     Plan {
-        id,
+        id: String::from(id),
         title,
         body,
         registered,
@@ -432,15 +432,15 @@ fn amend_step(
     out: &mut Gathered,
 ) -> Result<(), StoreError> {
     let mut row = cache.get(id).cloned().ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-    let mut changed: Vec<String> = Vec::new();
+    let mut changed = Vec::new();
     let title_changed = title.is_some();
     if let Some(t) = title {
         row.title = t;
-        changed.push("title".into());
+        changed.push(crate::vocab::AmendedField::Title);
     }
     let text = match &body {
         Some(b) => {
-            changed.push("body".into());
+            changed.push(crate::vocab::AmendedField::Body);
             b.clone()
         }
         None => db::body(txn, id)?.ok_or_else(|| missing(id))?,
@@ -582,7 +582,7 @@ fn parent_step(
     rules::parent_refusal(cache, &child, &parent)?;
     let new_epic = cache.get(&parent).map(|p| p.shortcode.clone()).expect("the parent exists");
     let previous = child.parent.take();
-    child.parent = Some(parent.clone());
+    child.parent = Some(crate::address::TicketId::new(parent.clone()));
     child.updated_unix = now;
     let old_epic = previous.as_deref().and_then(|p| cache.get(p)).map(|t| t.shortcode.clone());
     let derived = cache.reparent(&child, previous.as_deref())?;
@@ -604,10 +604,10 @@ fn parent_step(
     stored.write(txn)?;
     let body = db::body(txn, id)?.ok_or_else(|| missing(id))?;
     let (groups, joined, left) = cache.reparented(child.clone(), previous.as_deref(), moved);
-    out.tickets.push(Change::ParentChanged { ticket: whole(child, body), previous: previous.clone() });
+    out.tickets.push(Change::ParentChanged { ticket: whole(child, body), previous: previous.clone().map(String::from) });
     out.tickets.push(Change::ChildrenChanged { id: parent, shortcode: new_epic, added: id.to_string(), child_count: joined });
     if let (Some(old), Some(epic)) = (previous, old_epic) {
-        out.tickets.push(Change::ChildRemoved { id: old, shortcode: epic, removed: id.to_string(), child_count: left });
+        out.tickets.push(Change::ChildRemoved { id: String::from(old), shortcode: epic, removed: id.to_string(), child_count: left });
     }
     out.groups(groups);
     out.filtered(None, under.and_then(|u| u.after_in(cache)));
@@ -690,14 +690,14 @@ fn blockers_step(
     let mut row = cache.get(id).cloned().ok_or_else(|| StoreError::NotFound(id.to_string()))?;
     if !added.is_empty() {
         if !row.kind.has_lifecycle() {
-            return Err(StoreError::DocInGraph { id: row.id, blocked_by: added.to_vec(), unlocks: Vec::new() });
+            return Err(StoreError::DocInGraph { id: String::from(row.id), blocked_by: added.to_vec(), unlocks: Vec::new() });
         }
         let docs = rules::docs_among(cache, added);
         if !docs.is_empty() {
-            return Err(StoreError::BlockedByDoc { id: row.id, docs });
+            return Err(StoreError::BlockedByDoc { id: String::from(row.id), docs });
         }
         if let Some(path) = find_cycle(cache, id, added) {
-            return Err(StoreError::BlockCycle { id: row.id, path });
+            return Err(StoreError::BlockCycle { id: String::from(row.id), path });
         }
     }
     row.blocked_by.retain(|b| !removed.contains(b));

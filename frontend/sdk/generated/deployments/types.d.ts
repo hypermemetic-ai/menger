@@ -6,7 +6,7 @@ export interface DeploySource {
     system?: string | null;
     url?: string | null;
 }
-/** What a deployment did. */
+/** What a deployment did (any case; rolled-back too) */
 export type DeployState = "started" | "succeeded" | "failed" | "rolled_back";
 /** A deployment as menger keeps it: the record, read, with its id, `at` as
 unix seconds, and who recorded it when. */
@@ -32,6 +32,8 @@ export interface Deployment {
     /** The ids the record named, upper case — counted when they name a ticket. */
     tickets: string[];
 }
+/** DEPLOY-11: a deployment's number, from 1 in the order recorded. */
+export type DeploymentId = number;
 /** One deployment (`list`'s rows): `carried` the tickets it carried —
 whose linked commits are among its commits and revision, and the ids
 it named — `unlinked` its commits no ticket links, `live` whether it
@@ -148,6 +150,17 @@ export interface Environment {
     /** How many tickets run there. */
     tickets: number;
 }
+/** DEPLOY-10: an environment's name — lower case, `[a-z0-9._/-]`,
+starting with a letter or a digit, at most 64 bytes (`prod`,
+`pr-412`, `review/pr-412`): [`crate::deployments::environment_of`]. */
+export type EnvironmentName = string;
+/** DEPLOY-10: whose environment a deployment is — a shortcode's code,
+any case on the way in, kept upper case (`menger` is MENGER). The
+one shortcode rule, [`crate::address::Code::parse`]'s: [`crate::deployments::project_of`]. */
+export type Project = string;
+/** DEPLOY-10: a release — the artifact's name (`20261012T220402Z-235ff62`),
+one word, at most 256 bytes. */
+export type Release = string;
 /** DEPLOY-13: one ticket running in an environment — a kept cell, as
 `running` answers it. */
 export interface RunningCell {
@@ -158,3 +171,6 @@ export interface RunningCell {
     since: number;
     ticket: string;
 }
+/** DEPLOY-10: when — RFC 3339 (`2026-10-12T22:04:19Z`) or unix seconds,
+by its shape; the server reads the moment. */
+export type Timestamp = string;

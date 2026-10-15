@@ -31,7 +31,7 @@ use super::*;
 
 /// `waves { epics, kinds }` (WAVE-4): `epics` empty, a shortcode out of
 /// reach or a kind outside the six is one `Error`.
-pub(super) fn waves_answer(store: &Store, admitted: Result<Caller, String>, epics: Vec<String>, kinds: Option<Vec<String>>) -> Vec<TicketsEvent> {
+pub(super) fn waves_answer(store: &Store, admitted: Result<Caller, String>, epics: Vec<String>, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
     let caller = match admitted {
         Ok(caller) => caller,
         Err(message) => return vec![TicketsEvent::Error { message }],
@@ -57,7 +57,7 @@ pub(super) fn waves_answer(store: &Store, admitted: Result<Caller, String>, epic
 }
 
 /// `waves_under { id, kinds? }` (MENGER-31).
-pub(super) fn waves_under_answer(store: &Store, admitted: Result<Caller, String>, id: String, kinds: Option<Vec<String>>) -> Vec<TicketsEvent> {
+pub(super) fn waves_under_answer(store: &Store, admitted: Result<Caller, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
     let (visible, kinds) = match waves_of_one(store, admitted, &id, kinds, &crate::store::waves::DEFAULT_KINDS) {
         Ok(v) => v,
         Err(evs) => return evs,
@@ -70,7 +70,7 @@ pub(super) fn waves_under_answer(store: &Store, admitted: Result<Caller, String>
 }
 
 /// `waves_to { id, kinds? }` (MENGER-31).
-pub(super) fn waves_to_answer(store: &Store, admitted: Result<Caller, String>, id: String, kinds: Option<Vec<String>>) -> Vec<TicketsEvent> {
+pub(super) fn waves_to_answer(store: &Store, admitted: Result<Caller, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
     let every = [Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike];
     let (visible, kinds) = match waves_of_one(store, admitted, &id, kinds, &every) {
         Ok(v) => v,
@@ -89,12 +89,10 @@ pub(super) fn waves_to_answer(store: &Store, admitted: Result<Caller, String>, i
 /// The shortcodes a caller sees (`None`: all).
 type Visible = Option<std::collections::HashSet<crate::address::ShortcodeId>>;
 
-/// The kinds asked (`default` with none), or the `Error` naming the bad one.
-fn kinds_of(kinds: Option<Vec<String>>, default: &[Kind]) -> Result<Vec<Kind>, Vec<TicketsEvent>> {
-    match kinds {
-        None => Ok(default.to_vec()),
-        Some(given) => given.iter().map(|k| k.parse::<Kind>()).collect::<Result<_, _>>().map_err(|message| vec![TicketsEvent::Error { message }]),
-    }
+/// The kinds asked, `default` with none (ACCESS-8: a kind outside the six
+/// is refused at dispatch).
+fn kinds_of(kinds: Option<Vec<Kind>>, default: &[Kind]) -> Result<Vec<Kind>, Vec<TicketsEvent>> {
+    Ok(kinds.unwrap_or_else(|| default.to_vec()))
 }
 
 /// What `waves_under` and `waves_to` share before they read — the caller
@@ -105,7 +103,7 @@ fn waves_of_one(
     store: &Store,
     admitted: Result<Caller, String>,
     id: &str,
-    kinds: Option<Vec<String>>,
+    kinds: Option<Vec<Kind>>,
     default: &[Kind],
 ) -> Result<(Visible, Vec<Kind>), Vec<TicketsEvent>> {
     let caller = admitted.map_err(|message| vec![TicketsEvent::Error { message }])?;

@@ -460,7 +460,8 @@ fn ask(id: String) {
         n
     });
     spawn_local(async move {
-        let Ok(events) = client.theme_for_all(id.clone()).await else { return };
+        let Ok(ticket) = crate::typed::typed(&id) else { return };
+        let Ok(events) = client.theme_for_all(ticket).await else { return };
         if ASKED.with(Cell::get) != n {
             return;
         }

@@ -90,7 +90,7 @@ pub(super) fn restorable<'c>(cache: &'c Cache, row: &Row) -> Vec<(&'c Row, Statu
 fn status_transition(id: u64, ticket: &str, from: Status, to: Status, at: i64, act: &Act, cause: Option<(u64, &str)>) -> Transition {
     Transition {
         id,
-        ticket: ticket.to_string(),
+        ticket: crate::address::TicketId::new(ticket),
         field: TransitionField::Status,
         from: Some(from.as_str().to_string()),
         to: to.as_str().to_string(),
@@ -146,14 +146,14 @@ pub(super) fn status_steps(cache: &Cache, row: &Row, status: Status, act: &Act, 
     } else {
         Vec::new()
     };
-    steps.push(Step { id: row.id.clone(), to: status, transition: own, inputs: own_inputs });
+    steps.push(Step { id: row.id.to_string(), to: status, transition: own, inputs: own_inputs });
     if canceling {
         for t in to_cancel(cache, row) {
             let message = format!("canceled because {} was canceled by {who}", row.id);
             let tr = status_transition(next, &t.id, t.status, Status::Canceled, now, &system(message.clone()), cause);
             next += 1;
             let inputs = cache.inputs.withdrawing(&t.id, &message, now);
-            steps.push(Step { id: t.id.clone(), to: Status::Canceled, transition: Some(tr), inputs });
+            steps.push(Step { id: t.id.to_string(), to: Status::Canceled, transition: Some(tr), inputs });
         }
     } else if uncanceling && restore_children {
         for (t, from) in restorable(cache, row) {
@@ -161,7 +161,7 @@ pub(super) fn status_steps(cache: &Cache, row: &Row, status: Status, act: &Act, 
             let tr = status_transition(next, &t.id, Status::Canceled, from, now, &system(message.clone()), cause);
             next += 1;
             let inputs = cache.inputs.restoring(&t.id, &message, now);
-            steps.push(Step { id: t.id.clone(), to: from, transition: Some(tr), inputs });
+            steps.push(Step { id: t.id.to_string(), to: from, transition: Some(tr), inputs });
         }
     }
     steps
@@ -209,7 +209,7 @@ impl Store {
             },
         };
         let log = &cache.log;
-        let ticket_of = |p: u32| cache.order.get(&log.key_of(p)).map_or_else(|| id.clone(), |t| t.id.clone());
+        let ticket_of = |p: u32| cache.order.get(&log.key_of(p)).map_or_else(|| id.clone(), |t| t.id.to_string());
         let cause_of = |p: u32| {
             let c = log.mark(p).cause;
             (c != 0).then(|| log.pos_of(c)).flatten().map(ticket_of)
@@ -221,7 +221,7 @@ impl Store {
             .flat_map(|p| log.caused_by(log.mark(*p).id).iter().copied())
             .map(|p| log.transition(p, ticket_of(p), cause_of(p)))
             .collect();
-        let restorable = row.map(|r| restorable(&cache, r).into_iter().map(|(t, _)| t.id.clone()).collect()).unwrap_or_default();
+        let restorable = row.map(|r| restorable(&cache, r).into_iter().map(|(t, _)| t.id.to_string()).collect()).unwrap_or_default();
         let since = row.and_then(|_| log.timed(&epic, seq)).map(|t| (t.since, t.exact));
         let deletions = cache.tombstones.touching(&id);
         Ok(HistoryAnswer { own, caused, began: log.began(), restorable, since, deletions })
@@ -538,7 +538,7 @@ impl Gathered {
     /// ACT-2: the first transition gathered so far — its id and ticket.
     pub(super) fn first_transition(&self) -> Option<(u64, String)> {
         self.tickets.iter().find_map(|c| match c {
-            Change::Transition { transition, .. } => Some((transition.id, transition.ticket.clone())),
+            Change::Transition { transition, .. } => Some((transition.id, transition.ticket.to_string())),
             _ => None,
         })
     }

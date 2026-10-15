@@ -42,7 +42,7 @@ pub use crate::address::{Address, At, Code, Namespace, OrgId, Shortcode, Shortco
 /// it, every count has a bucket for it) and not in [`Status::LIFECYCLE`]
 /// (nothing moves a ticket into or out of it, so no chooser offers it).
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize,
 )]
 pub enum Status {
     Pending,
@@ -232,7 +232,7 @@ impl FromStr for Status {
 /// (doc ↔ scope it may), and a lower-seq ticket that becomes a scope or a
 /// doc becomes its shortcode's root.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -324,7 +324,7 @@ impl FromStr for Kind {
 }
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize,
 )]
 pub enum Severity {
     Critical,
@@ -371,7 +371,7 @@ pub struct Ticket {
     /// `EPIC-N`, allocated by the store. ORG-3: the ticket's key — opaque
     /// and immutable ([`crate::TicketId`]): today's id for today's tickets,
     /// its shortcode's id, `-` and its number for a newborn.
-    pub id: String,
+    pub id: TicketId,
     /// The shortcode's letters, upper case (e.g. `MNG`). ORG-3: what a row
     /// shows — two shortcodes of one code are told apart by `shortcode`
     /// and `address`, never by this.
@@ -400,7 +400,7 @@ pub struct Ticket {
     /// AGS-19: the ticket this one is an output of, if any. Any epic; the
     /// parent must exist at creation and the chain is acyclic.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub parent: Option<TicketId>,
     /// SCALE-4: how many tickets name this one as their `parent` — derived
     /// and kept by the store. It replaces AGS-19's `children`, the list of
     /// every child id, which made a shortcode root's row (every ticket of
@@ -466,7 +466,7 @@ pub struct Ticket {
 /// the same keys in every row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TicketSummary {
-    pub id: String,
+    pub id: TicketId,
     pub epic: Code,
     /// ORG-3: as on [`Ticket`].
     #[serde(default)]
@@ -479,7 +479,7 @@ pub struct TicketSummary {
     pub status: Status,
     pub kind: Kind,
     pub severity: Option<Severity>,
-    pub parent: Option<String>,
+    pub parent: Option<TicketId>,
     pub child_count: u64,
     pub blocked_by: Vec<String>,
     pub unlocks: Vec<String>,
@@ -888,8 +888,9 @@ impl Known for KnowNothing {
 }
 
 /// A shortcode's form: ASCII letters and digits (the server folds case).
+/// ACCESS-8: the one shortcode rule, [`Code::parse`]'s.
 fn is_shortcode(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())
+    Code::parse(s).is_ok_and(|c| c.as_str().len() == s.len())
 }
 
 impl AttrKind {
@@ -1041,7 +1042,7 @@ impl FromStr for InputKind {
 /// nobody is asked any more, it takes no answer, and its history is kept;
 /// the ticket leaving `Canceled` restores it. "Has an input in state `open`"
 /// is therefore "is asking someone", with no case for a canceled ticket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputState {
     Open,
@@ -1090,7 +1091,7 @@ impl FromStr for InputState {
 /// INPUT-3: who made a change to an input (INPUT-1's language) — `app`, a
 /// viewer's click, which the host says on its `answer`; `api`, everything
 /// else (synapse, an agent). The only "who" until CONTEXT adds identity.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AnswerSource {
     App,
@@ -1253,8 +1254,8 @@ pub struct InputHistoryEntry {
 /// it named — the history is a record, never rewritten.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Input {
-    pub ticket: String,
-    pub id: String,
+    pub ticket: TicketId,
+    pub id: crate::vocab::InputId,
     pub kind: InputKind,
     pub question: Option<String>,
     pub options: Vec<InputOption>,
@@ -1298,7 +1299,7 @@ impl FromStr for TransitionField {
 /// which says so), `api` (synapse, an agent, a script: the default),
 /// `pipeline` (the merge, which says so), `cascade` (the store itself: a
 /// cancellation carried down a canceled ticket's subtree, or undone).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TransitionSource {
     App,
@@ -1366,7 +1367,7 @@ pub const ANONYMOUS_ACTOR: &str = "anonymous";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Transition {
     pub id: u64,
-    pub ticket: String,
+    pub ticket: TicketId,
     pub field: TransitionField,
     pub from: Option<String>,
     pub to: String,
@@ -1473,7 +1474,7 @@ pub enum TicketsEvent {
     /// order, or nothing: `amend`'s own answer to a no-op, which `watch`
     /// never carries. The full ticket rides along, body included, so a
     /// watch-only client — and an open ticket page — needs no `get`.
-    Amended { ticket: Ticket, changed: Vec<String> },
+    Amended { ticket: Ticket, changed: Vec<crate::vocab::AmendedField> },
     /// SDLC-9: commits were linked to a ticket (yielded by `link_commits`,
     /// and by `watch` for every link that changed something). `added` is
     /// what was newly linked, in the order given — the ticket's `commits`
@@ -1637,7 +1638,7 @@ pub enum TicketsEvent {
     /// `blocked`, `ready`, `has commits`, `in`); `value` is canonical — a
     /// status as `set_status` stores it, a kind, a severity or a category in
     /// lower case, `yes` / `no` for the three flags, a shortcode for `in`.
-    Facet { field: String, value: String, held: u64 },
+    Facet { field: crate::vocab::FacetField, value: String, held: u64 },
     /// FILTER-4: a write moved this ticket into a `watch { filter }`'s
     /// filter — born into it, or its status, its blockers' or its commits
     /// moved it there (yielded by `watch { filter }` only, after every other
@@ -1986,9 +1987,10 @@ mod tests {
         for spelling in ["Canceled", "canceled", "CANCELED", "cancelled", "Cancelled"] {
             assert_eq!(spelling.parse::<Status>(), Ok(Status::Canceled), "{spelling}");
         }
-        // serde is the strict reader: only the canonical spelling.
-        assert!(serde_json::from_str::<Status>("\"InReview\"").is_err());
-        assert!(serde_json::from_str::<Status>("\"Cancelled\"").is_err());
+        // ACCESS-8: serde reads as `FromStr` does (a parameter takes every
+        // spelling), and writes the canonical one.
+        assert_eq!(serde_json::from_str::<Status>("\"InReview\"").unwrap(), Status::InReview);
+        assert_eq!(serde_json::from_str::<Status>("\"Cancelled\"").unwrap(), Status::Canceled);
 
         let err = "review".parse::<Status>().unwrap_err();
         assert!(err.contains("'review'"), "{err}");

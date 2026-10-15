@@ -11,9 +11,9 @@
 //! `Arc<Store>` as `tickets`, so a comment's anchor is checked against the
 //! tickets it names and `under` reads the tickets' lineage.
 
-use crate::comments::{Anchor, CommentsEvent};
-#[cfg(feature = "server")]
-use crate::comments::CommentState;
+use crate::comments::{Anchor, CommentIntent, CommentState, CommentsEvent};
+// ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
+use crate::vocab::{AnchorPath, Author, Body, CommentId, Query, Route, TicketRef, Under};
 #[cfg(feature = "server")]
 use crate::store::{CommentChange, CommentQuery, Store};
 #[cfg(feature = "server")]
@@ -100,6 +100,7 @@ fn answer(written: Result<crate::comments::Comment, crate::store::StoreError>) -
     namespace = "comments",
     description = "Comments on the app and on ticket bodies — add, list (filtered), resolve, reopen, watch",
     client,
+    typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core",
     // AUTH-7: IDENTITY-21's roles as explicit grant lists. IDENTITY-18's G1
@@ -138,7 +139,7 @@ impl Comments {
         ),
         example(note = "a note on a ticket's parent chip", params = r##"{"anchor": {"route": "#/ticket/DEMAND-2", "path": "[data-tag=\"ticket DEMAND-1\"]", "label": "Parent chip", "excerpt": "DEMAND-1", "ticket": "DEMAND-2"}, "body": "Show the parent's title here"}"##)
     )]
-    pub async fn add(&self, auth: Option<&AuthContext>, reach: Reach, anchor: Anchor, body: String, author: Option<String>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn add(&self, auth: Option<&AuthContext>, reach: Reach, anchor: Anchor, body: Body, author: Option<Author>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -165,8 +166,8 @@ impl Comments {
             }
             // Signed by the caller's principal; the name is theirs, not
             // what `author` says.
-            let author = caller.name.clone().or(author);
-            yield answer(store.add_comment_as(anchor, body, author, caller.principal.clone()).await);
+            let author = caller.name.clone().or(author.map(String::from));
+            yield answer(store.add_comment_as(anchor, body.into_string(), author, caller.principal.clone()).await);
         }
     }
 
@@ -205,15 +206,15 @@ impl Comments {
     )]
     pub async fn list(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        ticket: Option<String>,
-        under: Option<String>,
-        route: Option<String>,
-        path: Option<String>,
-        state: Option<String>,
-        author: Option<String>,
-        text: Option<String>,
-        intent: Option<String>,
-        after: Option<u64>,
+        ticket: Option<TicketRef>,
+        under: Option<Under>,
+        route: Option<Route>,
+        path: Option<AnchorPath>,
+        state: Option<CommentState>,
+        author: Option<Author>,
+        text: Option<Query>,
+        intent: Option<CommentIntent>,
+        after: Option<CommentId>,
         limit: Option<u32>,
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
@@ -233,25 +234,19 @@ impl Comments {
                     return;
                 }
             };
-            let state = match state.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::parse::<CommentState>) {
-                None => None,
-                Some(Ok(s)) => Some(s),
-                Some(Err(e)) => {
-                    yield CommentsEvent::Error { message: e };
-                    return;
-                }
+            let s = |v: Option<String>| v.filter(|v| !v.trim().is_empty());
+            let q = CommentQuery {
+                ticket: ticket.map(String::from),
+                under: under.map(String::from),
+                route: route.map(String::from),
+                path: path.map(String::from),
+                state,
+                author: author.map(String::from),
+                text: s(text.map(String::from)),
+                intent,
             };
-            let intent = match intent.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::parse::<crate::comments::CommentIntent>) {
-                None => None,
-                Some(Ok(i)) => Some(i),
-                Some(Err(message)) => {
-                    yield CommentsEvent::Error { message };
-                    return;
-                }
-            };
-            let q = CommentQuery { ticket, under, route, path, state, author, text, intent };
             let limit = crate::limits::page(limit, crate::limits::COMMENTS_PAGE_DEFAULT, crate::limits::COMMENTS_PAGE_MAX);
-            match store.comments(&q, after, Some(limit)) {
+            match store.comments(&q, after.map(CommentId::get), Some(limit)) {
                 Ok(page) => {
                     for comment in page.comments {
                         if !sees(&store, reach.as_ref(), &comment) {
@@ -275,7 +270,8 @@ impl Comments {
         description = "Resolve a comment; yields the comment, resolved",
         params(id = "The comment's id, e.g. 1")
     )]
-    pub async fn resolve(&self, auth: Option<&AuthContext>, reach: Reach, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn resolve(&self, auth: Option<&AuthContext>, reach: Reach, id: CommentId) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+        let id = id.get();
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -308,7 +304,8 @@ impl Comments {
         description = "Reopen a resolved comment; yields the comment, open",
         params(id = "The comment's id, e.g. 1")
     )]
-    pub async fn reopen(&self, auth: Option<&AuthContext>, reach: Reach, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn reopen(&self, auth: Option<&AuthContext>, reach: Reach, id: CommentId) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+        let id = id.get();
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {

@@ -73,19 +73,12 @@ async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_th
         TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Gap),
         other => panic!("expected Created, got {other:?}"),
     }
-    let ev = one(
-        hub.create(None, Reach::everywhere(), "MNG".into(), "x".into(), Some("bug".into()), None, None, None, None, None, None)
-            .await,
-    )
-    .await;
-    match ev {
-        TicketsEvent::Error { message } => {
-            assert!(message.contains("'bug'"), "{message}");
-            for name in ["scope", "execution", "build", "gap", "spike", "doc"] {
-                assert!(message.contains(name), "names {name}: {message}");
-            }
-        }
-        other => panic!("expected Error, got {other:?}"),
+    // ACCESS-8: `bug` is no Kind — refused at dispatch (`invalid_params`
+    // naming `kind`, tests/wire.rs), naming the six, before anything runs.
+    let message = "bug".parse::<Kind>().unwrap_err();
+    assert!(message.contains("'bug'"), "{message}");
+    for name in ["scope", "execution", "build", "gap", "spike", "doc"] {
+        assert!(message.contains(name), "names {name}: {message}");
     }
     assert!(matches!(
         one(hub.get(None, Reach::everywhere(), "MNG-4".into()).await).await,
@@ -118,12 +111,12 @@ async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
         TicketsEvent::Error { message } => assert!(message.contains("Doc is a doc's own status"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
-    let blocked = Some(vec!["DOCS-2".to_string()]);
+    let blocked = Some(vec!["DOCS-2".into()]);
     match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "x".into(), Some("doc".into()), None, blocked, None, None, None, None).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("a doc is never blocked"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
-    let on_doc = Some(vec!["DOCS-1".to_string()]);
+    let on_doc = Some(vec!["DOCS-1".into()]);
     match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "x".into(), None, None, on_doc, None, None, None, None).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("'DOCS-1' is a doc"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
@@ -204,9 +197,11 @@ async fn set_kind_reports_previous_and_refuses_in_band() {
         one(hub.set_kind(None, Reach::everywhere(), "IDN-9".into(), "gap".into(), None, None, None).await).await,
         TicketsEvent::NotFound { id } if id == "IDN-9"
     ));
+    // ACCESS-8: an unknown kind or status is no Kind or Status — refused
+    // at dispatch, naming the parameter (tests/wire.rs); the rest in band.
+    assert!("bug".parse::<Kind>().unwrap_err().contains("unknown kind 'bug'"));
+    assert!("Shipped".parse::<Status>().unwrap_err().contains("unknown status 'shipped'"));
     for (id, kind, status, says) in [
-        ("IDN-2", "bug", None, "unknown kind 'bug'"),
-        ("IDN-2", "gap", Some("Shipped"), "unknown status 'shipped'"),
         ("IDN-1", "build", None, "'IDN-1' is the root of IDN"),
         ("IDN-2", "doc", Some("Ready"), "a doc's status is Doc"),
         ("IDN-2", "spike", Some("Doc"), "Doc is a doc's own status"),
@@ -260,15 +255,15 @@ async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
 async fn a_body_past_the_cap_is_the_typed_body_too_large() {
     let hub = Tickets::new(Arc::new(Store::new().with_body_max(10)));
     one(hub.create(None, Reach::everywhere(), "BIG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let ev = one(hub.create(None, Reach::everywhere(), "BIG".into(), "page".into(), Some("doc".into()), None, None, Some("x".repeat(11)), None, None, None).await).await;
+    let ev = one(hub.create(None, Reach::everywhere(), "BIG".into(), "page".into(), Some("doc".into()), None, None, Some("x".repeat(11).as_str().into()), None, None, None).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
     assert_eq!((wire["type"].as_str(), wire["bytes"].as_u64(), wire["max"].as_u64()), (Some("body_too_large"), Some(11), Some(10)), "{wire}");
     assert!(wire["id"].is_null() && wire["message"].as_str().unwrap().contains("past the 10-byte cap"), "{wire}");
-    let ev = one(hub.amend(None, Reach::everywhere(), "BIG-1".into(), None, Some("y".repeat(12))).await).await;
+    let ev = one(hub.amend(None, Reach::everywhere(), "BIG-1".into(), None, Some("y".repeat(12).as_str().into())).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
     assert_eq!((wire["type"].as_str(), wire["id"].as_str(), wire["bytes"].as_u64()), (Some("body_too_large"), Some("BIG-1"), Some(12)), "{wire}");
     // At the cap, kept.
-    let ev = one(hub.amend(None, Reach::everywhere(), "BIG-1".into(), None, Some("z".repeat(10))).await).await;
+    let ev = one(hub.amend(None, Reach::everywhere(), "BIG-1".into(), None, Some("z".repeat(10).as_str().into())).await).await;
     assert!(matches!(ev, TicketsEvent::Amended { .. }), "{ev:?}");
 }
 
@@ -300,10 +295,8 @@ async fn amend_yields_amended_and_watch_carries_only_what_changed() {
         one(hub.amend(None, Reach::everywhere(), "AM-7".into(), Some("t".into()), None).await).await,
         TicketsEvent::NotFound { id } if id == "AM-7"
     ));
-    match one(hub.amend(None, Reach::everywhere(), "AM-1".into(), Some("  ".into()), None).await).await {
-        TicketsEvent::Error { message } => assert!(message.contains("empty"), "{message}"),
-        other => panic!("expected Error, got {other:?}"),
-    }
+    // ACCESS-8: a blank title is no Title — refused at dispatch.
+    assert!("  ".parse::<crate::vocab::Title>().unwrap_err().contains("not blank"));
 
     one(hub.amend(None, Reach::everywhere(), "AM-1".into(), Some("a better title".into()), None).await).await;
     match watch.next().await.expect("change") {
@@ -327,7 +320,7 @@ async fn link_commits_yields_commits_linked_and_watch_carries_only_what_changed(
     let hub = hub();
     one(hub.create(None, Reach::everywhere(), "LC".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
-    let commits = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+    let commits = |v: &[&str]| v.iter().map(|s| (*s).into()).collect::<Vec<crate::vocab::CommitRef>>();
 
     let ev = one(hub.link_commits(None, Reach::everywhere(), Some("lc-1".into()), None, commits(&["77df9a0", "plexus-macros@4F7114A"])).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
@@ -365,10 +358,10 @@ async fn link_commits_yields_commits_linked_and_watch_carries_only_what_changed(
         }
         other => panic!("expected CommitsLinked, got {other:?}"),
     }
-    match one(hub.link_commits(None, Reach::everywhere(), Some("LC-1".into()), None, commits(&["c8c5678", "77df9a0;rm", "090cdec"])).await).await {
-        TicketsEvent::Error { message } => assert!(message.contains("'77df9a0;rm'"), "names the entry: {message}"),
-        other => panic!("expected Error, got {other:?}"),
-    }
+    // ACCESS-8: a malformed entry is no CommitRef — refused at dispatch,
+    // naming it (`invalid_params`, tests/wire.rs), before the method runs.
+    let refused = "77df9a0;rm".parse::<crate::vocab::CommitRef>().unwrap_err();
+    assert!(refused.contains("`77df9a0;rm`"), "names the entry: {refused}");
     assert!(matches!(
         one(hub.link_commits(None, Reach::everywhere(), Some("LC-9".into()), None, commits(&["c8c5678"])).await).await,
         TicketsEvent::NotFound { id } if id == "LC-9"
@@ -530,7 +523,7 @@ async fn ids_and_page(
             other => panic!("expected a row or the page, got {other:?}"),
         }
     }
-    (ids, page)
+    (ids.into_iter().map(String::from).collect::<Vec<String>>(), page)
 }
 
 #[tokio::test]
@@ -799,7 +792,7 @@ async fn list_filters_by_parent() {
             .create(None, Reach::everywhere(), 
                 epic.into(),
                 title.into(),
-                kind.map(String::from),
+                kind.map(Into::into),
                 None,
                 None,
                 None,
@@ -900,7 +893,7 @@ async fn an_after_that_names_no_ticket_is_one_in_band_error() {
 async fn ready_set_takes_the_same_page_params() {
     let hub = hub();
     for i in 0..3 {
-        let kind = (i == 0).then(|| "scope".to_string()); // MNG-12: the root first
+        let kind = (i == 0).then_some(crate::types::Kind::Scope); // MNG-12: the root first
         one(hub.create(None, Reach::everywhere(), "RS".into(), "r".into(), kind, None, None, None, None, None, None).await).await;
     }
     one(hub.create(None, Reach::everywhere(), "RS".into(), "still pending".into(), None, None, None, None, None, None, None).await).await;
@@ -932,8 +925,8 @@ async fn ready_set_takes_the_same_page_params() {
 async fn find_yields_summary_rows_then_one_page_fifty_by_default() {
     let hub = hub();
     for i in 1..=60 {
-        let kind = (i == 1).then(|| "scope".to_string()); // MNG-12: the root first
-        one(hub.create(None, Reach::everywhere(), "FND".into(), format!("row {i}"), kind, None, None, Some("a body".into()), None, None, None).await).await;
+        let kind = (i == 1).then_some(crate::types::Kind::Scope); // MNG-12: the root first
+        one(hub.create(None, Reach::everywhere(), "FND".into(), format!("row {i}").as_str().into(), kind, None, None, Some("a body".into()), None, None, None).await).await;
     }
     one(hub.create(None, Reach::everywhere(), "OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
 
@@ -1098,7 +1091,7 @@ async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
 
     let mut broadcast: Vec<String> = Vec::new();
     for k in 2..=CREATES + 1 {
-        match one(hub.create(None, Reach::everywhere(), "LAG".into(), format!("t{k}"), None, None, None, None, None, None, None).await).await {
+        match one(hub.create(None, Reach::everywhere(), "LAG".into(), format!("t{k}").as_str().into(), None, None, None, None, None, None, None).await).await {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, format!("LAG-{k}")),
             ev => panic!("expected Created, got {ev:?}"),
         }
@@ -1231,7 +1224,7 @@ async fn placed_and_counts(
         assert!(counts.is_none(), "wave_counts is last: {ev:?}");
         match ev {
             TicketsEvent::Placed { summary, placement, waiting_on } => {
-                placed.push((summary.id, placement, waiting_on))
+                placed.push((summary.id.into_string(), placement, waiting_on))
             }
             TicketsEvent::WaveCounts { waves, missing, done } => counts = Some((waves, missing, done)),
             other => panic!("expected placed or wave_counts, got {other:?}"),
@@ -1251,13 +1244,13 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
     use crate::types::Placement::{Done, MissingBlocker, Wave};
     let hub = hub();
     let create = |epic: &str, kind: Option<&str>, blocked_by: &[&str]| {
-        let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| b.to_string()).collect());
-        let (epic, kind) = (epic.to_string(), kind.map(String::from));
+        let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| (*b).into()).collect());
+        let (epic, kind) = (epic.into(), kind.map(Into::into));
         let hub = hub.clone();
         async move { one(hub.create(None, Reach::everywhere(), epic, "t".into(), kind, None, blocked_by, None, None, None, None).await).await }
     };
     let status = |id: &str, s: &str| {
-        let (id, s, hub) = (id.to_string(), s.to_string(), hub.clone());
+        let (id, s, hub) = (id.into(), s.into(), hub.clone());
         async move { one(hub.set_status(None, Reach::everywhere(), id, s, None, None, None).await).await }
     };
     for epic in ["WA", "WB", "ELSE"] {
@@ -1329,17 +1322,11 @@ async fn waves_errors_are_in_band_and_alone() {
         other => panic!("expected Error, got {other:?}"),
     }
 
-    let evs: Vec<TicketsEvent> =
-        Box::pin(hub.waves(None, Reach::everywhere(), vec!["ER".into()], Some(vec!["build".into(), "bug".into()])).await).collect().await;
-    assert_eq!(evs.len(), 1, "{evs:?}");
-    match &evs[0] {
-        TicketsEvent::Error { message } => {
-            assert!(message.contains("'bug'"), "{message}");
-            for k in Kind::ALL {
-                assert!(message.contains(k.as_str()), "names {k}: {message}");
-            }
-        }
-        other => panic!("expected Error, got {other:?}"),
+    // ACCESS-8: a kind outside the six is refused at dispatch, naming them.
+    let message = "bug".parse::<Kind>().unwrap_err();
+    assert!(message.contains("'bug'"), "{message}");
+    for k in Kind::ALL {
+        assert!(message.contains(k.as_str()), "names {k}: {message}");
     }
 }
 
@@ -1351,8 +1338,8 @@ async fn waves_to_and_under_answer_as_waves_does() {
     use crate::types::Placement::Wave;
     let hub = hub();
     let create = |kind: &str, blocked_by: &[&str], parent: Option<&str>| {
-        let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| b.to_string()).collect());
-        let (kind, parent, hub) = (kind.to_string(), parent.map(String::from), hub.clone());
+        let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| (*b).into()).collect());
+        let (kind, parent, hub) = (kind.into(), parent.map(Into::into), hub.clone());
         async move { one(hub.create(None, Reach::everywhere(), "WT".into(), "t".into(), Some(kind), None, blocked_by, parent, None, None, None).await).await }
     };
     create("scope", &[], None).await; // WT-1
@@ -1376,12 +1363,8 @@ async fn waves_to_and_under_answer_as_waves_does() {
     ] {
         assert!(matches!(evs.as_slice(), [TicketsEvent::NotFound { id }] if id == "WT-99"), "{evs:?}");
     }
-    for evs in [
-        Box::pin(hub.waves_to(None, Reach::everywhere(), "WT-6".into(), None).await).collect::<Vec<_>>().await,
-        Box::pin(hub.waves_to(None, Reach::everywhere(), "WT-5".into(), Some(vec!["bug".into()])).await).collect::<Vec<_>>().await,
-    ] {
-        assert!(matches!(evs.as_slice(), [TicketsEvent::Error { .. }]), "{evs:?}");
-    }
+    let evs = Box::pin(hub.waves_to(None, Reach::everywhere(), "WT-6".into(), None).await).collect::<Vec<_>>().await;
+    assert!(matches!(evs.as_slice(), [TicketsEvent::Error { .. }]), "{evs:?}");
 }
 
 /// ACCESS-29 (ACCESS-4 L5): `list` answers 1,000 rows unless `limit` says,
@@ -1393,14 +1376,14 @@ async fn list_pages_by_default_and_never_past_the_most() {
     let store = Arc::new(Store::new());
     store.seed_synthetic(crate::store::SeedSpec { count: 1_200, seed: 7, into_existing: false }).unwrap();
     let hub = Tickets::new(store);
-    let list = |after: Option<String>, limit: Option<u32>| {
+    let list = |after: Option<crate::vocab::Cursor>, limit: Option<u32>| {
         hub.list(None, Reach::everywhere(), None, None, None, after, limit, Some(true), None, None, None, None)
     };
     let (ids, page) = ids_and_page(list(None, None).await).await;
     assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
     let (next, remaining) = page.expect("a page");
     assert_eq!(remaining, 200);
-    let (rest, page) = ids_and_page(list(next, None).await).await;
+    let (rest, page) = ids_and_page(list(next.as_deref().map(Into::into), None).await).await;
     assert_eq!((rest.len(), page.map(|p| p.0)), (200, Some(None)), "paged, everything is read");
     let (ids, _) = ids_and_page(list(None, Some(u32::MAX)).await).await;
     assert_eq!(ids.len(), 1_200, "under the most, what is asked");
@@ -1410,28 +1393,22 @@ async fn list_pages_by_default_and_never_past_the_most() {
     assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
 }
 
-/// ACCESS-29: a title past 1 KiB and a filter past 4 KiB are refused in
-/// band, naming the size.
+/// ACCESS-29: a title past 1 KiB and a filter past 4 KiB are refused,
+/// naming the size — ACCESS-8: by their types, at dispatch
+/// (`invalid_params`, tests/wire.rs), before the method runs; a title at
+/// the cap is kept.
 #[tokio::test]
 async fn a_title_and_a_filter_are_held_to_their_sizes() {
     let hub = hub();
     one(hub.create(None, Reach::everywhere(), "SZ".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let long = "t".repeat(crate::limits::TITLE_MAX + 1);
-    match one(hub.create(None, Reach::everywhere(), "SZ".into(), long.clone(), None, None, None, None, None, None, None).await).await {
-        TicketsEvent::Error { message } => assert!(message.contains("at most 1024 bytes"), "{message}"),
-        other => panic!("refused: {other:?}"),
-    }
-    match one(hub.amend(None, Reach::everywhere(), "SZ-1".into(), Some(long), None).await).await {
-        TicketsEvent::Error { message } => assert!(message.contains("'SZ-1'"), "{message}"),
-        other => panic!("refused: {other:?}"),
-    }
+    let refused = long.parse::<crate::vocab::Title>().unwrap_err();
+    assert!(refused.contains("at most 1024 bytes"), "{refused}");
     let at = "t".repeat(crate::limits::TITLE_MAX);
-    assert!(matches!(one(hub.amend(None, Reach::everywhere(), "SZ-1".into(), Some(at), None).await).await, TicketsEvent::Amended { .. }));
+    assert!(matches!(one(hub.amend(None, Reach::everywhere(), "SZ-1".into(), Some(at.as_str().into()), None).await).await, TicketsEvent::Amended { .. }));
     let filter = format!("kind build and {}", "not kind doc and ".repeat(300));
-    match one(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), Some(filter), None, None, None).await).await {
-        TicketsEvent::Error { message } => assert!(message.contains("a filter is at most 4096 bytes"), "{message}"),
-        other => panic!("refused: {other:?}"),
-    }
+    let refused = filter.parse::<crate::vocab::FilterText>().unwrap_err();
+    assert!(refused.contains("a filter is at most 4096 bytes"), "{refused}");
 }
 
 /// ACCESS-29: `comments.list` answers 500 unless `limit` says, never past

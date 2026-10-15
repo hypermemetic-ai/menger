@@ -26,7 +26,7 @@ use std::str::FromStr;
 /// the order is only for sorting. (What each role may is the gate's,
 /// declared on each activation with `roles(...)`; this names the role a
 /// membership holds.)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     Viewer,
@@ -130,6 +130,20 @@ impl fmt::Display for Scope {
         f.write_str(&self.text())
     }
 }
+
+/// ACCESS-8: a stored scope's text read back ([`Scope::stored`]), or why it
+/// is none — what deserializing one checks.
+impl TryFrom<&str> for Scope {
+    type Error = String;
+    fn try_from(text: &str) -> Result<Self, String> {
+        Self::stored(text).ok_or_else(|| {
+            format!("`{}` is not a scope as kept: `*`, an organization (`acme:`), or a shortcode in one by its identity (`acme:MENGER`)", text.trim())
+        })
+    }
+}
+
+// ACCESS-8: on the wire as its text, the string it always was.
+as_text!(Scope, "A grant's scope as kept: *, an organization (acme:), or a shortcode in one by its identity (acme:MENGER)");
 
 /// A scope as a reader writes it, checked for its spelling only: `*`, an
 /// organization (`acme:`), or a shortcode by any short form of its address

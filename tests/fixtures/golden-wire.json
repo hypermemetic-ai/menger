@@ -1,0 +1,7082 @@
+[
+  {
+    "call": "tickets.health",
+    "items": [
+      {
+        "ticket_count": 0,
+        "type": "health",
+        "unix_now": 0,
+        "version": ""
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "session.whoami",
+    "items": [
+      {
+        "type": "anonymous"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "session.providers",
+    "items": [],
+    "params": {}
+  },
+  {
+    "call": "orgs.list",
+    "items": [
+      {
+        "org": {
+          "aliases": [],
+          "name": "hypermemetic",
+          "roots": [],
+          "shortcodes": 0,
+          "tickets": 0
+        },
+        "type": "org"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "members.mine",
+    "items": [
+      {
+        "admin_everywhere": true,
+        "name": null,
+        "principal": null,
+        "type": "me"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "tickets.create",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-1",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "the root",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      }
+    ],
+    "params": {
+      "epic": "GOLD",
+      "kind": "scope",
+      "title": "the root"
+    }
+  },
+  {
+    "call": "tickets.create",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      }
+    ],
+    "params": {
+      "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+      "epic": "GOLD",
+      "title": "asks"
+    }
+  },
+  {
+    "call": "tickets.create",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      }
+    ],
+    "params": {
+      "blocked_by": [
+        "GOLD-2"
+      ],
+      "epic": "GOLD",
+      "kind": "gap",
+      "severity": "High",
+      "title": "a gap"
+    }
+  },
+  {
+    "call": "tickets.create",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-4",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-4",
+          "kind": "doc",
+          "labels": [],
+          "parent": "GOLD-1",
+          "path": "_MENGER/board",
+          "seq": 4,
+          "shortcode": "GOLD",
+          "status": "Doc",
+          "title": "the board",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      }
+    ],
+    "params": {
+      "epic": "GOLD",
+      "kind": "doc",
+      "path": "_MENGER/board",
+      "title": "the board"
+    }
+  },
+  {
+    "call": "tickets.create",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "body": "Defines it.\n\n```component m-gold\n<template><b>gold</b></template>\n```\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      }
+    ],
+    "params": {
+      "body": "Defines it.\n\n```component m-gold\n<template><b>gold</b></template>\n```\n",
+      "epic": "GOLD",
+      "title": "defines"
+    }
+  },
+  {
+    "call": "tickets.create",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:PLAT-1",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "the platform",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      }
+    ],
+    "params": {
+      "epic": "PLAT",
+      "kind": "scope",
+      "title": "the platform"
+    }
+  },
+  {
+    "call": "tickets.create",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      }
+    ],
+    "params": {
+      "epic": "PLAT",
+      "title": "work"
+    }
+  },
+  {
+    "call": "tickets.set_status",
+    "items": [
+      {
+        "previous": "Pending",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Ready",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "status_changed"
+      }
+    ],
+    "params": {
+      "id": "GOLD-2",
+      "status": "Ready"
+    }
+  },
+  {
+    "call": "tickets.set_status",
+    "items": [
+      {
+        "previous": "Ready",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "status_changed"
+      }
+    ],
+    "params": {
+      "id": "GOLD-2",
+      "message": "claimed",
+      "status": "Coding"
+    }
+  },
+  {
+    "call": "tickets.set_kind",
+    "items": [
+      {
+        "previous": "build",
+        "ticket": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "body": "Defines it.\n\n```component m-gold\n<template><b>gold</b></template>\n```\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "spike",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "kind_changed"
+      }
+    ],
+    "params": {
+      "id": "GOLD-5",
+      "kind": "spike"
+    }
+  },
+  {
+    "call": "tickets.set_parent",
+    "items": [
+      {
+        "previous": "GOLD-1",
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "parent_changed"
+      }
+    ],
+    "params": {
+      "id": "GOLD-3",
+      "parent": "GOLD-2"
+    }
+  },
+  {
+    "call": "tickets.amend",
+    "items": [
+      {
+        "changed": [
+          "title"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "amended"
+      }
+    ],
+    "params": {
+      "id": "GOLD-3",
+      "title": "a gap, retitled"
+    }
+  },
+  {
+    "call": "tickets.link_commits",
+    "items": [
+      {
+        "added": [
+          "77df9a0",
+          "plexus-macros@4f7114a"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "77df9a0",
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "commits_linked"
+      }
+    ],
+    "params": {
+      "commits": [
+        "77df9a0",
+        "plexus-macros@4f7114a"
+      ],
+      "id": "GOLD-2"
+    }
+  },
+  {
+    "call": "tickets.unlink_commits",
+    "items": [
+      {
+        "removed": [
+          "77df9a0"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "commits_unlinked"
+      }
+    ],
+    "params": {
+      "commits": [
+        "77df9a0"
+      ],
+      "id": "GOLD-2"
+    }
+  },
+  {
+    "call": "tickets.label",
+    "items": [
+      {
+        "added": [
+          "needs-you",
+          "p1"
+        ],
+        "removed": [],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "labels_changed"
+      }
+    ],
+    "params": {
+      "add": [
+        "needs-you",
+        "p1"
+      ],
+      "id": "GOLD-3"
+    }
+  },
+  {
+    "call": "tickets.update",
+    "items": [
+      {
+        "changed": [
+          "severity",
+          "blocked_by"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "updated"
+      }
+    ],
+    "params": {
+      "block": [
+        "PLAT-2"
+      ],
+      "id": "GOLD-3",
+      "severity": "none",
+      "unblock": [
+        "GOLD-2"
+      ]
+    }
+  },
+  {
+    "call": "tickets.update_many",
+    "items": [
+      {
+        "changed": [
+          "labels"
+        ],
+        "ids": [
+          "GOLD-3",
+          "PLAT-2"
+        ],
+        "tickets": [
+          {
+            "address": "hypermemetic:GOLD-3",
+            "blocked_by": [
+              "PLAT-2"
+            ],
+            "body": "",
+            "child_count": 0,
+            "commits": [],
+            "created_unix": 0,
+            "epic": "GOLD",
+            "id": "GOLD-3",
+            "kind": "gap",
+            "labels": [
+              "needs-you",
+              "p1",
+              "swept"
+            ],
+            "parent": "GOLD-2",
+            "placement": {
+              "n": 2,
+              "type": "wave"
+            },
+            "seq": 3,
+            "shortcode": "GOLD",
+            "status": "Pending",
+            "title": "a gap, retitled",
+            "unlocks": [],
+            "updated_unix": 0
+          },
+          {
+            "address": "hypermemetic:PLAT-2",
+            "blocked_by": [],
+            "body": "",
+            "child_count": 0,
+            "commits": [],
+            "created_unix": 0,
+            "epic": "PLAT",
+            "id": "PLAT-2",
+            "kind": "build",
+            "labels": [
+              "swept"
+            ],
+            "parent": "PLAT-1",
+            "placement": {
+              "n": 1,
+              "type": "wave"
+            },
+            "seq": 2,
+            "shortcode": "PLAT",
+            "status": "Pending",
+            "title": "work",
+            "unlocks": [
+              "GOLD-3"
+            ],
+            "updated_unix": 0
+          }
+        ],
+        "type": "updated_many",
+        "unchanged": []
+      }
+    ],
+    "params": {
+      "ids": [
+        "GOLD-3",
+        "PLAT-2"
+      ],
+      "label": [
+        "swept"
+      ]
+    }
+  },
+  {
+    "call": "tickets.answer",
+    "items": [
+      {
+        "input": {
+          "answer": {
+            "at_unix": 0,
+            "rationale": "holds",
+            "source": "api",
+            "value": {
+              "option": "archive",
+              "type": "choice"
+            }
+          },
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "answered",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      }
+    ],
+    "params": {
+      "input": "landing",
+      "rationale": "holds",
+      "ticket": "GOLD-2",
+      "value": {
+        "option": "archive",
+        "type": "choice"
+      }
+    }
+  },
+  {
+    "call": "tickets.clear_answer",
+    "items": [
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      }
+    ],
+    "params": {
+      "input": "landing",
+      "ticket": "GOLD-2"
+    }
+  },
+  {
+    "call": "tickets.close_input",
+    "items": [
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "closed",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "closed",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      }
+    ],
+    "params": {
+      "input": "landing",
+      "ticket": "GOLD-2"
+    }
+  },
+  {
+    "call": "tickets.reopen_input",
+    "items": [
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "closed",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "reopened",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      }
+    ],
+    "params": {
+      "input": "landing",
+      "ticket": "GOLD-2"
+    }
+  },
+  {
+    "call": "tickets.queue",
+    "items": [
+      {
+        "action": "queued",
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "queued"
+      }
+    ],
+    "params": {
+      "id": "GOLD-2",
+      "input": "landing",
+      "reason": "the import waits",
+      "urgency": "blocking"
+    }
+  },
+  {
+    "call": "tickets.snooze",
+    "items": [
+      {
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "snoozed_until_unix": 0,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "snoozed"
+      }
+    ],
+    "params": {
+      "id": "GOLD-2",
+      "minutes": 10
+    }
+  },
+  {
+    "call": "tickets.queued",
+    "items": [
+      {
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "snoozed_until_unix": 0,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "queue_row"
+      },
+      {
+        "count": 1,
+        "now_unix": 0,
+        "snoozed": 1,
+        "type": "queue_end"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "tickets.unqueue",
+    "items": [
+      {
+        "action": "unqueued",
+        "at_unix": 0,
+        "by": "anonymous",
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "snoozed_until_unix": 0,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "id": "GOLD-2",
+        "type": "unqueued"
+      }
+    ],
+    "params": {
+      "id": "GOLD-2"
+    }
+  },
+  {
+    "call": "tickets.create",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-6",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-6",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 6,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a mistake",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      }
+    ],
+    "params": {
+      "epic": "GOLD",
+      "title": "a mistake"
+    }
+  },
+  {
+    "call": "tickets.delete",
+    "items": [
+      {
+        "ids": [
+          "GOLD-6"
+        ],
+        "tombstones": [
+          {
+            "at_unix": 0,
+            "by": "anonymous",
+            "id": "GOLD-6",
+            "message": "filed twice",
+            "parent": "GOLD-1",
+            "restorable_until_unix": 0,
+            "title": "a mistake"
+          }
+        ],
+        "type": "deleted"
+      }
+    ],
+    "params": {
+      "ids": [
+        "GOLD-6"
+      ],
+      "message": "filed twice"
+    }
+  },
+  {
+    "call": "tickets.undelete",
+    "items": [
+      {
+        "ids": [
+          "GOLD-6"
+        ],
+        "tickets": [
+          {
+            "address": "hypermemetic:GOLD-6",
+            "blocked_by": [],
+            "body": "",
+            "child_count": 0,
+            "commits": [],
+            "created_unix": 0,
+            "epic": "GOLD",
+            "id": "GOLD-6",
+            "kind": "build",
+            "labels": [],
+            "parent": "GOLD-1",
+            "seq": 6,
+            "shortcode": "GOLD",
+            "status": "Pending",
+            "title": "a mistake",
+            "unlocks": [],
+            "updated_unix": 0
+          }
+        ],
+        "type": "undeleted"
+      }
+    ],
+    "params": {
+      "ids": [
+        "GOLD-6"
+      ]
+    }
+  },
+  {
+    "call": "tickets.reshortcode",
+    "items": [
+      {
+        "moves": [
+          {
+            "from": "GOLD-6",
+            "to": "PLAT-3"
+          }
+        ],
+        "tickets": [
+          {
+            "address": "hypermemetic:PLAT-3",
+            "blocked_by": [],
+            "body": "",
+            "child_count": 0,
+            "commits": [],
+            "created_unix": 0,
+            "epic": "PLAT",
+            "id": "PLAT-3",
+            "kind": "build",
+            "labels": [],
+            "parent": "PLAT-1",
+            "placement": {
+              "n": 1,
+              "type": "wave"
+            },
+            "seq": 3,
+            "shortcode": "PLAT",
+            "status": "Pending",
+            "title": "a mistake",
+            "unlocks": [],
+            "updated_unix": 0
+          }
+        ],
+        "type": "reshortcoded"
+      }
+    ],
+    "params": {
+      "ids": [
+        "GOLD-6"
+      ],
+      "to": "PLAT"
+    }
+  },
+  {
+    "call": "tickets.get",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "ticket"
+      }
+    ],
+    "params": {
+      "id": "GOLD-2"
+    }
+  },
+  {
+    "call": "tickets.get",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-4",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-4",
+          "kind": "doc",
+          "labels": [],
+          "parent": "GOLD-1",
+          "path": "_MENGER/board",
+          "seq": 4,
+          "shortcode": "GOLD",
+          "status": "Doc",
+          "title": "the board",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "ticket"
+      }
+    ],
+    "params": {
+      "id": "gold/_MENGER/board"
+    }
+  },
+  {
+    "call": "tickets.get",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:PLAT-3",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-3",
+          "kind": "build",
+          "labels": [],
+          "moved_from": [
+            "GOLD-6"
+          ],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 3,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "a mistake",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "ticket"
+      }
+    ],
+    "params": {
+      "id": "GOLD-6"
+    }
+  },
+  {
+    "call": "tickets.list",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-1",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 3,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "the root",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "ticket"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "ticket"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1",
+            "swept"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "ticket"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-4",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-4",
+          "kind": "doc",
+          "labels": [],
+          "parent": "GOLD-1",
+          "path": "_MENGER/board",
+          "seq": 4,
+          "shortcode": "GOLD",
+          "status": "Doc",
+          "title": "the board",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "ticket"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "body": "Defines it.\n\n```component m-gold\n<template><b>gold</b></template>\n```\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "spike",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "ticket"
+      },
+      {
+        "next": null,
+        "remaining": 0,
+        "type": "page"
+      }
+    ],
+    "params": {
+      "epic": "GOLD"
+    }
+  },
+  {
+    "call": "tickets.list",
+    "items": [
+      {
+        "summary": {
+          "address": "hypermemetic:GOLD-1",
+          "blocked_by": [],
+          "child_count": 3,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-1",
+          "kind": "scope",
+          "labels": [],
+          "parent": null,
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "the root",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "summary": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "summary": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1",
+            "swept"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "next": "GOLD-3",
+        "remaining": 5,
+        "type": "page"
+      }
+    ],
+    "params": {
+      "limit": 3,
+      "summary": true
+    }
+  },
+  {
+    "call": "tickets.list",
+    "items": [
+      {
+        "summary": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "summary": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1",
+            "swept"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "summary": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "spike",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "summary": {
+          "address": "hypermemetic:PLAT-1",
+          "blocked_by": [],
+          "child_count": 2,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-1",
+          "kind": "scope",
+          "labels": [],
+          "parent": null,
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "severity": null,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "the platform",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "summary": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [
+            "swept"
+          ],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "summary": {
+          "address": "hypermemetic:PLAT-3",
+          "blocked_by": [],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-3",
+          "kind": "build",
+          "labels": [],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": null,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "a mistake",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "first": 1,
+        "next": null,
+        "remaining": 0,
+        "type": "page"
+      }
+    ],
+    "params": {
+      "at": 1,
+      "filter": "not kind doc",
+      "summary": true
+    }
+  },
+  {
+    "call": "tickets.ready_set",
+    "items": [
+      {
+        "next": null,
+        "remaining": 0,
+        "type": "page"
+      }
+    ],
+    "params": {
+      "summary": true
+    }
+  },
+  {
+    "call": "tickets.find",
+    "items": [
+      {
+        "summary": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1",
+            "swept"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "next": null,
+        "remaining": 0,
+        "type": "page"
+      }
+    ],
+    "params": {
+      "query": "gap"
+    }
+  },
+  {
+    "call": "tickets.search",
+    "items": [
+      {
+        "corrected": false,
+        "snippet": [],
+        "summary": {
+          "address": "hypermemetic:PLAT-1",
+          "blocked_by": [],
+          "child_count": 2,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-1",
+          "kind": "scope",
+          "labels": [],
+          "parent": null,
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "severity": null,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "the platform",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "title": [
+          {
+            "hit": false,
+            "text": "the "
+          },
+          {
+            "hit": true,
+            "text": "platform"
+          }
+        ],
+        "type": "hit"
+      },
+      {
+        "matched": 1,
+        "next": null,
+        "type": "searched",
+        "words": [
+          {
+            "also": [],
+            "word": "platform"
+          }
+        ]
+      }
+    ],
+    "params": {
+      "query": "platform"
+    }
+  },
+  {
+    "call": "tickets.member",
+    "items": [
+      {
+        "id": "GOLD-2",
+        "matched": true,
+        "type": "member"
+      },
+      {
+        "id": "NOPE-1",
+        "matched": false,
+        "type": "member"
+      }
+    ],
+    "params": {
+      "filter": "kind build",
+      "ids": [
+        "GOLD-2",
+        "NOPE-1"
+      ]
+    }
+  },
+  {
+    "call": "tickets.groups",
+    "items": [
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 4
+        },
+        "type": "group"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 3
+        },
+        "type": "group"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "tickets.components",
+    "items": [
+      {
+        "component": {
+          "docs": null,
+          "name": "m-gold",
+          "owner": "GOLD-5",
+          "preview": [],
+          "references": [],
+          "source": "<template><b>gold</b></template>\n"
+        },
+        "type": "component"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "tickets.inputs",
+    "items": [
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "closed",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "reopened",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "tickets.extents",
+    "items": [
+      {
+        "epic": "GOLD",
+        "last_seq": 5,
+        "shortcode": "GOLD",
+        "type": "extent"
+      },
+      {
+        "epic": "PLAT",
+        "last_seq": 3,
+        "shortcode": "PLAT",
+        "type": "extent"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "tickets.counts",
+    "items": [
+      {
+        "epic": "GOLD",
+        "held": 4,
+        "shortcode": "GOLD",
+        "type": "count"
+      },
+      {
+        "epic": "PLAT",
+        "held": 3,
+        "shortcode": "PLAT",
+        "type": "count"
+      }
+    ],
+    "params": {
+      "filter": "not kind doc"
+    }
+  },
+  {
+    "call": "tickets.facets",
+    "items": [
+      {
+        "field": "status",
+        "held": 2,
+        "type": "facet",
+        "value": "Pending"
+      },
+      {
+        "field": "status",
+        "held": 1,
+        "type": "facet",
+        "value": "Coding"
+      },
+      {
+        "field": "category",
+        "held": 2,
+        "type": "facet",
+        "value": "open"
+      },
+      {
+        "field": "category",
+        "held": 1,
+        "type": "facet",
+        "value": "active"
+      },
+      {
+        "field": "kind",
+        "held": 2,
+        "type": "facet",
+        "value": "scope"
+      },
+      {
+        "field": "kind",
+        "held": 3,
+        "type": "facet",
+        "value": "build"
+      },
+      {
+        "field": "kind",
+        "held": 1,
+        "type": "facet",
+        "value": "gap"
+      },
+      {
+        "field": "kind",
+        "held": 1,
+        "type": "facet",
+        "value": "spike"
+      },
+      {
+        "field": "kind",
+        "held": 1,
+        "type": "facet",
+        "value": "doc"
+      },
+      {
+        "field": "severity",
+        "held": 3,
+        "type": "facet",
+        "value": "none"
+      },
+      {
+        "field": "blocked",
+        "held": 3,
+        "type": "facet",
+        "value": "no"
+      },
+      {
+        "field": "ready",
+        "held": 3,
+        "type": "facet",
+        "value": "no"
+      },
+      {
+        "field": "has commits",
+        "held": 1,
+        "type": "facet",
+        "value": "yes"
+      },
+      {
+        "field": "has commits",
+        "held": 2,
+        "type": "facet",
+        "value": "no"
+      },
+      {
+        "field": "menger doc",
+        "held": 3,
+        "type": "facet",
+        "value": "no"
+      },
+      {
+        "field": "asking",
+        "held": 1,
+        "type": "facet",
+        "value": "yes"
+      },
+      {
+        "field": "asking",
+        "held": 2,
+        "type": "facet",
+        "value": "no"
+      },
+      {
+        "field": "label",
+        "held": 1,
+        "type": "facet",
+        "value": "swept"
+      },
+      {
+        "field": "in",
+        "held": 1,
+        "type": "facet",
+        "value": "GOLD"
+      },
+      {
+        "field": "in",
+        "held": 2,
+        "type": "facet",
+        "value": "PLAT"
+      }
+    ],
+    "params": {
+      "filter": "kind build"
+    }
+  },
+  {
+    "call": "tickets.tree",
+    "items": [
+      {
+        "below": 3,
+        "matched": true,
+        "summary": {
+          "address": "hypermemetic:GOLD-1",
+          "blocked_by": [],
+          "child_count": 3,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-1",
+          "kind": "scope",
+          "labels": [],
+          "parent": null,
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "the root",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "node"
+      },
+      {
+        "next": null,
+        "remaining": 0,
+        "type": "page"
+      }
+    ],
+    "params": {
+      "epic": "GOLD",
+      "filter": "not kind doc"
+    }
+  },
+  {
+    "call": "tickets.waves",
+    "items": [
+      {
+        "placement": {
+          "n": 1,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": []
+      },
+      {
+        "placement": {
+          "n": 1,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "spike",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": []
+      },
+      {
+        "placement": {
+          "n": 1,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [
+            "swept"
+          ],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": []
+      },
+      {
+        "placement": {
+          "n": 1,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:PLAT-3",
+          "blocked_by": [],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-3",
+          "kind": "build",
+          "labels": [],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": null,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "a mistake",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": []
+      },
+      {
+        "placement": {
+          "n": 2,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1",
+            "swept"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": [
+          "PLAT-2"
+        ]
+      },
+      {
+        "done": 0,
+        "missing": 0,
+        "type": "wave_counts",
+        "waves": [
+          4,
+          1
+        ]
+      }
+    ],
+    "params": {
+      "epics": [
+        "GOLD",
+        "PLAT"
+      ]
+    }
+  },
+  {
+    "call": "tickets.waves_under",
+    "items": [
+      {
+        "placement": {
+          "n": 1,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": []
+      },
+      {
+        "placement": {
+          "n": 1,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "spike",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": []
+      },
+      {
+        "placement": {
+          "n": 2,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1",
+            "swept"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": [
+          "PLAT-2"
+        ]
+      },
+      {
+        "done": 0,
+        "missing": 0,
+        "type": "wave_counts",
+        "waves": [
+          2,
+          1
+        ]
+      }
+    ],
+    "params": {
+      "id": "GOLD-1"
+    }
+  },
+  {
+    "call": "tickets.waves_to",
+    "items": [
+      {
+        "placement": {
+          "n": 1,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [
+            "swept"
+          ],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": []
+      },
+      {
+        "placement": {
+          "n": 2,
+          "type": "wave"
+        },
+        "summary": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1",
+            "swept"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "placed",
+        "waiting_on": [
+          "PLAT-2"
+        ]
+      },
+      {
+        "done": 0,
+        "missing": 0,
+        "type": "wave_counts",
+        "waves": [
+          1,
+          1
+        ]
+      }
+    ],
+    "params": {
+      "id": "GOLD-3"
+    }
+  },
+  {
+    "call": "tickets.blockers",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [
+            "swept"
+          ],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "blocker"
+      }
+    ],
+    "params": {
+      "id": "GOLD-3"
+    }
+  },
+  {
+    "call": "tickets.history",
+    "items": [
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 2,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": "Pending",
+          "id": 8,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "to": "Ready"
+        },
+        "type": "transition"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": "Ready",
+          "id": 9,
+          "message": "claimed",
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "to": "Coding"
+        },
+        "type": "transition"
+      },
+      {
+        "record": {
+          "action": "queued",
+          "actor": "anonymous",
+          "at_unix": 0,
+          "id": 1,
+          "input": "landing",
+          "reason": "the import waits",
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "type": "queue_record"
+      },
+      {
+        "record": {
+          "action": "snoozed",
+          "actor": "anonymous",
+          "at_unix": 0,
+          "id": 2,
+          "input": "landing",
+          "source": "api",
+          "ticket": "GOLD-2",
+          "until_unix": 0,
+          "urgency": "blocking"
+        },
+        "type": "queue_record"
+      },
+      {
+        "record": {
+          "action": "unqueued",
+          "actor": "anonymous",
+          "at_unix": 0,
+          "id": 3,
+          "input": "landing",
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "type": "queue_record"
+      },
+      {
+        "began_unix": 0,
+        "restorable": [],
+        "status_since_exact": true,
+        "status_since_unix": 0,
+        "type": "history_end"
+      }
+    ],
+    "params": {
+      "id": "GOLD-2"
+    }
+  },
+  {
+    "call": "tickets.get",
+    "items": [
+      {
+        "id": "GOLD-99",
+        "type": "not_found"
+      }
+    ],
+    "params": {
+      "id": "GOLD-99"
+    }
+  },
+  {
+    "call": "tickets.set_status",
+    "items": [
+      {
+        "message": "'GOLD-4' is a doc: a doc has no lifecycle — it exists in its state, Doc, and no status is set on it (nothing changed)",
+        "type": "error"
+      }
+    ],
+    "params": {
+      "id": "GOLD-4",
+      "status": "Ready"
+    }
+  },
+  {
+    "call": "tickets.create",
+    "items": [
+      {
+        "message": "every shortcode starts with a scope or a doc: 'hypermemetic:NEW' has no tickets yet, so its first ticket must be kind 'scope' (or 'doc', for a doc collection) (got 'build'); create the root first",
+        "type": "error"
+      }
+    ],
+    "params": {
+      "epic": "NEW",
+      "title": "a build first"
+    }
+  },
+  {
+    "call": "comments.add",
+    "items": [
+      {
+        "anchor": {
+          "excerpt": "asks",
+          "label": "Title",
+          "path": "main > h1",
+          "route": "#/ticket/GOLD-2",
+          "ticket": "GOLD-2",
+          "version": 0
+        },
+        "at": 0,
+        "author": "owner",
+        "body": "rename it",
+        "id": 1,
+        "state": "open",
+        "type": "comment"
+      }
+    ],
+    "params": {
+      "anchor": {
+        "excerpt": "asks",
+        "label": "Title",
+        "path": "main > h1",
+        "route": "#/ticket/GOLD-2",
+        "ticket": "GOLD-2"
+      },
+      "body": "rename it"
+    }
+  },
+  {
+    "call": "comments.add",
+    "items": [
+      {
+        "anchor": {
+          "excerpt": "",
+          "label": "Nav",
+          "path": "nav",
+          "route": "#/"
+        },
+        "at": 0,
+        "author": "agent-1",
+        "body": "slow",
+        "id": 2,
+        "state": "open",
+        "type": "comment"
+      }
+    ],
+    "params": {
+      "anchor": {
+        "excerpt": "",
+        "label": "Nav",
+        "path": "nav",
+        "route": "#/"
+      },
+      "author": "agent-1",
+      "body": "slow"
+    }
+  },
+  {
+    "call": "comments.resolve",
+    "items": [
+      {
+        "anchor": {
+          "excerpt": "asks",
+          "label": "Title",
+          "path": "main > h1",
+          "route": "#/ticket/GOLD-2",
+          "ticket": "GOLD-2",
+          "version": 0
+        },
+        "at": 0,
+        "author": "owner",
+        "body": "rename it",
+        "id": 1,
+        "state": "resolved",
+        "type": "comment"
+      }
+    ],
+    "params": {
+      "id": 1
+    }
+  },
+  {
+    "call": "comments.reopen",
+    "items": [
+      {
+        "anchor": {
+          "excerpt": "asks",
+          "label": "Title",
+          "path": "main > h1",
+          "route": "#/ticket/GOLD-2",
+          "ticket": "GOLD-2",
+          "version": 0
+        },
+        "at": 0,
+        "author": "owner",
+        "body": "rename it",
+        "id": 1,
+        "state": "open",
+        "type": "comment"
+      }
+    ],
+    "params": {
+      "id": 1
+    }
+  },
+  {
+    "call": "comments.list",
+    "items": [
+      {
+        "anchor": {
+          "excerpt": "",
+          "label": "Nav",
+          "path": "nav",
+          "route": "#/"
+        },
+        "at": 0,
+        "author": "agent-1",
+        "body": "slow",
+        "id": 2,
+        "state": "open",
+        "type": "comment"
+      },
+      {
+        "anchor": {
+          "excerpt": "asks",
+          "label": "Title",
+          "path": "main > h1",
+          "route": "#/ticket/GOLD-2",
+          "ticket": "GOLD-2",
+          "version": 0
+        },
+        "at": 0,
+        "author": "owner",
+        "body": "rename it",
+        "id": 1,
+        "state": "open",
+        "type": "comment"
+      },
+      {
+        "next": null,
+        "type": "page"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "comments.list",
+    "items": [
+      {
+        "anchor": {
+          "excerpt": "asks",
+          "label": "Title",
+          "path": "main > h1",
+          "route": "#/ticket/GOLD-2",
+          "ticket": "GOLD-2",
+          "version": 0
+        },
+        "at": 0,
+        "author": "owner",
+        "body": "rename it",
+        "id": 1,
+        "state": "open",
+        "type": "comment"
+      },
+      {
+        "next": null,
+        "type": "page"
+      }
+    ],
+    "params": {
+      "state": "open",
+      "under": "GOLD"
+    }
+  },
+  {
+    "call": "notes.add",
+    "items": [
+      {
+        "at": 0,
+        "author": "owner",
+        "body": "## watch drops events\nseen twice",
+        "id": 1,
+        "ticket": null,
+        "type": "note",
+        "upgraded_at": null
+      }
+    ],
+    "params": {
+      "body": "## watch drops events\nseen twice"
+    }
+  },
+  {
+    "call": "notes.list",
+    "items": [
+      {
+        "at": 0,
+        "author": "owner",
+        "body": "## watch drops events\nseen twice",
+        "id": 1,
+        "ticket": null,
+        "type": "note",
+        "upgraded_at": null
+      },
+      {
+        "next": null,
+        "type": "page"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "notes.get",
+    "items": [
+      {
+        "at": 0,
+        "author": "owner",
+        "body": "## watch drops events\nseen twice",
+        "id": 1,
+        "ticket": null,
+        "type": "note",
+        "upgraded_at": null
+      }
+    ],
+    "params": {
+      "id": 1
+    }
+  },
+  {
+    "call": "notes.upgrade",
+    "items": [
+      {
+        "at": 0,
+        "author": "owner",
+        "body": "## watch drops events\nseen twice",
+        "id": 1,
+        "ticket": "GOLD-7",
+        "type": "note",
+        "upgraded_at": 0
+      }
+    ],
+    "params": {
+      "epic": "GOLD",
+      "id": 1
+    }
+  },
+  {
+    "call": "themes.define",
+    "items": [
+      {
+        "theme": {
+          "dark": {
+            "--accent": "#4db6ac"
+          },
+          "light": {
+            "--accent": "#00796b"
+          },
+          "name": "ocean",
+          "orphan": false,
+          "updated_unix": 0
+        },
+        "type": "theme"
+      }
+    ],
+    "params": {
+      "dark": {
+        "--accent": "#4db6ac"
+      },
+      "light": {
+        "--accent": "#00796b"
+      },
+      "name": "ocean"
+    }
+  },
+  {
+    "call": "themes.list",
+    "items": [
+      {
+        "theme": {
+          "dark": {},
+          "light": {},
+          "name": "default",
+          "orphan": false,
+          "updated_unix": 0
+        },
+        "type": "theme"
+      },
+      {
+        "theme": {
+          "dark": {
+            "--accent": "#4db6ac"
+          },
+          "light": {
+            "--accent": "#00796b"
+          },
+          "name": "ocean",
+          "orphan": false,
+          "updated_unix": 0
+        },
+        "type": "theme"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "themes.get",
+    "items": [
+      {
+        "theme": {
+          "dark": {
+            "--accent": "#4db6ac"
+          },
+          "light": {
+            "--accent": "#00796b"
+          },
+          "name": "ocean",
+          "orphan": false,
+          "updated_unix": 0
+        },
+        "type": "theme"
+      }
+    ],
+    "params": {
+      "name": "ocean"
+    }
+  },
+  {
+    "call": "themes.set",
+    "items": [
+      {
+        "setting": {
+          "reach": "site",
+          "scope": "GOLD",
+          "takeover": "on",
+          "theme": "ocean"
+        },
+        "type": "setting"
+      }
+    ],
+    "params": {
+      "reach": "site",
+      "scope": "GOLD",
+      "theme": "ocean"
+    }
+  },
+  {
+    "call": "themes.theme_for",
+    "items": [
+      {
+        "id": "GOLD-2",
+        "levels": {
+          "frame": {
+            "reach": "ticket",
+            "takeover": "on",
+            "theme": null
+          },
+          "shortcode": {
+            "reach": "site",
+            "scope": "GOLD",
+            "takeover": "on",
+            "theme": "ocean"
+          },
+          "site": null,
+          "ticket": {
+            "reach": "ticket",
+            "takeover": "on",
+            "theme": null
+          }
+        },
+        "regions": {
+          "frame": {
+            "from": "GOLD",
+            "level": "shortcode",
+            "theme": "ocean"
+          },
+          "site": {
+            "from": "GOLD",
+            "level": "shortcode",
+            "theme": "ocean"
+          },
+          "ticket": {
+            "from": "GOLD",
+            "level": "shortcode",
+            "theme": "ocean"
+          }
+        },
+        "type": "regions"
+      }
+    ],
+    "params": {
+      "id": "GOLD-2"
+    }
+  },
+  {
+    "call": "deployments.record",
+    "items": [
+      {
+        "carried": [
+          "GOLD-2"
+        ],
+        "deployment": {
+          "at": 0,
+          "commits": [
+            "4f7114a"
+          ],
+          "environment": "prod",
+          "id": 1,
+          "previous": null,
+          "project": "GOLD",
+          "recorded_at": 0,
+          "recorded_by": "anonymous",
+          "release": "r1",
+          "revision": "4f7114a",
+          "source": {
+            "run": "promote",
+            "system": "menger-pipeline",
+            "url": null
+          },
+          "state": "succeeded",
+          "tickets": []
+        },
+        "duplicate": false,
+        "entered": [
+          "GOLD-2"
+        ],
+        "left": [],
+        "live": true,
+        "type": "deployed",
+        "unlinked": []
+      }
+    ],
+    "params": {
+      "at": "2026-10-12T22:04:19Z",
+      "commits": [
+        "4f7114a"
+      ],
+      "environment": "prod",
+      "project": "gold",
+      "release": "r1",
+      "revision": "4f7114a",
+      "source": {
+        "run": "promote",
+        "system": "menger-pipeline"
+      },
+      "state": "succeeded"
+    }
+  },
+  {
+    "call": "deployments.list",
+    "items": [
+      {
+        "carried": [
+          "GOLD-2"
+        ],
+        "deployment": {
+          "at": 0,
+          "commits": [
+            "4f7114a"
+          ],
+          "environment": "prod",
+          "id": 1,
+          "previous": null,
+          "project": "GOLD",
+          "recorded_at": 0,
+          "recorded_by": "anonymous",
+          "release": "r1",
+          "revision": "4f7114a",
+          "source": {
+            "run": "promote",
+            "system": "menger-pipeline",
+            "url": null
+          },
+          "state": "succeeded",
+          "tickets": []
+        },
+        "live": true,
+        "type": "deployment",
+        "unlinked": []
+      },
+      {
+        "next": null,
+        "type": "page"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "deployments.environments",
+    "items": [
+      {
+        "environment": {
+          "deployment": 1,
+          "last": 1,
+          "last_at": 0,
+          "last_state": "succeeded",
+          "name": "prod",
+          "order": 0,
+          "project": "GOLD",
+          "release": "r1",
+          "revision": "4f7114a",
+          "since": 0,
+          "tickets": 1
+        },
+        "type": "environment"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "deployments.for_ticket",
+    "items": [
+      {
+        "deployment": 1,
+        "environment": "prod",
+        "project": "GOLD",
+        "release": "r1",
+        "revision": "4f7114a",
+        "since": 0,
+        "ticket": "GOLD-2",
+        "type": "running"
+      }
+    ],
+    "params": {
+      "id": "GOLD-2"
+    }
+  },
+  {
+    "call": "deployments.running",
+    "items": [
+      {
+        "environment": "prod",
+        "project": "GOLD",
+        "running": [
+          {
+            "deployment": 1,
+            "since": 0,
+            "ticket": "GOLD-2"
+          }
+        ],
+        "type": "cells"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "members.list",
+    "items": [],
+    "params": {}
+  },
+  {
+    "call": "orgs.list",
+    "items": [
+      {
+        "org": {
+          "aliases": [],
+          "name": "hypermemetic",
+          "roots": [
+            "hypermemetic:GOLD",
+            "hypermemetic:PLAT"
+          ],
+          "shortcodes": 2,
+          "tickets": 9
+        },
+        "type": "org"
+      }
+    ],
+    "params": {}
+  },
+  {
+    "call": "tickets.amend",
+    "items": [
+      {
+        "changed": [
+          "body"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-1",
+          "blocked_by": [],
+          "body": "the end",
+          "child_count": 4,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "the root",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "amended"
+      }
+    ],
+    "params": {
+      "body": "the end",
+      "id": "GOLD-1"
+    }
+  },
+  {
+    "call": "tickets.watch",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-1",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "the root",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 1,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-1",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 0,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 1
+        },
+        "type": "group_changed"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 2,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-2",
+        "child_count": 1,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 0,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 2
+        },
+        "type": "group_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "history": [],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 3,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-3",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-3",
+        "child_count": 2,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "added": "GOLD-3",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "unlocks_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 0,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 3
+        },
+        "type": "group_changed"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-4",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-4",
+          "kind": "doc",
+          "labels": [],
+          "parent": "GOLD-1",
+          "path": "_MENGER/board",
+          "seq": 4,
+          "shortcode": "GOLD",
+          "status": "Doc",
+          "title": "the board",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 4,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-4",
+          "to": "Doc"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-4",
+        "child_count": 3,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 3
+        },
+        "type": "group_changed"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "body": "Defines it.\n\n```component m-gold\n<template><b>gold</b></template>\n```\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 5,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-5",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-5",
+        "child_count": 4,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 4
+        },
+        "type": "group_changed"
+      },
+      {
+        "component": {
+          "docs": null,
+          "name": "m-gold",
+          "owner": "GOLD-5",
+          "preview": [],
+          "references": [],
+          "source": "<template><b>gold</b></template>\n"
+        },
+        "type": "component_changed"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:PLAT-1",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "the platform",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 6,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "PLAT-1",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 1
+        },
+        "type": "group_changed"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 7,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "PLAT-2",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "PLAT-2",
+        "child_count": 1,
+        "id": "PLAT-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 2
+        },
+        "type": "group_changed"
+      },
+      {
+        "previous": "Pending",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Ready",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "status_changed"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": "Pending",
+          "id": 8,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "to": "Ready"
+        },
+        "type": "transition"
+      },
+      {
+        "previous": "Ready",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "status_changed"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": "Ready",
+          "id": 9,
+          "message": "claimed",
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "to": "Coding"
+        },
+        "type": "transition"
+      },
+      {
+        "previous": "build",
+        "ticket": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "body": "Defines it.\n\n```component m-gold\n<template><b>gold</b></template>\n```\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "spike",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "kind_changed"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "kind",
+          "from": "build",
+          "id": 10,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-5",
+          "to": "spike"
+        },
+        "type": "transition"
+      },
+      {
+        "previous": "GOLD-1",
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "parent_changed"
+      },
+      {
+        "added": "GOLD-3",
+        "child_count": 1,
+        "id": "GOLD-2",
+        "type": "children_changed"
+      },
+      {
+        "child_count": 3,
+        "id": "GOLD-1",
+        "removed": "GOLD-3",
+        "type": "child_removed"
+      },
+      {
+        "changed": [
+          "title"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "amended"
+      },
+      {
+        "added": [
+          "77df9a0",
+          "plexus-macros@4f7114a"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "77df9a0",
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "commits_linked"
+      },
+      {
+        "removed": [
+          "77df9a0"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "commits_unlinked"
+      },
+      {
+        "added": [
+          "needs-you",
+          "p1"
+        ],
+        "removed": [],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "labels_changed"
+      },
+      {
+        "added": [
+          "PLAT-2"
+        ],
+        "removed": [
+          "GOLD-2"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "blockers_changed"
+      },
+      {
+        "added": "GOLD-3",
+        "ticket": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "unlocks_changed"
+      },
+      {
+        "removed": "GOLD-3",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "unlocks_removed"
+      },
+      {
+        "previous": "High",
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "severity_changed"
+      },
+      {
+        "changes": [
+          {
+            "id": "GOLD-3",
+            "placement": {
+              "n": 2,
+              "type": "wave"
+            }
+          }
+        ],
+        "type": "placements_changed"
+      },
+      {
+        "added": [
+          "swept"
+        ],
+        "removed": [],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1",
+            "swept"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "labels_changed"
+      },
+      {
+        "added": [
+          "swept"
+        ],
+        "removed": [],
+        "ticket": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [
+            "swept"
+          ],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "labels_changed"
+      },
+      {
+        "changed": [
+          "labels"
+        ],
+        "ids": [
+          "GOLD-3",
+          "PLAT-2"
+        ],
+        "tickets": [],
+        "type": "updated_many",
+        "unchanged": []
+      },
+      {
+        "input": {
+          "answer": {
+            "at_unix": 0,
+            "rationale": "holds",
+            "source": "api",
+            "value": {
+              "option": "archive",
+              "type": "choice"
+            }
+          },
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "answered",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "closed",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "closed",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "closed",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "reopened",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "action": "queued",
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "queued"
+      },
+      {
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "snoozed_until_unix": 0,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "snoozed"
+      },
+      {
+        "action": "unqueued",
+        "at_unix": 0,
+        "by": "anonymous",
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "snoozed_until_unix": 0,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "id": "GOLD-2",
+        "type": "unqueued"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-6",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-6",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 6,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a mistake",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 11,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-6",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-6",
+        "child_count": 4,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 5
+        },
+        "type": "group_changed"
+      },
+      {
+        "child_count": 3,
+        "id": "GOLD-1",
+        "removed": "GOLD-6",
+        "type": "child_removed"
+      },
+      {
+        "ids": [
+          "GOLD-6"
+        ],
+        "tombstones": [
+          {
+            "at_unix": 0,
+            "by": "anonymous",
+            "id": "GOLD-6",
+            "message": "filed twice",
+            "parent": "GOLD-1",
+            "restorable_until_unix": 0,
+            "title": "a mistake"
+          }
+        ],
+        "type": "deleted"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 4
+        },
+        "type": "group_changed"
+      },
+      {
+        "ids": [
+          "GOLD-6"
+        ],
+        "tickets": [
+          {
+            "address": "hypermemetic:GOLD-6",
+            "blocked_by": [],
+            "body": "",
+            "child_count": 0,
+            "commits": [],
+            "created_unix": 0,
+            "epic": "GOLD",
+            "id": "GOLD-6",
+            "kind": "build",
+            "labels": [],
+            "parent": "GOLD-1",
+            "seq": 6,
+            "shortcode": "GOLD",
+            "status": "Pending",
+            "title": "a mistake",
+            "unlocks": [],
+            "updated_unix": 0
+          }
+        ],
+        "type": "undeleted"
+      },
+      {
+        "added": "GOLD-6",
+        "child_count": 4,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 5
+        },
+        "type": "group_changed"
+      },
+      {
+        "changes": [
+          {
+            "id": "GOLD-6",
+            "placement": {
+              "n": 1,
+              "type": "wave"
+            }
+          }
+        ],
+        "type": "placements_changed"
+      },
+      {
+        "moves": [
+          {
+            "from": "GOLD-6",
+            "to": "PLAT-3"
+          }
+        ],
+        "tickets": [
+          {
+            "address": "hypermemetic:PLAT-3",
+            "blocked_by": [],
+            "body": "",
+            "child_count": 0,
+            "commits": [],
+            "created_unix": 0,
+            "epic": "PLAT",
+            "id": "PLAT-3",
+            "kind": "build",
+            "labels": [],
+            "parent": "PLAT-1",
+            "placement": {
+              "n": 1,
+              "type": "wave"
+            },
+            "seq": 3,
+            "shortcode": "PLAT",
+            "status": "Pending",
+            "title": "a mistake",
+            "unlocks": [],
+            "updated_unix": 0
+          }
+        ],
+        "type": "reshortcoded"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 4
+        },
+        "type": "group_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 3
+        },
+        "type": "group_changed"
+      },
+      {
+        "changes": [
+          {
+            "id": "PLAT-3",
+            "placement": {
+              "n": 1,
+              "type": "wave"
+            }
+          }
+        ],
+        "type": "placements_changed"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-7",
+          "blocked_by": [],
+          "body": "## watch drops events\nseen twice\n\nNoted <when> UTC — note 1.",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-7",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 7,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "watch drops events",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 12,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-7",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-7",
+        "child_count": 4,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 5
+        },
+        "type": "group_changed"
+      },
+      {
+        "changed": [
+          "body"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-1",
+          "blocked_by": [],
+          "body": "the end",
+          "child_count": 4,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "the root",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "amended"
+      }
+    ]
+  },
+  {
+    "call": "tickets.watch filtered",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-1",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "the root",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 1,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-1",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 0,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 1
+        },
+        "type": "group_changed"
+      },
+      {
+        "epic": "GOLD",
+        "id": "GOLD-1",
+        "seq": 1,
+        "shortcode": "GOLD",
+        "type": "entered"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 2,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-2",
+        "child_count": 1,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 0,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 2
+        },
+        "type": "group_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "history": [],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "epic": "GOLD",
+        "id": "GOLD-2",
+        "seq": 2,
+        "shortcode": "GOLD",
+        "type": "entered"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 3,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-3",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-3",
+        "child_count": 2,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "added": "GOLD-3",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "unlocks_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 0,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 3
+        },
+        "type": "group_changed"
+      },
+      {
+        "epic": "GOLD",
+        "id": "GOLD-3",
+        "seq": 3,
+        "shortcode": "GOLD",
+        "type": "entered"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-4",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-4",
+          "kind": "doc",
+          "labels": [],
+          "parent": "GOLD-1",
+          "path": "_MENGER/board",
+          "seq": 4,
+          "shortcode": "GOLD",
+          "status": "Doc",
+          "title": "the board",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 4,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-4",
+          "to": "Doc"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-4",
+        "child_count": 3,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 3
+        },
+        "type": "group_changed"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "body": "Defines it.\n\n```component m-gold\n<template><b>gold</b></template>\n```\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 5,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-5",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-5",
+        "child_count": 4,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 4
+        },
+        "type": "group_changed"
+      },
+      {
+        "component": {
+          "docs": null,
+          "name": "m-gold",
+          "owner": "GOLD-5",
+          "preview": [],
+          "references": [],
+          "source": "<template><b>gold</b></template>\n"
+        },
+        "type": "component_changed"
+      },
+      {
+        "epic": "GOLD",
+        "id": "GOLD-5",
+        "seq": 5,
+        "shortcode": "GOLD",
+        "type": "entered"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:PLAT-1",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "the platform",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 6,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "PLAT-1",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 1
+        },
+        "type": "group_changed"
+      },
+      {
+        "epic": "PLAT",
+        "id": "PLAT-1",
+        "seq": 1,
+        "shortcode": "PLAT",
+        "type": "entered"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 7,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "PLAT-2",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "PLAT-2",
+        "child_count": 1,
+        "id": "PLAT-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 2
+        },
+        "type": "group_changed"
+      },
+      {
+        "epic": "PLAT",
+        "id": "PLAT-2",
+        "seq": 2,
+        "shortcode": "PLAT",
+        "type": "entered"
+      },
+      {
+        "previous": "Pending",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Ready",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "status_changed"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": "Pending",
+          "id": 8,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "to": "Ready"
+        },
+        "type": "transition"
+      },
+      {
+        "previous": "Ready",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "status_changed"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": "Ready",
+          "id": 9,
+          "message": "claimed",
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "to": "Coding"
+        },
+        "type": "transition"
+      },
+      {
+        "previous": "build",
+        "ticket": {
+          "address": "hypermemetic:GOLD-5",
+          "blocked_by": [],
+          "body": "Defines it.\n\n```component m-gold\n<template><b>gold</b></template>\n```\n",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-5",
+          "kind": "spike",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 5,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "defines",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "kind_changed"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "kind",
+          "from": "build",
+          "id": 10,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-5",
+          "to": "spike"
+        },
+        "type": "transition"
+      },
+      {
+        "previous": "GOLD-1",
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "parent_changed"
+      },
+      {
+        "added": "GOLD-3",
+        "child_count": 1,
+        "id": "GOLD-2",
+        "type": "children_changed"
+      },
+      {
+        "child_count": 3,
+        "id": "GOLD-1",
+        "removed": "GOLD-3",
+        "type": "child_removed"
+      },
+      {
+        "changed": [
+          "title"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "amended"
+      },
+      {
+        "added": [
+          "77df9a0",
+          "plexus-macros@4f7114a"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "77df9a0",
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "commits_linked"
+      },
+      {
+        "removed": [
+          "77df9a0"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "commits_unlinked"
+      },
+      {
+        "added": [
+          "needs-you",
+          "p1"
+        ],
+        "removed": [],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "GOLD-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "labels_changed"
+      },
+      {
+        "added": [
+          "PLAT-2"
+        ],
+        "removed": [
+          "GOLD-2"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "severity": "High",
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "blockers_changed"
+      },
+      {
+        "added": "GOLD-3",
+        "ticket": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "unlocks_changed"
+      },
+      {
+        "removed": "GOLD-3",
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "body": "<m-decision data-field=\"decision\" id=\"landing\">\n\n<m-question data-field=\"question\">Archive or delete?</m-question>\n\n<m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n<m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n</m-decision>\n",
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "unlocks_removed"
+      },
+      {
+        "previous": "High",
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "severity_changed"
+      },
+      {
+        "changes": [
+          {
+            "id": "GOLD-3",
+            "placement": {
+              "n": 2,
+              "type": "wave"
+            }
+          }
+        ],
+        "type": "placements_changed"
+      },
+      {
+        "added": [
+          "swept"
+        ],
+        "removed": [],
+        "ticket": {
+          "address": "hypermemetic:GOLD-3",
+          "blocked_by": [
+            "PLAT-2"
+          ],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-3",
+          "kind": "gap",
+          "labels": [
+            "needs-you",
+            "p1",
+            "swept"
+          ],
+          "parent": "GOLD-2",
+          "placement": {
+            "n": 2,
+            "type": "wave"
+          },
+          "seq": 3,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a gap, retitled",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "labels_changed"
+      },
+      {
+        "added": [
+          "swept"
+        ],
+        "removed": [],
+        "ticket": {
+          "address": "hypermemetic:PLAT-2",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [
+            "swept"
+          ],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "labels_changed"
+      },
+      {
+        "changed": [
+          "labels"
+        ],
+        "ids": [
+          "GOLD-3",
+          "PLAT-2"
+        ],
+        "tickets": [],
+        "type": "updated_many",
+        "unchanged": []
+      },
+      {
+        "input": {
+          "answer": {
+            "at_unix": 0,
+            "rationale": "holds",
+            "source": "api",
+            "value": {
+              "option": "archive",
+              "type": "choice"
+            }
+          },
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "answered",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "closed",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "closed",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "history": [
+            {
+              "action": "answered",
+              "at_unix": 0,
+              "rationale": "holds",
+              "source": "api",
+              "value": {
+                "option": "archive",
+                "type": "choice"
+              }
+            },
+            {
+              "action": "cleared",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "closed",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            },
+            {
+              "action": "reopened",
+              "at_unix": 0,
+              "rationale": null,
+              "source": "api",
+              "value": null
+            }
+          ],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
+      },
+      {
+        "action": "queued",
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "queued"
+      },
+      {
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "snoozed_until_unix": 0,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "ticket": {
+          "address": "hypermemetic:GOLD-2",
+          "blocked_by": [],
+          "child_count": 1,
+          "commits": [
+            "plexus-macros@4f7114a"
+          ],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-2",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "GOLD",
+          "status": "Coding",
+          "title": "asks",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "snoozed"
+      },
+      {
+        "action": "unqueued",
+        "at_unix": 0,
+        "by": "anonymous",
+        "entry": {
+          "asked_unix": 0,
+          "by": "anonymous",
+          "input": "landing",
+          "queued_unix": 0,
+          "reason": "the import waits",
+          "snoozed_until_unix": 0,
+          "source": "api",
+          "ticket": "GOLD-2",
+          "urgency": "blocking"
+        },
+        "id": "GOLD-2",
+        "type": "unqueued"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-6",
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-6",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 6,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "a mistake",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 11,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-6",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-6",
+        "child_count": 4,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 5
+        },
+        "type": "group_changed"
+      },
+      {
+        "epic": "GOLD",
+        "id": "GOLD-6",
+        "seq": 6,
+        "shortcode": "GOLD",
+        "type": "entered"
+      },
+      {
+        "child_count": 3,
+        "id": "GOLD-1",
+        "removed": "GOLD-6",
+        "type": "child_removed"
+      },
+      {
+        "ids": [
+          "GOLD-6"
+        ],
+        "tombstones": [
+          {
+            "at_unix": 0,
+            "by": "anonymous",
+            "id": "GOLD-6",
+            "message": "filed twice",
+            "parent": "GOLD-1",
+            "restorable_until_unix": 0,
+            "title": "a mistake"
+          }
+        ],
+        "type": "deleted"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 4
+        },
+        "type": "group_changed"
+      },
+      {
+        "epic": "GOLD",
+        "id": "GOLD-6",
+        "seq": 6,
+        "shortcode": "GOLD",
+        "type": "left"
+      },
+      {
+        "ids": [
+          "GOLD-6"
+        ],
+        "tickets": [
+          {
+            "address": "hypermemetic:GOLD-6",
+            "blocked_by": [],
+            "body": "",
+            "child_count": 0,
+            "commits": [],
+            "created_unix": 0,
+            "epic": "GOLD",
+            "id": "GOLD-6",
+            "kind": "build",
+            "labels": [],
+            "parent": "GOLD-1",
+            "seq": 6,
+            "shortcode": "GOLD",
+            "status": "Pending",
+            "title": "a mistake",
+            "unlocks": [],
+            "updated_unix": 0
+          }
+        ],
+        "type": "undeleted"
+      },
+      {
+        "added": "GOLD-6",
+        "child_count": 4,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 5
+        },
+        "type": "group_changed"
+      },
+      {
+        "changes": [
+          {
+            "id": "GOLD-6",
+            "placement": {
+              "n": 1,
+              "type": "wave"
+            }
+          }
+        ],
+        "type": "placements_changed"
+      },
+      {
+        "epic": "GOLD",
+        "id": "GOLD-6",
+        "seq": 6,
+        "shortcode": "GOLD",
+        "type": "entered"
+      },
+      {
+        "moves": [
+          {
+            "from": "GOLD-6",
+            "to": "PLAT-3"
+          }
+        ],
+        "tickets": [
+          {
+            "address": "hypermemetic:PLAT-3",
+            "blocked_by": [],
+            "body": "",
+            "child_count": 0,
+            "commits": [],
+            "created_unix": 0,
+            "epic": "PLAT",
+            "id": "PLAT-3",
+            "kind": "build",
+            "labels": [],
+            "parent": "PLAT-1",
+            "placement": {
+              "n": 1,
+              "type": "wave"
+            },
+            "seq": 3,
+            "shortcode": "PLAT",
+            "status": "Pending",
+            "title": "a mistake",
+            "unlocks": [],
+            "updated_unix": 0
+          }
+        ],
+        "type": "reshortcoded"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 4
+        },
+        "type": "group_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 3
+        },
+        "type": "group_changed"
+      },
+      {
+        "changes": [
+          {
+            "id": "PLAT-3",
+            "placement": {
+              "n": 1,
+              "type": "wave"
+            }
+          }
+        ],
+        "type": "placements_changed"
+      },
+      {
+        "epic": "GOLD",
+        "id": "GOLD-6",
+        "seq": 6,
+        "shortcode": "GOLD",
+        "type": "left"
+      },
+      {
+        "epic": "PLAT",
+        "id": "PLAT-3",
+        "seq": 3,
+        "shortcode": "PLAT",
+        "type": "entered"
+      },
+      {
+        "ticket": {
+          "address": "hypermemetic:GOLD-7",
+          "blocked_by": [],
+          "body": "## watch drops events\nseen twice\n\nNoted <when> UTC — note 1.",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-7",
+          "kind": "build",
+          "labels": [],
+          "parent": "GOLD-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 7,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "watch drops events",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "created"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "status",
+          "from": null,
+          "id": 12,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "GOLD-7",
+          "to": "Pending"
+        },
+        "type": "transition"
+      },
+      {
+        "added": "GOLD-7",
+        "child_count": 4,
+        "id": "GOLD-1",
+        "type": "children_changed"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:GOLD",
+          "docs": 1,
+          "done": 0,
+          "epic": "GOLD",
+          "host": null,
+          "root": "GOLD-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the root"
+          },
+          "shortcode": "GOLD",
+          "total": 5
+        },
+        "type": "group_changed"
+      },
+      {
+        "epic": "GOLD",
+        "id": "GOLD-7",
+        "seq": 7,
+        "shortcode": "GOLD",
+        "type": "entered"
+      },
+      {
+        "changed": [
+          "body"
+        ],
+        "ticket": {
+          "address": "hypermemetic:GOLD-1",
+          "blocked_by": [],
+          "body": "the end",
+          "child_count": 4,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "GOLD",
+          "id": "GOLD-1",
+          "kind": "scope",
+          "labels": [],
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 1,
+          "shortcode": "GOLD",
+          "status": "Pending",
+          "title": "the root",
+          "unlocks": [],
+          "updated_unix": 0
+        },
+        "type": "amended"
+      }
+    ]
+  },
+  {
+    "call": "comments.watch",
+    "items": [
+      {
+        "comment": {
+          "anchor": {
+            "excerpt": "asks",
+            "label": "Title",
+            "path": "main > h1",
+            "route": "#/ticket/GOLD-2",
+            "ticket": "GOLD-2",
+            "version": 0
+          },
+          "at": 0,
+          "author": "owner",
+          "body": "rename it",
+          "id": 1,
+          "state": "open"
+        },
+        "type": "added"
+      },
+      {
+        "comment": {
+          "anchor": {
+            "excerpt": "",
+            "label": "Nav",
+            "path": "nav",
+            "route": "#/"
+          },
+          "at": 0,
+          "author": "agent-1",
+          "body": "slow",
+          "id": 2,
+          "state": "open"
+        },
+        "type": "added"
+      },
+      {
+        "comment": {
+          "anchor": {
+            "excerpt": "asks",
+            "label": "Title",
+            "path": "main > h1",
+            "route": "#/ticket/GOLD-2",
+            "ticket": "GOLD-2",
+            "version": 0
+          },
+          "at": 0,
+          "author": "owner",
+          "body": "rename it",
+          "id": 1,
+          "state": "resolved"
+        },
+        "type": "resolved"
+      },
+      {
+        "comment": {
+          "anchor": {
+            "excerpt": "asks",
+            "label": "Title",
+            "path": "main > h1",
+            "route": "#/ticket/GOLD-2",
+            "ticket": "GOLD-2",
+            "version": 0
+          },
+          "at": 0,
+          "author": "owner",
+          "body": "rename it",
+          "id": 1,
+          "state": "open"
+        },
+        "type": "reopened"
+      }
+    ]
+  }
+]

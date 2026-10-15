@@ -477,7 +477,7 @@ impl Cache {
         let mut keys: Vec<&OrderKey> = ids.into_iter().filter_map(|t| self.at.get(t)).collect();
         keys.sort();
         keys.dedup();
-        keys.into_iter().filter_map(|k| self.order.get(k)).map(|r| r.id.clone()).collect()
+        keys.into_iter().filter_map(|k| self.order.get(k)).map(|r| r.id.to_string()).collect()
     }
 
     /// What `d` carried, and the commits of it no ticket links, and whether
@@ -775,7 +775,7 @@ impl Store {
         let mut projects: BTreeSet<String> = BTreeSet::from([row.shortcode.as_str().to_string()]);
         projects.extend(lineage::host_chain(&cache, &row.shortcode).iter().map(|h| h.as_str().to_string()));
         for ((p, _), k) in &cache.deploys.envs {
-            if k.running.contains_key(&row.id) {
+            if k.running.contains_key(row.id.as_str()) {
                 projects.insert(p.clone());
             }
         }
@@ -785,9 +785,9 @@ impl Store {
                 continue;
             }
             let k = &cache.deploys.envs[&(env.project.clone(), env.name.clone())];
-            out.push(match k.running.get(&row.id) {
+            out.push(match k.running.get(row.id.as_str()) {
                 Some((since, deployment)) => DeploymentsEvent::Running {
-                    ticket: row.id.clone(),
+                    ticket: row.id.to_string(),
                     project: env.project,
                     environment: env.name,
                     since: *since,
@@ -795,7 +795,7 @@ impl Store {
                     revision: env.revision,
                     release: env.release,
                 },
-                None => DeploymentsEvent::NotRunning { ticket: row.id.clone(), project: env.project, environment: env.name },
+                None => DeploymentsEvent::NotRunning { ticket: row.id.to_string(), project: env.project, environment: env.name },
             });
         }
         Ok(out)
@@ -978,14 +978,14 @@ pub(super) fn scanned_cells(d: &Deploys, rows: &[&Row]) -> BTreeMap<(String, Str
             let mut best: Option<(i64, u64)> = None;
             for id in &k.stack {
                 let dep = &d.by_id[id];
-                let carries = dep.tickets.contains(&r.id)
+                let carries = dep.tickets.contains(&r.id.to_string())
                     || r.commits.iter().any(|c| dep.commits.iter().chain(std::iter::once(&dep.revision)).any(|x| same(c, x)));
                 if carries {
                     best = Some(earlier(best, (dep.at, dep.id)));
                 }
             }
             if let Some(b) = best {
-                cells.insert(r.id.clone(), b);
+                cells.insert(r.id.to_string(), b);
             }
         }
         out.insert(env.clone(), cells);

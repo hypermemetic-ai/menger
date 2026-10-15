@@ -25,7 +25,7 @@ fn new(epic: &str, kind: Kind, blocked_by: &[&str], parent: Option<&str>) -> New
 }
 
 async fn make(store: &Store, epic: &str, kind: Kind, blocked_by: &[&str], parent: Option<&str>) -> String {
-    store.create(new(epic, kind, blocked_by, parent)).await.unwrap().id
+    String::from(store.create(new(epic, kind, blocked_by, parent)).await.unwrap().id)
 }
 
 async fn build(store: &Store, epic: &str, blocked_by: &[&str]) -> String {
@@ -40,7 +40,7 @@ fn to(store: &Store, id: &str) -> WavesTo {
 
 /// The answer as `(id, placement)` in yield order.
 fn shape(w: &WavesTo) -> Vec<(String, Placement)> {
-    w.waves.placed.iter().map(|p| (p.summary.id.clone(), p.placement)).collect()
+    w.waves.placed.iter().map(|p| (p.summary.id.to_string(), p.placement)).collect()
 }
 
 fn at(id: &str, p: Placement) -> (String, Placement) {
@@ -227,7 +227,7 @@ async fn waves_under_is_the_subtree_board() {
     let h = make(&store, "HO", Kind::Spike, &[&b1], Some(&hosted)).await;
 
     let w = store.waves_under(&s, &super::waves::DEFAULT_KINDS, None).unwrap();
-    let got: Vec<(String, Placement)> = w.placed.iter().map(|p| (p.summary.id.clone(), p.placement)).collect();
+    let got: Vec<(String, Placement)> = w.placed.iter().map(|p| (p.summary.id.to_string(), p.placement)).collect();
     assert_eq!(got, [at(&b2, wave(1)), at(&b1, wave(2)), at(&h, wave(3))]);
     assert_eq!(w.placed[1].waiting_on, vec![beside.clone()], "a blocker off the subtree still places it");
 

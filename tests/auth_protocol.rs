@@ -600,9 +600,9 @@ async fn login_off_menger_is_as_it_was() {
             assert!(m.get("held_on").is_none(), "{m}");
             let props = m["params"]["properties"].as_object().cloned().unwrap_or_default();
             // THEME-8: `themes.set`'s `reach` is the setting's own (how far a
-            // theme takes over — a string), declared by the method; the
-            // gate's answer it does not take.
-            let own_reach = ns == "themes" && m["name"] == "set" && props["reach"]["type"] != json!(null);
+            // theme takes over — ACCESS-8: a `ThemeReach`), declared by the
+            // method; the gate's answer it does not take.
+            let own_reach = ns == "themes" && m["name"] == "set" && props.get("reach").is_some_and(|r| r.to_string().contains("#/$defs/ThemeReach"));
             assert!((own_reach || !props.contains_key("reach")) && !props.contains_key("auth"), "{ns}.{}: {props:?}", m["name"]);
         }
     }

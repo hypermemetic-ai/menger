@@ -128,7 +128,7 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
     let first_seen = StoredValue::new(None::<u64>);
     Effect::new(move |_| {
         if let (None, Some(r)) = (first_seen.get_value(), rows.get()) {
-            first_seen.set_value(Some(r.last().map_or(0, |c| c.id)));
+            first_seen.set_value(Some(r.last().map_or(0, |c| c.id.get())));
         }
     });
     let body = RwSignal::new(String::new());
@@ -168,7 +168,7 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                     let since = first_seen.get_value();
                     view! {
                         <ol class="cthread">
-                            {r.into_iter().map(|c| { let fresh = since.is_some_and(|s| c.id > s); row(c, fresh) }).collect_view()}
+                            {r.into_iter().map(|c| { let fresh = since.is_some_and(|s| c.id > menger_tickets_api::vocab::CommentId::new(s)); row(c, fresh) }).collect_view()}
                         </ol>
                     }
                     .into_any()
@@ -220,7 +220,7 @@ fn row(c: Comment, fresh: bool) -> impl IntoView {
     let flip = move |_| {
         busy.set(true);
         spawn_local(async move {
-            let r = if open { comments::resolve(id).await } else { comments::reopen(id).await };
+            let r = if open { comments::resolve(id.get()).await } else { comments::reopen(id.get()).await };
             busy.try_set(false);
             err.try_set(r.err());
         });
@@ -277,7 +277,7 @@ mod tests {
             resolved(whole(1)),
             comment(7, "#/board", "#board", Some("d-2")),
         ];
-        let ids: Vec<u64> = thread(&all, "D-2").iter().map(|c| c.id).collect();
+        let ids: Vec<u64> = thread(&all, "D-2").iter().map(|c| c.id.get()).collect();
         assert_eq!(ids, [1, 3, 7, 9]);
         assert_eq!(thread(&all, "d-2").len(), 4, "a ticket id, whatever its case");
         assert!(thread(&all, "D-9").is_empty());

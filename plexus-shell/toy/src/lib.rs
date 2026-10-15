@@ -15,12 +15,18 @@ pub static APP: EmbeddedTable = plexus_shell::embedded_app!();
 #[derive(Clone, Default)]
 pub struct Echo;
 
-#[plexus_macros::activation(namespace = "echo", version = "0.1.0", description = "says it back", crate_path = "plexus_core")]
+/// What `say` says back (ACCESS-8: a parameter is a type, never a bare
+/// `String`) — any text, as JSON carries it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct Said(String);
+
+#[plexus_macros::activation(namespace = "echo", version = "0.1.0", description = "says it back", typed_params, crate_path = "plexus_core")]
 impl Echo {
     /// Answers `text`, prefixed.
     #[plexus_macros::method]
-    async fn say(&self, text: String) -> impl Stream<Item = String> + Send + 'static {
-        stream! { yield format!("echo: {text}"); }
+    async fn say(&self, text: Said) -> impl Stream<Item = String> + Send + 'static {
+        stream! { yield format!("echo: {}", text.0); }
     }
 }
 

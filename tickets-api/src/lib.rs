@@ -26,6 +26,11 @@
 //! ```
 
 pub mod types;
+/// ACCESS-8: the vocabulary — every domain value a method takes, as a type
+/// validated once at the wire ([`vocab::TicketRef`], [`vocab::Principal`],
+/// [`vocab::FilterText`], …). Wasm-safe.
+#[macro_use]
+pub mod vocab;
 /// ORG-3: what names a shortcode and a ticket — [`OrgId`], [`Code`],
 /// [`ShortcodeId`], [`Namespace`], [`Shortcode`], [`TicketId`] — and
 /// [`Address::parse`], the one parser from text to an address. Wasm-safe.

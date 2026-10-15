@@ -79,7 +79,7 @@ fn assert_kept(store: &Store, after: &str) {
     assert_eq!(store.groups(), tests::nav(store), "the roll-ups the nav draws, after {after}");
     tests_placements::assert_kept_placements_are_the_rule(store, after);
     let cache = store.tickets.read().unwrap();
-    let scanned = Cache::new(cache.order.values().map(|t| (t.id.clone(), t.clone())).collect(), cache.inputs.clone());
+    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect(), cache.inputs.clone());
     assert_eq!(stored::compare(&cache.form(), &scanned.form()), Vec::<String>::new(), "after {after}");
 }
 
@@ -600,7 +600,7 @@ pub(super) async fn random_set_kind(store: &Store, below: &mut dyn FnMut(usize) 
                 was.map(|r| r.id.clone())
             };
             assert_eq!(now, expected, "{what}: the shortcode's root by its definition");
-            assert_eq!(store.tickets.read().unwrap().rollups.root(&t.shortcode).map(str::to_string), now, "{what}: the root kept");
+            assert_eq!(store.tickets.read().unwrap().rollups.root(&t.shortcode).map(str::to_string), now.clone().map(String::from), "{what}: the root kept");
             let reroot = now.as_deref() != was.map(|r| r.id.as_str());
             REROOTS.with(|r| r.set(r.get() + usize::from(reroot)));
             KindWrite::Changed { reroot }

@@ -295,7 +295,7 @@ fn check_input(cache: &Cache, ticket: &str, input: &str) -> Result<(), StoreErro
     let held = cache.inputs.get(ticket, input).ok_or_else(|| StoreError::InputUnknown {
         ticket: t.clone(),
         input: i.clone(),
-        known: cache.inputs.of(ticket).iter().map(|x| x.id.clone()).collect(),
+        known: cache.inputs.of(ticket).iter().map(|x| x.id.to_string()).collect(),
     })?;
     match held.state {
         InputState::Closed => Err(StoreError::InputClosed { ticket: t, input: i }),

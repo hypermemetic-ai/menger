@@ -1,3 +1,6 @@
+import type { Kind } from '../notes/types';
+/** MNG-16: what an `amend` moved — its title, its body. */
+export type AmendedField = "title" | "body";
 /** Where a comment was left: the app page, the place on it, what was there
 in words, and the ticket the element belongs to (when it belongs to one).
 
@@ -82,6 +85,8 @@ export declare function isAttrKindBoolean(e: AttrKind): e is AttrKindBoolean;
 export declare function isAttrKindShortcode(e: AttrKind): e is AttrKindShortcode;
 export declare function isAttrKindTicket(e: AttrKind): e is AttrKindTicket;
 export declare function isAttrKindEnum(e: AttrKind): e is AttrKindEnum;
+/** Where a write comes from: app, api (default) or pipeline (synapse is api, merge pipeline) */
+export type CallerSource = "app" | "api" | "pipeline";
 /** ORG-3: a shortcode's letters — ASCII letters and digits, upper case (a
 code is read case-blind and kept upper case), 1 to [`CODE_MAX`].
 
@@ -102,7 +107,7 @@ export interface Comment {
     /** What it says (markdown, as written). */
     body: string;
     /** Its id: 1, 2, … in the order comments were added, never reused. */
-    id: number;
+    id: CommentId;
     /** APP-23: `changes` for a change request; omitted for a comment. */
     intent?: CommentIntent;
     /** IDENTITY-21: the Plexus principal of who left it, when they were
@@ -110,13 +115,18 @@ export interface Comment {
     principal?: string | null;
     state: CommentState;
 }
-/** APP-23: what a comment is for — a comment (the default), or a change
-request: the owner handing a queued ticket back to whoever queued it
-(`tickets.request_changes`, the tray's Request changes). */
+/** COMMENT-2: a comment's number, from 1 in the order kept. */
+export type CommentId = number;
+/** What a comment is: a comment, or a change request (any case) */
 export type CommentIntent = "comment" | "changes";
-/** Where a comment stands: `open` until it is resolved; `resolve` and
-`reopen` flip it. */
+/** Where a comment stands (any case) */
 export type CommentState = "open" | "resolved";
+/** SDLC-9: a commit — a hexadecimal object name of 7 to 64 characters
+(kept lower case), optionally a repository and `@` before it
+(`77df9a0`, `plexus-macros@4f7114a`). Nothing is trimmed: an entry is
+a reference or it is not. Compared as its text — the server holds
+no repository (moved here from `store::commits::reference`). */
+export type CommitRef = string;
 /** COMP-3: one entry of the **component registry** — a custom element some
 ticket defined in a ` ```component <name> ` block (COMP-1 decisions 2, 3,
 pins 6–8), as the server keeps it.
@@ -185,8 +195,22 @@ export interface ComponentDocs {
     slots: SlotDoc[];
     summary: string;
 }
+/** Where a page starts: strictly after the ticket a `page` event named
+as its `next` (`MNG-9`). Opaque to the caller — today a ticket's
+key, folded to upper case as the store keeps it. */
+export type Cursor = string;
+/** What becomes of a deleted ticket's children: reparent or delete */
+export type DeleteChildren = "reparent" | "delete";
 /** APP-24: how a ticket ended for an agent waiting on it. */
 export type Ending = "canceled" | "deleted";
+/** FILTER-4: a field `facets` counts by — one of [`FACET_FIELDS`]. */
+export type FacetField = string;
+/** FILTER-3's language, as text (`ready and kind build and in SCALE`) —
+one the language reads (every bad chunk named), at most
+[`crate::limits::FILTER_MAX`] bytes, kept as written: the server reads it with its
+cells, ANDs the caller's reach on, and answers what it admits.
+Blank is a filter that narrows nothing. */
+export type FilterText = string;
 /** MNG-10: one shortcode's roll-up — the row AGS-20's nav draws for it,
 computed by the server so a client can draw the tree without holding
 every ticket.
@@ -254,13 +278,13 @@ it named — the history is a record, never rewritten. */
 export interface Input {
     answer?: Answer | null;
     history: InputHistoryEntry[];
-    id: string;
+    id: InputId;
     kind: InputKind;
     options: InputOption[];
     question?: string | null;
     recommendation?: string | null;
     state: InputState;
-    ticket: string;
+    ticket: TicketId;
 }
 /** INPUT-3: what one entry of an input's history did — an answer recorded
 (`answered`), the answer cleared (`cleared`), the input frozen
@@ -277,6 +301,9 @@ export interface InputHistoryEntry {
     source: AnswerSource;
     value?: InputValue | null;
 }
+/** INPUT-1: an input's id — the `id` attribute of its `<m-decision>` or
+`<m-input>`, trimmed, unique in its ticket. */
+export type InputId = string;
 /** INPUT-3: what an **input** asks for (INPUT-1 decision 2, the owner's
 fixed set): `choice` — one of its options (an `<m-decision>`); `multi` —
 any of its options, a set; `text` — a free reply (both an `<m-input>`).
@@ -291,17 +318,9 @@ export interface InputOption {
     recommended: boolean;
     value: string;
 }
-/** INPUT-3: where an input stands (INPUT-1 decision 4): `open` — waiting
-for an answer; `answered` — it holds one, which may change; `closed` —
-frozen, with or without an answer (DECIDED, for a decision); `removed` —
-its body no longer declares it, and its history is kept. The state is
-what the history says (the last answer or clear, the last close or
-reopen) while the body declares the input, and `removed` when it does not.
-
-MENGER-13: `withdrawn` — its ticket was canceled while it waited (open):
-nobody is asked any more, it takes no answer, and its history is kept;
-the ticket leaving `Canceled` restores it. "Has an input in state `open`"
-is therefore "is asking someone", with no case for a canceled ticket. */
+/** Who answers or clears an input: app (a viewer's click) or api (default) */
+export type InputSource = "app" | "api";
+/** Where an input stands (any case) */
 export type InputState = "open" | "answered" | "closed" | "removed" | "withdrawn";
 export interface InputValueChoice {
     type: 'choice';
@@ -326,21 +345,9 @@ export type InputValue = InputValueChoice | InputValueMulti | InputValueText;
 export declare function isInputValueChoice(e: InputValue): e is InputValueChoice;
 export declare function isInputValueMulti(e: InputValue): e is InputValueMulti;
 export declare function isInputValueText(e: InputValue): e is InputValueText;
-/** What shape of work a ticket is (AGS-13): the owner's closed five-value
-set, one vocabulary owning the slot — and, since SDLC-11 (owner,
-2026-10-02), a sixth that is not work at all: `doc`. Serialized
-lowercase (`kind: build`) on the wire and in the store.
-
-SDLC-13: set at birth, and changed only by `set_kind`, which moves
-everything kept by kind in the same write. Its rules: to a doc, the
-status becomes [`Status::Doc`] — refused while the ticket waits on a
-blocker or a ticket waits on it; from a doc, the status becomes the one
-given (never `Doc`), else `Epic` for a scope and `Pending` for any other
-kind; between two kinds with a lifecycle the status stays unless one is
-given. A shortcode's root never becomes a kind that roots nothing
-(doc ↔ scope it may), and a lower-seq ticket that becomes a scope or a
-doc becomes its shortcode's root. */
-export type Kind = "scope" | "execution" | "build" | "gap" | "spike" | "doc";
+/** MENGER-12: a label — ASCII letters, digits and `-`, 1 to 32, kept
+lower case (`Needs-You` is `needs-you`): [`crate::labels::normalize`]. */
+export type Label = string;
 /** SEARCH-2: a stretch of a search hit's title or passage, in order — `hit`
 when it is a word the query matched, which a client marks; the stretches
 of one title or passage, joined, are its text. */
@@ -348,6 +355,14 @@ export interface Marked {
     hit: boolean;
     text: string;
 }
+/** WAVE-10: a path inside a shortcode, `_MENGER/…`, exactly as written
+— what `create --path` gives a doc, and what `SHORTCODE/_MENGER/…`
+finds it by. */
+export type MengerPath = string;
+/** MENGER-13: why — a transition's message, an answer's rationale, a
+tombstone's reason — trimmed, at most [`MESSAGE_MAX`] bytes. Blank is
+no message. */
+export type Message = string;
 /** THEME-5: one declared part — `<part name="label">The field's
 label.</part>` — a piece of the component's shadow tree that a theme may
 skin with `m-name::part(label)` (looks only, THEME-1's `skins`).
@@ -427,6 +442,9 @@ export interface QueueRecord {
   the one it had (unqueued, closed). */
     urgency: Urgency;
 }
+/** MENGER-39: why a ticket is in front of the owner — a [`Message`]'s
+rule, and not blank. */
+export type Reason = string;
 /** APP-24: what answered an agent waiting on a ticket (`tickets.await_reply`)
 — the first response on it since the call's `since`. */
 export type Reply = never;
@@ -448,7 +466,10 @@ export interface SearchWord {
     also: string[];
     word: string;
 }
+/** How bad a gap is (any case) */
 export type Severity = "Critical" | "High" | "Medium" | "Low";
+/** A severity to set, or none to clear it */
+export type SeverityChange = "Critical" | "High" | "Medium" | "Low" | "none";
 /** A shortcode's identity, minted by the store: its code for a shortcode made before ORG-3, CODE.N for a namesake made after */
 export type ShortcodeId = string;
 /** ACT-6: one ticket a `reshortcode` moved — the id it had and the id it
@@ -463,9 +484,8 @@ export interface SlotDoc {
     description: string;
     name?: string | null;
 }
-/** Lifecycle status. Serialized with frontmatter casing (`Pending`, `Ready`, …)
-so a ticket round-trips into a plans/ file unchanged. */
-export type Status = never;
+/** A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case */
+export type Status = "Pending" | "Ready" | "Coding" | "In Review" | "Blocked" | "Complete" | "Idea" | "Epic" | "Superseded" | "Canceled" | "Doc";
 export interface Ticket {
     /** ORG-3: the ticket's full address, `org:ROOT/…/SC-N`
   (`hypermemetic:MENGER/THEME-3`) — what tells two `THEME-3`s apart,
@@ -496,7 +516,7 @@ export interface Ticket {
     /** `EPIC-N`, allocated by the store. ORG-3: the ticket's key — opaque
   and immutable ([`crate::TicketId`]): today's id for today's tickets,
   its shortcode's id, `-` and its number for a newborn. */
-    id: string;
+    id: TicketId;
     kind: Kind;
     /** MENGER-12: the ticket's labels — free-form tags (`needs-you`, …),
   each lower-case letters, digits and `-` ([`crate::labels`]), sorted,
@@ -512,7 +532,7 @@ export interface Ticket {
     movedFrom?: string[];
     /** AGS-19: the ticket this one is an output of, if any. Any epic; the
   parent must exist at creation and the chain is acyclic. */
-    parent?: string | null;
+    parent?: TicketId | null;
     /** WAVE-10: the ticket's **path address** inside its shortcode, if it
   has one — `<SHORTCODE>/<path>` names it (`get { id:
   "PLEXUS/_MENGER/board" }`), and no other ticket of the shortcode
@@ -543,6 +563,12 @@ export interface Ticket {
     unlocks: string[];
     updatedUnix: number;
 }
+/** ORG-3: a ticket's key — the immutable, opaque identity a ticket keeps
+for good (ORG-6 finding 1): today's id text for today's tickets,
+[`ShortcodeId::key`] for a newborn. What every row that names a ticket
+names it by; an address resolves *to* one. Its JSON is the id string, as
+it always was. */
+export type TicketId = string;
 /** MNG-9: a ticket row without its body — every field of [`Ticket`]
 except `body`.
 
@@ -564,12 +590,12 @@ export interface TicketSummary {
     commits: string[];
     createdUnix: number;
     epic: Code;
-    id: string;
+    id: TicketId;
     kind: Kind;
     /** MENGER-12: as on [`Ticket`] — on the row, so the board, the nav and
   Home's "Needs you" draw a ticket's label chips without a `get`. */
     labels?: string[];
-    parent?: string | null;
+    parent?: TicketId | null;
     /** WAVE-10: as on [`Ticket`] — on the row, so the nav can hide
   `_MENGER/` documents without a `get`. Unlike `severity` and
   `parent`, omitted when there is none (the ticket's contract): every
@@ -659,7 +685,7 @@ never carries. The full ticket rides along, body included, so a
 watch-only client — and an open ticket page — needs no `get`. */
 export interface TicketsEventAmended {
     type: 'amended';
-    changed: string[];
+    changed: AmendedField[];
     ticket: Ticket;
 }
 /** SDLC-9: commits were linked to a ticket (yielded by `link_commits`,
@@ -890,7 +916,7 @@ status as `set_status` stores it, a kind, a severity or a category in
 lower case, `yes` / `no` for the three flags, a shortcode for `in`. */
 export interface TicketsEventFacet {
     type: 'facet';
-    field: string;
+    field: FacetField;
     held: number;
     value: string;
 }
@@ -1337,7 +1363,7 @@ export interface Transition {
     message?: string | null;
     name?: string | null;
     source: TransitionSource;
-    ticket: string;
+    ticket: TicketId;
     to: string;
 }
 /** MENGER-13: which of a ticket's fields a transition moved — its status, or
@@ -1348,5 +1374,10 @@ which says so), `api` (synapse, an agent, a script: the default),
 `pipeline` (the merge, which says so), `cascade` (the store itself: a
 cancellation carried down a canceled ticket's subtree, or undone). */
 export type TransitionSource = "app" | "api" | "pipeline" | "cascade";
-/** How soon the owner should look — in rising order, so `max` raises. */
+/** How urgently the owner should look (any case) */
 export type Urgency = "whenever" | "today" | "now" | "blocking";
+/** MENGER-13: the time zone a history filter's days are read in — an
+IANA name (`Europe/Berlin`), `UTC`, or an offset (`+02:00`). Checked
+for its spelling here (wasm-safe); a name the server's tzdb does not
+hold is the server's in-band refusal. */
+export type Zone = string;

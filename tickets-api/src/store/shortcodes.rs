@@ -650,7 +650,7 @@ impl Cache {
                 At::Seq(n) => {
                     let k = super::OrderKey { shortcode: sc.clone(), seq: *n };
                     match self.order.get(&k) {
-                        Some(row) => row.id.clone(),
+                        Some(row) => row.id.to_string(),
                         None => continue,
                     }
                 }

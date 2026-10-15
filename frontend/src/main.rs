@@ -310,6 +310,7 @@ mod tags;
 mod theme;
 #[cfg(test)]
 mod tokens_lint;
+mod typed;
 mod waves;
 mod when;
 mod when_view;
@@ -1249,11 +1250,11 @@ fn chain_of(id: &str) -> (Vec<String>, Option<String>) {
             return (chain, (cur != id).then_some(cur));
         };
         let Some(p) = row.with(|t| t.parent.clone()) else { break };
-        if p == id || chain.contains(&p) {
+        if p == id || chain.contains(&p.to_string()) {
             break;
         }
-        chain.push(p.clone());
-        cur = p;
+        chain.push(p.to_string());
+        cur = String::from(p);
     }
     (chain, None)
 }
@@ -1364,7 +1365,7 @@ fn ticket_view(
         let count = ticket.with(|t| t.child_count);
         kids.with(|k| k.unshown(count))
     });
-    let parent_id = Memo::new(move |_| ticket.with(|t| t.parent.clone()));
+    let parent_id = Memo::new(move |_| ticket.with(|t| t.parent.as_deref().map(String::from)));
     // SDLC-9: the commits that finished this ticket, in link order, each in
     // git's short form with the whole reference in its title. They are on
     // the row, so a link made anywhere reaches this page as the row's
@@ -1528,7 +1529,7 @@ fn ticket_view(
         // its placement moves; a body with none renders as it always did.
         // COMP-4: a body that holds HTML renders in a sandboxed frame.
         Some(true) => view! {
-            <notes::BodyView body=Signal::derive(move || body_raw.get().unwrap_or_default()) refs=Some(refs) ticket=Some(body_ticket.clone()) title=Signal::derive(move || ticket.with(|t| t.title.clone())) />
+            <notes::BodyView body=Signal::derive(move || body_raw.get().unwrap_or_default()) refs=Some(refs) ticket=Some(body_ticket.to_string()) title=Signal::derive(move || ticket.with(|t| t.title.clone())) />
         }
         .into_any(),
     };
@@ -1536,7 +1537,7 @@ fn ticket_view(
     // The id never changes for a row's lifetime (see `Row`), so the
     // header's menu attachment is static. SDLC-13: a kind does change
     // (`set_kind`), so whether this is a doc is followed.
-    let header_id = ticket.with_untracked(|t| t.id.clone());
+    let header_id = ticket.with_untracked(|t| t.id.to_string());
     let me = header_id.clone();
     // MENGER-13: its history, under its children.
     let history_id = header_id.clone();
@@ -1560,11 +1561,11 @@ fn ticket_view(
     // from, when it was.
     let head = NodeRef::<leptos::html::H2>::new();
     let opened = header_id.clone();
-    head.on_load(move |h2: web_sys::HtmlHeadingElement| motion::open_page(h2.into(), opened));
+    head.on_load(move |h2: web_sys::HtmlHeadingElement| motion::open_page(h2.into(), String::from(opened)));
     view! {
         <article class="ticket">
             <h2 data-ticket-id=header_id node_ref=head>
-                <span class="id code" data-tag=move || ticket.with(|t| tags::Tag::ticket(&t.id).attr())>{move || ticket.with(|t| t.id.clone())}</span>
+                <span class="id code" data-tag=move || ticket.with(|t| tags::Tag::ticket(&t.id).attr())>{move || ticket.with(|t| t.id.to_string())}</span>
                 <span class="t">{move || ticket.with(|t| t.title.clone())}</span>
             </h2>
             {move || lensed.outside(&me).then(outside_notice)}
@@ -1579,7 +1580,7 @@ fn ticket_view(
                 {more_view}
                 {hidden_view}
             </section>
-            <history::HistoryView ticket=history_id />
+            <history::HistoryView ticket=String::from(history_id) />
             // APP-22: the ticket's comments, and a box for one on it as a whole.
             <conversation::Conversation ticket=conversation_id />
         </article>
@@ -1652,7 +1653,7 @@ fn ticket_view(
                 <div><dt>"Commits"</dt><dd id="t-commits">{commits_view}</dd></div>
                 // DEPLOY-13: where its work runs — each environment linked
                 // to the deploy that brought it, and those it is not on.
-                <div><dt>"Running"</dt><dd id="t-running"><deploys::Running id=running_id.clone() commits /></dd></div>
+                <div><dt>"Running"</dt><dd id="t-running"><deploys::Running id=running_id.to_string() commits /></dd></div>
                 // MENGER-12: its labels — chips, editable by a writer.
                 <div><dt>"Labels"</dt><dd id="t-labels"><labels::Editor ticket /></dd></div>
                 // COMMENT-3: its open comments, linking to them on #/comments.
@@ -1701,6 +1702,7 @@ fn parent_known(id: &str) -> Option<String> {
     cache::get(id)
         .and_then(|r| r.try_with_untracked(|t| t.parent.clone()).flatten())
         .or_else(|| session::recent(id).and_then(|t| t.parent))
+        .map(String::from)
 }
 
 /// FILTER-16: the ticket page under the global filter, for the page's

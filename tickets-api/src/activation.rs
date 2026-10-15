@@ -19,11 +19,18 @@
 //! a struct.
 #![allow(clippy::too_many_arguments)]
 
-use crate::types::{InputValue, TicketsEvent};
+use crate::types::{InputValue, Kind, Severity, Status, TicketsEvent};
+// ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
+use crate::types::InputState;
+use crate::queue::Urgency;
+use crate::vocab::{
+    Body, CallerSource, CommitRef, Cursor, DeleteChildren, FilterText, InputId, InputSource, Label, MengerPath, Message,
+    Query, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
+};
+use crate::address::OrgId;
 #[cfg(feature = "server")]
 use crate::store::{
-    BlockerRef, Change, Filtered, InputWrite, Kind, Lens, Membership, NewTicket, Page, PageQuery, Select, Severity,
-    Status, Step, Store, StoreError, Walk,
+    BlockerRef, Change, Filtered, InputWrite, Lens, Membership, NewTicket, Page, PageQuery, Select, Step, Store, StoreError, Walk,
 };
 #[cfg(feature = "server")]
 use crate::store::{TreePage, TreeQuery};
@@ -33,7 +40,7 @@ use crate::store::{Act, Clock};
 #[cfg(feature = "server")]
 use crate::types::TransitionSource;
 #[cfg(feature = "server")]
-use crate::types::{AnswerSource, InputState};
+use crate::types::AnswerSource;
 // FILTER-15: the reads that take the lens.
 #[cfg(feature = "server")]
 use crate::store::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
@@ -131,6 +138,7 @@ mod tests;
     namespace = "tickets",
     description = "Plans as data — create, query, and watch the work DAG",
     client,
+    typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core",
     roles(
@@ -218,16 +226,17 @@ impl Tickets {
     )]
     pub async fn create(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        epic: String,
-        title: String,
-        kind: Option<String>,
-        severity: Option<String>,
-        blocked_by: Option<Vec<String>>,
-        body: Option<String>,
-        parent: Option<String>,
-        path: Option<String>,
-        org: Option<String>,
+        epic: ShortcodeRef,
+        title: Title,
+        kind: Option<Kind>,
+        severity: Option<Severity>,
+        blocked_by: Option<Vec<TicketRef>>,
+        body: Option<Body>,
+        parent: Option<TicketRef>,
+        path: Option<MengerPath>,
+        org: Option<OrgId>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let blocked_by = blocked_by.map(texts);
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -241,7 +250,7 @@ impl Tickets {
             // ORG-4: the organization first — `--org`, the caller's only
             // one, or refused naming them (activation/orgs.rs) — then
             // IDENTITY-21's `tickets.create` where it lands.
-            let epic = match epic_in(&store, &caller, epic, org, parent.as_deref()) {
+            let epic = match epic_in(&store, &caller, epic.into_string(), org, parent.as_deref()) {
                 Ok(e) => e,
                 Err(ev) => {
                     yield ev;
@@ -255,22 +264,7 @@ impl Tickets {
                     return;
                 }
             };
-            let kind = match kind.as_deref().map(str::parse::<Kind>) {
-                None => Kind::Build,
-                Some(Ok(k)) => k,
-                Some(Err(e)) => {
-                    yield TicketsEvent::Error { message: e };
-                    return;
-                }
-            };
-            let severity = match severity.as_deref().map(str::parse::<Severity>) {
-                None => None,
-                Some(Ok(s)) => Some(s),
-                Some(Err(e)) => {
-                    yield TicketsEvent::Error { message: e };
-                    return;
-                }
-            };
+            let kind = kind.unwrap_or(Kind::Build);
             // MENGER-13: its first status is a transition, the caller's.
             let act = match act_of(&caller, None, None) {
                 Ok(a) => a,
@@ -281,13 +275,13 @@ impl Tickets {
             };
             match store.create_by(NewTicket {
                 epic,
-                title,
+                title: title.into_string(),
                 kind,
                 severity,
                 blocked_by: blocked_by.unwrap_or_default(),
-                parent,
-                path,
-                body: body.unwrap_or_default(),
+                parent: parent.map(String::from),
+                path: path.map(String::from),
+                body: body.map(String::from).unwrap_or_default(),
             }, act).await {
                 Ok(ticket) => yield TicketsEvent::Created { ticket },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
@@ -307,8 +301,8 @@ impl Tickets {
         example(note = "one ticket", params = r#"{"id": "MENGER-40"}"#),
         example(note = "a doc by its path address", params = r#"{"id": "PLEXUS/_MENGER/board"}"#)
     )]
-    pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        get_stream(self.store.clone(), self.access.admit(auth, &reach), id)
+    pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        get_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string())
     }
 
     /// Yields one row event per match, ordered by (epic, seq), then
@@ -367,17 +361,18 @@ impl Tickets {
     )]
     pub async fn list(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        epic: Option<String>,
-        status: Option<String>,
-        parent: Option<String>,
-        after: Option<String>,
+        epic: Option<ShortcodeRef>,
+        status: Option<Status>,
+        parent: Option<TicketRef>,
+        after: Option<Cursor>,
         limit: Option<u32>,
         summary: Option<bool>,
-        filter: Option<String>,
+        filter: Option<FilterText>,
         at: Option<u64>,
-        keep: Option<String>,
-        tz: Option<String>,
+        keep: Option<TicketRef>,
+        tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let (epic, parent) = (epic.map(String::from), parent.map(String::from));
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         let limit = Some(crate::limits::page(limit, crate::limits::LIST_PAGE_DEFAULT, crate::limits::LIST_PAGE_MAX));
@@ -394,14 +389,6 @@ impl Tickets {
                 Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            let status = match status.as_deref().map(str::parse::<Status>) {
-                None => None,
-                Some(Ok(s)) => Some(s),
-                Some(Err(e)) => {
-                    yield TicketsEvent::Error { message: e };
                     return;
                 }
             };
@@ -483,7 +470,7 @@ impl Tickets {
         description = "Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children)",
         params(
             id = "Ticket id, e.g. MNG-2",
-            status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled (case-insensitive; `active` is Coding; never Doc, a doc's own)",
+            status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled (the canonical spelling; through -p, the app or REST any case, `active` is Coding; never Doc, a doc's own)",
             restore_children = "Leaving Canceled: also put back, to the statuses they had, the descendants its cancel canceled and nothing has moved since (optional, default false; history's history_end names them)",
             source = "Where the change comes from: app | api | pipeline (optional, default api) — kept in the transition",
             message = "Why, kept in the transition (optional)"
@@ -496,11 +483,11 @@ impl Tickets {
     )]
     pub async fn set_status(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String,
-        status: String,
+        id: TicketRef,
+        status: Status,
         restore_children: Option<bool>,
-        source: Option<String>,
-        message: Option<String>,
+        source: Option<CallerSource>,
+        message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -514,14 +501,7 @@ impl Tickets {
                     return;
                 }
             };
-            let status = match status.parse::<Status>() {
-                Ok(s) => s,
-                Err(e) => {
-                    yield TicketsEvent::Error { message: e };
-                    return;
-                }
-            };
-            let act = match act_of(&caller, source.as_deref(), message) {
+            let act = match act_of(&caller, source, message) {
                 Ok(a) => a,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
@@ -530,7 +510,7 @@ impl Tickets {
             };
             match store.set_status_by(&id, status, act, restore_children.unwrap_or(false)).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e) => yield veiled(&caller, e),
             }
         }
@@ -571,11 +551,11 @@ impl Tickets {
     )]
     pub async fn set_kind(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String,
-        kind: String,
-        status: Option<String>,
-        source: Option<String>,
-        message: Option<String>,
+        id: TicketRef,
+        kind: Kind,
+        status: Option<Status>,
+        source: Option<CallerSource>,
+        message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -590,31 +570,16 @@ impl Tickets {
                 }
             };
             // MENGER-13: the kind's change (and the status's) is the caller's.
-            let act = match act_of(&caller, source.as_deref(), message) {
+            let act = match act_of(&caller, source, message) {
                 Ok(a) => a,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
-            let kind = match kind.parse::<Kind>() {
-                Ok(k) => k,
-                Err(e) => {
-                    yield TicketsEvent::Error { message: e };
-                    return;
-                }
-            };
-            let status = match status.as_deref().map(str::parse::<Status>) {
-                None => None,
-                Some(Ok(s)) => Some(s),
-                Some(Err(e)) => {
-                    yield TicketsEvent::Error { message: e };
-                    return;
-                }
-            };
             match store.set_kind_by(&id, kind, status, act).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e) => yield veiled(&caller, e),
             }
         }
@@ -639,8 +604,8 @@ impl Tickets {
     )]
     pub async fn set_parent(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String,
-        parent: String,
+        id: TicketRef,
+        parent: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -669,7 +634,7 @@ impl Tickets {
             }
             match store.set_parent(&id, &parent).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e) => yield veiled(&caller, e),
             }
         }
@@ -701,9 +666,9 @@ impl Tickets {
     )]
     pub async fn amend(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String,
-        title: Option<String>,
-        body: Option<String>,
+        id: TicketRef,
+        title: Option<Title>,
+        body: Option<Body>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -714,9 +679,9 @@ impl Tickets {
                 yield TicketsEvent::Error { message };
                 return;
             }
-            match store.amend(&id, title, body).await {
+            match store.amend(&id, title.map(String::from), body.map(String::from)).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
                 Err(e) => yield refusal(e),
             }
@@ -753,9 +718,9 @@ impl Tickets {
     )]
     pub async fn link_commits(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: Option<String>,
-        ids: Option<Vec<String>>,
-        commits: Vec<String>,
+        id: Option<TicketRef>,
+        ids: Option<Vec<TicketRef>>,
+        commits: Vec<CommitRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
         cells_stream(self.store.clone(), self.access.admit(auth, &reach), id, ids, CellWrite::Commits(commits))
@@ -779,8 +744,8 @@ impl Tickets {
     )]
     pub async fn unlink_commits(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String,
-        commits: Vec<String>,
+        id: TicketRef,
+        commits: Vec<CommitRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -791,9 +756,9 @@ impl Tickets {
                 yield TicketsEvent::Error { message };
                 return;
             }
-            match store.unlink_commits(&id, commits).await {
+            match store.unlink_commits(&id, texts(commits)).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e) => yield refusal(e),
             }
         }
@@ -828,10 +793,10 @@ impl Tickets {
     )]
     pub async fn label(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: Option<String>,
-        ids: Option<Vec<String>>,
-        add: Option<Vec<String>>,
-        remove: Option<Vec<String>>,
+        id: Option<TicketRef>,
+        ids: Option<Vec<TicketRef>>,
+        add: Option<Vec<Label>>,
+        remove: Option<Vec<Label>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
         let write = CellWrite::Labels(add.unwrap_or_default(), remove.unwrap_or_default());
@@ -867,17 +832,17 @@ impl Tickets {
     )]
     pub async fn update(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String,
-        title: Option<String>,
-        body: Option<String>,
-        kind: Option<String>,
-        status: Option<String>,
-        parent: Option<String>,
-        severity: Option<String>,
-        block: Option<Vec<String>>,
-        unblock: Option<Vec<String>>,
-        source: Option<String>,
-        message: Option<String>,
+        id: TicketRef,
+        title: Option<Title>,
+        body: Option<Body>,
+        kind: Option<Kind>,
+        status: Option<Status>,
+        parent: Option<TicketRef>,
+        severity: Option<SeverityChange>,
+        block: Option<Vec<TicketRef>>,
+        unblock: Option<Vec<TicketRef>>,
+        source: Option<CallerSource>,
+        message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -892,7 +857,7 @@ impl Tickets {
                     return;
                 }
             };
-            let (act, sight) = match (act_of(&caller, source.as_deref(), message), sight_lens(&caller)) {
+            let (act, sight) = match (act_of(&caller, source, message), sight_lens(&caller)) {
                 (Ok(a), Ok(s)) => (a, s),
                 (Err(message), _) | (_, Err(message)) => {
                     yield TicketsEvent::Error { message };
@@ -901,7 +866,7 @@ impl Tickets {
             };
             match store.update_by(&id, asked, act).await {
                 Ok(crate::store::Updated { ticket, changed }) => yield TicketsEvent::Updated { ticket, changed },
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
                 Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, sight.as_ref(), id)) },
             }
@@ -939,25 +904,25 @@ impl Tickets {
     )]
     pub async fn update_many(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        ids: Option<Vec<String>>,
-        filter: Option<String>,
+        ids: Option<Vec<TicketRef>>,
+        filter: Option<FilterText>,
         max: Option<u32>,
-        tz: Option<String>,
-        kind: Option<String>,
-        status: Option<String>,
-        parent: Option<String>,
-        severity: Option<String>,
-        block: Option<Vec<String>>,
-        unblock: Option<Vec<String>>,
-        label: Option<Vec<String>>,
-        unlabel: Option<Vec<String>>,
-        source: Option<String>,
-        message: Option<String>,
+        tz: Option<Zone>,
+        kind: Option<Kind>,
+        status: Option<Status>,
+        parent: Option<TicketRef>,
+        severity: Option<SeverityChange>,
+        block: Option<Vec<TicketRef>>,
+        unblock: Option<Vec<TicketRef>>,
+        label: Option<Vec<Label>>,
+        unlabel: Option<Vec<Label>>,
+        source: Option<CallerSource>,
+        message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // AUTH-7: the gate held the grant on each of `ids`; a filter's
         // tickets, and a parent or blocker beyond them, are asked there.
         let mut asked = update_of(None, None, kind, status, parent, severity, block, unblock);
-        (asked.label, asked.unlabel) = (label.unwrap_or_default(), unlabel.unwrap_or_default());
+        (asked.label, asked.unlabel) = (texts(label.unwrap_or_default()), texts(unlabel.unwrap_or_default()));
         update_many_stream(self.store.clone(), self.access.admit(auth, &reach), ids, filter, max, tz, asked, source, message)
     }
 
@@ -985,13 +950,13 @@ impl Tickets {
     )]
     pub async fn delete(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        ids: Option<Vec<String>>,
-        filter: Option<String>,
+        ids: Option<Vec<TicketRef>>,
+        filter: Option<FilterText>,
         max: Option<u32>,
-        tz: Option<String>,
-        children: Option<String>,
+        tz: Option<Zone>,
+        children: Option<DeleteChildren>,
         unblock: Option<bool>,
-        message: Option<String>,
+        message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         delete_stream(self.store.clone(), self.access.admit(auth, &reach), ids, filter, max, tz, children, unblock, message)
     }
@@ -1007,8 +972,8 @@ impl Tickets {
         params(ids = "Deleted ticket ids, e.g. [\"MENGER-40\"]"),
         example(note = "undo a delete", params = r#"{"ids": ["MENGER-40"]}"#)
     )]
-    pub async fn undelete(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        undelete_stream(self.store.clone(), self.access.admit(auth, &reach), ids)
+    pub async fn undelete(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<TicketRef>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        undelete_stream(self.store.clone(), self.access.admit(auth, &reach), texts(ids))
     }
 
     /// ACT-6: tickets moved into another shortcode ([`crate::store::Reshortcoded`]'s module).
@@ -1028,8 +993,9 @@ impl Tickets {
         example(note = "a scope out into a shortcode of its own", params = r#"{"ids": ["MENGER-2"], "to": "APP", "with_children": true}"#)
     )]
     pub async fn reshortcode(
-        &self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<String>, to: String, new_scope: Option<String>, parent: Option<String>, with_children: Option<bool>, message: Option<String>,
+        &self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<TicketRef>, to: ShortcodeRef, new_scope: Option<Title>, parent: Option<TicketRef>, with_children: Option<bool>, message: Option<Message>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let (ids, to, new_scope, parent) = (texts(ids), to.into_string(), new_scope.map(String::from), parent.map(String::from));
         let ask = crate::store::Reshortcode { ids, to, new_scope, parent, with_children: with_children.unwrap_or(false), orgs: None };
         reshortcode_stream(self.store.clone(), self.access.admit(auth, &reach), ask, message)
     }
@@ -1064,13 +1030,14 @@ impl Tickets {
     )]
     pub async fn ready_set(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        epic: Option<String>,
-        after: Option<String>,
+        epic: Option<ShortcodeRef>,
+        after: Option<Cursor>,
         limit: Option<u32>,
         summary: Option<bool>,
-        filter: Option<String>,
-        tz: Option<String>,
+        filter: Option<FilterText>,
+        tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let epic = epic.map(String::from);
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -1165,11 +1132,11 @@ impl Tickets {
     )]
     pub async fn find(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        query: String,
-        after: Option<String>,
+        query: Query,
+        after: Option<Cursor>,
         limit: Option<u32>,
-        filter: Option<String>,
-        tz: Option<String>,
+        filter: Option<FilterText>,
+        tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1231,11 +1198,11 @@ impl Tickets {
     )]
     pub async fn search(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        query: String,
-        filter: Option<String>,
+        query: Query,
+        filter: Option<FilterText>,
         limit: Option<u32>,
         offset: Option<u32>,
-        tz: Option<String>,
+        tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1300,7 +1267,8 @@ impl Tickets {
             tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         )
     )]
-    pub async fn member(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<String>, filter: String, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn member(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<TicketRef>, filter: FilterText, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let ids = texts(ids);
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -1466,11 +1434,11 @@ impl Tickets {
     )]
     pub async fn inputs(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        ticket: Option<String>,
-        epic: Option<String>,
-        state: Option<String>,
-        filter: Option<String>,
-        tz: Option<String>,
+        ticket: Option<TicketRef>,
+        epic: Option<ShortcodeRef>,
+        state: Option<InputState>,
+        filter: Option<FilterText>,
+        tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1495,14 +1463,6 @@ impl Tickets {
                     return;
                 }
             }
-            let state = match state.as_deref().map(str::parse::<InputState>) {
-                None => None,
-                Some(Ok(s)) => Some(s),
-                Some(Err(e)) => {
-                    yield TicketsEvent::Error { message: e };
-                    return;
-                }
-            };
             // FILTER-15: of the tickets the filter admits, by the cells.
             let answer = match zoned_lens(&caller, filter.as_deref(), tz.as_deref()) {
                 Err(e) => Err(e),
@@ -1553,11 +1513,11 @@ impl Tickets {
     )]
     pub async fn answer(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        ticket: String,
-        input: String,
+        ticket: TicketRef,
+        input: InputId,
         value: InputValue,
-        rationale: Option<String>,
-        source: Option<String>,
+        rationale: Option<Message>,
+        source: Option<InputSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1568,15 +1528,8 @@ impl Tickets {
                 yield TicketsEvent::Error { message };
                 return;
             }
-            let source = match source.as_deref().map(str::parse::<AnswerSource>).map(|r| r.and_then(caller_source)) {
-                None => AnswerSource::Api,
-                Some(Ok(s)) => s,
-                Some(Err(e)) => {
-                    yield TicketsEvent::Error { message: e };
-                    return;
-                }
-            };
-            yield input_event(store.answer(&ticket, &input, value, rationale, source).await, ticket);
+            let source = AnswerSource::from(source.unwrap_or_default());
+            yield input_event(store.answer(&ticket, &input, value, rationale.and_then(Message::given), source).await, ticket.into_string());
         }
     }
 
@@ -1599,9 +1552,9 @@ impl Tickets {
     )]
     pub async fn clear_answer(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        ticket: String,
-        input: String,
-        source: Option<String>,
+        ticket: TicketRef,
+        input: InputId,
+        source: Option<InputSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1612,15 +1565,8 @@ impl Tickets {
                 yield TicketsEvent::Error { message };
                 return;
             }
-            let source = match source.as_deref().map(str::parse::<AnswerSource>).map(|r| r.and_then(caller_source)) {
-                None => AnswerSource::Api,
-                Some(Ok(s)) => s,
-                Some(Err(e)) => {
-                    yield TicketsEvent::Error { message: e };
-                    return;
-                }
-            };
-            yield input_event(store.clear_answer(&ticket, &input, source).await, ticket);
+            let source = AnswerSource::from(source.unwrap_or_default());
+            yield input_event(store.clear_answer(&ticket, &input, source).await, ticket.into_string());
         }
     }
 
@@ -1635,7 +1581,7 @@ impl Tickets {
         description = "Close an input: freeze its answer (or its lack of one); yields input_changed",
         params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
     )]
-    pub async fn close_input(&self, auth: Option<&AuthContext>, reach: Reach, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn close_input(&self, auth: Option<&AuthContext>, reach: Reach, ticket: TicketRef, input: InputId) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -1645,7 +1591,7 @@ impl Tickets {
                 yield TicketsEvent::Error { message };
                 return;
             }
-            yield input_event(store.close_input(&ticket, &input).await, ticket);
+            yield input_event(store.close_input(&ticket, &input).await, ticket.into_string());
         }
     }
 
@@ -1659,7 +1605,7 @@ impl Tickets {
         description = "Reopen a closed input; yields input_changed",
         params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
     )]
-    pub async fn reopen_input(&self, auth: Option<&AuthContext>, reach: Reach, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn reopen_input(&self, auth: Option<&AuthContext>, reach: Reach, ticket: TicketRef, input: InputId) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -1669,7 +1615,7 @@ impl Tickets {
                 yield TicketsEvent::Error { message };
                 return;
             }
-            yield input_event(store.reopen_input(&ticket, &input).await, ticket);
+            yield input_event(store.reopen_input(&ticket, &input).await, ticket.into_string());
         }
     }
 
@@ -1738,7 +1684,7 @@ impl Tickets {
             tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         )
     )]
-    pub async fn counts(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>, keep: Option<String>, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn counts(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<FilterText>, keep: Option<TicketRef>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         counts_stream(self.store.clone(), self.access.admit(auth, &reach), filter, keep, tz)
     }
 
@@ -1764,7 +1710,7 @@ impl Tickets {
             tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         )
     )]
-    pub async fn facets(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>, base: Option<String>, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn facets(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<FilterText>, base: Option<FilterText>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         facets_stream(self.store.clone(), self.access.admit(auth, &reach), filter, base, tz)
     }
 
@@ -1818,15 +1764,16 @@ impl Tickets {
     )]
     pub async fn tree(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        parent: Option<String>,
-        epic: Option<String>,
-        filter: String,
-        after: Option<String>,
+        parent: Option<TicketRef>,
+        epic: Option<ShortcodeRef>,
+        filter: FilterText,
+        after: Option<Cursor>,
         limit: Option<u32>,
         matches_only: Option<bool>,
-        keep: Option<String>,
-        tz: Option<String>,
+        keep: Option<TicketRef>,
+        tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let (parent, epic) = (parent.map(String::from), epic.map(String::from));
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -1895,10 +1842,10 @@ impl Tickets {
     )]
     pub async fn waves(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        epics: Vec<String>,
-        kinds: Option<Vec<String>>,
+        epics: Vec<ShortcodeRef>,
+        kinds: Option<Vec<Kind>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(waves_answer(&self.store, self.access.admit(auth, &reach), epics, kinds))
+        futures::stream::iter(waves_answer(&self.store, self.access.admit(auth, &reach), texts(epics), kinds))
     }
 
     /// MENGER-31: the wave board of `id`'s subtree (activation/waves.rs).
@@ -1911,8 +1858,8 @@ impl Tickets {
         ),
         values(kinds = ["scope", "execution", "build", "gap", "spike"])
     )]
-    pub async fn waves_under(&self, auth: Option<&AuthContext>, reach: Reach, id: String, kinds: Option<Vec<String>>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(waves_under_answer(&self.store, self.access.admit(auth, &reach), id, kinds))
+    pub async fn waves_under(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, kinds: Option<Vec<Kind>>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        futures::stream::iter(waves_under_answer(&self.store, self.access.admit(auth, &reach), id.into_string(), kinds))
     }
 
     /// MENGER-31: the wave board whose final state is `id` (activation/waves.rs).
@@ -1925,8 +1872,8 @@ impl Tickets {
         ),
         values(kinds = ["scope", "execution", "build", "gap", "spike"])
     )]
-    pub async fn waves_to(&self, auth: Option<&AuthContext>, reach: Reach, id: String, kinds: Option<Vec<String>>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(waves_to_answer(&self.store, self.access.admit(auth, &reach), id, kinds))
+    pub async fn waves_to(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, kinds: Option<Vec<Kind>>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        futures::stream::iter(waves_to_answer(&self.store, self.access.admit(auth, &reach), id.into_string(), kinds))
     }
 
     /// "Why can't this start?" in one call. Yields, in `blocked_by`
@@ -1944,9 +1891,9 @@ impl Tickets {
     )]
     pub async fn blockers(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String,
+        id: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        blockers_stream(self.store.clone(), self.access.admit(auth, &reach), id)
+        blockers_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string())
     }
 
     /// MENGER-13: a ticket's history — every change of its status and its
@@ -1968,8 +1915,8 @@ impl Tickets {
         params(id = "Ticket id, e.g. MENGER-7"),
         example(note = "who moved MENGER-7, and what its cancel canceled", params = r#"{"id": "MENGER-7"}"#)
     )]
-    pub async fn history(&self, auth: Option<&AuthContext>, reach: Reach, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        history_stream(self.store.clone(), self.access.admit(auth, &reach), id)
+    pub async fn history(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        history_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string())
     }
 
     /// MENGER-39: puts a ticket in front of the owner — at an urgency, for a
@@ -1991,9 +1938,9 @@ impl Tickets {
     )]
     pub async fn queue(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String, urgency: String, reason: String, input: Option<String>, source: Option<String>,
+        id: TicketRef, urgency: Urgency, reason: Reason, input: Option<InputId>, source: Option<CallerSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id, Ask::Queue { urgency, reason, input }, source)
+        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string(), Ask::Queue { urgency, reason, input }, source)
     }
 
     /// MENGER-39: takes a ticket out of the queue. Yields one `unqueued`,
@@ -2005,8 +1952,8 @@ impl Tickets {
         params(id = "Ticket id, e.g. MENGER-39", source = "app | api | pipeline (optional, default api)"),
         values(source = ["app", "api", "pipeline"])
     )]
-    pub async fn unqueue(&self, auth: Option<&AuthContext>, reach: Reach, id: String, source: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id, Ask::Unqueue, source)
+    pub async fn unqueue(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, source: Option<CallerSource>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string(), Ask::Unqueue, source)
     }
 
     /// MENGER-39: a queued ticket off the alerting surfaces for a while; it
@@ -2018,8 +1965,8 @@ impl Tickets {
         params(id = "Ticket id, e.g. MENGER-39", minutes = "How long, in minutes", source = "app | api | pipeline (optional, default api)"),
         values(source = ["app", "api", "pipeline"])
     )]
-    pub async fn snooze(&self, auth: Option<&AuthContext>, reach: Reach, id: String, minutes: u32, source: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id, Ask::Snooze { minutes }, source)
+    pub async fn snooze(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, minutes: u32, source: Option<CallerSource>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        queue_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string(), Ask::Snooze { minutes }, source)
     }
 
     /// APP-23: hands a queued ticket back — a comment (intent `changes`) on its conversation and the entry unqueued, one write.
@@ -2030,8 +1977,8 @@ impl Tickets {
         params(id = "The queued ticket, e.g. APP-21", body = "What to change (markdown)", source = "app | api | pipeline (optional, default api)"),
         values(source = ["app", "api", "pipeline"])
     )]
-    pub async fn request_changes(&self, auth: Option<&AuthContext>, reach: Reach, id: String, body: String, source: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        request_changes_stream(self.store.clone(), self.access.admit(auth, &reach), id, body, source)
+    pub async fn request_changes(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, body: Body, source: Option<CallerSource>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        request_changes_stream(self.store.clone(), self.access.admit(auth, &reach), id.into_string(), body.into_string(), source)
     }
 
     /// APP-24: after queueing, an agent waits here — `waiting`, then one `replied` (or `timed_out`), then the end.
@@ -2041,7 +1988,8 @@ impl Tickets {
         description = "Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes",
         params(id = "The ticket, e.g. APP-21", since = "Responses from this unix time, so a reconnect loses nothing (optional; default now)", input = "Only this input's answer counts as answered (optional)", timeout_minutes = "Give up after this many minutes with timed_out (optional; default never)")
     )]
-    pub async fn await_reply(&self, auth: Option<&AuthContext>, reach: Reach, id: String, since: Option<i64>, input: Option<String>, timeout_minutes: Option<u32>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn await_reply(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef, since: Option<i64>, input: Option<InputId>, timeout_minutes: Option<u32>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let (id, input) = (id.into_string(), input.map(String::from));
         await_reply_stream(self.store.clone(), self.access.clone(), auth.cloned(), reach, await_reply::Ask { id, since, input, timeout_minutes })
     }
 
@@ -2140,10 +2088,10 @@ impl Tickets {
     )]
     pub async fn watch(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        epic: Option<String>,
-        filter: Option<String>,
+        epic: Option<ShortcodeRef>,
+        filter: Option<FilterText>,
         membership: Option<bool>,
-        tz: Option<String>,
+        tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let membership = membership.unwrap_or(false);
         let (epic, ambiguous) = sight::watched_shortcode(&self.store, epic.as_deref());

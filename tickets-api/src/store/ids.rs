@@ -182,11 +182,11 @@ impl Ids {
         Birth {
             epic: t.shortcode.clone(),
             run,
-            id: t.id.clone(),
-            resolves: self.unborn.contains_key(&t.id),
+            id: t.id.to_string(),
+            resolves: self.unborn.contains_key(t.id.as_str()),
             names: named
                 .into_iter()
-                .map(|b| ((b, OrderKey::of(t)), t.id.clone()))
+                .map(|b| ((b, OrderKey::of(t)), t.id.to_string()))
                 .collect(),
         }
     }
@@ -210,7 +210,7 @@ impl Ids {
             ids.iter().filter(|b| !rows.contains(b)).map(|b| (b.clone(), key.clone())).collect()
         };
         Reblock {
-            id: t.id.clone(),
+            id: t.id.to_string(),
             named: dangling(added),
             unnamed: dangling(removed),
         }
@@ -274,7 +274,7 @@ impl Ids {
                 self.unborn
                     .entry(b.clone())
                     .or_default()
-                    .insert(OrderKey::of(t), t.id.clone());
+                    .insert(OrderKey::of(t), t.id.to_string());
             }
         }
     }

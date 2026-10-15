@@ -105,11 +105,12 @@ pub(crate) fn counts_of(facets: impl IntoIterator<Item = (String, String, u64)>,
 /// no counts show).
 async fn ask_facets(filter: Option<String>, base: Option<String>, tree: Option<ScTree>) -> Option<Counts> {
     let client = session::client()?;
-    let events = client.facets_all(filter, base, crate::session::tz()).await.ok()?;
+    let (filter, base) = (crate::typed::opt(filter).ok()?, crate::typed::opt(base).ok()?);
+    let events = client.facets_all(filter, base, crate::session::zone()).await.ok()?;
     let mut facets = Vec::new();
     for ev in events {
         match ev {
-            TicketsEvent::Facet { field, value, held } => facets.push((field, value, held)),
+            TicketsEvent::Facet { field, value, held } => facets.push((field.into_string(), value, held)),
             TicketsEvent::Error { message } => {
                 leptos::logging::log!("facets: {message}");
                 return None;
@@ -239,7 +240,8 @@ impl LiveCounts {
         let n = self.asked.get_value().wrapping_add(1);
         self.asked.set_value(n);
         spawn_local(async move {
-            let Ok(events) = client.counts_all(Some(text), None, crate::session::tz()).await else { return };
+            let Ok(filter) = crate::typed::typed(&text) else { return };
+            let Ok(events) = client.counts_all(Some(filter), None, crate::session::zone()).await else { return };
             let mut runs = Vec::new();
             for ev in events {
                 match ev {

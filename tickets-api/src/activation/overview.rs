@@ -5,7 +5,7 @@
 use super::*;
 
 /// FILTER-4: `counts` — each shortcode's matches of a filter (the activation's doc).
-pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<Caller, String>, filter: Option<String>, keep: Option<String>, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<Caller, String>, filter: Option<FilterText>, keep: Option<TicketRef>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let caller = match admitted {
             Ok(caller) => caller,
@@ -50,7 +50,7 @@ pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<Caller, String>,
 }
 
 /// FILTER-4: `facets` — the menus' counts (the activation's doc).
-pub(super) fn facets_stream(store: Arc<Store>, admitted: Result<Caller, String>, filter: Option<String>, base: Option<String>, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn facets_stream(store: Arc<Store>, admitted: Result<Caller, String>, filter: Option<FilterText>, base: Option<FilterText>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let caller = match admitted {
             Ok(caller) => caller,
@@ -84,7 +84,10 @@ pub(super) fn facets_stream(store: Arc<Store>, admitted: Result<Caller, String>,
         match answer {
             Ok(facets) => {
                 for (field, value, held) in facets {
-                    yield TicketsEvent::Facet { field, value, held };
+                    // ACCESS-8: a field of the store's own list, always.
+                    if let Ok(field) = field.parse() {
+                        yield TicketsEvent::Facet { field, value, held };
+                    }
                 }
             }
             Err(message) => yield TicketsEvent::Error { message },

@@ -53,25 +53,25 @@ pub(super) fn kind_refusal(cache: &Cache, row: &Row, blocked_by: &[String], kind
         return Err(StoreError::DocInGraph {
             blocked_by: distinct(blocked_by),
             unlocks: distinct(&row.unlocks),
-            id: row.id.clone(),
+            id: row.id.to_string(),
         });
     }
     if !kind.roots_a_shortcode() && cache.rollups.root(&row.shortcode) == Some(row.id.as_str()) {
-        return Err(StoreError::RootKind { id: row.id.clone(), epic: row.epic.to_string(), kind });
+        return Err(StoreError::RootKind { id: row.id.to_string(), epic: row.epic.to_string(), kind });
     }
     // ORG-5: a scope roots its shortcode — a ticket inside one that another
     // roots does not become a scope there; it moves out first.
     if kind == Kind::Scope && row.kind != Kind::Scope && !legacy_scopes() {
         if let Some(root) = shortcode_root(cache, &row.shortcode).filter(|r| r.id != row.id && r.seq < row.seq) {
             return Err(StoreError::ScopeNotRoot {
-                id: row.id.clone(),
-                root: root.id.clone(),
-                parent: row.parent.clone().unwrap_or_else(|| root.id.clone()),
+                id: row.id.to_string(),
+                root: root.id.to_string(),
+                parent: row.parent.as_ref().unwrap_or(&root.id).to_string(),
             });
         }
     }
     if let (Some(path), true) = (&row.path, kind.has_lifecycle()) {
-        return Err(StoreError::PathKind { path: path.clone(), id: row.id.clone(), kind });
+        return Err(StoreError::PathKind { path: path.clone(), id: row.id.to_string(), kind });
     }
     Ok(())
 }
@@ -80,10 +80,10 @@ pub(super) fn kind_refusal(cache: &Cache, row: &Row, blocked_by: &[String], kind
 /// and `Doc` is a doc's own.
 pub(super) fn status_refusal(row: &Row, status: Status) -> Result<(), StoreError> {
     if !row.kind.has_lifecycle() {
-        return Err(StoreError::DocHasNoLifecycle { id: row.id.clone() });
+        return Err(StoreError::DocHasNoLifecycle { id: row.id.to_string() });
     }
     if !Status::LIFECYCLE.contains(&status) {
-        return Err(StoreError::DocStatusOnWork { id: row.id.clone(), kind: row.kind });
+        return Err(StoreError::DocStatusOnWork { id: row.id.to_string(), kind: row.kind });
     }
     Ok(())
 }
@@ -93,14 +93,14 @@ pub(super) fn status_refusal(row: &Row, status: Status) -> Result<(), StoreError
 /// shortcode's root, and not make the child its own ancestor.
 pub(super) fn parent_refusal(cache: &Cache, child: &Row, parent: &str) -> Result<(), StoreError> {
     let Some(parent_ticket) = cache.get(parent) else {
-        return Err(StoreError::ParentNotFound { id: child.id.clone(), parent: parent.to_string() });
+        return Err(StoreError::ParentNotFound { id: child.id.to_string(), parent: parent.to_string() });
     };
     let is_root = shortcode_root(cache, &child.shortcode).is_some_and(|r| r.id == child.id);
     if !is_root && parent_ticket.shortcode != child.shortcode {
-        return Err(StoreError::ParentOutsideShortcode { id: child.id.clone(), parent: parent.to_string() });
+        return Err(StoreError::ParentOutsideShortcode { id: child.id.to_string(), parent: parent.to_string() });
     }
     if let Some(path) = find_parent_cycle(cache, &child.id, parent) {
-        return Err(StoreError::ParentCycle { id: child.id.clone(), path });
+        return Err(StoreError::ParentCycle { id: child.id.to_string(), path });
     }
     Ok(())
 }

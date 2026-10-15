@@ -48,7 +48,7 @@ use crate::members::{Grant, Role, EVERYWHERE};
 use crate::store::{Lens, Store};
 
 /// The grantor named on `--admin` grants.
-pub const OPERATOR: &str = "--admin";
+pub use crate::vocab::OPERATOR;
 
 /// IDENTITY-35: `granted_by` of the grants the dev sign-in makes.
 pub const DEV_LOGIN: &str = "dev-login";
@@ -111,21 +111,8 @@ pub trait SessionMint: Send + Sync {
     fn end_key(&self, key: &str) -> bool;
 }
 
-/// A ceiling's scope: `*`, a shortcode, or one ticket (`SHORTCODE-<n>`),
-/// in upper case. ORG-4: or an organization (`acme:`), or a shortcode in
-/// one (`acme:MENGER`) — [`crate::members::scope_of`]'s spelling.
-pub fn ceiling_scope_of(text: &str) -> Result<String, String> {
-    let t = text.trim();
-    let ticket = t.split_once('-').filter(|(code, n)| {
-        !code.contains(':') && crate::members::scope_of(code).is_ok_and(|c| c != EVERYWHERE) && !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_digit())
-    });
-    match ticket {
-        Some((code, n)) => Ok(format!("{}-{n}", code.to_ascii_uppercase())),
-        None => crate::members::scope_of(t).map_err(|_| {
-            format!("`{t}` is not a scope: an organization (acme:), a shortcode (e.g. IDENTITY, acme:MENGER), a ticket (e.g. IDENTITY-12) or `*`")
-        }),
-    }
-}
+/// A ceiling's scope — the vocabulary's rule (ACCESS-8 moved it there).
+pub use crate::vocab::ceiling_scope_of;
 
 /// ORG-4: the `under` name a held scope reads as — `*` none (everything);
 /// an organization, `acme:`, itself (the filter's `under acme:`: every

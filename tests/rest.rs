@@ -297,7 +297,7 @@ async fn in_band_error_event_is_distinguishable_in_2xx() {
     let (status, body) = post(
         s.rest_port,
         "/rest/tickets/set_status",
-        &json!({"id": "RST-1", "status": "Bogus"}).to_string(),
+        &json!({"id": "RST-1", "status": "Doc"}).to_string(),
     )
     .await;
     assert!(status.is_success(), "in-band error rides a 2xx, got {status}");
@@ -307,7 +307,10 @@ async fn in_band_error_event_is_distinguishable_in_2xx() {
         ev["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("unknown status"),
+            .contains("Doc is a doc's own status"),
         "error names the offending value, got {ev}"
     );
+    // ACCESS-8: a status that is none is refused at dispatch, naming it.
+    let (_, body) = post(s.rest_port, "/rest/tickets/set_status", &json!({"id": "RST-1", "status": "Bogus"}).to_string()).await;
+    assert!(body.to_string().contains("status: unknown status 'bogus'"), "{body}");
 }

@@ -39,7 +39,7 @@ async fn store() -> Store {
 }
 
 async fn born(store: &Store, body: &str) -> String {
-    store.create(ticket("C", Kind::Build, body)).await.unwrap().id
+    String::from(store.create(ticket("C", Kind::Build, body)).await.unwrap().id)
 }
 
 async fn amend(store: &Store, id: &str, body: &str) {

@@ -116,8 +116,8 @@ pub(crate) fn pins(route: &str, comments: &[Comment], mut spot: impl FnMut(&Anch
             Spot::Pending => continue,
         };
         match groups.iter_mut().find(|(a, _)| *a == at) {
-            Some((_, ids)) => ids.push(c.id),
-            None => groups.push((at, vec![c.id])),
+            Some((_, ids)) => ids.push(c.id.get()),
+            None => groups.push((at, vec![c.id.get()])),
         }
     }
     for (_, ids) in &mut groups {
@@ -998,7 +998,7 @@ fn list_view(a: Annot, key: String, ids: Vec<u64>, moved: bool) -> AnyView {
                                     <div class="annot-meta">
                                         <span class="cwho">{c.author.clone()}</span>
                                         <span class="cwhen" title=fmt_unix(c.at)>{fmt_relative(now_unix(), c.at)}</span>
-                                        <span class="cid">"#"{id}</span>
+                                        <span class="cid">"#"{id.get()}</span>
                                         {moved.then(|| view! { <span class="annot-moved">"moved"</span> })}
                                     </div>
                                     <div class="annot-body" data-links="comment" data-ticket=c.anchor.ticket.clone()><crate::highlight::CommentText text=c.body.clone() /></div>
@@ -1010,7 +1010,7 @@ fn list_view(a: Annot, key: String, ids: Vec<u64>, moved: bool) -> AnyView {
                                             on:click=move |_| {
                                                 busy.set(true);
                                                 spawn_local(async move {
-                                                    let r = comments::resolve(id).await;
+                                                    let r = comments::resolve(id.get()).await;
                                                     busy.try_set(false);
                                                     err.try_set(r.err());
                                                     schedule();

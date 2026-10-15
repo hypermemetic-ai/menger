@@ -498,7 +498,18 @@ fn pump(client: Client, filter: &str, then: Option<futures::future::AbortHandle>
     }
     let filter = filter.to_string();
     let run = async move {
-        let mut stream = client.watch(None, Some(filter.clone()), Some(true), tz());
+        // ACCESS-8: the filter as a FilterText; one the language does not
+        // read is the watch's refusal, said to its ears.
+        let asked = match crate::typed::typed(&filter) {
+            Ok(f) => f,
+            Err(why) => {
+                for ear in ears(&filter) {
+                    ear(&Member::Refused(why.clone()));
+                }
+                return;
+            }
+        };
+        let mut stream = client.watch(None, Some(asked), Some(true), zone());
         if let Some(then) = then {
             then.abort();
         }
@@ -627,7 +638,7 @@ fn follow(id: &str) {
 
 /// ACT-5: `undeleted`: each ticket back as if born — its tombstone forgotten.
 fn undeleted(tickets: Vec<Ticket>, board: board::Board) {
-    TOMBSTONES.with(|t| t.update(|t| tickets.iter().for_each(|x| drop(t.remove(&x.id)))));
+    TOMBSTONES.with(|t| t.update(|t| tickets.iter().for_each(|x| drop(t.remove(x.id.as_str())))));
     for ticket in tickets {
         let summary = TicketSummary::from(&ticket);
         remember(&summary);
@@ -649,7 +660,7 @@ fn wanted(t: &TicketSummary) {
     let pages: Vec<cache::Holder> = WANTED.with(|w| {
         w.borrow()
             .iter()
-            .filter(|(asked, _)| asked.try_with_value(|a| a.contains(&t.id)).unwrap_or(false))
+            .filter(|(asked, _)| asked.try_with_value(|a| a.contains(t.id.as_str())).unwrap_or(false))
             .map(|(_, h)| h.clone())
             .collect()
     });
@@ -756,6 +767,13 @@ pub(crate) fn client() -> Option<Client> {
 /// filter's days (`today`, `yesterday`, `this week`, a date) are the
 /// viewer's. `None` where the browser names none (and natively, in tests):
 /// the server reads UTC.
+/// ACCESS-8: [`tz`] as the [`Zone`](menger_tickets_api::vocab::Zone) a
+/// filtered read takes — none when the browser names none, or one the
+/// vocabulary does not read.
+pub(crate) fn zone() -> Option<menger_tickets_api::vocab::Zone> {
+    tz().and_then(|z| z.parse().ok())
+}
+
 pub(crate) fn tz() -> Option<String> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -1000,7 +1018,7 @@ async fn session(
                 // DESIGN-39: a status moved — its cell sweeps, its row
                 // flashes, the nav's pip is counted again.
                 if let TicketsEvent::StatusChanged { ticket, .. } = &ev {
-                    crate::motion::changed(ticket.id.clone());
+                    crate::motion::changed(ticket.id.to_string());
                     crate::nav::pip_stale();
                 }
             }
@@ -1135,7 +1153,8 @@ async fn refetch_open_body(client: &Client, last_error: RwSignal<Option<String>>
     let Some(id) = OPEN_BODY.with(|b| b.borrow().as_ref().map(|(id, _)| id.clone())) else {
         return;
     };
-    match client.get_all(id.clone()).await {
+    let Ok(ticket) = crate::typed::typed(&id) else { return };
+    match client.get_all(ticket).await {
         Ok(events) => {
             for ev in events {
                 if let TicketsEvent::Ticket { ticket } = ev {
@@ -1151,7 +1170,8 @@ async fn refetch_open_body(client: &Client, last_error: RwSignal<Option<String>>
 /// MENGER-13: what restoring `id` would put back — the descendants its
 /// latest cancel canceled and nothing has moved since (empty on any failure).
 pub(crate) async fn restorable(client: &Client, id: &str) -> Vec<String> {
-    match client.history_all(id.to_string()).await {
+    let Ok(ticket) = crate::typed::typed(id) else { return Vec::new() };
+    match client.history_all(ticket).await {
         Ok(events) => events
             .into_iter()
             .find_map(|ev| match ev {
@@ -1213,12 +1233,15 @@ pub(crate) fn request_set_status(
         } else {
             false
         };
-        let failure = match client
-            .set_status_all(id.clone(), chosen.as_str().to_string(), Some(restore), Some("app".into()), None)
-            .await
-        {
-            Ok(events) => first_refusal(&events),
-            Err(e) => Some(describe(&e)),
+        let failure = match crate::typed::typed(&id) {
+            Ok(ticket) => match client
+                .set_status_all(ticket, chosen, Some(restore), Some(menger_tickets_api::vocab::CallerSource::App), None)
+                .await
+            {
+                Ok(events) => first_refusal(&events),
+                Err(e) => Some(describe(&e)),
+            },
+            Err(why) => Some(why),
         };
         if let Some(msg) = failure {
             last_error.set(Some(format!("set_status {id} -> {chosen}: {msg}")));
@@ -1266,7 +1289,8 @@ pub(crate) fn load_ticket(
             // than claiming the ticket does not exist.
             return;
         };
-        match client.get_all(id.clone()).await {
+        let Ok(ticket) = crate::typed::typed::<menger_tickets_api::vocab::TicketRef>(&id) else { return };
+        match client.get_all(ticket.clone()).await {
             Ok(events) => {
                 for ev in events {
                     match ev {
@@ -1300,7 +1324,7 @@ pub(crate) fn load_ticket(
             }
             Err(e) => last_error.set(Some(format!("get {id}: {}", describe(&e)))),
         }
-        match client.blockers_all(id.clone()).await {
+        match client.blockers_all(ticket).await {
             Ok(events) => {
                 for ev in events {
                     if let TicketsEvent::Blocker { ticket } = ev {
@@ -1323,7 +1347,8 @@ pub(crate) fn load_rows(ids: Vec<String>, holder: cache::Holder) {
         let Some(client) = client() else {
             return; // not connected yet: the page asks again when it is
         };
-        let gets = ids.iter().map(|id| client.get_all(id.clone()));
+        let asked: Vec<menger_tickets_api::vocab::TicketRef> = ids.iter().filter_map(|id| id.parse().ok()).collect();
+        let gets = asked.into_iter().map(|id| client.get_all(id));
         for events in futures::future::join_all(gets).await.into_iter().flatten() {
             for ev in events {
                 if let TicketsEvent::Ticket { ticket } = ev {
@@ -1374,8 +1399,16 @@ pub(crate) fn load_children(
         let Some(filter) = kids.try_with_untracked(|k| k.list_filter().map(str::to_string)) else {
             return; // the page is gone
         };
+        let typed = || -> Result<_, String> { Ok((crate::typed::typed(&id)?, crate::typed::opt(after.clone())?, crate::typed::opt(filter.clone())?)) };
+        let (parent, cursor, asked) = match typed() {
+            Ok(t) => t,
+            Err(why) => {
+                kids.try_update(|k| k.refuse(filter.as_deref(), why));
+                return;
+            }
+        };
         match client
-            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true), filter.clone(), None, None, crate::session::tz())
+            .list_all(None, None, Some(parent), cursor, Some(KIDS_LIMIT), Some(true), asked, None, None, crate::session::zone())
             .await
         {
             Ok(events) => {
@@ -1401,7 +1434,7 @@ pub(crate) fn load_children(
                         _ => {}
                     }
                 }
-                let ids: Vec<String> = page.iter().map(|t| t.id.clone()).collect();
+                let ids: Vec<String> = page.iter().map(|t| t.id.to_string()).collect();
                 holder.hold_page(page);
                 kids.try_update(|k| k.page_under(filter.as_deref(), first, ids, next, remaining));
             }
@@ -1429,8 +1462,9 @@ const MEMBER_MAX: usize = 1000;
 pub(crate) async fn member(ids: Vec<String>, filter: String) -> Result<Vec<(String, bool)>, String> {
     let client = client().ok_or_else(|| "not connected".to_string())?;
     let mut out = Vec::with_capacity(ids.len());
+    let filter: menger_tickets_api::vocab::FilterText = crate::typed::typed(&filter)?;
     for part in ids.chunks(MEMBER_MAX) {
-        for ev in client.member_all(part.to_vec(), filter.clone(), crate::session::tz()).await.map_err(|e| describe(&e))? {
+        for ev in client.member_all(crate::typed::many(part)?, filter.clone(), crate::session::zone()).await.map_err(|e| describe(&e))? {
             match ev {
                 TicketsEvent::Member { id, matched } => out.push((id, matched)),
                 TicketsEvent::Error { message } => return Err(message),
@@ -1446,7 +1480,11 @@ pub(crate) async fn member(ids: Vec<String>, filter: String) -> Result<Vec<(Stri
 /// take. `Err`: the call failed (the socket).
 pub(crate) async fn find_under(query: String, limit: u32, filter: Option<String>) -> Result<Result<(Vec<TicketSummary>, u64), String>, String> {
     let client = client().ok_or_else(|| "not connected".to_string())?;
-    let events = client.find_all(query, None, Some(limit), filter, crate::session::tz()).await.map_err(|e| describe(&e))?;
+    let (query, filter) = match (crate::typed::typed(&query), crate::typed::opt(filter)) {
+        (Ok(q), Ok(f)) => (q, f),
+        (Err(why), _) | (_, Err(why)) => return Ok(Err(why)),
+    };
+    let events = client.find_all(query, None, Some(limit), filter, crate::session::zone()).await.map_err(|e| describe(&e))?;
     let mut rows = Vec::new();
     let mut remaining = 0;
     for ev in events {
@@ -1481,7 +1519,11 @@ pub(crate) async fn search_under(
     filter: Option<String>,
 ) -> Result<Result<(Vec<Hit>, u64, Vec<SearchWord>), String>, String> {
     let client = client().ok_or_else(|| "not connected".to_string())?;
-    let events = client.search_all(query, filter, Some(limit), None, crate::session::tz()).await.map_err(|e| describe(&e))?;
+    let (query, filter) = match (crate::typed::typed(&query), crate::typed::opt(filter)) {
+        (Ok(q), Ok(f)) => (q, f),
+        (Err(why), _) | (_, Err(why)) => return Ok(Err(why)),
+    };
+    let events = client.search_all(query, filter, Some(limit), None, crate::session::zone()).await.map_err(|e| describe(&e))?;
     let (mut hits, mut matched, mut words) = (Vec::new(), 0, Vec::new());
     for ev in events {
         match ev {
@@ -1499,7 +1541,8 @@ pub(crate) async fn search_under(
 /// connection, or the server's words.
 pub(crate) async fn inputs_under(filter: String) -> Result<Vec<TicketsEvent>, String> {
     let client = client().ok_or_else(|| "not connected".to_string())?;
-    let events = client.inputs_all(None, None, None, Some(filter), crate::session::tz()).await.map_err(|e| describe(&e))?;
+    let filter = crate::typed::typed(&filter)?;
+    let events = client.inputs_all(None, None, None, Some(filter), crate::session::zone()).await.map_err(|e| describe(&e))?;
     if let Some(message) = events.iter().find_map(|ev| match ev {
         TicketsEvent::Error { message } => Some(message.clone()),
         _ => None,
@@ -1515,7 +1558,7 @@ pub(crate) async fn children_matching(parent: String, filter: String) -> Result<
     let client = client().ok_or_else(|| "not connected".to_string())?;
     let mut remaining = None;
     for ev in client
-        .list_all(None, None, Some(parent), None, Some(0), Some(true), Some(filter), None, None, crate::session::tz())
+        .list_all(None, None, Some(crate::typed::typed(&parent)?), None, Some(0), Some(true), Some(crate::typed::typed(&filter)?), None, None, crate::session::zone())
         .await
         .map_err(|e| describe(&e))?
     {
@@ -1539,7 +1582,7 @@ mod tests {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         Ticket {
             labels: Vec::new(),
-            id: id.to_string(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: format!("the title of {id}"),

@@ -180,7 +180,7 @@ impl Store {
                     Some(p.clone())
                 }
                 (None, true) => None,
-                (None, _) => shortcode_root(tickets, &sc).map(|r| r.id.clone()),
+                (None, _) => shortcode_root(tickets, &sc).map(|r| r.id.clone()).map(String::from),
             };
 
             // WAVE-10: a `_MENGER/` document lives directly under its
@@ -197,7 +197,7 @@ impl Store {
                     return Err(StoreError::PathParent {
                         path: path.clone(),
                         parent: parent.unwrap_or_default(),
-                        root: root.id.clone(),
+                        root: root.id.to_string(),
                     });
                 }
                 if let Some(holder) = tickets.paths.get(&(sc.clone(), path.clone())) {
@@ -226,7 +226,7 @@ impl Store {
 
             let now = chrono::Utc::now().timestamp();
             let mut ticket = Ticket {
-                id: id.clone(),
+                id: crate::address::TicketId::new(id.clone()),
                 // ORG-3: its letters and address as the write leaves the
                 // registry — set below, once the birth is worked out.
                 epic: minted.as_ref().map_or_else(|| tickets.shortcodes.code(&sc), |m| m.code.clone()),
@@ -240,7 +240,7 @@ impl Store {
                 severity: new.severity,
                 blocked_by,
                 unlocks,
-                parent: parent.clone(),
+                parent: parent.clone().map(crate::address::TicketId::new),
                 // SCALE-4: none, unless a hand-edited database already
                 // names this id as some ticket's parent — the index has
                 // kept those under the id, as `list { parent }` finds them.
@@ -378,7 +378,7 @@ impl Store {
         let born_id = ticket.id.clone();
         // NOTE-2: and the note it was made from, pointing at it.
         let upgraded = note.map(|n| crate::notes::Note {
-            ticket: Some(ticket.id.clone()),
+            ticket: Some(ticket.id.to_string()),
             upgraded_at: Some(ticket.created_unix),
             ..n
         });
@@ -402,7 +402,7 @@ impl Store {
                     .map(|row| {
                         db::update_row(tx, &row)?;
                         let body = db::body(tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
-                        Ok((row.id.clone(), whole(row, body)))
+                        Ok((row.id.to_string(), whole(row, body)))
                     })
                     .collect::<Result<HashMap<String, Ticket>, StoreError>>()?;
                 stored.write(tx)?;
@@ -430,16 +430,16 @@ impl Store {
                     (&ticket.parent, parent_epic, child_count)
                 {
                     let _ = tx.send(Change::ChildrenChanged {
-                        id: parent_id.clone(),
+                        id: parent_id.to_string(),
                         shortcode: epic,
-                        added: ticket.id.clone(),
+                        added: ticket.id.to_string(),
                         child_count,
                     });
                 }
                 for blocker_id in unlocks_added {
                     let _ = tx.send(Change::UnlocksChanged {
                         ticket: blockers[&blocker_id].clone(),
-                        added: ticket.id.clone(),
+                        added: ticket.id.to_string(),
                     });
                 }
                 broadcast_groups(tx, groups);

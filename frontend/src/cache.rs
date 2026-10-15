@@ -105,7 +105,7 @@ fn write(sig: &RowSignal, t: TicketSummary) {
 /// map is borrowed — a write can run code that looks a row up.
 fn hold_quiet(t: TicketSummary) -> (RowSignal, bool) {
     let held = ROWS.with(|rows| {
-        rows.borrow_mut().get_mut(&t.id).map(|e| {
+        rows.borrow_mut().get_mut(t.id.as_str()).map(|e| {
             e.holds += 1;
             e.sig.clone()
         })
@@ -118,7 +118,7 @@ fn hold_quiet(t: TicketSummary) -> (RowSignal, bool) {
         None => {
             let id = t.id.clone();
             let sig = ArcRwSignal::new(t);
-            ROWS.with(|rows| rows.borrow_mut().insert(id, Entry { sig: sig.clone(), holds: 1 }));
+            ROWS.with(|rows| rows.borrow_mut().insert(String::from(id), Entry { sig: sig.clone(), holds: 1 }));
             (sig, true)
         }
     }
@@ -284,7 +284,7 @@ impl Holder {
             let mut g = self.lock();
             match g.as_mut() {
                 None => None,
-                Some(ids) => Some(ids.insert(t.id.clone())),
+                Some(ids) => Some(ids.insert(t.id.to_string())),
             }
         };
         match first {
@@ -306,7 +306,7 @@ impl Holder {
     pub(crate) fn hold_page(&self, page: Vec<TicketSummary>) -> bool {
         let fresh: Option<Vec<bool>> = {
             let mut g = self.lock();
-            g.as_mut().map(|ids| page.iter().map(|t| ids.insert(t.id.clone())).collect())
+            g.as_mut().map(|ids| page.iter().map(|t| ids.insert(t.id.to_string())).collect())
         };
         let Some(fresh) = fresh else {
             for t in page {
@@ -393,7 +393,7 @@ mod tests {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         TicketSummary {
             labels: Vec::new(),
-            id: id.to_string(),
+            id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: format!("the title of {id}"),

@@ -66,7 +66,7 @@ impl Store {
             })?;
             anchor.version = Some(row.updated_unix);
             let comment = Comment {
-                id: cache.comments.next_id(),
+                id: crate::vocab::CommentId::new(cache.comments.next_id()),
                 state: CommentState::Open,
                 author,
                 at: now,
@@ -76,7 +76,7 @@ impl Store {
                 intent: CommentIntent::Changes,
             };
             let mut record = record_of(cache.queue.next_id(), &entry, QueueAction::ChangesRequested, &act, now);
-            record.comment = Some(comment.id);
+            record.comment = Some(comment.id.get());
             let key = (row.shortcode.clone(), row.seq);
             let under = lineage::touch_or_queued_before_with(&self.unders, &cache, &[(&key.0, key.1)]);
             (comment, entry, record, key, under)

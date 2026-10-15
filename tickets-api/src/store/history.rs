@@ -390,7 +390,7 @@ impl Log {
         };
         Transition {
             id: m.id,
-            ticket,
+            ticket: crate::address::TicketId::new(ticket),
             field: m.field,
             from: m.from.map(spell),
             to: spell(m.to),
@@ -733,7 +733,7 @@ pub(crate) fn load<'r>(
     let deleted = super::delete::deleted_places(conn)?;
     let place = |id: &str| -> Option<OrderKey> { deleted.get(id).cloned() };
     for t in read_all(conn)? {
-        match at.get(&t.ticket).cloned().or_else(|| place(&t.ticket)) {
+        match at.get(t.ticket.as_str()).cloned().or_else(|| place(&t.ticket)) {
             Some(key) => log.append(&t, &key),
             None => stray += 1,
         }
@@ -776,7 +776,7 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
         }
         previous_id = t.id;
         // ACT-5: a deleted ticket's transitions stay, with its tombstone.
-        if cache.get(&t.ticket).is_none() && !deleted.contains(&t.ticket) {
+        if cache.get(&t.ticket).is_none() && !deleted.contains(t.ticket.as_str()) {
             out.push(format!("transition {}: names {}, which is no ticket", t.id, t.ticket));
             continue;
         }

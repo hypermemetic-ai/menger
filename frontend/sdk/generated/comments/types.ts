@@ -3,6 +3,11 @@
 
 import type { Anchor, Comment, CommentIntent, CommentState } from '../tickets/types';
 
+/** COMMENT-2: where on a page an anchor is — the element's path,
+`[data-tag="ticket DEMAND-1"]`; `comments.list --path` matches a
+prefix of it. */
+export type AnchorPath = string;
+
 /** One comment as it is now, its fields beside `type` — `add`'s,
 `resolve`'s and `reopen`'s answer, and each of `list`'s rows.
 [`CommentsEvent::into_comment`] gives the [`Comment`]. */
@@ -70,3 +75,12 @@ export function isCommentsEventResolved(e: CommentsEvent): e is CommentsEventRes
 export function isCommentsEventReopened(e: CommentsEvent): e is CommentsEventReopened { return e.type === 'reopened'; }
 export function isCommentsEventLagged(e: CommentsEvent): e is CommentsEventLagged { return e.type === 'lagged'; }
 export function isCommentsEventError(e: CommentsEvent): e is CommentsEventError { return e.type === 'error'; }
+
+/** COMMENT-2: an app page, as its route — `#/ticket/DEMAND-2`, `#/` (the
+board) — always beginning `#/`. */
+export type Route = string;
+
+/** A ticket or a shortcode — `comments.list`'s `under`: a ticket (it
+and its descendants) or a shortcode (it and every shortcode hosted
+under it), by any name [`TicketRef`] or [`ShortcodeRef`] takes. */
+export type Under = string;

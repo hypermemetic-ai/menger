@@ -45,7 +45,7 @@ pub(super) fn children(store: &Store, id: &str) -> Vec<String> {
         .unwrap()
         .tickets
         .into_iter()
-        .map(|t| t.id)
+        .map(|t| t.id.into_string())
         .collect()
 }
 
@@ -57,7 +57,7 @@ pub(super) fn scanned(store: &Store) -> BTreeMap<String, Vec<(ShortcodeId, u32)>
     let mut out: BTreeMap<String, Vec<(ShortcodeId, u32)>> = BTreeMap::new();
     for t in cache.order.values() {
         if let Some(p) = &t.parent {
-            out.entry(p.clone()).or_default().push((t.shortcode.clone(), t.seq));
+            out.entry(p.to_string()).or_default().push((t.shortcode.clone(), t.seq));
         }
     }
     out
@@ -71,7 +71,7 @@ fn assert_children_are_a_scan(store: &Store, after: &str) {
     let cache = store.tickets.read().unwrap();
     assert_eq!(cache.children.all(), scan, "the index, after {after}");
     for t in cache.order.values() {
-        let n = scan.get(&t.id).map_or(0, |v| v.len() as u64);
+        let n = scan.get(t.id.as_str()).map_or(0, |v| v.len() as u64);
         assert_eq!(t.child_count, n, "{}.child_count, after {after}", t.id);
         assert_eq!(cache.children.count(&t.id), n, "the index's count of {}, after {after}", t.id);
     }
@@ -89,7 +89,7 @@ fn old_page(store: &Store, q: &PageQuery<'_>) -> Result<Answer, String> {
         cache
             .order
             .iter()
-            .map(|(k, t)| (t.id.clone(), k.clone(), t.parent.clone(), t.status))
+            .map(|(k, t)| (t.id.to_string(), k.clone(), t.parent.clone().map(String::from), t.status))
             .collect()
     };
     let up = |s: Option<&str>| s.map(str::to_ascii_uppercase);
@@ -123,7 +123,7 @@ fn old_page(store: &Store, q: &PageQuery<'_>) -> Result<Answer, String> {
 fn answered(store: &Store, q: &PageQuery<'_>) -> Result<Answer, String> {
     store
         .page(*q)
-        .map(|p| (p.tickets.iter().map(|t| t.id.clone()).collect(), p.next, p.remaining))
+        .map(|p| (p.tickets.iter().map(|t| t.id.to_string()).collect(), p.next, p.remaining))
         .map_err(|e| e.to_string())
 }
 
@@ -132,7 +132,7 @@ fn answered(store: &Store, q: &PageQuery<'_>) -> Result<Answer, String> {
 /// limit, under each epic and each status or none — is the old filter's.
 #[track_caller]
 fn assert_every_page_is_the_old_filters(store: &Store, parent: &str) {
-    let ids: Vec<String> = store.page(PageQuery::default()).unwrap().tickets.into_iter().map(|t| t.id).collect();
+    let ids: Vec<String> = store.page(PageQuery::default()).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect();
     let mut epics: Vec<Option<String>> = vec![None];
     epics.extend(store.extents_text().into_iter().map(|(e, _)| Some(e.as_str().to_string())));
     let cursors = std::iter::once(None).chain(ids.iter().map(|id| Some(id.as_str())));
@@ -357,7 +357,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
     let mut rng = Rng(4);
     let epics = ["RA", "RB", "RC", "RD"];
     for i in 0..600 {
-        let ids: Vec<String> = store.list(None, None, None).await.unwrap().into_iter().map(|t| t.id).collect();
+        let ids: Vec<String> = store.list(None, None, None).await.unwrap().into_iter().map(|t| t.id.into_string()).collect();
         let pick = |rng: &mut Rng| ids[rng.below(ids.len())].clone();
         let epic = epics[rng.below(epics.len())];
         match rng.below(10) {
@@ -663,7 +663,7 @@ async fn the_fixture_written_before_scale4_opens_with_its_children() {
     };
     assert_eq!(lists.len(), 9);
     let store = Store::open(&path).unwrap();
-    let order: Vec<String> = store.list(None, None, None).await.unwrap().into_iter().map(|t| t.id).collect();
+    let order: Vec<String> = store.list(None, None, None).await.unwrap().into_iter().map(|t| t.id.into_string()).collect();
     for (id, list) in &lists {
         let got = children(&store, id);
         let want: BTreeSet<&String> = list.iter().collect();

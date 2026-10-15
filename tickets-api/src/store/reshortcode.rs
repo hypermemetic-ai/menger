@@ -119,7 +119,7 @@ pub(super) struct Plan {
 impl Plan {
     /// Each old key with its new one.
     fn map(&self) -> HashMap<String, String> {
-        self.steps.iter().map(|s| (s.row.id.clone(), s.key.clone())).collect()
+        self.steps.iter().map(|s| (s.row.id.to_string(), s.key.clone())).collect()
     }
 }
 
@@ -197,7 +197,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
             let why = roots
                 .iter()
                 .map(|r| {
-                    (r.id.clone(), vec![refuse(format!(
+                    (r.id.to_string(), vec![refuse(format!(
                         "{} roots the shortcode {}: it moves only alone, with --with-children and the whole shortcode — a rename",
                         r.id, r.epic
                     ))])
@@ -249,7 +249,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
             match cache.target(&to, Some(p), true)? {
                 Target::Mint(sc) => {
                     let root = sc.id.key(1);
-                    (sc.id.clone(), Some(sc), Some((root.clone(), title.to_string(), p.id.clone())), 2, Some(root))
+                    (sc.id.clone(), Some(sc), Some((root.clone(), title.to_string(), p.id.to_string())), 2, Some(root))
                 }
                 Target::In(there) => {
                     return Err(refuse(format!(
@@ -271,7 +271,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
                         Some(p) if p.shortcode != sc => {
                             return Err(refuse(format!("parent {} is not in {}: a moved ticket hangs inside its shortcode — nothing written", p.id, to)))
                         }
-                        Some(p) => Some(p.id.clone()),
+                        Some(p) => Some(p.id.to_string()),
                         None => root_of(&sc),
                     };
                     (sc.clone(), None, None, cache.next_seq(&sc), home)
@@ -301,7 +301,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
     for m in &moving {
         let org = cache.shortcodes.org(&m.shortcode).cloned();
         if target_org.is_some() && org.is_some() && org != target_org {
-            refusals.push((m.id.clone(), vec![refuse(format!(
+            refusals.push((m.id.to_string(), vec![refuse(format!(
                 "{} is in the organization {}, and {to} in {}: a move keeps a ticket in its organization",
                 m.id,
                 org.expect("some"),
@@ -317,19 +317,19 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
     let mut steps: Vec<Step> = Vec::with_capacity(moving.len());
     for m in &moving {
         if m.shortcode == target {
-            refusals.push((m.id.clone(), vec![refuse(format!("{} is in {} already", m.id, to))]));
+            refusals.push((m.id.to_string(), vec![refuse(format!("{} is in {} already", m.id, to))]));
             continue;
         }
         let seq = next;
         next += 1;
-        map.insert(m.id.clone(), target.key(seq));
+        map.insert(m.id.to_string(), target.key(seq));
         steps.push(Step { row: m.clone(), key: target.key(seq), shortcode: target.clone(), seq, parent: None });
     }
     let as_root = minted.is_some() && born.is_none();
     // ORG-5: a scope roots its shortcode — it moves only to root a new one.
     for (i, s) in steps.iter().enumerate() {
         if s.row.kind == Kind::Scope && !(as_root && i == 0) {
-            refusals.push((s.row.id.clone(), vec![refuse(format!(
+            refusals.push((s.row.id.to_string(), vec![refuse(format!(
                 "{} is a scope, and a scope roots its own shortcode (ORG-5): move it alone into a new code, which it roots                  (tickets reshortcode --ids {} --to NEW --with-children true)",
                 s.row.id, s.row.id
             ))]));
@@ -339,13 +339,13 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
         s.parent = match s.row.parent.as_deref().and_then(|p| map.get(p)) {
             Some(p) => Some(p.clone()),
             // The new root keeps where it hangs, or hangs under --parent.
-            None if as_root && i == 0 => parent_row.as_ref().map(|p| p.id.clone()).or_else(|| s.row.parent.clone()),
+            None if as_root && i == 0 => parent_row.as_ref().map(|p| p.id.to_string()).or_else(|| s.row.parent.clone().map(String::from)),
             None => home.clone(),
         };
         // WAVE-10: a path is unique in its shortcode.
         if let Some(path) = &s.row.path {
             if let Some(holder) = cache.paths.get(&(target.clone(), path.clone())) {
-                refusals.push((s.row.id.clone(), vec![StoreError::PathTaken { epic: to.code.to_string(), path: path.clone(), holder: holder.clone() }]));
+                refusals.push((s.row.id.to_string(), vec![StoreError::PathTaken { epic: to.code.to_string(), path: path.clone(), holder: holder.clone() }]));
             }
         }
     }
@@ -358,7 +358,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
     for s in &steps {
         for (sc, seq) in cache.children.of(&s.row.id) {
             let Some(c) = cache.order.get(&OrderKey { shortcode: sc, seq }) else { continue };
-            if map.contains_key(&c.id) {
+            if map.contains_key(c.id.as_str()) {
                 continue;
             }
             let roots_its_own = root_of(&c.shortcode).as_deref() == Some(c.id.as_str());
@@ -367,13 +367,13 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
             } else {
                 let mut up = s.row.parent.clone();
                 let mut seen = HashSet::new();
-                while let Some(p) = up.clone().filter(|p| map.contains_key(p)) {
+                while let Some(p) = up.clone().filter(|p| map.contains_key(p.as_str())) {
                     if !seen.insert(p.clone()) {
                         break;
                     }
                     up = cache.get(&p).and_then(|r| r.parent.clone());
                 }
-                up.filter(|p| cache.get(p).is_some_and(|r| r.shortcode == c.shortcode)).or_else(|| root_of(&c.shortcode))
+                up.filter(|p| cache.get(p).is_some_and(|r| r.shortcode == c.shortcode)).map(String::from).or_else(|| root_of(&c.shortcode))
             };
             stays.push((c.clone(), under));
         }
@@ -381,7 +381,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
     // No cycle: every moved ticket's chain after the move reaches the top.
     let mut after: HashMap<String, Option<String>> = steps.iter().map(|s| (s.key.clone(), s.parent.clone())).collect();
     for (c, under) in &stays {
-        after.insert(c.id.clone(), under.clone());
+        after.insert(c.id.to_string(), under.clone());
     }
     let back: HashMap<&str, &str> = map.iter().map(|(o, n)| (n.as_str(), o.as_str())).collect();
     let parent_after = |id: &str| -> Option<String> {
@@ -389,7 +389,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
             return p.clone();
         }
         let p = cache.get(back.get(id).copied().unwrap_or(id))?.parent.clone()?;
-        Some(map.get(&p).cloned().unwrap_or(p))
+        Some(map.get(p.as_str()).cloned().unwrap_or(String::from(p)))
     };
     for s in &steps {
         let mut path = vec![s.key.clone()];
@@ -397,7 +397,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
         while let Some(p) = up {
             if path.contains(&p) {
                 path.push(p);
-                return Err(StoreError::ParentCycle { id: s.row.id.clone(), path });
+                return Err(StoreError::ParentCycle { id: s.row.id.to_string(), path });
             }
             path.push(p.clone());
             if path.len() > cache.len() + 2 {
@@ -406,8 +406,8 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
             up = parent_after(&p);
         }
     }
-    let mut asked: Vec<String> = steps.iter().map(|s| s.row.id.clone()).collect();
-    asked.extend(parent_row.as_ref().map(|p| p.id.clone()).or_else(|| home.filter(|h| cache.get(h).is_some())));
+    let mut asked: Vec<String> = steps.iter().map(|s| s.row.id.to_string()).collect();
+    asked.extend(parent_row.as_ref().map(|p| p.id.to_string()).or_else(|| home.filter(|h| cache.get(h).is_some())));
     Ok(Plan { steps, minted, born, stays, renamed: None, asked })
 }
 
@@ -441,7 +441,7 @@ fn rename(cache: &Cache, root: &Row, to: &Address, ask: &Reshortcode) -> Result<
             root.id
         )));
     }
-    let map: HashMap<String, String> = all.iter().map(|t| (t.id.clone(), sc.id.key(t.seq))).collect();
+    let map: HashMap<String, String> = all.iter().map(|t| (t.id.to_string(), sc.id.key(t.seq))).collect();
     let steps: Vec<Step> = all
         .iter()
         .map(|t| Step {
@@ -452,8 +452,8 @@ fn rename(cache: &Cache, root: &Row, to: &Address, ask: &Reshortcode) -> Result<
             parent: t.parent.as_deref().map(|p| map.get(p).cloned().unwrap_or_else(|| p.to_string())),
         })
         .collect();
-    let mut asked: Vec<String> = all.iter().map(|t| t.id.clone()).collect();
-    asked.extend(root.parent.clone());
+    let mut asked: Vec<String> = all.iter().map(|t| t.id.to_string()).collect();
+    asked.extend(root.parent.clone().map(String::from));
     Ok(Plan { steps, renamed: Some((old, sc.id.clone())), minted: Some(sc), born: None, stays: Vec::new(), asked })
 }
 
@@ -598,7 +598,7 @@ impl Store {
         let mut born_ticket = None;
         if let (Some((key, title, parent)), Some(sc)) = (&p.born, &p.minted) {
             let t = Ticket {
-                id: key.clone(),
+                id: crate::address::TicketId::new(key.clone()),
                 epic: sc.code.clone(),
                 shortcode: sc.id.clone(),
                 address: String::new(),
@@ -609,7 +609,7 @@ impl Store {
                 severity: None,
                 blocked_by: Vec::new(),
                 unlocks: Vec::new(),
-                parent: Some(parent.clone()),
+                parent: Some(crate::address::TicketId::new(parent.clone())),
                 child_count: 0,
                 commits: Vec::new(),
                 path: None,
@@ -652,22 +652,22 @@ impl Store {
         for s in &p.steps {
             named.extend(s.row.blocked_by.iter().chain(&s.row.unlocks).cloned());
         }
-        named.extend(p.stays.iter().map(|(c, _)| c.id.clone()));
+        named.extend(p.stays.iter().map(|(c, _)| c.id.to_string()));
         for s in &p.steps {
             let mut r = s.row.clone();
-            (r.id, r.shortcode, r.seq, r.parent, r.updated_unix) = (s.key.clone(), s.shortcode.clone(), s.seq, s.parent.clone(), now);
+            (r.id, r.shortcode, r.seq, r.parent, r.updated_unix) = (crate::address::TicketId::new(s.key.clone()), s.shortcode.clone(), s.seq, s.parent.clone().map(crate::address::TicketId::new), now);
             r.blocked_by = renamed_list(&r.blocked_by, &map);
             r.unlocks = renamed_list(&r.unlocks, &map);
-            rows.insert(r.id.clone(), r);
+            rows.insert(r.id.to_string(), r);
         }
         for id in named.iter().filter(|i| !map.contains_key(*i)) {
             let Some(mut r) = cache.get(id).cloned() else { continue };
             r.blocked_by = renamed_list(&r.blocked_by, &map);
             r.unlocks = renamed_list(&r.unlocks, &map);
             if let Some(under) = stay_under.get(id.as_str()) {
-                (r.parent, r.updated_unix) = ((*under).clone(), now);
+                (r.parent, r.updated_unix) = ((*under).clone().map(crate::address::TicketId::new), now);
             }
-            rows.insert(r.id.clone(), r);
+            rows.insert(r.id.to_string(), r);
         }
         for r in rows.values() {
             db::update_row(&txn, r)?;
@@ -679,7 +679,7 @@ impl Store {
         let inputs = inputs::load(&txn)?;
         let mut built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, inputs, cache.cells.keys());
         built.shortcodes = cache.shortcodes.clone();
-        let first = p.steps.first().map(|s| s.row.id.clone());
+        let first = p.steps.first().map(|s| s.row.id.to_string());
         if let Some(m) = cache.namespaces(built.rows(), &built.rollups, p.minted.as_ref(), first.as_deref())? {
             m.write(&txn)?;
             built.shortcodes = m.after;
@@ -687,12 +687,12 @@ impl Store {
         built.readdress_all();
         stored::write_all(&txn, &built.form())?;
         let mut tickets: Vec<Ticket> = Vec::with_capacity(p.steps.len() + 1);
-        for id in born_ticket.iter().chain(p.steps.iter().map(|s| &s.key)) {
+        for id in born_ticket.iter().map(|t| t.as_str()).chain(p.steps.iter().map(|s| s.key.as_str())) {
             tickets.push(after(&txn, &built, id)?);
         }
         let mut out = Gathered::default();
-        for (c, _) in p.stays.iter().filter(|(c, under)| c.parent != *under) {
-            out.tickets.push(Change::ParentChanged { ticket: after(&txn, &built, &c.id)?, previous: c.parent.clone() });
+        for (c, _) in p.stays.iter().filter(|(c, under)| c.parent.as_deref() != under.as_deref()) {
+            out.tickets.push(Change::ParentChanged { ticket: after(&txn, &built, &c.id)?, previous: c.parent.clone().map(String::from) });
         }
         txn.commit()?;
         // The cache, as an open of the file reads it: every record beside
@@ -702,7 +702,7 @@ impl Store {
         fresh.written = cache.written;
         fresh.themes.tx = cache.themes.tx.clone();
         *cache = fresh;
-        let moves: Vec<ShortcodeMove> = p.steps.iter().map(|s| ShortcodeMove { from: s.row.id.clone(), to: s.key.clone() }).collect();
+        let moves: Vec<ShortcodeMove> = p.steps.iter().map(|s| ShortcodeMove { from: s.row.id.to_string(), to: s.key.clone() }).collect();
         // Each moved ticket as the reader sees it now — its address dressed.
         let tickets: Vec<Ticket> = tickets
             .into_iter()

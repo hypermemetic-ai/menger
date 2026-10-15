@@ -81,12 +81,12 @@ impl Store {
         let mut found: Vec<Reply> = Vec::new();
         // Answers.
         for input in cache.inputs.of(id) {
-            if w.input.as_deref().is_some_and(|only| only != input.id) {
+            if w.input.as_deref().is_some_and(|only| only != input.id.as_str()) {
                 continue;
             }
             if let Some(h) = input.history.iter().find(|h| h.action == InputAction::Answered && h.at_unix >= w.since) {
                 if let Some(value) = h.value.clone() {
-                    found.push(Reply::Answered { input: input.id.clone(), value, rationale: h.rationale.clone(), source: h.source, at_unix: h.at_unix });
+                    found.push(Reply::Answered { input: input.id.to_string(), value, rationale: h.rationale.clone(), source: h.source, at_unix: h.at_unix });
                 }
             }
         }

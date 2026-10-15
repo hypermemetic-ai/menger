@@ -174,7 +174,7 @@ async fn doc_is_no_other_kinds_status() {
     store.create(new("W", Kind::Scope, None, &[])).await.unwrap(); // W-1
     let mut kinds = vec![("W-1".to_string(), Kind::Scope)];
     for kind in [Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike] {
-        kinds.push((store.create(new("W", kind, None, &[])).await.unwrap().id, kind));
+        kinds.push((String::from(store.create(new("W", kind, None, &[])).await.unwrap().id), kind));
     }
     let mut rx = store.subscribe();
     for (id, kind) in &kinds {

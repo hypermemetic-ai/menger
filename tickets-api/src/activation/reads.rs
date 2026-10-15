@@ -58,7 +58,7 @@ pub(super) fn blockers_stream(store: Arc<Store>, admitted: Result<Caller, String
                 for r in refs {
                     yield match r {
                         BlockerRef::Resolved(ticket) if sees_id(&store, reach.as_ref(), &ticket.id) => TicketsEvent::Blocker { ticket },
-                        BlockerRef::Resolved(ticket) => TicketsEvent::DanglingBlocker { id: ticket.id },
+                        BlockerRef::Resolved(ticket) => TicketsEvent::DanglingBlocker { id: String::from(ticket.id) },
                         BlockerRef::Dangling(id) => TicketsEvent::DanglingBlocker { id },
                     };
                 }

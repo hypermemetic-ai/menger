@@ -123,13 +123,13 @@ async fn a_note_upgraded_and_a_ticket_undeleted_are_held_to_the_namespace() {
     let (store, second) = two_themes(&path).await;
     // notes upgrade: a scope THEME under PLEXUS-2 — PLEXUS holds one.
     let note = store.add_note_as("a theme for the platform".into(), None, None).await.unwrap();
-    let refused = store.upgrade_note(note.id, new("THEME", Kind::Scope, Some("PLEXUS-2"))).await.unwrap_err();
+    let refused = store.upgrade_note(note.id.get(), new("THEME", Kind::Scope, Some("PLEXUS-2"))).await.unwrap_err();
     taken(refused);
-    let (made, _) = store.upgrade_note(note.id, new("THEME", Kind::Scope, Some("OUGHT-1"))).await.unwrap();
+    let (made, _) = store.upgrade_note(note.id.get(), new("THEME", Kind::Scope, Some("OUGHT-1"))).await.unwrap();
     assert_eq!(made.address, "hypermemetic:OUGHT/THEME-1");
     // delete and undelete: the namesake's root and its build go and come
     // back with their addresses.
-    let ids = vec![second.id.clone(), format!("{}-2", second.shortcode.as_str())];
+    let ids = vec![second.id.to_string(), format!("{}-2", second.shortcode.as_str())];
     store.delete(Selection::Ids(ids.clone()), Deletion { children: Some(Children::Delete), unblock: true }, None).await.unwrap();
     assert!(matches!(store.get("PLEXUS/THEME-1").await, Err(StoreError::NotFound(_))));
     store.undelete(&ids).await.unwrap();
