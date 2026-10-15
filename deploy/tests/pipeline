@@ -264,6 +264,9 @@ has "smoke: health with the token" "$err" "ok   tickets.health on :1 — 3 ticke
 has "smoke: behind the login page" "$err" "ok   app on :2 behind its login page"
 [[ $(<"$STUB_ARGV") != *"$STUB_SECRET"* ]] && ok || bad "the smoke password or token rode in argv: $(grep -- "$STUB_SECRET" "$STUB_ARGV")"
 has "the password went to curl on stdin" "$(<"$STUB_STDIN")" "password=$STUB_SECRET"
+# ACCESS-42: the body ends at its last field — a trailing newline would be
+# sent by --data-binary and read by the issuer into the audience.
+[[ $(tail -c 1 "$STUB_STDIN" | od -An -tx1 | tr -d ' \n') != 0a ]] && ok || bad "the form to curl ends with a newline: the issuer reads it into the last field"
 has "the token went to smoke-health on stdin" "$(<"$STUB_ARGV")" "smoke-health.mjs 1 -"
 # … and with its local half lost (the H3 install): the smoke fails
 cp "$C/test.local.env" "$SCRATCH/local.keep"; echo '# lost' >"$C/test.local.env"
