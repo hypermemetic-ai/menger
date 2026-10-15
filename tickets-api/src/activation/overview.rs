@@ -5,7 +5,7 @@
 use super::*;
 
 /// FILTER-4: `counts` — each shortcode's matches of a filter (the activation's doc).
-pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<Caller, String>, filter: Option<FilterText>, keep: Option<TicketRef>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, filter: Option<FilterText>, keep: Option<TicketRef>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let caller = match admitted {
             Ok(caller) => caller,
@@ -28,7 +28,7 @@ pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<Caller, String>,
                 return;
             }
         };
-        match filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())) {
+        match filter.as_ref().map(Lens::of).unwrap_or_else(|| Ok(Lens::all())) {
             Ok(lens) => {
                 let lens = lens.with_clock(clock);
                 let keep = kept(&store, &caller, keep.as_deref());
@@ -50,7 +50,7 @@ pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<Caller, String>,
 }
 
 /// FILTER-4: `facets` — the menus' counts (the activation's doc).
-pub(super) fn facets_stream(store: Arc<Store>, admitted: Result<Caller, String>, filter: Option<FilterText>, base: Option<FilterText>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn facets_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, filter: Option<FilterText>, base: Option<FilterText>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let caller = match admitted {
             Ok(caller) => caller,
@@ -73,14 +73,8 @@ pub(super) fn facets_stream(store: Arc<Store>, admitted: Result<Caller, String>,
                 return;
             }
         };
-        let read = |text: Option<String>| -> Result<crate::filter::Filter, String> {
-            text.as_deref().map_or_else(|| Ok(Default::default()), |t| crate::filter::Filter::parse(t).map_err(|e| e.to_string()))
-        };
-        let answer = clock_of(&caller, tz.as_deref()).and_then(|clock| {
-            read(filter)
-                .and_then(|f| Ok((f, read(base)?)))
-                .and_then(|(f, b)| store.facets_at(&f, &b, &clock).map_err(|e| e.to_string()))
-        });
+        let (filter, base) = (filter.unwrap_or_default(), base.unwrap_or_default());
+        let answer = clock_of(&caller, tz.as_deref()).and_then(|clock| store.facets_at(&filter, &base, &clock).map_err(|e| e.to_string()));
         match answer {
             Ok(facets) => {
                 for (field, value, held) in facets {

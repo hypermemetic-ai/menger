@@ -68,7 +68,7 @@ impl Members {
     /// grant gets `me` and nothing else.
     #[plexus_macros::method(group = "read", description = "Who you are, then each grant you hold")]
     pub async fn mine(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let access = self.access.clone();
         stream! {
             let caller = match admitted {
@@ -79,11 +79,11 @@ impl Members {
                 }
             };
             yield MembersEvent::Me {
-                principal: caller.principal.clone(),
-                name: caller.name.clone(),
+                principal: caller.principal_text(),
+                name: caller.name().map(str::to_string),
                 admin_everywhere: caller.administers("*"),
             };
-            if let Some(p) = &caller.principal {
+            if let Some(p) = caller.principal() {
                 for g in access.grants_of(p) {
                     yield grant_event(g);
                 }
@@ -100,7 +100,7 @@ impl Members {
         params(scope = "Only this organization (acme:), shortcode, or * (optional)")
     )]
     pub async fn list(&self, auth: Option<&AuthContext>, reach: Reach, scope: Option<ScopeRef>) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let (store, access) = (self.store.clone(), self.access.clone());
         stream! {
             // AUTH-7: the gate admitted `members.list` held somewhere (admin
@@ -148,7 +148,7 @@ impl Members {
         example(note = "make a person an editor on IDENTITY", params = r#"{"principal": "oidc:workos/user_01M4", "scope": "IDENTITY", "role": "editor"}"#)
     )]
     pub async fn grant(&self, auth: Option<&AuthContext>, reach: Reach, principal: Principal, scope: ScopeRef, role: Role) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let (store, access) = (self.store.clone(), self.access.clone());
         stream! {
             let caller = match admitted {
@@ -169,7 +169,7 @@ impl Members {
                 principal: principal.into_string(),
                 scope,
                 role,
-                granted_by: caller.principal.clone().unwrap_or_else(|| OPERATOR.into()),
+                granted_by: caller.principal_text().unwrap_or_else(|| OPERATOR.into()),
                 at: chrono::Utc::now().timestamp(),
             };
             match store.grant(grant).await {
@@ -191,7 +191,7 @@ impl Members {
         params(principal = "The Plexus principal", scope = "An organization (acme:), a shortcode in one, or *")
     )]
     pub async fn revoke(&self, auth: Option<&AuthContext>, reach: Reach, principal: Principal, scope: ScopeRef) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let store = self.store.clone();
         stream! {
             if let Err(message) = admitted {
@@ -220,7 +220,7 @@ impl Members {
     /// restart forgets them until they come back.
     #[plexus_macros::method(group = "admin", description = "Who signed in without a grant, waiting for an admin")]
     pub async fn requests(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         let access = self.access.clone();
         stream! {
             if let Err(message) = admitted {

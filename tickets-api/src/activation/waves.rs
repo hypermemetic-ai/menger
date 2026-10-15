@@ -31,7 +31,7 @@ use super::*;
 
 /// `waves { epics, kinds }` (WAVE-4): `epics` empty, a shortcode out of
 /// reach or a kind outside the six is one `Error`.
-pub(super) fn waves_answer(store: &Store, admitted: Result<Caller, String>, epics: Vec<String>, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
+pub(super) fn waves_answer(store: &Store, admitted: Result<VerifiedUser, String>, epics: Vec<String>, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
     let caller = match admitted {
         Ok(caller) => caller,
         Err(message) => return vec![TicketsEvent::Error { message }],
@@ -57,7 +57,7 @@ pub(super) fn waves_answer(store: &Store, admitted: Result<Caller, String>, epic
 }
 
 /// `waves_under { id, kinds? }` (MENGER-31).
-pub(super) fn waves_under_answer(store: &Store, admitted: Result<Caller, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
+pub(super) fn waves_under_answer(store: &Store, admitted: Result<VerifiedUser, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
     let (visible, kinds) = match waves_of_one(store, admitted, &id, kinds, &crate::store::waves::DEFAULT_KINDS) {
         Ok(v) => v,
         Err(evs) => return evs,
@@ -70,7 +70,7 @@ pub(super) fn waves_under_answer(store: &Store, admitted: Result<Caller, String>
 }
 
 /// `waves_to { id, kinds? }` (MENGER-31).
-pub(super) fn waves_to_answer(store: &Store, admitted: Result<Caller, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
+pub(super) fn waves_to_answer(store: &Store, admitted: Result<VerifiedUser, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
     let every = [Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike];
     let (visible, kinds) = match waves_of_one(store, admitted, &id, kinds, &every) {
         Ok(v) => v,
@@ -101,7 +101,7 @@ fn kinds_of(kinds: Option<Vec<Kind>>, default: &[Kind]) -> Result<Vec<Kind>, Vec
 /// refusal is the one event the call yields.
 fn waves_of_one(
     store: &Store,
-    admitted: Result<Caller, String>,
+    admitted: Result<VerifiedUser, String>,
     id: &str,
     kinds: Option<Vec<Kind>>,
     default: &[Kind],

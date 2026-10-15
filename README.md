@@ -1748,6 +1748,32 @@ active` is refused before it is sent (`-p '{"status": "active"}'`, the app
 and REST still send it); every invocation in this file and AGENTS.md is
 canonical.
 
+### Capabilities (ACCESS-9)
+
+What the gate does not decide, menger proves with a **capability**: a value
+only one module can make, so holding it is the proof (ACCESS-1, the
+capability-types pattern). `tickets-api/src/access/` (server-only):
+
+| type | holding one proves | minted by |
+|---|---|---|
+| `VerifiedUser` | signed in (or login off), the sign-in alive and unexpired, the principal parsed by the identity layer — never its `user_id` instead —, the ceiling readable, the grants resolved | `Access::verify(&AuthContext)` (`verify_call` for a method: and the grant it was admitted for) |
+| `Reach` (inside it) | its grants — direct ∪ its teams' (`team:<name>`; ACCESS-22 keeps the teams) ∪ the operator's — each scope compiled (`*`, `acme:`, a shortcode and those hosted under it, `under ID`, `ID`), the ceiling likewise, at the grants generation of the moment | `verify` |
+| `Permit<Viewer \| Editor \| Admin>` | a role the mark admits, on the ticket it names, by the kept tree as it stands (editor ⇒ viewer) | `VerifiedUser::permit(&TicketId, &Store)` |
+| `AdminOf` | admin on the scope it names (or one covering it), within the ceiling | `VerifiedUser::admin_of(&Scope, &Store)` |
+| `System` | the holder opened the store and acts for no user | the store, once (`Store::system`; the access layer takes it at `attach`) |
+
+`Hidden` is the one answer for a ticket that is not there and one that is
+not the caller's; `Refusal` every other reason (signed out, expired, no
+principal, held nowhere). A read's reach is predicates built from the
+compiled scopes — never filter text formatted and read back — and a watch
+compares a `ReachKey`, not a string. The **grants generation**
+(`Store::grants_generation`) moves on every grant, revoke and team change.
+None has a public field or constructor, a `Default` or a `Deserialize`
+(`compile_fail` doctests hold it); `for_tests` constructors exist under
+`cfg(test)` and the `test-support` feature, never in the server. ACCESS-10
+(reads take `&VerifiedUser`), ACCESS-11 (writes take a `Permit`) and
+ACCESS-12 (watches re-verify on the generation) build on these.
+
 ### Addresses and namespaces (ORG-3)
 
 A shortcode is unique only within its **namespace** — its organization and
@@ -3030,7 +3056,7 @@ its own grant** (`tickets.set_status`), a **role is an explicit list of
 grants**, and plexus-core's **gate** decides every call before it runs — the
 grant, held through a role on the scope the call's **target** lives in,
 within the session's ceiling. Default deny. menger supplies the gate its
-roles, memberships and scopes (`tickets-api/src/access.rs`, `Book`) and an
+roles, memberships and scopes (`tickets-api/src/access/`, `Book`) and an
 `AuthBackend` (`src/auth_backend.rs`). Login off: no gate, no `auth`
 activation — every method answers everyone, as before; schemas only gain
 `grant` and `target` on each method.

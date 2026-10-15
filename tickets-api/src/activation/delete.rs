@@ -11,7 +11,7 @@ use crate::store::{Children, Deleted, Deletion, Reshortcode, Reshortcoded, Selec
 /// ACT-5: `delete` — what to delete, how, and the store's write.
 pub(super) fn delete_stream(
     store: Arc<Store>,
-    admitted: Result<Caller, String>,
+    admitted: Result<VerifiedUser, String>,
     ids: Option<Vec<TicketRef>>,
     filter: Option<FilterText>,
     max: Option<u32>,
@@ -46,7 +46,8 @@ pub(super) fn delete_stream(
             }
         };
         let sight = sight_lens(&caller).ok().flatten();
-        let (gate, at) = (caller.clone(), store.clone());
+        let caller = Arc::new(caller);
+        let (gate, at) = (Arc::clone(&caller), store.clone());
         let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
         match store.delete_by(select, how, act, may).await {
             Ok(Deleted { ids, tombstones }) => yield TicketsEvent::Deleted { ids, tombstones },
@@ -56,7 +57,7 @@ pub(super) fn delete_stream(
 }
 
 /// ACT-5: `undelete` — the caller's grant on each id, then the store's write.
-pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<Caller, String>, ids: Vec<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, ids: Vec<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let caller = match admitted {
             Ok(caller) => caller,
@@ -72,7 +73,8 @@ pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<Caller, String
                 return;
             }
         };
-        let (gate, at) = (caller.clone(), store.clone());
+        let caller = Arc::new(caller);
+        let (gate, at) = (Arc::clone(&caller), store.clone());
         let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
         match store.undelete_by(&ids, act, may).await {
             Ok(Undeleted { ids, tickets }) => yield TicketsEvent::Undeleted { ids, tickets },
@@ -84,7 +86,7 @@ pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<Caller, String
 /// ACT-6: `reshortcode` — who asks, the grants, and the store's write.
 pub(super) fn reshortcode_stream(
     store: Arc<Store>,
-    admitted: Result<Caller, String>,
+    admitted: Result<VerifiedUser, String>,
     mut ask: Reshortcode,
     message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
@@ -99,7 +101,8 @@ pub(super) fn reshortcode_stream(
         // ORG-4: the ids, `to` and `parent` read in the caller's organizations.
         ask.orgs = caller.orgs();
         let sight = sight_lens(&caller).ok().flatten();
-        let (gate, at) = (caller.clone(), store.clone());
+        let caller = Arc::new(caller);
+        let (gate, at) = (Arc::clone(&caller), store.clone());
         let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
         match store.reshortcode_by(ask, act, may).await {
             Ok(Reshortcoded { moves, tickets }) => yield TicketsEvent::Reshortcoded { moves, tickets },
