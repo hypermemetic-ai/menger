@@ -19,7 +19,7 @@
 //! // A VerifiedUser: only Access::verify makes one.
 //! use menger_tickets_api::access::VerifiedUser;
 //! fn forge(reach: menger_tickets_api::access::Reach) -> VerifiedUser {
-//!     VerifiedUser { principal: None, name: None, reach, ctx: None }
+//!     VerifiedUser { principal: None, name: None, reach, ctx: None, gate: None }
 //! }
 //! ```
 //!
@@ -85,6 +85,24 @@ impl std::fmt::Display for Refusal {
 }
 
 impl std::error::Error for Refusal {}
+
+/// ACCESS-13: a refusal as the frame's resolver answers it on the wire,
+/// typed (MACRO-14): a sign-in that does not stand — none, no principal,
+/// expired, signed out, a ceiling that cannot be read — is
+/// `unauthenticated` (-32001), in its words; anything else is `forbidden`
+/// (-32003). The gate refuses a grant held nowhere before the resolver
+/// runs, so the second is rare: a reach no read can be made of.
+impl From<Refusal> for plexus_core::plexus::PlexusError {
+    fn from(r: Refusal) -> Self {
+        use plexus_core::plexus::{AuthzDenyReason, PlexusError};
+        match r {
+            Refusal::SignIn | Refusal::NoPrincipal | Refusal::Expired | Refusal::SignedOut | Refusal::Ceiling(_) => PlexusError::Unauthenticated(r.to_string()),
+            Refusal::Nowhere { .. } | Refusal::OutsideCeiling { .. } | Refusal::Lacks(_) | Refusal::Unreadable(_) => {
+                PlexusError::Forbidden { reason: AuthzDenyReason::NotAccepted }
+            }
+        }
+    }
+}
 
 impl From<Refusal> for String {
     fn from(r: Refusal) -> String {
@@ -363,6 +381,10 @@ pub struct VerifiedUser {
     reach: Reach,
     /// The identity verified — what the gate's own questions take.
     ctx: Option<AuthContext>,
+    /// ACCESS-13: the gate's reach the call was admitted under — what an
+    /// open watch asks again as the grants move ([`super::Following::of`]);
+    /// `None` with login off, and for a user verified outside a dispatch.
+    gate: Option<GateReach>,
 }
 
 impl std::fmt::Debug for VerifiedUser {
@@ -374,15 +396,31 @@ impl std::fmt::Debug for VerifiedUser {
 impl VerifiedUser {
     /// Login off: anyone, everything.
     pub(super) fn anyone() -> Self {
-        Self { principal: None, name: None, reach: Reach::everything(), ctx: None }
+        Self { principal: None, name: None, reach: Reach::everything(), ctx: None, gate: None }
     }
 
     pub(super) fn verified(principal: Who, name: Option<String>, reach: Reach, ctx: AuthContext) -> Self {
-        Self { principal: Some(principal), name, reach, ctx: Some(ctx) }
+        Self { principal: Some(principal), name, reach, ctx: Some(ctx), gate: None }
     }
 
     pub(super) fn for_call(self, grant: Option<GateGrant>) -> Self {
         Self { reach: self.reach.for_call(grant), ..self }
+    }
+
+    /// ACCESS-13: the gate's reach for the call, kept.
+    pub(super) fn following(self, gate: GateReach) -> Self {
+        Self { gate: Some(gate), ..self }
+    }
+
+    /// ACCESS-13: the identity verified (`None` with login off).
+    pub fn context(&self) -> Option<&AuthContext> {
+        self.ctx.as_ref()
+    }
+
+    /// ACCESS-13: the gate's reach the call was admitted under (`None` with
+    /// login off).
+    pub fn gate_reach(&self) -> Option<&GateReach> {
+        self.gate.as_ref()
     }
 
     /// A user holding `grants` (no ceiling), behind a gate over `access`'s
@@ -390,7 +428,7 @@ impl VerifiedUser {
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_tests(access: &Access, principal: Who, grants: Vec<(Held, Role)>) -> Self {
         let reach = Reach::for_tests(principal.as_str(), grants, access.gate().clone());
-        Self { principal: Some(principal), name: None, reach, ctx: None }
+        Self { principal: Some(principal), name: None, reach, ctx: None, gate: None }
     }
 
     /// The principal (`None` with login off).

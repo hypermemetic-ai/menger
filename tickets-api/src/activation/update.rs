@@ -50,14 +50,14 @@ pub(super) enum CellWrite {
 /// or none — one event per ticket, in the order named.
 pub(super) fn cells_stream(
     store: Arc<Store>,
-    admitted: Result<VerifiedUser, String>,
+    caller: VerifiedUser,
     id: Option<TicketRef>,
     ids: Option<Vec<TicketRef>>,
     write: CellWrite,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let (caller, target) = match admitted.and_then(|c| one_or_many(id.map(String::from), ids.map(texts)).map(|t| (c, t))) {
-            Ok(c) => c,
+        let target = match one_or_many(id.map(String::from), ids.map(texts)) {
+            Ok(t) => t,
             Err(message) => {
                 yield TicketsEvent::Error { message };
                 return;
@@ -133,7 +133,7 @@ fn one_or_many(id: Option<String>, ids: Option<Vec<String>>) -> Result<Result<St
 /// reach on every ticket selected, then the store's one write.
 pub(super) fn update_many_stream(
     store: Arc<Store>,
-    admitted: Result<VerifiedUser, String>,
+    caller: VerifiedUser,
     ids: Option<Vec<TicketRef>>,
     filter: Option<FilterText>,
     max: Option<u32>,
@@ -143,7 +143,7 @@ pub(super) fn update_many_stream(
     message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let chosen = admitted.and_then(|caller| {
+        let chosen = Ok::<_, String>(caller).and_then(|caller| {
             let select = match (ids, filter) {
                 (Some(ids), None) => Selection::Ids(texts(ids)),
                 (None, Some(filter)) => {

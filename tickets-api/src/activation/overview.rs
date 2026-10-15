@@ -5,15 +5,8 @@
 use super::*;
 
 /// FILTER-4: `counts` — each shortcode's matches of a filter (the activation's doc).
-pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, filter: Option<FilterText>, keep: Option<TicketRef>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn counts_stream(store: Arc<Store>, caller: VerifiedUser, filter: Option<FilterText>, keep: Option<TicketRef>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let caller = match admitted {
-            Ok(caller) => caller,
-            Err(message) => {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-        };
         let filter = match asked(filter.as_deref()) {
             Ok(v) => v,
             Err(message) => {
@@ -50,15 +43,8 @@ pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<VerifiedUser, St
 }
 
 /// FILTER-4: `facets` — the menus' counts (the activation's doc).
-pub(super) fn facets_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, filter: Option<FilterText>, base: Option<FilterText>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn facets_stream(store: Arc<Store>, caller: VerifiedUser, filter: Option<FilterText>, base: Option<FilterText>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let caller = match admitted {
-            Ok(caller) => caller,
-            Err(message) => {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-        };
         let filter = match asked(filter.as_deref()) {
             Ok(v) => v,
             Err(message) => {

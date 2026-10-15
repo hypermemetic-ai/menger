@@ -18,7 +18,8 @@
 //!   app gives; answering is the owner done with it, so the ticket leaves
 //!   the queue — the input itself stays the agent's to close), then *open
 //!   the ticket*, *snooze 10m* and *done with it*. A click on the open tab,
-//!   or Esc, lowers it.
+//!   Esc, or a press anywhere outside the tray — a frame's included
+//!   (APP-26, [`outside_lowers`]) — lowers it.
 //! - **Chosen, then submitted** (APP-25): an option clicked is selected
 //!   ([`Pick`]), nothing sent; ticks and a reply are held the same way, and
 //!   one **submit** sends whichever it is. The sheet comes down once that
@@ -769,6 +770,36 @@ pub(crate) fn Tray() -> impl IntoView {
             pick.set(Pick::default());
         }
     });
+    // APP-26: a press anywhere outside the tray lowers the sheet (it slides
+    // down as every close does; Motion none, at once); not while a submit
+    // is out. A tab, the sheet and the card are inside, so the press that
+    // opens or switches a tab is the tab's own. A press in a frame (a
+    // ticket's body) never reaches this window: focus going into the frame
+    // blurs it instead, and that is heard as the press.
+    let lower_outside = move |target: Option<web_sys::Element>| {
+        let inside = target.is_some_and(|el| el.closest("#qtray").ok().flatten().is_some());
+        let (Some(is_open), Some(is_busy)) = (open.try_with_untracked(Option::is_some), busy.try_get_untracked()) else { return };
+        if outside_lowers(is_open, is_busy, inside) {
+            open.set(None);
+        }
+    };
+    let press = window_event_listener(leptos::ev::pointerdown, move |ev| {
+        lower_outside(ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()));
+    });
+    let into_frame = window_event_listener(leptos::ev::blur, move |_| {
+        spawn_local(async move {
+            dom::sleep_ms(0).await;
+            let active = dom::window().document().and_then(|d| d.active_element());
+            if let Some(frame) = active.filter(|el| el.tag_name().eq_ignore_ascii_case("iframe")) {
+                lower_outside(Some(frame));
+            }
+        });
+    });
+    // The tray goes with the session's view (a sign-out): so do they.
+    on_cleanup(move || {
+        press.remove();
+        into_frame.remove();
+    });
     let toggle = move |id: String| {
         problem.set(None);
         draft.clear();
@@ -946,6 +977,13 @@ pub(crate) fn Tray() -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// APP-26: whether a press lowers the sheet — one is up, no submit is out,
+/// and the press landed outside the tray (a tab, the sheet and the card are
+/// inside).
+fn outside_lowers(open: bool, busy: bool, inside: bool) -> bool {
+    open && !busy && !inside
 }
 
 /// The named input of `e`, as the app's copy of the inputs holds it.
@@ -1431,5 +1469,16 @@ mod tests {
         assert_eq!(open_href(&e), "#/ticket/A-1");
         e.input = Some("landing".into());
         assert_eq!(open_href(&e), "#/ticket/A-1?anchor=landing");
+    }
+
+    /// APP-26: a press outside the tray lowers an open sheet; one inside it
+    /// (the tab that opens it, the sheet, the card) or during a submit does
+    /// not, and nothing is lowered when nothing is up.
+    #[test]
+    fn a_press_outside_lowers_the_sheet() {
+        assert!(outside_lowers(true, false, false), "outside, open, idle");
+        assert!(!outside_lowers(true, false, true), "inside the tray");
+        assert!(!outside_lowers(true, true, false), "a submit is out");
+        assert!(!outside_lowers(false, false, false), "nothing is up");
     }
 }

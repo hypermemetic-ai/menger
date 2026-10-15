@@ -518,18 +518,18 @@ async fn team_grants_add_to_direct_ones() {
     s.grant(SYS, grant("team:crew", "hypermemetic:IDENTITY", Role::Editor)).await.unwrap();
     a.attach(s.clone());
     let me = ctx(json!({}));
-    let u = a.verify(&me).unwrap();
+    let u = a.verify_now(&me).unwrap();
     assert!(u.permit::<Viewer>(&t("OUGHT-2"), &s).is_ok());
     assert!(u.permit::<Viewer>(&t("IDENTITY-2"), &s).is_err(), "not in the team yet");
     let crew = crate::vocab::TeamName::stored("crew");
     s.set_team_for_tests(ALICE, crew.clone(), true);
-    let u = a.verify(&me).unwrap();
+    let u = a.verify_now(&me).unwrap();
     assert!(u.permit::<Editor>(&t("IDENTITY-2"), &s).is_ok(), "the team's grant");
     assert!(u.permit::<Viewer>(&t("OUGHT-2"), &s).is_ok(), "and still the direct one");
     assert!(u.permit::<Editor>(&t("OUGHT-2"), &s).is_err(), "each at its own role");
     assert_eq!(u.reach().grants().len(), 2);
     s.set_team_for_tests(ALICE, crew, false);
-    assert!(a.verify(&me).unwrap().permit::<Viewer>(&t("IDENTITY-2"), &s).is_err(), "left the team");
+    assert!(a.verify_now(&me).unwrap().permit::<Viewer>(&t("IDENTITY-2"), &s).is_err(), "left the team");
 }
 
 #[tokio::test]
@@ -538,9 +538,9 @@ async fn the_generation_moves_on_every_grant_revoke_and_team_change() {
     let s = store().await;
     a.attach(s.clone());
     let me = ctx(json!({}));
-    let mut seen = vec![a.verify(&me).unwrap().reach().generation()];
+    let mut seen = vec![a.verify_now(&me).unwrap().reach().generation()];
     let mut moved = |why: &str| {
-        let g = a.verify(&me).unwrap().reach().generation();
+        let g = a.verify_now(&me).unwrap().reach().generation();
         assert!(!seen.contains(&g), "{why}: {g} after {seen:?}");
         assert_eq!(g, a.generation());
         seen.push(g);
@@ -570,20 +570,45 @@ async fn verify_needs_a_principal_and_never_falls_back_to_the_user_id() {
     a.attach(store().await);
     // A user_id the identity layer cannot read as a principal, and no claim.
     let bare = AuthContext::new("user-1".into(), "s".into(), vec![], json!({}));
-    assert_eq!(a.verify(&bare).unwrap_err(), Refusal::NoPrincipal);
+    assert_eq!(a.verify_now(&bare).unwrap_err(), Refusal::NoPrincipal);
     // A claim it cannot read is no principal either — not the user_id.
     let corrupt = AuthContext::new(ALICE.trim_start_matches("idp:").into(), "s".into(), vec![], json!({ "principal": "idp:not-a-uuid" }));
-    assert_eq!(a.verify(&corrupt).unwrap_err(), Refusal::NoPrincipal);
+    assert_eq!(a.verify_now(&corrupt).unwrap_err(), Refusal::NoPrincipal);
     assert!(a.waiting().is_empty(), "no one to wait");
-    assert_eq!(a.verify(&AuthContext::anonymous()).unwrap_err(), Refusal::SignIn);
-    let u = a.verify(&ctx(json!({ "name": "alice" }))).unwrap();
+    assert_eq!(a.verify_now(&AuthContext::anonymous()).unwrap_err(), Refusal::SignIn);
+    let u = a.verify_now(&ctx(json!({ "name": "alice" }))).unwrap();
     assert_eq!((u.principal().map(|p| p.as_str()), u.name()), (Some(ALICE), Some("alice")));
     // Login off: anyone, everything — no principal at all.
     let s = store().await;
-    let anyone = Access::open().verify(&AuthContext::anonymous()).unwrap();
+    let anyone = Access::open().verify_now(&AuthContext::anonymous()).unwrap();
     assert!(anyone.principal().is_none());
     assert!(anyone.permit::<Admin>(&t("OUGHT-2"), &s).is_ok());
     assert!(anyone.admin_of(&Scope::Everywhere, &s).is_ok());
+}
+
+/// ACCESS-13: the frame's resolver — `verify_now` for the call being
+/// dispatched, its refusal typed for the wire (MACRO-14), the gate's reach
+/// for the call kept on the user (what a watch follows).
+#[tokio::test]
+async fn the_frames_resolver_answers_typed_and_keeps_the_calls_reach() {
+    use plexus_core::plexus::PlexusError;
+    let a = login(vec![]);
+    a.attach(store().await);
+    match a.verify(&AuthContext::anonymous()).await {
+        Err(PlexusError::Unauthenticated(m)) => assert!(m.contains("sign in first"), "{m}"),
+        other => panic!("anonymous, login on: {other:?}"),
+    }
+    let bare = AuthContext::new("user-1".into(), "s".into(), vec![], json!({}));
+    assert!(matches!(a.verify(&bare).await, Err(PlexusError::Unauthenticated(_))), "no principal is no sign-in");
+    let u = a.verify(&ctx(json!({ "name": "alice" }))).await.expect("alice signs in");
+    assert_eq!(u.principal().map(|p| p.as_str()), Some(ALICE));
+    assert!(u.context().is_some() && u.gate_reach().is_some(), "the identity and the call's reach, kept");
+    // Login off: anyone, whatever identity the transport handed it.
+    let anyone = Access::open().verify(&AuthContext::anonymous()).await.expect("login off admits anyone");
+    assert!(anyone.principal().is_none() && anyone.gate_reach().is_none());
+    // Every other refusal is `forbidden`.
+    let e: PlexusError = Refusal::Lacks("no".into()).into();
+    assert!(matches!(e, PlexusError::Forbidden { .. }), "{e:?}");
 }
 
 #[tokio::test]
@@ -593,7 +618,7 @@ async fn admin_of_is_held_on_the_scope_or_one_covering_it() {
     s.grant(SYS, grant(ALICE, "hypermemetic:PLEXUS", Role::Admin)).await.unwrap();
     s.grant(SYS, grant(ALICE, "hypermemetic:OUGHT", Role::Editor)).await.unwrap();
     a.attach(s.clone());
-    let u = a.verify(&ctx(json!({}))).unwrap();
+    let u = a.verify_now(&ctx(json!({}))).unwrap();
     let shortcode = |id: &str| Scope::Shortcode { org: org(), id: ShortcodeId::new(id) };
     assert_eq!(u.admin_of(&shortcode("PLEXUS"), &s).unwrap().scope(), &shortcode("PLEXUS"));
     assert!(u.admin_of(&shortcode("IDENTITY"), &s).is_ok(), "hosted under PLEXUS");
@@ -608,10 +633,10 @@ async fn admin_of_is_held_on_the_scope_or_one_covering_it() {
     // The operator's admin on `*`, held to a ceiling: no wider than it.
     let op = login(vec![ALICE.into()]);
     op.attach(s.clone());
-    let held = op.verify(&ctx(json!({ CEILING_KEY: ceiling(&[&["admin@hypermemetic:IDENTITY"]]) }))).unwrap();
+    let held = op.verify_now(&ctx(json!({ CEILING_KEY: ceiling(&[&["admin@hypermemetic:IDENTITY"]]) }))).unwrap();
     assert!(held.admin_of(&shortcode("IDENTITY"), &s).is_ok());
     assert!(held.admin_of(&shortcode("PLEXUS"), &s).is_err());
-    assert!(op.verify(&ctx(json!({}))).unwrap().admin_of(&Scope::Everywhere, &s).is_ok());
+    assert!(op.verify_now(&ctx(json!({}))).unwrap().admin_of(&Scope::Everywhere, &s).is_ok());
 }
 
 #[tokio::test]
@@ -619,11 +644,11 @@ async fn a_ceiling_on_a_ticket_holds_permits_to_its_subtree() {
     let a = login(vec![ALICE.into()]);
     let s = deeper().await;
     a.attach(s.clone());
-    let u = a.verify(&ctx(json!({ CEILING_KEY: ceiling(&[&["editor@PLEXUS-2"]]) }))).unwrap();
+    let u = a.verify_now(&ctx(json!({ CEILING_KEY: ceiling(&[&["editor@PLEXUS-2"]]) }))).unwrap();
     assert_eq!(permitted(&u, &s), vec!["PLEXUS-2", "PLEXUS-3"]);
     assert!(u.permit::<Admin>(&t("PLEXUS-2"), &s).is_err(), "no more than editor");
     // A ceiling's single grant is no role: it gives no permit.
-    let g = a.verify(&ctx(json!({ CEILING_KEY: ceiling(&[&["tickets.get@*"]]) }))).unwrap();
+    let g = a.verify_now(&ctx(json!({ CEILING_KEY: ceiling(&[&["tickets.get@*"]]) }))).unwrap();
     assert!(permitted(&g, &s).is_empty());
 }
 

@@ -1854,7 +1854,7 @@ capability-types pattern). `tickets-api/src/access/` (server-only):
 
 | type | holding one proves | minted by |
 |---|---|---|
-| `VerifiedUser` | signed in (or login off), the sign-in alive and unexpired, the principal parsed by the identity layer — never its `user_id` instead —, the ceiling readable, the grants resolved | `Access::verify(&AuthContext)` (`verify_call` for a method: and the grant it was admitted for) |
+| `VerifiedUser` | signed in (or login off), the sign-in alive and unexpired, the principal parsed by the identity layer — never its `user_id` instead —, the ceiling readable, the grants resolved | `Access::verify(&AuthContext)`, the frame's resolver (ACCESS-13: and the grant the call was admitted for); `verify_now` the same, outside a dispatch; `verify_call` for an activation not on the frame yet |
 | `Reach` (inside it) | its grants — direct ∪ its teams' (`team:<name>`; ACCESS-22 keeps the teams) ∪ the operator's — each scope compiled (`*`, `acme:`, a shortcode and those hosted under it, `under ID`, `ID`), the ceiling likewise, at the grants generation of the moment | `verify` |
 | `Permit<Viewer \| Editor \| Admin>` | a role the mark admits, on the ticket it names, by the kept tree as it stands (editor ⇒ viewer) | `VerifiedUser::permit(&TicketId, &Store)` |
 | `AdminOf` | admin on the scope it names (or one covering it), within the ceiling | `VerifiedUser::admin_of(&Scope, &Store)` |
@@ -1987,6 +1987,77 @@ take (ACCESS-3 #8; one who sees everything hears them whole). For a caller
 allowed to write nothing on the wire changed. `store/tests_writs.rs` holds
 the proofs' rule and ACCESS-3 #1, #2, #11; `tests/members.rs` #2 and #8 over
 the socket.
+
+### The frame (ACCESS-13)
+
+`tickets` is declared on **the frame** every activation takes from here
+(`tickets-api/src/activation/mod.rs`; comments, members and session follow
+in ACCESS-19):
+
+```rust
+/// Plans as data — create, query, and watch the work DAG.
+#[plexus_macros::activation(namespace = "tickets", auth = "required", request = MengerRequest,
+    client, typed_params, server_cfg = "feature = \"server\"", crate_path = "plexus_core", roles(…))]
+impl Tickets {
+    /// Set a ticket's status (…).
+    ///
+    /// The long prose: what it yields, what it refuses.
+    #[plexus_macros::method(group = "write", target = "id", example(…))]
+    pub async fn set_status(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Ticket id, e.g. MNG-2.
+        id: TicketRef,
+        /// New status: …
+        status: Status,
+        …
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        answered!(store = self.store.clone(), user, Some(id.to_string()) => {
+            let on = permit::<Editor>(&store, &user, &id)?;
+            let act = act_of(&user, source, message)?;
+            Ok(change_event(store.set_status_by(on, status, act, restore_children.unwrap_or(false)).await?))
+        })
+    }
+}
+```
+
+- **The caller is resolved before the body runs** — and before a
+  parameter is read: `#[from_auth(self.access.verify)]` runs
+  `Access::verify` in the dispatch, which reads the gate's reach for the
+  call (`current_reach`) and answers a `VerifiedUser` holding it. No method
+  takes `auth: Option<&AuthContext>` or `reach: Reach`, and none admits by
+  hand. Its refusal is typed (MACRO-14): a sign-in that does not stand is
+  `-32001 unauthenticated`, anything else `-32003 forbidden`; a call with no
+  identity at all is refused `unauthenticated` by the dispatch itself. With
+  login on, the gate refuses an anonymous call before any of it (only the
+  auth door is in the anonymous view). **With login off** the resolver
+  admits anyone; menger's own transports (`menger.call` over the WebSocket
+  and stdio, `menger::calls`; the REST bridge) hand a call that carries no
+  identity the anonymous one (`calls::caller`), since the dispatch runs no
+  resolver without one. ACCESS-24 ends open mode.
+- **Descriptions are doc comments** — the method's `///` (its first
+  sentence is what synapse's listing shows; the whole is the schema's
+  `description` until MACRO-19 splits off the long description) and each
+  parameter's — no `description =`, no `params(…)`. `values(…)`, `example(…)`,
+  `group`, `target` stay in the attribute.
+- **A body is a few lines** (at most 15, `tickets-api/tests/sizes.rs`): a
+  permit or a scoped read, then one helper — `answered!` (one event: its
+  statements end in `Ok(event)`, every `?` a `Failed`, said by
+  `events::answer`: `not_found` named as asked, `body_too_large`, an
+  ambiguity veiled, any other refusal naming nothing out of reach) or a
+  `*_stream` beside the file (`reads.rs`, `update.rs`, `delete.rs`,
+  `queue.rs`, `watch.rs`, …). A watch follows the resolved user
+  (`Following::of`).
+- **The children** — `tickets inputs`, `commits`, `nav`, `work`,
+  `components` (ACCESS-14..18) — each have a file beside it
+  (`activation/<name>.rs`), a shell until its build fills it; the methods
+  stay on `tickets` until then, so the frame moved nothing on the wire
+  (`tests/golden_wire.rs`). Each file says how it is filled: plexus-macros
+  refuses an activation with no method yet (MACRO-18), so a shell is
+  mounted (`#[plexus_macros::child]`) in the build that moves its methods in.
+- The schema lists what the server injects (`auth`, `user`) with an
+  `x-plexus-source`; synapse shows them as server-supplied, and the SDK's
+  drift guard (`sdk_manifest.rs`, `scripts/sdk-codegen.sh`) drops them.
 
 ### Addresses and namespaces (ORG-3)
 
@@ -2444,7 +2515,9 @@ sheet above the tray — the urgency, who queued it and when, the reason, the
 named input's question answerable in place (recorded with source `app`;
 answering takes the ticket out of the queue, the input stays the agent's to
 close), **request changes** (APP-23, below), *open the ticket*, *snooze 10m*
-and *done with it*. A hidden tab's
+and *done with it*. The open tab again, Esc, or a press anywhere outside
+the tray — in a ticket's framed body too — lowers the sheet (APP-26; never
+while a submit is out). A hidden tab's
 title carries the count, `(2) menger`. Motion follows the setting: `calm`
 keeps the slide and drops the nudge, `none` moves nothing.
 

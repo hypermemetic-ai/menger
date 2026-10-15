@@ -433,7 +433,11 @@ async fn main() -> anyhow::Result<()> {
             let route_hub = hub.clone();
             let route_fn: RouteFn = Arc::new(move |method, params| {
                 let hub = route_hub.clone();
-                Box::pin(async move { hub.route(&method, params, None).await })
+                // ACCESS-13: with login off, the anonymous caller.
+                Box::pin(async move {
+                    let anonymous = plexus_core::plexus::AuthContext::anonymous();
+                    hub.route(&method, params, menger::calls::caller(&hub, None, &anonymous)).await
+                })
             });
             builder = builder
                 .with_rest_http_config(

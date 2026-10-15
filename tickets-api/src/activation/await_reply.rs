@@ -39,13 +39,12 @@ enum Woke {
 pub(super) fn await_reply_stream(
     store: Arc<Store>,
     access: Access,
-    who: Option<AuthContext>,
-    reach: Reach,
+    user: VerifiedUser,
     ask: Ask,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     let started = chrono::Utc::now().timestamp();
     // ACCESS-12: the caller followed — verified again when the grants move.
-    let opened = Following::open(&access, &store, who.as_ref(), &reach).and_then(|f| f.user().read_filter().map(|_| f));
+    let opened = Following::of(&access, &store, user).and_then(|f| f.user().read_filter().map(|_| f));
     let prepared = opened.map(|following| {
         let caller = following.user();
         // The ticket as kept — or a deleted one's id.

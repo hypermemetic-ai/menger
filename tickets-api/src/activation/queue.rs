@@ -38,15 +38,15 @@ pub(super) enum Ask {
 /// `id`), its act, the store's write; exactly one event.
 pub(super) fn queue_stream(
     store: Arc<Store>,
-    admitted: Result<VerifiedUser, String>,
+    caller: VerifiedUser,
     id: String,
     ask: Ask,
     source: Option<CallerSource>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         // ACCESS-11: the editor's permit for `id`; the store writes it.
-        let (caller, on) = match admit_on::<crate::access::Editor>(&store, admitted, &id) {
-            Ok(x) => x,
+        let on = match permit::<crate::access::Editor>(&store, &caller, &id) {
+            Ok(p) => p,
             Err(ev) => {
                 yield ev;
                 return;
@@ -79,15 +79,15 @@ pub(super) fn queue_stream(
 /// as `comments.add` signs: the caller's name, else `owner`.
 pub(super) fn request_changes_stream(
     store: Arc<Store>,
-    admitted: Result<VerifiedUser, String>,
+    caller: VerifiedUser,
     id: String,
     body: String,
     source: Option<CallerSource>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         // ACCESS-11: the editor's permit for `id`; the store writes it.
-        let (caller, on) = match admit_on::<crate::access::Editor>(&store, admitted, &id) {
-            Ok(x) => x,
+        let on = match permit::<crate::access::Editor>(&store, &caller, &id) {
+            Ok(p) => p,
             Err(ev) => {
                 yield ev;
                 return;
@@ -110,15 +110,12 @@ pub(super) fn request_changes_stream(
 
 /// MENGER-39: `queued` — the queue in the caller's reach, most urgent
 /// first, then the oldest; a `queue_row` each, then one `queue_end`.
-pub(super) fn queued_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, snoozed: bool) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn queued_stream(store: Arc<Store>, caller: VerifiedUser, snoozed: bool) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let caller = match admitted.and_then(|c| c.read_filter().map(|_| c)) {
-            Ok(c) => c,
-            Err(message) => {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-        };
+        if let Err(message) = caller.read_filter() {
+            yield TicketsEvent::Error { message };
+            return;
+        }
         let now = chrono::Utc::now().timestamp();
         let rows = store.queued(&caller, snoozed, now);
         let (count, asleep) = (rows.len() as u64, rows.iter().filter(|(e, _)| e.snoozed_at(now)).count() as u64);

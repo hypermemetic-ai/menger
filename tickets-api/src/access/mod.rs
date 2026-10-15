@@ -60,6 +60,9 @@ pub mod user;
 /// ACCESS-12: an open watch's caller, followed as the grants move.
 pub mod following;
 pub use following::{Closed, Followed, Following};
+/// ACCESS-13: the frame's per-call request.
+pub mod request;
+pub use request::MengerRequest;
 pub use crate::store::System;
 pub use reach::{Held, Reach, ReachKey};
 pub use user::{Admin, AdminOf, Deployer, DeployerOf, Editor, EditorOf, Forward, Hidden, On, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
@@ -603,7 +606,7 @@ impl Access {
     /// is still verified: a read then says it holds nothing). Login off:
     /// anyone, everything. Synchronous: it reads the cache and nothing
     /// else, so a method verifies before its stream starts.
-    pub fn verify(&self, ctx: &AuthContext) -> Result<VerifiedUser, Refusal> {
+    pub fn verify_now(&self, ctx: &AuthContext) -> Result<VerifiedUser, Refusal> {
         if !self.login {
             return Ok(VerifiedUser::anyone());
         }
@@ -632,7 +635,29 @@ impl Access {
             return Ok(VerifiedUser::anyone());
         }
         let ctx = auth.filter(|c| c.is_authenticated()).ok_or(Refusal::SignIn)?;
-        Ok(self.verify(ctx)?.for_call(reach.grant().cloned()))
+        Ok(self.verify_now(ctx)?.for_call(reach.grant().cloned()))
+    }
+
+    /// ACCESS-13: **the frame's resolver** — every method of an activation
+    /// on the frame takes `#[from_auth(self.access.verify)] user:
+    /// VerifiedUser`, so the dispatch runs this before the method's body
+    /// (and before its parameters are read: auth before params, ACCESS-6).
+    /// [`Access::verify_now`] for the call being dispatched: the identity the
+    /// upgrade proved, the grant the gate admitted the call for
+    /// ([`plexus_core::plexus::current_reach`], read here, in the dispatch's
+    /// scope) — kept on the user, with that reach, so an open watch can ask
+    /// the gate again as the grants move ([`Following::of`]). Its refusal is
+    /// typed on the wire (MACRO-14): a sign-in that does not stand is
+    /// `unauthenticated` (-32001), anything else `forbidden` (-32003).
+    /// Login off: anyone, everything — whatever identity the transport
+    /// handed it (menger's own hand the anonymous one: `menger::calls`).
+    pub async fn verify(&self, ctx: &AuthContext) -> Result<VerifiedUser, plexus_core::plexus::PlexusError> {
+        if !self.login {
+            return Ok(VerifiedUser::anyone());
+        }
+        let reach = plexus_core::plexus::current_reach();
+        let user = self.verify_now(ctx).map_err(plexus_core::plexus::PlexusError::from)?;
+        Ok(user.for_call(reach.grant().cloned()).following(reach))
     }
 
     /// The grants generation now ([`Store::grants_generation`]) — `0`

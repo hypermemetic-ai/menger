@@ -603,14 +603,21 @@ async fn login_off_menger_is_as_it_was() {
             // theme takes over — ACCESS-8: a `ThemeReach`), declared by the
             // method; the gate's answer it does not take.
             let own_reach = ns == "themes" && m["name"] == "set" && props.get("reach").is_some_and(|r| r.to_string().contains("#/$defs/ThemeReach"));
-            assert!((own_reach || !props.contains_key("reach")) && !props.contains_key("auth"), "{ns}.{}: {props:?}", m["name"]);
+            // ACCESS-13: what the frame injects (`auth`, the resolved
+            // `user`) is listed, marked as the server's (`x-plexus-source`).
+            let injected = |k: &str| props.get(k).is_some_and(|p| p.get("x-plexus-source").is_some());
+            assert!((own_reach || !props.contains_key("reach")) && (!props.contains_key("auth") || injected("auth")), "{ns}.{}: {props:?}", m["name"]);
         }
     }
     let tickets = one(&c, "tickets.schema", json!({})).await;
     let set_status = tickets["methods"].as_array().unwrap().iter().find(|m| m["name"] == "set_status").unwrap();
-    let mut props: Vec<&String> = set_status["params"]["properties"].as_object().unwrap().keys().collect();
+    // ACCESS-13: the caller's parameters as they were; beside them the
+    // frame's, marked as the server's.
+    let all = set_status["params"]["properties"].as_object().unwrap();
+    let mut props: Vec<&String> = all.iter().filter(|(_, p)| p.get("x-plexus-source").is_none()).map(|(k, _)| k).collect();
     props.sort();
     assert_eq!(props, ["id", "message", "restore_children", "source", "status"]);
+    assert_eq!(all["user"]["x-plexus-source"], json!({ "from": "auth", "resolver": "self.access.verify" }));
     assert_eq!(set_status["params"]["required"], json!(["id", "status"]));
     // Additive only: the grant and target the protocol adds.
     assert_eq!((set_status["grant"].as_str(), set_status["target"].as_str()), (Some("tickets.set_status"), Some("id")));

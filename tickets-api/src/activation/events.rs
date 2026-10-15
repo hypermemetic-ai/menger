@@ -167,7 +167,7 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
 /// FILTER-13: one page of `tree` as its events — a `node` per row, then one
 /// `page` (no `first`); a refusal is the one in-band `error`, and nothing
 /// else.
-pub(super) fn tree_events(page: Result<TreePage, StoreError>) -> Vec<TicketsEvent> {
+pub(super) fn tree_page_events(page: Result<TreePage, StoreError>) -> Vec<TicketsEvent> {
     match page {
         Err(e) => vec![refusal(e)],
         Ok(page) => page
@@ -227,3 +227,74 @@ pub(super) fn input_event(written: Result<InputWrite, StoreError>, ticket: Strin
         Err(e) => refusal(e),
     }
 }
+
+/// ACCESS-13: why a call answers other than with its event — the one shape
+/// every refusal beside the activation takes, said by [`answer`].
+pub(super) enum Failed {
+    /// Already its one event (a permit's `not_found`, an ambiguity veiled,
+    /// a refusal the store said for a name that is no ticket).
+    Said(TicketsEvent),
+    /// Refused in words — a proof not minted, a filter not read, a time
+    /// zone not known.
+    Refused(String),
+    /// The store's refusal.
+    Store(StoreError),
+}
+
+impl From<TicketsEvent> for Failed {
+    fn from(ev: TicketsEvent) -> Self {
+        Self::Said(ev)
+    }
+}
+
+impl From<String> for Failed {
+    fn from(message: String) -> Self {
+        Self::Refused(message)
+    }
+}
+
+impl From<StoreError> for Failed {
+    fn from(e: StoreError) -> Self {
+        Self::Store(e)
+    }
+}
+
+impl From<crate::access::Refusal> for Failed {
+    fn from(r: crate::access::Refusal) -> Self {
+        Self::Refused(r.to_string())
+    }
+}
+
+/// ACCESS-13: **the one helper** — a call's answer as its one event, every
+/// failure said as `caller` may hear it: `not_found` for a ticket the store
+/// does not have (named as `asked`, the id the call gave — a call that
+/// names none hears the store's words), a body past the cap typed (`body_too_large`), an ambiguity veiled
+/// to the caller's organizations, and every other refusal with the tickets
+/// it names out of the caller's reach said as such ([`said`]).
+pub(super) fn answer(store: &Store, caller: &VerifiedUser, asked: Option<&str>, r: Result<TicketsEvent, Failed>) -> TicketsEvent {
+    match r {
+        Ok(ev) | Err(Failed::Said(ev)) => ev,
+        Err(Failed::Refused(message)) => TicketsEvent::Error { message },
+        Err(Failed::Store(StoreError::NotFound(_))) if asked.is_some() => TicketsEvent::NotFound { id: Asked::stored(asked.unwrap_or_default()) },
+        Err(Failed::Store(e @ StoreError::BodyTooLarge { .. })) => too_large(e),
+        Err(Failed::Store(e @ StoreError::Ambiguous { .. })) => veiled(caller, e),
+        Err(Failed::Store(e)) => said(store, caller, e),
+    }
+}
+
+/// ACCESS-13: a method's body as its one answer — `answered!(store =
+/// <Arc<Store>>, user, <asked: Option<String>> => <statements ending in
+/// Ok(event)>)`: the statements run as one `async` block (each `?` turns a
+/// refusal into a [`Failed`]), and what they end in is the stream's one
+/// event, through [`answer`].
+macro_rules! answered {
+    ($store:ident = $at:expr, $user:ident, $asked:expr => $($body:tt)*) => {{
+        let $store = $at;
+        let __asked: Option<String> = $asked;
+        async_stream::stream! {
+            let __r: Result<TicketsEvent, Failed> = async { $($body)* }.await;
+            yield answer(&$store, &$user, __asked.as_deref(), __r);
+        }
+    }};
+}
+pub(super) use answered;

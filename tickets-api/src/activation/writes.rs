@@ -193,15 +193,6 @@ pub(super) fn undeleting(store: &Store, caller: &VerifiedUser, ids: &[String]) -
 }
 
 
-/// The caller admitted, and its role `R` permit for the ticket `id` names —
-/// or the one event to answer (the refusal; `not_found` for a ticket not
-/// there or not its, alike).
-pub(super) fn admit_on<R: RoleMark>(store: &Store, admitted: Result<VerifiedUser, String>, id: &str) -> Result<(VerifiedUser, Permit<R>), TicketsEvent> {
-    let caller = admitted.map_err(|message| TicketsEvent::Error { message })?;
-    let on = permit::<R>(store, &caller, id)?;
-    Ok((caller, on))
-}
-
 /// ACCESS-11 (ACCESS-3 #8): a write's refusal as `caller` may hear it — the
 /// tickets it names that `caller` cannot see said as out of reach (one who
 /// sees every ticket hears it whole, an id not born yet included).

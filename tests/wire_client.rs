@@ -58,7 +58,7 @@ async fn start_server() -> u16 {
     let port = free_port().await;
     let hub = build_rpc(&db_path).await.expect("open database");
     let conv = |arc: Arc<DynamicHub>| {
-        DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"))
+        menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"))
     };
     tokio::spawn(async move {
         let _keep = dir;
