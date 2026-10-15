@@ -83,7 +83,13 @@ print("\n\n".join(blocks))
 # offline mode. OFFLINE is the plan; SYNC (the server side) is hosted under it.
 seed() {
   local T="tickets"
-  syn $T create --epic KIT --kind doc --title 'Ticket components: decisions, inputs, checklists' --body "$(kit_body)"
+  # DESIGN-41: ART-9's blocks are past the shell's 128 KB argument cap
+  # (SYNAPSE-10) since DESIGN-40, so this one create goes over the WebSocket
+  # through deploy/menger-call.mjs, whose params ride stdin.
+  kit_body | python3 -c '
+import json, sys
+print(json.dumps({"epic": "KIT", "kind": "doc", "title": "Ticket components: decisions, inputs, checklists", "body": sys.stdin.read()}))
+' | node "$here/deploy/menger-call.mjs" --url "ws://127.0.0.1:$PORT" tickets.create > /dev/null
   syn $T create --epic OFFLINE --kind scope --title 'Offline mode for the Fieldnote mobile app' --body "$(cat <<'EOF'
 Field crews lose signal in basements, tunnels and on site. Today the app shows a spinner and their notes are gone.
 
