@@ -93,7 +93,9 @@
     <figure class="panel reveal">
       <div class="window develop">
         <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-10 · the lifecycle</span></div>
-        <video class="clip" data-auto data-poster="media/tour-2-lifecycle.poster.webp" muted loop playsinline preload="none" controls width="1000" height="626" aria-label="A ticket page: OFFLINE-10 goes from Ready to Coding, gains a commit, goes to In Review, then Complete."><source src="media/tour-2-lifecycle.mp4" type="video/mp4"><source src="media/tour-2-lifecycle.webm" type="video/webm"></video>
+        <!-- DESIGN-46: the clip is an animated image — it loads like a GIF,
+             already playing, no player; under reduced motion, its last frame -->
+        <picture><source media="(prefers-reduced-motion: reduce)" srcset="media/tour-2-lifecycle.poster.webp"><img src="media/tour-2-lifecycle.anim.webp" width="1000" height="626" alt="A ticket page: OFFLINE-10 goes from Ready to Coding, gains a commit, goes to In Review, then Complete." decoding="async"></picture>
       </div>
       <figcaption class="fig">[ <b>fig. 2</b> — OFFLINE-10, recorded from the real app: promoted, claimed, committed, reviewed, merged ]</figcaption>
     </figure>

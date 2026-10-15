@@ -43,12 +43,15 @@ menger.sh {
 	@fonts path /fonts/*
 	header @fonts Cache-Control "public, max-age=86400, stale-while-revalidate=604800"
 
-	# the stills and clips: regenerated rarely, under the same names, so a
-	# day, then revalidate in the background for a week. AVIF, WebP, MP4 and
-	# WebM are compressed already (encode leaves them alone: not text
+	# the stills and clips: regenerated under the same names whenever the app
+	# changes (DESIGN-41), so no-cache — the browser keeps each file and asks
+	# with If-None-Match on every visit; file_server answers 304 while the
+	# ETag holds, the new file the moment it changes (DESIGN-46: a day's
+	# max-age showed the old app for a day after a regeneration). AVIF, WebP,
+	# MP4 and WebM are compressed already (encode leaves them alone: not text
 	# types), and file_server answers the Range requests video needs.
 	@media path /media/*
-	header @media Cache-Control "public, max-age=86400, stale-while-revalidate=604800"
+	header @media Cache-Control "no-cache"
 }
 
 # If www.menger.sh is ever given a DNS record, add:
