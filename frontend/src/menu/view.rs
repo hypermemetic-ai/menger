@@ -2,12 +2,17 @@
 //! menu ([`model::entries`] drawn in order, a submenu inline under its item,
 //! a form in the items' place), the delete confirmation and the toast. What
 //! it holds is src/menu/model.rs's; what each item writes, src/menu/write.rs's.
+//!
+//! ACT-10: a value chip's chooser ([`Entry::Choice`]) is drawn by the same
+//! [`options_view`] a submenu's items are, in a `.flat` group with no head
+//! and no indent; `s` opens the menu with Set status already expanded
+//! (`Target::open`) and focus on the current status.
 
 use super::*;
 
 /// ACT-4: what the reader may do (src/signin.rs) — the server decides every
 /// call.
-fn grants() -> Grants {
+pub(super) fn grants() -> Grants {
     signin::account().with(|a| Grants { write: a.may_write(), delete: a.may_delete() })
 }
 
@@ -35,8 +40,9 @@ pub(crate) fn TicketMenu(last_error: RwSignal<Option<String>>) -> impl IntoView 
     let toaster = Toaster { toast, gen: toast_gen };
     // ACT-4: Delete…'s confirmation, outside the menu (which closes).
     let confirm = RwSignal::new(None::<model::DeletePlan>);
-    install_listeners(target);
+    install_listeners(target, last_error);
     OPEN.with(|o| o.set(Some(target)));
+    TOASTER.with(|t| t.set(Some(toaster)));
 
     view! {
         {move || {
@@ -83,7 +89,7 @@ fn menu_view(
     toaster: Toaster,
     confirm: RwSignal<Option<model::DeletePlan>>,
 ) -> impl IntoView {
-    let Target { ids, shortcode, x, y, nav, chip, level, framed } = t;
+    let Target { ids, shortcode, x, y, nav, chip, level, framed, open } = t;
     // SCALE-26: the menu holds the tickets it is open on, and asks for those
     // no view holds (no walk puts every ticket in the cache any more) — the
     // first few hundred of a selection: the rest mark nothing until shown.
@@ -126,7 +132,8 @@ fn menu_view(
         let one = one.clone();
         Memo::new(move |_| one.as_ref().and_then(|id| rows.with(|r| r.iter().find(|r| &r.id == id).map(|r| (r.status, r.title.clone())))))
     };
-    let open_sub = RwSignal::new(None::<Sub>);
+    // ACT-10: `s` opens it at Set status.
+    let open_sub = RwSignal::new(open);
     let form = RwSignal::new(None::<Form>);
     let root = NodeRef::<leptos::html::Div>::new();
     let close = move || close_menu(target);
@@ -134,15 +141,42 @@ fn menu_view(
     // Place once mounted, focus the menu so the arrow keys work at once, and
     // re-place when a list or a form changes the height.
     let focused = StoredValue::new(false);
+    // ACT-10: opened at a submenu (`s`), focus goes to its current value —
+    // the checked one, else its first — and follows the rows in: a row the
+    // menu had to ask for marks its value a moment later. Settled once the
+    // checked one has focus, or once the reader has moved it elsewhere.
+    let settled = StoredValue::new(open.is_none());
+    let auto = StoredValue::new_local(None::<web_sys::HtmlElement>);
     Effect::new(move |_| {
         let Some(el) = root.get() else { return };
         open_sub.track();
         form.track();
         entries.track();
+        rows.track();
         place(&el, x, y);
         if !focused.get_value() {
             focused.set_value(true);
             focus(&el);
+        }
+        if settled.get_value() {
+            return;
+        }
+        let active = document().active_element();
+        let ours = active.as_ref().is_some_and(|a| a.is_same_node(Some(&el)))
+            || auto.with_value(|a| a.as_ref().is_some_and(|a| active.as_ref().is_some_and(|x| x.is_same_node(Some(a)))));
+        if !ours {
+            settled.set_value(true);
+            return;
+        }
+        let Some(w) = open else { return };
+        let Some(group) = el.query_selector(&format!(".sub[data-sub='{}']", w.name())).ok().flatten() else { return };
+        let list = items(&group);
+        if let Some(checked) = list.iter().find(|i| i.get_attribute("aria-checked").as_deref() == Some("true")) {
+            focus(checked);
+            settled.set_value(true);
+        } else if let Some(first) = list.first() {
+            focus(first);
+            auto.set_value(Some(first.clone()));
         }
     });
 
@@ -302,6 +336,17 @@ fn entry_view(e: Entry, ctx: &Ctx) -> AnyView {
                         view! { <div class="sub" role="group" data-sub=sub.name()>{inner}</div> }
                     })
                 }}
+            }
+            .into_any()
+        }
+        // ACT-10: a value chip's chooser, flat — the submenu's items without
+        // its head or indent.
+        Entry::Choice(sub) => {
+            let ctx = ctx.clone();
+            view! {
+                <div class="flat" role="group" data-choice=sub.name() aria-label=sub.words()>
+                    {move || options_view(sub, &ctx)}
+                </div>
             }
             .into_any()
         }

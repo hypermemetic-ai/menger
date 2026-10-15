@@ -198,6 +198,8 @@ impl Context {
 pub(crate) enum Group {
     Move,
     Open,
+    /// ACT-10: a ticket's status, by key.
+    Status,
     Select,
     Nav,
     Filter,
@@ -209,9 +211,10 @@ pub(crate) enum Group {
 }
 
 impl Group {
-    pub(crate) const ALL: [Group; 10] = [
+    pub(crate) const ALL: [Group; 11] = [
         Group::Move,
         Group::Open,
+        Group::Status,
         Group::Select,
         Group::Nav,
         Group::Filter,
@@ -226,6 +229,7 @@ impl Group {
         match self {
             Group::Move => "Move",
             Group::Open => "Open",
+            Group::Status => "Status",
             Group::Select => "Select",
             Group::Nav => "Nav",
             Group::Filter => "Filter",
@@ -276,7 +280,11 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("go.board", &[C::Global], &["g h"], G::Open, "go to the board"),
     b("go.needs", &[C::Global], &["g n"], G::Open, "go to Needs you (Home's panel of what waits on you)"),
     b("link.follow", &[C::Link], &["Click", "Mod+Click", "Shift+Click", "MiddleClick"], G::Open, "inside menger, go there; anywhere else, a dialog names the destination first"),
-    b("menu.open", &[C::Ticket, C::Chip], &["RightClick", "ContextMenu", "Shift+F10"], G::Open, "the menu of what is under the pointer, or of the focused ticket: a ticket's actions, a chip's filters"),
+    b("menu.open", &[C::Ticket, C::Chip], &["RightClick", "ContextMenu", "Shift+F10"], G::Open, "the menu of what is under the pointer, or of the focused ticket: a ticket's actions, a chip's filters — a status, kind, severity or label chip's own values first"),
+    // -- Status (ACT-10)
+    b("status.up", &[C::Ticket], &["]"], G::Status, "the focused ticket (or its selection, or the ticket page's) one status on along the line: Idea → Pending → Ready → Coding → In Review → Complete"),
+    b("status.down", &[C::Ticket], &["["], G::Status, "one status back along the line; off it (Blocked, Epic, Superseded, Canceled) or at an end, nothing changes and a note says why"),
+    b("status.quick", &[C::Ticket], &["s"], G::Status, "the focused ticket's menu, opened at Set status, its current status focused — ↓/↑ and Enter set it"),
     // -- Select
     b("select.only", &[C::Nav, C::Board], &["Click"], G::Select, "open a ticket; the selection becomes its row — in the nav, a row with children opens after 250 ms, the double-click window"),
     b("select.range", &[C::Nav, C::Board], &["Shift+Click", "Shift+Mod+Click"], G::Select, "select from the last click to this row, in the order drawn"),

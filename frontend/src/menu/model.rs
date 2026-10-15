@@ -8,6 +8,8 @@
 //! The groups, each present only when it holds something, a rule between:
 //!
 //! ```text
+//! the chip's own chooser, flat (a status, kind, severity or label chip)     (ACT-10)
+//! ─────────
 //! Open · Open in new tab · Wave board for P · Waves to X · Wave board · Copy code     (one ticket)
 //! Copy codes                                                                         (a selection)
 //! ─────────
@@ -30,6 +32,11 @@
 //! - **The grants** ([`Grants`]): the updates are absent — not disabled — for
 //!   a reader who cannot write; Delete only for an admin (anyone, with login
 //!   off: the server admits every call then).
+//! - **ACT-10: a value chip answers with its values.** Right-clicked on a
+//!   status, kind, severity or label chip, by a reader who may write, the
+//!   menu's first group is that chip's chooser ([`chooser`]) — the submenu's
+//!   own options, marks and writes, drawn flat ([`Entry::Choice`]) — and its
+//!   `Set … ▸` is not among the updates. Off a value chip, nothing moves.
 //! - **A submenu's marks** ([`options`]): one ticket marks its value; a
 //!   selection marks each value with how many already hold it.
 //! - **Filter everywhere** (FILTER-25): where the filter items build a
@@ -184,6 +191,9 @@ pub(crate) enum Entry {
     /// Copy code / Copy codes: the text copied, and the words.
     Copy { text: String, words: &'static str },
     Sub(Sub),
+    /// ACT-10: a submenu's options drawn flat, its head and indent gone — a
+    /// value chip's own chooser, first.
+    Choice(Sub),
     Form(Form),
     /// FILTER-22's items (and a selection's).
     Filter(tags::Item),
@@ -211,11 +221,33 @@ pub(crate) fn heading(ids: &[String]) -> String {
     }
 }
 
+/// ACT-10: the chooser a value chip puts first, flat — its submenu, when the
+/// reader may write and the menu would offer it at all (a status chooser
+/// needs a held row with a lifecycle, as Set status ▸ does).
+pub(crate) fn chooser(f: &Facts) -> Option<Sub> {
+    if !f.grants.write || f.ids.is_empty() {
+        return None;
+    }
+    match f.chip? {
+        Tag::Status(_) => f.rows.iter().any(|r| r.kind.has_lifecycle()).then_some(Sub::Status),
+        Tag::Kind(_) => Some(Sub::Kind),
+        Tag::Severity(_) => Some(Sub::Severity),
+        Tag::Label(_) => Some(Sub::Labels),
+        _ => None,
+    }
+}
+
 /// The menu, in order (see the module doc).
 pub(crate) fn entries(f: &Facts) -> Vec<Entry> {
     let one = f.one();
     let row = one.and_then(|id| f.rows.iter().find(|r| r.id == id));
     let mut groups: Vec<Vec<Entry>> = Vec::new();
+
+    // ACT-10: a value chip's own chooser, flat, first.
+    let flat = chooser(f);
+    if let Some(sub) = flat {
+        groups.push(vec![Entry::Choice(sub)]);
+    }
 
     // The ticket's own actions.
     let mut acts = Vec::new();
@@ -249,6 +281,10 @@ pub(crate) fn entries(f: &Facts) -> Vec<Entry> {
         if one.is_some() {
             updates.extend([Entry::Form(Form::Rename), Entry::Form(Form::Commits)]);
         }
+    }
+    // ACT-10: the chooser already drawn flat has no submenu as well.
+    if let Some(sub) = flat {
+        updates.retain(|e| *e != Entry::Sub(sub));
     }
     groups.push(updates);
 
@@ -519,6 +555,43 @@ pub(crate) fn call(ids: &[String], change: &Change) -> Option<Call> {
     })
 }
 
+/// ACT-10: where `]` (`up`) or `[` moves the tickets `ids` — the next (or
+/// previous) status on the worker line ([`Status::LINE`]) from the one
+/// status they all hold — or, in the reader's words, why nothing is written:
+/// a row not held, a doc, a selection of mixed statuses, a status off the
+/// line, the line's end.
+pub(crate) fn step_status(ids: &[String], rows: &[TicketSummary], up: bool) -> Result<Status, String> {
+    let mut held: Vec<&TicketSummary> = Vec::new();
+    for id in ids {
+        match rows.iter().find(|r| &r.id == id) {
+            Some(r) => held.push(r),
+            None => return Err(format!("{id} is not loaded yet: try again in a moment")),
+        }
+    }
+    let Some(first) = held.first() else { return Err("no ticket to step".into()) };
+    if let Some(doc) = held.iter().find(|r| !r.kind.has_lifecycle()) {
+        return Err(format!("{} is a doc: it has no status to step", doc.id));
+    }
+    let mut statuses: Vec<Status> = Vec::new();
+    for r in &held {
+        if !statuses.contains(&r.status) {
+            statuses.push(r.status);
+        }
+    }
+    if statuses.len() > 1 {
+        let named: Vec<&str> = statuses.iter().map(|s| s.as_str()).collect();
+        return Err(format!("the selection holds {}: step one status at a time", named.join(", ")));
+    }
+    let now = first.status;
+    let to = if up { now.next() } else { now.prev() };
+    match (to, now.on_line()) {
+        (Some(s), _) => Ok(s),
+        (None, None) => Err(format!("{now} has no {} status: pick one from the menu", if up { "next" } else { "previous" })),
+        (None, Some(_)) if up => Err(format!("{now} is the last status on the line")),
+        (None, Some(_)) => Err(format!("{now} is the first status on the line")),
+    }
+}
+
 /// What a picked ticket can be for `ids`: never one of them.
 pub(crate) fn pickable(ids: &[String], candidate: &str) -> bool {
     !ids.iter().any(|id| id.eq_ignore_ascii_case(candidate))
@@ -657,6 +730,7 @@ mod tests {
                 Entry::WaveBoard(_) => "Wave board".into(),
                 Entry::Copy { words, .. } => words.to_string(),
                 Entry::Sub(s) => format!("{} ▸", s.words()),
+                Entry::Choice(s) => format!("[{}]", s.name()),
                 Entry::Form(f) => f.words().into(),
                 Entry::Filter(i) => i.words.clone(),
                 Entry::Delete(n) => delete_words(*n),
@@ -738,6 +812,89 @@ mod tests {
             let first = s.iter().find(|w| w.starts_with("Filter")).unwrap();
             assert!(!first.starts_with("Filter DEMAND"), "{chip:?}: {first}");
         }
+    }
+
+    /// ACT-10: a status chip, right-clicked by a reader who may write, opens
+    /// the menu on the ten statuses, flat and first — the current marked,
+    /// then a rule, then the menu as it was, with no Set status ▸. A kind,
+    /// severity or label chip does the same with theirs (Add a label… is the
+    /// view's, at the labels' end); a reader who cannot write, an id chip or
+    /// no chip: the menu as before.
+    #[test]
+    fn a_value_chip_puts_its_own_chooser_first_flat() {
+        let (i, rows) = (ids(&["DEMAND-4"]), vec![row("DEMAND-4", Status::Ready, Kind::Build)]);
+        let plain = said(&entries(&facts(&i, &rows, ALL)));
+        let chip = Tag::status(Status::Ready);
+        let f = Facts { chip: Some(&chip), ..facts(&i, &rows, ALL) };
+        let es = entries(&f);
+        assert_eq!(es[0], Entry::Choice(Sub::Status));
+        assert_eq!(es[1], Entry::Rule);
+        let flat = options(Sub::Status, &i, &rows);
+        assert_eq!(flat.iter().map(|o| o.value.as_str()).collect::<Vec<_>>(), Status::LIFECYCLE.map(|s| s.as_str()));
+        assert_eq!(
+            flat.iter().filter(|o| o.mark != Mark::None).map(|o| (o.value.as_str(), o.mark)).collect::<Vec<_>>(),
+            [("Ready", Mark::Current)]
+        );
+        let s = said(&es);
+        assert!(!s.contains(&"Set status ▸".to_string()), "{s:?}");
+        // Then the menu as it was, less its Set status ▸.
+        let rest: Vec<String> = plain.iter().filter(|w| *w != "Set status ▸").cloned().collect();
+        let filters_at = s.iter().position(|w| w == "Filter status Ready").unwrap();
+        assert_eq!(&s[2..filters_at], &rest[..rest.iter().position(|w| w == "Filter DEMAND").unwrap()]);
+        // A kind, severity and label chip: theirs.
+        for (chip, sub) in [
+            (Tag::kind(Kind::Build), Sub::Kind),
+            (Tag::severity(Severity::High), Sub::Severity),
+            (Tag::Label("needs-you".into()), Sub::Labels),
+        ] {
+            let s = said(&entries(&Facts { chip: Some(&chip), ..facts(&i, &rows, ALL) }));
+            assert_eq!(&s[..2], [format!("[{}]", sub.name()), "—".to_string()], "{chip:?}");
+            assert!(!s.contains(&format!("{} ▸", sub.words())), "{chip:?}: {s:?}");
+            assert!(s.contains(&"Set status ▸".to_string()), "the others stay: {s:?}");
+        }
+        // Without the write grant: as before — no chooser at all.
+        let reader = Facts { chip: Some(&chip), ..facts(&i, &rows, Grants::default()) };
+        assert_eq!(chooser(&reader), None);
+        assert!(!entries(&reader).iter().any(|e| matches!(e, Entry::Choice(_) | Entry::Sub(Sub::Status))));
+        // An id chip, or no chip: unchanged.
+        let id_chip = Tag::ticket("DEMAND-4");
+        assert_eq!(said(&entries(&Facts { chip: Some(&id_chip), ..facts(&i, &rows, ALL) })), plain);
+        // A doc's status chip: no status chooser, flat or not.
+        let (d, drows) = (ids(&["DOCS-3"]), vec![row("DOCS-3", Status::Doc, Kind::Doc)]);
+        let doc_chip = Tag::status(Status::Doc);
+        let s = said(&entries(&Facts { chip: Some(&doc_chip), ..facts(&d, &drows, ALL) }));
+        assert!(!s.iter().any(|w| w == "[status]" || w == "Set status ▸"), "{s:?}");
+        // A selection: the chooser, with its counts.
+        let many = ids(&["A-1", "A-2"]);
+        let mrows: Vec<_> = many.iter().map(|id| row(id, Status::Ready, Kind::Build)).collect();
+        let es = entries(&Facts { chip: Some(&chip), ..facts(&many, &mrows, ALL) });
+        assert_eq!(es[0], Entry::Choice(Sub::Status));
+    }
+
+    /// ACT-10: `]` and `[` step along the worker line from the one status
+    /// the tickets hold; a mix, a doc, a row not held, a status off the line
+    /// and the line's ends say why and write nothing.
+    #[test]
+    fn a_step_walks_the_worker_line_or_says_why_not() {
+        let one = ids(&["A-1"]);
+        let r = |s| vec![row("A-1", s, Kind::Build)];
+        assert_eq!(step_status(&one, &r(Status::Ready), true), Ok(Status::Coding));
+        assert_eq!(step_status(&one, &r(Status::Ready), false), Ok(Status::Pending));
+        assert_eq!(step_status(&one, &r(Status::InReview), true), Ok(Status::Complete));
+        assert_eq!(step_status(&one, &r(Status::Epic), true), Err("Epic has no next status: pick one from the menu".into()));
+        assert_eq!(step_status(&one, &r(Status::Canceled), false), Err("Canceled has no previous status: pick one from the menu".into()));
+        assert_eq!(step_status(&one, &r(Status::Complete), true), Err("Complete is the last status on the line".into()));
+        assert_eq!(step_status(&one, &r(Status::Idea), false), Err("Idea is the first status on the line".into()));
+        assert_eq!(step_status(&one, &[], true), Err("A-1 is not loaded yet: try again in a moment".into()));
+        let doc = vec![row("A-1", Status::Doc, Kind::Doc)];
+        assert_eq!(step_status(&one, &doc, true), Err("A-1 is a doc: it has no status to step".into()));
+        let many = ids(&["A-1", "A-2", "A-3"]);
+        let mut rows: Vec<_> = many.iter().map(|id| row(id, Status::Ready, Kind::Build)).collect();
+        assert_eq!(step_status(&many, &rows, true), Ok(Status::Coding), "one status: one step for all");
+        rows[2].status = Status::Coding;
+        assert_eq!(step_status(&many, &rows, true), Err("the selection holds Ready, Coding: step one status at a time".into()));
+        // And the write is the menu's own: set_status for one, update_many for many.
+        assert_eq!(call(&one, &Change::Status(Status::Coding)), Some(Call::SetStatus("A-1".into(), Status::Coding)));
     }
 
     /// A shortcode's row in the nav: its root's menu, the shortcode's Wave

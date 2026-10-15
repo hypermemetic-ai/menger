@@ -1536,6 +1536,9 @@ fn ticket_view(
     let me = header_id.clone();
     // MENGER-13: its history, under its children.
     let history_id = header_id.clone();
+    // ACT-10: the aside's status, kind and severity are the page's ticket
+    // too — a right-click on one opens the one menu, its chooser first.
+    let (status_host, kind_host, sev_host) = (header_id.clone(), header_id.clone(), header_id.clone());
     // COMMENT-3: the open comments on this ticket, live — `None` until the
     // app holds the comments (the page asks for them).
     let comments_id = header_id.clone();
@@ -1581,6 +1584,7 @@ fn ticket_view(
                     // was moved to; the chip says so on hover.
                     <dd
                         id="t-status"
+                        data-ticket-id=status_host
                         class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))
                         data-tag=move || ticket.with(|t| tags::Tag::status(t.status).attr())
                         title=move || is_doc.get().then_some("A doc has no lifecycle: it holds Doc, and no status moves it")
@@ -1592,6 +1596,7 @@ fn ticket_view(
                     <dt>"Kind"</dt>
                     <dd
                         id="t-kind"
+                        data-ticket-id=kind_host
                         class="kind"
                         data-kind=move || ticket.with(|t| t.kind.as_str())
                         data-tag=move || ticket.with(|t| tags::Tag::kind(t.kind).attr())
@@ -1604,7 +1609,7 @@ fn ticket_view(
                 </div>
                 <div>
                     <dt>"Severity"</dt>
-                    <dd id="t-sev">
+                    <dd id="t-sev" data-ticket-id=sev_host>
                         {move || match ticket.with(|t| t.severity) {
                             Some(s) => view! { <span data-tag=tags::Tag::severity(s).attr()>{s.to_string()}</span> }.into_any(),
                             None => view! { "—" }.into_any(),
