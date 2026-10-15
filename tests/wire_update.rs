@@ -201,7 +201,8 @@ async fn update_many_over_the_wire_a_hundred_tickets_in_one_call() {
     let port = start_server().await;
     let client = connect(port).await;
     assert_eq!(one(&client, "tickets.create", json!({"epic": "MANY", "title": "root", "kind": "scope"})).await["type"], "created");
-    assert_eq!(one(&client, "tickets.create", json!({"epic": "MANY", "title": "home", "kind": "scope"})).await["type"], "created");
+    // ORG-5: the home inside MANY is work, not a scope.
+    assert_eq!(one(&client, "tickets.create", json!({"epic": "MANY", "title": "home", "kind": "execution"})).await["type"], "created");
     for i in 0..100 {
         assert_eq!(one(&client, "tickets.create", json!({"epic": "MANY", "title": format!("t{i}")})).await["type"], "created");
     }

@@ -1,10 +1,12 @@
 //! ACT-5: `delete` and `undelete` as their streams — the selection (ACT-2's:
 //! `ids`, or a filter in the caller's reach), the caller's grant on every
-//! ticket the write touches, then the store's one write. Kept beside the
-//! activation so its file keeps only its methods (MENGER-29).
+//! ticket the write touches, then the store's one write. ACT-6:
+//! `reshortcode`'s too — the grant on every ticket that moves and on where
+//! they go (editor on both shortcodes). Kept beside the activation so its
+//! file keeps only its methods (MENGER-29).
 
 use super::*;
-use crate::store::{Children, Deleted, Deletion, Selection, Undeleted, UPDATE_MANY_MAX};
+use crate::store::{Children, Deleted, Deletion, Reshortcode, Reshortcoded, Selection, Undeleted, UPDATE_MANY_MAX};
 
 /// ACT-5: `delete` — what to delete, how, and the store's write.
 pub(super) fn delete_stream(
@@ -72,6 +74,33 @@ pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<Caller, String
         match store.undelete_by(&ids, act, may).await {
             Ok(Undeleted { ids, tickets }) => yield TicketsEvent::Undeleted { ids, tickets },
             Err(e) => yield veiled(&caller, e),
+        }
+    }
+}
+
+/// ACT-6: `reshortcode` — who asks, the grants, and the store's write.
+pub(super) fn reshortcode_stream(
+    store: Arc<Store>,
+    admitted: Result<Caller, String>,
+    mut ask: Reshortcode,
+    message: Option<String>,
+) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    stream! {
+        let (caller, act) = match admitted.and_then(|caller| act_of(&caller, None, message).map(|act| (caller, act))) {
+            Ok(c) => c,
+            Err(message) => {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+        };
+        // ORG-4: the ids, `to` and `parent` read in the caller's organizations.
+        ask.orgs = caller.orgs();
+        let sight = sight_lens(&caller).ok().flatten();
+        let (gate, at) = (caller.clone(), store.clone());
+        let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
+        match store.reshortcode_by(ask, act, may).await {
+            Ok(Reshortcoded { moves, tickets }) => yield TicketsEvent::Reshortcoded { moves, tickets },
+            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, sight.as_ref(), id)) },
         }
     }
 }

@@ -39,7 +39,7 @@ async fn fixture(store: &Store) {
         }
         store.create(t).await.unwrap();
     }
-    store.create(new("M", "an area", Kind::Scope, Some("M-1"))).await.unwrap();
+    store.create(new("M", "an area", Kind::Execution, Some("M-1"))).await.unwrap();
     store.create(new("M", "eight", Kind::Build, Some("M-7"))).await.unwrap();
     store.create(new("M", "nine", Kind::Build, Some("M-7"))).await.unwrap();
     store.create(new("N", "n root", Kind::Scope, None)).await.unwrap();

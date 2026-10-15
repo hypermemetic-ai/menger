@@ -88,6 +88,7 @@ impl Queue {
                 | TicketsEvent::StatusChanged { .. }
                 | TicketsEvent::KindChanged { .. }
                 | TicketsEvent::Deleted { .. }
+                | TicketsEvent::Reshortcoded { .. }
         )
     }
 
@@ -102,6 +103,20 @@ impl Queue {
                 let before = self.rows.len();
                 self.rows.retain(|r| !ids.contains(&r.entry.ticket));
                 self.rows.len() != before
+            }
+            // ACT-6: a queued ticket moved — its entry and row, renamed.
+            TicketsEvent::Reshortcoded { moves, tickets } => {
+                let mut moved = false;
+                for r in &mut self.rows {
+                    if let Some(m) = moves.iter().find(|m| m.from == r.entry.ticket) {
+                        r.entry.ticket = m.to.clone();
+                        if let Some(t) = tickets.iter().find(|t| t.id == m.to) {
+                            r.ticket = TicketSummary::from(t);
+                        }
+                        moved = true;
+                    }
+                }
+                moved
             }
             TicketsEvent::Amended { ticket, .. } | TicketsEvent::StatusChanged { ticket, .. } | TicketsEvent::KindChanged { ticket, .. } => {
                 match self.rows.iter_mut().find(|r| r.ticket.id == ticket.id) {
@@ -805,6 +820,15 @@ mod tests {
     }
 
     #[test]
+    fn a_queued_ticket_that_moves_keeps_its_tab_under_its_new_id() {
+        let mut q = Queue::default();
+        q.apply(&queued("A-1", Urgency::Now, 1));
+        let moves = vec![menger_tickets_api::ShortcodeMove { from: "A-1".into(), to: "B-4".into() }];
+        assert!(q.apply(&TicketsEvent::Reshortcoded { moves, tickets: Vec::new() }));
+        assert_eq!(ids(&q), ["B-4"]);
+    }
+
+    #[test]
     fn a_snoozed_tab_leaves_and_comes_back_on_time() {
         let mut q = Queue::default();
         q.apply(&queued("A-1", Urgency::Now, 1));
@@ -847,6 +871,7 @@ mod tests {
             body: String::new(),
             created_unix: 0,
             updated_unix: 0,
+            moved_from: Vec::new(),
         };
         let heard = vec![queued("A-2", Urgency::Now, 3), TicketsEvent::Amended { ticket: renamed, changed: vec!["title".into()] }];
         let q = settle(answer, &heard);

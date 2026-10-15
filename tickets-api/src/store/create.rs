@@ -128,6 +128,14 @@ impl Store {
                     kind: new.kind,
                 });
             }
+            // ORG-5 (owner, 2026-10-13: a child scope roots its own
+            // shortcode): a scope is born only as its shortcode's root —
+            // under a parent, in a shortcode of its own hosted there.
+            if new.kind == Kind::Scope {
+                if let Some(root) = shortcode_root(tickets, &sc) {
+                    return Err(rules::scope_not_root(parent_row.map(|p| p.id.as_str()), &epic, &root.id));
+                }
+            }
 
             // SDLC-11: a doc never completes, so nothing may wait on one —
             // neither by naming a doc that exists, nor by having named, before
@@ -248,6 +256,7 @@ impl Store {
                 body: new.body,
                 created_unix: now,
                 updated_unix: now,
+                moved_from: Vec::new(),
             };
 
             // Symmetry, in one place: every existing ticket this create

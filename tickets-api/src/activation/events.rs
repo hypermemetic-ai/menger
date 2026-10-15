@@ -109,6 +109,8 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         // ACT-5: a delete's and an undelete's, as their answers are.
         Change::Deleted { ids, tombstones } => TicketsEvent::Deleted { ids, tombstones },
         Change::Undeleted { ids, tickets } => TicketsEvent::Undeleted { ids, tickets },
+        // ACT-6: a reshortcode's, as its answer is.
+        Change::Reshortcoded { moves, tickets } => TicketsEvent::Reshortcoded { moves, tickets },
         // SCALE-4: the parent's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the id and the count.
         Change::ChildrenChanged {

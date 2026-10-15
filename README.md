@@ -744,6 +744,44 @@ synapse -P 4455 menger tickets delete --ids DEMO-1 --children delete --unblock t
 synapse -P 4455 menger tickets undelete --ids MENGER-40
 ```
 
+**`reshortcode`** (ACT-6; editor on both shortcodes) moves tickets into
+another shortcode, renumbered there, all or none (ACT-2). `to` names it by
+any short form: one there is — each ticket takes its next number in the
+order given and hangs under its root, or `parent` (inside it); with
+`new_scope TITLE` (and `parent`), one minted first, its root `TO-1` a new
+scope under `parent`, the tickets `TO-2`, …; none, and the first ticket a
+scope or a doc — that ticket becomes the new shortcode's root `TO-1`,
+hosted where it hangs (ORG-5's way out for a scope inside its parent's
+shortcode). A shortcode's root moves only alone, with `with_children` and
+every ticket of the shortcode: a **rename**, every number kept, the code
+new in its namespace. A ticket whose parent moves with it keeps it;
+`with_children` brings each one's descendants in its own shortcode,
+numbered after it; without it they stay in their shortcode under the
+nearest ancestor that stays, and a child rooting another shortcode stays
+hosted under the moved ticket, its namespace following. A ticket's id is
+its key, so the move rewrites the old id to the new wherever a row names
+it — parents, blockers and `unlocks`, the search index, inputs and
+answers, comments (and their route to the ticket's page), the transition
+log, grants, notes, themes, components, tombstones, the queue, deployments
+— in one transaction, and **pins the old id to the new key**: `get`, every
+write's id, blockers, filters, the app's `#/ticket/OLD` and a chip in a body
+naming the old id all reach the moved ticket, and `get` says
+`moved_from: [OLD]`. Bodies are not rewritten. No number is given out
+twice — a shortcode's next ticket is past the ones that left it. The cache
+is read back from the file after the commit, the derived state built from
+the rows (cell ids kept), so `--verify-derived` holds after it; `watch`
+carries `reshortcoded { moves: [{from, to}], tickets }`, each child that
+stayed and moved's `parent_changed`, the groups and placements that moved,
+and a filter's `left` for an old key and `entered` for a new one. A frozen
+target (MENGER-33) is not refused yet: freezing is not built.
+
+```sh
+synapse -P 4455 menger tickets reshortcode --ids THEME-9,THEME-10 --to LOOK      # THEME-9 → LOOK-3, THEME-10 → LOOK-4
+synapse -P 4455 menger tickets reshortcode --ids MENGER-35 --to PALETTE --new-scope "The palette" --parent MENGER-2
+synapse -P 4455 menger tickets reshortcode --ids MENGER-2 --to APP --with-children true   # MENGER-2 → APP-1, its tree after it
+synapse -P 4455 menger tickets reshortcode --ids LOOK-1 --to SKIN --with-children true    # a rename: LOOK-n → SKIN-n
+```
+
 The statuses of the lifecycle are ten (SDLC-7, SDLC-15): `Pending`, `Ready`,
 **`Coding`**, **`In Review`**, `Blocked`, `Complete`, `Idea`, `Epic`,
 `Superseded`, `Canceled` — and a doc's `Doc` (SDLC-11) beside them, outside it. The two
@@ -1597,7 +1635,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
 | `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent?, path? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode; **`path`** (WAVE-10) gives the ticket a path address in its shortcode — only `_MENGER/…` with something after it, only on a `doc`, only with the shortcode's scope root as `parent` (the default); one another ticket of the shortcode holds is an in-band `error` naming it, as is each other refusal, and nothing is allocated; COMP-3: the body's ` ```component ` blocks register components — a block whose tag is not a component name, a name defined twice, or a name another ticket defines is an in-band `error` (the last naming that ticket) and nothing is allocated; COMP-8: so is a malformed `<docs>`, naming the problem; MENGER-15: a body past the cap (`--max-body-bytes`, 8 MiB by default) is the typed `body_too_large { id: null, bytes, max, message }` and nothing is allocated |
-| `tickets.get { id }` | `ticket` or `not_found` — `id` is an `EPIC-N`, or (WAVE-10) a path address `SHORTCODE/path` (`PLEXUS/_MENGER/board`; the shortcode case-insensitive, the path exact), and `not_found` carries the id or address as given; ACT-5: a deleted ticket's id answers `deleted { ids: [id], tombstones: [tombstone] }` |
+| `tickets.get { id }` | `ticket` or `not_found` (ACT-6: a ticket an old id names carries `moved_from`, every id it had) — `id` is an `EPIC-N`, or (WAVE-10) a path address `SHORTCODE/path` (`PLEXUS/_MENGER/board`; the shortcode case-insensitive, the path exact), and `not_found` carries the id or address as given; ACT-5: a deleted ticket's id answers `deleted { ids: [id], tombstones: [tombstone] }` |
 | `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page (ACCESS-29: 1,000 rows unless given, never more than 10,000 — page with `next`) — `after` naming no ticket is one in-band `error` |
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete, Superseded or Canceled — never a doc), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
@@ -1612,6 +1650,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | `tickets.update { id, title?, body?, kind?, status?, parent?, severity?, block?, unblock?, source?, message? }` | `updated { ticket, changed }` (MENGER-30) — any part of a ticket in one write, all of it or none: each aspect by its own write's rules (`amend`, `set_kind` — the kind before the status —, `set_status` for a status alone, `set_parent`, `create`'s for `block`; `unblock` removes; an id in both refused), all asked first — a refusal is one in-band `error` naming every reason, nothing written; `severity: "none"` clears it; `changed` names what moved, in the order `title`, `body`, `kind`, `status`, `parent`, `severity`, `blocked_by`, empty (no write, no broadcast) when nothing would; `not_found`, or `body_too_large`. `watch` carries each aspect's own events, in that order — `amended`, `kind_changed` / `status_changed` and their `transition`s, `blockers_changed { ticket, added, removed }` then each blocker's `unlocks_changed { ticket, added }` / **`unlocks_removed { ticket, removed }`**, `parent_changed` / `children_changed` / `child_removed`, **`severity_changed { ticket, previous }`** — then the write's `group_changed`, `placements_changed`, components, inputs and (filtered) `entered` / `left` |
 | `tickets.update_many { ids \| filter, max?, tz?, kind?, status?, parent?, severity?, block?, unblock?, label?, unlabel?, source?, message? }` | `updated_many { ids, changed, tickets, unchanged }` (ACT-2) — `update`'s change to every ticket `ids` names, or that `filter` admits at the write (in the caller's reach, at most `max`, default 500 — more is an in-band `error` naming the count), in one write, all or none: each ticket by `update`'s rules (`label` / `unlabel` by `label`'s), each id's write grant asked; any refusal is one in-band `error` naming each refused id with its reasons, nothing written. `ids` the tickets it changed, `changed` the aspects that moved in any (`update`'s order, then `labels`), `tickets` every one selected as the write left it, `unchanged` those nothing changed for (no write). `message` on every transition; the write's first is the `cause` of the rest. `watch` carries each ticket's own events, then one `updated_many { ids, changed }` (`tickets`, `unchanged` empty), then (filtered) `entered` / `left` |
 | `tickets.delete { ids \| filter, max?, tz?, children?, unblock?, message? }` | `deleted { ids, tombstones }` (ACT-5; admin) — the tickets gone for good, all or none: refused, naming every reason of every ticket, while one has children (unless `children: reparent` — to the nearest ancestor that stays — or `delete` — the subtree too, every id in `ids`), a ticket waits on it (unless `unblock`), it roots a shortcode that holds a ticket that stays, it defines a component or a theme, or an input of its is `open` or `answered`. A tombstone each (`id, title, by, name?, at_unix, message?, restorable_until_unix?, parent?, reparented, unblocked`); the history kept; the body 30 days, then purged (at start, then daily); the number never reused. `watch`: each moved ticket's own event, then `deleted`, then groups, placements and a filter's `left` |
+| `tickets.reshortcode { ids, to, new_scope?, parent?, with_children?, message? }` | `reshortcoded { moves: [{from, to}], tickets }` (ACT-6; editor on the moved tickets and where they go) — the tickets moved into `to`, renumbered in the order given, all or none (the section above); every old id pinned to its new ticket (`get` answers it with `moved_from`). `watch`: `reshortcoded` first, then the stayed children's `parent_changed`, groups, placements, a filter's `left` / `entered` |
 | `tickets.undelete { ids }` | `undeleted { ids, tickets }` (ACT-5; admin) — deleted tickets back, whole, within 30 days, all or none: each child its delete moved back under it and each block it dropped back, where nothing has moved them since; refused for an id not deleted, a purged body, a parent or blocker still deleted (undelete it too), a path or a component taken since. `watch`: `undeleted` first, then the parents' and children's events, a filter's `entered` |
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is rewritten — SCALE-28 stores each one's new `child_count` on it, in the move's transaction; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, docs, root, root_row, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only; SDLC-11: the work only — `docs` counts the docs, and a row of docs alone is drawn), `root` is the lowest-seq `scope` (or `doc`), `root_row` the root's `{ title, status, kind }` (AGS-23: the nav draws the shortcode as the root's row; `null` with no root), `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
@@ -1707,6 +1746,19 @@ namespace moves with it, and so does every address under it — each moved
 group is a `group_changed`); `set_kind` (a ticket that becomes its
 shortcode's root); `notes upgrade`; `undelete`. A build or an execution
 never starts a shortcode: it files into the one its `--epic` names.
+
+**A scope roots its own shortcode** (ORG-5; owner, 2026-10-13: *a child
+scope roots its own shortcode*). A scope is born only as its shortcode's
+root: `create --kind scope --parent X` naming X's shortcode as `--epic` is
+refused (`a scope under X roots its own shortcode; pass a new --epic`), and
+with a new `--epic` it is that shortcode's `-1`, hosted under X. `set_kind`
+(and `update --kind`, `update_many --kind`) to a scope is refused for a
+ticket below its shortcode's root (`ScopeNotRoot`, naming `reshortcode
+--new-scope` as the way); `notes upgrade` is a create and takes the same
+rule. A root goes between scope and doc as before. A scope that sits inside
+its parent's shortcode from before ORG-5 moves out with `reshortcode --ids X
+--to NEW --with-children true` (it becomes NEW-1, its tree with it);
+`scripts/org-5-move.sh PORT` moves the tracker's.
 
 ```sh
 synapse -P 4455 menger tickets create --epic THEME --kind scope --parent PLEXUS-1 --title "the platform's themes"
@@ -2876,7 +2928,7 @@ activation — every method answers everyone, as before; schemas only gain
 | role | its grants (declared with `roles(...)` on each activation) |
 |---|---|
 | `viewer` | the reads: `tickets.{health, get, list, ready_set, find, search, member, groups, components, inputs, extents, counts, facets, tree, waves, blockers, watch, history}`, `comments.{add, list, watch}`, `orgs.list` (ORG-4) |
-| `editor` | viewer's, and the writes: `tickets.{create, set_status, set_kind, set_parent, amend, link_commits, unlink_commits, label, update, update_many, answer, clear_answer, close_input, reopen_input}`, `comments.{resolve, reopen}` |
+| `editor` | viewer's, and the writes: `tickets.{create, set_status, set_kind, set_parent, amend, link_commits, unlink_commits, label, update, update_many, reshortcode, answer, clear_answer, close_input, reopen_input}`, `comments.{resolve, reopen}` |
 | `admin` | every grant (built in): `tickets.{delete, undelete}` (ACT-5), `members.{list, grant, revoke, requests}`, `orgs.{create, rename, delete}` (ORG-4), `auth.{roles, role_set, grant, revoke, waiting}` |
 | any signed-in caller | `session.*`, `members.mine`, `auth.{whoami, logout, requires}` |
 

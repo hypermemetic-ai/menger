@@ -429,7 +429,10 @@ pub(crate) fn scope_call(call: Call, reach: Option<&Reach>) -> Result<Scoped, St
     };
     let epic = reach.epic.as_str();
     Ok(match call {
-        Call::Get { id } | Call::Blockers { id } if !reach.holds_id(&id) => Scoped::Answer(vec![TicketsEvent::NotFound { id }]),
+        // ACT-6: a `get` is asked whatever its id's letters — an old id names
+        // a ticket that moved, maybe into the reach — and its answer held to
+        // the reach ([`held_to`]: outside it, `not_found`).
+        Call::Blockers { id } if !reach.holds_id(&id) => Scoped::Answer(vec![TicketsEvent::NotFound { id }]),
         Call::List { epic: e, status, parent, after, limit, summary, filter } => Scoped::Call(Call::List {
             epic: e,
             status,
@@ -541,6 +544,12 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
             let ids: Vec<_> = ids.into_iter().filter(|id| reach.holds_id(id)).collect();
             let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(t.shortcode.as_str())).collect();
             (!ids.is_empty()).then_some(E::Undeleted { ids, tickets })
+        }
+        // ACT-6: a move, of the tickets the frame reaches where they are now.
+        E::Reshortcoded { moves, tickets } => {
+            let moves: Vec<_> = moves.into_iter().filter(|m| reach.holds_id(&m.to)).collect();
+            let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(t.shortcode.as_str())).collect();
+            (!moves.is_empty()).then_some(E::Reshortcoded { moves, tickets })
         }
         // The reach's own count, never the viewer's whole store.
         E::Health { version, unix_now, .. } => Some(E::Health { version, unix_now, ticket_count: reach.tickets }),
@@ -1152,6 +1161,7 @@ mod tests {
             body: format!("the body of {id}"),
             created_unix: 0,
             updated_unix: 0,
+            moved_from: Vec::new(),
         }
     }
 
@@ -1268,10 +1278,12 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        // Inside: asked. Outside: not_found, never asked.
+        // Inside: asked. Outside: not_found, never asked — but a `get`, whose
+        // id may be an old one (ACT-6): asked, its answer held to the reach.
         assert!(matches!(call(Call::Get { id: "SUB-2".into() }), Call::Get { .. }));
+        assert!(matches!(call(Call::Get { id: "OTHER-1".into() }), Call::Get { .. }));
         assert!(matches!(call(Call::Blockers { id: "AREA-1".into() }), Call::Blockers { .. }));
-        for c in [Call::Get { id: "OTHER-1".into() }, Call::Get { id: "OTHER/_MENGER/board".into() }, Call::Blockers { id: "OTHER-1".into() }] {
+        for c in [Call::Blockers { id: "OTHER-1".into() }] {
             match scope_call(c.clone(), Some(&area())).unwrap() {
                 Scoped::Answer(a) => assert!(matches!(&a[..], [TicketsEvent::NotFound { .. }]), "{c:?}: {a:?}"),
                 Scoped::Call(c) => panic!("asked: {c:?}"),

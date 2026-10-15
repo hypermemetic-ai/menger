@@ -581,14 +581,14 @@ fn unplan(cache: &Cache, found: Vec<(String, Option<Ticket>)>) -> Result<Vec<Bac
 
 /// What a rebuilding write remembers of the cache before it: each group as
 /// drawn, each row's placement, and the cells of the tickets it touches.
-struct Before {
+pub(super) struct Before {
     groups: HashMap<ShortcodeId, Group>,
     placed: BTreeMap<OrderKey, Option<crate::types::Placement>>,
     cells: BTreeMap<OrderKey, u32>,
 }
 
 impl Before {
-    fn of(cache: &Cache, touched: impl IntoIterator<Item = OrderKey>) -> Self {
+    pub(super) fn of(cache: &Cache, touched: impl IntoIterator<Item = OrderKey>) -> Self {
         let groups = cache.rollups.groups().into_iter().map(|g| (g.shortcode.clone(), cache.dress(g))).collect();
         let placed = cache.order.iter().map(|(k, r)| (k.clone(), r.placement)).collect();
         let cells = touched
@@ -603,7 +603,7 @@ impl Before {
 
     /// The groups, placements and cells that moved, as `cache` (after the
     /// write) has them — into `out`. `touched` in the store's order.
-    fn moved(self, cache: &Cache, touched: &[OrderKey], out: &mut Gathered) -> Option<Arc<cells::Moves>> {
+    pub(super) fn moved(self, cache: &Cache, touched: &[OrderKey], out: &mut Gathered) -> Option<Arc<cells::Moves>> {
         let groups: Vec<Group> = cache
             .rollups
             .groups()
@@ -648,7 +648,7 @@ impl Before {
 
 /// The open `under` watches' view of the tickets at `keys` and the subtrees
 /// of `roots`, before a rebuilding write.
-fn under_of(unders: &lineage::UnderWatches, cache: &Cache, keys: &[OrderKey], roots: &[&Row]) -> Option<lineage::UnderBefore> {
+pub(super) fn under_of(unders: &lineage::UnderWatches, cache: &Cache, keys: &[OrderKey], roots: &[&Row]) -> Option<lineage::UnderBefore> {
     lineage::under_before_with(unders, cache, || {
         let marks = cells::Moves {
             moves: keys.iter().map(|k| cells::CellMove { shortcode: k.shortcode.clone(), seq: k.seq, from: None, to: 0 }).collect(),
@@ -666,7 +666,8 @@ impl Cache {
     /// ACT-5: the sequence `epic`'s next ticket gets — past its highest, and
     /// past every number a delete freed: none is reused.
     pub(super) fn next_seq(&self, epic: &ShortcodeId) -> u32 {
-        self.ids.next_seq(epic).max(self.tombstones.after(epic) + 1)
+        // ACT-6: and past every number a move took out of it.
+        self.ids.next_seq(epic).max(self.tombstones.after(epic) + 1).max(self.shortcodes.moved_after(epic) + 1)
     }
 
     /// ACT-5: the sequences below `last` that `epic` does not hold — a
@@ -725,7 +726,7 @@ fn edited<'r>(rows: &'r mut BTreeMap<String, Row>, cache: &Cache, id: &str) -> O
 
 /// A ticket as the write leaves it — its row from `built`, its body from the
 /// write's transaction.
-fn after(txn: &rusqlite::Transaction<'_>, built: &Cache, id: &str) -> Result<Ticket, StoreError> {
+pub(super) fn after(txn: &rusqlite::Transaction<'_>, built: &Cache, id: &str) -> Result<Ticket, StoreError> {
     let row = built.get(id).cloned().ok_or_else(|| StoreError::NotFound(id.to_string()))?;
     let body = db::body(txn, id)?.ok_or_else(|| missing(id))?;
     Ok(whole(row, body))

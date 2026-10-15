@@ -953,7 +953,7 @@ async fn only_matches_move_up_to_the_nearest_match_or_the_shortcodes_top() {
     let mk = |epic: &str, kind: Kind, parent: Option<&str>| new_ticket(epic, kind, parent.map(String::from), Vec::new());
     for (epic, kind, parent) in [
         ("MENGER", Kind::Scope, None),            // MENGER-1, the root
-        ("MENGER", Kind::Scope, Some("MENGER-1")), // MENGER-2, an area
+        ("MENGER", Kind::Execution, Some("MENGER-1")), // MENGER-2, an area
         ("MENGER", Kind::Build, Some("MENGER-2")), // MENGER-3
         ("FILTER", Kind::Scope, Some("MENGER-2")), // FILTER-1, hosted at MENGER-2
         ("FILTER", Kind::Build, Some("FILTER-1")), // FILTER-2
@@ -1000,10 +1000,12 @@ async fn only_matches_move_up_to_the_nearest_match_or_the_shortcodes_top() {
     assert_eq!(ask("status Pending", None, Some("RETURNS")), [row("RETURNS-1", true, 3)]);
     assert_eq!(ask("status Pending", Some("RETURNS-1"), None), [row("RETURNS-2", true, 0), row("RETURNS-4", true, 1)]);
 
-    // A scope filter: the areas match, so FILTER's row stays at its host.
-    assert_eq!(ask("kind scope", None, Some("MENGER")), [row("MENGER-1", true, 2)]);
-    assert_eq!(ask("kind scope", Some("MENGER-1"), None), [row("MENGER-2", true, 1)]);
-    assert_eq!(ask("kind scope", Some("MENGER-2"), None), [row("FILTER-1", true, 0)]);
+    // A scope filter: FILTER-1 matches and MENGER-2 (ORG-5: an execution,
+    // as an area inside its shortcode is) does not, so FILTER's row moves up
+    // to MENGER-1.
+    assert_eq!(ask("kind scope", None, Some("MENGER")), [row("MENGER-1", true, 1)]);
+    assert_eq!(ask("kind scope", Some("MENGER-1"), None), [row("FILTER-1", true, 0)]);
+    assert_eq!(ask("kind scope", Some("MENGER-2"), None), []);
 
     // Paged in their new place: one row a page, across the matches and the
     // shortcodes drawn after them.
@@ -1044,7 +1046,7 @@ async fn a_kept_ticket_is_drawn_where_a_match_would_be() {
     let mk = |epic: &str, kind: Kind, parent: Option<&str>| new_ticket(epic, kind, parent.map(String::from), Vec::new());
     for (epic, kind, parent) in [
         ("MENGER", Kind::Scope, None),            // MENGER-1, the root
-        ("MENGER", Kind::Scope, Some("MENGER-1")), // MENGER-2, an area
+        ("MENGER", Kind::Execution, Some("MENGER-1")), // MENGER-2, an area
         ("MENGER", Kind::Build, Some("MENGER-2")), // MENGER-3
         ("FILTER", Kind::Scope, Some("MENGER-2")), // FILTER-1, hosted at MENGER-2
         ("FILTER", Kind::Build, Some("FILTER-1")), // FILTER-2

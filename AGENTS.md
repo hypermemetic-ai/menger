@@ -600,6 +600,20 @@ a queue that is always loud is a queue the owner learns to ignore.
   synapse -P 4455 menger tickets delete --ids THEME-12 --children reparent
   synapse -P 4455 menger tickets undelete --ids MENGER-40
   ```
+
+  **`tickets.reshortcode`** (ACT-6) moves tickets into another shortcode,
+  renumbered in the order given, all or none — into one there is (under
+  its root, or `--parent`), one `--new-scope TITLE --parent P` mints first,
+  or, for a scope moved into a code that does not exist, a shortcode it
+  roots itself; a root moves only with `--with-children` and its whole
+  shortcode (a rename). The old id is pinned to the new ticket — `get`,
+  blockers, filters, URLs and body chips follow it, `get` says
+  `moved_from` — and every record moves with it:
+
+  ```sh
+  synapse -P 4455 menger tickets reshortcode --ids THEME-9,THEME-10 --to LOOK
+  synapse -P 4455 menger tickets reshortcode --ids MENGER-2 --to APP --with-children true
+  ```
 - Architecture (owner-pinned): a service-wide in-memory cache
   (`src/store.rs`) is the ONLY interface the application has to tickets.
   Reads hit the cache, never storage; reads are async-safe (no lock
@@ -626,11 +640,18 @@ a queue that is always loud is a queue the owner learns to ignore.
   ticketing skill. Tickets are `Pending`
   until the human promotes them to `Ready`; implementation does not begin
   on `Pending` tickets.
+- **A scope roots its own shortcode** (ORG-5): a new area under a ticket is
+  `create --kind scope --epic NEW --parent X` (NEW-1, hosted under X) — a
+  scope with X's own shortcode is refused, and so is `set_kind` / `update
+  --kind` to a scope below a root; a ticket that must become an area moves
+  out first (`tickets reshortcode`, ACT-6).
 - **Three roots** (owner, 2026-10-08: "we need fewer root scopes"): MENGER
   (menger itself), PLEXUS (the platform) and OUGHT (the methodology). A new
   shortcode never adds a root: create its root ticket with `--parent` set to
   where it belongs. menger's areas are MENGER-2 *the app*, MENGER-3 *the
-  store and the server*, MENGER-4 *tickets*, MENGER-5 *running it*; work on
+  store and the server*, MENGER-4 *tickets*, MENGER-5 *running it* (ORG-5
+  moves them out to APP-1, STORE-1, TICKETS-1 and RUN-1, shortcodes of their
+  own hosted under MENGER-1; the old ids keep naming them); work on
   the platform goes under PLEXUS-1. To move a shortcode, `set_parent` its
   root; a hosted root can't return to the top level.
 - **Ask through the tracker** (owner, 2026-10-12, MENGER-12): a question

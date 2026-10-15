@@ -112,6 +112,13 @@ pub(super) struct Registry {
     /// Text → the key it is pinned to (today's ids, tombstones; ACT-6's
     /// aliases).
     pins: HashMap<String, String>,
+    /// ACT-6: each moved ticket's key → the ids it had, sorted — the
+    /// pins whose text is another ticket's id ([`Registry::index_aliases`]).
+    moved_ids: HashMap<String, Vec<String>>,
+    /// ACT-6: each shortcode's highest number a move took out of it — the
+    /// next ticket of it is born past it, as past a deleted one's: an old id
+    /// keeps naming the ticket that moved.
+    moved_last: HashMap<ShortcodeId, u32>,
 }
 
 impl Registry {
@@ -339,6 +346,45 @@ impl Registry {
         }
     }
 
+    /// ACT-6: the ids `key` had before a move named it anew, sorted.
+    pub(super) fn moved_from(&self, key: &str) -> Vec<String> {
+        self.moved_ids.get(key).cloned().unwrap_or_default()
+    }
+
+    /// ACT-6: the highest number a move took out of `sc` — 0 for none.
+    pub(super) fn moved_after(&self, sc: &ShortcodeId) -> u32 {
+        self.moved_last.get(sc).copied().unwrap_or(0)
+    }
+
+    /// ACT-6: the aliases and each shortcode's moved-out numbers, from the
+    /// pins — a pin whose text is a ticket's id (`{shortcode}-{n}`, no path)
+    /// and whose ticket is another is an alias. Built once the pins are read.
+    fn index_aliases(&mut self) {
+        let (mut aliases, mut last): (HashMap<String, Vec<(u32, String)>>, HashMap<ShortcodeId, u32>) = Default::default();
+        for (text, key) in &self.pins {
+            if text == key || text.contains('/') {
+                continue;
+            }
+            let Some((sc, n)) = text.rsplit_once('-').and_then(|(sc, n)| Some((ShortcodeId::new(sc), n.parse::<u32>().ok()?))) else {
+                continue;
+            };
+            let l = last.entry(sc).or_insert(0);
+            *l = (*l).max(n);
+            aliases.entry(key.clone()).or_default().push((n, text.clone()));
+        }
+        self.moved_last = last;
+        // Sorted: the pins keep no time, so a ticket moved twice lists both by
+        // their text.
+        self.moved_ids = aliases
+            .into_iter()
+            .map(|(k, v)| {
+                let mut v: Vec<String> = v.into_iter().map(|(_, t)| t).collect();
+                v.sort();
+                (k, v)
+            })
+            .collect();
+    }
+
     /// The key `text` is pinned to — today's id folded as a reader may write
     /// it (`theme-3`), or an alias as written.
     pub(super) fn pin(&self, text: &str) -> Option<&str> {
@@ -416,6 +462,7 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Registry> {
             r.aliases.insert(row.get(0)?, row.get(1)?);
         }
     }
+    r.index_aliases();
     r.readdress();
     Ok(r)
 }

@@ -59,6 +59,17 @@ pub(super) fn kind_refusal(cache: &Cache, row: &Row, blocked_by: &[String], kind
     if !kind.roots_a_shortcode() && cache.rollups.root(&row.shortcode) == Some(row.id.as_str()) {
         return Err(StoreError::RootKind { id: row.id.clone(), epic: row.epic.to_string(), kind });
     }
+    // ORG-5: a scope roots its shortcode — a ticket inside one that another
+    // roots does not become a scope there; it moves out first.
+    if kind == Kind::Scope && row.kind != Kind::Scope && !legacy_scopes() {
+        if let Some(root) = shortcode_root(cache, &row.shortcode).filter(|r| r.id != row.id && r.seq < row.seq) {
+            return Err(StoreError::ScopeNotRoot {
+                id: row.id.clone(),
+                root: root.id.clone(),
+                parent: row.parent.clone().unwrap_or_else(|| root.id.clone()),
+            });
+        }
+    }
     if let (Some(path), true) = (&row.path, kind.has_lifecycle()) {
         return Err(StoreError::PathKind { path: path.clone(), id: row.id.clone(), kind });
     }
@@ -92,4 +103,30 @@ pub(super) fn parent_refusal(cache: &Cache, child: &Row, parent: &str) -> Result
         return Err(StoreError::ParentCycle { id: child.id.clone(), path });
     }
     Ok(())
+}
+
+/// ORG-5: the refusal of a scope that would not root its shortcode — born
+/// under `parent` (or with none) into `epic`, which `root` roots already.
+pub(super) fn scope_not_root(parent: Option<&str>, epic: &str, root: &str) -> StoreError {
+    StoreError::Invalid(match parent {
+        Some(p) => format!("a scope under {p} roots its own shortcode; pass a new --epic (nothing was created)"),
+        None => format!(
+            "a scope roots its own shortcode, and {epic} is rooted by {root} — pass a new --epic, and --parent where it hangs (nothing was created)"
+        ),
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// ORG-5, tests only: a `set_kind` to a scope below a root let through,
+    /// to make the shape a file from before ORG-5 holds (MENGER-2 inside
+    /// MENGER) — what `reshortcode` moves out.
+    pub(super) static LEGACY_SCOPES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn legacy_scopes() -> bool {
+    #[cfg(test)]
+    return LEGACY_SCOPES.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    false
 }

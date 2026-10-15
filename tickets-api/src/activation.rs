@@ -138,7 +138,7 @@ mod tests;
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
             "unlink_commits", "label", "update", "update_many", "answer", "clear_answer", "close_input", "reopen_input",
-            "queue", "unqueue", "snooze"
+            "queue", "unqueue", "snooze", "reshortcode"
         ],
     )
 )]
@@ -304,28 +304,7 @@ impl Tickets {
         example(note = "a doc by its path address", params = r#"{"id": "PLEXUS/_MENGER/board"}"#)
     )]
     pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
-        stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            let named = named_in(&store, &caller, id.clone());
-            if caller.require(&[named.as_str()], &store).is_err() {
-                yield TicketsEvent::NotFound { id: id };
-                return;
-            }
-            match store.get(&named).await {
-                Ok(ticket) => yield TicketsEvent::Ticket { ticket },
-                // ACT-5: a deleted ticket answers its tombstone.
-                Err(StoreError::NotFound(_)) => yield store.tombstone(&id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
-                Err(e) => yield veiled(&caller, e),
-            }
-        }
+        get_stream(self.store.clone(), self.access.admit(auth, &reach), id)
     }
 
     /// Yields one row event per match, ordered by (epic, seq), then
@@ -1026,6 +1005,29 @@ impl Tickets {
     )]
     pub async fn undelete(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         undelete_stream(self.store.clone(), self.access.admit(auth, &reach), ids)
+    }
+
+    /// ACT-6: tickets moved into another shortcode ([`crate::store::Reshortcoded`]'s module).
+    #[plexus_macros::method(
+        group = "write",
+        target = "ids",
+        description = "Move tickets into another shortcode, renumbered there in the order given (a scope moved into a new code becomes its root; --new-scope makes the shortcode first; a root moves with --with-children as a rename); old ids keep resolving (get says moved_from); all or none; yields reshortcoded { moves, tickets }",
+        params(
+            ids = "Ticket ids, in the order they take their new numbers, e.g. [\"THEME-9\", \"THEME-10\"]",
+            to = "The shortcode they move into, e.g. LOOK (any short form of its address)",
+            new_scope = "Make the shortcode first: its root a new scope of this title under parent (optional)",
+            parent = "Where the moved tickets hang, inside the target (optional; default its root) — with new_scope, where the new scope hangs",
+            with_children = "Each one's descendants in its own shortcode move with it (optional; default false: they stay, under the nearest ancestor that stays)",
+            message = "Why (optional)"
+        ),
+        example(note = "two tickets into LOOK", params = r#"{"ids": ["THEME-9", "THEME-10"], "to": "LOOK"}"#),
+        example(note = "a scope out into a shortcode of its own", params = r#"{"ids": ["MENGER-2"], "to": "APP", "with_children": true}"#)
+    )]
+    pub async fn reshortcode(
+        &self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<String>, to: String, new_scope: Option<String>, parent: Option<String>, with_children: Option<bool>, message: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let ask = crate::store::Reshortcode { ids, to, new_scope, parent, with_children: with_children.unwrap_or(false), orgs: None };
+        reshortcode_stream(self.store.clone(), self.access.admit(auth, &reach), ask, message)
     }
 
     /// The DAG query: which tickets can start now? Yields one row event
@@ -2099,7 +2101,7 @@ impl Tickets {
     #[plexus_macros::method(
         group = "read",
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
+        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
         params(
             epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
             filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",

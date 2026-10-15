@@ -368,6 +368,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
             body: body_s,
             created_unix: created,
             updated_unix: updated,
+            moved_from: Vec::new(),
         });
     }
     out

@@ -124,14 +124,15 @@ async fn a_scope_gathers_its_open_descendants() {
     let root = make(&store, "SC", Kind::Scope, &[], None).await;
     make(&store, "XT", Kind::Scope, &[], None).await;
     let ext = build(&store, "XT", &[]).await;
-    let s = make(&store, "SC", Kind::Scope, &[], Some(&root)).await;
-    let b1 = make(&store, "SC", Kind::Build, &[], Some(&s)).await;
-    let e = make(&store, "SC", Kind::Execution, &[], Some(&s)).await;
-    let b2 = make(&store, "SC", Kind::Build, &[&ext], Some(&e)).await;
-    let b3 = make(&store, "SC", Kind::Build, &[&b2], Some(&e)).await;
-    let done = make(&store, "SC", Kind::Build, &[], Some(&s)).await;
+    // ORG-5: the scope roots a shortcode of its own, hosted under SC-1.
+    let s = make(&store, "SS", Kind::Scope, &[], Some(&root)).await;
+    let b1 = make(&store, "SS", Kind::Build, &[], Some(&s)).await;
+    let e = make(&store, "SS", Kind::Execution, &[], Some(&s)).await;
+    let b2 = make(&store, "SS", Kind::Build, &[&ext], Some(&e)).await;
+    let b3 = make(&store, "SS", Kind::Build, &[&b2], Some(&e)).await;
+    let done = make(&store, "SS", Kind::Build, &[], Some(&s)).await;
     store.set_status(&done, Status::Complete).await.unwrap();
-    let doc = make(&store, "SC", Kind::Doc, &[], Some(&s)).await;
+    let doc = make(&store, "SS", Kind::Doc, &[], Some(&s)).await;
     let _beside = make(&store, "SC", Kind::Build, &[], Some(&root)).await;
 
     let w = to(&store, &s);
@@ -149,12 +150,12 @@ async fn a_scope_gathers_its_open_descendants() {
     assert_eq!(shape(&builds), [at(&b1, wave(1)), at(&ext, wave(1)), at(&b2, wave(2)), at(&b3, wave(3)), at(&s, wave(4))]);
 
     // A build's children are its own business.
-    let kid = make(&store, "SC", Kind::Build, &[], Some(&b1)).await;
+    let kid = make(&store, "SS", Kind::Build, &[], Some(&b1)).await;
     let w = to(&store, &b1);
     assert!(!w.waves.placed.iter().any(|p| p.summary.id == kid));
 
     // Only what the caller sees is yielded; the rest still counts.
-    let visible: std::collections::HashSet<ShortcodeId> = [ShortcodeId::from("SC")].into();
+    let visible: std::collections::HashSet<ShortcodeId> = [ShortcodeId::from("SC"), ShortcodeId::from("SS")].into();
     let seen = store.waves_to(&s, &EVERY, Some(&visible)).unwrap();
     assert!(!seen.waves.placed.iter().any(|p| p.summary.id == ext));
     assert_eq!(seen.waves.placed.last().unwrap().placement, wave(4));
@@ -217,10 +218,11 @@ async fn waves_under_is_the_subtree_board() {
     let store = Store::new();
     let root = make(&store, "UN", Kind::Scope, &[], None).await;
     let beside = make(&store, "UN", Kind::Build, &[], Some(&root)).await;
-    let s = make(&store, "UN", Kind::Scope, &[], Some(&root)).await;
-    let e = make(&store, "UN", Kind::Execution, &[], Some(&s)).await;
-    let b1 = make(&store, "UN", Kind::Build, &[&beside], Some(&e)).await;
-    let b2 = make(&store, "UN", Kind::Gap, &[], Some(&s)).await;
+    // ORG-5: the scope roots a shortcode of its own, hosted under UN-1.
+    let s = make(&store, "US", Kind::Scope, &[], Some(&root)).await;
+    let e = make(&store, "US", Kind::Execution, &[], Some(&s)).await;
+    let b1 = make(&store, "US", Kind::Build, &[&beside], Some(&e)).await;
+    let b2 = make(&store, "US", Kind::Gap, &[], Some(&s)).await;
     let hosted = make(&store, "HO", Kind::Scope, &[], Some(&s)).await;
     let h = make(&store, "HO", Kind::Spike, &[&b1], Some(&hosted)).await;
 
