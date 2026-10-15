@@ -137,8 +137,8 @@ async fn record_test_then_prod_then_a_rollback() {
     ] {
         one(&client, "tickets.create", params).await;
     }
-    one(&client, "tickets.link_commits", json!({"id": "MENGER-2", "commits": ["29a50be"]})).await;
-    one(&client, "tickets.link_commits", json!({"id": "MENGER-3", "commits": ["824e943"]})).await;
+    one(&client, "tickets.commits.link", json!({"id": "MENGER-2", "commits": ["29a50be"]})).await;
+    one(&client, "tickets.commits.link", json!({"id": "MENGER-3", "commits": ["824e943"]})).await;
     let mut deployed = call(&client, "deployments.watch", json!({})).await;
     let mut entering = call(&client, "tickets.watch", json!({"filter": "deployed prod"})).await;
     assert!(where_runs(&client, "MENGER-3").await.is_empty(), "no environment yet");

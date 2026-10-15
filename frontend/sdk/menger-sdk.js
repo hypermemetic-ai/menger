@@ -681,10 +681,6 @@
       const stream = this.rpc.call("tickets.label", { add, id, ids, remove });
       yield* extractData(stream);
     }
-    async* linkCommits(commits, id, ids) {
-      const stream = this.rpc.call("tickets.link_commits", { commits, id, ids });
-      yield* extractData(stream);
-    }
     async* list(after, at, epic, filter, keep, limit, parent, status, summary, tz) {
       const stream = this.rpc.call("tickets.list", { after, at, epic, filter, keep, limit, parent, status, summary, tz });
       yield* extractData(stream);
@@ -751,10 +747,6 @@
     }
     async* undelete(ids) {
       const stream = this.rpc.call("tickets.undelete", { ids });
-      yield* extractData(stream);
-    }
-    async* unlinkCommits(commits, id) {
-      const stream = this.rpc.call("tickets.unlink_commits", { commits, id });
       yield* extractData(stream);
     }
     async* unqueue(id, source) {

@@ -9,3 +9,4 @@ export * as Orgs from './orgs';
 export * as Session from './session';
 export * as Themes from './themes';
 export * as Tickets from './tickets';
+export * as TicketsCommits from './tickets/commits';

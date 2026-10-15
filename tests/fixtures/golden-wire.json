@@ -501,7 +501,7 @@
     }
   },
   {
-    "call": "tickets.link_commits",
+    "call": "tickets.commits.link",
     "items": [
       {
         "added": [
@@ -548,7 +548,7 @@
     }
   },
   {
-    "call": "tickets.unlink_commits",
+    "call": "tickets.commits.unlink",
     "items": [
       {
         "removed": [

@@ -276,11 +276,11 @@ async fn update_many_over_the_wire_a_hundred_tickets_in_one_call() {
     let ev = one(&client, "tickets.update_many", json!({"status": "Complete"})).await;
     assert_eq!(ev["type"], "error", "ids or a filter: {ev}");
 
-    // `label` and `link_commits` over ids: one event per ticket, one write.
+    // `label` and `commits.link` over ids: one event per ticket, one write.
     let evs = collect(call(&client, "tickets.label", json!({"ids": ["MANY-3", "MANY-4"], "add": ["needs-you"]})).await).await;
     assert_eq!(types(&evs), ["labels_changed", "labels_changed"]);
     assert_eq!(evs[1]["ticket"]["labels"], json!(["moved", "needs-you"]));
-    let evs = collect(call(&client, "tickets.link_commits", json!({"ids": ["MANY-3", "MANY-4"], "commits": ["77df9a0"]})).await).await;
+    let evs = collect(call(&client, "tickets.commits.link", json!({"ids": ["MANY-3", "MANY-4"], "commits": ["77df9a0"]})).await).await;
     assert_eq!(types(&evs), ["commits_linked", "commits_linked"]);
     let ev = one(&client, "tickets.label", json!({"id": "MANY-3", "ids": ["MANY-4"], "add": ["x"]})).await;
     assert_eq!(ev["type"], "error", "id or ids, not both: {ev}");

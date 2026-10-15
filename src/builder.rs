@@ -180,8 +180,12 @@ pub async fn build_rpc_login(
     purge_daily(Arc::clone(&store), Arc::clone(&system));
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
+    let tickets = Tickets::with_access(Arc::clone(&store), access.clone());
+    // ACCESS-15: the children's roles, under `tickets.` — the gate's grants
+    // for `tickets.commits.*` (plexus-core seeds no child's).
+    let child_roles = tickets.child_roles();
     let mut hub = DynamicHub::new("menger")
-        .register(Tickets::with_access(Arc::clone(&store), access.clone()))
+        .register(tickets)
         .register(Comments::with_access(Arc::clone(&store), access.clone()))
         // NOTE-2: `notes` beside them, over the same store.
         .register(Notes::with_access(Arc::clone(&store), access.clone()))
@@ -206,6 +210,7 @@ pub async fn build_rpc_login(
             hub = hub.with_resource_metadata(url);
         }
         book.seed(hub.declared_roles());
+        book.seed(child_roles);
     }
     Ok(Arc::new(hub))
 }

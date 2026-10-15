@@ -520,7 +520,7 @@ pub(crate) enum Call {
     Many(Vec<String>, Args),
     /// One ticket's labels: `label { id, add, remove }`.
     Label { id: String, add: Vec<String>, remove: Vec<String> },
-    /// One ticket's commits: `link_commits { id, commits }`.
+    /// One ticket's commits: `commits.link { id, commits }` (ACCESS-15).
     Commits(String, Vec<String>),
 }
 
@@ -983,7 +983,7 @@ mod tests {
     }
 
     /// One write per change: `update` for one ticket (`set_status`, `label`
-    /// and `link_commits` for theirs), `update_many` for a selection; a title
+    /// and `commits.link` for theirs), `update_many` for a selection; a title
     /// and commits are one ticket's.
     #[test]
     fn a_change_is_one_write() {

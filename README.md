@@ -2094,6 +2094,17 @@ impl Tickets {
   (`tests/golden_wire.rs`). Each file says how it is filled: plexus-macros
   refuses an activation with no method yet (MACRO-18), so a shell is
   mounted (`#[plexus_macros::child]`) in the build that moves its methods in.
+- **A mounted child** — `tickets commits` (ACCESS-15: `link`, `unlink`,
+  were `link_commits`, `unlink_commits`) — is on the wire at
+  `tickets.<child>.<method>` (`synapse … menger tickets commits link --id X
+  --commits 77df9a0`), its Rust client `client.commits()` (`CommitsClient`),
+  the SDK's `tickets/commits/` (`scripts/sdk-codegen.sh` generates a child
+  beneath its parent and skips the mount itself). Its grants: its own
+  `roles(...)` say `commits.link`; the hub gates a child's call by its
+  whole path and seeds no child's roles, so `Tickets::child_roles` hands
+  the server `tickets.commits.link` (`src/builder.rs`). Under login a child
+  refuses everyone until MACRO-20: `route_to_child` passes it an
+  `IdentityOnly` context, without the principal, session or ceiling.
 - The schema lists what the server injects (`auth`, `user`) with an
   `x-plexus-source`; synapse shows them as server-supplied, and the SDK's
   drift guard (`sdk_manifest.rs`, `scripts/sdk-codegen.sh`) drops them.

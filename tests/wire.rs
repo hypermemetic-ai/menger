@@ -264,6 +264,43 @@ async fn the_frame_over_the_wire() {
     assert!(refused.contains("Authentication required"), "{refused}");
 }
 
+/// ACCESS-15: `tickets commits` — a child of `tickets` on the frame. Its
+/// schema is its own, every method and parameter described from its `///`;
+/// `link` and `unlink` answer at `tickets.commits.*`; a malformed commit is
+/// `invalid_params` naming it; the old names (`tickets.link_commits`,
+/// `tickets.unlink_commits`) are gone.
+#[tokio::test]
+async fn tickets_commits_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    let schema = content(call(&client, "tickets.commits.schema", json!({})).await.next().await.unwrap().unwrap());
+    assert_eq!(schema["namespace"], "commits", "{schema}");
+    let names: Vec<&str> = schema["methods"].as_array().unwrap().iter().filter_map(|m| m["name"].as_str()).filter(|m| *m != "schema").collect();
+    assert_eq!(names, ["link", "unlink"], "{schema}");
+    for m in schema["methods"].as_array().unwrap() {
+        assert!(!m["description"].as_str().unwrap_or_default().trim().is_empty(), "{} has no description", m["name"]);
+        for (name, p) in m["params"]["properties"].as_object().into_iter().flatten() {
+            if p.get("x-plexus-source").is_none() {
+                assert!(p.get("description").is_some_and(|d| !d.as_str().unwrap_or_default().is_empty()), "{}.{name}: {p}", m["name"]);
+            }
+        }
+    }
+
+    collect(call(&client, "tickets.create", json!({"epic": "LNK", "title": "root", "kind": "scope"})).await).await;
+    let linked = collect(call(&client, "tickets.commits.link", json!({"id": "lnk-1", "commits": ["77df9a0", "plexus-macros@4F7114A"]})).await).await;
+    assert_eq!((linked[0]["type"].as_str(), linked[0]["added"].clone()), (Some("commits_linked"), json!(["77df9a0", "plexus-macros@4f7114a"])), "{linked:?}");
+    let unlinked = collect(call(&client, "tickets.commits.unlink", json!({"id": "LNK-1", "commits": ["77df9a0"]})).await).await;
+    assert_eq!((unlinked[0]["type"].as_str(), unlinked[0]["ticket"]["commits"].clone()), (Some("commits_unlinked"), json!(["plexus-macros@4f7114a"])), "{unlinked:?}");
+    let message = invalid(&client, "tickets.commits.link", json!({"id": "LNK-1", "commits": ["77df9a0;rm"]})).await;
+    assert!(message.contains("commits: `77df9a0;rm` is not a commit reference"), "{message}");
+
+    for old in ["tickets.link_commits", "tickets.unlink_commits"] {
+        let item = call(&client, old, json!({"id": "LNK-1", "commits": ["77df9a0"]})).await.next().await.expect("an item").unwrap();
+        assert_eq!(item["type"], "error", "{old} is gone: {item}");
+    }
+}
+
 #[tokio::test]
 async fn in_band_errors_cross_the_wire() {
     let port = start_server().await;

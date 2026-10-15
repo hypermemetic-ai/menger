@@ -1,11 +1,12 @@
 //! MENGER-30: what `tickets.update` asks before the store — the call's
 //! fields as the store's [`Update`] (ACCESS-8: typed at dispatch), and the reach a parent or a blocker in
 //! another shortcode takes. ACT-2: and the writes over many tickets —
-//! `update_many`, `label` and `link_commits` given `ids` — as their streams,
+//! `update_many`, `label` and `commits.link` given `ids` — as their streams,
 //! so the activation keeps only its methods (MENGER-29).
 
 use super::*;
 use crate::store::{Selection, Update, UpdatedMany, UPDATE_MANY_MAX};
+use crate::vocab::CommitRef;
 
 /// The call's fields as an [`Update`]. ACCESS-8: each one already a type
 /// — an unknown kind, status or severity was refused at dispatch, naming
@@ -36,14 +37,14 @@ pub(super) fn update_of(
     }
 }
 
-/// ACT-2: a write `label` or `link_commits` makes, to one ticket or many.
+/// ACT-2: a write `label` or `commits.link` makes, to one ticket or many.
 pub(super) enum CellWrite {
     /// `add`, `remove`.
     Labels(Vec<Label>, Vec<Label>),
     Commits(Vec<CommitRef>),
 }
 
-/// ACT-2: `label` and `link_commits`, over `id` or `ids` — exactly one. One
+/// ACT-2: `label` and `commits.link`, over `id` or `ids` — exactly one. One
 /// ticket: the gate held the grant on it; one event, `not_found` for an id
 /// that names none. Many: the caller's grant on every one asked first (one
 /// missing refuses the write, naming it), then the store's one write, all
