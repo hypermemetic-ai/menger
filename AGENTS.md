@@ -624,11 +624,18 @@ a queue that is always loud is a queue the owner learns to ignore.
   ticketing skill. Tickets are `Pending`
   until the human promotes them to `Ready`; implementation does not begin
   on `Pending` tickets.
+- **A scope roots its own shortcode** (ORG-5): a new area under a ticket is
+  `create --kind scope --epic NEW --parent X` (NEW-1, hosted under X) — a
+  scope with X's own shortcode is refused, and so is `set_kind` / `update
+  --kind` to a scope below a root; a ticket that must become an area moves
+  out first (`tickets reshortcode`, ACT-6).
 - **Three roots** (owner, 2026-10-08: "we need fewer root scopes"): MENGER
   (menger itself), PLEXUS (the platform) and OUGHT (the methodology). A new
   shortcode never adds a root: create its root ticket with `--parent` set to
   where it belongs. menger's areas are MENGER-2 *the app*, MENGER-3 *the
-  store and the server*, MENGER-4 *tickets*, MENGER-5 *running it*; work on
+  store and the server*, MENGER-4 *tickets*, MENGER-5 *running it* (ORG-5
+  moves them out to APP-1, STORE-1, TICKETS-1 and RUN-1, shortcodes of their
+  own hosted under MENGER-1; the old ids keep naming them); work on
   the platform goes under PLEXUS-1. To move a shortcode, `set_parent` its
   root; a hosted root can't return to the top level.
 - **Ask through the tracker** (owner, 2026-10-12, MENGER-12): a question

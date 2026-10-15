@@ -297,6 +297,15 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
         steps.push(Step { row: m.clone(), key: target.key(seq), shortcode: target.clone(), seq, parent: None });
     }
     let as_root = minted.is_some() && born.is_none();
+    // ORG-5: a scope roots its shortcode — it moves only to root a new one.
+    for (i, s) in steps.iter().enumerate() {
+        if s.row.kind == Kind::Scope && !(as_root && i == 0) {
+            refusals.push((s.row.id.clone(), vec![refuse(format!(
+                "{} is a scope, and a scope roots its own shortcode (ORG-5): move it alone into a new code, which it roots                  (tickets reshortcode --ids {} --to NEW --with-children true)",
+                s.row.id, s.row.id
+            ))]));
+        }
+    }
     for (i, s) in steps.iter_mut().enumerate() {
         s.parent = match s.row.parent.as_deref().and_then(|p| map.get(p)) {
             Some(p) => Some(p.clone()),

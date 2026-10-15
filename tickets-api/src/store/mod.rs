@@ -1072,6 +1072,10 @@ pub enum StoreError {
     /// SDLC-13 (WAVE-10): `id` holds the path address `path`, which only a
     /// doc carries, and `kind` is work. Nothing changed.
     PathKind { id: String, path: String, kind: Kind },
+    /// ORG-5: `id` would become a scope inside the shortcode `root` roots — a
+    /// scope roots its own shortcode; it moves into one first (ACT-6's
+    /// `reshortcode`). `parent` is where it hangs. Nothing changed.
+    ScopeNotRoot { id: String, root: String, parent: String },
     /// MNG-14: a ticket's parent must be inside its own shortcode; only a
     /// shortcode's scope root may hang under another shortcode (its host).
     /// Nothing changed.
@@ -1341,6 +1345,11 @@ impl std::fmt::Display for StoreError {
                 "'{id}' is the root of {epic}: a shortcode's root is its lowest-seq scope or doc, so it cannot \
                  become a {} — make it a scope or a doc (nothing changed)",
                 kind.as_str()
+            ),
+            Self::ScopeNotRoot { id, root, parent } => write!(
+                f,
+                "'{id}' isn't its shortcode's root ({root} is): a scope roots its own shortcode (ORG-5) — move it into one of its \
+                 own first (tickets reshortcode --ids {id} --to NEW --new-scope TITLE --parent {parent}) (nothing changed)"
             ),
             Self::PathKind { id, path, kind } => write!(
                 f,
@@ -5714,3 +5723,6 @@ mod tests_delete;
 /// ACT-6: `reshortcode` — a test per row of the ticket's table.
 #[cfg(test)]
 mod tests_reshortcode;
+/// ORG-5: a scope under a scope roots its own shortcode — a test per row.
+#[cfg(test)]
+mod tests_child_scopes;

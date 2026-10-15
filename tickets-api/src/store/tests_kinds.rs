@@ -146,12 +146,19 @@ async fn from_a_doc_its_status_is_given_or_epic_for_a_scope_or_pending() {
         other => panic!("{other:?}"),
     }
 
-    let (t, _) = kind_changed(store.set_kind("K-6", Kind::Scope, None).await.unwrap());
+    // ORG-5: a doc below the root does not become a scope there…
+    match store.set_kind("K-6", Kind::Scope, None).await {
+        Err(StoreError::ScopeNotRoot { id, root, .. }) => assert_eq!((id.as_str(), root.as_str()), ("K-6", "K-1")),
+        other => panic!("{other:?}"),
+    }
+    // …a doc that roots its shortcode does, as `Epic`.
+    store.create(new("KD", Kind::Doc, None, &[])).await.unwrap();
+    let (t, _) = kind_changed(store.set_kind("KD-1", Kind::Scope, None).await.unwrap());
     assert_eq!((t.kind, t.status), (Kind::Scope, Status::Epic), "a scope's default");
     let (t, _) = kind_changed(store.set_kind("K-7", Kind::Spike, Some(Status::Complete)).await.unwrap());
     assert_eq!((t.kind, t.status, t.placement), (Kind::Spike, Status::Complete, Some(Placement::Done)));
     let g = group(&store, "K");
-    assert_eq!((g.total, g.done, g.docs), (7, 1, 0), "three docs became work, one of it done");
+    assert_eq!((g.total, g.done, g.docs), (6, 1, 1), "two docs became work, one of it done; K-6 stayed a doc (ORG-5)");
 
     let refused = store.set_kind("K-6", Kind::Doc, None).await.map(|_| ());
     assert!(refused.is_ok(), "back again: {refused:?}");
@@ -372,7 +379,7 @@ async fn verify_derived_is_consistent_after_each_kind_of_change() {
         store.create(new("SUB", Kind::Doc, None, &[])).await.unwrap();
     }
     let steps: [(&str, Kind, Option<Status>); 8] = [
-        ("K-3", Kind::Scope, None),
+        ("K-3", Kind::Execution, None),
         ("K-2", Kind::Gap, Some(Status::Complete)),
         ("K-4", Kind::Spike, Some(Status::Ready)),
         ("K-1", Kind::Doc, None),
@@ -408,7 +415,8 @@ async fn every_pair_of_kinds_with_and_without_a_status() {
     store.create(new("P", Kind::Scope, None, &[])).await.unwrap();
     let mut rx = store.subscribe_filtered();
     let mut changed = 0;
-    for from in Kind::ALL {
+    // ORG-5: no scope is born below P-1, so none is a `from` here.
+    for from in Kind::ALL.into_iter().filter(|k| *k != Kind::Scope) {
         for to in Kind::ALL {
             for status in [None, Some(Status::Ready), Some(Status::Complete)] {
                 let t = store.create(new("P", from, None, &[])).await.unwrap();
@@ -432,7 +440,8 @@ async fn every_pair_of_kinds_with_and_without_a_status() {
                 let refused = match (to.has_lifecycle(), status) {
                     (false, Some(_)) => true,
                     (false, None) => from.has_lifecycle(), // it blocks a ticket
-                    (true, _) => false,
+                    // ORG-5: a scope below P-1, its root.
+                    (true, _) => to == Kind::Scope,
                 };
                 match got {
                     Err(e) => assert!(refused, "{what}: {e}"),
@@ -455,7 +464,9 @@ async fn every_pair_of_kinds_with_and_without_a_status() {
             }
         }
     }
-    assert_eq!(changed, 6 * 6 * 3 - 5 * 3 - 2, "every pair but those the rules refuse");
+    // Five kinds from, six to, three statuses; less a doc's refusals (a
+    // status given, or a ticket that blocks) and a scope below P-1 (ORG-5).
+    assert_eq!(changed, 5 * 6 * 3 - (5 * 2 + 4) - 5 * 3, "every pair but those the rules refuse");
 }
 
 // ---- the random walks' share ---------------------------------------------
@@ -548,6 +559,10 @@ pub(super) async fn random_set_kind(store: &Store, below: &mut dyn FnMut(usize) 
         Ok(s) if kind == t.kind && s == t.status => Want::Unchanged,
         Ok(_) if !kind.has_lifecycle() && (!t.blocked_by.is_empty() || !t.unlocks.is_empty()) => Want::Refused("DocInGraph"),
         Ok(_) if roots_it && !kind.roots_a_shortcode() => Want::Refused("RootKind"),
+        // ORG-5: a scope roots its shortcode — no ticket below its root becomes one.
+        Ok(_) if kind == Kind::Scope && t.kind != Kind::Scope && first.get(t.epic.as_str()).is_some_and(|r| r.id != t.id && r.seq < t.seq) => {
+            Want::Refused("ScopeNotRoot")
+        }
         Ok(_) if t.path.is_some() && kind.has_lifecycle() => Want::Refused("PathKind"),
         Ok(s) => Want::Changed(s),
     };
@@ -560,6 +575,7 @@ pub(super) async fn random_set_kind(store: &Store, below: &mut dyn FnMut(usize) 
                 StoreError::DocInGraph { .. } => "DocInGraph",
                 StoreError::RootKind { .. } => "RootKind",
                 StoreError::PathKind { .. } => "PathKind",
+                StoreError::ScopeNotRoot { .. } => "ScopeNotRoot",
                 _ => "something else",
             };
             assert_eq!(is, name, "{what}: {e}");

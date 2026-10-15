@@ -3082,7 +3082,8 @@ async fn delete_over_the_wire() {
     let client = connect(port).await;
     for (title, kind, parent, blocked_by) in [
         ("the root", "scope", None, vec![]),
-        ("an area", "scope", None, vec![]),
+        // ORG-5: an area inside the shortcode is work, not a scope.
+        ("an area", "execution", None, vec![]),
         ("a child", "build", Some("DEL-2"), vec![]),
         ("waits", "build", None, vec!["DEL-2"]),
         ("a typo", "build", None, vec![]),

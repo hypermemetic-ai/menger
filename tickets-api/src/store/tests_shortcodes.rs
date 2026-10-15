@@ -108,9 +108,9 @@ async fn rehoming_a_root_into_a_namespace_that_holds_its_code_is_refused() {
     assert_eq!(store.get(&second.id).await.unwrap().address, "hypermemetic:OUGHT/THEME-1");
     assert_eq!(store.get("OUGHT/THEME-2").await.unwrap().title, "a build in PLEXUS/THEME");
     assert!(matches!(store.get("PLEXUS/THEME-2").await, Err(StoreError::NotFound(_))));
-    // A ticket that becomes a scope (set_kind) passes the same guard: here a
-    // build of THEME that is not its root stays in it.
-    store.set_kind("OUGHT/THEME-2", Kind::Scope, None).await.unwrap();
+    // A ticket that becomes a scope (set_kind) inside a shortcode another
+    // roots is refused (ORG-5): it moves into one of its own first.
+    assert!(matches!(store.set_kind("OUGHT/THEME-2", Kind::Scope, None).await, Err(StoreError::ScopeNotRoot { .. })));
     assert_eq!(store.get("OUGHT/THEME-2").await.unwrap().address, "hypermemetic:OUGHT/THEME-2");
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));

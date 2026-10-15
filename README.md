@@ -1742,6 +1742,19 @@ group is a `group_changed`); `set_kind` (a ticket that becomes its
 shortcode's root); `notes upgrade`; `undelete`. A build or an execution
 never starts a shortcode: it files into the one its `--epic` names.
 
+**A scope roots its own shortcode** (ORG-5; owner, 2026-10-13: *a child
+scope roots its own shortcode*). A scope is born only as its shortcode's
+root: `create --kind scope --parent X` naming X's shortcode as `--epic` is
+refused (`a scope under X roots its own shortcode; pass a new --epic`), and
+with a new `--epic` it is that shortcode's `-1`, hosted under X. `set_kind`
+(and `update --kind`, `update_many --kind`) to a scope is refused for a
+ticket below its shortcode's root (`ScopeNotRoot`, naming `reshortcode
+--new-scope` as the way); `notes upgrade` is a create and takes the same
+rule. A root goes between scope and doc as before. A scope that sits inside
+its parent's shortcode from before ORG-5 moves out with `reshortcode --ids X
+--to NEW --with-children true` (it becomes NEW-1, its tree with it);
+`scripts/org-5-move.sh PORT` moves the tracker's.
+
 ```sh
 synapse -P 4455 menger tickets create --epic THEME --kind scope --parent PLEXUS-1 --title "the platform's themes"
 synapse -P 4455 menger tickets create --epic PLEXUS/THEME --title "a build in it"

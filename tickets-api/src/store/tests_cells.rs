@@ -646,10 +646,12 @@ async fn every_dimension_of_a_cell_is_kept() {
     for (i, kind) in Kind::ALL.into_iter().enumerate() {
         for (j, severity) in severities.into_iter().enumerate() {
             let blocked_by = if kind != Kind::Doc && (i + j) % 2 == 0 { vec!["DIM-1".to_string()] } else { vec![] };
-            let t = store
-                .create(NewTicket { severity, ..new_ticket("DIM", kind, None, blocked_by) })
-                .await
-                .unwrap();
+            // ORG-5: a scope roots its own shortcode, hosted under DIM-1.
+            let made = match kind {
+                Kind::Scope => new_ticket(&format!("DS{j}"), kind, Some("DIM-1".into()), blocked_by),
+                _ => new_ticket("DIM", kind, None, blocked_by),
+            };
+            let t = store.create(NewTicket { severity, ..made }).await.unwrap();
             n += 1;
             if kind != Kind::Doc {
                 store.set_status(&t.id, Status::LIFECYCLE[n % Status::LIFECYCLE.len()]).await.unwrap();

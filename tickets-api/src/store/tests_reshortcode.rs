@@ -28,8 +28,8 @@ fn new(epic: &str, title: &str, kind: Kind, parent: Option<&str>) -> NewTicket {
     }
 }
 
-/// `M`: M-1 its root, M-2 … M-6 builds under it (M-3 waits on M-2), M-7 a
-/// scope under the root with M-8 and M-9 under it (M-9 waits on M-8); `N`:
+/// `M`: M-1 its root, M-2 … M-6 builds under it (M-3 waits on M-2), M-7 an
+/// execution under the root with M-8 and M-9 under it (M-9 waits on M-8); `N`:
 /// N-1 its root, N-2 a build; `H`: H-1 a scope hosted under M-7, H-2 a build.
 async fn fixture(store: &Store) {
     store.create(new("M", "the root", Kind::Scope, None)).await.unwrap();
@@ -40,7 +40,7 @@ async fn fixture(store: &Store) {
         }
         store.create(t).await.unwrap();
     }
-    store.create(new("M", "an area", Kind::Scope, Some("M-1"))).await.unwrap();
+    store.create(new("M", "an area", Kind::Execution, Some("M-1"))).await.unwrap();
     store.create(new("M", "eight", Kind::Build, Some("M-7"))).await.unwrap();
     store.create(NewTicket { blocked_by: vec!["M-8".into()], ..new("M", "nine", Kind::Build, Some("M-7")) }).await.unwrap();
     store.create(new("N", "n root", Kind::Scope, None)).await.unwrap();
@@ -53,6 +53,15 @@ async fn store() -> Store {
     let store = Store::new();
     fixture(&store).await;
     store
+}
+
+/// `id` made a scope where its shortcode has a root — the shape a file from
+/// before ORG-5 holds (MENGER-2 inside MENGER), which ORG-5 refuses to make.
+async fn legacy_scope(store: &Store, id: &str) {
+    rules::LEGACY_SCOPES.with(|l| l.set(true));
+    let made = store.set_kind(id, Kind::Scope, None).await;
+    rules::LEGACY_SCOPES.with(|l| l.set(false));
+    made.unwrap();
 }
 
 fn ask(ids: &[&str], to: &str) -> Reshortcode {
@@ -138,6 +147,7 @@ async fn new_scope_mints_the_shortcode_first_its_root_under_parent_and_a_clash_i
 #[tokio::test]
 async fn a_scope_moved_into_a_new_code_roots_it_hosted_where_it_hangs_and_its_hosted_shortcodes_follow() {
     let store = store().await;
+    legacy_scope(&store, "M-7").await;
     let r = store.reshortcode(Reshortcode { with_children: true, ..ask(&["M-7"], "AREA") }).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("M-7", "AREA-1"), ("M-8", "AREA-2"), ("M-9", "AREA-3")]));
     let root = store.get("AREA-1").await.unwrap();
@@ -312,6 +322,7 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
     let store = Store::open(&path).unwrap();
     fixture(&store).await;
     store.link_commits("M-9", vec!["abcdef1".into()]).await.unwrap();
+    legacy_scope(&store, "M-7").await;
     store.reshortcode(ask(&["M-5", "M-4"], "N")).await.unwrap();
     store.reshortcode(Reshortcode { with_children: true, ..ask(&["M-7"], "AREA") }).await.unwrap();
     store.reshortcode(Reshortcode { with_children: true, ..ask(&["H-1"], "LOOK") }).await.unwrap();

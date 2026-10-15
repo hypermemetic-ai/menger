@@ -207,7 +207,15 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
         0..=7 => {
             let epic = epics[rng.below(epics.len())];
             let exists = extents.contains_key(epic);
-            let kind = if !exists || rng.below(5) == 0 { Kind::Scope } else { Kind::Build };
+            // ORG-5: a scope only roots a new shortcode; inside one, the draw
+            // that made a scope there makes an execution (the draws stay).
+            let kind = if !exists {
+                Kind::Scope
+            } else if rng.below(5) == 0 {
+                Kind::Execution
+            } else {
+                Kind::Build
+            };
             // SDLC-11: every ninth create a doc — a new shortcode's root, or a
             // ticket inside one — with its roll-ups, counts and refusals. By a
             // count, not a draw: the walk's draws stay the ones it had.

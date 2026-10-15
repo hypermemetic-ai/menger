@@ -920,13 +920,12 @@ mod tests {
             Stamps { data_ticket: None, scope: Some("AUTH".into()), init_ticket: Some("AUTH-10".into()), depth: 1 }
         );
         let reach = bridge::Reach::only("AUTH");
+        // ACT-6: a `get` is asked (an old id may name a ticket that moved
+        // into the reach), and its answer held to the cited shortcode.
         let call = bridge::parse_call("get", r#"{"id":"MENGER-2"}"#).unwrap();
-        match bridge::scope_call(call, Some(&reach)).unwrap() {
-            bridge::Scoped::Answer(events) => {
-                assert!(matches!(&events[..], [TicketsEvent::NotFound { id }] if id == "MENGER-2"), "{events:?}")
-            }
-            other => panic!("{other:?}"),
-        }
+        assert!(matches!(bridge::scope_call(call, Some(&reach)).unwrap(), bridge::Scoped::Call(bridge::Call::Get { .. })));
+        let held = bridge::held_to(vec![TicketsEvent::Ticket { ticket: ticket("MENGER-2", "t", "") }], &reach, Some("MENGER-2".into()));
+        assert!(matches!(&held[..], [TicketsEvent::NotFound { id }] if id == "MENGER-2"), "{held:?}");
         match bridge::scope_call(bridge::parse_call("list", "{}").unwrap(), Some(&reach)).unwrap() {
             bridge::Scoped::Call(bridge::Call::List { filter, .. }) => assert_eq!(filter.as_deref(), Some("under AUTH")),
             other => panic!("{other:?}"),
