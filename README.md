@@ -484,6 +484,52 @@ and Title (the inputs page's State and Removed) are not in the language,
 so Save as… leaves them out and says so. The app reads `VIEW-1` when a
 menu opens — nothing at startup — and, once read, follows its `amended`.
 
+**Nesting and names** (FILTER-36). The language (FILTER-10's, in
+`tickets-api/src/filter.rs`) is groups joined by `and`, each group one `or`
+or one `and` of items — and an item is now a predicate *or a group*, to any
+depth: `(ready or (blocked and kind build)) and has commits`, `not (blocked
+or asking)`. One join per pair of parentheses still (`(a or b and c)` is
+refused: say which binds). The canonical text settles every tree one way —
+a group joined as its parent is spliced into it (`((a or b) or c)` is `(a
+or b or c)`), a one-item group is its item (`(a or (b))` is `(a or b)`), a
+negated list is the other list (`not (status A or status B)` is `not status
+in (A, B)`) — and `format(parse(x)) == x`, `parse(format(f)) == f` hold
+over random trees. `text "…"` stays a top-level `and` group of its own, at
+any depth. **`saved "Name"`** (`saved Name` when the name holds no space,
+comma, parenthesis or quote; `not saved "Name"` too) is a predicate naming
+a saved filter: the doc in `VIEW` at `_MENGER/view/…` whose title has the
+name's slug (`Needs you` = `needs you` = `needs-you`) — several so titled,
+the one at that slug's path; none, the doc at that path (a renamed
+filter's old name keeps naming it until another filter takes the name). An
+unlisted doc (taken off `Saved ▾`) still resolves while it exists; a
+deleted one does not; `Needs you` means MENGER-43's default, `(queued or
+asking or label needs-you)`, until a doc of that name is saved. The server
+expands every name before it compiles a filter to cells — a name standing
+alone at the top brings its groups in; anywhere else all of them are one
+group under the join (and the `not`) it stood in, so `saved "Needs you" or
+saved Plexus-Ready` is the union of two `and`s of groups — from a registry
+of the saved docs' texts kept in the cache (`store/saved.rs`: read from the
+bodies on open, moved by every body's write; derived, not stored). Every
+filtered read, count and watch resolves (`list`, `counts`, `facets`,
+`tree`, `find`, `search`, `inputs`, `ready_set`, `member`, `update_many`,
+`delete`, `watch`); a refusal is the read's one in-band `error`, naming the
+chunk: `no saved filter named "X"`, a cycle (`"A" names "B" names "A"`),
+names nested past 8, a saved text the language does not read, one naming
+no predicate, one holding `text`. A membership watch keeps the text it was
+asked: when a filter it names changes — its doc amended, renamed, deleted —
+it says what that did, `entered` / `left` per ticket (a `recount` per
+shortcode past 256), after the change that did it; a name that stops
+resolving ends it with the `error`. The app reads and carries any such
+text (the URL's `g=` / `n=` too); until FILTER-37's tree it draws a group
+holding a group or a name as one custom pill of its canonical text, edited
+in the bar's text mode — every unnested filter is drawn as before.
+
+```sh
+synapse -P 4455 menger tickets list --filter 'saved "Needs you" or saved Plexus-Ready' --summary true
+synapse -P 4455 menger tickets counts --filter 'saved Deployment and not saved Plexus-Coding'
+synapse -P 4455 menger tickets watch --filter '(saved Plexus-Ready or (asking and kind build))' --membership true
+```
+
 **When** (FILTER-27): every menu has a **When** category that builds the
 language's time clauses by clicks — **Created** (today · yesterday · this
 week · in the last hour · 12 hours · Custom…), **Moved into ▸** and **Moved

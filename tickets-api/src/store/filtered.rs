@@ -129,7 +129,9 @@ impl Lens {
     /// names kept, and the evaluator handed the lineage they are tested on.
     pub fn of(filter: &Filter) -> Result<Self, StoreError> {
         refuse(filter)?;
-        let preds = || filter.groups.iter().flat_map(|g| &g.preds);
+        // FILTER-36: every leaf, a nested group's at any depth.
+        let leaves = filter.leaves();
+        let preds = || leaves.iter().copied();
         let named: BTreeSet<String> = preds()
             .filter_map(|p| match &p.field {
                 Field::In(e) => Some(e.to_ascii_uppercase()),
@@ -261,6 +263,11 @@ pub fn refuse(filter: &Filter) -> Result<(), StoreError> {
         if g.preds.iter().any(|p| matches!(p.field, Field::Text(_))) {
             why.push("text is the palette's — ask `find` (a filter's text waits for SCALE-13's B5)");
         }
+        // FILTER-36: a name is the store's to resolve ([`Store::lens`]);
+        // one that reaches a compile unresolved is not answered blind.
+        if g.leaves().iter().any(|p| matches!(p.field, Field::Saved(_))) {
+            why.push("a saved filter's name is resolved by the store first, and this read did not");
+        }
         if !why.is_empty() {
             bad.push(format!("`{}` — {}", g.format(), why.join("; ")));
         }
@@ -358,7 +365,11 @@ pub enum Membership {
 /// FILTER-4: one `watch { filter }`'s filter, compiled — and compiled again
 /// when a write names a cell interned since.
 pub struct Watcher {
-    lens: Lens,
+    pub(super) lens: Lens,
+    /// FILTER-36: the text it was asked, names unresolved — read again when
+    /// a saved filter it names changes ([`Watcher::resaved`]); `None` when
+    /// it names none.
+    pub(super) source: Option<String>,
     admit: Admit,
     /// FILTER-13: a filter that asks `under` — each write works out this
     /// watch's membership itself ([`super::lineage::UnderMoves`]), and its
@@ -681,6 +692,7 @@ impl Store {
             let under = self.unders.open(lens.clone(), epic.cloned());
             return Watcher {
                 lens,
+                source: None,
                 admit: Admit::compile(&[], std::iter::empty(), |_, _| false),
                 under: Some(under),
                 read_at,
@@ -691,7 +703,7 @@ impl Store {
             let cache = self.tickets.read().expect("store lock poisoned");
             (lens.admit(&cache.shortcodes, cache.cells.keys(), None), cache.shortcodes.len())
         };
-        Watcher { lens, admit, under: None, read_at: 0, shortcodes }
+        Watcher { lens, source: None, admit, under: None, read_at: 0, shortcodes }
     }
 
     /// ORG-3: how many shortcodes the registry holds — what a watcher's

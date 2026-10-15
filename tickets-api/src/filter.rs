@@ -11,8 +11,11 @@
 //!   ticket.
 //! - **A group** is one predicate; `field in (a, b)` (any of them);
 //!   `not field in (a, b)` (none of them); or one pair of parentheses holding
-//!   predicates joined all by `or` (any) or all by `and` (all). As in
+//!   items joined all by `or` (any) or all by `and` (all). As in
 //!   manifest, a chunk `a or b` without parentheses is an `or` group too.
+//!   FILTER-36: an item is a predicate, a list, or a group in parentheses
+//!   ([`Field::Group`]), `not` before it or not — groups nest to any depth:
+//!   `(a or (b and c)) and d`. One pair of parentheses still holds one join.
 //! - **A predicate** is `not` (any number; they toggle) before one of
 //!   `status <name>` · `category <open|ready|active|review|done|dropped|static>`
 //!   · `kind <name>` · `severity <critical|high|medium|low|none>` ·
@@ -20,12 +23,14 @@
 //!   `asking` (MENGER-12: it has an open input) · `label <name>` (and
 //!   `label in (a, b)`; MENGER-12) ·
 //!   `in <SHORTCODE>` (and `in (A, B)`, `not in (A, B)`) ·
-//!   `under <ID or SHORTCODE>` · `text "…"`, or a bare `"…"`. A value
+//!   `under <ID or SHORTCODE>` · `text "…"`, or a bare `"…"` · FILTER-36:
+//!   `saved "Name"` (or `saved Name`), a saved filter by name
+//!   ([`Field::Saved`], expanded by [`Filter::resolve`]). A value
 //!   holding spaces, commas or parentheses is quoted with `"`; the language
 //!   has no escape, so no value holds a `"`.
 //! - **`text`** is tested on rows, so it stands only as a top-level `and`
 //!   group of its own: never inside `or`, under `not`, or in parentheses
-//!   with other predicates.
+//!   with other predicates — nor in a nested group, nor through a name.
 //! - **The display part** keeps `tree` (the default), `flat`, `columns a, b`
 //!   and `order code` (the store's order).
 //!
@@ -40,12 +45,18 @@
 //! language's shape — a one-predicate group is [`Conj::All`] (what
 //! [`Group::any`] and [`Group::all`] build), no group is empty, `text`
 //! stands alone, no value holds a `"`, and shortcodes and ids are upper
-//! case. [`Filter::parse`] produces only filters of that shape.
+//! case; FILTER-36: and every nested group settled as [`Group::of`] settles
+//! it — a group joined as its parent spliced into it, a one-item group its
+//! item, a negated list the other list, a group of one group that group.
+//! [`Filter::parse`] produces only filters of that shape.
 //!
 //! On top of the grammar: [`Filter::and`], the lens's aggregation (a level's
 //! filter under the global one), [`Filter::admits_nothing`], the
 //! contradiction a combined filter can fall into, and [`Filter::matches`],
-//! the reference evaluator every compiled form is held equal to.
+//! the reference evaluator every compiled form is held equal to — each
+//! walking nested groups as it walks a group (FILTER-36). And
+//! [`Filter::resolve`]: every `saved "Name"` replaced by the filter the name
+//! holds, which the store does before it compiles a filter to cells.
 //!
 //! Wasm-safe: no feature gate, nothing but `std` and the wire enums.
 
@@ -178,6 +189,17 @@ pub enum Field {
     /// optional window and `by` — over the transition log: some transition
     /// of the ticket's did that, in the window, by that actor ([`History`]).
     History(History),
+    /// FILTER-36: a group as one item of another — `(a or (b and c))`, at
+    /// any depth. Canonical ([`Group::of`]): it holds two or more items, its
+    /// join is not its parent's unless it is negated, and a negated one is
+    /// never a list (`not (status A or status B)` is `not status in (A, B)`).
+    Group(Box<Group>),
+    /// FILTER-36: `saved "Name"` — the saved filter (FILTER-6) of that name,
+    /// as written. It means nothing until [`Filter::resolve`] puts the named
+    /// filter in its place: the store resolves every filter before it
+    /// compiles one, and [`Filter::matches`] passes no ticket through an
+    /// unresolved name.
+    Saved(String),
 }
 
 impl Field {
@@ -198,6 +220,8 @@ impl Field {
             Field::Under(_) => "under",
             Field::Text(_) => "text",
             Field::History(h) => h.event.name(),
+            Field::Group(_) => "group",
+            Field::Saved(_) => "saved",
         }
     }
 
@@ -211,7 +235,9 @@ impl Field {
             Field::Kind(k) => k.as_str().into(),
             Field::Severity(s) => severity_name(*s).into(),
             Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking => return None,
-            Field::In(x) | Field::Under(x) | Field::Text(x) | Field::Label(x) => x.clone(),
+            Field::In(x) | Field::Under(x) | Field::Text(x) | Field::Label(x) | Field::Saved(x) => x.clone(),
+            // FILTER-36: a nested group's value is its text.
+            Field::Group(g) => g.format(),
             Field::History(h) => {
                 let full = h.format();
                 // FILTER-27: a `status … for …` is its whole text.
@@ -258,7 +284,13 @@ impl Field {
             Field::HasCommits => c.commits,
             Field::MengerDoc => c.menger,
             Field::Asking => c.asking,
-            Field::In(_) | Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) => return None,
+            Field::In(_)
+            | Field::Under(_)
+            | Field::Text(_)
+            | Field::Label(_)
+            | Field::History(_)
+            | Field::Group(_)
+            | Field::Saved(_) => return None,
         })
     }
 
@@ -275,6 +307,10 @@ impl Field {
                 let key = h.format();
                 f.history.contains(&key)
             }
+            // FILTER-36: the same walk, deeper.
+            Field::Group(g) => g.matches(f),
+            // Unresolved: nothing passes ([`Filter::resolve`] first).
+            Field::Saved(_) => false,
             _ => false,
         }
     }
@@ -312,6 +348,8 @@ impl Predicate {
             }
             Field::Text(t) => format!("{head}text \"{t}\""),
             Field::History(h) => format!("{head}{}", h.format()),
+            Field::Group(g) => format!("{head}{}", g.format()),
+            Field::Saved(n) => format!("{head}saved {}", quoted(n)),
             f => format!("{head}{} {}", f.name(), quoted(&f.value().unwrap_or_default())),
         }
     }
@@ -353,9 +391,58 @@ impl Group {
     }
 
     /// The canonical shape: one predicate is `All`, whatever joins it.
-    fn of(conj: Conj, preds: Vec<Predicate>) -> Self {
-        let conj = if preds.len() == 1 { Conj::All } else { conj };
-        Self { conj, preds }
+    /// FILTER-36: and every nested group settled ([`settle`]) — a one-item
+    /// group is its item, a group joined as its parent is spliced into it,
+    /// a negated list is the other list — and a group of one group, not
+    /// negated, is that group.
+    pub fn of(conj: Conj, preds: Vec<Predicate>) -> Self {
+        let mut out = Vec::with_capacity(preds.len());
+        for p in preds {
+            settle(p, conj, &mut out);
+        }
+        if let [Predicate { field: Field::Group(_), not: false }] = out.as_slice() {
+            let Some(Predicate { field: Field::Group(g), .. }) = out.pop() else { unreachable!() };
+            return *g;
+        }
+        let conj = if out.len() == 1 { Conj::All } else { conj };
+        Self { conj, preds: out }
+    }
+
+    /// FILTER-36: this group as one item of another — `not` or not.
+    pub fn nested(self, not: bool) -> Predicate {
+        Predicate { field: Field::Group(Box::new(self)), not }
+    }
+
+    /// FILTER-36: every predicate at its leaves — a nested group's, at any
+    /// depth, in the order written; a nested group is not one of them.
+    pub fn leaves(&self) -> Vec<&Predicate> {
+        let mut out = Vec::new();
+        fn walk<'a>(g: &'a Group, out: &mut Vec<&'a Predicate>) {
+            for p in &g.preds {
+                match &p.field {
+                    Field::Group(inner) => walk(inner, out),
+                    _ => out.push(p),
+                }
+            }
+        }
+        walk(self, &mut out);
+        out
+    }
+
+    /// FILTER-36: whether it holds a nested group or a `saved` name — what
+    /// the app's bar draws as text.
+    pub fn is_nested(&self) -> bool {
+        self.preds.iter().any(|p| matches!(p.field, Field::Group(_) | Field::Saved(_)))
+    }
+
+    /// FILTER-36: a list's other list — `any of a, b` negated is `none of a,
+    /// b` (De Morgan, which keeps a negated list a list).
+    fn negated_list(self) -> Group {
+        let conj = match self.conj {
+            Conj::Any => Conj::All,
+            Conj::All => Conj::Any,
+        };
+        Group { conj, preds: self.preds.into_iter().map(|p| Predicate { not: !p.not, ..p }).collect() }
     }
 
     /// Whether `facts` pass the group. An empty group passes (manifest's
@@ -398,6 +485,32 @@ impl Group {
             && first.field.listable()
             && self.preds.iter().all(|p| p.field.name() == first.field.name() && p.not == first.not)
             && self.conj == if first.not { Conj::All } else { Conj::Any }
+    }
+}
+
+/// FILTER-36: `p` into `out`, an item of a group joined by `conj`, in the
+/// canonical shape: a one-item group is its item (`not (a)` is `not a`); a
+/// negated list is the other list; a group joined as its parent, not
+/// negated, is spliced into it. Every group `p` holds is settled already.
+fn settle(p: Predicate, conj: Conj, out: &mut Vec<Predicate>) {
+    let Predicate { field, not } = p;
+    let mut g = match field {
+        Field::Group(g) => *g,
+        field => return out.push(Predicate { field, not }),
+    };
+    if g.preds.len() == 1 {
+        let mut inner = g.preds.pop().expect("one item");
+        inner.not ^= not;
+        return settle(inner, conj, out);
+    }
+    let mut not = not;
+    if not && g.listable() {
+        g = g.negated_list();
+        not = false;
+    }
+    match !not && g.conj == conj && !g.preds.is_empty() {
+        true => out.extend(g.preds),
+        false => out.push(g.nested(not)),
     }
 }
 
@@ -509,11 +622,14 @@ pub struct BadChunk {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FilterError {
     pub chunks: Vec<BadChunk>,
+    /// FILTER-36: the text was read, and these chunks name saved filters
+    /// that do not resolve ([`Filter::resolve`]).
+    pub unresolved: bool,
 }
 
 impl fmt::Display for FilterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("not understood: ")?;
+        f.write_str(if self.unresolved { "not resolved: " } else { "not understood: " })?;
         for (i, c) in self.chunks.iter().enumerate() {
             if i > 0 {
                 f.write_str("; ")?;
@@ -613,7 +729,7 @@ impl Filter {
         }
         match bad.is_empty() {
             true => Ok(Filter { groups, display }),
-            false => Err(FilterError { chunks: bad }),
+            false => Err(FilterError { chunks: bad, unresolved: false }),
         }
     }
 
@@ -683,6 +799,122 @@ impl Filter {
     }
 }
 
+impl Filter {
+    /// FILTER-36: every predicate at its leaves, group by group — a nested
+    /// group's at any depth; never a nested group itself.
+    pub fn leaves(&self) -> Vec<&Predicate> {
+        self.groups.iter().flat_map(Group::leaves).collect()
+    }
+
+    /// FILTER-36: the saved filters it names, as written, each once.
+    pub fn saved_names(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for p in self.leaves() {
+            if let Field::Saved(n) = &p.field {
+                if !out.contains(&n.as_str()) {
+                    out.push(n);
+                }
+            }
+        }
+        out
+    }
+
+    /// FILTER-36: whether it holds a nested group or a `saved` name — a
+    /// shape FILTER-10's two levels do not draw.
+    pub fn is_nested(&self) -> bool {
+        self.groups.iter().any(Group::is_nested)
+    }
+
+    /// FILTER-36: the filter with every `saved "Name"` in it replaced by the
+    /// filter that name holds — `lookup` says a name's canonical text, or
+    /// `None` when no saved filter has it — recursively, the display kept.
+    ///
+    /// A name standing alone as a top-level group brings its groups in as
+    /// groups of this filter; anywhere else it stands for one group of all
+    /// of them, under the join (and the `not`) it stood in: `saved A or
+    /// saved B`, each an `and` of groups, is one `or` of two all-of groups.
+    ///
+    /// Refused, every chunk that names one: a name nothing holds (`no saved
+    /// filter named "X"`); a cycle (`"A" names "B" names "A"`); names
+    /// nested past [`SAVED_DEPTH`]; a saved text the language does not
+    /// read, one that names no predicate, and one holding `text` — which
+    /// stands only at a filter's own top, never through a name.
+    pub fn resolve(&self, lookup: &mut impl FnMut(&str) -> Option<String>) -> Result<Filter, FilterError> {
+        self.resolve_in(lookup, &mut Vec::new())
+    }
+
+    fn resolve_in(&self, lookup: &mut impl FnMut(&str) -> Option<String>, stack: &mut Vec<(String, String)>) -> Result<Filter, FilterError> {
+        if self.saved_names().is_empty() {
+            return Ok(self.clone());
+        }
+        let (mut groups, mut bad) = (Vec::new(), Vec::new());
+        for g in &self.groups {
+            let read = match g.preds.as_slice() {
+                [Predicate { field: Field::Saved(name), not: false }] => expand(name, lookup, stack).map(|f| f.groups),
+                _ => resolve_group(g, lookup, stack).map(|g| vec![g]),
+            };
+            match read {
+                Ok(gs) => groups.extend(gs),
+                Err(why) => bad.push(BadChunk { text: g.format(), why }),
+            }
+        }
+        match bad.is_empty() {
+            true => Ok(Filter { groups, display: self.display.clone() }),
+            false => Err(FilterError { chunks: bad, unresolved: true }),
+        }
+    }
+}
+
+/// FILTER-36: how deep saved filters may name saved filters — a backstop
+/// behind the cycle check.
+pub const SAVED_DEPTH: usize = 8;
+
+/// FILTER-36: `g` with every name in it resolved.
+fn resolve_group(g: &Group, lookup: &mut impl FnMut(&str) -> Option<String>, stack: &mut Vec<(String, String)>) -> Result<Group, String> {
+    if !g.leaves().iter().any(|p| matches!(p.field, Field::Saved(_))) {
+        return Ok(g.clone());
+    }
+    let mut preds = Vec::with_capacity(g.preds.len());
+    for p in &g.preds {
+        preds.push(match &p.field {
+            Field::Saved(name) => {
+                let named = expand(name, lookup, stack)?;
+                Group::of(Conj::All, named.groups.into_iter().map(|g| g.nested(false)).collect()).nested(p.not)
+            }
+            Field::Group(inner) => resolve_group(inner, lookup, stack)?.nested(p.not),
+            _ => p.clone(),
+        });
+    }
+    Ok(Group::of(g.conj, preds))
+}
+
+/// FILTER-36: the filter `name` holds, its own names resolved — `stack`
+/// the names being expanded, outermost first (by slug, as names match).
+fn expand(name: &str, lookup: &mut impl FnMut(&str) -> Option<String>, stack: &mut Vec<(String, String)>) -> Result<Filter, String> {
+    let key = crate::saved_filters::slug(name);
+    if let Some(at) = stack.iter().position(|(k, _)| *k == key) {
+        let chain: Vec<String> = stack[at..].iter().map(|(_, n)| n.as_str()).chain([name]).map(|n| format!("\"{n}\"")).collect();
+        return Err(format!("a cycle: {}", chain.join(" names ")));
+    }
+    if stack.len() >= SAVED_DEPTH {
+        return Err(format!("saved filters name saved filters at most {SAVED_DEPTH} deep; \"{name}\" is deeper"));
+    }
+    let text = lookup(name).ok_or_else(|| format!("no saved filter named \"{name}\""))?;
+    let parsed = Filter::parse(&text).map_err(|e| format!("the saved filter \"{name}\" does not read — {e}"))?;
+    if parsed.groups.is_empty() {
+        return Err(format!("the saved filter \"{name}\" names no predicate"));
+    }
+    if parsed.leaves().iter().any(|p| matches!(p.field, Field::Text(_))) {
+        return Err(format!(
+            "the saved filter \"{name}\" holds `text`, which stands only at a filter's own top — never through a name"
+        ));
+    }
+    stack.push((key, name.to_string()));
+    let out = parsed.resolve_in(lookup, stack);
+    stack.pop();
+    out.map_err(|e| e.chunks.into_iter().map(|c| c.why).collect::<Vec<_>>().join("; "))
+}
+
 impl fmt::Display for Filter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.format())
@@ -702,7 +934,7 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 32] = [
+const NAMES: [&str; 33] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -727,6 +959,8 @@ const NAMES: [&str; 32] = [
     "written",
     "status",
     "lowest",
+    // FILTER-36: a saved filter by name.
+    "saved",
     "under",
     "label",
     "ready",
@@ -745,11 +979,11 @@ const NAMES: [&str; 32] = [
 const TEXT_ALONE: &str = "`text` is tested on rows, so it stands alone as a top-level `and` group — never \
                           inside `or`, under `not`, or in parentheses with other predicates";
 const MIXED: &str = "`or` and `and` do not mix inside one pair of parentheses: a group is all `or` or all `and`";
-const NESTED: &str = "groups do not nest: parentheses hold predicates, not groups";
-const LIST_NESTED: &str = "a list `field in (…)` is a group of its own, never inside parentheses or `or`";
+const UNBALANCED: &str = "a group's parentheses close where they open: `(a or (b and c))`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
                               `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
-                              `entered`, `left`, `changed`, `by`, `created`, `for`, `deployed` or `queued`, or a quoted text";
+                              `entered`, `left`, `changed`, `by`, `created`, `for`, `deployed`, `queued` or \
+                              `saved`, a group in parentheses, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
 /// `raw` cut at `sep` (ASCII case-insensitive) where it stands outside
@@ -934,8 +1168,12 @@ fn read_field(rest: &str) -> Result<Field, String> {
     if rest.starts_with('"') {
         return text(unquote(rest)?);
     }
+    // FILTER-36: a group inside a group.
     if rest.starts_with('(') {
-        return Err(NESTED.into());
+        return match wrapped(rest) {
+            Some(inner) => inner_group(inner).map(|g| Field::Group(Box::new(g))),
+            None => Err(UNBALANCED.into()),
+        };
     }
     // FILTER-27: `… for over|under <length>`, one predicate.
     if let Some(at) = held_at(rest).filter(|at| *at > 0) {
@@ -1014,6 +1252,15 @@ fn read_field(rest: &str) -> Result<Field, String> {
         // MENGER-39: over the queue's kept entries.
         "queued" => read_history(name, tail).map(Field::History),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
+        // FILTER-36: a saved filter, by its name.
+        "saved" => {
+            let v = value()?;
+            let name = v.split_whitespace().collect::<Vec<_>>().join(" ");
+            match crate::saved_filters::slug(&name).is_empty() {
+                true => Err(format!("`saved` takes a saved filter's name, which holds a letter or a digit — not `{v}`")),
+                false => Ok(Field::Saved(name)),
+            }
+        }
         "written" | "age" => Err(format!(
             "`{name}` is refused: it needs an index of its own (FILTER-3 §6.9, open question 6)"
         )),
@@ -1048,14 +1295,27 @@ fn group(conj: Conj, items: Vec<(&str, Result<Predicate, String>)>) -> Result<Gr
     if whys.is_empty() && preds.is_empty() {
         whys.push("nothing inside the parentheses".into());
     }
-    let alone = preds.len() == 1;
-    if preds.iter().any(|p| matches!(p.field, Field::Text(_)) && (p.not || !alone)) {
+    // FILTER-36: judged settled — a `text` a nested group brings up is in
+    // the group it lands in.
+    let settled = Group::of(conj, preds);
+    if !text_alone(&settled) {
         whys.push(TEXT_ALONE.into());
     }
     match whys.is_empty() {
-        true => Ok(Group::of(conj, preds)),
+        true => Ok(settled),
         false => Err(whys.join("; ")),
     }
+}
+
+/// Whether every `text` in `g` stands alone, not negated, at the top: a
+/// group of it alone.
+fn text_alone(g: &Group) -> bool {
+    let alone = g.preds.len() == 1;
+    g.preds.iter().all(|p| match &p.field {
+        Field::Text(_) => alone && !p.not,
+        Field::Group(inner) => !inner.leaves().iter().any(|l| matches!(l.field, Field::Text(_))),
+        _ => true,
+    })
 }
 
 /// `field in (a, b)` or `not field in (a, b)` — `in (A, B)` for the `in`
@@ -1078,27 +1338,34 @@ fn list_group(s: &str) -> Option<Result<Group, String>> {
     Some(group(if not { Conj::All } else { Conj::Any }, items))
 }
 
-/// The predicates of an `or` or an `and` inside a group.
+/// The predicates of an `or` or an `and` inside a group. FILTER-36: a list
+/// among them is a group inside it, as a parenthesized one is.
 fn members<'a>(raws: &[&'a str]) -> Vec<(&'a str, Result<Predicate, String>)> {
     raws.iter()
         .map(|&r| match list_group(r) {
-            Some(_) => (r, Err(LIST_NESTED.to_string())),
+            Some(list) => (r, list.map(|g| g.nested(false))),
             None => (r, parse_predicate(r)),
         })
         .collect()
 }
 
+/// What one pair of parentheses holds: items joined all by `or` or all by
+/// `and` — FILTER-36: each a predicate, a list, or a group in parentheses.
+fn inner_group(inner: &str) -> Result<Group, String> {
+    let ors = parts(split_top(inner, " or "));
+    if ors.len() > 1 {
+        if ors.iter().any(|o| parts(split_and(o)).len() > 1) {
+            return Err(MIXED.into());
+        }
+        return group(Conj::Any, members(&ors));
+    }
+    group(Conj::All, members(&parts(split_and(inner))))
+}
+
 /// One `and`-joined chunk (manifest's `parseGroup`, strict).
 fn parse_group(s: &str) -> Result<Group, String> {
     if let Some(inner) = wrapped(s) {
-        let ors = parts(split_top(inner, " or "));
-        if ors.len() > 1 {
-            if ors.iter().any(|o| parts(split_and(o)).len() > 1) {
-                return Err(MIXED.into());
-            }
-            return group(Conj::Any, members(&ors));
-        }
-        return group(Conj::All, members(&parts(split_and(inner))));
+        return inner_group(inner);
     }
     if let Some(list) = list_group(s) {
         return list;
@@ -1986,6 +2253,9 @@ enum Dim {
     Label(String),
     /// MENGER-13: a history predicate's truth — free, as the log is.
     History(String),
+    /// FILTER-36: an unresolved `saved` name — free, as nothing says what
+    /// it holds (its slug).
+    Saved(String),
 }
 
 fn dims(field: &Field) -> Vec<Dim> {
@@ -1997,7 +2267,11 @@ fn dims(field: &Field) -> Vec<Dim> {
         Field::HasCommits => vec![Dim::Commits],
         Field::Asking => vec![Dim::Asking],
         Field::In(_) => vec![Dim::Epic],
-        Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) => var(field).into_iter().collect(),
+        Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) => {
+            var(field).into_iter().collect()
+        }
+        // FILTER-36: what its leaves read.
+        Field::Group(g) => g.leaves().into_iter().flat_map(|p| dims(&p.field)).collect(),
     }
 }
 
@@ -2014,6 +2288,7 @@ fn var(field: &Field) -> Option<Dim> {
             (!key.is_empty()).then_some(Dim::Text(key))
         }
         Field::History(h) => Some(Dim::History(h.format())),
+        Field::Saved(n) => Some(Dim::Saved(crate::saved_filters::slug(n))),
         _ => None,
     }
 }
@@ -2027,7 +2302,7 @@ const WORLD_LIMIT: usize = 1 << 20;
 /// in common are independent, so each such component is decided alone.
 fn clash(groups: &[Group], subset: &[usize]) -> Option<Vec<usize>> {
     let read: Vec<Vec<Dim>> =
-        subset.iter().map(|&i| groups[i].preds.iter().flat_map(|p| dims(&p.field)).collect()).collect();
+        subset.iter().map(|&i| groups[i].leaves().into_iter().flat_map(|p| dims(&p.field)).collect()).collect();
     let mut root: Vec<usize> = (0..subset.len()).collect();
     fn find(root: &mut [usize], mut x: usize) -> usize {
         while root[x] != x {
@@ -2066,12 +2341,15 @@ enum Lit<'a> {
     /// The `n`th free truth.
     Var(usize),
     Always,
+    /// FILTER-36: a nested group, its items compiled.
+    Tree(Conj, Vec<(Lit<'a>, bool)>),
 }
 
 /// Whether some world of the closed domain passes every one of `groups`.
+/// FILTER-36: a nested group is judged as its parent is, deeper.
 fn satisfiable(groups: &[&Group]) -> bool {
     let (mut cell, mut epics, mut vars) = (false, Vec::<String>::new(), Vec::<Dim>::new());
-    for p in groups.iter().flat_map(|g| &g.preds) {
+    for p in groups.iter().flat_map(|g| g.leaves()) {
         match &p.field {
             Field::In(e) => {
                 let e = e.to_ascii_uppercase();
@@ -2079,7 +2357,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
                     epics.push(e);
                 }
             }
-            f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_)) => {
+            f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_)) => {
                 if let Some(v) = var(f).filter(|v| !vars.contains(v)) {
                     vars.push(v);
                 }
@@ -2103,47 +2381,44 @@ fn satisfiable(groups: &[&Group]) -> bool {
     if vars.len() > 20 || cells.len().saturating_mul(epics.len() + 1).saturating_mul(1 << vars.len()) > WORLD_LIMIT {
         return true;
     }
-    let compiled: Vec<(Conj, Vec<(Lit, bool)>)> = groups
-        .iter()
-        .map(|g| {
-            let lits = g
-                .preds
-                .iter()
-                .map(|p| {
-                    let lit = match &p.field {
-                        Field::In(e) => {
-                            Lit::Epic(epics.iter().position(|x| x.eq_ignore_ascii_case(e)).unwrap_or(usize::MAX))
-                        }
-                        f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_)) => match var(f) {
+    fn compile<'a>(g: &'a Group, epics: &[String], vars: &[Dim]) -> Vec<(Lit<'a>, bool)> {
+        g.preds
+            .iter()
+            .map(|p| {
+                let lit = match &p.field {
+                    Field::In(e) => Lit::Epic(epics.iter().position(|x| x.eq_ignore_ascii_case(e)).unwrap_or(usize::MAX)),
+                    f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_)) => {
+                        match var(f) {
                             Some(v) => Lit::Var(vars.iter().position(|x| *x == v).unwrap_or(usize::MAX)),
                             None => Lit::Always,
-                        },
-                        f => Lit::Cell(f),
-                    };
-                    (lit, p.not)
-                })
-                .collect();
-            (g.conj, lits)
-        })
-        .collect();
-    let holds = |c: &Cell, epic: usize, truths: usize| {
-        compiled.iter().all(|(conj, lits)| {
-            let test = |(lit, not): &(Lit, bool)| {
-                let hit = match lit {
-                    Lit::Cell(f) => f.on_cell(c).unwrap_or(false),
-                    Lit::Epic(n) => epic == *n,
-                    Lit::Var(n) => truths >> n & 1 == 1,
-                    Lit::Always => true,
+                        }
+                    }
+                    Field::Group(inner) => Lit::Tree(inner.conj, compile(inner, epics, vars)),
+                    f => Lit::Cell(f),
                 };
-                hit != *not
+                (lit, p.not)
+            })
+            .collect()
+    }
+    let compiled: Vec<(Conj, Vec<(Lit, bool)>)> = groups.iter().map(|g| (g.conj, compile(g, &epics, &vars))).collect();
+    fn passes(conj: Conj, lits: &[(Lit, bool)], c: &Cell, epic: usize, truths: usize) -> bool {
+        let test = |(lit, not): &(Lit, bool)| {
+            let hit = match lit {
+                Lit::Cell(f) => f.on_cell(c).unwrap_or(false),
+                Lit::Epic(n) => epic == *n,
+                Lit::Var(n) => truths >> n & 1 == 1,
+                Lit::Always => true,
+                Lit::Tree(conj, inner) => passes(*conj, inner, c, epic, truths),
             };
-            match conj {
-                _ if lits.is_empty() => true,
-                Conj::Any => lits.iter().any(test),
-                Conj::All => lits.iter().all(test),
-            }
-        })
-    };
+            hit != *not
+        };
+        match conj {
+            _ if lits.is_empty() => true,
+            Conj::Any => lits.iter().any(test),
+            Conj::All => lits.iter().all(test),
+        }
+    }
+    let holds = |c: &Cell, epic: usize, truths: usize| compiled.iter().all(|(conj, lits)| passes(*conj, lits, c, epic, truths));
     cells.iter().any(|c| (0..=epics.len()).any(|e| (0..1usize << vars.len()).any(|t| holds(c, e, t))))
 }
 

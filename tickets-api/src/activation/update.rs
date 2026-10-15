@@ -164,7 +164,7 @@ pub(super) fn update_many_stream(
                 (Some(ids), None) => Selection::Ids(texts(ids)),
                 (None, Some(filter)) => {
                     let text = caller.scoped_text(&filter)?;
-                    let lens = zoned_lens(&caller, Some(&text), tz.as_deref()).map_err(|e| e.to_string())?.unwrap_or_else(Lens::all);
+                    let lens = zoned_lens(&store, &caller, Some(&text), tz.as_deref()).map_err(|e| e.to_string())?.unwrap_or_else(Lens::all);
                     Selection::Filter { lens, max: max.map_or(UPDATE_MANY_MAX, |m| m as usize) }
                 }
                 _ => return Err("name the tickets: ids, or a filter — one of them".to_string()),

@@ -114,6 +114,9 @@ pub(crate) struct Uses {
     /// THEME-3: its ` ```theme ` blocks and the themes its frontmatter names
     /// ([`super::theme_registry`]), whose change rides with this registry's.
     pub(crate) themes: super::theme_registry::BodyThemes,
+    /// FILTER-36: its `filter:` line, as a saved filter's body holds one
+    /// ([`super::saved`]), whose change rides with this registry's too.
+    pub(crate) saved: Option<String>,
 }
 
 impl Uses {
@@ -160,7 +163,7 @@ fn rendered(body: &str) -> &str {
 /// the module doc for the rule. A body with no `<` and no `component` holds
 /// neither, and is not parsed.
 pub(crate) fn read(body: &str) -> (Uses, Vec<Problem>) {
-    let mut uses = Uses::default();
+    let mut uses = Uses { saved: crate::saved_filters::filter_line(body).map(str::to_string), ..Uses::default() };
     let mut problems = Vec::new();
     match super::theme_registry::read(body) {
         Ok(themes) => uses.themes = themes,
@@ -335,6 +338,9 @@ pub(crate) struct Moves {
     /// Each name whose entry moves, in name order — `None`: it goes.
     pub(crate) components: Vec<(String, Option<Entry>)>,
     pub(crate) themes: super::theme_registry::Moves,
+    /// FILTER-36: the ticket whose body was written and the `filter:` line
+    /// it holds now — `None`: no body was written.
+    pub(crate) saved: Option<(String, Option<String>)>,
 }
 
 /// One write's change to the registry, worked out before it commits.

@@ -105,6 +105,16 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets watch --filter 'category in (active, review)'   # + entered/left
   ```
 
+  Groups nest and saved filters are named (FILTER-36): `(a or (b and
+  c))` to any depth, and `saved "Name"` (`saved Name` without spaces) —
+  the saved filter's doc under VIEW-1, expanded by the server before the
+  cells (a missing name or a cycle is the in-band error; a watch re-says
+  its membership when a named doc changes). README "Nesting and names":
+
+  ```sh
+  synapse -P 4455 menger tickets list --filter 'saved "Needs you" or saved Plexus-Ready' --summary true
+  ```
+
   The other reads take the same flag (FILTER-15) — `find`, `ready_set`
   and `inputs` answer what they answered, of the tickets the filter
   admits; `member` says which of up to 1,000 ids it admits:

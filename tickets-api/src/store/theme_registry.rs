@@ -197,14 +197,21 @@ impl Cache {
             owner: o.owner,
         })?;
         plan.moves.themes = plan_themes(&self.themes, ticket, &uses.themes)?;
+        // FILTER-36: and the saved filter's text, which nothing refuses.
+        plan.moves.saved = Some((ticket.to_string(), uses.saved.clone()));
         Ok(plan)
     }
 
     /// A committed plan, taken: the components, then the themes — each theme
-    /// moved or removed said on the themes channel.
+    /// moved or removed said on the themes channel. FILTER-36: then the
+    /// saved filters' texts.
     pub(super) fn take_registry(&mut self, moves: components::Moves) {
         self.components.take(moves.components);
         take(&mut self.themes, moves.themes);
+        if let Some((ticket, text)) = moves.saved {
+            let doc = self.at.get(&ticket).and_then(|k| self.order.get(k)).map(super::saved::is_saved_doc);
+            self.saved.take(ticket, text.filter(|_| doc != Some(false)));
+        }
     }
 }
 
