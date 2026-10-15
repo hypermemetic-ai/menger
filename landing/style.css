@@ -306,9 +306,11 @@ pre.cmd .c { color: var(--night-dim); } pre.cmd .o { color: #8fd39a; }
 .close .actions { margin: 0; }
 .foot .btn { color: var(--night-ink); border-color: var(--night-ink); } .foot .btn:hover { background: var(--night-ink); color: var(--night); }
 .foot .btn-primary { background: #8ab4f8; color: var(--night); border-color: #8ab4f8; }
-.giant { font-size: clamp(90px, 19vw, 280px); font-weight: 700; letter-spacing: -.05em; line-height: .85; margin: 40px 0 -.08em; display: flex; align-items: flex-end; gap: .08em; }
+.giant { font-size: clamp(90px, 19vw, 280px); font-weight: 700; letter-spacing: -.05em; line-height: .85; margin: 40px 0 .2em; display: flex; align-items: flex-end; gap: .08em; }
 .giant .mark { width: .5em; height: .5em; margin-bottom: .05em; }
-.giant span { background: linear-gradient(90deg, color-mix(in srgb, var(--epic) calc(var(--alpha) * 100%), var(--night-ink)), color-mix(in srgb, var(--ready) calc(var(--alpha) * 100%), var(--night-ink)) 30%, color-mix(in srgb, var(--coding) calc(var(--alpha) * 100%), var(--night-ink)) 55%, color-mix(in srgb, var(--review) calc(var(--alpha) * 100%), var(--night-ink)) 78%, color-mix(in srgb, var(--complete) calc(var(--alpha) * 100%), var(--night-ink))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.giant span { background: linear-gradient(90deg, color-mix(in srgb, var(--epic) calc(var(--alpha) * 100%), var(--night-ink)), color-mix(in srgb, var(--ready) calc(var(--alpha) * 100%), var(--night-ink)) 30%, color-mix(in srgb, var(--coding) calc(var(--alpha) * 100%), var(--night-ink)) 55%, color-mix(in srgb, var(--review) calc(var(--alpha) * 100%), var(--night-ink)) 78%, color-mix(in srgb, var(--complete) calc(var(--alpha) * 100%), var(--night-ink))); -webkit-background-clip: text; background-clip: text; color: transparent;
+  /* DESIGN-52: the gradient paints only inside the span's box, and a .85 line box ends above the g's descender — pad the box down over it */
+  padding-bottom: .24em; margin-bottom: -.24em; }
 .js .giant.reveal { opacity: .2; transform: translateY(calc(45% * var(--sx))); transition: opacity 1s ease, transform 1s cubic-bezier(.2,.8,.2,1); }
 .js .giant.reveal.in { opacity: 1; transform: none; }
 .foot-row { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--night-dim); display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: center; padding: 22px 0; border-top: 1px solid var(--night-line); }
