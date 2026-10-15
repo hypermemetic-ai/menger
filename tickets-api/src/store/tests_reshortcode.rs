@@ -32,21 +32,21 @@ fn new(epic: &str, title: &str, kind: Kind, parent: Option<&str>) -> NewTicket {
 /// execution under the root with M-8 and M-9 under it (M-9 waits on M-8); `N`:
 /// N-1 its root, N-2 a build; `H`: H-1 a scope hosted under M-7, H-2 a build.
 async fn fixture(store: &Store) {
-    store.create(new("M", "the root", Kind::Scope, None)).await.unwrap();
+    store.create(SYS, new("M", "the root", Kind::Scope, None)).await.unwrap();
     for i in 2..=6 {
         let mut t = new("M", &format!("build {i}"), Kind::Build, None);
         if i == 3 {
             t.blocked_by = vec!["M-2".into()];
         }
-        store.create(t).await.unwrap();
+        store.create(SYS, t).await.unwrap();
     }
-    store.create(new("M", "an area", Kind::Execution, Some("M-1"))).await.unwrap();
-    store.create(new("M", "eight", Kind::Build, Some("M-7"))).await.unwrap();
-    store.create(NewTicket { blocked_by: vec!["M-8".into()], ..new("M", "nine", Kind::Build, Some("M-7")) }).await.unwrap();
-    store.create(new("N", "n root", Kind::Scope, None)).await.unwrap();
-    store.create(new("N", "n two", Kind::Build, None)).await.unwrap();
-    store.create(new("H", "hosted", Kind::Scope, Some("M-7"))).await.unwrap();
-    store.create(new("H", "h two", Kind::Build, None)).await.unwrap();
+    store.create(SYS, new("M", "an area", Kind::Execution, Some("M-1"))).await.unwrap();
+    store.create(SYS, new("M", "eight", Kind::Build, Some("M-7"))).await.unwrap();
+    store.create(SYS, NewTicket { blocked_by: vec!["M-8".into()], ..new("M", "nine", Kind::Build, Some("M-7")) }).await.unwrap();
+    store.create(SYS, new("N", "n root", Kind::Scope, None)).await.unwrap();
+    store.create(SYS, new("N", "n two", Kind::Build, None)).await.unwrap();
+    store.create(SYS, new("H", "hosted", Kind::Scope, Some("M-7"))).await.unwrap();
+    store.create(SYS, new("H", "h two", Kind::Build, None)).await.unwrap();
 }
 
 async fn store() -> Store {
@@ -59,7 +59,7 @@ async fn store() -> Store {
 /// before ORG-5 holds (MENGER-2 inside MENGER), which ORG-5 refuses to make.
 async fn legacy_scope(store: &Store, id: &str) {
     rules::LEGACY_SCOPES.with(|l| l.set(true));
-    let made = store.set_kind(id, Kind::Scope, None).await;
+    let made = store.set_kind(SYS.permit(id), Kind::Scope, None).await;
     rules::LEGACY_SCOPES.with(|l| l.set(false));
     made.unwrap();
 }
@@ -99,7 +99,7 @@ fn refused(e: StoreError) -> BTreeMap<String, String> {
 #[tokio::test]
 async fn into_a_shortcode_there_is_each_takes_its_next_number_in_the_order_given_under_its_root() {
     let store = store().await;
-    let r = store.reshortcode(ask(&["M-5", "M-4"], "N")).await.unwrap();
+    let r = store.reshortcode(SYS, ask(&["M-5", "M-4"], "N")).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("M-5", "N-3"), ("M-4", "N-4")]));
     for id in ["N-3", "N-4"] {
         let t = store.get(SYS, id).await.unwrap();
@@ -108,12 +108,12 @@ async fn into_a_shortcode_there_is_each_takes_its_next_number_in_the_order_given
     assert_eq!(store.get(SYS, "N-3").await.unwrap().title, "build 5");
     assert!(!exists(&store, "M-5") && !exists(&store, "M-4"));
     // `parent` must be inside the target.
-    let e = store.reshortcode(Reshortcode { parent: Some("M-1".into()), ..ask(&["M-6"], "N") }).await.unwrap_err();
+    let e = store.reshortcode(SYS, Reshortcode { parent: Some("M-1".into()), ..ask(&["M-6"], "N") }).await.unwrap_err();
     assert!(e.to_string().contains("parent M-1 is not in N"), "{e}");
-    let r = store.reshortcode(Reshortcode { parent: Some("N-2".into()), ..ask(&["M-6"], "N") }).await.unwrap();
+    let r = store.reshortcode(SYS, Reshortcode { parent: Some("N-2".into()), ..ask(&["M-6"], "N") }).await.unwrap();
     assert_eq!(store.get(SYS, &r.moves[0].to).await.unwrap().parent.as_deref(), Some("N-2"));
     // Into its own shortcode: refused.
-    let e = store.reshortcode(ask(&["N-2"], "N")).await.unwrap_err();
+    let e = store.reshortcode(SYS, ask(&["N-2"], "N")).await.unwrap_err();
     assert!(refused(e)["N-2"].contains("is in N already"));
     assert_kept(&store, "the moves into N");
 }
@@ -122,7 +122,7 @@ async fn into_a_shortcode_there_is_each_takes_its_next_number_in_the_order_given
 async fn new_scope_mints_the_shortcode_first_its_root_under_parent_and_a_clash_is_refused() {
     let store = store().await;
     let r = store
-        .reshortcode(Reshortcode { new_scope: Some("the palette".into()), parent: Some("M-7".into()), ..ask(&["M-8", "M-9"], "PAL") })
+        .reshortcode(SYS, Reshortcode { new_scope: Some("the palette".into()), parent: Some("M-7".into()), ..ask(&["M-8", "M-9"], "PAL") })
         .await
         .unwrap();
     assert_eq!(moves(&r), pairs(&[("M-8", "PAL-2"), ("M-9", "PAL-3")]));
@@ -134,11 +134,11 @@ async fn new_scope_mints_the_shortcode_first_its_root_under_parent_and_a_clash_i
     assert_eq!(store.history(SYS, "PAL-1").unwrap().own.len(), 1, "its birth");
     // H is in M's namespace already: a second H there is refused, naming it.
     let e = store
-        .reshortcode(Reshortcode { new_scope: Some("again".into()), parent: Some("M-2".into()), ..ask(&["M-6"], "H") })
+        .reshortcode(SYS, Reshortcode { new_scope: Some("again".into()), parent: Some("M-2".into()), ..ask(&["M-6"], "H") })
         .await
         .unwrap_err();
     assert!(e.to_string().contains("hypermemetic:M/H is already there"), "{e}");
-    let e = store.reshortcode(Reshortcode { new_scope: Some("t".into()), ..ask(&["M-6"], "Q") }).await.unwrap_err();
+    let e = store.reshortcode(SYS, Reshortcode { new_scope: Some("t".into()), ..ask(&["M-6"], "Q") }).await.unwrap_err();
     assert!(e.to_string().contains("under --parent"), "{e}");
     assert!(exists(&store, "M-6"), "nothing written");
     assert_kept(&store, "the new scope");
@@ -148,7 +148,7 @@ async fn new_scope_mints_the_shortcode_first_its_root_under_parent_and_a_clash_i
 async fn a_scope_moved_into_a_new_code_roots_it_hosted_where_it_hangs_and_its_hosted_shortcodes_follow() {
     let store = store().await;
     legacy_scope(&store, "M-7").await;
-    let r = store.reshortcode(Reshortcode { with_children: true, ..ask(&["M-7"], "AREA") }).await.unwrap();
+    let r = store.reshortcode(SYS, Reshortcode { with_children: true, ..ask(&["M-7"], "AREA") }).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("M-7", "AREA-1"), ("M-8", "AREA-2"), ("M-9", "AREA-3")]));
     let root = store.get(SYS, "AREA-1").await.unwrap();
     assert_eq!((root.parent.as_deref(), root.address.as_str()), (Some("M-1"), "hypermemetic:M/AREA-1"));
@@ -159,7 +159,7 @@ async fn a_scope_moved_into_a_new_code_roots_it_hosted_where_it_hangs_and_its_ho
     let groups = store.groups(SYS);
     assert!(groups.iter().any(|g| g.shortcode.as_str() == "AREA" && g.root.as_deref() == Some("AREA-1")), "{groups:?}");
     // A build can't: it names no shortcode, and roots nothing.
-    let e = store.reshortcode(ask(&["M-2"], "NOPE")).await.unwrap_err();
+    let e = store.reshortcode(SYS, ask(&["M-2"], "NOPE")).await.unwrap_err();
     assert!(e.to_string().contains("pass --new-scope"), "{e}");
     assert_kept(&store, "the scope out");
 }
@@ -167,7 +167,7 @@ async fn a_scope_moved_into_a_new_code_roots_it_hosted_where_it_hangs_and_its_ho
 #[tokio::test]
 async fn an_old_id_names_the_new_ticket_everywhere_and_get_says_moved_from() {
     let store = store().await;
-    store.reshortcode(ask(&["M-2"], "N")).await.unwrap();
+    store.reshortcode(SYS, ask(&["M-2"], "N")).await.unwrap();
     let t = store.get(SYS, "M-2").await.unwrap();
     assert_eq!((t.id.as_str(), t.moved_from.clone()), ("N-3", vec!["M-2".to_string()]));
     assert_eq!(store.get(SYS, "m-2").await.unwrap().id, "N-3", "folded as a reader writes it");
@@ -175,20 +175,20 @@ async fn an_old_id_names_the_new_ticket_everywhere_and_get_says_moved_from() {
     // Its blocked ticket names it anew; a new block by the old id lands on it.
     assert_eq!(store.get(SYS, "M-3").await.unwrap().blocked_by, ["N-3"]);
     assert_eq!(store.get(SYS, "N-3").await.unwrap().unlocks, ["M-3"]);
-    let born = store.create(NewTicket { blocked_by: vec!["M-2".into()], ..new("M", "waits on the old id", Kind::Build, None) }).await.unwrap();
+    let born = store.create(SYS, NewTicket { blocked_by: vec!["M-2".into()], ..new("M", "waits on the old id", Kind::Build, None) }).await.unwrap();
     assert_eq!(born.blocked_by, ["N-3"]);
     // A filter by the old id, and a set_status by it.
     assert_eq!(store.counts_text(&Lens::parse("under M-2").unwrap()).into_iter().map(|(_, n)| n).sum::<u64>(), 1);
-    store.set_status("M-2", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("M-2"), Status::Ready).await.unwrap();
     assert_eq!(store.get(SYS, "N-3").await.unwrap().status, Status::Ready);
     // Moved again: both old ids name it.
-    store.reshortcode(ask(&["N-3"], "H")).await.unwrap();
+    store.reshortcode(SYS, ask(&["N-3"], "H")).await.unwrap();
     let t = store.get(SYS, "M-2").await.unwrap();
     assert_eq!((t.id.as_str(), t.moved_from.clone()), ("H-3", vec!["M-2".to_string(), "N-3".to_string()]));
     // No number is given out twice: N's next is past the one that left.
-    assert_eq!(store.create(new("N", "after", Kind::Build, None)).await.unwrap().id, "N-4");
-    store.reshortcode(ask(&["M-10"], "N")).await.unwrap();
-    assert_eq!(store.create(new("M", "after", Kind::Build, None)).await.unwrap().id, "M-11", "past M-10, which left");
+    assert_eq!(store.create(SYS, new("N", "after", Kind::Build, None)).await.unwrap().id, "N-4");
+    store.reshortcode(SYS, ask(&["M-10"], "N")).await.unwrap();
+    assert_eq!(store.create(SYS, new("M", "after", Kind::Build, None)).await.unwrap().id, "M-11", "past M-10, which left");
     assert_eq!(store.get(SYS, "M-10").await.unwrap().title, "waits on the old id", "and M-10 still names the one that left");
     assert_kept(&store, "the old ids");
 }
@@ -196,10 +196,10 @@ async fn an_old_id_names_the_new_ticket_everywhere_and_get_says_moved_from() {
 #[tokio::test]
 async fn commits_inputs_comments_history_and_the_queue_move_by_identity() {
     let store = store().await;
-    store.link_commits("M-4", vec!["77df9a0".into()]).await.unwrap();
-    store.set_status("M-4", Status::Ready).await.unwrap();
+    store.link_commits(SYS.permit("M-4"), vec!["77df9a0".into()]).await.unwrap();
+    store.set_status(SYS.permit("M-4"), Status::Ready).await.unwrap();
     let body = r#"<m-input id="notes" kind="text"><m-question data-field="question">Anything?</m-question></m-input>"#;
-    store.amend("M-4", None, Some(body.into())).await.unwrap();
+    store.amend(SYS.permit("M-4"), None, Some(body.into())).await.unwrap();
     let anchor = crate::comments::Anchor {
         route: "#/ticket/M-4".into(),
         path: "p".into(),
@@ -208,9 +208,9 @@ async fn commits_inputs_comments_history_and_the_queue_move_by_identity() {
         ticket: Some("M-4".into()),
         version: None,
     };
-    let c = store.add_comment(anchor, "a note".into(), None).await.unwrap();
-    store.queue_by("M-4", crate::queue::Urgency::Today, "look", None, Act::default()).await.unwrap();
-    store.reshortcode(ask(&["M-4"], "N")).await.unwrap();
+    let c = store.add_comment(SYS, anchor, "a note".into(), None).await.unwrap();
+    store.queue_by(SYS.permit("M-4"), crate::queue::Urgency::Today, "look", None, Act::default()).await.unwrap();
+    store.reshortcode(SYS, ask(&["M-4"], "N")).await.unwrap();
     let t = store.get(SYS, "N-3").await.unwrap();
     assert_eq!(t.commits, ["77df9a0"]);
     assert_eq!(store.inputs(SYS, Some("N-3"), None, None).unwrap().iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["notes"]);
@@ -228,7 +228,7 @@ async fn children_stay_in_their_shortcode_unless_with_children() {
     let store = store().await;
     // Without: M-8 and M-9 stay in M, under M-7's parent; H-1 (its own
     // shortcode) stays hosted under the moved ticket.
-    let r = store.reshortcode(ask(&["M-7"], "N")).await.unwrap();
+    let r = store.reshortcode(SYS, ask(&["M-7"], "N")).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("M-7", "N-3")]));
     for id in ["M-8", "M-9"] {
         assert_eq!(store.get(SYS, id).await.unwrap().parent.as_deref(), Some("M-1"), "{id}");
@@ -237,7 +237,7 @@ async fn children_stay_in_their_shortcode_unless_with_children() {
     assert_eq!(store.get(SYS, "N-3").await.unwrap().child_count, 1);
     // With: the subtree in its own shortcode comes, the structure kept.
     let store = self::store().await;
-    let r = store.reshortcode(Reshortcode { with_children: true, ..ask(&["M-7"], "N") }).await.unwrap();
+    let r = store.reshortcode(SYS, Reshortcode { with_children: true, ..ask(&["M-7"], "N") }).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("M-7", "N-3"), ("M-8", "N-4"), ("M-9", "N-5")]));
     assert_eq!(store.get(SYS, "N-5").await.unwrap().parent.as_deref(), Some("N-3"));
     assert_eq!(store.get(SYS, "N-5").await.unwrap().blocked_by, ["N-4"]);
@@ -248,22 +248,22 @@ async fn children_stay_in_their_shortcode_unless_with_children() {
 #[tokio::test]
 async fn a_root_moves_only_with_its_whole_shortcode_as_a_rename() {
     let store = store().await;
-    let e = store.reshortcode(ask(&["H-1"], "N")).await.unwrap_err();
+    let e = store.reshortcode(SYS, ask(&["H-1"], "N")).await.unwrap_err();
     assert!(refused(e)["H-1"].contains("roots the shortcode H"));
-    let e = store.reshortcode(Reshortcode { with_children: true, ..ask(&["H-1", "M-2"], "LOOK") }).await.unwrap_err();
+    let e = store.reshortcode(SYS, Reshortcode { with_children: true, ..ask(&["H-1", "M-2"], "LOOK") }).await.unwrap_err();
     assert!(refused(e).contains_key("H-1"));
-    let r = store.reshortcode(Reshortcode { with_children: true, ..ask(&["H-1"], "LOOK") }).await.unwrap();
+    let r = store.reshortcode(SYS, Reshortcode { with_children: true, ..ask(&["H-1"], "LOOK") }).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("H-1", "LOOK-1"), ("H-2", "LOOK-2")]));
     let t = store.get(SYS, "H-2").await.unwrap();
     assert_eq!((t.id.as_str(), t.address.as_str(), t.parent.as_deref()), ("LOOK-2", "hypermemetic:M/LOOK-2", Some("LOOK-1")));
     assert_eq!(store.get(SYS, "LOOK-1").await.unwrap().parent.as_deref(), Some("M-7"));
     // A code taken in its namespace is refused: N is a root of the org, M's
     // namespace holds LOOK now.
-    let e = store.reshortcode(Reshortcode { with_children: true, ..ask(&["N-1"], "M") }).await.unwrap_err();
+    let e = store.reshortcode(SYS, Reshortcode { with_children: true, ..ask(&["N-1"], "M") }).await.unwrap_err();
     assert!(e.to_string().contains("hypermemetic:M is already there"), "{e}");
     // H stays registered, empty: a ticket filed into it again is numbered
     // past the ones that left, whose ids name LOOK's.
-    let h = store.create(new("H", "a new H", Kind::Scope, None)).await.unwrap();
+    let h = store.create(SYS, new("H", "a new H", Kind::Scope, None)).await.unwrap();
     assert_eq!(h.id, "H-3");
     assert_eq!(store.get(SYS, "H-1").await.unwrap().id, "LOOK-1");
     assert_kept(&store, "the rename");
@@ -272,7 +272,7 @@ async fn a_root_moves_only_with_its_whole_shortcode_as_a_rename() {
 #[tokio::test]
 async fn many_is_all_or_nothing_and_may_is_asked_of_the_moved_and_where_they_go() {
     let store = store().await;
-    let e = store.reshortcode(ask(&["M-2", "NOPE-9", "M-3"], "N")).await.unwrap_err();
+    let e = store.reshortcode(SYS, ask(&["M-2", "NOPE-9", "M-3"], "N")).await.unwrap_err();
     assert_eq!(refused(e).keys().collect::<Vec<_>>(), ["NOPE-9"]);
     assert!(exists(&store, "M-2") && exists(&store, "M-3"), "nothing written");
     let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -293,7 +293,7 @@ async fn many_is_all_or_nothing_and_may_is_asked_of_the_moved_and_where_they_go(
 async fn watch_says_reshortcoded_and_a_filter_hears_the_old_leave_and_the_new_enter() {
     let store = store().await;
     let mut rx = store.subscribe_filtered();
-    store.reshortcode(ask(&["M-2", "M-3"], "N")).await.unwrap();
+    store.reshortcode(SYS, ask(&["M-2", "M-3"], "N")).await.unwrap();
     let changes = drained(&mut rx);
     match &changes[0] {
         Change::Reshortcoded { moves, tickets } => {
@@ -321,12 +321,12 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
     let path = dir.path().join("reshortcode.db");
     let store = Store::open(&path).unwrap();
     fixture(&store).await;
-    store.link_commits("M-9", vec!["abcdef1".into()]).await.unwrap();
+    store.link_commits(SYS.permit("M-9"), vec!["abcdef1".into()]).await.unwrap();
     legacy_scope(&store, "M-7").await;
-    store.reshortcode(ask(&["M-5", "M-4"], "N")).await.unwrap();
-    store.reshortcode(Reshortcode { with_children: true, ..ask(&["M-7"], "AREA") }).await.unwrap();
-    store.reshortcode(Reshortcode { with_children: true, ..ask(&["H-1"], "LOOK") }).await.unwrap();
-    store.reshortcode(Reshortcode { new_scope: Some("p".into()), parent: Some("M-1".into()), ..ask(&["M-2", "M-3"], "PAL") }).await.unwrap();
+    store.reshortcode(SYS, ask(&["M-5", "M-4"], "N")).await.unwrap();
+    store.reshortcode(SYS, Reshortcode { with_children: true, ..ask(&["M-7"], "AREA") }).await.unwrap();
+    store.reshortcode(SYS, Reshortcode { with_children: true, ..ask(&["H-1"], "LOOK") }).await.unwrap();
+    store.reshortcode(SYS, Reshortcode { new_scope: Some("p".into()), parent: Some("M-1".into()), ..ask(&["M-2", "M-3"], "PAL") }).await.unwrap();
     assert_kept(&store, "the moves");
     let rows: Vec<Row> = store.tickets.read().unwrap().order.values().cloned().collect();
     let (groups, extents) = (store.groups(SYS), store.extents_text());
@@ -352,17 +352,17 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
 #[tokio::test]
 async fn a_move_keeps_its_organization_and_to_is_read_in_the_callers() {
     let store = store().await;
-    store.create_org("acme", None).await.unwrap();
-    store.create(new("acme:N", "acme's n", Kind::Scope, None)).await.unwrap();
+    store.create_org(SYS, "acme", None).await.unwrap();
+    store.create(SYS, new("acme:N", "acme's n", Kind::Scope, None)).await.unwrap();
     let hyper = vec![crate::address::OrgId::hypermemetic()];
     let both = vec![crate::address::OrgId::hypermemetic(), crate::address::OrgId::new("acme").unwrap()];
     // Across organizations: refused.
-    let e = store.reshortcode(ask(&["M-2"], "acme:N")).await.unwrap_err();
+    let e = store.reshortcode(SYS, ask(&["M-2"], "acme:N")).await.unwrap_err();
     assert!(refused(e)["M-2"].contains("a move keeps a ticket in its organization"));
     // `N` for a caller in both: two shortcodes, refused naming each.
-    let e = store.reshortcode(Reshortcode { orgs: Some(both), ..ask(&["M-2"], "N") }).await.unwrap_err();
+    let e = store.reshortcode(SYS, Reshortcode { orgs: Some(both), ..ask(&["M-2"], "N") }).await.unwrap_err();
     assert!(matches!(&e, StoreError::Ambiguous { candidates, .. } if candidates.len() == 2), "{e:?}");
     // In hypermemetic alone: its own N.
-    let r = store.reshortcode(Reshortcode { orgs: Some(hyper), ..ask(&["M-2"], "N") }).await.unwrap();
+    let r = store.reshortcode(SYS, Reshortcode { orgs: Some(hyper), ..ask(&["M-2"], "N") }).await.unwrap();
     assert_eq!(r.moves[0].to, "N-3");
 }

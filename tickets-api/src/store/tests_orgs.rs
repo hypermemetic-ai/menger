@@ -29,15 +29,15 @@ const ADA: &str = "key:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 /// own MENGER, each with a build; acme administered by ADA.
 async fn two_orgs(path: &Path) -> Store {
     let store = Store::open(path).unwrap();
-    store.create(new("MENGER", Kind::Scope, None)).await.unwrap();
-    store.create(new("MENGER", Kind::Build, None)).await.unwrap();
-    store.create(new("IDENTITY", Kind::Scope, Some("MENGER-1"))).await.unwrap();
-    let (org, admin) = store.create_org("acme", Some((ADA.into(), "--admin".into()))).await.unwrap();
+    store.create(SYS, new("MENGER", Kind::Scope, None)).await.unwrap();
+    store.create(SYS, new("MENGER", Kind::Build, None)).await.unwrap();
+    store.create(SYS, new("IDENTITY", Kind::Scope, Some("MENGER-1"))).await.unwrap();
+    let (org, admin) = store.create_org(SYS, "acme", Some((ADA.into(), "--admin".into()))).await.unwrap();
     assert_eq!((org.name.as_str(), org.tickets, org.roots.len()), ("acme", 0, 0), "an organization is born empty");
     assert_eq!(admin.unwrap().scope, "acme:");
-    let root = store.create(new("acme:MENGER", Kind::Scope, None)).await.unwrap();
+    let root = store.create(SYS, new("acme:MENGER", Kind::Scope, None)).await.unwrap();
     assert_eq!(root.address, "acme:MENGER-1");
-    store.create(new("acme:MENGER", Kind::Build, None)).await.unwrap();
+    store.create(SYS, new("acme:MENGER", Kind::Build, None)).await.unwrap();
     store
 }
 
@@ -71,12 +71,12 @@ async fn an_org_is_made_once_by_a_name_no_other_has_or_had() {
     let dir = tempfile::tempdir().unwrap();
     let store = two_orgs(&dir.path().join("t.db")).await;
     for bad in ["acme", "hypermemetic", "Acme", "ac me", "-x", ""] {
-        assert!(store.create_org(bad, None).await.is_err(), "{bad:?}");
+        assert!(store.create_org(SYS, bad, None).await.is_err(), "{bad:?}");
     }
-    let (made, admin) = store.create_org("beta", None).await.unwrap();
+    let (made, admin) = store.create_org(SYS, "beta", None).await.unwrap();
     assert_eq!((made.name.as_str(), admin), ("beta", None));
     // A new root in an organization that is not there is refused.
-    assert!(store.create(new("nope:X", Kind::Scope, None)).await.is_err());
+    assert!(store.create(SYS, new("nope:X", Kind::Scope, None)).await.is_err());
 }
 
 #[tokio::test]
@@ -138,21 +138,21 @@ async fn a_rename_keeps_every_address_and_grant_and_the_old_name() {
     let path = dir.path().join("t.db");
     {
         let store = two_orgs(&path).await;
-        store.grant(Grant { principal: ADA.into(), scope: store.scope_named("acme:MENGER").unwrap(), role: Role::Editor, granted_by: "t".into(), at: 1 }).await.unwrap();
-        let renamed = store.rename_org("acme", "acme-co").await.unwrap();
+        store.grant(SYS, Grant { principal: ADA.into(), scope: store.scope_named("acme:MENGER").unwrap(), role: Role::Editor, granted_by: "t".into(), at: 1 }).await.unwrap();
+        let renamed = store.rename_org(SYS, "acme", "acme-co").await.unwrap();
         assert_eq!((renamed.name.as_str(), renamed.aliases.clone()), ("acme-co", vec!["acme".to_string()]));
         assert_eq!(store.get(SYS, "acme:MENGER-2").await.unwrap().address, "acme-co:MENGER-2", "the old name resolves");
         let scopes: Vec<String> = store.grants_of(SYS, ADA).into_iter().map(|g| g.scope).collect();
         assert!(scopes.iter().all(|s| s.starts_with("acme-co:")), "{scopes:?}");
-        assert!(store.create_org("acme", None).await.is_err(), "an old name still names it");
+        assert!(store.create_org(SYS, "acme", None).await.is_err(), "an old name still names it");
         assert_eq!(store.scope_named("acme:").unwrap(), "acme-co:");
-        assert!(store.rename_org("acme-co", "hypermemetic").await.is_err());
+        assert!(store.rename_org(SYS, "acme-co", "hypermemetic").await.is_err());
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.org("acme").map(|o| o.name.to_string()).as_deref(), Some("acme-co"), "kept across a reopen");
     assert_eq!(store.get(SYS, "acme:MENGER-2").await.unwrap().address, "acme-co:MENGER-2");
     // Back to the old name: it is its own again, and no longer an alias.
-    let back = store.rename_org("acme-co", "acme").await.unwrap();
+    let back = store.rename_org(SYS, "acme-co", "acme").await.unwrap();
     assert_eq!((back.name.as_str(), back.aliases), ("acme", vec!["acme-co".to_string()]));
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 }
@@ -161,14 +161,14 @@ async fn a_rename_keeps_every_address_and_grant_and_the_old_name() {
 async fn a_delete_is_refused_while_the_org_holds_a_ticket_and_takes_its_grants() {
     let dir = tempfile::tempdir().unwrap();
     let store = two_orgs(&dir.path().join("t.db")).await;
-    let refused = store.delete_org("acme").await.unwrap_err().to_string();
+    let refused = store.delete_org(SYS, "acme").await.unwrap_err().to_string();
     assert!(refused.contains("holds 1 shortcode(s) and 2 ticket(s)"), "{refused}");
-    assert!(store.delete_org("hypermemetic").await.unwrap_err().to_string().contains("first organization"));
-    store.create_org("beta", Some((ADA.into(), "t".into()))).await.unwrap();
-    assert_eq!(store.delete_org("beta").await.unwrap(), (crate::address::OrgId::new("beta").unwrap(), 1));
+    assert!(store.delete_org(SYS, "hypermemetic").await.unwrap_err().to_string().contains("first organization"));
+    store.create_org(SYS, "beta", Some((ADA.into(), "t".into()))).await.unwrap();
+    assert_eq!(store.delete_org(SYS, "beta").await.unwrap(), (crate::address::OrgId::new("beta").unwrap(), 1));
     assert!(store.org("beta").is_none());
     assert!(!store.grants_of(SYS, ADA).iter().any(|g| g.scope.starts_with("beta:")));
-    assert!(matches!(store.delete_org("beta").await, Err(StoreError::NoOrg(_))));
+    assert!(matches!(store.delete_org(SYS, "beta").await, Err(StoreError::NoOrg(_))));
 }
 
 #[test]
@@ -178,12 +178,12 @@ fn a_file_s_grants_from_before_orgs_move_into_hypermemetic_once() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     {
         let store = Store::open(&path).unwrap();
-        rt.block_on(store.create(new("MENGER", Kind::Scope, None))).unwrap();
-        rt.block_on(store.create(new("IDENTITY", Kind::Scope, Some("MENGER-1")))).unwrap();
+        rt.block_on(store.create(SYS, new("MENGER", Kind::Scope, None))).unwrap();
+        rt.block_on(store.create(SYS, new("IDENTITY", Kind::Scope, Some("MENGER-1")))).unwrap();
         // As an ORG-3 build kept them: a bare shortcode, and `*`.
         for (scope, role) in [("IDENTITY", Role::Editor), ("*", Role::Admin), ("LATER", Role::Viewer)] {
             let g = Grant { principal: ADA.into(), scope: scope.into(), role, granted_by: "t".into(), at: 1 };
-            rt.block_on(store.grant(g)).unwrap();
+            rt.block_on(store.grant(SYS, g)).unwrap();
         }
     }
     let scopes = |s: &Store| -> Vec<String> { s.grants_of(SYS, ADA).into_iter().map(|g| g.scope).collect() };

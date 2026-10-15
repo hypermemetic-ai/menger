@@ -58,6 +58,7 @@ use super::cascade::Gathered;
 use super::history::Act;
 use super::update_many::UPDATE_MANY_CEILING;
 use super::*;
+use crate::access::AdminOf;
 use crate::address::ShortcodeId;
 use crate::types::{InputState, Tombstone};
 use rusqlite::OptionalExtension;
@@ -766,8 +767,8 @@ impl Store {
 
     /// [`Store::delete_by`] as nobody signed in, through the API, with every
     /// ticket allowed.
-    pub async fn delete(&self, select: Selection, how: Deletion, message: Option<String>) -> Result<Deleted, StoreError> {
-        self.delete_by(select, how, Act { message, ..Act::default() }, |_| Ok(())).await
+    pub async fn delete(&self, sys: &System, select: Selection, how: Deletion, message: Option<String>) -> Result<Deleted, StoreError> {
+        self.delete_by(select, how, Act { message, ..Act::default() }, |ids| Ok(ids.iter().map(|id| sys.permit(id)).collect())).await
     }
 
     /// ACT-5: the tickets `select` names deleted by `act`, as `how` says —
@@ -779,7 +780,7 @@ impl Store {
         select: Selection,
         how: Deletion,
         act: Act,
-        may: impl FnOnce(&[String]) -> Result<(), String> + Send,
+        may: impl FnOnce(&[String]) -> Result<Vec<Permit<Admin>>, String> + Send,
     ) -> Result<Deleted, StoreError> {
         let serial = self.serial().await;
         let ids = self.selected(select)?;
@@ -792,7 +793,9 @@ impl Store {
         };
         let p = planned.map_err(|refusals| StoreError::RefusedMany { refusals })?;
         let all: Vec<String> = p.gone.iter().map(|t| t.id.to_string()).collect();
-        may(&all).map_err(StoreError::Invalid)?;
+        // ACCESS-11: an admin's permit for every ticket that goes.
+        let permits = may(&all).map_err(StoreError::Invalid)?;
+        writs::covers_exactly(&self.tickets.read().expect("store lock poisoned"), &permits, &all)?;
         self.in_one_write(serial, move |conn, cache, unders| Self::deleting(conn, cache, unders, p, act)).await
     }
 
@@ -932,9 +935,28 @@ impl Store {
         Ok((Deleted { ids, tombstones }, out.finish()))
     }
 
+    /// ACCESS-11: whether `proofs` hold, for each of `ids`, admin on the
+    /// scope its shortcode is — `*`, its organization, or the shortcode.
+    fn undelete_covered(&self, ids: &[String], proofs: &[(String, AdminOf)]) -> Result<(), StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let r = &cache.shortcodes;
+        for id in ids {
+            let sc = id.rsplit_once('-').map(|(e, _)| ShortcodeId::new(e));
+            let covered = proofs.iter().filter(|(p, _)| p.trim().eq_ignore_ascii_case(id)).any(|(_, a)| match a.scope() {
+                crate::members::Scope::Everywhere => true,
+                crate::members::Scope::Org(o) => sc.as_ref().and_then(|s| r.org(s)).is_some_and(|w| r.canonical(w).is_some() && r.canonical(w) == r.canonical(o)),
+                s @ crate::members::Scope::Shortcode { .. } => sc.as_ref().is_some_and(|sc| *s == writs::scope_of(&cache, sc)),
+            });
+            if !covered {
+                return Err(StoreError::Invalid(format!("{id}: the write was not given the proof it needs (nothing written)")));
+            }
+        }
+        Ok(())
+    }
+
     /// [`Store::undelete_by`] as nobody signed in, with every ticket allowed.
-    pub async fn undelete(&self, ids: &[String]) -> Result<Undeleted, StoreError> {
-        self.undelete_by(ids, Act::default(), |_| Ok(())).await
+    pub async fn undelete(&self, sys: &System, ids: &[String]) -> Result<Undeleted, StoreError> {
+        self.undelete_by(ids, Act::default(), |ids| Ok(ids.iter().map(|id| (id.clone(), sys.admin_of(&crate::members::Scope::Everywhere))).collect())).await
     }
 
     /// ACT-5: the tickets `ids` names brought back, whole, as their
@@ -948,14 +970,17 @@ impl Store {
         &self,
         ids: &[String],
         _act: Act,
-        may: impl FnOnce(&[String]) -> Result<(), String> + Send,
+        may: impl FnOnce(&[String]) -> Result<Vec<(String, AdminOf)>, String> + Send,
     ) -> Result<Undeleted, StoreError> {
         let ids: Vec<String> = rules::distinct(&ids.iter().map(|i| i.trim().to_ascii_uppercase()).filter(|i| !i.is_empty()).collect::<Vec<_>>());
         if ids.is_empty() || ids.len() > UPDATE_MANY_CEILING {
             return Err(StoreError::Invalid(format!("name 1 to {UPDATE_MANY_CEILING} tickets")));
         }
-        may(&ids).map_err(StoreError::Invalid)?;
+        // ACCESS-11: admin, for each id, on the scope its shortcode is (or
+        // one the store says covers it) — a deleted ticket has no permit.
+        let proofs = may(&ids).map_err(StoreError::Invalid)?;
         let serial = self.serial().await;
+        self.undelete_covered(&ids, &proofs)?;
         let db = Arc::clone(&self.db);
         let asked = ids.clone();
         let found = tokio::task::spawn_blocking(move || -> Result<Vec<(String, Option<Ticket>)>, StoreError> {
@@ -1107,7 +1132,9 @@ impl Store {
     /// tombstone keeps its id, title, who, when and why, and can no longer
     /// be undone. Returns the ids purged. What the server runs at start and
     /// every [`PURGE_EVERY`].
-    pub async fn purge(&self, now: i64) -> Result<Vec<String>, StoreError> {
+    ///
+    /// ACCESS-11: the system's alone — the server's own upkeep.
+    pub async fn purge(&self, _sys: &System, now: i64) -> Result<Vec<String>, StoreError> {
         let _serial = self.serial().await;
         let db = Arc::clone(&self.db);
         let purged = tokio::task::spawn_blocking(move || -> Result<Vec<String>, StoreError> {

@@ -31,17 +31,17 @@ async fn all_nine_statuses_round_trip_through_the_database_and_filter() {
     let path = dir.path().join("statuses.db");
     {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("ST", Kind::Scope, &[])).await.unwrap(); // ST-1, the root
+        store.create(SYS, ticket("ST", Kind::Scope, &[])).await.unwrap(); // ST-1, the root
         for s in Status::LIFECYCLE {
-            let id = store.create(ticket("ST", Kind::Build, &[])).await.unwrap().id;
-            match store.set_status(&id, s).await.unwrap() {
+            let id = store.create(SYS, ticket("ST", Kind::Build, &[])).await.unwrap().id;
+            match store.set_status(SYS.permit(&id), s).await.unwrap() {
                 Change::StatusChanged { ticket, previous } => {
                     assert_eq!((ticket.status, previous), (s, Status::Pending), "{id}");
                 }
                 other => panic!("expected StatusChanged, got {other:?}"),
             }
         }
-        store.set_status("ST-1", Status::Epic).await.unwrap();
+        store.set_status(SYS.permit("ST-1"), Status::Epic).await.unwrap();
     }
 
     let stored: Vec<String> = Connection::open(&path)
@@ -82,15 +82,15 @@ async fn all_nine_statuses_round_trip_through_the_database_and_filter() {
 #[tokio::test]
 async fn the_worker_states_are_neither_ready_nor_done() {
     let store = Store::new();
-    store.create(ticket("WS", Kind::Scope, &[])).await.unwrap(); // WS-1
-    store.create(ticket("WS", Kind::Build, &[])).await.unwrap(); // WS-2
-    store.create(ticket("WS", Kind::Build, &["WS-2"])).await.unwrap(); // WS-3, blocked by WS-2
-    store.set_status("WS-3", Status::Ready).await.unwrap();
+    store.create(SYS, ticket("WS", Kind::Scope, &[])).await.unwrap(); // WS-1
+    store.create(SYS, ticket("WS", Kind::Build, &[])).await.unwrap(); // WS-2
+    store.create(SYS, ticket("WS", Kind::Build, &["WS-2"])).await.unwrap(); // WS-3, blocked by WS-2
+    store.set_status(SYS.permit("WS-3"), Status::Ready).await.unwrap();
     let done = |store: &Store| store.groups(SYS).into_iter().find(|g| g.epic == "WS").unwrap().done;
 
     let mut rx = store.subscribe();
     for s in [Status::Ready, Status::Coding, Status::InReview] {
-        store.set_status("WS-2", s).await.unwrap();
+        store.set_status(SYS.permit("WS-2"), s).await.unwrap();
         assert!(matches!(rx.try_change(), Ok(Change::StatusChanged { .. })));
         assert!(rx.try_change().is_err(), "{s}: no group_changed — nothing crossed Complete");
         assert_eq!(done(&store), 0, "{s}");
@@ -98,7 +98,7 @@ async fn the_worker_states_are_neither_ready_nor_done() {
         let want: &[&str] = if s == Status::Ready { &["WS-2"] } else { &[] };
         assert_eq!(ready, want, "{s}: WS-3 waits on its blocker; WS-2 is ready only while Ready");
     }
-    store.set_status("WS-2", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("WS-2"), Status::Complete).await.unwrap();
     assert_eq!(done(&store), 1, "the merge's Complete is what counts");
     let ready: Vec<String> = store.ready_set(SYS, None).await.unwrap().into_iter().map(|t| t.id.into_string()).collect();
     assert_eq!(ready, ["WS-3"]);

@@ -28,9 +28,9 @@ fn board(epic: &str) -> NewTicket {
 /// sub-shortcode hosted under PLX-1.
 async fn platform() -> Store {
     let store = Store::new();
-    store.create(new("PLX", Kind::Scope, None, None)).await.unwrap();
-    store.create(new("PLX", Kind::Build, None, None)).await.unwrap();
-    store.create(new("SUB", Kind::Scope, Some("PLX-1"), None)).await.unwrap();
+    store.create(SYS, new("PLX", Kind::Scope, None, None)).await.unwrap();
+    store.create(SYS, new("PLX", Kind::Build, None, None)).await.unwrap();
+    store.create(SYS, new("SUB", Kind::Scope, Some("PLX-1"), None)).await.unwrap();
     store
 }
 
@@ -42,7 +42,7 @@ async fn platform() -> Store {
 async fn a_menger_doc_is_born_under_the_scope_root_with_its_path() {
     let store = platform().await;
     let mut rx = store.subscribe();
-    let t = store.create(board("PLX")).await.unwrap();
+    let t = store.create(SYS, board("PLX")).await.unwrap();
     assert_eq!(t.id, "PLX-3", "an address is not an id");
     assert_eq!((t.kind, t.status), (Kind::Doc, Status::Doc));
     assert_eq!(t.parent.as_deref(), Some("PLX-1"), "the scope root, by default");
@@ -57,11 +57,11 @@ async fn a_menger_doc_is_born_under_the_scope_root_with_its_path() {
 
     // The root named as the parent, explicitly; and in a sub-shortcode, its
     // own root.
-    let named = store.create(new("PLX", Kind::Doc, Some("plx-1"), Some("_MENGER/notes"))).await.unwrap();
+    let named = store.create(SYS, new("PLX", Kind::Doc, Some("plx-1"), Some("_MENGER/notes"))).await.unwrap();
     assert_eq!((named.id.as_str(), named.parent.as_deref()), ("PLX-4", Some("PLX-1")));
-    let sub = store.create(board("SUB")).await.unwrap();
+    let sub = store.create(SYS, board("SUB")).await.unwrap();
     assert_eq!((sub.id.as_str(), sub.parent.as_deref()), ("SUB-2", Some("SUB-1")));
-    let next = store.create(new("PLX", Kind::Build, None, None)).await.unwrap();
+    let next = store.create(SYS, new("PLX", Kind::Build, None, None)).await.unwrap();
     assert_eq!(next.id, "PLX-5", "ids go on as before");
 }
 
@@ -72,7 +72,7 @@ async fn a_menger_doc_is_born_under_the_scope_root_with_its_path() {
 #[tokio::test]
 async fn get_resolves_a_path_address_case_insensitively_in_the_shortcode() {
     let store = platform().await;
-    let t = store.create(board("PLX")).await.unwrap();
+    let t = store.create(SYS, board("PLX")).await.unwrap();
     let by_id = store.get(SYS, "PLX-3").await.unwrap();
     assert_eq!(by_id, t);
     for address in ["PLX/_MENGER/board", "plx/_MENGER/board", "Plx/_MENGER/board"] {
@@ -98,9 +98,9 @@ async fn get_resolves_a_path_address_case_insensitively_in_the_shortcode() {
 #[tokio::test]
 async fn a_path_taken_in_its_shortcode_is_refused_naming_the_holder() {
     let store = platform().await;
-    store.create(board("PLX")).await.unwrap();
+    store.create(SYS, board("PLX")).await.unwrap();
     let before = store.count(SYS);
-    match store.create(board("plx")).await {
+    match store.create(SYS, board("plx")).await {
         Err(e @ StoreError::PathTaken { .. }) => {
             let StoreError::PathTaken { epic, path, holder } = &e else { unreachable!() };
             assert_eq!((epic.as_str(), path.as_str(), holder.as_str()), ("PLX", "_MENGER/board", "PLX-3"));
@@ -110,8 +110,8 @@ async fn a_path_taken_in_its_shortcode_is_refused_naming_the_holder() {
         other => panic!("expected PathTaken, got {other:?}"),
     }
     assert_eq!(store.count(SYS), before, "nothing stored");
-    assert_eq!(store.create(new("PLX", Kind::Build, None, None)).await.unwrap().id, "PLX-4", "no id spent");
-    assert_eq!(store.create(board("SUB")).await.unwrap().path.as_deref(), Some("_MENGER/board"));
+    assert_eq!(store.create(SYS, new("PLX", Kind::Build, None, None)).await.unwrap().id, "PLX-4", "no id spent");
+    assert_eq!(store.create(SYS, board("SUB")).await.unwrap().path.as_deref(), Some("_MENGER/board"));
 }
 
 /// Acceptance 1: what is refused, in-band, before anything is stored — a
@@ -120,28 +120,28 @@ async fn a_path_taken_in_its_shortcode_is_refused_naming_the_holder() {
 #[tokio::test]
 async fn non_docs_wrong_parents_and_unreserved_paths_are_refused() {
     let store = platform().await;
-    store.create(new("PLX", Kind::Doc, None, None)).await.unwrap(); // PLX-3, a plain doc
+    store.create(SYS, new("PLX", Kind::Doc, None, None)).await.unwrap(); // PLX-3, a plain doc
     let before = store.count(SYS);
     for path in ["board", "MENGER/board", "_menger/board", "_MENGER/", "_MENGER", " _MENGER/board"] {
-        match store.create(new("PLX", Kind::Doc, None, Some(path))).await {
+        match store.create(SYS, new("PLX", Kind::Doc, None, Some(path))).await {
             Err(e @ StoreError::PathNotReserved { .. }) => assert!(e.to_string().contains("_MENGER/"), "{e}"),
             other => panic!("{path:?}: expected PathNotReserved, got {other:?}"),
         }
     }
     for kind in [Kind::Build, Kind::Scope, Kind::Spike, Kind::Gap, Kind::Execution] {
-        match store.create(new("PLX", kind, None, Some("_MENGER/board"))).await {
+        match store.create(SYS, new("PLX", kind, None, Some("_MENGER/board"))).await {
             Err(e @ StoreError::PathOnWork { .. }) => assert!(e.to_string().contains("only a doc"), "{e}"),
             other => panic!("{kind:?}: expected PathOnWork, got {other:?}"),
         }
     }
     for parent in ["PLX-2", "PLX-3"] {
-        match store.create(new("PLX", Kind::Doc, Some(parent), Some("_MENGER/board"))).await {
+        match store.create(SYS, new("PLX", Kind::Doc, Some(parent), Some("_MENGER/board"))).await {
             Err(StoreError::PathParent { parent: p, root, .. }) => assert_eq!((p.as_str(), root.as_str()), (parent, "PLX-1")),
             other => panic!("{parent}: expected PathParent, got {other:?}"),
         }
     }
     // A shortcode's first ticket has no root above it to live under.
-    match store.create(board("NEW")).await {
+    match store.create(SYS, board("NEW")).await {
         Err(StoreError::PathNoRoot { epic, .. }) => assert_eq!(epic, "NEW"),
         other => panic!("expected PathNoRoot, got {other:?}"),
     }
@@ -157,8 +157,8 @@ async fn a_path_is_durable_and_unique_in_the_file() {
     let path = dir.path().join("paths.db");
     {
         let store = Store::open(&path).unwrap();
-        store.create(new("PLX", Kind::Scope, None, None)).await.unwrap();
-        store.create(board("PLX")).await.unwrap();
+        store.create(SYS, new("PLX", Kind::Scope, None, None)).await.unwrap();
+        store.create(SYS, board("PLX")).await.unwrap();
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.get(SYS, "plx/_MENGER/board").await.unwrap().id, "PLX-2");
@@ -179,11 +179,11 @@ async fn an_older_database_gains_the_column_on_open_and_keeps_every_row() {
     let path = dir.path().join("before.db");
     let before: Vec<Ticket> = {
         let store = Store::open(&path).unwrap();
-        store.create(new("OLD", Kind::Scope, None, None)).await.unwrap();
-        store.create(new("OLD", Kind::Build, None, None)).await.unwrap();
-        store.create(new("OLD", Kind::Doc, None, None)).await.unwrap();
-        store.set_status("OLD-2", Status::InReview).await.unwrap();
-        store.link_commits("OLD-2", vec!["77df9a0".into()]).await.unwrap();
+        store.create(SYS, new("OLD", Kind::Scope, None, None)).await.unwrap();
+        store.create(SYS, new("OLD", Kind::Build, None, None)).await.unwrap();
+        store.create(SYS, new("OLD", Kind::Doc, None, None)).await.unwrap();
+        store.set_status(SYS.permit("OLD-2"), Status::InReview).await.unwrap();
+        store.link_commits(SYS.permit("OLD-2"), vec!["77df9a0".into()]).await.unwrap();
         store.list(SYS, None, None, None).await.unwrap()
     };
     {
@@ -201,7 +201,7 @@ async fn an_older_database_gains_the_column_on_open_and_keeps_every_row() {
         let after = store.list(SYS, None, None, None).await.unwrap();
         assert_eq!(after, before, "every row as it was, none with a path");
         assert!(after.iter().all(|t| t.path.is_none()));
-        let t = store.create(board("OLD")).await.unwrap();
+        let t = store.create(SYS, board("OLD")).await.unwrap();
         assert_eq!((t.id.as_str(), t.parent.as_deref()), ("OLD-4", Some("OLD-1")));
     }
     let mut conn = Connection::open(&path).unwrap();

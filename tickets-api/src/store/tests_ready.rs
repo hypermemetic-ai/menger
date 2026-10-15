@@ -412,7 +412,7 @@ pub(super) async fn random_ask_or_label(store: &Store, own: &mut Rng, all: &[Row
                 2 => format!("decides\n\n{decision}"),
                 _ => "asks nothing".to_string(),
             };
-            store.amend(&id, None, Some(body)).await.unwrap();
+            store.amend(SYS.permit(&id), None, Some(body)).await.unwrap();
             tally.asked += 1;
             format!("amend {id}'s inputs")
         }
@@ -424,11 +424,11 @@ pub(super) async fn random_ask_or_label(store: &Store, own: &mut Rng, all: &[Row
                         "q" => InputValue::Text { text: "yes".into() },
                         _ => InputValue::Choice { option: "a".into() },
                     };
-                    store.answer(&id, &input, value, None, crate::types::AnswerSource::Api).await
+                    store.answer(SYS.permit(&id), &input, value, None, crate::types::AnswerSource::Api).await
                 }
-                1 => store.clear_answer(&id, &input, crate::types::AnswerSource::Api).await,
-                2 => store.close_input(&id, &input).await,
-                _ => store.reopen_input(&id, &input).await,
+                1 => store.clear_answer(SYS.permit(&id), &input, crate::types::AnswerSource::Api).await,
+                2 => store.close_input(SYS.permit(&id), &input).await,
+                _ => store.reopen_input(SYS.permit(&id), &input).await,
             };
             tally.asked += usize::from(matches!(done, Ok(InputWrite::Changed(_))));
             format!("an input write to {id}'s {input}")
@@ -440,7 +440,7 @@ pub(super) async fn random_ask_or_label(store: &Store, own: &mut Rng, all: &[Row
                 1 => (vec![], vec![names[own.below(3)].into()]),
                 _ => (vec![names[own.below(3)].into(), names[own.below(3)].to_ascii_uppercase()], vec![names[own.below(3)].into()]),
             };
-            match store.label(&id, add.clone(), remove.clone()).await.unwrap() {
+            match store.label(SYS.permit(&id), add.clone(), remove.clone()).await.unwrap() {
                 Change::LabelsChanged { added, removed, .. } if !(added.is_empty() && removed.is_empty()) => tally.labelled += 1,
                 _ => {}
             }
@@ -535,7 +535,7 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
             let what = format!("create {epic} under {parent:?} blocked by {blocked_by:?} at {path:?}");
             // A refusal (a parent outside the shortcode) is a write too.
             let new = NewTicket { path: path.clone(), ..new_ticket(epic, kind, parent, blocked_by.clone()) };
-            if store.create(new).await.is_ok() {
+            if store.create(SYS, new).await.is_ok() {
                 tally.created += 1;
                 tally.mengers += usize::from(path.is_some());
                 tally.docs += usize::from(kind == Kind::Doc);
@@ -560,7 +560,7 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
                 _ => Status::ALL[rng.below(Status::ALL.len())],
             };
             let row = store.row(&id).unwrap().0;
-            match store.set_status(&id, status).await {
+            match store.set_status(SYS.permit(&id), status).await {
                 Ok(_) if done(row.status) != done(status) => {
                     tally.crossings += 1;
                     tally.fanned += usize::from(!row.unlocks.is_empty());
@@ -581,7 +581,7 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
             let mine: Vec<&Row> = all.iter().filter(|t| t.epic == epic).collect();
             let parent = if rng.below(3) > 0 { mine[rng.below(mine.len())].id.clone() } else { pick(rng) };
             let was = store.row(&child).unwrap().0.parent;
-            match store.set_parent(&child, &parent).await {
+            match store.set_parent(SYS.moving(&child, &parent)).await {
                 Ok(_) if was.as_deref() != Some(parent.as_str()) => tally.moves += 1,
                 Ok(_) | Err(_) => {}
             }
@@ -589,19 +589,19 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
         }
         17 => {
             let id = pick(rng);
-            store.amend(&id, Some(format!("amended {}", rng.below(99))), None).await.unwrap();
+            store.amend(SYS.permit(&id), Some(format!("amended {}", rng.below(99))), None).await.unwrap();
             tally.others += 1;
             format!("amend {id}")
         }
         18 => {
             let id = pick(rng);
-            store.link_commits(&id, vec![format!("{:07x}", 0xabc0000 + rng.below(4))]).await.unwrap();
+            store.link_commits(SYS.permit(&id), vec![format!("{:07x}", 0xabc0000 + rng.below(4))]).await.unwrap();
             tally.others += 1;
             format!("link_commits {id}")
         }
         _ => {
             let id = pick(rng);
-            store.unlink_commits(&id, vec![format!("{:07x}", 0xabc0000 + rng.below(4))]).await.unwrap();
+            store.unlink_commits(SYS.permit(&id), vec![format!("{:07x}", 0xabc0000 + rng.below(4))]).await.unwrap();
             tally.others += 1;
             format!("unlink_commits {id}")
         }
@@ -667,14 +667,14 @@ async fn the_kept_state_is_a_scan_and_every_page_is_the_old_one_on_a_seeded_stor
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 1_200, seed: 32, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 1_200, seed: 32, into_existing: false }).unwrap();
     assert_kept_is_a_scan(&store, Some(&path), "a seed");
     let mut rng = Rng(0x5EED);
     assert_every_page_is_before(&store, &mut rng, "a seed");
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     let store = walk(store, &path, 0x5EED_0032, 250, 125, &epics).await;
-    store.seed_synthetic(SeedSpec { count: 600, seed: 5, into_existing: true }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 600, seed: 5, into_existing: true }).unwrap();
     assert_kept_is_a_scan(&store, Some(&path), "a seed into the walked store");
     assert_every_page_is_before(&store, &mut rng, "a seed into the walked store");
     walk(store, &path, 0x5EED_0033, 120, 60, &epics).await;
@@ -777,19 +777,19 @@ async fn membership_moves_on_exactly_the_three_writes() {
     let store = Store::open(&path).unwrap();
     let ids = |store: &Store| -> Vec<String> { store.ready_page(SYS, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect() };
     let count = |store: &Store, id: &str| store.tickets.read().unwrap().ready.counts().get(id).copied().unwrap_or(0);
-    store.create(new_ticket("TH", Kind::Scope, None, vec![])).await.unwrap();
+    store.create(SYS, new_ticket("TH", Kind::Scope, None, vec![])).await.unwrap();
     // TH-2 names TH-5 (not born) twice, and TH-1.
-    let t2 = store.create(new_ticket("TH", Kind::Build, None, vec!["TH-5".into(), "TH-1".into(), "TH-5".into()])).await.unwrap();
+    let t2 = store.create(SYS, new_ticket("TH", Kind::Build, None, vec!["TH-5".into(), "TH-1".into(), "TH-5".into()])).await.unwrap();
     assert_eq!(count(&store, &t2.id), 2, "two distinct blockers, neither done; the unborn one counts once");
-    store.create(new_ticket("TH", Kind::Build, None, vec!["TH-1".into()])).await.unwrap();
-    store.create(new_ticket("TH", Kind::Build, None, vec![])).await.unwrap();
+    store.create(SYS, new_ticket("TH", Kind::Build, None, vec!["TH-1".into()])).await.unwrap();
+    store.create(SYS, new_ticket("TH", Kind::Build, None, vec![])).await.unwrap();
     assert_kept_is_a_scan(&store, Some(&path), "the setup");
 
     // The ticket itself.
-    store.set_status("TH-4", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("TH-4"), Status::Ready).await.unwrap();
     assert_eq!(ids(&store), ["TH-4"]);
-    store.set_status("TH-3", Status::Ready).await.unwrap();
-    store.set_status("TH-2", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("TH-3"), Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("TH-2"), Status::Ready).await.unwrap();
     assert_eq!(ids(&store), ["TH-4"], "TH-3 and TH-2 wait on TH-1");
 
     // A blocker across the line: TH-1 unlocks TH-2 and TH-3.
@@ -801,27 +801,27 @@ async fn membership_moves_on_exactly_the_three_writes() {
         cache.ready.status_changed(cache.rows().with(&row), &row, previous).counts_moved()
     };
     assert_eq!(fanned(&store, "TH-1", Status::Complete), 2, "a crossing moves each ticket that names it");
-    store.set_status("TH-1", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("TH-1"), Status::Complete).await.unwrap();
     assert_eq!(ids(&store), ["TH-3", "TH-4"], "TH-2 still waits on TH-5, which is not born");
     assert_eq!(count(&store, "TH-2"), 1);
     assert_eq!(fanned(&store, "TH-1", Status::Superseded), 0, "Complete to Superseded is not a crossing");
-    store.set_status("TH-1", Status::Superseded).await.unwrap();
+    store.set_status(SYS.permit("TH-1"), Status::Superseded).await.unwrap();
     assert_eq!(ids(&store), ["TH-3", "TH-4"]);
     assert_kept_is_a_scan(&store, Some(&path), "the crossings");
 
     // A birth that resolves a forward reference: TH-5 is born `Pending`, so
     // TH-2's count does not move — and the scan agrees.
-    let t5 = store.create(new_ticket("TH", Kind::Build, None, vec!["TH-4".into()])).await.unwrap();
+    let t5 = store.create(SYS, new_ticket("TH", Kind::Build, None, vec!["TH-4".into()])).await.unwrap();
     assert_eq!(t5.unlocks, ["TH-2"]);
     assert_eq!(count(&store, "TH-2"), 1, "the newborn is not done: TH-2 waits on it still");
     assert_eq!(count(&store, "TH-5"), 1, "TH-4 is Ready, not done");
     assert_kept_is_a_scan(&store, Some(&path), "a birth that resolves a forward reference");
-    store.set_status("TH-5", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("TH-5"), Status::Complete).await.unwrap();
     assert_eq!(ids(&store), ["TH-2", "TH-3", "TH-4"], "now it is");
     assert_eq!(count(&store, "TH-2"), 0);
 
     // And back across the line.
-    store.set_status("TH-1", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("TH-1"), Status::Ready).await.unwrap();
     assert_eq!(ids(&store), ["TH-1", "TH-4"]);
     assert_eq!((count(&store, "TH-2"), count(&store, "TH-3")), (1, 1));
     assert_kept_is_a_scan(&store, Some(&path), "back across the line");
@@ -838,24 +838,24 @@ async fn completing_a_ticket_that_blocks_many_moves_each_of_them_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fan.db");
     let store = Store::open(&path).unwrap();
-    store.create(new_ticket("FAN", Kind::Scope, None, vec![])).await.unwrap();
-    let hub = store.create(new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
-    let other = store.create(new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
+    store.create(SYS, new_ticket("FAN", Kind::Scope, None, vec![])).await.unwrap();
+    let hub = store.create(SYS, new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
+    let other = store.create(SYS, new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
     let k: usize = 120;
     for i in 0..k {
         // A third also wait on another ticket; every one is Ready.
         let blocked_by = if i % 3 == 0 { vec![hub.clone(), other.clone()] } else { vec![hub.clone()] };
-        let id = store.create(new_ticket("FAN", Kind::Build, None, blocked_by.into_iter().map(String::from).collect::<Vec<String>>())).await.unwrap().id;
-        store.set_status(&id, Status::Ready).await.unwrap();
+        let id = store.create(SYS, new_ticket("FAN", Kind::Build, None, blocked_by.into_iter().map(String::from).collect::<Vec<String>>())).await.unwrap().id;
+        store.set_status(SYS.permit(&id), Status::Ready).await.unwrap();
     }
     let ready = |store: &Store| store.ready_page(SYS, Some("fan"), None, Some(0)).unwrap().remaining;
     assert_eq!(ready(&store), 0);
-    store.set_status(&hub, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&hub), Status::Complete).await.unwrap();
     assert_eq!(ready(&store), (k - k.div_ceil(3)) as u64, "every one blocked by nothing else joins");
     assert_kept_is_a_scan(&store, Some(&path), "the fan-out");
-    store.set_status(&other, Status::Superseded).await.unwrap();
+    store.set_status(SYS.permit(&other), Status::Superseded).await.unwrap();
     assert_eq!(ready(&store), k as u64);
-    store.set_status(&hub, Status::Coding).await.unwrap();
+    store.set_status(SYS.permit(&hub), Status::Coding).await.unwrap();
     assert_eq!(ready(&store), 0, "and back: every one leaves");
     assert_kept_is_a_scan(&store, Some(&path), "the fan-out, back");
 }
@@ -869,13 +869,13 @@ async fn a_canceled_blocker_is_done_with_and_survives_a_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("canceled.db");
     let store = Store::open(&path).unwrap();
-    store.create(new_ticket("CAN", Kind::Scope, None, vec![])).await.unwrap();
-    let dropped = store.create(new_ticket("CAN", Kind::Build, None, vec![])).await.unwrap().id;
-    let waiting = store.create(new_ticket("CAN", Kind::Build, None, vec![dropped.to_string()])).await.unwrap().id;
-    store.set_status(&waiting, Status::Ready).await.unwrap();
+    store.create(SYS, new_ticket("CAN", Kind::Scope, None, vec![])).await.unwrap();
+    let dropped = store.create(SYS, new_ticket("CAN", Kind::Build, None, vec![])).await.unwrap().id;
+    let waiting = store.create(SYS, new_ticket("CAN", Kind::Build, None, vec![dropped.to_string()])).await.unwrap().id;
+    store.set_status(SYS.permit(&waiting), Status::Ready).await.unwrap();
     let ready = |store: &Store| store.ready_page(SYS, Some("can"), None, Some(0)).unwrap().remaining;
     assert_eq!(ready(&store), 0);
-    store.set_status(&dropped, Status::Canceled).await.unwrap();
+    store.set_status(SYS.permit(&dropped), Status::Canceled).await.unwrap();
     assert_eq!(ready(&store), 1, "a canceled blocker is satisfied");
     assert_eq!(crate::filter::category_of(Status::Canceled), crate::filter::Category::Dropped);
     assert_kept_is_a_scan(&store, Some(&path), "canceled");
@@ -915,7 +915,7 @@ async fn a_hand_edit_that_breaks_the_unlocks_mirror_is_named_by_verify() {
     drop(conn);
     let store = Store::open(&path).unwrap();
     assert_kept_is_a_scan(&store, Some(&path), "the first open, a scan");
-    store.set_status("MI-1", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("MI-1"), Status::Complete).await.unwrap();
     let ids: Vec<String> = store.ready_page(SYS, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect();
     assert_eq!(ids, ["MI-3", "MI-4"], "MI-3 once; MI-4 does not name MI-1 and is not moved; MI-2 is not found");
     drop(store);
@@ -948,7 +948,7 @@ async fn a_file_from_scale_28_gains_the_ready_state_once_on_first_open() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("form1.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 800, seed: 28, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 800, seed: 28, into_existing: false }).unwrap();
     let want = kept(&store);
     let pages: Vec<Answer> = [None, Some(3)]
         .into_iter()
@@ -1002,11 +1002,11 @@ async fn verify_names_each_altered_number_of_the_ready_state() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("verify.db");
     let store = Store::open(&path).unwrap();
-    store.create(new_ticket("VR", Kind::Scope, None, vec![])).await.unwrap();
-    store.create(new_ticket("VR", Kind::Build, None, vec!["VR-1".into()])).await.unwrap();
-    store.create(new_ticket("VR", Kind::Build, None, vec![])).await.unwrap();
-    store.set_status("VR-2", Status::Ready).await.unwrap();
-    store.set_status("VR-3", Status::Ready).await.unwrap();
+    store.create(SYS, new_ticket("VR", Kind::Scope, None, vec![])).await.unwrap();
+    store.create(SYS, new_ticket("VR", Kind::Build, None, vec!["VR-1".into()])).await.unwrap();
+    store.create(SYS, new_ticket("VR", Kind::Build, None, vec![])).await.unwrap();
+    store.set_status(SYS.permit("VR-2"), Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("VR-3"), Status::Ready).await.unwrap();
     drop(store);
     assert!(matches!(
         Store::verify_derived(&path).unwrap(),
@@ -1043,7 +1043,7 @@ async fn a_page_of_the_ready_set_is_a_range_of_the_files_index() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 2_000, seed: 12, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 2_000, seed: 12, into_existing: false }).unwrap();
     drop(store);
     let store = Store::open(&path).unwrap();
     let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
@@ -1093,7 +1093,7 @@ async fn a_page_of_the_ready_set_is_a_range_of_the_files_index() {
 #[tokio::test]
 async fn a_walk_of_whole_tickets_answers_what_one_page_does() {
     let store = Store::new();
-    store.seed_synthetic(SeedSpec { count: 900, seed: 4, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 900, seed: 4, into_existing: false }).unwrap();
     let cursor = rows(&store)[300].id.clone();
     for select in [Select::Ready { epic: None }, Select::List { epic: None, status: Some(Status::Ready), parent: None }] {
         for (after, limit) in [(None, None), (None, Some(150)), (Some(cursor.as_str()), Some(7)), (Some(cursor.as_str()), None)] {

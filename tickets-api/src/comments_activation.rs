@@ -77,6 +77,21 @@ fn sees(store: &Store, caller: &VerifiedUser, c: &crate::comments::Comment) -> b
     ids.is_empty() || store.member(caller, &ids, &Lens::all()).into_iter().all(|ok| ok)
 }
 
+/// IDENTITY-21 / ACCESS-11: what resolving or reopening the comment `id`
+/// takes — the grant on the comment's tickets (held anywhere, for a comment
+/// on the app), as an editor's permit on each. ACCESS-10: a comment out of
+/// reach is no comment, as one not there.
+#[cfg(feature = "server")]
+fn editors_of(store: &Store, caller: &VerifiedUser, id: u64) -> Result<crate::store::OnComment<crate::access::Editor>, String> {
+    let ids = store.comment(caller, id).map(|c| named(&c)).map_err(|e| e.to_string())?;
+    let named: Vec<&str> = ids.iter().map(String::as_str).collect();
+    match named.is_empty() {
+        true => caller.reach_filter().map(|_| ())?,
+        false => caller.require(&named, store)?,
+    }
+    Ok(crate::store::OnComment::new(crate::activation::comment_permits(store, caller, &named)))
+}
+
 /// A write's answer: the comment as it is now, or the refusal in band.
 #[cfg(feature = "server")]
 fn answer(written: Result<crate::comments::Comment, crate::store::StoreError>) -> CommentsEvent {
@@ -158,7 +173,9 @@ impl Comments {
             // Signed by the caller's principal; the name is theirs, not
             // what `author` says.
             let author = caller.name().map(str::to_string).or(author.map(String::from));
-            yield answer(store.add_comment_as(anchor, body.into_string(), author, caller.principal_text()).await);
+            // ACCESS-11: a viewer's permit on each ticket it is on.
+            let on = crate::store::OnComment::new(crate::activation::comment_permits::<crate::access::Viewer>(&store, &caller, &named));
+            yield answer(store.add_comment_as(on, anchor, body.into_string(), author, caller.principal_text()).await);
         }
     }
 
@@ -268,19 +285,14 @@ impl Comments {
                     return;
                 }
             };
-            // IDENTITY-21: the grant on the comment's ticket (held anywhere,
-            // for a comment on the app).
-            // ACCESS-10: a comment out of reach is no comment, as one not there.
-            let allowed = match store.comment(&caller, id).map(|c| named(&c)) {
-                Err(e) => Err(e.to_string()),
-                Ok(ids) if ids.is_empty() => caller.reach_filter().map(|_| ()),
-                Ok(ids) => caller.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &store),
+            let on = match editors_of(&store, &caller, id) {
+                Ok(on) => on,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
             };
-            if let Err(message) = allowed {
-                yield CommentsEvent::Error { message };
-                return;
-            }
-            yield answer(store.resolve_comment(id).await);
+            yield answer(store.resolve_comment(on, id).await);
         }
     }
 
@@ -304,19 +316,14 @@ impl Comments {
                     return;
                 }
             };
-            // IDENTITY-21: the grant on the comment's ticket (held anywhere,
-            // for a comment on the app).
-            // ACCESS-10: a comment out of reach is no comment, as one not there.
-            let allowed = match store.comment(&caller, id).map(|c| named(&c)) {
-                Err(e) => Err(e.to_string()),
-                Ok(ids) if ids.is_empty() => caller.reach_filter().map(|_| ()),
-                Ok(ids) => caller.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &store),
+            let on = match editors_of(&store, &caller, id) {
+                Ok(on) => on,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
             };
-            if let Err(message) = allowed {
-                yield CommentsEvent::Error { message };
-                return;
-            }
-            yield answer(store.reopen_comment(id).await);
+            yield answer(store.reopen_comment(on, id).await);
         }
     }
 

@@ -219,7 +219,9 @@ async fn prepare(n: usize, path: &Path) {
     let base = n.saturating_sub(shapes.total()).max(10);
     {
         let store = Store::open(path).unwrap();
-        let report = store.seed_synthetic(SeedSpec { count: base, seed: 1, into_existing: false }).unwrap();
+        // ACCESS-11: seeding is the system's.
+        let system = store.system().expect("a store just opened holds its System");
+        let report = store.seed_synthetic(&system, SeedSpec { count: base, seed: 1, into_existing: false }).unwrap();
         eprintln!("seeded {} synthetic tickets in {:?}", report.count, report.elapsed);
     }
     write_shapes(path, &shapes);
@@ -314,7 +316,7 @@ async fn measure(path: &Path, samples: usize) {
         let flip = if matches!(was, Status::Complete | Status::Superseded) { Status::Pending } else { Status::Complete };
         for to in [flip, was] {
             let t0 = Instant::now();
-            store.set_status(&id, to).await.unwrap();
+            store.set_status(system.permit(&id), to).await.unwrap();
             status_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
             let m = moved(&mut rx);
             status_moved += m;
@@ -336,7 +338,7 @@ async fn measure(path: &Path, samples: usize) {
         blocked_by.dedup();
         let t0 = Instant::now();
         let r = store
-            .create(NewTicket {
+            .create(&system, NewTicket {
                 epic: epic.clone(),
                 title: "wave3".into(),
                 kind: Kind::Build,
@@ -364,7 +366,7 @@ async fn measure(path: &Path, samples: usize) {
             for rep in 0..3 {
                 passes();
                 let t0 = Instant::now();
-                store.set_status(id, to).await.unwrap();
+                store.set_status(system.permit(id), to).await.unwrap();
                 ms.push(t0.elapsed().as_secs_f64() * 1000.0);
                 m = moved(&mut rx);
                 if let Some(us) = passes()["max_us"].as_f64().filter(|_| WITH) {
@@ -373,7 +375,7 @@ async fn measure(path: &Path, samples: usize) {
                 // Back the other way, untimed, to repeat the same write.
                 if rep < 2 {
                     let undo = if to == Status::Complete { Status::Ready } else { Status::Complete };
-                    store.set_status(id, undo).await.unwrap();
+                    store.set_status(system.permit(id), undo).await.unwrap();
                     moved(&mut rx);
                 }
             }

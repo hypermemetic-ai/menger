@@ -24,8 +24,8 @@ fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 }
 
 async fn two_themes(store: &Store) {
-    store.define_theme("ocean", map(&[("--accent", "#00796b"), ("bg", "#f3f8f8")]), map(&[("--accent", "#4db6ac")])).await.unwrap();
-    store.define_theme("pantry", map(&[("--accent", "#d4572a"), ("--sans", "Georgia, serif")]), BTreeMap::new()).await.unwrap();
+    store.define_theme(SYS, "ocean", map(&[("--accent", "#00796b"), ("bg", "#f3f8f8")]), map(&[("--accent", "#4db6ac")])).await.unwrap();
+    store.define_theme(SYS, "pantry", map(&[("--accent", "#d4572a"), ("--sans", "Georgia, serif")]), BTreeMap::new()).await.unwrap();
 }
 
 async fn regions(store: &Store, id: &str) -> [(String, ThemeLevel); 3] {
@@ -47,7 +47,7 @@ async fn a_theme_is_defined_redefined_and_refused_when_it_is_not_one() {
     assert_eq!(store.themes().iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["default", "ocean", "pantry"]);
     assert!(store.theme("default").unwrap().light.is_empty());
     // Redefined whole.
-    store.define_theme("ocean", map(&[("--ink", "#012")]), BTreeMap::new()).await.unwrap();
+    store.define_theme(SYS, "ocean", map(&[("--ink", "#012")]), BTreeMap::new()).await.unwrap();
     assert_eq!(store.theme("ocean").unwrap().light, map(&[("--ink", "#012")]));
     assert!(store.theme("ocean").unwrap().dark.is_empty());
     // Refusals keep nothing.
@@ -57,7 +57,7 @@ async fn a_theme_is_defined_redefined_and_refused_when_it_is_not_one() {
         ("mint", map(&[("--nope", "#000")]), "`--nope` is not a token"),
         ("mint", map(&[("--ink", "red}")]), "`--ink`'s value"),
     ] {
-        let err = store.define_theme(name, light, BTreeMap::new()).await.unwrap_err().to_string();
+        let err = store.define_theme(SYS, name, light, BTreeMap::new()).await.unwrap_err().to_string();
         assert!(err.contains(why), "{name}: {err}");
     }
     assert!(store.theme("mint").unwrap_err().to_string().contains("no theme `mint` (defined: default, ocean, pantry)"));
@@ -67,12 +67,12 @@ async fn a_theme_is_defined_redefined_and_refused_when_it_is_not_one() {
 async fn the_site_and_a_shortcode_say_what_they_adopt() {
     let store = Store::new();
     two_themes(&store).await;
-    store.create(ticket("PANTRY", Kind::Scope, "", None)).await.unwrap();
+    store.create(SYS, ticket("PANTRY", Kind::Scope, "", None)).await.unwrap();
     let mut rx = store.subscribe_themes();
-    let s = store.set_theme("Site", Some("ocean"), None, None).await.unwrap();
+    let s = store.set_theme(SYS, "Site", Some("ocean"), None, None).await.unwrap();
     assert_eq!((s.scope.as_str(), s.theme.as_deref()), ("site", Some("ocean")));
     assert_eq!(rx.recv().await.unwrap(), ThemeChange::Set(s.clone()));
-    let p = store.set_theme("pantry", Some("pantry"), Some(ThemeReach::Site), None).await.unwrap();
+    let p = store.set_theme(SYS, "pantry", Some("pantry"), Some(ThemeReach::Site), None).await.unwrap();
     assert_eq!((p.scope.as_str(), p.reach), ("PANTRY", ThemeReach::Site));
     assert_eq!(store.theme_settings(), [s.clone(), p.clone()], "the site first");
     // Refused: an undefined theme, a shortcode that is none, the site
@@ -83,15 +83,15 @@ async fn the_site_and_a_shortcode_say_what_they_adopt() {
         ("site", Some("ocean"), Some(ThemeReach::Site), None, "the site adopts a theme or none"),
         ("site", None, None, Some(Takeover::Off), "the site adopts a theme or none"),
     ] {
-        let err = store.set_theme(scope, theme, reach, takeover).await.unwrap_err().to_string();
+        let err = store.set_theme(SYS, scope, theme, reach, takeover).await.unwrap_err().to_string();
         assert!(err.contains(why), "{scope}: {err}");
     }
     // `default` is adopting none; saying nothing clears it.
-    let cleared = store.set_theme("PANTRY", Some("default"), None, None).await.unwrap();
+    let cleared = store.set_theme(SYS, "PANTRY", Some("default"), None, None).await.unwrap();
     assert!(cleared.theme.is_none());
     assert_eq!(store.theme_settings(), [s]);
     // The channel heard the define too.
-    store.define_theme("mint", map(&[("--accent", "#2a7")]), BTreeMap::new()).await.unwrap();
+    store.define_theme(SYS, "mint", map(&[("--accent", "#2a7")]), BTreeMap::new()).await.unwrap();
     assert!(matches!(rx.recv().await.unwrap(), ThemeChange::Set(_)));
     assert!(matches!(rx.recv().await.unwrap(), ThemeChange::Set(_)));
     assert!(matches!(rx.recv().await.unwrap(), ThemeChange::Changed(t) if t.name == "mint"));
@@ -115,11 +115,11 @@ async fn theme_for_holds_every_row_of_who_wears_what() {
         (None, "frame-theme: pantry", [w("default", L::None), w("default", L::None), w("pantry", L::Frame)]),
         (Some("ocean"), "theme: pantry\nframe-takeover: off", [w("ocean", L::Site), w("pantry", L::Ticket), w("default", L::Frame)]),
     ];
-    store.create(ticket("ROW", Kind::Scope, "", None)).await.unwrap();
+    store.create(SYS, ticket("ROW", Kind::Scope, "", None)).await.unwrap();
     for (i, (site, fm, want)) in rows.into_iter().enumerate() {
-        store.set_theme("site", site, None, None).await.unwrap();
+        store.set_theme(SYS, "site", site, None, None).await.unwrap();
         let body = format!("---\n{fm}\n---\n<p>row {i}</p>");
-        let t = store.create(ticket("ROW", Kind::Build, &body, Some("ROW-1"))).await.unwrap();
+        let t = store.create(SYS, ticket("ROW", Kind::Build, &body, Some("ROW-1"))).await.unwrap();
         assert_eq!(regions(&store, &t.id).await, want, "row {i}: site {site:?}, {fm:?}");
     }
     assert!(matches!(store.theme_for(SYS, "ROW-99").await, Err(StoreError::NotFound(_))));
@@ -129,7 +129,7 @@ async fn theme_for_holds_every_row_of_who_wears_what() {
     assert_eq!(levels.ticket.theme.as_deref(), Some("pantry"));
     assert_eq!(levels.frame.takeover, Takeover::Off);
     // An amend moves the answer with the body.
-    store.amend("ROW-9", None, Some("no frontmatter".into())).await.unwrap();
+    store.amend(SYS.permit("ROW-9"), None, Some("no frontmatter".into())).await.unwrap();
     assert_eq!(regions(&store, "ROW-9").await, [w("ocean", L::Site), w("ocean", L::Site), w("ocean", L::Site)]);
 }
 
@@ -140,18 +140,18 @@ async fn the_nearest_shortcode_says_it_for_its_tickets_and_hosted_ones() {
     use ThemeLevel as L;
     let store = Store::new();
     two_themes(&store).await;
-    store.create(ticket("PANTRY", Kind::Scope, "", None)).await.unwrap();
-    store.create(ticket("PANTRY", Kind::Build, "", Some("PANTRY-1"))).await.unwrap();
+    store.create(SYS, ticket("PANTRY", Kind::Scope, "", None)).await.unwrap();
+    store.create(SYS, ticket("PANTRY", Kind::Build, "", Some("PANTRY-1"))).await.unwrap();
     // SHELF is hosted under PANTRY: its root's parent is there.
-    store.create(ticket("SHELF", Kind::Scope, "", Some("PANTRY-1"))).await.unwrap();
-    store.create(ticket("SHELF", Kind::Build, "", Some("SHELF-1"))).await.unwrap();
-    store.set_theme("site", Some("ocean"), None, None).await.unwrap();
-    store.set_theme("PANTRY", Some("pantry"), Some(ThemeReach::Site), None).await.unwrap();
+    store.create(SYS, ticket("SHELF", Kind::Scope, "", Some("PANTRY-1"))).await.unwrap();
+    store.create(SYS, ticket("SHELF", Kind::Build, "", Some("SHELF-1"))).await.unwrap();
+    store.set_theme(SYS, "site", Some("ocean"), None, None).await.unwrap();
+    store.set_theme(SYS, "PANTRY", Some("pantry"), Some(ThemeReach::Site), None).await.unwrap();
     let r = regions(&store, "PANTRY-2").await;
     assert_eq!(r, [w("pantry", L::Shortcode), w("pantry", L::Shortcode), w("pantry", L::Shortcode)]);
     let (_, regions_, _) = store.theme_for(SYS, "SHELF-2").await.unwrap();
     assert_eq!(regions_.ticket.from.as_deref(), Some("PANTRY"), "a hosted shortcode inherits from its host");
-    store.set_theme("SHELF", None, None, Some(Takeover::Off)).await.unwrap();
+    store.set_theme(SYS, "SHELF", None, None, Some(Takeover::Off)).await.unwrap();
     assert_eq!(regions(&store, "SHELF-2").await, [w("ocean", L::Site), w("default", L::Shortcode), w("default", L::Shortcode)]);
     assert_eq!(store.theme_for(SYS, "SHELF-2").await.unwrap().1.ticket.from.as_deref(), Some("SHELF"));
 }
@@ -164,10 +164,10 @@ async fn themes_and_settings_survive_a_reopen() {
     {
         let store = Store::open(&path).unwrap();
         two_themes(&store).await;
-        store.create(ticket("PANTRY", Kind::Scope, "", None)).await.unwrap();
-        store.set_theme("site", Some("ocean"), None, None).await.unwrap();
-        store.set_theme("PANTRY", Some("pantry"), Some(ThemeReach::Frame), Some(Takeover::Off)).await.unwrap();
-        store.set_theme("PANTRY", Some("pantry"), Some(ThemeReach::Frame), Some(Takeover::Off)).await.unwrap();
+        store.create(SYS, ticket("PANTRY", Kind::Scope, "", None)).await.unwrap();
+        store.set_theme(SYS, "site", Some("ocean"), None, None).await.unwrap();
+        store.set_theme(SYS, "PANTRY", Some("pantry"), Some(ThemeReach::Frame), Some(Takeover::Off)).await.unwrap();
+        store.set_theme(SYS, "PANTRY", Some("pantry"), Some(ThemeReach::Frame), Some(Takeover::Off)).await.unwrap();
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.theme("ocean").unwrap().dark, map(&[("--accent", "#4db6ac")]));

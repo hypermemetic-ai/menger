@@ -157,15 +157,19 @@ pub(super) fn kind_moves(cache: &Cache, old: &Row, row: &Row, act: &Act) -> (Vec
 
 impl Store {
     /// [`Store::update_by`] as nobody signed in, through the API.
-    pub async fn update(&self, id: &str, update: Update) -> Result<Updated, StoreError> {
-        self.update_by(id, update, Act::default()).await
+    pub async fn update(&self, at: Updating, update: Update) -> Result<Updated, StoreError> {
+        self.update_by(at, update, Act::default()).await
     }
 
     /// MENGER-30: changes any part of the ticket `id` in one write, by `act`
     /// (the module doc). [`StoreError::NotFound`] for an id that names no
     /// ticket; a refusal writes nothing.
-    pub async fn update_by(&self, id: &str, update: Update, act: Act) -> Result<Updated, StoreError> {
-        let id = crate::address::folded(id);
+    ///
+    /// ACCESS-11: of the ticket `at` is for, its parent and blockers as
+    /// `at`'s proofs name them ([`Updating`]) — checked under the
+    /// write-serial lock.
+    pub async fn update_by(&self, at: Updating, update: Update, act: Act) -> Result<Updated, StoreError> {
+        let id = crate::address::folded(at.id());
         let mut refusals: Vec<StoreError> = update.refused.iter().cloned().map(StoreError::Invalid).collect();
         // amend's, on what is in hand before the lock.
         if update.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
@@ -185,6 +189,8 @@ impl Store {
         let current = self.get_unscoped(&id).await?;
         let plan = {
             let cache = self.tickets.read().expect("store lock poisoned");
+            let row = cache.get(&current.id).ok_or_else(|| StoreError::NotFound(id.clone()))?;
+            at.check(&cache, row, &update)?;
             plan(&cache, &current, update, uses, declares, &mut refusals)
         };
         if refusals.len() == 1 {

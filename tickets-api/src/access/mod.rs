@@ -61,7 +61,7 @@ pub mod following;
 pub use following::{Closed, Followed, Following};
 pub use crate::store::System;
 pub use reach::{Held, Reach, ReachKey};
-pub use user::{Admin, AdminOf, Editor, Hidden, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
+pub use user::{Admin, AdminOf, Deployer, DeployerOf, Editor, EditorOf, Forward, Hidden, On, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
 
 /// The gate's reach for one call (plexus-core's): the grant a method was
 /// admitted for, and where.
@@ -174,7 +174,7 @@ pub struct Book {
     store: OnceLock<Arc<Store>>,
     /// ACCESS-9: the store's [`System`], taken at [`Access::attach`] — what
     /// the access layer's own reads of the grants act as (ACCESS-10).
-    system: OnceLock<System>,
+    system: OnceLock<Arc<System>>,
     admins: Vec<String>,
     /// Each role's grants as the activations declare them
     /// (`roles(...)`, merged by name) — seeded once the hub is built
@@ -208,11 +208,21 @@ impl Book {
         self.store.get()
     }
 
+    /// ACCESS-11: the store and the [`System`] the access layer's own
+    /// writes act as — `auth.grant`, `auth.revoke`, `auth.role_set` (the
+    /// gate decided them), the operator's dev sign-in.
+    fn writer(&self) -> Result<(&Arc<Store>, &System), GateStoreError> {
+        match (self.store(), self.system.get()) {
+            (Some(store), Some(system)) => Ok((store, &**system)),
+            _ => Err(GateStoreError::new("no store is attached")),
+        }
+    }
+
     /// ACCESS-10: the stored grants of `principal`, read as the store's
     /// [`System`] (none before a store is attached with it).
     fn stored_grants(&self, principal: &str) -> Vec<Grant> {
         match (self.store(), self.system.get()) {
-            (Some(store), Some(system)) => store.grants_of(system, principal),
+            (Some(store), Some(system)) => store.grants_of(&**system, principal),
             _ => Vec::new(),
         }
     }
@@ -295,9 +305,9 @@ impl RoleStore for Book {
         let GrantSet::Listed(set) = grants else {
             return Err(GateStoreError::new("only admin holds every grant"));
         };
-        let store = self.store().ok_or_else(|| GateStoreError::new("no store is attached"))?;
+        let (store, system) = self.writer()?;
         let grants: Vec<String> = set.iter().map(|g| g.as_str().to_string()).collect();
-        store.set_role(role.as_str().to_string(), grants).await.map_err(|e| GateStoreError::new(e.to_string()))
+        store.set_role(system, role.as_str().to_string(), grants).await.map_err(|e| GateStoreError::new(e.to_string()))
     }
 }
 
@@ -313,7 +323,7 @@ impl Memberships for Book {
 #[async_trait]
 impl MembershipStore for Book {
     async fn grant(&self, m: Membership) -> Result<(), GateStoreError> {
-        let store = self.store().ok_or_else(|| GateStoreError::new("no store is attached"))?;
+        let (store, system) = self.writer()?;
         // IDENTITY-21's rows hold viewer, editor or admin (DEPLOY-14: or
         // deployer); a role an admin defined with auth.role_set is not a
         // membership menger keeps yet.
@@ -324,20 +334,20 @@ impl MembershipStore for Book {
         let scope = store.scope_named(m.scope.as_str()).map_err(|e| GateStoreError::new(e.to_string()))?;
         let principal = m.principal.to_string();
         let g = Grant { principal: principal.clone(), scope, role, granted_by: AUTH_GRANT.into(), at: now() };
-        store.grant(g).await.map_err(|e| GateStoreError::new(e.to_string()))?;
+        store.grant(system, g).await.map_err(|e| GateStoreError::new(e.to_string()))?;
         self.granted(&principal);
         Ok(())
     }
 
     async fn revoke(&self, principal: &Principal, role: Option<&RoleName>, scope: &ScopeRef) -> Result<Vec<RoleName>, GateStoreError> {
-        let store = self.store().ok_or_else(|| GateStoreError::new("no store is attached"))?;
+        let (store, system) = self.writer()?;
         let scope = store.scope_named(scope.as_str()).map_err(|e| GateStoreError::new(e.to_string()))?;
         let who = principal.to_string();
         let held = self.stored_grants(&who).into_iter().find(|g| g.scope == scope);
         let Some(held) = held.filter(|g| role.is_none_or(|r| r.as_str() == g.role.as_str())) else {
             return Ok(Vec::new());
         };
-        store.revoke(who, scope).await.map_err(|e| GateStoreError::new(e.to_string()))?;
+        store.revoke(system, who, scope).await.map_err(|e| GateStoreError::new(e.to_string()))?;
         Ok(vec![RoleName::new(held.role.as_str())])
     }
 }
@@ -443,7 +453,7 @@ impl Access {
     /// no one has taken it before.
     pub fn attach(&self, store: Arc<Store>) {
         if let Some(system) = store.system() {
-            let _ = self.book.system.set(system);
+            let _ = self.book.system.set(Arc::new(system));
         }
         let _ = self.book.store.set(store);
     }
@@ -451,8 +461,10 @@ impl Access {
     /// ACCESS-10: [`Access::attach`], handed the store's [`System`] by
     /// whoever took it at the open (the builder, which read the store as
     /// the system first).
-    pub fn attach_with(&self, store: Arc<Store>, system: System) {
-        let _ = self.book.system.set(system);
+    /// ACCESS-11: shared — the builder keeps the store's upkeep (the purge)
+    /// acting as it too.
+    pub fn attach_with(&self, store: Arc<Store>, system: impl Into<Arc<System>>) {
+        let _ = self.book.system.set(system.into());
         let _ = self.book.store.set(store);
     }
 
@@ -501,10 +513,10 @@ impl Access {
     /// IDENTITY-35: a grant the operator's dev sign-in makes (test only),
     /// kept in the store like any other and signed `granted_by` `dev-login`.
     pub async fn dev_grant(&self, principal: &str, scope: &str, role: Role) -> Result<Grant, String> {
-        let store = self.book.store().cloned().ok_or("no store is attached")?;
+        let (store, system) = self.book.writer().map_err(|e| e.to_string())?;
         let scope = store.scope_named(scope).map_err(|e| e.to_string())?;
         let g = Grant { principal: principal.into(), scope, role, granted_by: DEV_LOGIN.into(), at: now() };
-        let g = store.grant(g).await.map_err(|e| e.to_string())?;
+        let g = store.grant(system, g).await.map_err(|e| e.to_string())?;
         self.granted(principal);
         Ok(g)
     }
@@ -512,11 +524,11 @@ impl Access {
     /// IDENTITY-35: a roster user's grants made exactly `grants`: each kept,
     /// and every other stored grant of theirs revoked.
     pub async fn dev_set_grants(&self, principal: &str, grants: &[(Role, String)]) -> Result<(), String> {
-        let store = self.book.store().cloned().ok_or("no store is attached")?;
+        let (store, system) = self.book.writer().map_err(|e| e.to_string())?;
         let named: Vec<String> = grants.iter().map(|(_, s)| store.scope_named(s).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
         for g in self.book.stored_grants(principal) {
             if !named.contains(&g.scope) {
-                store.revoke(principal.into(), g.scope).await.map_err(|e| e.to_string())?;
+                store.revoke(system, principal.into(), g.scope).await.map_err(|e| e.to_string())?;
             }
         }
         for (role, scope) in grants {

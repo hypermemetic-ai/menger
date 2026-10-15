@@ -24,9 +24,9 @@ fn new(epic: &str, kind: Kind, title: &str, body: &str) -> NewTicket {
 /// A store holding `SR-1`, a scope, then one build per `(title, body)`:
 /// `SR-2`, `SR-3`, …
 async fn holding(store: &Store, tickets: &[(&str, &str)]) {
-    store.create(new("SR", Kind::Scope, "search", "the root")).await.unwrap();
+    store.create(SYS, new("SR", Kind::Scope, "search", "the root")).await.unwrap();
     for (title, body) in tickets {
-        store.create(new("SR", Kind::Build, title, body)).await.unwrap();
+        store.create(SYS, new("SR", Kind::Build, title, body)).await.unwrap();
     }
 }
 
@@ -310,7 +310,7 @@ async fn a_filter_keeps_what_it_admits_and_pages_are_windows() {
     let refs: Vec<(&str, &str)> = tickets.iter().map(|(t, b)| (t.as_str(), b.as_str())).collect();
     holding(&store, &refs).await;
     for id in ["SR-3", "SR-5", "SR-6"] {
-        store.set_status(id, Status::Ready).await.unwrap();
+        store.set_status(SYS.permit(id), Status::Ready).await.unwrap();
     }
     let ready = Lens::of(&Filter::parse("status Ready").unwrap()).unwrap();
     let page = store.search(SYS, "cache", Some(ready.clone()), None, None).await.unwrap();
@@ -381,11 +381,11 @@ async fn windows_cross_from_the_typed_matches_to_the_corrected_ones() {
 async fn an_amend_moves_the_index() {
     let store = Store::new();
     holding(&store, &[("Old title", "the stale words")]).await;
-    store.amend("SR-2", None, Some("a fresh body".into())).await.unwrap();
+    store.amend(SYS.permit("SR-2"), None, Some("a fresh body".into())).await.unwrap();
     assert!(search(&store, "stale").await.hits.is_empty());
     assert_eq!(ids(&search(&store, "fresh").await), ["SR-2"]);
     assert_eq!(ids(&search(&store, "old title").await), ["SR-2"], "the title stands");
-    store.amend("SR-2", Some("New heading".into()), None).await.unwrap();
+    store.amend(SYS.permit("SR-2"), Some("New heading".into()), None).await.unwrap();
     assert!(search(&store, "old title").await.hits.is_empty());
     assert_eq!(ids(&search(&store, "heading fresh").await), ["SR-2"]);
     assert_eq!(search(&store, "heading").await.hits[0].summary.title, "New heading");
@@ -421,7 +421,7 @@ async fn a_first_open_builds_the_index_and_every_later_one_reads_it() {
     {
         let store = Store::open(&path).unwrap();
         assert_eq!(ids(&search(&store, "cache").await), ["SR-2"], "built by the open");
-        store.create(new("SR", Kind::Build, "Born after", "a newborn's words")).await.unwrap();
+        store.create(SYS, new("SR", Kind::Build, "Born after", "a newborn's words")).await.unwrap();
     }
     assert!(!search::migrate(&mut Connection::open(&path).unwrap()).unwrap(), "built once");
     let store = Store::open(&path).unwrap();
@@ -467,7 +467,7 @@ async fn a_seed_is_indexed_with_its_tickets() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("seed.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 600, seed: 7, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 600, seed: 7, into_existing: false }).unwrap();
     let page = store.search(SYS, "disagree", None, Some(5), None).await.unwrap();
     assert!(page.matched > 0 && page.hits.len() == 5, "{}", page.matched);
     let begun = store.search(SYS, "disagre readers", None, Some(5), None).await.unwrap();

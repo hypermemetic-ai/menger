@@ -86,8 +86,8 @@ fn a_reference_is_seven_to_sixty_four_hex_digits_after_an_optional_repository() 
 #[tokio::test]
 async fn every_row_of_the_table() {
     let store = Store::new();
-    store.create(ticket("CM", Kind::Scope, None, &[])).await.unwrap(); // CM-1
-    store.create(ticket("CM", Kind::Build, None, &[])).await.unwrap(); // CM-2
+    store.create(SYS, ticket("CM", Kind::Scope, None, &[])).await.unwrap(); // CM-1
+    store.create(SYS, ticket("CM", Kind::Build, None, &[])).await.unwrap(); // CM-2
     let mut rx = store.subscribe();
     let next = |rx: &mut broadcast::Receiver<Change>| {
         let change = rx.try_recv().expect("one event");
@@ -96,13 +96,13 @@ async fn every_row_of_the_table() {
     };
 
     // Two, appended in the order given.
-    let (t, added) = linked(store.link_commits("cm-2", strings(&["77df9a0", "Plexus-Macros@4F7114A"])).await.unwrap());
+    let (t, added) = linked(store.link_commits(SYS.permit("cm-2"), strings(&["77df9a0", "Plexus-Macros@4F7114A"])).await.unwrap());
     assert_eq!(added, ["77df9a0", "Plexus-Macros@4f7114a"], "the hash lowercased, the repository as given");
     assert_eq!(t.commits, added);
     assert_eq!(linked(next(&mut rx)), (t, added));
 
     // One of them again with a third: only the third is added, at the end.
-    let (t, added) = linked(store.link_commits("CM-2", strings(&["77DF9A0", "0bb28b2"])).await.unwrap());
+    let (t, added) = linked(store.link_commits(SYS.permit("CM-2"), strings(&["77DF9A0", "0bb28b2"])).await.unwrap());
     assert_eq!(added, ["0bb28b2"]);
     assert_eq!(t.commits, ["77df9a0", "Plexus-Macros@4f7114a", "0bb28b2"], "link order");
     assert_eq!(linked(next(&mut rx)), (t.clone(), added));
@@ -110,12 +110,12 @@ async fn every_row_of_the_table() {
 
     // Every entry already linked; none given; one named twice in a call.
     for entries in [vec!["77df9a0"], vec!["0BB28B2", "Plexus-Macros@4f7114a"], vec![]] {
-        let (got, added) = linked(store.link_commits("CM-2", strings(&entries)).await.unwrap());
+        let (got, added) = linked(store.link_commits(SYS.permit("CM-2"), strings(&entries)).await.unwrap());
         assert!(added.is_empty(), "{entries:?}: {added:?}");
         assert_eq!(got, t, "{entries:?}: the ticket as it is, unwritten");
         assert!(rx.try_recv().is_err(), "{entries:?}: a no-op broadcasts nothing");
     }
-    let (t, added) = linked(store.link_commits("CM-2", strings(&["5054a51", "5054A51"])).await.unwrap());
+    let (t, added) = linked(store.link_commits(SYS.permit("CM-2"), strings(&["5054a51", "5054A51"])).await.unwrap());
     assert_eq!(added, ["5054a51"], "an entry named twice is linked once");
     assert_eq!(t.commits.len(), 4);
     linked(next(&mut rx));
@@ -123,7 +123,7 @@ async fn every_row_of_the_table() {
     // One malformed entry among valid ones: refused whole, naming it.
     let before = store.get(SYS, "CM-2").await.unwrap();
     for entries in [vec!["499e3a0", "not-a-commit", "c8c5678"], vec!["499e3a0", "abc"]] {
-        match store.link_commits("CM-2", strings(&entries)).await {
+        match store.link_commits(SYS.permit("CM-2"), strings(&entries)).await {
             Err(e @ StoreError::NotACommit { .. }) => {
                 let bad = entries[1];
                 assert!(e.to_string().contains(&format!("'{bad}'")) && e.to_string().contains("CM-2"), "{e}");
@@ -132,7 +132,7 @@ async fn every_row_of_the_table() {
             other => panic!("{entries:?}: expected NotACommit, got {other:?}"),
         }
     }
-    match store.link_commits("CM-2", strings(&["xyz", "499e3a0", "HEAD"])).await {
+    match store.link_commits(SYS.permit("CM-2"), strings(&["xyz", "499e3a0", "HEAD"])).await {
         Err(StoreError::NotACommit { entries, .. }) => assert_eq!(entries, ["xyz", "HEAD"], "every one, as given"),
         other => panic!("expected NotACommit, got {other:?}"),
     }
@@ -141,26 +141,26 @@ async fn every_row_of_the_table() {
 
     // Unlink: what is on the ticket comes off, in the order given; a
     // reference that is not linked is not an error, and is not removed.
-    let (t, removed) = unlinked(store.unlink_commits("CM-2", strings(&["0BB28B2", "c8c5678", "77df9a0"])).await.unwrap());
+    let (t, removed) = unlinked(store.unlink_commits(SYS.permit("CM-2"), strings(&["0BB28B2", "c8c5678", "77df9a0"])).await.unwrap());
     assert_eq!(removed, ["0bb28b2", "77df9a0"]);
     assert_eq!(t.commits, ["Plexus-Macros@4f7114a", "5054a51"], "the rest, still in link order");
     assert_eq!(unlinked(next(&mut rx)), (t.clone(), removed));
     for entries in [vec!["c8c5678"], vec!["plexus-macros@4f7114a"], vec![]] {
-        let (got, removed) = unlinked(store.unlink_commits("CM-2", strings(&entries)).await.unwrap());
+        let (got, removed) = unlinked(store.unlink_commits(SYS.permit("CM-2"), strings(&entries)).await.unwrap());
         assert!(removed.is_empty(), "{entries:?}: compared as stored text — {removed:?}");
         assert_eq!(got, t);
         assert!(rx.try_recv().is_err(), "{entries:?}: nothing removed, nothing said");
     }
     assert!(matches!(
-        store.unlink_commits("CM-2", strings(&["5054a51", "nope"])).await,
+        store.unlink_commits(SYS.permit("CM-2"), strings(&["5054a51", "nope"])).await,
         Err(StoreError::NotACommit { entries, .. }) if entries == ["nope"]
     ));
     assert_eq!(store.get(SYS, "CM-2").await.unwrap(), t, "the refused unlink removed nothing");
 
     // An id naming no ticket, with entries or without.
     for entries in [vec!["77df9a0"], vec![]] {
-        assert!(matches!(store.link_commits("CM-9", strings(&entries)).await, Err(StoreError::NotFound(id)) if id == "CM-9"));
-        assert!(matches!(store.unlink_commits("CM-9", strings(&entries)).await, Err(StoreError::NotFound(id)) if id == "CM-9"));
+        assert!(matches!(store.link_commits(SYS.permit("CM-9"), strings(&entries)).await, Err(StoreError::NotFound(id)) if id == "CM-9"));
+        assert!(matches!(store.unlink_commits(SYS.permit("CM-9"), strings(&entries)).await, Err(StoreError::NotFound(id)) if id == "CM-9"));
     }
     assert!(rx.try_recv().is_err());
 }
@@ -173,24 +173,24 @@ async fn every_row_of_the_table() {
 #[tokio::test]
 async fn a_link_moves_the_commits_and_updated_unix_and_nothing_else() {
     let store = Store::new();
-    store.create(ticket("ED", Kind::Scope, None, &[])).await.unwrap(); // ED-1
-    store.create(ticket("ED", Kind::Build, None, &[])).await.unwrap(); // ED-2
-    store.create(ticket("ED", Kind::Gap, Some("ED-1"), &["ED-2", "ED-9"])).await.unwrap(); // ED-3
-    store.create(ticket("ED", Kind::Spike, Some("ED-3"), &["ED-3"])).await.unwrap(); // ED-4
-    store.set_status("ED-3", Status::Coding).await.unwrap();
-    store.set_status("ED-2", Status::Complete).await.unwrap();
+    store.create(SYS, ticket("ED", Kind::Scope, None, &[])).await.unwrap(); // ED-1
+    store.create(SYS, ticket("ED", Kind::Build, None, &[])).await.unwrap(); // ED-2
+    store.create(SYS, ticket("ED", Kind::Gap, Some("ED-1"), &["ED-2", "ED-9"])).await.unwrap(); // ED-3
+    store.create(SYS, ticket("ED", Kind::Spike, Some("ED-3"), &["ED-3"])).await.unwrap(); // ED-4
+    store.set_status(SYS.permit("ED-3"), Status::Coding).await.unwrap();
+    store.set_status(SYS.permit("ED-2"), Status::Complete).await.unwrap();
     let before: Vec<Ticket> = store.list(SYS, None, None, None).await.unwrap();
     let (groups, extents) = (store.groups(SYS), store.extents_text());
     let started = chrono::Utc::now().timestamp();
 
-    let (t, _) = linked(store.link_commits("ED-3", strings(&["77df9a0", "ought@1a2b3c4"])).await.unwrap());
+    let (t, _) = linked(store.link_commits(SYS.permit("ED-3"), strings(&["77df9a0", "ought@1a2b3c4"])).await.unwrap());
     let was = before.iter().find(|b| b.id == "ED-3").unwrap();
     assert!(t.updated_unix >= started);
     let mut expect = was.clone();
     expect.commits = strings(&["77df9a0", "ought@1a2b3c4"]);
     expect.updated_unix = t.updated_unix;
     assert_eq!(t, expect, "status (Coding), kind, body, edges, parent, children: as they were");
-    let (t, _) = unlinked(store.unlink_commits("ED-3", strings(&["77df9a0"])).await.unwrap());
+    let (t, _) = unlinked(store.unlink_commits(SYS.permit("ED-3"), strings(&["77df9a0"])).await.unwrap());
     expect.commits = strings(&["ought@1a2b3c4"]);
     expect.updated_unix = t.updated_unix;
     assert_eq!(t, expect);
@@ -205,7 +205,7 @@ async fn a_link_moves_the_commits_and_updated_unix_and_nothing_else() {
     assert_eq!(store.groups(SYS), groups, "no roll-up moved");
     assert_eq!(store.extents_text(), extents, "no sequence moved");
     for _ in 5..=9 {
-        store.create(ticket("ED", Kind::Build, None, &[])).await.unwrap();
+        store.create(SYS, ticket("ED", Kind::Build, None, &[])).await.unwrap();
     }
     assert_eq!(store.get(SYS, "ED-9").await.unwrap().unlocks, ["ED-3"], "the forward reference kept");
 }
@@ -217,14 +217,14 @@ async fn a_link_moves_the_commits_and_updated_unix_and_nothing_else() {
 #[tokio::test]
 async fn a_ticket_holds_at_most_256_commits() {
     let store = Store::new();
-    store.create(ticket("BD", Kind::Scope, None, &[])).await.unwrap();
+    store.create(SYS, ticket("BD", Kind::Scope, None, &[])).await.unwrap();
     let hash = |i: usize| format!("{i:07x}");
     let first: Vec<String> = (0..255).map(hash).collect();
-    let (t, added) = linked(store.link_commits("BD-1", first.clone()).await.unwrap());
+    let (t, added) = linked(store.link_commits(SYS.permit("BD-1"), first.clone()).await.unwrap());
     assert_eq!((added.len(), t.commits.len()), (255, 255));
     let mut rx = store.subscribe();
 
-    match store.link_commits("BD-1", vec![hash(0), hash(255), hash(256)]).await {
+    match store.link_commits(SYS.permit("BD-1"), vec![hash(0), hash(255), hash(256)]).await {
         Err(e @ StoreError::TooManyCommits { linked: 255, adding: 2, .. }) => {
             assert!(e.to_string().contains("256") && e.to_string().contains("BD-1"), "{e}")
         }
@@ -233,16 +233,16 @@ async fn a_ticket_holds_at_most_256_commits() {
     assert_eq!(store.get(SYS, "BD-1").await.unwrap().commits, first, "nothing written, not even the one that fit");
     assert!(rx.try_recv().is_err());
 
-    let (t, added) = linked(store.link_commits("BD-1", vec![hash(0), hash(255)]).await.unwrap());
+    let (t, added) = linked(store.link_commits(SYS.permit("BD-1"), vec![hash(0), hash(255)]).await.unwrap());
     assert_eq!((added, t.commits.len()), (vec![hash(255)], commits::MAX_PER_TICKET));
-    let (_, added) = linked(store.link_commits("BD-1", vec![hash(7), hash(255)]).await.unwrap());
+    let (_, added) = linked(store.link_commits(SYS.permit("BD-1"), vec![hash(7), hash(255)]).await.unwrap());
     assert!(added.is_empty(), "at the bound, what is there is still a no-op");
     assert!(matches!(
-        store.link_commits("BD-1", vec![hash(256)]).await,
+        store.link_commits(SYS.permit("BD-1"), vec![hash(256)]).await,
         Err(StoreError::TooManyCommits { linked: 256, adding: 1, .. })
     ));
-    unlinked(store.unlink_commits("BD-1", vec![hash(3)]).await.unwrap());
-    let (t, _) = linked(store.link_commits("BD-1", vec![hash(256)]).await.unwrap());
+    unlinked(store.unlink_commits(SYS.permit("BD-1"), vec![hash(3)]).await.unwrap());
+    let (t, _) = linked(store.link_commits(SYS.permit("BD-1"), vec![hash(256)]).await.unwrap());
     assert_eq!(t.commits.len(), 256);
     assert_eq!(t.commits.last(), Some(&hash(256)));
 }
@@ -257,10 +257,10 @@ async fn commits_are_on_every_row_in_link_order_and_survive_a_reopen() {
     let path = dir.path().join("commits.db");
     let linked_at = {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("RO", Kind::Scope, None, &[])).await.unwrap();
-        store.create(ticket("RO", Kind::Build, None, &[])).await.unwrap();
-        store.link_commits("RO-2", strings(&["C8C5678", "plexus-core@0BB28B2"])).await.unwrap();
-        let (t, _) = linked(store.link_commits("RO-2", strings(&["090cdec"])).await.unwrap());
+        store.create(SYS, ticket("RO", Kind::Scope, None, &[])).await.unwrap();
+        store.create(SYS, ticket("RO", Kind::Build, None, &[])).await.unwrap();
+        store.link_commits(SYS.permit("RO-2"), strings(&["C8C5678", "plexus-core@0BB28B2"])).await.unwrap();
+        let (t, _) = linked(store.link_commits(SYS.permit("RO-2"), strings(&["090cdec"])).await.unwrap());
         assert_eq!(t.commits, ["c8c5678", "plexus-core@0bb28b2", "090cdec"]);
         t
     };
@@ -320,7 +320,7 @@ async fn a_database_from_before_the_column_opens_with_none_linked_durably() {
             "nothing else read differently"
         );
         assert_eq!(store.get(SYS, "OLD-1").await.unwrap().child_count, 1);
-        store.link_commits("OLD-2", strings(&["77df9a0"])).await.unwrap();
+        store.link_commits(SYS.permit("OLD-2"), strings(&["77df9a0"])).await.unwrap();
     }
     let mut conn = Connection::open(&path).unwrap();
     assert!(db::has_column(&conn, "tickets", "commits").unwrap(), "the column is in the file");

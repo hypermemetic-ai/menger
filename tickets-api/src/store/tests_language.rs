@@ -248,7 +248,7 @@ async fn random_filters_equal_the_evaluator_on_a_seeded_store() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 3_000, seed: 410, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 3_000, seed: 410, into_existing: false }).unwrap();
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(5).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     walk(store, &path, 0x5EED_F410, 250, 25, &epics).await;
@@ -274,7 +274,7 @@ async fn random_filters_equal_the_evaluator_on_each_fixture() {
 #[tokio::test]
 async fn every_filter_3_filter_is_answered_as_the_evaluator_answers() {
     let store = Store::new();
-    store.seed_synthetic(SeedSpec { count: 4_000, seed: 1, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 4_000, seed: 1, into_existing: false }).unwrap();
     let big = store.extents_text().into_iter().max_by_key(|(_, n)| *n).unwrap().0;
     let plain = Plain::of(&store);
     let mut rng = Rng(0x3_62);
@@ -312,7 +312,7 @@ async fn every_filter_3_filter_is_answered_as_the_evaluator_answers() {
 #[tokio::test]
 async fn ready_is_the_ready_set() {
     let store = Store::new();
-    store.seed_synthetic(SeedSpec { count: 3_000, seed: 2, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 3_000, seed: 2, into_existing: false }).unwrap();
     let lens = Lens::parse("ready").unwrap();
     for (epic, held) in store.counts_text(&lens) {
         assert_eq!(held, store.ready_page(SYS, Some(&epic), None, Some(0)).unwrap().remaining, "{epic}");
@@ -338,7 +338,7 @@ async fn ready_is_the_ready_set() {
 #[tokio::test]
 async fn the_empty_filter_counts_every_ticket_of_every_shortcode() {
     let store = Store::new();
-    store.seed_synthetic(SeedSpec { count: 2_000, seed: 3, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 2_000, seed: 3, into_existing: false }).unwrap();
     let extents: Vec<(String, u64)> = store.extents_text().into_iter().map(|(e, n)| (e, u64::from(n))).collect();
     assert_eq!(store.counts_text(&Lens::all()), extents);
     assert_eq!(store.counts_text(&Lens::parse("").unwrap()), extents);
@@ -381,7 +381,7 @@ fn text_is_refused_naming_where_it_lives_and_under_is_answered() {
 #[tokio::test]
 async fn a_facet_sets_aside_only_its_fields_own_groups() {
     let store = Store::new();
-    store.seed_synthetic(SeedSpec { count: 1_500, seed: 5, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 1_500, seed: 5, into_existing: false }).unwrap();
     let plain = Plain::of(&store);
     let all = store.facets(SYS, &Filter::default(), &Filter::default()).unwrap();
     let by_status: Vec<&(String, String, u64)> = all.iter().filter(|(f, _, _)| f == "status").collect();

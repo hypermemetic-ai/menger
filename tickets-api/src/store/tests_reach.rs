@@ -55,12 +55,12 @@ pub(super) fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&s
 /// ```
 pub(super) async fn tracker() -> Store {
     let s = Store::new();
-    s.create(new("SECRET", Kind::Scope, None, &[], "")).await.unwrap();
-    s.create(new("SECRET", Kind::Build, Some("SECRET-1"), &[], "classified\n\n```component m-secret\n<template>s</template>\n```\n")).await.unwrap();
-    s.create(new("OPEN", Kind::Scope, Some("SECRET-1"), &[], "")).await.unwrap();
-    s.create(new("OPEN", Kind::Build, Some("OPEN-1"), &[], "")).await.unwrap();
-    s.create(new("OPEN", Kind::Build, Some("OPEN-1"), &["OPEN-2", "SECRET-2"], "")).await.unwrap();
-    s.create(new("OPEN", Kind::Build, Some("OPEN-3"), &[], "<m-secret></m-secret>")).await.unwrap();
+    s.create(SYS, new("SECRET", Kind::Scope, None, &[], "")).await.unwrap();
+    s.create(SYS, new("SECRET", Kind::Build, Some("SECRET-1"), &[], "classified\n\n```component m-secret\n<template>s</template>\n```\n")).await.unwrap();
+    s.create(SYS, new("OPEN", Kind::Scope, Some("SECRET-1"), &[], "")).await.unwrap();
+    s.create(SYS, new("OPEN", Kind::Build, Some("OPEN-1"), &[], "")).await.unwrap();
+    s.create(SYS, new("OPEN", Kind::Build, Some("OPEN-1"), &["OPEN-2", "SECRET-2"], "")).await.unwrap();
+    s.create(SYS, new("OPEN", Kind::Build, Some("OPEN-3"), &[], "<m-secret></m-secret>")).await.unwrap();
     s
 }
 
@@ -232,8 +232,8 @@ async fn waves_follow_no_hidden_blocker_by_name() {
 async fn a_comment_out_of_reach_is_no_comment() {
     let s = tracker().await;
     let anchor = |t: &str| crate::comments::Anchor { route: format!("#/ticket/{t}"), path: "p".into(), label: "l".into(), excerpt: "e".into(), ticket: Some(t.into()), version: None };
-    let open = s.add_comment(anchor("OPEN-2"), "seen".into(), None).await.unwrap();
-    let secret = s.add_comment(anchor("SECRET-2"), "unseen".into(), None).await.unwrap();
+    let open = s.add_comment(SYS, anchor("OPEN-2"), "seen".into(), None).await.unwrap();
+    let secret = s.add_comment(SYS, anchor("SECRET-2"), "unseen".into(), None).await.unwrap();
     let v = viewer_of(&["OPEN"]);
     let page = s.comments(&v, &Default::default(), None, None).unwrap();
     assert_eq!(page.comments.iter().map(|c| c.id).collect::<Vec<_>>(), [open.id]);
@@ -289,7 +289,7 @@ async fn nothing_answered_or_named_lies_outside_the_reach() {
         let mut ids: Vec<String> = Vec::new();
         for (i, code) in CODES.iter().enumerate() {
             let host = (i > 0 && r.below(3) > 0).then(|| ids[r.below(ids.len())].clone());
-            s.create(new(code, Kind::Scope, host.as_deref(), &[], "")).await.unwrap();
+            s.create(SYS, new(code, Kind::Scope, host.as_deref(), &[], "")).await.unwrap();
             let first = ids.len();
             ids.push(format!("{code}-1"));
             for _ in 0..3 + r.below(4) {
@@ -297,7 +297,7 @@ async fn nothing_answered_or_named_lies_outside_the_reach() {
                 let mut blockers: Vec<String> = (0..r.below(3)).map(|_| ids[r.below(ids.len())].clone()).filter(|b| !b.ends_with("-1")).collect();
                 blockers.dedup();
                 let b: Vec<&str> = blockers.iter().map(String::as_str).collect();
-                let t = s.create(new(code, Kind::Build, Some(&parent), &b, "")).await.unwrap();
+                let t = s.create(SYS, new(code, Kind::Build, Some(&parent), &b, "")).await.unwrap();
                 ids.push(t.id.to_string());
             }
         }

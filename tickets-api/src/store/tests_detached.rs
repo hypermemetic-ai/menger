@@ -120,15 +120,15 @@ fn kinds(changes: &[Change]) -> Vec<String> {
 async fn a_create_dropped_mid_commit_still_reaches_the_cache_and_watch_and_the_next_id_is_the_next() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
-    store.create(new("AB", Kind::Scope, "the root")).await.unwrap(); // AB-1
+    store.create(SYS, new("AB", Kind::Scope, "the root")).await.unwrap(); // AB-1
     let mut rx = store.subscribe();
 
-    drop_mid_commit(&store, store.create(new("AB", Kind::Build, "the dropped one"))).await;
+    drop_mid_commit(&store, store.create(SYS, new("AB", Kind::Build, "the dropped one"))).await;
     let stored = stored_when(&store, "AB-2", |_| true).await;
     let said = heard(&store, &mut rx).await;
     let cached = store.row("AB-2").ok().map(|(row, _)| unplaced(row));
     let counts = counts_agree(&store);
-    let next = store.create(new("AB", Kind::Build, "the next one")).await.unwrap();
+    let next = store.create(SYS, new("AB", Kind::Build, "the next one")).await.unwrap();
     let ab2_after = db::ticket(&store.db.lock().unwrap(), "AB-2").unwrap().unwrap();
 
     assert_eq!(stored.title, "the dropped one", "the commit landed");
@@ -160,11 +160,11 @@ async fn a_create_dropped_mid_commit_still_reaches_the_cache_and_watch_and_the_n
 async fn a_set_status_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
-    store.create(new("SS", Kind::Scope, "the root")).await.unwrap();
-    store.create(new("SS", Kind::Build, "a ticket")).await.unwrap();
+    store.create(SYS, new("SS", Kind::Scope, "the root")).await.unwrap();
+    store.create(SYS, new("SS", Kind::Build, "a ticket")).await.unwrap();
     let mut rx = store.subscribe();
 
-    drop_mid_commit(&store, store.set_status("SS-2", Status::Complete)).await;
+    drop_mid_commit(&store, store.set_status(SYS.permit("SS-2"), Status::Complete)).await;
     let stored = stored_when(&store, "SS-2", |t| t.status == Status::Complete).await;
     let said = heard(&store, &mut rx).await;
     let cached = unplaced(store.row("SS-2").unwrap().0);
@@ -193,12 +193,12 @@ async fn a_set_status_dropped_mid_commit_still_reaches_the_cache_and_watch() {
 async fn a_set_parent_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
-    store.create(new("SP", Kind::Scope, "the root")).await.unwrap(); // SP-1
-    store.create(new("SP", Kind::Build, "a")).await.unwrap(); // SP-2 -> SP-1
-    store.create(new("SP", Kind::Build, "b")).await.unwrap(); // SP-3 -> SP-1
+    store.create(SYS, new("SP", Kind::Scope, "the root")).await.unwrap(); // SP-1
+    store.create(SYS, new("SP", Kind::Build, "a")).await.unwrap(); // SP-2 -> SP-1
+    store.create(SYS, new("SP", Kind::Build, "b")).await.unwrap(); // SP-3 -> SP-1
     let mut rx = store.subscribe();
 
-    drop_mid_commit(&store, store.set_parent("SP-3", "SP-2")).await;
+    drop_mid_commit(&store, store.set_parent(SYS.moving("SP-3", "SP-2"))).await;
     let stored = stored_when(&store, "SP-3", |t| t.parent.as_deref() == Some("SP-2")).await;
     let said = heard(&store, &mut rx).await;
     let cached = unplaced(store.row("SP-3").unwrap().0);
@@ -228,10 +228,10 @@ async fn a_set_parent_dropped_mid_commit_still_reaches_the_cache_and_watch() {
 async fn an_amend_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
-    store.create(new("AM", Kind::Scope, "the root")).await.unwrap();
+    store.create(SYS, new("AM", Kind::Scope, "the root")).await.unwrap();
     let mut rx = store.subscribe();
 
-    drop_mid_commit(&store, store.amend("AM-1", Some("amended".into()), Some("a new body".into()))).await;
+    drop_mid_commit(&store, store.amend(SYS.permit("AM-1"), Some("amended".into()), Some("a new body".into()))).await;
     let stored = stored_when(&store, "AM-1", |t| t.title == "amended").await;
     let said = heard(&store, &mut rx).await;
     let cached = unplaced(store.row("AM-1").unwrap().0);
@@ -266,17 +266,17 @@ async fn an_amend_dropped_mid_commit_still_reaches_the_cache_and_watch() {
 async fn a_link_or_unlink_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
-    store.create(new("LK", Kind::Scope, "the root")).await.unwrap();
+    store.create(SYS, new("LK", Kind::Scope, "the root")).await.unwrap();
     let mut rx = store.subscribe();
 
-    drop_mid_commit(&store, store.link_commits("LK-1", vec!["77df9a0".into(), "0bb28b2".into()])).await;
+    drop_mid_commit(&store, store.link_commits(SYS.permit("LK-1"), vec!["77df9a0".into(), "0bb28b2".into()])).await;
     let stored = stored_when(&store, "LK-1", |t| t.commits.len() == 2).await;
     let said = heard(&store, &mut rx).await;
     let cached = unplaced(store.row("LK-1").unwrap().0);
     assert_eq!(cached, row_of(&stored, 0), "link: the database holds {:?} and the cache {:?}", stored.commits, cached.commits);
     assert_eq!(kinds(&said), ["commits_linked"]);
 
-    drop_mid_commit(&store, store.unlink_commits("LK-1", vec!["77df9a0".into()])).await;
+    drop_mid_commit(&store, store.unlink_commits(SYS.permit("LK-1"), vec!["77df9a0".into()])).await;
     let stored = stored_when(&store, "LK-1", |t| t.commits.len() == 1).await;
     let said = heard(&store, &mut rx).await;
     let cached = unplaced(store.row("LK-1").unwrap().0);
@@ -296,7 +296,7 @@ async fn a_caller_that_stays_is_answered_after_all_three_and_a_failed_commit_cha
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
     let mut rx = store.subscribe();
-    let t = store.create(new("ST", Kind::Scope, "stays")).await.unwrap();
+    let t = store.create(SYS, new("ST", Kind::Scope, "stays")).await.unwrap();
     // WAVE-6: the file holds everything but the placement, the cache's alone.
     let unplaced = Ticket { placement: None, address: String::new(), ..t.clone() };
     assert_eq!(db::ticket(&store.db.lock().unwrap(), "ST-1").unwrap().as_ref(), Some(&unplaced), "durable when answered");
@@ -307,7 +307,7 @@ async fn a_caller_that_stays_is_answered_after_all_three_and_a_failed_commit_cha
     // A commit that fails: the table is gone from under the writer.
     store.db.lock().unwrap().execute_batch("ALTER TABLE tickets RENAME TO gone").unwrap();
     let before = counts_agree(&store);
-    assert!(matches!(store.set_status("ST-1", Status::Ready).await, Err(StoreError::Db(_))));
+    assert!(matches!(store.set_status(SYS.permit("ST-1"), Status::Ready).await, Err(StoreError::Db(_))));
     assert_eq!(store.row("ST-1").unwrap().0.status, Status::Pending, "the cache is untouched");
     assert_eq!(counts_agree(&store), before, "and the count given back");
     while let Ok(change) = rx.try_change() {

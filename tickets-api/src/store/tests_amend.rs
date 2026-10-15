@@ -41,9 +41,9 @@ async fn a_body_round_trips_byte_exact_and_survives_a_reopen() {
     let path = dir.path().join("amend.db");
     let after = {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("AM", Kind::Scope, None, &[])).await.unwrap();
-        store.create(ticket("AM", Kind::Build, None, &[])).await.unwrap();
-        let (t, changed) = amended(store.amend("am-2", None, Some(AWKWARD.into())).await.unwrap());
+        store.create(SYS, ticket("AM", Kind::Scope, None, &[])).await.unwrap();
+        store.create(SYS, ticket("AM", Kind::Build, None, &[])).await.unwrap();
+        let (t, changed) = amended(store.amend(SYS.permit("am-2"), None, Some(AWKWARD.into())).await.unwrap());
         assert_eq!(changed, ["body"]);
         assert_eq!(t.body, AWKWARD);
         assert_eq!(store.get(SYS, "AM-2").await.unwrap().body.as_bytes(), AWKWARD.as_bytes());
@@ -62,8 +62,8 @@ async fn a_body_round_trips_byte_exact_and_survives_a_reopen() {
 #[tokio::test]
 async fn every_row_of_the_table() {
     let store = Store::new();
-    store.create(ticket("AM", Kind::Scope, None, &[])).await.unwrap(); // AM-1
-    let born = store.create(ticket("AM", Kind::Build, None, &[])).await.unwrap(); // AM-2
+    store.create(SYS, ticket("AM", Kind::Scope, None, &[])).await.unwrap(); // AM-1
+    let born = store.create(SYS, ticket("AM", Kind::Build, None, &[])).await.unwrap(); // AM-2
     let mut rx = store.subscribe();
     let next = |rx: &mut broadcast::Receiver<Change>| match rx.try_recv() {
         Ok(Change::Amended { ticket, changed }) => (ticket, changed),
@@ -71,21 +71,21 @@ async fn every_row_of_the_table() {
     };
 
     // the body
-    let (t, changed) = amended(store.amend("AM-2", None, Some("a new body".into())).await.unwrap());
+    let (t, changed) = amended(store.amend(SYS.permit("AM-2"), None, Some("a new body".into())).await.unwrap());
     assert_eq!(changed, ["body"]);
     assert_eq!((t.title.as_str(), t.body.as_str()), (born.title.as_str(), "a new body"));
     assert_eq!(next(&mut rx), (t, changed));
     assert!(rx.try_recv().is_err(), "one event, and no group moved");
 
     // the title
-    let (t, changed) = amended(store.amend("AM-2", Some("a new title".into()), None).await.unwrap());
+    let (t, changed) = amended(store.amend(SYS.permit("AM-2"), Some("a new title".into()), None).await.unwrap());
     assert_eq!(changed, ["title"]);
     assert_eq!((t.title.as_str(), t.body.as_str()), ("a new title", "a new body"));
     assert_eq!(next(&mut rx), (t, changed));
 
     // both, in one write — and `changed` names both, title first
     let (t, changed) =
-        amended(store.amend("AM-2", Some("third title".into()), Some("third body".into())).await.unwrap());
+        amended(store.amend(SYS.permit("AM-2"), Some("third title".into()), Some("third body".into())).await.unwrap());
     assert_eq!(changed, ["title", "body"]);
     assert_eq!((t.title.as_str(), t.body.as_str()), ("third title", "third body"));
     assert_eq!(next(&mut rx), (t.clone(), changed));
@@ -100,20 +100,20 @@ async fn every_row_of_the_table() {
         (None, Some("third body")),
     ] {
         let (got, changed) =
-            amended(store.amend("AM-2", title.map(Into::into), body.map(Into::into)).await.unwrap());
+            amended(store.amend(SYS.permit("AM-2"), title.map(Into::into), body.map(Into::into)).await.unwrap());
         assert!(changed.is_empty(), "{title:?} {body:?}: {changed:?}");
         assert_eq!(got, t, "the ticket as it is, unwritten");
         assert!(rx.try_recv().is_err(), "{title:?} {body:?}: a no-op broadcasts nothing");
     }
     let (_, changed) =
-        amended(store.amend("AM-2", Some("third title".into()), Some("fourth body".into())).await.unwrap());
+        amended(store.amend(SYS.permit("AM-2"), Some("third title".into()), Some("fourth body".into())).await.unwrap());
     assert_eq!(changed, ["body"], "only the value that differs");
     next(&mut rx);
 
     // a missing id; a blank title — nothing written, nothing said
-    assert!(matches!(store.amend("AM-9", None, Some("x".into())).await, Err(StoreError::NotFound(id)) if id == "AM-9"));
+    assert!(matches!(store.amend(SYS.permit("AM-9"), None, Some("x".into())).await, Err(StoreError::NotFound(id)) if id == "AM-9"));
     for blank in ["", "   ", "\t\n"] {
-        match store.amend("AM-2", Some(blank.into()), Some("a body that must not land".into())).await {
+        match store.amend(SYS.permit("AM-2"), Some(blank.into()), Some("a body that must not land".into())).await {
             Err(e @ StoreError::EmptyTitle { .. }) => {
                 assert!(e.to_string().contains("AM-2") && e.to_string().contains("empty"), "{e}")
             }
@@ -132,11 +132,11 @@ async fn every_row_of_the_table() {
 #[tokio::test]
 async fn an_amend_changes_the_title_body_and_updated_unix_and_nothing_else() {
     let store = Store::new();
-    store.create(ticket("ED", Kind::Scope, None, &[])).await.unwrap(); // ED-1
-    store.create(ticket("ED", Kind::Build, None, &[])).await.unwrap(); // ED-2
-    store.create(ticket("ED", Kind::Gap, Some("ED-1"), &["ED-2", "ED-9"])).await.unwrap(); // ED-3
-    store.create(ticket("ED", Kind::Spike, Some("ED-3"), &["ED-3"])).await.unwrap(); // ED-4
-    store.set_status("ED-3", Status::Coding).await.unwrap();
+    store.create(SYS, ticket("ED", Kind::Scope, None, &[])).await.unwrap(); // ED-1
+    store.create(SYS, ticket("ED", Kind::Build, None, &[])).await.unwrap(); // ED-2
+    store.create(SYS, ticket("ED", Kind::Gap, Some("ED-1"), &["ED-2", "ED-9"])).await.unwrap(); // ED-3
+    store.create(SYS, ticket("ED", Kind::Spike, Some("ED-3"), &["ED-3"])).await.unwrap(); // ED-4
+    store.set_status(SYS.permit("ED-3"), Status::Coding).await.unwrap();
     let before: Vec<Ticket> = store.list(SYS, None, None, None).await.unwrap();
     let groups = store.groups(SYS);
     let extents = store.extents_text();
@@ -144,7 +144,7 @@ async fn an_amend_changes_the_title_body_and_updated_unix_and_nothing_else() {
 
     let (t, _) = amended(
         store
-            .amend("ED-3", Some("retitled".into()), Some("rewritten".into()))
+            .amend(SYS.permit("ED-3"), Some("retitled".into()), Some("rewritten".into()))
             .await
             .unwrap(),
     );
@@ -166,7 +166,7 @@ async fn an_amend_changes_the_title_body_and_updated_unix_and_nothing_else() {
     assert_eq!(store.extents_text(), extents, "no sequence moved");
     // The id index kept ED-3's forward reference: ED-9, when born, unlocks it.
     for _ in 5..=9 {
-        store.create(ticket("ED", Kind::Build, None, &[])).await.unwrap();
+        store.create(SYS, ticket("ED", Kind::Build, None, &[])).await.unwrap();
     }
     assert_eq!(store.get(SYS, "ED-9").await.unwrap().unlocks, ["ED-3"]);
 }

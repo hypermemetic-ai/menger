@@ -25,16 +25,16 @@ fn ticket(epic: &str, kind: Kind, body: &str) -> NewTicket {
 /// A store with a scope root, `Q-1`, to file builds under.
 async fn store() -> Store {
     let store = Store::new();
-    store.create(ticket("Q", Kind::Scope, "the root")).await.unwrap();
+    store.create(SYS, ticket("Q", Kind::Scope, "the root")).await.unwrap();
     store
 }
 
 async fn born(store: &Store, body: &str) -> String {
-    String::from(store.create(ticket("Q", Kind::Build, body)).await.unwrap().id)
+    String::from(store.create(SYS, ticket("Q", Kind::Build, body)).await.unwrap().id)
 }
 
 async fn amend(store: &Store, id: &str, body: &str) {
-    store.amend(id, None, Some(body.into())).await.unwrap();
+    store.amend(SYS.permit(id), None, Some(body.into())).await.unwrap();
 }
 
 /// The house decision, with an id.
@@ -138,7 +138,7 @@ async fn a_body_written_declares_its_inputs() {
     let other = born(&store, "nothing yet").await;
     assert!(store.inputs(SYS, Some(&other), None, None).unwrap().is_empty(), "a body without inputs stores nothing");
     amend(&store, &other, &decision("go", &["Yes", "No"])).await;
-    changed(store.answer(&other, "go", choice("yes"), None, AnswerSource::Api).await.unwrap());
+    changed(store.answer(SYS.permit(&other), "go", choice("yes"), None, AnswerSource::Api).await.unwrap());
     amend(&store, &other, &decision("go", &["Yes", "No", "Later"])).await;
     let go = one(&store, &other, "go");
     assert_eq!(go.options.len(), 3);
@@ -154,7 +154,7 @@ async fn a_duplicate_input_id_refuses_the_write_naming_it() {
     let store = store().await;
     let mut rx = store.subscribe();
     let twice = format!("{}\n{}", decision("x", &["A"]), text("x"));
-    let e = store.create(ticket("Q", Kind::Build, &twice)).await.unwrap_err();
+    let e = store.create(SYS, ticket("Q", Kind::Build, &twice)).await.unwrap_err();
     assert!(matches!(&e, StoreError::InputMarkup { id: None, problem: crate::inputs::Problem::Twice { input } } if input == "x"), "{e:?}");
     assert!(e.to_string().contains("the input 'x' twice") && e.to_string().contains("nothing was created"), "{e}");
     assert!(drain(&mut rx).is_empty(), "nothing heard");
@@ -162,10 +162,10 @@ async fn a_duplicate_input_id_refuses_the_write_naming_it() {
     assert_eq!(id, "Q-2", "no id spent");
 
     let before = store.get(SYS, &id).await.unwrap();
-    let e = store.amend(&id, Some("new title".into()), Some(twice)).await.unwrap_err();
+    let e = store.amend(SYS.permit(&id), Some("new title".into()), Some(twice)).await.unwrap_err();
     assert!(e.to_string().contains("'x' twice") && e.to_string().contains("nothing changed for 'Q-2'"), "{e}");
     assert_eq!(store.get(SYS, &id).await.unwrap(), before, "title and body as they were");
-    let e = store.amend(&id, None, Some("<m-input id=\"k\" kind=\"choice\"></m-input>".into())).await.unwrap_err();
+    let e = store.amend(SYS.permit(&id), None, Some("<m-input id=\"k\" kind=\"choice\"></m-input>".into())).await.unwrap_err();
     assert!(e.to_string().contains("a choice is an <m-decision>"), "{e}");
     assert!(store.inputs(SYS, None, None, None).unwrap().is_empty());
 }
@@ -180,12 +180,12 @@ async fn an_answer_is_checked_and_recorded_with_source_and_time() {
     let before = store.get(SYS, &id).await.unwrap();
     let t0 = chrono::Utc::now().timestamp();
 
-    let d = changed(store.answer(&id, "d", choice("a"), Some("first look".into()), AnswerSource::App).await.unwrap());
+    let d = changed(store.answer(SYS.permit(&id), "d", choice("a"), Some("first look".into()), AnswerSource::App).await.unwrap());
     assert_eq!(d.state, InputState::Answered);
     let a = d.answer.clone().unwrap();
     assert_eq!((a.value, a.rationale.as_deref(), a.source), (choice("a"), Some("first look"), AnswerSource::App));
     assert!(a.at_unix >= t0);
-    let d = changed(store.answer(&id, "d", choice("b"), None, AnswerSource::Api).await.unwrap());
+    let d = changed(store.answer(SYS.permit(&id), "d", choice("b"), None, AnswerSource::Api).await.unwrap());
     assert_eq!(d.answer.as_ref().map(|a| (&a.value, a.source)), Some((&choice("b"), AnswerSource::Api)));
     assert_eq!(d.history.len(), 2, "every answer is history");
     assert_eq!(d.history[0].value, Some(choice("a")));
@@ -193,12 +193,12 @@ async fn an_answer_is_checked_and_recorded_with_source_and_time() {
 
     let m = changed(
         store
-            .answer(&id, "m", InputValue::Multi { options: vec!["z".into(), "x".into(), "z".into()] }, None, AnswerSource::Api)
+            .answer(SYS.permit(&id), "m", InputValue::Multi { options: vec!["z".into(), "x".into(), "z".into()] }, None, AnswerSource::Api)
             .await
             .unwrap(),
     );
     assert_eq!(m.answer.unwrap().value, InputValue::Multi { options: vec!["x".into(), "z".into()] }, "a set, in the body's order");
-    let t = changed(store.answer(&id, "t", InputValue::Text { text: "Yes, ship it".into() }, None, AnswerSource::Api).await.unwrap());
+    let t = changed(store.answer(SYS.permit(&id), "t", InputValue::Text { text: "Yes, ship it".into() }, None, AnswerSource::Api).await.unwrap());
     assert_eq!(t.answer.unwrap().value, InputValue::Text { text: "Yes, ship it".into() });
 
     let after = store.get(SYS, &id).await.unwrap();
@@ -213,36 +213,36 @@ async fn an_answer_is_refused_unknown_invalid_closed_or_removed() {
     let store = store().await;
     let id = born(&store, &format!("{}{}", decision("d", &["A"]), text("t"))).await;
     let mut rx = store.subscribe();
-    let e = store.answer("Q-99", "d", choice("a"), None, AnswerSource::Api).await.unwrap_err();
+    let e = store.answer(SYS.permit("Q-99"), "d", choice("a"), None, AnswerSource::Api).await.unwrap_err();
     assert!(matches!(e, StoreError::NotFound(ref t) if t == "Q-99"), "{e:?}");
-    let e = store.answer(&id, "nope", choice("a"), None, AnswerSource::Api).await.unwrap_err();
+    let e = store.answer(SYS.permit(&id), "nope", choice("a"), None, AnswerSource::Api).await.unwrap_err();
     assert_eq!(e.to_string(), "Q-2 declares no input 'nope' — its inputs are 'd', 't' (nothing changed)");
-    let e = store.answer("Q-1", "d", choice("a"), None, AnswerSource::Api).await.unwrap_err();
+    let e = store.answer(SYS.permit("Q-1"), "d", choice("a"), None, AnswerSource::Api).await.unwrap_err();
     assert!(e.to_string().contains("its body holds none"), "{e}");
     for (input, value, says) in [
         ("d", choice("z"), "'z' is not one of its options ('a')"),
         ("d", InputValue::Text { text: "a".into() }, "the input is a choice and the value a text"),
         ("t", InputValue::Text { text: " ".into() }, "a reply is not blank"),
     ] {
-        let e = store.answer(&id, input, value, None, AnswerSource::Api).await.unwrap_err();
+        let e = store.answer(SYS.permit(&id), input, value, None, AnswerSource::Api).await.unwrap_err();
         assert!(matches!(e, StoreError::InputInvalid { .. }), "{e:?}");
         assert!(e.to_string().contains(says) && e.to_string().starts_with(&format!("not an answer to Q-2's '{input}'")), "{e}");
     }
     assert!(drain(&mut rx).is_empty(), "no refusal is heard");
     assert!(store.inputs(SYS, Some(&id), None, None).unwrap().iter().all(|i| i.history.is_empty()), "nothing written");
 
-    changed(store.close_input(&id, "d").await.unwrap());
-    let e = store.answer(&id, "d", choice("a"), None, AnswerSource::Api).await.unwrap_err();
+    changed(store.close_input(SYS.permit(&id), "d").await.unwrap());
+    let e = store.answer(SYS.permit(&id), "d", choice("a"), None, AnswerSource::Api).await.unwrap_err();
     assert_eq!(e.to_string(), "Q-2's 'd' is closed: its answer is frozen — reopen_input it first (nothing changed)");
-    let e = store.clear_answer(&id, "d", AnswerSource::Api).await.unwrap_err();
+    let e = store.clear_answer(SYS.permit(&id), "d", AnswerSource::Api).await.unwrap_err();
     assert!(matches!(e, StoreError::InputClosed { .. }), "{e:?}");
 
     amend(&store, &id, &text("t")).await; // `d` leaves the body
     for e in [
-        store.answer(&id, "d", choice("a"), None, AnswerSource::Api).await.unwrap_err(),
-        store.clear_answer(&id, "d", AnswerSource::Api).await.unwrap_err(),
-        store.close_input(&id, "d").await.unwrap_err(),
-        store.reopen_input(&id, "d").await.unwrap_err(),
+        store.answer(SYS.permit(&id), "d", choice("a"), None, AnswerSource::Api).await.unwrap_err(),
+        store.clear_answer(SYS.permit(&id), "d", AnswerSource::Api).await.unwrap_err(),
+        store.close_input(SYS.permit(&id), "d").await.unwrap_err(),
+        store.reopen_input(SYS.permit(&id), "d").await.unwrap_err(),
     ] {
         assert!(matches!(e, StoreError::InputRemoved { .. }), "{e:?}");
         assert!(e.to_string().contains("was removed from its body"), "{e}");
@@ -256,19 +256,19 @@ async fn clear_close_and_reopen_move_the_state_and_are_history() {
     let store = store().await;
     let id = born(&store, &decision("d", &["A", "B"])).await;
     let mut rx = store.subscribe();
-    assert_eq!(unchanged(store.clear_answer(&id, "d", AnswerSource::Api).await.unwrap()).state, InputState::Open, "nothing to clear");
-    assert_eq!(unchanged(store.reopen_input(&id, "d").await.unwrap()).state, InputState::Open, "not closed");
+    assert_eq!(unchanged(store.clear_answer(SYS.permit(&id), "d", AnswerSource::Api).await.unwrap()).state, InputState::Open, "nothing to clear");
+    assert_eq!(unchanged(store.reopen_input(SYS.permit(&id), "d").await.unwrap()).state, InputState::Open, "not closed");
     assert!(drain(&mut rx).is_empty(), "a no-op is not heard");
 
-    changed(store.answer(&id, "d", choice("a"), None, AnswerSource::App).await.unwrap());
-    let d = changed(store.clear_answer(&id, "d", AnswerSource::App).await.unwrap());
+    changed(store.answer(SYS.permit(&id), "d", choice("a"), None, AnswerSource::App).await.unwrap());
+    let d = changed(store.clear_answer(SYS.permit(&id), "d", AnswerSource::App).await.unwrap());
     assert_eq!((d.state, d.answer.as_ref()), (InputState::Open, None));
-    changed(store.answer(&id, "d", choice("b"), Some("settled".into()), AnswerSource::Api).await.unwrap());
-    let d = changed(store.close_input(&id, "d").await.unwrap());
+    changed(store.answer(SYS.permit(&id), "d", choice("b"), Some("settled".into()), AnswerSource::Api).await.unwrap());
+    let d = changed(store.close_input(SYS.permit(&id), "d").await.unwrap());
     assert_eq!(d.state, InputState::Closed);
     assert_eq!(d.answer.as_ref().map(|a| &a.value), Some(&choice("b")), "closed keeps its answer");
-    assert_eq!(unchanged(store.close_input(&id, "d").await.unwrap()).state, InputState::Closed);
-    let d = changed(store.reopen_input(&id, "d").await.unwrap());
+    assert_eq!(unchanged(store.close_input(SYS.permit(&id), "d").await.unwrap()).state, InputState::Closed);
+    let d = changed(store.reopen_input(SYS.permit(&id), "d").await.unwrap());
     assert_eq!(d.state, InputState::Answered, "reopened to its answer");
     use InputAction::*;
     assert_eq!(actions(&d), [Answered, Cleared, Answered, Closed, Reopened]);
@@ -278,8 +278,8 @@ async fn clear_close_and_reopen_move_the_state_and_are_history() {
 
     // Closed without an answer, reopened to open.
     let e = born(&store, &decision("e", &["A"])).await;
-    assert_eq!(changed(store.close_input(&e, "e").await.unwrap()).state, InputState::Closed);
-    assert_eq!(changed(store.reopen_input(&e, "e").await.unwrap()).state, InputState::Open);
+    assert_eq!(changed(store.close_input(SYS.permit(&e), "e").await.unwrap()).state, InputState::Closed);
+    assert_eq!(changed(store.reopen_input(SYS.permit(&e), "e").await.unwrap()).state, InputState::Open);
 }
 
 /// Row 4: `inputs { ticket?, epic?, state? }` — every input in the store's
@@ -294,8 +294,8 @@ async fn inputs_answers_in_the_stores_order_and_filters() {
     }
     let q9 = born(&store, &format!("{}{}", decision("b", &["A"]), decision("a", &["A"]))).await;
     let q10 = born(&store, &text("c")).await;
-    store.create(ticket("R", Kind::Scope, &text("r"))).await.unwrap();
-    changed(store.answer(&q9, "a", choice("a"), None, AnswerSource::Api).await.unwrap());
+    store.create(SYS, ticket("R", Kind::Scope, &text("r"))).await.unwrap();
+    changed(store.answer(SYS.permit(&q9), "a", choice("a"), None, AnswerSource::Api).await.unwrap());
 
     let all: Vec<(String, String)> = store.inputs(SYS, None, None, None).unwrap().into_iter().map(|i| (i.ticket.into_string(), i.id.into_string())).collect();
     let pairs = |v: &[(&str, &str)]| v.iter().map(|(t, i)| (t.to_string(), i.to_string())).collect::<Vec<_>>();
@@ -332,7 +332,7 @@ async fn input_changed_comes_after_the_writes_other_events() {
     assert!(matches!(changes[0], Change::Amended { .. }));
     assert_eq!(heard(&changes), [("three".to_string(), InputState::Open), ("one".to_string(), InputState::Removed)], "an unchanged input is not heard");
 
-    changed(store.answer(&id, "two", InputValue::Text { text: "hi".into() }, None, AnswerSource::App).await.unwrap());
+    changed(store.answer(SYS.permit(&id), "two", InputValue::Text { text: "hi".into() }, None, AnswerSource::App).await.unwrap());
     let changes = drain(&mut rx);
     assert_eq!(changes.len(), 1, "{changes:?}");
     match &changes[0] {
@@ -352,8 +352,8 @@ async fn input_changed_comes_after_the_writes_other_events() {
 async fn an_input_leaving_its_body_is_removed_with_its_history() {
     let store = store().await;
     let id = born(&store, &format!("{}{}", decision("d", &["A", "B"]), text("t"))).await;
-    changed(store.answer(&id, "d", choice("b"), Some("why".into()), AnswerSource::App).await.unwrap());
-    changed(store.close_input(&id, "d").await.unwrap());
+    changed(store.answer(SYS.permit(&id), "d", choice("b"), Some("why".into()), AnswerSource::App).await.unwrap());
+    changed(store.close_input(SYS.permit(&id), "d").await.unwrap());
 
     amend(&store, &id, &text("t")).await;
     let d = one(&store, &id, "d");
@@ -379,11 +379,11 @@ async fn an_input_leaving_its_body_is_removed_with_its_history() {
 async fn an_answer_stays_when_the_body_changes_its_options() {
     let store = store().await;
     let id = born(&store, &decision("d", &["A", "B"])).await;
-    changed(store.answer(&id, "d", choice("a"), None, AnswerSource::Api).await.unwrap());
+    changed(store.answer(SYS.permit(&id), "d", choice("a"), None, AnswerSource::Api).await.unwrap());
     amend(&store, &id, &decision("d", &["B", "C"])).await;
     let d = one(&store, &id, "d");
     assert_eq!((d.state, d.answer.map(|a| a.value)), (InputState::Answered, Some(choice("a"))));
-    assert!(store.answer(&id, "d", choice("a"), None, AnswerSource::Api).await.is_err(), "a new answer is checked against the new options");
+    assert!(store.answer(SYS.permit(&id), "d", choice("a"), None, AnswerSource::Api).await.is_err(), "a new answer is checked against the new options");
 }
 
 /// The store is durable: a reopened file holds every input, its answer and
@@ -394,12 +394,12 @@ async fn inputs_and_their_history_survive_a_reopen() {
     let path = dir.path().join("inputs.db");
     let before = {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("Q", Kind::Scope, "root")).await.unwrap();
+        store.create(SYS, ticket("Q", Kind::Scope, "root")).await.unwrap();
         let id = born(&store, &format!("{}{}{}", decision("d", &["A", "B"]), multi("m", &["x", "y"]), text("t"))).await;
-        changed(store.answer(&id, "d", choice("a"), Some("r".into()), AnswerSource::App).await.unwrap());
-        changed(store.answer(&id, "m", InputValue::Multi { options: vec!["y".into()] }, None, AnswerSource::Api).await.unwrap());
-        changed(store.close_input(&id, "m").await.unwrap());
-        changed(store.answer(&id, "t", InputValue::Text { text: "a \"quoted\", reply".into() }, None, AnswerSource::Api).await.unwrap());
+        changed(store.answer(SYS.permit(&id), "d", choice("a"), Some("r".into()), AnswerSource::App).await.unwrap());
+        changed(store.answer(SYS.permit(&id), "m", InputValue::Multi { options: vec!["y".into()] }, None, AnswerSource::Api).await.unwrap());
+        changed(store.close_input(SYS.permit(&id), "m").await.unwrap());
+        changed(store.answer(SYS.permit(&id), "t", InputValue::Text { text: "a \"quoted\", reply".into() }, None, AnswerSource::Api).await.unwrap());
         amend(&store, &id, &format!("{}{}", multi("m", &["x", "y"]), decision("d", &["A", "B"]))).await; // t removed
         store.inputs(SYS, None, None, None).unwrap()
     };
@@ -410,7 +410,7 @@ async fn inputs_and_their_history_survive_a_reopen() {
     ]);
     let store = Store::open(&path).unwrap();
     assert_eq!(store.inputs(SYS, None, None, None).unwrap(), before);
-    changed(store.reopen_input("Q-2", "m").await.unwrap());
+    changed(store.reopen_input(SYS.permit("Q-2"), "m").await.unwrap());
     drop(store);
     let store = Store::open(&path).unwrap();
     assert_eq!(one(&store, "Q-2", "m").state, InputState::Answered);
@@ -427,7 +427,7 @@ async fn a_database_without_the_tables_gains_them_read_from_the_bodies() {
     let path = dir.path().join("before.db");
     {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("Q", Kind::Scope, "root")).await.unwrap();
+        store.create(SYS, ticket("Q", Kind::Scope, "root")).await.unwrap();
         born(&store, "plain").await; // Q-2: will declare two inputs
         born(&store, "plain").await; // Q-3: will hold a duplicate id
         born(&store, "plain").await; // Q-4: will hold markup in code only
@@ -456,9 +456,9 @@ async fn a_database_without_the_tables_gains_them_read_from_the_bodies() {
     ]);
     assert!(all.iter().all(|i| i.state == InputState::Open && i.history.is_empty()));
     assert_eq!(all[0].options.len(), 2);
-    let e = store.amend("Q-3", None, Some(format!("{}{}", text("x"), text("x")))).await.unwrap_err();
+    let e = store.amend(SYS.permit("Q-3"), None, Some(format!("{}{}", text("x"), text("x")))).await.unwrap_err();
     assert!(e.to_string().contains("'x' twice"), "{e}");
-    changed(store.answer("Q-2", "d", choice("a"), None, AnswerSource::Api).await.unwrap());
+    changed(store.answer(SYS.permit("Q-2"), "d", choice("a"), None, AnswerSource::Api).await.unwrap());
     drop(store);
 
     // Once: the tables are there, and the next open reads them.

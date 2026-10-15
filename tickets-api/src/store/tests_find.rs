@@ -268,7 +268,7 @@ fn answered(page: Page) -> (Vec<String>, Option<String>, u64) {
 fn find_pages_every_match_exactly_once_by_mng9s_rules() {
     let store = Store::new();
     store
-        .seed_synthetic(SeedSpec {
+        .seed_synthetic(SYS, SeedSpec {
             count: 1_500,
             seed: 6,
             into_existing: false,

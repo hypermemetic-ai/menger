@@ -29,11 +29,11 @@ fn new(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
 
 /// A shortcode's root — every shortcode starts with a scope (MNG-12).
 async fn root(store: &Store, epic: &str) -> String {
-    String::from(store.create(new(epic, Kind::Scope, &[])).await.unwrap().id)
+    String::from(store.create(SYS, new(epic, Kind::Scope, &[])).await.unwrap().id)
 }
 
 async fn build(store: &Store, epic: &str, blocked_by: &[&str]) -> String {
-    String::from(store.create(new(epic, Kind::Build, blocked_by)).await.unwrap().id)
+    String::from(store.create(SYS, new(epic, Kind::Build, blocked_by)).await.unwrap().id)
 }
 
 fn ask(store: &Store, epics: &[&str], kinds: &[Kind]) -> Waves {
@@ -75,14 +75,14 @@ async fn a_chain_is_one_two_three_and_finishing_its_head_moves_the_rest_left() {
         };
         assert_eq!(at(&store), (wave(1), wave(2), wave(3)), "the chain");
 
-        store.set_status(&a, finish).await.unwrap();
+        store.set_status(SYS.permit(&a), finish).await.unwrap();
         assert_eq!(at(&store), (Placement::Done, wave(1), wave(2)), "{finish}: A done, the rest one left");
 
-        store.set_status(&b, finish).await.unwrap();
+        store.set_status(SYS.permit(&b), finish).await.unwrap();
         assert_eq!(at(&store), (Placement::Done, Placement::Done, wave(1)), "{finish}");
 
-        store.set_status(&a, Status::Ready).await.unwrap();
-        store.set_status(&b, Status::Pending).await.unwrap();
+        store.set_status(SYS.permit(&a), Status::Ready).await.unwrap();
+        store.set_status(SYS.permit(&b), Status::Pending).await.unwrap();
         assert_eq!(at(&store), (wave(1), wave(2), wave(3)), "{finish}: undone, back where they were");
     }
 }
@@ -96,7 +96,7 @@ async fn only_complete_and_superseded_satisfy_a_blocker() {
     let a = build(&store, "SAT", &[]).await;
     let b = build(&store, "SAT", &[&a]).await;
     for s in [Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Idea, Status::Epic] {
-        store.set_status(&a, s).await.unwrap();
+        store.set_status(SYS.permit(&a), s).await.unwrap();
         assert_eq!(placements(&store, &["SAT"])[&b], wave(2), "{s} does not satisfy");
     }
 }
@@ -116,7 +116,7 @@ async fn a_diamond_takes_the_highest_wave_behind_it() {
     assert_eq!([p[&a], p[&b], p[&x], p[&c], p[&d]], [wave(1), wave(2), wave(3), wave(4), wave(5)]);
 
     // Finishing the long side shortens the diamond to its other side.
-    store.set_status(&x, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&x), Status::Complete).await.unwrap();
     let p = placements(&store, &["DI"]);
     assert_eq!([p[&c], p[&d]], [wave(2), wave(3)], "C now waits on A alone; D on B and C");
 }
@@ -181,7 +181,7 @@ async fn a_blocker_in_another_shortcode_places_the_ticket_though_only_its_own_is
     assert_eq!(answer.placed[0].waiting_on, [t2.clone()]);
     assert_eq!(answer.waves, [0, 0, 1], "waves 1 and 2 hold nothing of HERE's");
 
-    store.set_status(&t1, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&t1), Status::Complete).await.unwrap();
     assert_eq!(placements(&store, &["HERE"])[&h], wave(2), "a change elsewhere moves it");
 }
 
@@ -191,10 +191,10 @@ async fn a_blocker_in_another_shortcode_places_the_ticket_though_only_its_own_is
 async fn docs_never_appear() {
     let store = Store::new();
     root(&store, "DOCS").await;
-    store.create(new("DOCS", Kind::Doc, &[])).await.unwrap();
+    store.create(SYS, new("DOCS", Kind::Doc, &[])).await.unwrap();
     let w = build(&store, "DOCS", &[]).await;
-    let manual = store.create(new("MAN", Kind::Doc, &[])).await.unwrap().id; // a doc collection
-    store.create(new("MAN", Kind::Doc, &[])).await.unwrap();
+    let manual = store.create(SYS, new("MAN", Kind::Doc, &[])).await.unwrap().id; // a doc collection
+    store.create(SYS, new("MAN", Kind::Doc, &[])).await.unwrap();
 
     assert_eq!(ids(&ask(&store, &["DOCS", "MAN"], &DEFAULT_KINDS).placed), [w.as_str()]);
     let every = ask(&store, &["DOCS", "MAN"], &Kind::ALL);
@@ -211,9 +211,9 @@ async fn docs_never_appear() {
 async fn kinds_filter_what_is_yielded_not_what_is_followed() {
     let store = Store::new();
     let r = root(&store, "KI").await; // KI-1, a scope, wave 1
-    let s = store.create(new("KI", Kind::Spike, &[&r])).await.unwrap().id;
-    let g = store.create(new("KI", Kind::Gap, &[&s])).await.unwrap().id;
-    let e = store.create(new("KI", Kind::Execution, &[&g])).await.unwrap().id;
+    let s = store.create(SYS, new("KI", Kind::Spike, &[&r])).await.unwrap().id;
+    let g = store.create(SYS, new("KI", Kind::Gap, &[&s])).await.unwrap().id;
+    let e = store.create(SYS, new("KI", Kind::Execution, &[&g])).await.unwrap().id;
     let b = build(&store, "KI", &[&e]).await;
 
     let work = ask(&store, &["KI"], &DEFAULT_KINDS);
@@ -252,20 +252,20 @@ async fn the_yield_order_and_the_tally() {
         ("BB", Status::Coding),
     ] {
         let id = build(&store, epic, &[]).await;
-        store.set_status(&id, s).await.unwrap();
+        store.set_status(SYS.permit(&id), s).await.unwrap();
         wave1.push((s, id));
     }
     let head = wave1.iter().find(|(s, _)| *s == Status::Epic).unwrap().1.clone();
     let w2_ready = build(&store, "BB", &[&head]).await;
-    store.set_status(&w2_ready, Status::Ready).await.unwrap();
+    store.set_status(SYS.permit(&w2_ready), Status::Ready).await.unwrap();
     let w2_coding = build(&store, "BB", &[&head]).await;
-    store.set_status(&w2_coding, Status::Coding).await.unwrap();
+    store.set_status(SYS.permit(&w2_coding), Status::Coding).await.unwrap();
     let missing_b = build(&store, "BB", &["GONE-1"]).await;
     let missing_a = build(&store, "AA", &["GONE-2"]).await;
     let done_b = build(&store, "BB", &[]).await;
-    store.set_status(&done_b, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&done_b), Status::Complete).await.unwrap();
     let done_a = build(&store, "AA", &[&missing_a]).await; // done though its blocker is missing
-    store.set_status(&done_a, Status::Superseded).await.unwrap();
+    store.set_status(SYS.permit(&done_a), Status::Superseded).await.unwrap();
 
     let answer = ask(&store, &["BB", "AA"], &DEFAULT_KINDS);
     let got: Vec<&str> = ids(&answer.placed);
@@ -307,7 +307,7 @@ async fn waiting_on_is_the_unsatisfied_direct_blockers_in_order_each_once() {
     let a = build(&store, "WO", &[]).await; // WO-2
     let b = build(&store, "WO", &[]).await; // WO-3
     let c = build(&store, "WO", &[]).await; // WO-4
-    store.set_status(&b, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&b), Status::Complete).await.unwrap();
     let t = build(&store, "WO", &[&c, "WO-99", &b, &a, &c]).await;
     let answer = ask(&store, &["WO"], &DEFAULT_KINDS);
     let placed = answer.placed.iter().find(|p| p.summary.id == t).unwrap();
@@ -325,10 +325,10 @@ async fn a_blocked_status_and_a_parent_order_nothing() {
     let store = Store::new();
     root(&store, "PO").await;
     let marked = build(&store, "PO", &[]).await;
-    store.set_status(&marked, Status::Blocked).await.unwrap();
+    store.set_status(SYS.permit(&marked), Status::Blocked).await.unwrap();
     let parent = build(&store, "PO", &[]).await;
     let child = store
-        .create(NewTicket { parent: Some(parent.clone()), ..new("PO", Kind::Build, &[]) })
+        .create(SYS, NewTicket { parent: Some(parent.clone()), ..new("PO", Kind::Build, &[]) })
         .await
         .unwrap()
         .id;

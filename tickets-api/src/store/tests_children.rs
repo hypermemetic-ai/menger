@@ -159,19 +159,19 @@ fn assert_every_page_is_the_old_filters(store: &Store, parent: &str) {
 /// child moved in from a sibling, a grandchild, and statuses to filter on.
 async fn family(store: &Store) {
     let t = |epic, kind, parent| new_ticket(epic, kind, parent);
-    store.create(t("PAR", Kind::Scope, None)).await.unwrap(); // PAR-1
-    store.create(t("PAR", Kind::Build, None)).await.unwrap(); // PAR-2 → PAR-1
-    store.create(t("PAR", Kind::Build, None)).await.unwrap(); // PAR-3 → PAR-1
-    store.create(t("PAR", Kind::Build, None)).await.unwrap(); // PAR-4 → PAR-1
-    store.create(t("SUB", Kind::Scope, Some("PAR-2"))).await.unwrap(); // SUB-1 → PAR-2
-    store.create(t("AAA", Kind::Scope, Some("PAR-2"))).await.unwrap(); // AAA-1 → PAR-2
-    store.create(t("PAR", Kind::Gap, Some("PAR-2"))).await.unwrap(); // PAR-5 → PAR-2
-    store.set_parent("PAR-3", "PAR-2").await.unwrap();
-    store.set_parent("PAR-4", "PAR-3").await.unwrap();
-    store.create(t("SUB", Kind::Build, None)).await.unwrap(); // SUB-2 → SUB-1
-    store.create(t("PAR", Kind::Spike, None)).await.unwrap(); // PAR-6 → PAR-1
-    store.set_status("PAR-3", Status::Ready).await.unwrap();
-    store.set_status("AAA-1", Status::Ready).await.unwrap();
+    store.create(SYS, t("PAR", Kind::Scope, None)).await.unwrap(); // PAR-1
+    store.create(SYS, t("PAR", Kind::Build, None)).await.unwrap(); // PAR-2 → PAR-1
+    store.create(SYS, t("PAR", Kind::Build, None)).await.unwrap(); // PAR-3 → PAR-1
+    store.create(SYS, t("PAR", Kind::Build, None)).await.unwrap(); // PAR-4 → PAR-1
+    store.create(SYS, t("SUB", Kind::Scope, Some("PAR-2"))).await.unwrap(); // SUB-1 → PAR-2
+    store.create(SYS, t("AAA", Kind::Scope, Some("PAR-2"))).await.unwrap(); // AAA-1 → PAR-2
+    store.create(SYS, t("PAR", Kind::Gap, Some("PAR-2"))).await.unwrap(); // PAR-5 → PAR-2
+    store.set_parent(SYS.moving("PAR-3", "PAR-2")).await.unwrap();
+    store.set_parent(SYS.moving("PAR-4", "PAR-3")).await.unwrap();
+    store.create(SYS, t("SUB", Kind::Build, None)).await.unwrap(); // SUB-2 → SUB-1
+    store.create(SYS, t("PAR", Kind::Spike, None)).await.unwrap(); // PAR-6 → PAR-1
+    store.set_status(SYS.permit("PAR-3"), Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("AAA-1"), Status::Ready).await.unwrap();
 }
 
 /// Required behavior, row 2 and the planner's amendment: a page of
@@ -221,7 +221,7 @@ async fn a_page_of_children_is_the_old_filters_page() {
 #[tokio::test]
 async fn a_page_deep_in_a_large_parents_children_is_cut_by_position() {
     let store = Store::new();
-    store.seed_synthetic(SeedSpec { count: 20_000, seed: 1, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 20_000, seed: 1, into_existing: false }).unwrap();
     assert_children_are_a_scan(&store, "a seed");
     let root = store.groups(SYS).into_iter().max_by_key(|g| g.total).unwrap().root.unwrap();
     let n = store.get(SYS, &root).await.unwrap().child_count;
@@ -311,7 +311,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
     assert_children_are_a_scan(&store, "the family");
     // Both edges on one ticket: the parent is also the blocker.
     store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             blocked_by: vec!["PAR-6".into()],
             ..new_ticket("PAR", Kind::Build, Some("PAR-6"))
@@ -320,23 +320,23 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
         .unwrap();
     assert_children_are_a_scan(&store, "a create under its own blocker");
     // Refusals move nothing.
-    assert!(store.create(new_ticket("PAR", Kind::Build, Some("SUB-1"))).await.is_err());
-    assert!(store.set_parent("PAR-2", "PAR-4").await.is_err(), "PAR-4 is below PAR-2");
-    assert!(store.set_parent("SUB-2", "PAR-1").await.is_err(), "outside the shortcode");
+    assert!(store.create(SYS, new_ticket("PAR", Kind::Build, Some("SUB-1"))).await.is_err());
+    assert!(store.set_parent(SYS.moving("PAR-2", "PAR-4")).await.is_err(), "PAR-4 is below PAR-2");
+    assert!(store.set_parent(SYS.moving("SUB-2", "PAR-1")).await.is_err(), "outside the shortcode");
     assert_children_are_a_scan(&store, "the refusals");
     // Re-hosting a sub-shortcode root; a no-op move; moving off a cycle.
-    store.set_parent("SUB-1", "PAR-6").await.unwrap();
-    store.set_parent("SUB-1", "PAR-6").await.unwrap();
-    store.set_parent("LOOP-1", "LOOP-1").await.unwrap_err();
-    store.create(new_ticket("LOOP", Kind::Build, Some("LOOP-1"))).await.unwrap();
-    store.set_parent("LOOP-1", "HAND-1").await.unwrap(); // off the cycle
+    store.set_parent(SYS.moving("SUB-1", "PAR-6")).await.unwrap();
+    store.set_parent(SYS.moving("SUB-1", "PAR-6")).await.unwrap();
+    store.set_parent(SYS.moving("LOOP-1", "LOOP-1")).await.unwrap_err();
+    store.create(SYS, new_ticket("LOOP", Kind::Build, Some("LOOP-1"))).await.unwrap();
+    store.set_parent(SYS.moving("LOOP-1", "HAND-1")).await.unwrap(); // off the cycle
     assert_eq!(children(&store, "LOOP-2"), Vec::<String>::new());
     assert_children_are_a_scan(&store, "the moves");
     // The id two tickets already named is born: its count is theirs from birth.
     for _ in 5..9 {
-        store.create(new_ticket("HAND", Kind::Build, None)).await.unwrap();
+        store.create(SYS, new_ticket("HAND", Kind::Build, None)).await.unwrap();
     }
-    let born = store.create(new_ticket("HAND", Kind::Build, None)).await.unwrap();
+    let born = store.create(SYS, new_ticket("HAND", Kind::Build, None)).await.unwrap();
     assert_eq!((born.id.as_str(), born.child_count), ("HAND-9", 2));
     assert_children_are_a_scan(&store, "HAND-9's birth");
 
@@ -347,11 +347,11 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
     assert_children_are_a_scan(&store, "the reopen");
 
     store
-        .seed_synthetic(SeedSpec { count: 2_000, seed: 3, into_existing: true })
+        .seed_synthetic(SYS, SeedSpec { count: 2_000, seed: 3, into_existing: true })
         .unwrap();
     assert_children_are_a_scan(&store, "a seed into an existing store");
     let fresh = Store::new();
-    fresh.seed_synthetic(SeedSpec { count: 3_000, seed: 9, into_existing: false }).unwrap();
+    fresh.seed_synthetic(SYS, SeedSpec { count: 3_000, seed: 9, into_existing: false }).unwrap();
     assert_children_are_a_scan(&fresh, "a seed into an empty store");
 
     // 600 random writes: creates under a random parent in the shortcode
@@ -373,13 +373,13 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
                 } else {
                     new_ticket(epic, Kind::Build, Some(mine[rng.below(mine.len())]))
                 };
-                store.create(new).await.unwrap();
+                store.create(SYS, new).await.unwrap();
             }
             5..=7 => {
-                let _ = store.set_parent(&pick(&mut rng), &pick(&mut rng)).await;
+                let _ = store.set_parent(SYS.moving(&pick(&mut rng), &pick(&mut rng))).await;
             }
             _ => {
-                store.set_status(&pick(&mut rng), Status::Ready).await.unwrap();
+                store.set_status(SYS.permit(&pick(&mut rng)), Status::Ready).await.unwrap();
             }
         }
         if i % 50 == 49 {
@@ -404,10 +404,10 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
 #[tokio::test]
 async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
     let store = Store::new();
-    store.create(new_ticket("EV", Kind::Scope, None)).await.unwrap(); // EV-1
+    store.create(SYS, new_ticket("EV", Kind::Scope, None)).await.unwrap(); // EV-1
     let mut rx = store.subscribe();
     store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             blocked_by: vec!["EV-1".into()],
             ..new_ticket("EV", Kind::Build, None)
@@ -430,8 +430,8 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
     }
     while rx.try_change().is_ok() {}
 
-    store.create(new_ticket("EV", Kind::Build, None)).await.unwrap(); // EV-3 → EV-1
-    store.create(new_ticket("HOSTED", Kind::Scope, Some("EV-3"))).await.unwrap();
+    store.create(SYS, new_ticket("EV", Kind::Build, None)).await.unwrap(); // EV-3 → EV-1
+    store.create(SYS, new_ticket("HOSTED", Kind::Scope, Some("EV-3"))).await.unwrap();
     let parents: Vec<(String, String, u64)> = std::iter::from_fn(|| rx.try_change().ok())
         .filter_map(|c| match c {
             Change::ChildrenChanged { id, shortcode: epic, child_count, .. } => Some((id, epic.as_str().to_string(), child_count)),
@@ -444,7 +444,7 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
         "a hosted root's birth is filed under its host's shortcode"
     );
 
-    store.set_parent("EV-3", "EV-2").await.unwrap();
+    store.set_parent(SYS.moving("EV-3", "EV-2")).await.unwrap();
     let changes: Vec<Change> = std::iter::from_fn(|| rx.try_change().ok()).collect();
     match &changes[..3] {
         [Change::ParentChanged { ticket, previous }, Change::ChildrenChanged { id, added, child_count, .. }, Change::ChildRemoved { id: old, removed, child_count: left, .. }] =>
@@ -491,18 +491,18 @@ async fn a_parents_stored_row_does_not_change_when_it_gains_or_loses_children() 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("grow.db");
     let store = Store::open(&path).unwrap();
-    store.create(new_ticket("GROW", Kind::Scope, None)).await.unwrap();
-    store.create(new_ticket("GROW", Kind::Build, None)).await.unwrap(); // GROW-2
+    store.create(SYS, new_ticket("GROW", Kind::Scope, None)).await.unwrap();
+    store.create(SYS, new_ticket("GROW", Kind::Build, None)).await.unwrap(); // GROW-2
     let (root, other) = (stored_row(&path, "GROW-1"), stored_row(&path, "GROW-2"));
     assert!(!columns(&Connection::open(&path).unwrap()).contains(&"children".to_string()));
 
     for _ in 0..100 {
-        store.create(new_ticket("GROW", Kind::Build, None)).await.unwrap();
+        store.create(SYS, new_ticket("GROW", Kind::Build, None)).await.unwrap();
     }
     for i in 3..13 {
-        store.set_parent(&format!("GROW-{i}"), "GROW-2").await.unwrap();
+        store.set_parent(SYS.moving(&format!("GROW-{i}"), "GROW-2")).await.unwrap();
     }
-    store.set_parent("GROW-3", "GROW-1").await.unwrap();
+    store.set_parent(SYS.moving("GROW-3", "GROW-1")).await.unwrap();
     assert_eq!(store.get(SYS, "GROW-1").await.unwrap().child_count, 92);
     assert_eq!(store.get(SYS, "GROW-2").await.unwrap().child_count, 9);
     assert_eq!(stored_row(&path, "GROW-1"), root, "the root's row, byte for byte");

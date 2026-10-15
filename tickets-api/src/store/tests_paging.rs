@@ -56,7 +56,7 @@ async fn create_in(store: &Store, epic: &str) -> Ticket {
     } else {
         scope(epic)
     };
-    store.create(new).await.unwrap()
+    store.create(SYS, new).await.unwrap()
 }
 
 /// Writes tickets straight through the schema, `(epic, seq)` each, id
@@ -409,7 +409,7 @@ async fn remaining_is_the_count_for_random_stores_cursors_epics_and_limits() {
     }
     // A seed into it: some of its shortcodes may be the seed's own.
     store
-        .seed_synthetic(SeedSpec {
+        .seed_synthetic(SYS, SeedSpec {
             count: 400,
             seed: 3,
             into_existing: true,
@@ -420,7 +420,7 @@ async fn remaining_is_the_count_for_random_stores_cursors_epics_and_limits() {
     for seed in [1, 2] {
         let store = Store::new();
         store
-            .seed_synthetic(SeedSpec {
+            .seed_synthetic(SYS, SeedSpec {
                 count: 600,
                 seed,
                 into_existing: false,
@@ -512,22 +512,22 @@ async fn the_kept_runs_are_a_scan_after_every_path_that_brings_tickets_in() {
 
     // Creates — a new shortcode, one past a hole — then the ones that
     // change no shortcode's tickets, then a reopen and a seed into it.
-    let t = store.create(build("OLD")).await.unwrap();
+    let t = store.create(SYS, build("OLD")).await.unwrap();
     assert_eq!(t.id, "OLD-6", "past the hole, which stays");
     assert_runs_are_a_scan(&store, "a create past a hole");
-    store.create(scope("NEW")).await.unwrap();
-    store.create(build("NEW")).await.unwrap();
+    store.create(SYS, scope("NEW")).await.unwrap();
+    store.create(SYS, build("NEW")).await.unwrap();
     assert_runs_are_a_scan(&store, "a new shortcode");
     let before = store.tickets.read().unwrap().ids.runs();
-    store.set_status("NEW-2", Status::Complete).await.unwrap();
-    store.set_parent("OLD-3", "OLD-1").await.unwrap();
-    assert!(store.create(build("FRESH")).await.is_err(), "refused: no scope first");
+    store.set_status(SYS.permit("NEW-2"), Status::Complete).await.unwrap();
+    store.set_parent(SYS.moving("OLD-3", "OLD-1")).await.unwrap();
+    assert!(store.create(SYS, build("FRESH")).await.is_err(), "refused: no scope first");
     assert_eq!(store.tickets.read().unwrap().ids.runs(), before, "nothing moved");
     drop(store);
     let store = Store::open(&path).unwrap();
     assert_eq!(store.tickets.read().unwrap().ids.runs(), before, "a reopen rebuilds what was kept");
     store
-        .seed_synthetic(SeedSpec {
+        .seed_synthetic(SYS, SeedSpec {
             count: 300,
             seed: 4,
             into_existing: true,
@@ -537,7 +537,7 @@ async fn the_kept_runs_are_a_scan_after_every_path_that_brings_tickets_in() {
 
     let fresh = Store::new();
     fresh
-        .seed_synthetic(SeedSpec {
+        .seed_synthetic(SYS, SeedSpec {
             count: 2_000,
             seed: 9,
             into_existing: false,
@@ -555,13 +555,13 @@ async fn the_kept_runs_are_a_scan_after_every_path_that_brings_tickets_in() {
 #[tokio::test]
 async fn racing_creates_keep_the_runs_and_the_pages_exact() {
     let store = Arc::new(Store::new());
-    store.create(scope("RACE")).await.unwrap();
-    store.create(scope("PACE")).await.unwrap();
+    store.create(SYS, scope("RACE")).await.unwrap();
+    store.create(SYS, scope("PACE")).await.unwrap();
     let mut handles = Vec::new();
     for i in 0..40 {
         let store = store.clone();
         let epic = if i % 3 == 0 { "PACE" } else { "RACE" };
-        handles.push(tokio::spawn(async move { store.create(build(epic)).await.unwrap() }));
+        handles.push(tokio::spawn(async move { store.create(SYS, build(epic)).await.unwrap() }));
     }
     for h in handles {
         h.await.unwrap();

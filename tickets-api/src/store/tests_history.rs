@@ -77,8 +77,8 @@ async fn every_change_of_a_status_or_a_kind_is_a_transition() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("log.db");
     let store = Store::open(&path).unwrap();
-    store.create_by(ticket("LG", "root", Kind::Scope, None, ""), act("ada", TransitionSource::App)).await.unwrap();
-    store.create(ticket("LG", "work", Kind::Build, None, "")).await.unwrap();
+    store.create_by(SYS, ticket("LG", "root", Kind::Scope, None, ""), act("ada", TransitionSource::App)).await.unwrap();
+    store.create(SYS, ticket("LG", "work", Kind::Build, None, "")).await.unwrap();
     let t = own(&store, "LG-1");
     assert_eq!(t.len(), 1);
     assert_eq!((t[0].field, t[0].from.as_deref(), t[0].to.as_str()), (TransitionField::Status, None, "Pending"));
@@ -86,15 +86,15 @@ async fn every_change_of_a_status_or_a_kind_is_a_transition() {
     assert_eq!(own(&store, "LG-2")[0].actor, "anonymous", "login off: anonymous, from the api");
 
     let mut said = Act { message: Some("starting".into()), name: Some("Bob".into()), ..act("idp:bob", TransitionSource::Api) };
-    store.set_status_by("LG-2", Status::Coding, said.clone(), false).await.unwrap();
+    store.set_status_by(SYS.permit("LG-2"), Status::Coding, said.clone(), false).await.unwrap();
     said.message = None;
-    store.set_status_by("LG-2", Status::Coding, said, false).await.unwrap();
+    store.set_status_by(SYS.permit("LG-2"), Status::Coding, said, false).await.unwrap();
     let t = own(&store, "LG-2");
     assert_eq!(t.len(), 2, "the same status again is no transition: {t:?}");
     assert_eq!((t[1].from.as_deref(), t[1].to.as_str()), (Some("Pending"), "Coding"));
     assert_eq!((t[1].actor.as_str(), t[1].name.as_deref(), t[1].message.as_deref()), ("idp:bob", Some("Bob"), Some("starting")));
 
-    store.set_kind_by("LG-2", Kind::Gap, Some(Status::Complete), act("ada", TransitionSource::Pipeline)).await.unwrap();
+    store.set_kind_by(SYS.permit("LG-2"), Kind::Gap, Some(Status::Complete), act("ada", TransitionSource::Pipeline)).await.unwrap();
     let t = own(&store, "LG-2");
     assert_eq!(t.len(), 4);
     assert_eq!((t[2].field, t[2].from.as_deref(), t[2].to.as_str()), (TransitionField::Kind, Some("build"), "gap"));
@@ -116,18 +116,18 @@ async fn every_change_of_a_status_or_a_kind_is_a_transition() {
 /// answered); R-5 Complete; R-6 a doc; R-7 canceled on its own; R-8 an
 /// open build elsewhere.
 async fn tree(store: &Store) {
-    store.create(ticket("R", "root", Kind::Scope, None, "")).await.unwrap();
-    store.create(ticket("R", "parent", Kind::Build, Some("R-1"), &decision("own"))).await.unwrap();
-    store.create(ticket("R", "child", Kind::Build, Some("R-2"), &decision("ask"))).await.unwrap();
-    store.create(ticket("R", "grandchild", Kind::Execution, Some("R-3"), &decision("done"))).await.unwrap();
-    store.create(ticket("R", "finished", Kind::Build, Some("R-2"), "")).await.unwrap();
-    store.create(ticket("R", "a doc", Kind::Doc, Some("R-2"), "")).await.unwrap();
-    store.create(ticket("R", "dropped before", Kind::Spike, Some("R-2"), "")).await.unwrap();
-    store.create(ticket("R", "elsewhere", Kind::Build, Some("R-1"), "")).await.unwrap();
-    store.set_status("R-4", Status::Coding).await.unwrap();
-    store.answer("R-4", "done", InputValue::Choice { option: "yes".into() }, None, AnswerSource::Api).await.unwrap();
-    store.set_status("R-5", Status::Complete).await.unwrap();
-    store.set_status("R-7", Status::Canceled).await.unwrap();
+    store.create(SYS, ticket("R", "root", Kind::Scope, None, "")).await.unwrap();
+    store.create(SYS, ticket("R", "parent", Kind::Build, Some("R-1"), &decision("own"))).await.unwrap();
+    store.create(SYS, ticket("R", "child", Kind::Build, Some("R-2"), &decision("ask"))).await.unwrap();
+    store.create(SYS, ticket("R", "grandchild", Kind::Execution, Some("R-3"), &decision("done"))).await.unwrap();
+    store.create(SYS, ticket("R", "finished", Kind::Build, Some("R-2"), "")).await.unwrap();
+    store.create(SYS, ticket("R", "a doc", Kind::Doc, Some("R-2"), "")).await.unwrap();
+    store.create(SYS, ticket("R", "dropped before", Kind::Spike, Some("R-2"), "")).await.unwrap();
+    store.create(SYS, ticket("R", "elsewhere", Kind::Build, Some("R-1"), "")).await.unwrap();
+    store.set_status(SYS.permit("R-4"), Status::Coding).await.unwrap();
+    store.answer(SYS.permit("R-4"), "done", InputValue::Choice { option: "yes".into() }, None, AnswerSource::Api).await.unwrap();
+    store.set_status(SYS.permit("R-5"), Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("R-7"), Status::Canceled).await.unwrap();
 }
 
 /// Canceling a ticket cancels its open descendants in the same write: each
@@ -144,7 +144,7 @@ async fn canceling_cascades_through_the_open_work_below() {
     assert_eq!(admitted(&store, "asking", Clock::default()), ["R-2", "R-3"]);
     let mut rx = store.subscribe();
     let ada = Act { name: Some("Ada".into()), message: Some("folded into R-8".into()), ..act("idp:ada", TransitionSource::App) };
-    let answer = store.set_status_by("R-2", Status::Canceled, ada, false).await.unwrap();
+    let answer = store.set_status_by(SYS.permit("R-2"), Status::Canceled, ada, false).await.unwrap();
     assert!(matches!(&answer, Change::StatusChanged { ticket, previous: Status::Pending } if ticket.id == "R-2"), "{answer:?}");
 
     for (id, want) in [
@@ -183,7 +183,7 @@ async fn canceling_cascades_through_the_open_work_below() {
     assert!(store.inputs(SYS, None, None, Some(InputState::Open)).unwrap().is_empty(), "nothing waits");
     assert!(admitted(&store, "asking", Clock::default()).is_empty(), "a withdrawn input asks no one");
     assert!(matches!(
-        store.answer("R-3", "ask", InputValue::Choice { option: "yes".into() }, None, AnswerSource::Api).await,
+        store.answer(SYS.permit("R-3"), "ask", InputValue::Choice { option: "yes".into() }, None, AnswerSource::Api).await,
         Err(StoreError::InputWithdrawn { .. })
     ));
 
@@ -221,10 +221,10 @@ async fn canceling_cascades_through_the_open_work_below() {
 async fn restoring_brings_back_exactly_what_the_cancel_canceled() {
     let store = Store::new();
     tree(&store).await;
-    store.set_status("R-2", Status::Canceled).await.unwrap();
-    store.set_status("R-4", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("R-2"), Status::Canceled).await.unwrap();
+    store.set_status(SYS.permit("R-4"), Status::Ready).await.unwrap();
     assert_eq!(store.history(SYS, "R-2").unwrap().restorable, ["R-3"], "R-4 moved since");
-    store.set_status_by("R-2", Status::Ready, act("idp:ada", TransitionSource::Api), true).await.unwrap();
+    store.set_status_by(SYS.permit("R-2"), Status::Ready, act("idp:ada", TransitionSource::Api), true).await.unwrap();
     assert_eq!(status(&store, "R-2"), Status::Ready);
     assert_eq!(status(&store, "R-3"), Status::Pending, "back to what it had");
     assert_eq!(status(&store, "R-4"), Status::Ready, "moved since: as it was moved");
@@ -240,16 +240,16 @@ async fn restoring_brings_back_exactly_what_the_cancel_canceled() {
     assert_eq!(admitted(&store, "asking", Clock::default()), ["R-2", "R-3"]);
 
     // Without restore_children: the ticket, its inputs, nothing below.
-    store.set_status("R-2", Status::Canceled).await.unwrap();
-    store.set_status("R-2", Status::Pending).await.unwrap();
+    store.set_status(SYS.permit("R-2"), Status::Canceled).await.unwrap();
+    store.set_status(SYS.permit("R-2"), Status::Pending).await.unwrap();
     assert_eq!((status(&store, "R-2"), status(&store, "R-3"), status(&store, "R-4")), (Status::Pending, Status::Canceled, Status::Canceled));
     assert_eq!((input_state(&store, "R-2", "own"), input_state(&store, "R-3", "ask")), (InputState::Open, InputState::Withdrawn));
     assert!(store.history(SYS, "R-2").unwrap().restorable.is_empty(), "restorable only while canceled");
 
     // A body written while canceled declares its new inputs withdrawn.
-    store.amend("R-3", None, Some(format!("{}{}", decision("ask"), decision("later")))).await.unwrap();
+    store.amend(SYS.permit("R-3"), None, Some(format!("{}{}", decision("ask"), decision("later")))).await.unwrap();
     assert_eq!(input_state(&store, "R-3", "later"), InputState::Withdrawn);
-    store.set_status("R-3", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("R-3"), Status::Ready).await.unwrap();
     assert_eq!((input_state(&store, "R-3", "ask"), input_state(&store, "R-3", "later")), (InputState::Open, InputState::Open));
 }
 
@@ -275,13 +275,13 @@ async fn cascades_and_restores_keep_every_kept_structure_a_scan() {
                 let t = canceled[rng.below(canceled.len())];
                 let to = [Status::Pending, Status::Ready, Status::Coding][rng.below(3)];
                 let all = rng.below(3) != 0;
-                store.set_status_by(&t.id, to, Act::default(), all).await.unwrap();
+                store.set_status_by(SYS.permit(&t.id), to, Act::default(), all).await.unwrap();
                 restores += 1;
                 format!("restore {} to {to} (children: {all})", t.id)
             } else if !work.is_empty() {
                 let t = work[rng.below(work.len())];
                 let before = own(&store, &t.id).last().map(|x| x.id);
-                store.set_status(&t.id, Status::Canceled).await.unwrap();
+                store.set_status(SYS.permit(&t.id), Status::Canceled).await.unwrap();
                 cancels += 1;
                 if let Some(c) = own(&store, &t.id).last().filter(|x| Some(x.id) != before) {
                     cascaded += store.tickets.read().unwrap().log.caused_by(c.id).len();
@@ -322,8 +322,8 @@ async fn verify_names_a_log_that_disagrees_with_its_tickets() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("edited.db");
     let store = Store::open(&path).unwrap();
-    store.create(ticket("VE", "root", Kind::Scope, None, "")).await.unwrap();
-    store.set_status("VE-1", Status::Ready).await.unwrap();
+    store.create(SYS, ticket("VE", "root", Kind::Scope, None, "")).await.unwrap();
+    store.set_status(SYS.permit("VE-1"), Status::Ready).await.unwrap();
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { transitions: Some(2), .. }));
     let conn = rusqlite::Connection::open(&path).unwrap();
@@ -460,11 +460,11 @@ fn the_kept_indexes_answer_as_a_scan() {
 async fn the_examples_read_the_log() {
     let store = Store::new();
     tree(&store).await;
-    store.set_status("R-8", Status::InReview).await.unwrap();
-    store.set_status("R-3", Status::Coding).await.unwrap();
-    store.set_status("R-3", Status::InReview).await.unwrap();
-    store.set_status("R-3", Status::Ready).await.unwrap();
-    store.set_status_by("R-2", Status::Canceled, act("idp:ada", TransitionSource::App), false).await.unwrap();
+    store.set_status(SYS.permit("R-8"), Status::InReview).await.unwrap();
+    store.set_status(SYS.permit("R-3"), Status::Coding).await.unwrap();
+    store.set_status(SYS.permit("R-3"), Status::InReview).await.unwrap();
+    store.set_status(SYS.permit("R-3"), Status::Ready).await.unwrap();
+    store.set_status_by(SYS.permit("R-2"), Status::Canceled, act("idp:ada", TransitionSource::App), false).await.unwrap();
     let now = chrono::Utc::now().timestamp();
     let clock = at(now);
     assert_eq!(admitted(&store, "status \"In Review\" and entered \"In Review\" within 12h", clock.clone()), ["R-8"]);
@@ -508,7 +508,7 @@ async fn a_history_watch_hears_each_writes_transition() {
     let lens = Lens::parse("entered Coding within 1h").unwrap();
     let mut watcher = store.watcher(lens);
     let mut rx = store.subscribe_filtered();
-    store.set_status("R-8", Status::Coding).await.unwrap();
+    store.set_status(SYS.permit("R-8"), Status::Coding).await.unwrap();
     let mut heard = Vec::new();
     while let Ok(c) = rx.try_change() {
         if let Change::UnderMoved { moves } = c {

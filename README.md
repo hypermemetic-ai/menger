@@ -1950,6 +1950,44 @@ reach is compiled once a watch (and again when it moves) — not parsed per
 change; `store/tests_watching.rs` measures many watchers hearing many
 changes.
 
+### Writes through a permit (ACCESS-11)
+
+Every public write of the store takes the **proof** that its caller may
+make it, and the proof carries what it is for
+(`tickets-api/src/store/writs.rs`): a `Permit<R>` its ticket's id — the
+write changes that ticket and no other, *the ticket checked is the ticket
+written* — an `AdminOf` or an `On<R>` its scope, or the `System` (the code
+that opened the store: seeding, the purge, the access layer's own
+`auth.grant` / `auth.revoke` / `auth.role_set`, tests). An id is not a
+permit, a permit for one ticket cannot be made for another, and a viewer's
+is not an editor's (`compile_fail` doctests). The activations mint the
+proofs through the `VerifiedUser` (`activation/writes.rs`); the store checks,
+under its write-serial lock, that what the write is given names exactly
+what its proofs are for — a stale or mismatched proof writes nothing.
+
+| write | takes |
+|---|---|
+| `set_status`, `set_kind`, `amend`, `link_commits`, `unlink_commits`, `label`, `answer`, `clear_answer`, `close_input`, `reopen_input`, `queue`, `unqueue`, `snooze`, `request_changes` | `Permit<Editor>` for the ticket |
+| `create`, `notes.upgrade` | a `Filing`: editor's permit on the parent (else the shortcode's root); a new shortcode, `On<Editor>` `*` or its organization; a viewer's permit per `blocked_by` — or a forward reference, minted only for one who would see the ticket if it were one (it holds the whole shortcode) |
+| `set_parent` | a `Move`: editor's permits on the child, the parent it has now (checked under the lock: one that moved since refuses) and the one it goes to; a shortcode's root re-hosts it, so `AdminOf` the host it leaves (itself, hanging nowhere) and the one it joins |
+| `update` | an `Updating`: the ticket's permit, a `Move`'s proofs for a parent, a blocker proof per id it blocks or unblocks (in another shortcode, the editor's too) |
+| `update_many`, `label` / `link_commits` over `ids`, `reshortcode` | an editor's permit per ticket selected (the store checks they are exactly its selection) |
+| `delete` | `Permit<Admin>` per ticket that goes; `undelete`, `AdminOf` each one's shortcode |
+| `comments.add` / `resolve` / `reopen` | a viewer's (an editor's) permit on the comment's ticket; nothing more for a comment on the app |
+| `members.grant` / `revoke` | `AdminOf` exactly its scope, minted while login is on — with login off a grant would be planted for when it turns on (ACCESS-3 #11), and is refused |
+| `orgs.create` · `rename` · `delete` | `AdminOf` `*` · the organization (or `*`) |
+| `themes.define` · `themes.set` | `On<Editor>` `*` · `AdminOf` `*` for the site, `On<Editor>` the shortcode |
+| `deployments.record` | `On<Deployer>` the project's shortcode |
+
+What a caller may not see is answered as what is not there: a permit for a
+hidden ticket is `not_found`, exactly as a missing one, and a refusal names
+no ticket out of reach — a doc's place in the graph, a parent chain, a
+component's owner, a shortcode's root, a path's holder, the id a birth would
+take (ACCESS-3 #8; one who sees everything hears them whole). For a caller
+allowed to write nothing on the wire changed. `store/tests_writs.rs` holds
+the proofs' rule and ACCESS-3 #1, #2, #11; `tests/members.rs` #2 and #8 over
+the socket.
+
 ### Addresses and namespaces (ORG-3)
 
 A shortcode is unique only within its **namespace** — its organization and

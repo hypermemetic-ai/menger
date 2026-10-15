@@ -23,9 +23,7 @@ fn refused(store: &Store, caller: &VerifiedUser, id: String, e: StoreError) -> T
         StoreError::NotFound(_) => TicketsEvent::NotFound { id },
         // ORG-3: a name that fits several, each by its full address.
         e @ StoreError::Ambiguous { .. } => refusal(e),
-        e => {
-            TicketsEvent::Error { message: redacted(e, |id| sees_id(store, &caller.sight(), id)) }
-        }
+        e => said(store, caller, e),
     }
 }
 
@@ -46,20 +44,28 @@ pub(super) fn queue_stream(
     source: Option<CallerSource>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let (caller, act) = match admitted.and_then(|c| act_of(&c, source, None).map(|a| (c, a))) {
+        // ACCESS-11: the editor's permit for `id`; the store writes it.
+        let (caller, on) = match admit_on::<crate::access::Editor>(&store, admitted, &id) {
             Ok(x) => x,
+            Err(ev) => {
+                yield ev;
+                return;
+            }
+        };
+        let act = match act_of(&caller, source, None) {
+            Ok(a) => a,
             Err(message) => {
                 yield TicketsEvent::Error { message };
                 return;
             }
         };
         let answer = match ask {
-            Ask::Queue { urgency, reason, input } => store.queue_by(&id, urgency, &reason, input.as_deref(), act).await.map(wire),
+            Ask::Queue { urgency, reason, input } => store.queue_by(on, urgency, &reason, input.as_deref(), act).await.map(wire),
             Ask::Unqueue => store
-                .unqueue_by(&id, act)
+                .unqueue_by(on, act)
                 .await
                 .map(|c| c.map_or_else(|| TicketsEvent::NotQueued { id: id.trim().to_ascii_uppercase() }, wire)),
-            Ask::Snooze { minutes } => store.snooze_by(&id, minutes, act).await.map(wire),
+            Ask::Snooze { minutes } => store.snooze_by(on, minutes, act).await.map(wire),
         };
         match answer {
             Ok(ev) => yield ev,
@@ -79,14 +85,22 @@ pub(super) fn request_changes_stream(
     source: Option<CallerSource>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let (caller, act) = match admitted.and_then(|c| act_of(&c, source, None).map(|a| (c, a))) {
+        // ACCESS-11: the editor's permit for `id`; the store writes it.
+        let (caller, on) = match admit_on::<crate::access::Editor>(&store, admitted, &id) {
             Ok(x) => x,
+            Err(ev) => {
+                yield ev;
+                return;
+            }
+        };
+        let act = match act_of(&caller, source, None) {
+            Ok(a) => a,
             Err(message) => {
                 yield TicketsEvent::Error { message };
                 return;
             }
         };
-        match store.request_changes_by(&id, body, caller.name().map(str::to_string), caller.principal_text(), act).await {
+        match store.request_changes_by(on, body, caller.name().map(str::to_string), caller.principal_text(), act).await {
             Ok((comment, QueueChange::Unqueued { id, entry, by, at_unix, .. })) => yield TicketsEvent::ChangesRequested { id, comment, entry, by, at_unix },
             Ok((_, other)) => yield wire(other),
             Err(e) => yield refused(&store, &caller, id, e),

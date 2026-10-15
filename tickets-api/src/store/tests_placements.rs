@@ -45,7 +45,7 @@ fn new(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
 }
 
 async fn build(store: &Store, epic: &str, blocked_by: &[&str]) -> String {
-    String::from(store.create(new(epic, Kind::Build, blocked_by)).await.unwrap().id)
+    String::from(store.create(SYS, new(epic, Kind::Build, blocked_by)).await.unwrap().id)
 }
 
 fn wave(n: u32) -> Placement {
@@ -138,7 +138,7 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
         let mut mirror: BTreeMap<String, Option<Placement>> = BTreeMap::new();
         let mut ids: Vec<String> = Vec::new();
         for e in EPICS {
-            let t = store.create(new(e, Kind::Scope, &[])).await.unwrap();
+            let t = store.create(SYS, new(e, Kind::Scope, &[])).await.unwrap();
             mirror.insert(t.id.to_string(), t.placement);
             ids.push(String::from(t.id));
         }
@@ -180,7 +180,7 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
                 what = format!("create {epic} {kind:?} blocked by {refs:?}");
                 // A cycle, a doc named, a doc born as an awaited id: refused,
                 // as `create` refuses them — nothing changed.
-                match store.create(new(epic, kind, &refs)).await {
+                match store.create(SYS, new(epic, kind, &refs)).await {
                     Ok(t) => ids.push(String::from(t.id)),
                     Err(e) => {
                         let heard = drain(&mut rx);
@@ -196,7 +196,7 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
                     STATUSES[rng.below(STATUSES.len())]
                 };
                 what = format!("set_status {id} {status}");
-                if let Err(e) = store.set_status(&id, status).await {
+                if let Err(e) = store.set_status(SYS.permit(&id), status).await {
                     // A doc: no lifecycle.
                     let heard = drain(&mut rx);
                     assert!(heard.is_empty(), "a refusal says nothing: {what}: {e}: {heard:?}");
@@ -253,14 +253,14 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
 #[tokio::test]
 async fn completing_a_blocker_two_back_moves_the_card_in_one_placements_changed() {
     let store = Store::new();
-    store.create(new("TB", Kind::Scope, &[])).await.unwrap();
+    store.create(SYS, new("TB", Kind::Scope, &[])).await.unwrap();
     let y = build(&store, "TB", &[]).await;
     let x = build(&store, "TB", &[&y]).await;
     let c = build(&store, "TB", &[&x]).await;
     assert_eq!((kept(&store, &y), kept(&store, &x), kept(&store, &c)), (Some(wave(1)), Some(wave(2)), Some(wave(3))));
 
     let mut rx = store.subscribe();
-    store.set_status(&y, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&y), Status::Complete).await.unwrap();
     let heard = drain(&mut rx);
     match &heard[0] {
         Change::StatusChanged { ticket, .. } => assert_eq!(ticket.placement, Some(Placement::Done)),
@@ -272,14 +272,14 @@ async fn completing_a_blocker_two_back_moves_the_card_in_one_placements_changed(
     );
     assert_eq!((kept(&store, &x), kept(&store, &c)), (Some(wave(1)), Some(wave(2))));
 
-    store.set_status(&y, Status::Ready).await.unwrap();
+    store.set_status(SYS.permit(&y), Status::Ready).await.unwrap();
     assert_eq!(
         placed(&drain(&mut rx)).unwrap(),
         vec![(y.clone(), wave(1)), (x.clone(), wave(2)), (c.clone(), wave(3))],
         "a reopening moves them back"
     );
     // A status change that stays on one side of the line moves nothing.
-    store.set_status(&y, Status::Coding).await.unwrap();
+    store.set_status(SYS.permit(&y), Status::Coding).await.unwrap();
     assert_eq!(placed(&drain(&mut rx)), None);
     assert_kept_placements_are_the_rule(&store, "the two-back case");
 }
@@ -290,7 +290,7 @@ async fn completing_a_blocker_two_back_moves_the_card_in_one_placements_changed(
 #[tokio::test]
 async fn the_pass_stops_where_nothing_moves() {
     let store = Store::new();
-    store.create(new("ST", Kind::Scope, &[])).await.unwrap();
+    store.create(SYS, new("ST", Kind::Scope, &[])).await.unwrap();
     let a = build(&store, "ST", &[]).await;
     let h1 = build(&store, "ST", &[]).await;
     let h2 = build(&store, "ST", &[&h1]).await;
@@ -314,11 +314,11 @@ async fn the_pass_stops_where_nothing_moves() {
     assert_eq!(replaced.shifts.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), [a.as_str()]);
 
     let mut rx = store.subscribe();
-    store.set_status(&a, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&a), Status::Complete).await.unwrap();
     assert_eq!(placed(&drain(&mut rx)).unwrap(), vec![(a.clone(), Placement::Done)]);
     assert_eq!(kept(&store, &behind), Some(wave(54)));
     // The long wait ends: everything behind it moves, each once.
-    store.set_status(&h1, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&h1), Status::Complete).await.unwrap();
     let moved = placed(&drain(&mut rx)).unwrap();
     assert_eq!(moved.len(), 54, "H1, H2, H3, D and the fifty behind D");
     assert_eq!(moved.last(), Some(&(behind.clone(), wave(53))), "D in wave 3 now, fifty behind it");
@@ -332,13 +332,13 @@ async fn the_pass_stops_where_nothing_moves() {
 #[tokio::test]
 async fn a_birth_resolves_what_a_forward_reference_held_missing() {
     let store = Store::new();
-    store.create(new("FW", Kind::Scope, &[])).await.unwrap();
+    store.create(SYS, new("FW", Kind::Scope, &[])).await.unwrap();
     let t = build(&store, "FW", &["FW-4"]).await; // FW-2
     let u = build(&store, "FW", &[&t]).await; // FW-3
     assert_eq!((kept(&store, &t), kept(&store, &u)), (Some(Placement::MissingBlocker), Some(Placement::MissingBlocker)));
 
     let mut rx = store.subscribe();
-    let born = store.create(new("FW", Kind::Build, &[])).await.unwrap();
+    let born = store.create(SYS, new("FW", Kind::Build, &[])).await.unwrap();
     assert_eq!(born.id, "FW-4");
     assert_eq!(born.placement, Some(wave(1)), "born placed");
     let heard = drain(&mut rx);
@@ -353,7 +353,7 @@ async fn a_birth_resolves_what_a_forward_reference_held_missing() {
     build(&store, "FW", &[&u]).await;
     assert_eq!(placed(&drain(&mut rx)), None);
     // A doc is placed nowhere.
-    let doc = store.create(new("FW", Kind::Doc, &[])).await.unwrap();
+    let doc = store.create(SYS, new("FW", Kind::Doc, &[])).await.unwrap();
     assert_eq!(doc.placement, None);
     assert_eq!(placed(&drain(&mut rx)), None);
     assert_kept_placements_are_the_rule(&store, "the forward reference");
@@ -369,11 +369,11 @@ async fn reopening_a_hand_edited_cycle_gives_way_to_the_whole_store() {
     let path = dir.path().join("cycle.db");
     {
         let store = Store::open(&path).unwrap();
-        store.create(new("CY", Kind::Scope, &[])).await.unwrap();
+        store.create(SYS, new("CY", Kind::Scope, &[])).await.unwrap();
         let a = build(&store, "CY", &[]).await; // CY-2
         build(&store, "CY", &[&a]).await; // CY-3, waits on CY-2
         build(&store, "CY", &["CY-3"]).await; // CY-4, behind them
-        store.set_status(&a, Status::Complete).await.unwrap();
+        store.set_status(SYS.permit(&a), Status::Complete).await.unwrap();
     }
     {
         // By hand, both ends mirrored: CY-2 waits on CY-3 too.
@@ -396,7 +396,7 @@ async fn reopening_a_hand_edited_cycle_gives_way_to_the_whole_store() {
     };
     assert!(replaced.whole, "the walk gave way");
     let mut rx = store.subscribe();
-    store.set_status("CY-2", Status::Pending).await.unwrap();
+    store.set_status(SYS.permit("CY-2"), Status::Pending).await.unwrap();
     assert_eq!(
         placed(&drain(&mut rx)).unwrap(),
         vec![
@@ -416,13 +416,13 @@ async fn placements_are_placed_again_at_open() {
     let path = dir.path().join("reopen.db");
     let before: BTreeMap<String, Option<Placement>> = {
         let store = Store::open(&path).unwrap();
-        store.create(new("RO", Kind::Scope, &[])).await.unwrap();
+        store.create(SYS, new("RO", Kind::Scope, &[])).await.unwrap();
         let a = build(&store, "RO", &[]).await;
         let b = build(&store, "RO", &[&a, "RO-9"]).await;
         build(&store, "RO", &[&b]).await;
         let c = build(&store, "RO", &[&a]).await;
-        store.create(new("RO", Kind::Doc, &[])).await.unwrap();
-        store.set_status(&a, Status::Superseded).await.unwrap();
+        store.create(SYS, new("RO", Kind::Doc, &[])).await.unwrap();
+        store.set_status(SYS.permit(&a), Status::Superseded).await.unwrap();
         build(&store, "RO", &[&c]).await;
         let cache = store.tickets.read().unwrap();
         cache.order.values().map(|t| (t.id.to_string(), t.placement)).collect()
@@ -447,14 +447,14 @@ async fn placements_are_placed_again_at_open() {
 #[tokio::test]
 async fn watch_by_epic_keeps_the_changes_in_its_shortcode() {
     let store = Store::new();
-    store.create(new("UP", Kind::Scope, &[])).await.unwrap();
-    store.create(new("DN", Kind::Scope, &[])).await.unwrap();
-    store.create(new("NO", Kind::Scope, &[])).await.unwrap();
+    store.create(SYS, new("UP", Kind::Scope, &[])).await.unwrap();
+    store.create(SYS, new("DN", Kind::Scope, &[])).await.unwrap();
+    store.create(SYS, new("NO", Kind::Scope, &[])).await.unwrap();
     let up = build(&store, "UP", &[]).await;
     let near = build(&store, "UP", &[&up]).await;
     let far = build(&store, "DN", &[&near]).await;
     let mut rx = store.subscribe();
-    store.set_status(&up, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&up), Status::Complete).await.unwrap();
     let change = drain(&mut rx).pop().unwrap();
     let ids = |c: Option<Change>| match c {
         Some(Change::PlacementsChanged { changes }) => changes.into_iter().map(|(_, c)| c.id).collect::<Vec<_>>(),

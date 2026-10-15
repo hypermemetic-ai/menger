@@ -534,7 +534,7 @@ async fn filtered_answers_are_a_scan_on_a_seeded_store() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 2_000, seed: 41, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 2_000, seed: 41, into_existing: false }).unwrap();
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(5).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     walk(store, &path, 0x5EED_F4A2, 200, 20, &epics).await;
@@ -563,7 +563,7 @@ async fn membership_is_the_scans_difference() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("member.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 600, seed: 7, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 600, seed: 7, into_existing: false }).unwrap();
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).collect();
     let mut rng = Rng(0x3E3B);
     let lenses: Vec<(Lens, Formula)> = (0..6).map(|_| random_lens(&mut rng, &epics)).collect();

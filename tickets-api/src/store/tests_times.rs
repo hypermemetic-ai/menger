@@ -239,13 +239,13 @@ async fn every_write_keeps_the_times_and_verify_checks_them() {
         path: None,
         body: String::new(),
     };
-    store.create(scope("T")).await.unwrap();
-    store.create(t("one", None)).await.unwrap();
-    store.create(t("two", Some("T-2"))).await.unwrap();
-    store.create(t("three", Some("T-2"))).await.unwrap();
-    store.set_status("T-3", Status::Ready).await.unwrap();
-    store.set_status("T-2", Status::Canceled).await.unwrap();
-    store.amend("T-4", None, Some("a body".into())).await.unwrap();
+    store.create(SYS, scope("T")).await.unwrap();
+    store.create(SYS, t("one", None)).await.unwrap();
+    store.create(SYS, t("two", Some("T-2"))).await.unwrap();
+    store.create(SYS, t("three", Some("T-2"))).await.unwrap();
+    store.set_status(SYS.permit("T-3"), Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("T-2"), Status::Canceled).await.unwrap();
+    store.amend(SYS.permit("T-4"), None, Some("a body".into())).await.unwrap();
     let fresh = |store: &Store| {
         let cache = store.tickets.read().unwrap();
         cache.log.check_times(cache.order.values())
@@ -285,11 +285,11 @@ async fn the_acceptance_filters_on_a_file_from_before_the_log() {
         path: None,
         body: String::new(),
     };
-    store.create(scope("O")).await.unwrap();
+    store.create(SYS, scope("O")).await.unwrap();
     for title in ["old pending", "old pending edited", "old ready", "new"] {
-        store.create(n(title)).await.unwrap();
+        store.create(SYS, n(title)).await.unwrap();
     }
-    store.set_status("O-4", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("O-4"), Status::Ready).await.unwrap();
     drop(store);
     let now = chrono::Utc::now().timestamp();
     {
@@ -302,8 +302,8 @@ async fn the_acceptance_filters_on_a_file_from_before_the_log() {
     }
     let store = Store::open(&path).unwrap();
     // O-4 had been Ready since before the log; it moves now.
-    store.set_status("O-4", Status::Pending).await.unwrap();
-    store.set_status("O-5", Status::Coding).await.unwrap();
+    store.set_status(SYS.permit("O-4"), Status::Pending).await.unwrap();
+    store.set_status(SYS.permit("O-5"), Status::Coding).await.unwrap();
     let clock = at(now + 60);
     assert_eq!(ids(&store, "created today", clock.clone()), ["O-5"]);
     assert_eq!(ids(&store, "left Pending this week", clock.clone()), ["O-5"]);
@@ -332,8 +332,8 @@ async fn crossing_a_length_moves_a_watch_with_no_write() {
         path: None,
         body: String::new(),
     };
-    store.create(scope("W")).await.unwrap();
-    store.create(n).await.unwrap();
+    store.create(SYS, scope("W")).await.unwrap();
+    store.create(SYS, n).await.unwrap();
     let born = store.row("W-2").unwrap().0.created_unix;
     let since = store.history(SYS, "W-2").unwrap().since.unwrap().0;
     let over = Lens::parse("kind build and status Pending for over 1h").unwrap().with_clock(at(born));
@@ -351,7 +351,7 @@ async fn crossing_a_length_moves_a_watch_with_no_write() {
     let day = Lens::parse("created today").unwrap().with_clock(at(born));
     assert!(store.next_boundary(&day).is_some_and(|t| t > born && t <= born + DAY), "tomorrow's start");
     // A status write moves `since`: the boundary follows it.
-    store.set_status("W-2", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("W-2"), Status::Ready).await.unwrap();
     let moved = store.history(SYS, "W-2").unwrap().since.unwrap().0;
     assert_eq!(store.next_boundary(&over), Some(moved + 3_600 + 1));
 }

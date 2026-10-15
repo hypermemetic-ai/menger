@@ -187,14 +187,14 @@ async fn the_kept_tree_is_a_scan_after_every_write_on_a_nested_seed() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("nested.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic_shaped(SeedSpec { count: 1_500, seed: 13, into_existing: false }, SeedShape::Nested).unwrap();
+    store.seed_synthetic_shaped(SYS, SeedSpec { count: 1_500, seed: 13, into_existing: false }, SeedShape::Nested).unwrap();
     assert_tree_is_a_scan(&store, Some(&path), "a nested seed");
     let (depth, many) = shape(&store);
     assert!(depth == 3 && many > 10, "root → execution → build → doc ({depth} deep), {many} bitmaps");
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     let store = walk(store, &path, 0x5EED_0013, 250, &epics).await;
-    store.seed_synthetic_shaped(SeedSpec { count: 500, seed: 14, into_existing: true }, SeedShape::Nested).unwrap();
+    store.seed_synthetic_shaped(SYS, SeedSpec { count: 500, seed: 14, into_existing: true }, SeedShape::Nested).unwrap();
     assert_tree_is_a_scan(&store, Some(&path), "a nested seed into the walked store");
 }
 
@@ -230,11 +230,11 @@ async fn the_kept_tree_is_a_scan_on_hand_edited_shapes_and_through_their_repairs
     assert!(tallies.keys().any(|(p, _, _)| p == "GHOST-1"), "a dangling parent's subtree is tallied under its name");
     assert!(tallies.keys().any(|(p, _, _)| p == "CYC-1") && tallies.keys().any(|(p, _, _)| p == "CYC-2"), "both ends of a cycle");
 
-    store.set_parent("CYC-2", "CYC-4").await.unwrap();
+    store.set_parent(SYS.moving("CYC-2", "CYC-4")).await.unwrap();
     assert_tree_is_a_scan(&store, Some(&path), "a move off a cycle (a rebuild)");
-    store.set_parent("CXA-1", "PLEX-2").await.unwrap();
+    store.set_parent(SYS.moving("CXA-1", "PLEX-2")).await.unwrap();
     assert_tree_is_a_scan(&store, Some(&path), "a move off the cycle across three shortcodes");
-    store.create(new_ticket("GHOST", Kind::Scope, None, Vec::new())).await.unwrap();
+    store.create(SYS, new_ticket("GHOST", Kind::Scope, None, Vec::new())).await.unwrap();
     assert_tree_is_a_scan(&store, Some(&path), "the birth a dangling parent named");
     walk(
         store,
@@ -255,16 +255,16 @@ async fn a_list_across_the_threshold_and_a_subtree_moved_whole() {
     let path = dir.path().join("cross.db");
     let store = Store::open(&path).unwrap();
     let mk = |kind: Kind, parent: Option<&str>| new_ticket("TT", kind, parent.map(String::from), Vec::new());
-    store.create(mk(Kind::Scope, None)).await.unwrap(); // TT-1
+    store.create(SYS, mk(Kind::Scope, None)).await.unwrap(); // TT-1
     for _ in 0..3 {
-        store.create(mk(Kind::Execution, Some("TT-1"))).await.unwrap(); // TT-2..4
+        store.create(SYS, mk(Kind::Execution, Some("TT-1"))).await.unwrap(); // TT-2..4
     }
     for _ in 0..(HOLD_OVER + 2) {
-        store.create(mk(Kind::Build, Some("TT-2"))).await.unwrap();
+        store.create(SYS, mk(Kind::Build, Some("TT-2"))).await.unwrap();
         assert_tree_is_a_scan(&store, Some(&path), "a birth under TT-2");
     }
-    store.create(mk(Kind::Doc, Some("TT-5"))).await.unwrap();
-    store.create(mk(Kind::Doc, Some("TT-6"))).await.unwrap();
+    store.create(SYS, mk(Kind::Doc, Some("TT-5"))).await.unwrap();
+    store.create(SYS, mk(Kind::Doc, Some("TT-6"))).await.unwrap();
     assert_tree_is_a_scan(&store, Some(&path), "docs under two builds");
     // TT-2's list is a bitmap whose holders name TT-5 and TT-6.
     let (_, holders) = kept(&store);
@@ -272,19 +272,19 @@ async fn a_list_across_the_threshold_and_a_subtree_moved_whole() {
     // Move builds out of TT-2 until it is a vector again, and back.
     let moved: Vec<String> = (5..5 + HOLD_OVER as u32).map(|s| format!("TT-{s}")).collect();
     for id in &moved {
-        store.set_parent(id, "TT-3").await.unwrap();
+        store.set_parent(SYS.moving(id, "TT-3")).await.unwrap();
         assert_tree_is_a_scan(&store, Some(&path), &format!("{id} to TT-3"));
     }
     for id in &moved {
-        store.set_parent(id, "TT-2").await.unwrap();
+        store.set_parent(SYS.moving(id, "TT-2")).await.unwrap();
         assert_tree_is_a_scan(&store, Some(&path), &format!("{id} back to TT-2"));
     }
     // A subtree moved whole: TT-3 under TT-4, then a status change deep in it.
-    store.set_parent("TT-3", "TT-4").await.unwrap();
-    store.set_parent("TT-2", "TT-3").await.unwrap();
+    store.set_parent(SYS.moving("TT-3", "TT-4")).await.unwrap();
+    store.set_parent(SYS.moving("TT-2", "TT-3")).await.unwrap();
     assert_tree_is_a_scan(&store, Some(&path), "TT-2's subtree under TT-3 under TT-4");
-    store.set_status("TT-6", Status::Complete).await.unwrap();
-    store.link_commits("TT-5", vec!["abc1234".into()]).await.unwrap();
+    store.set_status(SYS.permit("TT-6"), Status::Complete).await.unwrap();
+    store.link_commits(SYS.permit("TT-5"), vec!["abc1234".into()]).await.unwrap();
     assert_tree_is_a_scan(&store, Some(&path), "cell moves four deep");
     let (tallies, _) = kept(&store);
     let below = |p: &str| tallies.iter().filter(|((x, _, _), _)| x == p).map(|(_, n)| *n).sum::<u32>();
@@ -790,7 +790,7 @@ async fn tree_and_under_equal_the_rule_on_a_nested_seed() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("nested.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic_shaped(SeedSpec { count: 1_200, seed: 131, into_existing: false }, SeedShape::Nested).unwrap();
+    store.seed_synthetic_shaped(SYS, SeedSpec { count: 1_200, seed: 131, into_existing: false }, SeedShape::Nested).unwrap();
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     // The seed only steers coverage (the answers are checked whatever it
@@ -809,7 +809,7 @@ async fn tree_and_under_equal_the_rule_on_a_nested_seed() {
 #[tokio::test]
 async fn every_address_of_a_nested_seed_answers_as_the_rule_does() {
     let store = Store::new();
-    store.seed_synthetic_shaped(SeedSpec { count: 900, seed: 6, into_existing: false }, SeedShape::Nested).unwrap();
+    store.seed_synthetic_shaped(SYS, SeedSpec { count: 900, seed: 6, into_existing: false }, SeedShape::Nested).unwrap();
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(3).collect();
     let epic_refs: Vec<&str> = epics.iter().map(String::as_str).collect();
     let mut rng = Rng(0x5EE_E13);
@@ -966,10 +966,10 @@ async fn only_matches_move_up_to_the_nearest_match_or_the_shortcodes_top() {
         ("RETURNS", Kind::Build, Some("RETURNS-3")), // RETURNS-4
         ("RETURNS", Kind::Build, Some("RETURNS-4")), // RETURNS-5
     ] {
-        store.create(mk(epic, kind, parent)).await.unwrap();
+        store.create(SYS, mk(epic, kind, parent)).await.unwrap();
     }
-    store.set_status("RETURNS-1", Status::Pending).await.unwrap();
-    store.set_status("RETURNS-3", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("RETURNS-1"), Status::Pending).await.unwrap();
+    store.set_status(SYS.permit("RETURNS-3"), Status::Ready).await.unwrap();
     let ask = |text: &str, parent: Option<&str>, epic: Option<&str>| -> Vec<(String, bool, u64)> {
         let filter = Filter::parse(text).unwrap();
         let got = tree_answered_in(&store, &filter, parent, epic, None, None, true);
@@ -1025,10 +1025,10 @@ async fn only_matches_move_up_to_the_nearest_match_or_the_shortcodes_top() {
 
     // Live: MENGER-2 becomes a build — it is drawn, and holds what had moved
     // up past it; a build that stops matching lets its match move up.
-    store.set_kind("MENGER-2", Kind::Build, None).await.unwrap();
+    store.set_kind(SYS.permit("MENGER-2"), Kind::Build, None).await.unwrap();
     assert_eq!(ask("kind build", None, Some("MENGER")), [row("MENGER-2", true, 3)]);
     assert_eq!(ask("kind build", Some("MENGER-2"), None), [row("MENGER-3", true, 0), row("FILTER-1", false, 2)]);
-    store.set_kind("RETURNS-4", Kind::Gap, None).await.unwrap();
+    store.set_kind(SYS.permit("RETURNS-4"), Kind::Gap, None).await.unwrap();
     assert_eq!(ask("kind build", None, Some("RETURNS")), [row("RETURNS-2", true, 0), row("RETURNS-5", true, 0)], "RETURNS-5 moves up past RETURNS-4");
     // Off, `tree` is FILTER-13's: the holders are rows.
     let off = tree_answered(&store, &filter, None, Some("RETURNS"), None, None).unwrap().0;
@@ -1057,7 +1057,7 @@ async fn a_kept_ticket_is_drawn_where_a_match_would_be() {
         ("RETURNS", Kind::Execution, Some("RETURNS-1")), // RETURNS-3
         ("RETURNS", Kind::Build, Some("RETURNS-3")), // RETURNS-4
     ] {
-        store.create(mk(epic, kind, parent)).await.unwrap();
+        store.create(SYS, mk(epic, kind, parent)).await.unwrap();
     }
     let filter = Filter::parse("kind build").unwrap();
     let ask = |keep: &str, parent: Option<&str>, epic: Option<&str>| -> Vec<(String, bool, u64)> {
@@ -1103,7 +1103,7 @@ async fn a_kept_ticket_is_drawn_where_a_match_would_be() {
 #[tokio::test]
 async fn tree_answers_one_address() {
     let store = Store::new();
-    store.create(new_ticket("TA", Kind::Scope, None, Vec::new())).await.unwrap();
+    store.create(SYS, new_ticket("TA", Kind::Scope, None, Vec::new())).await.unwrap();
     let lens = Lens::parse("").unwrap();
     for (parent, epic) in [(None, None), (Some("TA-1"), Some("TA"))] {
         let q = TreeQuery { parent: parent.map(String::from), epic: epic.map(String::from), lens: lens.clone(), matches_only: false, keep: None };
@@ -1126,7 +1126,7 @@ async fn under_membership_is_the_scans_difference_through_re_parents() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("under.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic_shaped(SeedSpec { count: 500, seed: 77, into_existing: false }, SeedShape::Nested).unwrap();
+    store.seed_synthetic_shaped(SYS, SeedSpec { count: 500, seed: 77, into_existing: false }, SeedShape::Nested).unwrap();
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(3).collect();
     let mut rng = Rng(0x0D3_13);
     let names = filter_names(&store);
@@ -1158,7 +1158,7 @@ async fn under_membership_is_the_scans_difference_through_re_parents() {
             let child = &rows[rng.below(rows.len())];
             let mine: Vec<&Row> = rows.iter().filter(|t| t.epic == child.epic).collect();
             let parent = mine[rng.below(mine.len())].id.clone();
-            let _ = store.set_parent(&child.id, &parent).await;
+            let _ = store.set_parent(SYS.moving(&child.id, &parent)).await;
             by_moves += 1;
             format!("set_parent {} under {parent}", child.id)
         } else {

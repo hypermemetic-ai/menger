@@ -130,19 +130,22 @@ impl Moved {
 impl Store {
     /// [`Store::update_many_by`] as nobody signed in, through the API, with
     /// every ticket allowed.
-    pub async fn update_many(&self, select: Selection, update: Update) -> Result<UpdatedMany, StoreError> {
-        self.update_many_by(select, update, Act::default(), |_| Ok(())).await
+    pub async fn update_many(&self, sys: &System, select: Selection, update: Update) -> Result<UpdatedMany, StoreError> {
+        self.update_many_by(select, update, Act::default(), |ids| Ok(ids.iter().map(|id| sys.updating(id)).collect())).await
     }
 
     /// ACT-2: the same `update` to every ticket `select` names, in one write
     /// by `act`, all or none (the module doc). `may` is asked of the whole
-    /// selection before any rule; its refusal is the write's.
+    /// selection before any rule; its refusal is the write's. ACCESS-11:
+    /// it answers the proofs — one [`Updating`] per ticket selected, each
+    /// checked, under the write-serial lock, to be for exactly that ticket
+    /// and what the update names beyond it.
     pub async fn update_many_by(
         &self,
         select: Selection,
         update: Update,
         mut act: Act,
-        may: impl FnOnce(&[String]) -> Result<(), String> + Send,
+        may: impl FnOnce(&[String]) -> Result<Vec<Updating>, String> + Send,
     ) -> Result<UpdatedMany, StoreError> {
         if !update.refused.is_empty() {
             return Err(StoreError::Invalid(update.refused.join("; ")));
@@ -157,7 +160,11 @@ impl Store {
         if ids.is_empty() {
             return Ok(UpdatedMany::default());
         }
-        may(&ids).map_err(StoreError::Invalid)?;
+        let proofs = may(&ids).map_err(StoreError::Invalid)?;
+        {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            writs::covers_exactly(&cache, proofs.iter().map(Updating::ticket), &ids)?;
+        }
         let (mut plans, mut refusals, mut unchanged) = (Vec::new(), Vec::new(), Vec::new());
         for id in &ids {
             let current = match self.get_unscoped(id).await {
@@ -170,6 +177,12 @@ impl Store {
             let mut refused = Vec::new();
             let p = {
                 let cache = self.tickets.read().expect("store lock poisoned");
+                let proof = proofs.iter().find(|u| writs::key_of(&cache, u.id()).as_deref() == Some(current.id.as_str()));
+                let row = cache.get(&current.id);
+                match (proof, row) {
+                    (Some(u), Some(row)) => u.check(&cache, row, &update)?,
+                    _ => return Err(StoreError::Invalid(format!("{}: the write was not given the proof it needs (nothing written)", current.id))),
+                }
                 plan(&cache, &current, update.clone(), None, None, &mut refused)
             };
             if !refused.is_empty() {
@@ -252,8 +265,10 @@ impl Store {
     /// that names nothing, or whose labels would be refused, refuses the
     /// write, each named). One `LabelsChanged` per ticket, in the order
     /// named — empty where nothing moved, which is no write.
-    pub async fn label_many(&self, ids: &[String], add: Vec<String>, remove: Vec<String>) -> Result<Vec<Change>, StoreError> {
-        self.cells_many(ids, |row| {
+    /// ACCESS-11: of the tickets the permits `on` are for.
+    pub async fn label_many(&self, on: Vec<Permit<Editor>>, add: Vec<String>, remove: Vec<String>) -> Result<Vec<Change>, StoreError> {
+        let ids: Vec<String> = on.iter().map(|p| p.id().to_string()).collect();
+        self.cells_many(&ids, |row| {
             let (after, added, removed) =
                 crate::labels::apply(&row.labels, &add, &remove).map_err(|why| StoreError::Labels { id: row.id.to_string(), why })?;
             let mut row = row.clone();
@@ -267,9 +282,11 @@ impl Store {
     /// not carry yet appended, by `link_commits`' rules, in one write, all
     /// or none. One `CommitsLinked` per ticket, in the order named — empty
     /// where nothing was added, which is no write.
-    pub async fn link_commits_many(&self, ids: &[String], entries: Vec<String>) -> Result<Vec<Change>, StoreError> {
+    /// ACCESS-11: of the tickets the permits `on` are for.
+    pub async fn link_commits_many(&self, on: Vec<Permit<Editor>>, entries: Vec<String>) -> Result<Vec<Change>, StoreError> {
+        let ids: Vec<String> = on.iter().map(|p| p.id().to_string()).collect();
         let refs = Self::references(&ids.join(", "), &entries)?;
-        self.cells_many(ids, |row| {
+        self.cells_many(&ids, |row| {
             let mut known: HashSet<String> = row.commits.iter().cloned().collect();
             let added: Vec<String> = refs.iter().filter(|r| known.insert((*r).clone())).cloned().collect();
             if row.commits.len() + added.len() > commits::MAX_PER_TICKET {

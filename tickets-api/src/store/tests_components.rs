@@ -34,16 +34,16 @@ fn ticket(epic: &str, kind: Kind, body: &str) -> NewTicket {
 /// A store with a scope root, `C-1`, to file builds under.
 async fn store() -> Store {
     let store = Store::new();
-    store.create(ticket("C", Kind::Scope, "the root")).await.unwrap();
+    store.create(SYS, ticket("C", Kind::Scope, "the root")).await.unwrap();
     store
 }
 
 async fn born(store: &Store, body: &str) -> String {
-    String::from(store.create(ticket("C", Kind::Build, body)).await.unwrap().id)
+    String::from(store.create(SYS, ticket("C", Kind::Build, body)).await.unwrap().id)
 }
 
 async fn amend(store: &Store, id: &str, body: &str) {
-    store.amend(id, None, Some(body.into())).await.unwrap();
+    store.amend(SYS.permit(id), None, Some(body.into())).await.unwrap();
 }
 
 fn registry(store: &Store) -> BTreeMap<String, Component> {
@@ -134,13 +134,13 @@ async fn another_ticket_defining_an_owned_name_is_refused_naming_the_owner() {
     let before = store.components(SYS);
     let mut rx = store.subscribe();
 
-    let e = store.create(ticket("C", Kind::Build, &def("m-x", "<template>theirs</template>"))).await.unwrap_err();
+    let e = store.create(SYS, ticket("C", Kind::Build, &def("m-x", "<template>theirs</template>"))).await.unwrap_err();
     assert!(matches!(&e, StoreError::ComponentOwned { id: None, name, owner: o } if name == "m-x" && *o == owner), "{e:?}");
     let message = e.to_string();
     assert!(message.contains(&owner) && message.contains("m-x") && message.contains("nothing was created"), "{message}");
 
     let e = store
-        .amend(&other, Some("a new title".into()), Some(def("m-x", "<template>theirs</template>")))
+        .amend(SYS.permit(&other), Some("a new title".into()), Some(def("m-x", "<template>theirs</template>")))
         .await
         .unwrap_err();
     assert!(e.to_string().contains(&owner), "{e}");
@@ -195,7 +195,7 @@ async fn defining_an_orphans_name_adopts_it() {
     );
     assert_eq!(heard(&drain(&mut rx)), [("changed", "m-x".to_string())]);
     // And now it is the adopter's: the first owner may not take it back.
-    let e = store.amend(&first, None, Some(def("m-x", "<template>mine</template>"))).await.unwrap_err();
+    let e = store.amend(SYS.permit(&first), None, Some(def("m-x", "<template>mine</template>"))).await.unwrap_err();
     assert!(e.to_string().contains(&adopter), "{e}");
 }
 
@@ -317,12 +317,12 @@ async fn a_malformed_block_refuses_a_body_change() {
         ("```component\nx\n```\n", "names none"),
         (&*format!("{}{}", def("m-x", "1"), def("m-x", "2")), "twice"),
     ] {
-        let e = store.create(ticket("C", Kind::Build, body)).await.unwrap_err();
+        let e = store.create(SYS, ticket("C", Kind::Build, body)).await.unwrap_err();
         assert!(e.to_string().contains(needle) && e.to_string().contains("nothing was created"), "{body}: {e}");
     }
     let id = born(&store, "plain").await;
     assert_eq!(id, "C-2", "no id spent");
-    let e = store.amend(&id, None, Some("```component Chart\nx\n```\n".into())).await.unwrap_err();
+    let e = store.amend(SYS.permit(&id), None, Some("```component Chart\nx\n```\n".into())).await.unwrap_err();
     assert!(e.to_string().contains(&format!("nothing changed for '{id}'")), "{e}");
     assert_eq!(store.get(SYS, &id).await.unwrap().body, "plain");
     assert!(store.components(SYS).is_empty());
@@ -336,7 +336,7 @@ async fn the_registry_survives_a_reopen() {
     let path = dir.path().join("components.db");
     let before = {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("C", Kind::Scope, "root")).await.unwrap();
+        store.create(SYS, ticket("C", Kind::Scope, "root")).await.unwrap();
         let owner = born(&store, &format!("{}{}", def("m-x", "<template><m-y></m-y></template>"), def("m-y", "y"))).await;
         born(&store, "<m-x></m-x>").await;
         amend(&store, &owner, &def("m-y", "y")).await; // m-x orphaned, kept by C-3
@@ -376,7 +376,7 @@ async fn a_database_without_the_table_gains_it_built_from_the_bodies() {
     let path = dir.path().join("before.db");
     {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("C", Kind::Scope, "root <m-x></m-x>")).await.unwrap(); // C-1: references before
+        store.create(SYS, ticket("C", Kind::Scope, "root <m-x></m-x>")).await.unwrap(); // C-1: references before
         born(&store, &def("m-x", "<template><m-y></m-y></template>")).await; // C-2: owns m-x
         born(&store, "plain").await; // C-3: will define m-x behind the server's back
         born(&store, "plain").await; // C-4: will hold a malformed block, written the same way
@@ -406,7 +406,7 @@ async fn a_database_without_the_table_gains_it_built_from_the_bodies() {
         ]
     );
     // C-3 does not own m-x, and its next body change that still defines it is refused.
-    let e = store.amend("C-3", None, Some(def("m-x", "still theirs"))).await.unwrap_err();
+    let e = store.amend(SYS.permit("C-3"), None, Some(def("m-x", "still theirs"))).await.unwrap_err();
     assert!(e.to_string().contains("C-2"), "{e}");
     amend(&store, "C-3", "gave it up").await;
     assert_eq!(registry(&store)["m-y"].references, ["m-x"]);
@@ -547,14 +547,14 @@ async fn a_malformed_docs_refuses_the_write_naming_the_problem() {
         ("<docs><summary>never closed</summary>", "<docs> is never closed"),
     ] {
         let body = def("m-y", &format!("<template>y</template>\n{docs}"));
-        let e = store.create(ticket("C", Kind::Build, &body)).await.unwrap_err();
+        let e = store.create(SYS, ticket("C", Kind::Build, &body)).await.unwrap_err();
         assert!(matches!(&e, StoreError::ComponentDocs { id: None, name, .. } if name == "m-y"), "{e:?}");
         let message = e.to_string();
         assert!(
             message.contains("'m-y' has a malformed <docs>") && message.contains(needle) && message.contains("nothing was created"),
             "{docs}: {message}"
         );
-        let e = store.amend(&id, Some("new title".into()), Some(body.clone())).await.unwrap_err();
+        let e = store.amend(SYS.permit(&id), Some("new title".into()), Some(body.clone())).await.unwrap_err();
         assert!(e.to_string().contains(needle) && e.to_string().contains(&format!("nothing changed for '{id}'")), "{e}");
     }
     assert_eq!(store.components(SYS), before);
@@ -596,7 +596,7 @@ async fn docs_and_preview_survive_a_reopen() {
     let path = dir.path().join("docs.db");
     let before = {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("C", Kind::Scope, "root")).await.unwrap();
+        store.create(SYS, ticket("C", Kind::Scope, "root")).await.unwrap();
         let owner = born(&store, DOCUMENTED).await;
         born(&store, "<m-wave-summary board=RETURNS></m-wave-summary>").await;
         born(&store, &format!("{}{}", def("m-y", "<docs><summary>y</summary></docs>"), "")).await;
@@ -619,7 +619,7 @@ async fn a_table_without_preview_gains_it_from_the_owners_bodies() {
     let path = dir.path().join("before-comp8.db");
     {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("C", Kind::Scope, "root")).await.unwrap();
+        store.create(SYS, ticket("C", Kind::Scope, "root")).await.unwrap();
         born(&store, DOCUMENTED).await; // C-2
         let gone = born(&store, "```component m-o board=X\n<docs><summary>o</summary></docs>\n```\n").await; // C-3
         born(&store, "<m-o></m-o>").await; // C-4

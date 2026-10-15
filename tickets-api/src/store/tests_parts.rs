@@ -24,7 +24,7 @@ fn ticket(kind: Kind, body: &str) -> NewTicket {
 
 async fn store() -> Store {
     let store = Store::new();
-    store.create(ticket(Kind::Scope, "the root")).await.unwrap();
+    store.create(SYS, ticket(Kind::Scope, "the root")).await.unwrap();
     store
 }
 
@@ -36,7 +36,7 @@ const FIELD: &str = "```component m-x\n<template><section part=\"section\"><span
 #[tokio::test]
 async fn documented_parts_are_registered() {
     let store = store().await;
-    store.create(ticket(Kind::Doc, FIELD)).await.unwrap();
+    store.create(SYS, ticket(Kind::Doc, FIELD)).await.unwrap();
     let c = store.components(SYS).into_iter().find(|c| c.name == "m-x").expect("m-x");
     let parts: Vec<(String, bool)> = c.docs.expect("docs").parts.into_iter().map(|p| (p.name, p.scripted)).collect();
     assert_eq!(parts, vec![("section".into(), false), ("label".into(), false), ("go".into(), true)]);
@@ -48,11 +48,11 @@ async fn documented_parts_are_registered() {
 async fn a_part_the_template_lacks_is_refused() {
     let store = store().await;
     let bad = FIELD.replace("part=\"label\"", "");
-    let e = store.create(ticket(Kind::Doc, &bad)).await.expect_err("refused");
+    let e = store.create(SYS, ticket(Kind::Doc, &bad)).await.expect_err("refused");
     assert!(e.to_string().contains("the part 'label' is documented but no element of the <template> carries part=\"label\""), "{e}");
     assert!(store.components(SYS).is_empty());
-    let id = store.create(ticket(Kind::Doc, FIELD)).await.unwrap().id;
-    let e = store.amend(&id, None, Some(bad)).await.expect_err("refused");
+    let id = store.create(SYS, ticket(Kind::Doc, FIELD)).await.unwrap().id;
+    let e = store.amend(SYS.permit(&id), None, Some(bad)).await.expect_err("refused");
     assert!(e.to_string().contains("the part 'label'"), "{e}");
     let c = store.components(SYS).into_iter().find(|c| c.name == "m-x").unwrap();
     assert_eq!(c.docs.unwrap().parts.len(), 3, "the amend wrote nothing");
@@ -67,7 +67,7 @@ async fn house_bodies_expose_their_documented_parts() {
     let mut seen = 0;
     for path in paths.split(':').filter(|p| !p.is_empty()) {
         let body = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
-        let id = store.create(ticket(Kind::Doc, &body)).await.unwrap_or_else(|e| panic!("{path}: refused: {e}")).id;
+        let id = store.create(SYS, ticket(Kind::Doc, &body)).await.unwrap_or_else(|e| panic!("{path}: refused: {e}")).id;
         // A component that renders nothing (m-house, the shared code: an empty template) has nothing to skin.
         let renders = |c: &Component| !c.source.contains("<template></template>");
         for c in store.components(SYS).into_iter().filter(|c| c.owner.as_deref() == Some(id.as_str()) && renders(c)) {

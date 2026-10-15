@@ -177,7 +177,10 @@ impl Store {
     /// every name an organization has or had) — and, when `admin` names one,
     /// that principal's admin grant on it (`name:`), in one transaction.
     /// The organization and the grant as kept.
-    pub async fn create_org(&self, name: &str, admin: Option<(String, String)>) -> Result<(Org, Option<Grant>), StoreError> {
+    ///
+    /// ACCESS-11: by `by` — the system, or admin on `*`.
+    pub async fn create_org(&self, by: impl Into<Authority>, name: &str, admin: Option<(String, String)>) -> Result<(Org, Option<Grant>), StoreError> {
+        by.into().admin_on(&crate::members::Scope::Everywhere, "a new organization needs admin on *")?;
         let org = OrgId::new(name.trim()).map_err(StoreError::Invalid)?;
         let serial = self.serial().await;
         let row = {
@@ -223,13 +226,18 @@ impl Store {
     /// grant on the organization is rewritten to the new name, every row's
     /// full address moves, and each of its groups is said again
     /// (`group_changed`). Renaming to an alias it had takes the name back.
-    pub async fn rename_org(&self, from: &str, to: &str) -> Result<Org, StoreError> {
+    ///
+    /// ACCESS-11: by `by` — the system, or admin on the organization (as
+    /// it is called now) or on `*`.
+    pub async fn rename_org(&self, by: impl Into<Authority>, from: &str, to: &str) -> Result<Org, StoreError> {
+        let by = by.into();
         let to = OrgId::new(to.trim()).map_err(StoreError::Invalid)?;
         let serial = self.serial().await;
         let (row, old, moved) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let r = &cache.shortcodes;
             let (row, old) = org_in(r, from)?;
+            org_admin(&by, old)?;
             let old = old.clone();
             if old == to {
                 return Ok(org_card(&cache, row, &old));
@@ -295,12 +303,16 @@ impl Store {
     /// `undelete` brings back), and for the first organization, which every
     /// shortcode nobody placed is in. Its grants and its old names go with
     /// it. The organization's name, and how many grants went.
-    pub async fn delete_org(&self, name: &str) -> Result<(OrgId, u32), StoreError> {
+    ///
+    /// ACCESS-11: by `by`, as [`Store::rename_org`].
+    pub async fn delete_org(&self, by: impl Into<Authority>, name: &str) -> Result<(OrgId, u32), StoreError> {
+        let by = by.into();
         let serial = self.serial().await;
         let (row, org, grants) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let r = &cache.shortcodes;
             let (row, org) = org_in(r, name)?;
+            org_admin(&by, org)?;
             let org = org.clone();
             if r.orgs.keys().next() == Some(&row) {
                 return Err(StoreError::Invalid(format!(
@@ -508,4 +520,11 @@ pub(super) fn settle(conn: &mut rusqlite::Connection, cache: &mut Cache) -> anyh
         }
     );
     Ok(moved.len())
+}
+
+/// ACCESS-11: whether `by` administers the organization `org` (as it is
+/// called now): admin on it, or on `*`.
+fn org_admin(by: &Authority, org: &OrgId) -> Result<(), StoreError> {
+    let what = "an organization's name and life need admin on it (or on *)";
+    by.admin_on(&crate::members::Scope::Org(org.clone()), what).or_else(|_| by.admin_on(&crate::members::Scope::Everywhere, what))
 }

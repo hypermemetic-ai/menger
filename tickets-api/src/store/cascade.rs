@@ -230,8 +230,8 @@ impl Store {
     /// [`Store::set_status_by`] as nobody signed in, through the API, with
     /// no children restored — the write as it was before MENGER-13, its
     /// transition and its cascade included.
-    pub async fn set_status(&self, id: &str, status: Status) -> Result<Change, StoreError> {
-        self.set_status_by(id, status, Act::default(), false).await
+    pub async fn set_status(&self, on: Permit<Editor>, status: Status) -> Result<Change, StoreError> {
+        self.set_status_by(on, status, Act::default(), false).await
     }
 
     /// Changes the status, write-through: durable in the database before
@@ -257,7 +257,11 @@ impl Store {
     /// canceled put back ([`restorable`]). A write that moves any ticket
     /// beside its own is one batch ([`Store::batch`]). The status it already
     /// has writes as before, and records no transition.
-    pub async fn set_status_by(&self, id: &str, status: Status, act: Act, restore_children: bool) -> Result<Change, StoreError> {
+    ///
+    /// ACCESS-11: of the ticket `on` is for — the ticket checked is the
+    /// ticket written.
+    pub async fn set_status_by(&self, on: Permit<Editor>, status: Status, act: Act, restore_children: bool) -> Result<Change, StoreError> {
+        let id = on.id().as_str();
         let serial = self.serial().await;
         let (mut row, _) = self.row(id)?;
         rules::status_refusal(&row, status)?;

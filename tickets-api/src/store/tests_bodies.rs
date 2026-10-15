@@ -58,13 +58,13 @@ fn stored_body(dir: &tempfile::TempDir, id: &str) -> String {
 async fn every_whole_ticket_is_its_row_and_the_stored_body_byte_exact() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
-    let root = store.create(new("BD", Kind::Scope, None, &[], &awkward("root"))).await.unwrap();
-    let a = store.create(new("BD", Kind::Build, None, &[], &awkward("a"))).await.unwrap();
-    let b = store.create(new("BD", Kind::Gap, None, &["BD-2", "BD-9"], "")).await.unwrap();
-    let c = store.create(new("BD", Kind::Spike, None, &["BD-2"], &awkward("c"))).await.unwrap();
-    store.set_status("BD-2", Status::Complete).await.unwrap();
-    store.set_status("BD-3", Status::Ready).await.unwrap();
-    store.set_status("BD-4", Status::Ready).await.unwrap();
+    let root = store.create(SYS, new("BD", Kind::Scope, None, &[], &awkward("root"))).await.unwrap();
+    let a = store.create(SYS, new("BD", Kind::Build, None, &[], &awkward("a"))).await.unwrap();
+    let b = store.create(SYS, new("BD", Kind::Gap, None, &["BD-2", "BD-9"], "")).await.unwrap();
+    let c = store.create(SYS, new("BD", Kind::Spike, None, &["BD-2"], &awkward("c"))).await.unwrap();
+    store.set_status(SYS.permit("BD-2"), Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("BD-3"), Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("BD-4"), Status::Ready).await.unwrap();
 
     for (id, born) in [("BD-1", &root), ("BD-2", &a), ("BD-3", &b), ("BD-4", &c)] {
         let got = store.get(SYS, id).await.unwrap();
@@ -112,8 +112,8 @@ async fn every_whole_ticket_is_its_row_and_the_stored_body_byte_exact() {
 async fn every_event_that_carries_a_ticket_carries_its_stored_body() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
-    store.create(new("EV", Kind::Scope, None, &[], &awkward("EV-1"))).await.unwrap();
-    store.create(new("EV", Kind::Build, None, &[], &awkward("EV-2"))).await.unwrap();
+    store.create(SYS, new("EV", Kind::Scope, None, &[], &awkward("EV-1"))).await.unwrap();
+    store.create(SYS, new("EV", Kind::Build, None, &[], &awkward("EV-2"))).await.unwrap();
     let mut rx = store.subscribe();
     let whole_tickets = |rx: &mut broadcast::Receiver<Change>| {
         let mut out = Vec::new();
@@ -132,14 +132,14 @@ async fn every_event_that_carries_a_ticket_carries_its_stored_body() {
 
     // Born under EV-1, blocked by EV-1 and EV-2: Created, then each blocker
     // whole in its UnlocksChanged — EV-1 also counting its new child.
-    store.create(new("EV", Kind::Gap, None, &["EV-1", "EV-2"], &awkward("EV-3"))).await.unwrap();
+    store.create(SYS, new("EV", Kind::Gap, None, &["EV-1", "EV-2"], &awkward("EV-3"))).await.unwrap();
     let seen = whole_tickets(&mut rx);
     assert_eq!(seen.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["EV-3", "EV-1", "EV-2"]);
     assert_eq!(seen[1].child_count, 2, "EV-1 rides out with the count it now has");
-    store.set_status("EV-2", Status::Ready).await.unwrap();
-    store.set_parent("EV-3", "EV-2").await.unwrap();
-    store.amend("EV-3", Some("retitled".into()), None).await.unwrap();
-    store.amend("EV-2", None, Some(awkward("EV-2, amended"))).await.unwrap();
+    store.set_status(SYS.permit("EV-2"), Status::Ready).await.unwrap();
+    store.set_parent(SYS.moving("EV-3", "EV-2")).await.unwrap();
+    store.amend(SYS.permit("EV-3"), Some("retitled".into()), None).await.unwrap();
+    store.amend(SYS.permit("EV-2"), None, Some(awkward("EV-2, amended"))).await.unwrap();
     let seen: Vec<(String, String)> =
         seen.into_iter().chain(whole_tickets(&mut rx)).map(|t| (t.id.into_string(), t.body)).collect();
     let expect = [
@@ -157,14 +157,14 @@ async fn every_event_that_carries_a_ticket_carries_its_stored_body() {
     }
 
     // The no-ops answer the ticket whole too, and write and say nothing.
-    match store.set_parent("EV-3", "EV-2").await.unwrap() {
+    match store.set_parent(SYS.moving("EV-3", "EV-2")).await.unwrap() {
         Change::ParentChanged { ticket, previous } => {
             assert_eq!(previous.as_deref(), Some("EV-2"));
             assert_eq!(ticket, store.get(SYS, "EV-3").await.unwrap());
         }
         other => panic!("{other:?}"),
     }
-    match store.amend("EV-1", Some("a scope in EV".into()), None).await.unwrap() {
+    match store.amend(SYS.permit("EV-1"), Some("a scope in EV".into()), None).await.unwrap() {
         Change::Amended { ticket, changed } => {
             assert!(changed.is_empty());
             assert_eq!(ticket.body, awkward("EV-1"));
@@ -182,7 +182,7 @@ async fn every_event_that_carries_a_ticket_carries_its_stored_body() {
 #[tokio::test]
 async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
     let store = Store::new();
-    store.seed_synthetic(SeedSpec { count: 1_000, seed: 14, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 1_000, seed: 14, into_existing: false }).unwrap();
     let rows = store.page(SYS, PageQuery::default()).unwrap().tickets;
     let (first, mid) = (rows[0].id.clone(), rows[480].id.clone());
     let root = rows[0].id.clone();
@@ -251,9 +251,9 @@ async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
 async fn the_cache_only_answers_read_no_database() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = on_disk(&dir);
-    store.create(new("CO", Kind::Scope, None, &[], "a body")).await.unwrap();
-    store.create(new("CO", Kind::Build, None, &[], "a body")).await.unwrap();
-    store.set_status("CO-2", Status::Ready).await.unwrap();
+    store.create(SYS, new("CO", Kind::Scope, None, &[], "a body")).await.unwrap();
+    store.create(SYS, new("CO", Kind::Build, None, &[], "a body")).await.unwrap();
+    store.set_status(SYS.permit("CO-2"), Status::Ready).await.unwrap();
     store.readers = Arc::new(Readers::File {
         path: dir.path().join("no-such-dir").join("absent.db"),
         idle: StdMutex::new(Vec::new()),
@@ -279,7 +279,7 @@ async fn the_cache_only_answers_read_no_database() {
 async fn a_read_answers_beside_an_open_write() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
-    store.create(new("RW", Kind::Scope, None, &[], "committed")).await.unwrap();
+    store.create(SYS, new("RW", Kind::Scope, None, &[], "committed")).await.unwrap();
     let writer = Arc::clone(&store.db);
     let (open, release) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
     let (o, r) = (Arc::clone(&open), Arc::clone(&release));
@@ -311,8 +311,8 @@ async fn a_read_answers_beside_an_open_write() {
 async fn a_read_that_meets_a_commit_answers_the_stored_version_whole() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir);
-    store.create(new("MC", Kind::Scope, None, &[], "old body")).await.unwrap();
-    store.create(new("MC", Kind::Build, None, &[], "child")).await.unwrap();
+    store.create(SYS, new("MC", Kind::Scope, None, &[], "old body")).await.unwrap();
+    store.create(SYS, new("MC", Kind::Build, None, &[], "child")).await.unwrap();
     let before = store.get(SYS, "MC-1").await.unwrap();
 
     // What `commit` does, by hand, up to the moment `apply` would run.
@@ -349,12 +349,12 @@ async fn read_your_writes_under_a_hammer_of_amends() {
     const VERSIONS: u64 = 150;
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(on_disk(&dir));
-    store.create(new("HM", Kind::Scope, None, &[], "title 0 / body 0")).await.unwrap();
+    store.create(SYS, new("HM", Kind::Scope, None, &[], "title 0 / body 0")).await.unwrap();
     for _ in 1..TICKETS {
-        store.create(new("HM", Kind::Build, None, &[], "body 0")).await.unwrap();
+        store.create(SYS, new("HM", Kind::Build, None, &[], "body 0")).await.unwrap();
     }
     for i in 1..=TICKETS {
-        store.amend(&format!("HM-{i}"), Some("title 0".into()), Some(awkward("body 0"))).await.unwrap();
+        store.amend(SYS.permit(&format!("HM-{i}")), Some("title 0".into()), Some(awkward("body 0"))).await.unwrap();
     }
     let acked: Arc<Vec<AtomicU64>> = Arc::new((0..TICKETS).map(|_| AtomicU64::new(0)).collect());
     let done = Arc::new(AtomicBool::new(false));
@@ -371,7 +371,7 @@ async fn read_your_writes_under_a_hammer_of_amends() {
             for v in 1..=VERSIONS {
                 for i in 0..TICKETS {
                     let body = awkward(&format!("body {v}"));
-                    store.amend(&format!("HM-{}", i + 1), Some(format!("title {v}")), Some(body)).await.unwrap();
+                    store.amend(SYS.permit(&format!("HM-{}", i + 1)), Some(format!("title {v}")), Some(body)).await.unwrap();
                     acked[i].store(v, Ordering::SeqCst);
                 }
             }
@@ -430,9 +430,9 @@ async fn a_body_past_the_cap_is_refused_naming_the_cap() {
     let dir = tempfile::tempdir().unwrap();
     let store = on_disk(&dir).with_body_max(1000);
     assert_eq!(store.body_max(), 1000);
-    store.create(new("CAP", Kind::Scope, None, &[], "")).await.unwrap();
+    store.create(SYS, new("CAP", Kind::Scope, None, &[], "")).await.unwrap();
     let over = "x".repeat(1001);
-    match store.create(new("CAP", Kind::Doc, None, &[], &over)).await {
+    match store.create(SYS, new("CAP", Kind::Doc, None, &[], &over)).await {
         Err(e @ StoreError::BodyTooLarge { .. }) => {
             assert!(matches!(e, StoreError::BodyTooLarge { id: None, bytes: 1001, max: 1000 }), "{e:?}");
             assert!(e.to_string().contains("1001 bytes, past the 1000-byte cap"), "{e}");
@@ -440,10 +440,10 @@ async fn a_body_past_the_cap_is_refused_naming_the_cap() {
         other => panic!("refused, typed: {other:?}"),
     }
     let at = "y".repeat(1000);
-    let kept = store.create(new("CAP", Kind::Doc, None, &[], &at)).await.unwrap();
+    let kept = store.create(SYS, new("CAP", Kind::Doc, None, &[], &at)).await.unwrap();
     assert_eq!(kept.id, "CAP-2", "the refused create spent no id");
     assert_eq!(stored_body(&dir, "CAP-2"), at);
-    match store.amend("cap-2", Some("a new title".into()), Some(over.clone())).await {
+    match store.amend(SYS.permit("cap-2"), Some("a new title".into()), Some(over.clone())).await {
         Err(StoreError::BodyTooLarge { id, bytes, max }) => assert_eq!((id.as_deref(), bytes, max), (Some("CAP-2"), 1001, 1000)),
         other => panic!("refused, typed: {other:?}"),
     }
