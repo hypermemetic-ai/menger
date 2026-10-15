@@ -960,6 +960,7 @@ async fn shell_serves_the_page() {
             app: menger::shell::AppSource::Dir(app_dist),
             env: None,
             login: None,
+            allowed_hosts: Vec::new(),
         })
         .await;
     });
@@ -968,7 +969,7 @@ async fn shell_serves_the_page() {
     for _ in 0..50 {
         match tokio::net::TcpStream::connect(("127.0.0.1", shell_port)).await {
             Ok(mut s) => {
-                s.write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                s.write_all(format!("GET / HTTP/1.0\r\nHost: localhost:{shell_port}\r\n\r\n").as_bytes())
                     .await
                     .unwrap();
                 s.read_to_end(&mut resp).await.unwrap();

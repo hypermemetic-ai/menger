@@ -29,6 +29,31 @@ the deep-link prefix (`/app/#/ticket/MNG-1`); it serves the app too.
 Open the app in two browser windows; create a ticket or flip a status in
 one and watch the other update. No polling — the server pushes.
 
+**Hosts** (ACCESS-25). Every listener — the WebSocket, the shell, the REST
+bridge, and `diagrams` — answers only its own names, so a page that rebinds
+its own name to 127.0.0.1 (DNS rebinding) gets nothing: a request naming any
+other `Host` is refused before anything routes it,
+
+```
+HTTP/1.1 421 Misdirected Request
+
+this server does not answer to that name
+```
+
+Each port always answers `127.0.0.1:<its port>` and `localhost:<its port>`,
+and `--public-url`'s host (as it names it, and its hostname on the port);
+`--allowed-host` adds more — repeatable, `host:port` or `host` for a default
+port, every listener; `MENGER_ALLOWED_HOSTS` with `;` between. `diagrams`
+is loopback only and takes no list. The check is plexus-transport's (the
+WebSocket upgrade and the REST bridge) and the shell's own, with or without
+login:
+
+```sh
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 \
+  --db-path /tmp/menger-dev.db --allowed-host menger.lan:4461 --allowed-host menger.lan:4460
+curl -si -H 'Host: evil.example' http://127.0.0.1:4462/debug   # 421
+```
+
 ### Synthetic seeding (PERF-2)
 
 For measurement, not for real data: `--seed-synthetic N` (env
@@ -2441,7 +2466,8 @@ auth door, nothing else), the protocol's gate decides **every call**, and
 expiring stops an open socket from answering, and ends its `watch`. The socket
 admits browser pages only from the shell's own origins (IDENTITY-29, with or
 without login; synapse sends no Origin). POSTs from another origin and requests
-naming another `Host` are refused.
+naming another `Host` are refused (the latter on every port, login or not —
+ACCESS-25).
 
 | flag | |
 |---|---|
@@ -2451,6 +2477,7 @@ naming another `Host` are refused.
 | `--login-forgot <url>` | a "Forgot password?" link |
 | `--public-url <url>` | where people reach the shell; the redirect URI's base (default `http://127.0.0.1:<shell-port>`) |
 | `--allowed-origin <origin>` | another origin whose pages may open the socket |
+| `--allowed-host <host>` | another `Host` every listener answers to (ACCESS-25, README "Run" → Hosts) |
 | `--session-hours <n>` | how long a sign-in lasts (default 12) |
 
 `GET /login/me` answers who the session is, or 401. Sessions live in memory,

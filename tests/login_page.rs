@@ -382,7 +382,7 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
     let app_dist = dir.path().join("no-dist");
     tokio::spawn(async move {
         let _keep = dir;
-        shell::serve(ShellConfig { port: shell_port, ws_port: ws, app: shell::AppSource::Dir(app_dist), env: None, login: Some(login) })
+        shell::serve(ShellConfig { port: shell_port, ws_port: ws, app: shell::AppSource::Dir(app_dist), env: None, login: Some(login), allowed_hosts: Vec::new() })
             .await
             .unwrap();
     });

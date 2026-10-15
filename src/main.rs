@@ -187,6 +187,14 @@ struct Args {
     #[arg(long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';')]
     allowed_origin: Vec<String>,
 
+    /// ACCESS-25: another `Host` every listener (WebSocket, shell, REST)
+    /// answers to (repeatable; `host:port`, or `host` for a default port).
+    /// Always answered: `127.0.0.1:<its port>`, `localhost:<its port>` and
+    /// `--public-url`'s host; anything else is refused 421 before routing
+    /// (DNS rebinding). In the env var, separated by `;`.
+    #[arg(long = "allowed-host", env = "MENGER_ALLOWED_HOSTS", value_name = "HOST", value_delimiter = ';')]
+    allowed_host: Vec<String>,
+
     /// IDENTITY-21: a principal who is admin on every shortcode from the
     /// operator (repeatable; `idp:<uuid>`, `oidc:<provider>/<sub>`,
     /// `nostr:<hex>`) — how the first admin exists. In the env var,
@@ -348,7 +356,9 @@ async fn main() -> anyhow::Result<()> {
             tracing::warn!("--auth-provider is ignored over stdio: there is no upgrade to carry a credential");
         }
     } else {
-        builder = builder.with_websocket(args.port);
+        // ACCESS-25: each listener answers only its own names.
+        let hosts = |port| local::listener_hosts(port, args.public_url.as_deref(), &args.allowed_host);
+        builder = builder.with_websocket(args.port).with_allowed_hosts(hosts(args.port));
         tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
         // IDENTITY-29: only menger's own pages may open the socket from a
         // browser, login or not; synapse sends no Origin and is unaffected.
@@ -373,7 +383,8 @@ async fn main() -> anyhow::Result<()> {
                 .with_rest_http_config(
                     RestHttpConfig::new(args.rest_port)
                         .with_server_name("menger".into())
-                        .with_server_version(env!("CARGO_PKG_VERSION").into()),
+                        .with_server_version(env!("CARGO_PKG_VERSION").into())
+                        .with_allowed_hosts(hosts(args.rest_port)),
                 )
                 .with_flat_schemas(hub.list_plugin_schemas()) // registers /rest/tickets/*
                 .with_route_fn(route_fn); // dispatches via hub.route()
@@ -389,6 +400,7 @@ async fn main() -> anyhow::Result<()> {
                 app: args.app_dist.map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
                 env: args.env.clone(),
                 login: wired.login.clone(),
+                allowed_hosts: hosts(args.shell_port),
             };
             tokio::spawn(async move {
                 if let Err(e) = shell::serve(cfg).await {

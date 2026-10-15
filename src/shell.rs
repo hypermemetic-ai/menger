@@ -69,6 +69,10 @@ pub struct ShellConfig {
     /// IDENTITY-19: the login page and its routes, when providers are
     /// configured; with `require`, the app's routes need a session.
     pub login: Option<Arc<crate::web_login::Login>>,
+    /// ACCESS-25: the `Host` values the shell answers to, login or not
+    /// ([`crate::local::listener_hosts`]); with login, the hosts its
+    /// origins name are added. Empty: `127.0.0.1:<port>`, `localhost:<port>`.
+    pub allowed_hosts: Vec<String>,
 }
 
 /// MFE-23: the tab's title — `menger.test` on the test environment,
@@ -196,12 +200,12 @@ async fn router(cfg: ShellConfig) -> Router {
                 // AUTH-22: our own sign-in page's steps, with an identity backend.
                 .merge(login.signin_routes()),
         );
-        // DNS rebinding: a page on another name resolving here gets nothing.
-        let hosts = Arc::new(allowed_hosts(cfg.port, &login));
-        app = app.layer(axum::middleware::from_fn_with_state(hosts, host_is_ours));
         tracing::info!("Login:     http://127.0.0.1:{}/login", cfg.port);
     }
-    app
+    // DNS rebinding: a page on another name resolving here gets nothing —
+    // login or not (ACCESS-25), and before anything routes.
+    let hosts = Arc::new(allowed_hosts(cfg.port, &cfg.allowed_hosts, cfg.login.as_deref()));
+    app.layer(axum::middleware::from_fn_with_state(hosts, host_is_ours))
 }
 
 /// IDENTITY-19: the app's routes without a session go to the login page;
@@ -251,10 +255,16 @@ async fn fonts_cors(req: Request, next: axum::middleware::Next) -> Response {
 }
 
 /// The `Host` values this shell answers to: its port on 127.0.0.1 and
-/// localhost, and the public URL's host.
-fn allowed_hosts(port: u16, login: &crate::web_login::Login) -> Vec<String> {
-    let mut hosts = vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")];
-    hosts.extend(login.hosts());
+/// localhost, the configured ones (ACCESS-25: the public URL's host and
+/// `--allowed-host`), and with login the hosts its origins name.
+fn allowed_hosts(port: u16, configured: &[String], login: Option<&crate::web_login::Login>) -> Vec<String> {
+    let mut hosts = plexus_transport::host::loopback_hosts(port);
+    for h in configured.iter().cloned().chain(login.map(|l| l.hosts()).unwrap_or_default()) {
+        let h = h.to_ascii_lowercase();
+        if !hosts.contains(&h) {
+            hosts.push(h);
+        }
+    }
     hosts
 }
 
@@ -263,7 +273,7 @@ async fn host_is_ours(State(hosts): State<Arc<Vec<String>>>, req: Request, next:
     let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).map(str::to_ascii_lowercase);
     match host {
         Some(h) if hosts.iter().any(|a| *a == h) => next.run(req).await,
-        _ => (StatusCode::MISDIRECTED_REQUEST, "this server does not answer to that name").into_response(),
+        _ => (StatusCode::MISDIRECTED_REQUEST, plexus_transport::host::REFUSAL).into_response(),
     }
 }
 

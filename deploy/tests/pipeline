@@ -40,7 +40,9 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$SCRATCH/bin/$1"; chmod +x "$
 stub systemctl '[[ ${STUB_RESTART_FAILS:-} == 1 && " $* " == *" restart "* ]] && exit 1
 [[ " $* " == *" is-active "* ]] && { [[ " $* " == *" --quiet "* ]] || echo active; }; exit 0'
 for t in ss node npm sqlite3; do stub $t 'exit 0'; done
-stub curl 'echo "<meta name=\"menger-ws-port\" content=\"1\">"'
+# ACCESS-25: a request naming evil.example is answered STUB_HOST_CODE (421: refused)
+stub curl '[[ " $* " == *"Host: evil.example"* ]] && { printf %s "${STUB_HOST_CODE:-421}"; exit 0; }
+echo "<meta name=\"menger-ws-port\" content=\"1\">"'
 # synapse: the smoke's reads answered; deployments.record kept in $SCRATCH/sent.ndjson
 # and answered as DEPLOY-11 does, or as STUB_TRACKER says (down, refuse, hang).
 stub synapse 'args=" $* "
@@ -66,7 +68,8 @@ release() { # N → a release directory at commit C[N]
   local id=2026100${1}T100000Z-${C[$1]:0:7} r
   r=$D/releases/$id; mkdir -p "$r/bin"
   printf 'release:   %s\ncommit:    %s\nsubject:   r%s\n' "$id" "${C[$1]}" "$1" >"$r/RELEASE"
-  printf '#!/usr/bin/env bash\nexit 0\n' >"$r/bin/menger"; chmod +x "$r/bin/menger"
+  # ACCESS-25: a release's menger knows --allowed-host, so the smoke asks every port
+  printf '#!/usr/bin/env bash\n[[ ${1:-} == --help ]] && echo "--allowed-host <HOST>"\nexit 0\n' >"$r/bin/menger"; chmod +x "$r/bin/menger"
   echo "$id"
 }
 R0=$(release 0) R1=$(release 1) R2=$(release 2)
@@ -218,6 +221,14 @@ run status
 out=$(<"$SCRATCH/out")
 has "status: the edge's pin" "$out" "landing   $S2"
 has "status: the edge's last record" "$out" "record    failed $S1"
+
+# ── ACCESS-25: the smoke asks every port for evil.example ──────────────────
+run smoke test
+same "smoke exits 0" "$code" 0
+same "smoke: every port refuses another host" "$(grep -c 'refuses Host: evil.example (421)' <<<"$err")" 4
+STUB_HOST_CODE=200 run smoke test
+same "a port answering evil.example fails the smoke" "$code" 1
+has "smoke: names the port" "$err" "FAIL :1 answers Host: evil.example (200)"
 
 printf 'deploy/pipeline records: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]
