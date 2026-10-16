@@ -1207,7 +1207,7 @@ pub(crate) fn at_of(hash: &str) -> Option<String> {
 /// [`apply`]), and/or ask the read again — whenever what the set is made of
 /// may have moved: a lag; a held ticket's status (a done blocker is not
 /// followed past, an undone one is again), kind, `blocked_by`, `unlocks` or
-/// parent; a birth or a move under a held ticket or the board's own; and, on
+/// parent; a blocker added or removed at either end held (APP-39); a birth or a move under a held ticket or the board's own; and, on
 /// a `to` board, a held ticket's placement (the final ticket's wave is the
 /// rest's). `held`: every ticket of the last answer, shown or not.
 pub(crate) fn heard_scoped(ev: &TicketsEvent, scope: &Scope, held: &HashSet<String>) -> (bool, bool) {
@@ -1220,7 +1220,16 @@ pub(crate) fn heard_scoped(ev: &TicketsEvent, scope: &Scope, held: &HashSet<Stri
             (true, ask)
         }
         TicketsEvent::StatusChanged { ticket, .. } | TicketsEvent::KindChanged { ticket, .. } => (true, mine(&ticket.id)),
-        TicketsEvent::Amended { ticket, .. } | TicketsEvent::UnlocksChanged { ticket, .. } => (false, mine(&ticket.id)),
+        TicketsEvent::Amended { ticket, .. } => (false, mine(&ticket.id)),
+        // APP-39: a blocker added or taken off — from either end. The new
+        // blocker is held by no board yet, so the ticket it now holds back
+        // is what names this board's set.
+        TicketsEvent::BlockersChanged { ticket, added, removed } => {
+            (false, mine(&ticket.id) || added.iter().chain(removed).any(|b| mine(b)))
+        }
+        TicketsEvent::UnlocksChanged { ticket, added: other } | TicketsEvent::UnlocksRemoved { ticket, removed: other } => {
+            (false, mine(&ticket.id) || mine(other))
+        }
         TicketsEvent::Created { ticket } => {
             let ask = ticket.parent.as_deref().is_some_and(mine) || ticket.unlocks.iter().any(|u| mine(u));
             (false, ask)
@@ -2149,6 +2158,36 @@ mod tests {
         let moved = TicketsEvent::PlacementsChanged { changes: vec![change("A-2", Placement::Wave { n: 1 })] };
         assert_eq!(heard_scoped(&moved, &to, &held), (true, true));
         assert_eq!(heard_scoped(&moved, &under, &held), (true, false));
+    }
+
+    /// APP-39: `update --block` / `--unblock` from outside the board — a
+    /// blocker's change asks when either end is held, on both kinds of
+    /// board (the new blocker is held by none yet); naming nothing held, it
+    /// asks nothing.
+    #[test]
+    fn a_scoped_board_hears_a_blocker_added_or_removed_from_outside() {
+        use menger_tickets_api::TicketName;
+        let held: HashSet<String> = ["A-2", "A-3"].map(String::from).into();
+        let boards = [Scope::To("A-3".into()), Scope::Under("A-1".into())];
+        let blockers = |id: &str, added: &[&str], removed: &[&str]| TicketsEvent::BlockersChanged {
+            ticket: ticket(id),
+            added: added.iter().map(|b| TicketName::new(*b)).collect(),
+            removed: removed.iter().map(|b| TicketName::new(*b)).collect(),
+        };
+        let unlocks = |id: &str, added: &str| TicketsEvent::UnlocksChanged { ticket: ticket(id), added: TicketName::new(added) };
+        let unlocked = |id: &str, removed: &str| TicketsEvent::UnlocksRemoved { ticket: ticket(id), removed: TicketName::new(removed) };
+        for board in &boards {
+            assert_eq!(heard_scoped(&blockers("A-3", &["X-9"], &[]), board, &held), (false, true), "a held ticket gained X-9");
+            assert_eq!(heard_scoped(&blockers("A-2", &[], &["X-9"]), board, &held), (false, true), "a held ticket lost X-9");
+            assert_eq!(heard_scoped(&blockers("Z-8", &["A-2"], &[]), board, &held), (false, true), "a held blocker named");
+            assert_eq!(heard_scoped(&unlocks("X-9", "A-3"), board, &held), (false, true), "X-9, not held yet, now holds back A-3");
+            assert_eq!(heard_scoped(&unlocks("A-2", "Z-8"), board, &held), (false, true));
+            assert_eq!(heard_scoped(&unlocked("X-9", "A-3"), board, &held), (false, true), "X-9 no longer holds back A-3");
+            assert_eq!(heard_scoped(&unlocked("A-2", "Z-8"), board, &held), (false, true));
+            assert_eq!(heard_scoped(&blockers("Z-8", &["X-9"], &["Y-7"]), board, &held), (false, false));
+            assert_eq!(heard_scoped(&unlocks("X-9", "Z-8"), board, &held), (false, false));
+            assert_eq!(heard_scoped(&unlocked("X-9", "Z-8"), board, &held), (false, false));
+        }
     }
 
     /// On a `to` board the final ticket's placement is the board's: a
