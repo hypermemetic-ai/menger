@@ -2742,6 +2742,16 @@
   @keyframes menger-rise { from { transform: translateY(110%); clip-path: inset(0 0 100% 0); } to { transform: none; clip-path: inset(0 0 0 0); } }
   #ticket-page article.ticket.opening > .mscope-frame { animation: menger-develop .5s ease-out .08s backwards; }
   @keyframes menger-develop { from { filter: blur(8px); opacity: 0; } to { filter: none; opacity: 1; } }
+  /* APP-34: the ticket menu opens with a motion — it grows out of the
+     corner nearest where it was opened (transform-origin set by
+     src/menu/mod.rs's place), a submenu the same, smaller and shorter, from
+     its parent row. Closing is instant: the menu is removed, focus returns.
+     Calm keeps it (a state change); none (below) stops it. */
+  #tmenu { animation: menger-menu-in .14s cubic-bezier(.2, .8, .2, 1) both; }
+  @keyframes menger-menu-in { from { opacity: 0; transform: scale(.96); } }
+  #tmenu .sub { transform-origin: left top; animation: menger-sub-in .1s cubic-bezier(.2, .8, .2, 1) both; }
+  @keyframes menger-sub-in { from { opacity: 0; transform: scale(.98) translateY(-2px); } }
+  html[data-motion="none"] :is(#tmenu, #tmenu .sub) { animation: none; }
   /* The pip: its cells the lifecycle's mix among what the nav shows. */
   #nav .carpet.pip rect { transition: fill .6s var(--ease); }
   .carpet rect.s-pending { fill: var(--st-pending-fg); }
@@ -2956,6 +2966,7 @@
     html:not([data-motion]) #qtray .qtab.fresh.unseen { outline: 2px solid var(--flash); outline-offset: -2px; }
     html:not([data-motion]) #qtray :is(.qedge, .qarrived) { display: none; }
     html:not([data-motion]) #qtray .qcard { animation: none; }
+    html:not([data-motion]) :is(#tmenu, #tmenu .sub) { animation: none; }
   }
 </style>
 </head>
