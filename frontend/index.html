@@ -1541,6 +1541,72 @@
   .mmock:has(.mpick[data-mark="answer"]), .mmock:has(.mpick[data-mark="decided"]) {
     outline: 2px solid var(--live); outline-offset: 4px; border-radius: var(--radius-lg); }
   .mmock:has(.mpick[data-mark="weighed"]) .framed-stage { opacity: .62; }
+  /* APP-44: the mockup compare (src/compare.rs) — a bar's Compare toggle;
+     the page's pill at the bottom left (clear of the queue control at the
+     bottom right and the dock at the right edge); and the full-window view,
+     a column per mockup at one shared device, scrolling sideways inside
+     itself past what fits. Columns sit in a fixed DOM order and move by
+     `order`, so their frames never reload. */
+  .cmp-pill { position: sticky; bottom: 14px; z-index: 30; width: fit-content; margin: 12px 0 0; display: flex; align-items: center; gap: 2px;
+    padding: 3px 4px 3px 12px; font: calc(12px * var(--text-scale)) var(--mono); color: var(--bg); background: var(--ink);
+    border-radius: var(--radius-pill); box-shadow: 0 8px 24px var(--shadow); }
+  .cmp-pill[hidden] { display: none; }
+  #ticket-page > .cmp-pill { order: 99; align-self: flex-start; }
+  .cmp-pill .cmp-n { padding-right: 6px; }
+  .cmp-pill button { font: inherit; color: inherit; background: none; border: 0; border-radius: var(--radius-pill); padding: 4px 10px; cursor: pointer; }
+  .cmp-pill .cmp-open { background: var(--bg); color: var(--ink); font-weight: var(--weight-medium); }
+  .cmp-pill button:hover { text-decoration: underline; }
+  .cmp-pill button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  @media (min-width: 641px) { #app:has(#qtray:not(.empty)) .cmp-pill { bottom: 62px; } }
+  /* A phone: above the dock's pill and the queue's tab, both at the bottom right. */
+  @media (max-width: 640px) { .cmp-pill { bottom: calc(98px + env(safe-area-inset-bottom, 0px)); } }
+  .cmp-view { position: fixed; inset: 0; z-index: 960; display: flex; flex-direction: column; box-sizing: border-box;
+    padding: .5rem .75rem .75rem; background: var(--bg); color: var(--ink); animation: menger-cmp-in .18s var(--ease) both; }
+  @keyframes menger-cmp-in { from { opacity: 0; transform: scale(.985); } }
+  .cmp-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem; padding-bottom: .45rem; margin-bottom: .5rem;
+    border-bottom: var(--border) solid var(--line); font-size: calc(.78rem * var(--text-scale)); color: var(--muted); }
+  .cmp-heading { color: var(--ink); font-weight: var(--weight-strong); font-size: calc(.9rem * var(--text-scale)); }
+  .cmp-heading .code { font-family: var(--mono); color: var(--muted); }
+  .cmp-size { width: 7.5rem; }
+  .cmp-menu { min-width: min(22rem, calc(100vw - 32px)); max-height: 70vh; overflow-y: auto; }
+  .cmp-menu .framed-menu-item .cmp-menu-l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .cmp-menu .framed-menu-item:last-of-type { border-top: 0; margin-top: 0; }
+  .cmp-menu-note { margin: 0; padding: .4rem .5rem; color: var(--muted); }
+  .cmp-ref { display: flex; align-items: center; gap: .5rem; padding: .4rem .5rem .2rem; margin-top: 2px; border-top: var(--border) solid var(--line); color: var(--muted); }
+  .cmp-ref .framed-input { flex: 1; min-width: 0; }
+  .cmp-menu .framed-refused { margin: .2rem .5rem .3rem; }
+  .cmp-switch { display: flex; align-items: center; gap: .5rem; padding: 0 0 .5rem; font-size: calc(.8rem * var(--text-scale)); }
+  .cmp-switch-at { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+  .cmp-switch-at .code { font-family: var(--mono); color: var(--muted); }
+  .cmp-stage { flex: 1; min-height: 0; display: flex; gap: 16px; align-items: flex-start; overflow-x: hidden; overflow-y: auto; }
+  .cmp-stage.scrolls { overflow-x: auto; }
+  .cmp-col { flex: none; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: .35rem; }
+  .cmp-col.hidden { display: none; }
+  .cmp-head { align-self: stretch; display: flex; align-items: center; gap: .45rem; min-width: 0; padding: .25rem .35rem .25rem .25rem;
+    font-size: calc(.8rem * var(--text-scale)); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: grab; }
+  .cmp-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .cmp-grip { color: var(--tree-line); letter-spacing: -.2em; padding: 0 .2rem; }
+  .cmp-title { font-family: var(--sans); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }
+  .cmp-at { font-family: var(--mono); color: var(--muted); font-size: calc(.72rem * var(--text-scale)); white-space: nowrap; }
+  .cmp-x { font: inherit; color: var(--muted); background: none; border: var(--border) solid transparent; border-radius: var(--radius); padding: 0 .35rem; cursor: pointer; }
+  .cmp-x:hover { color: var(--ink); border-color: var(--line); }
+  .cmp-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .cmp-acts { align-self: stretch; justify-content: flex-start; padding: 0; }
+  .cmp-caption { font-family: var(--sans); align-self: stretch; max-height: 2.9em; overflow: hidden; font-size: calc(.8rem * var(--text-scale)); line-height: 1.45; color: var(--muted); }
+  .cmp-caption > :first-child { margin-top: 0; }
+  .cmp-caption p { margin: 0; }
+  .cmp-state { align-self: stretch; margin: 0; padding: .5rem .7rem; font-size: calc(13px * var(--text-scale)); color: var(--muted);
+    border: var(--border) dashed var(--line); border-radius: var(--radius-lg); }
+  .cmp-state.failed { color: var(--err-fg); background: var(--err-bg); border-style: solid; border-color: var(--err-line); }
+  .cmp-screen { position: relative; flex: none; overflow: hidden; background: var(--card); border: 2px solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 6px 18px var(--shadow); }
+  .cmp-inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  .cmp-view.is-dragging .cmp-screen iframe { pointer-events: none; }
+  .cmp-view.is-dragging .cmp-head { cursor: grabbing; }
+  @media (max-width: 640px) {
+    .cmp-view { padding: .4rem 16px .6rem; }
+    .cmp-bar .framed-gap { display: none; }
+    .cmp-heading { flex-basis: 100%; }
+  }
   .md .wave-ref {
     font-family: var(--mono); font-size: calc(.85em * var(--text-scale)); white-space: nowrap; text-decoration: none;
     border: var(--border) solid var(--chip-line); background: var(--chip-bg); color: var(--chip-fg); border-radius: var(--radius-lg); padding: 0 5px;

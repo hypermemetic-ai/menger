@@ -977,6 +977,15 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
             return;
         }
     }
+    // APP-44: `c` with focus in a mockup's box — that mockup in or out of
+    // the page's comparison (the box is a region of its own: not the
+    // Conversation's `c`).
+    if let Some(key) = target.as_ref().and_then(crate::compare::box_key) {
+        if bindings::is(ev, Context::MockBox, "compare.toggle") && crate::compare::toggle_key(&key) {
+            ev.prevent_default();
+        }
+        return;
+    }
     // APP-22: `c` — the ticket page's Conversation box.
     if bindings::is(ev, Context::TicketPage, "comment.focus") {
         if crate::conversation::focus_box() {

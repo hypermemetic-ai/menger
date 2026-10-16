@@ -515,6 +515,8 @@ pub(crate) fn asked(citer: web_sys::HtmlIFrameElement, channel: String, n: u32, 
     position(&e);
     settle(&mut e);
     BOXES.with(|b| b.borrow_mut().insert(k.clone(), e));
+    // APP-44: a compare column of this mockup may now carry its *pick this*.
+    crate::compare::boxes_moved();
     if fetch {
         fetch_into(k);
     }
@@ -549,6 +551,40 @@ fn fetch_into(k: String) {
             }
         });
     });
+}
+
+/// APP-44: the box of ticket `ticket`'s mockup `n` on its own ticket page
+/// (the body's frame, not a cited window) — its key and the decision's option
+/// it is the look of, if any.
+pub(crate) fn box_of(ticket: &str, n: u32) -> Option<(String, Option<mockpick::Choice>)> {
+    BOXES.with(|b| {
+        b.borrow()
+            .iter()
+            .find(|(_, e)| {
+                e.n == n
+                    && !e.citer.has_attribute("data-cite-key")
+                    && e.citer.get_attribute("data-ticket").is_some_and(|t| t.eq_ignore_ascii_case(ticket))
+            })
+            .map(|(k, e)| (k.clone(), e.posted.option.clone()))
+    })
+}
+
+/// APP-44: the mockups of the decision the mockup `k` is an option's look
+/// of — each its body's ticket and number, in the body's order.
+pub(crate) fn decision_of(k: &str) -> Vec<(String, u32)> {
+    BOXES.with(|b| {
+        let b = b.borrow();
+        let Some(me) = b.get(k) else { return Vec::new() };
+        let Some(input) = me.posted.option.as_ref().map(|c| c.input.clone()) else { return Vec::new() };
+        let Some(ticket) = me.citer.get_attribute("data-ticket").filter(|t| !t.is_empty()) else { return Vec::new() };
+        let mut v: Vec<u32> = b
+            .values()
+            .filter(|e| e.channel == me.channel && e.posted.option.as_ref().is_some_and(|c| c.input == input))
+            .map(|e| e.n)
+            .collect();
+        v.sort_unstable();
+        v.into_iter().map(|n| (ticket.clone(), n)).collect()
+    })
 }
 
 /// APP-46: the body frame the mockup `k` is drawn for.

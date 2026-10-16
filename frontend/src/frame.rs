@@ -978,6 +978,8 @@ pub(crate) fn broadcast_change(ev: &TicketsEvent) {
     cite::heard(ev);
     // APP-29: and a referenced mockup's page.
     mockup::heard(ev);
+    // APP-44: and a compared mockup's.
+    crate::compare::heard(ev);
     if let TicketsEvent::GroupChanged { group } = ev {
         for scope in bridge::note_group(group) {
             refresh_reach(scope);

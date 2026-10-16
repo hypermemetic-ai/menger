@@ -1424,8 +1424,41 @@ as a whole, without annotation mode, anchored as APP-45 anchors inside a
 mockup — `mockup:<ticket>#<n>[=<ref>]@<width> >> body`, the page's root at
 the first device shown — labelled with the option (`Mockup of option
 “Dense” (look)`). Its pin sits on the device in annotation mode and
-`#/comments`' link back finds it. *Compare these* (APP-44's view) is
-absent until that view is on main (`mockpick::COMPARE`).
+`#/comments`' link back finds it. An option's look also carries **compare
+these**: APP-44's view (below) on every look of that decision, each column
+carrying the same bar — the option's name, its mark, *pick this* (the same
+answer path and gesture check) and *comment*.
+
+**Mockups side by side** (APP-44; `frontend/src/compare.rs`; owner,
+2026-10-16: *"allow me to do a side by side of various mocks … picking
+whichever I want on the page"*). Every mockup's bar on a ticket page has
+**Compare** — a toggle, or `c` while focus is in the mockup's box (its bar,
+its devices' labels; a key inside the mocked page is the page's). The
+picked mockups are the page's **compare set**, and a pill at the bottom
+left says `compare N · open · clear` (clear of the queue control at the
+bottom right and the dock at the right edge; on a phone, above both).
+**Open** lays them side by side in one full-window view: a column each, its
+description over it, at **one shared device** (390 · 768 · 1440, or a
+typed `W` / `W×H`) and one shared Light / Dark / Reduced motion, every
+column a live frame you use directly. Columns move by drag or ←/→ on a
+focused column head, go with ×, and come from **+ Add**: every mockup on
+the page (its title, `T#mN`), and **by ref** another ticket's — `DESIGN-49`
+(a whole-page body) or `DESIGN-49#m2` (its second mockup), read over your
+own socket (hidden ≡ not found). Past what fits the columns scroll
+sideways inside the view; at a phone's width it is one column and a
+switcher. Esc or Close leaves it; the set stays.
+
+A mockup is named as its box names itself: `T#mN`, the Nth `<m-mockup>` of
+T's body in the order its frame numbers them (fence, element and `ref`
+alike), or `T` for a `view: mockup` body. The set is yours: kept per page
+in this browser (`menger.compare:<T>`, the shared device under
+`menger.compare-device`), never in the body; while the view is open the
+route carries it — `#/ticket/APP-37?compare=APP-37#m1,APP-37#m3` — so the
+link opens the same comparison. A member that is not there is a named line
+in its column (`APP-37 has no mockup 9 — its body holds 6`, `NOPE-7: no
+ticket you can read`), never an error. A column redraws in place when its
+ticket is amended, and moving a column never reloads its frame (the columns
+keep one DOM order and move by CSS `order`).
 
 A soft check: the page shim reports its page's height (`menger:extent {
 height }`, a number, nothing of the page), and when the page at the
