@@ -1239,26 +1239,44 @@ its own (80vh) and scrolls inside it; its `#fragment` links scroll the page
 navigate the frame away), any other link takes MENGER-14's path (`menger:link`: the leave dialog first; full screen steps aside for it), and its `prefers-color-scheme`
 follows the app's painted mode.
 
-**A mockup among prose** (APP-29; `frontend/src/mockup.rs`, the SDK's
-`<m-mockup>`). A mockup is also a component of an ordinary body, with
-prose, decisions and other components around it, as many as a body needs
-(at most 16). Inline, a fence holds the page:
+**A mockup among prose** (APP-29, APP-32; `frontend/src/mockup.rs`,
+`tickets-api/src/mockups.rs`, the SDK's `<m-mockup>`). A mockup is also a
+component of an ordinary body, with prose, decisions and other components
+around it, as many as a body needs (at most 16, element, fence and ref
+mockups counted together). The standard form writes the page inside the
+element, in the ticket that discusses it — no doc of its own:
 
-````markdown
+```markdown
 The landing, as it stands:
 
-```mockup widths=390,1440
+<m-mockup widths="390,1440">
 <!doctype html>
 <html>…the whole page…</html>
-```
+</m-mockup>
 
 Ship it? <m-decision id="ship">…</m-decision>
+```
+
+The element's content, up to the first `</m-mockup>`, is the page's HTML as
+written — never read as markdown, never the body's own markup (blank lines,
+`<script>`, `</script>`, `<template>`, `<!doctype html>` all survive; its
+tags reference no component, its `<m-decision>`s are no inputs of the
+ticket); `widths=` is `W` or `WxH`, at most 6 (as `widths:` takes them), and
+defaults to 390, 768 and 1440. Written in a code span or a fence the element
+is text, as ever. A page that itself holds the text `</m-mockup>` would be
+cut there — put such a page in a fence, which holds it the same way:
+
+````markdown
+```mockup widths=390,1440
+<!doctype html>
+<html>…a page that says </m-mockup>…</html>
+```
 ````
 
-The fence's content is the page's HTML as written — never read as markdown
-(blank lines, `</script>`, `</template>` all survive); `widths=` takes what
-`widths:` takes (`W` or `WxH`, at most 6; quoted when it holds spaces) and
-defaults to 390, 768 and 1440. A fence alone frames its body. By reference,
+The fence's `widths=` is quoted when it holds spaces; a fence alone frames
+its body. An element with both `ref=` and a page inside it is refused when
+the body is written, naming its line: a mockup is either inline or by
+reference. By reference — still allowed, no longer the usual path —
 `<m-mockup ref="DESIGN-49"></m-mockup>` draws another ticket whose body is a
 whole HTML document, at the widths that page declares (`widths:` in its
 frontmatter, or its `<meta name="menger-widths">`) unless the element names
@@ -1267,8 +1285,8 @@ the same box a `view: mockup` body gets — one device frame per width side
 by side, All / per device, Light / Dark, Reduced motion, ⤢ Full screen.
 
 It is drawn as `<m-cite>` is: in the body's frame the element is only a
-placeholder (`menger:mockup { mock, ref, widths, source, rect }`, a fence's
-page carried in its `source` attribute); the **host** lays the devices over
+placeholder (`menger:mockup { mock, ref, widths, source, rect }`, an inline
+page — the element's or a fence's — carried in its `source` attribute); the **host** lays the devices over
 it, outside the frame, and answers only the height (`menger:mocked { mock,
 height }`), so the prose below moves down. A `ref` is read over the
 viewer's own socket with the viewer's reach — a ticket outside it is "no

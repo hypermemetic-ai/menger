@@ -1280,6 +1280,7 @@ impl StoreError {
             components::Problem::Twice(name) => Self::ComponentTwice { id, name },
             components::Problem::Docs { name, problem } => Self::ComponentDocs { id, name, problem },
             components::Problem::Theme { name, error } => Self::Invalid(format!("```theme {name}: {error} (nothing was written)")),
+            components::Problem::Mockup(problem) => Self::Invalid(format!("{problem} (nothing was written)")),
         }
     }
 }

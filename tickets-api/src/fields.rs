@@ -310,7 +310,10 @@ impl Scan {
         // blank lines included, as the frame renders it — the parser reads
         // the body with those blank lines marked; offsets and lines map
         // back (a mark ends its line, so a line's offsets still run on).
-        let read = html_runs::read(rest, options());
+        // APP-32: a page inside an `<m-mockup>` is the page's, not the
+        // body's markup — read blanked, offsets and lines as they were.
+        let blanked = crate::mockups::blank(rest);
+        let read = html_runs::read(&blanked, options());
         for (event, range) in Parser::new_ext(read.source(), options()).into_offset_iter() {
             let range = read.original(range.start)..read.original(range.end);
             match event {

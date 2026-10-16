@@ -139,6 +139,9 @@ pub(crate) enum Problem {
     /// THEME-3: a ` ```theme ` block that is not a theme — `error` names
     /// its line ([`crate::theme_block`]).
     Theme { name: String, error: String },
+    /// APP-32: an `<m-mockup>` with both a `ref` and a page inside it —
+    /// the line and the reason ([`crate::mockups::problems`]).
+    Mockup(String),
 }
 
 /// The frontmatter split off as the app splits it (`frontend/src/md.rs`,
@@ -186,7 +189,14 @@ pub(crate) fn read(body: &str) -> (Uses, Vec<Problem>) {
     let mut html: Option<String> = None;
     // COMP-11: an element opened in an HTML block runs to its close, blank
     // lines included, as the frame renders it (`html_runs`).
-    let read = html_runs::read(rendered(body), opts);
+    // APP-32: a page inside an `<m-mockup>` is the page's markup, not the
+    // body's — read blanked, as a fence's content is code; one with a `ref`
+    // too is refused, by line.
+    for problem in crate::mockups::problems(body) {
+        problems.push(Problem::Mockup(problem));
+    }
+    let blanked = crate::mockups::blank(rendered(body));
+    let read = html_runs::read(&blanked, opts);
     for event in Parser::new_ext(read.source(), opts) {
         match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
@@ -714,6 +724,8 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
                     ),
                     // THEME-3's own migration reads the theme blocks.
                     Problem::Theme { .. } => {}
+                    // APP-32: a stored body is drawn as it is; only a write refuses it.
+                    Problem::Mockup(_) => {}
                 }
             }
             uses.defines.retain(|name, _| match registry.owner(name) {

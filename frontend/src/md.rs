@@ -70,12 +70,18 @@
 //! escaped attribute, which the host draws in device chrome beside the
 //! prose around it (src/mockup.rs).
 //!
+//! APP-32: **a mockup written in its element** — `<m-mockup widths="390">`
+//! … the page … `</m-mockup>`, the standard form — is taken out of a framed
+//! body before anything reads it as markdown ([`inline_mockups`], by
+//! `menger_tickets_api::mockups`' rule: the content up to the first
+//! `</m-mockup>`, as written), and becomes the placeholder a fence becomes.
+//!
 //! COMP-12: in a frame, the elements markdown produced carry [`MD_MARK`]
 //! ([`push_marked`]) — in a body that opts out of the SDK's base typography
 //! on its own HTML (`<meta name="menger-base" content="markdown">`), the
 //! base styles those and nothing the body wrote as HTML.
 
-use menger_tickets_api::{component_docs, html_runs};
+use menger_tickets_api::{component_docs, html_runs, mockups};
 use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 use pulldown_cmark_escape::{escape_href, escape_html};
 
@@ -344,10 +350,17 @@ pub(crate) fn fence_widths(info: &str) -> Option<&str> {
 /// parsed or run in the body's frame. The page is the body's own text, so
 /// handing it to the host reveals nothing the body did not already hold.
 pub(crate) fn mockup_placeholder(info: &str, src: &str) -> String {
+    placeholder(fence_widths(info), src)
+}
+
+/// The placeholder for a page at `widths` (as written; `None`: the default
+/// devices) — a fence's ([`mockup_placeholder`]) and, APP-32, an element's
+/// ([`inline_mockups`]).
+fn placeholder(widths: Option<&str>, src: &str) -> String {
     let mut out = String::with_capacity(src.len() + src.len() / 8 + 64);
     out.push('<');
     out.push_str(MOCKUP_TAG);
-    if let Some(w) = fence_widths(info) {
+    if let Some(w) = widths {
         out.push_str(" widths=\"");
         escape_html(&mut out, w).expect("escaping into a String cannot fail");
         out.push('"');
@@ -358,6 +371,38 @@ pub(crate) fn mockup_placeholder(info: &str, src: &str) -> String {
     out.push_str(MOCKUP_TAG);
     out.push_str(">\n");
     out
+}
+
+/// APP-32: what stands in a body for its `n`th inline mockup while the
+/// rest is read as markdown — an HTML comment, which passes through a frame
+/// untouched wherever it sits (an HTML block, a paragraph, an element), and
+/// which [`render`] swaps for the page's placeholder once the body is HTML.
+/// U+FDD1, a noncharacter, keeps it from being anything a body means.
+fn inline_sentinel(n: usize) -> String {
+    format!("<!--\u{FDD1}m-mockup {n}\u{FDD1}-->")
+}
+
+/// APP-32: a framed body with each `<m-mockup>` that holds a page
+/// ([`menger_tickets_api::mockups`]: the content up to the first
+/// `</m-mockup>`, taken as written) replaced by its [`inline_sentinel`] —
+/// and each page's placeholder, the one a fence becomes, in order. `None`
+/// for a body that holds none.
+fn inline_mockups(src: &str) -> Option<(String, Vec<String>)> {
+    let found = mockups::find(src);
+    if found.inline.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(src.len());
+    let mut pages = Vec::with_capacity(found.inline.len());
+    let mut at = 0;
+    for (n, m) in found.inline.iter().enumerate() {
+        out.push_str(&src[at..m.start]);
+        out.push_str(&inline_sentinel(n));
+        pages.push(placeholder(m.widths.as_deref(), &src[m.page.clone()]));
+        at = m.end;
+    }
+    out.push_str(&src[at..]);
+    Some((out, pages))
 }
 
 /// COMP-9: the card a definition block renders as in a framed body — the
@@ -657,6 +702,10 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
     } else {
         src
     };
+    // APP-32 (framed only): each `<m-mockup>` holding a page is taken out
+    // before anything reads the body as markdown — its page never is.
+    let inline = if framed { inline_mockups(src) } else { None };
+    let src = inline.as_ref().map_or(src, |(s, _)| s.as_str());
 
     // Depth counters for dropped tags, so each End pairs with its Start.
     let mut dropped_links = 0u32;
@@ -851,6 +900,11 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
                 substitute(t, resolve, &mut out);
             }
             push_marked(&mut html, autolink(out.into_iter()).into_iter(), framed);
+        }
+    }
+    if let Some((_, pages)) = &inline {
+        for (n, page) in pages.iter().enumerate() {
+            html = html.replacen(&inline_sentinel(n), page.trim_end_matches('\n'), 1);
         }
     }
     Rendered { html, diagrams }
@@ -1830,5 +1884,65 @@ A candidate language, drawn below.
         assert!(!is_framed("the word mockup in prose"));
         // Unframed (never, for such a body — but the plain renderer keeps it a code block).
         assert!(render_body("```mockup\n<b>x</b>\n```\n").html.contains("<pre><code class=\"language-mockup\">&lt;b&gt;x&lt;/b&gt;"));
+    }
+
+    // -- mockups written in their element (APP-32) -----------------------
+
+    const PAGE_32: &str = "<!doctype html>\n<html><head><style>body{background:#fff}\n\n@media (max-width:600px){body{background:#f0c}}</style></head>\n<body>\n<h1 class=\"t\">Hi & \"bye\"</h1>\n\n<template><p>x</p></template>\n\n    indented, not code\n\n# not a heading\n\n<m-decision id=\"not-the-bodys\"></m-decision>\n\n<script>document.title = \"</scr\" + \"ipt>\"; var s = '</script>';</script>\n</body></html>\n";
+
+    /// The element's content is the page, as written — and the body renders
+    /// exactly as the same page in a fence does: one placeholder, `source=`.
+    #[test]
+    fn an_element_holding_a_page_is_the_fences_placeholder() {
+        let element = format!("Intro *prose*.\n\n<m-mockup widths=\"390,1440\">\n{PAGE_32}</m-mockup>\n\nAfter **it**.\n");
+        let fence = format!("Intro *prose*.\n\n```mockup widths=390,1440\n{PAGE_32}```\n\nAfter **it**.\n");
+        let r = render_body_framed(&element, &|_| None);
+        assert_eq!(mock_source(&r.html), PAGE_32);
+        assert_eq!(r.html, render_body_framed(&fence, &|_| None).html);
+        assert_eq!(r.html.matches("<m-mockup").count(), 1, "{}", r.html);
+        assert!(!r.html.contains("<!--") && !r.html.contains('\u{FDD1}'), "{}", r.html);
+        assert!(r.html.contains("<p>Intro <em>prose</em>.</p>") && r.html.contains("<p>After <strong>it</strong>.</p>"), "{}", r.html);
+        // A page whose first line follows the open tag on the same line.
+        let r = render_body_framed("<m-mockup><p>a</p>\n\n<p>b</p></m-mockup>\n", &|_| None);
+        assert_eq!(mock_source(&r.html), "<p>a</p>\n\n<p>b</p>");
+    }
+
+    /// widths as written (none: no attribute — the host's 390, 768, 1440);
+    /// a ref with no content is APP-29's element, as written.
+    #[test]
+    fn an_element_carries_its_widths_and_a_bare_ref_is_unchanged() {
+        let r = render_body_framed("<m-mockup>\n<p>a</p>\n</m-mockup>\n\nmid\n\n<m-mockup widths='390 768x1024'>\n<p>b</p>\n</m-mockup>\n", &|_| None);
+        assert!(r.html.contains("<m-mockup source=\"&lt;p&gt;a&lt;/p&gt;\n\"></m-mockup>"), "{}", r.html);
+        assert!(r.html.contains("<m-mockup widths=\"390 768x1024\" source=\"&lt;p&gt;b&lt;/p&gt;\n\"></m-mockup>"), "{}", r.html);
+        let r = render_body_framed("<m-mockup ref=\"DESIGN-49\" widths=\"390\"></m-mockup>\n", &|_| None);
+        assert!(r.html.contains("<m-mockup ref=\"DESIGN-49\" widths=\"390\"></m-mockup>") && !r.html.contains("source="), "{}", r.html);
+    }
+
+    /// Written in code — a span, a fence, indented — or in a comment, the
+    /// element is text, as ever; only real markup is a mockup.
+    #[test]
+    fn an_element_in_code_or_a_comment_is_no_mockup() {
+        let r = render_body_framed(
+            "Write `<m-mockup>x</m-mockup>`.\n\n```html\n<m-mockup>\n<p>x</p>\n</m-mockup>\n```\n\n<!-- <m-mockup>x</m-mockup> -->\n",
+            &|_| None,
+        );
+        assert!(!r.html.contains("source="), "{}", r.html);
+        assert!(r.html.contains("<code data-md>&lt;m-mockup&gt;x&lt;/m-mockup&gt;</code>"), "{}", r.html);
+    }
+
+    /// The first `</m-mockup>` closes it; inside a field, between blank
+    /// lines, inline in a paragraph — each is the same placeholder; element,
+    /// fence and ref mockups are all placeholders, which the host counts
+    /// together against its cap.
+    #[test]
+    fn elements_anywhere_and_every_form_counted_together() {
+        let src = "<m-field data-field=\"look\">\n\n<m-mockup widths=\"390\">\n<p>one</p>\n</m-mockup><p>after the first close</p></m-mockup>\n\n</m-field>\n\nSee <m-mockup><b>two</b></m-mockup> inline.\n\n```mockup\n<p>three</p>\n```\n\n<m-mockup ref=\"DESIGN-49\"></m-mockup>\n";
+        let r = render_body_framed(src, &|_| None);
+        assert_eq!(r.html.matches("<m-mockup").count(), 4, "{}", r.html);
+        assert_eq!(r.html.matches(" source=\"").count(), 3, "{}", r.html);
+        assert_eq!(mock_source(&r.html), "<p>one</p>\n");
+        assert!(r.html.contains("<p>after the first close</p>"), "{}", r.html);
+        assert!(r.html.contains("source=\"&lt;b&gt;two&lt;/b&gt;\""), "{}", r.html);
+        assert!(r.html.contains("<m-field data-field=\"look\">") && r.html.contains("</m-field>"), "{}", r.html);
     }
 }
