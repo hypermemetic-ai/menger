@@ -29,12 +29,14 @@ import type { TicketsClient } from './generated/tickets/client';
 import type { TicketsInputsClient } from './generated/tickets/inputs/client';
 import type { TicketsWorkClient } from './generated/tickets/work/client';
 import type { TicketsNavClient } from './generated/tickets/nav/client';
+import type { TicketsComponentsClient } from './generated/tickets/components/client';
 import type { Answer, Input, InputValue } from './generated/tickets/types';
 
 export type { TicketsClient } from './generated/tickets/client';
 export type { TicketsInputsClient } from './generated/tickets/inputs/client';
 export type { TicketsWorkClient } from './generated/tickets/work/client';
 export type { TicketsNavClient } from './generated/tickets/nav/client';
+export type { TicketsComponentsClient } from './generated/tickets/components/client';
 
 /**
  * ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
@@ -44,16 +46,24 @@ export type { TicketsNavClient } from './generated/tickets/nav/client';
 export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
 
 /**
+ * ACCESS-18: `menger.tickets.components` — the `tickets components` child's
+ * client (`list()`), and callable as `list` itself, as before the move.
+ */
+export type ComponentsChild = TicketsComponentsClient & TicketsComponentsClient['list'];
+
+/**
  * The typed `tickets` a frame gets: its `inputs` the child's, and
  * (ACCESS-17) its child `tickets work` as `work`, with that child's `waves`
  * and `blockers` where a body has always called them, until ACCESS-20
- * moves the SDK; (ACCESS-16) its child `nav`.
+ * moves the SDK; (ACCESS-16) its child `nav`; (ACCESS-18) its `components`
+ * the child's.
  */
-export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work' | 'nav'> &
+export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work' | 'nav' | 'components'> &
   Pick<TicketsWorkClient, 'waves' | 'blockers'> & {
     readonly inputs: InputsChild;
     readonly work: TicketsWorkClient;
     readonly nav: TicketsNavClient;
+    readonly components: ComponentsChild;
   };
 export type * from './generated/tickets/types';
 
@@ -178,7 +188,8 @@ export interface Menger {
    *
    * Answered by the app over its own connection, read-only: `get`, `list`,
    * `find`, `waves`, `nav.groups`, `nav.extents`, `blockers`, `health`,
-   * `components`, `inputs.list` (INPUT-4; ACCESS-14: the `tickets inputs`
+   * `components.list` (ACCESS-18: the `tickets components` child, and
+   * `components()` the same), `inputs.list` (INPUT-4; ACCESS-14: the `tickets inputs`
    * child — `inputs.list(epic?, filter?, state?, ticket?)`, and
    * `inputs(…)` the same — one `{ type: 'input', input }` per input, its
    * answer and history included). Every other method is present and

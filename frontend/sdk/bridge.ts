@@ -38,6 +38,7 @@ import { createTicketsClient, type TicketsClient } from './generated/tickets/cli
 import { createTicketsInputsClient, type TicketsInputsClient } from './generated/tickets/inputs/client';
 import { createTicketsWorkClient, type TicketsWorkClient } from './generated/tickets/work/client';
 import { createTicketsNavClient, type TicketsNavClient } from './generated/tickets/nav/client';
+import { createTicketsComponentsClient, type TicketsComponentsClient } from './generated/tickets/components/client';
 
 /** ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
  *  (`list`, and the writes, which the host refuses), and callable as
@@ -46,17 +47,24 @@ import { createTicketsNavClient, type TicketsNavClient } from './generated/ticke
  *  order). */
 export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
 
+/** ACCESS-18: `menger.tickets.components` — the `tickets components`
+ *  child's client (`list`), and callable as `list` itself, as
+ *  `menger.tickets.components()` was before the move. */
+export type ComponentsChild = TicketsComponentsClient & TicketsComponentsClient['list'];
+
 /** The typed `tickets` a frame gets: the generated client, its `inputs`
  *  the child's ([`InputsChild`]) — hub-codegen gives a `#[child]` accessor
  *  no client of its own on the parent — and (ACCESS-17) `tickets work` as
  *  `work`, with that child's `waves` and `blockers` kept where a body has
  *  always called them (`menger.tickets.waves([…])`) until ACCESS-20 moves
- *  the frames' SDK — and (ACCESS-16) its child `nav` (`tickets.nav.groups`, …). */
-export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work' | 'nav'> &
+ *  the frames' SDK — and (ACCESS-16) its child `nav` (`tickets.nav.groups`, …)
+ *  — and (ACCESS-18) its `components` the child's ([`ComponentsChild`]). */
+export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work' | 'nav' | 'components'> &
   Pick<TicketsWorkClient, 'waves' | 'blockers'> & {
     readonly inputs: InputsChild;
     readonly work: TicketsWorkClient;
     readonly nav: TicketsNavClient;
+    readonly components: ComponentsChild;
   };
 
 /** The shell's `menger.call`: a read over the bridge, answered with the
@@ -84,7 +92,13 @@ const NAV = 'tickets.nav.';
  *  and `blockers` the host's `waves` / `blockers` (its `menger.call` names
  *  move with every client in ACCESS-20); any other child method goes as
  *  `<child>.<method>`, which the host refuses. */
-const HOST_NAMES: Record<string, string> = { 'inputs.list': 'inputs', 'work.waves': 'waves', 'work.blockers': 'blockers' };
+const HOST_NAMES: Record<string, string> = {
+  'inputs.list': 'inputs',
+  'work.waves': 'waves',
+  'work.blockers': 'blockers',
+  // ACCESS-18: the registry is still the host's `components`.
+  'components.list': 'components',
+};
 
 function metadata(method: string): StreamMetadata {
   return { provenance: ['menger', 'bridge', method], plexusHash: '', timestamp: Math.floor(Date.now() / 1000) };
@@ -139,6 +153,13 @@ function frameTickets(rpc: RpcClient): FrameTickets {
   Object.assign(tickets, { work, waves: work.waves.bind(work), blockers: work.blockers.bind(work) });
   // ACCESS-16: `tickets nav`.
   Object.defineProperty(tickets, 'nav', { value: createTicketsNavClient(rpc) });
+  // ACCESS-18: `tickets components`, callable as `list`.
+  const registry = createTicketsComponentsClient(rpc);
+  const components: ComponentsChild = Object.assign(registry.list.bind(registry), {
+    list: registry.list.bind(registry),
+    schema: registry.schema.bind(registry),
+  });
+  Object.defineProperty(tickets, 'components', { value: components });
   return tickets as unknown as FrameTickets;
 }
 

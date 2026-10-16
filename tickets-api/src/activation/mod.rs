@@ -20,11 +20,11 @@
 //! synapse lists); every body a few lines through the helpers beside this
 //! file (`answered!` and `events::answer`, the `*_stream`s in `reads.rs`,
 //! `update.rs`, `delete.rs`, `queue.rs`, `watch.rs`). The children
-//! (ACCESS-14..18) are files of their own — `commits.rs` (ACCESS-15,
-//! `tickets.commits.*`), `inputs.rs` (ACCESS-14, `tickets.inputs.*`) and
-//! `work.rs` (ACCESS-17, `tickets.work.*`) and `nav.rs` (ACCESS-16,
-//! `tickets.nav.*`) mounted; `components.rs` a shell until its build fills
-//! and mounts it.
+//! (ACCESS-14..18) are files of their own, each mounted — `commits.rs`
+//! (ACCESS-15, `tickets.commits.*`), `inputs.rs` (ACCESS-14,
+//! `tickets.inputs.*`), `work.rs` (ACCESS-17, `tickets.work.*`), `nav.rs`
+//! (ACCESS-16, `tickets.nav.*`) and `components.rs` (ACCESS-18,
+//! `tickets.components.*`).
 //!
 //! `create` names one optional parameter per ticket field (AGS-19 added
 //! `parent`) — that is the wire surface talking, here and in the wrapper
@@ -159,16 +159,19 @@ use watch::{watch_stream, WatchAsk};
 #[cfg(all(test, feature = "server"))]
 mod tests;
 
-// ACCESS-13: the children, each in a file of its own — shells until
-// ACCESS-14..18 fill and mount them (each file says how).
+// ACCESS-13: the children, each in a file of its own (ACCESS-14..18).
 // ACCESS-15: `commits` filled and mounted (`Tickets::commits`); not gated,
 // so the client-only build has its `CommitsClient` too.
 mod commits;
 pub use commits::CommitsClient;
 #[cfg(feature = "server")]
 pub use commits::Commits;
-#[cfg(feature = "server")]
+// ACCESS-18: `tickets components`, filled and mounted (`tickets.components.list`).
+// Not gated: its attribute emits `ComponentsClient` in the client build.
 mod components;
+pub use components::ComponentsClient;
+#[cfg(feature = "server")]
+pub use components::Components;
 // ACCESS-14: inputs, filled and mounted (`tickets.inputs.<method>`). The
 // module is not gated: its attribute emits `InputsClient` in the client build.
 mod inputs;
@@ -210,7 +213,7 @@ pub use work::WorkClient;
     crate_path = "plexus_core",
     roles(
         viewer = [
-            "health", "get", "list", "find", "search", "components", "watch", "history",
+            "health", "get", "list", "find", "search", "watch", "history",
             "queued", "await_reply"
         ],
         editor = [
@@ -949,29 +952,10 @@ impl Tickets {
         Nav::new(self.store.clone(), self.access.clone())
     }
 
-    /// Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes.
-    ///
-    /// COMP-3: the component registry. Yields one `Component` per component
-    /// a ticket defines or once defined, in name order — its `source` (the
-    /// ` ```component <name> ` block's content), its `owner` (`null` for an
-    /// orphan: no ticket defines it any more, and something still uses it)
-    /// and its `references` (the tickets whose bodies hold `<name` as an
-    /// HTML tag, in the store's order, then the components whose sources
-    /// do). COMP-8: and its help — `docs`, the source's `<docs>` parsed
-    /// (summary, typed attributes, slots, examples, markdown help; `null`
-    /// without one) — and `preview`, the attributes on the block's opening
-    /// line. Nothing trails them — the stream's own `done` is the whole
-    /// answer, as for `groups`. From the cache alone; `watch` keeps a
-    /// client's copy current with `ComponentChanged` and `ComponentRemoved`.
-    /// IDENTITY-37: a caller who cannot view every shortcode gets the
-    /// components whose owner it can view — no orphan — each with only the
-    /// references it can view.
-    #[plexus_macros::method(group = "overview")]
-    pub async fn components(
-        &self,
-        #[from_auth(self.access.verify)] user: VerifiedUser,
-    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        listed(&self.store, &user, |store, user| store.components(user).into_iter().map(|component| TicketsEvent::Component { component }).collect())
+    /// The component registry — `tickets.components.list` (COMP-3, ACCESS-18), through the caller's reach.
+    #[plexus_macros::child]
+    pub fn components(&self) -> Components {
+        Components { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 
     /// A ticket's inputs — `tickets.inputs.<method>`: list, answer, clear, close, reopen (INPUT-3, ACCESS-14).

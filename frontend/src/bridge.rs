@@ -271,7 +271,7 @@ async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>, String> {
         Call::Extents => client.nav().extents_all().await,
         Call::Blockers { id } => client.work().blockers_all(typed(&id).map_err(named("blockers"))?).await,
         Call::Health => client.health_all().await,
-        Call::Components => client.components_all().await,
+        Call::Components => client.components().list_all().await,
         Call::Inputs { ticket, epic, state, filter } => {
             let typed_inputs = || -> Result<_, String> { Ok((opt(ticket)?, opt(epic)?, opt(state)?, opt(filter)?)) };
             let (ticket, epic, state, filter) = typed_inputs().map_err(named("inputs"))?;

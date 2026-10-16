@@ -592,12 +592,12 @@ async fn components_reach_only_those_who_can_view_their_owner() {
     call(&ada, "tickets.amend", json!({ "id": "IDENTITY-2", "body": "```component m-mine\n<p>mine</p>\n```\n\n<m-secret></m-secret>\n" })).await;
 
     let names = |evs: &[Value]| -> Vec<String> { evs.iter().filter_map(|e| e["component"]["name"].as_str().map(str::to_string)).collect() };
-    let hers = call(&alice, "tickets.components", json!({})).await;
+    let hers = call(&alice, "tickets.components.list", json!({})).await;
     assert_eq!(names(&hers), vec!["m-mine".to_string()], "{hers:?}");
-    let his = call(&bob, "tickets.components", json!({})).await;
+    let his = call(&bob, "tickets.components.list", json!({})).await;
     assert_eq!(names(&his), vec!["m-secret".to_string()], "{his:?}");
     assert_eq!(his[0]["component"]["references"], json!([]), "IDENTITY-2's use of it is not Bob's to see: {his:?}");
-    let all = call(&ada, "tickets.components", json!({})).await;
+    let all = call(&ada, "tickets.components.list", json!({})).await;
     assert_eq!(names(&all).len(), 2);
 
     let (heard, _) = drain(&mut watch, Duration::from_millis(500)).await;

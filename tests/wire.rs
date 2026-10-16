@@ -1703,7 +1703,7 @@ async fn components_over_the_wire() {
     assert_eq!(created[0]["type"], "created");
     let mut watch = call(&client, "tickets.watch", json!({})).await;
     let mut elsewhere = call(&client, "tickets.watch", json!({"epic": "OTHER"})).await;
-    let components = || async { collect(call(&client, "tickets.components", json!({})).await).await };
+    let components = || async { collect(call(&client, "tickets.components.list", json!({})).await).await };
     assert_eq!(components().await, Vec::<Value>::new(), "an empty registry is an empty answer");
 
     // Define.
@@ -1795,7 +1795,7 @@ async fn component_docs_over_the_wire() {
     let heard = watch_until(&mut watch, "component_changed").await;
     let changed = &heard.last().unwrap()["component"];
     assert_eq!((&changed["docs"], &changed["preview"]), (&docs, &preview));
-    let listed = collect(call(&client, "tickets.components", json!({})).await).await;
+    let listed = collect(call(&client, "tickets.components.list", json!({})).await).await;
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0]["component"]["docs"], docs);
     assert_eq!(listed[0]["component"]["preview"], preview);
