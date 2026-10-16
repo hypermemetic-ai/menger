@@ -153,7 +153,19 @@ async fn the_gate_resolves_a_ticket_through_its_shortcode_and_hosts() {
     assert_eq!(g.check(Some(&me), &set, Some("OUGHT-99")).unwrap_err().to_string(), "needs tickets.set_status on OUGHT-99");
     assert_eq!(
         s.gate_chain("identity-2").unwrap(),
-        ["IDENTITY-2", "hypermemetic:IDENTITY", "IDENTITY", "IDENTITY-1", "PLEXUS-1", "hypermemetic:PLEXUS", "PLEXUS", "hypermemetic:"]
+        // ACCESS-21: the ticket's own key bare (a grant on it alone), then
+        // `under` it and each ancestor (a grant on a subtree).
+        [
+            "IDENTITY-2",
+            "hypermemetic:IDENTITY",
+            "IDENTITY",
+            "under IDENTITY-2",
+            "under IDENTITY-1",
+            "under PLEXUS-1",
+            "hypermemetic:PLEXUS",
+            "PLEXUS",
+            "hypermemetic:"
+        ]
             .map(String::from)
             .to_vec()
     );
@@ -215,10 +227,11 @@ fn a_ceiling_entry_is_role_or_grant_at_scope() {
     let a = login(vec![]);
     assert_eq!(a.ceiling_entry("editor@identity"), Ok("editor@IDENTITY".into()));
     assert_eq!(a.ceiling_entry(" viewer@* "), Ok("viewer@*".into()));
-    assert_eq!(a.ceiling_entry("Admin@menger-12"), Ok("admin@MENGER-12".into()));
+    // ACCESS-21: a ticket in a ceiling is it and its subtree, kept `under` it.
+    assert_eq!(a.ceiling_entry("Admin@menger-12"), Ok("admin@under MENGER-12".into()));
     assert_eq!(a.ceiling_entry("tickets.get@menger"), Ok("tickets.get@MENGER".into()));
     // ORG-9: a code may hold hyphens (X-1A is one); only the last `-N` is a number.
-    assert_eq!(a.ceiling_entry("viewer@synapse-cc-1"), Ok("viewer@SYNAPSE-CC-1".into()));
+    assert_eq!(a.ceiling_entry("viewer@synapse-cc-1"), Ok("viewer@under SYNAPSE-CC-1".into()));
     assert_eq!(a.ceiling_entry("viewer@x-1a"), Ok("viewer@X-1A".into()));
     for bad in ["editor", "owner@X", "editor@", "editor@a b", "editor@X-", "editor@X--1a", "editor@X-1-2", "editor@*-1", "editor@under X", "a.b c@X"] {
         assert!(a.ceiling_entry(bad).is_err(), "{bad}");
@@ -419,12 +432,9 @@ async fn each_scope_kind_admits_exactly_its_tickets() {
     for (held, admits) in cases {
         let u = user(held.clone());
         assert_eq!(permitted(&u, &s), admits.to_vec(), "{held:?}: permits");
-        if !matches!(held, Held::Ticket(_)) {
-            assert_eq!(readable(&u, &s), admits.to_vec(), "{held:?}: a read's lens agrees");
-        }
+        // ACCESS-21: a ticket alone too — its lens is `ticket ID`.
+        assert_eq!(readable(&u, &s), admits.to_vec(), "{held:?}: a read's lens agrees");
     }
-    // One ticket alone is no `under`: a read is refused, never widened.
-    assert!(user(Held::Ticket(t("PLEXUS-2"))).filter_for(&GateGrant::new(SEES)).is_err());
     // A higher role on a narrower scope never lowers a wider one.
     let u = VerifiedUser::for_tests(&a, alice(), vec![(sc("PLEXUS"), Role::Viewer), (sc("IDENTITY"), Role::Editor)]);
     assert_eq!(permitted(&u, &s).len(), 5);
@@ -647,9 +657,20 @@ async fn a_ceiling_on_a_ticket_holds_permits_to_its_subtree() {
     let a = login(vec![ALICE.into()]);
     let s = deeper().await;
     a.attach(s.clone());
-    let u = a.verify_now(&ctx(json!({ CEILING_KEY: ceiling(&[&["editor@PLEXUS-2"]]) }))).unwrap();
+    // ACCESS-21: as minted (`editor@MENGER-12` is kept `under` it).
+    let minted = a.ceiling_entry("editor@plexus-2").unwrap();
+    assert_eq!(minted, "editor@under PLEXUS-2");
+    let u = a.verify_now(&ctx(json!({ CEILING_KEY: ceiling(&[&[minted.as_str()]]) }))).unwrap();
     assert_eq!(permitted(&u, &s), vec!["PLEXUS-2", "PLEXUS-3"]);
     assert!(u.permit::<Admin>(&t("PLEXUS-2"), &s).is_err(), "no more than editor");
+    for g in ["tickets.get", "tickets.set_status"].map(GateGrant::new) {
+        assert!(a.gate().check(u.context(), &g, Some("PLEXUS-3")).is_ok(), "the gate agrees: {g}");
+    }
+    // A bare key, as a session minted before ACCESS-21 kept it, is the
+    // ticket alone — to the gate and to the reach alike.
+    let old = a.verify_now(&ctx(json!({ CEILING_KEY: ceiling(&[&["editor@PLEXUS-2"]]) }))).unwrap();
+    assert_eq!(permitted(&old, &s), vec!["PLEXUS-2"]);
+    assert!(a.gate().check(old.context(), &GateGrant::new("tickets.get"), Some("PLEXUS-3")).is_err());
     // A ceiling's single grant is no role: it gives no permit.
     let g = a.verify_now(&ctx(json!({ CEILING_KEY: ceiling(&[&["tickets.get@*"]]) }))).unwrap();
     assert!(permitted(&g, &s).is_empty());
@@ -748,4 +769,79 @@ async fn a_followed_caller_signed_out_or_expired_ends_typed() {
     let mut f = Following::open(&open, &s, None, &GateReach::everywhere()).unwrap();
     assert!(!wakes(&mut f, 50).await);
     assert!(matches!(f.again(), Ok(Followed::Same)));
+}
+
+/// ACCESS-21: a grant on one ticket, and on a ticket and its subtree — kept
+/// by its key, read through `scope_named`, held by the gate and the reach
+/// alike, and kept through a move and a kind change.
+#[tokio::test]
+async fn access_21_a_ticket_alone_or_its_subtree_and_the_grant_follows_it() {
+    let a = login(vec![]);
+    let s = deeper().await;
+    a.attach(s.clone());
+    let alone = s.scope_named("plexus-2").unwrap();
+    assert_eq!(alone, Scope::Ticket(t("PLEXUS-2")));
+    assert_eq!(s.scope_named("under hypermemetic:PLEXUS-2").unwrap(), Scope::Under(t("PLEXUS-2")));
+    assert!(matches!(s.scope_named("PLEXUS-99"), Err(crate::store::StoreError::NotFound(_))), "a ticket there is not");
+    assert!(s.scope_named("under PLEXUS").is_err(), "`under` takes a ticket");
+    s.grant(SYS, Grant { principal: ALICE.parse().unwrap(), scope: alone.clone(), role: Role::Editor, granted_by: GrantedBy::AuthGrant, at: 1 }).await.unwrap();
+    let u = a.verify_now(&ctx(json!({}))).unwrap();
+    assert_eq!(permitted(&u, &s), ["PLEXUS-2"], "not its parent, not its child");
+    assert_eq!(readable(&u, &s), ["PLEXUS-2"]);
+    assert_eq!(u.orgs(), Some(vec![org()]), "in its ticket's organization");
+    let set = GateGrant::new("tickets.set_status");
+    let me = ctx(json!({}));
+    assert!(a.gate().check(Some(&me), &set, Some("PLEXUS-2")).is_ok());
+    for no in ["PLEXUS-1", "PLEXUS-3", "under PLEXUS-2"] {
+        assert!(a.gate().check(Some(&me), &set, Some(no)).is_err(), "{no}");
+    }
+    // A parent's permit is a role on what is below it: the ticket alone is none.
+    assert!(u.permit::<Editor>(&t("PLEXUS-2"), &s).is_ok());
+    assert!(u.permit_below::<Editor>(&t("PLEXUS-2"), &s).is_err());
+    // Moved and made another kind, it keeps its grant.
+    let beside = crate::store::NewTicket { epic: "PLEXUS".into(), title: "a new parent".into(), kind: Kind::Build, severity: None, blocked_by: Vec::new(), parent: Some("PLEXUS-1".into()), path: None, body: String::new() };
+    let p4 = s.create(SYS, beside).await.unwrap().id.to_string();
+    s.set_parent(SYS.moving("PLEXUS-2", &p4)).await.unwrap();
+    s.set_kind(SYS.permit("PLEXUS-2"), Kind::Gap, None).await.unwrap();
+    let u = a.verify_now(&ctx(json!({}))).unwrap();
+    assert_eq!(permitted(&u, &s), ["PLEXUS-2"]);
+    assert_eq!(readable(&u, &s), ["PLEXUS-2"]);
+    // `under` it: it and its subtree, a parent's permit too — and it moves with it.
+    s.grant(SYS, Grant { principal: ALICE.parse().unwrap(), scope: Scope::Under(t("PLEXUS-2")), role: Role::Viewer, granted_by: GrantedBy::AuthGrant, at: 1 }).await.unwrap();
+    let u = a.verify_now(&ctx(json!({}))).unwrap();
+    assert_eq!(permitted(&u, &s), ["PLEXUS-2", "PLEXUS-3"]);
+    assert_eq!(readable(&u, &s), ["PLEXUS-2", "PLEXUS-3"]);
+    assert!(u.permit::<Editor>(&t("PLEXUS-3"), &s).is_err(), "viewer below, editor on it alone");
+    assert!(u.permit_below::<Viewer>(&t("PLEXUS-2"), &s).is_ok());
+    // The grants read back as kept, by text.
+    let texts: Vec<String> = a.grants_of(ALICE).into_iter().map(|g| g.scope.text()).collect();
+    assert_eq!(texts, ["PLEXUS-2", "under PLEXUS-2"]);
+}
+
+/// ACCESS-21: admin on a ticket's scope is admin on a scope that covers the
+/// ticket — `*`, its organization, its shortcode or a host's, `under` it or
+/// an ancestor; the ticket alone covers itself, not its subtree.
+#[tokio::test]
+async fn access_21_admin_of_a_ticket_scope_is_admin_on_one_covering_it() {
+    let a = login(vec![]);
+    let s = deeper().await;
+    a.attach(s.clone());
+    let give = |scope: Scope| Grant { principal: ALICE.parse().unwrap(), scope, role: Role::Admin, granted_by: GrantedBy::AuthGrant, at: 1 };
+    let alone = |id: &str| Scope::Ticket(t(id));
+    let under = |id: &str| Scope::Under(t(id));
+    s.grant(SYS, give(alone("PLEXUS-2"))).await.unwrap();
+    let u = a.verify_now(&ctx(json!({}))).unwrap();
+    assert!(u.admin_of(&alone("PLEXUS-2"), &s).is_ok());
+    for no in [under("PLEXUS-2"), alone("PLEXUS-3"), alone("PLEXUS-1"), kept_scope("PLEXUS")] {
+        assert!(u.admin_of(&no, &s).is_err(), "{no}");
+    }
+    s.grant(SYS, give(under("PLEXUS-1"))).await.unwrap();
+    let u = a.verify_now(&ctx(json!({}))).unwrap();
+    for yes in [under("PLEXUS-2"), alone("PLEXUS-3"), alone("PLEXUS-1"), under("PLEXUS-1")] {
+        assert!(u.admin_of(&yes, &s).is_ok(), "{yes}");
+        assert!(u.administers(&yes.text()), "the gate agrees: {yes}");
+    }
+    assert!(u.admin_of(&kept_scope("PLEXUS"), &s).is_err(), "a subtree is no shortcode");
+    assert!(u.admin_of(&alone("OUGHT-2"), &s).is_err());
+    assert!(!u.administers("OUGHT-2"));
 }

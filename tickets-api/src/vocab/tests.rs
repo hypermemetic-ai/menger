@@ -73,7 +73,9 @@ fn the_shortcode_rules_are_one() {
         assert_eq!(text.parse::<ShortcodeRef>().is_ok() && !text.contains('.'), code, "ShortcodeRef {text:?}");
         assert_eq!(text.parse::<Project>().is_ok(), code, "Project {text:?}");
         assert_eq!(crate::deployments::project_of(text).is_ok(), code, "project_of {text:?}");
-        assert_eq!(crate::members::scope_of(text).is_ok() && text.trim() != "*", code, "scope_of {text:?}");
+        // ACCESS-21: a scope is a ticket's too (`A-1`, `A-B-2`).
+        let ticket = crate::address::Address::parse(text).is_ok_and(|a| a.names_ticket());
+        assert_eq!(crate::members::scope_of(text).is_ok() && text.trim() != "*", code || ticket, "scope_of {text:?}");
         let in_filter = crate::filter::Filter::parse(&format!("in {text}")).is_ok();
         if !text.trim().is_empty() && !text.contains(' ') {
             assert_eq!(in_filter, code, "`in {text}`");
@@ -165,7 +167,10 @@ fn who_granted_and_who_holds_read_as_their_text() {
 
 #[test]
 fn a_scope_ref_is_scope_of_and_a_ceiling_its_entry() {
-    holds::<ScopeRef>(&["*", "IDENTITY", "identity", "acme:", "acme:menger/theme"], &["", "a b", "under X", "IDENTITY-3", "Acme:"]);
+    holds::<ScopeRef>(
+        &["*", "IDENTITY", "identity", "acme:", "acme:menger/theme", "IDENTITY-3", "identity-3", "under IDENTITY-3", "under menger/theme-3"],
+        &["", "a b", "under X", "under IDENTITY", "under *", "Acme:"],
+    );
     assert_eq!("identity".parse::<ScopeRef>().unwrap().as_str(), "IDENTITY");
     holds::<Ceiling>(&["editor@IDENTITY", "Editor@identity", "viewer@*", "tickets.get@MENGER-12"], &["", "editor", "editor@", "a b@*", "tickets.@*"]);
     assert_eq!("Admin@menger-12".parse::<Ceiling>().unwrap().as_str(), "admin@MENGER-12");
@@ -297,7 +302,7 @@ fn a_shortcode_may_hold_hyphens_and_a_ticket_splits_at_its_last() {
     holds::<Under>(&["SYNAPSE-CC", "SYNAPSE-CC-1"], &["A--B"]);
     holds::<Project>(&["SYNAPSE-CC"], &["A-1", "A--B"]);
     holds::<ThemeScope>(&["SYNAPSE-CC"], &["A-1"]);
-    holds::<ScopeRef>(&["SYNAPSE-CC", "acme:SYNAPSE-CC"], &["SYNAPSE-CC-1"]);
+    holds::<ScopeRef>(&["SYNAPSE-CC", "acme:SYNAPSE-CC", "SYNAPSE-CC-1", "under SYNAPSE-CC-1"], &["A--B", "under SYNAPSE-CC"]);
     holds::<Ceiling>(&["editor@SYNAPSE-CC", "tickets.get@SYNAPSE-CC-1"], &["editor@A--B"]);
     assert_eq!("viewer@synapse-cc-1".parse::<Ceiling>().unwrap().as_str(), "viewer@SYNAPSE-CC-1");
     assert_eq!("viewer@synapse-cc".parse::<Ceiling>().unwrap().as_str(), "viewer@SYNAPSE-CC");

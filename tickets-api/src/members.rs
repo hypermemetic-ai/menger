@@ -5,7 +5,9 @@
 //! The IdP says who someone is; menger decides what they may do. A
 //! **grant** gives a principal a [`Role`] on a **scope**: a shortcode, which
 //! covers every shortcode hosted under it (the filter language's `under`),
-//! or `*`, every ticket.
+//! or `*`, every ticket. ACCESS-21: or one ticket alone (`MENGER-12`: not
+//! its parent, not its children), or a ticket and its subtree (`under
+//! MENGER-12`), each kept by the ticket's key.
 //!
 //! | role | may |
 //! | --- | --- |
@@ -14,7 +16,7 @@
 //! | `admin` | also grant and revoke roles on the scope |
 //! | `deployer` | read under the scope, and record its deployments — a CI's key (DEPLOY-14) |
 
-use crate::address::{Address, OrgId, ShortcodeId};
+use crate::address::{Address, OrgId, ShortcodeId, TicketId};
 use crate::vocab::{GrantedBy, Grantee};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -79,14 +81,32 @@ pub const EVERYWHERE: &str = "*";
 /// its root moves, and an org's rename rewrites the org part.
 ///
 /// ACCESS-21 adds the last two of ACCESS-37's forms — `under ID` (a ticket
-/// and its subtree) and `ID` (one ticket) — as variants here: every place
-/// that reads a scope matches on this enum, so a new form does not compile
-/// until each says what it means.
+/// and its subtree, wherever it moves) and `ID` (the ticket alone) — each by
+/// the ticket's key ([`TicketId`]), so a grant follows its ticket through
+/// `set_parent` and `set_kind`: every place that reads a scope matches on
+/// this enum, so a form does not compile until each says what it means.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Scope {
     Everywhere,
     Org(OrgId),
     Shortcode { org: OrgId, id: ShortcodeId },
+    /// ACCESS-21: `under ID` — the ticket and every ticket below it.
+    Under(TicketId),
+    /// ACCESS-21: `ID` — the ticket alone: not its parent, not its children.
+    Ticket(TicketId),
+}
+
+/// ACCESS-21: the word before a ticket's key in a subtree's scope.
+pub const UNDER: &str = "under ";
+
+/// ACCESS-21: whether `text` is a ticket's key as a scope keeps it — upper
+/// case, `CODE-N` (ORG-9: split at its last hyphen; `CODE.N-M` for a
+/// namesake's), no organization.
+fn stored_key(text: &str) -> bool {
+    !text.contains(':')
+        && text.len() <= 64
+        && crate::address::split_key(text).is_some()
+        && text.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
 }
 
 impl Scope {
@@ -97,6 +117,13 @@ impl Scope {
         let t = text.trim();
         if t == EVERYWHERE {
             return Some(Self::Everywhere);
+        }
+        // ACCESS-21: a ticket's subtree, or the ticket alone, by its key.
+        if let Some(key) = t.strip_prefix(UNDER) {
+            return stored_key(key).then(|| Self::Under(TicketId::new(key)));
+        }
+        if stored_key(t) {
+            return Some(Self::Ticket(TicketId::new(t)));
         }
         let (org, rest) = t.split_once(':')?;
         let org = OrgId::new(org).ok()?;
@@ -120,14 +147,26 @@ impl Scope {
             Self::Everywhere => EVERYWHERE.to_string(),
             Self::Org(org) => format!("{org}:"),
             Self::Shortcode { org, id } => format!("{org}:{id}"),
+            Self::Under(key) => format!("{UNDER}{key}"),
+            Self::Ticket(key) => key.to_string(),
         }
     }
 
-    /// The organization it is inside — `None` for `*`.
+    /// The organization it names — `None` for `*`, and (ACCESS-21) for a
+    /// ticket's scope, whose organization is its ticket's: the store's to
+    /// say ([`crate::store::Store::org_of`]).
     pub fn org(&self) -> Option<&OrgId> {
         match self {
-            Self::Everywhere => None,
+            Self::Everywhere | Self::Under(_) | Self::Ticket(_) => None,
             Self::Org(org) | Self::Shortcode { org, .. } => Some(org),
+        }
+    }
+
+    /// ACCESS-21: the ticket it is on — `under ID`'s or `ID`'s key.
+    pub fn ticket(&self) -> Option<&TicketId> {
+        match self {
+            Self::Under(key) | Self::Ticket(key) => Some(key),
+            _ => None,
         }
     }
 }
@@ -144,28 +183,41 @@ impl TryFrom<&str> for Scope {
     type Error = String;
     fn try_from(text: &str) -> Result<Self, String> {
         Self::stored(text).ok_or_else(|| {
-            format!("`{}` is not a scope as kept: `*`, an organization (`acme:`), or a shortcode in one by its identity (`acme:MENGER`)", text.trim())
+            format!("`{}` is not a scope as kept: `*`, an organization (`acme:`), a shortcode in one by its identity (`acme:MENGER`), `under` a ticket's key (`under MENGER-12`) or a ticket's key (`MENGER-12`)", text.trim())
         })
     }
 }
 
 // ACCESS-8: on the wire as its text, the string it always was.
-as_text!(Scope, "A grant's scope as kept: *, an organization (acme:), or a shortcode in one by its identity (acme:MENGER)");
+as_text!(Scope, "A grant's scope as kept: *, an organization (acme:), a shortcode in one by its identity (acme:MENGER), under a ticket's key (under MENGER-12: it and its subtree), or a ticket's key (MENGER-12: it alone)");
 
 /// A scope as a reader writes it, checked for its spelling only: `*`, an
 /// organization (`acme:`), or a shortcode by any short form of its address
 /// (`acme:MENGER/THEME`, `MENGER/THEME`, `IDENTITY`) — its codes upper
 /// case. ORG-4: which shortcode it names, and in which organization, is
 /// the store's to say ([`crate::store::Store::scope_named`]), which keeps
-/// it as a [`Scope`]. Anything else is refused.
+/// it as a [`Scope`]. ACCESS-21: or a ticket by any short form of its
+/// address — `under MENGER-12` (it and its subtree) or `MENGER-12` (it
+/// alone), which the store keeps by the ticket's key. Anything else is
+/// refused.
 pub fn scope_of(text: &str) -> Result<String, String> {
     let t = text.trim();
     if t == EVERYWHERE {
         return Ok(t.to_string());
     }
     let refused = || {
-        format!("`{t}` is not a scope: `*`, an organization (`acme:`), or a shortcode in one (`acme:MENGER`, or `IDENTITY` where one organization has it)")
+        format!("`{t}` is not a scope: `*`, an organization (`acme:`), a shortcode in one (`acme:MENGER`, or `IDENTITY` where one organization has it), `under` a ticket (`under MENGER-12`: it and its subtree) or a ticket (`MENGER-12`: it alone)")
     };
+    // ACCESS-21: a ticket's subtree — `under` and a ticket's address.
+    if let Some(rest) = t.strip_prefix("under ").or_else(|| t.strip_prefix("UNDER ")) {
+        return match Address::parse(rest.trim()) {
+            Ok(a) if a.names_ticket() && rest.len() <= 160 => Ok(format!("{UNDER}{a}")),
+            _ => Err(refused()),
+        };
+    }
+    if Scope::stored(t).is_some_and(|s| matches!(s, Scope::Ticket(_))) {
+        return Ok(t.to_string());
+    }
     if let Some(org) = t.strip_suffix(':') {
         return OrgId::new(org).map(|o| format!("{o}:")).map_err(|_| refused());
     }
@@ -173,9 +225,17 @@ pub fn scope_of(text: &str) -> Result<String, String> {
         return Ok(t.to_string());
     }
     match Address::parse(t) {
-        Ok(a) if !a.names_ticket() && t.len() <= 160 => Ok(a.to_string()),
+        // ACCESS-21: a ticket's address is the ticket alone.
+        Ok(a) if t.len() <= 160 => Ok(a.to_string()),
         _ => Err(refused()),
     }
+}
+
+/// ACCESS-21: whether a scope as [`scope_of`] spells it names a ticket —
+/// `under` one, or one alone.
+pub fn names_ticket(scope: &str) -> bool {
+    let t = scope.trim();
+    t.starts_with(UNDER) || (t != EVERYWHERE && !t.ends_with(':') && Address::parse(t).is_ok_and(|a| a.names_ticket()))
 }
 
 /// One grant.
@@ -238,8 +298,31 @@ mod tests {
     fn a_scope_is_a_shortcode_or_everywhere() {
         assert_eq!(scope_of("identity").unwrap(), "IDENTITY");
         assert_eq!(scope_of("*").unwrap(), "*");
-        for bad in ["", "a b", "x)", "under X", &"A".repeat(33), "IDENTITY-3", "Acme:", "acme:MENGER-1"] {
+        for bad in ["", "a b", "x)", "under X", "under acme:", "under *", &"A".repeat(33), "Acme:", "acme:MENGER-"] {
             assert!(scope_of(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn access_21_a_scope_is_a_ticket_alone_or_under_one() {
+        // As a reader writes it: any address of a ticket.
+        assert_eq!(scope_of("identity-3").unwrap(), "IDENTITY-3");
+        assert_eq!(scope_of("under identity-3").unwrap(), "under IDENTITY-3");
+        assert_eq!(scope_of("under acme:menger/theme-3").unwrap(), "under acme:MENGER/THEME-3");
+        assert_eq!(scope_of("acme:MENGER-1").unwrap(), "acme:MENGER-1");
+        // As kept: by the ticket's key.
+        let key = |k: &str| TicketId::new(k);
+        assert_eq!(Scope::stored("under MNG-40"), Some(Scope::Under(key("MNG-40"))));
+        assert_eq!(Scope::stored("MNG-40"), Some(Scope::Ticket(key("MNG-40"))));
+        assert_eq!(Scope::stored("SYNAPSE-CC.2-3"), Some(Scope::Ticket(key("SYNAPSE-CC.2-3"))));
+        for s in ["under MNG-40", "MNG-40", "SYNAPSE-CC-1"] {
+            assert_eq!(Scope::stored(s).unwrap().text(), s);
+        }
+        assert_eq!(Scope::stored("under MNG-40").unwrap().ticket(), Some(&key("MNG-40")));
+        assert_eq!(Scope::stored("MNG-40").unwrap().org(), None);
+        // Not a key as kept: lower case, an org, a shortcode under `under`.
+        for no in ["mng-40", "under mng-40", "under MNG", "under acme:MNG-40", "acme:MNG-40", "MNG", "under  MNG-40"] {
+            assert_eq!(Scope::stored(no), None, "{no}");
         }
     }
 

@@ -87,18 +87,21 @@ impl Members {
     pub async fn list(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Only this organization (acme:), shortcode, or * (optional).
+        /// Only this organization (acme:), shortcode, ticket (MENGER-12), subtree (under MENGER-12), or * (optional).
         scope: Option<ScopeRef>,
     ) -> impl Stream<Item = MembersEvent> + Send + 'static {
         list_stream(self.store.clone(), self.access.clone(), user, scope.map(String::from))
     }
 
-    /// Give a principal a role (viewer, editor, admin; deployer for a CI's key) on an organization, a shortcode in one, or *.
+    /// Give a principal a role (viewer, editor, admin; deployer for a CI's key) on an organization, a shortcode in one, a ticket, a ticket's subtree, or *.
     ///
-    /// Gives `principal` `role` on `scope` (a shortcode, or `*`), replacing
-    /// any role they held there. Needs admin on the scope, as the tree
-    /// stands (ACCESS-11's `AdminOf`). Yields the grant as kept, or an
-    /// in-band `error`.
+    /// Gives `principal` `role` on `scope` (a shortcode, `*`; ACCESS-21: a
+    /// ticket alone, `MENGER-12`, or a ticket and everything under it,
+    /// `under MENGER-12`, kept by the ticket's key so the grant follows it),
+    /// replacing any role they held there. Needs admin on the scope, as the
+    /// tree stands (ACCESS-11's `AdminOf`: for a ticket's scope, admin on a
+    /// scope that covers it). Yields the grant as kept, or an in-band
+    /// `error`.
     #[plexus_macros::method(
         group = "admin",
         target = "scope",
@@ -110,7 +113,7 @@ impl Members {
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// The Plexus principal, e.g. idp:c952acd3-…, oidc:auth0/google-oauth2|…, nostr:<hex>.
         principal: Principal,
-        /// An organization (acme:), a shortcode in one (hypermemetic:IDENTITY, or IDENTITY — covers the shortcodes hosted under it), or *.
+        /// An organization (acme:), a shortcode in one (hypermemetic:IDENTITY, or IDENTITY — covers the shortcodes hosted under it), a ticket alone (IDENTITY-12), a ticket and its subtree (under IDENTITY-12), or *.
         scope: ScopeRef,
         /// viewer | editor | admin | deployer (a CI's key: the reads and deployments.record, DEPLOY-14).
         role: Role,
@@ -119,7 +122,7 @@ impl Members {
         futures::stream::once(async move { grant(store, access, user, principal, scope.into(), role).await })
     }
 
-    /// Take a principal's role on a shortcode or * away.
+    /// Take a principal's role on a scope (an organization, a shortcode, a ticket, a subtree, or *) away.
     ///
     /// Takes `principal`'s role on `scope` away. Needs admin on the scope,
     /// as the tree stands. Yields `revoked { principal, scope, existed }`.
@@ -129,7 +132,7 @@ impl Members {
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// The Plexus principal.
         principal: Principal,
-        /// An organization (acme:), a shortcode in one, or *.
+        /// An organization (acme:), a shortcode in one, a ticket (IDENTITY-12), a subtree (under IDENTITY-12), or *.
         scope: ScopeRef,
     ) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let store = self.store.clone();

@@ -375,6 +375,23 @@ impl Store {
             return Ok(Scope::Everywhere);
         }
         let cache = self.tickets.read().expect("store lock poisoned");
+        // ACCESS-21: a ticket's subtree, or the ticket alone — kept by its
+        // key, so the grant follows it wherever it moves; one there is not
+        // is refused, as one naming several.
+        let (under, ticket) = match t.strip_prefix(crate::members::UNDER) {
+            Some(rest) => (true, Some(rest)),
+            None => (false, Address::parse(&t).ok().filter(Address::names_ticket).map(|_| t.as_str())),
+        };
+        if let Some(name) = ticket {
+            return match cache.find_ticket(name, OrgReach::All) {
+                Found::One(key) => {
+                    let key = crate::address::TicketId::new(key);
+                    Ok(if under { Scope::Under(key) } else { Scope::Ticket(key) })
+                }
+                Found::Many(candidates) => Err(StoreError::Ambiguous { text: name.to_string(), candidates }),
+                Found::None => Err(StoreError::NotFound(name.to_string())),
+            };
+        }
         let r = &cache.shortcodes;
         if let Some(org) = t.strip_suffix(':') {
             return org_in(r, org).map(|(_, o)| Scope::Org(o.clone()));
@@ -412,10 +429,29 @@ impl Store {
     /// out of reach as for none. An organization (`acme:`, or a name it had)
     /// is itself; a stored shortcode scope (`acme:MENGER.12`) is its
     /// shortcode's chain. `None`: it names nothing a scope could hold.
+    ///
+    /// ACCESS-21: a ticket is itself by its key (what a grant on it alone,
+    /// `ID`, names), then `under` its key and each of its ancestors' (what a
+    /// grant on a subtree, `under ID`, names): a grant on a ticket alone
+    /// reaches none of its children, a grant on a subtree each. A target
+    /// written `under ID` is that subtree — the chain of a ticket below it,
+    /// less the ticket alone.
     pub(crate) fn gate_chain(&self, target: &str) -> Option<Vec<String>> {
         let t = target.trim();
         if t.is_empty() {
             return None;
+        }
+        if let Some(rest) = t.strip_prefix(crate::members::UNDER) {
+            let below = self.gate_chain(rest)?;
+            let alone = below.iter().find_map(|i| i.strip_prefix(crate::members::UNDER)).map(str::to_string);
+            let label = format!("{}{}", crate::members::UNDER, folded(rest));
+            let mut out = vec![label];
+            for item in below.into_iter().skip(1) {
+                if Some(&item) != alone.as_ref() && !out.contains(&item) {
+                    out.push(item);
+                }
+            }
+            return Some(out);
         }
         let parsed = Address::parse(t).ok();
         let (raw, label) = {
@@ -452,12 +488,16 @@ impl Store {
         if let Some(l) = label {
             out.push(l);
         }
+        let mut own = true;
         for id in raw {
             // A key holds a `-`; a shortcode's identity never does. A
             // shortcode is its scope, `org:ID`, then its bare identity — unique
             // app-wide, what a session's ceiling minted before ORG-4 names.
+            // ACCESS-21: the ticket's own key bare and `under` it; an
+            // ancestor's `under` it alone.
             let items = match id.contains('-') {
-                true => vec![id],
+                true if std::mem::take(&mut own) => vec![format!("{}{id}", crate::members::UNDER), id],
+                true => vec![format!("{}{id}", crate::members::UNDER)],
                 false => {
                     let sc = ShortcodeId::new(&id);
                     let o = r.org(&sc).cloned().unwrap_or_else(|| fallback.clone());

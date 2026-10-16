@@ -475,6 +475,23 @@ impl VerifiedUser {
         }
     }
 
+    /// ACCESS-21: a [`Permit`] for the ticket `id` at role `R` as a parent —
+    /// when the reach covers a ticket *below* it (a role on `under` it, an
+    /// ancestor, its shortcode, …): what filing a child under it, or moving
+    /// one there, takes. A role on the ticket alone covers it and nothing
+    /// below it, so it is no parent's permit. [`Hidden`] as for
+    /// [`VerifiedUser::permit`].
+    pub fn permit_below<R: RoleMark>(&self, id: &TicketId, store: &Store) -> Result<Permit<R>, Hidden> {
+        if store.ticket_id(id.as_str()).as_deref() != Some(id.as_str()) {
+            return Err(Hidden);
+        }
+        let below: Vec<String> = store.gate_chain(id.as_str()).ok_or(Hidden)?.into_iter().filter(|c| !c.eq_ignore_ascii_case(id.as_str())).collect();
+        match self.reach.covers::<R>("", &below) {
+            true => Ok(Permit::new(id.clone())),
+            false => Err(Hidden),
+        }
+    }
+
     /// An [`AdminOf`] `scope` — when this user holds admin on a scope that
     /// covers it (`*`; its organization; the shortcode or one hosting it),
     /// and so does every ceiling layer: the reach's own question, asked of

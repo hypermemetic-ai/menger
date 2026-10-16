@@ -15,12 +15,14 @@
 //! (`hidden_blocked_by`, `hidden_unlocks`, `parent_hidden`), so readiness
 //! stays honest ([`Sees::row`]).
 //!
-//! A reach is closed under the kept tree: every scope it compiles from
+//! A reach of the subtree scopes is closed under the kept tree: every one
 //! (`*`, an organization, a shortcode and those hosted under it, `under
 //! ID`) holds a ticket's descendants with it, and so does their AND. So a
-//! visible ticket's children are all visible — `child_count` needs no
-//! redaction — and what can be hidden from a visible row is its parent, its
-//! blockers and what it unlocks.
+//! visible ticket's children are all visible, and what can be hidden from
+//! a visible row is its parent, its blockers and what it unlocks.
+//! ACCESS-21: a role on one ticket alone (`ticket ID`) is not — a reach
+//! holding one counts a visible row's `child_count` as the children it
+//! admits ([`Sees::row`]), so a ticket alone shows no children.
 //!
 //! ```compile_fail,E0277
 //! // A read without a reader: an id is not one, nor anything but the three.
@@ -159,6 +161,13 @@ impl Seen {
         Ok(Self { reach, app: who.app_comments(), archive: false })
     }
 
+    /// ACCESS-21: whether the reach holds a ticket alone (`ticket ID`) —
+    /// not closed under the kept tree, so a visible row's children are
+    /// counted through it.
+    fn open(&self) -> bool {
+        self.filter().is_some_and(|f| f.leaves().iter().any(|p| matches!(p.field, crate::filter::Field::Ticket(_))))
+    }
+
     /// ARCHIVE-2: this sight for a view — one that leaves the archive out,
     /// when `cache` holds any archived ticket (its archived cells' counts,
     /// summed: no walk). With none, a reader of everything takes the
@@ -248,7 +257,7 @@ impl Seen {
     /// ARCHIVE-2: [`Seen::sees`] for a view — the live tickets in reach.
     pub(super) fn view_sees<'c>(&self, cache: &'c Cache) -> Result<Sees<'c>, StoreError> {
         let q = Filtered { lens: self.view_lens()?, epic: None, status: None, parent: None, keep: None };
-        Ok(Sees { cache, view: Some(filtered::view_lenient(cache, &q)), app: self.app.clone() })
+        Ok(Sees { cache, view: Some(filtered::view_lenient(cache, &q)), app: self.app.clone(), open: self.open() })
     }
 
     /// The reach's admitted bitmaps, under the read lock the caller holds.
@@ -257,7 +266,7 @@ impl Seen {
             let q = Filtered { lens: lens.clone(), epic: None, status: None, parent: None, keep: None };
             filtered::view_lenient(cache, &q)
         });
-        Sees { cache, view, app: self.app.clone() }
+        Sees { cache, view, app: self.app.clone(), open: self.open() }
     }
 }
 
@@ -268,9 +277,18 @@ pub(super) struct Sees<'c> {
     view: Option<View<'c>>,
     /// ACCESS-19: the comments on the app it sees.
     app: AppSight,
+    /// ACCESS-21: the reach holds a ticket alone ([`Seen::open`]).
+    open: bool,
 }
 
 impl<'c> Sees<'c> {
+    /// ACCESS-21: how many of `id`'s children the reach admits — its
+    /// children index, each shortcode's list cut to what is admitted.
+    fn children(&self, id: &str) -> u64 {
+        let Some(kids) = self.cache.children.kids(id) else { return 0 };
+        kids.lists().map(|(sc, seqs)| self.admitted(sc).map_or(seqs.bitmap().len(), |a| seqs.bitmap().intersection_len(&a))).sum()
+    }
+
     /// Everything: nothing is hidden.
     pub(super) fn all(&self) -> bool {
         self.view.is_none()
@@ -382,6 +400,9 @@ impl<'c> Sees<'c> {
             r.parent = None;
             r.parent_hidden = true;
         }
+        if self.open && r.child_count > 0 {
+            r.child_count = self.children(r.id.as_str());
+        }
     }
 
     /// [`Sees::row`] for each of `rows`.
@@ -404,6 +425,9 @@ impl<'c> Sees<'c> {
         if t.parent.as_deref().is_some_and(|p| !self.id(p)) {
             t.parent = None;
             t.parent_hidden = true;
+        }
+        if self.open && t.child_count > 0 {
+            t.child_count = self.children(t.id.as_str());
         }
     }
 

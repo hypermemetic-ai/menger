@@ -946,6 +946,8 @@ impl Store {
                 crate::members::Scope::Everywhere => true,
                 crate::members::Scope::Org(o) => sc.as_ref().and_then(|s| r.org(s)).is_some_and(|w| r.canonical(w).is_some() && r.canonical(w) == r.canonical(o)),
                 s @ crate::members::Scope::Shortcode { .. } => sc.as_ref().is_some_and(|sc| *s == writs::scope_of(&cache, sc)),
+                // ACCESS-21: undeleting is its shortcode's admin's.
+                crate::members::Scope::Under(_) | crate::members::Scope::Ticket(_) => false,
             });
             if !covered {
                 return Err(StoreError::Invalid(format!("{id}: the write was not given the proof it needs (nothing written)")));

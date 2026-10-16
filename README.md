@@ -478,6 +478,14 @@ their set of labels — answered from the cells on every filtered read and on
 `labels` columns: a form-9 (or older) file is built again once on first
 open, and an older build cannot open it after.
 
+One ticket alone is a filter too (ACCESS-21): **`ticket <ID>`** — any
+address of a ticket (`ticket MENGER-12`, `ticket MENGER/ORG-3`) — admits
+that ticket and nothing else, not its children (`under` is it and its
+subtree). It is a truth of one ticket's, answered as a history predicate's
+is (the cells' answer corrected for the one ticket it holds for), on every
+filtered read and on `watch { filter }`. It is what a role granted on one
+ticket reads through ("Members and roles").
+
 **Needs you** (MENGER-12, MENGER-43) is a filter on the nav: what waits
 on the owner is the saved filter named "Needs you"
 (`VIEW/_MENGER/view/needs-you`; until one is saved, the default
@@ -1978,8 +1986,10 @@ honest (the placement is still the store's). The three are omitted when
 zero/false, so for a reader who sees everything nothing on the wire changes
 (`tests/golden_wire.rs`). A reach is closed under the kept tree (every scope
 holds a ticket's descendants), so a visible ticket's children are all
-visible and `child_count` needs no redaction. A reach no read can narrow to
-(single tickets alone) reads nothing, never everything.
+visible and `child_count` needs no redaction — ACCESS-21: unless it holds
+a ticket alone (`ticket ID`), when a visible row's `child_count` is the
+children the reach admits. A reach of one ticket reads that ticket (it was
+a reach no read could narrow to, and read nothing, until ACCESS-21).
 `store/tests_reach.rs` holds a test per ACCESS-3 read gap and a property:
 for random trees, grants and reads, nothing answered or named lies outside
 the reach, and the tree reaches everything in it.
@@ -3463,7 +3473,25 @@ changes. The IdP only proves who someone is. A grant gives a principal a
 role on a **scope**: a shortcode, which covers the shortcodes hosted under
 it (the filter language's `under`, so a grant on PLEXUS reaches IDENTITY),
 or `*`. ORG-4: or an organization (`acme:`), and a shortcode is kept in its
-organization (`hypermemetic:PLEXUS`) — "Organizations" above.
+organization (`hypermemetic:PLEXUS`) — "Organizations" above. ACCESS-21:
+or one ticket — `MENGER-12`, the ticket alone (not its parent, not its
+children), or `under MENGER-12`, the ticket and everything below it —
+written as any address of the ticket and kept by its key, so the grant
+follows the ticket through `set_parent` and `set_kind`.
+
+A role on a ticket alone reads it where its shortcode's tickets are read:
+`list` and the board answer it, the nav draws it at its shortcode's top
+(its parent out of reach), its inputs and comments are its; its
+`child_count` is the children in reach (none, alone). An editor on it may
+change it and answer its inputs, but files nothing under it, nor moves
+anything there: a parent takes the role on what is below it (`under` it or
+wider). Admin on a ticket's scope is admin on a scope covering it — `*`,
+its organization, its shortcode or a host's, `under` it or an ancestor;
+admin on the ticket alone grants on it alone, not on its subtree. The
+gate's chain for a ticket holds its key bare (the ticket alone) and `under`
+its key and each ancestor's (the subtrees it is in); a session's ceiling
+on a ticket (`editor@MENGER-12`) is minted `editor@under MENGER-12`, it and
+its subtree, as before.
 
 | role | may |
 |---|---|
@@ -3488,7 +3516,7 @@ Someone signed in with no grant reaches nothing and waits in
 |---|---|
 | `members.mine {}` | `me { principal, name, admin_everywhere }`, then `grant { grant }` each |
 | `members.list { scope? }` | the grants on the scopes the caller administers |
-| `members.grant { principal, scope, role }` | the grant as kept; needs admin on the scope |
+| `members.grant { principal, scope, role }` | the grant as kept; needs admin on the scope (`scope`: `*`, `acme:`, a shortcode, a ticket, `under` a ticket) |
 | `members.revoke { principal, scope }` | `revoked { principal, scope, existed }` |
 | `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant — an admin of `*` only (ACCESS-19: the list is every sign-in) |
 

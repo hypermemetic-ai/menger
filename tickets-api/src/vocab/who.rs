@@ -185,7 +185,9 @@ text_type!(
     /// ORG-4: a scope as a call writes it (ACCESS-37's grammar) — `*`, an
     /// organization (`acme:`), or a shortcode in one by any short form of
     /// its address (`acme:MENGER/THEME`, `IDENTITY`), its codes upper case:
-    /// [`crate::members::scope_of`]. The store resolves it to the
+    /// [`crate::members::scope_of`]. ACCESS-21: or a ticket alone by any
+    /// short form of its address (`MENGER-12`), or `under` one (`under
+    /// MENGER-12`, it and its subtree). The store resolves it to the
     /// [`crate::members::Scope`] it keeps.
     ScopeRef,
     scope_of
@@ -199,11 +201,13 @@ pub fn ceiling_scope_of(text: &str) -> Result<String, String> {
     let t = text.trim();
     // ORG-9: a ticket's key splits at its last hyphen (`SYNAPSE-CC-1`).
     let ticket = t.rsplit_once('-').filter(|(code, n)| {
-        !code.contains(':') && scope_of(code).is_ok_and(|c| c != EVERYWHERE) && !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_digit())
+        !code.contains(':') && scope_of(code).is_ok_and(|c| c != EVERYWHERE && !crate::members::names_ticket(&c)) && !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_digit())
     });
     match ticket {
         Some((code, n)) => Ok(format!("{}-{n}", code.to_ascii_uppercase())),
-        None => scope_of(t).map_err(|_| {
+        // ACCESS-21: a ticket a ceiling names is its key, read above; any
+        // other ticket's spelling a grant's scope takes is none here.
+        None => scope_of(t).ok().filter(|s| !crate::members::names_ticket(s)).ok_or_else(|| {
             format!("`{t}` is not a scope: an organization (acme:), a shortcode (e.g. IDENTITY, acme:MENGER), a ticket (e.g. IDENTITY-12) or `*`")
         }),
     }
