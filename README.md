@@ -2763,20 +2763,33 @@ root, else `*`).
 
 A ticket is **queued for the owner** with an urgency and a reason — one
 write, by anyone with the editor role, agents included — and every open app
-shows it at once in **the tray**: a tab per queued ticket along the bottom
-edge of the main column, most urgent first, then the oldest. A tab is the
-id, the title and an urgency chip (`today` in the Coding colours; `now` and
-`blocking` in the contract's `--urgent` red, taller, nudging every few
-seconds until opened); a new one slides up into place. A click raises a
-sheet above the tray — the urgency, who queued it and when, the reason, the
-named input's question answerable in place (recorded with source `app`;
-answering takes the ticket out of the queue, the input stays the agent's to
-close), **request changes** (APP-23, below), *open the ticket*, *snooze 10m*
-and *done with it*. The open tab again, Esc, or a press anywhere outside
-the tray — in a ticket's framed body too — lowers the sheet (APP-26; never
-while a submit is out). A hidden tab's
-title carries the count, `(2) menger`. Motion follows the setting: `calm`
-keeps the slide and drops the nudge, `none` moves nothing.
+shows it at once in **the tray** (APP-38): one control on the bottom edge
+of the main column, at the right. With one ticket it is that ticket's tab —
+the id, the title and an urgency chip; with more, the count, `queued`, the
+loudest urgency's chip with how many share it (`3 blocking`) and `▴`. Its
+ground and border are the loudest urgency's (`today` in the Coding colours;
+`now` and `blocking` in the contract's `--urgent` red, taller, nudging every
+few seconds while one is unopened). At a phone's width it is a pill at the
+bottom right. A click slides **the sheet** in from the bottom (a phone's:
+the whole width, 88% tall, over a scrim): its head says `queue N`, a chip
+per urgency that jumps to its group, `j` / `k`, close (Esc); its list is the
+queue most urgent first, then the oldest, grouped `blocking · now · today ·
+whenever` (`whenever` folded past six). The row picked is answered beside
+the list (a phone's: under its row) — the urgency, who queued it and when,
+the reason, the named input's question answerable in place (recorded with
+source `app`; answering takes the ticket out of the queue, the input stays
+the agent's to close), **request changes** (APP-23, below), *open ↗*,
+*snooze 10m* and *done with it* — and submit, snooze or done picks the next
+row; the last one leaving takes the sheet down, and the control with it.
+With one ticket the sheet holds its answer alone. The control again, Esc,
+the scrim, or a press anywhere outside the tray — in a ticket's framed body
+too — lowers the sheet (APP-26; never while a submit is out). An arrival
+while it is down blinks the control in its colour, sweeps the edge, says
+who queued it for a moment, and leaves `N new` until the sheet is opened.
+A hidden tab's title carries the count, `(2) menger`. Motion follows the
+setting: the sheet comes in in .32 s and goes in .2 s; `calm` keeps the
+slide and the blinks and drops the nudge and the sweep, `none` moves
+nothing (an arrival waiting is outlined in its colour).
 
 ```sh
 synapse -P 4455 menger tickets queue --id RETURNS-13 --urgency blocking --input landing --reason "idle until decided"
