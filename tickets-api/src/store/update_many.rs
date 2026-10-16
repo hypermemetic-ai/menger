@@ -340,6 +340,12 @@ impl Store {
                     continue;
                 }
                 row.updated_unix = now;
+                // DEPLOY-20: one call's commits are each ticket's next version.
+                if let Moved::Commits { added } = &moved {
+                    let version = cache.deploys.next_version(&row.id);
+                    super::versions::store(&txn, &row.id, added, version, now)?;
+                    cache.deploys.versioned(&row.id, added, version, now);
+                }
                 cell_step(&txn, cache, unders, row, &mut out, |t| moved.change(t))?;
                 answer.push(out.tickets.last().cloned().expect("the step's own change"));
             }

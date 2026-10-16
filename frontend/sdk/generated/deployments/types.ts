@@ -86,9 +86,12 @@ export interface DeploymentsEventEnvironmentChanged {
 
 /** `for_ticket`: the ticket runs in this environment, since `since`
 (unix seconds), brought by `deployment`; the environment runs
-`revision` now. */
+`revision` now. DEPLOY-20: `behind` the ticket's commits not carried
+there, in link order, when it runs an earlier version — `version`,
+its newest carried commit; empty when it runs the current one. */
 export interface DeploymentsEventRunning {
   type: 'running';
+  behind: string[];
   deployment: number;
   environment: string;
   project: string;
@@ -96,6 +99,7 @@ export interface DeploymentsEventRunning {
   revision: string | null;
   since: number;
   ticket: string;
+  version: string | null;
 }
 
 /** `for_ticket`: an environment of the ticket's project it does not run in. */
@@ -198,12 +202,20 @@ export type Release = string;
 /** DEPLOY-13: one ticket running in an environment — a kept cell, as
 `running` answers it. */
 export interface RunningCell {
+  /** DEPLOY-20: the ticket's commits not carried there, in link order —
+linked after the version that runs there. Empty: it runs the
+ticket's current version. */
+  behind?: string[];
   /** That deploy. */
   deployment: number;
   /** Since when, unix seconds — the earliest still-counting deploy that
 carried it. */
   since: number;
   ticket: string;
+  /** DEPLOY-20: when `behind`, the version that runs there — its newest
+carried commit (`None` when only a record naming the ticket carried
+it). */
+  version?: string | null;
 }
 
 /** DEPLOY-10: when — RFC 3339 (`2026-10-12T22:04:19Z`) or unix seconds,

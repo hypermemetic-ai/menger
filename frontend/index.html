@@ -2310,11 +2310,17 @@
   }
   a.envmark:hover, a.envmark:focus-visible { border-color: var(--accent); }
   .envmark.off { color: var(--muted); background: transparent; border-style: dashed; }
+  /* DEPLOY-20: running an earlier version there — the review tint, a
+     dashed edge and a down-step, apart from the current version's mark. */
+  .envmark.behind { color: var(--st-in-review-fg); background: var(--st-in-review-bg); border-style: dashed; border-color: currentColor; }
+  .envmark.behind::after { content: " \2193"; }
   .envmark.big { font-size: calc(12px * var(--text-scale)); padding: 1px 8px; font-weight: var(--weight-strong); }
   .wave-board .card .foot .envmarks, #waves .card .foot .envmarks { margin-left: 0; }
   #t-running { line-height: 1.9; }
   #t-running a.run, #t-running a.notrun { color: var(--ink); text-decoration: none; white-space: nowrap; }
   #t-running a.notrun { color: var(--muted); }
+  #t-running a.run.behind { white-space: normal; }
+  #t-running a.run.behind .rev { font-size: calc(11px * var(--text-scale)); }
   #t-running a:hover { color: var(--accent); }
   #t-running .none, #t-running .derr { color: var(--muted); }
   #deployments-page { max-width: 100%; }

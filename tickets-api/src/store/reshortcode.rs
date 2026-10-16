@@ -488,6 +488,8 @@ fn rekey(txn: &rusqlite::Transaction<'_>, map: &HashMap<String, String>, renamed
         ("members", "scope"),
         ("theme_settings", "scope"),
         ("pins", "ticket"),
+        // DEPLOY-20: the commit-link record.
+        ("commit_links", "ticket"),
     ];
     let mut pairs: Vec<(&str, &str)> = map.iter().map(|(o, n)| (o.as_str(), n.as_str())).collect();
     pairs.sort();

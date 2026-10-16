@@ -20,13 +20,16 @@ export interface DeploymentsClient {
    */
   environments(project?: Project | null): AsyncGenerator<DeploymentsEvent>;
   /**
-   * Where a ticket's work runs: running { environment, since, deployment } per environment, not_running for the rest
+   * Where a ticket's work runs: running { environment, since, deployment, behind, version } per environment, not_running for the rest
    *
    * Where a ticket's work runs: one `running` event for each environment
    * it runs in — since when, brought by which deployment, what the
    * environment runs now — and one `not_running` for each other
    * environment of its projects (its shortcode's, its hosts', and any it
-   * has run in). An `error` for an id that names no ticket.
+   * has run in). DEPLOY-20: a `running` whose `behind` is not empty runs
+   * an earlier version there — `behind` the commits not carried, in link
+   * order, `version` the newest carried one. An `error` for an id that
+   * names no ticket.
    * @requires `deployments.for_ticket` on the scope of `id`
    */
   forTicket(id: TicketRef): AsyncGenerator<DeploymentsEvent>;
@@ -67,13 +70,15 @@ export interface DeploymentsClient {
    */
   record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, previous?: CommitRef | null, release?: Release | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent>;
   /**
-   * The kept cells: cells { project, environment, running: [{ ticket, since, deployment }] } per environment
+   * The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }] } per environment
    *
    * DEPLOY-13: the kept cells — one `cells { project, environment,
    * running }` per environment (of `project`, named `environment`, when
    * given), `running` every ticket there (only `ids`' when given, at most
    * 1,000), each with since when and the deploy that brought it, in the
    * store's order — an empty one too, so a copy can replace what it held.
+   * DEPLOY-20: a cell's `behind` (and `version`) when the ticket runs an
+   * earlier version there.
    * What the app's board marks are drawn from, one read for every row.
    * @requires `deployments.running` anywhere it is held
    */

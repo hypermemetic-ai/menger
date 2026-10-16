@@ -39,8 +39,20 @@
 //! derived, checked). A file without them gains them, empty, on open
 //! ([`migrate`]). A **project** is a shortcode the store holds (`menger` is
 //! MENGER) — what a `deployer` grant names and a ticket lives in.
+//!
+//! **A ticket runs a version** (DEPLOY-20): its commits are grouped into
+//! versions by the link call that brought each ([`super::versions`]), and
+//! a ticket that runs in an environment is **behind** there when a version
+//! linked after the newest one the environment carries is not carried —
+//! the environment runs an earlier version. [`Kept::behind`] keeps, per
+//! environment, each such ticket's commits not carried (in link order) and
+//! the version that runs (its newest carried commit); a record that named
+//! the ticket carries every commit linked by then. `behind <env>` is
+//! answered from it ([`Deploys::holds_behind`]); a rollback refolds it as
+//! it refolds the cells.
 
 use super::history::Clock;
+use super::versions::{self, Linked};
 use super::{lineage, Authority, Cache, OrderKey, Row, Store, StoreError};
 use crate::address::ShortcodeId;
 use crate::vocab::CommitRef;
@@ -140,6 +152,19 @@ pub(super) fn same(a: &str, b: &str) -> bool {
 pub(crate) struct Links {
     by_key: HashMap<String, Vec<(String, String)>>,
     of: HashMap<String, Vec<CommitRef>>,
+    /// DEPLOY-20: each ticket's link record — which version each commit
+    /// linked since DEPLOY-20 is, and when.
+    record: HashMap<String, Linked>,
+}
+
+/// DEPLOY-20: a ticket running an earlier version in an environment — its
+/// commits not carried there, in link order, and the version that runs
+/// (its newest carried commit; `None` when only a record's naming carried
+/// it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Behind {
+    pub(crate) version: Option<String>,
+    pub(crate) not: Vec<String>,
 }
 
 impl Links {
@@ -173,6 +198,24 @@ impl Links {
     fn tickets<'a>(&'a self, c: &'a str) -> impl Iterator<Item = &'a str> + 'a {
         self.by_key.get(&key_of(c)).into_iter().flatten().filter(move |(h, _)| same(h, c)).map(|(_, t)| t.as_str())
     }
+
+    /// DEPLOY-20: whether `ticket`, running where `carries` says which
+    /// commits are (and, when a record there named it, `named` the latest
+    /// such record's moment), runs an earlier version: the versions linked
+    /// after its newest carried commit's, when there are any.
+    fn behind(&self, ticket: &str, carries: impl Fn(&str) -> bool, named: Option<i64>) -> Option<Behind> {
+        let commits = self.of.get(ticket)?;
+        let linked = self.record.get(ticket);
+        let version = versions::groups(commits, linked);
+        let carried = |c: &CommitRef| {
+            carries(c.as_str()) || named.is_some_and(|t| versions::at(c.as_str(), linked).is_none_or(|at| at <= t))
+        };
+        let newest = commits.iter().rposition(carried);
+        let after = newest.map(|i| version[i]);
+        let not: Vec<String> =
+            commits.iter().zip(&version).filter(|(_, v)| after.is_none_or(|a| **v > a)).map(|(c, _)| c.to_string()).collect();
+        (!not.is_empty()).then(|| Behind { version: newest.map(|i| commits[i].to_string()), not })
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -197,10 +240,15 @@ pub(crate) struct Kept {
     carried: HashMap<String, Vec<(String, i64, u64)>>,
     /// The ids the stack's records named: since when, brought by which.
     named: HashMap<String, (i64, u64)>,
+    /// DEPLOY-20: …and the latest such record's moment — what it carried of
+    /// the ticket is every commit linked by then.
+    named_last: HashMap<String, i64>,
     /// The kept cells: each ticket running there — since when, brought by
     /// which deployment. An id that names no ticket (a deleted one, a name a
     /// CI made up) is kept and never answered.
     pub(super) running: BTreeMap<String, (i64, u64)>,
+    /// DEPLOY-20: of `running`, each ticket that runs an earlier version.
+    pub(super) behind: BTreeMap<String, Behind>,
 }
 
 /// The earlier of two `(since, deployment)`.
@@ -253,12 +301,23 @@ pub(super) fn fold(ds: &[&Deployment]) -> Kept {
         }
         for t in &d.tickets {
             k.named.entry(t.clone()).or_insert((d.at, d.id));
+            k.named_last.insert(t.clone(), d.at);
         }
     }
     k
 }
 
 impl Kept {
+    /// Whether the stack carries the commit `c` names.
+    fn carries(&self, c: &str) -> bool {
+        self.carried.get(&key_of(c)).is_some_and(|l| l.iter().any(|(h, ..)| same(h, c)))
+    }
+
+    /// DEPLOY-20: `ticket`'s behind, as it runs here.
+    fn behind_of(&self, ticket: &str, links: &Links) -> Option<Behind> {
+        links.behind(ticket, |c| self.carries(c), self.named_last.get(ticket).copied())
+    }
+
     /// The cells, from the stack's commits and names joined with `links`.
     fn join(&mut self, links: &Links) {
         self.running.clear();
@@ -274,6 +333,7 @@ impl Kept {
             let was = self.running.get(t).copied();
             self.running.insert(t.clone(), earlier(was, *v));
         }
+        self.behind = self.running.keys().filter_map(|t| self.behind_of(t, links).map(|b| (t.clone(), b))).collect();
     }
 
     /// `ticket`'s cell again — its links moved.
@@ -289,6 +349,10 @@ impl Kept {
         match best {
             Some(v) => self.running.insert(ticket.to_string(), v),
             None => self.running.remove(ticket),
+        };
+        match best.and_then(|_| self.behind_of(ticket, links)) {
+            Some(b) => self.behind.insert(ticket.to_string(), b),
+            None => self.behind.remove(ticket),
         };
     }
 }
@@ -334,6 +398,32 @@ impl Deploys {
         if self.links.set(ticket, commits) {
             for k in self.envs.values_mut() {
                 k.rejoin(ticket, &self.links);
+            }
+        }
+    }
+
+    /// DEPLOY-20: the version the next link call to `ticket` makes.
+    pub(super) fn next_version(&self, ticket: &str) -> u32 {
+        versions::next(self.links.record.get(ticket))
+    }
+
+    /// DEPLOY-20: `refs` linked to `ticket` as `version` at `at` — recorded
+    /// before the row goes in, whose relink rejoins the cells with it.
+    pub(super) fn versioned(&mut self, ticket: &str, refs: &[CommitRef], version: u32, at: i64) {
+        let l = self.links.record.entry(ticket.to_string()).or_default();
+        for r in refs {
+            l.insert(r.to_string(), (version, at));
+        }
+    }
+
+    /// DEPLOY-20: `refs` unlinked from `ticket`, out of its record.
+    pub(super) fn unversioned(&mut self, ticket: &str, refs: &[CommitRef]) {
+        if let Some(l) = self.links.record.get_mut(ticket) {
+            for r in refs {
+                l.remove(r.as_str());
+            }
+            if l.is_empty() {
+                self.links.record.remove(ticket);
             }
         }
     }
@@ -412,6 +502,22 @@ impl Deploys {
         out
     }
 
+    /// DEPLOY-20: the tickets `behind <env>` holds for, per shortcode — each
+    /// running an earlier version in an environment `env` names. From the
+    /// kept cells, never a scan.
+    pub(super) fn holds_behind(&self, env: &str, at: &HashMap<String, OrderKey>) -> BTreeMap<ShortcodeId, RoaringBitmap> {
+        let mut out: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
+        for ((p, n), k) in &self.envs {
+            if !Self::names(env, p, n) {
+                continue;
+            }
+            for key in k.behind.keys().filter_map(|t| at.get(t)) {
+                out.entry(key.shortcode.clone()).or_default().insert(key.seq);
+            }
+        }
+        out
+    }
+
     /// DEPLOY-11: the next moment after the clock's now at which time alone
     /// moves what `deployed <env> <window>` holds for — as
     /// [`super::history::Log::next_boundary`] says it for a transition.
@@ -450,6 +556,8 @@ impl Cache {
     pub(super) fn holds(&self, h: &crate::filter::History, clock: &Clock) -> BTreeMap<ShortcodeId, RoaringBitmap> {
         match &h.event {
             crate::filter::Event::Deployed(env) => self.deploys.holds(env, h.window.as_ref(), clock, &self.at),
+            // DEPLOY-20: from the kept behind.
+            crate::filter::Event::Behind(env) => self.deploys.holds_behind(env, &self.at),
             // MENGER-39: `queued` from the queue's kept entries.
             crate::filter::Event::Queued(u) => self.queue.holds(*u, &self.at),
             _ => self.log.holds(h, clock),
@@ -460,8 +568,9 @@ impl Cache {
     pub(super) fn next_boundary(&self, h: &crate::filter::History, clock: &Clock) -> Option<i64> {
         match &h.event {
             crate::filter::Event::Deployed(env) => self.deploys.next_boundary(env, h.window.as_ref(), clock),
-            // MENGER-39: time alone never moves the queue.
-            crate::filter::Event::Queued(_) => None,
+            // MENGER-39 / DEPLOY-20: time alone never moves the queue, or
+            // which version runs.
+            crate::filter::Event::Queued(_) | crate::filter::Event::Behind(_) => None,
             _ => self.log.next_boundary(h, clock),
         }
     }
@@ -677,12 +786,16 @@ impl Store {
             d.id = cache.deploys.next_id();
             let kept = cache.deploys.refold(&d.project, &d.environment, Some(&d));
             let empty = BTreeMap::new();
-            let before = cache.deploys.envs.get(&(d.project.clone(), d.environment.clone())).map_or(&empty, |k| &k.running);
+            let (empty_behind, had) = (BTreeMap::new(), cache.deploys.envs.get(&(d.project.clone(), d.environment.clone())));
+            let before = had.map_or(&empty, |k| &k.running);
+            let behind = had.map_or(&empty_behind, |k| &k.behind);
+            // DEPLOY-20: a ticket whose version there moved is moved too.
             let moved: Vec<&str> = before
                 .iter()
                 .filter(|(t, v)| kept.running.get(*t) != Some(*v))
                 .map(|(t, _)| t.as_str())
                 .chain(kept.running.iter().filter(|(t, v)| before.get(*t) != Some(*v)).map(|(t, _)| t.as_str()))
+                .chain(behind.keys().chain(kept.behind.keys()).filter(|t| behind.get(*t) != kept.behind.get(*t)).map(String::as_str))
                 .collect();
             let entered = cache.in_order(kept.running.keys().map(String::as_str).filter(|t| !before.contains_key(*t)));
             let left = cache.in_order(before.keys().map(String::as_str).filter(|t| !kept.running.contains_key(*t)));
@@ -791,6 +904,7 @@ impl Store {
                 continue;
             }
             let k = &cache.deploys.envs[&(env.project.clone(), env.name.clone())];
+            let behind = k.behind.get(row.id.as_str()).cloned();
             out.push(match k.running.get(row.id.as_str()) {
                 Some((since, deployment)) => DeploymentsEvent::Running {
                     ticket: row.id.to_string(),
@@ -800,6 +914,8 @@ impl Store {
                     deployment: *deployment,
                     revision: env.revision,
                     release: env.release,
+                    behind: behind.as_ref().map(|b| b.not.clone()).unwrap_or_default(),
+                    version: behind.and_then(|b| b.version),
                 },
                 None => DeploymentsEvent::NotRunning { ticket: row.id.to_string(), project: env.project, environment: env.name },
             });
@@ -839,7 +955,15 @@ impl Store {
                 .iter()
                 .filter(|(t, _)| only.as_ref().is_none_or(|o| o.contains(*t)))
                 .filter_map(|(t, (since, deployment))| {
-                    cache.at.get(t).map(|key| (key, RunningCell { ticket: t.clone(), since: *since, deployment: *deployment }))
+                    let b = k.behind.get(t);
+                    let cell = RunningCell {
+                        ticket: t.clone(),
+                        since: *since,
+                        deployment: *deployment,
+                        behind: b.map(|b| b.not.clone()).unwrap_or_default(),
+                        version: b.and_then(|b| b.version.clone()),
+                    };
+                    cache.at.get(t).map(|key| (key, cell))
                 })
                 .collect();
             cells.sort_by(|a, b| a.0.cmp(b.0));
@@ -946,6 +1070,8 @@ impl Deploys {
     /// made from the rows.
     pub(super) fn load(&mut self, conn: &Connection) -> anyhow::Result<()> {
         let started = std::time::Instant::now();
+        // DEPLOY-20: the link record first, so the cells join with it.
+        self.links.record = versions::load(conn)?;
         let records = read_all(conn)?;
         self.load_records(records);
         tracing::info!(
@@ -999,6 +1125,26 @@ pub(super) fn scanned_cells(d: &Deploys, rows: &[&Row]) -> BTreeMap<(String, Str
     out
 }
 
+/// DEPLOY-20: each environment's behind by a scan — every running ticket
+/// tested against the stack's deployments one by one, as
+/// [`scanned_cells`] tests where it runs.
+pub(super) fn scanned_behind(d: &Deploys, cells: &BTreeMap<(String, String), BTreeMap<String, (i64, u64)>>) -> BTreeMap<(String, String), BTreeMap<String, Behind>> {
+    let mut out = BTreeMap::new();
+    for (env, k) in &d.envs {
+        let stack: Vec<&Deployment> = k.stack.iter().map(|id| &d.by_id[id]).collect();
+        let carries = |c: &str| stack.iter().any(|dep| dep.commits.iter().chain(std::iter::once(&dep.revision)).any(|x| same(c, x)));
+        let mut behind = BTreeMap::new();
+        for t in cells.get(env).into_iter().flat_map(BTreeMap::keys) {
+            let named = stack.iter().filter(|dep| dep.tickets.contains(t)).map(|dep| dep.at).max();
+            if let Some(b) = d.links.behind(t, carries, named) {
+                behind.insert(t.clone(), b);
+            }
+        }
+        out.insert(env.clone(), behind);
+    }
+    out
+}
+
 /// DEPLOY-11: `--verify-derived`'s look at the deployments, against
 /// `cache` (a scan of the same snapshot's tickets): `None` when the file has
 /// no deployments table yet; else how many deployments it holds and each
@@ -1027,6 +1173,7 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
     }
     // The cells as a server keeps them: folded first, every link after.
     let mut kept = Deploys::default();
+    kept.links.record = versions::load(conn)?;
     kept.load_records(records);
     let rows: Vec<&Row> = cache.order.values().collect();
     for r in &rows {
@@ -1057,6 +1204,15 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
                     have.get(t),
                     want.get(t)
                 ));
+            }
+        }
+    }
+    // DEPLOY-20: and each ticket's behind, kept against a scan.
+    for (env, want) in scanned_behind(&kept, &scanned) {
+        let have: BTreeMap<&String, &Behind> = kept.envs[&env].behind.iter().filter(|(t, _)| cache.at.contains_key(*t)).collect();
+        for t in have.keys().copied().chain(want.keys()).collect::<BTreeSet<_>>() {
+            if have.get(t).copied() != want.get(t) {
+                out.push(format!("behind cell {t} in {}/{}: kept {:?}; a scan gives {:?}", env.0, env.1, have.get(t), want.get(t)));
             }
         }
     }

@@ -2899,6 +2899,17 @@ synapse -P 4455 menger tickets list --filter 'not category done or not deployed 
   undone deploys carried; `started` and `failed` are recorded and shown and
   run nothing. A ticket runs there since the earliest deploy still counting
   that carried it.
+- **A ticket runs a version** (DEPLOY-20). A ticket's commits are grouped
+  into versions by the `commits link` call that brought them — a merge
+  commit and its branch commit linked together are one version — ordered as
+  they were linked, never by a repository's history (menger has none).
+  Running somewhere, a ticket is **behind** there when a version linked
+  after the newest one carried there is not carried: the environment runs
+  an earlier version. Every commit linked before DEPLOY-20 is its ticket's
+  first version, so an old database keeps its answers until a ticket gains a
+  commit; a record that names the ticket (`tickets`) carries every commit
+  linked by its `at`. The link record is the `commit_links` table, written
+  in the link's transaction and rekeyed by a reshortcode.
 - **A deployment never changes a status** — where a ticket runs is a fact
   beside it (DEPLOY-9).
 - **A retry is one deployment**: the same project, environment, state,
@@ -2910,8 +2921,8 @@ synapse -P 4455 menger tickets list --filter 'not category done or not deployed 
 | `deployments.record { project, environment, state, revision, previous?, commits?, tickets?, release?, at?, source? }` | `deployed { deployment, carried, unlinked, live, entered, left, duplicate }` — the deployment kept (`at` RFC 3339 or unix seconds, now when omitted; `recorded_by` the caller), the tickets it carried, its commits no ticket links, whether it still counts, and the tickets that began and stopped running in its environment. A bad field is one `error` naming it, nothing kept |
 | `deployments.list { project?, environment?, state?, ticket?, after?, limit? }` | `deployment { deployment, carried, unlinked, live }` newest first by `(at, id)`, then `page { next }` |
 | `deployments.environments { project? }` | `environment { project, name, order, revision, release, since, deployment, last, last_state, last_at, tickets }` per environment |
-| `deployments.for_ticket { id }` | `running { environment, since, deployment, revision, release }` for each environment it runs in, `not_running` for each other environment of its projects (its shortcode's, its hosts', any it ran in) |
-| `deployments.running { project?, environment?, ids? }` | DEPLOY-13: `cells { project, environment, running: [{ ticket, since, deployment }] }` per environment (an empty one too), each ticket running there — only `ids`' (at most 1,000) when given — in the store's order: what the app's board marks are drawn from, in one read |
+| `deployments.for_ticket { id }` | `running { environment, since, deployment, revision, release, behind, version }` for each environment it runs in — `behind` the commits not carried there, in link order, and `version` the newest carried one, when it runs an earlier version (DEPLOY-20; absent when current) — `not_running` for each other environment of its projects (its shortcode's, its hosts', any it ran in) |
+| `deployments.running { project?, environment?, ids? }` | DEPLOY-13: `cells { project, environment, running: [{ ticket, since, deployment, behind, version }] }` per environment (an empty one too), each ticket running there — only `ids`' (at most 1,000) when given — in the store's order: what the app's board marks are drawn from, in one read |
 | `deployments.watch` | `deployed`, then `environment_changed`, as each is recorded; `lagged { missed }` |
 
 **Filter cells.** `deployed <env>` (FILTER-3's language) is a ticket running
@@ -2921,7 +2932,16 @@ window (every window a history predicate takes); `not deployed prod` the rest.
 Answered from the kept cells, never by testing a ticket, on every filtered
 read; `tickets.watch --filter 'deployed prod'` says `entered` / `left` when a
 deploy or a rollback moves a ticket, and a relative window is read again as
-time passes.
+time passes. DEPLOY-20: `deployed prod` holds a ticket running there behind
+or not; `behind prod` (`behind menger/prod`; no window, no `by`) one running
+an earlier version there — its newest linked commit is not there; `deployed
+prod and not behind prod` one running its current version. A link and a
+deploy move it; a watch says `entered` / `left`.
+
+```sh
+synapse -P 4455 menger tickets list --filter 'behind prod' --summary true
+synapse -P 4455 menger deployments for_ticket --id LOOK-7     # running … behind [68e1271, 4145520], version d607756
+```
 
 **In the app** (DEPLOY-13): a ticket page's **Running** says where its work
 runs — `prod since 22:04 · test since 22:04 · not on staging`, each linked to
@@ -2930,7 +2950,11 @@ in the project's order; `#/deployments` (the header's `deployments`) shows
 each project's environments as columns — what each runs, since when, and a
 timeline of its deploys (state, when, the source's link, the tickets each
 carried) — under the project's **waiting** work: Complete, not yet on its last
-environment (`status Complete and under MENGER and not deployed menger/prod`).
+environment, or running an earlier version there (`status Complete and under
+MENGER and (not deployed menger/prod or behind menger/prod)`). DEPLOY-20: a
+ticket behind says so — Running reads `prod runs an earlier version
+(d607756); 68e1271, 4145520 not deployed`, and its board mark is drawn
+apart (dashed, `behind` in its title).
 The filter menu's **Deployed** category builds `deployed <env> [window]` and
 `not deployed <env>` from the environments recorded (a pill like When's), and
 the palette offers them as you type `deployed`, `not deployed` or `waiting`.

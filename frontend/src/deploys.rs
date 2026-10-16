@@ -49,6 +49,32 @@ pub(crate) struct Mark {
     pub(crate) env: String,
     pub(crate) since: i64,
     pub(crate) deployment: u64,
+    /// DEPLOY-20: its commits not carried there, when it runs an earlier
+    /// version (empty: current).
+    pub(crate) behind: Vec<String>,
+    /// DEPLOY-20: the version that runs there, when behind.
+    pub(crate) version: Option<String>,
+}
+
+/// One kept cell: since when, brought by which deploy, and (DEPLOY-20)
+/// what of the ticket is not there and the version that is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeptCell {
+    since: i64,
+    deployment: u64,
+    behind: Vec<String>,
+    version: Option<String>,
+}
+
+/// DEPLOY-20: a ticket behind, in words — `prod runs an earlier version
+/// (d607756); 68e1271, 4145520 not deployed`.
+pub(crate) fn behind_words(env: &str, version: Option<&str>, behind: &[String]) -> String {
+    let runs = match version {
+        Some(v) => format!("{env} runs an earlier version ({})", short(v)),
+        None => format!("{env} runs an earlier version"),
+    };
+    let not: Vec<String> = behind.iter().map(|c| short(c)).collect();
+    format!("{runs}; {} not deployed", not.join(", "))
 }
 
 /// Where an environment sits among its project's: test → staging → prod
@@ -64,7 +90,7 @@ pub(crate) struct Held {
     envs: Vec<Environment>,
     /// Each environment's running tickets: since when, brought by which
     /// deploy — by `(project, name)`.
-    cells: BTreeMap<(String, String), BTreeMap<String, (i64, u64)>>,
+    cells: BTreeMap<(String, String), BTreeMap<String, KeptCell>>,
     /// Each ticket's marks, in display order — derived from `cells`.
     marks: HashMap<String, Vec<Mark>>,
 }
@@ -111,8 +137,8 @@ impl Held {
                 kept
             }
         };
-        for RunningCell { ticket, since, deployment } in running {
-            next.insert(ticket, (since, deployment));
+        for RunningCell { ticket, since, deployment, behind, version } in running {
+            next.insert(ticket, KeptCell { since, deployment, behind, version });
         }
         if next == had {
             return false;
@@ -132,7 +158,8 @@ impl Held {
         let cells = self.cells.entry((deployment.project.clone(), deployment.environment.clone())).or_default();
         let mut moved = Vec::new();
         for t in entered {
-            if cells.insert(t.clone(), (deployment.at, deployment.id)).is_none() {
+            let cell = KeptCell { since: deployment.at, deployment: deployment.id, behind: Vec::new(), version: None };
+            if cells.insert(t.clone(), cell).is_none() {
                 moved.push(t.clone());
             }
         }
@@ -151,7 +178,16 @@ impl Held {
         let mut ms: Vec<Mark> = self
             .cells
             .iter()
-            .filter_map(|((p, e), c)| c.get(ticket).map(|(since, d)| Mark { project: p.clone(), env: e.clone(), since: *since, deployment: *d }))
+            .filter_map(|((p, e), c)| {
+                c.get(ticket).map(|c| Mark {
+                    project: p.clone(),
+                    env: e.clone(),
+                    since: c.since,
+                    deployment: c.deployment,
+                    behind: c.behind.clone(),
+                    version: c.version.clone(),
+                })
+            })
             .collect();
         ms.sort_by_key(|m| place(&m.project, &m.env));
         if ms.is_empty() {
@@ -205,10 +241,12 @@ impl Held {
 }
 
 /// The waiting clause of `project` (DEPLOY-13): its Complete work not yet
-/// on its last environment — `None` while it has none.
+/// on its last environment — DEPLOY-20: or running an earlier version there
+/// — `None` while it has none.
 pub(crate) fn waiting_filter(project: &str, envs: &[Environment]) -> Option<String> {
     let last = envs.iter().filter(|e| e.project == project).max_by_key(|e| (rank(&e.name), e.name.clone()))?;
-    Some(format!("status Complete and under {project} and not deployed {}/{}", project.to_ascii_lowercase(), last.name))
+    let env = format!("{}/{}", project.to_ascii_lowercase(), last.name);
+    Some(format!("status Complete and under {project} and (not deployed {env} or behind {env})"))
 }
 
 /// The waiting work that is on its way: running on one of `project`'s
@@ -221,7 +259,8 @@ pub(crate) fn on_its_way_filter(project: &str, envs: &[Environment]) -> Option<S
     mine.sort_by_key(|e| (rank(&e.name), e.name.clone()));
     mine.pop();
     let p = project.to_ascii_lowercase();
-    let earlier: Vec<String> = mine.iter().map(|e| format!("deployed {p}/{}", e.name)).collect();
+    // DEPLOY-20: on its way is its current version on an earlier one.
+    let earlier: Vec<String> = mine.iter().map(|e| format!("(deployed {p}/{n} and not behind {p}/{n})", n = e.name)).collect();
     match earlier.as_slice() {
         [] => None,
         [one] => Some(format!("{waiting} and {one}")),
@@ -482,10 +521,16 @@ pub(crate) fn row_marks(ticket: String) -> impl IntoView {
             view! {
                 <span class="envmarks">
                     {ms.into_iter().map(|m| {
-                        let title = format!("running on {}{} since {}", if many { format!("{} ", m.project) } else { String::new() }, m.env, since(m.since));
+                        let pre = if many { format!("{} ", m.project) } else { String::new() };
+                        let title = match m.behind.is_empty() {
+                            true => format!("running on {pre}{} since {}", m.env, since(m.since)),
+                            // DEPLOY-20: an earlier version, said apart.
+                            false => format!("behind — {pre}{}", behind_words(&m.env, m.version.as_deref(), &m.behind)),
+                        };
                         let label = if m.env.chars().count() > 8 { m.env.chars().take(7).chain(['…']).collect() } else { m.env.clone() };
+                        let behind = !m.behind.is_empty();
                         view! {
-                            <a class="envmark" data-env=m.env.clone() data-project=m.project.clone() href=href(&m.project, Some(m.deployment)) title=title>
+                            <a class="envmark" class:behind=behind data-env=m.env.clone() data-project=m.project.clone() data-behind=behind.then_some("true") href=href(&m.project, Some(m.deployment)) title=title>
                                 {label}
                             </a>
                         }
@@ -500,7 +545,7 @@ pub(crate) fn row_marks(ticket: String) -> impl IntoView {
 /// which deploy) or an environment of its projects it is not on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Where {
-    On { project: String, env: String, since: i64, deployment: u64, revision: Option<String> },
+    On { project: String, env: String, since: i64, deployment: u64, revision: Option<String>, behind: Vec<String>, version: Option<String> },
     NotOn { project: String, env: String },
 }
 
@@ -512,8 +557,8 @@ pub(crate) fn where_of(events: Vec<DeploymentsEvent>) -> Result<Vec<Where>, Stri
     let mut off = Vec::new();
     for ev in events {
         match ev {
-            DeploymentsEvent::Running { project, environment, since, deployment, revision, .. } => {
-                on.push(Where::On { project, env: environment, since, deployment, revision })
+            DeploymentsEvent::Running { project, environment, since, deployment, revision, behind, version, .. } => {
+                on.push(Where::On { project, env: environment, since, deployment, revision, behind, version })
             }
             DeploymentsEvent::NotRunning { project, environment, .. } => off.push(Where::NotOn { project, env: environment }),
             DeploymentsEvent::Error { message } => return Err(message),
@@ -582,7 +627,29 @@ pub(crate) fn Running(id: String, commits: Memo<Vec<String>>) -> impl IntoView {
                 .map(|(i, w)| {
                     let sep = (i + 1 < n).then_some(" · ");
                     let item = match w {
-                        Where::On { project, env, since: at, deployment, revision } => {
+                        Where::On { project, env, since: at, deployment, revision, behind, version } if !behind.is_empty() => {
+                            // DEPLOY-20: an earlier version runs there.
+                            let title = format!(
+                                "{project} {env} has run this ticket since {} — the version of {}; {} linked since",
+                                crate::fmt_unix(at),
+                                version.as_deref().map_or_else(|| "its deploy".to_string(), short),
+                                behind.iter().map(|c| short(c)).collect::<Vec<_>>().join(", "),
+                            );
+                            let _ = revision;
+                            let pre = many.then(|| format!("{project} "));
+                            let runs = match &version {
+                                Some(v) => view! { " runs an earlier version (" <code class="rev">{short(v)}</code> "); " }.into_any(),
+                                None => view! { " runs an earlier version; " }.into_any(),
+                            };
+                            let not = behind.iter().map(|c| short(c)).collect::<Vec<_>>().join(", ");
+                            view! {
+                                <a class="run behind" data-env=env.clone() data-behind="true" href=href(&project, Some(deployment)) title=title>
+                                    {pre}<span class="envmark behind">{env.clone()}</span>{runs}<code class="rev">{not}</code>" not deployed"
+                                </a>
+                            }
+                            .into_any()
+                        }
+                        Where::On { project, env, since: at, deployment, revision, .. } => {
                             let title = format!(
                                 "running on {project} {env} since {}{}",
                                 crate::fmt_unix(at),
@@ -641,7 +708,10 @@ mod tests {
         DeploymentsEvent::Cells {
             project: project.into(),
             environment: name.into(),
-            running: running.iter().map(|(t, s, d)| RunningCell { ticket: t.to_string(), since: *s, deployment: *d }).collect(),
+            running: running
+                .iter()
+                .map(|(t, s, d)| RunningCell { ticket: t.to_string(), since: *s, deployment: *d, behind: vec![], version: None })
+                .collect(),
         }
     }
 
@@ -687,7 +757,10 @@ mod tests {
         assert_eq!(envs_of(&h, "MENGER-2"), ["test", "prod"]);
         assert_eq!(envs_of(&h, "MENGER-3"), ["test"]);
         assert!(h.marks("MENGER-4").is_empty());
-        assert_eq!(h.marks("MENGER-2")[1], Mark { project: "MENGER".into(), env: "prod".into(), since: 10, deployment: 1 });
+        assert_eq!(
+            h.marks("MENGER-2")[1],
+            Mark { project: "MENGER".into(), env: "prod".into(), since: 10, deployment: 1, behind: vec![], version: None }
+        );
         assert_eq!((h.count("MENGER", "test"), h.count("MENGER", "staging")), (2, 0));
     }
 
@@ -730,18 +803,24 @@ mod tests {
         let two = Held::from_events([env("MENGER", "prod"), env("MENGER", "test"), env("PANTRY", "prod")], []);
         assert_eq!(two.choices(), ["test", "prod", "menger/test", "menger/prod", "pantry/prod"]);
         assert_eq!(two.projects(), ["MENGER", "PANTRY"]);
-        assert_eq!(waiting_filter("MENGER", two.envs()).as_deref(), Some("status Complete and under MENGER and not deployed menger/prod"));
+        assert_eq!(
+            waiting_filter("MENGER", two.envs()).as_deref(),
+            Some("status Complete and under MENGER and (not deployed menger/prod or behind menger/prod)")
+        );
         assert_eq!(waiting_filter("NONE", two.envs()), None);
         let f = menger_tickets_api::filter::Filter::parse(&waiting_filter("MENGER", two.envs()).unwrap()).unwrap();
         assert_eq!(f.groups.len(), 3, "the language reads it");
         assert_eq!(
             on_its_way_filter("MENGER", two.envs()).as_deref(),
-            Some("status Complete and under MENGER and not deployed menger/prod and deployed menger/test")
+            Some("status Complete and under MENGER and (not deployed menger/prod or behind menger/prod) and (deployed menger/test and not behind menger/test)")
         );
         assert_eq!(on_its_way_filter("PANTRY", two.envs()), None, "one environment: nothing earlier");
         let three = Held::from_events([env("MENGER", "prod"), env("MENGER", "test"), env("MENGER", "staging")], []);
         let way = on_its_way_filter("MENGER", three.envs()).unwrap();
-        assert!(way.ends_with("and (deployed menger/test or deployed menger/staging)"), "{way}");
+        assert!(
+            way.ends_with("and ((deployed menger/test and not behind menger/test) or (deployed menger/staging and not behind menger/staging))"),
+            "{way}"
+        );
         assert_eq!(menger_tickets_api::filter::Filter::parse(&way).unwrap().groups.len(), 4);
     }
 
@@ -757,6 +836,8 @@ mod tests {
             deployment: 1,
             revision: None,
             release: None,
+            behind: vec![],
+            version: None,
         };
         let off = |e: &str| DeploymentsEvent::NotRunning { ticket: "MENGER-2".into(), project: "MENGER".into(), environment: e.into() };
         let ws = where_of(vec![on("test", 5), off("staging"), on("prod", 9)]).unwrap();
@@ -769,6 +850,48 @@ mod tests {
             .collect();
         assert_eq!(names, ["on prod", "on test", "not staging"]);
         assert_eq!(where_of(vec![DeploymentsEvent::Error { message: "no ticket X".into() }]), Err("no ticket X".to_string()));
+    }
+
+    /// DEPLOY-20: a cell behind makes its mark behind — the versions said
+    /// in words — and the next answer makes it current; a page's Running
+    /// carries it.
+    #[test]
+    fn a_behind_cell_marks_its_row_apart() {
+        let behind = DeploymentsEvent::Cells {
+            project: "MENGER".into(),
+            environment: "prod".into(),
+            running: vec![RunningCell {
+                ticket: "LOOK-7".into(),
+                since: 10,
+                deployment: 4,
+                behind: vec!["68e1271".into(), "4145520".into()],
+                version: Some("d607756".into()),
+            }],
+        };
+        let mut h = Held::from_events([env("MENGER", "test"), env("MENGER", "prod")], [behind, cells("MENGER", "test", &[("LOOK-7", 20, 5)])]);
+        let ms = h.marks("LOOK-7");
+        assert_eq!(ms.iter().map(|m| (m.env.as_str(), m.behind.len())).collect::<Vec<_>>(), [("test", 0), ("prod", 2)]);
+        assert_eq!(
+            behind_words("prod", ms[1].version.as_deref(), &ms[1].behind),
+            "prod runs an earlier version (d607756); 68e1271, 4145520 not deployed"
+        );
+        assert_eq!(behind_words("prod", None, &["0123456789abcdef".to_string()]), "prod runs an earlier version; 0123456 not deployed");
+        // The next promote's answer: current.
+        assert!(h.take_cells(cells("MENGER", "prod", &[("LOOK-7", 10, 4)]), None));
+        assert!(h.marks("LOOK-7").iter().all(|m| m.behind.is_empty()));
+        let ws = where_of(vec![DeploymentsEvent::Running {
+            ticket: "LOOK-7".into(),
+            project: "MENGER".into(),
+            environment: "prod".into(),
+            since: 10,
+            deployment: 4,
+            revision: Some("4145520".into()),
+            release: None,
+            behind: vec!["68e1271".into()],
+            version: Some("d607756".into()),
+        }])
+        .unwrap();
+        assert!(matches!(&ws[0], Where::On { behind, version: Some(v), .. } if behind.len() == 1 && v == "d607756"));
     }
 
     /// A since in words: the time today, the day this year, else the date.

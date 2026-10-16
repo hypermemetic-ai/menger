@@ -72,6 +72,9 @@ pub(crate) enum Kind {
     /// DEPLOY-13: `not deployed <env> [window]` — built negated, as Hasn't
     /// changed is; a pill of it is a Deployed one, turned around.
     NotDeployed,
+    /// DEPLOY-20: `behind <env>` — running an earlier version there; a pill
+    /// (from the palette or a saved filter), never a row of a menu.
+    Behind,
     /// MENGER-39: `queued [urgency]` — the owner's queue, kept by the
     /// store; a pill (from the palette or a saved filter), never a row of
     /// When's menu.
@@ -99,6 +102,7 @@ impl Kind {
             Event::Changed => Kind::Changed,
             Event::Touched => Kind::Untouched,
             Event::Deployed(_) => Kind::Deployed,
+            Event::Behind(_) => Kind::Behind,
             Event::Queued(_) => Kind::Queued,
             Event::Archived => Kind::Archived,
             Event::Restored => Kind::Restored,
@@ -116,6 +120,7 @@ impl Kind {
             Kind::Untouched => "Hasn't changed",
             Kind::Deployed => "Deployed to",
             Kind::NotDeployed => "Not deployed to",
+            Kind::Behind => "Behind on",
             Kind::Queued => "Queued",
             Kind::Archived => "Archived",
             Kind::Restored => "Restored",
@@ -133,6 +138,7 @@ impl Kind {
             Kind::Untouched => "untouched",
             Kind::Deployed => "deployed",
             Kind::NotDeployed => "notdeployed",
+            Kind::Behind => "behind",
             Kind::Queued => "queued",
             Kind::Archived => "archived",
             Kind::Restored => "restored",
@@ -152,7 +158,7 @@ impl Kind {
 
     /// Whether its clause has a window (all but In status for).
     pub(crate) fn windowed(self) -> bool {
-        !matches!(self, Kind::Held | Kind::Queued)
+        !matches!(self, Kind::Held | Kind::Queued | Kind::Behind)
     }
 
     /// Whether its clause may say who (the transitions'; not a birth).
@@ -265,8 +271,8 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         Kind::Untouched => Event::Touched,
         // DEPLOY-13: names an environment first ([`new_deployed`]).
         Kind::Deployed | Kind::NotDeployed => return None,
-        // MENGER-39: never built by When's menu.
-        Kind::Queued => return None,
+        // MENGER-39 / DEPLOY-20: never built by When's menu.
+        Kind::Queued | Kind::Behind => return None,
         // ARCHIVE-2: the archive's two ends.
         Kind::Archived => Event::Archived,
         Kind::Restored => Event::Restored,
@@ -512,6 +518,10 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
         Event::Changed => out.push((None, "changed".into())),
         Event::Deployed(env) => {
             out.push((None, "deployed to".into()));
+            out.push((Some(Part::Env), env.clone()));
+        }
+        Event::Behind(env) => {
+            out.push((None, "behind on".into()));
             out.push((Some(Part::Env), env.clone()));
         }
         Event::Archived => out.push((None, "archived".into())),

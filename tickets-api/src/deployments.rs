@@ -183,6 +183,16 @@ pub struct RunningCell {
     pub since: i64,
     /// That deploy.
     pub deployment: u64,
+    /// DEPLOY-20: the ticket's commits not carried there, in link order —
+    /// linked after the version that runs there. Empty: it runs the
+    /// ticket's current version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub behind: Vec<String>,
+    /// DEPLOY-20: when `behind`, the version that runs there — its newest
+    /// carried commit (`None` when only a record naming the ticket carried
+    /// it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// What the `deployments` activation streams. Every method returns
@@ -216,7 +226,9 @@ pub enum DeploymentsEvent {
     EnvironmentChanged { environment: Environment },
     /// `for_ticket`: the ticket runs in this environment, since `since`
     /// (unix seconds), brought by `deployment`; the environment runs
-    /// `revision` now.
+    /// `revision` now. DEPLOY-20: `behind` the ticket's commits not carried
+    /// there, in link order, when it runs an earlier version — `version`,
+    /// its newest carried commit; empty when it runs the current one.
     Running {
         ticket: String,
         project: String,
@@ -225,6 +237,10 @@ pub enum DeploymentsEvent {
         deployment: u64,
         revision: Option<String>,
         release: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        behind: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
     },
     /// `for_ticket`: an environment of the ticket's project it does not run in.
     NotRunning { ticket: String, project: String, environment: String },
