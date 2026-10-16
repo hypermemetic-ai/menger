@@ -3274,6 +3274,8 @@
   }
   #qtray .qbtn:hover { transform: translateY(-1px); }
   #qtray .qbtn.fill { background: var(--ink); color: var(--bg); }
+  /* APP-48: open is the row's last move, at its far right. */
+  #qtray .qacts .qopen { margin-left: auto; }
   #qtray .qbtn:disabled { opacity: .5; cursor: default; }
   /* APP-23: Request changes — the button beside the answer, then its box. */
   #qtray .qchange { margin: 0 0 14px; }
@@ -3339,6 +3341,7 @@
     #qtray .qd-ph .qopts { grid-template-columns: 1fr; gap: 8px; }
     #qtray .qd-ph .qacts { display: grid; grid-template-columns: 1fr 1fr; }
     #qtray .qd-ph .qacts .qbtn { text-align: center; padding: 10px 8px; }
+    #qtray .qd-ph .qacts .qopen { margin-left: 0; }
     #qtray .qd-ph .qnext { grid-column: 1 / -1; margin: 0; }
     #qtray .qs.one .qd { padding: 6px 16px 22px; }
   }
