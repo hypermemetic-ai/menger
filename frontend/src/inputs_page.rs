@@ -136,7 +136,9 @@ fn parse_input_6(ps: &[lens::Pair]) -> Option<Kept> {
             ("sc", Some(v)) => {
                 let mut codes = Vec::new();
                 for sc in v.split(',') {
-                    if sc.is_empty() || !sc.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                    // ORG-9: or a hyphenated code, by the one rule (`SYNAPSE-CC`).
+                    let code = menger_tickets_api::address::is_code(sc);
+                    if sc.is_empty() || !(code || sc.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')) {
                         return None;
                     }
                     codes.push(sc.to_ascii_uppercase());
@@ -876,7 +878,9 @@ mod tests {
         assert_eq!(read_input_6("state=answered").flatten().map(|k| (k.filter.groups.is_empty(), Shown::of(&k.local).states)), Some((true, vec![InputState::Answered])));
         assert_eq!(read_input_6(""), None, "no INPUT-6 key: not one");
         assert_eq!(read_input_6("g=ready&n=in%20MNG"), None);
-        for bad in ["sc=", "sc=A-B", "state=removed", "state=open,shut", "sc=A&kind=choice", "sc=A&sc=B", "removed=yes", "state"] {
+        // ORG-9: a hyphenated shortcode is one; a doubled hyphen none.
+        assert_eq!(read_input_6("sc=synapse-cc").flatten().map(|k| k.filter.format()).as_deref(), Some("in SYNAPSE-CC"));
+        for bad in ["sc=", "sc=A--B", "sc=A-", "state=removed", "state=open,shut", "sc=A&kind=choice", "sc=A&sc=B", "removed=yes", "state"] {
             assert_eq!(read_input_6(bad), Some(None), "{bad}");
         }
     }

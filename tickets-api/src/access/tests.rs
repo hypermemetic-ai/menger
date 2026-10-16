@@ -217,7 +217,10 @@ fn a_ceiling_entry_is_role_or_grant_at_scope() {
     assert_eq!(a.ceiling_entry(" viewer@* "), Ok("viewer@*".into()));
     assert_eq!(a.ceiling_entry("Admin@menger-12"), Ok("admin@MENGER-12".into()));
     assert_eq!(a.ceiling_entry("tickets.get@menger"), Ok("tickets.get@MENGER".into()));
-    for bad in ["editor", "owner@X", "editor@", "editor@a b", "editor@X-", "editor@X-1a", "editor@*-1", "editor@under X", "a.b c@X"] {
+    // ORG-9: a code may hold hyphens (X-1A is one); only the last `-N` is a number.
+    assert_eq!(a.ceiling_entry("viewer@synapse-cc-1"), Ok("viewer@SYNAPSE-CC-1".into()));
+    assert_eq!(a.ceiling_entry("viewer@x-1a"), Ok("viewer@X-1A".into()));
+    for bad in ["editor", "owner@X", "editor@", "editor@a b", "editor@X-", "editor@X--1a", "editor@X-1-2", "editor@*-1", "editor@under X", "a.b c@X"] {
         assert!(a.ceiling_entry(bad).is_err(), "{bad}");
     }
 }

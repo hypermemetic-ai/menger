@@ -733,6 +733,9 @@ mod tests {
         assert_eq!(Tag::parse("status:pending"), Some(Tag::Status("Pending".into())));
         assert_eq!(Tag::parse("sev:Critical"), Some(Tag::Severity("critical".into())));
         assert_eq!(Tag::parse("id:Sub-12"), Some(Tag::Ticket("SUB-12".into())));
+        // ORG-9: a hyphenated shortcode, and its ticket split at the last `-`.
+        assert_eq!(Tag::parse("id:synapse-cc-1"), Some(Tag::Ticket("SYNAPSE-CC-1".into())));
+        assert_eq!(Tag::parse("sc:synapse-cc").map(|t| t.attr()), Some("sc:SYNAPSE-CC".into()));
         for bad in ["", "sc", "sc:", "sc:A B", "id:DEMAND", "id:DEMAND-", "id:-3", "id:DEMAND-x", "status:Nope", "kind:epic", "sev:none", "sev:", "wave:2", ":x"] {
             assert_eq!(Tag::parse(bad), None, "{bad}");
         }

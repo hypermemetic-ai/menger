@@ -103,8 +103,14 @@ impl Scope {
         if rest.is_empty() {
             return Some(Self::Org(org));
         }
-        let ok = rest.len() <= 48 && rest.split('.').next().is_some_and(|c| !c.is_empty())
-            && rest.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'.');
+        // ORG-9: a shortcode's identity, its code by the one rule
+        // (`SYNAPSE-CC`), `.N` after it for a namesake; never a ticket's key.
+        let (code, n) = rest.split_once('.').unwrap_or((rest, "0"));
+        let ok = rest.len() <= 48
+            && crate::address::is_code(code)
+            && !n.is_empty()
+            && n.bytes().all(|b| b.is_ascii_digit())
+            && rest.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'.' || b == b'-');
         ok.then(|| Self::Shortcode { org, id: ShortcodeId::new(rest) })
     }
 

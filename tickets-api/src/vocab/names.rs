@@ -4,7 +4,7 @@
 //! checked for its spelling and folded to the store's (`mng-1` is `MNG-1`).
 
 use super::{not_a, too_long, word};
-use crate::address::{folded, Address, CODE_MAX};
+use crate::address::{folded, Address};
 
 /// The longest name of a ticket or a shortcode a call may write — an
 /// address with every host spelled out, and room to spare.
@@ -22,9 +22,8 @@ fn minted(text: &str, seq: bool) -> Option<String> {
         false => up.as_str(),
     };
     let (code, n) = id.split_once('.')?;
-    let ok = !code.is_empty()
-        && code.len() <= CODE_MAX
-        && code.bytes().all(|b| b.is_ascii_alphanumeric())
+    // ORG-9: the code by the one rule, hyphens and all (`SYNAPSE-CC.2-3`).
+    let ok = crate::address::is_code(code)
         && !n.is_empty()
         && n.bytes().all(|b| b.is_ascii_digit());
     ok.then_some(up)
@@ -74,7 +73,7 @@ impl TicketRef {
 
 fn shortcode_ref(text: &str) -> Result<String, String> {
     let t = bounded(text, "a shortcode's name")?;
-    let shape = "letters and digits, as MENGER — or its address, org:ROOT/…/SC";
+    let shape = "letters and digits, as MENGER or SYNAPSE-CC — or its address, org:ROOT/…/SC";
     match Address::parse(t) {
         Ok(a) if !a.names_ticket() => Ok(a.to_string()),
         Ok(_) => Err(not_a(t, "a shortcode (it names a ticket)", shape)),

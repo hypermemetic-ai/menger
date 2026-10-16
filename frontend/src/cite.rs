@@ -132,8 +132,12 @@ pub(crate) struct Cite {
     pub(crate) section: Section,
 }
 
-/// A ticket id as a cite names one: `EPIC-N`.
+/// A ticket id as a cite names one: `EPIC-N` — ORG-9: split at its last
+/// `-`, its code by the one rule (`SYNAPSE-CC-1`), or letters, digits and `_`.
 fn ticket_ok(id: &str) -> bool {
+    if menger_tickets_api::address::split_key(id).is_some() {
+        return true;
+    }
     let Some((epic, n)) = id.rsplit_once('-') else { return false };
     !epic.is_empty()
         && epic.len() <= 64
@@ -812,6 +816,8 @@ mod tests {
             Ok(Cite { ticket: "AUTH-10".into(), section: Section::Id("the-table".into()) })
         );
         assert_eq!(parse("AUTH-10#x", Some("")).map(|c| c.section), Ok(Section::Id("x".into())));
+        // ORG-9: a hyphenated shortcode's ticket.
+        assert_eq!(parse("synapse-cc-1#x", None).map(|c| c.ticket), Ok("SYNAPSE-CC-1".into()));
         for (r, f, why) in [
             ("", Some("f"), "name the ticket"),
             ("AUTH", Some("f"), "no ticket id"),

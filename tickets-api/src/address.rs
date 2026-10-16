@@ -68,6 +68,40 @@ use std::sync::Arc;
 /// already capped it at 32).
 pub const CODE_MAX: usize = 32;
 
+/// ORG-9: the one shortcode rule — ASCII letters and digits, any case, 1 to
+/// [`CODE_MAX`], in segments joined by single hyphens (owner, 2026-10-16:
+/// *"synapse-cc-1 should be a valid name … only the final -N is
+/// protected"*). No leading, trailing or doubled hyphen, and no segment after
+/// the first all digits — so `A-1` is never a shortcode (it is ticket 1 of
+/// A), and `A-1-2` reads one way only. A ticket's key splits at its last
+/// hyphen ([`split_key`]).
+pub fn is_code(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= CODE_MAX
+        && text.split('-').enumerate().all(|(i, seg)| {
+            !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_alphanumeric()) && (i == 0 || !seg.bytes().all(|b| b.is_ascii_digit()))
+        })
+}
+
+/// ORG-9: a ticket's key, `CODE-N`, split at its **last** hyphen into its
+/// shortcode's identity and its number — `SYNAPSE-CC-1` is `(SYNAPSE-CC, 1)`,
+/// a namesake's `THEME.62-3` is `(THEME.62, 3)`. `None` for anything that is
+/// not one: a number of no digits or past `u32`, or a code [`is_code`]
+/// refuses (`.N` after it, for a namesake). Case is kept as written.
+pub fn split_key(id: &str) -> Option<(&str, u32)> {
+    let (code, n) = id.rsplit_once('-')?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n = n.parse::<u32>().ok()?;
+    let letters = match code.split_once('.') {
+        Some((c, k)) if !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()) => c,
+        Some(_) => return None,
+        None => code,
+    };
+    is_code(letters).then_some((code, n))
+}
+
 /// ORG-3: an organization's name — lower-case ASCII letters, digits and
 /// `-`, 1 to 63 of them, not starting or ending with `-`. Today's tracker is
 /// the one organization [`OrgId::HYPERMEMETIC`] (ORG-1's `org-name`); ORG-4
@@ -135,7 +169,8 @@ impl fmt::Display for OrgId {
 }
 
 /// ORG-3: a shortcode's letters — ASCII letters and digits, upper case (a
-/// code is read case-blind and kept upper case), 1 to [`CODE_MAX`].
+/// code is read case-blind and kept upper case), 1 to [`CODE_MAX`]. ORG-9:
+/// in hyphen-separated segments (`SYNAPSE-CC`) — [`is_code`]'s rule.
 ///
 /// Not an identity: two shortcodes of one code live in two namespaces. So
 /// it has no `Hash`, no `Ord` and no `Borrow<str>` — nothing can key a map
@@ -151,8 +186,11 @@ impl Code {
     /// `text` as a code — trimmed and upper-cased — or why it is not one.
     pub fn parse(text: &str) -> Result<Self, String> {
         let t = text.trim();
-        if t.is_empty() || t.len() > CODE_MAX || !t.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            return Err(format!("`{t}` is not a shortcode: ASCII letters and digits, as MENGER"));
+        if !is_code(t) {
+            return Err(format!(
+                "`{t}` is not a shortcode: ASCII letters and digits, as MENGER — or segments joined by single hyphens, \
+                 as SYNAPSE-CC, none after the first all digits"
+            ));
         }
         Ok(Self(t.to_ascii_uppercase()))
     }
@@ -534,12 +572,17 @@ impl Address {
             }
             return Ok(Self { org, hosts, code: Code::parse(last)?, at: At::Path(path) });
         }
+        // ORG-9: a code may hold hyphens; only the last `-N`, digits, is a
+        // ticket's number — and no code ends in a segment of digits, so
+        // `SYNAPSE-CC-1` is a ticket and `SYNAPSE-CC` a shortcode, one way.
         if let Some((code, n)) = last.rsplit_once('-') {
             if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) {
                 let seq = n.parse::<u32>().map_err(|_| format!("`{t}`: {n} is past the last number a ticket can have"))?;
                 return Ok(Self { org, hosts, code: Code::parse(code)?, at: At::Seq(seq) });
             }
-            return Err(format!("`{t}` is not an address: a ticket is SC-N, its number digits"));
+            if !is_code(last.trim()) {
+                return Err(format!("`{t}` is not an address: a ticket is SC-N, its number digits"));
+            }
         }
         Ok(Self { org, hosts, code: Code::parse(last)?, at: At::Shortcode })
     }
@@ -642,10 +685,55 @@ mod tests {
 
     #[test]
     fn what_is_no_address_says_why() {
-        for bad in ["", "THE ME-3", "THEME-x", "Hypermemetic:MENGER-1", "MENGER//THEME-3", "THEME-", "THE.ME-3", "-3"] {
+        for bad in ["", "THE ME-3", "THEME--x", "THEME-x-", "Hypermemetic:MENGER-1", "MENGER//THEME-3", "THEME-", "THE.ME-3", "-3"] {
             assert!(Address::parse(bad).is_err(), "{bad:?} parsed");
         }
         assert!(Address::parse("THEME-99999999999").is_err());
+        // ORG-9: `THEME-x` is no ticket — its last segment is not a number —
+        // but it is a shortcode now, its letters in two segments.
+        assert_eq!(Address::parse("THEME-x").unwrap().at, At::Shortcode);
+    }
+
+    #[test]
+    fn a_code_may_hold_hyphens_but_only_the_last_digits_are_a_number() {
+        // ORG-9: the rule, and the forms it refuses.
+        for ok in ["MENGER", "synapse-cc", "A-B-C", "A1-B2", "123", "X-1B", "ab-c9"] {
+            assert!(is_code(ok) && Code::parse(ok).is_ok(), "{ok:?} refused");
+        }
+        for bad in ["", "A-", "-A", "A--B", "A-1", "A-B-2", "A_B", "A B", "A.B", "-", &"A".repeat(CODE_MAX + 1)] {
+            assert!(!is_code(bad) && Code::parse(bad).is_err(), "{bad:?} passed");
+        }
+        assert_eq!(code("synapse-cc").as_str(), "SYNAPSE-CC");
+
+        let a = Address::parse("synapse-cc-1").unwrap();
+        assert_eq!((a.code.as_str(), &a.at), ("SYNAPSE-CC", &At::Seq(1)));
+        assert_eq!(a.to_string(), "SYNAPSE-CC-1");
+        let a = Address::parse("SYNAPSE-CC").unwrap();
+        assert_eq!((a.code.as_str(), &a.at), ("SYNAPSE-CC", &At::Shortcode));
+        let a = Address::parse("hypermemetic:PLEXUS/SYNAPSE/SYNAPSE-CC-12").unwrap();
+        assert_eq!((a.hosts.len(), a.code.as_str(), &a.at), (2, "SYNAPSE-CC", &At::Seq(12)));
+        let a = Address::parse("SYNAPSE-CC/HUB-GEN-3").unwrap();
+        assert_eq!((a.hosts, a.code.as_str(), a.at), (vec![code("SYNAPSE-CC")], "HUB-GEN", At::Seq(3)));
+        let a = Address::parse("SYNAPSE-CC/_MENGER/board").unwrap();
+        assert_eq!(a.code.as_str(), "SYNAPSE-CC");
+        // `A-1` is ticket 1 of A, never a shortcode; `A-1-2` is no address.
+        assert_eq!(Address::parse("A-1").unwrap().at, At::Seq(1));
+        for bad in ["A--B-1", "A-B--1", "-A-1", "A-1-2", "A-1/B-2", "A--B", "A-"] {
+            assert!(Address::parse(bad).is_err(), "{bad:?} parsed");
+        }
+        // Today's ids still read as they did.
+        assert_eq!(Address::parse("MNG-1").unwrap().code.as_str(), "MNG");
+    }
+
+    #[test]
+    fn a_key_splits_at_its_last_hyphen() {
+        assert_eq!(split_key("SYNAPSE-CC-1"), Some(("SYNAPSE-CC", 1)));
+        assert_eq!(split_key("MNG-12"), Some(("MNG", 12)));
+        assert_eq!(split_key("THEME.62-3"), Some(("THEME.62", 3)));
+        assert_eq!(split_key("SYNAPSE-CC.2-3"), Some(("SYNAPSE-CC.2", 3)));
+        for bad in ["MNG", "MNG-", "-1", "A--B-1", "A-1-2", "MNG-x", "THEME.-3", "MNG-99999999999"] {
+            assert_eq!(split_key(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

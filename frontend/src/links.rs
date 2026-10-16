@@ -1324,5 +1324,7 @@ mod tests {
         assert_eq!(route_ticket("#/ticket/MENGER-14?field=x"), Some("MENGER-14".into()));
         assert_eq!(route_ticket("#/ticket/<b>"), None);
         assert_eq!(route_ticket("#/waves/MENGER"), None);
+        // ORG-9: a hyphenated shortcode's ticket.
+        assert_eq!(route_ticket("#/ticket/SYNAPSE-CC-1?field=x"), Some("SYNAPSE-CC-1".into()));
     }
 }

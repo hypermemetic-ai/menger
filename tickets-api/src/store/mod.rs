@@ -5698,3 +5698,6 @@ mod tests_reshortcode;
 /// ORG-5: a scope under a scope roots its own shortcode — a test per row.
 #[cfg(test)]
 mod tests_child_scopes;
+/// ORG-9: a shortcode may hold hyphens — SYNAPSE-CC-1, end to end in the store.
+#[cfg(test)]
+mod tests_hyphens;

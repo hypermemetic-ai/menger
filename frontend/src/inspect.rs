@@ -137,7 +137,7 @@ pub(crate) fn app_route(route: &str) -> Option<String> {
     }
     let ok = match path.split_once('/') {
         Some(("ticket", id)) => {
-            crate::kids::key(id).is_some_and(|(epic, _)| !epic.is_empty() && epic.chars().all(|c| c.is_ascii_alphanumeric()))
+            menger_tickets_api::address::split_key(id).is_some_and(|(epic, _)| !epic.contains('.'))
                 && query.is_none_or(|q| {
                     q.strip_prefix("component=").is_some_and(is_component_name)
                         || q.strip_prefix("field=").is_some_and(section_name_ok)
@@ -145,7 +145,7 @@ pub(crate) fn app_route(route: &str) -> Option<String> {
                 })
         }
         Some(("components", tag)) => (tag.is_empty() || is_component_name(tag)) && query.is_none(),
-        Some(("waves", sc)) => sc.is_empty() || sc.chars().all(|c| c.is_ascii_alphanumeric()),
+        Some(("waves", sc)) => sc.is_empty() || menger_tickets_api::address::is_code(sc),
         None => (path == "components" && query.is_none()) || path == "waves",
         _ => false,
     };
@@ -301,6 +301,10 @@ mod tests {
             // COMP-14: a cite window's header opens its section.
             ("#/ticket/AUTH-10?field=findings", "#/ticket/AUTH-10?field=findings"),
             ("#/ticket/AUTH-10?anchor=the-table", "#/ticket/AUTH-10?anchor=the-table"),
+            // ORG-9: a shortcode may hold hyphens; only the last `-N` is the number.
+            ("#/ticket/SYNAPSE-CC-1", "#/ticket/SYNAPSE-CC-1"),
+            ("#/ticket/synapse-cc-1?field=findings", "#/ticket/synapse-cc-1?field=findings"),
+            ("#/waves/SYNAPSE-CC", "#/waves/SYNAPSE-CC"),
         ] {
             assert_eq!(app_route(route).as_deref(), Some(want), "{route}");
         }
@@ -309,6 +313,7 @@ mod tests {
             "#/ticket/A-1/x", "#/ticket/A-1?component=Bad", "#/ticket/A-1?evil=1", "#/components/Not-A-Tag", "#/components?x",
             "#/settings", "#/ticket/A-1\"><script>", "#/waves/PLEX US", "#/waves/../x", "#//evil.example",
             "#/ticket/A-1?field=", "#/ticket/A-1?field=a/b", "#/ticket/A-1?anchor=%22x", "#/components/m-x?field=a",
+            "#/ticket/A--B-1", "#/ticket/-A-1", "#/ticket/A-1-2", "#/waves/A--B", "#/waves/A-", "#/waves/A-1",
         ] {
             assert_eq!(app_route(route), None, "{route}");
         }

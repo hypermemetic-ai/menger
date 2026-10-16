@@ -1399,7 +1399,7 @@ fn group(epic: &str, total: u64, done: u64, root: &str, host: Option<&str>) -> G
 #[test]
 fn the_oracle_draws_the_navs_own_fixtures() {
     let f = |id: &str, kind: &str, parent: Option<&str>| {
-        let (epic, seq) = id.split_once('-').unwrap();
+        let (epic, seq) = id.rsplit_once('-').unwrap();
         Facts {
             id: id.into(),
             epic: epic.into(),

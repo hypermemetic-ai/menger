@@ -224,7 +224,9 @@ fn a_path_address_is_a_shortcode_a_slash_and_a_path() {
     assert_eq!(path_address("PLEXUS-35"), None);
     assert_eq!(path_address("/_MENGER/board"), None);
     assert_eq!(path_address("PLEXUS/"), None);
-    assert_eq!(path_address("PLE-XUS/_MENGER/board"), None);
+    // ORG-9: a code may hold hyphens, never a doubled one.
+    assert_eq!(path_address("PLE-XUS/_MENGER/board"), Some(("PLE-XUS".into(), "_MENGER/board")));
+    assert_eq!(path_address("PLE--XUS/_MENGER/board"), None);
     assert!(is_menger_path("_MENGER/board"));
     assert!(is_menger_path("_MENGER/a/b"));
     assert!(!is_menger_path("_MENGER/"));

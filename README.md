@@ -2079,6 +2079,17 @@ under MENGER is refused. Every ticket and every group carries:
 Events that name a shortcode (`extent`, `count`, `entered`, `left`,
 `recount`) carry `shortcode` beside `epic`.
 
+**A code may hold hyphens** (ORG-9; owner, 2026-10-16: *"synapse-cc-1
+should be a valid name … only the final -N is protected"*). A code is ASCII
+letters and digits, at most 32, in segments joined by single hyphens —
+`SYNAPSE-CC` is a shortcode and `SYNAPSE-CC-1` its first ticket. A ticket's
+id splits at its **last** hyphen. No leading, trailing or doubled hyphen,
+and no segment after the first all digits, so `A-1` is always ticket 1 of
+A and never a shortcode, and every name reads one way. `in SYNAPSE-CC` is
+those letters (SYNAPSE is another shortcode); `under SYNAPSE-CC-1` is the
+ticket and its descendants. The database keeps `epic` and `seq` apart, so
+no row is rewritten.
+
 **Naming a ticket.** Every method that takes a ticket or a shortcode takes
 any short form of its address — the full one, any subsequence of its hosts
 (`MENGER/ORG-3`, `ACCESS/ORG-3`), the org alone (`hypermemetic:ORG-3`), the

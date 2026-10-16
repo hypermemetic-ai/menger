@@ -197,7 +197,8 @@ text_type!(
 /// here from `access` by ACCESS-8: [`Ceiling`] is checked with it.)
 pub fn ceiling_scope_of(text: &str) -> Result<String, String> {
     let t = text.trim();
-    let ticket = t.split_once('-').filter(|(code, n)| {
+    // ORG-9: a ticket's key splits at its last hyphen (`SYNAPSE-CC-1`).
+    let ticket = t.rsplit_once('-').filter(|(code, n)| {
         !code.contains(':') && scope_of(code).is_ok_and(|c| c != EVERYWHERE) && !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_digit())
     });
     match ticket {
