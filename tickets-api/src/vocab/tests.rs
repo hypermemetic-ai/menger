@@ -64,7 +64,11 @@ fn a_shortcode_ref_is_a_code_or_an_address_of_one() {
 fn the_shortcode_rules_are_one() {
     // ACCESS-5 found six; each now asks `Code::parse`, so each takes the
     // same codes as a bare shortcode, and refuses the same.
-    for text in ["MENGER", "menger", "A1", "A_B", "a-b", "", " ", "THE ME", "THE.ME", &"A".repeat(32), &"A".repeat(33)] {
+    // ORG-9: and the same hyphenated codes, refusing the same malformed ones.
+    for text in [
+        "MENGER", "menger", "A1", "A_B", "a-b", "", " ", "THE ME", "THE.ME", &"A".repeat(32), &"A".repeat(33),
+        "SYNAPSE-CC", "synapse-cc", "A-B-C", "X-1B", "A-", "-A", "A--B", "A-1", "A-B-2",
+    ] {
         let code = Code::parse(text).is_ok();
         assert_eq!(text.parse::<ShortcodeRef>().is_ok() && !text.contains('.'), code, "ShortcodeRef {text:?}");
         assert_eq!(text.parse::<Project>().is_ok(), code, "Project {text:?}");
@@ -275,4 +279,35 @@ fn a_text_type_is_a_named_string_in_the_schema() {
     let schema = serde_json::to_value(schemars::schema_for!(Params)).unwrap();
     assert_eq!(schema["properties"]["id"]["$ref"], json!("#/$defs/TicketRef"), "{schema}");
     assert_eq!(schema["$defs"]["TicketRef"]["type"], json!("string"), "{schema}");
+}
+
+#[test]
+fn a_shortcode_may_hold_hyphens_and_a_ticket_splits_at_its_last() {
+    // ORG-9 (owner, 2026-10-16: "synapse-cc-1 should be a valid name … only
+    // the final -N is protected").
+    holds::<TicketRef>(
+        &["SYNAPSE-CC-1", "synapse-cc-1", "PLEXUS/SYNAPSE-CC-12", "hypermemetic:SYNAPSE/SYNAPSE-CC-1", "SYNAPSE-CC.2-3", "SYNAPSE-CC/_MENGER/board"],
+        &["A--B-1", "A-1-2", "-A-1", "A--B.2-3", "SYNAPSE-CC-", "SYNAPSE-CC"],
+    );
+    assert_eq!("synapse-cc-1".parse::<TicketRef>().unwrap().as_str(), "SYNAPSE-CC-1");
+    holds::<ShortcodeRef>(&["SYNAPSE-CC", "synapse-cc", "PLEXUS/SYNAPSE-CC", "acme:SYNAPSE-CC", "SYNAPSE-CC.2"], &["A-", "-A", "A--B", "A-1", "SYNAPSE-CC-1"]);
+    assert_eq!("synapse-cc".parse::<ShortcodeRef>().unwrap().as_str(), "SYNAPSE-CC");
+    let e = "A-1".parse::<ShortcodeRef>().unwrap_err();
+    assert!(e.contains("names a ticket"), "{e}");
+    holds::<Under>(&["SYNAPSE-CC", "SYNAPSE-CC-1"], &["A--B"]);
+    holds::<Project>(&["SYNAPSE-CC"], &["A-1", "A--B"]);
+    holds::<ThemeScope>(&["SYNAPSE-CC"], &["A-1"]);
+    holds::<ScopeRef>(&["SYNAPSE-CC", "acme:SYNAPSE-CC"], &["SYNAPSE-CC-1"]);
+    holds::<Ceiling>(&["editor@SYNAPSE-CC", "tickets.get@SYNAPSE-CC-1"], &["editor@A--B"]);
+    assert_eq!("viewer@synapse-cc-1".parse::<Ceiling>().unwrap().as_str(), "viewer@SYNAPSE-CC-1");
+    assert_eq!("viewer@synapse-cc".parse::<Ceiling>().unwrap().as_str(), "viewer@SYNAPSE-CC");
+    // A kept scope holds a hyphenated identity, and never a ticket's key.
+    use crate::members::Scope;
+    for text in ["hypermemetic:SYNAPSE-CC", "hypermemetic:SYNAPSE-CC.2"] {
+        let s: Scope = de(text).unwrap();
+        assert_eq!(serde_json::to_value(&s).unwrap(), json!(text));
+    }
+    for bad in ["hypermemetic:SYNAPSE-CC-1", "hypermemetic:A--B", "hypermemetic:-A"] {
+        assert!(de::<Scope>(bad).is_err(), "{bad}");
+    }
 }

@@ -182,10 +182,8 @@ fn wave_ref_at(s: &str) -> Option<(&str, usize)> {
     let body = &rest[lead..];
     let end = body.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap_or(body.len());
     let id = &body[..end];
-    let (epic, seq) = id.rsplit_once('-')?;
-    if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) || seq.is_empty() || !seq.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
+    // ORG-9: an id splits at its last `-`; its code may hold hyphens.
+    menger_tickets_api::address::split_key(id)?;
     let after = &body[end..];
     let trail = after.len() - after.trim_start_matches(' ').len();
     after[trail..].starts_with('}').then_some((id, WAVE_OPEN.len() + lead + end + trail + 1))
@@ -1650,6 +1648,8 @@ A candidate language, drawn below.
             ["RETURNS-6", "CONTEXT-4"]
         );
         assert!(wave_ids("nothing here").is_empty());
+        // ORG-9: a hyphenated shortcode's ticket is one id; a malformed one none.
+        assert_eq!(wave_ids("{wave: synapse-cc-2} {wave: A--B-1} {wave: -A-1} {wave: A-1-}"), ["SYNAPSE-CC-2"]);
     }
 
     /// MENGER-14: a bare URL in prose is a link, escaped as every link is;

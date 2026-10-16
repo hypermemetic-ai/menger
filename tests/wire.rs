@@ -1532,6 +1532,50 @@ async fn a_path_address_over_the_wire() {
     assert!(rows[0]["summary"].get("path").is_none(), "{}", rows[0]);
 }
 
+/// ORG-9 over the real protocol: a shortcode may hold hyphens. Before it,
+/// `tickets.get --id SYNAPSE-CC-1` was refused at dispatch (`is not a
+/// ticket`) and no such shortcode could be made; now the scope is born
+/// SYNAPSE-CC-1 under SYNAPSE-1, every read names it, and a malformed code
+/// is still refused at dispatch.
+#[tokio::test]
+async fn a_hyphenated_shortcode_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    collect(call(&client, "tickets.create", json!({"epic": "SYNAPSE", "title": "synapse", "kind": "scope"})).await).await;
+    let evs = collect(
+        call(&client, "tickets.create", json!({"epic": "synapse-cc", "title": "synapse-cc", "kind": "scope", "parent": "SYNAPSE-1"})).await,
+    )
+    .await;
+    assert_eq!(evs[0]["type"], "created", "{evs:?}");
+    assert_eq!(
+        (evs[0]["ticket"]["id"].as_str(), evs[0]["ticket"]["epic"].as_str(), evs[0]["ticket"]["address"].as_str()),
+        (Some("SYNAPSE-CC-1"), Some("SYNAPSE-CC"), Some("hypermemetic:SYNAPSE/SYNAPSE-CC-1"))
+    );
+    collect(call(&client, "tickets.create", json!({"epic": "SYNAPSE-CC", "title": "a gap", "kind": "gap", "parent": "SYNAPSE-CC-1"})).await).await;
+
+    for id in ["SYNAPSE-CC-1", "synapse-cc-1", "SYNAPSE/SYNAPSE-CC-1"] {
+        let evs = collect(call(&client, "tickets.get", json!({"id": id})).await).await;
+        assert_eq!(evs[0]["ticket"]["id"], "SYNAPSE-CC-1", "{id}: {evs:?}");
+    }
+    let ids = |rows: Vec<Value>| rows.iter().map(|r| r["summary"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let listed = rows(call(&client, "tickets.list", json!({"epic": "SYNAPSE-CC", "summary": true})).await).await;
+    assert_eq!(ids(listed), ["SYNAPSE-CC-1", "SYNAPSE-CC-2"]);
+    let filtered = rows(call(&client, "tickets.list", json!({"filter": "in SYNAPSE-CC and kind gap", "summary": true})).await).await;
+    assert_eq!(ids(filtered), ["SYNAPSE-CC-2"]);
+    let under = rows(call(&client, "tickets.list", json!({"filter": "under SYNAPSE-CC-1", "summary": true})).await).await;
+    assert_eq!(ids(under), ["SYNAPSE-CC-1", "SYNAPSE-CC-2"]);
+    let synapse = rows(call(&client, "tickets.list", json!({"filter": "in SYNAPSE", "summary": true})).await).await;
+    assert_eq!(ids(synapse), ["SYNAPSE-1"], "SYNAPSE is its own shortcode");
+
+    // Only the last `-N` is a number; a malformed code is no name at all.
+    for bad in ["A--B-1", "-A-1", "A-1-2"] {
+        let why = invalid(&client, "tickets.get", json!({"id": bad})).await;
+        assert!(why.contains("id"), "{bad}: {why}");
+    }
+    let why = invalid(&client, "tickets.create", json!({"epic": "A-1", "title": "x", "kind": "scope"})).await;
+    assert!(why.contains("epic"), "A-1 is a ticket, never a shortcode: {why}");
+}
+
 /// WAVE-6 over the real protocol: every row carries its kept placement —
 /// tagged as `waves` tags it, omitted on a doc — and a completion two
 /// blockers back from a ticket moves it in one `placements_changed { changes

@@ -649,7 +649,11 @@ impl VerifiedUser {
                 // letters — never the text before a `-` (an org's name).
                 let shortcode = crate::address::Address::parse(id)
                     .map(|a| a.code.as_str().to_string())
-                    .unwrap_or_else(|_| id.split(['-', '/']).next().unwrap_or(id).to_ascii_uppercase());
+                    .unwrap_or_else(|_| {
+                        // ORG-9: a namesake's key (`SYNAPSE-CC.2-3`) splits at its last `-`.
+                        let code = crate::address::split_key(id).map(|(c, _)| c);
+                        code.unwrap_or_else(|| id.split(['-', '/']).next().unwrap_or(id)).to_ascii_uppercase()
+                    });
                 format!("{} needs {grant} on {shortcode} for {id}", self.who())
             }
             None => format!("{} needs {grant} here", self.who()),

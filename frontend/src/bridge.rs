@@ -285,14 +285,23 @@ async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>, String> {
 // -- IDENTITY-36: a frame reads its own subtree ------------------------------
 
 /// The shortcode of a ticket id (`EPIC-N`) or a path address
-/// (`EPIC/_MENGER/…`) — the server's own reading (access.rs), uppercased.
+/// (`EPIC/_MENGER/…`) — the server's own reading (access/user.rs),
+/// uppercased. ORG-9: a code may hold hyphens, so an id splits at its last
+/// `-` (`SYNAPSE-CC-1` is in SYNAPSE-CC).
 pub(crate) fn shortcode_of(id: &str) -> String {
-    id.trim().split(['-', '/']).next().unwrap_or_default().to_ascii_uppercase()
+    let id = id.trim();
+    match menger_tickets_api::Address::parse(id) {
+        Ok(a) => a.code.as_str().to_string(),
+        Err(_) => menger_tickets_api::address::split_key(id)
+            .map(|(c, _)| c)
+            .unwrap_or_else(|| id.split(['-', '/']).next().unwrap_or_default())
+            .to_ascii_uppercase(),
+    }
 }
 
-/// A shortcode the filter language reads as one word.
+/// A shortcode the filter language reads as one word (ORG-9: `SYNAPSE-CC`).
 fn shortcode_ok(epic: &str) -> bool {
-    !epic.is_empty() && epic.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    !epic.is_empty() && epic.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// The scope a frame that renders `ticket`'s stored body reads under: that
@@ -1245,6 +1254,11 @@ mod tests {
         for bad in ["", "  ", "-3", "A B-1", "x)or(y-1"] {
             assert_eq!(scope_of(Some(bad)), None, "{bad:?}");
         }
+        // ORG-9: a shortcode may hold hyphens — an id splits at its last.
+        assert_eq!(scope_of(Some("SYNAPSE-CC-1")), Some("SYNAPSE-CC".into()));
+        assert_eq!(scope_of(Some("synapse-cc/_MENGER/board")), Some("SYNAPSE-CC".into()));
+        assert_eq!(shortcode_of("SYNAPSE-CC.2-3"), "SYNAPSE-CC.2");
+        assert_eq!(scoped_filter(None, "SYNAPSE-CC"), Ok("under SYNAPSE-CC".into()));
     }
 
     /// The reach is what `counts` under the scope holds — the shortcode

@@ -954,7 +954,7 @@ impl AttrKind {
             },
             Self::Shortcode => {
                 if !is_shortcode(v) {
-                    return Err(format!("'{value}' is not a shortcode (letters and digits, e.g. RETURNS)"));
+                    return Err(format!("'{value}' is not a shortcode (letters and digits, e.g. RETURNS or SYNAPSE-CC)"));
                 }
                 match known.shortcode(&v.to_ascii_uppercase()) {
                     Some(false) => Err(format!("no shortcode '{}'", v.to_ascii_uppercase())),
@@ -2007,7 +2007,7 @@ mod tests {
         assert_eq!(board.state(None, &KnowNothing), AttrState::Missing);
         assert_eq!(label.state(None, &KnowNothing), AttrState::Unset);
         assert_eq!(board.state(Some("RETURNS"), &KnowNothing), AttrState::Fits);
-        assert_eq!(board.state(Some("no way"), &KnowNothing), AttrState::Unfit("'no way' is not a shortcode (letters and digits, e.g. RETURNS)".into()));
+        assert_eq!(board.state(Some("no way"), &KnowNothing), AttrState::Unfit("'no way' is not a shortcode (letters and digits, e.g. RETURNS or SYNAPSE-CC)".into()));
         assert_eq!(compact.state(Some("compact"), &KnowNothing), AttrState::Fits);
         assert_eq!(compact.state(Some(""), &KnowNothing), AttrState::Fits);
         assert!(matches!(compact.state(Some("very"), &KnowNothing), AttrState::Unfit(_)));

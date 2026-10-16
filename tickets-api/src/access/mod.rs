@@ -678,7 +678,8 @@ impl Access {
         let scope = ceiling_scope_of(scope)?;
         // ORG-4: a shortcode or an organization as the store keeps it, so
         // the gate's chain holds it (a ticket stays its key-like spelling).
-        let ticket = scope.split_once('-').is_some_and(|(_, n)| n.bytes().all(|b| b.is_ascii_digit()));
+        // ORG-9: a key splits at its last hyphen (`SYNAPSE-CC-1`).
+        let ticket = crate::address::split_key(&scope).is_some();
         let scope = match self.book.store() {
             Some(store) if !ticket => store.scope_named(&scope).map_err(|e| e.to_string())?.text(),
             _ => scope,
