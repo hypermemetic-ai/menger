@@ -336,16 +336,16 @@ synapse -P 4455 menger tickets list --filter 'category done and not deployed pro
     them.</p>
 <pre class="cmd"><code>synapse -P 4455 menger tickets health
 synapse -P 4455 menger tickets list --filter 'blocked' --summary true --limit 20
-synapse -P 4455 menger tickets ready_set --filter 'kind build' --summary true
+synapse -P 4455 menger tickets work ready --filter 'kind build' --summary true
 synapse -P 4455 menger tickets search --query 'outbox replay'
 synapse -P 4455 menger tickets get --id OFFLINE-6
 synapse -P 4455 menger tickets watch                     # every change, live</code></pre>
 <pre class="cmd"><code>synapse -P 4455 menger tickets create --epic HOME --kind scope --title 'Home'
 synapse -P 4455 menger tickets create --epic HOME --title 'Fix the gate' --kind build
 synapse -P 4455 menger tickets set_status --id HOME-2 --status Ready
-synapse -P 4455 menger tickets link_commits --id HOME-2 --commits 77df9a0</code></pre>
-<pre class="cmd"><code>synapse -P 4455 menger tickets inputs --state open
-synapse -P 4455 menger tickets answer --ticket OFFLINE-7 --input policy \
+synapse -P 4455 menger tickets commits link --id HOME-2 --commits 77df9a0</code></pre>
+<pre class="cmd"><code>synapse -P 4455 menger tickets inputs list --state open
+synapse -P 4455 menger tickets inputs answer --ticket OFFLINE-7 --input policy \
   --value.type choice --value.option merge --rationale 'crews edit different fields'
 synapse -P 4455 menger comments list --state open
 synapse -P 4455 menger notes add --body 'the palette should remember its last query'

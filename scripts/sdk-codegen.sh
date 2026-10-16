@@ -112,27 +112,28 @@ cat >"$gen/check.ts" <<'EOF'
 import type { Answer, Input, MengerElement, WireEvent } from './menger';
 export async function script(this: MengerElement): Promise<number> {
   let n = 0;
-  for await (const ev of this.menger.tickets.waves(['RETURNS'])) {
+  // ACCESS-20 (SDK 2.0): every child's reads at its path — `tickets.work`'s waves.
+  for await (const ev of this.menger.tickets.work.waves(['RETURNS'])) {
     if (ev.type === 'wave_counts') n = ev.waves[0] ?? 0;
   }
   // ACCESS-16: the nav's reads are `tickets.nav`'s.
   for await (const ev of menger.tickets.nav.groups()) {
     if (ev.type === 'group') n += ev.group.total;
   }
-  const raw: WireEvent[] = await menger.call('waves', { epics: ['RETURNS'] });
+  const raw: WireEvent[] = await menger.call('work.waves', { epics: ['RETURNS'] });
+  for await (const ev of menger.tickets.components.list()) {
+    if (ev.type === 'component') n += ev.component.name.length;
+  }
   const off: () => void = menger.on('change', (e: WireEvent) => void e.type);
   off();
   menger.navigate('#/components/m-wave-summary');
   const v: string = window.menger.version;
   // INPUT-4: this ticket's inputs, read typed, and the first write.
   const ticket: string | null = this.menger.input.ticket;
-  // (epic, filter, state, ticket): the generated client takes them in name order.
-  for await (const ev of menger.tickets.inputs(undefined, undefined, 'open', ticket)) {
-    if (ev.type === 'input') n += ev.input.history.length + (ev.input.answer?.atUnix ?? 0);
-  }
-  // ACCESS-14: the `tickets inputs` child — `inputs.list`, the call above's same.
+  // ACCESS-14: the `tickets inputs` child — (epic, filter, state, ticket),
+  // the generated client takes them in name order.
   for await (const ev of this.menger.tickets.inputs.list(undefined, undefined, 'open', ticket)) {
-    if (ev.type === 'input') n += ev.input.history.length;
+    if (ev.type === 'input') n += ev.input.history.length + (ev.input.answer?.atUnix ?? 0);
   }
   const answer: Answer = await menger.input.submit('landing', { type: 'choice', option: 'archive' }, 'holds are real');
   const multi: Answer = await this.menger.input.submit('checks', { type: 'multi', options: ['unit'] });

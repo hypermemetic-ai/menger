@@ -422,7 +422,7 @@ pub struct Ticket {
     /// children themselves come by page: `list { parent }`.
     pub child_count: u64,
     /// SDLC-9: the commits that finished this ticket, in the order they
-    /// were linked (`tickets.link_commits`) — each a commit reference, a
+    /// were linked (`tickets.commits.link`) — each a commit reference, a
     /// hexadecimal object name of 7 to 64 characters stored lowercase,
     /// optionally `repository@` before it. `[]` when none. Recorded, not
     /// verified: the server has no repository. At most 256 (SCALE-4's
@@ -1182,7 +1182,7 @@ pub enum AnswerSource {
     Api,
     /// MENGER-13: the store itself — an input withdrawn because its ticket
     /// was canceled, or restored when it was not any more. Never a caller's
-    /// to say: `answer` and `clear_answer` refuse it.
+    /// to say: `inputs.answer` and `inputs.clear` refuse it.
     System,
 }
 
@@ -1558,13 +1558,13 @@ pub enum TicketsEvent {
     /// A ticket was created (yielded by `create`, and by `watch` on every creation).
     Created { ticket: Ticket },
     /// One ticket, as it exists now (yielded by `get`, and per-row by
-    /// `list` and `ready_set`).
+    /// `list` and `work.ready`).
     Ticket { ticket: Ticket },
     /// MNG-9: one ticket row without its body — what `list` and
-    /// `ready_set` yield per row instead of `ticket` when the call asked
+    /// `work.ready` yield per row instead of `ticket` when the call asked
     /// for `summary`, and what `find` always yields (SCALE-6).
     Summary { summary: TicketSummary },
-    /// MNG-9: where a `list` / `ready_set` / `find` walk stands, yielded once as
+    /// MNG-9: where a `list` / `work.ready` / `find` walk stands, yielded once as
     /// the last data event of the call. `next` is the cursor to pass as
     /// the next call's `after` — `null` when nothing more matches, which
     /// is how a client knows the walk is over — and `remaining` counts
@@ -1601,15 +1601,15 @@ pub enum TicketsEvent {
     /// never carries. The full ticket rides along, body included, so a
     /// watch-only client — and an open ticket page — needs no `get`.
     Amended { ticket: Ticket, changed: Vec<crate::vocab::AmendedField> },
-    /// SDLC-9: commits were linked to a ticket (yielded by `link_commits`,
+    /// SDLC-9: commits were linked to a ticket (yielded by `commits.link`,
     /// and by `watch` for every link that changed something). `added` is
     /// what was newly linked, in the order given — the ticket's `commits`
-    /// end with it — or nothing: `link_commits`' own answer when every
+    /// end with it — or nothing: `commits.link`'s own answer when every
     /// entry was already linked, which `watch` never carries. The whole
     /// ticket rides along, as with every write after birth.
     CommitsLinked { ticket: Ticket, added: Vec<CommitRef> },
     /// SDLC-9: commits were unlinked from a ticket (yielded by
-    /// `unlink_commits`, and by `watch` for every unlink that changed
+    /// `commits.unlink`, and by `watch` for every unlink that changed
     /// something). `removed` is what came off, in the order given; empty
     /// when none of it was linked, which `watch` never carries.
     CommitsUnlinked { ticket: Ticket, removed: Vec<CommitRef> },
@@ -1873,10 +1873,10 @@ pub enum TicketsEvent {
     /// INPUT-3: one input, as it is now (yielded per input by `inputs`, in
     /// the store's order of tickets and the body's order inside one — a
     /// removed input after the ones its body declares; and by a
-    /// `clear_answer`, `close_input` or `reopen_input` that changed nothing).
+    /// `inputs.clear`, `inputs.close` or `inputs.reopen` that changed nothing).
     Input { input: Input },
-    /// INPUT-3: an input changed (yielded by `answer`, `clear_answer`,
-    /// `close_input` and `reopen_input`, and by `watch`) — answered, cleared,
+    /// INPUT-3: an input changed (yielded by `inputs.answer`, `inputs.clear`,
+    /// `inputs.close` and `inputs.reopen`, and by `watch`) — answered, cleared,
     /// closed, reopened; or, by a `create` or `amend` of its ticket's body,
     /// declared, re-declared (its kind, question, options or recommendation),
     /// removed from the body, or declared again. Carries the whole input —

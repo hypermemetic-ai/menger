@@ -474,11 +474,11 @@ EOF
   syn $T set_status --id OFFLINE-1 --status Epic
   syn $T set_status --id SYNC-1 --status Epic
   # the commits that finished the work (the sample repository's)
-  syn $T link_commits --id OFFLINE-3 --commits 3f9c2a1
-  syn $T link_commits --id OFFLINE-4 --commits 8b41d07,c2e9f55
-  syn $T link_commits --id OFFLINE-5 --commits 51aa0e3
-  syn $T link_commits --id OFFLINE-6 --commits 9d7e214
-  syn $T link_commits --id SYNC-2 --commits fieldnote-server@4c0b8e2
+  syn $T commits link --id OFFLINE-3 --commits 3f9c2a1
+  syn $T commits link --id OFFLINE-4 --commits 8b41d07,c2e9f55
+  syn $T commits link --id OFFLINE-5 --commits 51aa0e3
+  syn $T commits link --id OFFLINE-6 --commits 9d7e214
+  syn $T commits link --id SYNC-2 --commits fieldnote-server@4c0b8e2
   # DESIGN-48 — the app's CI records its deploys (DEPLOY-11): prod runs 4.1.2
   # with the store and the cache; the beta channel runs 4.2-beta.3 with the
   # outbox and the sync engine too, so OFFLINE-5 waits for prod and OFFLINE-6

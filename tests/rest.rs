@@ -329,3 +329,39 @@ async fn in_band_error_event_is_distinguishable_in_2xx() {
     let (_, body) = post(s.rest_port, "/rest/tickets/set_status", &json!({"id": "RST-1", "status": "Bogus"}).to_string()).await;
     assert!(body.to_string().contains("status: unknown status 'bogus'"), "{body}");
 }
+
+/// ACCESS-20: a `#[child]`'s methods are reached at their whole path —
+/// `/rest/tickets.work/ready`, `/rest/tickets.nav/counts`,
+/// `/rest/tickets.commits/link` — and the old flat names are gone (404).
+#[tokio::test]
+async fn a_child_s_methods_are_reached_at_their_path() {
+    let s = spawn_server().await;
+    let (status, body) = post(
+        s.rest_port,
+        "/rest/tickets/create",
+        &json!({"epic": "RST", "title": "a child's path", "kind": "scope"}).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create failed: {body}");
+
+    let (status, body) = post(s.rest_port, "/rest/tickets.nav/counts", "{}").await;
+    assert_eq!(status, StatusCode::OK, "nav.counts: {body}");
+    assert!(body["data"].as_array().unwrap().iter().any(|e| e["type"] == "count"), "{body}");
+
+    let (status, body) = post(s.rest_port, "/rest/tickets.work/blockers", &json!({"id": "RST-1"}).to_string()).await;
+    assert_eq!(status, StatusCode::OK, "work.blockers: {body}");
+
+    let (status, body) = post(
+        s.rest_port,
+        "/rest/tickets.commits/link",
+        &json!({"id": "RST-1", "commits": ["77df9a0"]}).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "commits.link: {body}");
+    assert!(body.to_string().contains("77df9a0"), "{body}");
+
+    for old in ["/rest/tickets/ready_set", "/rest/tickets/counts", "/rest/tickets/link_commits"] {
+        let (status, _) = post(s.rest_port, old, "{}").await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{old} is gone");
+    }
+}

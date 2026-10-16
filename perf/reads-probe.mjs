@@ -111,9 +111,9 @@ for (const filter of NINE) {
   out.member_1000 = m.median_ms;
   out.member_1000_max = m.max_ms;
   out.member_matched = m.last.events.filter((e) => e.type === "member" && e.matched).length;
-  const head = await time("tickets.ready_set", { filter, summary: true, limit: 200 });
+  const head = await time("tickets.work.ready", { filter, summary: true, limit: 200 });
   out.ready_head = head.median_ms;
-  const map = await time("tickets.ready_set", { filter, summary: true, limit: 200, after: "MAP-1" });
+  const map = await time("tickets.work.ready", { filter, summary: true, limit: 200, after: "MAP-1" });
   out.ready_after_map1 = map.median_ms;
   console.log(JSON.stringify(out));
 }

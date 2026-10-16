@@ -200,7 +200,11 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// `queued`, and the `--urgent` tokens a frame receives. APP-29's 1.21 adds
 /// the built-in `<m-mockup>` (`menger:mockup` / `menger:unmock` /
 /// `menger:mocked`): a placeholder the host draws a website mockup over.
-pub(crate) const SDK_VERSION: &str = "1.21.0";
+/// ACCESS-20's 2.0 moves the reads onto the `tickets` children's paths —
+/// `menger.tickets.work.waves`, `.nav.groups`, `.inputs.list`,
+/// `.components.list`; `menger.call('work.waves')` — and refuses the 1.x
+/// names, naming the new one.
+pub(crate) const SDK_VERSION: &str = "2.0.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is

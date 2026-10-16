@@ -440,7 +440,10 @@ fn every_binding_is_dispatched_and_every_dispatched_id_is_a_binding() {
     let namespaces: BTreeSet<&str> = BINDINGS.iter().filter_map(|b| b.id.split_once('.').map(|(ns, _)| ns)).collect();
     let mut strays = Vec::new();
     for (file, text) in &files {
-        if file == "bindings.rs" {
+        // ACCESS-20: bridge.rs names wire methods by their path under
+        // `tickets` (`nav.groups`), which share the nav's namespace; it
+        // dispatches no binding.
+        if file == "bindings.rs" || file == "bridge.rs" {
             continue;
         }
         for lit in literals(text) {

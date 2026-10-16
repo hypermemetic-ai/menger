@@ -25,7 +25,7 @@ export interface TicketsClient {
   readonly components: TicketsComponentsClient;
   /** A ticket's inputs — `tickets.inputs.<method>`: list, answer, clear, close, reopen (INPUT-3, ACCESS-14). */
   readonly inputs: TicketsInputsClient;
-  /** ACCESS-16: what the nav and the menus ask — groups, extents, tree, counts, facets, member. */
+  /** What the nav and the menus ask — `tickets.nav.<method>`: groups, extents, tree, counts, facets, member (ACCESS-16). */
   readonly nav: TicketsNavClient;
   /** The order of work — `tickets work ready | waves | waves_under | waves_to | blockers` (ACCESS-17, activation/work.rs). */
   readonly work: TicketsWorkClient;
@@ -505,8 +505,8 @@ pass any `epic` filter.
 
 INPUT-3: an input a write moved is one `InputChanged` — the whole
 input — after every other event of the write, the component events
-included: an `answer`, `clear_answer`, `close_input` or
-`reopen_input`; or a `create` or `amend` whose body declared,
+included: an `inputs.answer`, `inputs.clear`, `inputs.close` or
+`inputs.reopen`; or a `create` or `amend` whose body declared,
 re-declared or removed inputs (in the body's order, the removed
 after). The `epic` filter applies to it by its ticket's shortcode.
 

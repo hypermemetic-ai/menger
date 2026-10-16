@@ -252,8 +252,9 @@ class Server {
     return this.child && this.child.exitCode === null && this.child.signalCode === null;
   }
 
-  restUrl(method) {
-    return `http://127.0.0.1:${this.rest}/rest/tickets/${method}`;
+  // ACCESS-20: a child's method at its whole path, `/rest/tickets.work/ready`.
+  restUrl(method, ns = "tickets") {
+    return `http://127.0.0.1:${this.rest}/rest/${ns}/${method}`;
   }
 
   appUrl(hash = "") {
@@ -800,7 +801,7 @@ async function runMagnitude(m, opts, browser) {
         return { id: sampleId, bytes: JSON.stringify(g).length };
       }));
       rows("rest_ready_set").push(await measure("rest_ready_set", B("rest"), async () => {
-        const out = await restStream(server.restUrl("ready_set"), {}, B("rest"));
+        const out = await restStream(server.restUrl("ready", "tickets.work"), {}, B("rest"));
         // MNG-9: the ready set plus the one trailing `page` event.
         if (out.events <= 1) throw new Error("ready_set empty");
         out.events -= 1;
@@ -808,7 +809,7 @@ async function runMagnitude(m, opts, browser) {
       }));
       rows("rest_blockers").push(await measure("rest_blockers", B("rest"), async () => {
         if (!multi[0]) throw new Error("no multi-blocker sample (list failed)");
-        const b = await restJson(server.restUrl("blockers"), { id: multi[0].id }, B("rest"));
+        const b = await restJson(server.restUrl("blockers", "tickets.work"), { id: multi[0].id }, B("rest"));
         const got = (b?.data ?? []).filter((e) => e.type === "blocker").length;
         if (got !== multi[0].blockers.length) throw new Error(`blockers ${multi[0].id}: ${got} resolved, expected ${multi[0].blockers.length}`);
         return { id: multi[0].id, count: got, bytes: JSON.stringify(b).length };

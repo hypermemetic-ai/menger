@@ -354,7 +354,7 @@ half lost fails, no secret in any argv); `cargo test` runs it.
 What a deployment did, in one JSON shape any CI can produce (DEPLOY-10) —
 the schema is `deploy/record.schema.json`, and menger's `deployments.record`
 (DEPLOY-11) takes it as its parameters. A deployment never changes a ticket's
-status; its tickets are the ones its commits are linked to (`link_commits`),
+status; its tickets are the ones its commits are linked to (`commits link`),
 plus any it names; an environment is a project's — menger's `prod` and
 PANTRY's `prod` are two (DEPLOY-9's decisions).
 

@@ -422,21 +422,13 @@
 
   // bridge.ts
   var NAMESPACE = "tickets.";
-  var NAV = "tickets.nav.";
-  var HOST_NAMES = {
-    "inputs.list": "inputs",
-    "work.waves": "waves",
-    "work.blockers": "blockers",
-    "components.list": "components"
-  };
   function metadata(method) {
     return { provenance: ["menger", "bridge", method], plexusHash: "", timestamp: Math.floor(Date.now() / 1000) };
   }
   function bridgeRpc(call) {
     return {
       async* call(method, params) {
-        const bare = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
-        const name = HOST_NAMES[bare] ?? (method.startsWith(NAV) ? method.slice(NAV.length) : bare);
+        const name = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
         let items;
         try {
           items = await call(name, params ?? null);
@@ -455,31 +447,8 @@
   async function* one(content) {
     yield { type: "data", metadata: metadata("typed"), contentType: "typed", content };
   }
-  function frameTickets(rpc) {
-    const tickets = createTicketsClient(rpc);
-    const child = createTicketsInputsClient(rpc);
-    const inputs = Object.assign(child.list.bind(child), {
-      list: child.list.bind(child),
-      answer: child.answer.bind(child),
-      clear: child.clear.bind(child),
-      close: child.close.bind(child),
-      reopen: child.reopen.bind(child),
-      schema: child.schema.bind(child)
-    });
-    Object.defineProperty(tickets, "inputs", { value: inputs });
-    const work = createTicketsWorkClient(rpc);
-    Object.assign(tickets, { work, waves: work.waves.bind(work), blockers: work.blockers.bind(work) });
-    Object.defineProperty(tickets, "nav", { value: createTicketsNavClient(rpc) });
-    const registry = createTicketsComponentsClient(rpc);
-    const components = Object.assign(registry.list.bind(registry), {
-      list: registry.list.bind(registry),
-      schema: registry.schema.bind(registry)
-    });
-    Object.defineProperty(tickets, "components", { value: components });
-    return tickets;
-  }
   mengerTyped = {
-    tickets: (call) => frameTickets(bridgeRpc(call)),
+    tickets: (call) => createTicketsClient(bridgeRpc(call)),
     typed: (content) => collectOne(one(content))
   };
 })();

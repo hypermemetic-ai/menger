@@ -9,7 +9,7 @@
 //! in the browser, and which lives in the route's query. (`f528177` made a
 //! board one shortcode with the ones under it as links; the owner rejected
 //! it.) The board asks the server where each of its tickets sits — one
-//! `tickets.waves { epics, kinds }` per load (WAVE-4), computed over the
+//! `tickets.work.waves { epics, kinds }` per load (WAVE-4), computed over the
 //! whole graph, never in the browser — and groups the answer into columns
 //! here, in one of two layouts a toggle apart:
 //!

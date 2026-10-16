@@ -8,8 +8,8 @@
  * Layer 1, `RpcClient` (./generated/rpc.ts): `call(method, params)` → an
  * `AsyncGenerator<PlexusStreamItem>`. A frame cannot open the WebSocket the
  * generated `PlexusRpcClient` would (its origin is opaque), so this file
- * implements `RpcClient` over the bridge instead: the method's name without
- * its namespace and the params go to the host as the shell's own
+ * implements `RpcClient` over the bridge instead: the method's path under
+ * `tickets` (`get`, `work.waves`) and the params go to the host as the shell's own
  * `menger.call` sends them (`menger:call`), and the host's answer comes back
  * as the stream items the generated client unwraps —
  *
@@ -35,37 +35,12 @@
 import { collectOne, type RpcClient } from './generated/rpc';
 import type { PlexusStreamItem, StreamMetadata } from './generated/types';
 import { createTicketsClient, type TicketsClient } from './generated/tickets/client';
-import { createTicketsInputsClient, type TicketsInputsClient } from './generated/tickets/inputs/client';
-import { createTicketsWorkClient, type TicketsWorkClient } from './generated/tickets/work/client';
-import { createTicketsNavClient, type TicketsNavClient } from './generated/tickets/nav/client';
-import { createTicketsComponentsClient, type TicketsComponentsClient } from './generated/tickets/components/client';
 
-/** ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
- *  (`list`, and the writes, which the host refuses), and callable as
- *  `list` itself, as `menger.tickets.inputs(epic?, filter?, state?,
- *  ticket?, tz?)` was before the move (the same parameters, the same
- *  order). */
-export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
-
-/** ACCESS-18: `menger.tickets.components` — the `tickets components`
- *  child's client (`list`), and callable as `list` itself, as
- *  `menger.tickets.components()` was before the move. */
-export type ComponentsChild = TicketsComponentsClient & TicketsComponentsClient['list'];
-
-/** The typed `tickets` a frame gets: the generated client, its `inputs`
- *  the child's ([`InputsChild`]) — the generated parent's `inputs` sub-client
- *  (hub-codegen ≥ 0.5.0), made callable as `list` — and (ACCESS-17) `tickets work` as
- *  `work`, with that child's `waves` and `blockers` kept where a body has
- *  always called them (`menger.tickets.waves([…])`) until ACCESS-20 moves
- *  the frames' SDK — and (ACCESS-16) its child `nav` (`tickets.nav.groups`, …)
- *  — and (ACCESS-18) its `components` the child's ([`ComponentsChild`]). */
-export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work' | 'nav' | 'components'> &
-  Pick<TicketsWorkClient, 'waves' | 'blockers'> & {
-    readonly inputs: InputsChild;
-    readonly work: TicketsWorkClient;
-    readonly nav: TicketsNavClient;
-    readonly components: ComponentsChild;
-  };
+/** The typed `tickets` a frame gets: the generated client as generated —
+ *  its children (hub-codegen ≥ 0.5.0) its own typed sub-clients,
+ *  `menger.tickets.work.waves([…])`, `.nav.groups()`, `.inputs.list(…)`,
+ *  `.components.list()` (ACCESS-20, SDK 2.0: no alias at the old names). */
+export type FrameTickets = TicketsClient;
 
 /** The shell's `menger.call`: a read over the bridge, answered with the
  *  call's items (the wire's spelling), or rejected with the reason. */
@@ -80,25 +55,10 @@ export interface Typed {
   typed<T>(content: unknown): Promise<T>;
 }
 
-/** The activation the generated client addresses (`tickets.get`, …); the
- *  host's methods are its bare names (`get`). ACCESS-16: its child's too
- *  (`tickets.nav.groups` → `groups`), as the host's `menger.call` names
- *  them. */
+/** The activation the generated client addresses (`tickets.get`,
+ *  `tickets.work.waves`, …); the host names a method by its path under it
+ *  (`get`, `work.waves`), as a frame's `menger.call` does (ACCESS-20). */
 const NAMESPACE = 'tickets.';
-const NAV = 'tickets.nav.';
-
-/** ACCESS-14 / ACCESS-17: a child's method by the host's name for it — the
- *  frame's read of inputs is still the host's `inputs`, and `work`'s `waves`
- *  and `blockers` the host's `waves` / `blockers` (its `menger.call` names
- *  move with every client in ACCESS-20); any other child method goes as
- *  `<child>.<method>`, which the host refuses. */
-const HOST_NAMES: Record<string, string> = {
-  'inputs.list': 'inputs',
-  'work.waves': 'waves',
-  'work.blockers': 'blockers',
-  // ACCESS-18: the registry is still the host's `components`.
-  'components.list': 'components',
-};
 
 function metadata(method: string): StreamMetadata {
   return { provenance: ['menger', 'bridge', method], plexusHash: '', timestamp: Math.floor(Date.now() / 1000) };
@@ -108,8 +68,7 @@ function metadata(method: string): StreamMetadata {
 function bridgeRpc(call: BridgeCall): RpcClient {
   return {
     async *call(method: string, params?: unknown): AsyncGenerator<PlexusStreamItem> {
-      const bare = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
-      const name = HOST_NAMES[bare] ?? (method.startsWith(NAV) ? method.slice(NAV.length) : bare);
+      const name = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
       let items: unknown[];
       try {
         items = await call(name, params ?? null);
@@ -134,36 +93,7 @@ async function* one(content: unknown): AsyncGenerator<PlexusStreamItem> {
 /** The shell's variable (menger-sdk.js declares it just above the region). */
 declare let mengerTyped: Typed | null;
 
-/** ACCESS-14: the generated client with `inputs` the child's ([`InputsChild`]);
- *  ACCESS-17: and `work`; ACCESS-16: and `nav`. */
-function frameTickets(rpc: RpcClient): FrameTickets {
-  const tickets = createTicketsClient(rpc);
-  const child = createTicketsInputsClient(rpc);
-  const inputs: InputsChild = Object.assign(child.list.bind(child), {
-    list: child.list.bind(child),
-    answer: child.answer.bind(child),
-    clear: child.clear.bind(child),
-    close: child.close.bind(child),
-    reopen: child.reopen.bind(child),
-    schema: child.schema.bind(child),
-  });
-  Object.defineProperty(tickets, 'inputs', { value: inputs });
-  // ACCESS-17: `tickets work`, and its `waves` / `blockers` where they were.
-  const work = createTicketsWorkClient(rpc);
-  Object.assign(tickets, { work, waves: work.waves.bind(work), blockers: work.blockers.bind(work) });
-  // ACCESS-16: `tickets nav`.
-  Object.defineProperty(tickets, 'nav', { value: createTicketsNavClient(rpc) });
-  // ACCESS-18: `tickets components`, callable as `list`.
-  const registry = createTicketsComponentsClient(rpc);
-  const components: ComponentsChild = Object.assign(registry.list.bind(registry), {
-    list: registry.list.bind(registry),
-    schema: registry.schema.bind(registry),
-  });
-  Object.defineProperty(tickets, 'components', { value: components });
-  return tickets as unknown as FrameTickets;
-}
-
 mengerTyped = {
-  tickets: (call: BridgeCall) => frameTickets(bridgeRpc(call)),
+  tickets: (call: BridgeCall) => createTicketsClient(bridgeRpc(call)),
   typed: <T>(content: unknown): Promise<T> => collectOne<T>(one(content)),
 };

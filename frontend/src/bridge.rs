@@ -15,7 +15,7 @@
 //!
 //! Read-only by construction: a method outside [`READ_METHODS`] is refused
 //! here, before anything is sent — `set_status`, `amend`, `create`, every
-//! other write, `answer` and `clear_answer` included, and `watch` (a frame
+//! other write, `inputs.answer` and `inputs.clear` included, and `watch` (a frame
 //! hears the stream as change notices, not by subscribing).
 //!
 //! INPUT-4: **the first write.** A frame records an answer to one of its own
@@ -50,14 +50,14 @@
 //! FILTER-13's `under SHORTCODE`, the shortcode and every shortcode hosted
 //! under it ([`Reach`], asked of the server's own `counts`). [`scope_call`]
 //! narrows the call — `under` ANDed into the filter of `list`, `find` and
-//! `inputs`; `get` and `blockers` of a ticket outside answered `not_found`
-//! unasked; `waves` of a shortcode outside refused — and [`admit_event`]
+//! `inputs.list`; `get` and `work.blockers` of a ticket outside answered `not_found`
+//! unasked; `work.waves` of a shortcode outside refused — and [`admit_event`]
 //! drops whatever comes back from outside the reach anyway (a blocker in
 //! another shortcode, a group or extent of one), so no title, body, input
 //! or answer from outside reaches the frame. `health`'s count is the
-//! reach's. `components` stays whole: the registry is the frames' code,
+//! reach's. `components.list` stays whole: the registry is the frames' code,
 //! handed to every frame already. A frame with no scope (a help card for
-//! an orphaned component) reads nothing but `components`.
+//! an orphaned component) reads nothing but `components.list`.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -69,10 +69,26 @@ use serde::Deserialize;
 
 use crate::session::Client;
 
-/// What a frame may call (COMP-1 pin 9) — the activation's read methods;
-/// INPUT-4: `inputs` among them.
-pub(crate) const READ_METHODS: [&str; 10] =
-    ["get", "list", "find", "waves", "groups", "extents", "blockers", "health", "components", "inputs"];
+/// What a frame may call (COMP-1 pin 9) — the activation's read methods,
+/// each by its path under `tickets` (ACCESS-20: a child's method is
+/// `<child>.<method>`, as the wire's `tickets.<child>.<method>`);
+/// INPUT-4: the inputs among them.
+pub(crate) const READ_METHODS: [&str; 10] = [
+    "get", "list", "find", "health", "work.waves", "work.blockers", "nav.groups", "nav.extents", "components.list",
+    "inputs.list",
+];
+
+/// ACCESS-20: a frame's name from before the children (ACCESS-14..18), and
+/// the path it is now — refused naming the new one, so a body written
+/// against SDK 1.x learns what to call.
+const MOVED: [(&str, &str); 6] = [
+    ("waves", "work.waves"),
+    ("blockers", "work.blockers"),
+    ("groups", "nav.groups"),
+    ("extents", "nav.extents"),
+    ("components", "components.list"),
+    ("inputs", "inputs.list"),
+];
 
 /// INPUT-4: the SDK call a frame's answer is made by — named in every
 /// refusal, so a component author finds it.
@@ -113,13 +129,13 @@ impl Call {
             Call::Get { .. } => "get",
             Call::List { .. } => "list",
             Call::Find { .. } => "find",
-            Call::Waves { .. } => "waves",
-            Call::Groups => "groups",
-            Call::Extents => "extents",
-            Call::Blockers { .. } => "blockers",
+            Call::Waves { .. } => "work.waves",
+            Call::Groups => "nav.groups",
+            Call::Extents => "nav.extents",
+            Call::Blockers { .. } => "work.blockers",
             Call::Health => "health",
-            Call::Components => "components",
-            Call::Inputs { .. } => "inputs",
+            Call::Components => "components.list",
+            Call::Inputs { .. } => "inputs.list",
         }
     }
 }
@@ -175,8 +191,8 @@ struct NoParams {}
 /// frame may make, and how (INPUT-4, INPUT-9).
 pub(crate) fn read_only(method: &str) -> String {
     format!(
-        "read-only: a frame may call only {} — not `{method}`; its only writes are `answer` and `clear_answer`, \
-         made by {SUBMIT} and {CLEAR} on a viewer's click",
+        "read-only: a frame may call only {} — not `{method}`; its only writes are `inputs.answer` and \
+         `inputs.clear`, made by {SUBMIT} and {CLEAR} on a viewer's click",
         READ_METHODS.join(", ")
     )
 }
@@ -186,6 +202,9 @@ pub(crate) fn read_only(method: &str) -> String {
 /// method that is not a read ([`read_only`]), or params the method does not
 /// take — an unknown name, a missing one, a wrong type, each named.
 pub(crate) fn parse_call(method: &str, params: &str) -> Result<Call, String> {
+    if let Some((_, now)) = MOVED.iter().find(|(was, _)| *was == method) {
+        return Err(format!("`{method}` is `{now}` since SDK 2.0 (ACCESS-20): call menger.call('{now}', …)"));
+    }
     if !READ_METHODS.contains(&method) {
         return Err(read_only(method));
     }
@@ -218,20 +237,20 @@ pub(crate) fn parse_call(method: &str, params: &str) -> Result<Call, String> {
             let p: FindParams = take(method, params)?;
             Call::Find { query: p.query, after: p.after, limit: p.limit, filter: p.filter }
         }
-        "waves" => {
+        "work.waves" => {
             let p: WavesParams = take(method, params)?;
             Call::Waves { epics: p.epics, kinds: p.kinds }
         }
-        "blockers" => Call::Blockers { id: take::<IdParams>(method, params)?.id },
-        "inputs" => {
+        "work.blockers" => Call::Blockers { id: take::<IdParams>(method, params)?.id },
+        "inputs.list" => {
             let p: InputsParams = take(method, params)?;
             Call::Inputs { ticket: p.ticket, epic: p.epic, state: p.state, filter: p.filter }
         }
         other => {
             take::<NoParams>(other, params)?;
             match other {
-                "groups" => Call::Groups,
-                "extents" => Call::Extents,
+                "nav.groups" => Call::Groups,
+                "nav.extents" => Call::Extents,
                 "health" => Call::Health,
                 _ => Call::Components,
             }
@@ -264,17 +283,17 @@ async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>, String> {
         }
         Call::Waves { epics, kinds } => {
             let typed_waves = || -> Result<_, String> { Ok((many(epics)?, opt_many(kinds)?)) };
-            let (epics, kinds) = typed_waves().map_err(named("waves"))?;
+            let (epics, kinds) = typed_waves().map_err(named("work.waves"))?;
             client.work().waves_all(epics, kinds).await
         }
         Call::Groups => client.nav().groups_all().await,
         Call::Extents => client.nav().extents_all().await,
-        Call::Blockers { id } => client.work().blockers_all(typed(&id).map_err(named("blockers"))?).await,
+        Call::Blockers { id } => client.work().blockers_all(typed(&id).map_err(named("work.blockers"))?).await,
         Call::Health => client.health_all().await,
         Call::Components => client.components().list_all().await,
         Call::Inputs { ticket, epic, state, filter } => {
             let typed_inputs = || -> Result<_, String> { Ok((opt(ticket)?, opt(epic)?, opt(state)?, opt(filter)?)) };
-            let (ticket, epic, state, filter) = typed_inputs().map_err(named("inputs"))?;
+            let (ticket, epic, state, filter) = typed_inputs().map_err(named("inputs.list"))?;
             client.inputs().list_all(ticket, epic, state, filter, zone).await
         }
     };
@@ -442,17 +461,17 @@ pub(crate) enum Scoped {
 }
 
 /// `call`, as a frame scoped to `reach` may make it: `list`, `find` and
-/// `inputs` under `under EPIC` (ANDed with their own filter); `get` and
-/// `blockers` of a ticket outside answered `not_found` without asking;
-/// `waves` of a shortcode outside refused, naming it; the rest as asked —
+/// `inputs.list` under `under EPIC` (ANDed with their own filter); `get` and
+/// `work.blockers` of a ticket outside answered `not_found` without asking;
+/// `work.waves` of a shortcode outside refused, naming it; the rest as asked —
 /// every answer is then held to the reach ([`admit_event`]). `reach: None`
-/// (a frame that renders no ticket's body): `components` only.
+/// (a frame that renders no ticket's body): `components.list` only.
 pub(crate) fn scope_call(call: Call, reach: Option<&Reach>) -> Result<Scoped, String> {
     let Some(reach) = reach else {
         return match call {
             Call::Components => Ok(Scoped::Call(call)),
             other => Err(format!(
-                "{}: this frame renders no ticket's body — it reads nothing but components",
+                "{}: this frame renders no ticket's body — it reads nothing but components.list",
                 other.method()
             )),
         };
@@ -481,7 +500,7 @@ pub(crate) fn scope_call(call: Call, reach: Option<&Reach>) -> Result<Scoped, St
         Call::Waves { epics, kinds } => {
             if let Some(outside) = epics.iter().find(|e| !reach.holds(e)) {
                 return Err(format!(
-                    "waves: {outside} is outside this frame's reach — a ticket's body reads its own shortcode, {epic}, \
+                    "work.waves: {outside} is outside this frame's reach — a ticket's body reads its own shortcode, {epic}, \
                      and the shortcodes hosted under it"
                 ));
             }
@@ -868,28 +887,28 @@ mod tests {
             Ok(Call::Find { query: "wave".into(), after: None, limit: None, filter: None })
         );
         assert_eq!(
-            parse_call("waves", r#"{"epics":["PLEXUS"]}"#),
+            parse_call("work.waves", r#"{"epics":["PLEXUS"]}"#),
             Ok(Call::Waves { epics: vec!["PLEXUS".into()], kinds: None })
         );
         assert_eq!(
-            parse_call("waves", r#"{"epics":["A","B"],"kinds":["build"]}"#),
+            parse_call("work.waves", r#"{"epics":["A","B"],"kinds":["build"]}"#),
             Ok(Call::Waves { epics: vec!["A".into(), "B".into()], kinds: Some(vec!["build".into()]) })
         );
-        assert_eq!(parse_call("blockers", r#"{"id":"MNG-4"}"#), Ok(Call::Blockers { id: "MNG-4".into() }));
-        assert_eq!(parse_call("groups", "{}"), Ok(Call::Groups));
-        assert_eq!(parse_call("extents", ""), Ok(Call::Extents));
+        assert_eq!(parse_call("work.blockers", r#"{"id":"MNG-4"}"#), Ok(Call::Blockers { id: "MNG-4".into() }));
+        assert_eq!(parse_call("nav.groups", "{}"), Ok(Call::Groups));
+        assert_eq!(parse_call("nav.extents", ""), Ok(Call::Extents));
         assert_eq!(parse_call("health", "null"), Ok(Call::Health));
-        assert_eq!(parse_call("components", "{}"), Ok(Call::Components));
-        assert_eq!(parse_call("inputs", "null"), Ok(Call::Inputs { ticket: None, epic: None, state: None, filter: None }));
+        assert_eq!(parse_call("components.list", "{}"), Ok(Call::Components));
+        assert_eq!(parse_call("inputs.list", "null"), Ok(Call::Inputs { ticket: None, epic: None, state: None, filter: None }));
         assert_eq!(
-            parse_call("inputs", r#"{"ticket":"INPUT-9","epic":"INPUT","state":"open"}"#),
+            parse_call("inputs.list", r#"{"ticket":"INPUT-9","epic":"INPUT","state":"open"}"#),
             Ok(Call::Inputs { ticket: Some("INPUT-9".into()), epic: Some("INPUT".into()), state: Some("open".into()), filter: None })
         );
         for m in READ_METHODS {
             let params = match m {
-                "get" | "blockers" => r#"{"id":"X-1"}"#,
+                "get" | "work.blockers" => r#"{"id":"X-1"}"#,
                 "find" => r#"{"query":""}"#,
-                "waves" => r#"{"epics":["X"]}"#,
+                "work.waves" => r#"{"epics":["X"]}"#,
                 _ => "{}",
             };
             assert!(parse_call(m, params).is_ok(), "{m}");
@@ -907,24 +926,30 @@ mod tests {
         for m in [
             "set_status", "set_kind", "amend", "create", "set_parent", "link_commits", "unlink_commits", "watch", "ready_set", "answer",
             "clear_answer", "close_input", "reopen_input", "", "GET", "menger.tickets.get", "submit", "menger.input.submit",
-            "clear", "menger.input.clear",
+            "clear", "menger.input.clear", "commits.link", "commits.unlink", "work.ready", "nav.tree", "nav.counts", "inputs.answer",
+            "inputs.clear", "inputs.close", "inputs.reopen", "tickets.work.waves", "work", "nav",
         ] {
             let err = parse_call(m, "{}").unwrap_err();
             assert!(err.starts_with("read-only: "), "{m}: {err}");
-            assert!(err.contains("get, list, find, waves, groups, extents, blockers, health, components, inputs"), "{err}");
             assert!(
                 err.contains(
-                    "its only writes are `answer` and `clear_answer`, made by menger.input.submit and menger.input.clear \
-                     on a viewer's click"
+                    "get, list, find, health, work.waves, work.blockers, nav.groups, nav.extents, components.list, inputs.list"
+                ),
+                "{err}"
+            );
+            assert!(
+                err.contains(
+                    "its only writes are `inputs.answer` and `inputs.clear`, made by menger.input.submit and \
+                     menger.input.clear on a viewer's click"
                 ),
                 "{err}"
             );
         }
         assert_eq!(
             parse_call("set_status", r#"{"id":"A-1","status":"Complete"}"#),
-            Err("read-only: a frame may call only get, list, find, waves, groups, extents, blockers, health, components, inputs \
-                 — not `set_status`; its only writes are `answer` and `clear_answer`, made by menger.input.submit and \
-                 menger.input.clear on a viewer's click"
+            Err("read-only: a frame may call only get, list, find, health, work.waves, work.blockers, nav.groups, \
+                 nav.extents, components.list, inputs.list — not `set_status`; its only writes are `inputs.answer` and \
+                 `inputs.clear`, made by menger.input.submit and menger.input.clear on a viewer's click"
                 .into())
         );
         let err = parse_call("answer", r#"{"ticket":"A-1","input":"d1","value":{"type":"choice","option":"a"}}"#).unwrap_err();
@@ -934,30 +959,49 @@ mod tests {
         assert!(err.starts_with("read-only: ") && err.contains("not `clear_answer`"), "{err}");
     }
 
+    /// ACCESS-20: a name from before the children is refused naming the
+    /// path it is now, before anything is sent.
+    #[test]
+    fn a_moved_name_says_where_it_went() {
+        for (was, now) in [
+            ("waves", "work.waves"),
+            ("blockers", "work.blockers"),
+            ("groups", "nav.groups"),
+            ("extents", "nav.extents"),
+            ("components", "components.list"),
+            ("inputs", "inputs.list"),
+        ] {
+            assert_eq!(
+                parse_call(was, "{}"),
+                Err(format!("`{was}` is `{now}` since SDK 2.0 (ACCESS-20): call menger.call('{now}', …)"))
+            );
+        }
+    }
+
     /// Params the method does not take are named, never dropped silently.
     #[test]
     fn wrong_params_are_named() {
         let err = parse_call("get", "{}").unwrap_err();
         assert!(err.starts_with("get: ") && err.contains("missing field `id`"), "{err}");
-        let err = parse_call("waves", r#"{"epic":"PLEXUS"}"#).unwrap_err();
+        let err = parse_call("work.waves", r#"{"epic":"PLEXUS"}"#).unwrap_err();
         assert!(err.contains("unknown field `epic`"), "{err}");
-        let err = parse_call("waves", r#"{"epics":"PLEXUS"}"#).unwrap_err();
+        let err = parse_call("work.waves", r#"{"epics":"PLEXUS"}"#).unwrap_err();
         assert!(err.contains("invalid type"), "{err}");
         let err = parse_call("health", r#"{"x":1}"#).unwrap_err();
         assert!(err.starts_with("health: ") && err.contains("unknown field `x`"), "{err}");
         let err = parse_call("list", r#"{"limit":-1}"#).unwrap_err();
         assert!(err.starts_with("list: "), "{err}");
         for not_an_object in ["[]", "[\"MNG-2\"]", "\"MNG-2\"", "5", "true"] {
-            let err = parse_call("groups", not_an_object).unwrap_err();
-            assert!(err.starts_with("groups: params must be an object"), "{not_an_object}: {err}");
+            let err = parse_call("nav.groups", not_an_object).unwrap_err();
+            assert!(err.starts_with("nav.groups: params must be an object"), "{not_an_object}: {err}");
         }
         // INPUT-4: `inputs`, with its own names.
-        let err = parse_call("inputs", r#"{"id":"INPUT-9"}"#).unwrap_err();
-        assert!(err.starts_with("inputs: ") && err.contains("unknown field `id`"), "{err}");
-        let err = parse_call("inputs", r#"{"ticket":9}"#).unwrap_err();
-        assert!(err.starts_with("inputs: ") && err.contains("invalid type"), "{err}");
-        let err = parse_call("inputs", r#"{"state":["open"]}"#).unwrap_err();
-        assert!(err.starts_with("inputs: ") && err.contains("invalid type"), "{err}");
+        let err = parse_call("inputs.list", r#"{"id":"INPUT-9"}"#).unwrap_err();
+        assert!(err.starts_with("inputs.list: ") && err.contains("unknown field `id`"), "{err}");
+        let err = parse_call("inputs.list", r#"{"ticket":9}"#).unwrap_err();
+        assert!(err.starts_with("inputs.list: ") && err.contains("invalid type"), "{err}");
+        let err = parse_call("inputs.list", r#"{"state":["open"]}"#).unwrap_err();
+        assert!(err.starts_with("inputs.list: ") && err.contains("invalid type"), "{err}");
     }
 
     // -- INPUT-4: the first write ----------------------------------------------
@@ -1318,7 +1362,7 @@ mod tests {
 
     /// What each read becomes under the scope: the filter-taking three get
     /// `under AREA` (ANDed with their own); `get`/`blockers` outside are
-    /// `not_found` unasked; `waves` outside is refused; the rest go as
+    /// `not_found` unasked; `work.waves` outside is refused; the rest go as
     /// asked, to be held to the reach on the way back.
     #[test]
     fn each_read_is_narrowed_to_the_reach() {
@@ -1341,7 +1385,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        match call(parse_call("inputs", r#"{"ticket":"OTHER-3","state":"open"}"#).unwrap()) {
+        match call(parse_call("inputs.list", r#"{"ticket":"OTHER-3","state":"open"}"#).unwrap()) {
             Call::Inputs { ticket, filter, .. } => {
                 assert_eq!(ticket.as_deref(), Some("OTHER-3"));
                 assert_eq!(under(&filter), Filter::parse("under AREA").ok(), "another ticket's inputs: none pass");
@@ -1361,7 +1405,7 @@ mod tests {
         }
         assert!(matches!(call(Call::Waves { epics: vec!["area".into(), "SUB".into()], kinds: None }), Call::Waves { .. }));
         let err = scope_call(Call::Waves { epics: vec!["AREA".into(), "OTHER".into()], kinds: None }, Some(&area())).unwrap_err();
-        assert!(err.starts_with("waves: OTHER is outside this frame's reach"), "{err}");
+        assert!(err.starts_with("work.waves: OTHER is outside this frame's reach"), "{err}");
         for c in [Call::Groups, Call::Extents, Call::Health, Call::Components] {
             assert!(matches!(scope_call(c.clone(), Some(&area())), Ok(Scoped::Call(_))), "{c:?}");
         }
@@ -1384,7 +1428,7 @@ mod tests {
         ] {
             let m = c.method();
             let err = scope_call(c, None).unwrap_err();
-            assert_eq!(err, format!("{m}: this frame renders no ticket's body — it reads nothing but components"));
+            assert_eq!(err, format!("{m}: this frame renders no ticket's body — it reads nothing but components.list"));
         }
     }
 
