@@ -668,7 +668,11 @@ foreign_holders() { # ENV → pids listening on the env's ports that are not its
   local mine=" " p
   for u in $(units_of "$1"); do mine+="$(systemctl --user show -p MainPID --value "$u" 2>/dev/null) "; done
   for port in "$MENGER_WS_PORT" "$MENGER_SHELL_PORT" "$MENGER_REST_PORT" "$MENGER_DIAGRAMS_PORT"; do
-    for p in $(ss -ltnpH sport = :"$port" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
+    # RUN-19: only a listener prod's bind (127.0.0.1) collides with — loopback
+    # or a wildcard; one on another address (menger-lan's proxies) is not in the way
+    for p in $(ss -ltnpH sport = :"$port" 2>/dev/null \
+        | awk '$4 ~ /^(127\.[0-9.]+|0\.0\.0\.0|\*|\[::\]|\[::1\]|\[::ffff:127\.[0-9.]+\]):[0-9]+$/' \
+        | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
       [[ $mine == *" $p "* ]] || echo "$p"
     done
   done | sort -u | tr '\n' ' ' | sed 's/ $//'
