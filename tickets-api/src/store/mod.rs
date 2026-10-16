@@ -289,6 +289,8 @@ pub(crate) struct Broadcast {
     comments: broadcast::Sender<CommentChange>,
     /// DEPLOY-11: `deployments.watch`'s — `deployed`, `environment_changed`.
     deployments: broadcast::Sender<crate::deployments::DeploymentsEvent>,
+    /// CHAT-3: `chats.watch`'s and `await_message`'s — the chats' changes.
+    chats: broadcast::Sender<chats::ChatChange>,
     /// ACCESS-12: the grants generation, as the last write left it — what
     /// wakes an open watch to verify its caller again (never a value it
     /// trusts: it reads [`Store::grants_generation`]).
@@ -305,6 +307,7 @@ impl Broadcast {
             filtered: broadcast::channel(BROADCAST_CAPACITY).0,
             comments: broadcast::channel(BROADCAST_CAPACITY).0,
             deployments: broadcast::channel(BROADCAST_CAPACITY).0,
+            chats: broadcast::channel(BROADCAST_CAPACITY).0,
             grants: Arc::new(tokio::sync::watch::channel(0).0),
         }
     }
@@ -323,6 +326,11 @@ impl Broadcast {
     /// DEPLOY-11: a deployment's event, to `deployments.watch`.
     fn deployment(&self, event: crate::deployments::DeploymentsEvent) {
         let _ = self.deployments.send(event);
+    }
+
+    /// CHAT-3: a chat's change, to `chats.watch` and `await_message`.
+    fn chat(&self, change: chats::ChatChange) {
+        let _ = self.chats.send(change);
     }
 
     /// Sends `change` to every subscriber it is for: a cell move to the
@@ -1868,6 +1876,8 @@ struct Cache {
     /// ([`saved::SavedFilters`]) — read from the bodies at open, moved by a
     /// body's write with the component registry.
     saved: saved::SavedFilters,
+    /// CHAT-3: every chat, its participants' read marks and its messages.
+    chats: chats::Chats,
     written: u64,
 }
 
@@ -2237,6 +2247,7 @@ impl Cache {
             queue: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
+            chats: Default::default(),
             written: 0,
         }
     }
@@ -2322,6 +2333,7 @@ impl Cache {
             queue: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
+            chats: Default::default(),
             written: 0,
         }
     }
@@ -3118,6 +3130,8 @@ impl Store {
         versions::migrate(&mut conn)?;
         // MENGER-39: and one without the queue's tables gains them, empty.
         queue::migrate(&mut conn)?;
+        // CHAT-3: and one without the chats' tables gains them, empty.
+        chats::migrate(&mut conn)?;
         // APP-23: and comments without an intent, and queue records without
         // the comment that answered them, gain the columns.
         comments::migrate(&conn)?;
@@ -3240,6 +3254,8 @@ impl Store {
         cache.queue = queue::load(conn)?;
         // FILTER-36: the saved filters, from their docs' bodies.
         cache.saved = saved::load(conn)?;
+        // CHAT-3: the chats, as stored.
+        cache.chats = chats::load(conn)?;
         Ok(cache)
     }
 
@@ -5445,6 +5461,9 @@ pub use changes::{conversation_anchor, CONVERSATION_PATH};
 /// APP-24: what answers an agent waiting on a ticket.
 mod replies;
 pub use replies::{comment_on, reply_key, Awaiting};
+/// CHAT-3: chats on a ticket among participants — opened, posted, read.
+mod chats;
+pub use chats::{ChatChange, ChatError, ChatQuery, ChatRecord, MessageWait, Signer, Standing};
 pub use deployments::{DeployPage, DeployQuery};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
@@ -5584,6 +5603,9 @@ mod tests_changes;
 /// APP-24: what answers a wait.
 #[cfg(test)]
 mod tests_replies;
+/// CHAT-3: CHAT-1's scenarios.
+#[cfg(test)]
+mod tests_chats;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

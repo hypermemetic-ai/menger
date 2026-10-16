@@ -484,6 +484,17 @@ impl Access {
         self.require_login
     }
 
+    /// CHAT-3: whether `principal` — named by a caller, not the caller —
+    /// can read the ticket `key` by its grants (a viewer's role, or more,
+    /// on a scope covering it). Login off: anyone reads everything.
+    pub fn reads_ticket(&self, principal: &str, key: &str, store: &Store) -> bool {
+        if !self.login {
+            return true;
+        }
+        let Some(chain) = store.gate_chain(key) else { return false };
+        Reach::of_grants(&self.book, &self.gate, principal).covers::<Viewer>(key, &chain)
+    }
+
     /// AUTH-7: the roles, memberships and scopes the gate reads.
     pub fn book(&self) -> Arc<Book> {
         self.book.clone()

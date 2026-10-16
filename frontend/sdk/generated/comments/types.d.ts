@@ -1,4 +1,4 @@
-import type { WatchEnd } from '../themes/types';
+import type { WatchEnd } from '../chats/types';
 import type { Anchor, Comment, CommentIntent, CommentState } from '../tickets/types';
 /** COMMENT-2: where on a page an anchor is — the element's path,
 `[data-tag="ticket DEMAND-1"]`; `comments.list --path` matches a

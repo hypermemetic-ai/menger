@@ -241,6 +241,21 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger comments list --under FILTER --state open --text title
   ```
 
+  **Chats** (CHAT-3) are the `chats` activation: a conversation among
+  named participants, opened inside one ticket — `open { ticket, others,
+  title? }` (the same set's open chat there is answered again), `post`,
+  `add`, `list` (`--unread true`), `messages`, `read { chat, upto }`,
+  `close` / `reopen`, `watch`, and `await_message` — `waiting`, then one
+  message by someone else, then the end (`await_reply`'s shape; pass
+  `--after <last id>` after a dropped connection). Participants only; each
+  must read the ticket. `chatting` and `unread` are filter cells, for the
+  reader. README "Chats":
+
+  ```sh
+  synapse -P 4455 menger chats open --ticket KILN-7 --others key:4b…
+  synapse -P 4455 -j menger chats await_message --chat 41 --timeout-minutes 240
+  ```
+
   **Notes** (NOTE-2) are the `notes` activation: dated, untitled thoughts
   kept in one place — `add { body }`, `list` (newest first; `state`
   open/upgraded, `author`, `text`; `after` + `limit`), `get { id }`, and

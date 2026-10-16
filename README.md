@@ -2732,6 +2732,40 @@ Under login both are editor writes: the gate holds `tickets.archive` /
 ticket it marks, each descendant included (ACCESS-11) — refused, counting
 the tickets outside the caller's reach, never naming them.
 
+### Chats (CHAT-3)
+
+A **chat** is a conversation among named participants, opened inside one
+ticket (CHAT-1: its own record, not a comment; no chat without a ticket),
+reached as the `chats` activation; its vocabulary (`Chat`, `Message`,
+`ChatState`, `ChatsEvent`) and `ChatsClient<T>` come from `tickets-api/`.
+Only participants read a chat — and an admin of its ticket, who reads it
+but has no mark and cannot post; to anyone else it is `not_found { chat }`,
+the same answer as a chat that is none (ACCESS-9). Every participant must
+read the ticket: one named who cannot is refused by name, and one who
+loses its reach loses the chat (`left { chat }` on its watch) until it is
+back. A message is signed by its caller (`author` its principal, `name`
+its name); `via` is kept for AGENT-3 and never set by a call.
+
+| method | yields |
+|---|---|
+| `chats.open { ticket, others, title? }` | `opened { chat, existing? }` — the caller and `others` (CHAT-1's `with`: TypeScript takes no parameter of that name) on the ticket; the same set's open chat there is answered with `existing: true` and nothing made. `refused { reasons }`: a ticket the caller cannot read (`no ticket X`), each participant who can't read it, a chat with no one else, past 32 |
+| `chats.post { chat, body }` | `posted { message { id, chat, author, name?, via?, at, body } }` — a participant's, in an open chat; markdown, not blank, at most the ticket body cap; the poster's mark moves to it. `refused`: `chat N is closed`, not a participant |
+| `chats.add { chat, principal }` | `added { chat }` — by a participant, to an open chat; the one added must read the ticket |
+| `chats.list { ticket?, unread?, state?, after?, limit? }` | `chat { chat }` each — by last activity, newest first — then `page { next }`. The caller's chats; with `ticket`, those on it (every one, for an admin of it). Each `chat`'s `unread` is the caller's, `waiting` who is on `await_message` for it now. 50 a page, at most 500 |
+| `chats.messages { chat, after?, limit? }` | `message { message }` each, oldest first, then `page { next }`; 100 a page, at most 1,000 |
+| `chats.read { chat, upto }` | `read { chat, upto, unread }` — the caller's mark moved forward (never back) to its latest message at or before `upto` |
+| `chats.close { chat }` · `chats.reopen { chat }` | `closed { chat }` · `reopened { chat }` — by any participant; a closed chat is read-only, kept on its ticket |
+| `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `listening { chat, principal, waiting }`, `left`, `lagged`, `watch_closed`. `claim_line` is declared for AGENT-3 and not emitted |
+| `chats.await_message { chat?, ticket?, since?, after?, timeout_minutes? }` | `waiting { chat?, ticket?, since }` at once, then one `message { message }` by someone else — in the chat, or any of the caller's chats (on `ticket`) — and the end; `timed_out` after the timeout. Without `since` or `after`, only what comes after the call; `since` (seconds) is at or after it, at least once; `after` (a message id) is exact. While it waits its chats show the caller in `waiting` (`listening` on watch) |
+
+Two filter cells read the caller's chats: `chatting` (the caller is in an
+open chat on the ticket) and `unread` (it has unread there) — answered for
+the reader (its principal, as `by me` is) from the kept chats, never by
+testing a ticket; a `watch { filter }` asking either follows every chat
+write. Kept in `chats`, `chat_participants` (each one's read mark) and
+`chat_messages` behind the cache, gained empty on open; who is listening is
+the cache's alone, never stored.
+
 ### Notes (NOTE-2)
 
 A **note** is a thought written down before it is a ticket: dated, never

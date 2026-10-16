@@ -979,7 +979,7 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 36] = [
+const NAMES: [&str; 38] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -992,6 +992,8 @@ const NAMES: [&str; 36] = [
     "archived",
     // ARCHIVE-2: the archive's other end.
     "restored",
+    // CHAT-3: the reader's chats.
+    "chatting",
     // MENGER-13: the history predicates.
     "entered",
     // ACCESS-21: one ticket alone.
@@ -1004,6 +1006,8 @@ const NAMES: [&str; 36] = [
     "behind",
     // MENGER-39: the owner's queue.
     "queued",
+    // CHAT-3: the reader's unread messages.
+    "unread",
     "created",
     // FILTER-30: the ticket's last touch.
     "touched",
@@ -1317,6 +1321,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "behind" => read_history(name, tail).map(Field::History),
         // MENGER-39: over the queue's kept entries.
         "queued" => read_history(name, tail).map(Field::History),
+        // CHAT-3: over the chats, for the reader.
+        "chatting" | "unread" => read_history(name, tail).map(Field::History),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
         // FILTER-36: a saved filter, by its name.
         "saved" => {
@@ -1506,6 +1512,14 @@ pub enum Event {
     /// <urgency>`, at that urgency (a snooze does not take it out). Answered
     /// from the queue's kept entries; no window, no `by`.
     Queued(Option<crate::queue::Urgency>),
+    /// CHAT-3: `chatting` — the reader is in an open chat on the ticket.
+    /// Answered for the reader (the clock's `me`) from the chats' kept
+    /// participants; no window, no `by`.
+    Chatting,
+    /// CHAT-3: `unread` — the reader has unread messages in a chat on the
+    /// ticket. Answered for the reader from the chats' read marks; no
+    /// window, no `by`.
+    Unread,
     /// ARCHIVE-2: `archived <window> [by who]` — the ticket is archived, and
     /// the write that archived it (its latest archive transition) was in
     /// the window, by that actor. Names the archive, as `archived` does.
@@ -1530,6 +1544,8 @@ impl Event {
             Event::Deployed(_) => "deployed",
             Event::Behind(_) => "behind",
             Event::Queued(_) => "queued",
+            Event::Chatting => "chatting",
+            Event::Unread => "unread",
             Event::Archived => "archived",
             Event::Restored => "restored",
         }
@@ -1841,6 +1857,8 @@ impl History {
             Event::Behind(env) => format!("behind {}", quoted(env)),
             Event::Queued(None) => "queued".to_string(),
             Event::Queued(Some(u)) => format!("queued {u}"),
+            Event::Chatting => "chatting".to_string(),
+            Event::Unread => "unread".to_string(),
             Event::Archived => "archived".to_string(),
             Event::Restored => "restored".to_string(),
             Event::Held(h) => {
@@ -1951,6 +1969,14 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
                 return Err(format!("`{extra}` is not understood here — `queued` takes an urgency (whenever, today, now, blocking) and nothing else: no window, no `by`"));
             }
             return Ok(History { event: Event::Queued(u), window: None, by: None });
+        }
+        // CHAT-3: `chatting`, `unread`, and nothing after either.
+        "chatting" | "unread" => {
+            if let Some(extra) = w.first() {
+                return Err(format!("`{extra}` is not understood here — `{name}` takes nothing after it: no window, no `by`"));
+            }
+            let event = if name == "chatting" { Event::Chatting } else { Event::Unread };
+            return Ok(History { event, window: None, by: None });
         }
         _ => {
             let who = w.first().ok_or("`by` names who: `me`, `system` or a principal")?;

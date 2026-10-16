@@ -183,6 +183,19 @@ impl Reach {
         Ok(Self { grants, held, ticket_orgs, ceiling, call: None, gate: Some(gate.clone()), generation, who: who.to_string() })
     }
 
+    /// CHAT-3: `who`'s reach from its grants alone (direct, its teams',
+    /// the operator's) — no session, so no ceiling: what another principal,
+    /// named by a caller, holds. Never a caller's own reach.
+    pub(super) fn of_grants(book: &Book, gate: &Gate, who: &str) -> Self {
+        let mut grants: Vec<(Scope, Role)> = Vec::new();
+        let mut held: Vec<(Held, Role)> = Vec::new();
+        for g in book.grants_of(who) {
+            held.push((Held::of_scope(&g.scope), g.role));
+            grants.push((g.scope, g.role));
+        }
+        Self { grants, held, ticket_orgs: Vec::new(), ceiling: Vec::new(), call: None, gate: Some(gate.clone()), generation: 0, who: who.to_string() }
+    }
+
     /// The reach for the call admitted for `grant`.
     pub(super) fn for_call(mut self, grant: Option<GateGrant>) -> Self {
         self.call = grant;

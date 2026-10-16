@@ -84,6 +84,10 @@ pub(crate) enum Kind {
     Archived,
     /// ARCHIVE-2: `restored [window] [by who]` — a pill, as `archived`.
     Restored,
+    /// CHAT-3: `chatting` / `unread` — the reader's chats, kept by the
+    /// store; a pill (from the palette or a saved filter), never a row of
+    /// When's menu. CHAT-4 draws them.
+    Chats,
 }
 
 impl Kind {
@@ -104,6 +108,7 @@ impl Kind {
             Event::Deployed(_) => Kind::Deployed,
             Event::Behind(_) => Kind::Behind,
             Event::Queued(_) => Kind::Queued,
+            Event::Chatting | Event::Unread => Kind::Chats,
             Event::Archived => Kind::Archived,
             Event::Restored => Kind::Restored,
         }
@@ -122,6 +127,7 @@ impl Kind {
             Kind::NotDeployed => "Not deployed to",
             Kind::Behind => "Behind on",
             Kind::Queued => "Queued",
+            Kind::Chats => "Chats",
             Kind::Archived => "Archived",
             Kind::Restored => "Restored",
         }
@@ -140,6 +146,7 @@ impl Kind {
             Kind::NotDeployed => "notdeployed",
             Kind::Behind => "behind",
             Kind::Queued => "queued",
+            Kind::Chats => "chats",
             Kind::Archived => "archived",
             Kind::Restored => "restored",
         }
@@ -158,7 +165,7 @@ impl Kind {
 
     /// Whether its clause has a window (all but In status for).
     pub(crate) fn windowed(self) -> bool {
-        !matches!(self, Kind::Held | Kind::Queued | Kind::Behind)
+        !matches!(self, Kind::Held | Kind::Queued | Kind::Behind | Kind::Chats)
     }
 
     /// Whether its clause may say who (the transitions'; not a birth).
@@ -272,7 +279,7 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         // DEPLOY-13: names an environment first ([`new_deployed`]).
         Kind::Deployed | Kind::NotDeployed => return None,
         // MENGER-39 / DEPLOY-20: never built by When's menu.
-        Kind::Queued | Kind::Behind => return None,
+        Kind::Queued | Kind::Behind | Kind::Chats => return None,
         // ARCHIVE-2: the archive's two ends.
         Kind::Archived => Event::Archived,
         Kind::Restored => Event::Restored,
@@ -526,6 +533,8 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
         }
         Event::Archived => out.push((None, "archived".into())),
         Event::Restored => out.push((None, "restored".into())),
+        Event::Chatting => out.push((None, "chatting".into())),
+        Event::Unread => out.push((None, "unread".into())),
         Event::Queued(u) => {
             out.push((None, "queued".into()));
             if let Some(u) = u {

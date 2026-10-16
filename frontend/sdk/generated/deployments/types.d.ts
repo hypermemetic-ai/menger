@@ -1,4 +1,4 @@
-import type { WatchEnd } from '../themes/types';
+import type { WatchEnd } from '../chats/types';
 /** Where to read the run that made a deployment. */
 export interface DeploySource {
     /** Its run, as the CI names it — what a retry of the same record repeats. */

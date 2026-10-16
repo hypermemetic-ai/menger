@@ -14,7 +14,7 @@
 #![cfg(feature = "server")]
 
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{Comments, Deployments, Members, Nav, Notes, Orgs, Session, Store, Themes, Tickets};
+use menger_tickets_api::{Chats, Comments, Deployments, Members, Nav, Notes, Orgs, Session, Store, Themes, Tickets};
 // (`Nav` is `tickets`' child, ACCESS-16.)
 use plexus_core::plexus::{Activation, MethodRole, PluginSchema};
 use std::collections::BTreeMap;
@@ -63,6 +63,9 @@ fn activation() -> Surface {
     // activation lists its static children by path).
     let children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&hub).into_iter().map(|(path, c)| surface_at(&format!("tickets.{path}"), c)).collect();
     let comments = Comments::new(Arc::clone(&store)).plugin_schema();
+    // CHAT-3: and chats.
+    let chats = Chats::new(Arc::clone(&store)).plugin_schema();
+    assert_eq!(chats.namespace, "chats");
     // NOTE-2: and notes.
     let notes = Notes::new(Arc::clone(&store)).plugin_schema();
     // DEPLOY-11: and deployments.
@@ -86,6 +89,7 @@ fn activation() -> Surface {
     );
     let mut out = surface(tickets);
     out.extend(surface(comments));
+    out.extend(surface(chats));
     out.extend(surface(notes));
     out.extend(surface(themes));
     out.extend(surface(deployments));

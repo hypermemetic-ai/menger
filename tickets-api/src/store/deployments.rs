@@ -560,6 +560,9 @@ impl Cache {
             crate::filter::Event::Behind(env) => self.deploys.holds_behind(env, &self.at),
             // MENGER-39: `queued` from the queue's kept entries.
             crate::filter::Event::Queued(u) => self.queue.holds(*u, &self.at),
+            // CHAT-3: for the reader, from the chats.
+            crate::filter::Event::Chatting => super::chats::holds(self, &clock.me, false),
+            crate::filter::Event::Unread => super::chats::holds(self, &clock.me, true),
             _ => self.log.holds(h, clock),
         }
     }
@@ -570,7 +573,7 @@ impl Cache {
             crate::filter::Event::Deployed(env) => self.deploys.next_boundary(env, h.window.as_ref(), clock),
             // MENGER-39 / DEPLOY-20: time alone never moves the queue, or
             // which version runs.
-            crate::filter::Event::Queued(_) | crate::filter::Event::Behind(_) => None,
+            crate::filter::Event::Queued(_) | crate::filter::Event::Behind(_) | crate::filter::Event::Chatting | crate::filter::Event::Unread => None,
             _ => self.log.next_boundary(h, clock),
         }
     }
