@@ -92,7 +92,7 @@ pub(crate) fn parse(reference: Option<&str>, source: Option<&str>) -> Result<Sou
     let reference = reference.map(str::trim).filter(|r| !r.is_empty());
     match (reference, source) {
         (Some(_), Some(_)) => Err("m-mockup: give ref=\"ID\" or a ```mockup fence's page, not both".into()),
-        (None, None) => Err("m-mockup: name a page — ref=\"DESIGN-49\", or write a ```mockup fence".into()),
+        (None, None) => Err("m-mockup: name a page — write it inside the element, or ref=\"DESIGN-49\"".into()),
         (None, Some(page)) => Ok(Source::Inline(page.to_string())),
         (Some(r), None) => {
             let id = r.to_ascii_uppercase();

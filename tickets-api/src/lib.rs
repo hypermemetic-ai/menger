@@ -48,6 +48,10 @@ pub mod fields;
 /// opened in an HTML block runs to its close — read for the app's parser.
 /// Wasm-safe, like `component_docs`: the frame renders with it.
 pub mod html_runs;
+/// APP-32: a mockup written in its element — `<m-mockup>` … the page …
+/// `</m-mockup>` — found in a body, its page never the body's markup.
+/// Wasm-safe, like `html_runs`: the frame renders with it.
+pub mod mockups;
 /// INPUT-3: a body's inputs — `<m-decision id>` and `<m-input id kind>` with
 /// their options, question and recommendation — read as the app renders the
 /// body, and an answer's value checked against them. Wasm-safe, like

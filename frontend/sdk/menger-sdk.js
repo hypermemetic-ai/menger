@@ -89,10 +89,15 @@
  *     document. The host answers only the window's height
  *     (`menger:cited`), which the placeholder takes.
  *   - **`<m-mockup>`** (APP-29, 1.21) — built in, beside `<m-cite>`: a
- *     website mockup as a component of the body. A ```mockup fence becomes
- *     `<m-mockup widths="390,1440" source="…the page…">` (md.rs: the page in
- *     an escaped attribute, never parsed here); `<m-mockup ref="DESIGN-49">`
- *     names another ticket's whole-document body. Only a placeholder, as
+ *     website mockup as a component of the body. A body writes the page
+ *     inside the element — `<m-mockup widths="390,1440">` … the page …
+ *     `</m-mockup>` (APP-32, the standard form: its content up to the first
+ *     `</m-mockup>`, taken as written, never markdown) — or in a ```mockup
+ *     fence; md.rs makes either `<m-mockup widths="390,1440" source="…the
+ *     page…">` (the page in an escaped attribute, never parsed here), so
+ *     this element never holds a page itself. `<m-mockup ref="DESIGN-49">`,
+ *     empty, names another ticket's whole-document body (ref= with a page
+ *     inside is refused when the body is written). Only a placeholder, as
  *     m-cite is: it posts what it draws and where (`menger:mockup`), the
  *     HOST draws the devices over it (frontend/src/mockup.rs) — a
  *     referenced ticket's body never enters this document — and answers
@@ -2242,7 +2247,8 @@
 
   // -- <m-mockup> (APP-29) -----------------------------------------------------
   // A placeholder as <m-cite> is: room in this body, what it draws (the
-  // page a ```mockup fence carries, or a ticket by ref) and where, told to
+  // page written inside the element or in a ```mockup fence, which md.rs
+  // carries in `source` (APP-32), or a ticket by ref) and where, told to
   // the host; the host draws the devices over it, outside this frame, and
   // answers the height. A referenced ticket's body never enters here.
 

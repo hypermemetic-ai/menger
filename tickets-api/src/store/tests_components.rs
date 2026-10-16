@@ -668,3 +668,43 @@ async fn a_cite_counts_as_its_tag_and_nothing_it_shows() {
     let page = store.search(SYS, "zanzibar", None, None, None).await.unwrap();
     assert_eq!(page.hits.iter().map(|h| h.summary.id.as_str()).collect::<Vec<_>>(), [cited.as_str()]);
 }
+
+/// APP-32: an `<m-mockup>` with both a `ref` and a page inside it is
+/// refused at write time, naming its line — on a create, an amend and an
+/// update; an inline page and a bare ref are taken.
+#[tokio::test]
+async fn a_mockup_with_a_ref_and_a_page_is_refused_naming_its_line() {
+    let store = store().await;
+    let both = "Intro.\n\n<m-mockup ref=\"DESIGN-49\">\n<p>a page</p>\n</m-mockup>\n";
+    let e = store.create(SYS, ticket("C", Kind::Build, both)).await.unwrap_err().to_string();
+    assert!(e.contains("line 3: <m-mockup> has both ref= and a page") && e.contains("nothing was written"), "{e}");
+    let kept = "<m-mockup ref=\"DESIGN-49\"></m-mockup>\n\n<m-mockup widths=\"390\">\n<p>p</p>\n</m-mockup>\n";
+    let id = born(&store, kept).await;
+    assert_eq!(id, "C-2", "no id spent");
+    let fm = format!("---\nview: inline\n---\n{both}");
+    let e = store.amend(SYS.permit(&id), None, Some(fm.clone())).await.unwrap_err().to_string();
+    assert!(e.contains("line 6: <m-mockup>"), "{e}");
+    let up = Update { body: Some(fm), ..Update::default() };
+    let e = store.update(SYS.updating(&id), up).await.unwrap_err().to_string();
+    assert!(e.contains("line 6: <m-mockup>"), "{e}");
+    assert_eq!(store.get(SYS, &id).await.unwrap().body, kept);
+}
+
+/// APP-32: an inline mockup's page is the page's markup, not the body's —
+/// its tags reference no component and its inputs are no inputs of the
+/// ticket, as a fence's are not; what is outside it still is.
+#[tokio::test]
+async fn an_inline_mockups_page_is_no_part_of_the_bodys_markup() {
+    let store = store().await;
+    born(&store, &format!("{}{}", def("m-chart", "<slot></slot>"), def("m-gauge", "<slot></slot>"))).await;
+    let body = "<m-mockup>\n<!doctype html>\n<html><body>\n\n<m-chart></m-chart>\n\
+                <m-decision id=\"inside\"><m-question>q</m-question><m-option name=\"A\"></m-option></m-decision>\n\
+                </body></html>\n</m-mockup>\n\n<m-gauge></m-gauge>\n\n\
+                <m-input id=\"outside\" kind=\"text\"><m-question>q</m-question></m-input>\n";
+    let id = born(&store, body).await;
+    let reg = registry(&store);
+    assert!(reg["m-chart"].references.is_empty(), "{:?}", reg["m-chart"]);
+    assert_eq!(reg["m-gauge"].references, [id.as_str()]);
+    let inputs = store.inputs(SYS, Some(&id), None, None).unwrap();
+    assert_eq!(inputs.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["outside"]);
+}
