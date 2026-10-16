@@ -73,6 +73,7 @@ fn blocker_ids(refs: Vec<BlockerRef>) -> Vec<String> {
         .map(|r| match r {
             BlockerRef::Resolved(t) => t.id.to_string(),
             BlockerRef::Dangling(id) => format!("dangling {id}"),
+            BlockerRef::Hidden => "hidden".to_string(),
         })
         .collect()
 }
@@ -86,12 +87,13 @@ fn tq(parent: Option<&str>, epic: Option<&str>, matches_only: bool) -> TreeQuery
 }
 
 /// ACCESS-3 #1: `blockers` resolves only what is in reach — a hidden
-/// blocker is not answered (its body never read), nor named as dangling.
+/// blocker is not answered (its body never read), nor named as dangling —
+/// ACCESS-17: it is counted, one `Hidden` after the shown ones.
 #[tokio::test]
 async fn blockers_answer_no_hidden_ticket() {
     let s = tracker().await;
     let v = viewer_of(&["OPEN"]);
-    assert_eq!(blocker_ids(s.blockers(&v, "OPEN-3").await.unwrap()), ["OPEN-2"]);
+    assert_eq!(blocker_ids(s.blockers(&v, "OPEN-3").await.unwrap()), ["OPEN-2", "hidden"]);
     assert_eq!(blocker_ids(s.blockers(SYS, "OPEN-3").await.unwrap()), ["OPEN-2", "SECRET-2"], "the system sees both");
     // A hidden ticket's own blockers: not found, as a ticket that is not there.
     assert!(matches!(s.blockers(&v, "SECRET-2").await, Err(StoreError::NotFound(_))));
@@ -340,7 +342,7 @@ async fn nothing_answered_or_named_lies_outside_the_reach() {
             assert_eq!(got.is_ok(), inside(id), "{why}: get {id}");
             if let Ok(t) = got {
                 assert!(named(&TicketSummary::from(t)), "{why}: get {id} names a hidden ticket");
-                assert!(blocker_ids(s.blockers(&v, id).await.unwrap()).iter().all(|b| inside(b)), "{why}: blockers of {id}");
+                assert!(blocker_ids(s.blockers(&v, id).await.unwrap()).iter().all(|b| b == "hidden" || inside(b)), "{why}: blockers of {id}");
                 assert!(s.tree_page(&v, &tq(Some(id), None, false), None, None).unwrap().nodes.iter().all(|n| named(&n.summary)), "{why}: tree at {id}");
                 assert!(s.tree_page(&v, &tq(Some(id), None, true), None, None).unwrap().nodes.iter().all(|n| named(&n.summary)), "{why}: matches at {id}");
             }

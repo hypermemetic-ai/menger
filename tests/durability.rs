@@ -299,7 +299,7 @@ async fn dag_edges_survive_sigkill() {
     )
     .await;
     assert_eq!(ev["type"], "status_changed");
-    let ready = drain(&c2, "tickets.ready_set", json!({"epic": "EDGE"})).await;
+    let ready = drain(&c2, "tickets.work.ready", json!({"epic": "EDGE"})).await;
     assert!(ready.is_empty(), "B is blocked by incomplete A, got {ready:?}");
 
     one(
@@ -308,7 +308,7 @@ async fn dag_edges_survive_sigkill() {
         json!({"id": "EDGE-1", "status": "Complete"}),
     )
     .await;
-    let ready = drain(&c2, "tickets.ready_set", json!({"epic": "EDGE"})).await;
+    let ready = drain(&c2, "tickets.work.ready", json!({"epic": "EDGE"})).await;
     assert_eq!(ready.len(), 1, "completing A unblocks B, got {ready:?}");
     assert_eq!(ready[0]["ticket"]["id"], "EDGE-2");
 }

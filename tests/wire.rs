@@ -421,7 +421,7 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
     assert_eq!(mirror["RS-1"]["unlocks"], json!(["RS-2"]));
 
     // Checkpoint 1: A is ready, B is not — server and mirror agree.
-    let server = ready_ids(rows(call(&client, "tickets.ready_set", json!({})).await).await);
+    let server = ready_ids(rows(call(&client, "tickets.work.ready", json!({})).await).await);
     assert_eq!(server, vec!["RS-1"]);
     assert_eq!(server, local_ready(&mirror));
 
@@ -430,7 +430,7 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
     let ev = content(watch.next().await.unwrap().unwrap());
     apply(&mut mirror, &ev);
 
-    let server = ready_ids(rows(call(&client, "tickets.ready_set", json!({})).await).await);
+    let server = ready_ids(rows(call(&client, "tickets.work.ready", json!({})).await).await);
     assert_eq!(server, vec!["RS-2"]);
     assert_eq!(server, local_ready(&mirror));
 }
@@ -447,10 +447,10 @@ async fn dangling_blocker_over_the_wire() {
         json!({"epic": "DG", "title": "C", "kind": "scope", "blocked_by": ["DG-99"]})).await).await;
     collect(call(&client, "tickets.set_status", json!({"id": "DG-1", "status": "Ready"})).await).await;
 
-    let ready = rows(call(&client, "tickets.ready_set", json!({})).await).await;
+    let ready = rows(call(&client, "tickets.work.ready", json!({})).await).await;
     assert!(ready.is_empty(), "DG-1 must not be ready: {ready:?}");
 
-    let evs = collect(call(&client, "tickets.blockers", json!({"id": "DG-1"})).await).await;
+    let evs = collect(call(&client, "tickets.work.blockers", json!({"id": "DG-1"})).await).await;
     assert_eq!(evs.len(), 1);
     assert_eq!(evs[0]["type"], "dangling_blocker");
     assert_eq!(evs[0]["id"], "DG-99");
@@ -690,14 +690,14 @@ async fn list_pages_over_the_wire() {
         collect(call(&client, "tickets.set_status", json!({"id": id, "status": "Ready"})).await).await;
     }
     let (evs, page) =
-        paged(call(&client, "tickets.ready_set", json!({"summary": true, "limit": 2})).await).await;
+        paged(call(&client, "tickets.work.ready", json!({"summary": true, "limit": 2})).await).await;
     assert_eq!(
         evs.iter().map(|e| e["summary"]["id"].as_str().unwrap()).collect::<Vec<_>>(),
         ["PGA-1", "PGA-2"]
     );
     assert_eq!(page, json!({"type": "page", "next": "PGA-2", "remaining": 1}));
     let (evs, page) =
-        paged(call(&client, "tickets.ready_set", json!({"after": "PGA-2"})).await).await;
+        paged(call(&client, "tickets.work.ready", json!({"after": "PGA-2"})).await).await;
     assert_eq!(evs.len(), 1);
     assert_eq!(evs[0]["ticket"]["id"], "PGZ-1", "no summary asked for, so full tickets");
     assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
@@ -1396,7 +1396,7 @@ async fn docs_root_a_shortcode_refuse_set_status_in_band_and_are_never_ready() {
     let evs = collect(call(&client, "tickets.set_status", json!({"id": "MANIFEST-3", "status": "Ready"})).await).await;
     assert_eq!(evs[0]["type"], "status_changed");
     for params in [json!({}), json!({"summary": true}), json!({"epic": "MANIFEST", "summary": true})] {
-        let (evs, page) = paged(call(&client, "tickets.ready_set", params.clone()).await).await;
+        let (evs, page) = paged(call(&client, "tickets.work.ready", params.clone()).await).await;
         let ids: Vec<&str> = evs
             .iter()
             .map(|ev| ev["ticket"]["id"].as_str().or(ev["summary"]["id"].as_str()).unwrap())
@@ -1439,7 +1439,7 @@ async fn docs_root_a_shortcode_refuse_set_status_in_band_and_are_never_ready() {
     assert_eq!(content(sub.next().await.unwrap().unwrap())["ticket_count"], 3, "nothing else was created");
 }
 
-/// WAVE-4 acceptance 3: `tickets.waves` over the real protocol — `epics` a
+/// WAVE-4 acceptance 3: `tickets.work.waves` over the real protocol — `epics` a
 /// JSON list, case-insensitive; one `placed { summary, placement,
 /// waiting_on }` per ticket (a summary row: no body), the placement tagged
 /// `{"type": "wave", "n": …}` / `{"type": "missing_blocker"}` /
@@ -1468,7 +1468,7 @@ async fn waves_over_the_wire() {
     }
     collect(call(&client, "tickets.set_status", json!({"id": "WV-5", "status": "Complete"})).await).await;
 
-    let mut evs = collect(call(&client, "tickets.waves", json!({"epics": ["wv"]})).await).await;
+    let mut evs = collect(call(&client, "tickets.work.waves", json!({"epics": ["wv"]})).await).await;
     let counts = evs.pop().expect("a waves answer ends with the tally");
     assert_eq!(counts, json!({"type": "wave_counts", "waves": [0, 1, 1], "missing": 1, "done": 1}));
     assert!(evs.iter().all(|e| e["type"] == "placed"), "{evs:?}");
@@ -1490,7 +1490,7 @@ async fn waves_over_the_wire() {
 
     // UP-2 completes: everything behind it moves one wave left.
     collect(call(&client, "tickets.set_status", json!({"id": "UP-2", "status": "Complete"})).await).await;
-    let evs = collect(call(&client, "tickets.waves", json!({"epics": ["WV", "UP"], "kinds": ["build", "spike"]})).await).await;
+    let evs = collect(call(&client, "tickets.work.waves", json!({"epics": ["WV", "UP"], "kinds": ["build", "spike"]})).await).await;
     let placed: Vec<(&str, &Value)> = evs
         .iter()
         .filter(|e| e["type"] == "placed")
@@ -1509,12 +1509,12 @@ async fn waves_over_the_wire() {
     assert_eq!(evs.last().unwrap(), &json!({"type": "wave_counts", "waves": [1, 1], "missing": 0, "done": 2}));
 
     // In-band errors: one data item, then done.
-    let evs = collect(call(&client, "tickets.waves", json!({"epics": []})).await).await;
+    let evs = collect(call(&client, "tickets.work.waves", json!({"epics": []})).await).await;
     assert_eq!(evs.len(), 1, "{evs:?}");
     assert_eq!(evs[0]["type"], "error");
     assert!(evs[0]["message"].as_str().unwrap().contains("epics"), "{}", evs[0]);
     // ACCESS-8: a kind outside the six is refused at dispatch.
-    let message = invalid(&client, "tickets.waves", json!({"epics": ["WV"], "kinds": ["bug"]})).await;
+    let message = invalid(&client, "tickets.work.waves", json!({"epics": ["WV"], "kinds": ["bug"]})).await;
     assert!(message.contains("kinds: unknown kind 'bug'"), "{message}");
 }
 
@@ -2724,17 +2724,17 @@ async fn reads_take_the_lens_over_the_wire() {
     assert_eq!(ids(&rows, "summary"), ["LN-2", "LN-4", "LN-6"]);
 
     // ready_set: the ready set and the filter — LN-7 waits on LN-5.
-    let (rows, page) = paged(call(&client, "tickets.ready_set", json!({"summary": true})).await).await;
+    let (rows, page) = paged(call(&client, "tickets.work.ready", json!({"summary": true})).await).await;
     assert_eq!(ids(&rows, "summary"), ["LN-2", "LN-4", "LN-6", "LX-1"]);
     assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
-    let (rows, page) = paged(call(&client, "tickets.ready_set", json!({"summary": true, "filter": "severity low", "limit": 5})).await).await;
+    let (rows, page) = paged(call(&client, "tickets.work.ready", json!({"summary": true, "filter": "severity low", "limit": 5})).await).await;
     assert_eq!(ids(&rows, "summary"), ["LN-6"]);
     assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}), "no first on a ready_set page");
-    let (rows, page) = paged(call(&client, "tickets.ready_set", json!({"filter": "not severity low", "limit": 1})).await).await;
+    let (rows, page) = paged(call(&client, "tickets.work.ready", json!({"filter": "not severity low", "limit": 1})).await).await;
     assert_eq!(ids(&rows, "ticket"), ["LN-2"], "whole tickets");
     assert_eq!(rows[0]["ticket"]["body"], decision);
     assert_eq!(page, json!({"type": "page", "next": "LN-2", "remaining": 2}));
-    let (rows, _) = paged(call(&client, "tickets.ready_set", json!({"summary": true, "epic": "lx", "filter": "kind scope"})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.work.ready", json!({"summary": true, "epic": "lx", "filter": "kind scope"})).await).await;
     assert_eq!(ids(&rows, "summary"), ["LX-1"]);
 
     // inputs: of the tickets the filter admits — LN-2, LN-7 and LX-1 declare one.
@@ -2783,12 +2783,12 @@ async fn reads_take_the_lens_over_the_wire() {
     assert_eq!(too_many[0]["type"], "error");
     assert!(too_many[0]["message"].as_str().unwrap().contains("at most 1000 ids"), "{too_many:?}");
     // FILTER-13: `under` is answered by these reads too — LN-1 roots LN.
-    let under = collect(call(&client, "tickets.ready_set", json!({"filter": "under LN-1", "summary": true})).await).await;
-    let in_ln = collect(call(&client, "tickets.ready_set", json!({"filter": "in LN", "summary": true})).await).await;
+    let under = collect(call(&client, "tickets.work.ready", json!({"filter": "under LN-1", "summary": true})).await).await;
+    let in_ln = collect(call(&client, "tickets.work.ready", json!({"filter": "in LN", "summary": true})).await).await;
     assert!(under.len() > 1 && under == in_ln, "{under:?}");
     for (method, params) in [
         ("tickets.find", json!({"query": "watch", "filter": "text \"watch\""})),
-        ("tickets.ready_set", json!({"filter": "under LN-1 and text \"x\""})),
+        ("tickets.work.ready", json!({"filter": "under LN-1 and text \"x\""})),
         ("tickets.inputs.list", json!({"filter": "tag x and nonsense"})),
         ("tickets.member", json!({"ids": ["LN-2"], "filter": "status Bogus"})),
         ("tickets.find", json!({"query": "x", "filter": "nonsense"})),

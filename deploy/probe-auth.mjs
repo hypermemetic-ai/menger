@@ -226,7 +226,7 @@ const vGet = await call(v, 'tickets.get', { id: awayId });
 check(!JSON.stringify(vGet).includes(`secret body of ${AWAY}`), `a viewer of ${HOME} cannot get a ${AWAY} ticket`);
 const vSearch = await call(v, 'tickets.search', { query: tag });
 check(!JSON.stringify(vSearch).includes(`secret body of ${AWAY}`), `a viewer of ${HOME} finds no ${AWAY} ticket by search`);
-const eBlockers = await call(e, 'tickets.blockers', { id: awayId });
+const eBlockers = await call(e, 'tickets.work.blockers', { id: awayId });
 check(!JSON.stringify(eBlockers).includes(`secret body of ${HOME}`), `an editor of ${AWAY} cannot read a ${HOME} blocker through blockers (IDENTITY-37)`);
 const sneak = await call(e, 'tickets.create', { epic: AWAY, title: `${tag} sneak`, blocked_by: [homeId] });
 check(errorOf(sneak), `an editor of ${AWAY} cannot name a ${HOME} ticket it cannot view as a blocker (IDENTITY-37)`);

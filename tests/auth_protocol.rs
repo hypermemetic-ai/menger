@@ -229,7 +229,6 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.health", Today::Anyone, None),
     ("tickets.get", Today::Viewer, None),
     ("tickets.list", Today::Viewer, None),
-    ("tickets.ready_set", Today::Viewer, None),
     ("tickets.find", Today::Viewer, None),
     ("tickets.search", Today::Viewer, None),
     ("tickets.member", Today::Viewer, None),
@@ -239,11 +238,13 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.counts", Today::Viewer, None),
     ("tickets.facets", Today::Viewer, None),
     ("tickets.tree", Today::Viewer, None),
-    ("tickets.waves", Today::Viewer, None),
-    // MENGER-31: a ticket's boards — reads, a viewer's.
-    ("tickets.waves_under", Today::Viewer, None),
-    ("tickets.waves_to", Today::Viewer, None),
-    ("tickets.blockers", Today::Viewer, None),
+    // ACCESS-17: `tickets work` — the order of work, reads, a viewer's
+    // (was `tickets.ready_set`, `waves`, …). MENGER-31: a ticket's boards.
+    ("tickets.work.ready", Today::Viewer, None),
+    ("tickets.work.waves", Today::Viewer, None),
+    ("tickets.work.waves_under", Today::Viewer, None),
+    ("tickets.work.waves_to", Today::Viewer, None),
+    ("tickets.work.blockers", Today::Viewer, None),
     ("tickets.watch", Today::Viewer, None),
     // MENGER-13: a ticket's history is a read.
     ("tickets.history", Today::Viewer, None),
@@ -619,6 +620,53 @@ async fn the_inputs_child_is_held_by_its_path() {
     // The old names are gone.
     let gone = one(&boss, "tickets.answer", answer("A-2")).await;
     assert_eq!(gone["type"], "error", "{gone}");
+}
+
+/// ACCESS-17: `tickets work` under login — a viewer's view shows the child
+/// (MACRO-20: the caller holds something below it)
+/// and a grantless caller is refused naming the routed grant.
+#[tokio::test]
+async fn tickets_work_is_held_by_its_path() {
+    let dir = tmp();
+    let s = spawn(&dir.path().join("t.db"), true).await;
+    let boss = as_key(s.port, &BOSS, "boss").await;
+    tickets(&boss).await;
+    let agent = as_key(s.port, &AGENT, "worker-1").await;
+    let no = one(&agent, "tickets.work.blockers", json!({ "id": "A-2" })).await;
+    assert_eq!((no["error_kind"].as_str(), no["grant"].as_str()), (Some("forbidden"), Some("tickets.work.blockers")), "{no}");
+    assert_eq!(no["roles"], json!(["editor", "viewer", "admin"]), "{no}");
+    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
+    assert!(view(&agent).await["tickets"].contains("work"), "the child is in a viewer's view");
+    let work = one(&agent, "tickets.work.schema", json!({})).await;
+    let methods: BTreeSet<String> = work["methods"].as_array().unwrap().iter().filter_map(|m| m["name"].as_str().map(str::to_string)).filter(|m| m != "schema").collect();
+    assert_eq!(methods, names(&["ready", "waves", "waves_under", "waves_to", "blockers"]), "{work}");
+}
+
+/// ACCESS-17: a viewer calls `tickets work` and a blocker out of its reach
+/// is counted, never named. Under login the child gets the
+/// caller whole (MACRO-20: principal, session, ceiling).
+#[tokio::test]
+async fn tickets_work_answers_a_viewer_and_counts_what_it_hides() {
+    let dir = tmp();
+    let s = spawn(&dir.path().join("t.db"), true).await;
+    let boss = as_key(s.port, &BOSS, "boss").await;
+    tickets(&boss).await;
+    let made = one(&boss, "tickets.create", json!({ "epic": "A", "title": "waits on B", "parent": "A-1", "blocked_by": ["A-2", "B-2"] })).await;
+    assert_eq!(made["ticket"]["id"], "A-3", "{made}");
+    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
+    let agent = as_key(s.port, &AGENT, "worker-1").await;
+    let blockers = call(&agent, "tickets.work.blockers", json!({ "id": "A-3" })).await;
+    let types: Vec<&str> = blockers.iter().filter_map(|e| e["type"].as_str()).collect();
+    assert_eq!(types, ["blocker", "hidden_blockers"], "{blockers:?}");
+    assert_eq!((blockers[0]["ticket"]["id"].as_str(), blockers[1]["count"].as_u64()), (Some("A-2"), Some(1)), "{blockers:?}");
+    assert!(!serde_json::to_string(&blockers).unwrap().contains("B-2"), "a hidden blocker is never named: {blockers:?}");
+    let all = call(&boss, "tickets.work.blockers", json!({ "id": "A-3" })).await;
+    assert_eq!(all.iter().filter_map(|e| e["ticket"]["id"].as_str()).collect::<Vec<_>>(), ["A-2", "B-2"], "the admin sees both: {all:?}");
+    let waves = call(&agent, "tickets.work.waves", json!({ "epics": ["A"] })).await;
+    assert_eq!(waves.last().map(|e| e["type"].clone()), Some(json!("wave_counts")), "{waves:?}");
+    assert!(!serde_json::to_string(&waves).unwrap().contains("B-2"), "{waves:?}");
+    let ready = call(&agent, "tickets.work.ready", json!({ "summary": true })).await;
+    assert_eq!(ready.last().map(|e| e["type"].clone()), Some(json!("page")), "{ready:?}");
 }
 
 /// FILTER-24: `keep` never answers a ticket outside the caller's reach — a

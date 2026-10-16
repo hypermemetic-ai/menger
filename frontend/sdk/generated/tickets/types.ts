@@ -1279,6 +1279,15 @@ export interface TicketsEventDanglingBlocker {
   id: TicketName;
 }
 
+/** ACCESS-17: how many blockers of the queried ticket the caller is not
+shown — out of its reach (or, to a restricted reader, naming no
+ticket); counted, never named or resolved. Yielded once, last, by
+`work blockers`, and only when there are any. */
+export interface TicketsEventHiddenBlockers {
+  type: 'hidden_blockers';
+  count: number;
+}
+
 /** FILTER-15: whether a filter admits one ticket (yielded by `member`,
 one per id asked, in the order asked): `id` as it was asked,
 `matched` whether the filter admits the ticket it names — `false`
@@ -1499,7 +1508,7 @@ export interface TicketsEventQueueRecord {
   record: QueueRecord;
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -1547,6 +1556,7 @@ export function isTicketsEventInput(e: TicketsEvent): e is TicketsEventInput { r
 export function isTicketsEventInputChanged(e: TicketsEvent): e is TicketsEventInputChanged { return e.type === 'input_changed'; }
 export function isTicketsEventBlocker(e: TicketsEvent): e is TicketsEventBlocker { return e.type === 'blocker'; }
 export function isTicketsEventDanglingBlocker(e: TicketsEvent): e is TicketsEventDanglingBlocker { return e.type === 'dangling_blocker'; }
+export function isTicketsEventHiddenBlockers(e: TicketsEvent): e is TicketsEventHiddenBlockers { return e.type === 'hidden_blockers'; }
 export function isTicketsEventMember(e: TicketsEvent): e is TicketsEventMember { return e.type === 'member'; }
 export function isTicketsEventNotFound(e: TicketsEvent): e is TicketsEventNotFound { return e.type === 'not_found'; }
 export function isTicketsEventAmbiguous(e: TicketsEvent): e is TicketsEventAmbiguous { return e.type === 'ambiguous'; }

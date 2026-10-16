@@ -1864,7 +1864,7 @@
     }
   },
   {
-    "call": "tickets.ready_set",
+    "call": "tickets.work.ready",
     "items": [
       {
         "next": null,
@@ -2331,7 +2331,7 @@
     }
   },
   {
-    "call": "tickets.waves",
+    "call": "tickets.work.waves",
     "items": [
       {
         "placement": {
@@ -2520,7 +2520,7 @@
     }
   },
   {
-    "call": "tickets.waves_under",
+    "call": "tickets.work.waves_under",
     "items": [
       {
         "placement": {
@@ -2640,7 +2640,7 @@
     }
   },
   {
-    "call": "tickets.waves_to",
+    "call": "tickets.work.waves_to",
     "items": [
       {
         "placement": {
@@ -2731,7 +2731,7 @@
     }
   },
   {
-    "call": "tickets.blockers",
+    "call": "tickets.work.blockers",
     "items": [
       {
         "ticket": {

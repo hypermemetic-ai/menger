@@ -151,9 +151,9 @@ async fn update_over_the_wire_one_write_its_events_in_order() {
     assert_eq!(seen[7]["changes"], json!([{"id": "UPD-3", "placement": {"type": "wave", "n": 2}}]));
 
     // `blockers` and `waves` read what it wrote.
-    let blockers = collect(call(&client, "tickets.blockers", json!({"id": "UPD-3"})).await).await;
+    let blockers = collect(call(&client, "tickets.work.blockers", json!({"id": "UPD-3"})).await).await;
     assert_eq!(blockers[0]["ticket"]["id"], "UPD-2", "{blockers:?}");
-    let waves = collect(call(&client, "tickets.waves", json!({"epics": ["UPD"]})).await).await;
+    let waves = collect(call(&client, "tickets.work.waves", json!({"epics": ["UPD"]})).await).await;
     let placed: Vec<(Value, Value)> =
         waves.iter().filter(|e| e["type"] == "placed").map(|e| (e["summary"]["id"].clone(), e["placement"].clone())).collect();
     assert!(placed.contains(&(json!("UPD-3"), json!({"type": "wave", "n": 2}))), "{waves:?}");

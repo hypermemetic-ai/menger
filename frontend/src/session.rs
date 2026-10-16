@@ -1327,7 +1327,7 @@ pub(crate) fn load_ticket(
             }
             Err(e) => last_error.set(Some(format!("get {id}: {}", describe(&e)))),
         }
-        match client.blockers_all(ticket).await {
+        match client.work().blockers_all(ticket).await {
             Ok(events) => {
                 for ev in events {
                     if let TicketsEvent::Blocker { ticket } = ev {

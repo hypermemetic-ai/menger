@@ -135,10 +135,6 @@
       const stream = this.rpc.call("tickets.await_reply", { id, input, since, timeout_minutes: timeoutMinutes });
       yield* extractData(stream);
     }
-    async* blockers(id) {
-      const stream = this.rpc.call("tickets.blockers", { id });
-      yield* extractData(stream);
-    }
     async* components() {
       const stream = this.rpc.call("tickets.components", {});
       yield* extractData(stream);
@@ -203,10 +199,6 @@
       const stream = this.rpc.call("tickets.queued", { snoozed });
       yield* extractData(stream);
     }
-    async* readySet(after, epic, filter, limit, summary, tz) {
-      const stream = this.rpc.call("tickets.ready_set", { after, epic, filter, limit, summary, tz });
-      yield* extractData(stream);
-    }
     async* requestChanges(body, id, source) {
       const stream = this.rpc.call("tickets.request_changes", { body, id, source });
       yield* extractData(stream);
@@ -267,18 +259,6 @@
       const stream = this.rpc.call("tickets.watch", { epic, filter, membership, tz });
       yield* extractData(stream);
     }
-    async* waves(epics, kinds) {
-      const stream = this.rpc.call("tickets.waves", { epics, kinds });
-      yield* extractData(stream);
-    }
-    async* wavesTo(id, kinds) {
-      const stream = this.rpc.call("tickets.waves_to", { id, kinds });
-      yield* extractData(stream);
-    }
-    async* wavesUnder(id, kinds) {
-      const stream = this.rpc.call("tickets.waves_under", { id, kinds });
-      yield* extractData(stream);
-    }
   }
   function createTicketsClient(rpc) {
     return new TicketsClientImpl(rpc);
@@ -319,9 +299,44 @@
     return new TicketsInputsClientImpl(rpc);
   }
 
+  // generated/tickets/work/client.ts
+  class TicketsWorkClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* blockers(id) {
+      const stream = this.rpc.call("tickets.work.blockers", { id });
+      yield* extractData(stream);
+    }
+    async* ready(after, epic, filter, limit, summary, tz) {
+      const stream = this.rpc.call("tickets.work.ready", { after, epic, filter, limit, summary, tz });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.work.schema", {});
+      return collectOne(stream);
+    }
+    async* waves(epics, kinds) {
+      const stream = this.rpc.call("tickets.work.waves", { epics, kinds });
+      yield* extractData(stream);
+    }
+    async* wavesTo(id, kinds) {
+      const stream = this.rpc.call("tickets.work.waves_to", { id, kinds });
+      yield* extractData(stream);
+    }
+    async* wavesUnder(id, kinds) {
+      const stream = this.rpc.call("tickets.work.waves_under", { id, kinds });
+      yield* extractData(stream);
+    }
+  }
+  function createTicketsWorkClient(rpc) {
+    return new TicketsWorkClientImpl(rpc);
+  }
+
   // bridge.ts
   var NAMESPACE = "tickets.";
-  var HOST_NAMES = { "inputs.list": "inputs" };
+  var HOST_NAMES = { "inputs.list": "inputs", "work.waves": "waves", "work.blockers": "blockers" };
   function metadata(method) {
     return { provenance: ["menger", "bridge", method], plexusHash: "", timestamp: Math.floor(Date.now() / 1000) };
   }
@@ -360,6 +375,8 @@
       schema: child.schema.bind(child)
     });
     Object.defineProperty(tickets, "inputs", { value: inputs });
+    const work = createTicketsWorkClient(rpc);
+    Object.assign(tickets, { work, waves: work.waves.bind(work), blockers: work.blockers.bind(work) });
     return tickets;
   }
   mengerTyped = {

@@ -989,6 +989,7 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
         match r {
             BlockerRef::Resolved(t) => assert_eq!(&t.id, b),
             BlockerRef::Dangling(d) => panic!("{}: {d} dangling", sample.id),
+            BlockerRef::Hidden => panic!("{}: a blocker hidden from the system", sample.id),
         }
     }
 

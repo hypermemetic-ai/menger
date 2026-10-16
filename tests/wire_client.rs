@@ -354,12 +354,12 @@ async fn the_wire_assertions_through_the_generated_client() {
         .expect("promote DG-1");
     let ready = rows(
         client
-            .ready_set_all(Some(p("DG")), None, None, None, None, None)
+            .work().ready_all(Some(p("DG")), None, None, None, None, None)
             .await
             .expect("ready_set"),
     );
     assert!(ready.is_empty(), "DG-1 must not be ready: {ready:?}");
-    match one(client.blockers_all(p("DG-1")).await.expect("blockers")) {
+    match one(client.work().blockers_all(p("DG-1")).await.expect("blockers")) {
         TicketsEvent::DanglingBlocker { id } => assert_eq!(id, "DG-99"),
         other => panic!("expected `dangling_blocker`, got {other:?}"),
     }
@@ -515,7 +515,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // Server and watch-only mirror agree on the ready set, computed two ways.
     let server_ready = ids(rows(
         client
-            .ready_set_all(Some(p("WIRE")), None, None, None, None, None)
+            .work().ready_all(Some(p("WIRE")), None, None, None, None, None)
             .await
             .expect("ready_set"),
     ));
@@ -630,7 +630,7 @@ async fn waves_decode_typed_through_the_generated_client() {
                 .expect("create"),
         );
     }
-    let events = client.waves_all(vec![p("ty")], None).await.expect("waves");
+    let events = client.work().waves_all(vec![p("ty")], None).await.expect("waves");
     let placed: Vec<(String, Placement, Vec<String>)> = events
         .iter()
         .filter_map(|e| match e {

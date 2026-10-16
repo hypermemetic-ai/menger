@@ -2154,6 +2154,14 @@ impl Tickets {
   caller (ACCESS-3 #12) — `app` for a person signed in through a provider,
   `api` for an agent's key and for every call with login off. Its grants and
   what it inherits are a child's, as above.
+- **`tickets work`** (ACCESS-17) is mounted: `ready` (was `tickets
+  ready_set`), `waves`, `waves_under`, `waves_to`, `blockers`, on the wire
+  as `tickets.work.<method>` (`synapse -P 4455 menger tickets work ready`;
+  the Rust client's `client.work()`); `blockers` ends with
+  `hidden_blockers { count }` when the caller is not shown some. Its
+  grants and what it inherits are a child's, as above. The frames' SDK
+  keeps `menger.tickets.waves` / `blockers` (and `menger.call('waves')`)
+  until ACCESS-20 moves every client.
 - The schema lists what the server injects (`auth`, `user`) with an
   `x-plexus-source`; synapse shows them as server-supplied, and the SDK's
   drift guard (`sdk_manifest.rs`, `scripts/sdk-codegen.sh`) drops them.
