@@ -85,15 +85,11 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   `tickets work ready|waves|waves_under|waves_to|blockers`, `tickets
   components list` — and this file is written for them (so are
   `members teams` and `--team`, ACCESS-22, and the ticket scopes of
-  ACCESS-21). **They apply from
-  the release that carries ACCESS-20 on.** Until that release is promoted,
-  prod (:4455, the tracker) runs the old names — `tickets inputs`,
-  `answer`, `clear_answer`, `close_input`, `reopen_input`, `link_commits`,
-  `unlink_commits`, `groups`, `extents`, `tree`, `counts`, `facets`,
-  `member`, `ready_set`, `waves`, `waves_under`, `waves_to`, `blockers`,
-  `components`, all directly under `tickets` — so a call against the
-  tracker uses those; `synapse -P 4455 menger tickets` lists what the
-  running server has. README "The frame" has the table.
+  ACCESS-21). Prod runs them since release
+  `20261016T170852Z-1a20db5` (promoted 2026-10-16); the old names —
+  `answer`, `close_input`, `link_commits`, `ready_set`, `groups`, `waves`,
+  … directly under `tickets` — are gone, and `synapse -P 4455 menger
+  tickets` lists what the running server has. README "The frame" has the table.
   **Read `../menger-skills/reaching/SKILL.md` before issuing synapse
   commands** — it is the house's invocation contract (where flags go, how to navigate
   to a method, how to discover its parameters from the CLI itself); what
