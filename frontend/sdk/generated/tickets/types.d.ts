@@ -42,6 +42,17 @@ export interface Answer {
 viewer's click, which the host says on its `answer`; `api`, everything
 else (synapse, an agent). The only "who" until CONTEXT adds identity. */
 export type AnswerSource = never;
+/** ARCHIVE-2: an archived ticket's mark — when it was archived, by whom
+(the principal, as a transition names its actor), why (the archive's
+`message`), and which write set it (the id of that write's first
+transition: every ticket one archive took shares it, so a restore
+`with_children` brings back exactly what went with its ticket). */
+export interface Archived {
+    atUnix: number;
+    by: string;
+    message?: string | null;
+    write: number;
+}
 /** ACCESS-48: a ticket or a shortcode as a call named it, echoed back —
 `not_found`'s and `ambiguous`'s `id`: what was asked, by any name
 [`TicketRef`] or [`ShortcodeRef`] takes (the rule [`Under`] reads). */
@@ -93,7 +104,8 @@ export declare function isAttrKindEnum(e: AttrKind): e is AttrKindEnum;
 /** Where a write comes from: app, api (default) or pipeline (synapse is api, merge pipeline) */
 export type CallerSource = "app" | "api" | "pipeline";
 /** ORG-3: a shortcode's letters — ASCII letters and digits, upper case (a
-code is read case-blind and kept upper case), 1 to [`CODE_MAX`].
+code is read case-blind and kept upper case), 1 to [`CODE_MAX`]. ORG-9:
+in hyphen-separated segments (`SYNAPSE-CC`) — [`is_code`]'s rule.
 
 Not an identity: two shortcodes of one code live in two namespaces. So
 it has no `Hash`, no `Ord` and no `Borrow<str>` — nothing can key a map
@@ -255,6 +267,10 @@ status or kind (SDLC-13: `set_kind`) is a change to its group, and
 export interface Group {
     /** ORG-3: the shortcode's full address, `org:ROOT/…/SC`. */
     address?: string;
+    /** ARCHIVE-2: the archived tickets in the row's subtree, which `total`,
+  `done` and `docs` leave out — so `done/total` reads its live work.
+  Omitted when none. */
+    archived?: number;
     /** SDLC-11: the docs in the row's subtree, which `total` leaves out. */
     docs: number;
     done: number;
@@ -356,6 +372,12 @@ export declare function isInputValueText(e: InputValue): e is InputValueText;
 /** MENGER-12: a label — ASCII letters, digits and `-`, 1 to 32, kept
 lower case (`Needs-You` is `needs-you`): [`crate::labels::normalize`]. */
 export type Label = string;
+/** ARCHIVE-2: a ticket an archive took that was still live work (not in
+category done) — the warning's row: its id and status. */
+export interface LiveTicket {
+    id: TicketId;
+    status: Status;
+}
 /** SEARCH-2: a stretch of a search hit's title or passage, in order — `hit`
 when it is a word the query matched, which a client marks; the stretches
 of one title or passage, joined, are its text. */
@@ -406,7 +428,7 @@ export interface PlacementChange {
     placement: Placement;
 }
 /** What one queue write did — a [`QueueRecord`]'s action. */
-export type QueueAction = "queued" | "raised" | "requeued" | "snoozed" | "unqueued" | "closed" | "changes_requested";
+export type QueueAction = "queued" | "raised" | "requeued" | "snoozed" | "unqueued" | "closed" | "changes_requested" | "archived";
 /** A ticket in the queue, as it stands. */
 export interface QueueEntry {
     /** When it was last queued (a requeue moves it; a snooze does not). */
@@ -499,6 +521,12 @@ export interface Ticket {
   (`hypermemetic:MENGER/THEME-3`) — what tells two `THEME-3`s apart,
   and what a link may name it by. */
     address?: string;
+    /** ARCHIVE-2: the archive's mark — when, by whom, why, and the write
+  that set it — or none: a live ticket. A mark apart from the status
+  (ARCHIVE-1): an archived ticket keeps its status, kind, place and
+  blockers, and is in no view unless the filter names `archived`.
+  Omitted on the wire for a live ticket. */
+    archived?: Archived | null;
     /** Ticket ids that must complete before this one starts. */
     blockedBy: TicketName[];
     /** Markdown body (Problem / Required behavior / Acceptance criteria …). */
@@ -610,6 +638,9 @@ the same keys in every row. */
 export interface TicketSummary {
     /** ORG-3: as on [`Ticket`]. */
     address?: string;
+    /** ARCHIVE-2: as on [`Ticket`] — on the row, so a chip to an archived
+  ticket is drawn struck through without a `get`. */
+    archived?: Archived | null;
     blockedBy: TicketName[];
     childCount: number;
     /** SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
@@ -651,6 +682,9 @@ export interface TicketSummary {
 /** Heartbeat. */
 export interface TicketsEventHealth {
     type: 'health';
+    /** ARCHIVE-2: the archived tickets the caller sees; omitted when none. */
+    archived: number;
+    /** The tickets the caller sees — ARCHIVE-2: the archive left out. */
     ticketCount: number;
     unixNow: number;
     version: string;
@@ -831,6 +865,37 @@ export interface TicketsEventUndeleted {
     type: 'undeleted';
     ids: TicketId[];
     tickets: Ticket[];
+}
+/** ARCHIVE-2: `archive`'s answer, and its write's event on `watch` —
+`ids` every ticket the write archived (the selection and each one's
+whole subtree, in the store's order; one already archived is not
+among them), `live` those of them that were not in category done
+(the warning: never a refusal), `unqueued` those it took out of the
+owner's queue, `mark` what each now carries. `dry_run`: what the
+write would do, nothing written (`mark.write` is then 0). After it on
+`watch`: the groups that moved, and a filter's `left`. */
+export interface TicketsEventArchived {
+    type: 'archived';
+    dryRun: boolean;
+    ids: TicketId[];
+    live: LiveTicket[];
+    mark: Archived;
+    unqueued: TicketId[];
+}
+/** ARCHIVE-2: `restore`'s answer, and its write's event on `watch` (and
+a create's or a move's under an archived parent, after its own) —
+`ids` every ticket brought back, in the store's order: those named,
+each one's archived ancestors (`ancestors`, ARCHIVE-1's chain), and
+with `with_children` the descendants archived in the same write as
+it. `still_archived`: the named tickets' descendants that stay in the
+archive. `by` who restored them; `dry_run` as `archived`'s. */
+export interface TicketsEventRestored {
+    type: 'restored';
+    ancestors: TicketId[];
+    by: string;
+    dryRun: boolean;
+    ids: TicketId[];
+    stillArchived: TicketId[];
 }
 /** ACT-6: `reshortcode`'s answer, and its write's event on `watch` —
 each moved ticket's old id and new one (`moves`, in the order they
@@ -1294,7 +1359,7 @@ export interface TicketsEventQueueRecord {
     type: 'queue_record';
     record: QueueRecord;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -1314,6 +1379,8 @@ export declare function isTicketsEventUpdated(e: TicketsEvent): e is TicketsEven
 export declare function isTicketsEventUpdatedMany(e: TicketsEvent): e is TicketsEventUpdatedMany;
 export declare function isTicketsEventDeleted(e: TicketsEvent): e is TicketsEventDeleted;
 export declare function isTicketsEventUndeleted(e: TicketsEvent): e is TicketsEventUndeleted;
+export declare function isTicketsEventArchived(e: TicketsEvent): e is TicketsEventArchived;
+export declare function isTicketsEventRestored(e: TicketsEvent): e is TicketsEventRestored;
 export declare function isTicketsEventReshortcoded(e: TicketsEvent): e is TicketsEventReshortcoded;
 export declare function isTicketsEventChildrenChanged(e: TicketsEvent): e is TicketsEventChildrenChanged;
 export declare function isTicketsEventParentChanged(e: TicketsEvent): e is TicketsEventParentChanged;
@@ -1411,7 +1478,7 @@ export interface Transition {
 }
 /** MENGER-13: which of a ticket's fields a transition moved — its status, or
 its kind (SDLC-13's `set_kind`). */
-export type TransitionField = "status" | "kind";
+export type TransitionField = never;
 /** MENGER-13: where a transition came from — `app` (a viewer in the app,
 which says so), `api` (synapse, an agent, a script: the default),
 `pipeline` (the merge, which says so), `cascade` (the store itself: a

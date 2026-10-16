@@ -212,6 +212,7 @@ fn whole(row: Row, body: String) -> Ticket {
         path,
         placement,
         labels,
+        archived,
         created_unix,
         updated_unix,
     } = row;
@@ -236,6 +237,7 @@ fn whole(row: Row, body: String) -> Ticket {
         path,
         placement,
         labels,
+        archived,
         body,
         created_unix,
         updated_unix,
@@ -847,6 +849,14 @@ pub enum Change {
     /// its new one — `tickets` as the write left them — first of its write
     /// ([`reshortcode`]).
     Reshortcoded { moves: Vec<crate::types::ShortcodeMove>, tickets: Vec<Ticket> },
+    /// ARCHIVE-2: an `archive` archived `ids` (each a transition before it),
+    /// `live` those not done, `unqueued` those it took out of the queue,
+    /// `mark` what each carries now ([`archive`]).
+    Archived { ids: Vec<TicketId>, live: Vec<crate::types::LiveTicket>, unqueued: Vec<TicketId>, mark: crate::types::Archived },
+    /// ARCHIVE-2: a `restore` (or a create's or move's chain) brought `ids`
+    /// back — `ancestors` the chain among them, `still_archived` what it
+    /// left in the archive below them.
+    Restored { ids: Vec<TicketId>, ancestors: Vec<TicketId>, still_archived: Vec<TicketId>, by: String },
     /// FILTER-4: every ticket whose cell the write moved — a birth, a status
     /// change and the blocker crossings it fans out to, a first commit or a
     /// last, SDLC-13: a kind changed — worked out once per write before it
@@ -908,7 +918,8 @@ impl Change {
             // ACT-5: its ids in any shortcode — see `in_epic`.
             Self::Deleted { .. } | Self::Undeleted { .. } => None,
             // ACT-6: its tickets in two shortcodes or more — see `in_epic`.
-            Self::Reshortcoded { .. } => None,
+            // ARCHIVE-2: its ids in any shortcode — see `in_epic`.
+            Self::Reshortcoded { .. } | Self::Archived { .. } | Self::Restored { .. } => None,
         }
     }
 
@@ -929,6 +940,7 @@ impl Change {
             Self::UpdatedMany { ids, changed } => update_many::in_epic(ids, changed, epic),
             Self::Deleted { .. } | Self::Undeleted { .. } => delete::in_epic(self, epic),
             Self::Reshortcoded { moves, tickets } => reshortcode::in_epic(moves, tickets, epic),
+            Self::Archived { .. } | Self::Restored { .. } => archive::in_epic(self, epic),
             // FILTER-4: each move filtered where it is turned into events.
             Self::CellsMoved { .. } | Self::UnderMoved { .. } => Some(self),
             other => (other.shortcode() == Some(epic)).then_some(other),
@@ -3070,6 +3082,8 @@ impl Store {
         // MENGER-12: a database written before MENGER-12 gains `labels` here,
         // once, durably — every ticket with none. No row is rewritten.
         db::migrate_add_labels(&mut conn)?;
+        // ARCHIVE-2: and `archived` — every ticket live. No row is rewritten.
+        db::migrate_add_archived(&mut conn)?;
         // COMP-3: a database written before COMP-3 — or a new one — gains the
         // `components` table here, once, durably, with the registry built
         // from every body; after it, every open reads the table.
@@ -3641,6 +3655,8 @@ impl Store {
         let after = after.map(str::to_ascii_uppercase);
         let scoped = Seen::of(who).and_then(|seen| {
             let cache = self.tickets.read().expect("store lock poisoned");
+            // ARCHIVE-2: a view — the archive left out.
+            let seen = seen.viewing(&cache);
             seen.sees(&cache).cursor(after.as_deref())?;
             Ok((seen.select(&cache, select.clone())?, seen))
         });
@@ -5370,6 +5386,11 @@ pub use update::{Update, Updated};
 mod update_many;
 pub use update_many::{refused as refused_many, Selection, UpdatedMany, UPDATE_MANY_MAX};
 /// ACT-5: `delete` and `undelete` — tombstones, the purge, the rebuild.
+// ARCHIVE-2: the archive — a mark apart from status.
+mod archive;
+pub use archive::{ArchiveAnswer, RestoreAnswer};
+#[cfg(test)]
+mod tests_archive;
 mod delete;
 pub use delete::{Children, Deleted, Deletion, Undeleted, KEEP_BODY_FOR, PURGE_EVERY};
 

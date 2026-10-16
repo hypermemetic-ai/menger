@@ -506,6 +506,7 @@ fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, statu
         hidden_blocked_by: 0,
         hidden_unlocks: 0,
         parent_hidden: false,
+        archived: None,
         labels: Vec::new(),
         id: menger_tickets_api::TicketId::new(id),
         // ORG-3: `epic` is the shortcode's identity (THEME, or a namesake's
@@ -4339,6 +4340,7 @@ mod tests {
             total,
             done,
             docs,
+            archived: 0,
             root: root.map(|r| menger_tickets_api::TicketId::new(r.0)),
             root_row: root.map(|(_, title, status, kind)| RootRow { title: title.into(), status, kind }),
             host: host.map(menger_tickets_api::TicketId::new),
@@ -4367,6 +4369,7 @@ mod tests {
             hidden_blocked_by: 0,
             hidden_unlocks: 0,
             parent_hidden: false,
+            archived: None,
             labels: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
@@ -4574,7 +4577,7 @@ mod tests {
     /// it holds; a row of docs alone counts its docs.
     #[test]
     fn a_rollup_shows_the_works_done_over_total_and_a_doc_collection_its_docs() {
-        let g = |total, done, docs| Group { epic: menger_tickets_api::Code::stored("G"), shortcode: menger_tickets_api::ShortcodeId::new("G"), address: String::new(), total, done, docs, root: None, root_row: None, host: None };
+        let g = |total, done, docs| Group { epic: menger_tickets_api::Code::stored("G"), shortcode: menger_tickets_api::ShortcodeId::new("G"), address: String::new(), total, done, docs, archived: 0, root: None, root_row: None, host: None };
         assert_eq!(rollup_label(&g(5, 2, 0)), "2/5");
         assert_eq!(rollup_label(&g(4, 4, 3)), "4/4", "docs do not hold a row open");
         assert_eq!(rollup_label(&g(0, 0, 1)), "1 doc");

@@ -163,6 +163,14 @@ pub(super) fn update_many_stream(
                 return;
             }
         };
+        // ARCHIVE-2: moved under an archived parent, its chain comes back after.
+        let chain = match chain_of(&store, &caller, asked.parent.as_deref()) {
+            Ok(c) => c,
+            Err(message) => {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+        };
         let caller = Arc::new(caller);
         // ACCESS-11: for each ticket selected, its editor's permit and the
         // proofs for the parent and blockers the update names.
@@ -172,7 +180,15 @@ pub(super) fn update_many_stream(
             on.into_iter().map(|p| updating(&at, &gate, p, &reach_of)).collect()
         };
         match store.update_many_by(select, asked, act, may).await {
-            Ok(UpdatedMany { tickets, ids, unchanged, changed }) => yield TicketsEvent::UpdatedMany { ids, changed, tickets, unchanged },
+            Ok(UpdatedMany { tickets, ids, unchanged, changed }) => {
+                let moved = ids.len();
+                yield TicketsEvent::UpdatedMany { ids, changed, tickets, unchanged };
+                if moved > 0 {
+                    if let Some(ev) = restore_chain(&store, &caller, chain, format!("{moved} ticket(s) were moved under it")).await {
+                        yield ev;
+                    }
+                }
+            }
             Err(e) => yield said(&store, &caller, e),
         }
     }

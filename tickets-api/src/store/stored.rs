@@ -87,12 +87,23 @@ use crate::address::{ShortcodeId, TicketId, TicketName};
 /// form 10 gains form 11 in place. One way: an older build reads a form-11
 /// file as its own and never looks at the tables; it would file a namesake's
 /// tickets under its id as if it were a code.
-const FORM: i64 = 11;
+///
+/// ARCHIVE-2 is form 12: a cell says whether its tickets are `archived`, and
+/// each roll-up tally counts the archived apart (`base_archived`,
+/// `own_archived`, `archived`; a cross tree's `archived`) — the columns,
+/// every one 0 by default. A file in form 10 or 11 holds no archived ticket
+/// (the tickets' `archived` column is new with this form), so every cell
+/// and tally it stores is form 12's as it is: it gains the columns in
+/// place, once, on its first open ([`upgrade`]). One way: an older build
+/// reads a form-12 file as its own; once anything is archived, it would
+/// read an archived ticket's cell as its live twin's.
+const FORM: i64 = 12;
 
 /// COMMENT-2, IDENTITY-21, AUTH-7: the forms [`upgrade`] takes to [`FORM`]
 /// in place. MENGER-12: none — form 10 moves the cells, so every older form
 /// is built again. ORG-3: form 10, which gains the shortcodes' tables.
-const UPGRADES_FROM: [i64; 1] = [10];
+/// ARCHIVE-2: and form 11, which gains the archive's columns (so does 10).
+const UPGRADES_FROM: [i64; 2] = [10, 11];
 
 /// IDENTITY-21: what form 8 adds beside the tables — a comment's signer.
 fn add_comment_principal(conn: &Connection) -> rusqlite::Result<()> {
@@ -121,6 +132,26 @@ const MENGER_COLUMN: (&str, &str) = ("cells", "menger");
 /// type and default)`.
 const ASKING_COLUMNS: [(&str, &str, &str); 2] =
     [("cells", "asking", "INTEGER NOT NULL DEFAULT 0"), ("cells", "labels", "TEXT NOT NULL DEFAULT '[]'")];
+
+/// ARCHIVE-2: the columns form 12 adds, `(table, column)` — each `INTEGER
+/// NOT NULL DEFAULT 0`.
+const ARCHIVE_COLUMNS: [(&str, &str); 5] = [
+    ("cells", "archived"),
+    ("rollup_groups", "base_archived"),
+    ("rollup_groups", "own_archived"),
+    ("rollup_groups", "archived"),
+    ("rollup_cross", "archived"),
+];
+
+/// ARCHIVE-2: [`ARCHIVE_COLUMNS`] added where they are missing.
+fn add_archive_columns(conn: &Connection) -> rusqlite::Result<()> {
+    for (table, column) in ARCHIVE_COLUMNS {
+        if !db::has_column(conn, table, column)? {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"), [])?;
+        }
+    }
+    Ok(())
+}
 
 /// The tables the derived state is stored in, and the index children are
 /// read from — each keyed the way the read that will answer from it asks
@@ -216,14 +247,18 @@ const SCHEMA: &str = "
             done       INTEGER NOT NULL,
             base_docs  INTEGER NOT NULL DEFAULT 0,
             own_docs   INTEGER NOT NULL DEFAULT 0,
-            docs       INTEGER NOT NULL DEFAULT 0
+            docs       INTEGER NOT NULL DEFAULT 0,
+            base_archived INTEGER NOT NULL DEFAULT 0,
+            own_archived  INTEGER NOT NULL DEFAULT 0,
+            archived      INTEGER NOT NULL DEFAULT 0
         ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS rollup_cross (
             id    TEXT PRIMARY KEY,
             total INTEGER NOT NULL,
             done  INTEGER NOT NULL,
             home  TEXT NOT NULL,
-            docs  INTEGER NOT NULL DEFAULT 0
+            docs  INTEGER NOT NULL DEFAULT 0,
+            archived INTEGER NOT NULL DEFAULT 0
         ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS rollup_marks (
             mark TEXT NOT NULL CHECK (mark IN ('cycle', 'dangling')),
@@ -249,7 +284,8 @@ const SCHEMA: &str = "
             commits  INTEGER NOT NULL,
             menger   INTEGER NOT NULL DEFAULT 0,
             asking   INTEGER NOT NULL DEFAULT 0,
-            labels   TEXT NOT NULL DEFAULT '[]'
+            labels   TEXT NOT NULL DEFAULT '[]',
+            archived INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS cell_bits (
             epic TEXT NOT NULL,
@@ -332,22 +368,23 @@ pub(super) type RunRow = (u32, u32, u64);
 pub(super) type RefKey = (TicketName, OrderKey);
 
 /// A shortcode's roll-up as stored: every field the roll-ups keep for it.
-/// Each tally is `(total, done, docs)` (SDLC-11: `docs` since form 3).
+/// Each tally is `(total, done, docs, archived)` (SDLC-11: `docs` since
+/// form 3; ARCHIVE-2: `archived` since form 12).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct GroupRow {
     pub(super) root: Option<String>,
     pub(super) host: Option<String>,
     pub(super) up: Option<ShortcodeId>,
-    pub(super) base: (u64, u64, u64),
+    pub(super) base: (u64, u64, u64, u64),
     pub(super) base_tops: u64,
-    pub(super) own: (u64, u64, u64),
-    pub(super) roll: (u64, u64, u64),
+    pub(super) own: (u64, u64, u64, u64),
+    pub(super) roll: (u64, u64, u64, u64),
 }
 
 /// A cross top's tree as stored: its tally and the group it is drawn in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CrossRow {
-    pub(super) tally: (u64, u64, u64),
+    pub(super) tally: (u64, u64, u64, u64),
     pub(super) home: ShortcodeId,
 }
 
@@ -613,8 +650,8 @@ fn write_tree(conn: &Connection, t: &tree::Stored) -> rusqlite::Result<()> {
 /// FILTER-4: one cell of the table.
 fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO cells (id, state, kind, severity, blocked, commits, menger, asking, labels)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO cells (id, state, kind, severity, blocked, commits, menger, asking, labels, archived)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )?
     .execute(params![
         id,
@@ -626,6 +663,7 @@ fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
         key.menger(),
         key.asking(),
         serde_json::to_string(&*key.labels().labels()).expect("serialize labels"),
+        key.archived(),
     ])?;
     Ok(())
 }
@@ -728,30 +766,33 @@ fn put_group(conn: &Connection, epic: &ShortcodeId, g: &GroupRow) -> rusqlite::R
     conn.prepare_cached(
         "INSERT INTO rollup_groups
                  (epic, root, host, up, base_total, base_done, base_tops,
-                  own_total, own_done, total, done, base_docs, own_docs, docs)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                  own_total, own_done, total, done, base_docs, own_docs, docs,
+                  base_archived, own_archived, archived)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT (epic) DO UPDATE SET
                  root = excluded.root, host = excluded.host, up = excluded.up,
                  base_total = excluded.base_total, base_done = excluded.base_done,
                  base_tops = excluded.base_tops, own_total = excluded.own_total,
                  own_done = excluded.own_done, total = excluded.total, done = excluded.done,
-                 base_docs = excluded.base_docs, own_docs = excluded.own_docs, docs = excluded.docs",
+                 base_docs = excluded.base_docs, own_docs = excluded.own_docs, docs = excluded.docs,
+                 base_archived = excluded.base_archived, own_archived = excluded.own_archived,
+                 archived = excluded.archived",
     )?
     .execute(params![
         epic, g.root, g.host, g.up, g.base.0, g.base.1, g.base_tops, g.own.0, g.own.1, g.roll.0, g.roll.1,
-        g.base.2, g.own.2, g.roll.2,
+        g.base.2, g.own.2, g.roll.2, g.base.3, g.own.3, g.roll.3,
     ])?;
     Ok(())
 }
 
 fn put_cross(conn: &Connection, id: &str, c: &CrossRow) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO rollup_cross (id, total, done, home, docs) VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO rollup_cross (id, total, done, home, docs, archived) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (id) DO UPDATE SET
                  total = excluded.total, done = excluded.done, home = excluded.home,
-                 docs = excluded.docs",
+                 docs = excluded.docs, archived = excluded.archived",
     )?
-    .execute(params![id, c.tally.0, c.tally.1, c.home, c.tally.2])?;
+    .execute(params![id, c.tally.0, c.tally.1, c.home, c.tally.2, c.tally.3])?;
     Ok(())
 }
 
@@ -845,6 +886,8 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
             tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
         }
     }
+    // ARCHIVE-2: and from form 11 or older the archive's columns.
+    add_archive_columns(&tx)?;
     create_children_index(&tx)?;
     drop_ready_index(&tx)?;
     // COMMENT-2: form 7's comments table — empty for a file that had none.
@@ -918,10 +961,12 @@ pub(super) fn upgrade(conn: &mut Connection, form: i64) -> anyhow::Result<bool> 
     tx.execute_batch(super::roles::TABLE)?;
     // ORG-3: form 11's tables, filled by the open's settle.
     tx.execute_batch(super::shortcodes::TABLES)?;
+    // ARCHIVE-2: form 12's columns, every one 0 — nothing was archived.
+    add_archive_columns(&tx)?;
     mark_stale(&tx, false)?;
     tx.commit()?;
     tracing::warn!(
-        "ORG-3: the file gained stored form {FORM} — the shortcodes, orgs and pins tables — in {:.1} ms, durably; \
+        "ORG-3, ARCHIVE-2: the file gained stored form {FORM} — the shortcodes, orgs and pins tables, the archive's columns — in {:.1} ms, durably; \
          it was in form {form}, whose derived state is form {FORM}'s (every shortcode is named by its id already), \
          so nothing was built again; every later open reads it",
         started.elapsed().as_secs_f64() * 1000.0
@@ -1142,7 +1187,7 @@ fn read_tables(conn: &Connection) -> rusqlite::Result<Form> {
     }
     let mut stmt = conn.prepare(
         "SELECT epic, root, host, up, base_total, base_done, base_tops, own_total, own_done, total, done,
-                base_docs, own_docs, docs
+                base_docs, own_docs, docs, base_archived, own_archived, archived
              FROM rollup_groups",
     )?;
     let mut rows = stmt.query([])?;
@@ -1153,20 +1198,20 @@ fn read_tables(conn: &Connection) -> rusqlite::Result<Form> {
                 root: r.get(1)?,
                 host: r.get(2)?,
                 up: r.get(3)?,
-                base: (r.get(4)?, r.get(5)?, r.get(11)?),
+                base: (r.get(4)?, r.get(5)?, r.get(11)?, r.get(14)?),
                 base_tops: r.get(6)?,
-                own: (r.get(7)?, r.get(8)?, r.get(12)?),
-                roll: (r.get(9)?, r.get(10)?, r.get(13)?),
+                own: (r.get(7)?, r.get(8)?, r.get(12)?, r.get(15)?),
+                roll: (r.get(9)?, r.get(10)?, r.get(13)?, r.get(16)?),
             },
         );
     }
-    let mut stmt = conn.prepare("SELECT id, total, done, home, docs FROM rollup_cross")?;
+    let mut stmt = conn.prepare("SELECT id, total, done, home, docs, archived FROM rollup_cross")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         form.cross.insert(
             r.get(0)?,
             CrossRow {
-                tally: (r.get(1)?, r.get(2)?, r.get(4)?),
+                tally: (r.get(1)?, r.get(2)?, r.get(4)?, r.get(5)?),
                 home: r.get(3)?,
             },
         );
@@ -1200,8 +1245,11 @@ fn parsed<T: std::str::FromStr<Err = String>>(column: usize, stored: &str) -> ru
 /// FILTER-4: the cell table, by id.
 fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
     let mut out = BTreeMap::new();
-    let mut stmt =
-        conn.prepare("SELECT id, state, kind, severity, blocked, commits, menger, asking, labels FROM cells ORDER BY id")?;
+    // ARCHIVE-2: `archived` as 0 in a file from before form 12 (`--verify-derived` migrates nothing).
+    let archived = if db::has_column(conn, "cells", "archived")? { "archived" } else { "0" };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, state, kind, severity, blocked, commits, menger, asking, labels, {archived} FROM cells ORDER BY id"
+    ))?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let severity = match r.get_ref(3)?.as_str_or_null()? {
@@ -1221,7 +1269,7 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
             rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, e.to_string().into())
         })?;
         let labels: Vec<crate::vocab::Label> = labels.into_iter().map(crate::vocab::Label::stored).collect();
-        let key = key.with(r.get(7)?, cells::LabelSet::of(&labels));
+        let key = key.with(r.get(7)?, cells::LabelSet::of(&labels)).archiving(r.get(9)?);
         out.insert(r.get(0)?, key);
     }
     Ok(out)
@@ -1438,7 +1486,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         State::Older(form) if UPGRADES_FROM.contains(&form) => {
             return Ok(Verdict::NotStored(format!(
                 "the derived state is stored in form {form}; this build reads {FORM} (the next open \
-                 adds the shortcodes, orgs and pins tables, and builds nothing again)"
+                 adds the shortcodes, orgs and pins tables and the archive's columns, and builds nothing again)"
             )))
         }
         State::Older(form) => {

@@ -1321,6 +1321,7 @@ pub(super) fn nav(store: &Store) -> Vec<Group> {
             total: r.total,
             done: r.done,
             docs: r.docs,
+            archived: 0,
             // AGS-23: the root's own row, as the rows have it — so a write
             // that changes it is a group that moved, here as on the wire.
             root_row: r.root.as_ref().and_then(|id| all.iter().find(|t| t.id == *id)).map(|t| RootRow {
@@ -1388,6 +1389,7 @@ fn group(epic: &str, total: u64, done: u64, root: &str, host: Option<&str>) -> G
         total,
         done,
         docs: 0,
+        archived: 0,
         root: Some(root.into()),
         root_row: None,
         host: host.map(Into::into),
@@ -1642,6 +1644,7 @@ pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)])
                 hidden_blocked_by: 0,
                 hidden_unlocks: 0,
                 parent_hidden: false,
+                archived: None,
                 labels: Vec::new(),
                 id: (*id).into(),
                 epic: epic.into(),
@@ -2022,6 +2025,7 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
                 hidden_blocked_by: 0,
                 hidden_unlocks: 0,
                 parent_hidden: false,
+                archived: None,
                 labels: Vec::new(),
                 id: (*id).into(),
                 epic: epic.into(),

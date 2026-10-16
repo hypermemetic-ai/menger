@@ -95,12 +95,27 @@ pub(super) fn reshortcode_stream(
         };
         // ORG-4: the ids, `to` and `parent` read in the caller's organizations.
         ask.orgs = caller.orgs();
+        // ARCHIVE-2: moved under an archived parent (or root), its chain
+        // comes back after.
+        let chain = match chain_under(&store, &caller, &ask.to, ask.parent.as_deref()) {
+            Ok(c) => c,
+            Err(message) => {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+        };
         let caller = Arc::new(caller);
         let (gate, at) = (Arc::clone(&caller), store.clone());
         // ACCESS-11: an editor's permit for every ticket the move names.
         let may = move |ids: &[String]| permits::<crate::access::Editor>(&at, &gate, ids);
         match store.reshortcode_by(ask, act, may).await {
-            Ok(Reshortcoded { moves, tickets }) => yield TicketsEvent::Reshortcoded { moves, tickets },
+            Ok(Reshortcoded { moves, tickets }) => {
+                let n = moves.len();
+                yield TicketsEvent::Reshortcoded { moves, tickets };
+                if let Some(ev) = restore_chain(&store, &caller, chain, format!("{n} ticket(s) were moved under it")).await {
+                    yield ev;
+                }
+            }
             Err(e) => yield said(&store, &caller, e),
         }
     }

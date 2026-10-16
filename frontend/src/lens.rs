@@ -368,7 +368,8 @@ pub(crate) fn token_of(f: &Field) -> Option<(Cat, Option<String>)> {
         // FILTER-27: a time clause is a pill of its own (When's), never a
         // category's value.
         // FILTER-36: a nested group and a saved name are drawn as their text.
-        Field::Category(_) | Field::Under(_) | Field::Text(_) | Field::History(_) | Field::Group(_) | Field::Saved(_) => {
+        // ARCHIVE-2: `archived` is a pill of its own too (ARCHIVE-3 draws it).
+        Field::Category(_) | Field::Under(_) | Field::Text(_) | Field::History(_) | Field::Group(_) | Field::Saved(_) | Field::Archived => {
             return None
         }
     })
@@ -1918,6 +1919,7 @@ mod tests {
         let ticket = |id: &str, kind: menger_tickets_api::Kind, path: Option<&str>| menger_tickets_api::filter::Facts {
             asking: false,
             labels: Vec::new(),
+            archived: false,
             id: id.into(),
             epic: "PLEXUS".into(),
             title: String::new(),

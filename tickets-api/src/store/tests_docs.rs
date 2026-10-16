@@ -77,6 +77,7 @@ async fn a_doc_is_born_in_doc_and_may_root_a_shortcode() {
             total: 0,
             done: 0,
             docs: 1,
+            archived: 0,
             root: Some("MAN-1".into()),
             // AGS-23: the root's row, as the nav draws it — its `Doc` chip.
             root_row: Some(RootRow { title: "a doc in MAN".into(), status: Status::Doc, kind: Kind::Doc }),
@@ -283,7 +284,7 @@ async fn roll_ups_ignore_docs_and_count_them_apart() {
     store.create(SYS, work("P", Some("P-4"))).await.unwrap(); // P-6, work under a doc
     assert_eq!(
         group(&store, "P"),
-        Group { epic: "P".into(), shortcode: "P".into(), address: "hypermemetic:P".into(), total: 4, done: 0, docs: 2, root: Some("P-1".into()), root_row: Some(scope_row(Status::Pending)), host: None }
+        Group { epic: "P".into(), shortcode: "P".into(), address: "hypermemetic:P".into(), total: 4, done: 0, docs: 2, archived: 0, root: Some("P-1".into()), root_row: Some(scope_row(Status::Pending)), host: None }
     );
     assert_eq!(store.groups(SYS), tests::nav(&store));
 
@@ -304,7 +305,7 @@ async fn roll_ups_ignore_docs_and_count_them_apart() {
     store.create(SYS, doc("P", Some("P-6"))).await.unwrap(); // P-7
     assert_eq!(
         group_changes(&mut rx),
-        vec![Group { epic: "P".into(), shortcode: "P".into(), address: "hypermemetic:P".into(), total: 4, done: 4, docs: 3, root: Some("P-1".into()), root_row: Some(scope_row(Status::Complete)), host: None }],
+        vec![Group { epic: "P".into(), shortcode: "P".into(), address: "hypermemetic:P".into(), total: 4, done: 4, docs: 3, archived: 0, root: Some("P-1".into()), root_row: Some(scope_row(Status::Complete)), host: None }],
         "a doc's birth moves docs, and nothing else"
     );
     let cache = store.tickets.read().unwrap();
@@ -408,7 +409,7 @@ async fn a_file_with_docs_verifies_and_reopens_as_it_was() {
     }
     let form = stored::read(&Connection::open(&path).unwrap()).unwrap();
     assert_eq!(form.statuses.get(&(ShortcodeId::from("MAN".to_string()), "Doc")), Some(&2));
-    assert_eq!(form.groups[&ShortcodeId::from("LONE")].roll, (0, 0, 1));
+    assert_eq!(form.groups[&ShortcodeId::from("LONE")].roll, (0, 0, 1, 0));
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.groups(SYS), groups, "the reopen reads what was stored");

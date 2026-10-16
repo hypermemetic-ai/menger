@@ -508,6 +508,8 @@ impl Store {
             .filter(|e| snoozed || !e.snoozed_at(now))
             .filter(|e| sees.id(&e.ticket))
             .filter_map(|e| Some((e.clone(), cache.get(&e.ticket)?.clone(), since(&e.ticket))))
+            // ARCHIVE-2: an archived ticket asks nothing — in no tray.
+            .filter(|(_, t, _)| t.archived.is_none())
             .collect();
         out.iter_mut().for_each(|(_, t, _)| sees.row(t));
         drop(sees);

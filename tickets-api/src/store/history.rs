@@ -31,7 +31,9 @@ use crate::address::ShortcodeId;
 use super::{Cache, OrderKey};
 use super::times::{self, Times};
 use crate::filter::{Event, History, Moment, When, Who, Window};
-use crate::types::{Kind, Status, TicketSummary, Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, SYSTEM_ACTOR};
+use crate::types::{
+    Kind, Status, TicketSummary, Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, ARCHIVE_ARCHIVED, ARCHIVE_LIVE, SYSTEM_ACTOR,
+};
 use roaring::RoaringBitmap;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeMap, HashMap};
@@ -128,6 +130,24 @@ fn kind_ix(k: Kind) -> u8 {
     Kind::ALL.iter().position(|x| *x == k).expect("a kind") as u8
 }
 
+/// ARCHIVE-2: an archive transition's end as a mark holds it — 0 live, 1
+/// archived — and back.
+fn archive_ix(s: &str) -> Option<u8> {
+    match s {
+        ARCHIVE_LIVE => Some(0),
+        ARCHIVE_ARCHIVED => Some(1),
+        _ => None,
+    }
+}
+
+fn archive_spell(i: u8) -> &'static str {
+    if i == 1 {
+        ARCHIVE_ARCHIVED
+    } else {
+        ARCHIVE_LIVE
+    }
+}
+
 /// One transition as the cache keeps it — compact: where its ticket sits,
 /// when, who (interned), what it moved, and what caused it. The strings that
 /// are not compact live beside the marks ([`Log`]).
@@ -182,6 +202,9 @@ pub(crate) struct Log {
     left: Vec<Vec<u32>>,
     /// Per actor: its marks, by `(at, id)`.
     by_actor: HashMap<u32, Vec<u32>>,
+    /// ARCHIVE-2: the archive marks, by `(at, id)` — `[0]` the restores
+    /// (into live), `[1]` the archives.
+    archive: [Vec<u32>; 2],
     /// When the log began — `None` for a log nobody began (a test's).
     began: Option<i64>,
     /// FILTER-27: each ticket's birth and status-since, and their indexes
@@ -278,6 +301,7 @@ impl Log {
                 t.from.as_deref().and_then(|s| s.parse::<Kind>().ok()).map(kind_ix),
                 t.to.parse::<Kind>().map(kind_ix).unwrap_or(0),
             ),
+            TransitionField::Archive => (t.from.as_deref().and_then(archive_ix), archive_ix(&t.to).unwrap_or(0)),
         };
         let mark = Mark {
             id: t.id,
@@ -311,6 +335,9 @@ impl Log {
             if let Some(f) = from {
                 insert_sorted(&mut self.left[f as usize], &self.marks, pos);
             }
+        }
+        if t.field == TransitionField::Archive {
+            insert_sorted(&mut self.archive[usize::from(to == 1)], &self.marks, pos);
         }
     }
 
@@ -387,6 +414,7 @@ impl Log {
         let spell = |i: u8| match m.field {
             TransitionField::Status => Status::ALL[i as usize].as_str().to_string(),
             TransitionField::Kind => Kind::ALL[i as usize].as_str().to_string(),
+            TransitionField::Archive => archive_spell(i).to_string(),
         };
         Transition {
             id: m.id,
@@ -407,6 +435,11 @@ impl Log {
     /// Where the mark with id `id` is.
     pub(super) fn pos_of(&self, id: u64) -> Option<u32> {
         self.marks.binary_search_by_key(&id, |m| m.id).ok().map(|p| p as u32)
+    }
+
+    /// ARCHIVE-2: [`Log::latest`] by the log's own index of the shortcode.
+    fn latest_at(&self, epic: u32, seq: u32, field: TransitionField) -> Option<u32> {
+        self.tickets.get(&(epic, seq))?.iter().rev().copied().find(|p| self.mark(*p).field == field)
     }
 
     /// The latest mark of `(epic, seq)` that moved `field`.
@@ -455,6 +488,9 @@ impl Log {
                 Some(a) => (self.by_actor.get(&a).map_or(&none[..], Vec::as_slice), false),
                 None => (&self.by_time, false),
             },
+            // ARCHIVE-2: the archive's own index, each way.
+            Event::Archived => (&self.archive[1], actor.is_some()),
+            Event::Restored => (&self.archive[0], actor.is_some()),
             // Answered from the times, above. DEPLOY-11: `deployed` from the
             // deployments' cells ([`Cache::holds`]), never here.
             Event::Created | Event::Touched | Event::Held(_) | Event::Deployed(_) | Event::Queued(_) => return out,
@@ -463,6 +499,11 @@ impl Log {
         for &p in range(list, &self.marks, lo, hi) {
             let m = self.mark(p);
             if test_actor && Some(m.actor) != actor {
+                continue;
+            }
+            // ARCHIVE-2: `archived …` asks of the archive the ticket is in —
+            // its latest archive mark, still standing.
+            if pred.event == Event::Archived && self.latest_at(m.epic, m.seq, TransitionField::Archive) != Some(p) {
                 continue;
             }
             by_epic.entry(m.epic).or_default().insert(m.seq);
@@ -496,6 +537,8 @@ impl Log {
                 Event::Entered(s) => self.entered.get(status_ix(*s) as usize).unwrap_or(&none),
                 Event::Left(s) => self.left.get(status_ix(*s) as usize).unwrap_or(&none),
                 Event::Changed => &self.by_time,
+                Event::Archived => &self.archive[1],
+                Event::Restored => &self.archive[0],
             };
             range(list, &self.marks, Some(from), None).first().map(|p| self.mark(*p).at)
         };
@@ -785,6 +828,7 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
                 t.to.parse::<Status>().is_ok() && t.from.as_deref().is_none_or(|f| f.parse::<Status>().is_ok())
             }
             TransitionField::Kind => t.to.parse::<Kind>().is_ok() && t.from.as_deref().is_none_or(|f| f.parse::<Kind>().is_ok()),
+            TransitionField::Archive => archive_ix(&t.to).is_some() && t.from.as_deref().is_none_or(|f| archive_ix(f).is_some()),
         };
         if !parses {
             out.push(format!("transition {}: {:?} → {:?} is not a {}", t.id, t.from, t.to, t.field.as_str()));
@@ -812,11 +856,23 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
         ids.insert(t.id, t);
         last.insert((t.ticket.as_str(), t.field), t);
     }
+    // ARCHIVE-2: an archived ticket's mark was set by an archive the log
+    // holds.
+    for row in cache.order.values().filter(|r| r.archived.is_some()) {
+        if !last.contains_key(&(row.id.as_str(), TransitionField::Archive)) {
+            out.push(format!("archive of {}: the ticket is archived, and the log holds no archive of it", row.id));
+        }
+    }
     for ((ticket, field), t) in &last {
         let Some(row) = cache.get(ticket) else { continue };
         let now = match field {
             TransitionField::Status => row.status.as_str(),
             TransitionField::Kind => row.kind.as_str(),
+            // ARCHIVE-2: the latest archive transition says the mark.
+            TransitionField::Archive => match row.archived {
+                Some(_) => ARCHIVE_ARCHIVED,
+                None => ARCHIVE_LIVE,
+            },
         };
         if t.to != now {
             out.push(format!(

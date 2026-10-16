@@ -12,6 +12,10 @@ struct Tally {
     total: u64,
     done: u64,
     docs: u64,
+    /// ARCHIVE-2: the archived tickets, apart — an archived ticket is in no
+    /// `total`, `done` or `docs`, so a row's `done/total` reads its live
+    /// work, and a row of archived tickets alone is not drawn.
+    archived: u64,
 }
 
 impl Tally {
@@ -20,24 +24,33 @@ impl Tally {
         total: 0,
         done: 1,
         docs: 0,
+        archived: 0,
     };
 
     /// One ticket: a doc whatever its status says (only a hand edit gives
     /// one a status but `Doc`), work otherwise.
     fn of(t: &Row) -> Self {
+        if t.archived.is_some() {
+            return Self { archived: 1, ..Self::default() };
+        }
         if t.kind.has_lifecycle() {
             Self {
                 total: 1,
                 done: u64::from(t.status == Status::Complete),
-                docs: 0,
+                ..Self::default()
             }
         } else {
             Self {
-                total: 0,
-                done: 0,
                 docs: 1,
+                ..Self::default()
             }
         }
+    }
+
+    /// ARCHIVE-2: whether a row holding this draws anything — live work or
+    /// a live doc; the archived alone draw no row.
+    fn drawn(self) -> bool {
+        self.total > 0 || self.docs > 0
     }
 
     /// Nothing counted: a row that draws no ticket.
@@ -50,20 +63,22 @@ impl Tally {
             self.total += by.total;
             self.done += by.done;
             self.docs += by.docs;
+            self.archived += by.archived;
         } else {
             self.total -= by.total;
             self.done -= by.done;
             self.docs -= by.docs;
+            self.archived -= by.archived;
         }
     }
 
-    /// As stored: `(total, done, docs)`.
-    fn stored(self) -> (u64, u64, u64) {
-        (self.total, self.done, self.docs)
+    /// As stored: `(total, done, docs, archived)`.
+    fn stored(self) -> (u64, u64, u64, u64) {
+        (self.total, self.done, self.docs, self.archived)
     }
 
-    fn from_stored((total, done, docs): (u64, u64, u64)) -> Self {
-        Self { total, done, docs }
+    fn from_stored((total, done, docs, archived): (u64, u64, u64, u64)) -> Self {
+        Self { total, done, docs, archived }
     }
 }
 
@@ -486,7 +501,9 @@ impl Rollups {
         previous: Status,
     ) -> Vec<Group> {
         let gain = t.status == Status::Complete;
-        if !Self::crosses(previous, t.status) {
+        // ARCHIVE-2: an archived ticket is counted in `archived` alone,
+        // whatever its status: its completion moves nothing.
+        if !Self::crosses(previous, t.status) || t.archived.is_some() {
             return Vec::new();
         }
         let home = self.count(rows, t, Tally::DONE, gain);
@@ -548,7 +565,36 @@ impl Rollups {
             s.roll.shift(was, false);
             s.roll.shift(now, true);
         }
-        chain.iter().filter_map(|epic| self.view(epic)).collect()
+        // ARCHIVE-2: a row the move leaves undrawn is said as one no longer
+        // drawn (`total: 0`, `docs: 0`), as `diff` says it.
+        chain.iter().map(|epic| self.view(epic).unwrap_or_else(|| self.undrawn(epic))).collect()
+    }
+
+    /// ARCHIVE-2: a row that is no longer drawn, as `diff` says one.
+    fn undrawn(&self, epic: &ShortcodeId) -> Group {
+        Group {
+            epic: Code::stored(epic.as_str()),
+            shortcode: epic.clone(),
+            address: String::new(),
+            total: 0,
+            done: 0,
+            docs: 0,
+            archived: 0,
+            root: self.shortcodes.get(epic).and_then(|s| s.root.clone()).map(TicketId::new),
+            root_row: None,
+            host: None,
+        }
+    }
+
+    /// ARCHIVE-2: `t` archived or restored (already in `rows`, `was` its
+    /// tally before): its count moves between `archived` and what it counts
+    /// live, where its tree is kept and up every row it is drawn in.
+    pub(super) fn archive_moved(&mut self, rows: Rows<'_>, t: &Row, was: &Row) -> Vec<Group> {
+        let (before, after) = (Tally::of(was), Tally::of(t));
+        if before == after {
+            return Vec::new();
+        }
+        self.retally(rows, t, before, after)
     }
 
     /// A `set_parent`, before the rows change: the child's tree — the
@@ -888,7 +934,7 @@ impl Rollups {
     /// shortcode's). SDLC-11: a row of docs alone is a row.
     fn view(&self, epic: &ShortcodeId) -> Option<Group> {
         let s = self.shortcodes.get(epic)?;
-        (!s.own.is_empty()).then(|| Group {
+        (s.own.drawn()).then(|| Group {
             // ORG-3: its letters and address are the registry's — the
             // cache dresses every group that leaves it (`Cache::dress`).
             epic: Code::stored(epic.as_str()),
@@ -897,6 +943,7 @@ impl Rollups {
             total: s.roll.total,
             done: s.roll.done,
             docs: s.roll.docs,
+            archived: s.roll.archived,
             root: s.root.clone().map(TicketId::new),
             // AGS-23: the cache dresses it (`Cache::dress`) — the
             // roll-ups keep no ticket's fields.
@@ -925,20 +972,7 @@ impl Rollups {
             match (before.get(epic), self.view(epic)) {
                 (Some((was, _)), Some(now)) if *was == now => {}
                 (_, Some(now)) => moved.push((self.chain(epic).len(), now)),
-                (Some((_, depth)), None) => moved.push((
-                    *depth,
-                    Group {
-                        epic: Code::stored(epic.as_str()),
-                        shortcode: epic.clone(),
-                        address: String::new(),
-                        total: 0,
-                        done: 0,
-                        docs: 0,
-                        root: s.root.clone().map(TicketId::new),
-                        root_row: None,
-                        host: None,
-                    },
-                )),
+                (Some((_, depth)), None) => moved.push((*depth, Group { root: s.root.clone().map(TicketId::new), ..self.undrawn(epic) })),
                 (None, None) => {}
             }
         }

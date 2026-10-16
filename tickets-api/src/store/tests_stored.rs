@@ -124,6 +124,7 @@ pub(super) fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
             total: g.roll.0,
             done: g.roll.1,
             docs: g.roll.2,
+            archived: g.roll.3,
             root: g.root.clone().map(TicketId::new),
             // AGS-23: the root's row is the file's row of the root.
             root_row: g.root.as_ref().and_then(|r| file.rows.get(r)).map(|t| RootRow {
@@ -566,7 +567,7 @@ async fn verify_names_an_altered_number_and_writes_nothing() {
     };
     assert_eq!(found.len(), 1, "{found:#?}");
     assert!(found[0].starts_with("roll-up group SUBV: stored "), "{}", found[0]);
-    assert!(found[0].contains("roll: (1, 1, 0)") && found[0].contains("roll: (1, 0, 0)"), "{}", found[0]);
+    assert!(found[0].contains("roll: (1, 1, 0, 0)") && found[0].contains("roll: (1, 0, 0, 0)"), "{}", found[0]);
     assert_eq!(bytes(), altered, "verifying an inconsistent file wrote nothing either");
     drop(store);
 }

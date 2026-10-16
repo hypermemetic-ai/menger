@@ -118,6 +118,10 @@ mod overview;
 #[cfg(feature = "server")]
 use overview::*;
 #[cfg(feature = "server")]
+mod archive;
+#[cfg(feature = "server")]
+use archive::*;
+#[cfg(feature = "server")]
 mod delete;
 #[cfg(feature = "server")]
 use delete::*;
@@ -193,7 +197,7 @@ mod work;
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
             "unlink_commits", "label", "update", "update_many", "answer", "clear_answer", "close_input", "reopen_input",
-            "queue", "unqueue", "snooze", "request_changes", "reshortcode"
+            "queue", "unqueue", "snooze", "request_changes", "reshortcode", "archive", "restore"
         ],
     )
 )]
@@ -205,8 +209,8 @@ impl Tickets {
     #[plexus_macros::method(group = "read")]
     pub async fn health(&self, #[from_auth(self.access.verify)] user: VerifiedUser) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // IDENTITY-21: what this caller can see.
-        let ticket_count = self.store.count(&user) as u64;
-        futures::stream::once(async move { TicketsEvent::Health { version: env!("CARGO_PKG_VERSION").to_string(), unix_now: chrono::Utc::now().timestamp(), ticket_count } })
+        let (ticket_count, archived) = (self.store.count(&user) as u64, self.store.archived_count(&user));
+        futures::stream::once(async move { TicketsEvent::Health { version: env!("CARGO_PKG_VERSION").to_string(), unix_now: chrono::Utc::now().timestamp(), ticket_count, archived } })
     }
 
     /// Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc.
@@ -270,13 +274,15 @@ impl Tickets {
         // ORG-4: the organization first (activation/orgs.rs); ACCESS-11:
         // the proofs a birth takes (activation/writes.rs); MENGER-13: its
         // first status is a transition, the caller's.
-        answered!(store = self.store.clone(), user, None => {
+        // ARCHIVE-2: under an archived parent, its chain comes back after.
+        answered_then!(store = self.store.clone(), user, None, then => {
             let epic = epic_in(&store, &user, epic.into_string(), org, parent.as_deref())?;
             let at = filing(&store, &user, &epic, parent.as_deref(), blocked_by.as_deref())?;
-            let act = act_of(&user, None, None)?;
+            let (act, chain) = (act_of(&user, None, None)?, chain_under(&store, &user, &epic, parent.as_deref())?);
             let (title, kind, blocked_by) = (title.into_string(), kind.unwrap_or(Kind::Build), blocked_by.unwrap_or_default());
             let (parent, path, body) = (parent.map(String::from), path.map(String::from), body.map(String::from).unwrap_or_default());
             let ticket = store.create_by(at, NewTicket { epic, title, kind, severity, blocked_by, parent, path, body }, act).await?;
+            then = restore_chain(&store, &user, chain, format!("{} was filed under it", ticket.id)).await;
             Ok(TicketsEvent::Created { ticket })
         })
     }
@@ -489,17 +495,19 @@ impl Tickets {
         /// Id of the ticket to file it under; any epic, must exist.
         parent: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        // IDENTITY-37 / ACCESS-11: editor on the child, the parent it has
-        // and the one it goes to; a shortcode's root re-hosts, so admin on
-        // both hosts (activation/writes.rs). The store checks, under its
-        // lock, that the parent it has is still that one.
-        answered!(store = self.store.clone(), user, Some(id.to_string()) => {
+        // IDENTITY-37 / ACCESS-11: editor on the child, its parent and the new
+        // one; a root re-hosts, so admin on both hosts (activation/writes.rs);
+        // the store checks the parent it has under its lock. ARCHIVE-2: an
+        // archived new parent's chain is restored after (`then`).
+        answered_then!(store = self.store.clone(), user, Some(id.to_string()), then => {
             let child = permit::<Editor>(&store, &user, &id)?;
             let Some(to) = parenting(&store, &user, child.id(), &parent)? else {
-                // A parent that is no ticket: the store's own refusal.
                 return Err(StoreError::ParentNotFound { id: child.id().to_string(), parent: parent.trim().to_ascii_uppercase() }.into());
             };
-            Ok(change_event(store.set_parent(crate::store::Move::new(child, to)).await?))
+            let (chain, moved) = (chain_of(&store, &user, Some(&parent))?, child.id().to_string());
+            let answer = change_event(store.set_parent(crate::store::Move::new(child, to)).await?);
+            then = restore_chain(&store, &user, chain, format!("{moved} was moved under it")).await;
+            Ok(answer)
         })
     }
 
@@ -684,10 +692,12 @@ impl Tickets {
         // AUTH-7: the gate held the grant on the target; a parent or a
         // blocker beyond it is proved here (`updating`, ACCESS-11).
         let ask = update_of(title, body, kind, status, parent, severity, block, unblock);
-        answered!(store = self.store.clone(), user, Some(id.to_string()) => {
+        // ARCHIVE-2: moved under an archived parent, its chain comes back after.
+        answered_then!(store = self.store.clone(), user, Some(id.to_string()), then => {
             let at = updating(&store, &user, permit::<Editor>(&store, &user, &id)?, &ask)?;
-            let act = act_of(&user, source, message)?;
+            let (act, chain) = (act_of(&user, source, message)?, chain_of(&store, &user, ask.parent.as_deref())?);
             let crate::store::Updated { ticket, changed } = store.update_by(at, ask, act).await?;
+            then = restore_chain(&store, &user, chain, format!("{} was moved under it", ticket.id)).await;
             Ok(TicketsEvent::Updated { ticket, changed })
         })
     }
@@ -798,6 +808,66 @@ impl Tickets {
         ids: Vec<TicketRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         undelete_stream(self.store.clone(), user, texts(ids))
+    }
+
+    /// Archive tickets — each named (or a filter's) with its whole subtree, live work included and named (live); out of every view unless a filter says archived; status unchanged; yields archived { ids, live, unqueued, mark, dry_run }.
+    ///
+    /// ARCHIVE-2 ([`crate::store::ArchiveAnswer`]'s module): a mark apart from status — status, kind, place and blockers stay; one already archived is a no-op; a queued one leaves the queue. dry_run: the answer, nothing written.
+    #[plexus_macros::method(
+        group = "write",
+        target = "ids",
+        example(note = "two finished tickets", params = r#"{"ids": ["KILN-3", "KILN-4"], "message": "landed and deployed"}"#),
+        example(note = "what would go, and what is live", params = r#"{"ids": ["KILN-1"], "dry_run": true}"#)
+    )]
+    pub async fn archive(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Ticket ids, e.g. ["KILN-1"] — each with its whole subtree (or filter).
+        ids: Option<Vec<TicketRef>>,
+        /// Instead of ids: the tickets this filter admits at the write, e.g. 'category done and under KILN' (FILTER-3's language).
+        filter: Option<FilterText>,
+        /// With a filter: the most tickets it may name (default 500); more is refused, naming the count.
+        max: Option<u32>,
+        /// The time zone a history filter's days are read in (optional; default UTC).
+        tz: Option<Zone>,
+        /// Why — kept on the mark and in each transition (optional).
+        message: Option<Message>,
+        /// Answer what the write would do and write nothing (optional; default false).
+        dry_run: Option<bool>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let act = act_of(&user, None, message);
+        archive_stream(self.store.clone(), user, Picked { ids, filter, max, tz }, act, dry_run.unwrap_or(false))
+    }
+
+    /// Restore archived tickets — each named (or a filter's archived ones) back in every view with its archived ancestors; with_children, the subtree archived with it; yields restored { ids, ancestors, still_archived, by, dry_run }.
+    ///
+    /// ARCHIVE-2: the ancestor chain comes back, never its other children (ARCHIVE-1); what stays archived below is named (still_archived). dry_run: the answer, nothing written.
+    #[plexus_macros::method(
+        group = "write",
+        target = "ids",
+        example(note = "a project back, everything archived with it", params = r#"{"ids": ["KILN-1"], "with_children": true}"#),
+        example(note = "one ticket, and the parents it needs", params = r#"{"ids": ["KILN-4"], "dry_run": true}"#)
+    )]
+    pub async fn restore(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Archived ticket ids, e.g. ["KILN-4"] (or filter).
+        ids: Option<Vec<TicketRef>>,
+        /// Instead of ids: the archived tickets this filter admits, e.g. 'archived within 7d by me'.
+        filter: Option<FilterText>,
+        /// With a filter: the most tickets it may name (default 500).
+        max: Option<u32>,
+        /// The time zone a history filter's days are read in (optional; default UTC).
+        tz: Option<Zone>,
+        /// Bring back the descendants archived in the same write as each (optional; default false: they stay, named).
+        with_children: Option<bool>,
+        /// Why — kept in each transition (optional).
+        message: Option<Message>,
+        /// Answer what the write would do and write nothing (optional; default false).
+        dry_run: Option<bool>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let act = act_of(&user, None, message);
+        restore_stream(self.store.clone(), user, Picked { ids, filter, max, tz }, with_children.unwrap_or(false), act, dry_run.unwrap_or(false))
     }
 
     /// Move tickets into another shortcode, renumbered there in the order given (a scope moved into a new code becomes its root; --new-scope makes the shortcode first; a root moves with --with-children as a rename); old ids keep resolving (get says moved_from); all or none; yields reshortcoded { moves, tickets }.

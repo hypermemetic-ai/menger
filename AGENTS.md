@@ -140,6 +140,25 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets set_status --id MNG-7 --status Canceled --message "folded into MNG-9"
   ```
 
+  **The archive** (ARCHIVE-2) is a mark apart from status: `archive`
+  takes ids or a filter and archives each with its whole subtree, live work
+  included and named in the answer's `live` (never refused); `restore`
+  brings a ticket back with its archived ancestors (the chain only;
+  `--with-children` the subtree archived with it). An archived ticket keeps
+  its status and blockers and is in no view — list, tree, counts, search,
+  find, ready set, waves, inputs, queue, health — unless the filter names
+  `archived`; `get` still answers it, with `archived: {at, by}`. Cells
+  `archived [window] [by who]` and `restored …` read the log; `--dry-run
+  true` answers and writes nothing. A create or move under an archived
+  parent restores its chain. README "The archive":
+
+  ```sh
+  synapse -P 4455 menger tickets archive --ids KILN-1 --dry-run true --message "first season fired"
+  synapse -P 4455 menger tickets archive --filter 'category done and under KILN' --max 500
+  synapse -P 4455 menger tickets list --filter 'archived within 7d by owner' --summary true
+  synapse -P 4455 menger tickets restore --ids KILN-4 --with-children true
+  ```
+
   **Addresses** (ORG-3): a shortcode is unique only within its namespace
   (its org and the shortcode it is hosted under), so two THEMEs may exist
   under different hosts. A ticket carries `epic` (the letters), `shortcode`

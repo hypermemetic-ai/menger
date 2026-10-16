@@ -249,6 +249,7 @@ impl Store {
                 hidden_blocked_by: 0,
                 hidden_unlocks: 0,
                 parent_hidden: false,
+                archived: None,
                 parent: parent.clone().map(crate::address::TicketId::new),
                 // SCALE-4: none, unless a hand-edited database already
                 // names this id as some ticket's parent — the index has

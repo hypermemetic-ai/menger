@@ -2524,6 +2524,83 @@ and kind transition ends where the ticket is, each starts where the one
 before ended, each `cause` is an earlier transition, a cascade has one, the
 system's has a message.
 
+### The archive (ARCHIVE-2)
+
+**Archived** is a mark a ticket carries apart from its status (ARCHIVE-1,
+decided by the owner 2026-10-15): when, by whom, why, and the write that set
+it — `archived: { at_unix, by, message, write }` on `get`, on every summary
+and row, omitted for a live ticket. Any ticket may carry it, of any kind and
+in any status, and it moves nothing else: status, kind, place, blockers,
+labels, inputs and history stay as they were. An archived Complete ticket
+still satisfies what waits on it; an archived open one still blocks (an
+archived Pending ticket is *parked*, not done). Writes to an archived ticket
+(`amend`, `set_status`, `label`, `link_commits`, a comment, an answer) are
+allowed and leave it archived. Nothing archives itself.
+
+```sh
+synapse -P 4455 menger tickets archive --ids KILN-3,KILN-4 --message "landed and deployed"
+synapse -P 4455 menger tickets archive --ids KILN-1 --dry-run true          # what would go, and what is live
+synapse -P 4455 menger tickets archive --filter 'category done and under KILN' --max 1000
+synapse -P 4455 menger tickets list --filter 'archived and under KILN' --summary true
+synapse -P 4455 menger tickets list --filter 'archived within 7d by owner' --summary true
+synapse -P 4455 menger tickets restore --ids KILN-4                         # and its archived parents
+synapse -P 4455 menger tickets restore --ids KILN-1 --with-children true
+```
+
+| method | yields |
+| -- | -- |
+| `archive { ids? \| filter?, max?, tz?, message?, dry_run? }` | `archived { ids, live, unqueued, mark, dry_run }` — every ticket named (or the filter admits, at most `max`, default 500: more is refused, naming the count) **and its whole subtree** (the kept tree: children, theirs, the shortcodes hosted under it) archived in one write, all or none. One already archived is a no-op. **Live work is never a refusal**: `live` names each archived ticket not in category done (or dropped, or a doc), with its status — the warning the app asks with first. A queued ticket leaves the queue (`unqueued`; its record's action `archived`). `dry_run`: the same answer, nothing written (`mark.write` 0) |
+| `restore { ids? \| filter?, max?, tz?, with_children?, message?, dry_run? }` | `restored { ids, ancestors, still_archived, by, dry_run }` — each archived ticket named (a filter is ANDed with `archived`) back in every view **with its archived ancestors** (`ancestors`: the chain only, never their other children). `with_children`: and the descendants archived by the same write as it; the named tickets' descendants that stay archived are named (`still_archived`) |
+
+**Every view leaves the archive out unless the filter names it.** `not
+archived` is every filter's default (`Filter::matches`): `list` (by epic,
+status, parent or filter, and a walk of whole tickets), `tree`, `counts`,
+`facets`, `groups`, `extents`, `search`, `find`, `ready_set`, the waves,
+`inputs` (a ticket's own, asked by naming it, still answer), `queued`,
+`member`, and `health`'s `ticket_count` — which gains `archived`, the count
+apart. A filter naming `archived` (alone, negated, in a group, or as
+`archived <window> [by who]`) lifts the default: `status Pending and
+archived` answers the parked Pending tickets, `archived or in KILN` both.
+`get`, a URL and a body's chip still reach an archived ticket, and a
+blocker's row answers it marked — never hidden.
+
+**Kept, never walked.** The mark is a coordinate of a ticket's cell (FILTER-4),
+so an archived ticket never shares a cell with a live one and a view that
+does not name the archive admits none of its cells: no view reads an
+archived row to drop it, and a store that is mostly archive answers a view
+over the rest as cheaply as one without it. A store that holds no archived
+ticket reads every view by the path it took before. The roll-ups count the
+archive apart (`archived` beside `docs` on a group): a row's `done/total` is
+its live work, a row of archived tickets alone is not drawn — so an archived
+shortcode root takes its shortcode out of the nav, with every shortcode
+hosted under it. Stored form 12 (`cells.archived`, the roll-up tables'
+`*_archived`; a form 10 or 11 file gains the columns in place), the tickets'
+`archived` column (a JSON mark, `NULL` live); `--verify-derived` builds the
+cells and roll-ups from the rows and compares, and holds each archived ticket
+to an archive in the log.
+
+**History and cells.** An archive and a restore are transitions (`field:
+archive`, `live` ↔ `archived`; who, from where, why; the write's first the
+cause of the rest). `archived <window> [by who]` holds for a ticket whose
+standing archive (its latest archive transition) is in the window, by that
+actor; `restored [window] [by who]` for one restored there (its own restore,
+a chain's, or a create's). `watch` says `archived` / `restored` after the
+write's transitions; a `watch { filter }` hears `left` / `entered` for each
+ticket its view held or now holds. An agent's `await_reply` on an archived
+ticket ends with `replied { kind: archived }`.
+
+**Under an archived parent** (ARCHIVE-1 `child-of-archived`): `create`,
+`set_parent`, `update --parent`, `update_many --parent` and `reshortcode`
+into an archived parent restore its archived chain (the parent, every
+archived ancestor) right after their own write — the caller's permits for
+the chain minted before it — and answer the write's event, then that
+`restored`.
+
+Under login both are editor writes: the gate holds `tickets.archive` /
+`tickets.restore` on each id, and the store takes a `Permit` for every
+ticket it marks, each descendant included (ACCESS-11) — refused, counting
+the tickets outside the caller's reach, never naming them.
+
 ### Notes (NOTE-2)
 
 A **note** is a thought written down before it is a ticket: dated, never

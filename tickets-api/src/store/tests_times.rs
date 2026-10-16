@@ -31,6 +31,7 @@ fn row(epic: &str, seq: u32, status: Status, created: i64, updated: i64) -> Row 
         hidden_blocked_by: 0,
         hidden_unlocks: 0,
         parent_hidden: false,
+        archived: None,
         id: format!("{epic}-{seq}").into(),
         epic: epic.into(),
         shortcode: epic.into(),

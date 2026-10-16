@@ -135,6 +135,8 @@ fn value_view(field: TransitionField, v: Option<String>) -> AnyView {
             view! { <span class=class>{s}</span> }.into_any()
         }
         (TransitionField::Kind, Some(k)) => view! { <span class="kindword">{k}</span> }.into_any(),
+        // ARCHIVE-2: `live` ↔ `archived`, as words.
+        (TransitionField::Archive, Some(a)) => view! { <span class="kindword">{a}</span> }.into_any(),
     }
 }
 
@@ -142,7 +144,11 @@ fn value_view(field: TransitionField, v: Option<String>) -> AnyView {
 fn row(t: Transition, show_ticket: bool) -> impl IntoView {
     let system = t.actor == SYSTEM_ACTOR;
     let field = t.field;
-    let what = if field == TransitionField::Kind { "kind" } else { "" };
+    let what = match field {
+        TransitionField::Kind => "kind",
+        TransitionField::Archive => "archive",
+        TransitionField::Status => "",
+    };
     let ticket = show_ticket.then(|| {
         let href = format!("#/ticket/{}", t.ticket);
         view! { <a class="code" href=href data-ticket-id=t.ticket.to_string()>{t.ticket.to_string()}</a> }

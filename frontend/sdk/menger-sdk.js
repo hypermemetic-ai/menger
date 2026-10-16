@@ -609,6 +609,10 @@
       const stream = this.rpc.call("tickets.answer", { input, rationale, source, ticket, value });
       yield* extractData(stream);
     }
+    async* archive(dryRun, filter, ids, max, message, tz) {
+      const stream = this.rpc.call("tickets.archive", { dry_run: dryRun, filter, ids, max, message, tz });
+      yield* extractData(stream);
+    }
     async* awaitReply(id, input, since, timeoutMinutes) {
       const stream = this.rpc.call("tickets.await_reply", { id, input, since, timeout_minutes: timeoutMinutes });
       yield* extractData(stream);
@@ -711,6 +715,10 @@
     }
     async* reshortcode(ids, to, message, newScope, parent, withChildren) {
       const stream = this.rpc.call("tickets.reshortcode", { ids, message, new_scope: newScope, parent, to, with_children: withChildren });
+      yield* extractData(stream);
+    }
+    async* restore(dryRun, filter, ids, max, message, tz, withChildren) {
+      const stream = this.rpc.call("tickets.restore", { dry_run: dryRun, filter, ids, max, message, tz, with_children: withChildren });
       yield* extractData(stream);
     }
     async schema() {

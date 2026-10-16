@@ -25,6 +25,7 @@ pub(super) const SCHEMA: &str = "
             unsatisfied  INTEGER NOT NULL DEFAULT 0,
             path         TEXT,
             labels       TEXT NOT NULL DEFAULT '[]',
+            archived     TEXT,
             UNIQUE (epic, seq)
         );
     ";
@@ -457,6 +458,38 @@ pub(super) fn migrate_add_labels(conn: &mut Connection) -> anyhow::Result<bool> 
     Ok(true)
 }
 
+/// The column ARCHIVE-2 adds: the archive's mark, a JSON object
+/// (`{at_unix, by, message, write}`), `NULL` for a live ticket.
+const ARCHIVED_COLUMN: &str = "archived";
+
+/// One-shot, durable migration of a database written before ARCHIVE-2: the
+/// `archived` column, `NULL` for every ticket (none was archived). SQLite
+/// rewrites no row to add a nullable column, so this is instant at any
+/// size; a binary from before ARCHIVE-2 names its columns and still opens
+/// the file. Returns whether the column was added.
+pub(super) fn migrate_add_archived(conn: &mut Connection) -> anyhow::Result<bool> {
+    if has_column(conn, "tickets", ARCHIVED_COLUMN)? {
+        return Ok(false);
+    }
+    let tx = conn.transaction()?;
+    tx.execute(&format!("ALTER TABLE tickets ADD COLUMN {ARCHIVED_COLUMN} TEXT"), [])?;
+    tx.commit()?;
+    tracing::info!("ARCHIVE-2: added the {ARCHIVED_COLUMN} column, every ticket live, durably");
+    Ok(true)
+}
+
+/// ARCHIVE-2: the mark as stored — JSON, or `NULL`.
+fn archived_text(a: &Option<crate::types::Archived>) -> Option<String> {
+    a.as_ref().map(|a| serde_json::to_string(a).expect("serialize the archive's mark"))
+}
+
+/// ARCHIVE-2: the mark read back from column `idx`.
+fn archived_of(idx: usize, stored: Option<String>) -> rusqlite::Result<Option<crate::types::Archived>> {
+    stored
+        .map(|t| serde_json::from_str(&t).map_err(|e| rusqlite::Error::FromSqlConversionFailure(idx, Type::Text, format!("{e}").into())))
+        .transpose()
+}
+
 /// Serializes a unit enum to its serde string form (`Pending`,
 /// `build`, `Critical`) — the same casing the wire uses, and what the
 /// `FromStr` impls parse back.
@@ -490,8 +523,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits, child_count, path, labels)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                  created_unix, updated_unix, commits, child_count, path, labels, archived)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT (id) DO UPDATE SET
                  epic = excluded.epic,
                  seq = excluded.seq,
@@ -508,7 +541,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
                  commits = excluded.commits,
                  child_count = excluded.child_count,
                  path = excluded.path,
-                 labels = excluded.labels",
+                 labels = excluded.labels,
+                 archived = excluded.archived",
         params![
             t.id,
             // ORG-3: the column holds the shortcode's identity — the code
@@ -529,6 +563,7 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
             t.child_count,
             t.path,
             serde_json::to_string(&t.labels).expect("serialize labels"),
+            archived_text(&t.archived),
         ],
     )?;
     Ok(())
@@ -547,8 +582,8 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits, child_count, unsatisfied, path, labels)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                  created_unix, updated_unix, commits, child_count, unsatisfied, path, labels, archived)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
     )?;
     debug_assert_eq!(tickets.len(), open.len());
     for (t, open) in tickets.iter().zip(open) {
@@ -571,6 +606,7 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
             open,
             t.path,
             serde_json::to_string(&t.labels).expect("serialize labels"),
+            archived_text(&t.archived),
         ])?;
     }
     Ok(())
@@ -579,10 +615,10 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
 /// SCALE-14: every stored column of a row but the body, in the order
 /// [`read_row`] reads them — what the cache loads, and the head of what a
 /// whole ticket is read back as. SDLC-9: `commits` at 12. SCALE-28:
-/// `child_count` at 13. WAVE-10: `path` at 14. MENGER-12: `labels` last,
-/// at 15.
+/// `child_count` at 13. WAVE-10: `path` at 14. MENGER-12: `labels` at 15.
+/// ARCHIVE-2: `archived` last, at 16.
 const ROW_COLUMNS: &str = "id, epic, seq, title, status, kind, severity,
-                    blocked_by, unlocks, created_unix, updated_unix, parent, commits, child_count, path, labels";
+                    blocked_by, unlocks, created_unix, updated_unix, parent, commits, child_count, path, labels, archived";
 
 /// [`ROW_COLUMNS`] for a file that may be from before WAVE-10 — what
 /// `--verify-derived` reads, which runs no migration: `NULL` stands in for
@@ -595,6 +631,10 @@ fn row_columns(conn: &Connection) -> rusqlite::Result<String> {
     // MENGER-12: and `[]` for a `labels` column it does not have yet.
     if !has_column(conn, "tickets", LABELS_COLUMN)? {
         columns = columns.replace(", labels", ", '[]' AS labels");
+    }
+    // ARCHIVE-2: and `NULL` for an `archived` column it does not have yet.
+    if !has_column(conn, "tickets", ARCHIVED_COLUMN)? {
+        columns = columns.replace(", archived", ", NULL AS archived");
     }
     Ok(columns)
 }
@@ -627,6 +667,8 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         hidden_blocked_by: 0,
         hidden_unlocks: 0,
         parent_hidden: false,
+        // ARCHIVE-2: moved by `archive` and `restore` alone.
+        archived: archived_of(16, row.get(16)?)?,
         created_unix: row.get(9)?,
         updated_unix: row.get(10)?,
         parent: row.get::<_, Option<String>>(11)?.map(crate::address::TicketId::new),
@@ -666,7 +708,7 @@ pub(super) fn load_rows_counted(
     conn: &Connection,
 ) -> anyhow::Result<(HashMap<String, Row>, HashMap<String, u32>)> {
     let mut stmt = conn.prepare(&format!("SELECT {ROW_COLUMNS}, unsatisfied FROM tickets"))?;
-    let rows = stmt.query_map([], |r| Ok((read_row(r)?, r.get::<_, u32>(16)?)))?;
+    let rows = stmt.query_map([], |r| Ok((read_row(r)?, r.get::<_, u32>(17)?)))?;
     let (mut out, mut open) = (HashMap::new(), HashMap::new());
     for row in rows {
         let (row, n) = row?;
@@ -689,7 +731,7 @@ pub(super) fn body(conn: &Connection, id: &str) -> rusqlite::Result<Option<Strin
 /// statement, so from one snapshot (SCALE-28: its `child_count` too).
 pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Ticket>> {
     conn.prepare_cached(&format!("SELECT {ROW_COLUMNS}, body FROM tickets WHERE id = ?1"))?
-        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(16)?)))
+        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(17)?)))
         .optional()
 }
 
@@ -706,7 +748,7 @@ pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
         "UPDATE tickets SET
                  epic = ?2, seq = ?3, title = ?4, status = ?5, kind = ?6,
                  severity = ?7, blocked_by = ?8, unlocks = ?9, parent = ?10,
-                 created_unix = ?11, updated_unix = ?12, commits = ?13, labels = ?14
+                 created_unix = ?11, updated_unix = ?12, commits = ?13, labels = ?14, archived = ?15
              WHERE id = ?1",
     )?
     .execute(params![
@@ -724,6 +766,7 @@ pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
         t.updated_unix,
         serde_json::to_string(&t.commits).expect("serialize commits"),
         serde_json::to_string(&t.labels).expect("serialize labels"),
+        archived_text(&t.archived),
     ])?;
     match changed {
         1 => Ok(()),

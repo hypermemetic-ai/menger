@@ -205,6 +205,13 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
             Event::Entered(s) => t.field == TransitionField::Status && t.to == s.as_str(),
             Event::Left(s) => t.field == TransitionField::Status && t.from.as_deref() == Some(s.as_str()),
             Event::Changed => true,
+            // ARCHIVE-2: an archive still standing — its latest.
+            Event::Archived => {
+                t.field == TransitionField::Archive
+                    && t.to == crate::types::ARCHIVE_ARCHIVED
+                    && own.iter().rev().find(|x| x.field == TransitionField::Archive).is_some_and(|x| x.id == t.id)
+            }
+            Event::Restored => t.field == TransitionField::Archive && t.to == crate::types::ARCHIVE_LIVE,
             Event::Created | Event::Touched | Event::Held(_) | Event::Deployed(_) | Event::Queued(_) => false,
         };
         let when = lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h);
@@ -282,6 +289,7 @@ impl Plain {
         crate::filter::Facts {
             asking: k.asking(),
             labels: t.labels.iter().map(|l| l.to_string()).collect(),
+            archived: k.archived(),
             id: t.id.to_string(),
             epic: t.epic.to_string(),
             title: t.title.clone(),

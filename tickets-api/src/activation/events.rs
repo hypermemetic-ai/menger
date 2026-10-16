@@ -109,6 +109,8 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         // ACT-5: a delete's and an undelete's, as their answers are.
         Change::Deleted { ids, tombstones } => TicketsEvent::Deleted { ids, tombstones },
         Change::Undeleted { ids, tickets } => TicketsEvent::Undeleted { ids, tickets },
+        Change::Archived { ids, live, unqueued, mark } => TicketsEvent::Archived { ids, live, unqueued, mark, dry_run: false },
+        Change::Restored { ids, ancestors, still_archived, by } => TicketsEvent::Restored { ids, ancestors, still_archived, by, dry_run: false },
         // ACT-6: a reshortcode's, as its answer is.
         Change::Reshortcoded { moves, tickets } => TicketsEvent::Reshortcoded { moves, tickets },
         // SCALE-4: the parent's shortcode filtered `watch { epic }` on the
@@ -298,3 +300,23 @@ macro_rules! answered {
     }};
 }
 pub(super) use answered;
+
+/// ARCHIVE-2: [`answered!`] for a write that may bring an archived chain
+/// back after it (a create or a move under an archived parent, ARCHIVE-1
+/// `child-of-archived`): the body sets `$then` to the chain's `restored`,
+/// yielded after the write's own event.
+macro_rules! answered_then {
+    ($store:ident = $at:expr, $user:ident, $asked:expr, $then:ident => $($body:tt)*) => {{
+        let $store = $at;
+        let __asked: Option<String> = $asked;
+        async_stream::stream! {
+            let mut $then: Option<TicketsEvent> = None;
+            let __r: Result<TicketsEvent, Failed> = async { $($body)* }.await;
+            yield answer(&$store, &$user, __asked.as_deref(), __r);
+            if let Some(ev) = $then {
+                yield ev;
+            }
+        }
+    }};
+}
+pub(super) use answered_then;

@@ -230,6 +230,16 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
             let tickets: Vec<Ticket> = tickets.into_iter().filter(|t| sees.id(&t.id)).map(row).collect();
             (!ids.is_empty()).then_some(Change::Undeleted { ids, tickets })
         }
+        // ARCHIVE-2: of the tickets the reach holds.
+        Change::Archived { ids, live, unqueued, mark } => {
+            let ids = sees.keep(ids);
+            let live = live.into_iter().filter(|l| sees.id(&l.id)).collect();
+            (!ids.is_empty()).then(|| Change::Archived { ids, live, unqueued: sees.keep(unqueued), mark })
+        }
+        Change::Restored { ids, ancestors, still_archived, by } => {
+            let ids = sees.keep(ids);
+            (!ids.is_empty()).then(|| Change::Restored { ids, ancestors: sees.keep(ancestors), still_archived: sees.keep(still_archived), by })
+        }
         // ACT-6: a move, of the tickets the reach holds where they are now.
         Change::Reshortcoded { moves, tickets } => {
             let moves: Vec<crate::types::ShortcodeMove> = moves.into_iter().filter(|m| sees.id(&m.to)).collect();
