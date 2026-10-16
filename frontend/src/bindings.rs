@@ -113,11 +113,13 @@ pub(crate) enum Context {
     TimeField,
     /// A text field with a button beside it.
     Field,
+    /// APP-33: a mockup device's resize handle (its right edge, its corner).
+    Mockup,
 }
 
 impl Context {
     #[cfg(test)]
-    pub(crate) const ALL: [Context; 16] = [
+    pub(crate) const ALL: [Context; 17] = [
         Context::Anywhere,
         Context::Global,
         Context::Nav,
@@ -134,6 +136,7 @@ impl Context {
         Context::DatePicker,
         Context::TimeField,
         Context::Field,
+        Context::Mockup,
     ];
 
     /// Where, in the reader's words — the tables' last column.
@@ -155,6 +158,7 @@ impl Context {
             Context::DatePicker => "in a date picker",
             Context::TimeField => "in a time field",
             Context::Field => "in a text field",
+            Context::Mockup => "on a mockup device's edge",
         }
     }
 
@@ -164,7 +168,7 @@ impl Context {
     fn modal(self) -> bool {
         matches!(
             self,
-            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field
+            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field | Context::Mockup
         )
     }
 
@@ -308,6 +312,18 @@ pub(crate) const BINDINGS: &[Binding] = &[
     // -- View
     b("view.full-screen", &[C::TicketPage, C::Frame], &["z"], G::View, "the ticket's framed body full screen, and back (from inside the body too)"),
     b("app.escape", &[C::Global, C::Frame], &["Escape"], G::View, "close the palette or this list; fold an open query tree; leave annotation mode; leave full screen; clear the selection"),
+    // APP-33: a mockup at any size (src/mocksize.rs).
+    b("mockup.drag", &[C::Mockup], &["Click"], G::View, "drag a mockup device's right edge (its width) or corner (both), snapping to a standard width within 8 px"),
+    b("mockup.drag-free", &[C::Mockup], &["Alt+Click"], G::View, "drag it without snapping"),
+    b("mockup.wider", &[C::Mockup], &["ArrowRight"], G::View, "the device 10 px wider, its edge's handle focused"),
+    b("mockup.narrower", &[C::Mockup], &["ArrowLeft"], G::View, "10 px narrower"),
+    b("mockup.taller", &[C::Mockup], &["ArrowDown"], G::View, "10 px taller"),
+    b("mockup.shorter", &[C::Mockup], &["ArrowUp"], G::View, "10 px shorter"),
+    b("mockup.wider-1", &[C::Mockup], &["Shift+ArrowRight"], G::View, "1 px wider"),
+    b("mockup.narrower-1", &[C::Mockup], &["Shift+ArrowLeft"], G::View, "1 px narrower"),
+    b("mockup.taller-1", &[C::Mockup], &["Shift+ArrowDown"], G::View, "1 px taller"),
+    b("mockup.shorter-1", &[C::Mockup], &["Shift+ArrowUp"], G::View, "1 px shorter"),
+    b("mockup.add-size", &[C::Menu, C::Field], &["Shift+Click", "Shift+Enter"], G::View, "in a mockup's Size menu or its Custom field: add that size beside the devices shown (without Shift, it is drawn alone)"),
     // -- Menus & dialogs
     b("list.next", &[C::Palette, C::Menu], &["ArrowDown"], G::Dialogs, "the next item (from the last, the first)"),
     b("list.prev", &[C::Palette, C::Menu], &["ArrowUp"], G::Dialogs, "the previous item (from the first, the last)"),

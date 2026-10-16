@@ -39,7 +39,8 @@
 //!    `view: mockup` body gets — one device frame per width side by side,
 //!    All / per device, Light / Dark, Reduced motion, ⤢ Full screen — each
 //!    device a [`crate::frame::Frame`] with `emulate` and `fixed`, stamped
-//!    with no ticket (nothing in a mock answers an input);
+//!    with no ticket (nothing in a mock answers an input) — and APP-33's
+//!    size controls (src/mocksize.rs), the viewer's sizes kept per mockup;
 //! 3. answers the placeholder **only the box's height** — `menger:mocked {
 //!    mock, height }` ([`mocked_reply`]) — so the prose below it moves down.
 //!
@@ -303,10 +304,16 @@ fn paint(e: &mut Entry) {
         _ => e.citer.get_attribute("data-scope"),
     }
     .unwrap_or_default();
+    // APP-33: the viewer's sizes are kept per mockup — the body's ticket and
+    // the placeholder's number (a draft's preview keeps none).
+    let remember = e.citer.get_attribute("data-ticket").filter(|t| !t.is_empty()).map(|t| format!("{t}#m{}", e.n));
     let handle = leptos::mount::mount_to(host, move || {
         let html = Signal::derive(move || html.get());
         let decl = Signal::derive(move || decl.get());
-        view! { <present::Framed html decl ticket=None scope /> }
+        match remember {
+            Some(remember) => view! { <present::Framed html decl ticket=None scope remember /> }.into_any(),
+            None => view! { <present::Framed html decl ticket=None scope /> }.into_any(),
+        }
     });
     e.mounted = Some(Box::new(handle));
 }

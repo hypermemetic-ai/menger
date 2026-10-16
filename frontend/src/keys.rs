@@ -865,13 +865,13 @@ pub(crate) fn no_overlay() -> bool {
 
 /// True where a keystroke belongs to whatever already has focus: a text
 /// field, a `<select>`, a dialog (the overlays run their own key maps),
-/// or a menu (AGS-16).
+/// a menu (AGS-16), or a slider — APP-33's mockup handle owns its arrows.
 pub(crate) fn defer_to_focus(el: &web_sys::Element) -> bool {
     matches!(
         el.tag_name().as_str(),
         "INPUT" | "TEXTAREA" | "SELECT" | "OPTION"
     ) || el
-        .closest("[role=dialog], [role=menu], [contenteditable='true']")
+        .closest("[role=dialog], [role=menu], [role=slider], [contenteditable='true']")
         .ok()
         .flatten()
         .is_some()
