@@ -214,6 +214,17 @@ pub(crate) fn declared(frontmatter: Option<&str>, src: &str) -> Decl {
     decl
 }
 
+/// APP-29: the devices an `<m-mockup>` draws — the widths it names (a
+/// fence's `widths=`, the element's `widths="…"`) when any is readable, else
+/// what the page it shows declares (`declared`: a referenced ticket's
+/// `widths:` or `<meta name="menger-widths">`), else the three defaults.
+pub(crate) fn mock_devices(named: Option<&str>, declared: Option<&Decl>) -> Vec<Device> {
+    named
+        .and_then(parse_widths)
+        .or_else(|| declared.map(|d| d.devices.clone()))
+        .unwrap_or_else(|| Decl::default().devices)
+}
+
 /// The scale that fits `devices` (all of them side by side, `gap` px
 /// apart) into `avail_w` px — and, when the height counts (full screen),
 /// `avail_h` px — never above 1.
@@ -733,5 +744,23 @@ mod tests {
         assert_eq!(with_full("#/ticket/A-1?field=x&view=full&g=1", false), "#/ticket/A-1?field=x&g=1");
         assert_eq!(with_full("#/ticket/A-1?field=x", true), "#/ticket/A-1?field=x&view=full");
         assert_eq!(with_full("#/ticket/A-1?view=full", true), "#/ticket/A-1?view=full");
+    }
+
+    /// APP-29: a fence's or element's widths win; else the referenced
+    /// page's declaration; else the defaults — and widths past reason are
+    /// dropped as `widths:`'s are.
+    #[test]
+    fn a_mockup_component_takes_its_widths_from_itself_then_its_page() {
+        let page = "<!doctype html><html><head><meta name=\"menger-view\" content=\"mockup\"><meta name=\"menger-widths\" content=\"375,1280x800\"></head><body></body></html>";
+        let decl = declared(None, page);
+        assert_eq!(mock_devices(Some("390,1440"), Some(&decl)), vec![Device::of_width(390), Device::of_width(1440)]);
+        assert_eq!(mock_devices(Some("390, 768x1000"), None), vec![Device::of_width(390), Device { w: 768, h: 1000 }]);
+        assert_eq!(mock_devices(None, Some(&decl)), vec![Device::of_width(375), Device { w: 1280, h: 800 }]);
+        // Nothing readable named: the page's, then the defaults.
+        assert_eq!(mock_devices(Some("wide"), Some(&decl)), decl.devices);
+        assert_eq!(mock_devices(Some("10"), None), Decl::default().devices);
+        assert_eq!(mock_devices(None, None).iter().map(|d| d.w).collect::<Vec<_>>(), DEFAULT_WIDTHS);
+        // A referenced page that declares nothing: its defaults.
+        assert_eq!(mock_devices(None, Some(&declared(None, "<!doctype html><html><body></body></html>"))), Decl::default().devices);
     }
 }

@@ -88,6 +88,15 @@
  *     (frontend/src/cite.rs) — nothing of the cited ticket enters this
  *     document. The host answers only the window's height
  *     (`menger:cited`), which the placeholder takes.
+ *   - **`<m-mockup>`** (APP-29, 1.21) — built in, beside `<m-cite>`: a
+ *     website mockup as a component of the body. A ```mockup fence becomes
+ *     `<m-mockup widths="390,1440" source="…the page…">` (md.rs: the page in
+ *     an escaped attribute, never parsed here); `<m-mockup ref="DESIGN-49">`
+ *     names another ticket's whole-document body. Only a placeholder, as
+ *     m-cite is: it posts what it draws and where (`menger:mockup`), the
+ *     HOST draws the devices over it (frontend/src/mockup.rs) — a
+ *     referenced ticket's body never enters this document — and answers
+ *     only the height (`menger:mocked`), which the placeholder takes.
  *   - **a cited window's frame** (init `cite`: `{ field }` or `{ anchor }`)
  *     shows that one section of its body: everything but the element and
  *     its ancestors is hidden (the ancestors' own boxes invisible), and
@@ -222,6 +231,13 @@
  *   frame → host  menger:uncite { cite }                  it left the body
  *   host → frame  menger:cited { cite, height }           its window's
  *                 height in px — all the host says of it
+ *   frame → host  menger:mockup { mock, ref, widths, source, rect } an
+ *                 `<m-mockup>` (1.21): its number in this frame, its
+ *                 attributes as written (null when absent), its box — at
+ *                 connect, on a change of an attribute, whenever it moves
+ *   frame → host  menger:unmock { mock }                  it left the body
+ *   host → frame  menger:mocked { mock, height }          its mockup's
+ *                 height in px — all the host says of it
  *   frame → host  menger:submit { id, params: { input, value, rationale? } }
  *                 menger.input.submit, inside a gesture
  *   host → frame  menger:submitted { id, answer } | { id, error }
@@ -278,7 +294,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.20.0";
+  var VERSION = "1.21.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -1210,6 +1226,8 @@
       else if (typeof m.anchor === "string") revealSection("anchor", m.anchor);
     } else if (m.type === "menger:cited") {
       citedHeight(m);
+    } else if (m.type === "menger:mocked") {
+      mockedHeight(m);
     } else if (m.type === "menger:annotate") {
       setAnnotating(m.on === true);
     } else if (m.type === "menger:probe") {
@@ -2190,6 +2208,103 @@
   window.addEventListener("resize", reportCites);
   // A scroller inside the body moves its cites without a resize.
   doc.addEventListener("scroll", reportCites, true);
+
+  // -- <m-mockup> (APP-29) -----------------------------------------------------
+  // A placeholder as <m-cite> is: room in this body, what it draws (the
+  // page a ```mockup fence carries, or a ticket by ref) and where, told to
+  // the host; the host draws the devices over it, outside this frame, and
+  // answers the height. A referenced ticket's body never enters here.
+
+  var mocks = new Map(); // element → { n, box, v, last }
+  var mocksByN = Object.create(null);
+  var nextMock = 0;
+  var MOCK_MIN = 160; // px reserved before the host says
+
+  function mockReport(el, force) {
+    var st = mocks.get(el);
+    if (!st) return;
+    var rect = citeRect(el);
+    var key = st.v + ":" + JSON.stringify(rect);
+    if (!force && key === st.last) return;
+    st.last = key;
+    post("menger:mockup", {
+      mock: st.n,
+      ref: el.getAttribute("ref"),
+      widths: el.getAttribute("widths"),
+      source: el.getAttribute("source"),
+      rect: rect,
+    });
+  }
+
+  function reportMocks() {
+    mocks.forEach(function (_, el) {
+      mockReport(el, false);
+    });
+  }
+
+  function mockedHeight(m) {
+    var el = mocksByN[m.mock];
+    var st = el && mocks.get(el);
+    if (!st || typeof m.height !== "number" || !isFinite(m.height)) return;
+    st.box.style.height = Math.max(0, Math.min(MAX_HEIGHT, Math.ceil(m.height))) + "px";
+  }
+
+  var mockRO = RO
+    ? new RO(function () {
+        reportMocks();
+      })
+    : null;
+
+  if (CE && !CE.get("m-mockup")) {
+    try {
+      CE.define(
+        "m-mockup",
+        class extends HTMLElement {
+          static get observedAttributes() {
+            return ["ref", "widths", "source"];
+          }
+          connectedCallback() {
+            var st = mocks.get(this);
+            if (!st) {
+              var root = this.shadowRoot || this.attachShadow({ mode: "open" });
+              root.innerHTML = "";
+              var style = doc.createElement("style");
+              style.textContent = ":host{display:block;margin:.8em 0}div{min-height:0}";
+              var box = doc.createElement("div");
+              box.setAttribute("part", "mockup");
+              box.style.height = MOCK_MIN + "px";
+              root.appendChild(style);
+              root.appendChild(box);
+              st = { n: ++nextMock, box: box, v: 0, last: null };
+              mocks.set(this, st);
+            } else {
+              st.n = ++nextMock; // a move is a new mockup: the old box went with the old number
+              st.last = null;
+            }
+            mocksByN[st.n] = this;
+            if (mockRO) mockRO.observe(this);
+            mockReport(this, true);
+          }
+          disconnectedCallback() {
+            var st = mocks.get(this);
+            if (!st) return;
+            if (mockRO) mockRO.unobserve(this);
+            delete mocksByN[st.n];
+            post("menger:unmock", { mock: st.n });
+          }
+          attributeChangedCallback() {
+            var st = mocks.get(this);
+            if (st) st.v++;
+            if (this.isConnected) mockReport(this, true);
+          }
+        }
+      );
+    } catch (e) {
+      logError(e);
+    }
+  }
+  window.addEventListener("resize", reportMocks);
+  doc.addEventListener("scroll", reportMocks, true);
 
   // -- a cited window's frame (COMP-14) ----------------------------------------
   // Everything but the section and its ancestors is hidden; the ancestors'

@@ -63,6 +63,13 @@
 //! HTML block's extent changes nothing anyone means — so [`render_body`] and
 //! [`render_body_with`] parse the body as written, byte for byte as before.
 //!
+//! APP-29: a **mockup fence** — ` ```mockup widths=390,1440 ` — frames its
+//! body ([`is_framed`]) and, in the frame, is not a code block: its content
+//! (a page's HTML, verbatim — never read as markdown) becomes one
+//! `<m-mockup>` placeholder ([`mockup_placeholder`]) with the page in an
+//! escaped attribute, which the host draws in device chrome beside the
+//! prose around it (src/mockup.rs).
+//!
 //! COMP-12: in a frame, the elements markdown produced carry [`MD_MARK`]
 //! ([`push_marked`]) — in a body that opts out of the SDK's base typography
 //! on its own HTML (`<meta name="menger-base" content="markdown">`), the
@@ -300,6 +307,59 @@ pub(crate) fn is_theme_fence(info: &str) -> bool {
     info.split_whitespace().next() == Some("theme")
 }
 
+/// APP-29: a fence that holds a mocked page (` ```mockup widths=390,1440 `):
+/// framed, it renders as an `<m-mockup>` placeholder carrying the page
+/// ([`mockup_placeholder`]) — the host draws it in device chrome
+/// (src/mockup.rs), as `view: mockup` draws a whole body.
+pub(crate) fn is_mockup_fence(info: &str) -> bool {
+    info.split_whitespace().next() == Some("mockup")
+}
+
+/// APP-29: the element a mockup is — the fence's placeholder, and the tag a
+/// body writes to show another ticket's page (`<m-mockup ref="DESIGN-49">`).
+pub(crate) const MOCKUP_TAG: &str = "m-mockup";
+
+/// APP-29: a mockup fence's `widths=…` as written (`widths=390,1440`,
+/// `widths="390, 768x1024"`), for the host to read
+/// (`present::parse_widths`); `None` when the fence names none.
+pub(crate) fn fence_widths(info: &str) -> Option<&str> {
+    let at = info.find("widths=")? + "widths=".len();
+    let rest = &info[at..];
+    let value = match rest.chars().next()? {
+        q @ ('"' | '\'') => {
+            let inner = &rest[1..];
+            &inner[..inner.find(q).unwrap_or(inner.len())]
+        }
+        _ => &rest[..rest.find(char::is_whitespace).unwrap_or(rest.len())],
+    };
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+/// APP-29: the placeholder a ```mockup fence becomes — `<m-mockup>` with
+/// the page as its `source` attribute and the fence's `widths`, both
+/// escaped. An attribute, not a `<template>` or a `<script>`: an attribute's
+/// value comes back from `getAttribute` exactly as written, whatever the page
+/// holds (`</template>`, `</script>`, blank lines), and nothing in it is
+/// parsed or run in the body's frame. The page is the body's own text, so
+/// handing it to the host reveals nothing the body did not already hold.
+pub(crate) fn mockup_placeholder(info: &str, src: &str) -> String {
+    let mut out = String::with_capacity(src.len() + src.len() / 8 + 64);
+    out.push('<');
+    out.push_str(MOCKUP_TAG);
+    if let Some(w) = fence_widths(info) {
+        out.push_str(" widths=\"");
+        escape_html(&mut out, w).expect("escaping into a String cannot fail");
+        out.push('"');
+    }
+    out.push_str(" source=\"");
+    escape_html(&mut out, src).expect("escaping into a String cannot fail");
+    out.push_str("\"></");
+    out.push_str(MOCKUP_TAG);
+    out.push_str(">\n");
+    out
+}
+
 /// COMP-9: the card a definition block renders as in a framed body — the
 /// block's tag and preview from its info string, its docs parsed from its
 /// content (src/card.rs).
@@ -533,14 +593,17 @@ pub fn is_framed(src: &str) -> bool {
     if is_page(src) {
         return true;
     }
-    if !src.contains('<') && !src.contains("component") && !src.contains("theme") {
+    if !src.contains('<') && !src.contains("component") && !src.contains("theme") && !src.contains("mockup") {
         return false;
     }
     Parser::new_ext(src, options()).any(|ev| match ev {
         Event::Html(s) | Event::InlineHtml(s) => holds_markup(&s),
         // COMP-9: a definition renders as its card, in the frame — THEME-3:
-        // and a theme block as its swatch sheet.
-        Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => component_docs::definition(&info).is_some() || is_theme_fence(&info),
+        // and a theme block as its swatch sheet; APP-29: and a mockup fence
+        // as the page it holds, in device chrome.
+        Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
+            component_docs::definition(&info).is_some() || is_theme_fence(&info) || is_mockup_fence(&info)
+        }
         _ => false,
     })
 }
@@ -605,6 +668,9 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
     // COMP-9: inside a definition's fence (framed, with cards): its info
     // string and the source collected so far; the End emits the card.
     let mut definition: Option<(String, String)> = None;
+    // APP-29 (framed only): inside a ```mockup fence — its info string and
+    // the page collected so far, verbatim; the End emits the placeholder.
+    let mut mockup: Option<(String, String)> = None;
     let cards = framed && cards;
     // ART-5 (framed only): an HTML block's lines, gathered — a diagram
     // written as HTML spans them — and emitted whole at its end, each
@@ -630,6 +696,19 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
                         return Some(Event::Html(crate::swatches::sheet(&info, &source).into()));
                     }
                     Some(Event::Html(definition_card(&info, &source).into()))
+                }
+                _ => None,
+            };
+        }
+        if mockup.is_some() {
+            return match ev {
+                Event::Text(t) => {
+                    mockup.as_mut().expect("checked").1.push_str(&t);
+                    None
+                }
+                Event::End(TagEnd::CodeBlock) => {
+                    let (info, page) = mockup.take().expect("checked");
+                    Some(Event::Html(mockup_placeholder(&info, &page).into()))
                 }
                 _ => None,
             };
@@ -672,6 +751,10 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
                 if is_mermaid_fence(info) =>
             {
                 mermaid_src = Some(String::new());
+                None
+            }
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info))) if framed && is_mockup_fence(info) => {
+                mockup = Some((info.to_string(), String::new()));
                 None
             }
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info)))
@@ -1679,5 +1762,73 @@ A candidate language, drawn below.
         assert!(f.html.contains("<code>https://v.example</code>") && f.html.contains("<code>https://z.example</code>"), "{}", f.html);
         // An IDN host is linked as written; the browser opens its punycode.
         assert!(render_body("https://\u{0430}pple.com").html.contains("href=\"https://%D0%B0pple.com\""), "{}", render_body("https://\u{0430}pple.com").html);
+    }
+
+    // -- mockup fences (APP-29) ------------------------------------------
+
+    /// The attribute's value as `getAttribute` gives it back: the HTML
+    /// parser's entity decoding of what escape_html wrote.
+    fn unescape_attr(s: &str) -> String {
+        s.replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    }
+
+    /// The `source` attribute of the first `<m-mockup>` in `html`.
+    fn mock_source(html: &str) -> String {
+        let at = html.find("<m-mockup").expect("a placeholder");
+        let s = at + html[at..].find(" source=\"").expect("a source") + " source=\"".len();
+        let e = s + html[s..].find('"').expect("closed");
+        unescape_attr(&html[s..e])
+    }
+
+    /// A fence becomes the placeholder holding the page exactly — a page
+    /// that holds `</script>`, `</template>`, quotes, ampersands, markdown
+    /// look-alikes and blank lines — and none of it is live in the body.
+    #[test]
+    fn a_mockup_fence_becomes_a_placeholder_holding_its_page() {
+        let page = "<!doctype html>\n<html><head><style>body{background:#fff}\n\n@media (max-width:600px){body{background:#f0c}}</style></head>\n<body>\n<h1 class=\"t\">Hi & \"bye\"</h1>\n\n<template><p>x</p></template>\n\n    indented, not code\n\n# not a heading\n\n<script>document.title = \"</scr\" + \"ipt>\"; var s = '</script>';</script>\n</body></html>\n";
+        let src = format!("Intro *prose*.\n\n```mockup widths=390,1440\n{page}```\n\nAfter **it**.\n");
+        let r = render_body_framed(&src, &|_| None);
+        assert_eq!(mock_source(&r.html), page);
+        assert!(r.html.contains("<m-mockup widths=\"390,1440\" source=\""), "{}", r.html);
+        assert_eq!(r.html.matches("<m-mockup").count(), 1);
+        // Nothing of the page is markup in the body: no tag opens inside the attribute.
+        let at = r.html.find(" source=\"").unwrap();
+        let end = at + 9 + r.html[at + 9..].find('"').unwrap();
+        assert!(!r.html[at..end].contains('<') && !r.html[at..end].contains('>'), "{}", &r.html[at..end]);
+        assert!(!r.html.contains("<pre") && !r.html.contains("language-mockup"), "{}", r.html);
+        // The prose around it is markdown, as ever.
+        assert!(r.html.contains("<p>Intro <em>prose</em>.</p>"), "{}", r.html);
+        assert!(r.html.find("Intro").unwrap() < r.html.find("<m-mockup").unwrap());
+        assert!(r.html.find("<m-mockup").unwrap() < r.html.find("After").unwrap());
+        assert!(r.html.contains("<p>After <strong>it</strong>.</p>"), "{}", r.html);
+    }
+
+    /// The fence's widths, as written; none named, no attribute (the host's
+    /// default devices stand); several fences, several placeholders.
+    #[test]
+    fn a_mockup_fence_carries_its_widths() {
+        assert_eq!(fence_widths("mockup widths=390,1440"), Some("390,1440"));
+        assert_eq!(fence_widths("mockup  widths=\"390, 768x1024\" title=x"), Some("390, 768x1024"));
+        assert_eq!(fence_widths("mockup widths='1440'"), Some("1440"));
+        assert_eq!(fence_widths("mockup"), None);
+        assert_eq!(fence_widths("mockup widths="), None);
+        assert!(is_mockup_fence("mockup") && is_mockup_fence("mockup widths=390"));
+        assert!(!is_mockup_fence("mockups") && !is_mockup_fence("html"));
+        let r = render_body_framed("```mockup\n<p>a</p>\n```\n\nmid\n\n```mockup widths=\"390 1440\"\n<p>b</p>\n```\n", &|_| None);
+        assert_eq!(r.html.matches("<m-mockup").count(), 2, "{}", r.html);
+        assert!(r.html.contains("<m-mockup source=\"&lt;p&gt;a&lt;/p&gt;\n\"></m-mockup>"), "{}", r.html);
+        assert!(r.html.contains("<m-mockup widths=\"390 1440\" source=\"&lt;p&gt;b&lt;/p&gt;\n\"></m-mockup>"), "{}", r.html);
+    }
+
+    /// A body whose only markup is a mockup fence still frames — the fence
+    /// is what frames it; a fence of another language holding HTML does not.
+    #[test]
+    fn a_body_that_is_only_a_mockup_fence_frames() {
+        assert!(is_framed("```mockup\n<!doctype html><html><body>x</body></html>\n```\n"));
+        assert!(is_framed("Some prose.\n\n```mockup widths=390\nplain words\n```\n"));
+        assert!(!is_framed("```html\n<div>x</div>\n```\n"));
+        assert!(!is_framed("the word mockup in prose"));
+        // Unframed (never, for such a body — but the plain renderer keeps it a code block).
+        assert!(render_body("```mockup\n<b>x</b>\n```\n").html.contains("<pre><code class=\"language-mockup\">&lt;b&gt;x&lt;/b&gt;"));
     }
 }

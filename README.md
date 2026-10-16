@@ -1239,6 +1239,43 @@ its own (80vh) and scrolls inside it; its `#fragment` links scroll the page
 navigate the frame away), any other link takes MENGER-14's path (`menger:link`: the leave dialog first; full screen steps aside for it), and its `prefers-color-scheme`
 follows the app's painted mode.
 
+**A mockup among prose** (APP-29; `frontend/src/mockup.rs`, the SDK's
+`<m-mockup>`). A mockup is also a component of an ordinary body, with
+prose, decisions and other components around it, as many as a body needs
+(at most 16). Inline, a fence holds the page:
+
+````markdown
+The landing, as it stands:
+
+```mockup widths=390,1440
+<!doctype html>
+<html>…the whole page…</html>
+```
+
+Ship it? <m-decision id="ship">…</m-decision>
+````
+
+The fence's content is the page's HTML as written — never read as markdown
+(blank lines, `</script>`, `</template>` all survive); `widths=` takes what
+`widths:` takes (`W` or `WxH`, at most 6; quoted when it holds spaces) and
+defaults to 390, 768 and 1440. A fence alone frames its body. By reference,
+`<m-mockup ref="DESIGN-49"></m-mockup>` draws another ticket whose body is a
+whole HTML document, at the widths that page declares (`widths:` in its
+frontmatter, or its `<meta name="menger-widths">`) unless the element names
+its own (`widths="390"`); an amended page redraws in place. Either way it is
+the same box a `view: mockup` body gets — one device frame per width side
+by side, All / per device, Light / Dark, Reduced motion, ⤢ Full screen.
+
+It is drawn as `<m-cite>` is: in the body's frame the element is only a
+placeholder (`menger:mockup { mock, ref, widths, source, rect }`, a fence's
+page carried in its `source` attribute); the **host** lays the devices over
+it, outside the frame, and answers only the height (`menger:mocked { mock,
+height }`), so the prose below moves down. A `ref` is read over the
+viewer's own socket with the viewer's reach — a ticket outside it is "no
+ticket you can read", never named — and the body's frame never receives
+the referenced body. A ref that cannot be read, or whose body is not a
+whole page, shows its line in place.
+
 **What makes `prefers-color-scheme` follow inside the frame.** An iframe's
 `prefers-color-scheme` is the *embedder's* in Chromium, whatever the
 `<iframe>` element's `color-scheme` says (checked: Chromium 153 reports the

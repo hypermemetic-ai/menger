@@ -134,7 +134,7 @@ pub(crate) struct Cite {
 
 /// A ticket id as a cite names one: `EPIC-N` — ORG-9: split at its last
 /// `-`, its code by the one rule (`SYNAPSE-CC-1`), or letters, digits and `_`.
-fn ticket_ok(id: &str) -> bool {
+pub(crate) fn ticket_ok(id: &str) -> bool {
     if menger_tickets_api::address::split_key(id).is_some() {
         return true;
     }
