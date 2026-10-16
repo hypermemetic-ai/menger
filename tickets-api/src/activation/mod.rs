@@ -91,29 +91,6 @@ impl Tickets {
     pub fn with_access(store: Arc<Store>, access: Access) -> Self {
         Self { store, access }
     }
-
-    /// ACCESS-15: the roles the children declare (`roles(...)` on each —
-    /// `commits.link`, …), every grant under `tickets.`: the hub gates a
-    /// child's call by its whole path and seeds only its registered
-    /// activations' roles (plexus-core indexes no child), so the server adds
-    /// these to `declared_roles` (`src/builder.rs`). A child built later
-    /// adds its schema to the list.
-    pub fn child_roles(&self) -> std::collections::BTreeMap<String, Vec<String>> {
-        let mut out = std::collections::BTreeMap::<String, Vec<String>>::new();
-        for schema in self.child_schemas() {
-            for (role, grants) in schema.roles {
-                out.entry(role).or_default().extend(grants.into_iter().map(|g| format!("tickets.{g}")));
-            }
-        }
-        out
-    }
-
-    /// ACCESS-15: the mounted children's schemas — `commits`, … (a child
-    /// built later adds its own).
-    pub fn child_schemas(&self) -> Vec<plexus_core::plexus::PluginSchema> {
-        use plexus_core::plexus::Activation;
-        vec![self.commits().plugin_schema()]
-    }
 }
 
 // MENGER-29: everything but the methods lives beside this file —

@@ -12,9 +12,10 @@
 //! `activation/mod.rs` (`answered!`, `cells_stream`).
 //!
 //! Its grants: the child's own `roles(...)` say `commits.<method>`; the hub
-//! gates a child's call by its whole path (`tickets.commits.<method>` —
-//! plexus-core indexes no child), so [`super::child_roles`] hands the gate
-//! these, qualified under `tickets`, when the server seeds its roles.
+//! gates a child's call by its whole path (`tickets.commits.<method>`, with
+//! the method's own `target`) and seeds its roles qualified the same way
+//! (MACRO-20: plexus-core's `DynamicHub` indexes a static child; the call
+//! reaches it with the caller whole — principal, session, ceiling).
 
 use crate::types::TicketsEvent;
 use crate::vocab::{CommitRef, TicketRef};

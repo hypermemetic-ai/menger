@@ -58,8 +58,9 @@ fn activation() -> Surface {
     let store = Arc::new(Store::new());
     let hub = Tickets::new(Arc::clone(&store));
     let tickets = hub.plugin_schema();
-    // ACCESS-15: the children, each under `tickets.<child>`.
-    let children: Vec<Surface> = hub.child_schemas().into_iter().map(|c| surface_at(&format!("tickets.{}", c.namespace), c)).collect();
+    // ACCESS-15: the children, each under `tickets.<child>` (MACRO-20: the
+    // activation lists its static children by path).
+    let children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&hub).into_iter().map(|(path, c)| surface_at(&format!("tickets.{path}"), c)).collect();
     let comments = Comments::new(Arc::clone(&store)).plugin_schema();
     // NOTE-2: and notes.
     let notes = Notes::new(Arc::clone(&store)).plugin_schema();

@@ -93,7 +93,8 @@ async fn start() -> World {
     let providers: Vec<Provider> = vec![format!("idp={iss},plexus:menger").parse().unwrap()];
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
-    let access = Access::with_login(menger::session_table(&sessions), true, vec![format!("idp:{ADA}")]);
+    // MACRO-20: minting, so a member can take a ceilinged session (auth.login).
+    let access = Access::with_login(menger::session_table(&sessions), true, vec![format!("idp:{ADA}")]).minting(menger::session_table(&sessions));
     let offers = providers.iter().map(menger::offer).collect();
     let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
     // AUTH-7: as main wires it, the upgrade notices who signs in holding nothing.
@@ -242,6 +243,41 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
 /// listed and read with a role held anywhere, signed and named by its
 /// writer; nobody's without one. An upgrade makes a ticket, so it needs
 /// what tickets.create needs where the ticket lands.
+/// MACRO-20: an idp principal reaching a child (`tickets.commits.link`) is
+/// gated by the child's whole path on its target, and its session's ceiling
+/// holds there — before MACRO-20 the child saw no metadata, so an idp
+/// caller got through on its user id alone, with no ceiling.
+#[tokio::test]
+async fn an_idp_member_reaches_a_child_by_its_path_and_its_ceiling_holds() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await;
+    call(&ada, "members.grant", grant(ALICE, "OUGHT", "viewer")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+
+    let linked = call(&alice, "tickets.commits.link", json!({ "id": "IDENTITY-2", "commits": ["77df9a0"] })).await;
+    assert_eq!((linked[0]["type"].as_str(), linked[0]["added"].clone()), (Some("commits_linked"), json!(["77df9a0"])), "{linked:?}");
+    // A viewer on OUGHT: refused, naming the full grant and the target.
+    let no = call(&alice, "tickets.commits.link", json!({ "id": "OUGHT-2", "commits": ["77df9a0"] })).await;
+    assert_eq!(refused(&no), ("tickets.commits.link".to_string(), "OUGHT-2".to_string()));
+    // Bob holds nothing.
+    let bob = as_(&w, BOB, "bob").await;
+    let no = call(&bob, "tickets.commits.link", json!({ "id": "IDENTITY-2", "commits": ["77df9a0"] })).await;
+    assert_eq!(refused(&no).0, "tickets.commits.link");
+
+    // Alice's session within viewer@IDENTITY: the write is refused there.
+    let session = call(&alice, "auth.login", json!({ "flow": { "session": { "ceiling": ["viewer@IDENTITY"] } } })).await;
+    let token = session[0]["token"].as_str().unwrap_or_else(|| panic!("{session:?}")).to_string();
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", HeaderValue::from_str(&format!("Bearer {token}")).unwrap());
+    let scoped = WsClientBuilder::default().set_headers(headers).build(format!("ws://127.0.0.1:{}", w.port)).await.unwrap();
+    let no = call(&scoped, "tickets.commits.link", json!({ "id": "IDENTITY-2", "commits": ["1a2b3c4"] })).await;
+    assert_eq!(refused(&no).0, "tickets.commits.link");
+    let got = call(&ada, "tickets.get", json!({ "id": "IDENTITY-2" })).await;
+    assert_eq!(got[0]["ticket"]["commits"], json!(["77df9a0"]), "the ceilinged session wrote nothing");
+}
+
 #[tokio::test]
 async fn notes_are_any_members_and_an_upgrade_needs_what_create_needs() {
     let w = start().await;

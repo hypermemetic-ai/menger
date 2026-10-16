@@ -2100,11 +2100,14 @@ impl Tickets {
   --commits 77df9a0`), its Rust client `client.commits()` (`CommitsClient`),
   the SDK's `tickets/commits/` (`scripts/sdk-codegen.sh` generates a child
   beneath its parent and skips the mount itself). Its grants: its own
-  `roles(...)` say `commits.link`; the hub gates a child's call by its
-  whole path and seeds no child's roles, so `Tickets::child_roles` hands
-  the server `tickets.commits.link` (`src/builder.rs`). Under login a child
-  refuses everyone until MACRO-20: `route_to_child` passes it an
-  `IdentityOnly` context, without the principal, session or ceiling.
+  `roles(...)` say `commits.link`; the hub (MACRO-20) gates a child's call
+  by its whole path — `tickets.commits.link`, on the method's own `target`
+  — seeds the child's roles qualified the same way in `declared_roles`,
+  and keeps the child's entry in a caller's view when the caller holds
+  something below it. The call reaches the child with the caller whole
+  (`SameService`: principal, session, ceiling); a child that must not see
+  the caller's session says `#[plexus_macros::child(forward =
+  "identity_only")]`.
 - The schema lists what the server injects (`auth`, `user`) with an
   `x-plexus-source`; synapse shows them as server-supplied, and the SDK's
   drift guard (`sdk_manifest.rs`, `scripts/sdk-codegen.sh`) drops them.

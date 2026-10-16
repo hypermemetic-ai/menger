@@ -323,12 +323,8 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     let sessions = Arc::new(menger::sessions::Sessions::new(3600, &menger::login_names()));
     let access = menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), true, Vec::new()).minting(menger::session_table(&sessions));
     let hub = menger::build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access).await.unwrap();
-    let mut declared = hub.declared_roles();
-    // ACCESS-15: and the children's, under `tickets.`, as the server seeds them.
-    let tickets = menger_tickets_api::Tickets::new(Arc::new(menger_tickets_api::store::Store::new()));
-    for (role, grants) in tickets.child_roles() {
-        declared.entry(role).or_default().extend(grants);
-    }
+    // MACRO-20: the children's roles are in it, each grant under its path.
+    let declared = hub.declared_roles();
     let viewer: BTreeSet<String> = declared["viewer"].iter().cloned().collect();
     let editor: BTreeSet<String> = declared["editor"].iter().cloned().collect();
     assert!(viewer.is_subset(&editor), "an editor holds every viewer grant");
@@ -338,7 +334,11 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     // ACCESS-15: a child's methods are `tickets.<child>.<method>` on the
     // wire and in the table; its schema says `<child>.<method>`.
     let mut seen = BTreeSet::new();
-    let children = tickets.child_schemas().into_iter().map(|s| (format!("tickets.{}", s.namespace), s));
+    // MACRO-20: the hub lists them by path (`tickets.commits`), each schema
+    // its own (namespace and grants as the macro wrote them).
+    let children = plexus_core::plexus::Activation::static_child_schemas(&menger_tickets_api::Tickets::new(Arc::new(menger_tickets_api::store::Store::new())))
+        .into_iter()
+        .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = hub.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
         if !["tickets", "comments", "notes", "members", "session"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
@@ -516,16 +516,13 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     assert_eq!((compat["type"].as_str(), compat["scope"].clone()), (Some("login"), json!(["viewer@hypermemetic:A"])));
 }
 
-/// ACCESS-15: a child's methods (`tickets.commits.link` / `unlink`) are
-/// gated by their whole path — the grant the hub checks, what the editor
-/// role holds — and the ticket is asked by the method's permit: an editor
-/// on A links and unlinks there, is refused on B, and a viewer is refused.
-///
-/// Ignored until MACRO-20: past the gate, `route_to_child` hands the child
-/// an `IdentityOnly` context — no principal stamp, session or ceiling — so
-/// under login the child refuses everyone ("names no principal").
+/// ACCESS-15 / MACRO-20: a child's methods (`tickets.commits.link` /
+/// `unlink`) are gated by their whole path — the grant the hub checks, on
+/// the method's own target, what the editor role holds — and reach the
+/// child with the caller whole (principal, session, ceiling): an editor on
+/// A links and unlinks there, is refused on B, a viewer is refused naming
+/// the full grant, and a session's ceiling holds inside the child.
 #[tokio::test]
-#[ignore = "MACRO-20: a #[child] gets an IdentityOnly context under login"]
 async fn a_child_s_methods_are_held_by_their_path() {
     let dir = tmp();
     let s = spawn(&dir.path().join("t.db"), true).await;
@@ -535,17 +532,50 @@ async fn a_child_s_methods_are_held_by_their_path() {
 
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
     let no = one(&agent, "tickets.commits.link", json!({ "id": "A-2", "commits": ["77df9a0"] })).await;
-    assert_eq!((no["error_kind"].as_str(), no["grant"].as_str()), (Some("forbidden"), Some("tickets.commits.link")), "{no}");
+    assert_eq!(
+        (no["error_kind"].as_str(), no["grant"].as_str(), no["scope"].as_str(), no["roles"].clone()),
+        (Some("forbidden"), Some("tickets.commits.link"), Some("A-2"), json!(["editor", "admin"])),
+        "{no}"
+    );
+    // A viewer holds nothing below `commits`: the entry is not in its view.
+    assert!(!view(&agent).await["tickets"].contains("commits"), "a viewer is shown no commits");
 
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "editor" })).await;
     let linked = one(&agent, "tickets.commits.link", json!({ "id": "A-2", "commits": ["77df9a0"] })).await;
     assert_eq!((linked["type"].as_str(), linked["added"].clone()), (Some("commits_linked"), json!(["77df9a0"])), "{linked}");
     let unlinked = one(&agent, "tickets.commits.unlink", json!({ "id": "A-2", "commits": ["77df9a0"] })).await;
     assert_eq!((unlinked["type"].as_str(), unlinked["removed"].clone()), (Some("commits_unlinked"), json!(["77df9a0"])), "{unlinked}");
+    // Gated on the target: editor on A is not editor on B.
     let no = one(&agent, "tickets.commits.link", json!({ "id": "B-2", "commits": ["77df9a0"] })).await;
-    assert_ne!(no["type"], "commits_linked", "not on B: {no}");
+    assert_eq!(
+        (no["error_kind"].as_str(), no["grant"].as_str(), no["scope"].as_str(), no["held_on"].clone()),
+        (Some("forbidden"), Some("tickets.commits.link"), Some("B-2"), json!(["hypermemetic:A"])),
+        "{no}"
+    );
     let b = one(&boss, "tickets.get", json!({ "id": "B-2" })).await;
     assert_eq!(b["ticket"]["commits"], json!([]), "nothing written on B");
+    // The editor's view keeps the child's entry; auth.requires knows the path.
+    assert!(view(&agent).await["tickets"].contains("commits"), "an editor navigates to commits");
+    let req = one(&agent, "auth.requires", json!({ "method": "tickets.commits.link" })).await;
+    assert_eq!(
+        (req["grant"].as_str(), req["target"].as_str(), req["roles"].clone()),
+        (Some("tickets.commits.link"), Some("id"), json!(["editor", "admin"])),
+        "{req}"
+    );
+
+    // A session's ceiling holds inside the child: within editor@A it links …
+    let session = one(&agent, "auth.login", json!({ "flow": { "session": { "ceiling": ["editor@A"] } } })).await;
+    let scoped = connect(s.port, Some(session["token"].as_str().unwrap())).await;
+    let linked = one(&scoped, "tickets.commits.link", json!({ "id": "A-2", "commits": ["1a2b3c4"] })).await;
+    assert_eq!(linked["type"], "commits_linked", "the session's principal reaches the child: {linked}");
+    // … within viewer@A it is refused, though the key holds editor on A.
+    let session = one(&agent, "auth.login", json!({ "flow": { "session": { "ceiling": ["viewer@A"] } } })).await;
+    let scoped = connect(s.port, Some(session["token"].as_str().unwrap())).await;
+    let no = one(&scoped, "tickets.commits.link", json!({ "id": "A-2", "commits": ["5d6e7f8"] })).await;
+    assert_eq!((no["error_kind"].as_str(), no["grant"].as_str(), no["held_on"].clone()), (Some("forbidden"), Some("tickets.commits.link"), json!([])), "{no}");
+    let a = one(&boss, "tickets.get", json!({ "id": "A-2" })).await;
+    assert_eq!(a["ticket"]["commits"], json!(["1a2b3c4"]), "only the editor@A session wrote");
+
     // The old names are gone.
     let gone = one(&boss, "tickets.link_commits", json!({ "id": "A-2", "commits": ["77df9a0"] })).await;
     assert_eq!(gone["type"], "error", "{gone}");
