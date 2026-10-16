@@ -787,9 +787,9 @@ pub(crate) const WHOLE: usize = PAGE;
 /// scroll back over them is a re-render, not a re-fetch.
 pub(crate) const KEEP_CHUNKS: usize = 4;
 
-/// The nav's row pitch (px) until a row has been measured: 12.5 px type at
-/// a 1.55 line height (index.html).
-const PITCH_GUESS: f64 = 19.375;
+/// The nav's row pitch (px) until a row has been measured: a row is 24px
+/// tall (index.html, LOOK-2).
+const PITCH_GUESS: f64 = 24.0;
 
 /// What an open node lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
