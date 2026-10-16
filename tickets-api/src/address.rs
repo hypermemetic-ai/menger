@@ -252,9 +252,14 @@ impl PartialEq<&str> for Code {
 /// `.`). A ticket's key is its shortcode's id, `-`, and its number, as it
 /// was born.
 ///
-/// `Ord` is its text's: today's order of shortcodes is unchanged, and a
-/// namesake sorts right after the code it shares (`.` sorts before every
-/// letter and digit).
+/// `Ord` is its text's, byte by byte: today's order of shortcodes is
+/// unchanged, it is stable, and it is stored nowhere. A namesake sorts
+/// after the code it shares and before any longer code of letters and
+/// digits (`.` sorts before every letter and digit) — but not right after
+/// it: since ORG-9 a code may hold `-`, which sorts before `.`, so a
+/// hyphenated code that extends the letters comes between (ORG-11:
+/// `SYNAPSE` < `SYNAPSE-CC` < `SYNAPSE.62` < `SYNAPSE2`). Nothing relies
+/// on a namesake standing beside its code.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShortcodeId(Arc<str>);
 
@@ -745,11 +750,21 @@ mod tests {
     }
 
     #[test]
-    fn a_shortcode_id_mints_the_key_and_sorts_a_namesake_beside_its_code() {
+    fn a_shortcode_id_mints_the_key_and_sorts_a_namesake_after_its_code() {
         let (plain, namesake, next) = (ShortcodeId::new("THEME"), ShortcodeId::new("THEME.62"), ShortcodeId::new("THEME2"));
         assert_eq!((plain.key(3), namesake.key(3)), ("THEME-3".to_string(), "THEME.62-3".to_string()));
         assert!(plain < namesake && namesake < next);
         assert_eq!(serde_json::to_string(&namesake).unwrap(), "\"THEME.62\"");
+    }
+
+    #[test]
+    fn a_hyphenated_code_sorts_between_a_code_and_its_namesakes() {
+        // ORG-11: the text's order — `-` sorts before `.`, `.` before every letter and digit.
+        let mut ids: Vec<ShortcodeId> =
+            ["SYNAPSE2", "SYNAPSE.62", "SYNAPSE-CC", "SYNAPSE"].into_iter().map(ShortcodeId::new).collect();
+        ids.sort();
+        let order: Vec<&str> = ids.iter().map(ShortcodeId::as_str).collect();
+        assert_eq!(order, ["SYNAPSE", "SYNAPSE-CC", "SYNAPSE.62", "SYNAPSE2"]);
     }
 
     #[test]
