@@ -66,7 +66,7 @@ fn outcome(evs: Result<Vec<MembersEvent>, plexus_client::ClientError>) -> Result
 async fn grant(client: MembersClient<std::rc::Rc<plexus_client::WsTransport>>, principal: String, scope: String, role: String) -> Result<(), String> {
     let typed = || -> Result<_, String> { Ok((crate::typed::typed(&principal)?, crate::typed::typed(&scope)?, crate::typed::typed(&role)?)) };
     let (principal, scope, role) = typed()?;
-    outcome(client.grant_all(principal, scope, role).await)
+    outcome(client.grant_all(Some(principal), None, scope, role).await)
 }
 
 #[component]
@@ -143,8 +143,13 @@ pub(crate) fn MembersPage() -> impl IntoView {
                             let (p, s) = (p.clone(), s.clone());
                             let Some(client) = session::members_client() else { return };
                             act(format!("revoked {p} on {s}"), Box::pin(async move {
-                                let (principal, scope) = (crate::typed::typed(&p.to_string())?, crate::typed::typed(&s.to_string())?);
-                                outcome(client.revoke_all(principal, scope).await)
+                                // ACCESS-22: a grant is to a principal or a team.
+                                let (principal, team) = match p {
+                                    menger_tickets_api::vocab::Grantee::Principal(p) => (Some(p), None),
+                                    menger_tickets_api::vocab::Grantee::Team(t) => (None, Some(t)),
+                                };
+                                let scope = crate::typed::typed(&s.to_string())?;
+                                outcome(client.revoke_all(principal, team, scope).await)
                             }));
                         };
                         view! {

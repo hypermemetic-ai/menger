@@ -527,12 +527,12 @@ async fn verify_derived_names_an_altered_tally_and_holder_and_a_form_4_file_is_b
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 4; this build reads 12"), "{out}");
+    assert!(out.contains("stored in form 4; this build reads 13"), "{out}");
     let s = spawn_server(&db, dir.path(), "form4").await;
     let c = connect(s.port).await;
     one(&c, "tickets.health", json!({})).await.unwrap();
     let log = s.log();
-    assert!(log.contains("it was stored in form 4, this build writes 12"), "{log}");
+    assert!(log.contains("it was stored in form 4, this build writes 13"), "{log}");
     assert!(log.contains("kept the tree over 6000 tickets"), "{log}");
     drop(c);
     s.kill9();
@@ -654,13 +654,13 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 5; this build reads 12"), "{out}");
+    assert!(out.contains("stored in form 5; this build reads 13"), "{out}");
 
     // The first open gains form 6, once, and answers as before.
     let s = spawn_server(&db, dir.path(), "form5").await;
     let after = answers(connect(s.port).await).await;
     let log = s.log();
-    let built = log.lines().find(|l| l.contains("it was stored in form 5, this build writes 12")).unwrap_or_else(|| panic!("{log}"));
+    let built = log.lines().find(|l| l.contains("it was stored in form 5, this build writes 13")).unwrap_or_else(|| panic!("{log}"));
     eprintln!("form 5 → 8: {}", &built[built.find("built once").unwrap_or(0)..]);
     assert_eq!(after.len(), before.len());
     for (i, (a, b)) in after.iter().zip(&before).enumerate() {
@@ -671,7 +671,7 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     assert_eq!(code, Some(0), "{out}\n{err}");
     let conn = rusqlite::Connection::open(&db).unwrap();
     let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
-    assert_eq!(form, 12, "ARCHIVE-2: a build writes form 12");
+    assert_eq!(form, 13, "ACCESS-22: a build writes form 13");
     assert_eq!(docs_cells(&conn), 2, "the board notes' cell and the ordinary docs' apart");
     let menger: i64 = conn.query_row("SELECT count(*) FROM cells WHERE menger = 1", [], |r| r.get(0)).unwrap();
     assert!(menger >= 1);
@@ -730,7 +730,7 @@ async fn a_form_6_file_gains_form_7_once_and_answers_as_before() {
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 6; this build reads 12 (the next open builds it again)"), "{out}");
+    assert!(out.contains("stored in form 6; this build reads 13 (the next open builds it again)"), "{out}");
 
     // The first open gains the table and — MENGER-12: form 10 moves the
     // cells — builds the derived state again, once, and answers as before.
@@ -740,7 +740,7 @@ async fn a_form_6_file_gains_form_7_once_and_answers_as_before() {
     let log = s.log();
     let built = log
         .lines()
-        .find(|l| l.contains("SCALE-28: stored the derived state again: it was stored in form 6, this build writes 12"))
+        .find(|l| l.contains("SCALE-28: stored the derived state again: it was stored in form 6, this build writes 13"))
         .unwrap_or_else(|| panic!("{log}"));
     eprintln!("form 6 → 10: {}", &built[built.find("SCALE-28").unwrap_or(0)..]);
     assert_eq!(after.len(), before.len());
@@ -757,7 +757,7 @@ async fn a_form_6_file_gains_form_7_once_and_answers_as_before() {
     assert_eq!(code, Some(0), "{out}\n{err}");
     let conn = rusqlite::Connection::open(&db).unwrap();
     let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
-    assert_eq!((form, tables(&conn)), (12, 1));
+    assert_eq!((form, tables(&conn)), (13, 1));
     drop(conn);
 
     // The next open reads: nothing gained, nothing built; the comment kept.

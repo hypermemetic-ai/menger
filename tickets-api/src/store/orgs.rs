@@ -332,6 +332,11 @@ impl Store {
                     held.len()
                 )));
             }
+            // ACCESS-22: nor while a team lives in it.
+            let teams = cache.members.records.values().filter(|t| t.org == row).count();
+            if teams > 0 {
+                return Err(StoreError::Invalid(format!("{org} holds {teams} team(s) — delete them first: an organization is deleted only empty (nothing was changed)")));
+            }
             let mut names = r.aliases_of(row);
             names.push(org.as_str().to_string());
             let grants: Vec<Grant> = cache.members.all().into_iter().filter(|g| scope_in(&g.scope, &names)).collect();

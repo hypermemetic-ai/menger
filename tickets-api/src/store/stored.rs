@@ -97,13 +97,21 @@ use crate::address::{ShortcodeId, TicketId, TicketName};
 /// place, once, on its first open ([`upgrade`]). One way: an older build
 /// reads a form-12 file as its own; once anything is archived, it would
 /// read an archived ticket's cell as its live twin's.
-const FORM: i64 = 12;
+///
+/// ACCESS-22 is form 13: the teams (`teams`, `team_members`,
+/// [`super::teams`]) — records of their own, beside the grants, moving
+/// nothing derived: a file in form 10, 11 or 12 gains them, empty, in place,
+/// once ([`upgrade`]). One way: an older build reads a form-13 file as its
+/// own and never looks at the tables, so a grant to a team reaches no one
+/// there (its members are unknown to it) — narrower, never wider.
+const FORM: i64 = 13;
 
 /// COMMENT-2, IDENTITY-21, AUTH-7: the forms [`upgrade`] takes to [`FORM`]
 /// in place. MENGER-12: none — form 10 moves the cells, so every older form
 /// is built again. ORG-3: form 10, which gains the shortcodes' tables.
 /// ARCHIVE-2: and form 11, which gains the archive's columns (so does 10).
-const UPGRADES_FROM: [i64; 2] = [10, 11];
+/// ACCESS-22: and form 12, which gains the teams' tables (so do 10 and 11).
+const UPGRADES_FROM: [i64; 3] = [10, 11, 12];
 
 /// IDENTITY-21: what form 8 adds beside the tables — a comment's signer.
 fn add_comment_principal(conn: &Connection) -> rusqlite::Result<()> {
@@ -900,6 +908,8 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     // ORG-3: form 11's shortcodes, orgs and pins — empty; the open that
     // built this fills them ([`super::shortcodes::settle`]).
     tx.execute_batch(super::shortcodes::TABLES)?;
+    // ACCESS-22: form 13's teams — empty for a file that had none.
+    tx.execute_batch(super::teams::TABLES)?;
     // MENGER-12: the inputs say which tickets are `asking` — read before
     // the cells are built (`inputs::migrate` made the tables before this).
     let cache = Cache::new(db::load_rows(&tx)?, super::inputs::load(&tx)?);
@@ -963,10 +973,12 @@ pub(super) fn upgrade(conn: &mut Connection, form: i64) -> anyhow::Result<bool> 
     tx.execute_batch(super::shortcodes::TABLES)?;
     // ARCHIVE-2: form 12's columns, every one 0 — nothing was archived.
     add_archive_columns(&tx)?;
+    // ACCESS-22: form 13's teams, empty.
+    tx.execute_batch(super::teams::TABLES)?;
     mark_stale(&tx, false)?;
     tx.commit()?;
     tracing::warn!(
-        "ORG-3, ARCHIVE-2: the file gained stored form {FORM} — the shortcodes, orgs and pins tables, the archive's columns — in {:.1} ms, durably; \
+        "ORG-3, ARCHIVE-2, ACCESS-22: the file gained stored form {FORM} — the shortcodes, orgs and pins tables, the archive's columns, the teams' tables — in {:.1} ms, durably; \
          it was in form {form}, whose derived state is form {FORM}'s (every shortcode is named by its id already), \
          so nothing was built again; every later open reads it",
         started.elapsed().as_secs_f64() * 1000.0

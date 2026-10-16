@@ -17,7 +17,7 @@
 //! | `deployer` | read under the scope, and record its deployments — a CI's key (DEPLOY-14) |
 
 use crate::address::{Address, OrgId, ShortcodeId, TicketId};
-use crate::vocab::{GrantedBy, Grantee};
+use crate::vocab::{GrantedBy, Grantee, Principal, TeamName};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -258,6 +258,33 @@ pub struct Grant {
     pub at: i64,
 }
 
+/// ACCESS-22: a team — a named set of principals that holds grants as one
+/// grantee (`team:<name>`): each member holds what it holds. Its name is
+/// unique app-wide (so `team:<name>` names one), and it lives in one
+/// organization (ACCESS-37), where `members teams list` shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Team {
+    pub name: TeamName,
+    pub org: OrgId,
+    /// Who made it — a principal, or the operator's.
+    pub created_by: GrantedBy,
+    /// When, unix seconds.
+    pub at: i64,
+    /// How many principals are in it.
+    pub members: u32,
+}
+
+/// ACCESS-22: one principal in a team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TeamMember {
+    pub team: TeamName,
+    pub principal: Principal,
+    /// Who added them.
+    pub added_by: GrantedBy,
+    /// When, unix seconds.
+    pub at: i64,
+}
+
 /// What the `members` activation's methods yield.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -274,8 +301,21 @@ pub enum MembersEvent {
         /// When they first signed in without access, unix seconds.
         since: i64,
     },
-    /// `mine`: who the caller is — before their grants.
+    /// `mine`: who the caller is — before their teams and grants.
     Me { principal: Option<String>, name: Option<String>, admin_everywhere: bool },
+    /// ACCESS-22: a team as it stands — `teams.list`, `teams.show`'s first,
+    /// `teams.create` and `teams.rename`'s answer, and `mine`'s, one per
+    /// team the caller is in (before its grants: a grant held through a team
+    /// is the team's, `principal: team:<name>`).
+    Team { team: Team },
+    /// ACCESS-22: a principal in a team — `teams.show`'s, after the team;
+    /// `teams.add`'s answer.
+    TeamMember { member: TeamMember },
+    /// ACCESS-22: `teams.remove`'s answer — whether they were in it.
+    TeamLeft { team: TeamName, principal: Principal, existed: bool },
+    /// ACCESS-22: `teams.delete`'s answer — the team, with every grant it
+    /// held (`grants`, how many) and every member.
+    TeamDeleted { team: TeamName, grants: u32, members: u32 },
     /// A refusal, naming the problem; nothing was changed.
     Error { message: String },
 }

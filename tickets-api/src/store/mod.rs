@@ -3232,6 +3232,8 @@ impl Store {
         shortcodes::settle(conn, &mut cache)?;
         // ORG-4: every grant from before organizations moved into its own.
         cache.members = orgs::settle(conn, &cache, grant_rows)?;
+        // ACCESS-22: the teams and who is in each, beside the grants.
+        teams::load(conn, &mut cache.members)?;
         // MENGER-39: the queue, as stored.
         cache.queue = queue::load(conn)?;
         // FILTER-36: the saved filters, from their docs' bodies.
@@ -4743,6 +4745,12 @@ impl Store {
     pub async fn grant(&self, by: impl Into<Authority>, g: crate::members::Grant) -> Result<crate::members::Grant, StoreError> {
         by.into().grants_on(&g.scope)?;
         let serial = self.serial().await;
+        // ACCESS-22: a grant to a team is to one there is.
+        if let crate::vocab::Grantee::Team(t) = &g.principal {
+            if !self.has_team(t) {
+                return Err(StoreError::Invalid(format!("no team {t} (nothing written)")));
+            }
+        }
         let (stored, kept) = (g.clone(), g.clone());
         self.write(
             serial,
@@ -5361,6 +5369,9 @@ pub use notes::{NotePage, NoteQuery};
 /// IDENTITY-21: the members store — every grant of a role on a scope, kept
 /// beside the tickets, behind the cache.
 mod members;
+/// ACCESS-22: the teams — a named set of principals holding grants as one.
+mod teams;
+pub use teams::OnTeam;
 // ACCESS-9: the capability of acting for no user, minted here alone.
 mod system;
 pub use system::System;
@@ -5478,6 +5489,8 @@ mod shortcodes;
 mod orgs;
 #[cfg(test)]
 mod tests_orgs;
+#[cfg(test)]
+mod tests_teams;
 // The create write, in a module of its own (MENGER-29).
 mod create;
 pub use shortcodes::OrgReach;

@@ -527,6 +527,10 @@ async fn a_grant_on_a_ticket_that_moves_follows_it() {
 async fn team_grants_add_to_direct_ones() {
     let a = login(vec![]);
     let s = store().await;
+    let crew = crate::vocab::TeamName::stored("crew");
+    // ACCESS-22: a grant to a team is to one there is.
+    assert!(s.grant(SYS, grant("team:crew", "hypermemetic:IDENTITY", Role::Editor)).await.is_err(), "no team crew yet");
+    s.create_team(SYS, crew.clone(), &org(), GrantedBy::Operator).await.unwrap();
     s.grant(SYS, grant(ALICE, "hypermemetic:OUGHT", Role::Viewer)).await.unwrap();
     s.grant(SYS, grant("team:crew", "hypermemetic:IDENTITY", Role::Editor)).await.unwrap();
     a.attach(s.clone());
@@ -534,14 +538,13 @@ async fn team_grants_add_to_direct_ones() {
     let u = a.verify_now(&me).unwrap();
     assert!(u.permit::<Viewer>(&t("OUGHT-2"), &s).is_ok());
     assert!(u.permit::<Viewer>(&t("IDENTITY-2"), &s).is_err(), "not in the team yet");
-    let crew = crate::vocab::TeamName::stored("crew");
-    s.set_team_for_tests(ALICE, crew.clone(), true);
+    s.add_to_team(SYS, &crew, &alice(), GrantedBy::Operator).await.unwrap();
     let u = a.verify_now(&me).unwrap();
     assert!(u.permit::<Editor>(&t("IDENTITY-2"), &s).is_ok(), "the team's grant");
     assert!(u.permit::<Viewer>(&t("OUGHT-2"), &s).is_ok(), "and still the direct one");
     assert!(u.permit::<Editor>(&t("OUGHT-2"), &s).is_err(), "each at its own role");
     assert_eq!(u.reach().grants().len(), 2);
-    s.set_team_for_tests(ALICE, crew, false);
+    assert!(s.remove_from_team(SYS, &crew, &alice()).await.unwrap());
     assert!(a.verify_now(&me).unwrap().permit::<Viewer>(&t("IDENTITY-2"), &s).is_err(), "left the team");
 }
 
@@ -566,14 +569,18 @@ async fn the_generation_moves_on_every_grant_revoke_and_team_change() {
     moved("someone else's grant");
     s.revoke(SYS, ALICE.parse().unwrap(), kept_scope("hypermemetic:OUGHT")).await.unwrap();
     moved("a revoke");
-    s.set_team_for_tests(ALICE, crate::vocab::TeamName::stored("crew"), true);
+    let crew = crate::vocab::TeamName::stored("crew");
+    s.create_team(SYS, crew.clone(), &org(), GrantedBy::Operator).await.unwrap();
+    s.add_to_team(SYS, &crew, &alice(), GrantedBy::Operator).await.unwrap();
     moved("a team joined");
-    s.set_team_for_tests(ALICE, crate::vocab::TeamName::stored("crew"), false);
+    s.remove_from_team(SYS, &crew, &alice()).await.unwrap();
     moved("a team left");
     // Nothing that changes no one's grants moves it.
     let before = a.generation();
     assert!(!s.revoke(SYS, ALICE.parse().unwrap(), kept_scope("hypermemetic:OUGHT")).await.unwrap());
-    s.set_team_for_tests(ALICE, crate::vocab::TeamName::stored("crew"), false);
+    assert!(!s.remove_from_team(SYS, &crew, &alice()).await.unwrap());
+    s.create_team(SYS, crate::vocab::TeamName::stored("empty"), &org(), GrantedBy::Operator).await.unwrap();
+    s.delete_team(SYS, &crate::vocab::TeamName::stored("empty")).await.unwrap();
     assert_eq!(a.generation(), before);
 }
 

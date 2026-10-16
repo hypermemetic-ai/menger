@@ -406,6 +406,16 @@ impl Authority {
         }
     }
 
+    /// ACCESS-22: whether it is admin on some scope (minted while login is
+    /// on), or the system — what making a team takes.
+    pub(super) fn administers_somewhere(&self, what: &str) -> Result<(), StoreError> {
+        match &self.0 {
+            AuthorityBy::System => Ok(()),
+            AuthorityBy::Admin(a) if !a.anyone() => Ok(()),
+            _ => Err(mismatch(what)),
+        }
+    }
+
     /// Whether it is admin on exactly `scope`, or the system.
     pub(super) fn admin_on(&self, scope: &Scope, what: &str) -> Result<(), StoreError> {
         match &self.0 {

@@ -372,13 +372,13 @@ async fn a_form_11_file_gains_the_archives_columns_in_place() {
     )
     .unwrap();
     drop(conn);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 11; this build reads 12")));
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 11; this build reads 13")));
     let store = Store::open(&path).unwrap();
     assert_eq!(store.groups(SYS), groups, "answers as before, nothing built again");
     store.archive(SYS, ids(&["K-6"]), false).await.unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 }

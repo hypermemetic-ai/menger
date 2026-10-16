@@ -57,14 +57,15 @@ impl Store {
     }
 
     /// ACCESS-9: the teams `principal` is in — the input a reach adds each
-    /// team's grants from (`team:<name>`'s). From the cache; empty until
-    /// ACCESS-22 keeps teams.
+    /// team's grants from (`team:<name>`'s). From the cache (ACCESS-22
+    /// keeps the teams).
     pub fn teams_of(&self, principal: &str) -> Vec<crate::vocab::TeamName> {
         self.tickets.read().expect("store lock poisoned").members.teams_of(principal)
     }
 
-    /// ACCESS-9, tests only until ACCESS-22 stores teams: `principal` in
-    /// `team` or out of it, in the cache alone (nothing is written).
+    /// ACCESS-9, tests only: `principal` in `team` or out of it, in the
+    /// cache alone (nothing is written; ACCESS-22's writes are
+    /// [`Store::add_to_team`] and [`Store::remove_from_team`]).
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_team_for_tests(&self, principal: &str, team: crate::vocab::TeamName, member: bool) {
         let generation = {
