@@ -40,6 +40,12 @@
  *     browser would navigate the frame away); an app route (`#/…`) navigates the app,
  *     and any other link is handed to the host as `menger:link { href }` —
  *     MENGER-14's path: inside menger it navigates, leaving it asks first.
+ *   - **Says how tall its page is** (APP-42): `menger:extent { height }`,
+ *     the document's scroll height in px, whenever it or the viewport
+ *     changes — the host
+ *     keeps it for a mockup's device (a frame held to its screen) and notes
+ *     in the bar when the page scrolls several screens; elsewhere it is
+ *     ignored. A number, nothing of the page's content.
  */
 (function () {
   "use strict";
@@ -258,6 +264,39 @@
       apply();
     }
   });
+
+  // -- APP-42: how tall the page is -----------------------------------------
+  var extentSent = "";
+  var extentQueued = false;
+  function extent() {
+    extentQueued = false;
+    var de = doc.documentElement;
+    var b = doc.body;
+    var h = Math.max(de ? de.scrollHeight : 0, b ? b.scrollHeight : 0);
+    // Said again when the viewport moves too (APP-33's resizes): the host
+    // measures the screen it is held to as it hears this.
+    var key = h + ":" + window.innerWidth + "x" + window.innerHeight;
+    if (!isFinite(h) || key === extentSent) return;
+    extentSent = key;
+    post("menger:extent", { height: h });
+  }
+  function queueExtent() {
+    if (extentQueued) return;
+    extentQueued = true;
+    setTimeout(extent, 60);
+  }
+  if (typeof ResizeObserver === "function") {
+    var extentRO = new ResizeObserver(queueExtent);
+    if (doc.documentElement) extentRO.observe(doc.documentElement);
+    var watchBody = function () {
+      if (doc.body) extentRO.observe(doc.body);
+    };
+    if (doc.body) watchBody();
+    else doc.addEventListener("DOMContentLoaded", watchBody);
+  }
+  window.addEventListener("resize", queueExtent);
+  window.addEventListener("load", queueExtent);
+  doc.addEventListener("DOMContentLoaded", queueExtent);
 
   if (!page) return;
 

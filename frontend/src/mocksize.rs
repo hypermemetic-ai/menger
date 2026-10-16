@@ -311,6 +311,13 @@ impl Sizer {
         s
     }
 
+    /// APP-42: the devices shown — every slot, or the one shown alone —
+    /// each its slot's key and its size, tracked.
+    pub(crate) fn shown(&self) -> Vec<(u32, Device)> {
+        let solo = self.solo.get();
+        self.slots.with(|v| v.iter().filter(|x| solo.is_none_or(|k| k == x.key)).map(|x| (x.key, x.dev.get())).collect())
+    }
+
     fn devices_untracked(&self) -> Vec<Device> {
         self.slots.with_untracked(|v| v.iter().map(|s| s.dev.get_untracked()).collect())
     }
@@ -707,7 +714,7 @@ impl Sizer {
         let readout2 = readout.clone();
         let data_kind = kind.clone();
         view! {
-            <figure class="device" data-kind=data_kind data-w=data_w class:hidden=move || !shown() class:is-dragging=dragging>
+            <figure class="device" data-slot=key.to_string() data-kind=data_kind data-w=data_w class:hidden=move || !shown() class:is-dragging=dragging>
                 <figcaption class="device-label">
                     <span>{kind}</span>
                     <button class="device-size code" title="Type a size for this device" on:click=move |_| s.open_field(Target::Slot(key))>{readout}</button>

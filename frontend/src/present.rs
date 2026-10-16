@@ -41,8 +41,21 @@
 //! APP-33: the viewer sizes it — a Size menu of standard devices, Custom
 //! `W×H`, a device's edge dragged, Rotate, Reset (src/mocksize.rs).
 //!
+//! APP-42: **a mockup is one view, and what it shows is said outside it.**
+//! A mockup's caption ([`Caption`]) — an `<m-mockup>`'s `title` and
+//! `description` (and its `<m-description>` child), a fence's `title=` /
+//! `description=`, a `view: mockup` body's frontmatter `description:` (or a
+//! whole document's `<meta name="menger-description">`) — is drawn by this
+//! box above its bar and its devices, in the app's DOM and type: never in
+//! the mocked page, never changing a device's viewport. And when the page
+//! at the narrowest device shown is more than [`TALL_SCREENS`] of its
+//! screens tall ([`screens`]) — the page shim reports its height,
+//! `menger:extent` — the bar says so, quietly ([`tall_note`]): a hint to the
+//! author that another view is another mockup, never a refusal.
+//!
 //! What decides — the declaration, the devices, the scale, the route's
-//! query — is pure and pinned by native tests; the rest is DOM.
+//! query, the caption, the tall check — is pure and pinned by native tests;
+//! the rest is DOM.
 
 use std::cell::{Cell, RefCell};
 
@@ -123,17 +136,109 @@ pub(crate) const DEFAULT_WIDTHS: [u32; 3] = [390, 768, 1440];
 /// The most devices a mockup draws.
 pub(crate) const MAX_DEVICES: usize = 6;
 
-/// What a body declares: its view, and a mockup's devices.
+/// What a body declares: its view, a mockup's devices, and (APP-42) what
+/// the mockup shows, said above it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Decl {
     pub(crate) mode: Mode,
     pub(crate) devices: Vec<Device>,
+    pub(crate) caption: Caption,
 }
 
 impl Default for Decl {
     fn default() -> Self {
-        Decl { mode: Mode::Inline, devices: DEFAULT_WIDTHS.iter().map(|w| Device::of_width(*w)).collect() }
+        Decl {
+            mode: Mode::Inline,
+            devices: DEFAULT_WIDTHS.iter().map(|w| Device::of_width(*w)).collect(),
+            caption: Caption::default(),
+        }
     }
+}
+
+/// APP-42: a mockup's caption — a title (one line) and a description
+/// (markdown, a line or a paragraph or two), drawn above the devices.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Caption {
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
+}
+
+/// The longest title a caption keeps, in characters.
+pub(crate) const TITLE_MAX: usize = 200;
+/// The longest description a caption keeps, in characters.
+pub(crate) const DESCRIPTION_MAX: usize = 4_000;
+
+impl Caption {
+    /// A caption from what was written: each trimmed, blank ones none, a
+    /// title one line (its first) and clipped, a description clipped.
+    pub(crate) fn of(title: Option<&str>, description: Option<&str>) -> Self {
+        let title = title
+            .and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty()))
+            .map(|t| clip_chars(t, TITLE_MAX));
+        let description = description.map(str::trim).filter(|d| !d.is_empty()).map(|d| clip_chars(d, DESCRIPTION_MAX));
+        Caption { title, description }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.title.is_none() && self.description.is_none()
+    }
+
+    /// This caption, or — when it says nothing — `other`'s (an element's
+    /// own caption wins over the referenced page's declared one).
+    pub(crate) fn or(self, other: Option<&Caption>) -> Caption {
+        if self.is_empty() {
+            other.cloned().unwrap_or_default()
+        } else {
+            self
+        }
+    }
+}
+
+fn clip_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", s[..i].trim_end()),
+        None => s.to_string(),
+    }
+}
+
+/// APP-42: a page more than this many of its device's screens tall draws
+/// the bar's note.
+pub(crate) const TALL_SCREENS: u32 = 3;
+
+/// APP-42: how many screens a page `doc` px tall fills in a viewport `view`
+/// px tall — `Some` only when that is more than [`TALL_SCREENS`] of them
+/// (rounded up: a page 3.2 screens tall scrolls 4).
+pub(crate) fn screens(doc: u32, view: u32) -> Option<u32> {
+    if view == 0 || doc <= TALL_SCREENS.saturating_mul(view) {
+        return None;
+    }
+    Some(doc.div_ceil(view))
+}
+
+/// APP-42: a frame's page, as the shim last measured it — its document's
+/// height and the viewport it was measured in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Extent {
+    pub(crate) doc: u32,
+    pub(crate) view: u32,
+}
+
+/// APP-42: the tall check for a mockup — of the devices `shown` (each its
+/// slot's key and size), the narrowest (the first, on a tie), and the extent
+/// its frame last reported (`seen`, by slot key): the screens it scrolls,
+/// when too many. A device not yet measured says nothing.
+pub(crate) fn tall(shown: &[(u32, Device)], seen: &[(u32, Extent)]) -> Option<u32> {
+    let (key, _) = shown.iter().fold(None::<(u32, Device)>, |best, &(k, d)| match best {
+        Some((_, b)) if b.w <= d.w => best,
+        _ => Some((k, d)),
+    })?;
+    let e = seen.iter().find(|(k, _)| *k == key)?.1;
+    screens(e.doc, e.view)
+}
+
+/// APP-42: the bar's note for a page `n` screens tall.
+pub(crate) fn tall_note(n: u32) -> String {
+    format!("one view per mockup — this page scrolls {n} screens")
 }
 
 /// `390, 768x1024, 1440` (or `[390, 768, 1440]`) — each `W` or `WxH`, a
@@ -168,6 +273,24 @@ fn fm_value<'a>(fm: &'a str, key: &str) -> Option<&'a str> {
         let (k, v) = line.split_once(':')?;
         (k == key).then(|| v.split(" #").next().unwrap_or(v).trim())
     })
+}
+
+/// APP-42: a frontmatter's text value — quoted (`"…"` / `'…'`: as written
+/// inside the quotes, a ` #` included), or plain (a trailing ` # comment`
+/// dropped). `None` when absent or blank.
+fn fm_text<'a>(fm: &'a str, key: &str) -> Option<&'a str> {
+    let v = fm.lines().find_map(|line| {
+        let (k, v) = line.split_once(':')?;
+        (k == key).then_some(v.trim())
+    })?;
+    let v = match v.chars().next() {
+        Some(q @ ('"' | '\'')) => {
+            let inner = &v[1..];
+            &inner[..inner.rfind(q).unwrap_or(inner.len())]
+        }
+        _ => v.split(" #").next().unwrap_or(v).trim(),
+    };
+    (!v.trim().is_empty()).then_some(v.trim())
 }
 
 /// A whole document's `<meta name="NAME" content="…">`, anywhere in it.
@@ -213,6 +336,11 @@ pub(crate) fn declared(frontmatter: Option<&str>, src: &str) -> Decl {
     if let Some(devices) = widths {
         decl.devices = devices;
     }
+    // APP-42: what the mockup shows, said above it.
+    let description = frontmatter
+        .and_then(|fm| fm_text(fm, "description"))
+        .or_else(|| page.then(|| meta_content(src, "menger-description")).flatten());
+    decl.caption = Caption::of(None, description);
     decl
 }
 
@@ -277,6 +405,31 @@ thread_local! {
     static LISTENING: Cell<bool> = const { Cell::new(false) };
     /// Each mounted box's element, by number.
     static ROOTS: RefCell<Vec<(u32, web_sys::Element)>> = const { RefCell::new(Vec::new()) };
+    /// APP-42: each mounted mockup's measured pages, by box number — each
+    /// device's slot key and its frame's last [`Extent`].
+    static EXTENTS: RefCell<Vec<(u32, ArcRwSignal<Vec<(u32, Extent)>>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// APP-42: `menger:extent` from a device's frame — its page is `height` px
+/// tall in its viewport. Kept for the box and slot the frame sits in;
+/// anything else (a frame in no mockup) is ignored.
+pub(crate) fn extent(frame: &web_sys::HtmlIFrameElement, height: u32) {
+    let attr = |sel: &str, name: &str| {
+        frame.closest(sel).ok().flatten().and_then(|el| el.get_attribute(name)).and_then(|n| n.parse::<u32>().ok())
+    };
+    let (Some(id), Some(slot)) = (attr(".framed[data-framed]", "data-framed"), attr(".device[data-slot]", "data-slot")) else {
+        return;
+    };
+    let view = u32::try_from(frame.client_height()).unwrap_or(0);
+    let Some(seen) = EXTENTS.with(|x| x.borrow().iter().find(|(n, _)| *n == id).map(|(_, s)| s.clone())) else { return };
+    let now = Extent { doc: height, view };
+    let known = seen.with_untracked(|v| v.iter().any(|(k, e)| *k == slot && *e == now));
+    if !known {
+        seen.update(|v| {
+            v.retain(|(k, _)| *k != slot);
+            v.push((slot, now));
+        });
+    }
 }
 
 fn full() -> ArcRwSignal<Option<u32>> {
@@ -448,7 +601,10 @@ pub(crate) fn Framed(
     root.on_load(move |el: web_sys::HtmlDivElement| {
         ROOTS.with(|r| r.borrow_mut().push((id, el.into())));
     });
+    let seen = ArcRwSignal::new(Vec::<(u32, Extent)>::new());
+    EXTENTS.with(|x| x.borrow_mut().push((id, seen.clone())));
     on_cleanup(move || {
+        EXTENTS.with(|x| x.borrow_mut().retain(|(n, _)| *n != id));
         ROOTS.with(|r| r.borrow_mut().retain(|(n, _)| *n != id));
         if PAGE.with(Cell::get) == Some(id) {
             PAGE.with(|p| p.set(None));
@@ -510,6 +666,10 @@ pub(crate) fn Framed(
     // mockup (its own name, else its ticket's) in this browser.
     let declared_devices = Memo::new(move |_| decl.with(|d| d.devices.clone()));
     let sizer = crate::mocksize::Sizer::new(declared_devices.into(), remember.or_else(|| ticket.clone()));
+    // APP-42: what the mockup shows, said above it; and the note when its
+    // page at the narrowest device shown scrolls several screens.
+    let caption = Memo::new(move |_| decl.with(|d| if d.mode == Mode::Mockup && !d.caption.is_empty() { Some(d.caption.clone()) } else { None }));
+    let tall_screens = Memo::new(move |_| if mockup.get() { tall(&sizer.shown(), &seen.get()) } else { None });
     let ticket_id = ticket.clone();
     let heading = move || {
         let t = title?;
@@ -550,8 +710,10 @@ pub(crate) fn Framed(
     };
     view! {
         <div class="framed" class:is-full=move || is_full.get() data-framed=id.to_string() data-view=mode node_ref=root>
+            {move || caption.get().map(caption_view)}
             <div class="framed-bar">
                 {move || if is_full.get() { heading() } else { None }}
+                {move || tall_screens.get().map(|n| view! { <span class="framed-note" role="note" title="A mockup is one screen at one state; another view is another mockup">{tall_note(n)}</span> })}
                 <span class="framed-gap"></span>
                 {controls}
                 <button class="framed-btn framed-full" title="Full screen (z) — Esc leaves it" aria-pressed=move || is_full.get().to_string() on:click=toggle>
@@ -559,6 +721,19 @@ pub(crate) fn Framed(
                 </button>
             </div>
             <div class="framed-stage" node_ref=stage>{body}</div>
+        </div>
+    }
+}
+
+/// APP-42: a mockup's caption, in the app's DOM and type — the title a line,
+/// the description markdown rendered as a comment's is (safe for
+/// `inner_html`; its links the app's, `.md`).
+fn caption_view(c: Caption) -> impl IntoView {
+    let html = c.description.as_deref().map(|d| crate::md::render_body(d).html);
+    view! {
+        <div class="framed-caption">
+            {c.title.map(|t| view! { <p class="framed-caption-title">{t}</p> })}
+            {html.map(|h| view! { <div class="framed-caption-text md" inner_html=h></div> })}
         </div>
     }
 }
@@ -627,6 +802,57 @@ mod tests {
             assert_eq!(d, Decl::default(), "{fm:?}");
         }
         assert_eq!(Decl::default().devices.iter().map(|d| d.w).collect::<Vec<_>>(), DEFAULT_WIDTHS);
+    }
+
+    /// APP-42: a `view: mockup` body says what it shows in its
+    /// frontmatter's `description:` (a whole document, in its head too).
+    #[test]
+    fn a_body_describes_its_mockup_in_its_frontmatter() {
+        let d = declared(Some("view: mockup\ndescription: The cart, one item.  # the first view\n"), "<p>x</p>");
+        assert_eq!(d.caption, Caption { title: None, description: Some("The cart, one item.".into()) });
+        let d = declared(Some("view: mockup\ndescription: \"Step #2: pay\"\n"), "x");
+        assert_eq!(d.caption.description.as_deref(), Some("Step #2: pay"));
+        assert!(declared(Some("view: mockup\ndescription:   \n"), "x").caption.is_empty());
+        let page = "<!doctype html><html><head><meta name=\"menger-description\" content=\"The landing, dark.\"></head><body></body></html>";
+        assert_eq!(declared(None, page).caption.description.as_deref(), Some("The landing, dark."));
+        assert_eq!(declared(Some("description: mine"), page).caption.description.as_deref(), Some("mine"));
+    }
+
+    /// APP-42: a caption is trimmed, one-line titled, clipped; an element's
+    /// own wins over its page's.
+    #[test]
+    fn a_caption_is_trimmed_and_the_elements_own_wins() {
+        let c = Caption::of(Some("  \n Checkout \n more"), Some("  "));
+        assert_eq!(c, Caption { title: Some("Checkout".into()), description: None });
+        assert!(Caption::of(Some(" "), None).is_empty());
+        let long = "x".repeat(TITLE_MAX + 5);
+        assert_eq!(Caption::of(Some(&long), None).title.unwrap().chars().count(), TITLE_MAX + 1);
+        let page = Caption::of(None, Some("the page's"));
+        assert_eq!(Caption::default().or(Some(&page)), page);
+        assert_eq!(c.clone().or(Some(&page)), c);
+        assert_eq!(Caption::default().or(None), Caption::default());
+    }
+
+    /// APP-42: the note shows for a page taller than three of its screens at
+    /// the narrowest device shown — not for one that fits, not before that
+    /// device's frame has said how tall its page is.
+    #[test]
+    fn a_page_taller_than_three_screens_at_its_narrowest_is_noted() {
+        assert_eq!(screens(844 * 3, 844), None);
+        assert_eq!(screens(844 * 3 + 1, 844), Some(4));
+        assert_eq!(screens(9000, 900), Some(10));
+        assert_eq!(screens(9000, 0), None);
+        let phone = Device { w: 390, h: 844 };
+        let desk = Device { w: 1440, h: 900 };
+        let shown = [(0, desk), (1, phone)];
+        // The phone is narrowest: its page decides, the desktop's does not.
+        assert_eq!(tall(&shown, &[(0, Extent { doc: 900, view: 900 }), (1, Extent { doc: 5000, view: 844 })]), Some(6));
+        assert_eq!(tall(&shown, &[(0, Extent { doc: 9000, view: 900 }), (1, Extent { doc: 1000, view: 844 })]), None);
+        assert_eq!(tall(&shown, &[(0, Extent { doc: 9000, view: 900 })]), None);
+        assert_eq!(tall(&[], &[]), None);
+        // Resized (APP-33): the new extent is what counts.
+        assert_eq!(tall(&[(1, Device { w: 390, h: 2000 })], &[(1, Extent { doc: 5000, view: 2000 })]), None);
+        assert_eq!(tall_note(6), "one view per mockup — this page scrolls 6 screens");
     }
 
     #[test]

@@ -350,24 +350,46 @@ pub(crate) fn fence_widths(info: &str) -> Option<&str> {
 /// parsed or run in the body's frame. The page is the body's own text, so
 /// handing it to the host reveals nothing the body did not already hold.
 pub(crate) fn mockup_placeholder(info: &str, src: &str) -> String {
-    placeholder(fence_widths(info), src)
+    let title = mockups::info_attribute(info, "title");
+    let description = mockups::info_attribute(info, "description");
+    placeholder(&Placed { widths: fence_widths(info), title: title.as_deref(), description: description.as_deref(), reference: None }, Some(src))
+}
+
+/// What a placeholder says beside its page — APP-42 adds the caption, and a
+/// described `ref` (`<m-mockup ref>` holding an `<m-description>` alone).
+struct Placed<'a> {
+    widths: Option<&'a str>,
+    title: Option<&'a str>,
+    description: Option<&'a str>,
+    reference: Option<&'a str>,
 }
 
 /// The placeholder for a page at `widths` (as written; `None`: the default
 /// devices) — a fence's ([`mockup_placeholder`]) and, APP-32, an element's
-/// ([`inline_mockups`]).
-fn placeholder(widths: Option<&str>, src: &str) -> String {
-    let mut out = String::with_capacity(src.len() + src.len() / 8 + 64);
+/// ([`inline_mockups`]). APP-42: with its `title` and `description` (the
+/// host draws them above the devices, outside them), and for a described
+/// reference its `ref` and no `source`; an element that describes and names
+/// no page has neither (the host says so).
+fn placeholder(p: &Placed, src: Option<&str>) -> String {
+    let mut out = String::with_capacity(src.map_or(0, str::len) * 9 / 8 + 64);
     out.push('<');
     out.push_str(MOCKUP_TAG);
-    if let Some(w) = widths {
-        out.push_str(" widths=\"");
-        escape_html(&mut out, w).expect("escaping into a String cannot fail");
+    let attr = |out: &mut String, name: &str, value: &str| {
+        out.push(' ');
+        out.push_str(name);
+        out.push_str("=\"");
+        escape_html(&mut *out, value).expect("escaping into a String cannot fail");
         out.push('"');
+    };
+    for (name, value) in [("ref", p.reference), ("widths", p.widths), ("title", p.title), ("description", p.description)] {
+        if let Some(v) = value {
+            attr(&mut out, name, v);
+        }
     }
-    out.push_str(" source=\"");
-    escape_html(&mut out, src).expect("escaping into a String cannot fail");
-    out.push_str("\"></");
+    if let Some(src) = src {
+        attr(&mut out, "source", src);
+    }
+    out.push_str("></");
     out.push_str(MOCKUP_TAG);
     out.push_str(">\n");
     out
@@ -398,7 +420,15 @@ fn inline_mockups(src: &str) -> Option<(String, Vec<String>)> {
     for (n, m) in found.inline.iter().enumerate() {
         out.push_str(&src[at..m.start]);
         out.push_str(&inline_sentinel(n));
-        pages.push(placeholder(m.widths.as_deref(), &src[m.page.clone()]));
+        let placed = Placed {
+            widths: m.widths.as_deref(),
+            title: m.title.as_deref(),
+            description: m.description.as_deref(),
+            reference: m.reference.as_deref(),
+        };
+        // A described reference, or a description with no page: no source.
+        let page = (!m.page.is_empty()).then(|| &src[m.page.clone()]);
+        pages.push(placeholder(&placed, page));
         at = m.end;
     }
     out.push_str(&src[at..]);
@@ -1916,6 +1946,29 @@ A candidate language, drawn below.
         assert!(r.html.contains("<m-mockup widths=\"390 768x1024\" source=\"&lt;p&gt;b&lt;/p&gt;\n\"></m-mockup>"), "{}", r.html);
         let r = render_body_framed("<m-mockup ref=\"DESIGN-49\" widths=\"390\"></m-mockup>\n", &|_| None);
         assert!(r.html.contains("<m-mockup ref=\"DESIGN-49\" widths=\"390\"></m-mockup>") && !r.html.contains("source="), "{}", r.html);
+    }
+
+    /// APP-42: a mockup's caption rides on its placeholder — a fence's
+    /// `title=` / `description=`, an element's attributes and its
+    /// `<m-description>` child — and is no part of the page; a described
+    /// ref is the ref form with its caption, no `source`.
+    #[test]
+    fn a_mockups_caption_rides_on_its_placeholder_never_in_its_page() {
+        let r = render_body_framed("```mockup widths=390 title=\"Checkout\" description=\"The cart, one item.\"\n<p>a</p>\n```\n", &|_| None);
+        assert!(
+            r.html.contains("<m-mockup widths=\"390\" title=\"Checkout\" description=\"The cart, one item.\" source=\"&lt;p&gt;a&lt;/p&gt;\n\"></m-mockup>"),
+            "{}",
+            r.html
+        );
+        let r = render_body_framed(
+            "<m-mockup description=\"One view.\">\n<m-description>\nThe **cart** & its total.\n</m-description>\n<p>page</p>\n</m-mockup>\n",
+            &|_| None,
+        );
+        assert_eq!(mock_source(&r.html), "<p>page</p>\n");
+        assert!(r.html.contains(" description=\"One view.\n\nThe **cart** &amp; its total.\""), "{}", r.html);
+        assert!(!r.html.contains("<m-description"), "{}", r.html);
+        let r = render_body_framed("<m-mockup ref=\"DESIGN-49\">\n<m-description>Dark.</m-description>\n</m-mockup>\n", &|_| None);
+        assert!(r.html.contains("<m-mockup ref=\"DESIGN-49\" description=\"Dark.\"></m-mockup>"), "{}", r.html);
     }
 
     /// Written in code — a span, a fence, indented — or in a comment, the

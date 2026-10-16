@@ -1332,7 +1332,7 @@ the same box a `view: mockup` body gets — one device frame per width side
 by side, All / per device, Light / Dark, Reduced motion, ⤢ Full screen.
 
 It is drawn as `<m-cite>` is: in the body's frame the element is only a
-placeholder (`menger:mockup { mock, ref, widths, source, rect }`, an inline
+placeholder (`menger:mockup { mock, ref, widths, source, title, description, rect }`, an inline
 page — the element's or a fence's — carried in its `source` attribute); the **host** lays the devices over
 it, outside the frame, and answers only the height (`menger:mocked { mock,
 height }`), so the prose below moves down. A `ref` is read over the
@@ -1340,6 +1340,51 @@ viewer's own socket with the viewer's reach — a ticket outside it is "no
 ticket you can read", never named — and the body's frame never receives
 the referenced body. A ref that cannot be read, or whose body is not a
 whole page, shows its line in place.
+
+**A mockup is one view, and its description sits outside it** (APP-42;
+owner, 2026-10-16). One mockup is one screen at one state, at the device's
+viewport — not a long page of figures that scrolls through several
+screens. Its controls work, so the states one view reaches (a menu open, a
+sheet slid up, a row collapsed) are reached by using it, not drawn again
+below; another view is **its own mockup, in its own section of the body**.
+What a mockup shows and why is said **outside** it — the prose above it, or
+the mockup's own caption, never a heading or an intro inside the mocked
+page. The caption is the mockup's:
+
+```markdown
+<m-mockup widths="390,1440" title="Checkout" description="The cart, one item in it.">
+<m-description>
+What the **buyer** sees first; the total follows the quantity.
+</m-description>
+<!doctype html>
+<html>…the cart, and nothing else…</html>
+</m-mockup>
+```
+
+`title="…"` is one line; `description="…"` a line, and an
+`<m-description>` child that opens the element's content — markdown, a
+paragraph or two, up to its `</m-description>` — follows it; the page
+starts past the child. A fence takes `title=` and `description=` in its
+info string (` ```mockup widths=390 title="Checkout" description="…" `),
+quoted; a `ref` takes the attributes, or an `<m-description>` as its only
+content (`<m-mockup ref="DESIGN-49"><m-description>…</m-description></m-mockup>`
+is the reference form, described — a page after it is still refused); a ref
+with no caption of its own shows the referenced page's. A `view: mockup`
+body says it in its frontmatter (`description: The landing, dark.`; quoted
+when it holds ` #`), a whole document also as `<meta
+name="menger-description" content="…">`. The host draws the caption above
+the bar and the devices, outside every device frame, in the app's type —
+it is not in the mocked page and changes no device's viewport. md.rs moves
+it onto the placeholder (`title`, `description`: SDK 2.2's `menger:mockup`
+carries them — the body's own text); a referenced page's is read and drawn
+by the host and never reaches the citing frame, which hears only a height.
+
+A soft check: the page shim reports its page's height (`menger:extent {
+height }`, a number, nothing of the page), and when the page at the
+narrowest device shown is more than **3** of that device's screens tall,
+the bar says so quietly — *one view per mockup — this page scrolls N
+screens* — after a resize too (APP-33), and only as a hint to the author,
+never a refusal.
 
 **What makes `prefers-color-scheme` follow inside the frame.** An iframe's
 `prefers-color-scheme` is the *embedder's* in Chromium, whatever the
