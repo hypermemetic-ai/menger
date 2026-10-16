@@ -38,6 +38,8 @@
 //! `prefers-color-scheme` / `prefers-reduced-motion` (src/frame.rs
 //! [`frame::Emulate`]; frontend/sdk/menger-page.js), applied live. Full
 //! screen applies to a mockup too: the devices scale to the screen.
+//! APP-33: the viewer sizes it — a Size menu of standard devices, Custom
+//! `W×H`, a device's edge dragged, Rotate, Reset (src/mocksize.rs).
 //!
 //! What decides — the declaration, the devices, the scale, the route's
 //! query — is pure and pinned by native tests; the rest is DOM.
@@ -92,7 +94,7 @@ pub(crate) struct Device {
 
 impl Device {
     /// A width alone: a phone's, a tablet's or a desktop's height.
-    fn of_width(w: u32) -> Self {
+    pub(crate) fn of_width(w: u32) -> Self {
         let h = if w < 600 {
             844
         } else if w < 1100 {
@@ -103,7 +105,7 @@ impl Device {
         Device { w, h }
     }
 
-    fn kind(self) -> &'static str {
+    pub(crate) fn kind(self) -> &'static str {
         if self.w < 600 {
             "phone"
         } else if self.w < 1100 {
@@ -119,7 +121,7 @@ impl Device {
 pub(crate) const DEFAULT_WIDTHS: [u32; 3] = [390, 768, 1440];
 
 /// The most devices a mockup draws.
-const MAX_DEVICES: usize = 6;
+pub(crate) const MAX_DEVICES: usize = 6;
 
 /// What a body declares: its view, and a mockup's devices.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -424,6 +426,7 @@ pub(crate) fn Framed(
     ticket: Option<String>,
     #[prop(optional)] scope: Option<String>,
     #[prop(optional)] title: Option<Signal<String>>,
+    #[prop(optional)] remember: Option<String>,
 ) -> impl IntoView {
     install();
     let id = NEXT.with(|n| {
@@ -502,7 +505,11 @@ pub(crate) fn Framed(
         (false, _) => "⤢ Full screen",
     };
     let mode = move || decl.with(|d| d.mode.as_str());
-    let mockup = Memo::new(move |_| decl.with(|d| (d.mode == Mode::Mockup).then(|| d.devices.clone())));
+    let mockup = Memo::new(move |_| decl.with(|d| d.mode == Mode::Mockup));
+    // APP-33: the devices it declares, sized by the viewer — kept per
+    // mockup (its own name, else its ticket's) in this browser.
+    let declared_devices = Memo::new(move |_| decl.with(|d| d.devices.clone()));
+    let sizer = crate::mocksize::Sizer::new(declared_devices.into(), remember.or_else(|| ticket.clone()));
     let ticket_id = ticket.clone();
     let heading = move || {
         let t = title?;
@@ -515,39 +522,22 @@ pub(crate) fn Framed(
     let app_scheme = crate::frame::painted_scheme();
     let scheme = RwSignal::new(app_scheme);
     let reduce = RwSignal::new(prefers_reduced_motion());
-    let solo = RwSignal::new(None::<usize>);
     let size = RwSignal::new((0.0f64, 0.0f64));
     stage.on_load(move |el: web_sys::HtmlDivElement| observe(el, size));
-    let body = move || match mockup.get() {
-        None => {
-            let ticket = ticket.clone();
-            let scope = scope.clone().unwrap_or_default();
+    let emulate = Signal::derive(move || Emulate { scheme: Some(scheme.get()), reduce: Some(reduce.get()) });
+    let body = move || {
+        let ticket = ticket.clone();
+        let scope = scope.clone().unwrap_or_default();
+        if mockup.get() {
+            sizer.devices(html, ticket, scope, emulate, size, is_full).into_any()
+        } else {
             view! { <Frame html ticket scope /> }.into_any()
-        }
-        Some(devices) => {
-            let ticket = ticket.clone();
-            let scope = scope.clone().unwrap_or_default();
-            mockup_view(html, devices, ticket, scope, scheme, reduce, solo, size, is_full).into_any()
         }
     };
     let controls = move || {
-        mockup.with(|m| m.clone()).map(|devices| {
-            let buttons = devices
-                .iter()
-                .enumerate()
-                .map(|(i, d)| {
-                    let label = format!("{}", d.w);
-                    let tip = format!("{} × {} ({})", d.w, d.h, d.kind());
-                    view! {
-                        <button class="framed-btn" title=tip aria-pressed=move || (solo.get() == Some(i)).to_string() on:click=move |_| solo.set(Some(i))>{label}</button>
-                    }
-                })
-                .collect_view();
+        mockup.get().then(|| {
             view! {
-                <span class="framed-group" role="group" aria-label="devices">
-                    <button class="framed-btn" title="every device, side by side" aria-pressed=move || solo.get().is_none().to_string() on:click=move |_| solo.set(None)>"All"</button>
-                    {buttons}
-                </span>
+                {sizer.controls()}
                 <span class="framed-group" role="group" aria-label="colour scheme">
                     <button class="framed-btn" aria-pressed=move || (scheme.get() == Scheme::Light).to_string() on:click=move |_| scheme.set(Scheme::Light)>"Light"</button>
                     <button class="framed-btn" aria-pressed=move || (scheme.get() == Scheme::Dark).to_string() on:click=move |_| scheme.set(Scheme::Dark)>"Dark"</button>
@@ -617,69 +607,6 @@ fn observe(el: web_sys::HtmlDivElement, size: RwSignal<(f64, f64)>) {
     if let Ok(observe) = Reflect::get(&ro, &JsValue::from_str("observe")).and_then(|f| f.dyn_into::<Function>()) {
         let _ = observe.call1(&ro, &el);
     }
-}
-
-/// The gap between devices side by side, px.
-const GAP: f64 = 24.0;
-/// A device's label and chrome, above and around its screen, px.
-const CHROME_H: f64 = 84.0;
-/// A device's bezel, left and right of its screen (at most), px.
-const BEZEL_W: f64 = 20.0;
-
-/// A mockup's devices: each a frame of the body at its viewport, scaled.
-#[allow(clippy::too_many_arguments)]
-fn mockup_view(
-    html: Signal<String>,
-    devices: Vec<Device>,
-    ticket: Option<String>,
-    scope: String,
-    scheme: RwSignal<Scheme>,
-    reduce: RwSignal<bool>,
-    solo: RwSignal<Option<usize>>,
-    size: RwSignal<(f64, f64)>,
-    is_full: Memo<bool>,
-) -> impl IntoView {
-    let emulate = Signal::derive(move || Emulate { scheme: Some(scheme.get()), reduce: Some(reduce.get()) });
-    let all = devices.clone();
-    let scale = Memo::new(move |_| {
-        let (w, h) = size.get();
-        let shown: Vec<Device> = match solo.get() {
-            Some(i) => all.get(i).copied().into_iter().collect(),
-            None => all.clone(),
-        };
-        let avail_h = is_full.get().then_some(h - CHROME_H);
-        // The stage's padding, and each device's bezel, are not scaled.
-        fit(&shown, GAP, w - 12.0 - BEZEL_W * shown.len() as f64, avail_h)
-    });
-    devices
-        .into_iter()
-        .enumerate()
-        .map(|(i, d)| {
-            let ticket = ticket.clone();
-            let scope = scope.clone();
-            let shown = move || solo.get().is_none_or(|s| s == i);
-            let screen = move || {
-                let s = scale.get();
-                format!("width:{:.1}px;height:{:.1}px", f64::from(d.w) * s, f64::from(d.h) * s)
-            };
-            let inner = move || format!("width:{}px;height:{}px;transform:scale({:.4})", d.w, d.h, scale.get());
-            let label = format!("{} × {}", d.w, d.h);
-            view! {
-                <figure class="device" data-kind=d.kind() data-w=d.w.to_string() class:hidden=move || !shown()>
-                    <figcaption class="device-label">
-                        <span>{d.kind()}</span>
-                        <span class="code">{label}</span>
-                        <span class="device-scale">{move || format!("{:.0}%", scale.get() * 100.0)}</span>
-                    </figcaption>
-                    <div class="device-screen" style=screen>
-                        <div class="device-inner" style=inner>
-                            <Frame html ticket scope emulate fixed=true />
-                        </div>
-                    </div>
-                </figure>
-            }
-        })
-        .collect_view()
 }
 
 #[cfg(test)]

@@ -1425,6 +1425,53 @@
   .device[data-kind="phone"] .device-screen { border-width: 8px; border-radius: var(--radius-phone); }
   .device[data-kind="desktop"] .device-screen { border-width: 18px 2px 2px; border-color: var(--line); border-radius: var(--radius-xl) var(--radius-xl) var(--radius) var(--radius); }
   .device-inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  /* APP-33: a mockup at any size (src/mocksize.rs) — the Size menu of
+     standard devices, the Custom field, a device's readout, Rotate, and the
+     grips on its right edge and corner (the edge a focusable handle). At a
+     phone's width the grips give way to the field. */
+  .framed[data-view="mockup"] .framed-stage { padding-right: 18px; }
+  .framed-sizes { position: relative; display: inline-flex; }
+  .framed-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; min-width: 15rem; max-width: calc(100vw - 32px); display: flex; flex-direction: column;
+    padding: 4px; background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-lg); box-shadow: 0 8px 24px var(--shadow); }
+  .framed-menu[hidden] { display: none; }
+  .framed-menu-item { font: inherit; display: flex; gap: 1rem; justify-content: space-between; align-items: baseline; text-align: left;
+    color: var(--ink); background: none; border: 0; border-radius: var(--radius); padding: .3rem .5rem; cursor: pointer; }
+  .framed-menu-item .code { font-family: var(--mono); color: var(--muted); }
+  .framed-menu-item:hover, .framed-menu-item:focus-visible { background: var(--hover); outline: none; }
+  .framed-menu-item.is-on { background: var(--sel); }
+  .framed-menu-item:last-child { border-top: var(--border) solid var(--line); border-radius: 0 0 var(--radius) var(--radius); margin-top: 2px; }
+  .framed-btn:disabled { color: var(--muted); cursor: default; background: var(--panel); }
+  .framed-field { display: inline-flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+  .framed-input { font: inherit; font-family: var(--mono); width: 9rem; color: var(--ink); background: var(--card);
+    border: var(--border) solid var(--line); border-radius: var(--radius); padding: .12rem .4rem; }
+  .framed-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .framed-input[aria-invalid="true"] { border-color: var(--err-line); }
+  .framed-refused { padding: .1rem .45rem; color: var(--err-fg); background: var(--err-bg); border: var(--border) solid var(--err-line); border-radius: var(--radius); }
+  .framed-refused[hidden] { display: none; }
+  .device-label { align-items: baseline; }
+  .device-size, .device-rotate { font: inherit; color: var(--muted); background: none; border: var(--border) solid transparent; border-radius: var(--radius); padding: 0 .25rem; cursor: pointer; }
+  .device-size { font-family: var(--mono); }
+  .device-size:hover, .device-rotate:hover { color: var(--ink); border-color: var(--line); }
+  .device-size:focus-visible, .device-rotate:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .device-body { position: relative; width: fit-content; }
+  .device-grip { position: absolute; touch-action: none; user-select: none; }
+  .device-grip-e { top: 0; bottom: 18px; right: -14px; width: 10px; cursor: ew-resize; border-radius: var(--radius-pill); }
+  .device-grip-e::after { content: ""; position: absolute; left: 3px; top: 50%; width: 4px; height: 40px; max-height: 60%; transform: translateY(-50%);
+    background: var(--tree-line); border-radius: var(--radius-pill); }
+  .device-grip-se { right: -14px; bottom: -6px; width: 14px; height: 14px; cursor: nwse-resize;
+    border-right: 3px solid var(--tree-line); border-bottom: 3px solid var(--tree-line); border-radius: 0 0 var(--radius) 0; }
+  .device-grip:hover::after, .device-grip-e:focus-visible::after, .device.is-dragging .device-grip-e::after { background: var(--accent); }
+  .device-grip-se:hover, .device.is-dragging .device-grip-se { border-color: var(--accent); }
+  .device-grip-e:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .device.is-dragging .device-screen { box-shadow: 0 0 0 2px var(--accent); }
+  .device-readout { position: absolute; top: 8px; right: 8px; z-index: 3; pointer-events: none; padding: .15rem .45rem;
+    font-size: calc(.78rem * var(--text-scale)); color: var(--bg); background: var(--ink); border-radius: var(--radius); }
+  .device-readout[hidden] { display: none; }
+  @media (max-width: 640px) {
+    .device-grip { display: none; }
+    .framed[data-view="mockup"] .framed-stage { padding-right: 4px; }
+    .framed-menu { min-width: min(15rem, calc(100vw - 32px)); }
+  }
   .mframe.mframe-fixed { width: 100%; height: 100%; max-width: none; }
   .mframe.mframe-fixed > iframe { width: 100%; height: 100%; border: 0; border-radius: 0; }
   /* COMP-14: a cite window (src/cite.rs) — laid by the host over an

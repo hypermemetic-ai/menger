@@ -1227,6 +1227,25 @@ fit — all side by side at one common scale, or one at a time — with
 **Light / Dark** and **Reduced motion** toggles the framed page itself sees,
 live; full screen scales the devices to the screen.
 
+**Any size** (APP-33; `frontend/src/mocksize.rs`) — every mockup, by
+`view: mockup`, fence or `ref`. It opens at its declared widths; the bar's
+**Size** menu holds the standard devices (Phone 375 × 667, Phone 390 × 844,
+Phone large 430 × 932, Tablet 768 × 1024, Tablet landscape 1024 × 768,
+Laptop 1280 × 800, Desktop 1440 × 900, Wide 1920 × 1080) — choosing one draws
+it alone, Shift (click or Enter) adds it beside the ones shown — and
+**Custom…** (or a device's `W × H` readout clicked) takes `W` or `W×H`
+(320–3840 by 240–2160), refused in place past that. A device's right edge or
+corner drags its viewport live, with a `W × H` readout, the width snapping
+to a standard one within 8 px (Alt: no snapping); the edge is a labelled
+handle in the tab order whose arrows move 10 px (1 with Shift; ←/→ the
+width, ↑/↓ the height). **rotate** swaps a device's width and height,
+**Reset** returns to the declared widths. A resize only restyles the box a
+frame sits in — the page reflows as in a resized window and never reloads,
+its state, scroll, scheme and motion kept. The sizes are the viewer's: kept
+in this browser's localStorage per mockup (`menger.mockup-sizes:<ticket>`,
+or `<ticket>#m<n>` for a body's n-th `<m-mockup>`), never in the body;
+Reset clears them. At the app's phone width the grips give way to the field.
+
 **A body that is a whole HTML document** — `<!doctype html` (then an
 element) or `<html` first, past comments — renders as itself: its own head,
 styles and scripts, inline media included, never markdown and never under

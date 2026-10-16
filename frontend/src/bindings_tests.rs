@@ -237,7 +237,7 @@ fn search_narrows_by_a_key_or_by_words() {
     assert_eq!(ids("ctrl+k", false), ["palette.toggle"]);
     assert_eq!(ids("⌘K", true), ["palette.toggle"]);
     assert_eq!(ids("Mod+k", false), ["palette.toggle"], "the table's own spelling");
-    assert_eq!(ids("alt+click", false), ["chip.filter-everywhere"]);
+    assert_eq!(ids("alt+click", false), ["chip.filter-everywhere", "mockup.drag-free"]);
     assert_eq!(ids("esc", false), ["app.escape", "dialog.close", "form.cancel"]);
     assert!(ids("q", false).is_empty(), "a key nothing answers");
     assert_eq!(ids("global filter", false), ["filter.global", "chip.filter-everywhere"]);
