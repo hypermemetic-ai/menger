@@ -262,7 +262,8 @@ impl Filing {
                 let ok = match on.scope() {
                     Scope::Everywhere => true,
                     Scope::Org(o) => org.is_some_and(|w| cache.shortcodes.canonical(w) == cache.shortcodes.canonical(o)),
-                    Scope::Shortcode { .. } => false,
+                    // ACCESS-21: a ticket's scope founds no shortcode.
+                    Scope::Shortcode { .. } | Scope::Under(_) | Scope::Ticket(_) => false,
                 };
                 if !ok {
                     return Err(mismatch("a new shortcode needs editor on * or on its organization"));

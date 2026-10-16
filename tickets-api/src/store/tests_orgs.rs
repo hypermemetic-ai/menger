@@ -124,7 +124,12 @@ async fn the_gate_chain_names_the_org_and_a_ticket_as_written() {
     assert!(chain.contains(&format!("acme:{sc}")) && chain.last().map(String::as_str) == Some("acme:"), "{chain:?}");
     assert!(!chain.iter().any(|s| s.starts_with("hypermemetic")), "{chain:?}");
     let hyper = store.gate_chain("IDENTITY-1").unwrap();
-    assert_eq!(hyper, ["IDENTITY-1", "hypermemetic:IDENTITY", "IDENTITY", "MENGER-1", "hypermemetic:MENGER", "MENGER", "hypermemetic:"]);
+    assert_eq!(hyper, ["IDENTITY-1", "hypermemetic:IDENTITY", "IDENTITY", "under IDENTITY-1", "under MENGER-1", "hypermemetic:MENGER", "MENGER", "hypermemetic:"]);
+    // ACCESS-21: `under ID` is the subtree — the chain less the ticket alone.
+    assert_eq!(
+        store.gate_chain("under identity-1").unwrap(),
+        ["under IDENTITY-1", "hypermemetic:IDENTITY", "IDENTITY", "under MENGER-1", "hypermemetic:MENGER", "MENGER", "hypermemetic:"]
+    );
     // A missing ticket in acme is placed by its shortcode, in acme.
     assert_eq!(store.gate_chain("acme:MENGER-99").unwrap().last().map(String::as_str), Some("acme:"));
     assert_eq!(store.gate_chain("acme:").unwrap(), ["acme:"]);
@@ -195,5 +200,44 @@ fn a_file_s_grants_from_before_orgs_move_into_hypermemetic_once() {
     drop(store);
     let store = Store::open(&path).unwrap();
     assert_eq!(scopes(&store), ["*", "hypermemetic:IDENTITY", "hypermemetic:LATER"], "once: the next open reads them");
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
+}
+
+/// ACCESS-21: a form-8 file (IDENTITY-21's members table, every scope `*`
+/// or a bare shortcode, no roles table) opens unchanged — its grants are
+/// what they were, ORG-4's rewrite aside — and takes grants on a ticket and
+/// on a subtree beside them, kept by the ticket's key, read back as kept
+/// at the next open. The scope column is text: a ticket's spellings are
+/// values in it, so nothing new is stored but rows.
+#[test]
+fn access_21_a_form_8_file_migrates_unchanged_and_keeps_ticket_scopes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("form8.db");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    {
+        let store = Store::open(&path).unwrap();
+        rt.block_on(store.create(SYS, new("MENGER", Kind::Scope, None))).unwrap();
+        rt.block_on(store.create(SYS, new("MENGER", Kind::Build, None))).unwrap();
+        rt.block_on(store.create(SYS, new("IDENTITY", Kind::Scope, Some("MENGER-1")))).unwrap();
+    }
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        for (scope, role) in [("IDENTITY", Role::Editor), ("*", Role::Viewer)] {
+            super::members::store_row(&conn, ADA, scope, role, "--admin", 1).unwrap();
+        }
+        conn.execute_batch("DROP TABLE roles; UPDATE derived_state SET form = 8;").unwrap();
+    }
+    let scopes = |s: &Store| -> Vec<String> { s.grants_of(SYS, ADA).into_iter().map(|g| g.scope.text()).collect() };
+    let store = Store::open(&path).unwrap();
+    assert_eq!(scopes(&store), ["*", "hypermemetic:IDENTITY"], "form 8's grants, unchanged in meaning");
+    for (scope, role) in [("menger-2", Role::Editor), ("under MENGER-1", Role::Viewer)] {
+        let g = Grant { principal: ADA.parse().unwrap(), scope: store.scope_named(scope).unwrap(), role, granted_by: crate::vocab::GrantedBy::AuthGrant, at: 2 };
+        rt.block_on(store.grant(SYS, g)).unwrap();
+    }
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(scopes(&store), ["*", "MENGER-2", "hypermemetic:IDENTITY", "under MENGER-1"], "kept by key, read back as kept");
+    let editor = store.grants_of(SYS, ADA).into_iter().find(|g| g.scope.text() == "MENGER-2").unwrap();
+    assert_eq!((editor.role, editor.scope), (Role::Editor, crate::members::Scope::Ticket(crate::address::TicketId::new("MENGER-2"))));
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 }

@@ -352,8 +352,20 @@ impl<'c> Compiled<'c> {
         // MENGER-13: each history predicate, a range of the log's indexes.
         let hist = lens.has_history().then(|| {
             let clock = lens.clock();
-            let keys: Vec<String> = lens.history().iter().map(crate::filter::History::format).collect();
-            let sets: Vec<BTreeMap<ShortcodeId, RoaringBitmap>> = lens.history().iter().map(|h| cache.holds(h, clock)).collect();
+            let mut keys: Vec<String> = lens.history().iter().map(crate::filter::History::format).collect();
+            let mut sets: Vec<BTreeMap<ShortcodeId, RoaringBitmap>> = lens.history().iter().map(|h| cache.holds(h, clock)).collect();
+            // ACCESS-21: `ticket <ID>` holds for the one ticket it names (any
+            // address; one naming none or several holds for none).
+            for name in lens.tickets() {
+                let mut one: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
+                if let shortcodes::Found::One(key) = cache.find_ticket(name, shortcodes::OrgReach::All) {
+                    if let Some(r) = cache.get(&key) {
+                        one.entry(r.shortcode.clone()).or_default().insert(r.seq);
+                    }
+                }
+                keys.push(crate::filter::ticket_truth(name));
+                sets.push(one);
+            }
             let mut any: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
             for s in &sets {
                 for (e, b) in s {

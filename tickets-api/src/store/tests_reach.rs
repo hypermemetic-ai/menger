@@ -24,9 +24,8 @@ pub(super) fn viewer_under(id: &str) -> VerifiedUser {
     VerifiedUser::for_tests(&Access::for_tests(), READER.parse().unwrap(), vec![(Held::Under(TicketId::new(id)), Role::Viewer)])
 }
 
-/// A reader whose reach no read can narrow to: one ticket alone (ACCESS-21
-/// keeps none yet; a ceiling may).
-fn single(id: &str) -> VerifiedUser {
+/// ACCESS-21: a reader of one ticket alone — not its parent, not its children.
+pub(super) fn single(id: &str) -> VerifiedUser {
     VerifiedUser::for_tests(&Access::for_tests(), READER.parse().unwrap(), vec![(Held::Ticket(TicketId::new(id)), Role::Viewer)])
 }
 
@@ -244,22 +243,39 @@ async fn a_comment_out_of_reach_is_no_comment() {
     assert_eq!(s.comments(SYS, &Default::default(), None, None).unwrap().comments.len(), 2);
 }
 
-/// ACCESS-3 #15: there is no unscoped path to fall to — a reach no read can
-/// narrow to reads nothing, never everything.
+/// ACCESS-21 (ACCESS-3 #15 before it, when one ticket alone was a reach no
+/// read could narrow to and read nothing): a reader of one ticket reads it
+/// and nothing else — not its parent, not its children, not its siblings —
+/// in every read, and the nav draws it at its shortcode's top.
 #[tokio::test]
-async fn a_reach_no_read_narrows_to_reads_nothing() {
+async fn a_reach_of_one_ticket_reads_it_alone() {
     let s = tracker().await;
-    let only = single("OPEN-2");
-    assert!(s.groups(&only).is_empty() && s.extents(&only).is_empty() && s.components(&only).is_empty());
-    assert_eq!(s.count(&only), 0);
-    assert!(s.get(&only, "OPEN-2").await.is_err());
-    assert!(s.page(&only, PageQuery::default()).is_err());
-    assert!(s.find_page(&only, "", None, None).is_err());
-    assert!(s.tree_page(&only, &tq(None, Some("OPEN"), false), None, None).is_err());
-    assert_eq!(s.member(&only, &["OPEN-2".into()], &Lens::all()), [false]);
-    assert!(s.waves(&only, &["OPEN".to_string()], &waves::DEFAULT_KINDS).placed.is_empty());
-    let mut walk = s.walk(&only, Select::Ready { epic: None }, None, None);
-    assert!(walk.next(&s).await.is_err());
+    let only = single("OPEN-3");
+    assert_eq!(s.count(&only), 1);
+    let t = s.get(&only, "OPEN-3").await.unwrap();
+    assert!(t.parent.is_none() && t.parent_hidden, "its parent is out of reach");
+    assert_eq!(t.child_count, 0, "its child OPEN-4 is out of reach");
+    assert_eq!(t.blocked_by.iter().map(|b| b.to_string()).collect::<Vec<_>>(), Vec::<String>::new());
+    assert_eq!(t.hidden_blocked_by, 2);
+    for hidden in ["OPEN-1", "OPEN-2", "OPEN-4", "SECRET-2"] {
+        assert!(s.get(&only, hidden).await.is_err(), "{hidden}");
+    }
+    assert_eq!(ids_of(&s.page(&only, PageQuery::default()).unwrap().tickets), ["OPEN-3"]);
+    assert_eq!(ids_of(&s.find_page(&only, "", None, None).unwrap().tickets), ["OPEN-3"]);
+    assert_eq!(s.member(&only, &["OPEN-2".into(), "OPEN-3".into(), "OPEN-4".into()], &Lens::all()), [false, true, false]);
+    // The nav: at OPEN's top, alone, with nothing below it.
+    let top = s.tree_page(&only, &tq(None, Some("OPEN"), true), None, None).unwrap();
+    assert_eq!(top.nodes.iter().map(|n| n.summary.id.to_string()).collect::<Vec<_>>(), ["OPEN-3"]);
+    assert_eq!(top.nodes[0].summary.child_count, 0);
+    assert!(s.tree_page(&only, &tq(Some("OPEN-3"), None, false), None, None).unwrap().nodes.is_empty());
+    assert!(s.groups(&only).iter().all(|g| g.shortcode.as_str() == "OPEN"), "{:?}", s.groups(&only));
+    assert!(s.waves(&only, &["OPEN".to_string()], &waves::DEFAULT_KINDS).placed.iter().all(|p| p.summary.id.as_str() == "OPEN-3"));
+    let mut walk = s.walk(&only, Select::List { epic: None, status: None, parent: None }, None, None);
+    let mut seen = Vec::new();
+    while let Step::Tickets(page) = walk.next(&s).await.unwrap() {
+        seen.extend(page.into_iter().map(|t| t.id.to_string()));
+    }
+    assert_eq!(seen, ["OPEN-3"]);
 }
 
 /// A small, seeded generator — the property's trees, grants and reads.
@@ -305,9 +321,11 @@ async fn nothing_answered_or_named_lies_outside_the_reach() {
         }
         let mut held = Vec::new();
         for _ in 0..1 + r.below(2) {
-            held.push(match r.below(2) {
+            held.push(match r.below(3) {
                 0 => (Held::Shortcode { org: OrgId::new(OrgId::HYPERMEMETIC).unwrap(), id: ShortcodeId::new(CODES[r.below(4)]) }, Role::Viewer),
-                _ => (Held::Under(TicketId::new(&ids[r.below(ids.len())])), Role::Viewer),
+                1 => (Held::Under(TicketId::new(&ids[r.below(ids.len())])), Role::Viewer),
+                // ACCESS-21: one ticket alone.
+                _ => (Held::Ticket(TicketId::new(&ids[r.below(ids.len())])), Role::Viewer),
             });
         }
         let v = VerifiedUser::for_tests(&Access::for_tests(), READER.parse().unwrap(), held.clone());
@@ -328,7 +346,9 @@ async fn nothing_answered_or_named_lies_outside_the_reach() {
             let hidden = all.blocked_by.iter().filter(|b| !inside(b)).count() as u32;
             assert_eq!(row.hidden_blocked_by, hidden, "{why}: {} counts its hidden blockers", row.id);
             assert_eq!(row.parent_hidden, all.parent.as_deref().is_some_and(|p| !inside(p)), "{why}: {}", row.id);
-            assert_eq!(row.child_count, all.child_count, "{why}: a reach holds a visible ticket's children");
+            // ACCESS-21: a visible ticket's children as the reach admits them.
+            let kids = s.page(SYS, PageQuery::default()).unwrap().tickets.iter().filter(|t| t.parent.as_deref() == Some(row.id.as_str()) && inside(t.id.as_str())).count();
+            assert_eq!(row.child_count, kids as u64, "{why}: {} counts the children in reach", row.id);
         }
         let find = s.find_page(&v, "", None, None).unwrap();
         assert_eq!(ids_of(&find.tickets).into_iter().collect::<HashSet<_>>(), visible, "{why}: find");

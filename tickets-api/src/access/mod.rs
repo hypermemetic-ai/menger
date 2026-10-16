@@ -682,6 +682,11 @@ impl Access {
         let ticket = crate::address::split_key(&scope).is_some();
         let scope = match self.book.store() {
             Some(store) if !ticket => store.scope_named(&scope).map_err(|e| e.to_string())?.text(),
+            // ACCESS-21: a ticket in a ceiling is it and its subtree, as
+            // IDENTITY-42 made it — kept `under` its key, which the gate's
+            // chain holds for it and every ticket below it (its key bare is
+            // the ticket alone).
+            _ if ticket => format!("{}{scope}", crate::members::UNDER),
             _ => scope,
         };
         if left.contains('.') {

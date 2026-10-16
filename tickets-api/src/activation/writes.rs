@@ -37,6 +37,12 @@ pub(super) fn permit<R: RoleMark>(store: &Store, caller: &VerifiedUser, id: &str
 /// words — the call's grant on the id's shortcode, as the gate says it —
 /// the same for a ticket not there as for one out of reach.
 fn beside<R: RoleMark>(store: &Store, caller: &VerifiedUser, id: &str, what: &str) -> Result<Permit<R>, String> {
+    beside_as::<R>(store, caller, id, what, false)
+}
+
+/// ACCESS-21: [`beside`] for a parent — `below`: the role held on what is
+/// below it ([`VerifiedUser::permit_below`]), never on the ticket alone.
+fn beside_as<R: RoleMark>(store: &Store, caller: &VerifiedUser, id: &str, what: &str, below: bool) -> Result<Permit<R>, String> {
     let refused = || {
         let g = caller.grant().cloned().unwrap_or_else(|| Grant::new(what));
         caller.check(&g, id.trim()).err().unwrap_or_else(|| caller.lacks(&g, Some(id.trim())))
@@ -45,7 +51,12 @@ fn beside<R: RoleMark>(store: &Store, caller: &VerifiedUser, id: &str, what: &st
         e @ StoreError::Ambiguous { .. } => e.to_string(),
         _ => refused(),
     })?;
-    caller.permit::<R>(&TicketId::new(k), store).map_err(|Hidden| refused())
+    let k = TicketId::new(k);
+    match below {
+        true => caller.permit_below::<R>(&k, store),
+        false => caller.permit::<R>(&k, store),
+    }
+    .map_err(|Hidden| refused())
 }
 
 /// A blocker `caller` names: a ticket it can view, or — one who sees every
@@ -82,7 +93,9 @@ pub(super) fn filing(store: &Store, caller: &VerifiedUser, epic: &str, parent: O
     };
     let under = match anchor {
         Some(a) => match store.ticket_id(a.trim()) {
-            Some(_) => Under::Parent(beside::<Editor>(store, caller, &a, "tickets.create").map_err(error)?),
+            // ACCESS-21: editor on what is below the parent — `under` it or
+            // wider; editor on the parent alone files nothing under it.
+            Some(_) => Under::Parent(beside_as::<Editor>(store, caller, &a, "tickets.create", true).map_err(error)?),
             // A parent that is no ticket: the store says so — to one who
             // sees every ticket; to anyone else it is out of reach.
             None => match caller.forward(&a, store) {
@@ -140,7 +153,8 @@ pub(super) fn parenting(store: &Store, caller: &VerifiedUser, child: &TicketId, 
         }
     };
     let from = now.map(|p| beside::<Editor>(store, caller, p.as_str(), what)).transpose()?;
-    let to = beside::<Editor>(store, caller, &to, what)?;
+    // ACCESS-21: the new parent as a parent — what is below it.
+    let to = beside_as::<Editor>(store, caller, &to, what, true)?;
     Ok(Some(Parenting::new(from, to, rehost)))
 }
 

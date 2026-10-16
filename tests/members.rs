@@ -889,3 +889,105 @@ async fn the_waiting_list_is_for_admins_of_star_only() {
     let listed: Vec<Value> = call(&alice, "members.list", json!({})).await;
     assert!(listed.iter().all(|e| e["grant"]["scope"] == "hypermemetic:IDENTITY"), "the grants on what she administers: {listed:?}");
 }
+
+/// ACCESS-21's acceptance, over the real socket: IDENTITY-2 (under
+/// IDENTITY-1) holds an input and a comment, and IDENTITY-3 sits under it.
+async fn a_ticket_with_a_child(ada: &WsClient) {
+    tickets(ada).await;
+    let body = r#"<m-input id="notes" kind="text"><m-question data-field="question">Anything?</m-question></m-input>"#;
+    assert_eq!(call(ada, "tickets.amend", json!({ "id": "IDENTITY-2", "body": body })).await[0]["type"], "amended");
+    let made = call(ada, "tickets.create", json!({ "epic": "IDENTITY", "title": "below", "parent": "IDENTITY-2" })).await;
+    assert_eq!(made[0]["ticket"]["id"], "IDENTITY-3", "{made:?}");
+    let on = json!({ "anchor": { "route": "#/ticket/IDENTITY-2", "path": "main", "label": "body", "excerpt": "", "ticket": "IDENTITY-2" }, "body": "on it" });
+    assert_eq!(call(ada, "comments.add", on).await[0]["type"], "comment");
+}
+
+#[tokio::test]
+async fn access_21_a_viewer_of_one_ticket_sees_it_alone_and_under_it_its_subtree() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    a_ticket_with_a_child(&ada).await;
+    let kept = call(&ada, "members.grant", grant(ALICE, "identity-2", "viewer")).await;
+    assert_eq!(kept[0]["grant"]["scope"], "IDENTITY-2", "{kept:?}");
+    let alice = as_(&w, ALICE, "alice").await;
+
+    // It, alone: not its parent, not its child.
+    assert_eq!(ids(&call(&alice, "tickets.list", json!({})).await), set(&["IDENTITY-2"]));
+    let it = call(&alice, "tickets.get", json!({ "id": "IDENTITY-2" })).await;
+    assert_eq!((it[0]["type"].as_str(), it[0]["ticket"]["parent_hidden"].as_bool()), (Some("ticket"), Some(true)), "{it:?}");
+    assert_eq!(it[0]["ticket"]["child_count"], 0, "its child is out of reach");
+    for hidden in ["IDENTITY-1", "IDENTITY-3", "PLEXUS-1"] {
+        assert_eq!(call(&alice, "tickets.get", json!({ "id": hidden })).await[0]["type"], "not_found", "{hidden}");
+    }
+    // The nav: at IDENTITY's top, alone.
+    let top = call(&alice, "tickets.nav.tree", json!({ "epic": "IDENTITY", "filter": "not category done", "matches_only": true })).await;
+    let nodes: Vec<&str> = top.iter().filter(|e| e["type"] == "node").filter_map(|e| e["summary"]["id"].as_str()).collect();
+    assert_eq!(nodes, ["IDENTITY-2"], "{top:?}");
+    let below = call(&alice, "tickets.nav.tree", json!({ "parent": "IDENTITY-2", "filter": "not category done" })).await;
+    assert!(below.iter().all(|e| e["type"] != "node"), "{below:?}");
+    // Its inputs and its comments.
+    let inputs = call(&alice, "tickets.inputs.list", json!({ "ticket": "IDENTITY-2" })).await;
+    assert!(inputs.iter().any(|e| e["input"]["id"] == "notes"), "{inputs:?}");
+    let comments = call(&alice, "comments.list", json!({ "ticket": "IDENTITY-2" })).await;
+    assert!(comments.iter().any(|e| e["type"] == "comment" && e["body"] == "on it"), "{comments:?}");
+    // `mine` shows the ticket's scope.
+    let mine = call(&alice, "members.mine", json!({})).await;
+    assert_eq!(mine[1]["grant"]["scope"], "IDENTITY-2", "{mine:?}");
+    // A viewer, not an editor.
+    assert_eq!(call(&alice, "tickets.set_status", json!({ "id": "IDENTITY-2", "status": "Ready" })).await[0]["type"], "error");
+
+    // `under` it: it and its subtree, still not its parent.
+    call(&ada, "members.grant", grant(ALICE, "under IDENTITY-2", "viewer")).await;
+    assert_eq!(ids(&call(&alice, "tickets.list", json!({})).await), set(&["IDENTITY-2", "IDENTITY-3"]));
+    assert_eq!(call(&alice, "tickets.get", json!({ "id": "IDENTITY-2" })).await[0]["ticket"]["child_count"], 1);
+    assert_eq!(call(&alice, "tickets.get", json!({ "id": "IDENTITY-1" })).await[0]["type"], "not_found");
+    let listed = call(&ada, "members.list", json!({ "scope": "under IDENTITY-2" })).await;
+    assert_eq!(listed.iter().filter_map(|e| e["grant"]["scope"].as_str()).collect::<Vec<_>>(), ["under IDENTITY-2"], "{listed:?}");
+}
+
+#[tokio::test]
+async fn access_21_an_editor_of_one_ticket_changes_it_and_files_nothing_under_it() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    a_ticket_with_a_child(&ada).await;
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY-2", "editor")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+    let moved = call(&alice, "tickets.set_status", json!({ "id": "IDENTITY-2", "status": "Ready" })).await;
+    assert_eq!(moved[0]["type"], "status_changed", "{moved:?}");
+    let answered = call(&alice, "tickets.inputs.answer", json!({ "ticket": "IDENTITY-2", "input": "notes", "value": { "type": "text", "text": "yes" } })).await;
+    assert_eq!(answered[0]["type"], "input_changed", "{answered:?}");
+    for other in ["IDENTITY-1", "IDENTITY-3"] {
+        assert_ne!(call(&alice, "tickets.set_status", json!({ "id": other, "status": "Ready" })).await[0]["type"], "status_changed", "{other}");
+    }
+    // The ticket alone is no parent's role.
+    let under = call(&alice, "tickets.create", json!({ "epic": "IDENTITY", "title": "no", "parent": "IDENTITY-2" })).await;
+    assert_eq!(under[0]["type"], "error", "{under:?}");
+    call(&ada, "members.grant", grant(ALICE, "under IDENTITY-2", "editor")).await;
+    let under = call(&alice, "tickets.create", json!({ "epic": "IDENTITY", "title": "yes", "parent": "IDENTITY-2" })).await;
+    assert_eq!(under[0]["type"], "created", "{under:?}");
+}
+
+/// ACCESS-21: who may grant a ticket's scope — admin on a scope covering
+/// it; admin on the ticket alone grants on it alone. A ticket that is not
+/// there is refused, and a grant follows its ticket through a move.
+#[tokio::test]
+async fn access_21_a_ticket_scope_is_granted_by_an_admin_covering_it() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    a_ticket_with_a_child(&ada).await;
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY-2", "admin")).await;
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "admin")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+    let bob = as_(&w, BOB, "bob").await;
+    assert_eq!(call(&alice, "members.grant", grant(BOB, "IDENTITY-2", "viewer")).await[0]["type"], "grant");
+    assert_eq!(call(&alice, "members.grant", grant(BOB, "under IDENTITY-2", "viewer")).await[0]["type"], "error");
+    assert_eq!(call(&alice, "members.grant", grant(BOB, "IDENTITY-3", "viewer")).await[0]["type"], "error");
+    assert_eq!(call(&bob, "members.grant", grant(ALICE, "IDENTITY-2", "editor")).await[0]["type"], "error", "admin of OUGHT only");
+    assert_eq!(call(&ada, "members.grant", grant(BOB, "IDENTITY-99", "viewer")).await[0]["type"], "error", "no such ticket");
+    // Moved, it keeps its grant.
+    call(&ada, "tickets.set_parent", json!({ "id": "IDENTITY-2", "parent": "IDENTITY-1" })).await;
+    let made = call(&ada, "tickets.create", json!({ "epic": "IDENTITY", "title": "a new parent", "parent": "IDENTITY-1" })).await;
+    let to = made[0]["ticket"]["id"].as_str().unwrap().to_string();
+    assert_eq!(call(&ada, "tickets.set_parent", json!({ "id": "IDENTITY-2", "parent": to })).await[0]["type"], "parent_changed");
+    assert_eq!(ids(&call(&bob, "tickets.list", json!({ "filter": "in IDENTITY" })).await), set(&["IDENTITY-2"]));
+}

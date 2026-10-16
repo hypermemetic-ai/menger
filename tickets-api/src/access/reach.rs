@@ -24,9 +24,11 @@ use crate::members::Scope;
 
 /// One scope a role is held on, compiled — the four kinds of ACCESS-37's
 /// grammar and the organization ORG-4 added. A grant compiles to the first
-/// three (the stored [`Scope`]; ACCESS-21 adds `under ID` and `ID` there);
-/// a session's ceiling names tickets too (`editor@MENGER-12`, the ticket
-/// and its subtree: [`Held::Under`]).
+/// five (the stored [`Scope`]; ACCESS-21 added `under ID` and `ID`); a
+/// session's ceiling names them the same way (`editor@under MENGER-12`, the
+/// ticket and its subtree — what a ceiling asked as `editor@MENGER-12` is
+/// minted as, [`super::Access::ceiling_entry`]; one minted before ACCESS-21,
+/// `editor@MENGER-12`, is the ticket alone, as the gate reads it).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Held {
     /// `*`: every ticket.
@@ -37,9 +39,8 @@ pub enum Held {
     Shortcode { org: OrgId, id: ShortcodeId },
     /// `under ID`: the ticket and its descendants, wherever it moves.
     Under(TicketId),
-    /// `ID`: the ticket itself, alone. No stored scope names one yet
-    /// (ACCESS-21); a read's lens cannot narrow to it, so it adds nothing
-    /// to one ([`Held::under`]) — a [`super::Permit`] reaches it.
+    /// `ID`: the ticket itself, alone — a read's lens is `ticket ID`
+    /// ([`Field::Ticket`]), a [`super::Permit`] reaches it and nothing below.
     Ticket(TicketId),
     /// A scope minted before ORG-4 (a bare `IDENTITY`, in a ceiling or a
     /// grant the open has not rewritten yet): named as the gate names it,
@@ -54,12 +55,15 @@ impl Held {
             Scope::Everywhere => Self::Everywhere,
             Scope::Org(org) => Self::Org(org.clone()),
             Scope::Shortcode { org, id } => Self::Shortcode { org: org.clone(), id: id.clone() },
+            Scope::Under(t) => Self::Under(t.clone()),
+            Scope::Ticket(t) => Self::Ticket(t.clone()),
         }
     }
 
     /// A ceiling entry's scope, as the gate reads it: `*`; a kept scope
-    /// (`acme:`, `acme:MENGER`); a ticket (`MENGER-12`, it and its
-    /// subtree); else the name itself.
+    /// (`acme:`, `acme:MENGER`, ACCESS-21: `under MENGER-12`, `MENGER-12`
+    /// — the gate's chain holds a ticket's own key alone, so a bare key is
+    /// the ticket alone here too); else the name itself.
     fn of_ceiling(scope: &ScopeRef) -> Self {
         let ScopeRef::Named(text) = scope else { return Self::Everywhere };
         if let Some(s) = Scope::stored(text) {
@@ -67,7 +71,7 @@ impl Held {
         }
         let ticket = text.rsplit_once('-').is_some_and(|(code, n)| !code.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
         match ticket {
-            true => Self::Under(TicketId::new(text.trim().to_ascii_uppercase())),
+            true => Self::Ticket(TicketId::new(text.trim().to_ascii_uppercase())),
             false => Self::Named(text.trim().to_string()),
         }
     }
@@ -81,22 +85,25 @@ impl Held {
             Self::Everywhere => true,
             Self::Org(org) => holds(&Scope::Org(org.clone()).text()),
             Self::Shortcode { org, id } => holds(&Scope::Shortcode { org: org.clone(), id: id.clone() }.text()),
-            Self::Under(t) => holds(t.as_str()),
-            Self::Ticket(t) => t.as_str() == key,
+            // ACCESS-21: `under` each of the ticket's own key and its
+            // ancestors'; its own key bare, alone ([`Store::gate_chain`]).
+            Self::Under(t) => holds(&Scope::Under(t.clone()).text()),
+            Self::Ticket(t) => t.as_str() == key || holds(t.as_str()),
             Self::Named(n) => holds(n),
         }
     }
 
-    /// The name a read's `under` asks for it — `None` for `*` (no
-    /// narrowing) and for one ticket alone (no `under` is it).
-    fn under(&self) -> Option<String> {
-        match self {
-            Self::Everywhere | Self::Ticket(_) => None,
-            Self::Org(org) => Some(Scope::Org(org.clone()).text()),
-            Self::Shortcode { id, .. } => Some(id.as_str().to_string()),
-            Self::Under(t) => Some(crate::address::folded(t.as_str())),
-            Self::Named(n) => Some(under_name(n)),
-        }
+    /// The predicate a read asks for it — `under` its name; ACCESS-21:
+    /// `ticket ID` for one ticket alone. `None` for `*` (no narrowing).
+    fn read(&self) -> Option<Field> {
+        Some(match self {
+            Self::Everywhere => return None,
+            Self::Org(org) => Field::Under(Scope::Org(org.clone()).text()),
+            Self::Shortcode { id, .. } => Field::Under(id.as_str().to_string()),
+            Self::Under(t) => Field::Under(crate::address::folded(t.as_str())),
+            Self::Ticket(t) => Field::Ticket(crate::address::folded(t.as_str())),
+            Self::Named(n) => Field::Under(under_name(n)),
+        })
     }
 }
 
@@ -126,6 +133,9 @@ pub struct ReachKey {
 pub struct Reach {
     grants: Vec<(Scope, Role)>,
     held: Vec<(Held, Role)>,
+    /// ACCESS-21: the organizations its ticket scopes are in, as the store
+    /// placed each ticket when it was resolved.
+    ticket_orgs: Vec<OrgId>,
     ceiling: Vec<Layer>,
     call: Option<GateGrant>,
     /// `None`: login is off — everything, as menger always answered.
@@ -144,7 +154,7 @@ impl std::fmt::Debug for Reach {
 impl Reach {
     /// Login off: everything.
     pub(super) fn everything() -> Self {
-        Self { grants: Vec::new(), held: Vec::new(), ceiling: Vec::new(), call: None, gate: None, generation: 0, who: "an anonymous caller".into() }
+        Self { grants: Vec::new(), held: Vec::new(), ticket_orgs: Vec::new(), ceiling: Vec::new(), call: None, gate: None, generation: 0, who: "an anonymous caller".into() }
     }
 
     /// `who`'s reach as `ctx` stands: its grants as the book resolves them
@@ -156,7 +166,12 @@ impl Reach {
         let mut held: Vec<(Held, Role)> = Vec::new();
         // ACCESS-48: every grant's scope is a kept form — one written before
         // ORG-4 is rewritten at the store's open, or held nowhere.
+        let mut ticket_orgs: Vec<OrgId> = Vec::new();
         for g in book.grants_of(who) {
+            // ACCESS-21: a ticket's scope is in its ticket's organization.
+            if let (Some(t), Some(store)) = (g.scope.ticket(), book.store()) {
+                ticket_orgs.extend(store.org_of(t.as_str()));
+            }
             held.push((Held::of_scope(&g.scope), g.role));
             grants.push((g.scope, g.role));
         }
@@ -165,7 +180,7 @@ impl Reach {
             .into_iter()
             .map(|l| Layer { text: l.text(), entries: l.0.iter().map(|(rg, s)| (rg.clone(), Held::of_ceiling(s))).collect() })
             .collect();
-        Ok(Self { grants, held, ceiling, call: None, gate: Some(gate.clone()), generation, who: who.to_string() })
+        Ok(Self { grants, held, ticket_orgs, ceiling, call: None, gate: Some(gate.clone()), generation, who: who.to_string() })
     }
 
     /// The reach for the call admitted for `grant`.
@@ -184,10 +199,12 @@ impl Reach {
                 Held::Everywhere => Some((Scope::Everywhere, *r)),
                 Held::Org(o) => Some((Scope::Org(o.clone()), *r)),
                 Held::Shortcode { org, id } => Some((Scope::Shortcode { org: org.clone(), id: id.clone() }, *r)),
-                _ => None,
+                Held::Under(t) => Some((Scope::Under(t.clone()), *r)),
+                Held::Ticket(t) => Some((Scope::Ticket(t.clone()), *r)),
+                Held::Named(_) => None,
             })
             .collect();
-        Self { grants: scopes, held: grants, ceiling: Vec::new(), call: None, gate: Some(gate), generation: 0, who: who.to_string() }
+        Self { grants: scopes, held: grants, ticket_orgs: Vec::new(), ceiling: Vec::new(), call: None, gate: Some(gate), generation: 0, who: who.to_string() }
     }
 
     /// The grants it holds, as kept.
@@ -258,12 +275,16 @@ impl Reach {
         let Some(key) = self.key_for(grant)? else { return Ok(None) };
         let mut groups = Vec::with_capacity(key.parts.len());
         for part in &key.parts {
-            let mut names: Vec<String> = part.iter().filter_map(Held::under).collect();
-            names.dedup();
-            if names.is_empty() {
-                return Err(Refusal::Unreadable(format!("{} holds {grant} only on single tickets, which a read cannot narrow to yet", self.who)));
+            let mut fields: Vec<Field> = Vec::new();
+            for f in part.iter().filter_map(Held::read) {
+                if !fields.contains(&f) {
+                    fields.push(f);
+                }
             }
-            groups.push(Group::any(names.into_iter().map(|n| Predicate::is(Field::Under(n))).collect()));
+            if fields.is_empty() {
+                return Err(Refusal::Unreadable(format!("{} holds {grant} nowhere a read can narrow to", self.who)));
+            }
+            groups.push(Group::any(fields.into_iter().map(Predicate::is).collect()));
         }
         Ok(Some(Filter { groups, display: Default::default() }))
     }
@@ -287,15 +308,18 @@ impl Reach {
     /// one (a role on `*`, or login off).
     pub fn orgs(&self) -> Option<Vec<OrgId>> {
         self.gate.as_ref()?;
-        let mut out: Vec<OrgId> = Vec::new();
+        let mut out: Vec<OrgId> = self.ticket_orgs.clone();
         for (s, _) in &self.grants {
             match s.org() {
+                // ACCESS-21: a ticket's scope is in its ticket's (above).
+                None if s.ticket().is_some() => {}
                 None => return None,
                 Some(o) if !out.contains(o) => out.push(o.clone()),
                 Some(_) => {}
             }
         }
         out.sort();
+        out.dedup();
         Some(out)
     }
 }

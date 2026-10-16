@@ -1610,3 +1610,29 @@ fn an_unresolved_name_matches_nothing_and_clashes_with_nothing() {
     assert!(!parsed("status Ready").is_nested() && !parsed("(ready or blocked)").is_nested());
     assert!(parsed("saved A").is_nested() && parsed("(ready or (blocked and asking))").is_nested());
 }
+
+/// ACCESS-21: `ticket <ID>` — the ticket alone: written by any address of
+/// one, kept folded, said back as written; it passes that ticket and no
+/// other, its children included (`under` is the subtree).
+#[test]
+fn access_21_ticket_is_one_ticket_alone() {
+    let f = Filter::parse("ticket mng-40").unwrap();
+    assert_eq!(f.groups[0].preds[0].field, Field::Ticket("MNG-40".into()));
+    assert_eq!(f.format(), "ticket MNG-40");
+    assert_eq!(Filter::parse(&f.format()).unwrap(), f);
+    assert_eq!(Filter::parse("not ticket MENGER/THEME-3").unwrap().format(), "not ticket MENGER/THEME-3");
+    for bad in ["ticket", "ticket MNG", "ticket a b", "ticket *"] {
+        assert!(Filter::parse(bad).is_err(), "{bad}");
+    }
+    let mut child = facts("MNG-41", "below", Status::Ready, Kind::Build);
+    child.lineage.push("MNG-40".into());
+    let it = facts("MNG-40", "it", Status::Ready, Kind::Build);
+    assert!(f.matches(&it) && !f.matches(&child));
+    assert!(Filter::parse("under MNG-40").unwrap().matches(&child));
+    // On a cell, the store hands the truth by its name.
+    let mut cell = facts("", "", Status::Ready, Kind::Build);
+    assert!(!f.matches(&cell));
+    cell.history.push(ticket_truth("mng-40"));
+    assert!(f.matches(&cell));
+    assert!(Filter::parse("ticket MNG-40 and not ticket MNG-40").unwrap().admits_nothing().is_some());
+}

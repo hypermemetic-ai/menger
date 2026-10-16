@@ -36,6 +36,10 @@ pub struct Lens {
     /// the transition log's kept indexes ([`super::history::Log::holds`]),
     /// at the moment and in the zone `clock` says.
     history: Vec<crate::filter::History>,
+    /// ACCESS-21: the tickets `ticket <ID>` names, each once, as written
+    /// (folded) — a free truth per ticket, handed to the judge as a history
+    /// predicate's is ([`crate::filter::ticket_truth`]).
+    tickets: Vec<String>,
     clock: super::history::Clock,
     judge: Arc<Judge>,
     /// ACCESS-10: the filter it was compiled from ([`Lens::of`]) — what a
@@ -66,6 +70,7 @@ impl Lens {
             named,
             unders: Vec::new(),
             history: Vec::new(),
+            tickets: Vec::new(),
             clock: Default::default(),
             judge: Arc::new(move |e, k, _, _| judge(e, k)),
             filter: None,
@@ -101,6 +106,7 @@ impl Lens {
             named: union(&self.named, &reach.named),
             unders: union(&self.unders, &reach.unders),
             history,
+            tickets: union(&self.tickets, &reach.tickets),
             clock: self.clock.clone(),
             judge: Arc::new(move |e, k, l, h| a(e, k, l, h) && b(e, k, l, h)),
             filter: None,
@@ -126,8 +132,16 @@ impl Lens {
     }
 
     /// MENGER-13: whether it asks the transition log.
+    ///
+    /// ACCESS-21: or names a ticket alone (`ticket <ID>`) — a truth of one
+    /// ticket's, worked out as a history predicate's is.
     pub fn has_history(&self) -> bool {
-        !self.history.is_empty()
+        !self.history.is_empty() || !self.tickets.is_empty()
+    }
+
+    /// ACCESS-21: the tickets `ticket <ID>` names, as written.
+    pub(super) fn tickets(&self) -> &[String] {
+        &self.tickets
     }
 
     /// FILTER-30: whether it asks `touched` — what a write that moves no
@@ -231,12 +245,26 @@ impl Lens {
                 history.len()
             )));
         }
+        // ACCESS-21: the tickets it names alone, each once.
+        let tickets: BTreeSet<String> = preds()
+            .filter_map(|p| match &p.field {
+                Field::Ticket(x) => Some(x.trim().to_ascii_uppercase()),
+                _ => None,
+            })
+            .collect();
+        if tickets.len() > UNDERS_MAX {
+            return Err(StoreError::Filter(format!(
+                "a filter names at most {UNDERS_MAX} tickets with `ticket`; this one names {}",
+                tickets.len()
+            )));
+        }
         let judged = filter.clone();
         Ok(Self {
             text: filter.format(),
             named: named.into_iter().collect(),
             unders: unders.into_iter().collect(),
             history,
+            tickets: tickets.into_iter().collect(),
             clock: Default::default(),
             judge: Arc::new(move |epic, key, lineage, holds| {
                 let f = facts(epic, key, lineage, holds);

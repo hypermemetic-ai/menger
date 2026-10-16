@@ -187,6 +187,11 @@ pub enum Field {
     /// ORG-3: any address, resolved by the store to one ticket or shortcode
     /// (or refused, naming each it could be).
     Under(String),
+    /// ACCESS-21: `ticket <ID>`: it is the one named — that ticket alone,
+    /// not its parent, not its children (`under` is it and its subtree).
+    /// What a role on a single ticket reads through ([`crate::access::Held`]);
+    /// a free truth, as a history predicate's is ([`ticket_truth`]).
+    Ticket(String),
     /// `text "…"`: its id or title contains the text — find's rule
     /// (SCALE-6): trimmed, ASCII case folded; a blank text matches all.
     Text(String),
@@ -207,6 +212,13 @@ pub enum Field {
     Saved(String),
 }
 
+/// ACCESS-21: the truth a `ticket <ID>` predicate is handed by, for the
+/// one ticket it names ([`Facts::history`] carries it, as a history
+/// predicate's): `ticket ID`, upper case.
+pub fn ticket_truth(id: &str) -> String {
+    format!("ticket {}", id.trim().to_ascii_uppercase())
+}
+
 impl Field {
     /// The field's name as a filter writes it: `status`, `has commits`, …
     pub const fn name(&self) -> &'static str {
@@ -224,6 +236,7 @@ impl Field {
             Field::Archived => "archived",
             Field::In(_) => "in",
             Field::Under(_) => "under",
+            Field::Ticket(_) => "ticket",
             Field::Text(_) => "text",
             Field::History(h) => h.event.name(),
             Field::Group(_) => "group",
@@ -241,7 +254,7 @@ impl Field {
             Field::Kind(k) => k.as_str().into(),
             Field::Severity(s) => severity_name(*s).into(),
             Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived => return None,
-            Field::In(x) | Field::Under(x) | Field::Text(x) | Field::Label(x) | Field::Saved(x) => x.clone(),
+            Field::In(x) | Field::Under(x) | Field::Ticket(x) | Field::Text(x) | Field::Label(x) | Field::Saved(x) => x.clone(),
             // FILTER-36: a nested group's value is its text.
             Field::Group(g) => g.format(),
             Field::History(h) => {
@@ -292,6 +305,7 @@ impl Field {
             Field::Asking => c.asking,
             Field::In(_)
             | Field::Under(_)
+            | Field::Ticket(_)
             | Field::Text(_)
             | Field::Label(_)
             | Field::Archived
@@ -308,6 +322,9 @@ impl Field {
         match self {
             Field::In(e) => f.epic.eq_ignore_ascii_case(e),
             Field::Under(x) => f.lineage.iter().any(|l| l.eq_ignore_ascii_case(x)),
+            // ACCESS-21: its own id — or, judged on a cell, the truth the
+            // store hands it for that ticket.
+            Field::Ticket(x) => f.id.eq_ignore_ascii_case(x) || f.history.contains(&ticket_truth(x)),
             Field::Text(t) => text_matches(t, &f.id, &f.title),
             Field::Label(l) => f.labels.iter().any(|x| x.eq_ignore_ascii_case(l)),
             Field::Archived => f.archived,
@@ -962,7 +979,7 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 34] = [
+const NAMES: [&str; 35] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -977,6 +994,8 @@ const NAMES: [&str; 34] = [
     "restored",
     // MENGER-13: the history predicates.
     "entered",
+    // ACCESS-21: one ticket alone.
+    "ticket",
     "changed",
     "blocked",
     "session",
@@ -1273,6 +1292,15 @@ fn read_field(rest: &str) -> Result<Field, String> {
             match ok {
                 true => Ok(Field::Under(crate::address::folded(v))),
                 false => Err(format!("`under` takes an id, a shortcode or an address, as `under SCALE-13` — not `{v}`")),
+            }
+        }
+        // ACCESS-21: a ticket, by any address that names one — spelled as
+        // `under`'s is; the store resolves it to its key.
+        "ticket" => {
+            let v = value()?;
+            match crate::address::Address::parse(v) {
+                Ok(a) if a.names_ticket() => Ok(Field::Ticket(crate::address::folded(v))),
+                _ => Err(format!("`ticket` takes a ticket's id or address, as `ticket SCALE-13` — not `{v}`")),
             }
         }
         // MENGER-13: the transition log.
@@ -2317,7 +2345,7 @@ fn dims(field: &Field) -> Vec<Dim> {
         Field::HasCommits => vec![Dim::Commits],
         Field::Asking => vec![Dim::Asking],
         Field::In(_) => vec![Dim::Epic],
-        Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived => {
+        Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived => {
             var(field).into_iter().collect()
         }
         // FILTER-36: what its leaves read.
@@ -2332,6 +2360,8 @@ fn dims(field: &Field) -> Vec<Dim> {
 fn var(field: &Field) -> Option<Dim> {
     match field {
         Field::Under(x) => Some(Dim::Under(x.to_ascii_uppercase())),
+        // ACCESS-21: a free truth, named as the store hands it.
+        Field::Ticket(x) => Some(Dim::History(ticket_truth(x))),
         Field::Label(l) => Some(Dim::Label(l.to_ascii_lowercase())),
         Field::Text(t) => {
             let key = t.trim().to_ascii_lowercase();
@@ -2408,7 +2438,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
                     epics.push(e);
                 }
             }
-            f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived) => {
+            f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived) => {
                 if let Some(v) = var(f).filter(|v| !vars.contains(v)) {
                     vars.push(v);
                 }
@@ -2438,7 +2468,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
             .map(|p| {
                 let lit = match &p.field {
                     Field::In(e) => Lit::Epic(epics.iter().position(|x| x.eq_ignore_ascii_case(e)).unwrap_or(usize::MAX)),
-                    f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived) => {
+                    f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived) => {
                         match var(f) {
                             Some(v) => Lit::Var(vars.iter().position(|x| *x == v).unwrap_or(usize::MAX)),
                             None => Lit::Always,
