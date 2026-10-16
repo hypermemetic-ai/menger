@@ -1313,9 +1313,10 @@ Transport limits sit around it: the WebSocket takes a request up to 10 MB
 (jsonrpsee's default — JSON escaping grows a body, so a cap much above
 ~9 MB is refused there first, untyped); the REST bridge refuses a request
 past 2 MB (axum's default body limit) with `413`, so a large body is
-written over the WebSocket; and synapse cannot send one from the command
-line (a single argument is at most 128 KB on Linux, and synapse has no
-file or stdin parameter) — a script speaks the WebSocket instead.
+written over the WebSocket. synapse sends one from a file,
+`--body @page.html`, or from stdin, `--body -` (synapse ≥ 3.14.8,
+SYNAPSE-10): no command-line argument carries it, so Linux's 128 KB cap on
+a single argument does not apply (`--body "$(cat page.html)"` hits it).
 
 `window.menger` (1.4, frozen): `version`; **`tickets`** (COMP-10) — the
 `tickets` activation's typed client (below); **`call(method, params)`** → a
@@ -3582,8 +3583,8 @@ npm ci --prefix diagrams/node           # once: jsdom, pinned by the lockfile
 cargo run -p menger-diagrams            # WebSocket :4458
 synapse -P 4458 diagrams mermaid parse --source 'graph LR
   A --> B'
-synapse -P 4458 diagrams mermaid check --markdown "$(cat ticket-body.md)"
-# any body, frontmatter and `$` included, needs synapse >= 3.14.2 (SYNAPSE-4, SYNAPSE-6)
+synapse -P 4458 diagrams mermaid check --markdown @ticket-body.md
+# the file's contents exactly, frontmatter and `$` included (synapse >= 3.14.8, SYNAPSE-10)
 ```
 
 | method | yields |

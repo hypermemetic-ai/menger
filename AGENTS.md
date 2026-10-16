@@ -385,11 +385,15 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   `["MNG-1","MNG-2"]` (commas need synapse ≥ 3.14, SYNAPSE-2; on an
   older binary `a,b` is silently one string). An
   element that itself holds a comma is double-quoted inside the value, and
-  the shell must not eat the quotes: `'"a,b","c"'`. A multi-line `--body`
-  is an ordinary quoted argument — `--body "$(cat body.md)"` — whatever it
-  begins with (frontmatter's `---` included) and whatever it holds: a `$`
-  the shell did not expand arrives literally. Both need synapse ≥ 3.14.2
-  (SYNAPSE-4, SYNAPSE-6; this machine has it); `--key=value` works too.
+  the shell must not eat the quotes: `'"a,b","c"'`. **A body is a file**:
+  `--body @body.md` sends the file's contents exactly, whatever it begins
+  with (frontmatter's `---` included) and whatever it holds (`$`,
+  backticks), and as large as menger takes (synapse ≥ 3.14.8, SYNAPSE-10;
+  this machine has it). `--body -` reads stdin, `@@text` is a literal
+  `@text`, and `-p @params.json` / `-p -` take a whole params object.
+  Don't use `--body "$(cat body.md)"`: Linux caps one argument at 128 KB.
+  A value may begin with dashes (synapse ≥ 3.14.2, SYNAPSE-4, SYNAPSE-6);
+  `--key=value` works too.
 
   **Every parameter is a type** (ACCESS-8, `tickets-api/src/vocab/`): a
   value its type refuses is `-32602 invalid_params` naming the parameter,
