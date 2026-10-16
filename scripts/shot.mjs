@@ -36,6 +36,8 @@ options
   --theme T           light, dark or both                          [light]
   --width W[,W...]    viewport widths in px, comma-separated       [1440]
   --height H          viewport height in px                        [900]
+  --reduced-motion    emulate prefers-reduced-motion: reduce, so the app's
+                      Motion setting reads none (its default follows it)
   --screen            only the visible screen (default: the whole page —
                       the window grows to the tallest scroller)
   --selector CSS      only this element (the first match), whole unless
@@ -77,6 +79,7 @@ try {
       width: { type: 'string', default: '1440' },
       height: { type: 'string', default: '900' },
       screen: { type: 'boolean', default: false },
+      'reduced-motion': { type: 'boolean', default: false },
       selector: { type: 'string' },
       'wait-for': { type: 'string' },
       out: { type: 'string' },
@@ -370,7 +373,7 @@ async function shoot(context, { t, theme, width }) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message.split('\n')[0]));
   try {
-    await page.emulateMedia({ colorScheme: theme });
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: opt['reduced-motion'] ? 'reduce' : 'no-preference' });
     await page.setViewportSize({ width, height });
     await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     if (t.origin && new URL(page.url()).pathname.startsWith('/login')) {
