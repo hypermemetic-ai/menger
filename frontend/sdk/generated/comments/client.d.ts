@@ -26,6 +26,8 @@ export interface CommentsClient {
   kept as given (`ticket` stays what the element belonged to).
   ACCESS-19: a comment on the app (naming no ticket) is seen only by
   its author and the admins of `*`.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `comments.add` anywhere it is held
      */
     add(anchor: Anchor, body: Body): AsyncGenerator<CommentsEvent>;
@@ -48,6 +50,8 @@ export interface CommentsClient {
   `after` that names no comment, is one in-band `error` and nothing
   else. Only the comments the caller sees (ACCESS-10; a comment on the
   app, its author's and the admins' of `*`). From the cache.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `comments.list` anywhere it is held
      */
     list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent>;
@@ -58,6 +62,8 @@ export interface CommentsClient {
   already was — or an in-band `error` for an id that names no comment.
   A comment the caller does not see is answered as one that is not
   there, naming nothing (ACCESS-3 #7). `watch` carries `reopened`.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `comments.reopen` anywhere it is held
      */
     reopen(id: CommentId): AsyncGenerator<CommentsEvent>;
@@ -69,6 +75,8 @@ export interface CommentsClient {
   in-band `error` for an id that names no comment. A comment the
   caller does not see is answered as one that is not there, naming
   nothing (ACCESS-3 #7). `watch` carries `resolved`.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `comments.resolve` anywhere it is held
      */
     resolve(id: CommentId): AsyncGenerator<CommentsEvent>;

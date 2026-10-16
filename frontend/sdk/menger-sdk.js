@@ -623,11 +623,172 @@
     throw new Error("No data received from method call");
   }
 
-  // generated/tickets/client.ts
-  class TicketsClientImpl {
+  // generated/tickets/commits/client.ts
+  class TicketsCommitsClientImpl {
     rpc;
     constructor(rpc) {
       this.rpc = rpc;
+    }
+    async* link(commits, id, ids) {
+      const stream = this.rpc.call("tickets.commits.link", { commits, id, ids });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.commits.schema", {});
+      return collectOne(stream);
+    }
+    async* unlink(commits, id) {
+      const stream = this.rpc.call("tickets.commits.unlink", { commits, id });
+      yield* extractData(stream);
+    }
+  }
+  function createTicketsCommitsClient(rpc) {
+    return new TicketsCommitsClientImpl(rpc);
+  }
+
+  // generated/tickets/components/client.ts
+  class TicketsComponentsClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* list() {
+      const stream = this.rpc.call("tickets.components.list", {});
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.components.schema", {});
+      return collectOne(stream);
+    }
+  }
+  function createTicketsComponentsClient(rpc) {
+    return new TicketsComponentsClientImpl(rpc);
+  }
+
+  // generated/tickets/inputs/client.ts
+  class TicketsInputsClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* answer(input, ticket, value, rationale) {
+      const stream = this.rpc.call("tickets.inputs.answer", { input, rationale, ticket, value });
+      yield* extractData(stream);
+    }
+    async* clear(input, ticket) {
+      const stream = this.rpc.call("tickets.inputs.clear", { input, ticket });
+      yield* extractData(stream);
+    }
+    async* close(input, ticket) {
+      const stream = this.rpc.call("tickets.inputs.close", { input, ticket });
+      yield* extractData(stream);
+    }
+    async* list(epic, filter, state, ticket, tz) {
+      const stream = this.rpc.call("tickets.inputs.list", { epic, filter, state, ticket, tz });
+      yield* extractData(stream);
+    }
+    async* reopen(input, ticket) {
+      const stream = this.rpc.call("tickets.inputs.reopen", { input, ticket });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.inputs.schema", {});
+      return collectOne(stream);
+    }
+  }
+  function createTicketsInputsClient(rpc) {
+    return new TicketsInputsClientImpl(rpc);
+  }
+
+  // generated/tickets/nav/client.ts
+  class TicketsNavClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* counts(filter, keep, tz) {
+      const stream = this.rpc.call("tickets.nav.counts", { filter, keep, tz });
+      yield* extractData(stream);
+    }
+    async* extents() {
+      const stream = this.rpc.call("tickets.nav.extents", {});
+      yield* extractData(stream);
+    }
+    async* facets(base, filter, tz) {
+      const stream = this.rpc.call("tickets.nav.facets", { base, filter, tz });
+      yield* extractData(stream);
+    }
+    async* groups() {
+      const stream = this.rpc.call("tickets.nav.groups", {});
+      yield* extractData(stream);
+    }
+    async* member(filter, ids, tz) {
+      const stream = this.rpc.call("tickets.nav.member", { filter, ids, tz });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.nav.schema", {});
+      return collectOne(stream);
+    }
+    async* tree(filter, after, epic, keep, limit, matchesOnly, parent, tz) {
+      const stream = this.rpc.call("tickets.nav.tree", { after, epic, filter, keep, limit, matches_only: matchesOnly, parent, tz });
+      yield* extractData(stream);
+    }
+  }
+  function createTicketsNavClient(rpc) {
+    return new TicketsNavClientImpl(rpc);
+  }
+
+  // generated/tickets/work/client.ts
+  class TicketsWorkClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* blockers(id) {
+      const stream = this.rpc.call("tickets.work.blockers", { id });
+      yield* extractData(stream);
+    }
+    async* ready(after, epic, filter, limit, summary, tz) {
+      const stream = this.rpc.call("tickets.work.ready", { after, epic, filter, limit, summary, tz });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.work.schema", {});
+      return collectOne(stream);
+    }
+    async* waves(epics, kinds) {
+      const stream = this.rpc.call("tickets.work.waves", { epics, kinds });
+      yield* extractData(stream);
+    }
+    async* wavesTo(id, kinds) {
+      const stream = this.rpc.call("tickets.work.waves_to", { id, kinds });
+      yield* extractData(stream);
+    }
+    async* wavesUnder(id, kinds) {
+      const stream = this.rpc.call("tickets.work.waves_under", { id, kinds });
+      yield* extractData(stream);
+    }
+  }
+  function createTicketsWorkClient(rpc) {
+    return new TicketsWorkClientImpl(rpc);
+  }
+
+  // generated/tickets/client.ts
+  class TicketsClientImpl {
+    rpc;
+    commits;
+    components;
+    inputs;
+    nav;
+    work;
+    constructor(rpc) {
+      this.rpc = rpc;
+      this.commits = createTicketsCommitsClient(rpc);
+      this.components = createTicketsComponentsClient(rpc);
+      this.inputs = createTicketsInputsClient(rpc);
+      this.nav = createTicketsNavClient(rpc);
+      this.work = createTicketsWorkClient(rpc);
     }
     async* amend(id, body, title) {
       const stream = this.rpc.call("tickets.amend", { body, id, title });
@@ -740,134 +901,6 @@
   }
   function createTicketsClient(rpc) {
     return new TicketsClientImpl(rpc);
-  }
-
-  // generated/tickets/inputs/client.ts
-  class TicketsInputsClientImpl {
-    rpc;
-    constructor(rpc) {
-      this.rpc = rpc;
-    }
-    async* answer(input, ticket, value, rationale) {
-      const stream = this.rpc.call("tickets.inputs.answer", { input, rationale, ticket, value });
-      yield* extractData(stream);
-    }
-    async* clear(input, ticket) {
-      const stream = this.rpc.call("tickets.inputs.clear", { input, ticket });
-      yield* extractData(stream);
-    }
-    async* close(input, ticket) {
-      const stream = this.rpc.call("tickets.inputs.close", { input, ticket });
-      yield* extractData(stream);
-    }
-    async* list(epic, filter, state, ticket, tz) {
-      const stream = this.rpc.call("tickets.inputs.list", { epic, filter, state, ticket, tz });
-      yield* extractData(stream);
-    }
-    async* reopen(input, ticket) {
-      const stream = this.rpc.call("tickets.inputs.reopen", { input, ticket });
-      yield* extractData(stream);
-    }
-    async schema() {
-      const stream = this.rpc.call("tickets.inputs.schema", {});
-      return collectOne(stream);
-    }
-  }
-  function createTicketsInputsClient(rpc) {
-    return new TicketsInputsClientImpl(rpc);
-  }
-
-  // generated/tickets/work/client.ts
-  class TicketsWorkClientImpl {
-    rpc;
-    constructor(rpc) {
-      this.rpc = rpc;
-    }
-    async* blockers(id) {
-      const stream = this.rpc.call("tickets.work.blockers", { id });
-      yield* extractData(stream);
-    }
-    async* ready(after, epic, filter, limit, summary, tz) {
-      const stream = this.rpc.call("tickets.work.ready", { after, epic, filter, limit, summary, tz });
-      yield* extractData(stream);
-    }
-    async schema() {
-      const stream = this.rpc.call("tickets.work.schema", {});
-      return collectOne(stream);
-    }
-    async* waves(epics, kinds) {
-      const stream = this.rpc.call("tickets.work.waves", { epics, kinds });
-      yield* extractData(stream);
-    }
-    async* wavesTo(id, kinds) {
-      const stream = this.rpc.call("tickets.work.waves_to", { id, kinds });
-      yield* extractData(stream);
-    }
-    async* wavesUnder(id, kinds) {
-      const stream = this.rpc.call("tickets.work.waves_under", { id, kinds });
-      yield* extractData(stream);
-    }
-  }
-  function createTicketsWorkClient(rpc) {
-    return new TicketsWorkClientImpl(rpc);
-  }
-
-  // generated/tickets/nav/client.ts
-  class TicketsNavClientImpl {
-    rpc;
-    constructor(rpc) {
-      this.rpc = rpc;
-    }
-    async* counts(filter, keep, tz) {
-      const stream = this.rpc.call("tickets.nav.counts", { filter, keep, tz });
-      yield* extractData(stream);
-    }
-    async* extents() {
-      const stream = this.rpc.call("tickets.nav.extents", {});
-      yield* extractData(stream);
-    }
-    async* facets(base, filter, tz) {
-      const stream = this.rpc.call("tickets.nav.facets", { base, filter, tz });
-      yield* extractData(stream);
-    }
-    async* groups() {
-      const stream = this.rpc.call("tickets.nav.groups", {});
-      yield* extractData(stream);
-    }
-    async* member(filter, ids, tz) {
-      const stream = this.rpc.call("tickets.nav.member", { filter, ids, tz });
-      yield* extractData(stream);
-    }
-    async schema() {
-      const stream = this.rpc.call("tickets.nav.schema", {});
-      return collectOne(stream);
-    }
-    async* tree(filter, after, epic, keep, limit, matchesOnly, parent, tz) {
-      const stream = this.rpc.call("tickets.nav.tree", { after, epic, filter, keep, limit, matches_only: matchesOnly, parent, tz });
-      yield* extractData(stream);
-    }
-  }
-  function createTicketsNavClient(rpc) {
-    return new TicketsNavClientImpl(rpc);
-  }
-
-  // generated/tickets/components/client.ts
-  class TicketsComponentsClientImpl {
-    rpc;
-    constructor(rpc) {
-      this.rpc = rpc;
-    }
-    async* list() {
-      const stream = this.rpc.call("tickets.components.list", {});
-      yield* extractData(stream);
-    }
-    async schema() {
-      const stream = this.rpc.call("tickets.components.schema", {});
-      return collectOne(stream);
-    }
-  }
-  function createTicketsComponentsClient(rpc) {
-    return new TicketsComponentsClientImpl(rpc);
   }
 
   // bridge.ts

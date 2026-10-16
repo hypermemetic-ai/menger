@@ -14,6 +14,8 @@ export interface SessionClient {
   `role@SCOPE` each (`editor@IDENTITY`, `viewer@*`, `editor@MENGER-12`):
   every check then passes only if the principal's grants AND the scope
   allow it. A session minted from a scoped session keeps that scope too.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `session.login` anywhere it is held
      */
     login(scope?: Ceiling[] | null, ttlSecs?: number | null): AsyncGenerator<SessionEvent>;

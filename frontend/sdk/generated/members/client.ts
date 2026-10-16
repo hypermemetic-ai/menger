@@ -15,6 +15,8 @@ Gives `principal` `role` on `scope` (a shortcode, or `*`), replacing
 any role they held there. Needs admin on the scope, as the tree
 stands (ACCESS-11's `AdminOf`). Yields the grant as kept, or an
 in-band `error`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `members.grant` on the scope of `scope`
    */
   grant(principal: Principal, role: Role, scope: ScopeRef): AsyncGenerator<MembersEvent>;
@@ -24,6 +26,8 @@ in-band `error`.
 Every grant on the scopes the caller administers, by principal then
 scope (`--admin` ones included); `scope` narrows to one. Needs admin
 somewhere.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `members.list` anywhere it is held
    */
   list(scope?: ScopeRef | null): AsyncGenerator<MembersEvent>;
@@ -53,6 +57,8 @@ come back.
 
 Takes `principal`'s role on `scope` away. Needs admin on the scope,
 as the tree stands. Yields `revoked { principal, scope, existed }`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `members.revoke` on the scope of `scope`
    */
   revoke(principal: Principal, scope: ScopeRef): AsyncGenerator<MembersEvent>;
