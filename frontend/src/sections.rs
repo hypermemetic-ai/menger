@@ -181,6 +181,19 @@ pub(crate) fn build(items: &[Item], states: Option<&States>) -> Vec<Section> {
     out
 }
 
+/// LOOK-8: each input's state, by its id, as the dock draws it.
+pub(crate) fn asks_of(sections: &[Section]) -> HashMap<String, Ask> {
+    sections.iter().flat_map(|s| &s.inputs).map(|i| (i.id.clone(), i.ask)).collect()
+}
+
+/// LOOK-8: the inputs whose state turned between two drawings — an input
+/// that changed state, or one that came in. Nothing before the server's
+/// first answer (`was` None): the first drawing is no change.
+pub(crate) fn turned(was: Option<&HashMap<String, Ask>>, now: &HashMap<String, Ask>) -> std::collections::HashSet<String> {
+    let Some(was) = was else { return Default::default() };
+    now.iter().filter(|(id, a)| was.get(*id) != Some(*a)).map(|(id, _)| id.clone()).collect()
+}
+
 /// Whether the page shows a dock at all: three sections or more, or an
 /// input.
 pub(crate) fn shows(sections: &[Section]) -> bool {
@@ -549,19 +562,61 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
     let sheet_label = label.clone();
     let pos = move || sections.with(|s| format!("{} / {}", lit.get().min(s.len().saturating_sub(1)) + 1, s.len()));
     let n_waiting = Memo::new(move |_| sections.with(|s| waiting(s)));
+    // LOOK-8: the way the lit section went — its edge is drawn in from the
+    // side it came from — and the inputs whose state just turned, which
+    // the rows drawn for this change play once.
+    let went = Memo::new(move |prev: Option<&(usize, &'static str)>| {
+        let now = lit.get();
+        let dir = match prev {
+            Some((was, _)) if now < *was => "up",
+            Some((was, _)) if now > *was => "down",
+            Some((_, d)) => d,
+            None => "down",
+        };
+        (now, dir)
+    });
+    let went = Signal::derive(move || went.get().1);
+    let asks = StoredValue::new(None::<HashMap<String, Ask>>);
+    let turned_now = Memo::new(move |_| {
+        let now = sections.with(|s| asks_of(s));
+        let was = asks.get_value();
+        asks.set_value(states.with(Option::is_some).then(|| now.clone()));
+        turned(was.as_ref(), &now)
+    });
+    // Once the rows are drawn for it, each turned input's rows play the
+    // turn — once: the class goes when it has (a rail opened later replays
+    // nothing).
+    Effect::new(move |_| {
+        let ids = turned_now.get();
+        if ids.is_empty() || motion::current() == motion::Motion::None {
+            return;
+        }
+        spawn_local(async move {
+            dom::sleep_ms(0).await;
+            let Some(doc) = dom::window().document() else { return };
+            for id in ids {
+                let q = id.replace('\\', "\\\\").replace('"', "\\\"");
+                let Ok(rows) = doc.query_selector_all(&format!(":is(#tdock, #tdock-sheet) [data-input=\"{q}\"]")) else { continue };
+                for i in 0..rows.length() {
+                    if let Some(el) = rows.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) {
+                        motion::replay(&el, "turned", 400);
+                    }
+                }
+            }
+        });
+    });
 
     view! {
         <Show when=move || shown.get()>
             <aside id="tdock" aria-label=label.clone() class:open=move || rail_open.get()>
                 <div class="rail" aria-hidden="true" on:click=move |ev| { ev.stop_propagation(); rail_open.set(true); }>
                     {move || sections.with(|secs| {
-                        let at = lit.get();
                         secs.iter().enumerate().map(|(k, s)| {
                             let dots = s.inputs.iter().map(|i| {
                                 let c = match i.ask { Ask::Waiting => "ask", Ask::Answered => "ask answered", Ask::Decided => "dec" };
-                                view! { <i class=c></i> }
+                                view! { <i class=c data-input=i.id.clone()></i> }
                             }).collect_view();
-                            view! { <i class="tick" class:on=k == at></i>{dots} }
+                            view! { <i class="tick" class:on=move || lit.get() == k></i>{dots} }
                         }).collect_view()
                     })}
                 </div>
@@ -571,9 +626,8 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                         {format!("● {} waiting on you", n_waiting.get())}<kbd>"i"</kbd>
                     </button>
                 })}
-                <ol class="dlist">
+                <ol class="dlist" data-dir=move || went.get()>
                     {move || sections.with(|secs| {
-                        let at = lit.get();
                         secs.iter().enumerate().map(|(k, s)| {
                             let spot = s.at;
                             let open = s.inputs.iter().filter(|i| i.ask == Ask::Waiting).count();
@@ -581,7 +635,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                                 let spot = i.at;
                                 let title = i.question.clone().unwrap_or_default();
                                 view! {
-                                    <li class=format!("i {}", i.ask.class())>
+                                    <li class=format!("i {}", i.ask.class()) data-input=i.id.clone()>
                                         <button type="button" title=title on:click=move |_| go_to(spot, true)>
                                             <span class="dot"></span><span class="l">{i.id.clone()}</span><span class="mini">{i.ask.word()}</span>
                                         </button>
@@ -589,7 +643,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                                 }
                             }).collect_view();
                             view! {
-                                <li class="s" class:on=k == at class:seen=k < at>
+                                <li class="s" class:on=move || lit.get() == k class:seen=move || k < lit.get()>
                                     <button type="button" on:click=move |_| go_to(spot, false)>
                                         <span class="n">{format!("{:02}", k + 1)}</span>
                                         <span class="l">{s.label.clone()}</span>
@@ -628,7 +682,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                                 let spot = i.at;
                                 let q = i.question.clone().unwrap_or_else(|| i.id.clone());
                                 view! {
-                                    <button type="button" class=format!("in {}", i.ask.class()) on:click=move |_| go_to(spot, true)>
+                                    <button type="button" class=format!("in {}", i.ask.class()) data-input=i.id.clone() on:click=move |_| go_to(spot, true)>
                                         <span class="dot"></span><span class="q">{q}</span><small>{i.ask.word()}</small>
                                     </button>
                                 }
@@ -637,14 +691,13 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                         })
                     })}
                     <h3>"Sections"</h3>
-                    <ol class="slist">
+                    <ol class="slist" data-dir=move || went.get()>
                         {move || sections.with(|secs| {
-                            let at = lit.get();
                             secs.iter().enumerate().map(|(k, s)| {
                                 let spot = s.at;
                                 let open = s.inputs.iter().filter(|i| i.ask == Ask::Waiting).count();
                                 view! {
-                                    <li class:on=k == at>
+                                    <li class:on=move || lit.get() == k>
                                         <button type="button" on:click=move |_| go_to(spot, false)>
                                             <span class="n">{format!("{:02}", k + 1)}</span>{s.label.clone()}
                                             {(open > 0).then(|| view! { <span class="mini">{format!("● {open}")}</span> })}
@@ -769,6 +822,20 @@ mod tests {
         assert!(!p.scrolled(1200.0, true), "the page's end: back");
         assert!(p.scrolled(1300.0, false));
         assert!(!p.scrolled(0.0, false), "the top: back");
+    }
+
+    /// LOOK-8: a row plays its turn once, when its input's state moved or
+    /// it came in — never on the first drawing, never when nothing moved.
+    #[test]
+    fn an_input_turns_only_when_its_state_moved() {
+        let m = |v: &[(&str, Ask)]| v.iter().map(|(k, a)| (k.to_string(), *a)).collect::<HashMap<_, _>>();
+        let a = m(&[("landing", Ask::Waiting), ("notes", Ask::Waiting)]);
+        assert!(turned(None, &a).is_empty(), "the first drawing is no change");
+        assert!(turned(Some(&a), &a).is_empty());
+        let b = m(&[("landing", Ask::Answered), ("notes", Ask::Waiting), ("checks", Ask::Waiting)]);
+        let t = turned(Some(&a), &b);
+        assert_eq!(t.len(), 2);
+        assert!(t.contains("landing") && t.contains("checks"));
     }
 
     #[test]

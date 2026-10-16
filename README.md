@@ -3087,6 +3087,24 @@ paints through `var(--…)` needs nothing:
 return this.menger.on('theme', () => draw());   // tokens are already live on :root
 ```
 
+**Motion in the app** (DESIGN-39, LOOK-8): the shell's chrome moves in
+the house's hand — ≤ 200 ms, ease-out in, faster out, from where a thing
+comes from, never delaying focus or a key. The section dock (the rail
+opening and closing, the sheet and the pill, the lit section's edge drawn
+from the side the reading came from, an input's dot popping as it turns,
+the column sliding in past 1760) and the nav tree (a caret turning and the
+children dropping in, the selection's edge growing, a row a `watch` change
+brought arriving, one leaving as a fading ghost, rows settling in after the
+filter moves) first, then the pages, overlays, dialogs and menus (the walk
+is LOOK-8's child doc). `html[data-motion="none"]` stops every animation and
+transition (one `!important` rule; before the setting is stamped, reduced
+motion does the same); `calm` keeps state changes and stops ornament —
+anything that runs forever. `frontend/src/motion_lint.rs` fails when a move
+escapes: an `!important` animation, an infinite one with no `calm` rule, or a
+`requestAnimationFrame`, `.animate(`, smooth scroll or inline transition in
+`frontend/src` outside a function that asks `motion::current()` (the
+next-frame uses that move nothing are listed there, with their reasons).
+
 **Motion in a frame** (DESIGN-40, SDK 1.18): a frame wears the app's
 Motion setting (DESIGN-39's `html[data-motion]`: `full`, `calm`, `none`;
 absent is `full`) as its own `html[data-motion]` — set from the init block
