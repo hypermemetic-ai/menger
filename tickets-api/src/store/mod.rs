@@ -353,7 +353,7 @@ impl Broadcast {
 /// ORG-3: the shortcode by its identity ([`ShortcodeId`]), never its code —
 /// two THEMEs' `THEME-3` are two keys. Its order is the id's text, which for
 /// every shortcode before ORG-3 is the code: today's order, unchanged, with
-/// a namesake right after the code it shares.
+/// a namesake after its code — not beside it (ORG-11, [`ShortcodeId`]).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OrderKey {
     pub shortcode: ShortcodeId,
