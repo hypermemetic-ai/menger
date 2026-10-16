@@ -204,7 +204,7 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// `menger.tickets.work.waves`, `.nav.groups`, `.inputs.list`,
 /// `.components.list`; `menger.call('work.waves')` — and refuses the 1.x
 /// names, naming the new one.
-pub(crate) const SDK_VERSION: &str = "2.0.0";
+pub(crate) const SDK_VERSION: &str = "2.1.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -676,6 +676,9 @@ pub(crate) enum Msg {
     /// FILTER-25: a ticket chip in the body was Alt+clicked — the global
     /// filter becomes its shortcode's clause.
     FilterEverywhere,
+    /// LOOK-3: a whole body's sections and inputs, where each runs — what
+    /// the ticket page's section dock is drawn from (src/sections.rs).
+    Sections,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -701,6 +704,7 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:link" => Some(Msg::Link),
         "menger:ticket-menu" => Some(Msg::TicketMenu),
         "menger:filter-everywhere" => Some(Msg::FilterEverywhere),
+        "menger:sections" => Some(Msg::Sections),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -1273,6 +1277,21 @@ fn on_message(ev: web_sys::MessageEvent) {
                 }
             }
         }
+        // LOOK-3: the ticket page's own body says where its sections are —
+        // never a cited window, a whole document or another page's frame.
+        Some(Msg::Sections) => {
+            let body = frame.closest("#ticket-page").ok().flatten().is_some()
+                && !frame.has_attribute("data-cite-key")
+                && !frame.has_attribute("data-page");
+            if body {
+                let items = field("items")
+                    .and_then(|v| js_sys::JSON::stringify(&v).ok())
+                    .and_then(|s| s.as_string())
+                    .and_then(|s| serde_json::from_str::<Vec<crate::sections::Item>>(&s).ok())
+                    .unwrap_or_default();
+                crate::sections::heard(&channel, items);
+            }
+        }
         Some(Msg::Navigate) => {
             // MENGER-15: an app route leaves full screen.
             present::escape();
@@ -1532,6 +1551,29 @@ fn reveal_message(channel: &str, anchor: &inspect::Anchor) -> JsValue {
     let (key, value) = anchor.pair();
     set(&msg, key, &value.into());
     msg.into()
+}
+
+/// LOOK-3: `menger:flash { n }` — the frame flashes the n-th item of the
+/// sections it last reported.
+pub(crate) fn post_flash(frame: &web_sys::HtmlIFrameElement, n: usize) {
+    let Some(channel) = frame.get_attribute("data-channel") else { return };
+    let msg = message("menger:flash", &channel);
+    set(&msg, "n", &JsValue::from_f64(n as f64));
+    post(frame, &msg.into());
+}
+
+/// LOOK-3: the ticket page's body frame for `ticket` — its own, shown
+/// (never a cited window, a whole document, or one still loading).
+pub(crate) fn body_frame(ticket: &str) -> Option<web_sys::HtmlIFrameElement> {
+    let doc = dom::window().document()?;
+    let sel = format!(
+        "#ticket-page iframe.{FRAME_CLASS}[data-state=\"live\"]:not([data-cite-key]):not([data-page])"
+    );
+    let list = doc.query_selector_all(&sel).ok()?;
+    (0..list.length())
+        .filter_map(|i| list.get(i))
+        .filter_map(|n| n.dyn_into::<web_sys::HtmlIFrameElement>().ok())
+        .find(|f| f.get_attribute("data-ticket").is_some_and(|t| t.eq_ignore_ascii_case(ticket)))
 }
 
 /// COMP-14: `menger:cited { cite, height }` to a citing frame — the one
@@ -2157,6 +2199,7 @@ mod tests {
         assert_eq!(parse_msg("menger:navigate", None, None), Some(Msg::Navigate));
         assert_eq!(parse_msg("menger:inspect", None, None), Some(Msg::Inspect));
         assert_eq!(parse_msg("menger:revealed", None, None), Some(Msg::Revealed));
+        assert_eq!(parse_msg("menger:sections", None, None), Some(Msg::Sections));
         assert_eq!(parse_msg("menger:submit", None, None), Some(Msg::Submit));
         assert_eq!(parse_msg("menger:clear", None, None), Some(Msg::Clear));
         // COMMENT-3: annotation mode's inbound five.

@@ -272,6 +272,11 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("move.prev", &[C::Nav, C::Board, C::TicketPage], &["k", "ArrowUp"], G::Move, "the previous ticket, opened; on the nav's first ticket, its `under` filter one parent wider; on the board, the previous row"),
     b("move.first", &[C::Nav, C::Board], &["Home"], G::Move, "the first row (the board's, once one of its rows has focus)"),
     b("move.last", &[C::Nav, C::Board], &["End"], G::Move, "the last row"),
+    // LOOK-3: the ticket page's section dock (owner, 2026-10-16: `}` / `{`,
+    // so `]` / `[` stay the status keys).
+    b("dock.next", &[C::TicketPage], &["}"], G::Move, "the ticket page's next section, from its dock (Shift+])"),
+    b("dock.prev", &[C::TicketPage], &["{"], G::Move, "the ticket page's previous section (Shift+[)"),
+    b("dock.input", &[C::TicketPage], &["i"], G::Move, "the ticket page's next input waiting on you, centred (wrapping)"),
     Binding { id: "focus.tab", contexts: &[C::Global], chords: &["Tab"], group: G::Move, does: "into the nav tree, the board rows, and the controls", native: true },
     // -- Open
     b("open.focused", &[C::Nav, C::Board], &["Enter"], G::Open, "open the focused ticket (a group's row in the nav opens or closes)"),

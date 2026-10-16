@@ -63,6 +63,12 @@
 "--urgent" = ['#c4262e', '#ff6b6b', "urgent: the queue's now and blocking"]
 "--urgent-bg" = ['#fbe3e1', '#3d1a1d', "urgent: its ground (the tray's loud tab)"]
 "--urgent-ink" = ['#fff', '#101014', 'text on --urgent (the chip)']
+# LOOK-3 (APP-30): what waits on the reader — an open input's row in the
+# ticket page's section dock, its rail dot and the pill's count; --ask over
+# --ask-bg over 4.5:1 in both modes.
+"--ask" = ['#a8540a', '#f2b46a', 'waiting on you: an open input in the section dock']
+"--ask-bg" = ['#fdf0df', '#33240f', 'waiting on you: its ground']
+"--ask-line" = ['#f0c48f', '#6b4a1c', 'waiting on you: its edge']
 
 # The status table (AGS-15, SDLC-7, SDLC-11, SDLC-15): one chip per status,
 # ground and text, each pair over 4.5:1 in both modes. `.st-<status>` reads

@@ -240,6 +240,8 @@ fn row(c: Comment, fresh: bool) -> impl IntoView {
     };
     view! {
         <li class="cpost" class:fresh=fresh class:pinned=!is_whole(&c) class:changes=mark(&c).is_some() data-comment-id=id.to_string() data-state=c.state.as_str()>
+            // LOOK-3: the author's initials, the mockup's avatar.
+            <span class="cav" aria-hidden="true">{initials(&c.author)}</span>
             <div class="chead">
                 {mark(&c).map(|m| view! { <span class="cmark">{m}</span> })}
                 <span class="cwho">{c.author.clone()}</span>
@@ -256,10 +258,30 @@ fn row(c: Comment, fresh: bool) -> impl IntoView {
     }
 }
 
+/// LOOK-3: an author's initials for the avatar — the first letters of its
+/// first two words (`owner` → `OW`, `Ada Lovelace` → `AL`, `key:4b…` → `KE`).
+pub(crate) fn initials(name: &str) -> String {
+    let words: Vec<&str> = name.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let s: String = match words.as_slice() {
+        [] => "?".to_string(),
+        [one] => one.chars().take(2).collect(),
+        [a, b, ..] => a.chars().take(1).chain(b.chars().take(1)).collect(),
+    };
+    s.to_uppercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bindings::{pick_single, table_with, Press};
+
+    #[test]
+    fn an_avatar_is_the_authors_initials() {
+        assert_eq!(initials("owner"), "OW");
+        assert_eq!(initials("Ada Lovelace"), "AL");
+        assert_eq!(initials("key:4b19"), "K4");
+        assert_eq!(initials(""), "?");
+    }
     use crate::comments::tests::{comment, resolved};
 
     /// The thread is the ticket's comments — its anchor's ticket, any case —

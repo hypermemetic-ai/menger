@@ -286,6 +286,23 @@ are not the app's keys, AGS-27). `f` on a ticket page makes the nav's filter
 then widens that `under` by one parent — a shortcode's to its root's host —
 and drops it at a top root.
 
+A ticket page has a **section dock** (LOOK-3, APP-30): every labelled
+field of the body in order, then the Conversation, the one being read lit
+(the last whose top has passed a line a quarter of the way down), and each
+input (`m-decision` / `m-input` with an `id`) a row under its section —
+amber `waiting` while open, an amber ring once `answered`, green `decided`
+once closed, live on `input_changed`; the head says `● N waiting on you`.
+At ≥ 1100px it is a column of its own; from 640 to 1100 a rail of ticks at
+the right edge that opens over the body on hover, focus or a tap; at ≤ 640
+a pill above the tray (hidden while you read down, back on the way up and
+at the end) that opens a sheet, inputs first. A row scrolls there (an input
+centred) and flashes it. `}` / `{` the next and previous section and `i`
+the next open input, wrapping (`]` / `[` stay the status keys; owner,
+2026-10-16). A body with fewer than three sections and no input has none.
+A framed body tells the app where its sections are (SDK 2.1:
+`menger:sections { items }`, and `menger:flash { n }` back); the dock is the
+app's, painted with the contract's `--ask` / `--ask-bg` / `--ask-line`.
+
 The nav selects like a file list (ACT-3), one selection for the whole app —
 the tree, the flat list and the board draw and take the same one. A click
 opens the ticket and selects its row; Shift+click selects from the anchor

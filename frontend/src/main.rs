@@ -303,6 +303,7 @@ mod registry;
 mod rowclick;
 mod saved;
 mod scopes;
+mod sections;
 mod selection;
 mod shape;
 mod swatches;
@@ -1556,6 +1557,7 @@ fn ticket_view(
     // MENGER-13: its history, under its children.
     let history_id = header_id.clone();
     let conversation_id = header_id.clone();
+    let dock_id = header_id.to_string();
     // ACT-10: the aside's status, kind and severity are the page's ticket
     // too — a right-click on one opens the one menu, its chooser first.
     let (status_host, kind_host, sev_host) = (header_id.clone(), header_id.clone(), header_id.clone());
@@ -1697,6 +1699,8 @@ fn ticket_view(
                 {unlocks}
             </section>
         </aside>
+        // LOOK-3: the section dock — the body's sections and inputs.
+        <sections::Dock ticket=dock_id />
     }
 }
 

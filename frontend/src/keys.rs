@@ -942,6 +942,15 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         }
         return;
     }
+    // LOOK-3: the section dock — `}` `{` its sections, `i` its next input.
+    for (id, k) in [("dock.next", crate::sections::Key::Next), ("dock.prev", crate::sections::Key::Prev), ("dock.input", crate::sections::Key::Input)] {
+        if bindings::is(ev, Context::TicketPage, id) {
+            if crate::sections::key(k) {
+                ev.prevent_default();
+            }
+            return;
+        }
+    }
     // APP-22: `c` — the ticket page's Conversation box.
     if bindings::is(ev, Context::TicketPage, "comment.focus") {
         if crate::conversation::focus_box() {
