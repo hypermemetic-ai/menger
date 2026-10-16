@@ -207,8 +207,14 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// names, naming the new one. APP-42's 2.2 has `<m-mockup>` post its
 /// `title` and `description` (`menger:mockup`), the caption the host draws
 /// above the devices; the page shim, in a mockup's frames, reports its
-/// page's height (`menger:extent`) for the bar's one-view note.
-pub(crate) const SDK_VERSION: &str = "2.2.0";
+/// page's height (`menger:extent`) for the bar's one-view note. APP-45's
+/// 2.3 reaches annotation mode into mockups: the SDK and the page shim walk
+/// their document by key (`menger:walk { step }`), `menger:locate { reveal
+/// }` scrolls a device's page to the element first, a device's frame says
+/// when its page scrolls in the mode (`menger:scrolled`), and the page shim
+/// takes the whole mode in a whole document (outline, hover, pick, probe,
+/// locate), as the SDK does in a body.
+pub(crate) const SDK_VERSION: &str = "2.3.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -337,7 +343,7 @@ const FONTS_URL: &str = "/app/fonts/";
 
 /// The class every frame's `<iframe>` wears — what the listener and
 /// [`retheme_all`] look frames up by.
-const FRAME_CLASS: &str = "mframe-doc";
+pub(crate) const FRAME_CLASS: &str = "mframe-doc";
 
 /// A re-rendered frame that never reports `settled` replaces the one on
 /// screen after this long anyway.
@@ -674,6 +680,9 @@ pub(crate) enum Msg {
     Unmock,
     /// APP-42: the page shim says how tall its page is, in px.
     Extent { height: u32 },
+    /// APP-45: in annotation mode, a device's page scrolled — what it said
+    /// about where elements are is stale.
+    Scrolled,
     /// MENGER-14: a link in the body was clicked — its `href` as written,
     /// classified here (src/links.rs), never by the frame.
     Link,
@@ -711,6 +720,7 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:ticket-menu" => Some(Msg::TicketMenu),
         "menger:filter-everywhere" => Some(Msg::FilterEverywhere),
         "menger:sections" => Some(Msg::Sections),
+        "menger:scrolled" => Some(Msg::Scrolled),
         "menger:extent" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Extent { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32 })
@@ -1212,6 +1222,11 @@ fn on_message(ev: web_sys::MessageEvent) {
                 if frame.get_attribute("data-state").as_deref() == Some("pending") {
                     promote(&frame);
                 }
+                // APP-45: and it takes annotation mode, its shim's.
+                if annotate::is_on() {
+                    post(&frame, &annotate_message(&channel, true));
+                }
+                annotate::frame_changed(&channel);
                 return;
             }
             post(&frame, &theme_message(&frame, &channel));
@@ -1334,6 +1349,10 @@ fn on_message(ev: web_sys::MessageEvent) {
             let chain = field("chain").and_then(read_chain);
             let rect = field("rect").map(read_rect).unwrap_or_default();
             let text = field("text").and_then(|v| v.as_string()).unwrap_or_default();
+            // APP-45: the keys walk in the device last hovered.
+            if chain.is_some() {
+                crate::mock_anchor::hovered(&frame);
+            }
             annotate::frame_hover(frame, chain, rect, text);
         }
         Some(Msg::Pick) => {
@@ -1371,6 +1390,10 @@ fn on_message(ev: web_sys::MessageEvent) {
         }
         Some(Msg::Key) => {
             if let Some(key) = field("key").and_then(|v| v.as_string()) {
+                // APP-45: in annotation mode, a device's walk keys.
+                if crate::mock_anchor::frame_key(&frame, &key) {
+                    return;
+                }
                 // AGS-28: what the posted key is, inside a framed body.
                 match crate::bindings::key_hit(&key, crate::bindings::Context::Frame) {
                     // MENGER-6: the palette's chord, pressed inside the body.
@@ -1493,6 +1516,7 @@ fn on_message(ev: web_sys::MessageEvent) {
                 present::extent(&frame, height);
             }
         }
+        Some(Msg::Scrolled) => annotate::frame_changed(&channel),
         Some(Msg::Unmock) => {
             if let Some(n) = field("mock").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) {
                 mockup::dropped(&channel, n as u32);
@@ -1535,10 +1559,22 @@ fn read_rect(v: JsValue) -> annotate::Rect {
     annotate::Rect { x: n("x"), y: n("y"), w: n("w"), h: n("h") }
 }
 
-/// COMMENT-3: `menger:annotate { on }` for the frame on `channel`.
+/// COMMENT-3: `menger:annotate { on }` for the frame on `channel` —
+/// APP-45: with `outline`, the app's `--annot` as painted now, which a
+/// whole document (no tokens of its own) outlines its elements in.
 fn annotate_message(channel: &str, on: bool) -> JsValue {
     let msg = message("menger:annotate", channel);
     set(&msg, "on", &JsValue::from_bool(on));
+    let outline = dom::window()
+        .document()
+        .and_then(|d| d.document_element())
+        .and_then(|r| dom::window().get_computed_style(&r).ok().flatten())
+        .and_then(|cs| cs.get_property_value("--annot").ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    if let Some(o) = outline {
+        set(&msg, "outline", &JsValue::from_str(&o));
+    }
     msg.into()
 }
 
@@ -1569,6 +1605,26 @@ pub(crate) fn post_locate(frame: &web_sys::HtmlIFrameElement, channel: &str, id:
     let msg = message("menger:locate", channel);
     set(&msg, "id", &JsValue::from_f64(f64::from(id)));
     set(&msg, "paths", &strings(paths));
+    post(frame, &msg.into());
+}
+
+/// APP-45: `menger:locate { id, paths, reveal }` — a link back: a frame
+/// held to its device's screen scrolls its page to the first element before
+/// it says where it is (a body frame, sized to its page, does not).
+pub(crate) fn post_locate_revealing(frame: &web_sys::HtmlIFrameElement, channel: &str, id: u32, paths: &[String]) {
+    let msg = message("menger:locate", channel);
+    set(&msg, "id", &JsValue::from_f64(f64::from(id)));
+    set(&msg, "paths", &strings(paths));
+    set(&msg, "reveal", &JsValue::from_bool(frame.has_attribute("data-fixed")));
+    post(frame, &msg.into());
+}
+
+/// APP-45: `menger:walk { step }` — the keyboard path in a device's page:
+/// `start`, `next`, `prev`, `in`, `out`, or `pick`.
+pub(crate) fn post_walk(frame: &web_sys::HtmlIFrameElement, step: &str) {
+    let Some(channel) = frame.get_attribute("data-channel") else { return };
+    let msg = message("menger:walk", &channel);
+    set(&msg, "step", &JsValue::from_str(step));
     post(frame, &msg.into());
 }
 
@@ -2231,6 +2287,7 @@ mod tests {
         assert_eq!(parse_msg("menger:size", Some(f64::NAN), Some(true)), None);
         assert_eq!(parse_msg("menger:size", None, Some(true)), None);
         assert_eq!(parse_msg("menger:extent", Some(5000.4), None), Some(Msg::Extent { height: 5001 }));
+        assert_eq!(parse_msg("menger:scrolled", None, None), Some(Msg::Scrolled));
         assert_eq!(parse_msg("menger:extent", Some(f64::NAN), None), None);
         assert_eq!(parse_msg("menger:extent", None, None), None);
         assert_eq!(parse_msg("menger:call", None, None), Some(Msg::Call));

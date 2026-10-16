@@ -86,6 +86,12 @@ pub(crate) const MAX_PER_FRAME: usize = 16;
 /// The class a mockup's box wears, in the body frame's container.
 pub(crate) const BOX_CLASS: &str = "mmock";
 
+/// APP-45: what a box says it shows, for an anchor inside it
+/// (src/mock_anchor.rs) — the ticket whose body holds the placeholder, and
+/// the ticket a `ref` shows.
+pub(crate) const TICKET_ATTR: &str = "data-mock-ticket";
+pub(crate) const REF_ATTR: &str = "data-mock-ref";
+
 /// What a placeholder draws.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Source {
@@ -467,6 +473,13 @@ pub(crate) fn asked(citer: web_sys::HtmlIFrameElement, channel: String, n: u32, 
         None => parse(posted.reference.as_deref(), posted.source.as_deref()),
     };
     let fetch = matches!(source, Ok(Source::Ref(_)));
+    // APP-45: what an anchor inside it names.
+    if let Some(t) = citer.get_attribute("data-ticket").filter(|t| !t.is_empty()) {
+        let _ = overlay.set_attribute(TICKET_ATTR, &t);
+    }
+    if let Ok(Source::Ref(r)) = &source {
+        let _ = overlay.set_attribute(REF_ATTR, r);
+    }
     let observer = observe(&k, &overlay);
     let mut e = Entry {
         citer,

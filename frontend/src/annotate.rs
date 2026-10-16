@@ -154,10 +154,22 @@ impl Rect {
         Rect { x: r.left(), y: r.top(), w: r.width(), h: r.height() }
     }
 
-    /// A rect in a frame's document, in the app's viewport.
+    /// A rect in a frame's document, in the app's viewport — APP-45: scaled
+    /// as the frame is drawn (a mockup's device), and cut to what the frame
+    /// shows (none of it: nothing, so no pin).
     fn in_frame(self, frame: &web_sys::HtmlIFrameElement) -> Self {
         let f = frame.get_bounding_client_rect();
-        Rect { x: self.x + f.left() + f64::from(frame.client_left()), y: self.y + f.top() + f64::from(frame.client_top()), ..self }
+        let ow = f64::from(frame.offset_width());
+        let s = if ow > 0.0 && f.width() > 0.0 { f.width() / ow } else { 1.0 };
+        let (cl, ct) = (f64::from(frame.client_left()), f64::from(frame.client_top()));
+        let r = Rect { x: f.left() + (cl + self.x) * s, y: f.top() + (ct + self.y) * s, w: self.w * s, h: self.h * s };
+        let (vx, vy) = (f.left() + cl * s, f.top() + ct * s);
+        let (vr, vb) = (vx + f64::from(frame.client_width()) * s, vy + f64::from(frame.client_height()) * s);
+        if r.x > vr || r.y > vb || r.x + r.w < vx || r.y + r.h < vy {
+            return Rect { x: r.x, y: r.y, w: 0.0, h: 0.0 };
+        }
+        let (x, y) = (r.x.max(vx), r.y.max(vy));
+        Rect { x, y, w: (r.x + r.w).min(vr) - x, h: (r.y + r.h).min(vb) - y }
     }
 
     fn style(self) -> String {
@@ -710,7 +722,8 @@ pub(crate) fn frame_probed(channel: &str, id: u32, ok: Vec<bool>) {
         path: anchor::join(&anchor::frame_path(&pick.frame), &inner),
         label: anchor::label_of(&pick.chain, &pick.text),
         excerpt: anchor::excerpt_of(&pick.text),
-        ticket: anchor::ticket_of(&route, &frame_chain),
+        // APP-45: inside a mockup, the ticket that holds it.
+        ticket: crate::mock_anchor::of_frame(&pick.frame).map(|m| m.ticket).or_else(|| anchor::ticket_of(&route, &frame_chain)),
         route,
         version: None,
     };
@@ -784,11 +797,14 @@ fn reveal(a: Annot, id: u64) {
                         None => {
                             let ask = next_id();
                             LOCATING.with(|l| l.borrow_mut().insert(ask, (channel.clone(), vec![c.anchor.path.clone()])));
-                            frame::post_locate(&frame, &channel, ask, &[anchor::split(&c.anchor.path).1.to_string()]);
+                            // APP-45: a device scrolls its page to the element first.
+                            frame::post_locate_revealing(&frame, &channel, ask, &[anchor::split(&c.anchor.path).1.to_string()]);
                             continue;
                         }
                         Some(Some((r, text))) if anchor::still_there(&c.anchor.path, &c.anchor.excerpt, Some(&text)) => {
-                            frame::scroll_into_frame(&frame, (r.y - 80.0).max(0.0));
+                            if !crate::mock_anchor::scroll_to_device(&frame) {
+                                frame::scroll_into_frame(&frame, (r.y - 80.0).max(0.0));
+                            }
                             Some(Box::new(move || r.in_frame(&frame)) as Box<dyn Fn() -> Rect>)
                         }
                         Some(_) => None,
@@ -899,10 +915,14 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
     };
     let error = move || a.draft.with(|d| d.as_ref().filter(|d| d.seq == seq).and_then(|d| d.error.clone()));
     let saving = move || a.draft.with(|d| d.as_ref().is_some_and(|d| d.seq == seq && d.saving));
-    let where_ = match &anchor.ticket {
+    let mut where_ = match &anchor.ticket {
         Some(t) => format!("{} · {t}", anchor.route),
         None => anchor.route.clone(),
     };
+    // APP-45: inside a mockup, which and at what width.
+    if let Some(m) = crate::mock_anchor::where_words(&anchor.path) {
+        where_ = format!("{where_} · {m}");
+    }
     view! {
         <div
             id="annot-box"

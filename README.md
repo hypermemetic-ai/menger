@@ -2532,7 +2532,29 @@ The anchor's `path` is a CSS selector, stable attributes first
 (`#t-status`, `#t-parent [data-tag="id:DEMAND-1"]`, `m-ticket[ticket="RETURNS-1"]`),
 positions last; inside a framed body it is the frame, ` >> `, then the
 element in it (`iframe[data-ticket="RETURNS-2"] >> body > table > tbody >
-tr:nth-of-type(1) > td:nth-of-type(1)`). A comment whose element is gone is
+tr:nth-of-type(1) > td:nth-of-type(1)`). **Inside a mockup** (APP-45) the
+first half names the mockup, not a frame — its devices are several frames
+showing one page — as `mockup:<ticket>[#<n>[=<ref>]]@<width>`: the ticket
+whose body holds it, the `<m-mockup>`'s number in that body (none: the body
+itself, `view: mockup`), the ticket a `ref` shows, and the device width the
+comment was left at:
+
+```text
+mockup:APP-45#2@1440 >> body > main > h1:nth-of-type(1)    the body's 2nd <m-mockup>, a fence
+mockup:APP-45#3=DESIGN-49@390 >> #cta                      its 3rd, showing DESIGN-49's page
+mockup:DESIGN-49@768 >> section:nth-of-type(2)              DESIGN-49's own body, view: mockup
+```
+
+The app finds the device showing that mockup now — at the same width, else
+the nearest shown — so the pin is drawn on its element at any width (a `ref`
+whose placeholder moved in the body is found by its ref), cut to what the
+device's screen shows, and following the page as it scrolls; the link back
+from `#/comments` scrolls the device into view and its page to the element.
+Every path not beginning `mockup:` is a CSS selector, as before. In the mode,
+with a mockup shown, the keys choose an element without the pointer: `]` /
+`[` the next or previous device, ↓ ↑ the next or previous element, → into the
+first child, ← out to the parent, Enter comments on it. A whole-document body
+(MENGER-15) takes annotation mode too, its page shim's. A comment whose element is gone is
 marked "moved" and pinned to its ticket's heading. `#/comments` lists every
 comment, filtered by the route's query (`?ticket=&under=&state=&author=&text=`),
 each linking back to its page and element (`…?comment=<id>`); a ticket page's

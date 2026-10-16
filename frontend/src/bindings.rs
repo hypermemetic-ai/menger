@@ -311,6 +311,14 @@ pub(crate) const BINDINGS: &[Binding] = &[
     // -- Annotate
     b("annotate.toggle", &[C::Global, C::Frame], &["a", "Shift+a"], G::Annotate, "annotation mode: outline the page, click anything to comment on it; again, it ends"),
     b("annotate.pick", &[C::Annotate], &["Click"], G::Annotate, "comment on what was clicked"),
+    // APP-45: the keyboard path inside a mockup (src/mock_anchor.rs).
+    b("annotate.device-next", &[C::Annotate], &["]"], G::Annotate, "with a mockup on the page: the next device to choose an element in, from its first element"),
+    b("annotate.device-prev", &[C::Annotate], &["["], G::Annotate, "the previous mockup device"),
+    b("annotate.walk-next", &[C::Annotate], &["ArrowDown"], G::Annotate, "in a mockup's device: the next element beside the one chosen"),
+    b("annotate.walk-prev", &[C::Annotate], &["ArrowUp"], G::Annotate, "the previous element beside it"),
+    b("annotate.walk-in", &[C::Annotate], &["ArrowRight"], G::Annotate, "into the chosen element: its first child"),
+    b("annotate.walk-out", &[C::Annotate], &["ArrowLeft"], G::Annotate, "out to the chosen element's parent"),
+    b("annotate.walk-pick", &[C::Annotate], &["Enter"], G::Annotate, "comment on the element chosen"),
     b("comment.save", &[C::Dialog, C::Field], &["Mod+Enter"], G::Annotate, "save the comment being written — in a comment box, or send it from a ticket's Conversation"),
     // APP-22: the ticket page's Conversation box.
     b("comment.focus", &[C::TicketPage], &["c"], G::Annotate, "comment on the ticket as a whole: its Conversation box, focused"),
