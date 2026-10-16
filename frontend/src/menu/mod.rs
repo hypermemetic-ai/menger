@@ -363,15 +363,32 @@ fn focus(el: &web_sys::HtmlElement) {
 /// Measure the mounted menu and move it inside the viewport (see
 /// [`clamp`]). Called once it is in the DOM and again whenever its height
 /// changes (the status list opening). FILTER-22: the tag menu's too.
+///
+/// APP-34: measured by its layout box (`offsetWidth` / `offsetHeight`), not
+/// its rect — while it opens it is scaled down, and a rect would place it
+/// by its shrunken size; and its `transform-origin` is set to the corner it
+/// grows from ([`origin`]).
 pub(crate) fn place(el: &web_sys::HtmlElement, x: f64, y: f64) {
-    let rect = el.get_bounding_client_rect();
+    let (w, h) = (f64::from(el.offset_width()), f64::from(el.offset_height()));
     let win = dom::window();
     let dim = |v: Result<JsValue, JsValue>| v.ok().and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY);
     let (vw, vh) = (dim(win.inner_width()), dim(win.inner_height()));
-    let (left, top) = clamp(x, y, rect.width(), rect.height(), vw, vh);
+    let (left, top) = clamp(x, y, w, h, vw, vh);
     let style = el.style();
     let _ = style.set_property("left", &format!("{left}px"));
     let _ = style.set_property("top", &format!("{top}px"));
+    let (ox, oy) = origin(x, y, left, top, w, h);
+    let _ = style.set_property("transform-origin", &format!("{ox} {oy}"));
+}
+
+/// APP-34: the corner of a `w`×`h` box placed at (`left`, `top`) nearest
+/// the point it was opened at (`x`, `y`) — the corner its opening grows
+/// from. Unshifted, that is the top left, at the pointer; a menu that
+/// [`clamp`] flipped to fit grows from the side it was flipped toward.
+pub(crate) fn origin(x: f64, y: f64, left: f64, top: f64, w: f64, h: f64) -> (&'static str, &'static str) {
+    let ox = if x - left > w / 2.0 { "right" } else { "left" };
+    let oy = if y - top > h / 2.0 { "bottom" } else { "top" };
+    (ox, oy)
 }
 
 /// Close the menu, handing focus back where it was if the menu was opened
@@ -815,7 +832,7 @@ fn toast_view(t: Toast, toaster: Toaster, last_error: RwSignal<Option<String>>) 
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp, frame_point, frame_ticket, step, wave_items, WaveItem, EDGE};
+    use super::{clamp, frame_point, frame_ticket, origin, step, wave_items, WaveItem, EDGE};
 
     /// MENGER-34: what a frame says is a ticket only when it has a ticket's
     /// form, read as the server reads it.
@@ -879,6 +896,47 @@ mod tests {
         assert_eq!(clamp(100.0, 300.0, 220.0, 2000.0, 1400.0, 900.0), (100.0, EDGE));
         // a cursor at the very edge stays where it is (no push past it)
         assert_eq!(clamp(0.0, 0.0, 220.0, 160.0, 1400.0, 900.0), (0.0, 0.0));
+    }
+
+    /// APP-34: the menu grows from the corner nearest where it was opened —
+    /// the pointer's own corner unless the viewport flipped it.
+    #[test]
+    fn the_menu_grows_from_the_corner_nearest_the_pointer() {
+        let at = |x: f64, y: f64| {
+            let (left, top) = clamp(x, y, 220.0, 160.0, 1400.0, 900.0);
+            origin(x, y, left, top, 220.0, 160.0)
+        };
+        assert_eq!(at(100.0, 200.0), ("left", "top"), "fits: at the pointer");
+        assert_eq!(at(1300.0, 200.0), ("right", "top"), "flipped left: from the right");
+        assert_eq!(at(100.0, 850.0), ("left", "bottom"), "flipped up: from the bottom");
+        assert_eq!(at(1399.0, 899.0), ("right", "bottom"), "both");
+        assert_eq!(at(0.0, 0.0), ("left", "top"));
+    }
+
+    /// APP-34: the opening is CSS keyed on `#tmenu`, and Motion none (or the
+    /// system's reduced motion before the setting is stamped) adds no
+    /// animation to it.
+    #[test]
+    fn motion_none_adds_no_animation_to_the_menu() {
+        let css = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("index.html")).unwrap();
+        let rule = |sel: &str| {
+            let at = css.find(&format!("\n  {sel} {{")).unwrap_or_else(|| panic!("no rule `{sel}` in index.html"));
+            let body = &css[at..];
+            body[..body.find('}').unwrap()].to_string()
+        };
+        // Every rule for a selector, as one text (a selector is ruled in more than one place).
+        let rules = |sel: &str| css.match_indices(&format!("\n  {sel} {{")).map(|(at, _)| &css[at..at + css[at..].find('}').unwrap()]).collect::<String>();
+        assert!(rules("#tmenu").contains("animation: menger-menu-in"), "the menu opens with a motion");
+        assert!(rules("#tmenu .sub").contains("animation: menger-sub-in"), "a submenu too");
+        assert!(css.contains("@keyframes menger-menu-in") && css.contains("@keyframes menger-sub-in"));
+        let none = rule("html[data-motion=\"none\"] *, html[data-motion=\"none\"] *::before, html[data-motion=\"none\"] *::after");
+        assert!(none.contains("animation: none !important"), "none stops every animation, the menu's with it");
+        let tm = rule("html[data-motion=\"none\"] :is(#tmenu, #tmenu .sub)");
+        assert!(tm.contains("animation: none"), "and names the menu");
+        let reduce = &css[css.find("@media (prefers-reduced-motion: reduce)").unwrap()..];
+        assert!(reduce[..reduce.find("\n  }").unwrap()].contains("html:not([data-motion]) :is(#tmenu, #tmenu .sub) { animation: none; }"));
+        // No rule keyed on calm takes it away: calm keeps a state change.
+        assert!(!css.contains("html[data-motion=\"calm\"] :is(#tmenu"), "calm keeps it");
     }
 
     /// Arrow keys wrap over the mounted items; entering from the menu
