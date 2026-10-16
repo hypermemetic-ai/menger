@@ -42,6 +42,10 @@ such input, the value does not answer it, it is closed, or it was
 removed from its body — and nothing is written. Never touches the
 body. `watch` carries the `InputChanged`. */
   answer(input: InputId, ticket: TicketRef, value: InputValue, rationale?: Message | null, source?: InputSource | null): AsyncGenerator<TicketsEvent>;
+  /** Archive tickets — each named (or a filter's) with its whole subtree, live work included and named (live); out of every view unless a filter says archived; status unchanged; yields archived { ids, live, unqueued, mark, dry_run }.
+
+ARCHIVE-2 ([`crate::store::ArchiveAnswer`]'s module): a mark apart from status — status, kind, place and blockers stay; one already archived is a no-op; a queued one leaves the queue. dry_run: the answer, nothing written. */
+  archive(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
   /** Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes.
 
 APP-24: after queueing, an agent waits here — `waiting`, then one `replied` (or `timed_out`), then the end. */
@@ -394,6 +398,10 @@ APP-23: hands a queued ticket back — a comment (intent `changes`) on its conve
 
 ACT-6: tickets moved into another shortcode ([`crate::store::Reshortcoded`]'s module). */
   reshortcode(ids: TicketRef[], to: ShortcodeRef, message?: Message | null, newScope?: Title | null, parent?: TicketRef | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
+  /** Restore archived tickets — each named (or a filter's archived ones) back in every view with its archived ancestors; with_children, the subtree archived with it; yields restored { ids, ancestors, still_archived, by, dry_run }.
+
+ARCHIVE-2: the ancestor chain comes back, never its other children (ARCHIVE-1); what stays archived below is named (still_archived). dry_run: the answer, nothing written. */
+  restore(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
   /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
   schema(): Promise<unknown>;
   /** Search inside tickets: the tickets whose title or body holds every word of the query (prefixes and typos too), best first, each with the passage that matched; optionally under a filter, paged with offset + limit.
@@ -670,6 +678,11 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
+  async *archive(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.archive', { dry_run: dryRun, filter, ids, max, message, tz });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
   async *awaitReply(id: TicketRef, input?: InputId | null, since?: number | null, timeoutMinutes?: number | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.await_reply', { id, input, since, timeout_minutes: timeoutMinutes });
     yield* extractData<TicketsEvent>(stream);
@@ -797,6 +810,11 @@ class TicketsClientImpl implements TicketsClient {
 
   async *reshortcode(ids: TicketRef[], to: ShortcodeRef, message?: Message | null, newScope?: Title | null, parent?: TicketRef | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.reshortcode', { ids, message, new_scope: newScope, parent, to, with_children: withChildren });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *restore(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.restore', { dry_run: dryRun, filter, ids, max, message, tz, with_children: withChildren });
     yield* extractData<TicketsEvent>(stream);
   }
 

@@ -76,6 +76,11 @@ pub(crate) enum Kind {
     /// store; a pill (from the palette or a saved filter), never a row of
     /// When's menu.
     Queued,
+    /// ARCHIVE-2: `archived <window> [by who]` — a pill, never a row of
+    /// When's menu (the Archive view is ARCHIVE-3's).
+    Archived,
+    /// ARCHIVE-2: `restored [window] [by who]` — a pill, as `archived`.
+    Restored,
 }
 
 impl Kind {
@@ -95,6 +100,8 @@ impl Kind {
             Event::Touched => Kind::Untouched,
             Event::Deployed(_) => Kind::Deployed,
             Event::Queued(_) => Kind::Queued,
+            Event::Archived => Kind::Archived,
+            Event::Restored => Kind::Restored,
         }
     }
 
@@ -110,6 +117,8 @@ impl Kind {
             Kind::Deployed => "Deployed to",
             Kind::NotDeployed => "Not deployed to",
             Kind::Queued => "Queued",
+            Kind::Archived => "Archived",
+            Kind::Restored => "Restored",
         }
     }
 
@@ -125,6 +134,8 @@ impl Kind {
             Kind::Deployed => "deployed",
             Kind::NotDeployed => "notdeployed",
             Kind::Queued => "queued",
+            Kind::Archived => "archived",
+            Kind::Restored => "restored",
         }
     }
 
@@ -146,7 +157,7 @@ impl Kind {
 
     /// Whether its clause may say who (the transitions'; not a birth).
     pub(crate) fn has_who(self) -> bool {
-        matches!(self, Kind::Into | Kind::OutOf | Kind::Changed)
+        matches!(self, Kind::Into | Kind::OutOf | Kind::Changed | Kind::Archived | Kind::Restored)
     }
 
     /// Whether its window may be "ever" (a birth and a touch always have
@@ -256,6 +267,9 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         Kind::Deployed | Kind::NotDeployed => return None,
         // MENGER-39: never built by When's menu.
         Kind::Queued => return None,
+        // ARCHIVE-2: the archive's two ends.
+        Kind::Archived => Event::Archived,
+        Kind::Restored => Event::Restored,
     };
     let window = match kind {
         Kind::Created | Kind::Untouched => Some(window.unwrap_or_else(|| default_window(&event))),
@@ -500,6 +514,8 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
             out.push((None, "deployed to".into()));
             out.push((Some(Part::Env), env.clone()));
         }
+        Event::Archived => out.push((None, "archived".into())),
+        Event::Restored => out.push((None, "restored".into())),
         Event::Queued(u) => {
             out.push((None, "queued".into()));
             if let Some(u) = u {

@@ -454,6 +454,13 @@ pub struct Ticket {
     /// server from before MENGER-12 sends none.
     #[serde(default)]
     pub labels: Vec<Label>,
+    /// ARCHIVE-2: the archive's mark — when, by whom, why, and the write
+    /// that set it — or none: a live ticket. A mark apart from the status
+    /// (ARCHIVE-1): an archived ticket keeps its status, kind, place and
+    /// blockers, and is in no view unless the filter names `archived`.
+    /// Omitted on the wire for a live ticket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<Archived>,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -470,6 +477,33 @@ pub struct Ticket {
 /// ACCESS-10: a count of hidden ids that is none — omitted on the wire.
 fn is_zero(n: &u32) -> bool {
     *n == 0
+}
+
+/// ARCHIVE-2: a count that is none — omitted on the wire.
+fn is_zero64(n: &u64) -> bool {
+    *n == 0
+}
+
+/// ARCHIVE-2: an archived ticket's mark — when it was archived, by whom
+/// (the principal, as a transition names its actor), why (the archive's
+/// `message`), and which write set it (the id of that write's first
+/// transition: every ticket one archive took shares it, so a restore
+/// `with_children` brings back exactly what went with its ticket).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Archived {
+    pub at_unix: i64,
+    pub by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub write: u64,
+}
+
+/// ARCHIVE-2: a ticket an archive took that was still live work (not in
+/// category done) — the warning's row: its id and status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LiveTicket {
+    pub id: TicketId,
+    pub status: Status,
 }
 
 /// ACCESS-10: a flag that is unset — omitted on the wire.
@@ -535,6 +569,10 @@ pub struct TicketSummary {
     /// Home's "Needs you" draw a ticket's label chips without a `get`.
     #[serde(default)]
     pub labels: Vec<Label>,
+    /// ARCHIVE-2: as on [`Ticket`] — on the row, so a chip to an archived
+    /// ticket is drawn struck through without a `get`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived: Option<Archived>,
     pub created_unix: i64,
     pub updated_unix: i64,
 }
@@ -562,6 +600,7 @@ impl From<Ticket> for TicketSummary {
             path: t.path,
             placement: t.placement,
             labels: t.labels,
+            archived: t.archived,
             created_unix: t.created_unix,
             updated_unix: t.updated_unix,
         }
@@ -666,6 +705,11 @@ pub struct Group {
     pub done: u64,
     /// SDLC-11: the docs in the row's subtree, which `total` leaves out.
     pub docs: u64,
+    /// ARCHIVE-2: the archived tickets in the row's subtree, which `total`,
+    /// `done` and `docs` leave out — so `done/total` reads its live work.
+    /// Omitted when none.
+    #[serde(default, skip_serializing_if = "is_zero64")]
+    pub archived: u64,
     /// ACCESS-48: the root's key.
     pub root: Option<TicketId>,
     /// AGS-23: what the root's own row shows.
@@ -1311,7 +1355,15 @@ pub struct Input {
 pub enum TransitionField {
     Status,
     Kind,
+    /// ARCHIVE-2: the archive's mark — `from` / `to` are `live` and
+    /// `archived` (an archive, or a restore).
+    Archive,
 }
+
+/// ARCHIVE-2: an archive transition's two ends, as `from` / `to` spell them.
+pub const ARCHIVE_LIVE: &str = "live";
+/// ARCHIVE-2: see [`ARCHIVE_LIVE`].
+pub const ARCHIVE_ARCHIVED: &str = "archived";
 
 impl TransitionField {
     /// The wire spelling.
@@ -1319,6 +1371,7 @@ impl TransitionField {
         match self {
             TransitionField::Status => "status",
             TransitionField::Kind => "kind",
+            TransitionField::Archive => "archive",
         }
     }
 }
@@ -1329,7 +1382,8 @@ impl FromStr for TransitionField {
         match s.trim().to_ascii_lowercase().as_str() {
             "status" => Ok(Self::Status),
             "kind" => Ok(Self::Kind),
-            other => Err(format!("unknown transition field '{other}' (expected status or kind)")),
+            "archive" => Ok(Self::Archive),
+            other => Err(format!("unknown transition field '{other}' (expected status, kind or archive)")),
         }
     }
 }
@@ -1495,7 +1549,11 @@ pub enum TicketsEvent {
     Health {
         version: String,
         unix_now: i64,
+        /// The tickets the caller sees — ARCHIVE-2: the archive left out.
         ticket_count: u64,
+        /// ARCHIVE-2: the archived tickets the caller sees; omitted when none.
+        #[serde(default, skip_serializing_if = "is_zero64")]
+        archived: u64,
     },
     /// A ticket was created (yielded by `create`, and by `watch` on every creation).
     Created { ticket: Ticket },
@@ -1605,6 +1663,23 @@ pub enum TicketsEvent {
     /// tickets brought back (whole), in the store's order, with their
     /// children and blocks put back where nothing has moved them since.
     Undeleted { ids: Vec<TicketId>, tickets: Vec<Ticket> },
+    /// ARCHIVE-2: `archive`'s answer, and its write's event on `watch` —
+    /// `ids` every ticket the write archived (the selection and each one's
+    /// whole subtree, in the store's order; one already archived is not
+    /// among them), `live` those of them that were not in category done
+    /// (the warning: never a refusal), `unqueued` those it took out of the
+    /// owner's queue, `mark` what each now carries. `dry_run`: what the
+    /// write would do, nothing written (`mark.write` is then 0). After it on
+    /// `watch`: the groups that moved, and a filter's `left`.
+    Archived { ids: Vec<TicketId>, live: Vec<LiveTicket>, unqueued: Vec<TicketId>, mark: Archived, dry_run: bool },
+    /// ARCHIVE-2: `restore`'s answer, and its write's event on `watch` (and
+    /// a create's or a move's under an archived parent, after its own) —
+    /// `ids` every ticket brought back, in the store's order: those named,
+    /// each one's archived ancestors (`ancestors`, ARCHIVE-1's chain), and
+    /// with `with_children` the descendants archived in the same write as
+    /// it. `still_archived`: the named tickets' descendants that stay in the
+    /// archive. `by` who restored them; `dry_run` as `archived`'s.
+    Restored { ids: Vec<TicketId>, ancestors: Vec<TicketId>, still_archived: Vec<TicketId>, by: String, dry_run: bool },
     /// ACT-6: `reshortcode`'s answer, and its write's event on `watch` —
     /// each moved ticket's old id and new one (`moves`, in the order they
     /// were numbered), and every moved ticket as the write left it
@@ -2142,7 +2217,7 @@ mod tests {
     /// drawn.
     #[test]
     fn a_group_is_drawn_when_it_holds_work_or_docs() {
-        let g = |total, docs| Group { epic: "G".into(), shortcode: "G".into(), address: String::new(), total, done: 0, docs, root: None, root_row: None, host: None };
+        let g = |total, docs| Group { epic: "G".into(), shortcode: "G".into(), address: String::new(), total, done: 0, docs, archived: 0, root: None, root_row: None, host: None };
         assert!(g(1, 0).drawn());
         assert!(g(0, 3).drawn(), "a doc collection");
         assert!(!g(0, 0).drawn());
@@ -2170,6 +2245,7 @@ mod tests {
             hidden_blocked_by: 0,
             hidden_unlocks: 0,
             parent_hidden: false,
+            archived: None,
             labels: Vec::new(),
             id: "W-2".into(),
             epic: "W".into(),
@@ -2245,6 +2321,7 @@ mod tests {
             hidden_blocked_by: 0,
             hidden_unlocks: 0,
             parent_hidden: false,
+            archived: None,
             id: "SUM-1".into(),
             epic: "SUM".into(),
             shortcode: "SUM".into(),

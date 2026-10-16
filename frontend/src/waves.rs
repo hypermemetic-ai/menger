@@ -571,6 +571,8 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         // are on its row.
         asking: false,
         labels: s.labels.iter().map(ToString::to_string).collect(),
+        // ARCHIVE-2: on its row.
+        archived: s.archived.is_some(),
         id: s.id.to_string(),
         epic: s.epic.to_string(),
         title: s.title.clone(),
@@ -1563,6 +1565,7 @@ mod tests {
             hidden_blocked_by: 0,
             hidden_unlocks: 0,
             parent_hidden: false,
+            archived: None,
             labels: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
@@ -1688,6 +1691,7 @@ mod tests {
             hidden_blocked_by: 0,
             hidden_unlocks: 0,
             parent_hidden: false,
+            archived: None,
             labels: Vec::new(),
             id: s.id,
             epic: s.epic,

@@ -378,6 +378,10 @@ pub(super) struct Tally {
     pub(super) ask_and_label: bool,
     pub(super) asked: usize,
     pub(super) labelled: usize,
+    /// ARCHIVE-2: whether the walk also archives and restores — opt-in, so
+    /// the other walks walk as they did — and how many writes moved a mark.
+    pub(super) archive: bool,
+    pub(super) archived: usize,
 }
 
 impl Tally {
@@ -389,6 +393,12 @@ impl Tally {
     /// MENGER-12: a walk that files board notes, asks and labels.
     pub(super) fn asking_and_labelling() -> Self {
         Self { file_menger_docs: true, ask_and_label: true, ..Self::default() }
+    }
+
+    /// ARCHIVE-2: [`Tally::asking_and_labelling`]'s walk, archiving and
+    /// restoring too.
+    pub(super) fn archiving() -> Self {
+        Self { archive: true, ..Self::asking_and_labelling() }
     }
 }
 
@@ -479,6 +489,19 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
     }
     // MENGER-12: every fifth write, when the walk asks for them, one that
     // asks or labels — by the count, on draws of its own.
+    // ARCHIVE-2: every sixth write, when the walk asks for them, an archive
+    // or a restore — of a ticket and its subtree, by draws of its own.
+    if tally.archive && !all.is_empty() && tally.writes % 6 == 1 {
+        let mut own = Rng(rng.0 ^ (tally.writes as u64).wrapping_mul(0x5A2C_0002_0000_0001));
+        let id = all[own.below(all.len())].id.to_string();
+        let sel = super::update_many::Selection::Ids(vec![id.clone()]);
+        let moved = match own.below(3) {
+            0 => store.restore(SYS, sel, own.below(2) == 0, false).await.map(|r| r.ids.len()),
+            _ => store.archive(SYS, sel, false).await.map(|a| a.ids.len()),
+        };
+        tally.archived += usize::from(moved.as_ref().is_ok_and(|n| *n > 0));
+        return format!("archive or restore of {id}: {moved:?}");
+    }
     if tally.ask_and_label && !all.is_empty() && tally.writes % 5 == 3 {
         let mut own = Rng(rng.0 ^ (tally.writes as u64).wrapping_mul(0x4E12_0012_0000_0001));
         return random_ask_or_label(store, &mut own, &all, tally).await;

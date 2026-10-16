@@ -250,6 +250,14 @@ fn script() -> Vec<(&'static str, Value)> {
         ("deployments.running", json!({})),
         ("members.list", json!({})),
         ("orgs.list", json!({})),
+        // ARCHIVE-2 (added deliberately, last, so nothing before it moves):
+        // a dry run, an archive with its live work named, a filter that
+        // names the archive, and the restore.
+        ("tickets.archive", json!({"ids": ["PLAT-1"], "dry_run": true})),
+        ("tickets.archive", json!({"ids": ["PLAT-2"], "message": "parked"})),
+        ("tickets.list", json!({"filter": "archived", "summary": true})),
+        ("tickets.get", json!({"id": "PLAT-2"})),
+        ("tickets.restore", json!({"ids": ["PLAT-2"]})),
         // The watch's marker.
         ("tickets.amend", json!({"id": "GOLD-1", "body": "the end"})),
     ]

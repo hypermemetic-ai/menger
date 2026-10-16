@@ -329,6 +329,7 @@ mod tests {
             menger_doc: false,
             asking,
             labels: labels.iter().map(|l| l.to_string()).collect(),
+            archived: false,
             lineage: vec!["T-1".into(), "T".into()],
             history: Vec::new(),
         }

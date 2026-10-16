@@ -134,6 +134,9 @@ pub enum QueueAction {
     /// APP-23: handed back — the owner requested changes (the record names
     /// the comment that says which).
     ChangesRequested,
+    /// ARCHIVE-2: taken out because the ticket was archived — an archived
+    /// ticket asks nothing.
+    Archived,
 }
 
 impl QueueAction {
@@ -147,6 +150,7 @@ impl QueueAction {
             QueueAction::Unqueued => "unqueued",
             QueueAction::Closed => "closed",
             QueueAction::ChangesRequested => "changes_requested",
+            QueueAction::Archived => "archived",
         }
     }
 }
@@ -162,6 +166,7 @@ impl FromStr for QueueAction {
             "unqueued" => QueueAction::Unqueued,
             "closed" => QueueAction::Closed,
             "changes_requested" => QueueAction::ChangesRequested,
+            "archived" => QueueAction::Archived,
             other => return Err(format!("unknown queue action `{other}`")),
         })
     }
@@ -222,13 +227,16 @@ pub enum Reply {
     Unqueued { action: QueueAction, by: String, at_unix: i64 },
     /// The ticket was canceled or deleted (`how`): nothing more will come.
     Ended { how: Ending, by: String, at_unix: i64 },
+    /// ARCHIVE-2: the ticket was archived (by `by`, itself or with an
+    /// ancestor): it asks nothing any more.
+    Archived { by: String, at_unix: i64 },
 }
 
 impl Reply {
     /// When it happened, unix seconds.
     pub fn at_unix(&self) -> i64 {
         match self {
-            Reply::Answered { at_unix, .. } | Reply::Unqueued { at_unix, .. } | Reply::Ended { at_unix, .. } => *at_unix,
+            Reply::Answered { at_unix, .. } | Reply::Unqueued { at_unix, .. } | Reply::Ended { at_unix, .. } | Reply::Archived { at_unix, .. } => *at_unix,
             Reply::ChangesRequested { comment } | Reply::Commented { comment } => comment.at,
         }
     }

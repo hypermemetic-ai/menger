@@ -28,7 +28,8 @@ pub(super) fn scanned(rows: &[Row], asking: &BTreeSet<String>) -> BTreeMap<Order
             let blocked = named.iter().any(|b| !by_id.get(b).is_some_and(|bt| done(bt.status)));
             let menger = t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"));
             let key = Key::new(t.status, t.kind, t.severity, blocked, !t.commits.is_empty(), menger)
-                .with(asking.contains(t.id.as_str()), cells::LabelSet::of(&t.labels));
+                .with(asking.contains(t.id.as_str()), cells::LabelSet::of(&t.labels))
+                .archiving(t.archived.is_some());
             (OrderKey::of(t), key)
         })
         .collect()
@@ -37,7 +38,9 @@ pub(super) fn scanned(rows: &[Row], asking: &BTreeSet<String>) -> BTreeMap<Order
 /// MENGER-12: the tickets with an open input, by the inputs store's own
 /// answer (`inputs { state: open }`) — what the oracle's `asking` reads.
 pub(super) fn asking(store: &Store) -> BTreeSet<String> {
-    store.inputs(SYS, None, None, Some(InputState::Open)).unwrap().into_iter().map(|i| i.ticket.into_string()).collect()
+    // ARCHIVE-2: of every ticket, the archived too (a list of inputs leaves
+    // theirs out).
+    store.tickets.read().unwrap().inputs.query(None, None, Some(InputState::Open)).into_iter().map(|i| i.ticket.into_string()).collect()
 }
 
 /// The cells a stored form holds, by ticket.
@@ -387,14 +390,14 @@ async fn asking_and_labels_move_a_tickets_cell() {
     )
     .unwrap();
     drop(conn);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 9; this build reads 11")));
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 9; this build reads 12")));
     let store = Store::open(&path).unwrap();
     assert!(asking(&store, "AS-2"));
     assert_cells_are_a_scan(&store, Some(&path), "the first open of a form-9 file");
     drop(store);
     let conn = Connection::open(&path).unwrap();
     assert!(db::has_column(&conn, "cells", "asking").unwrap() && db::has_column(&conn, "cells", "labels").unwrap());
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 11);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 4, .. }));
 }
@@ -558,7 +561,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 606, .. }));
     let conn = Connection::open(&path).unwrap();
     assert!(db::has_column(&conn, "cells", "menger").unwrap());
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 11, "ORG-3: built to form 11");
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 12, "ARCHIVE-2: built to form 12");
     drop(conn);
     let store = Store::open(&path).unwrap();
     assert_eq!(answers(&store), before, "the next open reads what the first stored");

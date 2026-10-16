@@ -174,6 +174,11 @@ pub enum Field {
     /// [`crate::labels::normalize`]). A ticket holds many, so — as `under` —
     /// two inclusions never intersect.
     Label(String),
+    /// `archived` (ARCHIVE-2): the ticket carries the archive's mark. A
+    /// filter that names neither this nor `archived <window> [by who]`
+    /// admits no archived ticket ([`Filter::matches`]): `not archived` is
+    /// every filter's default.
+    Archived,
     /// `in <SHORTCODE>`: its shortcode is the one named (upper case). ORG-3:
     /// by its letters — every shortcode with them, wherever hosted.
     In(String),
@@ -216,6 +221,7 @@ impl Field {
             Field::MengerDoc => "menger doc",
             Field::Asking => "asking",
             Field::Label(_) => "label",
+            Field::Archived => "archived",
             Field::In(_) => "in",
             Field::Under(_) => "under",
             Field::Text(_) => "text",
@@ -234,7 +240,7 @@ impl Field {
             Field::Category(c) => c.as_str().into(),
             Field::Kind(k) => k.as_str().into(),
             Field::Severity(s) => severity_name(*s).into(),
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking => return None,
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived => return None,
             Field::In(x) | Field::Under(x) | Field::Text(x) | Field::Label(x) | Field::Saved(x) => x.clone(),
             // FILTER-36: a nested group's value is its text.
             Field::Group(g) => g.format(),
@@ -288,6 +294,7 @@ impl Field {
             | Field::Under(_)
             | Field::Text(_)
             | Field::Label(_)
+            | Field::Archived
             | Field::History(_)
             | Field::Group(_)
             | Field::Saved(_) => return None,
@@ -303,6 +310,7 @@ impl Field {
             Field::Under(x) => f.lineage.iter().any(|l| l.eq_ignore_ascii_case(x)),
             Field::Text(t) => text_matches(t, &f.id, &f.title),
             Field::Label(l) => f.labels.iter().any(|x| x.eq_ignore_ascii_case(l)),
+            Field::Archived => f.archived,
             Field::History(h) => {
                 let key = h.format();
                 f.history.contains(&key)
@@ -343,7 +351,7 @@ impl Predicate {
     pub fn format(&self) -> String {
         let head = if self.not { "not " } else { "" };
         match &self.field {
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking => {
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived => {
                 format!("{head}{}", self.field.name())
             }
             Field::Text(t) => format!("{head}text \"{t}\""),
@@ -684,6 +692,8 @@ pub struct Facts {
     pub asking: bool,
     /// MENGER-12: its labels, lower case.
     pub labels: Vec<String>,
+    /// ARCHIVE-2: it carries the archive's mark.
+    pub archived: bool,
     /// What `under` finds it under: its own id, its ancestors' ids, its
     /// shortcode and the shortcodes hosting it.
     pub lineage: Vec<String>,
@@ -751,9 +761,27 @@ impl Filter {
     }
 
     /// The reference evaluator: whether a ticket with these facts passes
-    /// every group.
+    /// every group. ARCHIVE-2: and — unless the filter names `archived`
+    /// ([`Filter::names_archived`]) — whether it is live: `not archived` is
+    /// every filter's default, the empty filter's included.
     pub fn matches(&self, facts: &Facts) -> bool {
+        (!facts.archived || self.names_archived()) && self.matches_as_written(facts)
+    }
+
+    /// ARCHIVE-2: [`Filter::matches`] without the archive's default — the
+    /// groups alone, as written. What a reader's reach is judged by: a
+    /// reach decides what may be read, never what a view shows, so an
+    /// archived ticket in reach is still found by name.
+    pub fn matches_as_written(&self, facts: &Facts) -> bool {
         self.groups.iter().all(|g| g.matches(facts))
+    }
+
+    /// ARCHIVE-2: whether any of its predicates, at any depth, asks of the
+    /// archive — `archived`, or `archived <window> [by who]` — which lifts
+    /// the default that admits no archived ticket. `restored …` does not:
+    /// a restored ticket is live.
+    pub fn names_archived(&self) -> bool {
+        self.leaves().iter().any(|p| matches!(&p.field, Field::Archived) || matches!(&p.field, Field::History(h) if h.event == Event::Archived))
     }
 
     /// The lens's aggregation: the tickets both filters match, as one
@@ -934,7 +962,7 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 33] = [
+const NAMES: [&str; 34] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -945,6 +973,8 @@ const NAMES: [&str; 33] = [
     "severity",
     "past cap",
     "archived",
+    // ARCHIVE-2: the archive's other end.
+    "restored",
     // MENGER-13: the history predicates.
     "entered",
     "changed",
@@ -1194,6 +1224,10 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "has commits" => flag(Field::HasCommits),
         "menger doc" => flag(Field::MengerDoc),
         "asking" => flag(Field::Asking),
+        // ARCHIVE-2: the mark (a cell); with a window or `by`, the archive
+        // write that set it (the transition log).
+        "archived" if tail.is_empty() => Ok(Field::Archived),
+        "archived" | "restored" => read_history(name, tail).map(Field::History),
         "label" => crate::labels::normalize(value()?).map(Field::Label),
         "text" => text(value()?),
         "status" => {
@@ -1435,6 +1469,14 @@ pub enum Event {
     /// <urgency>`, at that urgency (a snooze does not take it out). Answered
     /// from the queue's kept entries; no window, no `by`.
     Queued(Option<crate::queue::Urgency>),
+    /// ARCHIVE-2: `archived <window> [by who]` — the ticket is archived, and
+    /// the write that archived it (its latest archive transition) was in
+    /// the window, by that actor. Names the archive, as `archived` does.
+    Archived,
+    /// ARCHIVE-2: `restored [window] [by who]` — some restore of the
+    /// ticket's (its own, a chain's, a create's under it) was in the
+    /// window, by that actor.
+    Restored,
 }
 
 impl Event {
@@ -1450,6 +1492,8 @@ impl Event {
             Event::Held(_) => "for",
             Event::Deployed(_) => "deployed",
             Event::Queued(_) => "queued",
+            Event::Archived => "archived",
+            Event::Restored => "restored",
         }
     }
 }
@@ -1758,6 +1802,8 @@ impl History {
             Event::Deployed(env) => format!("deployed {}", quoted(env)),
             Event::Queued(None) => "queued".to_string(),
             Event::Queued(Some(u)) => format!("queued {u}"),
+            Event::Archived => "archived".to_string(),
+            Event::Restored => "restored".to_string(),
             Event::Held(h) => {
                 let of = |name: &str, vs: Vec<String>| match vs.as_slice() {
                     [one] => format!("{name} {one} "),
@@ -1844,6 +1890,8 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         "changed" => (Event::Changed, None),
         "created" => (Event::Created, None),
         "touched" => (Event::Touched, None),
+        "archived" => (Event::Archived, None),
+        "restored" => (Event::Restored, None),
         "deployed" => {
             let env = w.first().ok_or("`deployed` names an environment, as `deployed prod` or `deployed menger/prod`")?;
             i = 1;
@@ -2256,6 +2304,8 @@ enum Dim {
     /// FILTER-36: an unresolved `saved` name — free, as nothing says what
     /// it holds (its slug).
     Saved(String),
+    /// ARCHIVE-2: whether it is archived — free: any ticket may be.
+    Archived,
 }
 
 fn dims(field: &Field) -> Vec<Dim> {
@@ -2267,7 +2317,7 @@ fn dims(field: &Field) -> Vec<Dim> {
         Field::HasCommits => vec![Dim::Commits],
         Field::Asking => vec![Dim::Asking],
         Field::In(_) => vec![Dim::Epic],
-        Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) => {
+        Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived => {
             var(field).into_iter().collect()
         }
         // FILTER-36: what its leaves read.
@@ -2289,6 +2339,7 @@ fn var(field: &Field) -> Option<Dim> {
         }
         Field::History(h) => Some(Dim::History(h.format())),
         Field::Saved(n) => Some(Dim::Saved(crate::saved_filters::slug(n))),
+        Field::Archived => Some(Dim::Archived),
         _ => None,
     }
 }
@@ -2357,7 +2408,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
                     epics.push(e);
                 }
             }
-            f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_)) => {
+            f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived) => {
                 if let Some(v) = var(f).filter(|v| !vars.contains(v)) {
                     vars.push(v);
                 }
@@ -2387,7 +2438,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
             .map(|p| {
                 let lit = match &p.field {
                     Field::In(e) => Lit::Epic(epics.iter().position(|x| x.eq_ignore_ascii_case(e)).unwrap_or(usize::MAX)),
-                    f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_)) => {
+                    f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived) => {
                         match var(f) {
                             Some(v) => Lit::Var(vars.iter().position(|x| *x == v).unwrap_or(usize::MAX)),
                             None => Lit::Always,

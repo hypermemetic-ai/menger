@@ -51,6 +51,7 @@ pub fn reply_key(r: &Reply) -> String {
         Reply::ChangesRequested { comment } | Reply::Commented { comment } => format!("comment {}", comment.id),
         Reply::Unqueued { action, by, at_unix } => format!("unqueued {} {by} {at_unix}", action.as_str()),
         Reply::Ended { how, .. } => format!("ended {how:?}"),
+        Reply::Archived { at_unix, .. } => format!("archived {at_unix}"),
     }
 }
 
@@ -112,8 +113,12 @@ impl Store {
             }
         }
         // Canceled.
-        if let Some(t) = transitions.into_iter().find(|t| t.field == TransitionField::Status && t.to == "Canceled" && t.at_unix >= w.since) {
+        if let Some(t) = transitions.iter().cloned().find(|t| t.field == TransitionField::Status && t.to == "Canceled" && t.at_unix >= w.since) {
             found.push(Reply::Ended { how: Ending::Canceled, by: t.actor, at_unix: t.at_unix });
+        }
+        // ARCHIVE-2: archived.
+        if let Some(t) = transitions.iter().find(|t| t.field == TransitionField::Archive && t.to == crate::types::ARCHIVE_ARCHIVED && t.at_unix >= w.since) {
+            found.push(Reply::Archived { by: t.actor.clone(), at_unix: t.at_unix });
         }
         // Deleted.
         let key = match cache.find_ticket(id, shortcodes::OrgReach::All) {

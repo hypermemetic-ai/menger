@@ -137,6 +137,10 @@ pub struct Key {
     asking: bool,
     /// MENGER-12: the labels it holds.
     labels: LabelSet,
+    /// ARCHIVE-2: it carries the archive's mark — so an archived ticket
+    /// never shares a cell with a live one, and a view that does not name
+    /// the archive admits no cell that holds one: nothing walks them.
+    archived: bool,
 }
 
 fn place<T: PartialEq>(all: &[T], v: &T) -> u8 {
@@ -154,7 +158,13 @@ impl Key {
             menger,
             asking: false,
             labels: LabelSet::NONE,
+            archived: false,
         }
+    }
+
+    /// ARCHIVE-2: this cell, archived or not.
+    pub(super) fn archiving(self, archived: bool) -> Self {
+        Self { archived, ..self }
     }
 
     /// MENGER-12: this cell, asking or not, holding `labels`.
@@ -177,6 +187,7 @@ impl Key {
             crate::is_menger_doc(t.path.as_deref()),
         )
         .with(asking, LabelSet::of(&t.labels))
+        .archiving(t.archived.is_some())
     }
 
     pub fn status(self) -> Status {
@@ -213,6 +224,11 @@ impl Key {
     pub fn labels(self) -> LabelSet {
         self.labels
     }
+
+    /// ARCHIVE-2: whether it is archived.
+    pub fn archived(self) -> bool {
+        self.archived
+    }
 }
 
 /// As `--verify-derived` names a cell: `(Ready, build, none, blocked, no
@@ -226,7 +242,7 @@ impl fmt::Display for Key {
         };
         write!(
             f,
-            "({}, {}, {}, {}, {}{}{}{})",
+            "({}, {}, {}, {}, {}{}{}{}{})",
             self.status(),
             self.kind(),
             self.severity().map_or("none".to_string(), |s| s.as_str().to_ascii_lowercase()),
@@ -235,6 +251,7 @@ impl fmt::Display for Key {
             if self.menger { ", menger doc" } else { "" },
             if self.asking { ", asking" } else { "" },
             labels,
+            if self.archived { ", archived" } else { "" },
         )
     }
 }
@@ -605,6 +622,18 @@ impl Cells {
             }
         }
         s
+    }
+
+    /// ARCHIVE-2: how many tickets are archived, of `sc` alone or of every
+    /// shortcode — a sum over the bitmaps of the archived cells, never a
+    /// walk. A view asks it first: with none archived, it takes the path it
+    /// took before the archive.
+    pub(super) fn archived(&self, sc: Option<&ShortcodeId>) -> u64 {
+        let count = |held: &Held| held.iter().filter(|(id, _)| self.keys[*id as usize].archived()).map(|(_, b)| b.len()).sum::<u64>();
+        match sc {
+            Some(sc) => self.held.get(sc).map_or(0, count),
+            None => self.held.values().map(count).sum(),
+        }
     }
 
     /// The cell table: id → cell.

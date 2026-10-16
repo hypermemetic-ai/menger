@@ -691,7 +691,7 @@ mod tests {
         let group = |epic: &str, host: Option<&str>| {
             (
                 epic.to_string(),
-                Roll { epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(), total: 2, done: 0, docs: 0, root: Some(menger_tickets_api::TicketId::new(format!("{epic}-1"))), root_row: None, host: host.map(menger_tickets_api::TicketId::new) },
+                Roll { epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(), total: 2, done: 0, docs: 0, archived: 0, root: Some(menger_tickets_api::TicketId::new(format!("{epic}-1"))), root_row: None, host: host.map(menger_tickets_api::TicketId::new) },
             )
         };
         let g: BTreeMap<String, Roll> = [group("DEMAND", None), group("SUB", Some("DEMAND-3")), group("MNG", None)].into_iter().collect();

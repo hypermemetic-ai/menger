@@ -248,8 +248,6 @@ fn each_refused_field_is_an_error_naming_it() {
         ("unattested", "unattested"),
         ("past cap", "past cap"),
         ("lowest Ready", "lowest"),
-        ("archived", "archived"),
-        ("not archived", "archived"),
         ("depth <= 2", "depth"),
         ("created < 2d", "created"),
         ("written < 1w", "written"),
@@ -415,6 +413,7 @@ fn facts(id: &str, title: &str, status: Status, kind: Kind) -> Facts {
     Facts {
         asking: false,
         labels: Vec::new(),
+        archived: false,
         id: id.into(),
         lineage: vec![id.into(), epic.clone()],
         history: Vec::new(),
@@ -876,6 +875,7 @@ fn random_facts(rng: &mut Rng, pools: &Pools) -> Facts {
     Facts {
         asking: rng.coin(),
         labels: pools.labels.iter().filter(|_| rng.coin()).map(|l| l.to_string()).collect(),
+        archived: false,
         id,
         epic,
         title: words.join(" "),
@@ -980,6 +980,7 @@ fn some_world_matches(f: &Filter) -> bool {
                 let mut x = Facts {
                     asking: false,
                     labels: chosen(&labels, l),
+                    archived: false,
                     id: "QQ-1".into(),
                     epic: epic.clone(),
                     title: chosen(&texts, t).join("|"),

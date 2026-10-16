@@ -576,6 +576,18 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
             let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(t.shortcode.as_str())).collect();
             (!ids.is_empty()).then_some(E::Undeleted { ids, tickets })
         }
+        // ARCHIVE-2: an archive or a restore, of the tickets the frame reaches.
+        E::Archived { ids, live, unqueued, mark, dry_run } => {
+            let ids: Vec<_> = ids.into_iter().filter(|id| reach.holds_id(id)).collect();
+            let live: Vec<_> = live.into_iter().filter(|l| reach.holds_id(&l.id)).collect();
+            let unqueued: Vec<_> = unqueued.into_iter().filter(|id| reach.holds_id(id)).collect();
+            (!ids.is_empty()).then_some(E::Archived { ids, live, unqueued, mark, dry_run })
+        }
+        E::Restored { ids, ancestors, still_archived, by, dry_run } => {
+            let keep = |v: Vec<menger_tickets_api::TicketId>| v.into_iter().filter(|id| reach.holds_id(id)).collect::<Vec<_>>();
+            let ids = keep(ids);
+            (!ids.is_empty()).then(|| E::Restored { ids, ancestors: keep(ancestors), still_archived: keep(still_archived), by, dry_run })
+        }
         // ACT-6: a move, of the tickets the frame reaches where they are now.
         E::Reshortcoded { moves, tickets } => {
             let moves: Vec<_> = moves.into_iter().filter(|m| reach.holds_id(&m.to)).collect();
@@ -583,7 +595,8 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
             (!moves.is_empty()).then_some(E::Reshortcoded { moves, tickets })
         }
         // The reach's own count, never the viewer's whole store.
-        E::Health { version, unix_now, .. } => Some(E::Health { version, unix_now, ticket_count: reach.tickets }),
+        // ARCHIVE-2: and no count of an archive the frame was not shown.
+        E::Health { version, unix_now, .. } => Some(E::Health { version, unix_now, ticket_count: reach.tickets, archived: 0 }),
         // A dangling blocker's id names no ticket: nothing to read.
         E::DanglingBlocker { .. }
         | E::Page { .. }
@@ -1194,6 +1207,7 @@ mod tests {
             hidden_blocked_by: 0,
             hidden_unlocks: 0,
             parent_hidden: false,
+            archived: None,
             labels: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
@@ -1221,7 +1235,7 @@ mod tests {
     }
 
     fn group(epic: &str, host: Option<&str>) -> Group {
-        Group { epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(), total: 3, done: 1, docs: 0, root: Some(menger_tickets_api::TicketId::new(format!("{epic}-1"))), root_row: None, host: host.map(menger_tickets_api::TicketId::new) }
+        Group { epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(), total: 3, done: 1, docs: 0, archived: 0, root: Some(menger_tickets_api::TicketId::new(format!("{epic}-1"))), root_row: None, host: host.map(menger_tickets_api::TicketId::new) }
     }
 
     /// AREA: its own shortcode and SUB, hosted under it — what `counts {
@@ -1446,7 +1460,7 @@ mod tests {
             other => panic!("{other:?}"),
         }
         // `health` counts the reach, not the viewer's whole store.
-        match admit_event(TicketsEvent::Health { version: "v".into(), unix_now: 1, ticket_count: 5000 }, &area()) {
+        match admit_event(TicketsEvent::Health { version: "v".into(), unix_now: 1, ticket_count: 5000, archived: 0 }, &area()) {
             Some(TicketsEvent::Health { ticket_count, .. }) => assert_eq!(ticket_count, 6),
             other => panic!("{other:?}"),
         }

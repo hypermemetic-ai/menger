@@ -47,6 +47,7 @@ fn write_titled(path: &Path, rows: &[(&str, &str)]) {
                 hidden_blocked_by: 0,
                 hidden_unlocks: 0,
                 parent_hidden: false,
+                archived: None,
                 labels: Vec::new(),
                 id: (*id).into(),
                 epic: epic.into(),

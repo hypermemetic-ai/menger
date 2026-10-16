@@ -163,6 +163,14 @@
         "ticket",
         "value"
       ],
+      "archive": [
+        "dry_run",
+        "filter",
+        "ids",
+        "max",
+        "message",
+        "tz"
+      ],
       "await_reply": [
         "id",
         "input",
@@ -296,6 +304,15 @@
         "new_scope",
         "parent",
         "to",
+        "with_children"
+      ],
+      "restore": [
+        "dry_run",
+        "filter",
+        "ids",
+        "max",
+        "message",
+        "tz",
         "with_children"
       ],
       "schema": [],

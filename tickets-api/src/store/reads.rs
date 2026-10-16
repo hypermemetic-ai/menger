@@ -46,15 +46,20 @@ impl Store {
             }
             if g.root.as_deref().is_some_and(|r| !sees.id(r)) {
                 (g.root, g.root_row) = (None, None);
-                let (mut total, mut done, mut docs) = (0, 0, 0);
+                let (mut total, mut done, mut docs, mut archived) = (0, 0, 0, 0);
                 for seq in sees.admitted(&g.shortcode).unwrap_or_default() {
                     let Some(t) = cache.order.get(&OrderKey { shortcode: g.shortcode.clone(), seq }) else { continue };
-                    match t.kind.has_lifecycle() {
-                        true => (total, done) = (total + 1, done + u64::from(t.status == Status::Complete)),
-                        false => docs += 1,
+                    match (t.archived.is_some(), t.kind.has_lifecycle()) {
+                        // ARCHIVE-2: counted apart, as the roll-ups count it.
+                        (true, _) => archived += 1,
+                        (false, true) => (total, done) = (total + 1, done + u64::from(t.status == Status::Complete)),
+                        (false, false) => docs += 1,
                     }
                 }
-                (g.total, g.done, g.docs) = (total, done, docs);
+                (g.total, g.done, g.docs, g.archived) = (total, done, docs, archived);
+                if !g.drawn() {
+                    continue;
+                }
             }
             out.push(g);
         }
@@ -65,11 +70,13 @@ impl Store {
     /// — of the shortcodes `who` sees a ticket of, each its highest it sees.
     pub fn extents(&self, who: &(impl Reader + ?Sized)) -> Vec<(ShortcodeId, u32)> {
         let Ok(seen) = Seen::of(who) else { return Vec::new() };
-        if seen.all() {
+        let seen = seen.viewing(&self.tickets.read().expect("store lock poisoned"));
+        if seen.views_all() {
             return self.extents_unscoped();
         }
         let cache = self.tickets.read().expect("store lock poisoned");
-        let sees = seen.sees(&cache);
+        // ARCHIVE-2: of the live tickets in reach.
+        let Ok(sees) = seen.view_sees(&cache) else { return Vec::new() };
         let held = sees.shortcodes().unwrap_or_default();
         cache
             .ids
@@ -85,12 +92,14 @@ impl Store {
     /// the deleted ones below it.
     pub fn extents_holed(&self, who: &(impl Reader + ?Sized)) -> Vec<(ShortcodeId, crate::address::Code, u32, Vec<u32>)> {
         let Ok(seen) = Seen::of(who) else { return Vec::new() };
+        let seen = seen.viewing(&self.tickets.read().expect("store lock poisoned"));
         let all = self.extents_holed_unscoped();
-        if seen.all() {
+        if seen.views_all() {
             return all;
         }
         let cache = self.tickets.read().expect("store lock poisoned");
-        let sees = seen.sees(&cache);
+        // ARCHIVE-2: of the live tickets in reach.
+        let Ok(sees) = seen.view_sees(&cache) else { return Vec::new() };
         let held = sees.shortcodes().unwrap_or_default();
         all.into_iter()
             .filter(|(sc, ..)| held.contains(sc))
@@ -123,7 +132,8 @@ impl Store {
             let last = OrderKey { shortcode: epic.clone(), seq: u32::MAX };
             cache.order.range(first..=last).map(|(_, t)| t)
         });
-        let mut w = waves::of(cache.rows(), tickets, kinds, &|t| sees.sees_row(t));
+        // ARCHIVE-2: an archived ticket is placed on no board.
+        let mut w = waves::of(cache.rows(), tickets, kinds, &|t| sees.sees_row(t) && t.archived.is_none());
         redact_waves(&sees, &mut w);
         w
     }
@@ -143,7 +153,7 @@ impl Store {
         let tickets = sub
             .iter()
             .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { shortcode: epic.clone(), seq })));
-        let mut w = waves::of(cache.rows(), tickets, kinds, &|t| sees.sees_row(t));
+        let mut w = waves::of(cache.rows(), tickets, kinds, &|t| sees.sees_row(t) && t.archived.is_none());
         redact_waves(&sees, &mut w);
         Ok(w)
     }
@@ -168,7 +178,7 @@ impl Store {
             .iter()
             .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { shortcode: epic.clone(), seq })))
             .filter(|t| t.id != row.id);
-        let mut to = waves::to(cache.rows(), row, descendants, kinds, &|t| sees.sees_row(t));
+        let mut to = waves::to(cache.rows(), row, descendants, kinds, &|t| sees.sees_row(t) && (t.archived.is_none() || t.id == row.id));
         redact_waves(&sees, &mut to.waves);
         if !sees.all() {
             to.cycles = to.cycles.into_iter().map(|c| sees.keep(c)).filter(|c| !c.is_empty()).collect();
@@ -236,8 +246,8 @@ impl Store {
     /// page of its reach (with `first`, as IDENTITY-21 answered it), rows
     /// redacted, a cursor it may not see a cursor into nothing.
     pub fn page(&self, who: &(impl Reader + ?Sized), q: PageQuery<'_>) -> Result<Page, StoreError> {
-        let seen = Seen::of(who)?;
-        if seen.all() {
+        let seen = Seen::of(who)?.viewing(&self.tickets.read().expect("store lock poisoned"));
+        if seen.views_all() {
             return self.page_unscoped(q);
         }
         let select = Select::List { epic: q.epic.map(str::to_string), status: q.status, parent: q.parent.map(str::to_string) };
@@ -247,8 +257,8 @@ impl Store {
     /// MNG-9: one page of the ready set ([`Store::ready_page_unscoped`]) — of
     /// the tickets `who` sees.
     pub fn ready_page(&self, who: &(impl Reader + ?Sized), epic: Option<&str>, after: Option<&str>, limit: Option<u32>) -> Result<Page, StoreError> {
-        let seen = Seen::of(who)?;
-        if seen.all() {
+        let seen = Seen::of(who)?.viewing(&self.tickets.read().expect("store lock poisoned"));
+        if seen.views_all() {
             return self.ready_page_unscoped(epic, after, limit);
         }
         let page = self.seen_page(&seen, Select::Ready { epic: epic.map(str::to_string) }, after, limit, None)?;
@@ -259,10 +269,11 @@ impl Store {
     /// ([`Store::find_page_unscoped`]) — of those `who` sees: a restricted
     /// reader's is `find`'s filtered page of its reach.
     pub fn find_page(&self, who: &(impl Reader + ?Sized), query: &str, after: Option<&str>, limit: Option<u32>) -> Result<Page, StoreError> {
-        let seen = Seen::of(who)?;
-        match seen.lens() {
-            None => self.find_page_unscoped(query, after, limit),
-            Some(reach) => self.find_seen(&seen, query, reach, after, limit),
+        let seen = Seen::of(who)?.viewing(&self.tickets.read().expect("store lock poisoned"));
+        // ARCHIVE-2: the live tickets in reach.
+        match seen.views_all() {
+            true => self.find_page_unscoped(query, after, limit),
+            false => self.find_seen(&seen, query, &seen.view_lens()?, after, limit),
         }
     }
 
@@ -368,11 +379,31 @@ impl Store {
     }
 
     /// How many tickets `who` sees.
+    ///
+    /// ARCHIVE-2: the live ones — the archive is counted by
+    /// [`Store::archived_count`].
     pub fn count(&self, who: &(impl Reader + ?Sized)) -> usize {
         let Ok(seen) = Seen::of(who) else { return 0 };
+        let seen = seen.viewing(&self.tickets.read().expect("store lock poisoned"));
+        if seen.views_all() {
+            return self.count_unscoped();
+        }
+        match seen.view_lens() {
+            Ok(lens) => self.counts_unscoped(&lens).into_iter().map(|(_, n)| n as usize).sum(),
+            Err(_) => 0,
+        }
+    }
+
+    /// ARCHIVE-2: how many archived tickets `who` sees — a sum over the
+    /// archived cells (in reach), never a walk.
+    pub fn archived_count(&self, who: &(impl Reader + ?Sized)) -> u64 {
+        let Ok(seen) = Seen::of(who) else { return 0 };
         match seen.lens() {
-            None => self.count_unscoped(),
-            Some(reach) => self.counts_unscoped(reach).into_iter().map(|(_, n)| n as usize).sum(),
+            None => self.tickets.read().expect("store lock poisoned").cells.archived(None),
+            Some(reach) => match Lens::of(&crate::filter::Filter::parse("archived").expect("the language reads it")).and_then(|l| l.and(reach)) {
+                Ok(lens) => self.counts_unscoped(&lens).into_iter().map(|(_, n)| n).sum(),
+                Err(_) => 0,
+            },
         }
     }
 
@@ -415,9 +446,12 @@ impl Store {
         // address, one naming several refused.
         let ticket = ticket.map(|t| sees.resolve(t)).transpose()?;
         let epic = epic.map(|e| span_shortcode(&cache, Some(e))).transpose()?.flatten();
-        Ok(match sees.all() {
+        // ARCHIVE-2: an archived ticket's inputs are in no list — but its
+        // own page still reads them, by naming it.
+        let live = |id: &str| ticket.is_some() || cache.get(id).is_none_or(|r| r.archived.is_none());
+        Ok(match sees.all() && cache.cells.archived(None) == 0 {
             true => cache.inputs.query(ticket.as_deref(), epic.as_ref(), state),
-            false => cache.inputs.query_where(ticket.as_deref(), epic.as_ref(), state, |id| sees.id(id)),
+            false => cache.inputs.query_where(ticket.as_deref(), epic.as_ref(), state, |id| sees.id(id) && live(id)),
         })
     }
 
@@ -580,8 +614,10 @@ impl Store {
     /// ([`Store::search_unscoped`]) — of the tickets `who` sees: `lens`
     /// within its reach (its reach alone without one), the hits redacted.
     pub async fn search(&self, who: &(impl Reader + ?Sized), query: &str, lens: Option<Lens>, limit: Option<u32>, offset: Option<u32>) -> Result<SearchPage, StoreError> {
-        let seen = Seen::of(who)?;
+        let seen = Seen::of(who)?.viewing(&self.tickets.read().expect("store lock poisoned"));
+        // ARCHIVE-2: without a filter, the live tickets in reach.
         let lens = match (lens, seen.lens()) {
+            (None, _) if !seen.views_all() => Some(seen.view_lens()?),
             (l, None) => l,
             (None, Some(reach)) => Some(reach.clone()),
             (Some(l), Some(_)) => Some(seen.within(&l)?),

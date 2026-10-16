@@ -262,6 +262,9 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.update_many", Today::Editor, Some("ids")),
     // ACT-6: moved into another shortcode — an editor's, on every one moved.
     ("tickets.reshortcode", Today::Editor, Some("ids")),
+    // ARCHIVE-2: editor writes, a permit per ticket, descendants included.
+    ("tickets.archive", Today::Editor, Some("ids")),
+    ("tickets.restore", Today::Editor, Some("ids")),
     // ACT-5: gone for good, and back — admin's alone.
     ("tickets.delete", Today::Admin, Some("ids")),
     ("tickets.undelete", Today::Admin, Some("ids")),

@@ -42,6 +42,11 @@ pub struct Lens {
     /// read ANDs the reader's reach into ([`Lens::and`]), as the language
     /// ANDs two filters. `None` for a lens made of a judge alone (a test's).
     filter: Option<Arc<Filter>>,
+    /// ARCHIVE-2: judged as written — without the archive's default, which
+    /// admits no archived ticket unless the filter names `archived`
+    /// ([`Filter::matches`]). A reader's reach ([`Lens::reach`]) and
+    /// [`Lens::all`] are: what may be read, never what a view shows.
+    written: bool,
 }
 
 /// A lens's judge: a shortcode, a cell, the lineage's names that hold, and
@@ -64,6 +69,7 @@ impl Lens {
             clock: Default::default(),
             judge: Arc::new(move |e, k, _, _| judge(e, k)),
             filter: None,
+            written: true,
         }
     }
 
@@ -73,7 +79,9 @@ impl Lens {
     /// lens's. A lens made of a judge alone is ANDed judge by judge.
     pub(super) fn and(&self, reach: &Lens) -> Result<Lens, StoreError> {
         if let (Some(a), Some(b)) = (&self.filter, &reach.filter) {
-            return Ok(Lens::of(&a.and(b))?.with_clock(self.clock.clone()));
+            // ARCHIVE-2: judged as this lens is — a view's keeps the
+            // archive's default, a reach's or `all`'s has none.
+            return Ok(Lens::compiled(&a.and(b), self.written)?.with_clock(self.clock.clone()));
         }
         let union = |a: &[String], b: &[String]| -> Vec<String> {
             let mut v: Vec<String> = a.iter().chain(b).cloned().collect();
@@ -96,6 +104,7 @@ impl Lens {
             clock: self.clock.clone(),
             judge: Arc::new(move |e, k, l, h| a(e, k, l, h) && b(e, k, l, h)),
             filter: None,
+            written: self.written,
         })
     }
 
@@ -145,10 +154,24 @@ impl Lens {
         self.history.iter().any(crate::filter::History::relative)
     }
 
-    /// The empty filter: every ticket.
+    /// The empty filter as written: every ticket, the archived included —
+    /// what an access check asks a ticket of (ARCHIVE-2: a write to an
+    /// archived ticket is allowed), never what a view shows ([`Lens::live`]).
     pub fn all() -> Self {
         // ACCESS-10: the empty filter's, so a reach ANDs into it as text.
         Self { filter: Some(Arc::new(Filter::default())), ..Self::new(String::new(), Vec::new(), |_, _| true) }
+    }
+
+    /// ARCHIVE-2: the empty filter as a view reads it — every live ticket,
+    /// the archive left out ([`Filter::matches`]'s default).
+    pub fn live() -> Self {
+        Self::of(&Filter::default()).expect("the empty filter compiles")
+    }
+
+    /// ARCHIVE-2: a reader's reach — `filter` judged as written, so an
+    /// archived ticket in reach is still reached by name.
+    pub(super) fn reach(filter: &Filter) -> Result<Self, StoreError> {
+        Self::compiled(filter, true)
     }
 
     /// A filter's text, read by the language (FILTER-10) and judged by its
@@ -166,6 +189,11 @@ impl Lens {
     /// `text` is refused ([`refuse`]). FILTER-13: `under` is answered — its
     /// names kept, and the evaluator handed the lineage they are tested on.
     pub fn of(filter: &Filter) -> Result<Self, StoreError> {
+        Self::compiled(filter, false)
+    }
+
+    /// [`Lens::of`], or (`written`) [`Lens::reach`].
+    fn compiled(filter: &Filter, written: bool) -> Result<Self, StoreError> {
         refuse(filter)?;
         // FILTER-36: every leaf, a nested group's at any depth.
         let leaves = filter.leaves();
@@ -210,8 +238,16 @@ impl Lens {
             unders: unders.into_iter().collect(),
             history,
             clock: Default::default(),
-            judge: Arc::new(move |epic, key, lineage, holds| judged.matches(&facts(epic, key, lineage, holds))),
+            judge: Arc::new(move |epic, key, lineage, holds| {
+                let f = facts(epic, key, lineage, holds);
+                if written {
+                    judged.matches_as_written(&f)
+                } else {
+                    judged.matches(&f)
+                }
+            }),
             filter: Some(Arc::new(filter.clone())),
+            written,
         })
     }
 
@@ -286,6 +322,7 @@ fn facts(letters: &str, key: Key, lineage: &[&str], holds: &[&str]) -> Facts {
         menger_doc: key.menger(),
         asking: key.asking(),
         labels: key.labels().labels().iter().map(|l| l.to_string()).collect(),
+        archived: key.archived(),
         lineage: lineage.iter().map(|l| l.to_string()).collect(),
         history: holds.iter().map(|h| h.to_string()).collect(),
     }
@@ -363,8 +400,10 @@ fn slot(field: &str, k: Key) -> usize {
 }
 
 impl PartialEq for Lens {
+    /// ARCHIVE-2: and how it is judged — the empty filter as a view reads
+    /// it ([`Lens::live`]) is not the empty filter as written ([`Lens::all`]).
     fn eq(&self, other: &Self) -> bool {
-        self.text == other.text
+        self.text == other.text && self.written == other.written
     }
 }
 

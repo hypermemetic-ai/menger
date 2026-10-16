@@ -619,6 +619,7 @@ impl Store {
                 hidden_blocked_by: 0,
                 hidden_unlocks: 0,
                 parent_hidden: false,
+                archived: None,
                 parent: Some(crate::address::TicketId::new(parent.clone())),
                 child_count: 0,
                 commits: Vec::new(),

@@ -3483,6 +3483,192 @@
     "params": {}
   },
   {
+    "call": "tickets.archive",
+    "items": [
+      {
+        "dry_run": true,
+        "ids": [
+          "PLAT-1",
+          "PLAT-2",
+          "PLAT-3"
+        ],
+        "live": [
+          {
+            "id": "PLAT-1",
+            "status": "Pending"
+          },
+          {
+            "id": "PLAT-2",
+            "status": "Pending"
+          },
+          {
+            "id": "PLAT-3",
+            "status": "Pending"
+          }
+        ],
+        "mark": {
+          "at_unix": 0,
+          "by": "anonymous",
+          "write": 0
+        },
+        "type": "archived",
+        "unqueued": []
+      }
+    ],
+    "params": {
+      "dry_run": true,
+      "ids": [
+        "PLAT-1"
+      ]
+    }
+  },
+  {
+    "call": "tickets.archive",
+    "items": [
+      {
+        "dry_run": false,
+        "ids": [
+          "PLAT-2"
+        ],
+        "live": [
+          {
+            "id": "PLAT-2",
+            "status": "Pending"
+          }
+        ],
+        "mark": {
+          "at_unix": 0,
+          "by": "anonymous",
+          "message": "parked",
+          "write": 13
+        },
+        "type": "archived",
+        "unqueued": []
+      }
+    ],
+    "params": {
+      "ids": [
+        "PLAT-2"
+      ],
+      "message": "parked"
+    }
+  },
+  {
+    "call": "tickets.list",
+    "items": [
+      {
+        "summary": {
+          "address": "hypermemetic:PLAT-2",
+          "archived": {
+            "at_unix": 0,
+            "by": "anonymous",
+            "message": "parked",
+            "write": 13
+          },
+          "blocked_by": [],
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [
+            "swept"
+          ],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "severity": null,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "summary"
+      },
+      {
+        "first": 0,
+        "next": null,
+        "remaining": 0,
+        "type": "page"
+      }
+    ],
+    "params": {
+      "filter": "archived",
+      "summary": true
+    }
+  },
+  {
+    "call": "tickets.get",
+    "items": [
+      {
+        "ticket": {
+          "address": "hypermemetic:PLAT-2",
+          "archived": {
+            "at_unix": 0,
+            "by": "anonymous",
+            "message": "parked",
+            "write": 13
+          },
+          "blocked_by": [],
+          "body": "",
+          "child_count": 0,
+          "commits": [],
+          "created_unix": 0,
+          "epic": "PLAT",
+          "id": "PLAT-2",
+          "kind": "build",
+          "labels": [
+            "swept"
+          ],
+          "parent": "PLAT-1",
+          "placement": {
+            "n": 1,
+            "type": "wave"
+          },
+          "seq": 2,
+          "shortcode": "PLAT",
+          "status": "Pending",
+          "title": "work",
+          "unlocks": [
+            "GOLD-3"
+          ],
+          "updated_unix": 0
+        },
+        "type": "ticket"
+      }
+    ],
+    "params": {
+      "id": "PLAT-2"
+    }
+  },
+  {
+    "call": "tickets.restore",
+    "items": [
+      {
+        "ancestors": [],
+        "by": "anonymous",
+        "dry_run": false,
+        "ids": [
+          "PLAT-2"
+        ],
+        "still_archived": [],
+        "type": "restored"
+      }
+    ],
+    "params": {
+      "ids": [
+        "PLAT-2"
+      ]
+    }
+  },
+  {
     "call": "tickets.amend",
     "items": [
       {
@@ -5188,6 +5374,107 @@
           "total": 5
         },
         "type": "group_changed"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "archive",
+          "from": "live",
+          "id": 13,
+          "message": "parked",
+          "name": null,
+          "source": "api",
+          "ticket": "PLAT-2",
+          "to": "archived"
+        },
+        "type": "transition"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "archived": 1,
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 2
+        },
+        "type": "group_changed"
+      },
+      {
+        "dry_run": false,
+        "ids": [
+          "PLAT-2"
+        ],
+        "live": [
+          {
+            "id": "PLAT-2",
+            "status": "Pending"
+          }
+        ],
+        "mark": {
+          "at_unix": 0,
+          "by": "anonymous",
+          "message": "parked",
+          "write": 13
+        },
+        "type": "archived",
+        "unqueued": []
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "archive",
+          "from": "archived",
+          "id": 14,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "PLAT-2",
+          "to": "live"
+        },
+        "type": "transition"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 3
+        },
+        "type": "group_changed"
+      },
+      {
+        "ancestors": [],
+        "by": "anonymous",
+        "dry_run": false,
+        "ids": [
+          "PLAT-2"
+        ],
+        "still_archived": [],
+        "type": "restored"
       },
       {
         "changed": [
@@ -6971,6 +7258,121 @@
         "id": "GOLD-7",
         "seq": 7,
         "shortcode": "GOLD",
+        "type": "entered"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "archive",
+          "from": "live",
+          "id": 13,
+          "message": "parked",
+          "name": null,
+          "source": "api",
+          "ticket": "PLAT-2",
+          "to": "archived"
+        },
+        "type": "transition"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "archived": 1,
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 2
+        },
+        "type": "group_changed"
+      },
+      {
+        "dry_run": false,
+        "ids": [
+          "PLAT-2"
+        ],
+        "live": [
+          {
+            "id": "PLAT-2",
+            "status": "Pending"
+          }
+        ],
+        "mark": {
+          "at_unix": 0,
+          "by": "anonymous",
+          "message": "parked",
+          "write": 13
+        },
+        "type": "archived",
+        "unqueued": []
+      },
+      {
+        "epic": "PLAT",
+        "id": "PLAT-2",
+        "seq": 2,
+        "shortcode": "PLAT",
+        "type": "left"
+      },
+      {
+        "transition": {
+          "actor": "anonymous",
+          "at_unix": 0,
+          "cause": null,
+          "cause_ticket": null,
+          "field": "archive",
+          "from": "archived",
+          "id": 14,
+          "message": null,
+          "name": null,
+          "source": "api",
+          "ticket": "PLAT-2",
+          "to": "live"
+        },
+        "type": "transition"
+      },
+      {
+        "group": {
+          "address": "hypermemetic:PLAT",
+          "docs": 0,
+          "done": 0,
+          "epic": "PLAT",
+          "host": null,
+          "root": "PLAT-1",
+          "root_row": {
+            "kind": "scope",
+            "status": "Pending",
+            "title": "the platform"
+          },
+          "shortcode": "PLAT",
+          "total": 3
+        },
+        "type": "group_changed"
+      },
+      {
+        "ancestors": [],
+        "by": "anonymous",
+        "dry_run": false,
+        "ids": [
+          "PLAT-2"
+        ],
+        "still_archived": [],
+        "type": "restored"
+      },
+      {
+        "epic": "PLAT",
+        "id": "PLAT-2",
+        "seq": 2,
+        "shortcode": "PLAT",
         "type": "entered"
       },
       {

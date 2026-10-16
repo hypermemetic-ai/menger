@@ -132,6 +132,10 @@ pub(super) struct Seen {
     reach: Option<(Filter, Lens)>,
     /// ACCESS-19: the comments on the app it sees.
     app: AppSight,
+    /// ARCHIVE-2: the store holds archived tickets, which a view leaves out
+    /// ([`Seen::viewing`]) — so a reader of everything reads a view under
+    /// [`Lens::live`] rather than by today's unscoped path.
+    archive: bool,
 }
 
 impl std::fmt::Debug for Seen {
@@ -146,17 +150,43 @@ impl Seen {
         let reach = match who.reach()? {
             None => None,
             Some(f) => {
-                let lens = Lens::of(&f)?;
+                // ARCHIVE-2: as written — a reach decides what may be read,
+                // so an archived ticket in it is still found by name.
+                let lens = Lens::reach(&f)?;
                 Some((f, lens))
             }
         };
-        Ok(Self { reach, app: who.app_comments() })
+        Ok(Self { reach, app: who.app_comments(), archive: false })
+    }
+
+    /// ARCHIVE-2: this sight for a view — one that leaves the archive out,
+    /// when `cache` holds any archived ticket (its archived cells' counts,
+    /// summed: no walk). With none, a reader of everything takes the
+    /// unscoped path, as before the archive.
+    pub(super) fn viewing(mut self, cache: &Cache) -> Self {
+        self.archive = cache.cells.archived(None) > 0;
+        self
+    }
+
+    /// ARCHIVE-2: a view may take the unscoped path: everything is in reach
+    /// and nothing is archived.
+    pub(super) fn views_all(&self) -> bool {
+        self.reach.is_none() && !self.archive
+    }
+
+    /// ARCHIVE-2: the lens a view without a filter reads under — every live
+    /// ticket in reach.
+    pub(super) fn view_lens(&self) -> Result<Lens, StoreError> {
+        match self.lens() {
+            None => Ok(Lens::live()),
+            Some(reach) => Lens::live().and(reach),
+        }
     }
 
     /// The system's sight: everything. What a walk whose reach could not
     /// be read holds beside its refusal (it reads nothing).
     pub(super) fn everything() -> Self {
-        Self { reach: None, app: AppSight::All }
+        Self { reach: None, app: AppSight::All, archive: false }
     }
 
     /// Everything: nothing is hidden.
@@ -168,10 +198,19 @@ impl Seen {
     /// the filtered selections they are, the reach their lens (IDENTITY-21
     /// answered a restricted reader so: the reach is a filter); a filtered
     /// one ANDed ([`Seen::filtered`]).
+    ///
+    /// ARCHIVE-2: a list's lens is the live one within the reach
+    /// ([`Seen::view_lens`]); the ready set's is `ready and (reach)`, read
+    /// with the archive's default. A reader of everything over a store
+    /// that holds archived tickets ([`Seen::viewing`]) reads both so too.
     pub(super) fn select(&self, cache: &Cache, select: Select) -> Result<Select, StoreError> {
-        let Some((filter, lens)) = &self.reach else { return Ok(select) };
+        if self.views_all() {
+            return Ok(select);
+        }
+        let everything = Filter::default();
+        let filter = self.filter().unwrap_or(&everything);
         Ok(Select::Filtered(match select {
-            Select::List { epic, status, parent } => Filtered { lens: lens.clone(), epic, status, parent, keep: None },
+            Select::List { epic, status, parent } => Filtered { lens: self.view_lens()?, epic, status, parent, keep: None },
             Select::Ready { epic } => lensed::ready_and(filter, epic)?,
             Select::Filtered(q) => self.filtered(cache, &q)?,
         }))
@@ -204,6 +243,12 @@ impl Seen {
         }
         let keep = q.keep.as_deref().and_then(|k| filtered::keep_row(cache, k)).filter(|t| self.sees(cache).key(&OrderKey { shortcode: t.shortcode.clone(), seq: t.seq }));
         Ok(Filtered { lens: self.within(&q.lens)?, keep: keep.map(|t| t.id.to_string()), ..q.clone() })
+    }
+
+    /// ARCHIVE-2: [`Seen::sees`] for a view — the live tickets in reach.
+    pub(super) fn view_sees<'c>(&self, cache: &'c Cache) -> Result<Sees<'c>, StoreError> {
+        let q = Filtered { lens: self.view_lens()?, epic: None, status: None, parent: None, keep: None };
+        Ok(Sees { cache, view: Some(filtered::view_lenient(cache, &q)), app: self.app.clone() })
     }
 
     /// The reach's admitted bitmaps, under the read lock the caller holds.

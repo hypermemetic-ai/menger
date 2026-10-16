@@ -2861,6 +2861,7 @@ pub(crate) mod tests {
                 total: 3,
                 done: 0,
                 docs: 0,
+                archived: 0,
                 root: Some(menger_tickets_api::TicketId::new(format!("{epic}-1"))),
                 root_row: None,
                 host: host.map(menger_tickets_api::TicketId::new),
