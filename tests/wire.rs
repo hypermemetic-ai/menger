@@ -1816,8 +1816,10 @@ async fn component_docs_over_the_wire() {
 /// `answer` with a typed value is recorded, `inputs` shows it with its
 /// history, and `watch` hears it — a `watch { epic }` of the ticket's
 /// shortcode too, and not one of another. Then the refusals are one in-band
-/// `error` each, a no-op `close_input` answers `input`, and `inputs`' filters
-/// hold.
+/// `error` each, a no-op `close` answers `input`, and `list`'s filters
+/// hold. ACCESS-14: at their paths under `tickets.inputs`, and an answer's
+/// source is the server's (ACCESS-3 #12) — `api` for a call that proves no
+/// one, whatever the caller sends.
 #[tokio::test]
 async fn inputs_over_the_wire() {
     let port = start_server().await;
@@ -1828,7 +1830,7 @@ async fn inputs_over_the_wire() {
     let mut elsewhere = call(&client, "tickets.watch", json!({"epic": "OTHER"})).await;
     let inputs = |params: Value| {
         let client = &client;
-        async move { collect(call(client, "tickets.inputs", params).await).await }
+        async move { collect(call(client, "tickets.inputs.list", params).await).await }
     };
 
     let body = "<m-decision data-field=\"decision\" id=\"landing\">\n\n\
@@ -1851,10 +1853,11 @@ async fn inputs_over_the_wire() {
     assert_eq!(heard.last(), Some(&json!({"type": "input_changed", "input": declared})), "after the write's other events");
     assert_eq!(inputs(json!({})).await, vec![json!({"type": "input", "input": declared})]);
 
-    // Answer: a typed value, recorded with its source and rationale.
+    // Answer: a typed value, recorded with its source and rationale — the
+    // source the server's: a caller's `source` is no parameter (ignored).
     let value = json!({"type": "choice", "option": "archive"});
     let evs = collect(
-        call(&client, "tickets.answer", json!({"ticket": "ask-2", "input": "landing", "value": value, "rationale": "holds are real", "source": "app"}))
+        call(&client, "tickets.inputs.answer", json!({"ticket": "ask-2", "input": "landing", "value": value, "rationale": "holds are real", "source": "app"}))
             .await,
     )
     .await;
@@ -1863,7 +1866,7 @@ async fn inputs_over_the_wire() {
     let answered = evs[0]["input"].clone();
     assert_eq!(answered["state"], "answered");
     assert_eq!(answered["answer"]["value"], value);
-    assert_eq!((&answered["answer"]["rationale"], &answered["answer"]["source"]), (&json!("holds are real"), &json!("app")));
+    assert_eq!((&answered["answer"]["rationale"], &answered["answer"]["source"]), (&json!("holds are real"), &json!("api")));
     assert!(answered["answer"]["at_unix"].as_i64().unwrap() > 0);
     assert_eq!(answered["history"].as_array().unwrap().len(), 1);
     assert_eq!(answered["history"][0]["action"], "answered");
@@ -1875,46 +1878,45 @@ async fn inputs_over_the_wire() {
     assert_eq!(watch_until(&mut mine, "input_changed").await.last().unwrap()["input"]["state"], "open", "the declaration");
     assert_eq!(watch_until(&mut mine, "input_changed").await, vec![json!({"type": "input_changed", "input": answered})]);
 
-    // INPUT-9: a clear takes a source too (the host's `app` for a frame's
-    // `menger.input.clear`), recorded in the history.
-    let evs = collect(call(&client, "tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing", "source": "app"})).await).await;
+    // INPUT-9: a clear is recorded in the history with its source — the
+    // server's (ACCESS-14), as an answer's.
+    let evs = collect(call(&client, "tickets.inputs.clear", json!({"ticket": "ASK-2", "input": "landing", "source": "app"})).await).await;
     assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("input_changed")), "{evs:?}");
     assert_eq!((&evs[0]["input"]["state"], &evs[0]["input"]["answer"]), (&json!("open"), &Value::Null));
-    assert_eq!((&evs[0]["input"]["history"][1]["action"], &evs[0]["input"]["history"][1]["source"]), (&json!("cleared"), &json!("app")));
+    assert_eq!((&evs[0]["input"]["history"][1]["action"], &evs[0]["input"]["history"][1]["source"]), (&json!("cleared"), &json!("api")));
 
-    // Default source: api. Close, then a no-op close answers `input`.
-    let evs = collect(call(&client, "tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "Delete"}})).await).await;
+    // Close, then a no-op close answers `input`.
+    let evs = collect(call(&client, "tickets.inputs.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "Delete"}})).await).await;
     assert_eq!(evs[0]["input"]["answer"]["source"], "api");
-    assert_eq!(collect(call(&client, "tickets.close_input", json!({"ticket": "ASK-2", "input": "landing"})).await).await[0]["type"], "input_changed");
-    let evs = collect(call(&client, "tickets.close_input", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
+    assert_eq!(collect(call(&client, "tickets.inputs.close", json!({"ticket": "ASK-2", "input": "landing"})).await).await[0]["type"], "input_changed");
+    let evs = collect(call(&client, "tickets.inputs.close", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
     assert_eq!((evs.len(), evs[0]["type"].as_str(), evs[0]["input"]["state"].as_str()), (1, Some("input"), Some("closed")));
 
     // Refusals: one in-band error each, naming why; a ticket that is none is not_found.
     for (method, params, says) in [
-        ("tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "archive"}}), "is closed"),
-        ("tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing"}), "is closed"),
-        ("tickets.reopen_input", json!({"ticket": "ASK-2", "input": "nope"}), "declares no input 'nope'"),
+        ("tickets.inputs.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "archive"}}), "is closed"),
+        ("tickets.inputs.clear", json!({"ticket": "ASK-2", "input": "landing"}), "is closed"),
+        ("tickets.inputs.reopen", json!({"ticket": "ASK-2", "input": "nope"}), "declares no input 'nope'"),
     ] {
         let evs = collect(call(&client, method, params).await).await;
         assert_eq!(evs.len(), 1, "{method}: {evs:?}");
         assert_eq!(evs[0]["type"], "error", "{method}: {evs:?}");
         assert!(evs[0]["message"].as_str().unwrap().contains(says), "{method}: {}", evs[0]);
     }
-    // ACCESS-8: a source or a state that is none is refused at dispatch.
+    // ACCESS-8: a state or a value that is none is refused at dispatch.
     for (method, params, says) in [
-        ("tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "x"}, "source": "robot"}), "source: unknown answer source 'robot'"),
-        ("tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing", "source": "system"}), "source: unknown answer source 'system'"),
-        ("tickets.inputs", json!({"state": "pending"}), "state: unknown input state 'pending'"),
+        ("tickets.inputs.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "robot"}}), "value: "),
+        ("tickets.inputs.list", json!({"state": "pending"}), "state: unknown input state 'pending'"),
     ] {
         let message = invalid(&client, method, params).await;
         assert!(message.contains(says), "{method}: {message}");
     }
-    collect(call(&client, "tickets.reopen_input", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
-    let evs = collect(call(&client, "tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "text", "text": "x"}})).await).await;
+    collect(call(&client, "tickets.inputs.reopen", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
+    let evs = collect(call(&client, "tickets.inputs.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "text", "text": "x"}})).await).await;
     assert!(evs[0]["message"].as_str().unwrap().contains("the input is a choice and the value a text"), "{evs:?}");
-    let evs = collect(call(&client, "tickets.answer", json!({"ticket": "ASK-99", "input": "landing", "value": value})).await).await;
+    let evs = collect(call(&client, "tickets.inputs.answer", json!({"ticket": "ASK-99", "input": "landing", "value": value})).await).await;
     assert_eq!(evs, vec![json!({"type": "not_found", "id": "ASK-99"})]);
-    assert_eq!(collect(call(&client, "tickets.inputs", json!({"ticket": "ASK-99"})).await).await, vec![json!({"type": "not_found", "id": "ASK-99"})]);
+    assert_eq!(collect(call(&client, "tickets.inputs.list", json!({"ticket": "ASK-99"})).await).await, vec![json!({"type": "not_found", "id": "ASK-99"})]);
 
     // Filters.
     assert_eq!(inputs(json!({"state": "open"})).await, Vec::<Value>::new());
@@ -2623,7 +2625,7 @@ async fn labels_and_asking_are_filters_over_the_wire() {
     let members = collect(call(&client, "tickets.member", json!({"ids": ["HOME-2", "HOME-3", "HOME-4"], "filter": "asking or label needs-you"})).await).await;
     let matched: Vec<bool> = members.iter().map(|m| m["matched"].as_bool().unwrap()).collect();
     assert_eq!(matched, [true, true, false]);
-    let open = collect(call(&client, "tickets.inputs", json!({"state": "open", "filter": "asking or label needs-you"})).await).await;
+    let open = collect(call(&client, "tickets.inputs.list", json!({"state": "open", "filter": "asking or label needs-you"})).await).await;
     assert_eq!(open.len(), 1, "{open:?}");
     assert_eq!((open[0]["input"]["ticket"].as_str(), open[0]["input"]["question"].as_str()), (Some("HOME-2"), Some("Anything else?")));
 
@@ -2631,10 +2633,10 @@ async fn labels_and_asking_are_filters_over_the_wire() {
     let mut watch = call(&client, "tickets.watch", json!({"filter": "asking or label needs-you"})).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     answer(&client, "tickets.label", json!({"id": "HOME-4", "add": ["needs-you"]})).await; // enters
-    let answered = answer(&client, "tickets.answer", json!({"ticket": "HOME-2", "input": "notes", "value": {"type": "text", "text": "no"}})).await;
+    let answered = answer(&client, "tickets.inputs.answer", json!({"ticket": "HOME-2", "input": "notes", "value": {"type": "text", "text": "no"}})).await;
     assert_eq!(answered["type"], "input_changed", "{answered}"); // leaves: answered, not open
-    answer(&client, "tickets.clear_answer", json!({"ticket": "HOME-2", "input": "notes"})).await; // enters: open again
-    answer(&client, "tickets.close_input", json!({"ticket": "HOME-2", "input": "notes"})).await; // leaves: closed
+    answer(&client, "tickets.inputs.clear", json!({"ticket": "HOME-2", "input": "notes"})).await; // enters: open again
+    answer(&client, "tickets.inputs.close", json!({"ticket": "HOME-2", "input": "notes"})).await; // leaves: closed
     answer(&client, "tickets.label", json!({"id": "HOME-3", "remove": ["needs-you"]})).await; // leaves
     answer(&client, "tickets.amend", json!({"id": "HOME-1", "body": asks})).await; // enters: its body asks
     answer(&client, "tickets.amend", json!({"id": "HOME-4", "body": "marker"})).await;
@@ -2739,7 +2741,7 @@ async fn reads_take_the_lens_over_the_wire() {
     let inputs = |params: Value| {
         let client = &client;
         async move {
-            collect(call(client, "tickets.inputs", params).await)
+            collect(call(client, "tickets.inputs.list", params).await)
                 .await
                 .into_iter()
                 .map(|e| e["input"]["ticket"].as_str().unwrap().to_string())
@@ -2750,7 +2752,7 @@ async fn reads_take_the_lens_over_the_wire() {
     assert_eq!(inputs(json!({"filter": "ready"})).await, ["LN-2", "LX-1"], "LN-7 waits on LN-5");
     assert_eq!(inputs(json!({"filter": "kind build", "state": "open"})).await, ["LN-2", "LN-7"]);
     assert_eq!(inputs(json!({"filter": "kind scope", "epic": "ln"})).await, Vec::<String>::new());
-    let missing = collect(call(&client, "tickets.inputs", json!({"ticket": "LN-99", "filter": "ready"})).await).await;
+    let missing = collect(call(&client, "tickets.inputs.list", json!({"ticket": "LN-99", "filter": "ready"})).await).await;
     assert_eq!(missing, [json!({"type": "not_found", "id": "LN-99"})]);
 
     // member: one event per id, in the order asked, then done.
@@ -2787,7 +2789,7 @@ async fn reads_take_the_lens_over_the_wire() {
     for (method, params) in [
         ("tickets.find", json!({"query": "watch", "filter": "text \"watch\""})),
         ("tickets.ready_set", json!({"filter": "under LN-1 and text \"x\""})),
-        ("tickets.inputs", json!({"filter": "tag x and nonsense"})),
+        ("tickets.inputs.list", json!({"filter": "tag x and nonsense"})),
         ("tickets.member", json!({"ids": ["LN-2"], "filter": "status Bogus"})),
         ("tickets.find", json!({"query": "x", "filter": "nonsense"})),
     ] {
@@ -3308,7 +3310,7 @@ async fn delete_over_the_wire() {
 /// MENGER-39: the queue over the real protocol — `queue` answers `queued`
 /// and `watch` hears it; a requeue raises and never lowers; `queued` lists
 /// it most urgent first; a `watch { filter: "queued" }` hears it enter; a
-/// `close_input` of the named input unqueues it — `watch` hears `unqueued`
+/// `inputs close` of the named input unqueues it — `watch` hears `unqueued`
 /// (action `closed`) and the filter's `left`; `snooze`, `unqueue`'s
 /// `not_queued`, the refusals, and `history`'s queue records.
 #[tokio::test]
@@ -3366,9 +3368,9 @@ async fn the_queue_over_the_wire() {
     assert_eq!((rows.len(), rows[0]["entry"]["ticket"].as_str()), (2, Some("QUE-2")), "{rows:?}");
 
     // The answer alone does not unqueue; closing the named input does.
-    answer(&client, "tickets.answer", json!({"ticket": "QUE-2", "input": "landing", "value": {"type": "choice", "option": "archive"}, "source": "app"})).await;
+    answer(&client, "tickets.inputs.answer", json!({"ticket": "QUE-2", "input": "landing", "value": {"type": "choice", "option": "archive"}})).await;
     assert_eq!(collect(call(&client, "tickets.queued", json!({})).await).await.len(), 3, "answered, still queued");
-    answer(&client, "tickets.close_input", json!({"ticket": "QUE-2", "input": "landing"})).await;
+    answer(&client, "tickets.inputs.close", json!({"ticket": "QUE-2", "input": "landing"})).await;
     let heard = watch_until(&mut watch, "unqueued").await;
     let unq = heard.last().unwrap();
     assert_eq!((unq["id"].as_str(), unq["action"].as_str(), unq["by"].as_str()), (Some("QUE-2"), Some("closed"), Some("system")), "{unq}");
@@ -3434,7 +3436,7 @@ async fn await_reply_over_the_wire() {
     let mut wait = call(&agent, "tickets.await_reply", json!({"id": "AWR-2", "timeout_minutes": 5})).await;
     let first = next_events(&mut wait, 1).await.pop().unwrap();
     assert_eq!((first["type"].as_str(), first["ticket"].as_str(), first["queued"]["urgency"].as_str()), (Some("waiting"), Some("AWR-2"), Some("blocking")), "{first}");
-    answer(&owner, "tickets.answer", json!({"ticket": "AWR-2", "input": "agent-owner", "value": {"type": "choice", "option": "granter"}, "source": "app"})).await;
+    answer(&owner, "tickets.inputs.answer", json!({"ticket": "AWR-2", "input": "agent-owner", "value": {"type": "choice", "option": "granter"}})).await;
     let replied = next_events(&mut wait, 1).await.pop().unwrap();
     assert_eq!(replied["type"], "replied", "{replied}");
     assert_eq!(
@@ -3490,7 +3492,7 @@ async fn request_changes_over_the_wire() {
     let listed = collect(call(&client, "comments.list", json!({"intent": "changes"})).await).await;
     assert_eq!((listed.len(), listed[0]["id"].as_u64()), (2, c["id"].as_u64()), "{listed:?}");
     assert_eq!(collect(call(&client, "comments.list", json!({"intent": "comment"})).await).await.len(), 1, "a page event alone");
-    let inputs = collect(call(&client, "tickets.inputs", json!({"ticket": "RQC-2"})).await).await;
+    let inputs = collect(call(&client, "tickets.inputs.list", json!({"ticket": "RQC-2"})).await).await;
     assert_eq!(inputs[0]["input"]["state"], "open", "{inputs:?}");
     assert_eq!(collect(call(&client, "tickets.queued", json!({})).await).await[0]["count"], 0);
     let ev = answer(&client, "tickets.request_changes", json!({"id": "RQC-2", "body": "again"})).await;

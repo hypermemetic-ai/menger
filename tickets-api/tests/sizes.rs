@@ -182,6 +182,16 @@ fn comments_members_and_session_are_declarations() {
     }
 }
 
+/// ACCESS-14: and each child mounted on it — `tickets commits`,
+/// `tickets inputs` (a child built later adds its file).
+#[test]
+fn the_tickets_children_are_declarations() {
+    for file in ["tickets-api/src/activation/commits.rs", "tickets-api/src/activation/inputs.rs"] {
+        let found = off_the_frame(&std::fs::read_to_string(root().join(file)).unwrap());
+        assert!(found.is_empty(), "{file} is off the frame (ACCESS-13): {}\n{}", advice(file), found.join("\n"));
+    }
+}
+
 #[test]
 fn off_the_frame_names_a_long_body_and_a_description() {
     let long = format!("    #[plexus_macros::method(group = \"read\", description = \"x\")]\n    pub async fn get(&self) -> X {{\n{}    }}\n", "        a;\n".repeat(16));

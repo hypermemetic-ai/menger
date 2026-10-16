@@ -774,7 +774,7 @@
     }
   },
   {
-    "call": "tickets.answer",
+    "call": "tickets.inputs.answer",
     "items": [
       {
         "input": {
@@ -832,7 +832,7 @@
     }
   },
   {
-    "call": "tickets.clear_answer",
+    "call": "tickets.inputs.clear",
     "items": [
       {
         "input": {
@@ -884,7 +884,7 @@
     }
   },
   {
-    "call": "tickets.close_input",
+    "call": "tickets.inputs.close",
     "items": [
       {
         "input": {
@@ -943,7 +943,7 @@
     }
   },
   {
-    "call": "tickets.reopen_input",
+    "call": "tickets.inputs.reopen",
     "items": [
       {
         "input": {
@@ -2060,7 +2060,7 @@
     "params": {}
   },
   {
-    "call": "tickets.inputs",
+    "call": "tickets.inputs.list",
     "items": [
       {
         "input": {

@@ -164,6 +164,10 @@ export async function script(this: MengerElement): Promise<number> {
   for await (const ev of menger.tickets.inputs(undefined, undefined, 'open', ticket)) {
     if (ev.type === 'input') n += ev.input.history.length + (ev.input.answer?.atUnix ?? 0);
   }
+  // ACCESS-14: the `tickets inputs` child — `inputs.list`, the call above's same.
+  for await (const ev of this.menger.tickets.inputs.list(undefined, undefined, 'open', ticket)) {
+    if (ev.type === 'input') n += ev.input.history.length;
+  }
   const answer: Answer = await menger.input.submit('landing', { type: 'choice', option: 'archive' }, 'holds are real');
   const multi: Answer = await this.menger.input.submit('checks', { type: 'multi', options: ['unit'] });
   n += answer.atUnix + multi.atUnix + (answer.source === 'app' ? 1 : 0);

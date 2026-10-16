@@ -20,8 +20,9 @@
 //! synapse lists); every body a few lines through the helpers beside this
 //! file (`answered!` and `events::answer`, the `*_stream`s in `reads.rs`,
 //! `update.rs`, `delete.rs`, `queue.rs`, `watch.rs`). The children
-//! (ACCESS-14..18) are shells in `inputs.rs`, `commits.rs`, `nav.rs`,
-//! `work.rs`, `components.rs` until their builds fill and mount them.
+//! (ACCESS-14..18) are files of their own — `inputs.rs` mounted
+//! (ACCESS-14, `tickets.inputs.*`); `commits.rs`, `nav.rs`, `work.rs`,
+//! `components.rs` shells until their builds fill and mount them.
 //!
 //! `create` names one optional parameter per ticket field (AGS-19 added
 //! `parent`) — that is the wire surface talking, here and in the wrapper
@@ -34,7 +35,7 @@ use crate::types::{InputValue, Kind, Severity, Status, TicketsEvent};
 use crate::types::InputState;
 use crate::queue::Urgency;
 use crate::vocab::{
-    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputSource, Label, MengerPath, Message,
+    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, Label, MengerPath, Message,
     Query, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
@@ -91,6 +92,7 @@ impl Tickets {
     pub fn with_access(store: Arc<Store>, access: Access) -> Self {
         Self { store, access }
     }
+
 }
 
 // MENGER-29: everything but the methods lives beside this file —
@@ -165,8 +167,12 @@ pub use commits::CommitsClient;
 pub use commits::Commits;
 #[cfg(feature = "server")]
 mod components;
-#[cfg(feature = "server")]
+// ACCESS-14: inputs, filled and mounted (`tickets.inputs.<method>`). The
+// module is not gated: its attribute emits `InputsClient` in the client build.
 mod inputs;
+pub use inputs::InputsClient;
+#[cfg(feature = "server")]
+pub use inputs::Inputs;
 #[cfg(feature = "server")]
 mod nav;
 #[cfg(feature = "server")]
@@ -195,12 +201,11 @@ mod work;
     roles(
         viewer = [
             "health", "get", "list", "ready_set", "find", "search", "member", "groups", "components",
-            "inputs", "extents", "counts", "facets", "tree", "waves", "waves_under", "waves_to", "blockers", "watch", "history",
+            "extents", "counts", "facets", "tree", "waves", "waves_under", "waves_to", "blockers", "watch", "history",
             "queued", "await_reply"
         ],
         editor = [
-            viewer, "create", "set_status", "set_kind", "set_parent", "amend", "label", "update", "update_many", "answer",
-            "clear_answer", "close_input", "reopen_input",
+            viewer, "create", "set_status", "set_kind", "set_parent", "amend", "label", "update", "update_many",
             "queue", "unqueue", "snooze", "request_changes", "reshortcode", "archive", "restore"
         ],
     )
@@ -1044,162 +1049,10 @@ impl Tickets {
         listed(&self.store, &user, |store, user| store.components(user).into_iter().map(|component| TicketsEvent::Component { component }).collect())
     }
 
-    /// Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket.
-    ///
-    /// INPUT-3: the inputs store. Yields one `Input` per input of `ticket`
-    /// (every ticket's, without one) whose ticket is in the shortcode `epic`
-    /// and which is in `state` — its ticket, id, kind (`choice`, `multi`,
-    /// `text`), question, options (`{ value, label, recommended }`, the
-    /// body's order), recommendation, state (`open`, `answered`, `closed`,
-    /// `removed`), current answer (`{ value, rationale, source, at_unix }`,
-    /// `null` with none) and whole history, oldest first — in the store's
-    /// order of tickets, each ticket's inputs in its body's order and the
-    /// removed after. Nothing trails them; the stream's own `done` is the
-    /// whole answer. `NotFound` when `ticket` names no ticket; an unknown
-    /// `state` is an in-band `Error`. From the cache; `watch` keeps a
-    /// client's copy current with `InputChanged`.
-    ///
-    /// FILTER-15: `filter` (the language's text, FILTER-10) keeps the inputs
-    /// whose ticket the filter admits — each such ticket one lookup in the
-    /// filter's admitted cells; every other parameter as without it. A
-    /// filter not taken, or one that asks `under` or `text`, is one in-band
-    /// `error`; one that narrows nothing (empty, a display part alone) is no
-    /// filter.
-    #[plexus_macros::method(
-        group = "inputs",
-        values(state = ["open", "answered", "closed", "removed", "withdrawn"]),
-        example(note = "everything waiting on the owner", params = r#"{"state": "open"}"#),
-        example(note = "one ticket's inputs, answers and history", params = r#"{"ticket": "RETURNS-13"}"#)
-    )]
-    pub async fn inputs(
-        &self,
-        #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Only this ticket's inputs, e.g. INPUT-9 (optional).
-        ticket: Option<TicketRef>,
-        /// Only inputs of tickets in this shortcode (optional).
-        epic: Option<ShortcodeRef>,
-        /// Only inputs in this state: open | answered | closed | removed | withdrawn (optional; withdrawn: its ticket is canceled).
-        state: Option<InputState>,
-        /// A filter on the input's ticket, e.g. 'kind build' (FILTER-3's language; optional): only inputs of tickets it admits.
-        filter: Option<FilterText>,
-        /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
-        tz: Option<Zone>,
-    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(inputs_events(&self.store, &user, ticket, epic, state, filter, tz))
-    }
-
-    /// Answer an input: record a value (checked against its kind and options) with a rationale, a source and the time; yields input_changed.
-    ///
-    /// INPUT-3: answers an input — records `value` against `ticket`'s input
-    /// `input`, with its `rationale`, its `source` (`app`: a viewer's click,
-    /// which the host says; `api`, the default: anything else) and the
-    /// time. The value is typed by the input's kind and checked against the
-    /// options its body declares: `{"type": "choice", "option": …}` names
-    /// one, `{"type": "multi", "options": […]}` a set (kept in the body's
-    /// order, each once; empty: none ticked), `{"type": "text", "text": …}`
-    /// a reply, not blank. Every answer is a history entry — a changed one,
-    /// and the same one again. Yields exactly one event: `InputChanged` (the
-    /// input as it is now, its answer and history included), `NotFound` for
-    /// a ticket that is none, or an in-band `Error` — the ticket declares no
-    /// such input, the value does not answer it, it is closed, or it was
-    /// removed from its body — and nothing is written. Never touches the
-    /// body. `watch` carries the `InputChanged`.
-    #[plexus_macros::method(
-        group = "inputs",
-        target = "ticket",
-        values(source = ["api", "app"]),
-        example(note = "pick an option, saying why", params = r#"{"ticket": "RETURNS-13", "input": "landing", "value": {"type": "choice", "option": "archive"}, "rationale": "holds are real"}"#),
-        example(note = "reply in text", params = r#"{"ticket": "RETURNS-13", "input": "notes", "value": {"type": "text", "text": "ship it"}}"#),
-        example(note = "tick several (a list inside --value goes whole, with -p)", params = r#"{"ticket": "RETURNS-13", "input": "checks", "value": {"type": "multi", "options": ["unit", "wire"]}}"#)
-    )]
-    pub async fn answer(
-        &self,
-        #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Ticket id, e.g. INPUT-9.
-        ticket: TicketRef,
-        /// The input's id in that ticket's body, e.g. landing.
-        input: InputId,
-        /// Typed by the input's kind: {"type": "choice", "option": "archive"} | {"type": "multi", "options": ["a", "b"]} | {"type": "text", "text": "a reply"}; through synapse, --value.type choice --value.option archive.
-        value: InputValue,
-        /// Why (optional).
-        rationale: Option<Message>,
-        /// app (a viewer's click, said by the host) | api (default).
-        source: Option<InputSource>,
-    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        answered!(store = self.store.clone(), user, Some(ticket.to_string()) => {
-            let on = permit::<Editor>(&store, &user, &ticket)?;
-            let source = AnswerSource::from(source.unwrap_or_default());
-            Ok(input_event(store.answer(on, &input, value, rationale.and_then(Message::given), source).await, ticket.into_string()))
-        })
-    }
-
-    /// Clear an input's answer (open again; kept in its history, with a source); yields input_changed.
-    ///
-    /// INPUT-3: clears an input's answer — `open` again, the clear in its
-    /// history, with its `source` (INPUT-9: `app`, a viewer's click, which
-    /// the host says for a frame's `menger.input.clear`; `api`, the default:
-    /// anything else). Yields exactly one event: `InputChanged`; `Input`
-    /// when it held no answer (nothing written); `NotFound`; or an in-band
-    /// `Error` — no such input, closed, removed, an unknown source.
-    #[plexus_macros::method(group = "inputs", target = "ticket", values(source = ["api", "app"]))]
-    pub async fn clear_answer(
-        &self,
-        #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Ticket id, e.g. INPUT-9.
-        ticket: TicketRef,
-        /// The input's id in that ticket's body.
-        input: InputId,
-        /// app (a viewer's click, said by the host) | api (default).
-        source: Option<InputSource>,
-    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        answered!(store = self.store.clone(), user, Some(ticket.to_string()) => {
-            let on = permit::<Editor>(&store, &user, &ticket)?;
-            let source = AnswerSource::from(source.unwrap_or_default());
-            Ok(input_event(store.clear_answer(on, &input, source).await, ticket.into_string()))
-        })
-    }
-
-    /// Close an input: freeze its answer (or its lack of one); yields input_changed.
-    ///
-    /// INPUT-3: closes an input — frozen (a decision's DECIDED), with its
-    /// answer or without one; an answer or a clear is refused until it is
-    /// reopened. Yields exactly one event: `InputChanged`; `Input` when it
-    /// was closed already; `NotFound`; or an in-band `Error` — no such
-    /// input, removed.
-    #[plexus_macros::method(group = "inputs", target = "ticket")]
-    pub async fn close_input(
-        &self,
-        #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Ticket id, e.g. INPUT-9.
-        ticket: TicketRef,
-        /// The input's id in that ticket's body.
-        input: InputId,
-    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        answered!(store = self.store.clone(), user, Some(ticket.to_string()) => {
-            let on = permit::<Editor>(&store, &user, &ticket)?;
-            Ok(input_event(store.close_input(on, &input).await, ticket.into_string()))
-        })
-    }
-
-    /// Reopen a closed input; yields input_changed.
-    ///
-    /// INPUT-3: reopens a closed input — `answered` again when it holds an
-    /// answer, else `open`. Yields exactly one event: `InputChanged`;
-    /// `Input` when it was not closed; `NotFound`; or an in-band `Error` —
-    /// no such input, removed.
-    #[plexus_macros::method(group = "inputs", target = "ticket")]
-    pub async fn reopen_input(
-        &self,
-        #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Ticket id, e.g. INPUT-9.
-        ticket: TicketRef,
-        /// The input's id in that ticket's body.
-        input: InputId,
-    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        answered!(store = self.store.clone(), user, Some(ticket.to_string()) => {
-            let on = permit::<Editor>(&store, &user, &ticket)?;
-            Ok(input_event(store.reopen_input(on, &input).await, ticket.into_string()))
-        })
+    /// A ticket's inputs — `tickets.inputs.<method>`: list, answer, clear, close, reopen (INPUT-3, ACCESS-14).
+    #[plexus_macros::child]
+    pub fn inputs(&self) -> Inputs {
+        Inputs { store: self.store.clone(), access: self.access.clone() }
     }
 
     /// Each shortcode's last sequence (a deleted ticket's too: numbers are never reused) and the holes below it, in shortcode order — where each shortcode ends in the store's order.

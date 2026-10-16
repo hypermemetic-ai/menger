@@ -24,7 +24,7 @@
  * wire's spelling, in the typed client's (`at_unix` → `atUnix`), by the
  * generated runtime's own transform (`collectOne`), so what
  * `menger.input.submit` resolves to is the generated `Answer`, spelled as
- * `menger.tickets.inputs()` spells an input's answer.
+ * `menger.tickets.inputs.list()` spells an input's answer.
  *
  * scripts/sdk-codegen.sh bundles this file (bun, IIFE) with the generated
  * client into the region between the GENERATED markers of menger-sdk.js. The
@@ -35,6 +35,19 @@
 import { collectOne, type RpcClient } from './generated/rpc';
 import type { PlexusStreamItem, StreamMetadata } from './generated/types';
 import { createTicketsClient, type TicketsClient } from './generated/tickets/client';
+import { createTicketsInputsClient, type TicketsInputsClient } from './generated/tickets/inputs/client';
+
+/** ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
+ *  (`list`, and the writes, which the host refuses), and callable as
+ *  `list` itself, as `menger.tickets.inputs(epic?, filter?, state?,
+ *  ticket?, tz?)` was before the move (the same parameters, the same
+ *  order). */
+export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
+
+/** The typed `tickets` a frame gets: the generated client, its `inputs`
+ *  the child's ([`InputsChild`]) — hub-codegen gives a `#[child]` accessor
+ *  no client of its own on the parent. */
+export type FrameTickets = Omit<TicketsClient, 'inputs'> & { readonly inputs: InputsChild };
 
 /** The shell's `menger.call`: a read over the bridge, answered with the
  *  call's items (the wire's spelling), or rejected with the reason. */
@@ -43,7 +56,7 @@ export type BridgeCall = (method: string, params: unknown) => Promise<unknown[]>
 /** What the bundle hands the shell. */
 export interface Typed {
   /** The typed `tickets` client over `call`. */
-  tickets(call: BridgeCall): TicketsClient;
+  tickets(call: BridgeCall): FrameTickets;
   /** INPUT-4: `content` (the wire's spelling) in the typed client's — the
    *  generated runtime's key transform, as every typed event gets it. */
   typed<T>(content: unknown): Promise<T>;
@@ -53,6 +66,11 @@ export interface Typed {
  *  host's methods are its bare names (`waves`). */
 const NAMESPACE = 'tickets.';
 
+/** ACCESS-14: a child's method by the host's name for it — the frame's
+ *  read of inputs is still the host's `inputs` (its `menger.call` names
+ *  move with every client in ACCESS-20). */
+const HOST_NAMES: Record<string, string> = { 'inputs.list': 'inputs' };
+
 function metadata(method: string): StreamMetadata {
   return { provenance: ['menger', 'bridge', method], plexusHash: '', timestamp: Math.floor(Date.now() / 1000) };
 }
@@ -61,7 +79,8 @@ function metadata(method: string): StreamMetadata {
 function bridgeRpc(call: BridgeCall): RpcClient {
   return {
     async *call(method: string, params?: unknown): AsyncGenerator<PlexusStreamItem> {
-      const name = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
+      const bare = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
+      const name = HOST_NAMES[bare] ?? bare;
       let items: unknown[];
       try {
         items = await call(name, params ?? null);
@@ -86,7 +105,23 @@ async function* one(content: unknown): AsyncGenerator<PlexusStreamItem> {
 /** The shell's variable (menger-sdk.js declares it just above the region). */
 declare let mengerTyped: Typed | null;
 
+/** ACCESS-14: the generated client with `inputs` the child's ([`InputsChild`]). */
+function frameTickets(rpc: RpcClient): FrameTickets {
+  const tickets = createTicketsClient(rpc);
+  const child = createTicketsInputsClient(rpc);
+  const inputs: InputsChild = Object.assign(child.list.bind(child), {
+    list: child.list.bind(child),
+    answer: child.answer.bind(child),
+    clear: child.clear.bind(child),
+    close: child.close.bind(child),
+    reopen: child.reopen.bind(child),
+    schema: child.schema.bind(child),
+  });
+  Object.defineProperty(tickets, 'inputs', { value: inputs });
+  return tickets as unknown as FrameTickets;
+}
+
 mengerTyped = {
-  tickets: (call: BridgeCall) => createTicketsClient(bridgeRpc(call)),
+  tickets: (call: BridgeCall) => frameTickets(bridgeRpc(call)),
   typed: <T>(content: unknown): Promise<T> => collectOne<T>(one(content)),
 };

@@ -46,7 +46,7 @@ const [a, b] = [caller(await open(before)), caller(await open(after))];
 const content = (t) => JSON.parse(t.replace('"subscription":_', '"subscription":0')).params.result.content;
 const epics = (await a("tickets.extents", {})).map(content).map((e) => [e.epic, e.last_seq]);
 const anyId = () => { const [e, n] = epics[rand(epics.length)]; return `${e}-${1 + rand(n)}`; };
-const inputs = (await a("tickets.inputs", {})).map(content).map((e) => e.input);
+const inputs = (await a("tickets.inputs.list", {})).map(content).map((e) => e.input);
 const nothing = () => [{}, { filter: "" }, { filter: "· flat" }][rand(3)];
 
 const calls = [];
@@ -66,9 +66,9 @@ for (let i = 0; i < 200; i++) {
     ...(rand(3) === 0 ? { epic: epics[rand(epics.length)][0] } : {}),
     ...(states[rand(states.length)] ? { state: states[rand(states.length)] } : {}),
   };
-  calls.push([["tickets.inputs", p], ["tickets.inputs", { ...p, ...nothing() }]]);
+  calls.push([["tickets.inputs.list", p], ["tickets.inputs.list", { ...p, ...nothing() }]]);
 }
-calls.push([["tickets.inputs", { ticket: "NOPE-1" }], ["tickets.inputs", { ticket: "NOPE-1", filter: "" }]]);
+calls.push([["tickets.inputs.list", { ticket: "NOPE-1" }], ["tickets.inputs.list", { ticket: "NOPE-1", filter: "" }]]);
 calls.push([["tickets.find", { query: "x", after: "NOPE-1" }], ["tickets.find", { query: "x", after: "NOPE-1", filter: "" }]]);
 
 let items = 0;
