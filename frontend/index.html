@@ -2957,6 +2957,281 @@
     html:not([data-motion]) #qtray :is(.qedge, .qarrived) { display: none; }
     html:not([data-motion]) #qtray .qcard { animation: none; }
   }
+  /* ── LOOK-4: every other view in ARCHIVE-5's hand — the pages the mockup
+     does not draw (comments, inputs, deployments, the waves, components,
+     settings), the palette and the tray, drawn as its figure 5 draws a list
+     page: the head in the display face, the hint in the bar's small muted
+     voice, a list as one card on the stronger hairline with its rows on the
+     light one, a group's head on the panel, ids in the accent, references
+     as small ruled chips, states as cells, buttons mono upper case on a
+     hairline. The mockup's `--line-2` is `--tree-line`, its `--accent-ink`
+     is `--bg`. Tokens only (THEME-2); these rules restyle — no id, route,
+     key or behaviour moves, and the tray keeps all of its motion. ── */
+  /* The page's head: the mockup's `.ahead h1` and its sub-line. */
+  :is(#comments, #inputs, #deployments-page, #components, #settings, #waves-index) > h2,
+  #waves > h2.scope-h {
+    font-family: var(--font-display); font-size: calc(24px * var(--text-scale)); font-weight: var(--weight-strong);
+    letter-spacing: -.02em; line-height: 1.2; margin: 2px 0 8px;
+  }
+  #waves > h2.scope-h .title { font-weight: var(--weight-normal); color: var(--muted); }
+  :is(#comments, #inputs) .lede, #components > h2 + p {
+    color: var(--muted); font-size: calc(12px * var(--text-scale)); margin: 0 0 14px; max-width: 60rem;
+  }
+  #comments .lede kbd {
+    font: var(--weight-medium) calc(10px * var(--text-scale))/15px var(--mono); color: var(--muted); background: var(--card);
+    border: var(--border) solid var(--tree-line); border-bottom-width: 2px; border-radius: var(--radius-sm); padding: 0 5px;
+  }
+  /* A reference to a ticket: the mockup's `.chip` — mono, a ruled box, the accent. */
+  #comments .code, #inputs .code, #deployments-page a.code, #components .code, #waves .code, #waves-index .code, #waves .card .off {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: 0;
+    line-height: 1.5; color: var(--accent); background: transparent; border: var(--border) solid var(--tree-line);
+    border-radius: var(--radius-sm); padding: 0 6px; white-space: nowrap; text-decoration: none;
+  }
+  :is(#comments, #inputs, #deployments-page, #components, #waves, #waves-index) a.code:hover,
+  #waves .card .off:hover { color: var(--accent); border-color: var(--accent); background: var(--sel); }
+  /* A small action: the mockup's `.btn.sm.ghost` — mono upper case, a hairline. */
+  #comments .cflip, #comments .creset, .denv .dmore, #settings button:not(.link):not(.fill) {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase;
+    line-height: 1.5; padding: 4px 9px; background: transparent; color: var(--ink);
+    border: var(--border) solid var(--tree-line); border-radius: var(--radius); cursor: pointer;
+    transition: transform var(--motion-fast) var(--ease);
+  }
+  #comments .cflip:hover:not(:disabled), #comments .creset:hover:not(:disabled), .denv .dmore:hover,
+  #settings button:not(.link):not(.fill):hover:not(:disabled) { transform: translateY(-1px); border-color: var(--ink); color: var(--ink); }
+  #settings button.primary:not(:disabled) { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  #settings button.primary:not(:disabled):hover { color: var(--bg); border-color: var(--accent); }
+  /* A field: the mockup's `.flab` over its `.field`. */
+  #comments .cfield {
+    font-family: var(--mono); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-medium);
+    letter-spacing: .12em; text-transform: uppercase; color: var(--muted); gap: 5px;
+  }
+  #comments .cfield input, #comments .cfield select, #settings input#ws-url, #settings input#test-url, #settings input#keys-search, #settings select {
+    font-family: var(--mono); font-size: calc(12px * var(--text-scale)); letter-spacing: 0; text-transform: none;
+    color: var(--ink); background: var(--bg); border: var(--border) solid var(--tree-line); border-radius: var(--radius-md); padding: 5px 8px;
+  }
+  :is(#comments .cfield input, #comments .cfield select, #settings input, #settings select):focus { border-color: var(--accent); outline: none; }
+  #comments .cbar { gap: 8px 10px; margin: 0 0 14px; }
+  #comments .ccount { font-size: calc(11px * var(--text-scale)); margin: 0 0 8px; }
+
+  /* #/comments — one card, a row per comment (figure 5's rows), the open
+     ones marked with the selection's accent bar. */
+  #comments ul.crows {
+    gap: 0; background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius); overflow: hidden;
+  }
+  #comments .crow {
+    border: 0; border-bottom: var(--border) solid var(--line); border-radius: 0; background: transparent;
+    padding: 9px 12px 10px 14px; font-size: calc(13.5px * var(--text-scale));
+  }
+  #comments .crow:last-child { border-bottom: 0; }
+  #comments .crow[data-state="open"] { border-left: 0; box-shadow: inset 2px 0 var(--accent); }
+  #comments .crow[data-state="resolved"] { opacity: 1; color: var(--muted); }
+  #comments .chead { gap: 10px; font-family: var(--mono); font-size: calc(11.5px * var(--text-scale)); }
+  #comments a.cplace { font-family: var(--sans); font-size: calc(13px * var(--text-scale)); font-weight: var(--weight-strong); color: var(--ink); }
+  #comments a.cplace:hover { color: var(--accent); text-decoration: none; }
+  #comments .cstate, #inputs .ist {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-normal); letter-spacing: .04em;
+    text-transform: none; line-height: 1.6; padding: 0 8px; border: 0; border-radius: var(--radius-sm);
+  }
+  #comments .cstate[data-state="open"], #inputs .ist[data-state="open"] { background: var(--st-ready-bg); color: var(--st-ready-fg); }
+  #comments .cstate[data-state="resolved"], #inputs .ist[data-state="answered"] { background: var(--st-complete-bg); color: var(--st-complete-fg); }
+  #inputs .ist[data-state="closed"] { background: var(--st-doc-bg); color: var(--st-doc-fg); }
+  #inputs .ist[data-state="removed"] { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  #comments .cwho { color: var(--accent); font-size: calc(11.5px * var(--text-scale)); }
+  #comments .cwhen, #comments .cid { font-size: calc(11.5px * var(--text-scale)); }
+  #comments .cbody { margin: 5px 0 3px; line-height: 1.5; }
+  #comments .cexcerpt { font-style: italic; font-size: calc(12.5px * var(--text-scale)); }
+  #comments .cacts { margin-top: 6px; }
+  #comments .croute { font-size: calc(11px * var(--text-scale)); }
+
+  /* #/inputs — figure 5 itself: a group per state, its head on the panel
+     (the state as a cell, the count ruled), its inputs as rows under it. */
+  #inputs .ibar { background: transparent; border: 0; padding: 0; margin: 0 0 14px; }
+  #inputs .igroup {
+    margin: 0 0 16px; background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius); overflow: hidden;
+  }
+  #inputs .igroup h3 {
+    margin: 0; padding: 8px 12px; gap: 12px; align-items: center; background: var(--panel);
+    border-bottom: var(--border) solid var(--tree-line); font-size: calc(11.5px * var(--text-scale)); font-weight: var(--weight-normal);
+  }
+  #inputs .igroup .n {
+    margin-left: 0; font-size: calc(11px * var(--text-scale)); color: var(--muted);
+    border: var(--border) solid var(--tree-line); border-radius: var(--radius-sm); padding: 0 6px;
+  }
+  #inputs .igroup p.empty { margin: 0; padding: 8px 12px; font-size: calc(11.5px * var(--text-scale)); }
+  #inputs .igroup h3 + p.empty, #inputs .igroup:has(> p.empty) h3 { border-bottom-color: var(--line); }
+  #inputs ul.irows { gap: 0; }
+  #inputs .irow {
+    background: transparent; border: 0; border-bottom: var(--border) solid var(--line); border-radius: 0;
+    padding: 9px 12px 10px 14px;
+  }
+  #inputs .irow:last-child { border-bottom: 0; }
+  #inputs .irow[data-state="open"] { border-left: 0; box-shadow: inset 2px 0 var(--accent); }
+  #inputs .ihead { gap: 10px; }
+  #inputs .iid, #inputs .ikind { font-family: var(--mono); font-size: calc(11px * var(--text-scale)); }
+  #inputs .iq { font-size: calc(13.5px * var(--text-scale)); margin: 5px 0 6px; }
+  #inputs ul.iopts { gap: 6px; margin: 0 0 6px; }
+  #inputs .opt {
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale)); line-height: 1.6; padding: 0 8px;
+    background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-sm);
+  }
+  #inputs .opt.recommended { border-color: var(--accent); }
+  #inputs .opt .rec, #inputs .opt.recommended .rec {
+    font-size: calc(9.5px * var(--text-scale)); letter-spacing: .1em; text-transform: uppercase; color: var(--accent);
+  }
+  #inputs .opt.chosen { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: var(--weight-medium); }
+  #inputs .opt.chosen .rec { color: var(--bg); }
+  #inputs .irec, #inputs .ians { font-size: calc(12px * var(--text-scale)); }
+  #inputs .lbl { font-family: var(--mono); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: .12em; }
+  #inputs .src { color: var(--muted); background: transparent; border-color: var(--tree-line); border-radius: var(--radius-sm); }
+
+  /* #/deployments — each environment a card: its head on the panel, its
+     deploys as rows; Waiting for as the mockup's banner. */
+  .dproject h3 {
+    display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px;
+    font-family: var(--font-display); font-size: calc(16px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: -.01em;
+  }
+  .dproject h3 .n { font-family: var(--mono); font-size: calc(11.5px * var(--text-scale)); letter-spacing: 0; }
+  .dwaiting {
+    background: var(--card); border: var(--border) solid var(--tree-line); border-left: var(--border) solid var(--tree-line);
+    border-radius: var(--radius-lg); box-shadow: inset 2px 0 var(--accent); padding: 12px 14px 12px 16px; margin: 0 0 16px;
+  }
+  .dwaiting h4 { font-family: var(--sans); font-size: calc(14px * var(--text-scale)); font-weight: var(--weight-strong); gap: 6px; }
+  .dwaiting h4 .n { font-family: var(--mono); font-size: calc(12px * var(--text-scale)); }
+  .dwaiting .dsub { font-size: calc(11.5px * var(--text-scale)); }
+  .dlink { font-family: var(--mono); font-size: calc(11px * var(--text-scale)); }
+  .denvs { gap: 16px; }
+  .denv {
+    background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-xl); padding: 0; overflow: hidden;
+  }
+  .denv .dhead { margin: 0; padding: 10px 12px; background: var(--panel); border-bottom: var(--border) solid var(--tree-line); gap: 3px; }
+  .denv .druns { font-size: calc(12px * var(--text-scale)); }
+  .denv .dcount { margin: 0; padding: 8px 12px 0; font-size: calc(11px * var(--text-scale)); }
+  .denv ol.dtimeline { margin: 8px 12px 12px; padding-left: 10px; border-left: 2px solid var(--line); gap: 6px; }
+  .denv .dmore { margin: 0 12px 12px; }
+  .ddeploy { background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); padding: 7px 10px; }
+  .ddeploy:hover { border-color: var(--tree-line); }
+  .ddeploy .dline { gap: 4px 8px; }
+  .dstate {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-normal); letter-spacing: .04em;
+    line-height: 1.6; padding: 0 8px; border-radius: var(--radius-sm);
+  }
+  .envmark { border-radius: var(--radius-sm); }
+  ul.drows .tag { border-radius: var(--radius-sm); }
+
+  /* The waves: lanes on the panel under the stronger hairline, their heads
+     the mockup's small upper-case voice; a card a row's worth of words; the
+     layout switch a segmented tool. */
+  #waves .wbar { gap: 8px 14px; margin: 0 0 14px; font-size: calc(11.5px * var(--text-scale)); }
+  #waves .layout {
+    font-size: 0; display: inline-flex; border: var(--border) solid var(--tree-line); border-radius: var(--radius); overflow: hidden;
+  }
+  #waves button.seg {
+    font-size: calc(11px * var(--text-scale)); line-height: 1.5; padding: 2px 9px; background: var(--card); color: var(--muted);
+  }
+  #waves button.seg + button.seg { border-left: var(--border) solid var(--tree-line); }
+  #waves button.seg:hover { color: var(--accent); }
+  #waves button.seg.on { color: var(--accent); background: var(--sel); font-weight: var(--weight-normal); text-decoration: none; }
+  #waves .tally { font-size: calc(11px * var(--text-scale)); }
+  #waves .lanes { gap: 12px; }
+  #waves .lane { background: var(--panel); border-color: var(--tree-line); border-radius: var(--radius-lg); padding: 6px; }
+  #waves .lane-h {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-medium);
+    letter-spacing: .12em; padding: 3px 6px; margin: 0 0 6px;
+  }
+  #waves .lane-h .n {
+    font-size: calc(11px * var(--text-scale)); border: var(--border) solid var(--line); border-radius: var(--radius-sm); padding: 0 5px;
+  }
+  #waves ul.cards { gap: 6px; }
+  #waves .card { border-color: var(--line); border-radius: var(--radius); padding: 7px 10px 8px; }
+  #waves .card:hover { border-color: var(--tree-line); box-shadow: 0 4px 14px var(--shadow); }
+  #waves .card.at { border-color: var(--accent); box-shadow: inset 2px 0 var(--accent), 0 0 0 1px var(--accent); }
+  #waves .card .kind { font-family: var(--mono); font-size: calc(11px * var(--text-scale)); }
+  #waves .card a.title { font-size: calc(13.5px * var(--text-scale)); margin: 4px 0 6px; line-height: 1.35; }
+  #waves .card .foot .tag { border-radius: var(--radius-sm); font-size: calc(10.5px * var(--text-scale)); padding: 0 8px; letter-spacing: .04em; }
+  #waves .card .badge { border-radius: var(--radius-sm); background: transparent; border-color: var(--tree-line); color: var(--muted); }
+  #waves p.cycle { border-radius: var(--radius-lg); }
+
+  /* #/components — the board's table: one card, heads on the panel. */
+  #components table.comps {
+    margin-top: 6px; background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius);
+    font-size: calc(12.5px * var(--text-scale));
+  }
+  #components table.comps th {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted); background: var(--panel); padding: 8px 12px; border-bottom: var(--border) solid var(--tree-line);
+  }
+  #components table.comps td { padding: 8px 12px; }
+  #components tr.comp td { padding-bottom: 2px; }
+  #components tr.src td { padding-top: 0; }
+  #components a.tag { font-weight: var(--weight-medium); font-size: calc(12.5px * var(--text-scale)); }
+  #components .c-summary { font-family: var(--sans); font-size: calc(13px * var(--text-scale)); }
+  #components .orphan { border-color: var(--tree-line); border-radius: var(--radius-sm); }
+  #components .count { font-size: calc(11px * var(--text-scale)); }
+  #components details summary { font-size: calc(11px * var(--text-scale)); }
+  #components details pre { border-color: var(--line); border-radius: var(--radius-md); }
+  #components h3 {
+    font-family: var(--font-display); font-size: calc(16px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: -.01em; margin: 28px 0 8px;
+  }
+
+  /* Settings: each group the mockup's `.panel` — a card on the stronger
+     hairline, 8px corners, its name the small upper-case head inside it. */
+  #settings fieldset.group {
+    background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-xl);
+    padding: 14px 16px 16px; margin: 0 0 16px;
+  }
+  #settings fieldset.group > legend {
+    float: left; width: 100%; padding: 0; margin: 0 0 8px;
+    font-family: var(--mono); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: .12em;
+  }
+  #settings fieldset.group > legend + * { clear: both; }
+  #settings p.now { font-size: calc(12px * var(--text-scale)); }
+  #settings label { font-size: calc(12.5px * var(--text-scale)); }
+  #settings .recent { border-top-color: var(--line); font-size: calc(11.5px * var(--text-scale)); }
+
+  /* The palette: a menu card (LOOK-2's) — the query in the display face,
+     rows 5px 9px, the one under the keys tinted with the accent's bar, ids
+     in the accent, the hint a panel foot. */
+  #palette.dialog {
+    background: var(--card); border-color: var(--tree-line); border-radius: var(--radius-xl); box-shadow: 0 18px 50px var(--shadow);
+  }
+  #palette-input {
+    font-family: var(--font-display); font-size: calc(16px * var(--text-scale)); padding: 12px 14px;
+    background: var(--card); border-bottom-color: var(--tree-line);
+  }
+  #palette-list { padding: 5px; }
+  #palette-list li { padding: 4px 9px; gap: 10px; border-radius: var(--radius); font-size: calc(12px * var(--text-scale)); }
+  #palette-list li:hover { background: var(--hover); }
+  #palette-list li.hi { background: var(--row-sel); box-shadow: inset 2px 0 var(--accent); }
+  #palette-list li .code {
+    background: transparent; border: 0; padding: 0; min-width: 5.5em; color: var(--accent);
+    font-size: calc(11.5px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: 0;
+  }
+  #palette-list li .label { font-family: var(--sans); font-size: calc(13px * var(--text-scale)); }
+  #palette-list li.pal-head, #palette-list li.pal-wide { margin-top: 4px; border-top-color: var(--line); border-radius: 0; }
+  #palette-list li.pal-head {
+    font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: .12em; text-transform: uppercase;
+  }
+  #palette-list li .pal-out { border-color: var(--tree-line); border-radius: var(--radius-sm); }
+  #palette .hint {
+    background: var(--panel); border-top-color: var(--line); padding: 8px 14px; font-size: calc(11px * var(--text-scale));
+  }
+
+  /* The tray (MENGER-39 — drawn from the mockup's hand already): its sheet's
+     id the accent's plain words, its title the display face; the tabs, the
+     sheet's rise and every nudge, arrival and hover card as they were. */
+  #qtray .qsheet h4 { font-family: var(--font-display); letter-spacing: -.015em; }
+  #qtray .qsheet h4 a.code, #qtray .qsheet h4 .code { text-decoration: none; }
+  #qtray .qsheet h4 a.code:hover { text-decoration: underline; }
+  #qtray .qtab .u { border-radius: var(--radius-sm); }
+  #qtray .qbtn:disabled { background: transparent; color: var(--muted); border-color: var(--tree-line); }
+
+  /* At a phone's width: the head a size down, the gutters the shell's. */
+  @container (max-width: 40rem) {
+    :is(#comments, #inputs, #deployments-page, #components, #settings, #waves-index) > h2, #waves > h2.scope-h { font-size: calc(20px * var(--text-scale)); }
+    #comments .cfield { flex: 1 1 9rem; }
+    #comments .cfield input, #comments .cfield select { min-width: 0; width: 100%; }
+    #settings fieldset.group { padding: 12px; }
+  }
 </style>
 </head>
 <body></body>
