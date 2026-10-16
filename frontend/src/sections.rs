@@ -16,8 +16,9 @@
 //! `waiting`, answered-not-closed is `answered`, closed is `decided`; a
 //! removed or withdrawn input is not listed.
 //!
-//! **Its forms**, by the viewport's width: at ≥ 1920 (LOOK-7: the owner's
-//! full-HD minimum) a card in its own column, sticky; between 640 and 1920 a rail of ticks at the right edge
+//! **Its forms**, by the viewport's width: at ≥ 1760 (LOOK-7: the owner's
+//! full-HD width less 10em, 1920 − 160) a card in its own column, sticky;
+//! between 640 and 1760 a rail of ticks at the right edge
 //! that opens over the body; at ≤ 640 no dock but a pill above the tray
 //! (hiding while the reader scrolls down) that opens a bottom sheet, inputs
 //! first. A body with fewer than three sections and no input has none.
@@ -263,7 +264,7 @@ pub(crate) enum Form {
 }
 
 pub(crate) fn form(width: f64) -> Form {
-    if width >= 1920.0 {
+    if width >= 1760.0 {
         Form::Column
     } else if width > 640.0 {
         Form::Rail
@@ -774,7 +775,8 @@ mod tests {
     fn the_form_follows_the_width() {
         assert_eq!(form(2560.0), Form::Column);
         assert_eq!(form(1920.0), Form::Column);
-        assert_eq!(form(1919.0), Form::Rail);
+        assert_eq!(form(1760.0), Form::Column);
+        assert_eq!(form(1759.0), Form::Rail);
         assert_eq!(form(1440.0), Form::Rail);
         assert_eq!(form(768.0), Form::Rail);
         assert_eq!(form(641.0), Form::Rail);
