@@ -1424,6 +1424,15 @@
   .framed[data-view="mockup"] { max-width: none; }
   .framed[data-view="mockup"] .framed-stage { display: flex; flex-wrap: nowrap; gap: 24px; align-items: flex-start; padding: 4px; }
   .framed.is-full[data-view="mockup"] .framed-stage { justify-content: center; }
+  /* APP-42: what a mockup shows, said above it — the app's type, outside
+     every device; and the bar's quiet note when its page scrolls screens. */
+  .framed-caption { max-width: 46rem; padding: 0 0 .45rem; color: var(--ink); font-size: calc(.9rem * var(--text-scale)); line-height: 1.45; }
+  .framed-caption-title { margin: 0 0 .15rem; font-weight: var(--weight-strong); }
+  .framed-caption-text > :first-child { margin-top: 0; }
+  .framed-caption-text > :last-child { margin-bottom: 0; }
+  .framed-caption-text p { margin: 0 0 .4rem; }
+  .framed.is-full .framed-caption { max-width: none; padding-bottom: .3rem; }
+  .framed-note { color: var(--muted); font-style: italic; }
   .device { margin: 0; flex: none; }
   .device.hidden { display: none; }
   .device-label { display: flex; gap: .5rem; font-size: calc(.72rem * var(--text-scale)); color: var(--muted); padding: 0 0 .3rem; }

@@ -49,6 +49,14 @@
 //! under a referenced id that was none is fetched. The citing frame's
 //! re-render, resize and promotion move its boxes as they move cites'.
 //!
+//! **Its caption** (APP-42): the placeholder posts its `title` and
+//! `description` too (md.rs puts a fence's, and an element's
+//! `<m-description>`, there) — the body's own text, so handing it over
+//! reveals nothing new. The box draws it above the devices, in the app's
+//! DOM ([`present::Caption`]); for a `ref` with none, the referenced page's
+//! declared `description:` — read by the host, drawn by the host, never
+//! told to the citing frame (IDENTITY-36), which still hears only a height.
+//!
 //! **Failure is a named state** ([`state_text`]), in place of the devices:
 //! an unknown or unreadable ticket, a ticket that is no whole page, a
 //! malformed element, one past [`MAX_PER_FRAME`], one inside a mock.
@@ -68,7 +76,7 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::cite::{self, Fetched, Rect};
-use crate::present::{self, Decl, Mode};
+use crate::present::{self, Caption, Decl, Mode};
 use crate::{bridge, dom, frame, md, session};
 
 /// The most mockups one body draws: each is up to six frames, and a `ref`
@@ -165,9 +173,26 @@ pub(crate) fn resolve(source: &Source, fetched: Option<&Fetched>) -> Result<(Str
 }
 
 /// The declaration the mounted box is given: a mockup, at `widths` (the
-/// element's) or the page's declared devices.
-pub(crate) fn decl_for(widths: Option<&str>, declared: Option<&Decl>) -> Decl {
-    Decl { mode: Mode::Mockup, devices: present::mock_devices(widths, declared) }
+/// element's) or the page's declared devices; APP-42: captioned by the
+/// element's own `caption`, else the page's declared one.
+pub(crate) fn decl_for(widths: Option<&str>, caption: Caption, declared: Option<&Decl>) -> Decl {
+    Decl {
+        mode: Mode::Mockup,
+        devices: present::mock_devices(widths, declared),
+        caption: caption.or(declared.map(|d| &d.caption)),
+    }
+}
+
+/// What a placeholder posted (`menger:mockup`), as written — compared whole
+/// to tell a change from a move.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Posted {
+    pub(crate) reference: Option<String>,
+    pub(crate) widths: Option<String>,
+    pub(crate) source: Option<String>,
+    /// APP-42: its caption, as written.
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
 }
 
 /// `menger:mocked`'s payload past its type and channel — the one thing the
@@ -197,8 +222,7 @@ struct Entry {
     channel: String,
     n: u32,
     /// What the placeholder posted, to tell a change from a move.
-    posted: (Option<String>, Option<String>, Option<String>),
-    widths: Option<String>,
+    posted: Posted,
     source: Result<Source, String>,
     overlay: web_sys::HtmlElement,
     rect: Rect,
@@ -389,7 +413,8 @@ fn settle(e: &mut Entry) {
     };
     match resolved {
         Ok((page, declared)) => {
-            let decl = decl_for(e.widths.as_deref(), declared.as_ref());
+            let caption = Caption::of(e.posted.title.as_deref(), e.posted.description.as_deref());
+            let decl = decl_for(e.posted.widths.as_deref(), caption, declared.as_ref());
             if e.decl.get_untracked() != decl {
                 e.decl.set(decl);
             }
@@ -405,20 +430,11 @@ fn settle(e: &mut Entry) {
 }
 
 /// `menger:mockup` from the frame `citer` on `channel`: its placeholder `n`
-/// says `reference` / `widths` / `source` and sits at `rect`. A new or
-/// changed one is drawn (a `ref` fetched); a moved one is laid again.
-pub(crate) fn asked(
-    citer: web_sys::HtmlIFrameElement,
-    channel: String,
-    n: u32,
-    reference: Option<String>,
-    widths: Option<String>,
-    source: Option<String>,
-    rect: Rect,
-) {
+/// says what it `posted` and sits at `rect`. A new or changed one is drawn
+/// (a `ref` fetched); a moved one is laid again.
+pub(crate) fn asked(citer: web_sys::HtmlIFrameElement, channel: String, n: u32, posted: Posted, rect: Rect) {
     prune();
     let k = key(&channel, n);
-    let posted = (reference, widths, source);
     let same = BOXES.with(|b| b.borrow().get(&k).map(|e| e.posted == posted));
     match same {
         Some(true) => {
@@ -448,7 +464,7 @@ pub(crate) fn asked(
     let source = match over_cap(open) {
         Some(why) => Err(why),
         None if nested => Err(state_text(None, &State::Nested).unwrap_or_default()),
-        None => parse(posted.0.as_deref(), posted.2.as_deref()),
+        None => parse(posted.reference.as_deref(), posted.source.as_deref()),
     };
     let fetch = matches!(source, Ok(Source::Ref(_)));
     let observer = observe(&k, &overlay);
@@ -456,7 +472,6 @@ pub(crate) fn asked(
         citer,
         channel,
         n,
-        widths: posted.1.clone(),
         posted,
         source,
         overlay,
@@ -656,9 +671,9 @@ mod tests {
         let s = parse(None, Some(PAGE)).unwrap();
         let (page, declared) = resolve(&s, None).unwrap();
         assert_eq!((page.as_str(), declared), (PAGE, None));
-        let d = decl_for(Some("390,1440"), None);
+        let d = decl_for(Some("390,1440"), Caption::default(), None);
         assert_eq!((d.mode, d.devices), (Mode::Mockup, vec![Device { w: 390, h: 844 }, Device { w: 1440, h: 900 }]));
-        assert_eq!(decl_for(None, None).devices, Decl::default().devices);
+        assert_eq!(decl_for(None, Caption::default(), None).devices, Decl::default().devices);
     }
 
     /// By ref: the ticket's whole-document body, at its own declared widths
@@ -670,12 +685,12 @@ mod tests {
         let t = ticket("DESIGN-49", PAGE);
         let (page, declared) = resolve(&s, Some(&Fetched::Ticket(Box::new(t)))).unwrap();
         assert_eq!(page, PAGE);
-        assert_eq!(decl_for(None, declared.as_ref()).devices, vec![Device { w: 375, h: 844 }, Device { w: 1280, h: 800 }]);
-        assert_eq!(decl_for(Some("390"), declared.as_ref()).devices, vec![Device { w: 390, h: 844 }]);
+        assert_eq!(decl_for(None, Caption::default(), declared.as_ref()).devices, vec![Device { w: 375, h: 844 }, Device { w: 1280, h: 800 }]);
+        assert_eq!(decl_for(Some("390"), Caption::default(), declared.as_ref()).devices, vec![Device { w: 390, h: 844 }]);
         let fm = format!("---\nview: mockup\nwidths: 768\n---\n{PAGE}");
         let (page, declared) = page_of(&fm).unwrap();
         assert_eq!(page, PAGE);
-        assert_eq!(decl_for(None, Some(&declared)).devices, vec![Device { w: 768, h: 1024 }]);
+        assert_eq!(decl_for(None, Caption::default(), Some(&declared)).devices, vec![Device { w: 768, h: 1024 }]);
     }
 
     /// A ticket that cannot be read, or is no page, is its named line — and
@@ -698,6 +713,22 @@ mod tests {
         assert_eq!(state_text(Some(&s), &State::Shown), None);
         let bad = parse(None, None).unwrap_err();
         assert_eq!(state_text(None, &State::Invalid(bad.clone())), Some(bad));
+    }
+
+    /// APP-42: the element's caption is the box's; a `ref` with none takes
+    /// its page's declared description — drawn by the host, which tells the
+    /// citing frame only a height, as before.
+    #[test]
+    fn a_mockups_caption_is_its_own_else_its_pages() {
+        let own = Caption::of(Some("Checkout"), Some("The cart, one item."));
+        assert_eq!(decl_for(None, own.clone(), None).caption, own);
+        let fm = format!("---\nview: mockup\ndescription: The landing, dark.\n---\n{PAGE}");
+        let (_, declared) = page_of(&fm).unwrap();
+        assert_eq!(decl_for(None, Caption::default(), Some(&declared)).caption.description.as_deref(), Some("The landing, dark."));
+        assert_eq!(decl_for(None, own.clone(), Some(&declared)).caption, own);
+        // What the frame is told stays the height alone.
+        let reply = serde_json::to_value(mocked_reply(1, 300.0)).unwrap();
+        assert_eq!(reply.as_object().unwrap().len(), 2);
     }
 
     /// The body hears only a height; a body draws a bounded number.

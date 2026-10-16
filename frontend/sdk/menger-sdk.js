@@ -105,6 +105,11 @@
  *     HOST draws the devices over it (frontend/src/mockup.rs) — a
  *     referenced ticket's body never enters this document — and answers
  *     only the height (`menger:mocked`), which the placeholder takes.
+ *     APP-42 (2.2): a mockup is one view, and what it shows is said
+ *     outside it — `title="…"` and `description="…"` (and an
+ *     `<m-description>` child opening the element, or a fence's
+ *     `title=` / `description=`, which md.rs moves onto the placeholder)
+ *     are posted too, and the host draws them above the devices.
  *   - **a cited window's frame** (init `cite`: `{ field }` or `{ anchor }`)
  *     shows that one section of its body: everything but the element and
  *     its ancestors is hidden (the ancestors' own boxes invisible), and
@@ -239,8 +244,9 @@
  *   frame → host  menger:uncite { cite }                  it left the body
  *   host → frame  menger:cited { cite, height }           its window's
  *                 height in px — all the host says of it
- *   frame → host  menger:mockup { mock, ref, widths, source, rect } an
- *                 `<m-mockup>` (1.21): its number in this frame, its
+ *   frame → host  menger:mockup { mock, ref, widths, source, title,
+ *                 description, rect } an `<m-mockup>` (1.21; title and
+ *                 description 2.2, APP-42): its number in this frame, its
  *                 attributes as written (null when absent), its box — at
  *                 connect, on a change of an attribute, whenever it moves
  *   frame → host  menger:unmock { mock }                  it left the body
@@ -315,7 +321,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.1.0";
+  var VERSION = "2.2.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -2449,6 +2455,8 @@
       ref: el.getAttribute("ref"),
       widths: el.getAttribute("widths"),
       source: el.getAttribute("source"),
+      title: el.getAttribute("title"),
+      description: el.getAttribute("description"),
       rect: rect,
     });
   }
@@ -2478,7 +2486,7 @@
         "m-mockup",
         class extends HTMLElement {
           static get observedAttributes() {
-            return ["ref", "widths", "source"];
+            return ["ref", "widths", "source", "title", "description"];
           }
           connectedCallback() {
             var st = mocks.get(this);

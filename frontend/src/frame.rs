@@ -204,8 +204,11 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// ACCESS-20's 2.0 moves the reads onto the `tickets` children's paths —
 /// `menger.tickets.work.waves`, `.nav.groups`, `.inputs.list`,
 /// `.components.list`; `menger.call('work.waves')` — and refuses the 1.x
-/// names, naming the new one.
-pub(crate) const SDK_VERSION: &str = "2.1.0";
+/// names, naming the new one. APP-42's 2.2 has `<m-mockup>` post its
+/// `title` and `description` (`menger:mockup`), the caption the host draws
+/// above the devices; the page shim, in a mockup's frames, reports its
+/// page's height (`menger:extent`) for the bar's one-view note.
+pub(crate) const SDK_VERSION: &str = "2.2.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -669,6 +672,8 @@ pub(crate) enum Msg {
     Mockup,
     /// APP-29: an `<m-mockup>` left the body.
     Unmock,
+    /// APP-42: the page shim says how tall its page is, in px.
+    Extent { height: u32 },
     /// MENGER-14: a link in the body was clicked — its `href` as written,
     /// classified here (src/links.rs), never by the frame.
     Link,
@@ -706,6 +711,10 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:ticket-menu" => Some(Msg::TicketMenu),
         "menger:filter-everywhere" => Some(Msg::FilterEverywhere),
         "menger:sections" => Some(Msg::Sections),
+        "menger:extent" => {
+            let h = height.filter(|h| h.is_finite())?;
+            Some(Msg::Extent { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32 })
+        }
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -1468,7 +1477,21 @@ fn on_message(ev: web_sys::MessageEvent) {
             let text = |k: &str| field(k).and_then(|v| v.as_string());
             let r = field("rect").map(read_rect).unwrap_or_default();
             let rect = cite::Rect { x: r.x, y: r.y, w: r.w, h: r.h };
-            mockup::asked(frame, channel, n as u32, text("ref"), text("widths"), text("source"), rect);
+            let posted = mockup::Posted {
+                reference: text("ref"),
+                widths: text("widths"),
+                source: text("source"),
+                title: text("title"),
+                description: text("description"),
+            };
+            mockup::asked(frame, channel, n as u32, posted, rect);
+        }
+        // APP-42: a device's frame says how tall its page is — only a frame
+        // held to its device's screen counts (the bar's one-view note).
+        Some(Msg::Extent { height }) => {
+            if frame.has_attribute("data-fixed") {
+                present::extent(&frame, height);
+            }
         }
         Some(Msg::Unmock) => {
             if let Some(n) = field("mock").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) {
@@ -2122,10 +2145,17 @@ mod tests {
         let define = SDK_JS.find(&format!("CE.define(\n        \"{}\"", md::MOCKUP_TAG)).expect("m-mockup defined");
         let sync = SDK_JS.find("if (Array.isArray(init.components)) sync(init.components);").unwrap();
         assert!(define < sync, "m-mockup is defined before the registry's names");
-        assert!(SDK_JS.contains("return [\"ref\", \"widths\", \"source\"];"), "the attributes it watches");
+        assert!(SDK_JS.contains("return [\"ref\", \"widths\", \"source\", \"title\", \"description\"];"), "the attributes it watches");
         let at = SDK_JS.find("function mockReport(el, force) {").unwrap();
         let body = &SDK_JS[at..at + SDK_JS[at..].find("\n  }\n").unwrap()];
-        for attr in ["el.getAttribute(\"ref\")", "el.getAttribute(\"widths\")", "el.getAttribute(\"source\")", "post(\"menger:mockup\""] {
+        for attr in [
+            "el.getAttribute(\"ref\")",
+            "el.getAttribute(\"widths\")",
+            "el.getAttribute(\"source\")",
+            "el.getAttribute(\"title\")",
+            "el.getAttribute(\"description\")",
+            "post(\"menger:mockup\"",
+        ] {
             assert!(body.contains(attr), "{attr}: {body}");
         }
         let at = SDK_JS.find("function mockedHeight(m) {").unwrap();
@@ -2200,6 +2230,9 @@ mod tests {
         assert_eq!(parse_msg("menger:size", Some(1e12), Some(true)), Some(Msg::Size { height: 50_000, settled: true }));
         assert_eq!(parse_msg("menger:size", Some(f64::NAN), Some(true)), None);
         assert_eq!(parse_msg("menger:size", None, Some(true)), None);
+        assert_eq!(parse_msg("menger:extent", Some(5000.4), None), Some(Msg::Extent { height: 5001 }));
+        assert_eq!(parse_msg("menger:extent", Some(f64::NAN), None), None);
+        assert_eq!(parse_msg("menger:extent", None, None), None);
         assert_eq!(parse_msg("menger:call", None, None), Some(Msg::Call));
         assert_eq!(parse_msg("menger:navigate", None, None), Some(Msg::Navigate));
         assert_eq!(parse_msg("menger:inspect", None, None), Some(Msg::Inspect));
