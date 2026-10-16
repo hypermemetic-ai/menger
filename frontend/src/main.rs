@@ -1098,7 +1098,17 @@ fn Board(
                                 <td>
                                     {move || ticket.with(|t| t.severity).map(|s| view! { <span data-tag=tags::Tag::severity(s).attr()>{s.to_string()}</span> })}
                                 </td>
-                                <td title=move || ticket.with(|t| t.blocked_by.join(" "))>{move || ticket.with(|t| t.blocked_by.join(" "))}</td>
+                                // LOOK-2: each blocker a chip (ARCHIVE-5's `.chip`); the
+                                // cell's text stays the ids, a space apart.
+                                <td title=move || ticket.with(|t| t.blocked_by.join(" "))>
+                                    {move || ticket.with(|t| {
+                                        t.blocked_by
+                                            .iter()
+                                            .enumerate()
+                                            .map(|(i, b)| view! { {(i > 0).then_some(" ")}<span class="chip blk">{b.to_string()}</span> })
+                                            .collect_view()
+                                    })}
+                                </td>
                             </tr>
                         }
                         .into_any()

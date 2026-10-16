@@ -186,9 +186,9 @@ pub(crate) const KEEP: usize = 400;
 /// The most one page asks for.
 pub(crate) const MAX_PAGE: usize = 500;
 
-/// The nav's row pitch (px) until a row has been measured: 12.5 px type at a
-/// 1.55 line height (index.html), as the tree's.
-const PITCH_GUESS: f64 = 19.375;
+/// The nav's row pitch (px) until a row has been measured: a row is 24px
+/// tall (index.html, LOOK-2), as the tree's.
+const PITCH_GUESS: f64 = 24.0;
 
 /// Where a page starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
