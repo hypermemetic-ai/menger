@@ -668,8 +668,10 @@ async fn without_jsdom_each_call_names_it_and_the_command() {
             panic!("one in-band error: {events:?}");
         };
         assert!(message.starts_with("jsdom is not installed"), "{message}");
+        // node names the directory by its real path (a /home symlink resolved)
+        let real = dir.path().canonicalize().unwrap();
         assert!(
-            message.contains(&format!("npm ci --prefix {}", dir.path().display())),
+            message.contains(&format!("npm ci --prefix {}", real.display())),
             "{message}"
         );
     }
