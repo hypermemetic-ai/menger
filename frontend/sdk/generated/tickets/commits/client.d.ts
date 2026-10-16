@@ -22,6 +22,8 @@ export interface TicketsCommitsClient {
   `watch` carries every `CommitsLinked` that added something. ACT-2:
   `ids` instead of `id` links them to each, in one write, all or none,
   one `CommitsLinked` per ticket (`cells_stream`).
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `commits.link` on the scope of `id`
      */
     link(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): AsyncGenerator<TicketsEvent>;
@@ -40,6 +42,8 @@ export interface TicketsCommitsClient {
   broadcasts nothing — or `NotFound`; an entry that is not a reference
   is `invalid_params` naming it. `watch` carries every
   `CommitsUnlinked` that removed something.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `commits.unlink` on the scope of `id`
      */
     unlink(commits: CommitRef[], id: TicketRef): AsyncGenerator<TicketsEvent>;

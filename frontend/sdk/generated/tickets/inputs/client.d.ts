@@ -21,6 +21,8 @@ export interface TicketsInputsClient {
   such input, the value does not answer it, it is closed, or it was
   removed from its body — and nothing is written. Never touches the
   body. `tickets.watch` carries the `InputChanged`.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `inputs.answer` on the scope of `ticket`
      */
     answer(input: InputId, ticket: TicketRef, value: InputValue, rationale?: Message | null): AsyncGenerator<TicketsEvent>;
@@ -32,6 +34,8 @@ export interface TicketsInputsClient {
   Yields exactly one event: `InputChanged`; `Input` when it held no
   answer (nothing written); `NotFound`; or an in-band `Error` — no
   such input, closed, removed.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `inputs.clear` on the scope of `ticket`
      */
     clear(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent>;
@@ -43,6 +47,8 @@ export interface TicketsInputsClient {
   reopened. Yields exactly one event: `InputChanged`; `Input` when it
   was closed already; `NotFound`; or an in-band `Error` — no such
   input, removed.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `inputs.close` on the scope of `ticket`
      */
     close(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent>;
@@ -68,6 +74,8 @@ export interface TicketsInputsClient {
   filter not taken, or one that asks `under` or `text`, is one in-band
   `error`; one that narrows nothing (empty, a display part alone) is no
   filter.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `inputs.list` anywhere it is held
      */
     list(epic?: ShortcodeRef | null, filter?: FilterText | null, state?: InputState | null, ticket?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -78,6 +86,8 @@ export interface TicketsInputsClient {
   answer, else `open`. Yields exactly one event: `InputChanged`;
   `Input` when it was not closed; `NotFound`; or an in-band `Error` —
   no such input, removed.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `inputs.reopen` on the scope of `ticket`
      */
     reopen(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent>;

@@ -106,44 +106,6 @@ cat >"$gen/synapse.config.json" <<EOF
   }
 }
 EOF
-# ACCESS-13: hub-codegen through a filter — a parameter the server injects
-# (an IR param with a pdSource: the frame's `auth` and resolved `user`) is
-# none a client sends, and left in it would take a place in the generated
-# methods' positional arguments (which are in name order), moving every
-# argument after it. The IR is the last argument hub-codegen is given.
-cat >"$gen/hub-codegen-sent" <<'WRAP'
-#!/bin/sh
-set -eu
-real="$(command -v hub-codegen)"
-last=""
-for a in "$@"; do last="$a"; done
-if [ -f "$last" ] && [ "${last%.json}" != "$last" ]; then
-  sent="${last%.json}.sent.json"
-  node -e '
-    const fs = require("fs");
-    const ir = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    for (const m of Object.values(ir.irMethods ?? {})) m.mdParams = (m.mdParams ?? []).filter((p) => !p.pdSource);
-    // ACCESS-15: a #[child] mount (tickets.commits, role static_child) is
-    // a namespace, not a method a client calls: its methods are generated
-    // as the child client (tickets/commits/), the mount is not.
-    for (const [k, m] of Object.entries(ir.irMethods ?? {})) {
-      const kind = m.mdRole?.kind;
-      if (kind === "static_child" || kind === "dynamic_child") delete ir.irMethods[k];
-    }
-    fs.writeFileSync(process.argv[2], JSON.stringify(ir));
-  ' "$last" "$sent"
-  n=$#
-  i=0
-  for a in "$@"; do
-    i=$((i + 1))
-    [ "$i" -lt "$n" ] && set -- "$@" "$a"
-  done
-  shift "$n"
-  exec "$real" "$@" "$sent"
-fi
-exec "$real" "$@"
-WRAP
-chmod +x "$gen/hub-codegen-sent"
 # The SDK's own types, checked against the generated ones: menger.d.ts
 # resolves, and a component script written against it typechecks.
 cat >"$gen/check.ts" <<'EOF'
@@ -208,7 +170,8 @@ for (const m of Object.values(ir.irMethods)) {
   // under `tickets.commits`), not a method.
   if (['static_child', 'dynamic_child'].includes(m.mdRole?.kind)) continue;
   // ACCESS-13: a parameter the server injects (pdSource: auth, the frame's
-  // user) is none a client sends.
+  // user) is none a client sends — hub-codegen ≥ 0.5.0 leaves it out of the
+  // generated methods (SYNAPSE-CC-2), and the manifest leaves it out too.
   (activations[m.mdNamespace] ??= {})[m.mdName] = m.mdParams.filter((p) => !p.pdSource).map((p) => p.pdName).sort();
 }
 const sorted = (o) => Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
@@ -246,7 +209,12 @@ docker run --rm --network host \
   --user "$(id -u):$(id -g)" \
   -v "$gen:/work" -w /work \
   "$image" sh -euc '
-    synapse-cc build --hub-codegen /work/hub-codegen-sent >&2
+    # SYNAPSE-CC-2: an older hub-codegen writes the server-injected params
+    # (auth, user) into every generated method as optional `unknown`s, and
+    # a #[child] mount as one `name(): Promise<unknown>` method.
+    set -- $(hub-codegen --version)
+    case "$2" in 0.[0-4].*) echo "sdk-codegen: hub-codegen $2 in the image predates 0.5.0 — rebuild it (../dockerfiles/plexus-codegen/build.sh)" >&2; exit 1 ;; esac
+    synapse-cc build >&2
     tsc=/work/generated/node_modules/.bin/tsc
     (cd generated && "$tsc" -p tsconfig.json --noEmit false --declaration --emitDeclarationOnly --outDir ../decl)
     "$tsc" -p tsconfig.check.json

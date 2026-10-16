@@ -53,8 +53,8 @@ export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
 export type ComponentsChild = TicketsComponentsClient & TicketsComponentsClient['list'];
 
 /** The typed `tickets` a frame gets: the generated client, its `inputs`
- *  the child's ([`InputsChild`]) — hub-codegen gives a `#[child]` accessor
- *  no client of its own on the parent — and (ACCESS-17) `tickets work` as
+ *  the child's ([`InputsChild`]) — the generated parent's `inputs` sub-client
+ *  (hub-codegen ≥ 0.5.0), made callable as `list` — and (ACCESS-17) `tickets work` as
  *  `work`, with that child's `waves` and `blockers` kept where a body has
  *  always called them (`menger.tickets.waves([…])`) until ACCESS-20 moves
  *  the frames' SDK — and (ACCESS-16) its child `nav` (`tickets.nav.groups`, …)

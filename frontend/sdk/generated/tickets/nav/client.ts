@@ -23,6 +23,8 @@ filter not taken, or one that asks `under` or `text`, is one in-band
 `error` and nothing else. FILTER-24: `keep` (a ticket id inside the
 caller's reach) is counted as a match whatever the filter says of it —
 once — as `list { filter, keep }` pages it.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `nav.counts` anywhere it is held
    */
   counts(filter?: FilterText | null, keep?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -61,6 +63,8 @@ value: one `Facet { field, value, held }` per value with `held` above
 shortcode order — then the stream's done. A sum over kept cell
 counts, never a ticket. A filter not taken, or one that asks `under`
 or `text`, is one in-band `error` and nothing else.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `nav.facets` anywhere it is held
    */
   facets(base?: FilterText | null, filter?: FilterText | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -97,6 +101,8 @@ after them: the stream's own `done` ends it. Each id is one lookup in
 the filter's admitted cells, never a test of the ticket. At most
 1,000 ids: more, a filter not taken, or one that asks `under` or
 `text`, is one in-band `error` and nothing else.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `nav.member` anywhere it is held
    */
   member(filter: FilterText, ids: TicketRef[], tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -141,6 +147,8 @@ own nearest matches answered under it rather than above, a hosted
 shortcode placed at it; its node still says `matched: false`. A
 match, a shortcode's root, an id naming no ticket, or one outside the
 caller's reach changes nothing.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `nav.tree` anywhere it is held
    */
   tree(filter: FilterText, after?: Cursor | null, epic?: ShortcodeRef | null, keep?: TicketRef | null, limit?: number | null, matchesOnly?: boolean | null, parent?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;

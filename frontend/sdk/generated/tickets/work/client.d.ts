@@ -16,6 +16,8 @@ export interface TicketsWorkClient {
   store, an id that names no ticket — is neither resolved nor named:
   the answer ends with one `HiddenBlockers { count }` saying how many,
   yielded only when there are any.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `work.blockers` anywhere it is held
      */
     blockers(id: TicketRef): AsyncGenerator<TicketsEvent>;
@@ -38,6 +40,8 @@ export interface TicketsWorkClient {
   or one that asks `under` or `text`, is one in-band `error`; one that
   narrows nothing (empty, a display part alone) is no filter.
   ACCESS-17: was `tickets ready_set`.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `work.ready` anywhere it is held
      */
     ready(after?: Cursor | null, epic?: ShortcodeRef | null, filter?: FilterText | null, limit?: number | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -68,6 +72,8 @@ export interface TicketsWorkClient {
   nothing else. WAVE-6: each placement is the one the store keeps on the
   row (the same rule, kept current by every write that moves one); rows
   only.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `work.waves` anywhere it is held
      */
     waves(epics: ShortcodeRef[], kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
@@ -75,6 +81,8 @@ export interface TicketsWorkClient {
      * The wave board whose final state is one ticket: its blockers transitively (and a scope's open descendants) placed in waves, done blockers done, the ticket alone in the last wave; cycles named; then the wave counts.
   
   MENGER-31: the wave board whose final state is `id` (activation/waves.rs).
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `work.waves_to` anywhere it is held
      */
     wavesTo(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
@@ -82,6 +90,8 @@ export interface TicketsWorkClient {
      * The order of work under one ticket: each ticket of its subtree placed in its wave (or missing_blocker, or done) with what it waits on, then the wave counts.
   
   MENGER-31: the wave board of `id`'s subtree (activation/waves.rs).
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
      * @requires `work.waves_under` anywhere it is held
      */
     wavesUnder(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;

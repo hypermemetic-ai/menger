@@ -6,9 +6,29 @@ import { extractData, collectOne } from '../rpc';
 import type { CallerSource, Cursor, DeleteChildren, FilterText, InputId, Label, MengerPath, Message, Reason, Severity, SeverityChange, Status, TicketsEvent, Urgency, Zone } from './types';
 import type { Body, Kind, Query, ShortcodeRef, TicketRef, Title } from '../notes/types';
 import type { OrgId } from '../orgs/types';
+import type { TicketsCommitsClient } from '../tickets/commits/client';
+import { createTicketsCommitsClient } from '../tickets/commits/client';
+import type { TicketsComponentsClient } from '../tickets/components/client';
+import { createTicketsComponentsClient } from '../tickets/components/client';
+import type { TicketsInputsClient } from '../tickets/inputs/client';
+import { createTicketsInputsClient } from '../tickets/inputs/client';
+import type { TicketsNavClient } from '../tickets/nav/client';
+import { createTicketsNavClient } from '../tickets/nav/client';
+import type { TicketsWorkClient } from '../tickets/work/client';
+import { createTicketsWorkClient } from '../tickets/work/client';
 
 /** Typed client interface for tickets plugin */
 export interface TicketsClient {
+  /** The commits that finished a ticket — `tickets.commits.link` / `unlink` (ACCESS-15). */
+  readonly commits: TicketsCommitsClient;
+  /** The component registry — `tickets.components.list` (COMP-3, ACCESS-18), through the caller's reach. */
+  readonly components: TicketsComponentsClient;
+  /** A ticket's inputs — `tickets.inputs.<method>`: list, answer, clear, close, reopen (INPUT-3, ACCESS-14). */
+  readonly inputs: TicketsInputsClient;
+  /** ACCESS-16: what the nav and the menus ask — groups, extents, tree, counts, facets, member. */
+  readonly nav: TicketsNavClient;
+  /** The order of work — `tickets work ready | waves | waves_under | waves_to | blockers` (ACCESS-17, activation/work.rs). */
+  readonly work: TicketsWorkClient;
   /**
    * Replace a ticket's title and/or body (whole values); yields amended { ticket, changed }.
 
@@ -25,6 +45,8 @@ moves the component registry — its ` ```component ` blocks and `<tag`
 references — and `watch` says so after the `Amended`; a malformed
 block, or a name another ticket defines, is an in-band `Error` (the
 latter naming that ticket) and nothing is written, title included.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.amend` on the scope of `id`
    */
   amend(id: TicketRef, body?: Body | null, title?: Title | null): AsyncGenerator<TicketsEvent>;
@@ -32,6 +54,8 @@ latter naming that ticket) and nothing is written, title included.
    * Archive tickets — each named (or a filter's) with its whole subtree, live work included and named (live); out of every view unless a filter says archived; status unchanged; yields archived { ids, live, unqueued, mark, dry_run }.
 
 ARCHIVE-2 ([`crate::store::ArchiveAnswer`]'s module): a mark apart from status — status, kind, place and blockers stay; one already archived is a no-op; a queued one leaves the queue. dry_run: the answer, nothing written.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.archive` on the scope of `ids`
    */
   archive(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -39,6 +63,8 @@ ARCHIVE-2 ([`crate::store::ArchiveAnswer`]'s module): a mark apart from status �
    * Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes.
 
 APP-24: after queueing, an agent waits here — `waiting`, then one `replied` (or `timed_out`), then the end.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.await_reply` anywhere it is held
    */
   awaitReply(id: TicketRef, input?: InputId | null, since?: number | null, timeoutMinutes?: number | null): AsyncGenerator<TicketsEvent>;
@@ -73,6 +99,8 @@ not a component name, a name defined twice, and a name another
 ticket defines are in-band errors — the last naming that ticket —
 with nothing stored or allocated.
 Yields exactly one event: `Created` or `Error`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.create` anywhere it is held
    */
   create(epic: ShortcodeRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, kind?: Kind | null, org?: OrgId | null, parent?: TicketRef | null, path?: MengerPath | null, severity?: Severity | null): AsyncGenerator<TicketsEvent>;
@@ -84,6 +112,8 @@ them unless told what moves; a tombstone kept, the body 30 days. The
 rules, the write and the events are [`crate::store::Deleted`]'s
 module's. Admin only. Yields `Deleted { ids, tombstones }`, or one
 `Error` naming every refused ticket and why.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.delete` on the scope of `ids`
    */
   delete(children?: DeleteChildren | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null, unblock?: boolean | null): AsyncGenerator<TicketsEvent>;
@@ -109,6 +139,8 @@ without it — the needle tested only on the candidates the filter's
 cells admit, never on the rest of the store. A filter not taken, or
 one that asks `under` or `text`, is one in-band `error`; one that
 narrows nothing (empty, a display part alone) is no filter.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.find` anywhere it is held
    */
   find(query: Query, after?: Cursor | null, filter?: FilterText | null, limit?: number | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -119,6 +151,8 @@ Yields exactly one event: `Ticket` if found, `NotFound` otherwise.
 WAVE-10: `id` may be a path address, `<SHORTCODE>/<path>` — the
 shortcode case-insensitive, the path exact — naming the one ticket of
 that shortcode that holds the path; `NotFound` carries the address.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.get` anywhere it is held
    */
   get(id: TicketRef): AsyncGenerator<TicketsEvent>;
@@ -146,6 +180,8 @@ before it has a history), and for a canceled ticket the descendants
 `set_status { restore_children: true }` would put back. `NotFound` for
 an id that names no ticket (or one out of the caller's reach). From
 the cache; `watch` carries each new `Transition`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.history` anywhere it is held
    */
   history(id: TicketRef): AsyncGenerator<TicketsEvent>;
@@ -166,6 +202,8 @@ label, or a result past 16; an error writes nothing. Moves
 else. `watch` carries every `LabelsChanged` that moved something.
 ACT-2: `ids` instead of `id` moves each one's, in one write, all or
 none, one `LabelsChanged` per ticket (`cells_stream`).
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.label` on the scope of `id`
    */
   label(add?: Label[] | null, id?: TicketRef | null, ids?: TicketRef[] | null, remove?: Label[] | null): AsyncGenerator<TicketsEvent>;
@@ -206,6 +244,8 @@ is listed and counted as a match whatever the filter says of it — at
 its place, in `first` and `remaining` — when it is inside `epic`,
 `status` and `parent` and inside the caller's reach; otherwise, and
 without a filter, it changes nothing.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.list` anywhere it is held
    */
   list(after?: Cursor | null, at?: number | null, epic?: ShortcodeRef | null, filter?: FilterText | null, keep?: TicketRef | null, limit?: number | null, parent?: TicketRef | null, status?: Status | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -215,6 +255,8 @@ without a filter, it changes nothing.
 MENGER-39: puts a ticket in front of the owner — at an urgency, for a
 reason; `blocking` names the input that answers it. Queued again: the
 urgency raised, never lowered. Yields one `queued`, or an `error`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.queue` on the scope of `id`
    */
   queue(id: TicketRef, reason: Reason, urgency: Urgency, input?: InputId | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
@@ -222,6 +264,8 @@ urgency raised, never lowered. Yields one `queued`, or an `error`.
    * The owner's queue, most urgent first, then oldest: a queue_row { entry, ticket } each, then queue_end { count, snoozed, now_unix }.
 
 MENGER-39: the owner's queue, most urgent first, then the oldest.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.queued` anywhere it is held
    */
   queued(snoozed?: boolean | null): AsyncGenerator<TicketsEvent>;
@@ -229,6 +273,8 @@ MENGER-39: the owner's queue, most urgent first, then the oldest.
    * Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix }.
 
 APP-23: hands a queued ticket back — a comment (intent `changes`) on its conversation and the entry unqueued, one write.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.request_changes` on the scope of `id`
    */
   requestChanges(body: Body, id: TicketRef, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
@@ -236,6 +282,8 @@ APP-23: hands a queued ticket back — a comment (intent `changes`) on its conve
    * Move tickets into another shortcode, renumbered there in the order given (a scope moved into a new code becomes its root; --new-scope makes the shortcode first; a root moves with --with-children as a rename); old ids keep resolving (get says moved_from); all or none; yields reshortcoded { moves, tickets }.
 
 ACT-6: tickets moved into another shortcode ([`crate::store::Reshortcoded`]'s module).
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.reshortcode` on the scope of `ids`
    */
   reshortcode(ids: TicketRef[], to: ShortcodeRef, message?: Message | null, newScope?: Title | null, parent?: TicketRef | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
@@ -243,6 +291,8 @@ ACT-6: tickets moved into another shortcode ([`crate::store::Reshortcoded`]'s mo
    * Restore archived tickets — each named (or a filter's archived ones) back in every view with its archived ancestors; with_children, the subtree archived with it; yields restored { ids, ancestors, still_archived, by, dry_run }.
 
 ARCHIVE-2: the ancestor chain comes back, never its other children (ARCHIVE-1); what stays archived below is named (still_archived). dry_run: the answer, nothing written.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.restore` on the scope of `ids`
    */
   restore(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
@@ -269,6 +319,8 @@ language's text, FILTER-10) keeps the matches it admits (`under`
 too); one not taken, or one that asks `text`, is one in-band `error`
 and nothing else. `limit` is [`SEARCH_LIMIT`] unless given, at most
 [`SEARCH_MAX`]; `offset` skips that many matches.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.search` anywhere it is held
    */
   search(query: Query, filter?: FilterText | null, limit?: number | null, offset?: number | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -293,6 +345,8 @@ that becomes a scope or a doc becomes its shortcode's root. The kind
 with `previous` equal to its kind. `watch` carries `KindChanged`
 first, then the `GroupChanged`, `PlacementsChanged` and (filtered)
 `Entered` / `Left` it caused, as for a status change.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.set_kind` on the scope of `id`
    */
   setKind(id: TicketRef, kind: Kind, message?: Message | null, source?: CallerSource | null, status?: Status | null): AsyncGenerator<TicketsEvent>;
@@ -307,6 +361,8 @@ in-band `Error` when the parent does not exist or the chain would
 make the ticket its own ancestor. `watch` also carries the parents'
 side: `ChildrenChanged` for the new parent and `ChildRemoved` for
 the old one — each the parent's id and new `child_count` (SCALE-4).
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.set_parent` on the scope of `id`
    */
   setParent(id: TicketRef, parent: TicketRef): AsyncGenerator<TicketsEvent>;
@@ -330,6 +386,8 @@ canceled in the same write, each a transition of `system`'s naming
 the cause. Out of `Canceled`, its withdrawn inputs come back; with
 `restore_children`, so do the descendants its cancel canceled (and
 nothing has moved since), to the statuses they had.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.set_status` on the scope of `id`
    */
   setStatus(id: TicketRef, status: Status, message?: Message | null, restoreChildren?: boolean | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
@@ -338,6 +396,8 @@ nothing has moved since), to the statuses they had.
 
 MENGER-39: a queued ticket off the alerting surfaces for a while; it
 stays queued. Yields one `snoozed`, or an `error`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.snooze` on the scope of `id`
    */
   snooze(id: TicketRef, minutes: number, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
@@ -348,6 +408,8 @@ ACT-5: deleted tickets brought back while their tombstones keep the
 body — each child its delete moved and each block it dropped put back
 where nothing has moved them since. Admin only. Yields `Undeleted {
 ids, tickets }`, or one `Error` naming every refused ticket and why.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.undelete` on the scope of `ids`
    */
   undelete(ids: TicketRef[]): AsyncGenerator<TicketsEvent>;
@@ -356,6 +418,8 @@ ids, tickets }`, or one `Error` naming every refused ticket and why.
 
 MENGER-39: takes a ticket out of the queue. Yields one `unqueued`,
 `not_queued` (nothing written), or an `error`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.unqueue` on the scope of `id`
    */
   unqueue(id: TicketRef, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
@@ -367,6 +431,8 @@ rules, the steps and the events are [`crate::store::Update`]'s
 module's. Yields exactly one event: `Updated { ticket, changed }`
 (`changed` empty: nothing written or sent), `NotFound`,
 `BodyTooLarge`, or one `Error` naming every refusal.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.update` on the scope of `id`
    */
   update(id: TicketRef, block?: TicketRef[] | null, body?: Body | null, kind?: Kind | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, title?: Title | null, unblock?: TicketRef[] | null): AsyncGenerator<TicketsEvent>;
@@ -378,6 +444,8 @@ the selection, the rules, the steps and the events are
 [`crate::store::UpdatedMany`]'s module's. Yields exactly one event:
 `UpdatedMany { ids, changed, tickets, unchanged }`, or one `Error`
 naming every refused ticket and why.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.update_many` on the scope of `ids`
    */
   updateMany(block?: TicketRef[] | null, filter?: FilterText | null, ids?: TicketRef[] | null, kind?: Kind | null, label?: Label[] | null, max?: number | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, tz?: Zone | null, unblock?: TicketRef[] | null, unlabel?: Label[] | null): AsyncGenerator<TicketsEvent>;
@@ -460,6 +528,8 @@ redacted as a read's is, and follows the caller's grants: when they
 move it says what entered and left (`entered` / `left`, past 256
 `recount`) and hears through the new reach; refused — signed out,
 expired, held nowhere — it ends with `watch_closed { reason, message }`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.watch` anywhere it is held
    */
   watch(epic?: ShortcodeRef | null, filter?: FilterText | null, membership?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
@@ -468,7 +538,19 @@ expired, held nowhere — it ends with `watch_closed { reason, message }`.
 /** Typed client implementation for tickets plugin */
 class TicketsClientImpl implements TicketsClient {
   private rpc: RpcClient;
-  constructor(rpc: RpcClient) { this.rpc = rpc; }
+  readonly commits: TicketsCommitsClient;
+  readonly components: TicketsComponentsClient;
+  readonly inputs: TicketsInputsClient;
+  readonly nav: TicketsNavClient;
+  readonly work: TicketsWorkClient;
+  constructor(rpc: RpcClient) {
+    this.rpc = rpc;
+    this.commits = createTicketsCommitsClient(rpc);
+    this.components = createTicketsComponentsClient(rpc);
+    this.inputs = createTicketsInputsClient(rpc);
+    this.nav = createTicketsNavClient(rpc);
+    this.work = createTicketsWorkClient(rpc);
+  }
 
   async *amend(id: TicketRef, body?: Body | null, title?: Title | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.amend', { body, id, title });
