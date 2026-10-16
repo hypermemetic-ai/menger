@@ -2707,7 +2707,7 @@
      as ruled chips (struck through and dashed for what is gone, ready for
      ARCHIVE-3), a banner with a hatched edge, children and relations as a
      ruled list, the Conversation with an avatar per author. Then APP-30's
-     section dock (APP-31's mockup): a column at ≥ 1100, a rail of ticks to
+     section dock (APP-31's mockup): a column at ≥ 1920 (LOOK-7), a rail of ticks to
      640, a pill and a sheet below. Tokens only (THEME-2; the mockup's
      `--line-2` is `--tree-line`, its `--accent-ink` is `--bg`). ── */
   /* The crumb: mono, quiet, the ids in the accent. */
@@ -2866,15 +2866,15 @@
   #tdock .dfoot { border-top: var(--border) solid var(--line); padding: 7px 12px; display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
   #tdock .rail { display: none; }
   #tdock-pill, #tdock-sheet, #tdock-scrim { display: none; }
-  /* ≥ 1100: a column of its own at the right, sticky, never over the body. */
-  @media (min-width: 1100px) {
+  /* ≥ 1920 (LOOK-7): a column of its own at the right, sticky, never over the body. */
+  @media (min-width: 1920px) {
     #ticket-page:has(> #tdock) { display: grid; grid-template-columns: minmax(0, 1fr) calc(248px * var(--text-scale)); column-gap: 24px; align-items: start; }
     #ticket-page:has(> #tdock) > :not(#tdock), #ticket-page:has(> #tdock) article.ticket > * { grid-column: 1; }
     #ticket-page > #tdock { grid-column: 2; grid-row: 1 / span 40; position: sticky; top: 16px; max-height: calc(100vh - 32px); }
   }
-  /* 640–1100: a rail of ticks at the right edge; hover, focus or a tap
+  /* 640–1920: a rail of ticks at the right edge; hover, focus or a tap
      opens the dock over the body. */
-  @media (min-width: 641px) and (max-width: 1099.98px) {
+  @media (min-width: 641px) and (max-width: 1919.98px) {
     #ticket-page:has(> #tdock) { padding-right: 44px; }
     #ticket-page > #tdock {
       position: fixed; top: 96px; right: 10px; width: 34px; padding: 8px 0; align-items: center;

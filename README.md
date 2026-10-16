@@ -292,7 +292,7 @@ field of the body in order, then the Conversation, the one being read lit
 input (`m-decision` / `m-input` with an `id`) a row under its section —
 amber `waiting` while open, an amber ring once `answered`, green `decided`
 once closed, live on `input_changed`; the head says `● N waiting on you`.
-At ≥ 1100px it is a column of its own; from 640 to 1100 a rail of ticks at
+At ≥ 1920px (LOOK-7) it is a column of its own; from 640 to 1920 a rail of ticks at
 the right edge that opens over the body on hover, focus or a tap; at ≤ 640
 a pill above the tray (hidden while you read down, back on the way up and
 at the end) that opens a sheet, inputs first. A row scrolls there (an input
