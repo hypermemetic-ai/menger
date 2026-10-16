@@ -285,6 +285,19 @@
  *                 to `height` px down the document (`found` false: no
  *                 such section — `height` 0).
  *
+ *   frame → host  menger:sections { items }              (2.1, LOOK-3) a
+ *                 whole body's sections and inputs, in document order,
+ *                 whenever they or the layout move: each `{ kind, name,
+ *                 label, top, height }` — `kind` "field" for an outermost
+ *                 `[data-field]` (not an input, not inside one) with its
+ *                 `label` attribute (null: none), "input" for an
+ *                 `m-decision` / `m-input` carrying an `id` (its `name`);
+ *                 `top` and `height` in px down this document. The host's
+ *                 section dock is drawn from it; never sent by a cited
+ *                 window's frame.
+ *   host → frame  menger:flash { n }                      (2.1) flash the
+ *                 n-th item of the last menger:sections, once
+ *
  * The init block (#menger-init, JSON) carries
  * `{ channel, version, scheme, theme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite, motion, entered, typing }`
  * — (1.18) `motion` the app's Motion setting and `entered` true on a
@@ -302,7 +315,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.0.0";
+  var VERSION = "2.1.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -1348,6 +1361,8 @@
       if (typeof m.component === "string") reveal(m.component);
       else if (typeof m.field === "string") revealSection("field", m.field);
       else if (typeof m.anchor === "string") revealSection("anchor", m.anchor);
+    } else if (m.type === "menger:flash") {
+      flashSection(m.n);
     } else if (m.type === "menger:cited") {
       citedHeight(m);
     } else if (m.type === "menger:mocked") {
@@ -2221,6 +2236,83 @@
     post("menger:revealed", msg);
   }
 
+  // -- the section dock (LOOK-3) -------------------------------------------------
+  // The body's sections (each outermost [data-field] that is not an input)
+  // and its inputs (an m-decision or m-input with an id), in document order,
+  // with where each runs — told to the host whenever they or the layout
+  // move. The host draws the dock; it asks for a flash by number.
+
+  var sectionEls = [];
+  var lastSections = "";
+
+  function isInput(el) {
+    var t = el.tagName.toLowerCase();
+    return t === "m-decision" || t === "m-input";
+  }
+
+  // An element's box down this document; a box-less element (display:
+  // contents) is measured by its first child that has one.
+  function boxOf(el) {
+    var r = el.getBoundingClientRect();
+    if (!r.width && !r.height) {
+      var kids = el.children;
+      for (var i = 0; i < kids.length; i++) {
+        var k = kids[i].getBoundingClientRect();
+        if (k.width || k.height) {
+          r = k;
+          break;
+        }
+      }
+    }
+    var y = window.scrollY || 0;
+    return { top: Math.max(0, Math.round(r.top + y)), height: Math.max(0, Math.round(r.height)) };
+  }
+
+  function sectionItems() {
+    var els = [];
+    var items = [];
+    var all = doc.querySelectorAll("[data-field], m-decision[id], m-input[id]");
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      var up = el.parentElement;
+      if (isInput(el)) {
+        if (!el.id || (up && up.closest("m-decision, m-input"))) continue;
+        var b = boxOf(el);
+        els.push(el);
+        items.push({ kind: "input", name: el.id, label: null, top: b.top, height: b.height });
+        continue;
+      }
+      if (up && up.closest("[data-field], m-decision, m-input")) continue;
+      var name = el.getAttribute("data-field") || "";
+      if (!name) continue;
+      var bx = boxOf(el);
+      els.push(el);
+      items.push({ kind: "field", name: name, label: el.getAttribute("label"), top: bx.top, height: bx.height });
+    }
+    return { els: els, items: items };
+  }
+
+  function reportSections() {
+    if (citeTarget) return;
+    var got = sectionItems();
+    var text = JSON.stringify(got.items);
+    sectionEls = got.els;
+    if (text === lastSections) return;
+    lastSections = text;
+    post("menger:sections", { items: got.items });
+  }
+
+  function flashSection(n) {
+    var el = typeof n === "number" ? sectionEls[n] : null;
+    if (!el) return;
+    el.classList.remove("menger-flash");
+    void el.offsetWidth;
+    el.classList.add("menger-flash");
+    setTimeout(function () {
+      el.classList.remove("menger-flash");
+    }, 2000);
+  }
+
   // -- <m-cite> (COMP-14) ------------------------------------------------------
   // A placeholder only: room in this body, and where it is, told to the
   // host; the host draws the window over it, in a frame of the cited
@@ -2835,6 +2927,8 @@
       post("menger:size", { height: bottom, settled: settled, top: top, found: !!el });
       return;
     }
+    // LOOK-3: where this body's sections and inputs are, for the dock.
+    reportSections();
     var h = measure();
     if (!force && h === lastHeight) return;
     lastHeight = h;

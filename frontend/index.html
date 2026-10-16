@@ -83,6 +83,9 @@
     --urgent: #c4262e; /* urgent: the queue's now and blocking */
     --urgent-bg: #fbe3e1; /* urgent: its ground (the tray's loud tab) */
     --urgent-ink: #fff; /* text on --urgent (the chip) */
+    --ask: #a8540a; /* waiting on you: an open input in the section dock */
+    --ask-bg: #fdf0df; /* waiting on you: its ground */
+    --ask-line: #f0c48f; /* waiting on you: its edge */
     /* colour.status */
     --st-pending-bg: #f3e8c8; /* Pending */
     --st-pending-fg: #7a5d00; /* Pending */
@@ -197,6 +200,9 @@
       --urgent: #ff6b6b; /* urgent: the queue's now and blocking */
       --urgent-bg: #3d1a1d; /* urgent: its ground (the tray's loud tab) */
       --urgent-ink: #101014; /* text on --urgent (the chip) */
+      --ask: #f2b46a; /* waiting on you: an open input in the section dock */
+      --ask-bg: #33240f; /* waiting on you: its ground */
+      --ask-line: #6b4a1c; /* waiting on you: its edge */
       /* colour.status */
       --st-pending-bg: #3a3115; /* Pending */
       --st-pending-fg: #e8cf7a; /* Pending */
@@ -277,6 +283,9 @@
     --urgent: #ff6b6b; /* urgent: the queue's now and blocking */
     --urgent-bg: #3d1a1d; /* urgent: its ground (the tray's loud tab) */
     --urgent-ink: #101014; /* text on --urgent (the chip) */
+    --ask: #f2b46a; /* waiting on you: an open input in the section dock */
+    --ask-bg: #33240f; /* waiting on you: its ground */
+    --ask-line: #6b4a1c; /* waiting on you: its edge */
     /* colour.status */
     --st-pending-bg: #3a3115; /* Pending */
     --st-pending-fg: #e8cf7a; /* Pending */
@@ -2689,6 +2698,257 @@
     #app:not(.nonav) .content, #app:not(.nonav) #qtray { grid-row: 2; height: auto; }
     header { padding: 8px 16px; gap: 4px 14px; }
     main { padding: calc(14px * var(--space)) calc(16px * var(--space)) calc(32px * var(--space)); }
+  }
+  /* ── LOOK-3: the ticket page as ARCHIVE-5's figure 4 draws it — the crumb
+     in the bar's small mono voice, the head (the id a cell, the title in the
+     display face at 26px), the fields a grid of small upper-case labels over
+     their values, the body a card on the stronger hairline, every section's
+     head the mockup's `.lbl` (mono, tracked, a rule after it), references
+     as ruled chips (struck through and dashed for what is gone, ready for
+     ARCHIVE-3), a banner with a hatched edge, children and relations as a
+     ruled list, the Conversation with an avatar per author. Then APP-30's
+     section dock (APP-31's mockup): a column at ≥ 1100, a rail of ticks to
+     640, a pill and a sheet below. Tokens only (THEME-2; the mockup's
+     `--line-2` is `--tree-line`, its `--accent-ink` is `--bg`). ── */
+  /* The crumb: mono, quiet, the ids in the accent. */
+  #ticket-page .crumbs { font-family: var(--mono); font-size: calc(11.5px * var(--text-scale)); color: var(--muted); margin: 0 0 14px; }
+  #ticket-page .crumbs .crumb { font-size: calc(11.5px * var(--text-scale)); color: var(--accent); }
+  #ticket-page .crumbs .sep { padding: 0 2px; }
+  /* The head. */
+  #ticket-page article.ticket > h2 {
+    font-family: var(--font-display); font-size: calc(26px * var(--text-scale)); font-weight: var(--weight-strong);
+    letter-spacing: -.02em; line-height: 1.2; gap: 14px; margin: 6px 0 16px; align-items: baseline;
+  }
+  #ticket-page article.ticket > h2 .code {
+    font-size: calc(11px * var(--text-scale)); font-weight: var(--weight-medium); padding: 2px 8px; letter-spacing: 0;
+    background: var(--sel); color: var(--accent); border-color: transparent; border-radius: var(--radius-sm); transform: translateY(-4px);
+  }
+  /* The fields: the mockup's `.props` — labels over values, a grid that wraps. */
+  #ticket-page aside.props { gap: 10px 28px; padding: 0 0 18px; margin-bottom: 22px; border-bottom-color: var(--tree-line); font-size: calc(12.5px * var(--text-scale)); }
+  #ticket-page aside.props dl.meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, max-content)); gap: 12px 28px; flex: 1 1 100%; }
+  #ticket-page aside.props dl.meta div { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+  #ticket-page aside.props dl.meta dt {
+    font-family: var(--mono); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-medium);
+    letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  }
+  #ticket-page aside.props dl.meta dd { font-size: calc(12.5px * var(--text-scale)); }
+  #ticket-page aside.props dl.meta div:has(> #t-labels) { grid-column: span 2; }
+  #ticket-page aside.props dl.meta dd.status { border-radius: var(--radius-sm); font-family: var(--mono); font-size: calc(11px * var(--text-scale)); letter-spacing: .04em; padding: 1px 8px; }
+  #ticket-page dd#t-commits .commit, #ticket-page dd#t-comments a { font-size: calc(11.5px * var(--text-scale)); }
+  #ticket-page aside.props .stamps { font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); flex: 1 1 100%; }
+  /* A reference: the mockup's `.chip`; gone (ARCHIVE-3's archived, a
+     tombstone) struck through on a dashed edge, still a link. */
+  #ticket-page .code {
+    font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-medium); line-height: 1.5; color: var(--accent);
+    background: transparent; border: var(--border) solid var(--tree-line); border-radius: var(--radius-sm); padding: 0 6px; white-space: nowrap;
+  }
+  #ticket-page a.code:hover { background: var(--sel); }
+  #ticket-page :is(.code, .chip).gone, .chip.gone {
+    color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px;
+    border-style: dashed; border-color: var(--tree-line);
+  }
+  /* A banner: the mockup's archived banner — a ruled card on the panel, a
+     hatched edge, the lane's word in mono; the global filter's notice is
+     one, over the head. */
+  #ticket-page .tbanner, #ticket-page .tout {
+    position: relative; overflow: hidden; order: 0; margin: 0 0 16px; padding: 12px 14px 12px 22px;
+    background: var(--panel); border: var(--border) solid var(--tree-line); border-radius: var(--radius-lg);
+    font-size: calc(13px * var(--text-scale)); color: var(--muted);
+  }
+  #ticket-page :is(.tbanner, .tout)::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; opacity: .7;
+    background: repeating-linear-gradient(-45deg, var(--muted) 0 3px, transparent 3px 6px);
+  }
+  #ticket-page .tout strong, #ticket-page .tbanner .lane {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-strong);
+    letter-spacing: .14em; text-transform: uppercase; color: var(--ink);
+  }
+  /* The body: a card on the stronger hairline. Its ground is the page's:
+     a framed body paints its own (--bg), so the card is drawn round it. */
+  #ticket-page article.ticket > .mscope-frame {
+    border: var(--border) solid var(--tree-line); border-radius: var(--radius-xl); padding: 28px 32px;
+  }
+  /* Every section's head: the mockup's `.lbl`, a rule running after it. */
+  #ticket-page section.kidsec h3, #ticket-page section.histsec h3, #ticket-page section.convsec h3, #ticket-page aside.props section.dag h3 {
+    display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: calc(10.5px * var(--text-scale));
+    font-weight: var(--weight-medium); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px;
+  }
+  #ticket-page :is(section.kidsec, section.histsec, section.convsec) h3::after { content: ""; flex: 1; height: var(--border); background: var(--line); }
+  #ticket-page :is(section.kidsec, section.histsec, section.convsec) { border-top: 0; margin-top: 26px; padding-top: 0; }
+  #ticket-page section.kidsec .roll { border-radius: var(--radius-sm); font-size: calc(10.5px * var(--text-scale)); letter-spacing: 0; }
+  /* Children and relations: the mockup's `.kids` — a ruled list, a row a line. */
+  #ticket-page ul#children, #ticket-page ul#blockers, #ticket-page ul#unlocks {
+    border: var(--border) solid var(--line); border-radius: var(--radius-md); overflow: hidden; background: var(--card);
+  }
+  #ticket-page ul#children li, #ticket-page ul#blockers li, #ticket-page ul#unlocks li {
+    margin: 0; padding: 6px 12px; gap: 10px; align-items: center; border-radius: 0; border-top: var(--border) solid var(--line);
+    font-family: var(--sans); font-size: calc(13.5px * var(--text-scale));
+  }
+  #ticket-page :is(ul#children, ul#blockers, ul#unlocks) li:first-child { border-top: 0; }
+  #ticket-page :is(ul#children, ul#blockers, ul#unlocks) li:hover { background: var(--hover); }
+  #ticket-page .bstatus { width: calc(86px * var(--text-scale)); border-radius: var(--radius-sm); font-size: calc(10.5px * var(--text-scale)); letter-spacing: .04em; }
+  #ticket-page aside.props section.dag { border-top: 0; padding-top: 0; column-gap: 28px; }
+  #ticket-page aside.props section.dag h3 { margin-top: 10px; }
+  #ticket-page aside.props section.dag .none { font-size: calc(12.5px * var(--text-scale)); }
+  /* The Conversation: the mockup's `.msg` — an avatar, who and when in mono, the words. */
+  #ticket-page section.convsec ol.cthread { gap: 14px; margin-bottom: 14px; }
+  #ticket-page section.convsec li.cpost {
+    display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 10px; align-items: start;
+    border: 0; background: transparent; padding: 0; border-radius: 0; font-size: calc(14px * var(--text-scale));
+  }
+  #ticket-page section.convsec li.cpost > :not(.cav) { grid-column: 2; }
+  #ticket-page section.convsec .cav {
+    grid-column: 1; grid-row: 1 / span 3; width: 28px; height: 28px; border-radius: var(--radius-pill);
+    display: grid; place-items: center; background: var(--panel); border: var(--border) solid var(--tree-line);
+    font: var(--weight-strong) calc(10px * var(--text-scale))/1 var(--mono); color: var(--muted);
+  }
+  #ticket-page section.convsec li.cpost.changes .cav { border-color: var(--urgent); color: var(--urgent); }
+  #ticket-page section.convsec li.cpost[data-state="resolved"] .cav { border-color: var(--live); color: var(--live); }
+  #ticket-page section.convsec .chead { font-family: var(--mono); font-size: calc(11px * var(--text-scale)); color: var(--muted); gap: 6px; margin-bottom: 2px; }
+  #ticket-page section.convsec .cwho { font-weight: var(--weight-medium); color: var(--muted); }
+  #ticket-page section.convsec .cwho::after { content: " ·"; }
+  #ticket-page section.convsec .cwhen { font-size: calc(11px * var(--text-scale)); }
+  #ticket-page section.convsec :is(.cflip, .csend) {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase;
+    background: transparent; border-color: var(--tree-line); padding: 2px 9px;
+  }
+  #ticket-page section.convsec .csend { border-color: var(--ink); padding: 5px 12px; }
+  #ticket-page section.convsec textarea.cbox { border-color: var(--tree-line); border-radius: var(--radius-md); font-size: calc(13.5px * var(--text-scale)); }
+  #ticket-page section.convsec.dock-flash, #conversation.dock-flash { animation: menger-dock-flash var(--motion-flash) var(--ease); }
+  @keyframes menger-dock-flash { 0%, 35% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 3px transparent; } }
+  /* A narrow column: the relations one under the other. */
+  @container (max-width: 44rem) {
+    #ticket-page aside.props section.dag { grid-template-columns: minmax(0, 1fr); grid-auto-flow: row; grid-template-rows: none; }
+  }
+  /* ── The section dock (APP-30, APP-31). ── */
+  #tdock {
+    display: flex; flex-direction: column; background: var(--card); border: var(--border) solid var(--tree-line);
+    border-radius: var(--radius-2xl); box-shadow: 0 10px 30px var(--shadow); font-family: var(--mono);
+    font-size: calc(12px * var(--text-scale)); overflow: hidden; z-index: 6;
+  }
+  #tdock button { font: inherit; color: inherit; background: none; border: 0; text-align: left; cursor: pointer; }
+  #tdock kbd, #tdock-pill kbd {
+    font: var(--weight-medium) calc(10px * var(--text-scale))/14px var(--mono); color: var(--muted); background: var(--card);
+    border: var(--border) solid var(--tree-line); border-bottom-width: 2px; border-radius: var(--radius-sm); padding: 0 4px;
+  }
+  #tdock .dhead { display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px; border-bottom: var(--border) solid var(--line); }
+  #tdock .dhead h2 { margin: 0; font: var(--weight-medium) calc(10px * var(--text-scale))/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  #tdock .dhead .pos { margin-left: auto; font-size: calc(10.5px * var(--text-scale)); color: var(--muted); font-variant-numeric: tabular-nums; }
+  #tdock button.waiting {
+    display: flex; align-items: center; gap: 8px; margin: 8px 8px 2px; padding: 7px 10px; border-radius: var(--radius-lg);
+    background: var(--ask-bg); color: var(--ask); border: var(--border) solid var(--ask-line); font-weight: var(--weight-strong); font-size: calc(11.5px * var(--text-scale));
+  }
+  #tdock button.waiting kbd { margin-left: auto; }
+  #tdock ol.dlist { list-style: none; margin: 0; padding: 6px 0 8px; overflow-y: auto; min-height: 0; flex: 1; }
+  #tdock ol.dlist li button {
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 12px 4px 14px; color: var(--muted);
+    border-left: 2px solid transparent; line-height: 1.35;
+    transition: color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease);
+  }
+  #tdock ol.dlist li button:hover, #tdock ol.dlist li button:focus-visible { color: var(--ink); background: var(--hover); }
+  #tdock ol.dlist .n { font-size: calc(10px * var(--text-scale)); color: var(--tree-line); width: 16px; flex: none; }
+  #tdock ol.dlist .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #tdock ol.dlist .mini { margin-left: auto; font-size: calc(10px * var(--text-scale)); flex: none; }
+  #tdock ol.dlist li.s.on > button { color: var(--ink); border-left-color: var(--accent); background: var(--sel); font-weight: var(--weight-medium); }
+  #tdock ol.dlist li.s:is(.on, .seen) .n { color: var(--accent); }
+  #tdock ol.dlist li.s .mini { color: var(--ask); }
+  /* An input: a row of its own under its section — amber while it waits, an
+     amber ring once answered, green once decided. */
+  #tdock ol.dlist li.i button { padding-left: 38px; font-size: calc(11.5px * var(--text-scale)); }
+  #tdock .dot, #tdock-sheet .dot { width: 8px; height: 8px; border-radius: var(--radius-pill); flex: none; }
+  #tdock ol.dlist li.i.open button { color: var(--ask); font-weight: var(--weight-strong); }
+  #tdock ol.dlist li.i.open .dot { background: var(--ask); box-shadow: 0 0 0 3px var(--ask-bg); animation: menger-ask-ping 2s ease-in-out infinite; }
+  #tdock ol.dlist li.i.answered button { color: var(--ask); }
+  #tdock ol.dlist li.i.answered .dot { border: 2px solid var(--ask); }
+  #tdock ol.dlist li.i.decided .dot { background: var(--live); }
+  #tdock ol.dlist li.i.decided .mini { color: var(--live); }
+  @keyframes menger-ask-ping { 50% { box-shadow: 0 0 0 5px transparent; } }
+  #tdock .dfoot { border-top: var(--border) solid var(--line); padding: 7px 12px; display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
+  #tdock .rail { display: none; }
+  #tdock-pill, #tdock-sheet, #tdock-scrim { display: none; }
+  /* ≥ 1100: a column of its own at the right, sticky, never over the body. */
+  @media (min-width: 1100px) {
+    #ticket-page:has(> #tdock) { display: grid; grid-template-columns: minmax(0, 1fr) calc(248px * var(--text-scale)); column-gap: 24px; align-items: start; }
+    #ticket-page:has(> #tdock) > :not(#tdock), #ticket-page:has(> #tdock) article.ticket > * { grid-column: 1; }
+    #ticket-page > #tdock { grid-column: 2; grid-row: 1 / span 40; position: sticky; top: 16px; max-height: calc(100vh - 32px); }
+  }
+  /* 640–1100: a rail of ticks at the right edge; hover, focus or a tap
+     opens the dock over the body. */
+  @media (min-width: 641px) and (max-width: 1099.98px) {
+    #ticket-page:has(> #tdock) { padding-right: 44px; }
+    #ticket-page > #tdock {
+      position: fixed; top: 96px; right: 10px; width: 34px; padding: 8px 0; align-items: center;
+      transition: width .2s var(--ease);
+    }
+    #ticket-page > #tdock > :not(.rail) { display: none; }
+    #tdock .rail { display: flex; flex-direction: column; align-items: center; gap: 7px; cursor: pointer; }
+    #tdock .rail i { display: block; width: 12px; height: 3px; border-radius: var(--radius-xs); background: var(--tree-line); }
+    #tdock .rail i.tick.on { width: 18px; background: var(--accent); }
+    #tdock .rail i.ask { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--ask); }
+    #tdock .rail i.ask.answered { background: transparent; border: 2px solid var(--ask); }
+    #tdock .rail i.dec { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--live); }
+    #ticket-page > #tdock:is(:hover, :focus-within, .open) { width: calc(260px * var(--text-scale)); align-items: stretch; padding: 0; max-height: calc(100vh - 140px); }
+    #ticket-page > #tdock:is(:hover, :focus-within, .open) > .rail { display: none; }
+    #ticket-page > #tdock:is(:hover, :focus-within, .open) > :is(.dhead, .dfoot, button.waiting) { display: flex; }
+    #ticket-page > #tdock:is(:hover, :focus-within, .open) > ol.dlist { display: block; }
+  }
+  /* ≤ 640: no dock — a pill above the tray, and a sheet when it is tapped. */
+  @media (max-width: 640px) {
+    #ticket-page > #tdock { display: none; }
+    #ticket-page article.ticket > .mscope-frame { padding: 4px 16px 20px; }
+    #ticket-page article.ticket > h2 { font-size: calc(20px * var(--text-scale)); gap: 8px; }
+    #ticket-page aside.props dl.meta { grid-template-columns: repeat(auto-fill, minmax(130px, max-content)); gap: 8px 18px; }
+    #ticket-page:has(> #tdock) { padding-bottom: 64px; }
+    #tdock-pill {
+      display: inline-flex; position: fixed; right: 12px; bottom: 46px; z-index: 25; align-items: center; gap: 8px;
+      height: 40px; padding: 0 6px 0 14px; max-width: calc(100vw - 24px); border-radius: var(--radius-pill);
+      background: var(--ink); color: var(--bg); border: 0; box-shadow: 0 10px 30px var(--shadow);
+      font: calc(12px * var(--text-scale)) var(--mono); cursor: pointer;
+      transition: transform .25s var(--ease), opacity .25s var(--ease);
+    }
+    #tdock-pill .pos { opacity: .6; font-size: calc(11px * var(--text-scale)); flex: none; }
+    #tdock-pill .l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; font-weight: var(--weight-medium); }
+    #tdock-pill .ask {
+      display: inline-flex; align-items: center; gap: 5px; background: var(--ask); color: var(--bg); font-weight: var(--weight-strong);
+      font-size: calc(11px * var(--text-scale)); height: 28px; padding: 0 10px; border-radius: var(--radius-pill); flex: none;
+    }
+    #tdock-pill .ask i { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--bg); }
+    #tdock-pill.away { transform: translateY(90px); opacity: 0; pointer-events: none; }
+    #tdock-scrim { display: block; position: fixed; inset: 0; z-index: 40; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity .2s var(--ease); }
+    #tdock-scrim.on { opacity: 1; pointer-events: auto; }
+    #tdock-sheet {
+      display: flex; flex-direction: column; position: fixed; left: 0; right: 0; bottom: 0; z-index: 41; max-height: 72vh;
+      background: var(--card); border-radius: var(--radius-device) var(--radius-device) 0 0; box-shadow: 0 10px 30px var(--shadow);
+      transform: translateY(105%); transition: transform .28s cubic-bezier(.2, .9, .3, 1); font-family: var(--sans);
+    }
+    #tdock-sheet.on { transform: none; }
+    #tdock-sheet button { font: inherit; color: inherit; background: none; border: 0; text-align: left; cursor: pointer; }
+    #tdock-sheet .grab { width: 36px; height: 4px; border-radius: var(--radius-xs); background: var(--tree-line); margin: 8px auto 4px; }
+    #tdock-sheet .shead { display: flex; align-items: baseline; gap: 8px; padding: 4px 16px 10px; border-bottom: var(--border) solid var(--line); }
+    #tdock-sheet .shead h2 { margin: 0; font: var(--weight-strong) calc(15px * var(--text-scale)) var(--sans); }
+    #tdock-sheet .shead .id { color: var(--accent); font: calc(12px * var(--text-scale)) var(--mono); }
+    #tdock-sheet .shead button { margin-left: auto; color: var(--muted); font: calc(12px * var(--text-scale)) var(--mono); padding: 4px; }
+    #tdock-sheet .sscroll { overflow-y: auto; padding: 4px 0 24px; }
+    #tdock-sheet h3 { margin: 14px 16px 6px; font: var(--weight-medium) calc(10px * var(--text-scale)) var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+    #tdock-sheet .ins { display: grid; gap: 8px; padding: 0 12px; }
+    #tdock-sheet .ins button.in {
+      display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 11px 12px;
+      border-radius: var(--radius-xl); border: var(--border) solid var(--line); font-size: calc(13.5px * var(--text-scale));
+    }
+    #tdock-sheet .ins button.in.open { background: var(--ask-bg); border-color: var(--ask-line); color: var(--ask); font-weight: var(--weight-strong); }
+    #tdock-sheet .ins button.in.open .dot { background: var(--ask); }
+    #tdock-sheet .ins button.in.answered { border-color: var(--ask-line); color: var(--ask); }
+    #tdock-sheet .ins button.in.answered .dot { border: 2px solid var(--ask); }
+    #tdock-sheet .ins button.in.decided { color: var(--muted); }
+    #tdock-sheet .ins button.in.decided .dot { background: var(--live); }
+    #tdock-sheet .ins small { font: calc(11px * var(--text-scale)) var(--mono); }
+    #tdock-sheet .ins .q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tdock-sheet ol.slist { list-style: none; margin: 0; padding: 0; }
+    #tdock-sheet ol.slist button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 0 16px; border-left: 3px solid transparent; }
+    #tdock-sheet ol.slist .n { font: calc(11px * var(--text-scale)) var(--mono); color: var(--muted); width: 18px; }
+    #tdock-sheet ol.slist .mini { margin-left: auto; font: var(--weight-strong) calc(11px * var(--text-scale)) var(--mono); color: var(--ask); }
+    #tdock-sheet ol.slist li.on button { border-left-color: var(--accent); background: var(--sel); font-weight: var(--weight-strong); }
+    #tdock-sheet ol.slist li.on .n { color: var(--accent); }
   }
   /* ── DESIGN-39: the chrome in motion (DESIGN-35's moves, as DESIGN-34's
      first screen plays them; src/motion.rs). How much moves is the Motion
