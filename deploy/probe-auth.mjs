@@ -104,8 +104,10 @@ function info(ws) {
 /** AUTH-4: the activations a connection's view shows, each with its methods. */
 async function viewOf(ws) {
   const hub = (await call(ws, 'menger.schema'))[0] || {};
+  // RUN-18: namespaces in name order — the hub's own order is not fixed
+  // between processes, and the checks compare views as JSON
   const out = {};
-  for (const c of hub.children || []) {
+  for (const c of [...(hub.children || [])].sort((a, b) => a.namespace.localeCompare(b.namespace))) {
     const s = (await call(ws, `${c.namespace}.schema`))[0] || {};
     out[c.namespace] = (s.methods || []).map((m) => m.name).filter((n) => n !== 'schema').sort();
   }
@@ -155,7 +157,7 @@ const anon = (await open({ origin: null })).ws;
 check(anon, 'an anonymous upgrade is admitted into the anonymous view (AUTH-6)');
 if (anon) {
   const i = await info(anon);
-  check(i.view === 'anonymous' && JSON.stringify(i.auth?.methods) === JSON.stringify(DOOR), `an anonymous _info names only the door: ${DOOR.join(', ')}`);
+  check(i.view === 'anonymous' && JSON.stringify([...(i.auth?.methods || [])].sort()) === JSON.stringify([...DOOR].sort()), `an anonymous _info names only the door: ${DOOR.join(', ')}`);
   const v = await viewOf(anon);
   check(JSON.stringify(v) === JSON.stringify({ auth: ['login', 'providers', 'signup'], session: ['providers'] }), `an anonymous schema shows only the auth door (${JSON.stringify(v)})`);
   let reached = [];
