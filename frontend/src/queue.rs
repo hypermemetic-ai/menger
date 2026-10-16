@@ -926,10 +926,11 @@ fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
             {input_view(id.clone(), e.input.clone(), input, s.problem, s.busy, s.pick)}
             {changes_view(id.clone(), s.problem, s.busy, s.draft)}
             <div class="qacts">
-                <a class="qbtn" href=open_href(&e) on:click=move |_| open.set(false)>"open ↗"</a>
+                // APP-48 (owner): done with it is the filled one; open sits at the far right.
                 <button type="button" class="qbtn" on:click=move |_| snooze(snooze_id.clone(), problem)>{format!("snooze {SNOOZE_MINUTES}m")}</button>
-                <button type="button" class="qbtn" on:click=move |_| done(done_id.clone(), problem)>"done with it"</button>
+                <button type="button" class="qbtn fill" data-act="done" on:click=move |_| done(done_id.clone(), problem)>"done with it"</button>
                 {place}
+                <a class="qbtn qopen" href=open_href(&e) on:click=move |_| open.set(false)>"open ↗"</a>
             </div>
             {move || problem.get().map(|p| view! { <p class="qproblem" role="alert">{p}</p> })}
         </div>
