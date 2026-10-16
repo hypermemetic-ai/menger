@@ -285,6 +285,7 @@ mod lens;
 mod links;
 mod md;
 mod menu;
+mod mock_anchor;
 mod mockup;
 mod mocksize;
 mod nav;
@@ -2180,6 +2181,8 @@ fn App() -> impl IntoView {
     let route = use_route(lens);
     // COMMENT-3: annotation mode — its state, its listeners, its layer.
     let annot = annotate::install(route);
+    // APP-45: and its keyboard path inside mockups.
+    mock_anchor::install();
     // FILTER-12: the board shows its effective filter (global ∧ board) —
     // set before the session asks for anything.
     board.follow(lens.effective(lens::Level::Board));

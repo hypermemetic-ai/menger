@@ -124,6 +124,12 @@
  *     (`menger:locate`), and draws everything the mode shows over the frame
  *     itself. `a`/`A` (and Esc in the mode) are posted to the host
  *     (`menger:key`), whose keys they are. Off, the page is as it was.
+ *     APP-45 (2.3): in a mockup's device, the host's keyboard path walks
+ *     the body (`menger:walk { step }`: `start` its first element, `next`
+ *     / `prev` a sibling, `in` the first child, `out` the parent, each
+ *     posted as a hover; `pick` the chosen element, posted as a click),
+ *     and `menger:locate { reveal: true }` scrolls the first element into
+ *     view before it says where it is.
  *   - **badges and tooltips** (COMP-9) — in annotation mode only (COMMENT-1:
  *     the info card left plain hover), every component instance wears a
  *     small corner badge, `m-x ↗`, shown on hover or keyboard focus and
@@ -269,8 +275,15 @@
  *   host → frame  menger:probe { id, selectors }          which select the
  *                 picked element and nothing else
  *   frame → host  menger:probed { id, ok: [bool, …] }
- *   host → frame  menger:locate { id, paths }             where these are
+ *   host → frame  menger:locate { id, paths, reveal? }    where these are
+ *                 (2.3: `reveal`, the first scrolled into view first)
  *   frame → host  menger:located { id, found: [{ rect, text } | null, …] }
+ *   host → frame  menger:walk { step }                    (2.3, APP-45) the
+ *                 keyboard path in the mode: `start`, `next`, `prev`, `in`,
+ *                 `out` (answered as menger:hover) or `pick` (as
+ *                 menger:pick)
+ *   frame → host  menger:scrolled {}                      (2.3) in the mode,
+ *                 a device's page scrolled (posted by the page shim)
  *   frame → host  menger:key { key }                      `a`, `A`, `z`
  *                 (full screen, 1.9) or Esc (always, 1.9: the host decides
  *                 whether it leaves the mode or full screen) — the app's
@@ -321,7 +334,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.2.0";
+  var VERSION = "2.3.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -1379,6 +1392,8 @@
       probe(m);
     } else if (m.type === "menger:locate") {
       locate(m);
+    } else if (m.type === "menger:walk") {
+      walk(m.step);
     }
   });
 
@@ -2089,6 +2104,7 @@
       if (annotStyle && annotStyle.parentNode) annotStyle.parentNode.removeChild(annotStyle);
       annotStyle = null;
       hovered = null;
+      cursor = null;
       picked = Object.create(null);
       closeTip();
     }
@@ -2147,13 +2163,59 @@
         if (type.indexOf("pointer") === 0) return;
         ev.preventDefault();
         if (type !== "click" || isPage(ev.target)) return;
-        var id = ++nextPick;
-        picked[id] = ev.target;
-        post("menger:pick", { id: id, chain: chainOf(ev.target), rect: rectOf(ev.target), text: textOf(ev.target) });
+        pickEl(ev.target);
       },
       true
     );
   });
+
+  function pickEl(el) {
+    var id = ++nextPick;
+    picked[id] = el;
+    post("menger:pick", { id: id, chain: chainOf(el), rect: rectOf(el), text: textOf(el) });
+  }
+
+  // APP-45: the host's keyboard path — a cursor walked over the body's
+  // elements, each step said as a hover, `pick` as a click.
+  var cursor = null;
+  var SKIP = /^(script|style|template|noscript|link|meta|base|title|head)$/;
+  function walkable(n) {
+    return !!n && n.nodeType === 1 && !SKIP.test(n.localName) && !n.hasAttribute("data-menger-tip") && n.getClientRects().length > 0;
+  }
+  function firstIn(n) {
+    for (var c = n.firstElementChild; c; c = c.nextElementSibling) if (walkable(c)) return c;
+    return null;
+  }
+  function sibling(n, d) {
+    for (var c = d > 0 ? n.nextElementSibling : n.previousElementSibling; c; c = d > 0 ? c.nextElementSibling : c.previousElementSibling) {
+      if (walkable(c)) return c;
+    }
+    return null;
+  }
+  function walk(step) {
+    var body = doc.body;
+    if (!annotating || !body) return;
+    var at = cursor && cursor !== body && body.contains(cursor) ? cursor : null;
+    if (step === "pick") {
+      if (at) pickEl(at);
+      return;
+    }
+    var next = null;
+    if (!at || step === "start") next = firstIn(body);
+    else if (step === "next") next = sibling(at, 1);
+    else if (step === "prev") next = sibling(at, -1);
+    else if (step === "in") next = firstIn(at);
+    else if (step === "out") next = at.parentElement !== body ? at.parentElement : null;
+    cursor = next || at;
+    if (!cursor) return;
+    try {
+      cursor.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch (e) {
+      /* a page that will not scroll stays */
+    }
+    hovered = cursor;
+    post("menger:hover", { chain: chainOf(cursor), rect: rectOf(cursor), text: textOf(cursor) });
+  }
 
   function probe(m) {
     var el = picked[m.id];
@@ -2172,6 +2234,14 @@
 
   function locate(m) {
     var paths = Array.isArray(m.paths) ? m.paths : [];
+    if (m.reveal === true && paths.length) {
+      try {
+        var first = doc.querySelector(String(paths[0]));
+        if (first) first.scrollIntoView({ block: "center", inline: "nearest" });
+      } catch (e) {
+        /* not a selector: nothing to show */
+      }
+    }
     var found = paths.map(function (p) {
       try {
         var el = doc.querySelector(String(p));

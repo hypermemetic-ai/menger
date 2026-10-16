@@ -532,7 +532,11 @@ pub(crate) fn find_in_app(path: &str) -> Option<web_sys::Element> {
 
 /// The frame a framed path's first half selects — the one on screen
 /// (`data-state="live"`) when a re-render has a second beside it.
+/// APP-45: a mockup's first half (`mockup:…`) finds the device showing it.
 pub(crate) fn find_frame(selector: &str) -> Option<web_sys::HtmlIFrameElement> {
+    if let Some(device) = crate::mock_anchor::frame_for(selector) {
+        return device;
+    }
     let list = crate::dom::window().document()?.query_selector_all(selector).ok()?;
     let frames: Vec<web_sys::HtmlIFrameElement> =
         (0..list.length()).filter_map(|i| list.item(i)).filter_map(|n| n.dyn_into::<web_sys::HtmlIFrameElement>().ok()).collect();
@@ -543,7 +547,11 @@ pub(crate) fn find_frame(selector: &str) -> Option<web_sys::HtmlIFrameElement> {
 /// body (whichever of its frames is on screen is the one); otherwise its
 /// chain's candidates, as any element's — the frame's own step without its
 /// position, since a re-render puts a second frame beside it for a moment.
+/// APP-45: a mockup's device is named by its mockup (`mockup:…`).
 pub(crate) fn frame_path(frame: &web_sys::Element) -> String {
+    if let Some(m) = crate::mock_anchor::of_frame(frame) {
+        return m.text();
+    }
     if let Some(t) = frame.get_attribute("data-ticket").filter(|t| !t.is_empty() && t.len() <= VALUE_MAX) {
         return format!("iframe[data-ticket={}]", quote(&t));
     }

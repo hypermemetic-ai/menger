@@ -46,6 +46,18 @@
  *     keeps it for a mockup's device (a frame held to its screen) and notes
  *     in the bar when the page scrolls several screens; elsewhere it is
  *     ignored. A number, nothing of the page's content.
+ *   - **Annotation mode** (APP-45): in the mode (`menger:annotate { on }`,
+ *     the SDK's message), a scroll of the page is said
+ *     (`menger:scrolled`), so the host moves what it draws over a device's
+ *     page. In a page (not under the SDK, which does all of it in a body)
+ *     the shim takes the whole mode as the SDK does: every element outlined
+ *     (in `outline`, the app's `--annot`, which the host sends), the element
+ *     under the pointer posted (`menger:hover`), every click the mode's
+ *     (`menger:pick`), `menger:probe` / `menger:locate` (`reveal`: the
+ *     first scrolled into view first) answered — and the host's keyboard
+ *     path, `menger:walk { step }`, walked; the walk's keys pressed inside
+ *     the page (the arrows, Enter, `[` `]`) are handed to the host
+ *     (`menger:key`), whose they are.
  */
 (function () {
   "use strict";
@@ -262,8 +274,32 @@
     if (m.type === "menger:emulate") {
       take(m);
       apply();
+    } else if (m.type === "menger:annotate") {
+      annot.on = m.on === true;
+      if (annot.set) annot.set(m);
+    } else if (annot.handle) {
+      annot.handle(m);
     }
   });
+
+  // -- APP-45: annotation mode — a scroll is said ---------------------------
+  // `set` and `handle` are the page's own (below); under the SDK they stay
+  // unset, and the SDK answers the mode.
+  var annot = { on: false, set: null, handle: null, scrolled: null };
+  var scrollQueued = false;
+  window.addEventListener(
+    "scroll",
+    function () {
+      if (!annot.on || scrollQueued) return;
+      scrollQueued = true;
+      requestAnimationFrame(function () {
+        scrollQueued = false;
+        post("menger:scrolled", {});
+        if (annot.scrolled) annot.scrolled();
+      });
+    },
+    true
+  );
 
   // -- APP-42: how tall the page is -----------------------------------------
   var extentSent = "";
@@ -348,4 +384,239 @@
   }
   doc.addEventListener("click", takeLink);
   doc.addEventListener("auxclick", takeLink);
+
+  // -- APP-45: annotation mode, in a page --------------------------------------
+  // What the SDK does in a body (COMMENT-3): the host decides what an element
+  // is from the chain posted here (src/anchor.rs); this side reads the DOM,
+  // outlines, keeps the clicks, and walks by the host's keys.
+  var annotStyle = null;
+  var hovered = null;
+  var cursor = null;
+  var picked = Object.create(null);
+  var nextPick = 0;
+  var WALK_KEYS = /^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Enter|\[|\])$/;
+  var SKIP = /^(script|style|template|noscript|link|meta|base|title|head)$/;
+
+  function words(t, max) {
+    return String(t || "").replace(/\s+/g, " ").trim().slice(0, max);
+  }
+  function textOf(el) {
+    var t = typeof el.innerText === "string" ? el.innerText : el.textContent;
+    return String(t || "").slice(0, 600);
+  }
+  function rectOf(el) {
+    var r = el.getBoundingClientRect();
+    return { x: r.left, y: r.top, w: r.width, h: r.height };
+  }
+  function captionOf(n) {
+    var tag = n.localName;
+    if (tag === "dd") {
+      var dt = n.previousElementSibling;
+      return dt && dt.localName === "dt" ? words(dt.textContent, 60) || null : null;
+    }
+    if (tag === "td" || tag === "th") {
+      var row = n.parentElement;
+      if (!row || (row.parentElement && row.parentElement.localName === "thead")) return null;
+      var at = Array.prototype.indexOf.call(row.children, n);
+      var table = n.closest("table");
+      var head = table && table.querySelector("thead tr");
+      var h = head && head.children[at];
+      return h ? words(h.textContent, 60) || null : null;
+    }
+    if (tag === "section" || tag === "article" || tag === "aside" || tag === "details") {
+      var hd = n.querySelector(":scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > summary");
+      return hd ? words(hd.textContent, 60) || null : null;
+    }
+    return null;
+  }
+  function nodeOf(n) {
+    var attrs = [];
+    for (var i = 0; i < n.attributes.length && attrs.length < 24; i++) {
+      var a = n.attributes[i];
+      if (a.name !== "class" && a.name !== "style") attrs.push([a.name, a.value.slice(0, 300)]);
+    }
+    var nth = 1;
+    var of = 0;
+    var parent = n.parentElement;
+    if (parent) {
+      for (var s = parent.firstElementChild; s; s = s.nextElementSibling) {
+        if (s.localName === n.localName) {
+          of++;
+          if (s === n) nth = of;
+        }
+      }
+    }
+    return { tag: n.localName, attrs: attrs, classes: Array.prototype.slice.call(n.classList, 0, 8), nth: nth, of: Math.max(of, 1), caption: captionOf(n) };
+  }
+  // The element, then its ancestors below the body element.
+  function chainOf(el) {
+    var out = [];
+    for (var n = el; n && n.nodeType === 1 && n !== doc.body && n !== doc.documentElement && out.length < 32; n = n.parentElement) out.push(nodeOf(n));
+    return out;
+  }
+  function isPage(el) {
+    return !el || el.nodeType !== 1 || el === doc.body || el === doc.documentElement;
+  }
+  function hover(el) {
+    hovered = el;
+    post("menger:hover", el ? { chain: chainOf(el), rect: rectOf(el), text: textOf(el) } : { chain: null });
+  }
+  function pickEl(el) {
+    var id = ++nextPick;
+    picked[id] = el;
+    post("menger:pick", { id: id, chain: chainOf(el), rect: rectOf(el), text: textOf(el) });
+  }
+  // The outline's colour, as the host sent it — a colour, nothing else.
+  function outlineOf(v) {
+    v = String(v || "");
+    return /^[#(),.%\w\s-]{1,64}$/.test(v) ? v : "currentColor";
+  }
+  annot.set = function (m) {
+    if (annot.on && !annotStyle) {
+      annotStyle = doc.createElement("style");
+      annotStyle.id = "menger-annotate";
+      annotStyle.textContent = "*{outline:1px dashed " + outlineOf(m.outline) + "!important;outline-offset:-1px!important;cursor:crosshair!important}";
+      (doc.head || doc.documentElement).appendChild(annotStyle);
+    } else if (!annot.on) {
+      if (annotStyle && annotStyle.parentNode) annotStyle.parentNode.removeChild(annotStyle);
+      annotStyle = null;
+      hovered = null;
+      cursor = null;
+      picked = Object.create(null);
+    }
+  };
+  annot.scrolled = function () {
+    if (hovered && hovered.isConnected) hover(hovered);
+  };
+
+  function walkable(n) {
+    return !!n && n.nodeType === 1 && !SKIP.test(n.localName) && n.getClientRects().length > 0;
+  }
+  function firstIn(n) {
+    for (var c = n.firstElementChild; c; c = c.nextElementSibling) if (walkable(c)) return c;
+    return null;
+  }
+  function sibling(n, d) {
+    for (var c = d > 0 ? n.nextElementSibling : n.previousElementSibling; c; c = d > 0 ? c.nextElementSibling : c.previousElementSibling) {
+      if (walkable(c)) return c;
+    }
+    return null;
+  }
+  function walk(step) {
+    var body = doc.body;
+    if (!body) return;
+    var at = cursor && cursor !== body && body.contains(cursor) ? cursor : null;
+    if (step === "pick") {
+      if (at) pickEl(at);
+      return;
+    }
+    var next = null;
+    if (!at || step === "start") next = firstIn(body);
+    else if (step === "next") next = sibling(at, 1);
+    else if (step === "prev") next = sibling(at, -1);
+    else if (step === "in") next = firstIn(at);
+    else if (step === "out") next = at.parentElement !== body ? at.parentElement : null;
+    cursor = next || at;
+    if (!cursor) return;
+    try {
+      cursor.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch (e) {
+      /* stays */
+    }
+    hover(cursor);
+  }
+
+  // Where elements are is asked outside the mode too (a link back, as the
+  // SDK answers it); probes and walks only in it.
+  annot.handle = function (m) {
+    if (!annot.on && m.type !== "menger:locate") return;
+    if (m.type === "menger:probe") {
+      var el = picked[m.id];
+      delete picked[m.id];
+      var sels = Array.isArray(m.selectors) ? m.selectors : [];
+      post("menger:probed", {
+        id: m.id,
+        ok: sels.map(function (sel) {
+          try {
+            var all = doc.querySelectorAll(String(sel));
+            return !!el && all.length === 1 && all[0] === el;
+          } catch (e) {
+            return false;
+          }
+        }),
+      });
+    } else if (m.type === "menger:locate") {
+      var paths = Array.isArray(m.paths) ? m.paths : [];
+      if (m.reveal === true && paths.length) {
+        try {
+          var first = doc.querySelector(String(paths[0]));
+          if (first) first.scrollIntoView({ block: "center", inline: "nearest" });
+        } catch (e) {
+          /* not a selector */
+        }
+      }
+      post("menger:located", {
+        id: m.id,
+        found: paths.map(function (p) {
+          try {
+            var el = doc.querySelector(String(p));
+            return el ? { rect: rectOf(el), text: textOf(el) } : null;
+          } catch (e) {
+            return null;
+          }
+        }),
+      });
+    } else if (m.type === "menger:walk") {
+      walk(m.step);
+    }
+  };
+
+  doc.addEventListener(
+    "mouseover",
+    function (ev) {
+      if (!annot.on) return;
+      var el = ev.target;
+      if (isPage(el)) {
+        if (hovered) hover(null);
+        return;
+      }
+      if (el !== hovered) hover(el);
+    },
+    true
+  );
+  doc.addEventListener(
+    "mouseout",
+    function (ev) {
+      if (annot.on && !ev.relatedTarget) hover(null);
+    },
+    true
+  );
+  // Every pointer and mouse event is the mode's, as in a body: stopped
+  // before the page hears it, its default prevented; a click is a pick.
+  ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "auxclick", "contextmenu"].forEach(function (type) {
+    window.addEventListener(
+      type,
+      function (ev) {
+        if (!annot.on) return;
+        ev.stopImmediatePropagation();
+        if (type.indexOf("pointer") === 0) return;
+        ev.preventDefault();
+        if (type === "click" && !isPage(ev.target)) pickEl(ev.target);
+      },
+      true
+    );
+  });
+  // The walk's keys, pressed inside the page: the host's.
+  window.addEventListener(
+    "keydown",
+    function (ev) {
+      if (!annot.on || ev.isComposing || ev.ctrlKey || ev.metaKey || ev.altKey || !WALK_KEYS.test(ev.key)) return;
+      var t = ev.composedPath ? ev.composedPath()[0] : ev.target;
+      if (t && t.nodeType === 1 && (/^(input|textarea|select)$/i.test(t.tagName) || t.isContentEditable)) return;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      post("menger:key", { key: ev.key });
+    },
+    true
+  );
 })();
