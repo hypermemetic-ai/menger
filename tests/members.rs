@@ -210,7 +210,7 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     assert_eq!(ids(&found), set(&["IDENTITY-1", "OUGHT-1"]), "{found:?}");
     assert_eq!(found.last().unwrap()["matched"], 2, "PLEXUS-1 is not counted either");
     assert_eq!(call(&alice, "tickets.get", json!({ "id": "PLEXUS-2" })).await[0]["type"], "not_found", "no leak of existence");
-    let groups = call(&alice, "tickets.groups", json!({})).await;
+    let groups = call(&alice, "tickets.nav.groups", json!({})).await;
     let epics: BTreeSet<String> = groups.iter().map(|g| g["group"]["epic"].as_str().unwrap().to_string()).collect();
     assert_eq!(epics, set(&["IDENTITY", "OUGHT"]));
     let identity = groups.iter().find(|g| g["group"]["epic"] == "IDENTITY").unwrap();
@@ -694,7 +694,7 @@ async fn org_4_a_reader_of_one_org_sees_nothing_of_the_other() {
     assert!(acme_ids.iter().all(|id| id.starts_with("MENGER.")), "acme's MENGER is a namesake: {acme_ids:?}");
     assert_eq!(call(&bob, "tickets.get", json!({ "id": "PLEXUS-1" })).await[0]["type"], "not_found");
     assert_eq!(call(&bob, "tickets.get", json!({ "id": "hypermemetic:MENGER-1" })).await[0]["type"], "not_found");
-    let counted: u64 = call(&bob, "tickets.counts", json!({})).await.iter().filter_map(|e| e["count"].as_u64().or(e["held"].as_u64())).sum();
+    let counted: u64 = call(&bob, "tickets.nav.counts", json!({})).await.iter().filter_map(|e| e["count"].as_u64().or(e["held"].as_u64())).sum();
     assert_eq!(counted, 2, "counts: acme's alone");
     // The bare id fits both orgs: read in Bob's, it is acme's; Ada, of `*`,
     // is told both by their full addresses.

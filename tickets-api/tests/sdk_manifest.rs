@@ -14,8 +14,9 @@
 #![cfg(feature = "server")]
 
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{Comments, Deployments, Members, Notes, Orgs, Session, Store, Themes, Tickets};
-use plexus_core::plexus::{Activation, PluginSchema};
+use menger_tickets_api::{Comments, Deployments, Members, Nav, Notes, Orgs, Session, Store, Themes, Tickets};
+// (`Nav` is `tickets`' child, ACCESS-16.)
+use plexus_core::plexus::{Activation, MethodRole, PluginSchema};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

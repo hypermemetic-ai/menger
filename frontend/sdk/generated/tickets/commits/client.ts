@@ -8,7 +8,8 @@ import type { CommitRef, TicketsEvent } from '../../tickets/types';
 
 /** Typed client interface for tickets.commits plugin */
 export interface TicketsCommitsClient {
-  /** Link commits to a ticket, or to many (ids; one write, all or none) — the commits that finished it; yields commits_linked { ticket, added } per ticket.
+  /**
+   * Link commits to a ticket, or to many (ids; one write, all or none) — the commits that finished it; yields commits_linked { ticket, added } per ticket.
 
 SDLC-9: records which commits finished a ticket. Each entry is a
 commit reference — a hexadecimal object name of 7 to 64 characters
@@ -25,11 +26,17 @@ past 256 commits on the ticket; an entry that is not a reference is
 nothing. Moves `updated_unix` and nothing else — not the status.
 `watch` carries every `CommitsLinked` that added something. ACT-2:
 `ids` instead of `id` links them to each, in one write, all or none,
-one `CommitsLinked` per ticket (`cells_stream`). */
+one `CommitsLinked` per ticket (`cells_stream`).
+   * @requires `commits.link` on the scope of `id`
+   */
   link(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): AsyncGenerator<TicketsEvent>;
-  /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
+  /**
+   * Get plugin or method schema. Pass {"method": "name"} for a specific method.
+   * @requires `commits.schema` anywhere it is held
+   */
   schema(): Promise<unknown>;
-  /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed }.
+  /**
+   * Unlink commits from a ticket; yields commits_unlinked { ticket, removed }.
 
 SDLC-9: the inverse of `link` — every entry the ticket carries comes
 off. The same references, compared the same way, all or nothing.
@@ -37,7 +44,9 @@ Yields exactly one event: `CommitsUnlinked { ticket, removed }` —
 `removed` empty when none of them was linked, which writes and
 broadcasts nothing — or `NotFound`; an entry that is not a reference
 is `invalid_params` naming it. `watch` carries every
-`CommitsUnlinked` that removed something. */
+`CommitsUnlinked` that removed something.
+   * @requires `commits.unlink` on the scope of `id`
+   */
   unlink(commits: CommitRef[], id: TicketRef): AsyncGenerator<TicketsEvent>;
 }
 
@@ -66,3 +75,15 @@ class TicketsCommitsClientImpl implements TicketsCommitsClient {
 export function createTicketsCommitsClient(rpc: RpcClient): TicketsCommitsClient {
   return new TicketsCommitsClientImpl(rpc);
 }
+
+/** What each tickets.commits method needs (AUTH-9): its grant, and the param that locates what it acts on (`null`: allowed wherever the grant is held). The gate decides, server-side. */
+export const requires = {
+  "commits.link": { grant: "commits.link", target: "id" },
+  "commits.schema": { grant: "commits.schema", target: null },
+  "commits.unlink": { grant: "commits.unlink", target: "id" },
+} as const;
+
+/** The tickets.commits activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
+export const defaultRoles = {
+  "editor": ["commits.link", "commits.unlink"],
+} as const;

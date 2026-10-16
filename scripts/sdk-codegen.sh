@@ -153,6 +153,10 @@ export async function script(this: MengerElement): Promise<number> {
   for await (const ev of this.menger.tickets.waves(['RETURNS'])) {
     if (ev.type === 'wave_counts') n = ev.waves[0] ?? 0;
   }
+  // ACCESS-16: the nav's reads are `tickets.nav`'s.
+  for await (const ev of menger.tickets.nav.groups()) {
+    if (ev.type === 'group') n += ev.group.total;
+  }
   const raw: WireEvent[] = await menger.call('waves', { epics: ['RETURNS'] });
   const off: () => void = menger.on('change', (e: WireEvent) => void e.type);
   off();

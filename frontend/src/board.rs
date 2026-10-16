@@ -801,7 +801,7 @@ async fn count(client: &Client, filter: &str) -> Counted {
         Ok(f) => f,
         Err(why) => return Counted::Refused(why),
     };
-    match client.counts_all(Some(filter), None, crate::session::zone()).await {
+    match client.nav().counts_all(Some(filter), None, crate::session::zone()).await {
         Ok(events) => {
             let mut runs = Vec::new();
             for ev in events {

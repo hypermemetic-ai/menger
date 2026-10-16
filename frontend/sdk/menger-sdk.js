@@ -541,6 +541,14 @@
     }
   }
   function errorFromStreamItem(item) {
+    if (item.error_kind === "forbidden" && typeof item.grant === "string") {
+      return new Forbidden(item.message, {
+        grant: item.grant,
+        scope: item.scope ?? "",
+        roles: item.roles ?? [],
+        heldOn: item.held_on ?? []
+      }, item.recoverable, item.metadata);
+    }
     switch (item.code) {
       case "-32003":
         return new ForbiddenError(item.message, item.recoverable, item.metadata);
@@ -548,6 +556,21 @@
         return new UnauthenticatedError(item.message, item.recoverable, item.metadata);
       default:
         return new PlexusError(item.message, item.code, item.recoverable, item.metadata);
+    }
+  }
+
+  class Forbidden extends ForbiddenError {
+    grant;
+    scope;
+    roles;
+    heldOn;
+    constructor(message, refusal, recoverable = false, metadata) {
+      super(message, recoverable, metadata);
+      this.name = "Forbidden";
+      this.grant = refusal.grant;
+      this.scope = refusal.scope;
+      this.roles = refusal.roles;
+      this.heldOn = refusal.heldOn;
     }
   }
 
@@ -622,10 +645,6 @@
       const stream = this.rpc.call("tickets.components", {});
       yield* extractData(stream);
     }
-    async* counts(filter, keep, tz) {
-      const stream = this.rpc.call("tickets.counts", { filter, keep, tz });
-      yield* extractData(stream);
-    }
     async* create(epic, title, blockedBy, body, kind, org, parent, path, severity) {
       const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, epic, kind, org, parent, path, severity, title });
       yield* extractData(stream);
@@ -634,24 +653,12 @@
       const stream = this.rpc.call("tickets.delete", { children, filter, ids, max, message, tz, unblock });
       yield* extractData(stream);
     }
-    async* extents() {
-      const stream = this.rpc.call("tickets.extents", {});
-      yield* extractData(stream);
-    }
-    async* facets(base, filter, tz) {
-      const stream = this.rpc.call("tickets.facets", { base, filter, tz });
-      yield* extractData(stream);
-    }
     async* find(query, after, filter, limit, tz) {
       const stream = this.rpc.call("tickets.find", { after, filter, limit, query, tz });
       yield* extractData(stream);
     }
     async* get(id) {
       const stream = this.rpc.call("tickets.get", { id });
-      yield* extractData(stream);
-    }
-    async* groups() {
-      const stream = this.rpc.call("tickets.groups", {});
       yield* extractData(stream);
     }
     async* health() {
@@ -668,10 +675,6 @@
     }
     async* list(after, at, epic, filter, keep, limit, parent, status, summary, tz) {
       const stream = this.rpc.call("tickets.list", { after, at, epic, filter, keep, limit, parent, status, summary, tz });
-      yield* extractData(stream);
-    }
-    async* member(filter, ids, tz) {
-      const stream = this.rpc.call("tickets.member", { filter, ids, tz });
       yield* extractData(stream);
     }
     async* queue(id, reason, urgency, input, source) {
@@ -716,10 +719,6 @@
     }
     async* snooze(id, minutes, source) {
       const stream = this.rpc.call("tickets.snooze", { id, minutes, source });
-      yield* extractData(stream);
-    }
-    async* tree(filter, after, epic, keep, limit, matchesOnly, parent, tz) {
-      const stream = this.rpc.call("tickets.tree", { after, epic, filter, keep, limit, matches_only: matchesOnly, parent, tz });
       yield* extractData(stream);
     }
     async* undelete(ids) {
@@ -817,8 +816,48 @@
     return new TicketsWorkClientImpl(rpc);
   }
 
+  // generated/tickets/nav/client.ts
+  class TicketsNavClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* counts(filter, keep, tz) {
+      const stream = this.rpc.call("tickets.nav.counts", { filter, keep, tz });
+      yield* extractData(stream);
+    }
+    async* extents() {
+      const stream = this.rpc.call("tickets.nav.extents", {});
+      yield* extractData(stream);
+    }
+    async* facets(base, filter, tz) {
+      const stream = this.rpc.call("tickets.nav.facets", { base, filter, tz });
+      yield* extractData(stream);
+    }
+    async* groups() {
+      const stream = this.rpc.call("tickets.nav.groups", {});
+      yield* extractData(stream);
+    }
+    async* member(filter, ids, tz) {
+      const stream = this.rpc.call("tickets.nav.member", { filter, ids, tz });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.nav.schema", {});
+      return collectOne(stream);
+    }
+    async* tree(filter, after, epic, keep, limit, matchesOnly, parent, tz) {
+      const stream = this.rpc.call("tickets.nav.tree", { after, epic, filter, keep, limit, matches_only: matchesOnly, parent, tz });
+      yield* extractData(stream);
+    }
+  }
+  function createTicketsNavClient(rpc) {
+    return new TicketsNavClientImpl(rpc);
+  }
+
   // bridge.ts
   var NAMESPACE = "tickets.";
+  var NAV = "tickets.nav.";
   var HOST_NAMES = { "inputs.list": "inputs", "work.waves": "waves", "work.blockers": "blockers" };
   function metadata(method) {
     return { provenance: ["menger", "bridge", method], plexusHash: "", timestamp: Math.floor(Date.now() / 1000) };
@@ -827,7 +866,7 @@
     return {
       async* call(method, params) {
         const bare = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
-        const name = HOST_NAMES[bare] ?? bare;
+        const name = HOST_NAMES[bare] ?? (method.startsWith(NAV) ? method.slice(NAV.length) : bare);
         let items;
         try {
           items = await call(name, params ?? null);
@@ -860,6 +899,7 @@
     Object.defineProperty(tickets, "inputs", { value: inputs });
     const work = createTicketsWorkClient(rpc);
     Object.assign(tickets, { work, waves: work.waves.bind(work), blockers: work.blockers.bind(work) });
+    Object.defineProperty(tickets, "nav", { value: createTicketsNavClient(rpc) });
     return tickets;
   }
   mengerTyped = {

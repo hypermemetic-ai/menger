@@ -127,7 +127,7 @@ async fn listed(client: &WsClient, filter: &str) -> Result<Vec<String>, String> 
 
 /// `counts`' matches, summed — or the in-band error's message.
 async fn counted(client: &WsClient, filter: &str) -> Result<u64, String> {
-    let evs = collect(call(client, "tickets.counts", json!({"filter": filter})).await).await;
+    let evs = collect(call(client, "tickets.nav.counts", json!({"filter": filter})).await).await;
     if let Some(e) = evs.iter().find(|e| e["type"] == "error") {
         return Err(e["message"].as_str().unwrap_or_default().to_string());
     }

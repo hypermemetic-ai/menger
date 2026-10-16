@@ -857,7 +857,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     // type, so this is the whole answer: group items, then done.
     // AGS-23: each with its root's row — every root here a Pending scope.
     let root_row = |title: &str| json!({"title": title, "status": "Pending", "kind": "scope"});
-    let items = collect(call(&client, "tickets.groups", json!({})).await).await;
+    let items = collect(call(&client, "tickets.nav.groups", json!({})).await).await;
     assert!(items.iter().all(|ev| ev["type"] == "group"), "only groups: {items:?}");
     let groups: Vec<Value> = items.into_iter().map(|ev| ev["group"].clone()).collect();
     assert_eq!(
@@ -1008,7 +1008,7 @@ async fn extents_are_each_shortcodes_last_seq_and_a_row_is_a_cursor() {
     let evs = collect(call(&client, "tickets.create", json!({"epic": "NEW", "title": "x"})).await).await;
     assert_eq!(evs[0]["type"], "error", "{evs:?}");
 
-    let items = collect(call(&client, "tickets.extents", json!({})).await).await;
+    let items = collect(call(&client, "tickets.nav.extents", json!({})).await).await;
     assert_eq!(
         items,
         vec![
@@ -1021,7 +1021,7 @@ async fn extents_are_each_shortcodes_last_seq_and_a_row_is_a_cursor() {
     let health = collect(call(&client, "tickets.health", json!({})).await).await;
     let sum: u64 = items.iter().map(|ev| ev["last_seq"].as_u64().unwrap()).sum();
     assert_eq!(json!(sum), health[0]["ticket_count"]);
-    let groups = collect(call(&client, "tickets.groups", json!({})).await).await;
+    let groups = collect(call(&client, "tickets.nav.groups", json!({})).await).await;
     let hub = groups.iter().find(|ev| ev["group"]["epic"] == "HUB").unwrap();
     assert_eq!(hub["group"]["total"], 6, "the roll-up nests SUB; the extent does not");
 
@@ -1045,7 +1045,7 @@ async fn extents_are_each_shortcodes_last_seq_and_a_row_is_a_cursor() {
     // A birth is its shortcode's new last_seq — `created` already says so.
     let evs = collect(call(&client, "tickets.create", json!({"epic": "SUB", "title": "e"})).await).await;
     assert_eq!((evs[0]["ticket"]["epic"].as_str(), evs[0]["ticket"]["seq"].as_u64()), (Some("SUB"), Some(4)));
-    let items = collect(call(&client, "tickets.extents", json!({})).await).await;
+    let items = collect(call(&client, "tickets.nav.extents", json!({})).await).await;
     assert_eq!(items[2], json!({"type": "extent", "epic": "SUB", "shortcode": "SUB", "last_seq": 4}));
 }
 
@@ -1414,7 +1414,7 @@ async fn docs_root_a_shortcode_refuse_set_status_in_band_and_are_never_ready() {
     assert_eq!(docs, [("MANIFEST-1", "Doc"), ("MANIFEST-2", "Doc")]);
 
     // One piece of work, two docs, rooted at the doc.
-    let items = collect(call(&client, "tickets.groups", json!({})).await).await;
+    let items = collect(call(&client, "tickets.nav.groups", json!({})).await).await;
     let groups: Vec<Value> = items.into_iter().map(|ev| ev["group"].clone()).collect();
     assert_eq!(
         groups,
@@ -2182,22 +2182,22 @@ async fn tree_and_under_over_the_wire() {
             })
             .collect()
     };
-    let (rows, page) = paged(call(&client, "tickets.tree", json!({"parent": "TW-1", "filter": "status Ready"})).await).await;
+    let (rows, page) = paged(call(&client, "tickets.nav.tree", json!({"parent": "TW-1", "filter": "status Ready"})).await).await;
     assert_eq!(nodes(&rows), [("TW-2".to_string(), false, 1)], "TW-2 holds the Ready build; TW-3 holds nothing");
     assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}), "no `first`");
     assert_eq!(rows[0]["summary"]["title"], "a execution", "the row is the summary");
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"epic": "tw", "filter": "status Ready"})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"epic": "tw", "filter": "status Ready"})).await).await;
     assert_eq!(nodes(&rows), [("TW-1".to_string(), false, 1)], "the shortcode's top row: its root");
-    let (rows, page) = paged(call(&client, "tickets.tree", json!({"parent": "TW-1", "filter": "", "limit": 1})).await).await;
+    let (rows, page) = paged(call(&client, "tickets.nav.tree", json!({"parent": "TW-1", "filter": "", "limit": 1})).await).await;
     assert_eq!(nodes(&rows), [("TW-2".to_string(), true, 2)]);
     assert_eq!(page, json!({"type": "page", "next": "TW-2", "remaining": 1}));
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TW-1", "filter": "kind doc and under TW-2"})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"parent": "TW-1", "filter": "kind doc and under TW-2"})).await).await;
     assert_eq!(nodes(&rows), [("TW-2".to_string(), false, 1)]);
     for bad in [json!({"filter": ""}), json!({"parent": "TW-1", "epic": "TW", "filter": ""}), json!({"parent": "TW-1", "filter": "text \"x\""})] {
-        let evs = collect(call(&client, "tickets.tree", bad.clone()).await).await;
+        let evs = collect(call(&client, "tickets.nav.tree", bad.clone()).await).await;
         assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("error")), "{bad}: {evs:?}");
     }
-    let counts = collect(call(&client, "tickets.counts", json!({"filter": "under TW-2"})).await).await;
+    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "under TW-2"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "TW", "shortcode": "TW", "held": 3})], "TW-2, TW-4, TW-6");
 
     // `watch { filter }` asking `under`: TW-5 moved under TW-2 enters; back, it leaves.
@@ -2244,32 +2244,32 @@ async fn tree_matches_only_over_the_wire() {
     let row = |id: &str, m: bool, b: u64| (id.to_string(), m, b);
     // The heading TM: TM-1 and TM-2 are not builds; TM-3 moves up, TM-4
     // stays under it, and TN's row follows its host TM-2 up to TM's top.
-    let (rows, page) = paged(call(&client, "tickets.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true})).await).await;
+    let (rows, page) = paged(call(&client, "tickets.nav.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true})).await).await;
     assert_eq!(nodes(&rows), [row("TM-3", true, 1), row("TN-1", false, 1)]);
     assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TM-1", "filter": "kind build", "matches_only": true})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"parent": "TM-1", "filter": "kind build", "matches_only": true})).await).await;
     assert_eq!(nodes(&rows), [row("TM-3", true, 1), row("TN-1", false, 1)], "the root's address answers the same");
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TM-3", "filter": "kind build", "matches_only": true})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"parent": "TM-3", "filter": "kind build", "matches_only": true})).await).await;
     assert_eq!(nodes(&rows), [row("TM-4", true, 0)]);
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"epic": "TN", "filter": "kind build", "matches_only": true})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"epic": "TN", "filter": "kind build", "matches_only": true})).await).await;
     assert_eq!(nodes(&rows), [row("TN-2", true, 0)]);
     // Paged across the matches and the shortcodes after them.
-    let (rows, page) = paged(call(&client, "tickets.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true, "limit": 1})).await).await;
+    let (rows, page) = paged(call(&client, "tickets.nav.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true, "limit": 1})).await).await;
     assert_eq!((nodes(&rows), page), (vec![row("TM-3", true, 1)], json!({"type": "page", "next": "TM-3", "remaining": 1})));
-    let (rows, page) = paged(call(&client, "tickets.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true, "after": "TM-3"})).await).await;
+    let (rows, page) = paged(call(&client, "tickets.nav.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true, "after": "TM-3"})).await).await;
     assert_eq!((nodes(&rows), page), (vec![row("TN-1", false, 1)], json!({"type": "page", "next": null, "remaining": 0})));
     // Without the flag (or with it false), FILTER-13's answer: the holders.
     for off in [json!({"parent": "TM-1", "filter": "kind build"}), json!({"parent": "TM-1", "filter": "kind build", "matches_only": false})] {
-        let (rows, _) = paged(call(&client, "tickets.tree", off.clone()).await).await;
+        let (rows, _) = paged(call(&client, "tickets.nav.tree", off.clone()).await).await;
         assert_eq!(nodes(&rows), [row("TM-2", false, 3)], "{off}");
     }
     // TM-2 made a build: it is drawn, and TM-3 and TN's row are under it again.
     answer(&client, "tickets.set_kind", json!({"id": "TM-2", "kind": "build"})).await;
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true})).await).await;
     assert_eq!(nodes(&rows), [row("TM-2", true, 3)]);
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TM-2", "filter": "kind build", "matches_only": true})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"parent": "TM-2", "filter": "kind build", "matches_only": true})).await).await;
     assert_eq!(nodes(&rows), [row("TM-3", true, 1), row("TN-1", false, 1)]);
-    let evs = collect(call(&client, "tickets.tree", json!({"parent": "TM-1", "epic": "TM", "filter": "", "matches_only": true})).await).await;
+    let evs = collect(call(&client, "tickets.nav.tree", json!({"parent": "TM-1", "epic": "TM", "filter": "", "matches_only": true})).await).await;
     assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("error")), "one address: {evs:?}");
 }
 
@@ -2302,17 +2302,17 @@ async fn keep_over_the_wire() {
         p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
         p
     };
-    let (rows, _) = paged(call(&client, "tickets.tree", tree(json!({}))).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", tree(json!({}))).await).await;
     assert_eq!(nodes(&rows), [row("TK-3", true, 0), row("TK-4", true, 0), row("TL-1", false, 1)], "without keep");
-    let (rows, page) = paged(call(&client, "tickets.tree", tree(json!({"keep": "TK-2"}))).await).await;
+    let (rows, page) = paged(call(&client, "tickets.nav.tree", tree(json!({"keep": "TK-2"}))).await).await;
     assert_eq!(nodes(&rows), [row("TK-2", false, 2), row("TK-4", true, 0)], "TK-2 in TK-3's place");
     assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TK-2", "filter": "kind build", "matches_only": true, "keep": "tk-2"})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"parent": "TK-2", "filter": "kind build", "matches_only": true, "keep": "tk-2"})).await).await;
     assert_eq!(nodes(&rows), [row("TK-3", true, 0), row("TL-1", false, 1)], "its build and TL's row under it");
     // ACCESS-8: a blank `keep` is no ticket — refused at dispatch (it was none).
-    assert!(invalid(&client, "tickets.tree", tree(json!({"keep": ""}))).await.contains("keep: "));
+    assert!(invalid(&client, "tickets.nav.tree", tree(json!({"keep": ""}))).await.contains("keep: "));
     for keep in ["TK-3", "TK-1", "NONE-1"] {
-        let (rows, _) = paged(call(&client, "tickets.tree", tree(json!({"keep": keep}))).await).await;
+        let (rows, _) = paged(call(&client, "tickets.nav.tree", tree(json!({"keep": keep}))).await).await;
         assert_eq!(nodes(&rows), [row("TK-3", true, 0), row("TK-4", true, 0), row("TL-1", false, 1)], "keep {keep:?}");
     }
 
@@ -2328,10 +2328,10 @@ async fn keep_over_the_wire() {
     assert_eq!(ids(&rows), ["TL-2"], "outside the sugar: not kept");
 
     let counts = |evs: Vec<Value>| evs.into_iter().map(|e| (e["epic"].as_str().unwrap().to_string(), e["held"].as_u64().unwrap())).collect::<Vec<_>>();
-    assert_eq!(counts(collect(call(&client, "tickets.counts", json!({"filter": "kind build"})).await).await), [("TK".to_string(), 2), ("TL".to_string(), 1)]);
-    assert_eq!(counts(collect(call(&client, "tickets.counts", json!({"filter": "kind build", "keep": "TK-2"})).await).await), [("TK".to_string(), 3), ("TL".to_string(), 1)]);
-    assert_eq!(counts(collect(call(&client, "tickets.counts", json!({"filter": "kind build", "keep": "TK-3"})).await).await), [("TK".to_string(), 2), ("TL".to_string(), 1)], "a match once");
-    assert_eq!(counts(collect(call(&client, "tickets.counts", json!({"filter": "kind doc", "keep": "TL-1"})).await).await), [("TL".to_string(), 1)], "a shortcode with no match");
+    assert_eq!(counts(collect(call(&client, "tickets.nav.counts", json!({"filter": "kind build"})).await).await), [("TK".to_string(), 2), ("TL".to_string(), 1)]);
+    assert_eq!(counts(collect(call(&client, "tickets.nav.counts", json!({"filter": "kind build", "keep": "TK-2"})).await).await), [("TK".to_string(), 3), ("TL".to_string(), 1)]);
+    assert_eq!(counts(collect(call(&client, "tickets.nav.counts", json!({"filter": "kind build", "keep": "TK-3"})).await).await), [("TK".to_string(), 2), ("TL".to_string(), 1)], "a match once");
+    assert_eq!(counts(collect(call(&client, "tickets.nav.counts", json!({"filter": "kind doc", "keep": "TL-1"})).await).await), [("TL".to_string(), 1)], "a shortcode with no match");
 }
 
 /// Acceptance 4: completing a blocker, under `watch { filter: "ready" }`, is
@@ -2392,7 +2392,7 @@ async fn a_crossing_that_unblocks_three_hundred_recounts() {
     let recounts: Vec<&Value> = evs.iter().filter(|e| e["type"] == "recount").collect();
     assert_eq!(recounts, [&json!({"type": "recount", "epic": "RA", "shortcode": "RA", "held": 200}), &json!({"type": "recount", "epic": "RB", "shortcode": "RB", "held": 100})], "{evs:#?}");
     assert!(!evs.iter().any(|e| e["type"] == "entered" || e["type"] == "left"), "no entered past 256");
-    let counts = collect(call(&client, "tickets.counts", json!({"filter": "ready"})).await).await;
+    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "ready"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "RA", "shortcode": "RA", "held": 200}), json!({"type": "count", "epic": "RB", "shortcode": "RB", "held": 100})]);
     let plain_evs = until_marker(&mut plain).await;
     assert!(!plain_evs.iter().any(|e| matches!(e["type"].as_str(), Some("entered" | "left" | "recount"))), "watch {{}}");
@@ -2439,14 +2439,14 @@ async fn counts_facets_and_filtered_pages_over_the_wire() {
     let message = invalid(&client, "tickets.list", json!({"filter": "tag x and ready and nonsense"})).await;
     assert!(message.contains("filter: ") && message.contains("`tag x`") && message.contains("`nonsense`"), "{message}");
 
-    let counts = collect(call(&client, "tickets.counts", json!({"filter": "severity in (high, low)"})).await).await;
+    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "severity in (high, low)"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "FW", "shortcode": "FW", "held": 6})]);
-    let all = collect(call(&client, "tickets.counts", json!({})).await).await;
+    let all = collect(call(&client, "tickets.nav.counts", json!({})).await).await;
     assert_eq!(all, [json!({"type": "count", "epic": "FW", "shortcode": "FW", "held": 7})]);
-    let none = collect(call(&client, "tickets.counts", json!({"filter": "category active"})).await).await;
+    let none = collect(call(&client, "tickets.nav.counts", json!({"filter": "category active"})).await).await;
     assert!(none.is_empty(), "a shortcode with no match has no count");
 
-    let facets = collect(call(&client, "tickets.facets", json!({"filter": "severity high and status Pending"})).await).await;
+    let facets = collect(call(&client, "tickets.nav.facets", json!({"filter": "severity high and status Pending"})).await).await;
     let of = |field: &str| -> Vec<(String, u64)> {
         facets
             .iter()
@@ -2462,7 +2462,7 @@ async fn counts_facets_and_filtered_pages_over_the_wire() {
     assert_eq!(of("in"), [("FW".to_string(), 3)]);
     assert_eq!(of("blocked"), [("no".to_string(), 3)]);
     assert_eq!(facets[0], json!({"type": "facet", "field": "status", "value": "Pending", "held": 3}));
-    let base = collect(call(&client, "tickets.facets", json!({"base": "status Ready"})).await).await;
+    let base = collect(call(&client, "tickets.nav.facets", json!({"base": "status Ready"})).await).await;
     assert!(base.iter().filter(|f| f["field"] == "status").all(|f| f["value"] == "Ready"), "base is never set aside: {base:?}");
 }
 
@@ -2494,9 +2494,9 @@ async fn menger_doc_is_a_filter_on_every_read_over_the_wire() {
     assert_eq!((ids(&rows), page["first"].as_u64()), (vec!["PLEXUS-3".to_string()], Some(1)), "read whatever its case, paged by position");
 
     // counts, and facets: a flag category, yes / no.
-    let counts = collect(call(&client, "tickets.counts", json!({"filter": "menger doc"})).await).await;
+    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "menger doc"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "PLEXUS", "shortcode": "PLEXUS", "held": 1})]);
-    let counts = collect(call(&client, "tickets.counts", json!({"filter": "not menger doc and kind doc"})).await).await;
+    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "not menger doc and kind doc"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "PLEXUS", "shortcode": "PLEXUS", "held": 1})], "PLEXUS-3, the ordinary doc");
     let menu = |facets: &[Value], field: &str| -> Vec<(String, u64)> {
         facets
@@ -2505,15 +2505,15 @@ async fn menger_doc_is_a_filter_on_every_read_over_the_wire() {
             .map(|f| (f["value"].as_str().unwrap().to_string(), f["held"].as_u64().unwrap()))
             .collect()
     };
-    let facets = collect(call(&client, "tickets.facets", json!({})).await).await;
+    let facets = collect(call(&client, "tickets.nav.facets", json!({})).await).await;
     assert_eq!(menu(&facets, "menger doc"), [("yes".to_string(), 1), ("no".to_string(), 3)]);
     let fields: Vec<&str> = facets.iter().map(|f| f["field"].as_str().unwrap()).collect();
     let at = |name: &str| fields.iter().position(|f| *f == name).unwrap();
     assert!(at("has commits") < at("menger doc") && at("menger doc") < at("in"), "after the other flags, before `in`: {fields:?}");
-    let facets = collect(call(&client, "tickets.facets", json!({"filter": "not menger doc"})).await).await;
+    let facets = collect(call(&client, "tickets.nav.facets", json!({"filter": "not menger doc"})).await).await;
     assert_eq!(menu(&facets, "menger doc"), [("yes".to_string(), 1), ("no".to_string(), 3)], "its own group set aside");
     assert_eq!(menu(&facets, "kind"), [("scope".to_string(), 1), ("build".to_string(), 1), ("doc".to_string(), 1)], "the rest under it");
-    let facets = collect(call(&client, "tickets.facets", json!({"base": "kind doc"})).await).await;
+    let facets = collect(call(&client, "tickets.nav.facets", json!({"base": "kind doc"})).await).await;
     assert_eq!(menu(&facets, "menger doc"), [("yes".to_string(), 1), ("no".to_string(), 1)]);
 
     // tree: the nav's default — the root and its work, the board note gone.
@@ -2522,11 +2522,11 @@ async fn menger_doc_is_a_filter_on_every_read_over_the_wire() {
             .map(|e| (e["summary"]["id"].as_str().unwrap().to_string(), e["matched"].as_bool().unwrap(), e["below"].as_u64().unwrap()))
             .collect()
     };
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"epic": "plexus", "filter": "not menger doc"})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"epic": "plexus", "filter": "not menger doc"})).await).await;
     assert_eq!(nodes(&rows), [("PLEXUS-1".to_string(), true, 2)]);
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "PLEXUS-1", "filter": "not menger doc"})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"parent": "PLEXUS-1", "filter": "not menger doc"})).await).await;
     assert_eq!(nodes(&rows), [("PLEXUS-3".to_string(), true, 0), ("PLEXUS-4".to_string(), true, 0)]);
-    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "PLEXUS-1", "filter": "menger doc"})).await).await;
+    let (rows, _) = paged(call(&client, "tickets.nav.tree", json!({"parent": "PLEXUS-1", "filter": "menger doc"})).await).await;
     assert_eq!(nodes(&rows), [("PLEXUS-2".to_string(), true, 0)]);
 
     // find and member.
@@ -2534,7 +2534,7 @@ async fn menger_doc_is_a_filter_on_every_read_over_the_wire() {
     assert_eq!(ids(&rows), ["PLEXUS-2", "PLEXUS-3", "PLEXUS-4"]);
     let (rows, _) = paged(call(&client, "tickets.find", json!({"query": "board", "filter": "not menger doc"})).await).await;
     assert_eq!(ids(&rows), ["PLEXUS-3", "PLEXUS-4"]);
-    let members = collect(call(&client, "tickets.member", json!({"ids": ["PLEXUS-2", "PLEXUS-3"], "filter": "menger doc"})).await).await;
+    let members = collect(call(&client, "tickets.nav.member", json!({"ids": ["PLEXUS-2", "PLEXUS-3"], "filter": "menger doc"})).await).await;
     assert_eq!(
         members,
         [json!({"type": "member", "id": "PLEXUS-2", "matched": true}), json!({"type": "member", "id": "PLEXUS-3", "matched": false})]
@@ -2602,12 +2602,12 @@ async fn labels_and_asking_are_filters_over_the_wire() {
         let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": filter, "summary": true})).await).await;
         assert_eq!(ids(&rows), want, "{filter}");
     }
-    let counts = collect(call(&client, "tickets.counts", json!({"filter": "asking or label needs-you"})).await).await;
+    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "asking or label needs-you"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "shortcode": "HOME", "held": 2})]);
     // FILTER-24: `keep` holds the open ticket in, under these cells too.
     let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "asking or label needs-you", "keep": "HOME-4", "summary": true})).await).await;
     assert_eq!(ids(&rows), ["HOME-2", "HOME-3", "HOME-4"], "kept beside the matches");
-    let counts = collect(call(&client, "tickets.counts", json!({"filter": "label needs-you", "keep": "HOME-4"})).await).await;
+    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "label needs-you", "keep": "HOME-4"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "shortcode": "HOME", "held": 2})]);
     let menu = |facets: &[Value], field: &str| -> Vec<(String, u64)> {
         facets
@@ -2616,13 +2616,13 @@ async fn labels_and_asking_are_filters_over_the_wire() {
             .map(|f| (f["value"].as_str().unwrap().to_string(), f["held"].as_u64().unwrap()))
             .collect()
     };
-    let facets = collect(call(&client, "tickets.facets", json!({})).await).await;
+    let facets = collect(call(&client, "tickets.nav.facets", json!({})).await).await;
     assert_eq!(menu(&facets, "asking"), [("yes".to_string(), 1), ("no".to_string(), 3)]);
     assert_eq!(menu(&facets, "label"), [("needs-you".to_string(), 1)]);
     let fields: Vec<&str> = facets.iter().map(|f| f["field"].as_str().unwrap()).collect();
     let at = |name: &str| fields.iter().position(|f| *f == name).unwrap();
     assert!(at("menger doc") < at("asking") && at("asking") < at("label") && at("label") < at("in"), "{fields:?}");
-    let members = collect(call(&client, "tickets.member", json!({"ids": ["HOME-2", "HOME-3", "HOME-4"], "filter": "asking or label needs-you"})).await).await;
+    let members = collect(call(&client, "tickets.nav.member", json!({"ids": ["HOME-2", "HOME-3", "HOME-4"], "filter": "asking or label needs-you"})).await).await;
     let matched: Vec<bool> = members.iter().map(|m| m["matched"].as_bool().unwrap()).collect();
     assert_eq!(matched, [true, true, false]);
     let open = collect(call(&client, "tickets.inputs.list", json!({"state": "open", "filter": "asking or label needs-you"})).await).await;
@@ -2757,7 +2757,7 @@ async fn reads_take_the_lens_over_the_wire() {
 
     // member: one event per id, in the order asked, then done.
     let asked = json!(["LN-4", "LN-2", "NOPE-1", "ln-6", "LN-7", "LN-2"]);
-    let members = collect(call(&client, "tickets.member", json!({"ids": asked, "filter": "ready"})).await).await;
+    let members = collect(call(&client, "tickets.nav.member", json!({"ids": asked, "filter": "ready"})).await).await;
     assert_eq!(
         members,
         [
@@ -2770,15 +2770,15 @@ async fn reads_take_the_lens_over_the_wire() {
             json!({"type": "member", "id": "LN-2", "matched": true}),
         ]
     );
-    let all = collect(call(&client, "tickets.member", json!({"ids": ["LN-3", "LX-1"], "filter": ""})).await).await;
+    let all = collect(call(&client, "tickets.nav.member", json!({"ids": ["LN-3", "LX-1"], "filter": ""})).await).await;
     assert!(all.iter().all(|m| m["matched"] == true), "the empty filter admits every ticket: {all:?}");
-    assert!(collect(call(&client, "tickets.member", json!({"ids": [], "filter": "ready"})).await).await.is_empty());
+    assert!(collect(call(&client, "tickets.nav.member", json!({"ids": [], "filter": "ready"})).await).await.is_empty());
 
     // The refusals: each one error, nothing else.
     let thousand: Vec<String> = (1..=1000).map(|i| format!("LN-{i}")).collect();
-    assert_eq!(collect(call(&client, "tickets.member", json!({"ids": thousand, "filter": "ready"})).await).await.len(), 1000);
+    assert_eq!(collect(call(&client, "tickets.nav.member", json!({"ids": thousand, "filter": "ready"})).await).await.len(), 1000);
     let more: Vec<String> = (1..=1001).map(|i| format!("LN-{i}")).collect();
-    let too_many = collect(call(&client, "tickets.member", json!({"ids": more, "filter": "ready"})).await).await;
+    let too_many = collect(call(&client, "tickets.nav.member", json!({"ids": more, "filter": "ready"})).await).await;
     assert_eq!(too_many.len(), 1, "{too_many:?}");
     assert_eq!(too_many[0]["type"], "error");
     assert!(too_many[0]["message"].as_str().unwrap().contains("at most 1000 ids"), "{too_many:?}");
@@ -2790,7 +2790,7 @@ async fn reads_take_the_lens_over_the_wire() {
         ("tickets.find", json!({"query": "watch", "filter": "text \"watch\""})),
         ("tickets.work.ready", json!({"filter": "under LN-1 and text \"x\""})),
         ("tickets.inputs.list", json!({"filter": "tag x and nonsense"})),
-        ("tickets.member", json!({"ids": ["LN-2"], "filter": "status Bogus"})),
+        ("tickets.nav.member", json!({"ids": ["LN-2"], "filter": "status Bogus"})),
         ("tickets.find", json!({"query": "x", "filter": "nonsense"})),
     ] {
         // ACCESS-8: a filter the language does not read is refused at
@@ -3279,7 +3279,7 @@ async fn delete_over_the_wire() {
     assert_eq!(heard.last().unwrap()["ids"], json!(["DEL-5"]), "{heard:?}");
     let got = answer(&client, "tickets.get", json!({"id": "DEL-5"})).await;
     assert_eq!((&got["type"], &got["tombstones"][0]["by"]), (&json!("deleted"), &json!("anonymous")), "{got}");
-    let extents = collect(call(&client, "tickets.extents", json!({})).await).await;
+    let extents = collect(call(&client, "tickets.nav.extents", json!({})).await).await;
     assert_eq!(extents, [json!({"type": "extent", "epic": "DEL", "shortcode": "DEL", "last_seq": 5, "holes": [5]})], "the deleted last is a hole");
 
     let refused = answer(&client, "tickets.delete", json!({"ids": ["DEL-2"]})).await;
@@ -3297,7 +3297,7 @@ async fn delete_over_the_wire() {
     assert_eq!(kinds, ["parent_changed", "children_changed", "blockers_changed", "child_removed", "deleted"], "{heard:?}");
     let child = answer(&client, "tickets.get", json!({"id": "DEL-3"})).await;
     assert_eq!(child["ticket"]["parent"], "DEL-1", "moved to its grandparent");
-    let extents = collect(call(&client, "tickets.extents", json!({})).await).await;
+    let extents = collect(call(&client, "tickets.nav.extents", json!({})).await).await;
     assert_eq!(extents, [json!({"type": "extent", "epic": "DEL", "shortcode": "DEL", "last_seq": 5, "holes": [2, 5]})]);
 
     let back = answer(&client, "tickets.undelete", json!({"ids": ["DEL-2"]})).await;
@@ -3356,7 +3356,7 @@ async fn the_queue_over_the_wire() {
         .collect();
     assert_eq!(order, [("QUE-2", "blocking"), ("QUE-3", "now")]);
     assert_eq!((rows[2]["type"].as_str(), rows[2]["count"].as_u64(), rows[2]["snoozed"].as_u64()), (Some("queue_end"), Some(2), Some(0)));
-    let counts = collect(call(&client, "tickets.counts", json!({"filter": "queued now or queued blocking"})).await).await;
+    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "queued now or queued blocking"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "QUE", "shortcode": "QUE", "held": 2})]);
 
     // Snooze: still queued, off the list without the snoozed.

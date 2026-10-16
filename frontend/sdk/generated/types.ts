@@ -3,9 +3,9 @@
  * DO NOT EDIT MANUALLY
  *
  * Toolchain:
- *   - synapse-cc v0.3.4
+ *   - synapse-cc v0.3.5
  *   - synapse v0.2.0.0
- *   - hub-codegen v0.4.1
+ *   - hub-codegen v0.5.0
  *
  * Backend: menger
  */
@@ -56,6 +56,16 @@ export interface PlexusStreamItemError {
   code?: string;
   /** Whether the operation can be retried */
   recoverable: boolean;
+  /** AUTH-2: `forbidden` or `unauthenticated` for an auth refusal */
+  error_kind?: string;
+  /** AUTH-2: the grant a refused call needed, e.g. `tickets.set_status` */
+  grant?: string;
+  /** AUTH-2: the scope it was needed on */
+  scope?: string;
+  /** AUTH-2: the roles that list the grant */
+  roles?: string[];
+  /** AUTH-2: where the caller holds the grant */
+  held_on?: string[];
 }
 
 /** Stream completed successfully */
@@ -255,11 +265,72 @@ export function errorFromStreamItem(item: {
   code?: string;
   recoverable: boolean;
   metadata?: StreamMetadata;
+  error_kind?: string;
+  grant?: string;
+  scope?: string;
+  roles?: string[];
+  held_on?: string[];
 }): PlexusError {
+  // AUTH-9: a refusal that names the grant it needed is a typed Forbidden.
+  if (item.error_kind === 'forbidden' && typeof item.grant === 'string') {
+    return new Forbidden(item.message, {
+      grant: item.grant,
+      scope: item.scope ?? '',
+      roles: item.roles ?? [],
+      heldOn: item.held_on ?? [],
+    }, item.recoverable, item.metadata);
+  }
   switch (item.code) {
     case '-32003': return new ForbiddenError(item.message, item.recoverable, item.metadata);
     case '-32001': return new UnauthenticatedError(item.message, item.recoverable, item.metadata);
     default:       return new PlexusError(item.message, item.code, item.recoverable, item.metadata);
+  }
+}
+
+// === AUTH-9: the typed refusal ===
+//
+// A gated hub (AUTH-2) refuses a call with an error item that names what it
+// needed — `{"type":"error","error_kind":"forbidden","grant":"tickets.set_status",
+// "scope":"IDENTITY","roles":["editor","admin"],"held_on":["MENGER"],
+// "code":"-32003","message":"needs tickets.set_status on IDENTITY",…}` — and
+// the RPC helpers throw it as a `Forbidden`.
+
+/** What a refusal says it needed (AUTH-2). */
+export interface Refusal {
+  /** The grant the call needed, e.g. `tickets.set_status`. */
+  grant: string;
+  /** The scope it was needed on, e.g. `IDENTITY`. */
+  scope: string;
+  /** The roles that list the grant. */
+  roles: string[];
+  /** Where the caller holds the grant (none: nowhere). */
+  heldOn: string[];
+}
+
+/**
+ * A refusal that names what it needed: the grant, the scope it was needed
+ * on, the roles that list it, and where the caller holds it (AUTH-2).
+ *
+ * A `ForbiddenError` (and so a `PlexusError`): a handler written for those
+ * still catches it.
+ */
+export class Forbidden extends ForbiddenError implements Refusal {
+  readonly grant: string;
+  readonly scope: string;
+  readonly roles: string[];
+  readonly heldOn: string[];
+  constructor(
+    message: string,
+    refusal: Refusal,
+    recoverable: boolean = false,
+    metadata?: StreamMetadata
+  ) {
+    super(message, recoverable, metadata);
+    this.name = 'Forbidden';
+    this.grant = refusal.grant;
+    this.scope = refusal.scope;
+    this.roles = refusal.roles;
+    this.heldOn = refusal.heldOn;
   }
 }
 

@@ -9,7 +9,8 @@ import type { Anchor, CommentId, CommentIntent, CommentState } from '../tickets/
 
 /** Typed client interface for comments plugin */
 export interface CommentsClient {
-  /** Leave a comment at an anchor (route, path, label, excerpt, and ticket when the element belongs to one); yields the comment.
+  /**
+   * Leave a comment at an anchor (route, path, label, excerpt, and ticket when the element belongs to one); yields the comment.
 
 Keeps a comment: `anchor` says where it was left — `route` (the app
 page, beginning `#/`), `path` (where on the page), `label` and
@@ -29,9 +30,12 @@ caller needs the role on `X` as well as on the anchor's ticket, and it
 is listed and watched only by those who can view both. The anchor is
 kept as given (`ticket` stays what the element belonged to).
 ACCESS-19: a comment on the app (naming no ticket) is seen only by
-its author and the admins of `*`. */
+its author and the admins of `*`.
+   * @requires `comments.add` anywhere it is held
+   */
   add(anchor: Anchor, body: Body): AsyncGenerator<CommentsEvent>;
-  /** List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.
+  /**
+   * List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.
 
 The comments matching every filter given, newest first — one
 `comment` event each — then exactly one `page { next }`: `next` is
@@ -48,26 +52,38 @@ prefix of the anchor's), `state` (`open` or `resolved`), `author`
 its ASCII case) and `intent` (APP-23: `comment` or `changes`). A blank filter is none. An unknown `state`, or an
 `after` that names no comment, is one in-band `error` and nothing
 else. Only the comments the caller sees (ACCESS-10; a comment on the
-app, its author's and the admins' of `*`). From the cache. */
+app, its author's and the admins' of `*`). From the cache.
+   * @requires `comments.list` anywhere it is held
+   */
   list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent>;
-  /** Reopen a resolved comment; yields the comment, open.
+  /**
+   * Reopen a resolved comment; yields the comment, open.
 
 Yields exactly one event: `comment`, state `open` — as it was, if it
 already was — or an in-band `error` for an id that names no comment.
 A comment the caller does not see is answered as one that is not
-there, naming nothing (ACCESS-3 #7). `watch` carries `reopened`. */
+there, naming nothing (ACCESS-3 #7). `watch` carries `reopened`.
+   * @requires `comments.reopen` anywhere it is held
+   */
   reopen(id: CommentId): AsyncGenerator<CommentsEvent>;
-  /** Resolve a comment; yields the comment, resolved.
+  /**
+   * Resolve a comment; yields the comment, resolved.
 
 Yields exactly one event: `comment`, state `resolved` — as it was,
 if it already was, and then nothing is written or broadcast — or an
 in-band `error` for an id that names no comment. A comment the
 caller does not see is answered as one that is not there, naming
-nothing (ACCESS-3 #7). `watch` carries `resolved`. */
+nothing (ACCESS-3 #7). `watch` carries `resolved`.
+   * @requires `comments.resolve` anywhere it is held
+   */
   resolve(id: CommentId): AsyncGenerator<CommentsEvent>;
-  /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
+  /**
+   * Get plugin or method schema. Pass {"method": "name"} for a specific method.
+   * @requires `comments.schema` anywhere it is held
+   */
   schema(): Promise<unknown>;
-  /** Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes.
+  /**
+   * Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes.
 
 `added`, `resolved` and `reopened`, each with the comment as the
 change left it, in the order the writes were acknowledged, until the
@@ -77,7 +93,9 @@ that is `tickets.watch`. IDENTITY-37: what it relays follows the
 caller's grants as they stand at each change, and a caller who can
 see nothing any more is told so in band and the stream ends —
 ACCESS-12: with one `watch_closed { reason, message }`, at once when
-a revoke or sign-out ends it. */
+a revoke or sign-out ends it.
+   * @requires `comments.watch` anywhere it is held
+   */
   watch(): AsyncGenerator<CommentsEvent>;
 }
 
@@ -121,3 +139,19 @@ class CommentsClientImpl implements CommentsClient {
 export function createCommentsClient(rpc: RpcClient): CommentsClient {
   return new CommentsClientImpl(rpc);
 }
+
+/** What each comments method needs (AUTH-9): its grant, and the param that locates what it acts on (`null`: allowed wherever the grant is held). The gate decides, server-side. */
+export const requires = {
+  "comments.add": { grant: "comments.add", target: null },
+  "comments.list": { grant: "comments.list", target: null },
+  "comments.reopen": { grant: "comments.reopen", target: null },
+  "comments.resolve": { grant: "comments.resolve", target: null },
+  "comments.schema": { grant: "comments.schema", target: null },
+  "comments.watch": { grant: "comments.watch", target: null },
+} as const;
+
+/** The comments activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
+export const defaultRoles = {
+  "editor": ["comments.add", "comments.list", "comments.watch", "comments.resolve", "comments.reopen"],
+  "viewer": ["comments.add", "comments.list", "comments.watch"],
+} as const;

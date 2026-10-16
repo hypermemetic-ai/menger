@@ -267,8 +267,8 @@ async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>, String> {
             let (epics, kinds) = typed_waves().map_err(named("waves"))?;
             client.work().waves_all(epics, kinds).await
         }
-        Call::Groups => client.groups_all().await,
-        Call::Extents => client.extents_all().await,
+        Call::Groups => client.nav().groups_all().await,
+        Call::Extents => client.nav().extents_all().await,
         Call::Blockers { id } => client.work().blockers_all(typed(&id).map_err(named("blockers"))?).await,
         Call::Health => client.health_all().await,
         Call::Components => client.components_all().await,
@@ -427,7 +427,7 @@ pub(crate) fn moved(reaches: &mut HashMap<String, Reach>, group: &menger_tickets
 /// Ask the server how far `epic` reaches for this viewer, and remember it.
 pub(crate) async fn reach_of(client: &Client, epic: &str) -> Result<Reach, String> {
     let filter = crate::typed::typed(&scoped_filter(None, epic)?)?;
-    let events = client.counts_all(Some(filter), None, crate::session::zone()).await.map_err(|e| crate::session::describe(&e))?;
+    let events = client.nav().counts_all(Some(filter), None, crate::session::zone()).await.map_err(|e| crate::session::describe(&e))?;
     let reach = Reach::from_counts(epic, events)?;
     REACHES.with(|r| r.borrow_mut().insert(reach.epic.clone(), reach.clone()));
     Ok(reach)

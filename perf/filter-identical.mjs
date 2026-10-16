@@ -50,7 +50,7 @@ function caller(ws) {
 }
 
 const [a, b] = [caller(await open(before)), caller(await open(after))];
-const extents = (await a("tickets.extents", {})).map((t) => JSON.parse(t.replace('"subscription":_', '"subscription":0')).params.result.content);
+const extents = (await a("tickets.nav.extents", {})).map((t) => JSON.parse(t.replace('"subscription":_', '"subscription":0')).params.result.content);
 const epics = extents.map((e) => [e.epic, e.last_seq]);
 const anyId = () => { const [e, n] = epics[rand(epics.length)]; return `${e}-${1 + rand(n)}`; };
 const small = epics.reduce((m, e) => (e[1] < m[1] ? e : m));

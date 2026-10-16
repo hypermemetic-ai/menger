@@ -28,11 +28,13 @@
 import type { TicketsClient } from './generated/tickets/client';
 import type { TicketsInputsClient } from './generated/tickets/inputs/client';
 import type { TicketsWorkClient } from './generated/tickets/work/client';
+import type { TicketsNavClient } from './generated/tickets/nav/client';
 import type { Answer, Input, InputValue } from './generated/tickets/types';
 
 export type { TicketsClient } from './generated/tickets/client';
 export type { TicketsInputsClient } from './generated/tickets/inputs/client';
 export type { TicketsWorkClient } from './generated/tickets/work/client';
+export type { TicketsNavClient } from './generated/tickets/nav/client';
 
 /**
  * ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
@@ -45,10 +47,14 @@ export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
  * The typed `tickets` a frame gets: its `inputs` the child's, and
  * (ACCESS-17) its child `tickets work` as `work`, with that child's `waves`
  * and `blockers` where a body has always called them, until ACCESS-20
- * moves the SDK.
+ * moves the SDK; (ACCESS-16) its child `nav`.
  */
-export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work'> &
-  Pick<TicketsWorkClient, 'waves' | 'blockers'> & { readonly inputs: InputsChild; readonly work: TicketsWorkClient };
+export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work' | 'nav'> &
+  Pick<TicketsWorkClient, 'waves' | 'blockers'> & {
+    readonly inputs: InputsChild;
+    readonly work: TicketsWorkClient;
+    readonly nav: TicketsNavClient;
+  };
 export type * from './generated/tickets/types';
 
 /**
@@ -167,8 +173,11 @@ export interface Menger {
    * const items = await Array.fromAsync(menger.tickets.components());
    * ```
    *
+   * ACCESS-16: the nav's reads are its child's, `menger.tickets.nav`
+   * (`tickets.nav.groups` on the wire): `menger.tickets.nav.groups()`.
+   *
    * Answered by the app over its own connection, read-only: `get`, `list`,
-   * `find`, `waves`, `groups`, `extents`, `blockers`, `health`,
+   * `find`, `waves`, `nav.groups`, `nav.extents`, `blockers`, `health`,
    * `components`, `inputs.list` (INPUT-4; ACCESS-14: the `tickets inputs`
    * child — `inputs.list(epic?, filter?, state?, ticket?)`, and
    * `inputs(…)` the same — one `{ type: 'input', input }` per input, its

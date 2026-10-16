@@ -7,7 +7,8 @@ import type { Ceiling, SessionEvent } from './types';
 
 /** Typed client interface for session plugin */
 export interface SessionClient {
-  /** Mint a session for this identity: login { token, principal, agent, expires_at, scope }.
+  /**
+   * Mint a session for this identity: login { token, principal, agent, expires_at, scope }.
 
 IDENTITY-42: a session for this connection's identity. Yields
 `login { token, principal, agent, expires_at, scope }`, or an in-band
@@ -17,25 +18,37 @@ access_token=mgs_…` — until `expires_at` or `logout`. `ttl_secs`:
 default 43200 (12 h), at most 86400. `scope`: the session's ceiling,
 `role@SCOPE` each (`editor@IDENTITY`, `viewer@*`, `editor@MENGER-12`):
 every check then passes only if the principal's grants AND the scope
-allow it. A session minted from a scoped session keeps that scope too. */
+allow it. A session minted from a scoped session keeps that scope too.
+   * @requires `session.login` anywhere it is held
+   */
   login(scope?: Ceiling[] | null, ttlSecs?: number | null): AsyncGenerator<SessionEvent>;
-  /** End this connection's session: logged_out.
+  /**
+   * End this connection's session: logged_out.
 
 IDENTITY-42: ends the session this connection is on (its token stops
 opening connections, and its open connections stop answering).
 Yields `logged_out`, or an in-band `error` when the connection holds
-no session. */
+no session.
+   * @requires `session.logout` anywhere it is held
+   */
   logout(): AsyncGenerator<SessionEvent>;
-  /** The providers this menger admits callers through: provider { name, kind, issuer, audience }.
+  /**
+   * The providers this menger admits callers through: provider { name, kind, issuer, audience }.
 
 IDENTITY-15: one `provider { name, kind, issuer, audience }` each, in
 the order they were configured; none when login is off. Nothing here
 is secret: it is what a sign-in needs to find the provider — so it is
-`public` (ACCESS-19), answered before anyone has signed in. */
+`public` (ACCESS-19), answered before anyone has signed in.
+   * @requires `session.providers` anywhere it is held
+   */
   providers(): AsyncGenerator<SessionEvent>;
-  /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
+  /**
+   * Get plugin or method schema. Pass {"method": "name"} for a specific method.
+   * @requires `session.schema` anywhere it is held
+   */
   schema(): Promise<unknown>;
-  /** Who this connection is: identity { principal, name, roles, tenant, provider }, or anonymous.
+  /**
+   * Who this connection is: identity { principal, name, roles, tenant, provider }, or anonymous.
 
 Yields exactly one event: `identity` — `principal` (`idp:<uuid>`,
 `oidc:<provider>/<sub>` or `nostr:<hex>`), `name`, `roles`, `tenant`
@@ -43,7 +56,9 @@ and `provider` — or `anonymous` with login off. The identity is
 settled when the connection opens; reconnect to change it.
 ACCESS-19 (ACCESS-3 #14): the caller is verified as every method's
 is — a sign-in signed out or expired is refused `unauthenticated`,
-never reported as signed in. */
+never reported as signed in.
+   * @requires `session.whoami` anywhere it is held
+   */
   whoami(): AsyncGenerator<SessionEvent>;
 }
 
@@ -82,3 +97,12 @@ class SessionClientImpl implements SessionClient {
 export function createSessionClient(rpc: RpcClient): SessionClient {
   return new SessionClientImpl(rpc);
 }
+
+/** What each session method needs (AUTH-9): its grant, and the param that locates what it acts on (`null`: allowed wherever the grant is held). The gate decides, server-side. */
+export const requires = {
+  "session.login": { grant: "session.login", target: null },
+  "session.logout": { grant: "session.logout", target: null },
+  "session.providers": { grant: "session.providers", target: null },
+  "session.schema": { grant: "session.schema", target: null },
+  "session.whoami": { grant: "session.whoami", target: null },
+} as const;

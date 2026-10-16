@@ -2162,6 +2162,12 @@ impl Tickets {
   grants and what it inherits are a child's, as above. The frames' SDK
   keeps `menger.tickets.waves` / `blockers` (and `menger.call('waves')`)
   until ACCESS-20 moves every client.
+- **`tickets nav`** (ACCESS-16) is mounted: `groups`, `extents`, `tree`,
+  `counts`, `facets`, `member` are `tickets.nav.<method>` on the wire
+  (`synapse -P <port> menger tickets nav groups`), `client.nav()` from the
+  Rust client, `menger.tickets.nav` in a frame's SDK (whose host still
+  answers `menger.call('groups')`); the old `tickets.groups` … are gone.
+  Its grants and what it inherits are a child's, as above.
 - The schema lists what the server injects (`auth`, `user`) with an
   `x-plexus-source`; synapse shows them as server-supplied, and the SDK's
   drift guard (`sdk_manifest.rs`, `scripts/sdk-codegen.sh`) drops them.

@@ -3,9 +3,9 @@
  * DO NOT EDIT MANUALLY
  *
  * Toolchain:
- *   - synapse-cc v0.3.4
+ *   - synapse-cc v0.3.5
  *   - synapse v0.2.0.0
- *   - hub-codegen v0.4.1
+ *   - hub-codegen v0.5.0
  *
  * Backend: menger
  */
@@ -49,6 +49,16 @@ export interface PlexusStreamItemError {
     code?: string;
     /** Whether the operation can be retried */
     recoverable: boolean;
+    /** AUTH-2: `forbidden` or `unauthenticated` for an auth refusal */
+    error_kind?: string;
+    /** AUTH-2: the grant a refused call needed, e.g. `tickets.set_status` */
+    grant?: string;
+    /** AUTH-2: the scope it was needed on */
+    scope?: string;
+    /** AUTH-2: the roles that list the grant */
+    roles?: string[];
+    /** AUTH-2: where the caller holds the grant */
+    held_on?: string[];
 }
 /** Stream completed successfully */
 export interface PlexusStreamItemDone {
@@ -176,4 +186,34 @@ export declare function errorFromStreamItem(item: {
     code?: string;
     recoverable: boolean;
     metadata?: StreamMetadata;
+    error_kind?: string;
+    grant?: string;
+    scope?: string;
+    roles?: string[];
+    held_on?: string[];
 }): PlexusError;
+/** What a refusal says it needed (AUTH-2). */
+export interface Refusal {
+    /** The grant the call needed, e.g. `tickets.set_status`. */
+    grant: string;
+    /** The scope it was needed on, e.g. `IDENTITY`. */
+    scope: string;
+    /** The roles that list the grant. */
+    roles: string[];
+    /** Where the caller holds the grant (none: nowhere). */
+    heldOn: string[];
+}
+/**
+ * A refusal that names what it needed: the grant, the scope it was needed
+ * on, the roles that list it, and where the caller holds it (AUTH-2).
+ *
+ * A `ForbiddenError` (and so a `PlexusError`): a handler written for those
+ * still catches it.
+ */
+export declare class Forbidden extends ForbiddenError implements Refusal {
+    readonly grant: string;
+    readonly scope: string;
+    readonly roles: string[];
+    readonly heldOn: string[];
+    constructor(message: string, refusal: Refusal, recoverable?: boolean, metadata?: StreamMetadata);
+}

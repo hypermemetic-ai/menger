@@ -588,17 +588,17 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
             "status Pending and not menger doc",
             "not menger doc and under PLX-1",
         ] {
-            out.push(all(&c, "tickets.counts", json!({"filter": filter})).await);
+            out.push(all(&c, "tickets.nav.counts", json!({"filter": filter})).await);
             out.push(all(&c, "tickets.list", json!({"filter": filter, "summary": true, "limit": 40})).await);
             out.push(all(&c, "tickets.list", json!({"filter": filter, "summary": true, "at": 7, "limit": 5})).await);
-            out.push(all(&c, "tickets.facets", json!({"filter": filter})).await);
-            out.push(all(&c, "tickets.tree", json!({"epic": "PLX", "filter": filter})).await);
-            out.push(all(&c, "tickets.tree", json!({"parent": "PLX-1", "filter": filter})).await);
+            out.push(all(&c, "tickets.nav.facets", json!({"filter": filter})).await);
+            out.push(all(&c, "tickets.nav.tree", json!({"epic": "PLX", "filter": filter})).await);
+            out.push(all(&c, "tickets.nav.tree", json!({"parent": "PLX-1", "filter": filter})).await);
         }
         out
     };
     let before = answers(c).await;
-    let mengers = all(&connect(s.port).await, "tickets.counts", json!({"filter": "menger doc"})).await;
+    let mengers = all(&connect(s.port).await, "tickets.nav.counts", json!({"filter": "menger doc"})).await;
     assert_eq!(
         mengers,
         [json!({"type": "count", "epic": "MNG", "shortcode": "MNG", "held": 1}), json!({"type": "count", "epic": "PLX", "shortcode": "PLX", "held": 2})],
@@ -709,12 +709,12 @@ async fn a_form_6_file_gains_form_7_once_and_answers_as_before() {
     let answers = |c: WsClient| async move {
         let mut out = Vec::new();
         for filter in ["", "kind build", "under DEMAND", "status Pending and under DEMAND-2"] {
-            out.push(all(&c, "tickets.counts", json!({"filter": filter})).await);
+            out.push(all(&c, "tickets.nav.counts", json!({"filter": filter})).await);
             out.push(all(&c, "tickets.list", json!({"filter": filter, "summary": true, "limit": 40})).await);
-            out.push(all(&c, "tickets.tree", json!({"epic": "DEMAND", "filter": filter})).await);
+            out.push(all(&c, "tickets.nav.tree", json!({"epic": "DEMAND", "filter": filter})).await);
         }
-        out.push(all(&c, "tickets.groups", json!({})).await);
-        out.push(all(&c, "tickets.extents", json!({})).await);
+        out.push(all(&c, "tickets.nav.groups", json!({})).await);
+        out.push(all(&c, "tickets.nav.extents", json!({})).await);
         out.push(all(&c, "tickets.get", json!({"id": "SUBD-1"})).await);
         out
     };

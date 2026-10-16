@@ -1643,7 +1643,7 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
         Ok((crate::typed::opt(parent)?, crate::typed::opt(epic)?, crate::typed::typed(filter)?, crate::typed::opt(after)?, crate::typed::opt(keep)?))
     };
     let Ok((parent, epic, filter, after, keep)) = typed() else { return Asked::Offline };
-    match client.tree_all(parent, epic, filter, after, Some(limit as u32), Some(true), keep, crate::session::zone()).await {
+    match client.nav().tree_all(parent, epic, filter, after, Some(limit as u32), Some(true), keep, crate::session::zone()).await {
         Ok(events) => {
             let mut rows = Vec::new();
             let mut marks = Vec::new();
@@ -1679,7 +1679,7 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
 async fn ask_root(epic: &str, root: &str, filter: &str) -> Option<Mark> {
     let client = session::client()?;
     let (epic, filter) = (crate::typed::typed(epic).ok()?, crate::typed::typed(filter).ok()?);
-    let events = client.tree_all(None, Some(epic), filter, None, Some(1), None, None, crate::session::zone()).await.ok()?;
+    let events = client.nav().tree_all(None, Some(epic), filter, None, Some(1), None, None, crate::session::zone()).await.ok()?;
     events.into_iter().find_map(|ev| match ev {
         TicketsEvent::Node { summary, matched, below } if summary.id == root => Some(Mark { matched, below }),
         _ => None,
@@ -2782,7 +2782,7 @@ fn pip_mix(tree: Tree, lens: Lens) -> RwSignal<Option<[usize; 8]>> {
             }
             let Some(client) = session::client() else { return };
             let Ok(text) = crate::typed::opt(text) else { return };
-            let Ok(events) = client.facets_all(text, None, session::zone()).await else { return };
+            let Ok(events) = client.nav().facets_all(text, None, session::zone()).await else { return };
             let mut counts = [0u64; 5];
             for ev in events {
                 if let TicketsEvent::Facet { field, value, held } = ev {

@@ -102,8 +102,10 @@ pub(crate) mod nav_plan;
 
 pub mod activation;
 pub use activation::TicketsClient;
+// ACCESS-16: `tickets nav`, a child of `tickets` (`TicketsClient::nav()`).
+pub use activation::NavClient;
 #[cfg(feature = "server")]
-pub use activation::Tickets;
+pub use activation::{Nav, Tickets};
 
 /// COMMENT-2: the comments vocabulary — [`Anchor`], [`Comment`],
 /// [`CommentState`], [`CommentsEvent`] — and the rules `add` keeps them by.
