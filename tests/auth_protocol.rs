@@ -233,7 +233,7 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.search", Today::Viewer, None),
     ("tickets.nav.member", Today::Viewer, None),
     ("tickets.nav.groups", Today::Viewer, None),
-    ("tickets.components", Today::Viewer, None),
+    ("tickets.components.list", Today::Viewer, None),
     ("tickets.nav.extents", Today::Viewer, None),
     ("tickets.nav.counts", Today::Viewer, None),
     ("tickets.nav.facets", Today::Viewer, None),
@@ -640,6 +640,35 @@ async fn tickets_work_is_held_by_its_path() {
     let work = one(&agent, "tickets.work.schema", json!({})).await;
     let methods: BTreeSet<String> = work["methods"].as_array().unwrap().iter().filter_map(|m| m["name"].as_str().map(str::to_string)).filter(|m| m != "schema").collect();
     assert_eq!(methods, names(&["ready", "waves", "waves_under", "waves_to", "blockers"]), "{work}");
+}
+
+/// ACCESS-18: `tickets components` under login — a grantless caller is
+/// refused naming the child's grant (`tickets.components.list`, held by
+/// viewer and editor, MACRO-20), a viewer on A is shown the child and lists
+/// the components it may read, and the old name is gone.
+#[tokio::test]
+async fn tickets_components_is_held_by_its_path() {
+    let dir = tmp();
+    let s = spawn(&dir.path().join("t.db"), true).await;
+    let boss = as_key(s.port, &BOSS, "boss").await;
+    tickets(&boss).await;
+    let a = one(&boss, "tickets.amend", json!({ "id": "A-2", "body": "```component m-a\n<b>a</b>\n```\n" })).await;
+    assert_eq!(a["type"], "amended", "{a}");
+    let b = one(&boss, "tickets.amend", json!({ "id": "B-2", "body": "```component m-b\n<b>b</b>\n```\n" })).await;
+    assert_eq!(b["type"], "amended", "{b}");
+    let agent = as_key(s.port, &AGENT, "worker-1").await;
+    let no = one(&agent, "tickets.components.list", json!({})).await;
+    assert_eq!((no["error_kind"].as_str(), no["grant"].as_str()), (Some("forbidden"), Some("tickets.components.list")), "{no}");
+    assert_eq!(no["roles"], json!(["editor", "viewer", "admin"]), "{no}");
+    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
+    assert!(view(&agent).await["tickets"].contains("components"), "the child is in a viewer's view");
+    let listed = call(&agent, "tickets.components.list", json!({})).await;
+    let names: Vec<&str> = listed.iter().filter_map(|e| e["component"]["name"].as_str()).collect();
+    assert_eq!(names, ["m-a"], "only what A owns: {listed:?}");
+    let all = call(&boss, "tickets.components.list", json!({})).await;
+    assert_eq!(all.iter().filter_map(|e| e["component"]["name"].as_str()).collect::<Vec<_>>(), ["m-a", "m-b"], "{all:?}");
+    let gone = one(&boss, "tickets.components", json!({})).await;
+    assert_eq!(gone["type"], "error", "the old name is gone: {gone}");
 }
 
 /// ACCESS-17: a viewer calls `tickets work` and a blocker out of its reach

@@ -2168,6 +2168,14 @@ impl Tickets {
   Rust client, `menger.tickets.nav` in a frame's SDK (whose host still
   answers `menger.call('groups')`); the old `tickets.groups` … are gone.
   Its grants and what it inherits are a child's, as above.
+- **`tickets components`** (ACCESS-18) is mounted: `list` (was
+  `tickets.components`) at `tickets.components.list` (`synapse -P <port>
+  menger tickets components list`), `client.components()` from the Rust
+  client, and in a frame `menger.tickets.components()` as before (the
+  child's client, callable as `list`). It answers through the caller's
+  reach: only components whose owner the caller can view, each with only
+  the references it can view. Its grants and what it inherits are a
+  child's, as above.
 - The schema lists what the server injects (`auth`, `user`) with an
   `x-plexus-source`; synapse shows them as server-supplied, and the SDK's
   drift guard (`sdk_manifest.rs`, `scripts/sdk-codegen.sh`) drops them.

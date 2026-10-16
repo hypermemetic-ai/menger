@@ -170,7 +170,6 @@
         "since",
         "timeout_minutes"
       ],
-      "components": [],
       "create": [
         "blocked_by",
         "body",
@@ -340,6 +339,10 @@
         "commits",
         "id"
       ]
+    },
+    "tickets.components": {
+      "list": [],
+      "schema": []
     },
     "tickets.inputs": {
       "answer": [

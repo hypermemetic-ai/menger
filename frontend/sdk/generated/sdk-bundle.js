@@ -158,10 +158,6 @@
       const stream = this.rpc.call("tickets.await_reply", { id, input, since, timeout_minutes: timeoutMinutes });
       yield* extractData(stream);
     }
-    async* components() {
-      const stream = this.rpc.call("tickets.components", {});
-      yield* extractData(stream);
-    }
     async* create(epic, title, blockedBy, body, kind, org, parent, path, severity) {
       const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, epic, kind, org, parent, path, severity, title });
       yield* extractData(stream);
@@ -372,10 +368,34 @@
     return new TicketsNavClientImpl(rpc);
   }
 
+  // generated/tickets/components/client.ts
+  class TicketsComponentsClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* list() {
+      const stream = this.rpc.call("tickets.components.list", {});
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.components.schema", {});
+      return collectOne(stream);
+    }
+  }
+  function createTicketsComponentsClient(rpc) {
+    return new TicketsComponentsClientImpl(rpc);
+  }
+
   // bridge.ts
   var NAMESPACE = "tickets.";
   var NAV = "tickets.nav.";
-  var HOST_NAMES = { "inputs.list": "inputs", "work.waves": "waves", "work.blockers": "blockers" };
+  var HOST_NAMES = {
+    "inputs.list": "inputs",
+    "work.waves": "waves",
+    "work.blockers": "blockers",
+    "components.list": "components"
+  };
   function metadata(method) {
     return { provenance: ["menger", "bridge", method], plexusHash: "", timestamp: Math.floor(Date.now() / 1000) };
   }
@@ -417,6 +437,12 @@
     const work = createTicketsWorkClient(rpc);
     Object.assign(tickets, { work, waves: work.waves.bind(work), blockers: work.blockers.bind(work) });
     Object.defineProperty(tickets, "nav", { value: createTicketsNavClient(rpc) });
+    const registry = createTicketsComponentsClient(rpc);
+    const components = Object.assign(registry.list.bind(registry), {
+      list: registry.list.bind(registry),
+      schema: registry.schema.bind(registry)
+    });
+    Object.defineProperty(tickets, "components", { value: components });
     return tickets;
   }
   mengerTyped = {

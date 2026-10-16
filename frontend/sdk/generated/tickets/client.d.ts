@@ -38,27 +38,6 @@ export interface TicketsClient {
      */
     awaitReply(id: TicketRef, input?: InputId | null, since?: number | null, timeoutMinutes?: number | null): AsyncGenerator<TicketsEvent>;
     /**
-     * Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes.
-  
-  COMP-3: the component registry. Yields one `Component` per component
-  a ticket defines or once defined, in name order — its `source` (the
-  ` ```component <name> ` block's content), its `owner` (`null` for an
-  orphan: no ticket defines it any more, and something still uses it)
-  and its `references` (the tickets whose bodies hold `<name` as an
-  HTML tag, in the store's order, then the components whose sources
-  do). COMP-8: and its help — `docs`, the source's `<docs>` parsed
-  (summary, typed attributes, slots, examples, markdown help; `null`
-  without one) — and `preview`, the attributes on the block's opening
-  line. Nothing trails them — the stream's own `done` is the whole
-  answer, as for `groups`. From the cache alone; `watch` keeps a
-  client's copy current with `ComponentChanged` and `ComponentRemoved`.
-  IDENTITY-37: a caller who cannot view every shortcode gets the
-  components whose owner it can view — no orphan — each with only the
-  references it can view.
-     * @requires `tickets.components` anywhere it is held
-     */
-    components(): AsyncGenerator<TicketsEvent>;
-    /**
      * Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc.
   
   Creates a ticket in an epic. The store allocates the next `EPIC-N`
@@ -496,10 +475,6 @@ export declare const requires: {
         readonly grant: "tickets.await_reply";
         readonly target: null;
     };
-    readonly "tickets.components": {
-        readonly grant: "tickets.components";
-        readonly target: null;
-    };
     readonly "tickets.create": {
         readonly grant: "tickets.create";
         readonly target: null;
@@ -599,6 +574,6 @@ export declare const requires: {
 };
 /** The tickets activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
 export declare const defaultRoles: {
-    readonly editor: readonly ["tickets.health", "tickets.get", "tickets.list", "tickets.find", "tickets.search", "tickets.components", "tickets.watch", "tickets.history", "tickets.queued", "tickets.await_reply", "tickets.create", "tickets.set_status", "tickets.set_kind", "tickets.set_parent", "tickets.amend", "tickets.label", "tickets.update", "tickets.update_many", "tickets.queue", "tickets.unqueue", "tickets.snooze", "tickets.request_changes", "tickets.reshortcode", "tickets.archive", "tickets.restore"];
-    readonly viewer: readonly ["tickets.health", "tickets.get", "tickets.list", "tickets.find", "tickets.search", "tickets.components", "tickets.watch", "tickets.history", "tickets.queued", "tickets.await_reply"];
+    readonly editor: readonly ["tickets.health", "tickets.get", "tickets.list", "tickets.find", "tickets.search", "tickets.watch", "tickets.history", "tickets.queued", "tickets.await_reply", "tickets.create", "tickets.set_status", "tickets.set_kind", "tickets.set_parent", "tickets.amend", "tickets.label", "tickets.update", "tickets.update_many", "tickets.queue", "tickets.unqueue", "tickets.snooze", "tickets.request_changes", "tickets.reshortcode", "tickets.archive", "tickets.restore"];
+    readonly viewer: readonly ["tickets.health", "tickets.get", "tickets.list", "tickets.find", "tickets.search", "tickets.watch", "tickets.history", "tickets.queued", "tickets.await_reply"];
 };

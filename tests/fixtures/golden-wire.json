@@ -2043,7 +2043,7 @@
     "params": {}
   },
   {
-    "call": "tickets.components",
+    "call": "tickets.components.list",
     "items": [
       {
         "component": {

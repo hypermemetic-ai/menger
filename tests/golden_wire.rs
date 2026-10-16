@@ -215,7 +215,7 @@ fn script() -> Vec<(&'static str, Value)> {
         ("tickets.search", json!({"query": "platform"})),
         ("tickets.nav.member", json!({"ids": ["GOLD-2", "NOPE-1"], "filter": "kind build"})),
         ("tickets.nav.groups", json!({})),
-        ("tickets.components", json!({})),
+        ("tickets.components.list", json!({})),
         ("tickets.inputs.list", json!({})),
         ("tickets.nav.extents", json!({})),
         ("tickets.nav.counts", json!({"filter": "not kind doc"})),
