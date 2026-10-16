@@ -768,7 +768,7 @@ async fn an_acknowledged_amend_survives_sigkill_byte_exact() {
 
 /// SDLC-9 criterion 3, black-box: an acknowledged link survives SIGKILL —
 /// the restarted server answers the same ticket, its commits in link order
-/// — and `unlink_commits` removes exactly what it names, durably too.
+/// — and `commits.unlink` removes exactly what it names, durably too.
 #[tokio::test]
 async fn an_acknowledged_link_survives_sigkill_and_unlink_removes_exactly_what_it_names() {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
@@ -777,9 +777,9 @@ async fn an_acknowledged_link_survives_sigkill_and_unlink_removes_exactly_what_i
     let s1 = spawn_server(Some(&db), &[], dir.path(), "link1").await;
     let c1 = connect(s1.port).await;
     one(&c1, "tickets.create", json!({"epic": "LNK", "title": "finished by commits", "kind": "scope", "body": "b"})).await;
-    let ev = one(&c1, "tickets.link_commits", json!({"id": "LNK-1", "commits": ["77df9a0", "plexus-macros@4F7114A"]})).await;
+    let ev = one(&c1, "tickets.commits.link", json!({"id": "LNK-1", "commits": ["77df9a0", "plexus-macros@4F7114A"]})).await;
     assert_eq!(ev["type"], "commits_linked", "{ev}");
-    let ev = one(&c1, "tickets.link_commits", json!({"id": "LNK-1", "commits": ["77df9a0", "0bb28b2"]})).await;
+    let ev = one(&c1, "tickets.commits.link", json!({"id": "LNK-1", "commits": ["77df9a0", "0bb28b2"]})).await;
     assert_eq!(ev["added"], json!(["0bb28b2"]));
     let acked = one(&c1, "tickets.get", json!({"id": "LNK-1"})).await;
     assert_eq!(acked["ticket"]["commits"], json!(["77df9a0", "plexus-macros@4f7114a", "0bb28b2"]));
@@ -790,7 +790,7 @@ async fn an_acknowledged_link_survives_sigkill_and_unlink_removes_exactly_what_i
     let c2 = connect(s2.port).await;
     let got = one(&c2, "tickets.get", json!({"id": "LNK-1"})).await;
     assert_eq!(got, acked, "the acknowledged ticket, commits and all, after SIGKILL + restart");
-    let ev = one(&c2, "tickets.unlink_commits", json!({"id": "LNK-1", "commits": ["plexus-macros@4f7114a"]})).await;
+    let ev = one(&c2, "tickets.commits.unlink", json!({"id": "LNK-1", "commits": ["plexus-macros@4f7114a"]})).await;
     assert_eq!(ev["type"], "commits_unlinked", "{ev}");
     assert_eq!(ev["removed"], json!(["plexus-macros@4f7114a"]));
     assert_eq!(ev["ticket"]["commits"], json!(["77df9a0", "0bb28b2"]), "exactly what it named");
@@ -848,7 +848,7 @@ async fn pre_sdlc9_database_opens_with_no_commits_durably() {
     let log = s2.startup_output();
     assert!(!log.contains("SDLC-9:"), "no second migration:\n{log}");
     assert_eq!(none_linked(&c2, "after SIGKILL + restart").await, 9);
-    let ev = one(&c2, "tickets.link_commits", json!({"id": "PAR-2", "commits": ["9087ca7"]})).await;
+    let ev = one(&c2, "tickets.commits.link", json!({"id": "PAR-2", "commits": ["9087ca7"]})).await;
     assert_eq!(ev["ticket"]["commits"], json!(["9087ca7"]), "{ev}");
     drop(c2);
     s2.kill9();

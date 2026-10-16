@@ -34,7 +34,7 @@ use crate::types::{InputValue, Kind, Severity, Status, TicketsEvent};
 use crate::types::InputState;
 use crate::queue::Urgency;
 use crate::vocab::{
-    Body, CallerSource, CommitRef, Cursor, DeleteChildren, FilterText, InputId, InputSource, Label, MengerPath, Message,
+    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputSource, Label, MengerPath, Message,
     Query, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
@@ -157,8 +157,12 @@ mod tests;
 
 // ACCESS-13: the children, each in a file of its own — shells until
 // ACCESS-14..18 fill and mount them (each file says how).
-#[cfg(feature = "server")]
+// ACCESS-15: `commits` filled and mounted (`Tickets::commits`); not gated,
+// so the client-only build has its `CommitsClient` too.
 mod commits;
+pub use commits::CommitsClient;
+#[cfg(feature = "server")]
+pub use commits::Commits;
 #[cfg(feature = "server")]
 mod components;
 #[cfg(feature = "server")]
@@ -195,8 +199,8 @@ mod work;
             "queued", "await_reply"
         ],
         editor = [
-            viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
-            "unlink_commits", "label", "update", "update_many", "answer", "clear_answer", "close_input", "reopen_input",
+            viewer, "create", "set_status", "set_kind", "set_parent", "amend", "label", "update", "update_many", "answer",
+            "clear_answer", "close_input", "reopen_input",
             "queue", "unqueue", "snooze", "request_changes", "reshortcode", "archive", "restore"
         ],
     )
@@ -547,66 +551,10 @@ impl Tickets {
         })
     }
 
-    /// Link commits to a ticket, or to many (ids; one write, all or none) — the commits that finished it; yields commits_linked { ticket, added } per ticket.
-    ///
-    /// SDLC-9: records which commits finished a ticket. Each entry is a
-    /// commit reference — a hexadecimal object name of 7 to 64 characters
-    /// (stored lowercase), optionally prefixed by a repository and `@`
-    /// (`77df9a0`, `plexus-macros@4f7114a`) — compared as text: the server
-    /// has no repository, so link the form you want kept. Every entry not
-    /// already on the ticket is appended, in the order given. Yields
-    /// exactly one event: `CommitsLinked { ticket, added }` — `added` is
-    /// what was newly linked, empty when nothing was (every entry already
-    /// linked, or none given), which writes and broadcasts nothing —
-    /// `NotFound` if `id` names no ticket, or an in-band `Error` naming
-    /// every entry that is not a reference, or for a link past 256 commits
-    /// on the ticket; an error writes nothing. Moves `updated_unix` and
-    /// nothing else — not the status. `watch` carries every
-    /// `CommitsLinked` that added something. ACT-2: `ids` instead of `id`
-    /// links them to each, in one write, all or none, one `CommitsLinked`
-    /// per ticket (`cells_stream`).
-    #[plexus_macros::method(
-        group = "write",
-        target = "id",
-        example(note = "link the commit that finished it", params = r#"{"id": "MENGER-40", "commits": ["77df9a0"]}"#),
-        example(note = "and one in another repository", params = r#"{"id": "MENGER-40", "commits": ["77df9a0", "plexus-macros@4f7114a"]}"#)
-    )]
-    pub async fn link_commits(
-        &self,
-        #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Ticket id, e.g. MNG-10 (or ids).
-        id: Option<TicketRef>,
-        /// Ticket ids, instead of id: every one gets the commits, in one write, all or none.
-        ids: Option<Vec<TicketRef>>,
-        /// Commit references, in link order: a hex object name of 7-64 characters, optionally repo@ before it — e.g. ["77df9a0", "plexus-macros@4f7114a"].
-        commits: Vec<CommitRef>,
-    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
-        cells_stream(self.store.clone(), user, id, ids, CellWrite::Commits(commits))
-    }
-
-    /// Unlink commits from a ticket; yields commits_unlinked { ticket, removed }.
-    ///
-    /// SDLC-9: the inverse of `link_commits` — every entry the ticket
-    /// carries comes off. The same references, compared the same way, all
-    /// or nothing. Yields exactly one event: `CommitsUnlinked { ticket,
-    /// removed }` — `removed` empty when none of them was linked, which
-    /// writes and broadcasts nothing — `NotFound`, or an in-band `Error`
-    /// naming every entry that is not a reference. `watch` carries every
-    /// `CommitsUnlinked` that removed something.
-    #[plexus_macros::method(group = "write", target = "id")]
-    pub async fn unlink_commits(
-        &self,
-        #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Ticket id, e.g. MNG-10.
-        id: TicketRef,
-        /// Commit references to remove, as linked (the hash is compared lowercase).
-        commits: Vec<CommitRef>,
-    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        answered!(store = self.store.clone(), user, Some(id.to_string()) => {
-            let on = permit::<Editor>(&store, &user, &id)?;
-            Ok(change_event(store.unlink_commits(on, commits).await?))
-        })
+    /// The commits that finished a ticket — `tickets.commits.link` / `unlink` (ACCESS-15).
+    #[plexus_macros::child]
+    fn commits(&self) -> commits::Commits {
+        commits::Commits { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 
     /// Add or remove a ticket's labels (e.g. needs-you), or many tickets' (ids; one write, all or none); yields labels_changed { ticket, added, removed } per ticket.
@@ -1650,7 +1598,7 @@ impl Tickets {
     /// moves no group — AGS-23: but a new title on a shortcode's root, which
     /// is followed by its group's `GroupChanged`.
     ///
-    /// SDLC-9: so is a `link_commits` or `unlink_commits` that changed
+    /// SDLC-9: so is a `commits.link` or `commits.unlink` that changed
     /// something — one `CommitsLinked` or `CommitsUnlinked`, the whole
     /// ticket, no group.
     ///

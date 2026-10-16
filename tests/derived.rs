@@ -218,11 +218,11 @@ async fn burst(port: u16, seed: u64, known: Vec<usize>, acked: Arc<AtomicUsize>)
             ),
             9 => ("tickets.amend", json!({"id": target, "title": format!("amended {}", rng.below(99))})),
             10 => (
-                "tickets.link_commits",
+                "tickets.commits.link",
                 json!({"id": target, "commits": [format!("{:07x}", 0xabc0000 + rng.below(4))]}),
             ),
             11 => (
-                "tickets.unlink_commits",
+                "tickets.commits.unlink",
                 json!({"id": target, "commits": [format!("{:07x}", 0xabc0000 + rng.below(4))]}),
             ),
             // SDLC-13: a kind changed — any of the six, with no status or one
@@ -405,7 +405,7 @@ async fn verify_derived_names_an_altered_cell_container_and_count() {
     for _ in 0..3 {
         one(&c, "tickets.create", json!({"epic": "CEL", "title": "t"})).await.unwrap();
     }
-    one(&c, "tickets.link_commits", json!({"id": "CEL-3", "commits": ["abc1234"]})).await.unwrap();
+    one(&c, "tickets.commits.link", json!({"id": "CEL-3", "commits": ["abc1234"]})).await.unwrap();
     drop(c);
     s.kill9();
     let (code, out, _) = verify(&db);

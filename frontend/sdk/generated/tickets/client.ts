@@ -3,7 +3,7 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { CallerSource, CommitRef, Cursor, DeleteChildren, FilterText, InputId, InputSource, InputState, InputValue, Label, MengerPath, Message, Reason, Severity, SeverityChange, Status, TicketsEvent, Urgency, Zone } from './types';
+import type { CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputSource, InputState, InputValue, Label, MengerPath, Message, Reason, Severity, SeverityChange, Status, TicketsEvent, Urgency, Zone } from './types';
 import type { Body, Kind, Query, ShortcodeRef, TicketRef, Title } from '../notes/types';
 import type { OrgId } from '../orgs/types';
 
@@ -286,25 +286,6 @@ else. `watch` carries every `LabelsChanged` that moved something.
 ACT-2: `ids` instead of `id` moves each one's, in one write, all or
 none, one `LabelsChanged` per ticket (`cells_stream`). */
   label(add?: Label[] | null, id?: TicketRef | null, ids?: TicketRef[] | null, remove?: Label[] | null): AsyncGenerator<TicketsEvent>;
-  /** Link commits to a ticket, or to many (ids; one write, all or none) — the commits that finished it; yields commits_linked { ticket, added } per ticket.
-
-SDLC-9: records which commits finished a ticket. Each entry is a
-commit reference — a hexadecimal object name of 7 to 64 characters
-(stored lowercase), optionally prefixed by a repository and `@`
-(`77df9a0`, `plexus-macros@4f7114a`) — compared as text: the server
-has no repository, so link the form you want kept. Every entry not
-already on the ticket is appended, in the order given. Yields
-exactly one event: `CommitsLinked { ticket, added }` — `added` is
-what was newly linked, empty when nothing was (every entry already
-linked, or none given), which writes and broadcasts nothing —
-`NotFound` if `id` names no ticket, or an in-band `Error` naming
-every entry that is not a reference, or for a link past 256 commits
-on the ticket; an error writes nothing. Moves `updated_unix` and
-nothing else — not the status. `watch` carries every
-`CommitsLinked` that added something. ACT-2: `ids` instead of `id`
-links them to each, in one write, all or none, one `CommitsLinked`
-per ticket (`cells_stream`). */
-  linkCommits(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): AsyncGenerator<TicketsEvent>;
   /** List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at.
 
 Yields one row event per match, ordered by (epic, seq), then
@@ -522,16 +503,6 @@ body — each child its delete moved and each block it dropped put back
 where nothing has moved them since. Admin only. Yields `Undeleted {
 ids, tickets }`, or one `Error` naming every refused ticket and why. */
   undelete(ids: TicketRef[]): AsyncGenerator<TicketsEvent>;
-  /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed }.
-
-SDLC-9: the inverse of `link_commits` — every entry the ticket
-carries comes off. The same references, compared the same way, all
-or nothing. Yields exactly one event: `CommitsUnlinked { ticket,
-removed }` — `removed` empty when none of them was linked, which
-writes and broadcasts nothing — `NotFound`, or an in-band `Error`
-naming every entry that is not a reference. `watch` carries every
-`CommitsUnlinked` that removed something. */
-  unlinkCommits(commits: CommitRef[], id: TicketRef): AsyncGenerator<TicketsEvent>;
   /** Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued.
 
 MENGER-39: takes a ticket out of the queue. Yields one `unqueued`,
@@ -583,7 +554,7 @@ MNG-16: an `amend` that changed something is one `Amended`, and
 moves no group — AGS-23: but a new title on a shortcode's root, which
 is followed by its group's `GroupChanged`.
 
-SDLC-9: so is a `link_commits` or `unlink_commits` that changed
+SDLC-9: so is a `commits.link` or `commits.unlink` that changed
 something — one `CommitsLinked` or `CommitsUnlinked`, the whole
 ticket, no group.
 
@@ -768,11 +739,6 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *linkCommits(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.link_commits', { commits, id, ids });
-    yield* extractData<TicketsEvent>(stream);
-  }
-
   async *list(after?: Cursor | null, at?: number | null, epic?: ShortcodeRef | null, filter?: FilterText | null, keep?: TicketRef | null, limit?: number | null, parent?: TicketRef | null, status?: Status | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.list', { after, at, epic, filter, keep, limit, parent, status, summary, tz });
     yield* extractData<TicketsEvent>(stream);
@@ -855,11 +821,6 @@ class TicketsClientImpl implements TicketsClient {
 
   async *undelete(ids: TicketRef[]): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.undelete', { ids });
-    yield* extractData<TicketsEvent>(stream);
-  }
-
-  async *unlinkCommits(commits: CommitRef[], id: TicketRef): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.unlink_commits', { commits, id });
     yield* extractData<TicketsEvent>(stream);
   }
 

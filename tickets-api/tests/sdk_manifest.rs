@@ -24,9 +24,16 @@ type Surface = BTreeMap<String, Vec<String>>;
 
 /// One activation's surface, from its own schema.
 fn surface(schema: PluginSchema) -> Surface {
+    surface_at(&schema.namespace.clone(), schema)
+}
+
+/// ACCESS-15: a schema's methods under `path` — its namespace, or a
+/// child's whole path (`tickets.commits`); a `#[child]` mount is no method.
+fn surface_at(path: &str, schema: PluginSchema) -> Surface {
     schema
         .methods
         .iter()
+        .filter(|m| !matches!(m.role, plexus_core::plexus::MethodRole::StaticChild | plexus_core::plexus::MethodRole::DynamicChild { .. }))
         .map(|m| {
             let mut params: Vec<String> = m
                 .params
@@ -40,7 +47,7 @@ fn surface(schema: PluginSchema) -> Surface {
                 .map(|props| props.iter().filter(|(_, p)| p.get("x-plexus-source").is_none()).map(|(k, _)| k.clone()).collect())
                 .unwrap_or_default();
             params.sort();
-            (format!("{}.{}", schema.namespace, m.name), params)
+            (format!("{path}.{}", m.name), params)
         })
         .collect()
 }
@@ -49,7 +56,11 @@ fn surface(schema: PluginSchema) -> Surface {
 /// `menger::build_rpc` registers.
 fn activation() -> Surface {
     let store = Arc::new(Store::new());
-    let tickets = Tickets::new(Arc::clone(&store)).plugin_schema();
+    let hub = Tickets::new(Arc::clone(&store));
+    let tickets = hub.plugin_schema();
+    // ACCESS-15: the children, each under `tickets.<child>` (MACRO-20: the
+    // activation lists its static children by path).
+    let children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&hub).into_iter().map(|(path, c)| surface_at(&format!("tickets.{path}"), c)).collect();
     let comments = Comments::new(Arc::clone(&store)).plugin_schema();
     // NOTE-2: and notes.
     let notes = Notes::new(Arc::clone(&store)).plugin_schema();
@@ -77,6 +88,7 @@ fn activation() -> Surface {
     out.extend(surface(session));
     out.extend(surface(members));
     out.extend(surface(orgs));
+    children.into_iter().for_each(|c| out.extend(c));
     out
 }
 

@@ -253,8 +253,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.set_kind", Today::Editor, Some("id")),
     ("tickets.set_parent", Today::Editor, Some("id")),
     ("tickets.amend", Today::Editor, Some("id")),
-    ("tickets.link_commits", Today::Editor, Some("id")),
-    ("tickets.unlink_commits", Today::Editor, Some("id")),
+    ("tickets.commits.link", Today::Editor, Some("id")),
+    ("tickets.commits.unlink", Today::Editor, Some("id")),
     // MENGER-12: an editor's, on the ticket it labels.
     ("tickets.label", Today::Editor, Some("id")),
     // MENGER-30: any part of a ticket in one write — an editor's, on it.
@@ -323,6 +323,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     let sessions = Arc::new(menger::sessions::Sessions::new(3600, &menger::login_names()));
     let access = menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), true, Vec::new()).minting(menger::session_table(&sessions));
     let hub = menger::build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access).await.unwrap();
+    // MACRO-20: the children's roles are in it, each grant under its path.
     let declared = hub.declared_roles();
     let viewer: BTreeSet<String> = declared["viewer"].iter().cloned().collect();
     let editor: BTreeSet<String> = declared["editor"].iter().cloned().collect();
@@ -330,17 +331,26 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     let signed_in: BTreeSet<&str> = menger::SIGNED_IN_GRANTS.into_iter().collect();
 
     // Every method of menger's activations is in the table, once.
+    // ACCESS-15: a child's methods are `tickets.<child>.<method>` on the
+    // wire and in the table; its schema says `<child>.<method>`.
     let mut seen = BTreeSet::new();
-    for schema in hub.list_plugin_schemas() {
-        if !["tickets", "comments", "notes", "members", "session"].contains(&schema.namespace.as_str()) {
+    // MACRO-20: the hub lists them by path (`tickets.commits`), each schema
+    // its own (namespace and grants as the macro wrote them).
+    let children = plexus_core::plexus::Activation::static_child_schemas(&menger_tickets_api::Tickets::new(Arc::new(menger_tickets_api::store::Store::new())))
+        .into_iter()
+        .map(|(path, s)| (format!("tickets.{path}"), s));
+    let top = hub.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
+    for (path, schema) in top.chain(children) {
+        if !["tickets", "comments", "notes", "members", "session"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
         }
         for m in &schema.methods {
-            if m.name == "schema" {
+            if m.name == "schema" || matches!(m.role, plexus_core::plexus::MethodRole::StaticChild) {
                 continue;
             }
-            let grant = format!("{}.{}", schema.namespace, m.name);
-            assert_eq!(m.grant.as_deref(), Some(grant.as_str()), "the grant is the method");
+            let own = format!("{}.{}", schema.namespace, m.name);
+            assert_eq!(m.grant.as_deref(), Some(own.as_str()), "the grant is the method");
+            let grant = format!("{path}.{}", m.name);
             let (_, today, target) = TODAY.iter().find(|(g, _, _)| *g == grant).unwrap_or_else(|| panic!("{grant} is not in the table"));
             assert_eq!(m.target.as_deref(), *target, "{grant}'s target");
             let now = if signed_in.contains(grant.as_str()) {
@@ -504,6 +514,71 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     // session.login (IDENTITY-42's, kept) mints the same way.
     let compat = one(&agent, "session.login", json!({ "scope": ["viewer@A"] })).await;
     assert_eq!((compat["type"].as_str(), compat["scope"].clone()), (Some("login"), json!(["viewer@hypermemetic:A"])));
+}
+
+/// ACCESS-15 / MACRO-20: a child's methods (`tickets.commits.link` /
+/// `unlink`) are gated by their whole path — the grant the hub checks, on
+/// the method's own target, what the editor role holds — and reach the
+/// child with the caller whole (principal, session, ceiling): an editor on
+/// A links and unlinks there, is refused on B, a viewer is refused naming
+/// the full grant, and a session's ceiling holds inside the child.
+#[tokio::test]
+async fn a_child_s_methods_are_held_by_their_path() {
+    let dir = tmp();
+    let s = spawn(&dir.path().join("t.db"), true).await;
+    let boss = as_key(s.port, &BOSS, "boss").await;
+    tickets(&boss).await;
+    let agent = as_key(s.port, &AGENT, "worker-1").await;
+
+    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
+    let no = one(&agent, "tickets.commits.link", json!({ "id": "A-2", "commits": ["77df9a0"] })).await;
+    assert_eq!(
+        (no["error_kind"].as_str(), no["grant"].as_str(), no["scope"].as_str(), no["roles"].clone()),
+        (Some("forbidden"), Some("tickets.commits.link"), Some("A-2"), json!(["editor", "admin"])),
+        "{no}"
+    );
+    // A viewer holds nothing below `commits`: the entry is not in its view.
+    assert!(!view(&agent).await["tickets"].contains("commits"), "a viewer is shown no commits");
+
+    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "editor" })).await;
+    let linked = one(&agent, "tickets.commits.link", json!({ "id": "A-2", "commits": ["77df9a0"] })).await;
+    assert_eq!((linked["type"].as_str(), linked["added"].clone()), (Some("commits_linked"), json!(["77df9a0"])), "{linked}");
+    let unlinked = one(&agent, "tickets.commits.unlink", json!({ "id": "A-2", "commits": ["77df9a0"] })).await;
+    assert_eq!((unlinked["type"].as_str(), unlinked["removed"].clone()), (Some("commits_unlinked"), json!(["77df9a0"])), "{unlinked}");
+    // Gated on the target: editor on A is not editor on B.
+    let no = one(&agent, "tickets.commits.link", json!({ "id": "B-2", "commits": ["77df9a0"] })).await;
+    assert_eq!(
+        (no["error_kind"].as_str(), no["grant"].as_str(), no["scope"].as_str(), no["held_on"].clone()),
+        (Some("forbidden"), Some("tickets.commits.link"), Some("B-2"), json!(["hypermemetic:A"])),
+        "{no}"
+    );
+    let b = one(&boss, "tickets.get", json!({ "id": "B-2" })).await;
+    assert_eq!(b["ticket"]["commits"], json!([]), "nothing written on B");
+    // The editor's view keeps the child's entry; auth.requires knows the path.
+    assert!(view(&agent).await["tickets"].contains("commits"), "an editor navigates to commits");
+    let req = one(&agent, "auth.requires", json!({ "method": "tickets.commits.link" })).await;
+    assert_eq!(
+        (req["grant"].as_str(), req["target"].as_str(), req["roles"].clone()),
+        (Some("tickets.commits.link"), Some("id"), json!(["editor", "admin"])),
+        "{req}"
+    );
+
+    // A session's ceiling holds inside the child: within editor@A it links …
+    let session = one(&agent, "auth.login", json!({ "flow": { "session": { "ceiling": ["editor@A"] } } })).await;
+    let scoped = connect(s.port, Some(session["token"].as_str().unwrap())).await;
+    let linked = one(&scoped, "tickets.commits.link", json!({ "id": "A-2", "commits": ["1a2b3c4"] })).await;
+    assert_eq!(linked["type"], "commits_linked", "the session's principal reaches the child: {linked}");
+    // … within viewer@A it is refused, though the key holds editor on A.
+    let session = one(&agent, "auth.login", json!({ "flow": { "session": { "ceiling": ["viewer@A"] } } })).await;
+    let scoped = connect(s.port, Some(session["token"].as_str().unwrap())).await;
+    let no = one(&scoped, "tickets.commits.link", json!({ "id": "A-2", "commits": ["5d6e7f8"] })).await;
+    assert_eq!((no["error_kind"].as_str(), no["grant"].as_str(), no["held_on"].clone()), (Some("forbidden"), Some("tickets.commits.link"), json!([])), "{no}");
+    let a = one(&boss, "tickets.get", json!({ "id": "A-2" })).await;
+    assert_eq!(a["ticket"]["commits"], json!(["1a2b3c4"]), "only the editor@A session wrote");
+
+    // The old names are gone.
+    let gone = one(&boss, "tickets.link_commits", json!({ "id": "A-2", "commits": ["77df9a0"] })).await;
+    assert_eq!(gone["type"], "error", "{gone}");
 }
 
 /// FILTER-24: `keep` never answers a ticket outside the caller's reach — a

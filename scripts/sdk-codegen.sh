@@ -123,6 +123,13 @@ if [ -f "$last" ] && [ "${last%.json}" != "$last" ]; then
     const fs = require("fs");
     const ir = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     for (const m of Object.values(ir.irMethods ?? {})) m.mdParams = (m.mdParams ?? []).filter((p) => !p.pdSource);
+    // ACCESS-15: a #[child] mount (tickets.commits, role static_child) is
+    // a namespace, not a method a client calls: its methods are generated
+    // as the child client (tickets/commits/), the mount is not.
+    for (const [k, m] of Object.entries(ir.irMethods ?? {})) {
+      const kind = m.mdRole?.kind;
+      if (kind === "static_child" || kind === "dynamic_child") delete ir.irMethods[k];
+    }
     fs.writeFileSync(process.argv[2], JSON.stringify(ir));
   ' "$last" "$sent"
   n=$#
@@ -189,6 +196,9 @@ const ir = JSON.parse(readFileSync('generated/ir.json', 'utf8'));
 const activations = {};
 for (const m of Object.values(ir.irMethods)) {
   if (!m.mdNamespace) continue;
+  // ACCESS-15: a #[child] mount is a namespace (its methods are listed
+  // under `tickets.commits`), not a method.
+  if (['static_child', 'dynamic_child'].includes(m.mdRole?.kind)) continue;
   // ACCESS-13: a parameter the server injects (pdSource: auth, the frame's
   // user) is none a client sends.
   (activations[m.mdNamespace] ??= {})[m.mdName] = m.mdParams.filter((p) => !p.pdSource).map((p) => p.pdName).sort();
@@ -243,13 +253,13 @@ mkdir -p "$out"
 for f in index.ts rpc.ts types.ts transport.ts package.json; do
   cp "$gen/generated/$f" "$out/$f"
 done
-# COMMENT-2: every activation's module — a directory holding a client.
-for dir in "$gen"/generated/*/; do
-  ns="$(basename "$dir")"
-  [ -f "$dir/client.ts" ] || continue
+# COMMENT-2: every activation's module — a directory holding a client;
+# ACCESS-15: a child's beneath its parent's (tickets/commits/).
+(cd "$gen/generated" && find . -mindepth 2 -path './node_modules/*' -prune -o -name client.ts -print) | while read -r c; do
+  ns="$(dirname "$c")"
   mkdir -p "$out/$ns"
   for f in index.ts client.ts types.ts; do
-    cp "$dir/$f" "$out/$ns/$f"
+    [ -f "$gen/generated/$ns/$f" ] && cp "$gen/generated/$ns/$f" "$out/$ns/$f"
   done
 done
 (cd "$gen/decl" && find . -name '*.d.ts' -print) | while read -r f; do

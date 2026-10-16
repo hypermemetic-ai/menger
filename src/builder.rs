@@ -180,8 +180,9 @@ pub async fn build_rpc_login(
     purge_daily(Arc::clone(&store), Arc::clone(&system));
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
+    let tickets = Tickets::with_access(Arc::clone(&store), access.clone());
     let mut hub = DynamicHub::new("menger")
-        .register(Tickets::with_access(Arc::clone(&store), access.clone()))
+        .register(tickets)
         .register(Comments::with_access(Arc::clone(&store), access.clone()))
         // NOTE-2: `notes` beside them, over the same store.
         .register(Notes::with_access(Arc::clone(&store), access.clone()))
@@ -205,6 +206,8 @@ pub async fn build_rpc_login(
         if let Some(url) = resource_metadata {
             hub = hub.with_resource_metadata(url);
         }
+        // MACRO-20: `declared_roles` holds the children's too, each grant
+        // under its path (`tickets.commits.link`).
         book.seed(hub.declared_roles());
     }
     Ok(Arc::new(hub))

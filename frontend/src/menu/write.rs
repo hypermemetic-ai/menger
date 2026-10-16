@@ -108,7 +108,7 @@ pub(crate) fn send(call: Call, change: Change, last_error: RwSignal<Option<Strin
                         .await
                 }
                 Call::Label { id, add, remove } => client.label_all(Some(typed(&id)?), None, some_list(Some(add))?, some_list(Some(remove))?).await,
-                Call::Commits(id, commits) => client.link_commits_all(Some(typed(&id)?), None, many(commits)?).await,
+                Call::Commits(id, commits) => client.commits().link_all(Some(typed(&id)?), None, many(commits)?).await,
                 Call::SetStatus(..) => unreachable!("sent above"),
             })
         };
