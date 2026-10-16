@@ -3519,6 +3519,37 @@ Someone signed in with no grant reaches nothing and waits in
 | `members.grant { principal, scope, role }` | the grant as kept; needs admin on the scope (`scope`: `*`, `acme:`, a shortcode, a ticket, `under` a ticket) |
 | `members.revoke { principal, scope }` | `revoked { principal, scope, existed }` |
 | `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant — an admin of `*` only (ACCESS-19: the list is every sign-in) |
+| `members.teams.list { org? }` | ACCESS-22: `team { name, org, created_by, at, members }` per team in the caller's organizations |
+| `members.teams.show { team }` | the `team`, a `team_member { member }` per principal in it, then a `grant` per grant it holds on a scope the caller administers |
+| `members.teams.create { name, org? }` | the `team`, empty; needs admin somewhere |
+| `members.teams.add { team, principal }` / `remove` | `team_member { member }` / `team_left { team, principal, existed }`; needs admin on every scope the team holds |
+| `members.teams.rename { team, to }` / `delete { team }` | the `team` / `team_deleted { team, grants, members }` — its grants go with its name, and with its end |
+
+**Teams** (ACCESS-22) give a group the same base access: a team is a
+name (lower-kebab, unique app-wide) in an organization, and a set of
+principals; `members grant --team crew --scope OUGHT --role viewer` grants
+to it (`principal: team:crew`, kept in the `members` table as any grant),
+and each of its members holds what it holds beside their own grants — the
+higher role on a scope wins, whichever way round. `members.mine` says the
+caller's teams (`team`, after `me`) and the grants each holds. Who may do
+what (owner, 2026-10-09): a team is made by an admin of somewhere; who is
+in it, its name and its end are changed only by one who is admin on
+**every** scope it holds a grant on (admin of `*`, on any), checked again
+by the store under its lock against the grants as they stand; granting to
+it is admin on the scope, as for a person. Every change to who is in a team
+moves the grants generation, so its members' open sockets follow at once
+(ACCESS-12: a watch stops hearing a team's scopes the moment its watcher
+leaves it). Stored form 13 adds the `teams` and `team_members` tables: a
+file in form 10, 11 or 12 gains them, empty, in place; an older build reads
+a form-13 file as its own and knows no team's members, so a team's grants
+reach no one there. An organization holding a team is not deleted.
+
+```sh
+synapse -P 4450 -t "$ADA" menger members teams create --name release-crew
+synapse -P 4450 -t "$ADA" menger members grant --team release-crew --scope 'under MENGER-5' --role editor
+synapse -P 4450 -t "$ADA" menger members teams add --team release-crew --principal idp:c952acd3-…
+synapse -P 4450 -t "$ADA" menger members teams show --team release-crew
+```
 
 The first admin is the operator's: `--admin <principal>` (repeatable,
 `MENGER_ADMINS`) holds admin on `*`. Grants live in the `members` table,

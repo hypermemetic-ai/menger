@@ -31,12 +31,16 @@ pub(super) const TABLE: &str = "
 /// ACCESS-9: and the **grants generation** — a count every change to who
 /// holds what moves (a grant, a revoke, a team joined or left), which a
 /// [`crate::access::Reach`] records when it is resolved and a watch
-/// compares (ACCESS-12) — and the teams each principal is in (ACCESS-22
-/// keeps them; none today, so a team's grants reach no one yet).
+/// compares (ACCESS-12) — and the teams each principal is in.
+///
+/// ACCESS-22: and the teams themselves ([`super::teams`]), by name — kept
+/// here beside the grants because a change to who is in one is a change to
+/// who holds what: the generation moves with it.
 #[derive(Debug, Clone, Default)]
 pub struct Members {
     by_principal: BTreeMap<String, BTreeMap<String, Grant>>,
     teams: BTreeMap<String, BTreeSet<TeamName>>,
+    pub(super) records: BTreeMap<TeamName, super::teams::Record>,
     generation: u64,
 }
 
@@ -71,15 +75,14 @@ impl Members {
     }
 
     /// ACCESS-9: the teams `principal` is in, by name — the input a reach
-    /// adds each team's grants from. Empty until ACCESS-22 keeps teams.
+    /// adds each team's grants from (ACCESS-22 keeps them).
     pub fn teams_of(&self, principal: &str) -> Vec<TeamName> {
         self.teams.get(principal).map(|t| t.iter().cloned().collect()).unwrap_or_default()
     }
 
     /// ACCESS-9: `principal` in `team` (`true`) or out of it — the
-    /// generation moved when that changed anything. ACCESS-22 stores it;
-    /// until then, tests alone call it.
-    #[cfg(any(test, feature = "test-support"))]
+    /// generation moved when that changed anything. ACCESS-22: the index
+    /// beside the teams' records ([`super::teams`] keeps both).
     pub(super) fn set_team(&mut self, principal: &str, team: TeamName, member: bool) {
         let teams = self.teams.entry(principal.to_string()).or_default();
         let moved = if member { teams.insert(team) } else { teams.remove(&team) };

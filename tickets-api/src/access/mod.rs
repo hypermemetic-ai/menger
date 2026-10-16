@@ -511,6 +511,30 @@ impl Access {
         }
     }
 
+    /// ACCESS-22: every team, by name — in `orgs` when given — read as the
+    /// store's [`System`] (none before a store is attached).
+    pub fn teams(&self, orgs: Option<&[crate::address::OrgId]>) -> Vec<crate::members::Team> {
+        match (self.book.store(), self.book.system.get()) {
+            (Some(store), Some(system)) => store.teams(system, orgs),
+            _ => Vec::new(),
+        }
+    }
+
+    /// ACCESS-22: the team `name`, its members and its grants, read as the
+    /// store's [`System`].
+    pub fn team(&self, name: &crate::vocab::TeamName) -> Option<(crate::members::Team, Vec<crate::members::TeamMember>, Vec<Grant>)> {
+        match (self.book.store(), self.book.system.get()) {
+            (Some(store), Some(system)) => store.team(system, name),
+            _ => None,
+        }
+    }
+
+    /// ACCESS-22: the teams `principal` is in, each as it stands.
+    pub fn teams_of(&self, principal: &str) -> Vec<crate::members::Team> {
+        let Some(store) = self.book.store() else { return Vec::new() };
+        store.teams_of(principal).iter().filter_map(|t| self.team(t).map(|(team, _, _)| team)).collect()
+    }
+
     /// The operator's `--admin` principals.
     pub fn admins(&self) -> Vec<String> {
         self.book.admins.clone()

@@ -390,14 +390,14 @@ async fn asking_and_labels_move_a_tickets_cell() {
     )
     .unwrap();
     drop(conn);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 9; this build reads 12")));
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 9; this build reads 13")));
     let store = Store::open(&path).unwrap();
     assert!(asking(&store, "AS-2"));
     assert_cells_are_a_scan(&store, Some(&path), "the first open of a form-9 file");
     drop(store);
     let conn = Connection::open(&path).unwrap();
     assert!(db::has_column(&conn, "cells", "asking").unwrap() && db::has_column(&conn, "cells", "labels").unwrap());
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 12);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 13);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 4, .. }));
 }
@@ -561,7 +561,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 606, .. }));
     let conn = Connection::open(&path).unwrap();
     assert!(db::has_column(&conn, "cells", "menger").unwrap());
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 12, "ARCHIVE-2: built to form 12");
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 13, "ACCESS-22: built to form 13");
     drop(conn);
     let store = Store::open(&path).unwrap();
     assert_eq!(answers(&store), before, "the next open reads what the first stored");

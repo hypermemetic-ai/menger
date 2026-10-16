@@ -158,7 +158,7 @@ pub use members::{Grant, MembersEvent, Role};
 /// IDENTITY-21: the `members` activation, declared once: the server's
 /// [`Members`] and the browser's [`MembersClient`].
 pub mod members_activation;
-pub use members_activation::MembersClient;
+pub use members_activation::{MembersClient, TeamsClient};
 #[cfg(feature = "server")]
 pub use members_activation::Members;
 

@@ -13,6 +13,7 @@ export * from './transport';
 export * as Comments from './comments';
 export * as Deployments from './deployments';
 export * as Members from './members';
+export * as MembersTeams from './members/teams';
 export * as Notes from './notes';
 export * as Orgs from './orgs';
 export * as Session from './session';

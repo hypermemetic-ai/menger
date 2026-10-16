@@ -991,3 +991,118 @@ async fn access_21_a_ticket_scope_is_granted_by_an_admin_covering_it() {
     assert_eq!(call(&ada, "tickets.set_parent", json!({ "id": "IDENTITY-2", "parent": to })).await[0]["type"], "parent_changed");
     assert_eq!(ids(&call(&bob, "tickets.list", json!({ "filter": "in IDENTITY" })).await), set(&["IDENTITY-2"]));
 }
+
+/// ACCESS-22: a team's grant, as members.grant gives it.
+fn to_team(team: &str, scope: &str, role: &str) -> Value {
+    json!({ "team": team, "scope": scope, "role": role })
+}
+
+fn teamed(team: &str, principal: &str) -> Value {
+    json!({ "team": team, "principal": format!("idp:{principal}") })
+}
+
+/// ACCESS-22 over the socket: a team holds grants and its members hold
+/// them; `mine`, `list` and `show` say so; a team grant and a direct grant
+/// on the same scope — the higher role wins, either way round.
+#[tokio::test]
+async fn access_22_a_team_s_members_hold_what_it_holds() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    let made = call(&ada, "members.teams.create", json!({ "name": "crew" })).await;
+    assert_eq!((made[0]["type"].as_str(), made[0]["team"]["org"].as_str()), (Some("team"), Some("hypermemetic")), "{made:?}");
+    let g = call(&ada, "members.grant", to_team("crew", "OUGHT", "viewer")).await;
+    assert_eq!(g[0]["grant"]["principal"], "team:crew", "{g:?}");
+    assert_eq!(call(&ada, "members.grant", to_team("nobody", "OUGHT", "viewer")).await[0]["type"], "error", "no such team");
+    assert_eq!(call(&ada, "members.grant", json!({ "scope": "OUGHT", "role": "viewer" })).await[0]["type"], "error", "a principal or a team");
+    let alice = as_(&w, ALICE, "alice").await;
+    assert_eq!(call(&alice, "tickets.list", json!({})).await[0]["type"], "error", "not in it yet");
+    assert_eq!(call(&ada, "members.teams.add", teamed("crew", ALICE)).await[0]["type"], "team_member");
+    assert_eq!(ids(&call(&alice, "tickets.list", json!({})).await), set(&["OUGHT-1", "OUGHT-2"]));
+    let mine = call(&alice, "members.mine", json!({})).await;
+    let kinds: Vec<&str> = mine.iter().filter_map(|e| e["type"].as_str()).collect();
+    assert_eq!(kinds, ["me", "team", "grant"], "{mine:?}");
+    assert_eq!((mine[1]["team"]["name"].as_str(), mine[2]["grant"]["principal"].as_str()), (Some("crew"), Some("team:crew")));
+    let shown = call(&ada, "members.teams.show", json!({ "team": "crew" })).await;
+    let kinds: Vec<&str> = shown.iter().filter_map(|e| e["type"].as_str()).collect();
+    assert_eq!(kinds, ["team", "team_member", "grant"], "{shown:?}");
+    assert_eq!(shown[1]["member"]["principal"], format!("idp:{ALICE}"));
+    let listed = call(&ada, "members.teams.list", json!({})).await;
+    assert_eq!((listed.len(), listed[0]["team"]["members"].as_u64()), (1, Some(1)), "{listed:?}");
+    // The higher role wins: a direct editor's beside the team's viewer …
+    assert_eq!(call(&alice, "tickets.set_status", json!({ "id": "OUGHT-2", "status": "Ready" })).await[0]["type"], "error");
+    call(&ada, "members.grant", grant(ALICE, "OUGHT", "editor")).await;
+    assert_eq!(call(&alice, "tickets.set_status", json!({ "id": "OUGHT-2", "status": "Ready" })).await[0]["type"], "status_changed");
+    // … and the team's editor beside a direct viewer's.
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "viewer")).await;
+    call(&ada, "members.grant", to_team("crew", "IDENTITY", "editor")).await;
+    assert_eq!(call(&alice, "tickets.set_status", json!({ "id": "IDENTITY-2", "status": "Ready" })).await[0]["type"], "status_changed");
+    // Not an admin: the teams are no business of Alice's.
+    assert_eq!(call(&alice, "members.teams.list", json!({})).await[0]["error_kind"], "forbidden");
+    // Renamed, its grants go with it; deleted, they go.
+    let renamed = call(&ada, "members.teams.rename", json!({ "team": "crew", "to": "release-crew" })).await;
+    assert_eq!(renamed[0]["team"]["name"], "release-crew", "{renamed:?}");
+    let mine = call(&alice, "members.mine", json!({})).await;
+    assert!(mine.iter().any(|e| e["grant"]["principal"] == "team:release-crew"), "{mine:?}");
+    let gone = call(&ada, "members.teams.delete", json!({ "team": "release-crew" })).await;
+    assert_eq!((gone[0]["grants"].as_u64(), gone[0]["members"].as_u64()), (Some(2), Some(1)), "{gone:?}");
+    let left = call(&alice, "members.mine", json!({})).await;
+    assert!(left.iter().all(|e| e["type"] != "team" && !e["grant"]["principal"].as_str().is_some_and(|p| p.starts_with("team:"))), "{left:?}");
+}
+
+/// ACCESS-22's acceptance: an admin of IDENTITY only cannot add anyone to a
+/// team holding a grant on OUGHT — nor rename it, nor delete it — and may
+/// make a team of their own, change it, and grant it only what they
+/// administer.
+#[tokio::test]
+async fn access_22_an_admin_of_identity_only_cannot_change_a_team_holding_ought() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.teams.create", json!({ "name": "crew" })).await;
+    call(&ada, "members.grant", to_team("crew", "OUGHT", "viewer")).await;
+    call(&ada, "members.grant", grant(BOB, "IDENTITY", "admin")).await;
+    let bob = as_(&w, BOB, "bob").await;
+    let no = call(&bob, "members.teams.add", teamed("crew", ALICE)).await;
+    assert_eq!(no[0]["type"], "error", "{no:?}");
+    assert!(no[0]["message"].as_str().unwrap().contains("hypermemetic:OUGHT"), "the scope is named: {no:?}");
+    assert_eq!(call(&bob, "members.teams.rename", json!({ "team": "crew", "to": "mine" })).await[0]["type"], "error");
+    assert_eq!(call(&bob, "members.teams.delete", json!({ "team": "crew" })).await[0]["type"], "error");
+    assert_eq!(call(&ada, "members.teams.show", json!({ "team": "crew" })).await.iter().filter(|e| e["type"] == "team_member").count(), 0, "nothing written");
+    // Their own team: made, joined, granted where they are admin only.
+    assert_eq!(call(&bob, "members.teams.create", json!({ "name": "bobs" })).await[0]["type"], "team");
+    assert_eq!(call(&bob, "members.teams.add", teamed("bobs", ALICE)).await[0]["type"], "team_member");
+    assert_eq!(call(&bob, "members.grant", to_team("bobs", "IDENTITY", "viewer")).await[0]["type"], "grant");
+    assert_eq!(call(&bob, "members.grant", to_team("bobs", "OUGHT", "viewer")).await[0]["type"], "error");
+    let alice = as_(&w, ALICE, "alice").await;
+    assert_eq!(ids(&call(&alice, "tickets.list", json!({})).await), set(&["IDENTITY-1", "IDENTITY-2"]));
+    // Once his team holds OUGHT too, Bob is admin on one of its two scopes: not enough.
+    call(&ada, "members.grant", to_team("bobs", "OUGHT", "viewer")).await;
+    assert_eq!(call(&bob, "members.teams.remove", teamed("bobs", ALICE)).await[0]["type"], "error", "bobs holds OUGHT now");
+    assert_eq!(call(&ada, "members.teams.remove", teamed("bobs", ALICE)).await[0]["existed"], true);
+}
+
+/// ACCESS-22's acceptance: removing someone from a team stops their open
+/// watch's events for the team's scopes, at once (ACCESS-12).
+#[tokio::test]
+async fn access_22_removing_someone_from_a_team_stops_their_watch_for_its_scopes() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.teams.create", json!({ "name": "crew" })).await;
+    call(&ada, "members.grant", to_team("crew", "OUGHT", "viewer")).await;
+    call(&ada, "members.teams.add", teamed("crew", BOB)).await;
+    call(&ada, "members.grant", grant(BOB, "IDENTITY", "viewer")).await;
+    let bob = as_(&w, BOB, "bob").await;
+    let mut watch = sub(&bob, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    call(&ada, "tickets.amend", json!({ "id": "OUGHT-2", "title": "the crew's" })).await;
+    let (heard, ended) = drain(&mut watch, Duration::from_millis(500)).await;
+    assert_eq!((amended(&heard), ended), (vec!["OUGHT-2".to_string()], false), "{heard:?}");
+    assert_eq!(call(&ada, "members.teams.remove", teamed("crew", BOB)).await[0]["existed"], true);
+    call(&ada, "tickets.amend", json!({ "id": "OUGHT-2", "title": "no longer Bob's", "body": "secret" })).await;
+    call(&ada, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "still Bob's" })).await;
+    let (heard, ended) = drain(&mut watch, Duration::from_millis(500)).await;
+    assert_eq!((amended(&heard), ended), (vec!["IDENTITY-2".to_string()], false), "{heard:?}");
+    assert!(!heard.iter().any(|e| e.to_string().contains("secret")), "{heard:?}");
+}

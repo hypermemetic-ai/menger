@@ -5,7 +5,7 @@
 use crate::access::{Access, AdminOf, VerifiedUser};
 use crate::members::{Grant, MembersEvent, Role, Scope};
 use crate::store::Store;
-use crate::vocab::{GrantedBy, Grantee, Principal};
+use crate::vocab::{GrantedBy, Grantee, Principal, TeamName};
 use async_stream::stream;
 use futures::Stream;
 use std::sync::Arc;
@@ -30,6 +30,10 @@ fn admin_on(store: &Store, user: &VerifiedUser, scope: &Scope) -> Result<AdminOf
 pub(super) fn mine_stream(access: Access, user: VerifiedUser) -> impl Stream<Item = MembersEvent> + Send + 'static {
     stream! {
         yield MembersEvent::Me { principal: user.principal_text(), name: user.name().map(str::to_string), admin_everywhere: user.administers("*") };
+        // ACCESS-22: the teams it is in, before the grants each holds.
+        for team in user.principal().map(|p| access.teams_of(p.as_str())).unwrap_or_default() {
+            yield MembersEvent::Team { team };
+        }
         for g in user.principal().map(|p| access.grants_of(p)).unwrap_or_default() {
             yield grant_event(g);
         }
@@ -62,9 +66,24 @@ pub(super) fn list_stream(store: Arc<Store>, access: Access, user: VerifiedUser,
     }
 }
 
+/// ACCESS-22: who a grant or a revoke names — a principal or a team,
+/// exactly one.
+fn grantee(named: (Option<Principal>, Option<TeamName>)) -> Result<Grantee, MembersEvent> {
+    match named {
+        (Some(p), None) => Ok(Grantee::Principal(p)),
+        (None, Some(t)) => Ok(Grantee::Team(t)),
+        _ => Err(MembersEvent::Error { message: "name a principal or a team (--principal or --team), one of the two".into() }),
+    }
+}
+
 /// `members.grant`: ACCESS-11 — admin on the scope as it stands (ACCESS-3
-/// #2, #11), the grant signed by the caller.
-pub(super) async fn grant(store: Arc<Store>, access: Access, user: VerifiedUser, principal: Principal, scope: String, role: Role) -> MembersEvent {
+/// #2, #11), the grant signed by the caller. ACCESS-22: to a principal or
+/// a team, as the same rule.
+pub(super) async fn grant(store: Arc<Store>, access: Access, user: VerifiedUser, named: (Option<Principal>, Option<TeamName>), scope: String, role: Role) -> MembersEvent {
+    let principal = match grantee(named) {
+        Ok(g) => g,
+        Err(refused) => return refused,
+    };
     let scope = match scope_of(&store, &scope) {
         Ok(s) => s,
         Err(refused) => return refused,
@@ -74,7 +93,7 @@ pub(super) async fn grant(store: Arc<Store>, access: Access, user: VerifiedUser,
         Err(refused) => return refused,
     };
     let granted_by = user.principal().cloned().map_or(GrantedBy::Operator, GrantedBy::Principal);
-    let grant = Grant { principal: Grantee::Principal(principal), scope, role, granted_by, at: chrono::Utc::now().timestamp() };
+    let grant = Grant { principal, scope, role, granted_by, at: chrono::Utc::now().timestamp() };
     match store.grant(admin, grant).await {
         Ok(g) => {
             access.granted(&g.principal.to_string());
@@ -85,7 +104,11 @@ pub(super) async fn grant(store: Arc<Store>, access: Access, user: VerifiedUser,
 }
 
 /// `members.revoke`: ACCESS-11 — admin on the scope as it stands.
-pub(super) async fn revoke(store: Arc<Store>, user: VerifiedUser, principal: Principal, scope: String) -> MembersEvent {
+pub(super) async fn revoke(store: Arc<Store>, user: VerifiedUser, named: (Option<Principal>, Option<TeamName>), scope: String) -> MembersEvent {
+    let principal = match grantee(named) {
+        Ok(g) => g,
+        Err(refused) => return refused,
+    };
     let scope = match scope_of(&store, &scope) {
         Ok(s) => s,
         Err(refused) => return refused,
@@ -94,7 +117,6 @@ pub(super) async fn revoke(store: Arc<Store>, user: VerifiedUser, principal: Pri
         Ok(a) => a,
         Err(refused) => return refused,
     };
-    let principal = Grantee::Principal(principal);
     match store.revoke(admin, principal.clone(), scope.clone()).await {
         Ok(existed) => MembersEvent::Revoked { principal, scope, existed },
         Err(e) => MembersEvent::Error { message: e.to_string() },

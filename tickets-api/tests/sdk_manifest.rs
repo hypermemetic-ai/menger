@@ -76,7 +76,10 @@ fn activation() -> Surface {
     assert_eq!(themes.namespace, "themes");
     assert_eq!(notes.namespace, "notes");
     let session = Session::new().plugin_schema();
-    let members = Members::new(Arc::new(Store::new()), Access::open()).plugin_schema();
+    let members_hub = Members::new(Arc::new(Store::new()), Access::open());
+    let members = members_hub.plugin_schema();
+    // ACCESS-22: members' child, `members.teams`.
+    let member_children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&members_hub).into_iter().map(|(path, c)| surface_at(&format!("members.{path}"), c)).collect();
     assert_eq!(
         (tickets.namespace.as_str(), comments.namespace.as_str(), session.namespace.as_str(), members.namespace.as_str()),
         ("tickets", "comments", "session", "members")
@@ -89,7 +92,7 @@ fn activation() -> Surface {
     out.extend(surface(session));
     out.extend(surface(members));
     out.extend(surface(orgs));
-    children.into_iter().for_each(|c| out.extend(c));
+    children.into_iter().chain(member_children).for_each(|c| out.extend(c));
     out
 }
 
