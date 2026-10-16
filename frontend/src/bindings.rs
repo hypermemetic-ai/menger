@@ -342,6 +342,9 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("dialog.close", &[C::Palette, C::Dialog, C::Menu, C::DatePicker], &["Escape"], G::Dialogs, "close it; focus goes back where it was"),
     b("dialog.next-field", &[C::Palette, C::Dialog], &["Tab"], G::Dialogs, "the next control, kept inside the dialog"),
     b("dialog.prev-field", &[C::Palette, C::Dialog], &["Shift+Tab"], G::Dialogs, "the previous control, kept inside the dialog"),
+    // APP-38: the queue's sheet answers its rows in turn.
+    b("queue.next", &[C::Dialog], &["j"], G::Dialogs, "in the queue's sheet, the next ticket picked (not while typing)"),
+    b("queue.prev", &[C::Dialog], &["k"], G::Dialogs, "in the queue's sheet, the previous ticket picked"),
     // -- Forms
     b("form.submit", &[C::Field, C::Dialog], &["Enter"], G::Forms, "what the form's button does — Test, Save, Rename, Apply; in the leave dialog, open the link"),
     b("form.cancel", &[C::Field], &["Escape"], G::Forms, "leave the field, nothing applied"),

@@ -230,7 +230,7 @@ fn search_narrows_by_a_key_or_by_words() {
     let t = t();
     let ids = |q: &str, mac| search(&t, q, mac).iter().map(|e| e.binding.id).collect::<Vec<_>>();
     assert_eq!(ids("", false).len(), BINDINGS.len());
-    assert_eq!(ids("j", false), ["move.next"]);
+    assert_eq!(ids("j", false), ["move.next", "queue.next"], "APP-38: the queue sheet's j too");
     assert_eq!(ids("J", false), ["select.extend-down"], "the capital is Shift+j");
     assert_eq!(ids("*", false), ["nav.expand-subtree"]);
     assert_eq!(ids("g h", false), ["go.board"]);

@@ -1,5 +1,5 @@
-//! MENGER-39: **the tray** — the owner's queue as tabs along the bottom edge
-//! of the app's main column (MENGER-40's variant C, the one chosen).
+//! MENGER-39: **the tray** — the owner's queue on the bottom edge of the
+//! app's main column: one control, and the sheet it slides in (APP-38).
 //!
 //! - **What it holds** is the app's copy of `tickets.queued` — fetched on
 //!   every connection and after every `lagged` ([`refresh`]), kept in
@@ -7,29 +7,40 @@
 //!   (an upsert), `unqueued` takes it out, a row event of a queued ticket
 //!   moves its title ([`Queue::apply`]). As `inputs`' copy is, the events
 //!   heard while a fetch is out are replayed onto its answer.
-//! - **A tab** per queued ticket that is not snoozed, most urgent first, then
-//!   the oldest: its id, its title (cut short) and an urgency chip — `today`
-//!   in the Coding colours, `now` and `blocking` in the contract's urgent
-//!   red, taller, nudging every few seconds until the owner opens it. A new
-//!   tab slides up into place.
-//! - **The sheet**: a click raises it above the tray — the urgency, who
-//!   queued it and when, the reason, and the named input's question,
-//!   answerable in place (recorded with source `app`, as every answer the
-//!   app gives; answering is the owner done with it, so the ticket leaves
-//!   the queue — the input itself stays the agent's to close), then *open
-//!   the ticket*, *snooze 10m* and *done with it*. A click on the open tab,
-//!   Esc, or a press anywhere outside the tray — a frame's included
-//!   (APP-26, [`outside_lowers`]) — lowers it.
+//! - **One control** (APP-38, APP-36's direction A, the one chosen) on the
+//!   main column's bottom edge, at the right. One ticket: its tab, as the
+//!   tray always drew it — its id, its title, an urgency chip. More: the
+//!   count, `queued`, the loudest urgency's chip with how many share it
+//!   (`3 blocking`) and `▴`. Its ground and border are the loudest
+//!   urgency's ([`Control`]); `now` / `blocking` are taller, red, and nudge
+//!   while one of them is unopened. At a phone's width it is a 46 px pill
+//!   at the bottom right.
+//! - **The sheet**: the control slides it in from the bottom of the main
+//!   column (a phone's: the whole width, 88% tall, over a scrim, with a grab
+//!   handle). Its head says `queue N`, a chip per urgency (each jumps to its
+//!   group), `j` / `k`, close (Esc). Its list is the queue most urgent first,
+//!   then oldest, grouped `blocking · now · today · whenever` under sticky
+//!   heads, `whenever` folded past six ([`groups`]); a row picked is
+//!   answered beside the list (a phone's: under its row) — who and when,
+//!   the reason, and the named input's question, answerable in place
+//!   (recorded with source `app`, as every answer the app gives; answering
+//!   is the owner done with it, so the ticket leaves the queue — the input
+//!   itself stays the agent's to close), then *open ↗*, *snooze 10m* and
+//!   *done with it*. Submit, snooze or done picks the next row
+//!   ([`next_pick`]); the last one leaving takes the sheet down, and the
+//!   control with it. With one ticket the sheet holds its answer alone.
+//!   Esc, close, the scrim, the control again, or a press anywhere outside
+//!   the tray — a frame's included (APP-26, [`outside_lowers`]) — lowers it.
 //! - **Chosen, then submitted** (APP-25): an option clicked is selected
 //!   ([`Pick`]), nothing sent; ticks and a reply are held the same way, and
 //!   one **submit** sends whichever it is. The sheet comes down once that
 //!   write (the answer, then the unqueue) succeeds; a refusal keeps it up
 //!   with the problem shown.
-//! - **The question on hover** (APP-25): hovering or focusing a tab shows a
-//!   card above it, after a short delay — the named input's question, else
-//!   the reason, its urgency and who queued it ([`card`]) — gone on leave
-//!   or blur and never while that tab's sheet is up. Settings → Queue turns
-//!   it off ([`hover_setting`]); on by default.
+//! - **The question on hover** (APP-25): hovering or focusing the one
+//!   ticket's tab shows a card above it, after a short delay — the named
+//!   input's question, else the reason, its urgency and who queued it
+//!   ([`card`]) — gone on leave or blur and never while the sheet is up.
+//!   Settings → Queue turns it off ([`hover_setting`]); on by default.
 //! - **Request changes** (APP-23): beside the input's answer (alone when
 //!   none is named), a box for a short note — Ctrl+Enter (AGS-28's
 //!   `comment.save`) sends it as `tickets.request_changes`: the note goes on
@@ -38,14 +49,16 @@
 //!   closes the box. The draft is the tray's, so the clock's tick or an
 //!   answer elsewhere does not lose it.
 //! - **A hidden tab's title** carries the count: `(2) menger`.
-//! - **Motion** is DESIGN-39's setting: `calm` keeps the slide and drops the
-//!   nudge, `none` keeps the tray and moves nothing (index.html's rules).
-//! - **An arrival** (MENGER-45, MENGER-40's variant C′): a tab that shows up
-//!   in front of the reader — a new entry heard on `watch`, one raised to a
-//!   higher urgency, one whose snooze ended — flashes in its urgency's
-//!   colour (`fresh`), a line sweeps the tray's bottom edge, a label says
-//!   "queued · <urgency> · <who>" for ~3s, and a dot (`unseen`) stays on the
-//!   tab until it is opened. What a fetch brings (the first load, a
+//! - **Motion** is DESIGN-39's setting (LOOK-8): the sheet in in .32 s
+//!   eased out, down in .2 s; `calm` keeps the slide and the blinks and
+//!   drops the nudge and the sweep, `none` moves nothing (index.html's
+//!   rules).
+//! - **An arrival** (MENGER-45, MENGER-40's variant C′) — a new entry heard
+//!   on `watch`, one raised to a higher urgency, one whose snooze ended —
+//!   while the sheet is down blinks the control in its urgency's colour,
+//!   ticks the count, sweeps the edge, says "queued · <urgency> · <who>" for
+//!   ~3s, and leaves `N new` (a dot) until the sheet is opened; its row
+//!   keeps a dot until it is picked. What a fetch brings (the first load, a
 //!   reconnect's refetch) was not arriving in front of anyone: no flash, no
 //!   dot ([`step`]). While the page is hidden the flash waits for it to show.
 //!
@@ -292,29 +305,181 @@ pub(crate) fn who(e: &QueueEntry) -> &str {
     e.name.as_deref().unwrap_or(&e.by)
 }
 
-/// How a tab stands: its sheet up, opened since it arrived, flashing its
-/// arrival, arrived and not yet opened (the dot).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Mark {
-    pub(crate) open: bool,
-    pub(crate) seen: bool,
-    pub(crate) fresh: bool,
-    pub(crate) unseen: bool,
+/// APP-38: the urgencies, loudest first — the sheet's groups, in order, and
+/// its head's chips.
+pub(crate) const LOUDEST_FIRST: [Urgency; 4] = [Urgency::Blocking, Urgency::Now, Urgency::Today, Urgency::Whenever];
+
+/// APP-38: past this many, `whenever` folds under one line until asked for.
+pub(crate) const FOLD_OVER: usize = 6;
+
+/// APP-38: what the one control on the edge says — one ticket's tab, or the
+/// count and the loudest urgency.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Control {
+    /// How many are queued (and not snoozed).
+    pub(crate) count: usize,
+    /// The loudest urgency among them: the control's colours.
+    pub(crate) loudest: Urgency,
+    /// How many share it — `3 blocking`.
+    pub(crate) sharing: usize,
+    /// What arrived since the sheet was last opened — `1 new`, a dot.
+    pub(crate) new: usize,
+    /// A now or blocking ticket not yet opened: the control nudges.
+    pub(crate) nudge: bool,
 }
 
-/// A tab's classes: its urgency, `loud` for now and blocking, `open` while
-/// its sheet is up, `seen` once the owner has opened it (no more nudging),
-/// `fresh` while it plays its arrival, `unseen` (the dot) from its arrival
-/// until it is opened.
-pub(crate) fn tab_class(e: &QueueEntry, m: Mark) -> String {
-    let mut c = format!("qtab {}", e.urgency.as_str());
-    for (on, word) in [(e.urgency.loud(), "loud"), (m.open, "open"), (m.seen, "seen"), (m.fresh, "fresh"), (m.unseen && !m.seen, "unseen")] {
+/// The control for `rows` (what shows), `seen` the tickets opened since they
+/// arrived, `new` the arrivals since the sheet was last opened; none for an
+/// empty queue.
+pub(crate) fn control(rows: &[Row], seen: &HashSet<String>, new: &HashSet<String>) -> Option<Control> {
+    let loudest = rows.iter().map(|r| r.entry.urgency).max()?;
+    Some(Control {
+        count: rows.len(),
+        loudest,
+        sharing: rows.iter().filter(|r| r.entry.urgency == loudest).count(),
+        new: rows.iter().filter(|r| new.contains(&r.entry.ticket)).count(),
+        nudge: rows.iter().any(|r| r.entry.urgency.loud() && !seen.contains(&r.entry.ticket)),
+    })
+}
+
+impl Control {
+    /// One ticket: the control is its tab.
+    pub(crate) fn one(&self) -> bool {
+        self.count == 1
+    }
+
+    /// The loudest urgency's chip: `3 blocking` (one ticket: `blocking`).
+    pub(crate) fn chip(&self) -> String {
+        if self.one() {
+            self.loudest.as_str().to_string()
+        } else {
+            format!("{} {}", self.sharing, self.loudest.as_str())
+        }
+    }
+
+    /// The control's classes: its loudest urgency (`u-…`, the colours),
+    /// `one` (and `qtab`, as the tab it is) or `many`, `loud` for now and
+    /// blocking, `nudge` while one of those is unopened, `open` while the
+    /// sheet is up, `fresh f-<urgency>` while it plays an arrival, `has-new`
+    /// while arrivals wait for the sheet.
+    pub(crate) fn class(&self, open: bool, fresh: Option<Urgency>) -> String {
+        let mut c = format!("qc u-{}", self.loudest.as_str());
+        c.push_str(if self.one() { " one qtab" } else { " many" });
+        for (on, word) in [(self.loudest.loud(), "loud"), (self.nudge, "nudge"), (open, "open"), (self.new > 0, "has-new")] {
+            if on {
+                c.push(' ');
+                c.push_str(word);
+            }
+        }
+        if let Some(u) = fresh {
+            c.push_str(" fresh f-");
+            c.push_str(u.as_str());
+        }
+        c
+    }
+
+    /// What a screen reader hears: `9 queued, 1 blocking, 1 new`.
+    pub(crate) fn words(&self) -> String {
+        let mut w = format!("{} queued, {} {}", self.count, self.sharing, self.loudest.as_str());
+        if self.new > 0 {
+            w.push_str(&format!(", {} new", self.new));
+        }
+        w
+    }
+}
+
+/// APP-38: one urgency's group in the sheet — its rows, or, folded, how
+/// many it holds.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Group {
+    pub(crate) urgency: Urgency,
+    pub(crate) rows: Vec<Row>,
+    /// Folded: the rows it holds, none drawn (`18 whenever · show`).
+    pub(crate) folded: usize,
+}
+
+impl Group {
+    /// How many it holds, drawn or folded.
+    pub(crate) fn len(&self) -> usize {
+        self.rows.len() + self.folded
+    }
+}
+
+/// The sheet's groups for `rows` (in the queue's order): `blocking · now ·
+/// today · whenever`, the empty ones left out; `whenever` folded past
+/// [`FOLD_OVER`] unless `unfold` or the ticket `picked` is in it.
+pub(crate) fn groups(rows: &[Row], unfold: bool, picked: Option<&str>) -> Vec<Group> {
+    LOUDEST_FIRST
+        .iter()
+        .filter_map(|&urgency| {
+            let rows: Vec<Row> = rows.iter().filter(|r| r.entry.urgency == urgency).cloned().collect();
+            if rows.is_empty() {
+                return None;
+            }
+            let holds_pick = picked.is_some_and(|p| rows.iter().any(|r| r.entry.ticket == p));
+            let fold = urgency == Urgency::Whenever && rows.len() > FOLD_OVER && !unfold && !holds_pick;
+            Some(if fold { Group { urgency, folded: rows.len(), rows: Vec::new() } } else { Group { urgency, rows, folded: 0 } })
+        })
+        .collect()
+}
+
+/// APP-38: after the queue moved from `before` to `after` (ids, in order),
+/// the row to have picked: `picked` while it is still there; when it left
+/// (submitted, snoozed, done with, or answered elsewhere), the next row that
+/// stayed, else the one before it, else the first; none when nothing is
+/// picked or nothing is left.
+pub(crate) fn next_pick(before: &[String], after: &[String], picked: Option<&str>) -> Option<String> {
+    let p = picked?;
+    if after.iter().any(|a| a == p) {
+        return Some(p.to_string());
+    }
+    let stays = |b: &&String| after.contains(b);
+    let at = before.iter().position(|b| b == p);
+    at.and_then(|i| before[i + 1..].iter().find(stays).or_else(|| before[..i].iter().rev().find(stays)))
+        .or_else(|| after.first())
+        .cloned()
+}
+
+/// APP-38: `j` / `k` — the row `by` places from `picked` in `order`, held at
+/// either end; the first when nothing is picked.
+pub(crate) fn step_pick(order: &[String], picked: Option<&str>, by: i32) -> Option<String> {
+    let at = picked.and_then(|p| order.iter().position(|o| o == p));
+    let to = match at {
+        Some(i) => (i as i64 + i64::from(by)).clamp(0, order.len() as i64 - 1) as usize,
+        None => 0,
+    };
+    order.get(to).cloned()
+}
+
+/// APP-38: where `picked` stands in `order` — `(k, n)`, one-based, for
+/// `k of N · submit moves to the next`.
+pub(crate) fn position(order: &[String], picked: Option<&str>) -> Option<(usize, usize)> {
+    let p = picked?;
+    order.iter().position(|o| o == p).map(|i| (i + 1, order.len()))
+}
+
+/// APP-38: a row's classes — its urgency (`u-…`, the left rule), `sel` while
+/// picked, `unseen` (the dot) from its arrival until it is picked.
+pub(crate) fn row_class(e: &QueueEntry, sel: bool, unseen: bool) -> String {
+    let mut c = format!("qr u-{}", e.urgency.as_str());
+    for (on, word) in [(sel, "sel"), (unseen && !sel, "unseen")] {
         if on {
             c.push(' ');
             c.push_str(word);
         }
     }
     c
+}
+
+/// APP-38: a row's age, short: `now`, `5m`, `2h`, `3d`.
+pub(crate) fn age(now: i64, then: i64) -> String {
+    let s = (now - then).max(0);
+    match s {
+        0..=59 => "now".into(),
+        60..=3_599 => format!("{}m", s / 60),
+        3_600..=86_399 => format!("{}h", s / 3_600),
+        _ => format!("{}d", s / 86_400),
+    }
 }
 
 /// An answer as the sheet says it.
@@ -590,10 +755,10 @@ pub(crate) const CHANGES_PLACEHOLDER: &str = "What should change? It goes on the
 
 /// APP-25: **submit** — answer `input` of `id` with `value` (source `app`),
 /// then — the owner has answered what was asked — take the ticket out of
-/// the queue. Only once both writes succeed does the sheet come down (and
-/// the pick go); a refusal of either keeps it up with the problem shown.
-#[allow(clippy::too_many_arguments)]
-fn submit(id: String, input: String, value: InputValue, problem: RwSignal<Option<String>>, busy: RwSignal<bool>, open: RwSignal<Option<String>>, pick: RwSignal<Pick>) {
+/// the queue. Once both writes succeed the pick goes and the row leaves, and
+/// the tray picks the next (APP-38; the last one takes the sheet down); a
+/// refusal of either keeps the row with the problem shown.
+fn submit(id: String, input: String, value: InputValue, problem: RwSignal<Option<String>>, busy: RwSignal<bool>, pick: RwSignal<Pick>) {
     let Some(client) = session::client() else { return };
     busy.set(true);
     problem.set(None);
@@ -629,9 +794,6 @@ fn submit(id: String, input: String, value: InputValue, problem: RwSignal<Option
             }
             None => {
                 pick.try_set(Pick::default());
-                if open.try_get_untracked().flatten().as_deref() == Some(id.as_str()) {
-                    open.try_set(None);
-                }
             }
         }
         busy.try_set(false);
@@ -699,36 +861,131 @@ fn clock() -> RwSignal<i64> {
     c
 }
 
-/// The tray: a tab per queued ticket along the main column's bottom edge,
-/// and the sheet the open one raises.
+/// APP-38: the phone's width — the control a pill, the sheet the whole
+/// width over a scrim, a row's answer opened under it.
+const PHONE: &str = "(max-width: 640px)";
+
+/// Whether the window is a phone's width, followed.
+fn phone_width() -> RwSignal<bool> {
+    let s = RwSignal::new(false);
+    let Some(m) = dom::window().match_media(PHONE).ok().flatten() else { return s };
+    s.set(m.matches());
+    let held = m.clone();
+    let on = Closure::<dyn Fn()>::new(move || {
+        s.try_set(held.matches());
+    });
+    let _ = m.add_event_listener_with_callback("change", on.as_ref().unchecked_ref());
+    on.forget();
+    s
+}
+
+/// How long the sheet takes to slide down (index.html's `.2s`), so the
+/// tray outlives its last row by as much.
+const SLIDE_OUT_MS: i32 = 220;
+
+/// What the answer in the sheet reads and writes — the tray's.
+#[derive(Clone, Copy)]
+struct Sheet {
+    open: RwSignal<bool>,
+    picked: RwSignal<Option<String>>,
+    order: Memo<Vec<String>>,
+    clock: RwSignal<i64>,
+    problem: RwSignal<Option<String>>,
+    busy: RwSignal<bool>,
+    draft: Draft,
+    pick: RwSignal<Pick>,
+}
+
+/// One ticket's answer — today's sheet: who and when, the reason, the
+/// named input (pick, then submit), Request changes, open, snooze, done;
+/// with many, where it stands (`2 of 9 · submit moves to the next`).
+fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
+    let id = row.entry.ticket.clone();
+    let e = row.entry.clone();
+    let input = named_input(&inputs::signal(), &e);
+    // The time moves on its own: the answer is not drawn again for it.
+    let hd = {
+        let e = e.clone();
+        let clock = s.clock;
+        move || format!("{} · queued by {} · {}", e.urgency.as_str(), who(&e), ago(clock.get(), e.asked_unix))
+    };
+    let (snooze_id, done_id) = (id.clone(), id.clone());
+    let (problem, open) = (s.problem, s.open);
+    let place = move || {
+        if !many {
+            return None;
+        }
+        let (k, n) = position(&s.order.get(), s.picked.get().as_deref())?;
+        Some(view! { <span class="qnext">{format!("{k} of {n} · submit moves to the next")}</span> })
+    };
+    view! {
+        <div class=format!("qd u-{}", e.urgency.as_str()) data-ticket-id=id.clone()>
+            <div class="qhd">{hd}</div>
+            <h4><a class="code" href=format!("#/ticket/{id}")>{id.clone()}</a>" · "{row.ticket.title.clone()}</h4>
+            <p class="qwhy">{e.reason.clone()}</p>
+            {input_view(id.clone(), e.input.clone(), input, s.problem, s.busy, s.pick)}
+            {changes_view(id.clone(), s.problem, s.busy, s.draft)}
+            <div class="qacts">
+                <a class="qbtn" href=open_href(&e) on:click=move |_| open.set(false)>"open ↗"</a>
+                <button type="button" class="qbtn" on:click=move |_| snooze(snooze_id.clone(), problem)>{format!("snooze {SNOOZE_MINUTES}m")}</button>
+                <button type="button" class="qbtn" on:click=move |_| done(done_id.clone(), problem)>"done with it"</button>
+                {place}
+            </div>
+            {move || problem.get().map(|p| view! { <p class="qproblem" role="alert">{p}</p> })}
+        </div>
+    }
+}
+
+/// `#qtray`'s element for `selector`, brought into view in its list
+/// (`nearest`: a row on screen never jumps), at once.
+fn reveal(selector: &str, block: web_sys::ScrollLogicalPosition) {
+    let Some(el) = dom::window().document().and_then(|d| d.query_selector(selector).ok().flatten()) else { return };
+    let opts = web_sys::ScrollIntoViewOptions::new();
+    opts.set_block(block);
+    el.scroll_into_view_with_scroll_into_view_options(&opts);
+}
+
+/// The tray (APP-38, APP-36's direction A): one control on the main
+/// column's bottom edge — one ticket's tab, or the count and the loudest
+/// urgency — and the sheet it slides in from the bottom: the queue grouped
+/// by urgency, answered row by row.
 #[component]
 pub(crate) fn Tray() -> impl IntoView {
     let held = signal();
     let clock = clock();
     inputs::want();
-    let inputs_held = inputs::signal();
-    let card_inputs = inputs_held.clone();
-    let open = RwSignal::new(None::<String>);
+    let card_inputs = inputs::signal();
+    let open = RwSignal::new(false);
+    let picked = RwSignal::new(None::<String>);
+    // Opened since it arrived (no nudge); arrived and not picked yet (the
+    // row's dot); arrived since the sheet was last opened (`N new`).
     let seen = RwSignal::new(HashSet::<String>::new());
-    // MENGER-45: the tabs playing an arrival, the tabs with a dot, and the
-    // edge's sweep and the label (the arrival they say, a generation).
-    let fresh = RwSignal::new(HashSet::<String>::new());
     let unseen = RwSignal::new(HashSet::<String>::new());
+    let new = RwSignal::new(HashSet::<String>::new());
+    // MENGER-45 on the one control: the arrival it blinks for, the rows
+    // arriving in the open sheet, and the edge's sweep and the label.
+    let fresh = RwSignal::new(None::<Urgency>);
+    let fresh_rows = RwSignal::new(HashSet::<String>::new());
     let flash = RwSignal::new(None::<(Arrival, u32)>);
     let problem = RwSignal::new(None::<String>);
     let busy = RwSignal::new(false);
     let draft = Draft::new();
-    // APP-25: the open sheet's choice, held until submit; the tab hovered
-    // (its card's place, once the delay is out) and the hover's generation.
     let pick = RwSignal::new(Pick::default());
+    let unfold = RwSignal::new(false);
+    let closing = RwSignal::new(false);
+    let phone = phone_width();
+    // APP-25: the one ticket's tab hovered (its card's place, once the delay
+    // is out) and the hover's generation.
     let hovered = RwSignal::new(None::<(String, f64, f64)>);
     let hover_gen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let hover_on = hover_setting();
     let tray_ref = NodeRef::<leptos::html::Div>::new();
-    // Arrivals play once the page is visible: each tab loses `fresh` for a
-    // frame and takes it again (a raise replays it), loses `seen` (a raised
-    // tab nudges again) and takes the dot; the most urgent sweeps the edge
-    // and is the label.
+    let sheet_ref = NodeRef::<leptos::html::Div>::new();
+    let control_ref = NodeRef::<leptos::html::Button>::new();
+    // Arrivals play once the page is visible: each loses `seen` (a raised
+    // one nudges again) and takes the dot; while the sheet is down they
+    // count as new and the control blinks for the most urgent, which sweeps
+    // the edge and is the label; while it is up their rows slide in.
     {
         let arriving = ARRIVING.with(Clone::clone);
         let hidden = HIDDEN.with(Clone::clone);
@@ -739,17 +996,25 @@ pub(crate) fn Tray() -> impl IntoView {
             }
             let got = arriving.try_update_untracked(std::mem::take).unwrap_or_default();
             let ids: Vec<String> = got.iter().map(|a| a.ticket.clone()).collect();
+            let up = open.get_untracked();
             seen.update(|s| s.retain(|id| !ids.contains(id)));
             unseen.update(|s| s.extend(ids.iter().cloned()));
-            fresh.update(|s| s.retain(|id| !ids.contains(id)));
+            if !up {
+                new.update(|s| s.extend(ids.iter().cloned()));
+            }
+            fresh_rows.update(|s| s.retain(|id| !ids.contains(id)));
             let Some(top) = got.into_iter().max_by_key(|a| a.urgency) else { return };
+            fresh.set(None);
             let n = generation.get().wrapping_add(1);
             generation.set(n);
             let generation = generation.clone();
             spawn_local(async move {
                 dom::sleep_ms(40).await;
-                fresh.try_update(|s| s.extend(ids));
-                flash.try_set(Some((top, n)));
+                fresh_rows.try_update(|s| s.extend(ids));
+                if !up {
+                    fresh.try_set(Some(top.urgency));
+                    flash.try_set(Some((top, n)));
+                }
                 dom::sleep_ms(3_600).await;
                 if generation.get() == n {
                     flash.try_set(None);
@@ -761,26 +1026,113 @@ pub(crate) fn Tray() -> impl IntoView {
         let held = held.clone();
         Memo::new(move |_| held.with(|q| q.as_ref().map(|q| q.showing(clock.get())).unwrap_or_default()))
     };
-    // The open ticket left the tray (unqueued, snoozed, answered elsewhere):
-    // the sheet comes down.
-    Effect::new(move |_| {
-        let gone = open.with(|o| o.as_ref().is_some_and(|id| rows.with(|r| !r.iter().any(|x| &x.entry.ticket == id))));
-        if gone {
-            open.set(None);
+    let order = Memo::new(move |_| rows.with(|r| r.iter().map(|x| x.entry.ticket.clone()).collect::<Vec<_>>()));
+    let one = Memo::new(move |_| rows.with(|r| r.len() == 1));
+    let ctl = Memo::new(move |_| rows.with(|r| seen.with(|s| new.with(|n| control(r, s, n)))));
+    let picked_row = Memo::new(move |_| picked.with(|p| p.as_ref().and_then(|id| rows.with(|r| r.iter().find(|x| &x.entry.ticket == id).cloned()))));
+    let sheet = Sheet { open, picked, order, clock, problem, busy, draft, pick };
+    // A row picked: its answer starts clean, it is opened (no nudge, no dot).
+    let pick_row = move |id: String| {
+        if picked.with_untracked(|p| p.as_deref() != Some(id.as_str())) {
+            problem.set(None);
+            draft.clear();
             pick.set(Pick::default());
+            picked.set(Some(id.clone()));
+        }
+        if seen.with_untracked(|s| !s.contains(&id)) {
+            seen.update(|s| {
+                s.insert(id.clone());
+            });
+        }
+        if unseen.with_untracked(|s| s.contains(&id)) {
+            unseen.update(|s| {
+                s.remove(&id);
+            });
+        }
+    };
+    let focus_sheet = move || {
+        spawn_local(async move {
+            dom::sleep_ms(0).await;
+            if let Some(el) = sheet_ref.get_untracked() {
+                let opts = web_sys::FocusOptions::new();
+                opts.set_prevent_scroll(true);
+                let _ = el.focus_with_options(&opts);
+            }
+        });
+    };
+    // The sheet up: the row picked before (if still queued), else the
+    // first — the most urgent, the oldest; the arrivals are no longer new.
+    let open_sheet = move || {
+        let keep = picked.get_untracked().filter(|p| order.with_untracked(|o| o.contains(p)));
+        if let Some(id) = keep.or_else(|| order.with_untracked(|o| o.first().cloned())) {
+            pick_row(id);
+        }
+        new.set(HashSet::new());
+        fresh.set(None);
+        flash.set(None);
+        open.set(true);
+        focus_sheet();
+    };
+    let close_sheet = move |refocus: bool| {
+        open.set(false);
+        if refocus {
+            if let Some(b) = control_ref.get_untracked() {
+                let opts = web_sys::FocusOptions::new();
+                opts.set_prevent_scroll(true);
+                let _ = b.focus_with_options(&opts);
+            }
+        }
+    };
+    // The queue moved: a picked row that left (submitted, snoozed, done
+    // with, answered elsewhere) hands the pick to the next; the last one
+    // leaving takes the sheet down, and the tray stays as long as it slides.
+    {
+        let before = StoredValue::new(Vec::<String>::new());
+        Effect::new(move |_| {
+            let after = order.get();
+            let prev = before.get_value();
+            before.set_value(after.clone());
+            if after.is_empty() {
+                if open.get_untracked() {
+                    open.set(false);
+                    closing.set(true);
+                    spawn_local(async move {
+                        dom::sleep_ms(SLIDE_OUT_MS).await;
+                        closing.try_set(false);
+                    });
+                }
+                return;
+            }
+            let p = picked.get_untracked();
+            if !open.get_untracked() {
+                if p.as_ref().is_some_and(|p| !after.contains(p)) {
+                    picked.set(None);
+                }
+                return;
+            }
+            if let Some(next) = next_pick(&prev, &after, p.as_deref()) {
+                if p.as_deref() != Some(next.as_str()) {
+                    pick_row(next);
+                }
+            }
+        });
+    }
+    // What the sheet draws while it slides down after its last row left.
+    let last = RwSignal::new(None::<Row>);
+    Effect::new(move |_| {
+        if let Some(r) = picked_row.get() {
+            last.set(Some(r));
         }
     });
-    // APP-26: a press anywhere outside the tray lowers the sheet (it slides
-    // down as every close does; Motion none, at once); not while a submit
-    // is out. A tab, the sheet and the card are inside, so the press that
-    // opens or switches a tab is the tab's own. A press in a frame (a
-    // ticket's body) never reaches this window: focus going into the frame
-    // blurs it instead, and that is heard as the press.
+    // APP-26: a press anywhere outside the tray lowers the sheet; not while
+    // a submit is out. The control, the sheet, its scrim and the card are
+    // inside. A press in a frame never reaches this window: focus going
+    // into the frame blurs it instead, and that is heard as the press.
     let lower_outside = move |target: Option<web_sys::Element>| {
         let inside = target.is_some_and(|el| el.closest("#qtray").ok().flatten().is_some());
-        let (Some(is_open), Some(is_busy)) = (open.try_with_untracked(Option::is_some), busy.try_get_untracked()) else { return };
+        let (Some(is_open), Some(is_busy)) = (open.try_get_untracked(), busy.try_get_untracked()) else { return };
         if outside_lowers(is_open, is_busy, inside) {
-            open.set(None);
+            open.set(false);
         }
     };
     let press = window_event_listener(leptos::ev::pointerdown, move |ev| {
@@ -795,60 +1147,36 @@ pub(crate) fn Tray() -> impl IntoView {
             }
         });
     });
-    // The tray goes with the session's view (a sign-out): so do they.
     on_cleanup(move || {
         press.remove();
         into_frame.remove();
     });
-    let toggle = move |id: String| {
-        problem.set(None);
-        draft.clear();
-        pick.set(Pick::default());
-        seen.update(|s| {
-            s.insert(id.clone());
+    // j / k: the next or previous row, picked and brought into view.
+    let step_by = move |by: i32| {
+        let Some(id) = order.with_untracked(|o| step_pick(o, picked.get_untracked().as_deref(), by)) else { return };
+        pick_row(id.clone());
+        spawn_local(async move {
+            dom::sleep_ms(0).await;
+            reveal(&format!("#qtray .qr[data-ticket-id=\"{id}\"]"), web_sys::ScrollLogicalPosition::Nearest);
         });
-        unseen.update(|s| {
-            s.remove(&id);
+    };
+    // A head chip: its group's first row picked, the group brought to the
+    // top of the list (whenever unfolded).
+    let jump = move |u: Urgency| {
+        if u == Urgency::Whenever {
+            unfold.set(true);
+        }
+        let first = rows.with_untracked(|r| r.iter().find(|x| x.entry.urgency == u).map(|x| x.entry.ticket.clone()));
+        if let Some(id) = first {
+            pick_row(id);
+        }
+        spawn_local(async move {
+            dom::sleep_ms(0).await;
+            reveal(&format!("#qtray .grp[data-urgency=\"{}\"]", u.as_str()), web_sys::ScrollLogicalPosition::Start);
         });
-        open.update(|o| *o = if o.as_deref() == Some(id.as_str()) { None } else { Some(id) });
     };
-    // APP-25: the sheet slides down rather than vanishing — the last ticket
-    // drawn stays in it while it closes (on submit its row has already
-    // left), and is replaced when another opens.
-    let last = RwSignal::new(None::<Row>);
-    let sheet = move || {
-        let row = match open.get() {
-            Some(id) => rows.with(|r| r.iter().find(|x| x.entry.ticket == id).cloned()).or_else(|| last.get_untracked().filter(|r| r.entry.ticket == id))?,
-            None => last.get_untracked()?,
-        };
-        last.set(Some(row.clone()));
-        let id = row.entry.ticket.clone();
-        let e = row.entry.clone();
-        let input = named_input(&inputs_held, &e);
-        // The time moves on its own: the sheet is not drawn again for it.
-        let hd = {
-            let e = e.clone();
-            move || format!("{} · {} · {}", e.urgency.as_str(), who(&e), ago(clock.get(), e.asked_unix))
-        };
-        let (snooze_id, done_id) = (id.clone(), id.clone());
-        Some(view! {
-            <div class="qsheet-in" data-ticket-id=id.clone()>
-                <div class=format!("qhd {}", e.urgency.as_str())>{hd}</div>
-                <h4><a class="code" href=format!("#/ticket/{id}")>{id.clone()}</a>" · "{row.ticket.title.clone()}</h4>
-                <p class="qwhy">{e.reason.clone()}</p>
-                {input_view(id.clone(), e.input.clone(), input, problem, busy, open, pick)}
-                {changes_view(id.clone(), problem, busy, draft)}
-                <div class="qacts">
-                    <a class="qbtn fill" href=open_href(&e) on:click=move |_| open.set(None)>"open the ticket"</a>
-                    <button type="button" class="qbtn" on:click=move |_| snooze(snooze_id.clone(), problem)>{format!("snooze {SNOOZE_MINUTES}m")}</button>
-                    <button type="button" class="qbtn" on:click=move |_| done(done_id.clone(), problem)>"done with it"</button>
-                </div>
-                {move || problem.get().map(|p| view! { <p class="qproblem" role="alert">{p}</p> })}
-            </div>
-        })
-    };
-    // APP-25: a tab hovered or focused shows its card after the delay, at
-    // the tab (relative to the tray); leaving, blurring or opening it ends it.
+    // APP-25: the one ticket's tab hovered or focused shows its card after
+    // the delay, above the control; leaving, blurring or opening ends it.
     use std::sync::atomic::Ordering::Relaxed;
     let hover_end = {
         let gen = hover_gen.clone();
@@ -860,14 +1188,15 @@ pub(crate) fn Tray() -> impl IntoView {
     let hover_begin = {
         let gen = hover_gen.clone();
         let on = hover_on.clone();
-        move |id: String, ev: web_sys::Event| {
+        move |ev: web_sys::Event| {
             let n = gen.fetch_add(1, Relaxed).wrapping_add(1);
-            if !on.get_untracked() {
+            if !on.get_untracked() || !one.get_untracked() || open.get_untracked() {
                 return;
             }
+            let Some(id) = order.with_untracked(|o| o.first().cloned()) else { return };
             let (Some(tab), Some(tray)) = (ev.current_target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()), tray_ref.get_untracked()) else { return };
             let (t, r) = (tab.get_bounding_client_rect(), tray.get_bounding_client_rect());
-            let place = (id, t.left() - r.left(), r.bottom() - t.top() + 6.0);
+            let place = (id, t.right() - r.left(), r.bottom() - t.top() + 6.0);
             let gen = gen.clone();
             spawn_local(async move {
                 dom::sleep_ms(CARD_DELAY_MS).await;
@@ -881,100 +1210,248 @@ pub(crate) fn Tray() -> impl IntoView {
         let on = hover_on.clone();
         let inputs_held = card_inputs;
         move || {
-            if !on.get() {
+            if !on.get() || open.get() || !one.get() {
                 return None;
             }
-            let (id, left, bottom) = hovered.get()?;
-            if open.with(|o| o.as_deref() == Some(id.as_str())) {
-                return None;
-            }
+            let (id, right, bottom) = hovered.get()?;
             let row = rows.with(|r| r.iter().find(|x| x.entry.ticket == id).cloned())?;
             let c = card(&row, named_input(&inputs_held, &row.entry).as_ref());
             Some(view! {
                 <div
                     id="qcard"
-                    class=format!("qcard {}", row.entry.urgency.as_str())
+                    class=format!("qcard u-{}", row.entry.urgency.as_str())
                     role="tooltip"
                     data-ticket-id=id.clone()
-                    style=format!("--x: {left:.0}px; bottom: {bottom:.0}px")
+                    style=format!("--x: {right:.0}px; bottom: {bottom:.0}px")
                 >
-                    <div class=format!("qhd {}", row.entry.urgency.as_str())>{format!("{id} · {}", c.line)}</div>
+                    <div class="qhd">{format!("{id} · {}", c.line)}</div>
                     <p class="qcq">{c.question}</p>
                 </div>
             })
         }
+    };
+    // The control's face: one ticket's id, title and urgency; or the count,
+    // `queued`, the loudest's chip, what is new, and the caret.
+    let face = move || {
+        if one.get() {
+            let title = move || rows.with(|r| r.first().map(|r| r.ticket.title.clone()).unwrap_or_default());
+            let tid = move || order.with(|o| o.first().cloned().unwrap_or_default());
+            view! {
+                <span class="id">{tid}</span>
+                <span class="t">{title}</span>
+                <span class="chip-u">{move || ctl.with(|c| c.as_ref().map(Control::chip).unwrap_or_default())}</span>
+                <span class="car" aria-hidden="true">"▴"</span>
+            }
+            .into_any()
+        } else {
+            view! {
+                <span class="cnt">{move || ctl.with(|c| c.as_ref().map_or(0, |c| c.count))}</span>
+                <span class="lbl">"queued"</span>
+                <span class="chip-u">{move || ctl.with(|c| c.as_ref().map(Control::chip).unwrap_or_default())}</span>
+                {move || ctl.with(|c| c.as_ref().filter(|c| c.new > 0).map(|c| c.new)).map(|n| view! { <span class="new">{format!("{n} new")}</span> })}
+                <span class="car" aria-hidden="true">"▴"</span>
+            }
+            .into_any()
+        }
+    };
+    // The sheet's head: `queue N`, a chip per urgency held (each jumps to
+    // its group), j / k, close.
+    let chips = move || {
+        rows.with(|r| {
+            LOUDEST_FIRST
+                .iter()
+                .filter_map(|&u| {
+                    let n = r.iter().filter(|x| x.entry.urgency == u).count();
+                    (n > 0).then(|| {
+                        view! {
+                            <button type="button" class=format!("qj u-{}", u.as_str()) on:click=move |_| jump(u)>{format!("{n} {}", u.as_str())}</button>
+                        }
+                    })
+                })
+                .collect_view()
+        })
+    };
+    // One row of the list; on a phone its answer opens under it.
+    let row_view = move |row: Row| {
+        let id = row.entry.ticket.clone();
+        let now_row = {
+            let id = id.clone();
+            Memo::new(move |_| rows.with(|r| r.iter().find(|x| x.entry.ticket == id).cloned()))
+        };
+        let (cid, pid, hid) = (id.clone(), id.clone(), id.clone());
+        let class = move || {
+            let mut c = now_row.with(|r| {
+                r.as_ref()
+                    .map(|r| row_class(&r.entry, picked.with(|p| p.as_deref() == Some(cid.as_str())), unseen.with(|s| s.contains(&cid))))
+                    .unwrap_or_default()
+            });
+            if fresh_rows.with(|s| s.contains(&cid)) {
+                c.push_str(" fresh");
+            }
+            c
+        };
+        let here = move || phone.get() && picked.with(|p| p.as_deref() == Some(hid.as_str()));
+        view! {
+            <button
+                type="button"
+                class=class
+                data-ticket-id=id.clone()
+                aria-pressed=move || picked.with(|p| p.as_deref() == Some(pid.as_str())).to_string()
+                on:click=move |_| pick_row(id.clone())
+            >
+                <span class="id">{row.entry.ticket.clone()}</span>
+                <span class="t">{move || now_row.with(|r| r.as_ref().map(|r| r.ticket.title.clone()).unwrap_or_default())}</span>
+                <span class="m">
+                    {move || now_row.with(|r| r.as_ref().map(|r| age(clock.get(), r.entry.asked_unix)).unwrap_or_default())}
+                    {move || now_row.with(|r| r.as_ref().is_some_and(|r| r.entry.input.is_some())).then(|| view! { " · "<span class="ask">"asks"</span> })}
+                </span>
+            </button>
+            {move || here().then(|| picked_row.get().map(|r| view! { <div class="qd-ph">{answer_view(r, sheet, true)}</div> }))}
+        }
+    };
+    let grouped = Memo::new(move |_| rows.with(|r| groups(r, unfold.get(), picked.get().as_deref())));
+    let list = move || {
+        view! {
+            <div class="ql">
+                <For each=move || grouped.with(|g| g.iter().map(|g| g.urgency).collect::<Vec<_>>()) key=|u| *u let:u>
+                    {
+                        let g = Memo::new(move |_| grouped.with(|gs| gs.iter().find(|g| g.urgency == u).cloned()));
+                        view! {
+                            <div class="grp" data-urgency=u.as_str()>
+                                <div class=format!("qg u-{}", u.as_str())>
+                                    {u.as_str()}" "<b>{move || g.with(|g| g.as_ref().map_or(0, Group::len))}</b>
+                                    <span class="ln"></span>
+                                </div>
+                                <For each=move || g.with(|g| g.as_ref().map(|g| g.rows.clone()).unwrap_or_default()) key=|r| r.entry.ticket.clone() let:row>
+                                    {row_view(row)}
+                                </For>
+                                {move || {
+                                    let n = g.with(|g| g.as_ref().map_or(0, |g| g.folded));
+                                    (n > 0).then(|| view! {
+                                        <button type="button" class="qmore" on:click=move |_| unfold.set(true)>{format!("{n} whenever · show")}</button>
+                                    })
+                                }}
+                            </div>
+                        }
+                    }
+                </For>
+            </div>
+        }
+    };
+    // The answer beside the list (and the one ticket's, alone): the picked
+    // row's, else the last drawn while the sheet slides down.
+    let pane = move || {
+        let many = !one.get();
+        if many && phone.get() {
+            return None;
+        }
+        let row = picked_row.get().or_else(|| last.get_untracked())?;
+        Some(view! { <div class="qpane">{answer_view(row, sheet, many)}</div> })
     };
     view! {
         <div
             id="qtray"
             node_ref=tray_ref
             class="qtray"
-            class:empty=move || rows.with(Vec::is_empty)
+            class:empty=move || rows.with(Vec::is_empty) && !closing.get()
+            class:open=move || open.get()
+            class:one=move || one.get()
             on:keydown=move |ev: web_sys::KeyboardEvent| {
-                if crate::bindings::hit(&ev, crate::bindings::Context::Dialog) == Some("dialog.close") && open.get_untracked().is_some() {
-                    ev.stop_propagation();
-                    open.set(None);
+                if !open.get_untracked() {
+                    return;
+                }
+                let typing = ev
+                    .target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                    .is_some_and(|el| matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT"));
+                match crate::bindings::hit(&ev, crate::bindings::Context::Dialog) {
+                    Some("dialog.close") => {
+                        ev.stop_propagation();
+                        close_sheet(true);
+                    }
+                    Some("queue.next") if !typing && !one.get_untracked() => {
+                        ev.prevent_default();
+                        step_by(1);
+                    }
+                    Some("queue.prev") if !typing && !one.get_untracked() => {
+                        ev.prevent_default();
+                        step_by(-1);
+                    }
+                    _ => {}
                 }
             }
         >
-            <div
-                class="qsheet"
-                class:open=move || open.with(Option::is_some)
-                inert=move || open.with(Option::is_none)
-                class:loud=move || open.with(|o| o.as_ref().is_some_and(|id| rows.with(|r| r.iter().any(|x| &x.entry.ticket == id && x.entry.urgency.loud()))))
-                aria-live="polite"
-            >
-                <div class="qsheet-clip">{sheet}</div>
+            <div class="qscrim" aria-hidden="true" on:click=move |_| close_sheet(false)></div>
+            <div class="qclip">
+                <div
+                    id="qsheet"
+                    node_ref=sheet_ref
+                    class="qs"
+                    class:one=move || one.get()
+                    class:loud=move || ctl.with(|c| c.as_ref().is_some_and(|c| c.loudest.loud()))
+                    role="dialog"
+                    aria-label="the queue"
+                    tabindex="-1"
+                    inert=move || !open.get()
+                    aria-live="polite"
+                >
+                    <div class="qgrab" aria-hidden="true"></div>
+                    <div class="qh">
+                        <span class="qt">"queue"</span>
+                        <b class="qn">{move || rows.with(Vec::len)}</b>
+                        {move || (!one.get()).then(|| view! { <span class="qjs">{chips}</span> })}
+                        <span class="sp"></span>
+                        {move || (!one.get()).then(|| view! { <span class="kb" aria-hidden="true"><kbd>"j"</kbd>" "<kbd>"k"</kbd></span> })}
+                        <button type="button" class="qx" on:click=move |_| close_sheet(true)>"close ▾ "<kbd>"esc"</kbd></button>
+                    </div>
+                    <div class="qb">
+                        {move || (!one.get()).then(list)}
+                        {pane}
+                    </div>
+                </div>
             </div>
             {move || flash.get().map(|(a, n)| view! {
-                <i class=format!("qedge {}", a.urgency.as_str()) data-gen=n.to_string() aria-hidden="true"></i>
-                <div class="qarrived" role="status">{a.label()}</div>
+                <i class=format!("qedge u-{}", a.urgency.as_str()) data-gen=n.to_string() aria-hidden="true"></i>
+                <div class=format!("qarrived u-{}", a.urgency.as_str()) role="status" aria-label=a.label()>"queued · "<b>{a.urgency.as_str()}</b>" · "{a.who.clone()}</div>
             })}
             {card_view}
-            <div class="qtabs" role="toolbar" aria-label="queued for you">
-                <For each=move || rows.get() key=|r| r.entry.ticket.clone() let:row>
-                    {
-                        let id = row.entry.ticket.clone();
-                        let now_row = {
-                            let id = id.clone();
-                            Memo::new(move |_| rows.with(|r| r.iter().find(|x| x.entry.ticket == id).cloned()))
-                        };
-                        let (cid, tid, did) = (id.clone(), id.clone(), id.clone());
-                        let (enter_id, focus_id) = (id.clone(), id.clone());
-                        let (begin_enter, begin_focus) = (hover_begin.clone(), hover_begin.clone());
-                        let (end_leave, end_blur, end_click) = (hover_end.clone(), hover_end.clone(), hover_end.clone());
-                        let titled_on = hover_on.clone();
-                        view! {
-                            <button
-                                type="button"
-                                class=move || now_row.with(|r| r.as_ref().map(|r| tab_class(&r.entry, Mark {
-                                    open: open.with(|o| o.as_deref() == Some(cid.as_str())),
-                                    seen: seen.with(|s| s.contains(&cid)),
-                                    fresh: fresh.with(|s| s.contains(&cid)),
-                                    unseen: unseen.with(|s| s.contains(&cid)),
-                                })).unwrap_or_default())
-                                data-ticket-id=id.clone()
-                                aria-expanded=move || open.with(|o| o.as_deref() == Some(tid.as_str())).to_string()
-                                // APP-25: the card replaces the browser's title while it is on.
-                                title=move || (!titled_on.get()).then(|| now_row.with(|r| r.as_ref().map(|r| format!("{} — {} ({})", r.entry.ticket, r.entry.reason, r.entry.urgency.as_str())).unwrap_or_default()))
-                                aria-describedby=move || hovered.with(|h| h.as_ref().is_some_and(|h| h.0 == did)).then_some("qcard")
-                                on:mouseenter=move |ev| begin_enter(enter_id.clone(), ev.into())
-                                on:focus=move |ev| begin_focus(focus_id.clone(), ev.into())
-                                on:mouseleave=move |_| end_leave()
-                                on:blur=move |_| end_blur()
-                                on:click=move |_| {
-                                    end_click();
-                                    toggle(id.clone());
-                                }
-                            >
-                                <span class="id">{row.entry.ticket.clone()}</span>
-                                <span class="t">{move || now_row.with(|r| r.as_ref().map(|r| r.ticket.title.clone()).unwrap_or_default())}</span>
-                                <span class="u">{move || now_row.with(|r| r.as_ref().map(|r| r.entry.urgency.as_str()).unwrap_or_default())}</span>
-                            </button>
-                        }
+            <button
+                type="button"
+                id="qcontrol"
+                node_ref=control_ref
+                class=move || ctl.with(|c| c.as_ref().map(|c| c.class(open.get(), fresh.get())).unwrap_or_else(|| "qc".into()))
+                aria-expanded=move || open.get().to_string()
+                aria-controls="qsheet"
+                aria-label=move || ctl.with(|c| c.as_ref().map(Control::words).unwrap_or_default())
+                aria-describedby=move || hovered.with(Option::is_some).then_some("qcard")
+                data-ticket-id=move || one.get().then(|| order.with(|o| o.first().cloned())).flatten()
+                on:mouseenter={
+                    let begin = hover_begin.clone();
+                    move |ev| begin(ev.into())
+                }
+                on:focus={
+                    let begin = hover_begin.clone();
+                    move |ev| begin(ev.into())
+                }
+                on:mouseleave={
+                    let end = hover_end.clone();
+                    move |_| end()
+                }
+                on:blur={
+                    let end = hover_end.clone();
+                    move |_| end()
+                }
+                on:click=move |_| {
+                    hover_end();
+                    if open.get_untracked() {
+                        close_sheet(false);
+                    } else {
+                        open_sheet();
                     }
-                </For>
-            </div>
+                }
+            >
+                {face}
+            </button>
         </div>
     }
 }
@@ -1070,7 +1547,6 @@ fn input_view(
     input: Option<Input>,
     problem: RwSignal<Option<String>>,
     busy: RwSignal<bool>,
-    open: RwSignal<Option<String>>,
     pick: RwSignal<Pick>,
 ) -> Option<AnyView> {
     let named = named?;
@@ -1165,7 +1641,7 @@ fn input_view(
             return;
         }
         if let Some(value) = pick.with_untracked(|p| p.value(kind)) {
-            submit(id.clone(), named.clone(), value, problem, busy, open, pick);
+            submit(id.clone(), named.clone(), value, problem, busy, pick);
         }
     };
     let controls = view! {
@@ -1466,19 +1942,117 @@ mod tests {
         assert_eq!(ago(400, 100), "5m ago");
         assert_eq!(ago(7_300, 100), "2h ago");
         assert_eq!(ago(300_000, 100), "3d ago");
+        assert_eq!(age(100, 100), "now");
+        assert_eq!(age(400, 100), "5m");
+        assert_eq!(age(7_300, 100), "2h");
+        assert_eq!(age(300_000, 100), "3d");
         let mut e = entry("A-1", Urgency::Blocking, 0);
-        assert_eq!(tab_class(&e, Mark::default()), "qtab blocking loud");
-        assert_eq!(tab_class(&e, Mark { open: true, seen: true, ..Mark::default() }), "qtab blocking loud open seen");
-        assert_eq!(tab_class(&e, Mark { fresh: true, unseen: true, ..Mark::default() }), "qtab blocking loud fresh unseen");
-        assert_eq!(tab_class(&e, Mark { seen: true, fresh: true, unseen: true, ..Mark::default() }), "qtab blocking loud seen fresh", "opened: no dot");
+        assert_eq!(row_class(&e, false, false), "qr u-blocking");
+        assert_eq!(row_class(&e, false, true), "qr u-blocking unseen", "arrived: the dot");
+        assert_eq!(row_class(&e, true, true), "qr u-blocking sel", "picked: no dot");
         e.urgency = Urgency::Today;
-        assert_eq!(tab_class(&e, Mark::default()), "qtab today");
         assert_eq!(who(&e), "idp:agent");
         e.name = Some("Ada".into());
         assert_eq!(who(&e), "Ada");
         assert_eq!(open_href(&e), "#/ticket/A-1");
         e.input = Some("landing".into());
         assert_eq!(open_href(&e), "#/ticket/A-1?anchor=landing");
+    }
+
+    fn rows_of(spec: &[(&str, Urgency)]) -> Vec<Row> {
+        let mut q = Queue::default();
+        for (i, (id, u)) in spec.iter().enumerate() {
+            q.apply(&queued(id, *u, i as i64));
+        }
+        q.rows().to_vec()
+    }
+
+    fn set(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn strings(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// APP-38: the control's model — the count, the loudest urgency and how
+    /// many share it, what is new, and whether it nudges.
+    #[test]
+    fn the_control_says_the_count_and_the_loudest() {
+        assert_eq!(control(&[], &set(&[]), &set(&[])), None, "nothing queued: no control");
+        let rows = rows_of(&[("A-1", Urgency::Whenever), ("A-2", Urgency::Now), ("A-3", Urgency::Blocking), ("A-4", Urgency::Blocking), ("A-5", Urgency::Today)]);
+        let c = control(&rows, &set(&[]), &set(&["A-5", "Z-9"])).unwrap();
+        assert_eq!(c, Control { count: 5, loudest: Urgency::Blocking, sharing: 2, new: 1, nudge: true });
+        assert_eq!(c.chip(), "2 blocking");
+        assert_eq!(c.words(), "5 queued, 2 blocking, 1 new");
+        assert_eq!(c.class(false, None), "qc u-blocking many loud nudge has-new");
+        assert_eq!(c.class(true, Some(Urgency::Today)), "qc u-blocking many loud nudge open has-new fresh f-today", "the arrival's colour, not the loudest's");
+        // Every loud one opened: no nudge; a quiet one unopened does not nudge.
+        let c = control(&rows, &set(&["A-2", "A-3", "A-4"]), &set(&[])).unwrap();
+        assert!(!c.nudge);
+        assert_eq!(c.class(false, None), "qc u-blocking many loud");
+        // The loudest is today: Coding's pair, no loud, no nudge.
+        let quiet = rows_of(&[("B-1", Urgency::Whenever), ("B-2", Urgency::Today), ("B-3", Urgency::Today)]);
+        let c = control(&quiet, &set(&[]), &set(&[])).unwrap();
+        assert_eq!((c.loudest, c.sharing, c.nudge), (Urgency::Today, 2, false));
+        assert_eq!(c.class(false, None), "qc u-today many");
+        // One ticket: the control is its tab.
+        let one = rows_of(&[("C-1", Urgency::Now)]);
+        let c = control(&one, &set(&[]), &set(&[])).unwrap();
+        assert!(c.one());
+        assert_eq!(c.chip(), "now");
+        assert_eq!(c.class(false, None), "qc u-now one qtab loud nudge");
+    }
+
+    /// APP-38: grouped blocking · now · today · whenever, the empty ones
+    /// left out, in the queue's order within each; whenever folded past six
+    /// unless unfolded or holding the pick.
+    #[test]
+    fn the_sheet_groups_by_urgency_and_folds_whenever() {
+        let mut spec = vec![("T-1", Urgency::Today), ("B-1", Urgency::Blocking), ("T-2", Urgency::Today)];
+        let ws: Vec<String> = (1..=7).map(|i| format!("W-{i}")).collect();
+        for w in &ws {
+            spec.push((w.as_str(), Urgency::Whenever));
+        }
+        let rows = rows_of(&spec);
+        let g = groups(&rows, false, None);
+        let shape: Vec<(Urgency, Vec<&str>, usize)> = g.iter().map(|g| (g.urgency, g.rows.iter().map(|r| r.entry.ticket.as_str()).collect(), g.folded)).collect();
+        assert_eq!(
+            shape,
+            [(Urgency::Blocking, vec!["B-1"], 0), (Urgency::Today, vec!["T-1", "T-2"], 0), (Urgency::Whenever, vec![], 7)],
+            "no now group; whenever's seven folded"
+        );
+        assert_eq!(g[2].len(), 7);
+        assert_eq!(groups(&rows, true, None)[2].rows.len(), 7, "shown when asked");
+        assert_eq!(groups(&rows, false, Some("W-3"))[2].rows.len(), 7, "or when the pick is in it");
+        let six = rows_of(&[("W-1", Urgency::Whenever), ("W-2", Urgency::Whenever), ("W-3", Urgency::Whenever), ("W-4", Urgency::Whenever), ("W-5", Urgency::Whenever), ("W-6", Urgency::Whenever)]);
+        assert_eq!(groups(&six, false, None)[0].folded, 0, "six are not folded");
+        assert!(groups(&[], false, None).is_empty());
+    }
+
+    /// APP-38: submit, snooze or done moves the pick to the next row; the
+    /// last row's leaving goes back one; a pick still queued stays.
+    #[test]
+    fn the_next_row_is_picked_after_one_leaves() {
+        let before = strings(&["A", "B", "C", "D"]);
+        assert_eq!(next_pick(&before, &strings(&["A", "C", "D"]), Some("B")).as_deref(), Some("C"), "the next");
+        assert_eq!(next_pick(&before, &strings(&["A", "D"]), Some("B")).as_deref(), Some("D"), "the next that stayed");
+        assert_eq!(next_pick(&before, &strings(&["A", "B", "C"]), Some("D")).as_deref(), Some("C"), "the last left: the one before");
+        assert_eq!(next_pick(&before, &strings(&["A", "B", "C", "D"]), Some("B")).as_deref(), Some("B"), "still there: kept");
+        assert_eq!(next_pick(&before, &strings(&["E"]), Some("B")).as_deref(), Some("E"), "everything else left: the first there is");
+        assert_eq!(next_pick(&before, &[], Some("B")), None, "nothing left");
+        assert_eq!(next_pick(&before, &strings(&["A"]), None), None, "nothing picked");
+        // An arrival ahead of it does not take the pick.
+        assert_eq!(next_pick(&before, &strings(&["N", "A", "C", "D"]), Some("B")).as_deref(), Some("C"));
+        // j / k, held at either end; where the pick stands.
+        assert_eq!(step_pick(&before, Some("B"), 1).as_deref(), Some("C"));
+        assert_eq!(step_pick(&before, Some("B"), -1).as_deref(), Some("A"));
+        assert_eq!(step_pick(&before, Some("D"), 1).as_deref(), Some("D"));
+        assert_eq!(step_pick(&before, Some("A"), -1).as_deref(), Some("A"));
+        assert_eq!(step_pick(&before, None, 1).as_deref(), Some("A"));
+        assert_eq!(step_pick(&[], None, 1), None);
+        assert_eq!(position(&before, Some("C")), Some((3, 4)));
+        assert_eq!(position(&before, Some("Z")), None);
     }
 
     /// APP-26: a press outside the tray lowers an open sheet; one inside it
