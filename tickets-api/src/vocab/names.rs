@@ -442,6 +442,17 @@ number_type!(
     DeploymentId
 );
 
+number_type!(
+    /// CHAT-3: a chat's number, from 1 in the order opened.
+    ChatId
+);
+
+number_type!(
+    /// CHAT-3: a chat message's number, from 1 across every chat in the
+    /// order posted — a later message's is always greater.
+    MessageId
+);
+
 fn token_name(text: &str) -> Result<String, String> {
     let t = text.trim();
     let name = t.trim_start_matches('-');

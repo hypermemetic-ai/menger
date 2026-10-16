@@ -1,5 +1,5 @@
+import type { WatchEnd } from '../chats/types';
 import type { Kind, TicketRef } from '../notes/types';
-import type { WatchEnd } from '../themes/types';
 /** MNG-16: what an `amend` moved — its title, its body. */
 export type AmendedField = "title" | "body";
 /** Where a comment was left: the app page, the place on it, what was there

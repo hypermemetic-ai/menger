@@ -1,6 +1,54 @@
 {
   "comment": "COMP-10: written by scripts/sdk-codegen.sh from the IR hub-codegen generated this client from — each activation on the hub (COMMENT-2: comments beside tickets), its methods and their parameter names. tickets-api/tests/sdk_manifest.rs holds the activations to it. Do not edit: run the script.",
   "activations": {
+    "chats": {
+      "add": [
+        "chat",
+        "principal"
+      ],
+      "await_message": [
+        "after",
+        "chat",
+        "since",
+        "ticket",
+        "timeout_minutes"
+      ],
+      "close": [
+        "chat"
+      ],
+      "list": [
+        "after",
+        "limit",
+        "state",
+        "ticket",
+        "unread"
+      ],
+      "messages": [
+        "after",
+        "chat",
+        "limit"
+      ],
+      "open": [
+        "others",
+        "ticket",
+        "title"
+      ],
+      "post": [
+        "body",
+        "chat"
+      ],
+      "read": [
+        "chat",
+        "upto"
+      ],
+      "reopen": [
+        "chat"
+      ],
+      "schema": [],
+      "watch": [
+        "ticket"
+      ]
+    },
     "comments": {
       "add": [
         "anchor",

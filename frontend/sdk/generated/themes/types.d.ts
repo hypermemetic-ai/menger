@@ -1,3 +1,4 @@
+import type { WatchEnd } from '../chats/types';
 /** Everything the levels say for one ticket, the reader aside — what
 [`resolve`] decides from. */
 export interface Levels {
@@ -133,11 +134,6 @@ export declare function isThemesEventError(e: ThemesEvent): e is ThemesEventErro
 most 200 bytes, nothing that could end its declaration:
 [`crate::themes::value_ok`]. */
 export type TokenValue = string;
-/** ACCESS-12: why an open watch ended — its caller verified again when the
-grants moved (or its sign-in ended), and refused. Every watch (`tickets`,
-`comments`, `themes`, `deployments`) ends with one `watch_closed { reason,
-message }` and nothing after it. */
-export type WatchEnd = "signed_out" | "expired" | "revoked" | "refused";
 /** What a region wears, and the level it came from. */
 export interface Worn {
     /** The shortcode, for a shortcode's theme. */

@@ -161,6 +161,12 @@ impl Lens {
         self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Queued(_)))
     }
 
+    /// CHAT-3: whether it asks `chatting` or `unread` — what a chat write
+    /// can move.
+    pub fn asks_chats(&self) -> bool {
+        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Chatting | crate::filter::Event::Unread))
+    }
+
     /// MENGER-13: whether what it admits moves as time passes — a history
     /// predicate whose window is relative (`within`, `today`, `yesterday`,
     /// `this week`): a `watch` reads it again on a clock.

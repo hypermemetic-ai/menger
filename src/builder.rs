@@ -1,5 +1,5 @@
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{Comments, Deployments, Members, Notes, Orgs, ProviderOffer, Session, Themes, Tickets};
+use menger_tickets_api::{Chats, Comments, Deployments, Members, Notes, Orgs, ProviderOffer, Session, Themes, Tickets};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
@@ -184,6 +184,8 @@ pub async fn build_rpc_login(
     let mut hub = DynamicHub::new("menger")
         .register(tickets)
         .register(Comments::with_access(Arc::clone(&store), access.clone()))
+        // CHAT-3: `chats` beside them — conversations inside tickets.
+        .register(Chats::with_access(Arc::clone(&store), access.clone()))
         // NOTE-2: `notes` beside them, over the same store.
         .register(Notes::with_access(Arc::clone(&store), access.clone()))
         // THEME-8: `themes` beside them — the themes and what each level adopts.

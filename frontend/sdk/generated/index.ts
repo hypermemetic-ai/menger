@@ -10,6 +10,7 @@ export * from './rpc';
 export * from './transport';
 
 // Namespace modules (types + clients)
+export * as Chats from './chats';
 export * as Comments from './comments';
 export * as Deployments from './deployments';
 export * as Members from './members';

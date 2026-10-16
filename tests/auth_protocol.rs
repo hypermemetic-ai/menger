@@ -808,8 +808,8 @@ async fn login_off_menger_is_as_it_was() {
     let hub = one(&c, "menger.schema", json!({})).await;
     assert!(hub.get("view").is_none());
     let kids: BTreeSet<String> = hub["children"].as_array().unwrap().iter().map(|k| k["namespace"].as_str().unwrap().to_string()).collect();
-    assert_eq!(kids, names(&["comments", "deployments", "members", "notes", "orgs", "session", "themes", "tickets"]), "no auth activation without login");
-    for ns in ["tickets", "comments", "notes", "members", "session", "themes", "deployments"] {
+    assert_eq!(kids, names(&["chats", "comments", "deployments", "members", "notes", "orgs", "session", "themes", "tickets"]), "no auth activation without login");
+    for ns in ["tickets", "comments", "chats", "notes", "members", "session", "themes", "deployments"] {
         let schema = one(&c, &format!("{ns}.schema"), json!({})).await;
         assert!(schema.get("view").is_none());
         for m in schema["methods"].as_array().unwrap() {

@@ -119,6 +119,17 @@ pub use comments_activation::CommentsClient;
 #[cfg(feature = "server")]
 pub use comments_activation::Comments;
 
+/// CHAT-3: the chats vocabulary — [`Chat`], [`Message`], [`ChatState`],
+/// [`ChatsEvent`]. Wasm-safe, like [`comments`].
+pub mod chats;
+pub use chats::{Chat, ChatState, ChatsEvent, Message};
+/// CHAT-3: the `chats` activation, declared once: the server's [`Chats`]
+/// and the browser's [`ChatsClient`].
+pub mod chats_activation;
+pub use chats_activation::ChatsClient;
+#[cfg(feature = "server")]
+pub use chats_activation::Chats;
+
 /// NOTE-2: the notes vocabulary — [`Note`], [`NoteState`], [`NotesEvent`]
 /// — the rules `add` keeps a note by, and the title a note gives its
 /// ticket. Wasm-safe, like [`comments`].
