@@ -315,6 +315,8 @@ mod tags;
 mod theme;
 #[cfg(test)]
 mod tokens_lint;
+#[cfg(test)]
+mod motion_lint;
 mod typed;
 mod waves;
 mod when;

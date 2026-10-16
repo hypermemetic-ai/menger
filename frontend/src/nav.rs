@@ -1528,6 +1528,7 @@ pub(crate) fn chain_moved(id: String) {
 /// `children_changed`.
 pub(crate) fn arrived(t: &TicketSummary, born: bool) {
     ARRIVED.with(|a| *a.borrow_mut() = Some((t.clone(), born)));
+    crate::motion::fresh(&t.id);
     if !born {
         return;
     }
@@ -1566,6 +1567,8 @@ pub(crate) fn children_changed(parent: &str, added: &str, count: u64) {
 /// MFE-17's `child_removed`: an open list of `parent`'s children lets
 /// `removed` go. FILTER-14: under the lens, the old parent's chain asks again.
 pub(crate) fn child_removed(parent: &str, removed: &str, count: u64) {
+    // LOOK-8: the row leaves a ghost behind as it goes.
+    crate::motion::ghost(&crate::motion::nav_rows(removed));
     chain_moved(parent.to_string());
     for (list, holder) in lists(|s| matches!(s, Source::Parent(p) if p == parent)) {
         list.try_update(|l| l.removed(removed, count as usize));
@@ -1577,6 +1580,7 @@ pub(crate) fn child_removed(parent: &str, removed: &str, count: u64) {
 /// parent's lists hear `child_removed`); every list under the lens asks
 /// again.
 pub(crate) fn departed(id: &str, epic: &str) {
+    crate::motion::ghost(&crate::motion::nav_rows(id));
     for (list, holder) in lists(|s| matches!(s, Source::Epic(e) if e == epic)) {
         list.try_update(|l| {
             let n = l.n.saturating_sub(1);
@@ -2593,7 +2597,12 @@ impl Under {
     /// again; a recount or a gap — every open list does.
     fn heard(self, ev: &Member) {
         match ev {
-            Member::Entered { id, .. } | Member::Left { id, .. } => chain_moved(id.clone()),
+            Member::Entered { id, .. } => {
+                // LOOK-8: drawn when the lists have asked again, it arrives.
+                crate::motion::fresh(id);
+                chain_moved(id.clone());
+            }
+            Member::Left { id, .. } => chain_moved(id.clone()),
             Member::Recount { .. } | Member::Lagged => ask_again(|_| true),
             Member::Refused(message) => {
                 self.refused.try_set(Some(message.clone()));
@@ -2819,6 +2828,14 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     // keeps the open lists live (shared with the counts' own: one stream).
     let lens = use_lens();
     let under = Under::new(lens, route);
+    // LOOK-8: a new filter — the rows drawn for it settle in.
+    Effect::new(move |prev: Option<(bool, Option<String>)>| {
+        let now = (under.on.get(), under.text.get());
+        if prev.is_some_and(|p| p != now) {
+            crate::motion::relensed();
+        }
+        now
+    });
     // FILTER-24: the open ticket is kept in every list's answer; when it
     // moves, the lists on the old one's chain and the new one's ask again —
     // but for a ticket the tree already said matches (keeping it moved
@@ -3488,6 +3505,18 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
     };
 
     let kids_ref = NodeRef::<leptos::html::Div>::new();
+    // LOOK-8: opening or closing it turns its caret and drops its children
+    // in — not on its first drawing.
+    let node_ref = NodeRef::<leptos::html::Div>::new();
+    Effect::new(move |prev: Option<bool>| {
+        let now = open.get();
+        if prev.is_some_and(|p| p != now) {
+            if let Some(el) = node_ref.get_untracked() {
+                crate::motion::node_toggled(el.into(), now);
+            }
+        }
+        now
+    });
     // ACT-7: opened by a mark of its own (a click, h/l, the reveal) — or only
     // by a bulk expand, when its list waits to be near the viewport to ask.
     let marked = {
@@ -3499,6 +3528,7 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
             class="node"
             class:group=is_group
             class:shortcode=shortcode.is_some()
+            node_ref=node_ref
             role="none"
             data-node-key=key.clone()
             data-group=shortcode
@@ -4061,8 +4091,15 @@ fn group_row(
     let pick = (key != code).then(|| key.clone());
     let heading_code = pick.as_ref().map(|_| code.clone());
     let picked = pick.clone().map(selection::is_picked);
+    // LOOK-8: drawn just after the filter moved, it settles in.
+    let row_ref = NodeRef::<leptos::html::Div>::new();
+    {
+        let key = key.clone();
+        row_ref.on_load(move |el| crate::motion::row_mounted(el.into(), &key));
+    }
     view! {
         <div
+            node_ref=row_ref
             class="row grouprow"
             class:dim=move || face.with(|f| f.as_ref().is_some_and(|f| f.dim))
             // FILTER-23: under the lens a shortcode's row is a heading.
@@ -4168,9 +4205,17 @@ fn leaf_row(
     let (click_id, dbl_id, leave_id) = (id.clone(), id.clone(), id.clone());
     let click_toggle = toggle.clone();
     let glyph_id = id.clone();
+    // LOOK-8: a row a `watch` change brought arrives; one drawn just after
+    // the filter moved settles in.
+    let row_ref = NodeRef::<leptos::html::A>::new();
+    {
+        let id = id.clone();
+        row_ref.on_load(move |el| crate::motion::row_mounted(el.into(), &id));
+    }
 
     view! {
         <a
+            node_ref=row_ref
             class="row leaf"
             class:sel=move || sel.get()
             // FILTER-14: a row that only holds matches, dimmed.

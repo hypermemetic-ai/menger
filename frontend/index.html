@@ -3509,6 +3509,149 @@
     #comments .cfield input, #comments .cfield select { min-width: 0; width: 100%; }
     #settings fieldset.group { padding: 12px; }
   }
+  /* ── LOOK-8: motion everywhere, each move under the Motion setting
+     (DESIGN-39's contract: html[data-motion="full|calm|none"]). The house
+     hand, APP-34's: short — ≤ 200 ms for chrome — ease-out in, faster out,
+     from where the thing comes from, never delaying focus or the next key.
+     A move is a state change (calm keeps it) unless it says ornament (calm
+     stops it, below); none stops every one (the global rule above). What
+     the script plays (src/motion.rs) checks the setting itself. ── */
+  /* The nav tree. A node opened: its caret turns and its children drop in
+     beneath it (motion::node_toggled); closed: the caret turns back and the
+     children go at once (an unmount — nothing waits on it). */
+  #nav .node > .kids.opening { animation: menger-kids-open .18s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes menger-kids-open { from { opacity: 0; transform: translateY(-4px); clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+  #nav .toggle.clickable.turn-open { animation: menger-caret-open .16s cubic-bezier(.2, .8, .2, 1); }
+  #nav .toggle.clickable.turn-shut { animation: menger-caret-shut .12s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes menger-caret-open { from { transform: rotate(-90deg); } }
+  @keyframes menger-caret-shut { from { transform: rotate(90deg); } }
+  /* The selection moving: the open ticket's edge is drawn in and its ground
+     comes up as the last row's fades (the row's own transition). */
+  #nav .row { transition: background-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease); }
+  #nav .row.sel { animation: menger-sel-in .18s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes menger-sel-in { from { box-shadow: inset 0 0 0 var(--accent); background-color: transparent; } }
+  /* A row a watch change brought (a birth, a move, a filter's entered)
+     arrives; rows drawn just after the filter changed settle in; a row that
+     leaves leaves a ghost behind that fades as the tree closes up
+     (motion::row_mounted, motion::ghost). */
+  #nav .row.arrive, #nav .row.sel.arrive { animation: menger-row-arrive .2s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes menger-row-arrive { from { opacity: 0; transform: translateX(-8px); background-color: var(--row-sel); } }
+  #nav .row.settle, #nav .row.sel.settle { animation: menger-row-settle .16s ease-out; }
+  @keyframes menger-row-settle { from { opacity: 0; transform: translateY(-3px); } }
+  #nav .row.ghost { animation: menger-row-leave .14s ease-in forwards; }
+  @keyframes menger-row-leave { to { opacity: 0; transform: translateX(-8px); } }
+  /* DESIGN-39's flash keeps its place on a selected row. */
+  #nav .row.sel.flash { animation: menger-flash 1.6s ease-out; }
+  /* The nav's view switched, its selection foot appearing, the nav shown
+     again after hiding (‹ and the header's ›). */
+  #nav .tree > .flat, #nav .nsel { animation: menger-fade-up .16s ease-out; }
+  #nav { animation: menger-nav-in .18s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes menger-nav-in { from { opacity: 0; transform: translateX(-12px); } }
+  header .nav-reveal { animation: menger-fade-in .16s ease-out; }
+  #nav .nview-b { transition: color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease); }
+
+  /* The section dock (LOOK-3, LOOK-7). The lit section moving: its edge is
+     drawn in from the side the reading came from (data-dir), the last one's
+     ground fades. */
+  #tdock ol.dlist li.s > button { position: relative; }
+  #tdock ol.dlist li.s.on > button { border-left-color: transparent; }
+  #tdock ol.dlist li.s > button::before {
+    content: ""; position: absolute; left: -2px; top: 0; bottom: 0; width: 2px; background: var(--accent);
+    transform: scaleY(0); transform-origin: top; transition: transform .1s ease-in;
+  }
+  #tdock ol.dlist[data-dir="up"] li.s > button::before { transform-origin: bottom; }
+  #tdock ol.dlist li.s.on > button::before { transform: scaleY(1); transition: transform .18s cubic-bezier(.2, .8, .2, 1); }
+  #tdock .rail i.tick { transition: width .18s cubic-bezier(.2, .8, .2, 1), background-color .18s ease-out; }
+  #tdock-sheet ol.slist button { transition: background-color var(--motion-fast) var(--ease), border-left-color .18s ease-out; }
+  /* An input's row changing state (open → answered → decided), or coming
+     in: its dot pops in its new colour and the row's ground flashes once. */
+  :is(#tdock ol.dlist li.i, #tdock-sheet .ins button.in).turned .dot,
+  #tdock .rail i.turned { animation: menger-dot-turn .2s cubic-bezier(.2, .8, .2, 1.4); }
+  #tdock ol.dlist li.i.open.turned .dot { animation: menger-dot-turn .2s cubic-bezier(.2, .8, .2, 1.4), menger-ask-ping 2s ease-in-out .2s infinite; }
+  @keyframes menger-dot-turn { from { transform: scale(1.9); opacity: .3; } }
+  #tdock ol.dlist li.i.turned > button, #tdock-sheet .ins button.in.turned { animation: menger-ask-turn .2s ease-out; }
+  @keyframes menger-ask-turn { from { background-color: var(--ask-bg); } }
+  #tdock button.waiting { animation: menger-fade-in .16s ease-out; }
+  /* The column, appearing as the window widens past 1760. */
+  @media (min-width: 1760px) {
+    #ticket-page > #tdock { animation: menger-dock-col .2s cubic-bezier(.2, .8, .2, 1); }
+  }
+  @keyframes menger-dock-col { from { opacity: 0; transform: translateX(16px); } }
+  /* The rail: it arrives from the edge; opened over the body it widens
+     and its list slides in (.18 s), closed it narrows faster (.12 s) and
+     its ticks come back. */
+  @media (min-width: 641px) and (max-width: 1759.98px) {
+    #ticket-page > #tdock { animation: menger-dock-rail .18s cubic-bezier(.2, .8, .2, 1); transition: width .12s cubic-bezier(.4, 0, 1, 1); }
+    #ticket-page > #tdock:is(:hover, :focus-within, .open) { transition: width .18s cubic-bezier(.2, .8, .2, 1); }
+    #ticket-page > #tdock:is(:hover, :focus-within, .open) > :not(.rail) { animation: menger-dock-open .18s cubic-bezier(.2, .8, .2, 1); }
+    #ticket-page > #tdock > .rail { animation: menger-fade-in .12s ease-out; }
+  }
+  @keyframes menger-dock-rail { from { opacity: 0; transform: translateX(12px); } }
+  @keyframes menger-dock-open { from { opacity: 0; transform: translateX(10px); } }
+  /* The pill and its sheet (≤ 640): the pill rises in, hides faster than it
+     returns; the sheet rises from the bottom edge over the scrim in .2 s and
+     drops in .14 s. */
+  @media (max-width: 640px) {
+    #tdock-pill { animation: menger-pill-in .2s cubic-bezier(.2, .8, .2, 1); transition: transform .2s cubic-bezier(.2, .8, .2, 1), opacity .2s ease-out; }
+    #tdock-pill.away { transition: transform .14s cubic-bezier(.4, 0, 1, 1), opacity .14s ease-in; }
+    #tdock-scrim { transition: opacity .12s ease-in; }
+    #tdock-scrim.on { transition: opacity .2s ease-out; }
+    #tdock-sheet { transition: transform .14s cubic-bezier(.4, 0, 1, 1); }
+    #tdock-sheet.on { transition: transform .2s cubic-bezier(.2, .9, .3, 1); }
+  }
+  @keyframes menger-pill-in { from { opacity: 0; transform: translateY(16px) scale(.96); } }
+
+  /* Everywhere else (LOOK-8's walk, a child doc of the ticket). A page
+     arriving on a route change; a ticket's own opening stays DESIGN-39's. */
+  main > :is(.bbar, table.board, #ticket-page, #waves, #waves-index, #components, #inputs, #settings, #members, #comments, #deployments-page, #checking, #no-access) {
+    animation: menger-fade-in .16s ease-out;
+  }
+  #error, #link-notice { animation: menger-drop-in .18s cubic-bezier(.2, .8, .2, 1); }
+  #checking-detail, .loading { animation: menger-fade-in .2s ease-out; }
+  /* Overlays: the scrim fades in, the palette and the key help drop in from
+     above; the dialogs (save as, leaving for a link, delete) grow in. */
+  .overlay { animation: menger-fade-in .14s ease-out; }
+  .overlay > :is(#palette, #cheats) { animation: menger-drop-in .16s cubic-bezier(.2, .8, .2, 1); }
+  :is(#save-as, #leave, #delete) { animation: menger-menu-in .16s cubic-bezier(.2, .8, .2, 1); }
+  #palette-list li { transition: background-color .1s ease-out, box-shadow .1s ease-out; }
+  /* Menus: the tag menu as the ticket menu (APP-34; its origin is placed
+     by menu::place); the filter and saved-filter menus drop from their bar;
+     a query folded open; m-mockup's size menu. */
+  #tagmenu { animation: menger-menu-in .14s cubic-bezier(.2, .8, .2, 1); }
+  :is(.fmenu, .framed-menu:not([hidden])) { animation: menger-drop-in .14s cubic-bezier(.2, .8, .2, 1); }
+  .qbar .qtree, .fbar .ftext, .fbadge, .qnote, .fclash { animation: menger-fade-in .14s ease-out; }
+  /* The header: the connection's colour moves, a badge appears. */
+  #conn { transition: color .2s ease-out; }
+  header .hlink .hbadge { animation: menger-pop-in .16s cubic-bezier(.2, .8, .2, 1.3); }
+  header .hlink .hbadge.tick { animation: menger-tick .5s cubic-bezier(.2, .8, .2, 1); }
+  /* The ticket page: a label's chip, the label form and its problem; the
+     history, children and a details opened anywhere in the chrome. */
+  #t-labels :is(.lwrap, .ladd, .lproblem) { animation: menger-pop-in .16s cubic-bezier(.2, .8, .2, 1); }
+  :is(#t-history, #children, #kids-more, #kids-hidden) { animation: menger-fade-in .16s ease-out; }
+  main details[open] > :not(summary) { animation: menger-drop-in .16s cubic-bezier(.2, .8, .2, 1); }
+  /* Inputs, waves, settings, members: a chosen option, a layout segment, a
+     lane opened, a probe's verdict, a note. */
+  #inputs .opt { transition: background-color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease); }
+  #inputs :is(.irefused, .none.empty) { animation: menger-fade-in .16s ease-out; }
+  #waves .seg { transition: background-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease); }
+  #waves .lane:not(.collapsed) ul.cards { animation: menger-drop-in .16s cubic-bezier(.2, .8, .2, 1); }
+  #settings :is(#ws-status, #test-status) > *, #members #members-note { animation: menger-fade-in .16s ease-out; }
+  /* The house's moves, shared. */
+  @keyframes menger-fade-in { from { opacity: 0; } }
+  @keyframes menger-fade-up { from { opacity: 0; transform: translateY(4px); } }
+  @keyframes menger-drop-in { from { opacity: 0; transform: translateY(-4px); } }
+  @keyframes menger-pop-in { from { opacity: 0; transform: scale(.9); } }
+  /* Calm drops the ornament: the open input's ping, as the pip's breathe
+     and the live mark's pulse. */
+  html[data-motion="calm"] #tdock ol.dlist li.i.open .dot { animation: none; }
+  html[data-motion="calm"] #tdock ol.dlist li.i.open.turned .dot { animation: menger-dot-turn .2s cubic-bezier(.2, .8, .2, 1.4); }
+  /* Before the script has stamped the setting, the system's preference
+     stops every move as none does. */
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion]) *, html:not([data-motion]) *::before, html:not([data-motion]) *::after {
+      animation: none !important; transition: none !important;
+    }
+  }
 </style>
 </head>
 <body></body>

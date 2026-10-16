@@ -658,6 +658,138 @@ pub(crate) fn open_page(h2: web_sys::Element, id: String) {
 }
 
 // ---------------------------------------------------------------------
+// LOOK-8: the nav in motion
+
+thread_local! {
+    /// Ids a `watch` change brought into the nav, and when — a row drawn for
+    /// one soon after arrives with a move ([`row_mounted`]).
+    static FRESH: RefCell<Vec<(String, f64)>> = const { RefCell::new(Vec::new()) };
+    /// When the nav's filter last changed: rows drawn soon after settle in.
+    static RELENSED: Cell<f64> = const { Cell::new(f64::NEG_INFINITY) };
+}
+
+/// How long an arrival or a new filter stays good for the rows it draws —
+/// the server's answer comes in between.
+pub(crate) const FRESH_MS: f64 = 1_500.0;
+
+/// What a nav row drawn now plays: `arrive` for an id a `watch` change
+/// brought `age_fresh` ms ago, `settle` for any row drawn `age_lens` ms after
+/// the filter changed, else nothing. Pure: the clock is the caller's.
+pub(crate) fn row_move(age_fresh: Option<f64>, age_lens: f64) -> Option<&'static str> {
+    if age_fresh.is_some_and(|a| (0.0..FRESH_MS).contains(&a)) {
+        Some("arrive")
+    } else if (0.0..FRESH_MS).contains(&age_lens) {
+        Some("settle")
+    } else {
+        None
+    }
+}
+
+/// A `watch` change brought `id` into the nav (a birth, a move, a filter's
+/// entered).
+pub(crate) fn fresh(id: &str) {
+    let now = now_ms();
+    FRESH.with(|f| {
+        let mut f = f.borrow_mut();
+        f.retain(|(_, at)| now - *at < FRESH_MS);
+        f.push((id.to_string(), now));
+    });
+}
+
+/// The nav's filter changed.
+pub(crate) fn relensed() {
+    RELENSED.with(|r| r.set(now_ms()));
+}
+
+/// A nav row for `id` was drawn: it arrives or settles when it should
+/// ([`row_move`]). An arrival is taken: the next drawing of the row is plain.
+pub(crate) fn row_mounted(el: web_sys::Element, id: &str) {
+    if current() == Motion::None {
+        return;
+    }
+    let now = now_ms();
+    let age = FRESH.with(|f| {
+        let mut f = f.borrow_mut();
+        let at = f.iter().position(|(x, _)| x == id)?;
+        Some(now - f.remove(at).1)
+    });
+    let lens = now - RELENSED.with(Cell::get);
+    if let Some(class) = row_move(age, lens) {
+        replay(&el, class, 700);
+    }
+}
+
+/// A node of the nav was opened (`true`) or closed: its caret turns, and an
+/// opened node's children drop in beneath it. Closing unmounts at once —
+/// nothing waits on a move.
+pub(crate) fn node_toggled(node: web_sys::Element, opened: bool) {
+    if current() == Motion::None {
+        return;
+    }
+    spawn_local(async move {
+        dom::sleep_ms(0).await;
+        if let Ok(Some(caret)) = node.query_selector(":scope > .row .toggle.clickable") {
+            replay(&caret, if opened { "turn-open" } else { "turn-shut" }, 400);
+        }
+        if opened {
+            if let Ok(Some(kids)) = node.query_selector(":scope > .kids") {
+                replay(&kids, "opening", 500);
+            }
+        }
+    });
+}
+
+/// Rows at `selector` are leaving the nav: each leaves a ghost where it
+/// stood that fades and slides away (≤ 140 ms) while the real row goes at
+/// once — the tree never waits on it.
+pub(crate) fn ghost(selector: &str) {
+    if current() == Motion::None {
+        return;
+    }
+    let Some(doc) = dom::window().document() else { return };
+    // Inside the tree, so it wears the tree's face and size.
+    let Ok(Some(host)) = doc.query_selector("#nav .tree") else { return };
+    let Ok(rows) = doc.query_selector_all(selector) else { return };
+    for i in 0..rows.length() {
+        let Some(row) = rows.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
+        let r = row.get_bounding_client_rect();
+        if r.height() <= 0.0 {
+            continue;
+        }
+        let Ok(copy) = row.clone_node_with_deep(true) else { continue };
+        let Ok(copy) = copy.dyn_into::<web_sys::HtmlElement>() else { continue };
+        for a in ["id", "tabindex", "data-ticket-id", "data-nav-id", "data-node-key", "data-pick", "href", "role", "aria-owns"] {
+            let _ = copy.remove_attribute(a);
+        }
+        let _ = copy.set_attribute("aria-hidden", "true");
+        let _ = copy.class_list().add_1("ghost");
+        let st = copy.style();
+        for (k, v) in [
+            ("position", "fixed".to_string()),
+            ("left", format!("{}px", r.left())),
+            ("top", format!("{}px", r.top())),
+            ("width", format!("{}px", r.width())),
+            ("height", format!("{}px", r.height())),
+            ("margin", "0".to_string()),
+            ("pointer-events", "none".to_string()),
+            ("z-index", "5".to_string()),
+        ] {
+            let _ = st.set_property(k, &v);
+        }
+        let _ = host.append_child(&copy);
+        spawn_local(async move {
+            dom::sleep_ms(220).await;
+            copy.remove();
+        });
+    }
+}
+
+/// The selector for `id`'s rows in the nav.
+pub(crate) fn nav_rows(id: &str) -> String {
+    format!("#nav .row[data-ticket-id=\"{}\"]", css_escape(id))
+}
+
+// ---------------------------------------------------------------------
 // The pip
 
 /// The lifecycle's five, in order — the pip's colours.
@@ -730,6 +862,18 @@ mod tests {
         assert_eq!(ease_out(0.0), 0.0);
         assert_eq!(ease_out(1.0), 1.0);
         assert!(ease_out(0.5) > 0.5, "ease-out runs ahead");
+    }
+
+    /// LOOK-8: a nav row drawn soon after a `watch` change brought it
+    /// arrives; soon after the filter moved, settles; otherwise plays nothing.
+    #[test]
+    fn a_nav_row_arrives_or_settles_only_soon_after_its_cause() {
+        assert_eq!(row_move(Some(10.0), f64::INFINITY), Some("arrive"));
+        assert_eq!(row_move(Some(10.0), 10.0), Some("arrive"), "an arrival wins over a new filter");
+        assert_eq!(row_move(None, 200.0), Some("settle"));
+        assert_eq!(row_move(Some(FRESH_MS + 1.0), 200.0), Some("settle"));
+        assert_eq!(row_move(Some(FRESH_MS + 1.0), FRESH_MS + 1.0), None);
+        assert_eq!(row_move(None, f64::INFINITY), None, "a row scrolled into view later plays nothing");
     }
 
     #[test]
