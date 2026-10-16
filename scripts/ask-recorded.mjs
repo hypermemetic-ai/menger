@@ -46,7 +46,7 @@ const T = 'OFFLINE-15', INPUT = 'shape';
 const REASON = 'the other help pages wait on this: one page or three?';
 const QUEUE = ['-P', WS, 'menger', 'tickets', 'queue', '--id', T, '--urgency', 'now', '--input', INPUT, '--reason', REASON];
 const AWAIT = ['-P', WS, '-j', 'menger', 'tickets', 'await_reply', '--id', T, '--input', INPUT, '--timeout-minutes', '5'];
-const CLOSE = ['-P', WS, 'menger', 'tickets', 'close_input', '--ticket', T, '--input', INPUT];
+const CLOSE = ['-P', WS, 'menger', 'tickets', 'inputs', 'close', '--ticket', T, '--input', INPUT];
 const shown = (args) => 'synapse ' + args.map((a) => (/[\s?:;]/.test(a) ? `"${a}"` : a)).join(' ');
 
 // ── the terminal: Konsole, a Claude Code session in it ────────────────────

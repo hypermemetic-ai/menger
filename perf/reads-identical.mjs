@@ -57,7 +57,7 @@ for (let i = 0; i < 600; i++) {
 }
 for (let i = 0; i < 500; i++) {
   const p = { summary: rand(4) > 0, limit: [0, 1, 50, 200][rand(4)], ...(rand(5) ? { after: anyId() } : {}), ...(rand(3) === 0 ? { epic: epics[rand(epics.length)][0] } : {}) };
-  calls.push([["tickets.ready_set", p], ["tickets.ready_set", { ...p, ...nothing() }]]);
+  calls.push([["tickets.work.ready", p], ["tickets.work.ready", { ...p, ...nothing() }]]);
 }
 const states = [undefined, "open", "answered", "closed", "removed"];
 for (let i = 0; i < 200; i++) {

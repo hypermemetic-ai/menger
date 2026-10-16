@@ -446,7 +446,10 @@ async fn main() -> anyhow::Result<()> {
                         .with_server_version(env!("CARGO_PKG_VERSION").into())
                         .with_allowed_hosts(hosts(args.rest_port)),
                 )
-                .with_flat_schemas(hub.list_plugin_schemas()) // registers /rest/tickets/*
+                // registers /rest/tickets/*; ACCESS-20: and each static
+                // child under its whole path (`/rest/tickets.work/ready`),
+                // which the bridge's `/{namespace}/{method}` reaches no other way.
+                .with_flat_schemas(hub.list_plugin_schemas().into_iter().chain(hub.static_children()).collect())
                 .with_route_fn(route_fn); // dispatches via hub.route()
             tracing::info!("REST:      http://127.0.0.1:{}/rest", args.rest_port);
         }

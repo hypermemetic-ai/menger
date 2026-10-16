@@ -12,7 +12,7 @@
 //! server, so a cold load rides the existing `/app/` index serving with
 //! no SPA fallback, and dist assets can never collide with a route. The
 //! page shows every wire-exposed field, renders the body as sanitized
-//! markdown (src/md.rs), resolves blockers via `tickets.blockers`, and
+//! markdown (src/md.rs), resolves blockers via `tickets.work.blockers`, and
 //! stays live through the same watch stream as the board: `get` and
 //! `blockers` results upsert into the id-keyed row store and the page
 //! renders THROUGH those signals, so a status change arriving from
@@ -181,7 +181,7 @@
 
 //! WAVE-5: the wave board (src/waves.rs) — `#/waves/<SHORTCODE>`, the
 //! order of work as columns derived from `blocked_by` by the server
-//! (`tickets.waves`, WAVE-4): a column per wave, or per stage, one toggle
+//! (`tickets.work.waves`, WAVE-4): a column per wave, or per stage, one toggle
 //! apart. `#/waves` lists the boards; the header links to it beside the
 //! board, and a shortcode's row in the nav offers its board in the ticket
 //! menu. `waves` is asked only while a wave board is open.

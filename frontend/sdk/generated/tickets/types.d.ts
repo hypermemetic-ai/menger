@@ -536,7 +536,7 @@ export interface Ticket {
   children themselves come by page: `list { parent }`. */
     childCount: number;
     /** SDLC-9: the commits that finished this ticket, in the order they
-  were linked (`tickets.link_commits`) — each a commit reference, a
+  were linked (`tickets.commits.link`) — each a commit reference, a
   hexadecimal object name of 7 to 64 characters stored lowercase,
   optionally `repository@` before it. `[]` when none. Recorded, not
   verified: the server has no repository. At most 256 (SCALE-4's
@@ -693,19 +693,19 @@ export interface TicketsEventCreated {
     ticket: Ticket;
 }
 /** One ticket, as it exists now (yielded by `get`, and per-row by
-`list` and `ready_set`). */
+`list` and `work.ready`). */
 export interface TicketsEventTicket {
     type: 'ticket';
     ticket: Ticket;
 }
 /** MNG-9: one ticket row without its body — what `list` and
-`ready_set` yield per row instead of `ticket` when the call asked
+`work.ready` yield per row instead of `ticket` when the call asked
 for `summary`, and what `find` always yields (SCALE-6). */
 export interface TicketsEventSummary {
     type: 'summary';
     summary: TicketSummary;
 }
-/** MNG-9: where a `list` / `ready_set` / `find` walk stands, yielded once as
+/** MNG-9: where a `list` / `work.ready` / `find` walk stands, yielded once as
 the last data event of the call. `next` is the cursor to pass as
 the next call's `after` — `null` when nothing more matches, which
 is how a client knows the walk is over — and `remaining` counts
@@ -754,10 +754,10 @@ export interface TicketsEventAmended {
     changed: AmendedField[];
     ticket: Ticket;
 }
-/** SDLC-9: commits were linked to a ticket (yielded by `link_commits`,
+/** SDLC-9: commits were linked to a ticket (yielded by `commits.link`,
 and by `watch` for every link that changed something). `added` is
 what was newly linked, in the order given — the ticket's `commits`
-end with it — or nothing: `link_commits`' own answer when every
+end with it — or nothing: `commits.link`'s own answer when every
 entry was already linked, which `watch` never carries. The whole
 ticket rides along, as with every write after birth. */
 export interface TicketsEventCommitsLinked {
@@ -766,7 +766,7 @@ export interface TicketsEventCommitsLinked {
     ticket: Ticket;
 }
 /** SDLC-9: commits were unlinked from a ticket (yielded by
-`unlink_commits`, and by `watch` for every unlink that changed
+`commits.unlink`, and by `watch` for every unlink that changed
 something). `removed` is what came off, in the order given; empty
 when none of it was linked, which `watch` never carries. */
 export interface TicketsEventCommitsUnlinked {
@@ -1129,13 +1129,13 @@ export interface TicketsEventComponentRemoved {
 /** INPUT-3: one input, as it is now (yielded per input by `inputs`, in
 the store's order of tickets and the body's order inside one — a
 removed input after the ones its body declares; and by a
-`clear_answer`, `close_input` or `reopen_input` that changed nothing). */
+`inputs.clear`, `inputs.close` or `inputs.reopen` that changed nothing). */
 export interface TicketsEventInput {
     type: 'input';
     input: Input;
 }
-/** INPUT-3: an input changed (yielded by `answer`, `clear_answer`,
-`close_input` and `reopen_input`, and by `watch`) — answered, cleared,
+/** INPUT-3: an input changed (yielded by `inputs.answer`, `inputs.clear`,
+`inputs.close` and `inputs.reopen`, and by `watch`) — answered, cleared,
 closed, reopened; or, by a `create` or `amend` of its ticket's body,
 declared, re-declared (its kind, question, options or recommendation),
 removed from the body, or declared again. Carries the whole input —

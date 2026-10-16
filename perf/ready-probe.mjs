@@ -50,7 +50,7 @@ if (mode === "pages") {
   const call = caller(ws);
   for (const cursor of cursors) {
     for (const [label, method, base] of [
-      ["ready_set", "tickets.ready_set", { summary: true, limit: 200 }],
+      ["ready_set", "tickets.work.ready", { summary: true, limit: 200 }],
       ["list { status: Ready }", "tickets.list", { status: "Ready", summary: true, limit: 200 }],
       ["list {} (the floor)", "tickets.list", { summary: true, limit: 200 }],
     ]) {
@@ -102,7 +102,7 @@ if (mode === "pages") {
         const mine = seen.slice(mark);
         watch.push(mine.reduce((a, e) => a + e.bytes, 0));
         for (const e of mine) types[e.type] = (types[e.type] ?? 0) + 1 / R;
-        ready = (await call("tickets.ready_set", { epic: "FAN", summary: true, limit: 0 })).events.at(-1).remaining;
+        ready = (await call("tickets.work.ready", { epic: "FAN", summary: true, limit: 0 })).events.at(-1).remaining;
         if (status === "Complete") await call("tickets.set_status", { id: blocker, status: "Ready" });
       }
       out[way] = { median_ms: ms(med(ts)), min_ms: ms(Math.min(...ts)), max_ms: ms(Math.max(...ts)),

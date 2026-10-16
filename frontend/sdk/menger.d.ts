@@ -1,5 +1,5 @@
 /**
- * menger SDK 1.8 — the types of `window.menger` and of a component script's
+ * menger SDK 2.0 — the types of `window.menger` and of a component script's
  * `this`, inside every framed body (COMP-4, COMP-5, COMP-10, COMP-9,
  * INPUT-4, INPUT-9). 1.5 (COMMENT-3) changes nothing here: annotation mode
  * is the host's, spoken over the frame's own messages, and a component's
@@ -16,6 +16,11 @@
  * ticket menu (`menger:ticket-menu`); plain text keeps the browser's.
  * 1.17 (FILTER-25) neither: Alt+click on such a chip sets the app's global
  * filter to its shortcode (`menger:filter-everywhere`).
+ * 2.0 (ACCESS-20) moves the reads onto the `tickets` children's paths:
+ * `menger.tickets.work.waves`, `.work.blockers`, `.nav.groups`,
+ * `.nav.extents`, `.components.list`, `.inputs.list`, and `menger.call`
+ * names them the same (`'work.waves'`, …); the 1.x names are refused,
+ * naming the new one.
  *
  * Published by the app at /app/sdk/menger.d.ts, beside the SDK itself
  * (/app/sdk/menger-sdk.js) and the generated client's declarations
@@ -26,10 +31,6 @@
  */
 
 import type { TicketsClient } from './generated/tickets/client';
-import type { TicketsInputsClient } from './generated/tickets/inputs/client';
-import type { TicketsWorkClient } from './generated/tickets/work/client';
-import type { TicketsNavClient } from './generated/tickets/nav/client';
-import type { TicketsComponentsClient } from './generated/tickets/components/client';
 import type { Answer, Input, InputValue } from './generated/tickets/types';
 
 export type { TicketsClient } from './generated/tickets/client';
@@ -37,34 +38,17 @@ export type { TicketsInputsClient } from './generated/tickets/inputs/client';
 export type { TicketsWorkClient } from './generated/tickets/work/client';
 export type { TicketsNavClient } from './generated/tickets/nav/client';
 export type { TicketsComponentsClient } from './generated/tickets/components/client';
+export type { TicketsCommitsClient } from './generated/tickets/commits/client';
 
 /**
- * ACCESS-14: `menger.tickets.inputs` — the `tickets inputs` child's client
- * (`list(epic?, filter?, state?, ticket?, tz?)`; its writes are refused
- * "read-only"), and callable as `list` itself, as before the move.
+ * The typed `tickets` a frame gets: the generated client as generated, its
+ * children its typed sub-clients — `work`, `nav`, `inputs`, `components`,
+ * `commits` (ACCESS-14..18). SDK 2.0 (ACCESS-20) keeps no alias at the old
+ * names: `menger.tickets.waves(…)` is `menger.tickets.work.waves(…)`,
+ * `menger.tickets.inputs(…)` is `menger.tickets.inputs.list(…)`,
+ * `menger.tickets.components()` is `menger.tickets.components.list()`.
  */
-export type InputsChild = TicketsInputsClient & TicketsInputsClient['list'];
-
-/**
- * ACCESS-18: `menger.tickets.components` — the `tickets components` child's
- * client (`list()`), and callable as `list` itself, as before the move.
- */
-export type ComponentsChild = TicketsComponentsClient & TicketsComponentsClient['list'];
-
-/**
- * The typed `tickets` a frame gets: its `inputs` the child's, and
- * (ACCESS-17) its child `tickets work` as `work`, with that child's `waves`
- * and `blockers` where a body has always called them, until ACCESS-20
- * moves the SDK; (ACCESS-16) its child `nav`; (ACCESS-18) its `components`
- * the child's.
- */
-export type FrameTickets = Omit<TicketsClient, 'inputs' | 'work' | 'nav' | 'components'> &
-  Pick<TicketsWorkClient, 'waves' | 'blockers'> & {
-    readonly inputs: InputsChild;
-    readonly work: TicketsWorkClient;
-    readonly nav: TicketsNavClient;
-    readonly components: ComponentsChild;
-  };
+export type FrameTickets = TicketsClient;
 export type * from './generated/tickets/types';
 
 /**
@@ -168,7 +152,7 @@ export interface MengerTheme {
 }
 
 export interface Menger {
-  /** "1.8.0". */
+  /** "2.0.0". */
   readonly version: string;
 
   /**
@@ -177,22 +161,21 @@ export interface Menger {
    * `AsyncGenerator<TicketsEvent>`:
    *
    * ```js
-   * for await (const ev of menger.tickets.waves(['RETURNS'])) {
+   * for await (const ev of menger.tickets.work.waves(['RETURNS'])) {
    *   if (ev.type === 'wave_counts') count = ev.waves[0] ?? 0;
    * }
-   * const items = await Array.fromAsync(menger.tickets.components());
+   * const items = await Array.fromAsync(menger.tickets.components.list());
    * ```
    *
-   * ACCESS-16: the nav's reads are its child's, `menger.tickets.nav`
-   * (`tickets.nav.groups` on the wire): `menger.tickets.nav.groups()`.
+   * A child's methods are its sub-client's (`tickets.nav.groups` on the
+   * wire is `menger.tickets.nav.groups()`).
    *
    * Answered by the app over its own connection, read-only: `get`, `list`,
-   * `find`, `waves`, `nav.groups`, `nav.extents`, `blockers`, `health`,
-   * `components.list` (ACCESS-18: the `tickets components` child, and
-   * `components()` the same), `inputs.list` (INPUT-4; ACCESS-14: the `tickets inputs`
-   * child — `inputs.list(epic?, filter?, state?, ticket?)`, and
-   * `inputs(…)` the same — one `{ type: 'input', input }` per input, its
-   * answer and history included). Every other method is present and
+   * `find`, `health`, `work.waves`, `work.blockers`, `nav.groups`,
+   * `nav.extents`, `components.list`, `inputs.list` (INPUT-4 —
+   * `inputs.list(epic?, filter?, state?, ticket?)`, one
+   * `{ type: 'input', input }` per input, its answer and history
+   * included). Every other method is present and
    * throws a `PlexusError` whose message starts "read-only" when iterated
    * — `inputs.answer` and `inputs.clear` too: a frame answers through
    * `input.submit` and clears through `input.clear`.
@@ -200,10 +183,11 @@ export interface Menger {
   readonly tickets: FrameTickets;
 
   /**
-   * The untyped escape hatch: `method` by its bare wire name (`waves`) with
-   * the activation's parameter names (`{ epics: ['PLEXUS'] }`) → the call's
-   * items, as the wire spells them. Read-only, as `tickets` — `inputs`
-   * with `{ ticket?, epic?, state? }`; a method outside the reads rejects
+   * The untyped escape hatch: `method` by its path under `tickets`
+   * (`get`, `work.waves`; SDK 2.0, ACCESS-20 — a 1.x name such as `waves`
+   * is refused naming its path) with the activation's parameter names
+   * (`{ epics: ['PLEXUS'] }`) → the call's items, as the wire spells them.
+   * Read-only, as `tickets` — `inputs.list` with `{ ticket?, epic?, state? }`; a method outside the reads rejects
    * with "read-only: …" (naming `input.submit` and `input.clear` as the
    * two writes), a
    * parameter the method does not take rejects naming it.

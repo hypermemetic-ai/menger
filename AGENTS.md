@@ -77,6 +77,23 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
 - **`synapse`** (`../synapse`; on PATH) — the CLI over any Plexus backend.
   This is how an agent, a worker or a shell script reads and writes
   tickets; prefer it to hand-rolled curl against the REST bridge.
+
+  **The paths moved** (ACCESS-14..18; every client, ACCESS-20): a ticket's
+  inputs, commits, nav reads, order of work and components are children of
+  `tickets` — `tickets inputs list|answer|clear|close|reopen`, `tickets
+  commits link|unlink`, `tickets nav groups|extents|tree|counts|facets|member`,
+  `tickets work ready|waves|waves_under|waves_to|blockers`, `tickets
+  components list` — and this file is written for them (so are
+  `members teams` and `--team`, ACCESS-22, and the ticket scopes of
+  ACCESS-21). **They apply from
+  the release that carries ACCESS-20 on.** Until that release is promoted,
+  prod (:4455, the tracker) runs the old names — `tickets inputs`,
+  `answer`, `clear_answer`, `close_input`, `reopen_input`, `link_commits`,
+  `unlink_commits`, `groups`, `extents`, `tree`, `counts`, `facets`,
+  `member`, `ready_set`, `waves`, `waves_under`, `waves_to`, `blockers`,
+  `components`, all directly under `tickets` — so a call against the
+  tracker uses those; `synapse -P 4455 menger tickets` lists what the
+  running server has. README "The frame" has the table.
   **Read `../menger-skills/reaching/SKILL.md` before issuing synapse
   commands** — it is the house's invocation contract (where flags go, how to navigate
   to a method, how to discover its parameters from the CLI itself); what
@@ -99,9 +116,9 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   the language cannot read:
 
   ```sh
-  synapse -P 4455 menger tickets counts --filter 'ready and kind build'    # per shortcode
+  synapse -P 4455 menger tickets nav counts --filter 'ready and kind build'    # per shortcode
   synapse -P 4455 menger tickets list --filter 'blocked' --at 1000 --summary --limit 20
-  synapse -P 4455 menger tickets facets --filter 'status Ready and kind build'   # menu counts
+  synapse -P 4455 menger tickets nav facets --filter 'status Ready and kind build'   # menu counts
   synapse -P 4455 menger tickets watch --filter 'category in (active, review)'   # + entered/left
   ```
 
@@ -115,15 +132,15 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets list --filter 'saved "Needs you" or saved Plexus-Ready' --summary true
   ```
 
-  The other reads take the same flag (FILTER-15) — `find`, `ready_set`
-  and `inputs` answer what they answered, of the tickets the filter
-  admits; `member` says which of up to 1,000 ids it admits:
+  The other reads take the same flag (FILTER-15) — `find`, `work ready`
+  and `inputs list` answer what they answered, of the tickets the filter
+  admits; `nav member` says which of up to 1,000 ids it admits:
 
   ```sh
   synapse -P 4455 menger tickets find --query watch --filter 'not category done'
-  synapse -P 4455 menger tickets ready_set --filter 'kind build and in SCALE' --summary
-  synapse -P 4455 menger tickets inputs --state open --filter 'kind build'
-  synapse -P 4455 menger tickets member --ids FILTER-4,FILTER-5 --filter 'status Ready'
+  synapse -P 4455 menger tickets work ready --filter 'kind build and in SCALE' --summary
+  synapse -P 4455 menger tickets inputs list --state open --filter 'kind build'
+  synapse -P 4455 menger tickets nav member --ids FILTER-4,FILTER-5 --filter 'status Ready'
   ```
 
   **History** (MENGER-13): every status and kind change is a transition —
@@ -189,7 +206,7 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets search --query 'set_status' --filter 'not category done' --limit 5
   ```
 
-  **The nav under a filter** is `tree` (FILTER-13): a parent's children —
+  **The nav under a filter** is `nav tree` (FILTER-13): a parent's children —
   or a shortcode's top row (its root; a rootless shortcode's tickets) —
   that match or hold a match, each a `node { summary, matched, below }`
   (`below`: the matches strictly under it; `matched: false` a holder), then
@@ -202,15 +219,15 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   the shortcode's top. `--keep ID` (FILTER-24, the nav's open ticket)
   answers as if that ticket matched — drawn where a match would be, its
   matches under it, its node still `matched: false`; `list` (with a
-  filter) and `counts` take it too, and none of them keeps a ticket
+  filter) and `nav counts` take it too, and none of them keeps a ticket
   outside the caller's reach:
 
   ```sh
-  synapse -P 4455 menger tickets tree --epic FILTER --filter 'status Ready'
-  synapse -P 4455 menger tickets tree --parent FILTER-9 --filter 'not category done' --limit 50
-  synapse -P 4455 menger tickets tree --epic MENGER --filter 'kind build' --matches-only true
-  synapse -P 4455 menger tickets tree --parent FILTER-1 --filter 'not category done' --matches-only true --keep FILTER-23
-  synapse -P 4455 menger tickets counts --filter 'ready and under FILTER-9'
+  synapse -P 4455 menger tickets nav tree --epic FILTER --filter 'status Ready'
+  synapse -P 4455 menger tickets nav tree --parent FILTER-9 --filter 'not category done' --limit 50
+  synapse -P 4455 menger tickets nav tree --epic MENGER --filter 'kind build' --matches-only true
+  synapse -P 4455 menger tickets nav tree --parent FILTER-1 --filter 'not category done' --matches-only true --keep FILTER-23
+  synapse -P 4455 menger tickets nav counts --filter 'ready and under FILTER-9'
   ```
 
   **Comments** (COMMENT-2) are the `comments` activation beside `tickets`:
@@ -352,12 +369,26 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   hosted under it); `members grant --scope IDENTITY` keeps it as
   `hypermemetic:IDENTITY`. `tickets create --org acme` (or `--epic
   acme:MENGER`); without it, the caller's only org. A reader sees only the
-  orgs it holds a role in — another org's tickets are `not_found`. README
-  "Organizations" has the rest:
+  orgs it holds a role in — another org's tickets are `not_found`. A
+  grant's scope may also be one ticket (`--scope MNG-40`, it alone) or a
+  subtree (`--scope 'under MNG-40'`, ACCESS-21). README "Organizations"
+  has the rest:
 
   ```sh
   synapse -P 4455 menger orgs list
   synapse -P 4455 menger members grant --principal key:4b… --scope acme: --role editor
+  ```
+
+  **Teams** (ACCESS-22) are members' child `members teams` (admin only):
+  `list`, `show`, `create`, `rename`, `delete`, `add` / `remove` a
+  principal; `members grant` / `revoke` take `--team` in place of
+  `--principal`, and each member holds what the team holds beside their
+  own grants. README "Members and roles" has the rules:
+
+  ```sh
+  synapse -P 4455 menger members teams create --name release-crew
+  synapse -P 4455 menger members grant --team release-crew --scope 'under MENGER-5' --role editor
+  synapse -P 4455 menger members teams add --team release-crew --principal key:4b…
   ```
 
   **Limits** (ACCESS-29): connections in all, per IP, per principal and
@@ -470,19 +501,21 @@ id refuses the write):
 An option's value is its `value`, else its `name`.
 
 **The owner answers; an agent doesn't** (menger-skills `asking`: an agent
-never answers its own decision). A reader's click records the answer with source `app`; a
-reader may change or clear it until the input is closed.
+never answers its own decision). A reader's click records the answer — its source
+the server's, from the caller (ACCESS-14: `app` for a person signed in through a
+provider, `api` for a key and with login off); a reader may change or clear it
+until the input is closed.
 
 **Read what's waiting, act, then close:**
 
 ```sh
-synapse -P 4455 menger tickets inputs --state open          # everything waiting, across tickets
-synapse -P 4455 menger tickets inputs --ticket RETURNS-13   # one ticket's inputs, answers and history
-synapse -P 4455 menger tickets close_input --ticket RETURNS-13 --input landing   # after acting on it
-synapse -P 4455 menger tickets reopen_input --ticket RETURNS-13 --input landing  # if it must be asked again
+synapse -P 4455 menger tickets inputs list --state open          # everything waiting, across tickets
+synapse -P 4455 menger tickets inputs list --ticket RETURNS-13   # one ticket's inputs, answers and history
+synapse -P 4455 menger tickets inputs close --ticket RETURNS-13 --input landing   # after acting on it
+synapse -P 4455 menger tickets inputs reopen --ticket RETURNS-13 --input landing  # if it must be asked again
 ```
 
-Act on an answer, then `close_input` it: closing freezes it (the reader can
+Act on an answer, then `inputs close` it: closing freezes it (the reader can
 no longer change or clear it) and the component shows DECIDED. States are
 `open` · `answered` · `closed` · `removed` (gone from the body, history
 kept). An answer can be cleared by the reader while open — read the state
@@ -492,10 +525,10 @@ that follows live; the app's `#/inputs` page lists them all.
 **Answering through synapse** (the owner from a shell; source `api`):
 
 ```sh
-synapse -P 4455 menger tickets answer --ticket T --input landing --value.type choice --value.option archive --rationale "why"
-synapse -P 4455 menger tickets answer --ticket T --input notes --value.type text --value.text "the reply"
-synapse -P 4455 -p '{"ticket":"T","input":"checks","value":{"type":"multi","options":["unit","wire"]}}' menger tickets answer
-synapse -P 4455 menger tickets clear_answer --ticket T --input landing
+synapse -P 4455 menger tickets inputs answer --ticket T --input landing --value.type choice --value.option archive --rationale "why"
+synapse -P 4455 menger tickets inputs answer --ticket T --input notes --value.type text --value.text "the reply"
+synapse -P 4455 -p '{"ticket":"T","input":"checks","value":{"type":"multi","options":["unit","wire"]}}' menger tickets inputs answer
+synapse -P 4455 menger tickets inputs clear --ticket T --input landing
 ```
 
 A `multi` answer goes through `-p` for now — synapse sends a list inside a
@@ -665,7 +698,7 @@ is always loud is a queue the owner learns to ignore. menger-skills
   **`tickets.update_many`** (ACT-2) is the same update to many tickets in
   one write, all or none — `--ids`, or `--filter` (at most `--max`, default
   500); `update`'s fields but title and body, plus `--label` / `--unlabel`;
-  a refusal names each refused id. `label` and `link_commits` take `--ids`
+  a refusal names each refused id. `label` and `commits link` take `--ids`
   too:
 
   ```sh
@@ -779,7 +812,7 @@ is always loud is a queue the owner learns to ignore. menger-skills
   synapse's own `--status` flag takes the canonical spelling only,
   ACCESS-8). The merge sets `Complete`. **Link the commit** (SDLC-9): in the step that flips the
   ticket to `In Review`, the worker links its commit(s) with
-  `tickets.link_commits` (`synapse -P 4455 menger tickets link_commits
+  `tickets.commits.link` (`synapse -P 4455 menger tickets commits link
   --id MNG-10 --commits 77df9a0`, the flag repeated per commit;
   `repo@hash` for a commit outside menger); the merge links the merge
   commit too if it differs, when it sets `Complete`.

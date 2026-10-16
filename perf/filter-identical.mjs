@@ -72,16 +72,16 @@ for (let i = 0; i < 1200; i++) {
 for (let i = 0; i < 100; i++) calls.push(["tickets.list", { limit: 20, ...(rand(3) ? { after: anyId() } : {}) }]);
 for (let i = 0; i < 1100; i++) {
   const after = rand(5) === 0 ? undefined : anyId();
-  calls.push(["tickets.ready_set", { summary: true, limit: [0, 1, 50, 200][rand(4)], ...(after ? { after } : {}), ...(rand(3) === 0 ? { epic: epics[rand(epics.length)][0] } : {}) }]);
+  calls.push(["tickets.work.ready", { summary: true, limit: [0, 1, 50, 200][rand(4)], ...(after ? { after } : {}), ...(rand(3) === 0 ? { epic: epics[rand(epics.length)][0] } : {}) }]);
 }
-for (let i = 0; i < 50; i++) calls.push(["tickets.ready_set", { limit: 20, ...(rand(2) ? { after: anyId() } : {}) }]);
+for (let i = 0; i < 50; i++) calls.push(["tickets.work.ready", { limit: 20, ...(rand(2) ? { after: anyId() } : {}) }]);
 const queries = ["audit", "map", "zzqx", "1", "SCALE", "the", "x"];
 for (let i = 0; i < 1200; i++) {
   calls.push(["tickets.find", { query: queries[rand(queries.length)], limit: [1, 50, 200][rand(3)], ...(rand(3) ? { after: anyId() } : {}) }]);
 }
 calls.push(["tickets.list", { epic: small[0] }]);
 calls.push(["tickets.list", { epic: small[0], summary: true }]);
-calls.push(["tickets.ready_set", { epic: small[0] }]);
+calls.push(["tickets.work.ready", { epic: small[0] }]);
 
 let items = 0;
 const diffs = [];

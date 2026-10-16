@@ -397,7 +397,7 @@ async function takeClips(browser) {
       await sleep(300);
       synapse('set_status', '--id', 'OFFLINE-10', '--status', 'Coding');
       await sleep(1300);
-      synapse('link_commits', '--id', 'OFFLINE-10', '--commits', 'a7c31f0');
+      synapse('commits', 'link', '--id', 'OFFLINE-10', '--commits', 'a7c31f0');
       await sleep(1000);
       synapse('set_status', '--id', 'OFFLINE-10', '--status', 'In Review');
       await sleep(1300);

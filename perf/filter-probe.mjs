@@ -97,7 +97,7 @@ if (mode === "after") {
   // What the commit before can answer of the nine: a status, the ready set.
   const equivalents = {
     "status Ready": ["tickets.list", { status: "Ready" }],
-    "ready": ["tickets.ready_set", {}],
+    "ready": ["tickets.work.ready", {}],
   };
   for (const filter of NINE) {
     const eq = equivalents[filter];

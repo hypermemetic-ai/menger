@@ -296,7 +296,7 @@ pub fn check(kind: InputKind, options: &[InputOption], value: InputValue) -> Res
         }
         InputValue::Text { text } => {
             if text.trim().is_empty() {
-                Err("a reply is not blank — clear_answer clears an answer".to_string())
+                Err("a reply is not blank — inputs.clear clears an answer".to_string())
             } else {
                 Ok(InputValue::Text { text })
             }
