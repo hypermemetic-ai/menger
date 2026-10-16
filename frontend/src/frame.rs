@@ -91,7 +91,8 @@
 //! the host reads at once whether a gesture on THAT frame is under way
 //! (IDENTITY-36, src/gesture.rs: the app's activation, focus in this very
 //! frame, the pointer or a Tab brought there since the app's own last
-//! gesture — never just any click in the app), then answers
+//! gesture — never just any click in the app; APP-35: read again once
+//! the app's own activation has run out, when only that was in doubt), then answers
 //! `menger:submitted { id, answer }` or `{ id, error }` after the bridge's
 //! checks and `tickets.inputs.answer` (src/bridge.rs). Every
 //! `watch` event, `input_changed` among them, reaches the frames as
@@ -1024,7 +1025,8 @@ fn answer_call(
 /// INPUT-4: answer a frame's `menger.input.submit` — `menger:submitted {
 /// id, answer }` (the recorded answer, the wire's spelling) or `{ id, error
 /// }`: refused unless a gesture on this frame is under way (`gesture`,
-/// IDENTITY-36: [`gesture::on_frame`]) and the frame
+/// IDENTITY-36: [`gesture::on_frame`], read at the arrival; APP-35: one
+/// put off is read again by [`gesture::settle`]) and the frame
 /// renders a ticket (`ticket`, from its `data-ticket`), then the bridge's
 /// checks against that ticket's inputs, then `tickets.inputs.answer`.
 /// INPUT-9: and (`write` [`Msg::Clear`]) its `menger.input.clear` —
@@ -1037,7 +1039,7 @@ fn answer_write(
     channel: String,
     id: JsValue,
     ticket: Option<String>,
-    gesture: bool,
+    gesture: gesture::Verdict,
     params: Result<String, String>,
     cited: bool,
 ) {
@@ -1052,6 +1054,7 @@ fn answer_write(
             if cited {
                 return Err(bridge::display_only(sdk));
             }
+            let gesture = gesture::settle(&frame, gesture).await;
             let ticket = bridge::admit(sdk, ticket.as_deref(), gesture)?;
             let params = params?;
             let client = || session::client().ok_or_else(|| format!("{sdk}: not connected (nothing sent)"));
@@ -1231,7 +1234,8 @@ fn on_message(ev: web_sys::MessageEvent) {
         }
         Some(write @ (Msg::Submit | Msg::Clear)) => {
             // Now, while the gesture that sent it is under way — and on
-            // this very frame (IDENTITY-36), not anywhere in the app.
+            // this very frame (IDENTITY-36), not anywhere in the app; or,
+            // APP-35, once the app's own activation has run out.
             let gesture = gesture::on_frame(&frame);
             let sdk = if write == Msg::Clear { bridge::CLEAR } else { bridge::SUBMIT };
             let id = field("id").filter(|v| v.as_f64().is_some()).unwrap_or(JsValue::NULL);
@@ -1407,7 +1411,8 @@ fn on_message(ev: web_sys::MessageEvent) {
             // inside a viewer's gesture on this very frame (IDENTITY-36's
             // reading) — else, like any other, it asks.
             let Some(href) = field("href").and_then(|v| v.as_string()) else { return };
-            let gesture = gesture::on_frame(&frame);
+            // Asked at once: a link that waits would open seconds late (it asks instead).
+            let gesture = gesture::on_frame(&frame) == gesture::Verdict::Yes;
             // MENGER-15: the leave dialog (or the route) is the app's, drawn
             // outside the full-screen box — which steps aside for it.
             present::escape();
