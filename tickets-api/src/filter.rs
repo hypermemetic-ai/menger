@@ -979,7 +979,7 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 35] = [
+const NAMES: [&str; 36] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -1000,6 +1000,8 @@ const NAMES: [&str; 35] = [
     "blocked",
     "session",
     "asking",
+    // DEPLOY-20: running an earlier version.
+    "behind",
     // MENGER-39: the owner's queue.
     "queued",
     "created",
@@ -1031,7 +1033,7 @@ const MIXED: &str = "`or` and `and` do not mix inside one pair of parentheses: a
 const UNBALANCED: &str = "a group's parentheses close where they open: `(a or (b and c))`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
                               `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
-                              `entered`, `left`, `changed`, `by`, `created`, `for`, `deployed`, `queued` or \
+                              `entered`, `left`, `changed`, `by`, `created`, `for`, `deployed`, `behind`, `queued` or \
                               `saved`, a group in parentheses, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
@@ -1311,6 +1313,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "touched" => read_history(name, tail).map(Field::History),
         // DEPLOY-11: over the deployments' kept cells.
         "deployed" => read_history(name, tail).map(Field::History),
+        // DEPLOY-20: over the deployments' kept behind.
+        "behind" => read_history(name, tail).map(Field::History),
         // MENGER-39: over the queue's kept entries.
         "queued" => read_history(name, tail).map(Field::History),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
@@ -1493,6 +1497,11 @@ pub enum Event {
     /// one), since a moment in the window when one is given. Answered from
     /// the deployments' kept cells, never from the transition log.
     Deployed(String),
+    /// DEPLOY-20: `behind <env>` — the ticket runs in an environment of
+    /// that name, but an earlier version: a commit linked after the newest
+    /// one carried there is not. No window, no `by`; answered from the
+    /// deployments' kept behind.
+    Behind(String),
     /// MENGER-39: `queued` — the ticket is in the owner's queue; `queued
     /// <urgency>`, at that urgency (a snooze does not take it out). Answered
     /// from the queue's kept entries; no window, no `by`.
@@ -1519,6 +1528,7 @@ impl Event {
             Event::Touched => "touched",
             Event::Held(_) => "for",
             Event::Deployed(_) => "deployed",
+            Event::Behind(_) => "behind",
             Event::Queued(_) => "queued",
             Event::Archived => "archived",
             Event::Restored => "restored",
@@ -1828,6 +1838,7 @@ impl History {
             Event::Created => "created".to_string(),
             Event::Touched => "touched".to_string(),
             Event::Deployed(env) => format!("deployed {}", quoted(env)),
+            Event::Behind(env) => format!("behind {}", quoted(env)),
             Event::Queued(None) => "queued".to_string(),
             Event::Queued(Some(u)) => format!("queued {u}"),
             Event::Archived => "archived".to_string(),
@@ -1924,6 +1935,14 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
             let env = w.first().ok_or("`deployed` names an environment, as `deployed prod` or `deployed menger/prod`")?;
             i = 1;
             (Event::Deployed(deployed_env(env)?), None)
+        }
+        // DEPLOY-20: `behind <env>`, and nothing after it.
+        "behind" => {
+            let env = w.first().ok_or("`behind` names an environment, as `behind prod` or `behind menger/prod`")?;
+            if let Some(extra) = w.get(1) {
+                return Err(format!("`{extra}` is not understood here — `behind` takes an environment and nothing else: no window, no `by`"));
+            }
+            return Ok(History { event: Event::Behind(deployed_env(env)?), window: None, by: None });
         }
         // MENGER-39: `queued [urgency]`, and nothing after it.
         "queued" => {

@@ -282,11 +282,14 @@ impl Deployments {
     /// it runs in — since when, brought by which deployment, what the
     /// environment runs now — and one `not_running` for each other
     /// environment of its projects (its shortcode's, its hosts', and any it
-    /// has run in). An `error` for an id that names no ticket.
+    /// has run in). DEPLOY-20: a `running` whose `behind` is not empty runs
+    /// an earlier version there — `behind` the commits not carried, in link
+    /// order, `version` the newest carried one. An `error` for an id that
+    /// names no ticket.
     #[plexus_macros::method(
         group = "read",
         target = "id",
-        description = "Where a ticket's work runs: running { environment, since, deployment } per environment, not_running for the rest",
+        description = "Where a ticket's work runs: running { environment, since, deployment, behind, version } per environment, not_running for the rest",
         params(id = "Ticket id, e.g. MENGER-34"),
         example(note = "where MENGER-34 runs", params = r#"{"id": "MENGER-34"}"#)
     )]
@@ -318,10 +321,12 @@ impl Deployments {
     /// given), `running` every ticket there (only `ids`' when given, at most
     /// 1,000), each with since when and the deploy that brought it, in the
     /// store's order — an empty one too, so a copy can replace what it held.
+    /// DEPLOY-20: a cell's `behind` (and `version`) when the ticket runs an
+    /// earlier version there.
     /// What the app's board marks are drawn from, one read for every row.
     #[plexus_macros::method(
         group = "read",
-        description = "The kept cells: cells { project, environment, running: [{ ticket, since, deployment }] } per environment",
+        description = "The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }] } per environment",
         params(
             project = "Only this project's (a shortcode) (optional)",
             environment = "Only environments of this name (optional)",

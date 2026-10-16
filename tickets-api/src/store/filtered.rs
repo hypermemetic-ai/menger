@@ -150,10 +150,10 @@ impl Lens {
         self.history.iter().any(|h| h.event == crate::filter::Event::Touched)
     }
 
-    /// DEPLOY-11: whether it asks `deployed` — what a recorded deployment
-    /// can move.
+    /// DEPLOY-11: whether it asks `deployed` (DEPLOY-20: or `behind`) —
+    /// what a recorded deployment can move.
     pub fn asks_deployed(&self) -> bool {
-        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Deployed(_)))
+        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Deployed(_) | crate::filter::Event::Behind(_)))
     }
 
     /// MENGER-39: whether it asks `queued` — what a queue write can move.

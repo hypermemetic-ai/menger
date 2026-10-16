@@ -3114,6 +3114,8 @@ impl Store {
         delete::migrate(&mut conn)?;
         // DEPLOY-11: and one without the deployments tables gains them, empty.
         deployments::migrate(&mut conn)?;
+        // DEPLOY-20: and one without the commit-link record gains it, empty.
+        versions::migrate(&mut conn)?;
         // MENGER-39: and one without the queue's tables gains them, empty.
         queue::migrate(&mut conn)?;
         // APP-23: and comments without an intent, and queue records without
@@ -4957,6 +4959,9 @@ impl Store {
         }
         row.commits.extend(added.iter().cloned());
         row.updated_unix = chrono::Utc::now().timestamp();
+        // DEPLOY-20: this call's commits are the ticket's next version.
+        let version = (self.tickets.read().expect("store lock poisoned").deploys.next_version(&id), row.updated_unix);
+        let (linked, kept) = ((id.clone(), added.clone()), added.clone());
         // FILTER-4: a first commit moves the ticket's cell.
         let (derived, under) = self.commits_derived(&row);
         let announced = derived.announced();
@@ -4969,9 +4974,13 @@ impl Store {
             move |tx| {
                 let out = commit(tx)?;
                 stored.write(tx)?;
+                versions::store(tx, &linked.0, &linked.1, version.0, version.1)?;
                 Ok(out)
             },
-            move |cache, (row, _)| cache.commits_changed(row.clone(), moved),
+            move |cache, (row, _)| {
+                cache.deploys.versioned(&row.id, &kept, version.0, version.1);
+                cache.commits_changed(row.clone(), moved)
+            },
             move |(row, body), (), tx| {
                 let change = Change::CommitsLinked {
                     ticket: whole(row, body),
@@ -5102,15 +5111,21 @@ impl Store {
         let Derived { stored, moved } = derived;
         let commit = Self::row_commit(row);
         let cache = Arc::clone(&self.tickets);
+        // DEPLOY-20: out of the link record too.
+        let (gone, kept) = ((id.clone(), removed.clone()), removed.clone());
 
         self.write(
             serial,
             move |tx| {
                 let out = commit(tx)?;
                 stored.write(tx)?;
+                versions::forget(tx, &gone.0, &gone.1)?;
                 Ok(out)
             },
-            move |cache, (row, _)| cache.commits_changed(row.clone(), moved),
+            move |cache, (row, _)| {
+                cache.deploys.unversioned(&row.id, &kept);
+                cache.commits_changed(row.clone(), moved)
+            },
             move |(row, body), (), tx| {
                 let change = Change::CommitsUnlinked {
                     ticket: whole(row, body),
@@ -5421,6 +5436,7 @@ mod theme_registry;
 /// DEPLOY-11: every deployment, what each environment runs, and where each
 /// ticket's work runs — the `deployed` cells.
 mod deployments;
+mod versions;
 mod queue;
 pub use queue::QueueChange;
 /// APP-23: a change request — a comment and an unqueue, one write.
@@ -5553,6 +5569,9 @@ mod tests_notes;
 /// DEPLOY-11: deployments — the fold, rollbacks, the kept join, the cells.
 #[cfg(test)]
 mod tests_deployments;
+/// DEPLOY-20: a ticket's version — behind, current, rolled back, named.
+#[cfg(test)]
+mod tests_behind;
 /// THEME-8: define, set, theme_for (every row), refusals, a reopen.
 #[cfg(test)]
 mod tests_themes;
