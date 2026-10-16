@@ -1451,6 +1451,18 @@
   .mcite[data-state="failed"] .mcite-state { color: var(--err-fg); background: var(--err-bg); }
   .mcite-view { height: 0; overflow: auto; }
   .mcite-view > .mframe { max-width: none; padding: 0 .6rem; }
+  /* APP-29: a mockup box (src/mockup.rs) — laid by the host over an
+     <m-mockup> placeholder in a framed body, outside that frame: the same
+     .framed box a `view: mockup` body gets (its bar, its devices side by
+     side), its height told back to the placeholder. Full screen lifts it
+     above the app as any .framed is. */
+  .mmock { position: absolute; z-index: 2; box-sizing: border-box; background: var(--bg); }
+  .mmock[data-pending] { visibility: hidden; }
+  .mmock:has(.framed.is-full) { z-index: 950; }
+  .mmock > .mmock-host > .framed { max-width: none; }
+  .mmock-state { margin: 0; padding: .5rem .7rem; font-size: calc(13px * var(--text-scale)); color: var(--muted);
+    border: var(--border) dashed var(--line); border-radius: var(--radius-lg); }
+  .mmock[data-state="failed"] .mmock-state { color: var(--err-fg); background: var(--err-bg); border-style: solid; }
   .md .wave-ref {
     font-family: var(--mono); font-size: calc(.85em * var(--text-scale)); white-space: nowrap; text-decoration: none;
     border: var(--border) solid var(--chip-line); background: var(--chip-bg); color: var(--chip-fg); border-radius: var(--radius-lg); padding: 0 5px;

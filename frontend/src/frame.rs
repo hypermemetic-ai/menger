@@ -152,7 +152,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, inspect, links, md, mermaid, notes, present, registry, session};
+use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, inspect, links, md, mermaid, mockup, notes, present, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
@@ -197,8 +197,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// (`typing` in the init block, `menger:typing`, `typing` on `menger:theme`)
 /// as `html[data-typing]`, and adds `menger.typing`. MENGER-39's 1.20 is
 /// the generated client's: `menger.tickets.queue`, `unqueue`, `snooze` and
-/// `queued`, and the `--urgent` tokens a frame receives.
-pub(crate) const SDK_VERSION: &str = "1.20.0";
+/// `queued`, and the `--urgent` tokens a frame receives. APP-29's 1.21 adds
+/// the built-in `<m-mockup>` (`menger:mockup` / `menger:unmock` /
+/// `menger:mocked`): a placeholder the host draws a website mockup over.
+pub(crate) const SDK_VERSION: &str = "1.21.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -658,6 +660,10 @@ pub(crate) enum Msg {
     Cite,
     /// COMP-14: an `<m-cite>` left the body.
     Uncite,
+    /// APP-29: an `<m-mockup>` placeholder says what it draws and where.
+    Mockup,
+    /// APP-29: an `<m-mockup>` left the body.
+    Unmock,
     /// MENGER-14: a link in the body was clicked — its `href` as written,
     /// classified here (src/links.rs), never by the frame.
     Link,
@@ -686,6 +692,8 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:key" => Some(Msg::Key),
         "menger:cite" => Some(Msg::Cite),
         "menger:uncite" => Some(Msg::Uncite),
+        "menger:mockup" => Some(Msg::Mockup),
+        "menger:unmock" => Some(Msg::Unmock),
         "menger:link" => Some(Msg::Link),
         "menger:ticket-menu" => Some(Msg::TicketMenu),
         "menger:filter-everywhere" => Some(Msg::FilterEverywhere),
@@ -938,6 +946,8 @@ pub(crate) fn broadcast_registry() {
 pub(crate) fn broadcast_change(ev: &TicketsEvent) {
     // COMP-14: a cited ticket moved — its windows follow.
     cite::heard(ev);
+    // APP-29: and a referenced mockup's page.
+    mockup::heard(ev);
     if let TicketsEvent::GroupChanged { group } = ev {
         for scope in bridge::note_group(group) {
             refresh_reach(scope);
@@ -1136,6 +1146,8 @@ fn promote(frame: &web_sys::HtmlIFrameElement) {
     }
     // COMP-14: the old frame's cite windows go with it; the new one's show.
     cite::promoted(frame);
+    // APP-29: so do its mockups.
+    mockup::promoted(frame);
 }
 
 fn has_live_sibling(frame: &web_sys::HtmlIFrameElement) -> bool {
@@ -1243,8 +1255,12 @@ fn on_message(ev: web_sys::MessageEvent) {
                     let found = field("found").and_then(|v| v.as_bool()).unwrap_or(false);
                     cite::sized(&frame, &key, top, f64::from(height), found, settled);
                 }
-                // A citing frame resized: its windows are laid again.
-                None => cite::relayout(&channel),
+                // A citing frame resized: its windows are laid again
+                // (APP-29: and its mockups).
+                None => {
+                    cite::relayout(&channel);
+                    mockup::relayout(&channel);
+                }
             }
             // COMP-9: a card the route names may be in this frame.
             if settled && !frame.has_attribute("data-cite-key") {
@@ -1419,6 +1435,18 @@ fn on_message(ev: web_sys::MessageEvent) {
             }
             crate::tags::filter_everywhere(&id);
         }
+        Some(Msg::Mockup) => {
+            let Some(n) = field("mock").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0 && *v < 1e9) else { return };
+            let text = |k: &str| field(k).and_then(|v| v.as_string());
+            let r = field("rect").map(read_rect).unwrap_or_default();
+            let rect = cite::Rect { x: r.x, y: r.y, w: r.w, h: r.h };
+            mockup::asked(frame, channel, n as u32, text("ref"), text("widths"), text("source"), rect);
+        }
+        Some(Msg::Unmock) => {
+            if let Some(n) = field("mock").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) {
+                mockup::dropped(&channel, n as u32);
+            }
+        }
         Some(Msg::Uncite) => {
             if let Some(n) = field("cite").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) {
                 cite::dropped(&channel, n as u32);
@@ -1507,6 +1535,15 @@ fn reveal_message(channel: &str, anchor: &inspect::Anchor) -> JsValue {
 pub(crate) fn post_cited(citer: &web_sys::HtmlIFrameElement, channel: &str, reply: &cite::CitedReply) {
     let msg = message("menger:cited", channel);
     set(&msg, "cite", &JsValue::from_f64(f64::from(reply.cite)));
+    set(&msg, "height", &JsValue::from_f64(f64::from(reply.height)));
+    post(citer, &msg.into());
+}
+
+/// APP-29: `menger:mocked { mock, height }` to a body's frame — the one
+/// thing it learns of its mockup ([`mockup::mocked_reply`]).
+pub(crate) fn post_mocked(citer: &web_sys::HtmlIFrameElement, channel: &str, reply: &mockup::MockedReply) {
+    let msg = message("menger:mocked", channel);
+    set(&msg, "mock", &JsValue::from_f64(f64::from(reply.mock)));
     set(&msg, "height", &JsValue::from_f64(f64::from(reply.height)));
     post(citer, &msg.into());
 }
@@ -2025,6 +2062,29 @@ mod tests {
         ));
     }
 
+    /// APP-29: `<m-mockup>` is built in as `<m-cite>` is — defined before
+    /// the registry's names, under the tag md.rs's fence writes; it posts
+    /// its three attributes as written and where it is, and of the host's
+    /// answer takes the height alone (nothing of a referenced ticket).
+    #[test]
+    fn the_sdk_mocks_by_placeholder_and_takes_only_a_height() {
+        let define = SDK_JS.find(&format!("CE.define(\n        \"{}\"", md::MOCKUP_TAG)).expect("m-mockup defined");
+        let sync = SDK_JS.find("if (Array.isArray(init.components)) sync(init.components);").unwrap();
+        assert!(define < sync, "m-mockup is defined before the registry's names");
+        assert!(SDK_JS.contains("return [\"ref\", \"widths\", \"source\"];"), "the attributes it watches");
+        let at = SDK_JS.find("function mockReport(el, force) {").unwrap();
+        let body = &SDK_JS[at..at + SDK_JS[at..].find("\n  }\n").unwrap()];
+        for attr in ["el.getAttribute(\"ref\")", "el.getAttribute(\"widths\")", "el.getAttribute(\"source\")", "post(\"menger:mockup\""] {
+            assert!(body.contains(attr), "{attr}: {body}");
+        }
+        let at = SDK_JS.find("function mockedHeight(m) {").unwrap();
+        let body = &SDK_JS[at..at + SDK_JS[at..].find("\n  }\n").unwrap()];
+        assert!(body.contains("m.height") && !body.contains("innerHTML") && !body.contains("m.html"), "{body}");
+        // The host's reply is the height alone.
+        let reply = serde_json::to_value(mockup::mocked_reply(2, 700.4)).unwrap();
+        assert_eq!(reply, serde_json::json!({ "mock": 2, "height": 701 }));
+    }
+
     /// COMP-5: the registry rides in the init block whole, in the wire's
     /// spelling — and a source is HTML with scripts in it, which must not
     /// end the init block's `<script>` either.
@@ -2104,6 +2164,9 @@ mod tests {
         // COMP-14: a placeholder's two.
         assert_eq!(parse_msg("menger:cite", None, None), Some(Msg::Cite));
         assert_eq!(parse_msg("menger:uncite", None, None), Some(Msg::Uncite));
+        // APP-29: a mockup placeholder's two.
+        assert_eq!(parse_msg("menger:mockup", None, None), Some(Msg::Mockup));
+        assert_eq!(parse_msg("menger:unmock", None, None), Some(Msg::Unmock));
         // MENGER-14: a link clicked.
         assert_eq!(parse_msg("menger:link", None, None), Some(Msg::Link));
         // MENGER-34: a chip's ticket menu.
@@ -2113,6 +2176,7 @@ mod tests {
         for outbound in [
             "menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal",
             "menger:submitted", "menger:cleared", "menger:annotate", "menger:probe", "menger:locate", "menger:cited",
+            "menger:mocked",
         ] {
             assert_eq!(parse_msg(outbound, None, None), None, "{outbound}: outbound only");
         }
@@ -2161,7 +2225,7 @@ mod tests {
             "menger:navigate", "menger:inspect", "menger:inspected", "menger:reveal", "menger:revealed", "menger:submit",
             "menger:submitted", "menger:clear", "menger:cleared", "menger:annotate", "menger:hover", "menger:pick",
             "menger:probe", "menger:probed", "menger:locate", "menger:located", "menger:key", "menger:cite",
-            "menger:uncite", "menger:cited", "menger:link",
+            "menger:uncite", "menger:cited", "menger:link", "menger:mockup", "menger:unmock", "menger:mocked",
         ] {
             assert!(SDK_JS.contains(&format!("\"{kind}\"")), "{kind}");
         }

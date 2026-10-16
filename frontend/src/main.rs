@@ -285,6 +285,7 @@ mod lens;
 mod links;
 mod md;
 mod menu;
+mod mockup;
 mod nav;
 mod notes;
 mod present;
