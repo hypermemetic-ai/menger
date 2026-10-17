@@ -346,8 +346,8 @@ async fn fetch(port: u16, path: &str, host: &str, extra: &str) -> String {
 /// takes its own origin's page at `/ws`, and no other origin's.
 #[tokio::test]
 async fn behind_https_the_protected_resource_is_the_public_origins_socket() {
-    let args = ["--public-url", "https://menger.example", "--trusted-proxy", "127.0.0.1", "--auth-provider", "key"];
-    let (_server, ws, shell, _) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &args).await;
+    let args = ["--public-url", "https://menger.example", "--trusted-proxy", "127.0.0.1"];
+    let (_server, ws, shell) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &args).await;
     let path = "/.well-known/oauth-protected-resource/ws";
     for port in [shell, ws] {
         let text = fetch(port, path, "menger.example", "").await;
