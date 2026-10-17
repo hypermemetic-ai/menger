@@ -9,7 +9,7 @@
 use crate::access::{Access, Following, Followed, VerifiedUser, Viewer};
 use crate::address::TicketId;
 use crate::chats::{Chat, ChatsEvent, CHATS_PAGE_DEFAULT, CHATS_PAGE_MAX, MESSAGES_PAGE_DEFAULT, MESSAGES_PAGE_MAX};
-use crate::store::{ChatChange, ChatError, ChatQuery, Signer, Store};
+use crate::store::{ChatChange, ChatError, ChatQuery, Paging, Signer, Store};
 use crate::vocab::{ChatId, MessageId};
 use async_stream::stream;
 use futures::Stream;
@@ -175,9 +175,18 @@ pub(super) fn list_stream(store: Arc<Store>, user: VerifiedUser, q: ChatQuery, a
 }
 
 /// `chats.messages`.
-pub(super) fn messages_stream(store: Arc<Store>, user: VerifiedUser, chat: u64, after: Option<u64>, limit: Option<u32>) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+/// CHAT-8: which way `messages` pages — `before` over `newest` over `after`.
+pub(super) fn paging(after: Option<MessageId>, before: Option<MessageId>, newest: Option<bool>) -> Paging {
+    match (before, newest, after) {
+        (Some(b), _, _) => Paging::Before(b.get()),
+        (None, Some(true), _) => Paging::Newest,
+        (None, _, a) => Paging::After(a.map_or(0, MessageId::get)),
+    }
+}
+
+pub(super) fn messages_stream(store: Arc<Store>, user: VerifiedUser, chat: u64, paging: Paging, limit: Option<u32>) -> impl Stream<Item = ChatsEvent> + Send + 'static {
     let limit = crate::limits::page(limit, MESSAGES_PAGE_DEFAULT, MESSAGES_PAGE_MAX);
-    let answered = store.chat_messages(&user, chat, after, limit);
+    let answered = store.chat_page(&user, chat, paging, limit);
     stream! {
         match answered {
             Ok((rows, next)) => {

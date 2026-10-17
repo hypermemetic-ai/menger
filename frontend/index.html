@@ -4110,6 +4110,22 @@
   :is(#chatpane, #chatfull) .pmsgs.turns { padding: 14px 14px 8px; gap: 0; }
   :is(#chatpane, #chatfull) .tcol { display: flex; flex-direction: column; gap: 16px; width: 100%; margin: 0 auto; }
   #chatfull .tcol { max-width: 780px; padding: 18px 0 6px; gap: 22px; }
+  /* CHAT-8: the virtual list — rows spaced by their own padding (so a
+     measured height is the whole of a row), spacers for what is not mounted. */
+  :is(#chatpane, #chatfull) .tlist { display: block; }
+  :is(#chatpane, #chatfull) .trow { padding-bottom: 16px; }
+  #chatfull .trow { padding-bottom: 22px; }
+  :is(#chatpane, #chatfull) .trow .pnewline { margin-bottom: 12px; }
+  :is(#chatpane, #chatfull) .tspace { display: block; }
+  :is(#chatpane, #chatfull) .tearlier { text-align: center; color: var(--muted); font: calc(10.5px * var(--text-scale)) var(--mono); padding: 4px 0; }
+  :is(#chatpane, #chatfull) .md > :first-child { margin-top: 0; }
+  :is(#chatpane, #chatfull) .md > :last-child { margin-bottom: 0; }
+  :is(#chatpane, #chatfull) .tchunk { margin-top: 1em; }
+  :is(#chatpane, #chatfull) .tmore {
+    margin-top: 8px; padding: 3px 10px; border: var(--border) solid var(--accent); border-radius: var(--radius);
+    color: var(--accent); background: var(--card); font: calc(11px * var(--text-scale)) var(--mono); cursor: pointer;
+  }
+  :is(#chatpane, #chatfull) .tmore[disabled] { color: var(--muted); border-color: var(--line); cursor: default; }
   :is(#chatpane, #chatfull) .turn.theirs { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
   :is(#chatpane, #chatfull) .turn.mine { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
   :is(#chatpane, #chatfull) .turn .bubble {

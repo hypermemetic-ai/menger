@@ -15,6 +15,7 @@ use super::*;
 use crate::access::{Access, Held, VerifiedUser, Viewer};
 use crate::address::OrgId;
 use crate::chats::{ChatState, Message};
+use super::chats::{synthetic_message, ChatSeed, Paging};
 use crate::members::Role;
 
 const ADA: &str = "idp:00000000-0000-4000-8000-0000000000ad";
@@ -423,4 +424,72 @@ async fn a_participant_renames_a_chat() {
     let cleared = store.rename_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), Some(" ".into())).await.unwrap();
     assert_eq!(cleared.title, None);
     assert_eq!(store.chat_view(&reader(ADA), c.id).unwrap().title, None);
+}
+
+/// CHAT-8: paging — from the newest end back to the first, and from the
+/// first forward to the newest: every id once, in order, both ways; a
+/// chat says how many it holds.
+#[tokio::test]
+async fn messages_page_back_from_the_newest_and_forward_from_the_first() {
+    let store = kiln().await;
+    let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    let mut posted = Vec::new();
+    for i in 0..23 {
+        posted.push(post(&store, if i % 2 == 0 { ADA } else { BUILDER }, c.id, &format!("m{i}")).await.unwrap().id.get());
+    }
+    let ada = reader(ADA);
+    // Back: the newest page, then `before` its `next` until there is none.
+    let (mut page, mut next) = store.chat_page(&ada, c.id, Paging::Newest, 5).unwrap();
+    assert_eq!(page.iter().map(|m| m.id.get()).collect::<Vec<_>>(), posted[18..], "the newest five, oldest first");
+    let mut back: Vec<u64> = page.iter().map(|m| m.id.get()).collect();
+    while let Some(before) = next {
+        (page, next) = store.chat_page(&ada, c.id, Paging::Before(before), 5).unwrap();
+        let mut ids: Vec<u64> = page.iter().map(|m| m.id.get()).collect();
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "oldest first within a page");
+        ids.extend(back);
+        back = ids;
+    }
+    assert_eq!(back, posted, "back: every id once, in order");
+    assert_eq!(page.len(), 3, "the last page back is what is left");
+    // Forward: `after` from nothing to the newest.
+    let mut fwd = Vec::new();
+    let mut after = Some(0);
+    while let Some(a) = after {
+        let (page, next) = store.chat_page(&ada, c.id, Paging::After(a), 7).unwrap();
+        fwd.extend(page.iter().map(|m| m.id.get()));
+        after = next;
+    }
+    assert_eq!(fwd, posted, "forward: every id once, in order");
+    // Around a message (the read mark, `?at=`): back from just past it, then after it.
+    let at = posted[10];
+    let (before, _) = store.chat_page(&ada, c.id, Paging::Before(at + 1), 3).unwrap();
+    let (after, _) = store.chat_page(&ada, c.id, Paging::After(at), 3).unwrap();
+    let around: Vec<u64> = before.iter().chain(after.iter()).map(|m| m.id.get()).collect();
+    assert_eq!(around, posted[8..14]);
+    // Past either end: empty, and nothing more.
+    assert_eq!(store.chat_page(&ada, c.id, Paging::Before(posted[0]), 5).unwrap(), (Vec::new(), None));
+    assert_eq!(store.chat_page(&ada, c.id, Paging::After(posted[22]), 5).unwrap(), (Vec::new(), None));
+    // The chat says how many it holds; outsiders still find nothing.
+    assert_eq!(store.chat_view(&ada, c.id).unwrap().count, 23);
+    assert_eq!(store.chat_page(&reader(RUI), c.id, Paging::Newest, 5).unwrap_err(), ChatError::NotFound(c.id));
+}
+
+/// CHAT-8: the probe's seed — so many messages, or one long one, between
+/// the reader (who has read it all) and agent:builder; parsed from its flag.
+#[tokio::test]
+async fn synthetic_chats_are_seeded_in_bulk() {
+    assert_eq!("1000".parse::<ChatSeed>(), Ok(ChatSeed::Messages(1000)));
+    assert_eq!("L5000".parse::<ChatSeed>(), Ok(ChatSeed::Lines(5000)));
+    assert!("0".parse::<ChatSeed>().is_err() && "lots".parse::<ChatSeed>().is_err());
+    let store = Store::new();
+    let made = store.seed_synthetic_chats(&SYS, &[ChatSeed::Messages(250), ChatSeed::Lines(120)], ADA).await.unwrap();
+    assert_eq!(made.iter().map(|(_, _, n)| *n).collect::<Vec<_>>(), [250, 1]);
+    let ada = VerifiedUser::for_tests(&Access::for_tests(), ADA.parse().unwrap(), vec![(Held::Everywhere, Role::Viewer)]);
+    let c = store.chat_view(&ada, made[0].1).unwrap();
+    assert_eq!((c.count, c.unread, c.participants.len()), (250, 0, 2));
+    let (page, next) = store.chat_page(&ada, made[0].1, Paging::Newest, 10).unwrap();
+    assert_eq!((page.len(), next.is_some()), (10, true));
+    let lines = store.chat_page(&ada, made[1].1, Paging::Newest, 1).unwrap().0[0].body.lines().filter(|l| l.starts_with("Line ")).count();
+    assert!(lines > 100, "{lines}");
+    assert!(synthetic_message(4).contains("```rust"), "some code");
 }

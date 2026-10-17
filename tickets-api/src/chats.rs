@@ -93,6 +93,15 @@ pub struct Chat {
     pub last_message: Option<MessageId>,
     /// The caller's unread messages in it.
     pub unread: u32,
+    /// CHAT-8: how many messages it holds — the app's spacer for what it
+    /// has not fetched.
+    #[serde(default)]
+    pub count: u64,
+    /// CHAT-8: the caller's read mark — the last message it has read
+    /// (none: nothing read, or not a participant). The app opens a chat
+    /// with more unread than a page around it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark: Option<MessageId>,
     /// The participants waiting on `await_message` for it now (CHAT-1's
     /// "waiting for a message"): who is listening, as the pane shows it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

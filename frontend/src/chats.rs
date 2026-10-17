@@ -38,13 +38,22 @@ use crate::session;
 
 /// How many chats one `list` page asks for (the server's most).
 const PAGE: u32 = 500;
-/// How many messages one `messages` page asks for (the server's most).
-const MESSAGES_PAGE: u32 = 1_000;
 
-/// A chat's messages as the app holds them, oldest first.
+/// A chat's messages as the app holds them, oldest first — CHAT-8: a
+/// contiguous window of them, not the whole chat: fetched from the newest
+/// end (or around a message), grown older or newer a page at a time,
+/// trimmed at the far end (src/window.rs).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Thread {
     pub(crate) list: Vec<Message>,
+    /// Older messages than the first are on the server.
+    pub(crate) older: bool,
+    /// Newer than the last are: the window does not reach the newest, so
+    /// a message arriving does not join it.
+    pub(crate) newer: bool,
+    /// A fetch has set the window. Before one, a message heard is kept for
+    /// the fetch to merge by id.
+    pub(crate) fetched: bool,
 }
 
 impl Thread {
@@ -62,6 +71,78 @@ impl Thread {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn last(&self) -> Option<u64> {
         self.list.last().map(|m| m.id.get())
+    }
+
+    pub(crate) fn first(&self) -> Option<u64> {
+        self.list.first().map(|m| m.id.get())
+    }
+
+    /// The window from the newest end: `page`, with what was heard before
+    /// it merged by id; `older` whether more lie before it.
+    pub(crate) fn at_newest(&mut self, page: Vec<Message>, older: bool) {
+        let kept = if self.fetched { Vec::new() } else { std::mem::take(&mut self.list) };
+        self.list = page;
+        for m in &kept {
+            self.take(m);
+        }
+        (self.older, self.newer, self.fetched) = (older, false, true);
+    }
+
+    /// The window around a message: the page back to it and the page after.
+    pub(crate) fn around(&mut self, back: Vec<Message>, older: bool, ahead: Vec<Message>, newer: bool) {
+        let kept = if self.fetched { Vec::new() } else { std::mem::take(&mut self.list) };
+        self.list = back;
+        for m in &ahead {
+            self.take(m);
+        }
+        if !newer {
+            for m in &kept {
+                self.take(m);
+            }
+        }
+        (self.older, self.newer, self.fetched) = (older, newer, true);
+    }
+
+    /// An older page, put before the first.
+    pub(crate) fn prepend(&mut self, page: Vec<Message>, older: bool) {
+        let mut page = page;
+        page.retain(|m| self.first().is_none_or(|f| m.id.get() < f));
+        page.append(&mut self.list);
+        self.list = page;
+        self.older = older;
+    }
+
+    /// A newer page, put after the last.
+    pub(crate) fn append(&mut self, page: Vec<Message>, newer: bool) {
+        for m in &page {
+            self.take(m);
+        }
+        self.newer = newer;
+    }
+
+    /// `n` dropped from one end, to be fetched again on return.
+    pub(crate) fn drop_side(&mut self, side: crate::scale::Side, n: usize) {
+        let n = n.min(self.list.len());
+        match side {
+            crate::scale::Side::Older => {
+                self.list.drain(..n);
+                self.older = true;
+            }
+            crate::scale::Side::Newer => {
+                self.list.truncate(self.list.len() - n);
+                self.newer = true;
+            }
+        }
+    }
+
+    /// A message heard: it joins a window that reaches the newest (or is
+    /// kept for a fetch to merge); one that does not reach it never
+    /// fetches the history.
+    fn heard(&mut self, m: &Message) -> bool {
+        if self.fetched && self.newer {
+            return false;
+        }
+        self.take(m)
     }
 }
 
@@ -138,7 +219,7 @@ impl Held {
         }
         let id = m.chat.get();
         // Kept though the thread is not fetched yet: the fetch merges by id.
-        let fresh = self.threads.entry(id).or_default().take(m);
+        let fresh = self.threads.entry(id).or_default().heard(m);
         let Some(c) = self.chats.get_mut(&id) else { return fresh };
         if c.last_message.is_some_and(|l| l.get() >= m.id.get()) {
             return fresh;
@@ -153,15 +234,32 @@ impl Held {
         true
     }
 
-    /// A chat's messages fetched: its thread, every message by id once.
+    /// A chat's messages fetched: its thread, every message by id once —
+    /// the whole of it (a test's shorthand for a newest page with nothing older).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn loaded(&mut self, chat: u64, messages: Vec<Message>) {
+        self.named(&messages);
         let t = self.threads.entry(chat).or_default();
-        for m in &messages {
+        let mut sorted = messages;
+        sorted.sort_by_key(|m| m.id.get());
+        sorted.dedup_by_key(|m| m.id.get());
+        t.at_newest(sorted, false);
+    }
+
+    fn named(&mut self, messages: &[Message]) {
+        for m in messages {
             if let Some(name) = &m.name {
                 self.names.insert(m.author.clone(), name.clone());
             }
-            t.take(m);
         }
+    }
+
+    /// CHAT-8: the thread of `chat`, changed by `f` — its window, with the
+    /// names its messages carry.
+    pub(crate) fn with_thread(&mut self, chat: u64, f: impl FnOnce(&mut Thread)) {
+        f(self.threads.entry(chat).or_default());
+        let list = self.threads.get(&chat).map(|t| t.list.clone()).unwrap_or_default();
+        self.named(&list);
     }
 
     pub(crate) fn get(&self, id: u64) -> Option<&Chat> {
@@ -387,35 +485,102 @@ fn fetch() {
 }
 
 /// The pane shows `chat`: its messages fetched, once per connection.
-pub(crate) fn load(chat: u64) {
+/// CHAT-8: the first window of `chat`'s messages, once per connection —
+/// the newest page of `size`, or (`at`) the page back to that message and
+/// the page after it.
+pub(crate) fn load(chat: u64, size: u32, at: Option<u64>) {
     if ASKED.with(|a| a.borrow().contains(&chat)) {
         return;
     }
     let Some(client) = session::chats_client() else { return };
     ASKED.with(|a| a.borrow_mut().push(chat));
     spawn_local(async move {
-        let mut all = Vec::new();
-        let mut after = None;
-        loop {
-            let Ok(events) = client.messages_all(ChatId::new(chat), after, Some(MESSAGES_PAGE)).await else {
-                ASKED.with(|a| a.borrow_mut().retain(|c| *c != chat));
-                return;
-            };
-            let mut next = None;
-            for ev in events {
-                match ev {
-                    ChatsEvent::Message { message } => all.push(message),
-                    ChatsEvent::Page { next: n } => next = n,
-                    _ => {}
-                }
-            }
-            match next {
-                Some(n) => after = Some(MessageId::new(n)),
-                None => break,
-            }
-        }
-        HELD.with(|s| s.update(|h| h.get_or_insert_with(Held::default).loaded(chat, all)));
+        let fetched = match at {
+            None => page(&client, chat, Paging::Newest, size).await.map(|(p, next)| (p, next.is_some(), Vec::new(), false)),
+            Some(m) => match page(&client, chat, Paging::Before(m + 1), size).await {
+                Ok((back, older)) => page(&client, chat, Paging::After(m), size).await.map(|(ahead, newer)| (back, older.is_some(), ahead, newer.is_some())),
+                Err(()) => Err(()),
+            },
+        };
+        let Ok((back, older, ahead, newer)) = fetched else {
+            ASKED.with(|a| a.borrow_mut().retain(|c| *c != chat));
+            return;
+        };
+        HELD.with(|s| s.update(|h| h.get_or_insert_with(Held::default).with_thread(chat, |t| if at.is_some() { t.around(back, older, ahead, newer) } else { t.at_newest(back, older) })));
     });
+}
+
+/// CHAT-8: the page before the first held (`Side::Older`) or after the
+/// last (`Side::Newer`), put in the window; whether one came.
+pub(crate) async fn grow(chat: u64, side: crate::scale::Side, size: u32) -> bool {
+    let Some(client) = session::chats_client() else { return false };
+    let edge = HELD.with(|s| s.with_untracked(|h| h.as_ref().and_then(|h| h.thread(chat)).map(|t| (t.first(), t.last()))));
+    let Some((Some(first), Some(last))) = edge else { return false };
+    let paging = match side {
+        crate::scale::Side::Older => Paging::Before(first),
+        crate::scale::Side::Newer => Paging::After(last),
+    };
+    let Ok((got, next)) = page(&client, chat, paging, size).await else { return false };
+    let came = !got.is_empty();
+    HELD.with(|s| {
+        s.try_update(|h| {
+            h.get_or_insert_with(Held::default).with_thread(chat, |t| match side {
+                crate::scale::Side::Older => t.prepend(got, next.is_some()),
+                crate::scale::Side::Newer => t.append(got, next.is_some()),
+            })
+        })
+    });
+    came
+}
+
+/// CHAT-8: **jump to latest** from a window that stops short of the
+/// newest — the newest page fetched again, the window put there.
+pub(crate) fn jump_newest(chat: u64, size: u32) {
+    let Some(client) = session::chats_client() else { return };
+    spawn_local(async move {
+        let Ok((got, next)) = page(&client, chat, Paging::Newest, size).await else { return };
+        HELD.with(|s| {
+            s.try_update(|h| {
+                h.get_or_insert_with(Held::default).with_thread(chat, |t| {
+                    *t = Thread::default();
+                    t.at_newest(got, next.is_some());
+                })
+            })
+        });
+    });
+}
+
+/// CHAT-8: `n` messages dropped from one end of `chat`'s window.
+pub(crate) fn drop_side(chat: u64, side: crate::scale::Side, n: usize) {
+    HELD.with(|s| s.update(|h| h.get_or_insert_with(Held::default).with_thread(chat, |t| t.drop_side(side, n))));
+}
+
+/// Which way a page runs.
+#[derive(Clone, Copy)]
+enum Paging {
+    Newest,
+    Before(u64),
+    After(u64),
+}
+
+/// One `messages` page, oldest first, and its `next`.
+async fn page(client: &menger_tickets_api::ChatsClient<std::rc::Rc<plexus_client::WsTransport>>, chat: u64, paging: Paging, size: u32) -> Result<(Vec<Message>, Option<u64>), ()> {
+    let (after, before, newest) = match paging {
+        Paging::Newest => (None, None, Some(true)),
+        Paging::Before(b) => (None, Some(MessageId::new(b)), None),
+        Paging::After(a) => (Some(MessageId::new(a)), None, None),
+    };
+    let events = client.messages_all(ChatId::new(chat), after, before, newest, Some(size)).await.map_err(|_| ())?;
+    let mut out = Vec::new();
+    let mut next = None;
+    for ev in events {
+        match ev {
+            ChatsEvent::Message { message } => out.push(message),
+            ChatsEvent::Page { next: n } => next = n,
+            _ => {}
+        }
+    }
+    Ok((out, next))
 }
 
 /// The one answer a write gives, applied at once — or what the server said
@@ -515,6 +680,8 @@ pub(crate) mod tests {
             last_at: 100,
             last_message: None,
             unread: 0,
+            count: 0,
+            mark: None,
             waiting: Vec::new(),
         }
     }
@@ -603,6 +770,35 @@ pub(crate) mod tests {
         let again = settle(vec![ChatsEvent::Chat { chat: chat(41, "KILN-7", &["ada", "builder"]) }], &[ChatsEvent::Posted { message: msg(4, 41, "builder", "d") }], "ada", Some(&h));
         assert_eq!(again.thread(41).unwrap().last(), Some(4));
         assert_eq!(again.get(41).unwrap().unread, 1);
+    }
+
+    /// CHAT-8: the window — the newest page (with a post heard before it
+    /// merged), older pages put before it, the far end dropped; a message
+    /// arriving joins only a window that reaches the newest.
+    #[test]
+    fn a_thread_is_a_window() {
+        let ids = |t: &Thread| t.list.iter().map(|m| m.id.get()).collect::<Vec<_>>();
+        let page = |r: std::ops::RangeInclusive<u64>| r.map(|i| msg(i, 41, "ada", "x")).collect::<Vec<_>>();
+        let mut t = Thread::default();
+        assert!(t.heard(&msg(31, 41, "builder", "early")), "before a fetch, kept for it");
+        t.at_newest(page(21..=30), true);
+        assert_eq!(ids(&t), (21..=31).collect::<Vec<_>>());
+        assert!(t.older && !t.newer && t.fetched);
+        t.prepend(page(11..=20), true);
+        t.prepend(page(1..=10), false);
+        assert_eq!(ids(&t), (1..=31).collect::<Vec<_>>());
+        assert!(!t.older);
+        assert!(t.heard(&msg(32, 41, "builder", "live")), "it reaches the newest: joined");
+        t.drop_side(crate::scale::Side::Newer, 12);
+        assert_eq!((t.last(), t.newer), (Some(20), true));
+        assert!(!t.heard(&msg(33, 41, "builder", "later")), "short of the newest: not joined, no history fetched");
+        t.append(page(21..=33), false);
+        t.drop_side(crate::scale::Side::Older, 20);
+        assert_eq!((t.first(), t.older, t.last()), (Some(21), true, Some(33)));
+        // Around a message: the page back to it and the page after.
+        let mut a = Thread::default();
+        a.around(page(48..=50), true, page(51..=53), true);
+        assert_eq!((ids(&a), a.older, a.newer), ((48..=53).collect::<Vec<_>>(), true, true));
     }
 
     #[test]

@@ -47,7 +47,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::chats::{self, short, Held};
-use crate::{dom, fmt_unix, turns};
+use crate::{dom, fmt_unix, scale, turns};
 
 /// What the pane shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +73,12 @@ pub(crate) struct Shown {
 pub(crate) const DISMISS_PX: f64 = 80.0;
 
 /// `chat=<id>` in a route's query.
+/// CHAT-8: `?at=MSG` — open the chat at that message.
+pub(crate) fn at_in(hash: &str) -> Option<u64> {
+    let (_, q) = hash.split_once('?')?;
+    q.split('&').find_map(|p| p.strip_prefix("at=")).and_then(|v| v.parse().ok())
+}
+
 pub(crate) fn chat_in(hash: &str) -> Option<u64> {
     let (_, q) = hash.split_once('?')?;
     q.split('&').find_map(|p| p.strip_prefix("chat=")).and_then(|v| v.parse().ok())
@@ -450,27 +456,50 @@ pub(crate) fn Grab(target: &'static str, dismiss: Callback<()>) -> impl IntoView
 /// reopen. CHAT-7: the same view in the dock and full screen (`full`).
 #[component]
 pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) -> impl IntoView {
-    chats::load(id);
     let held = chats::signal();
     let chat = {
         let held = held.clone();
         Memo::new(move |_| held.with(|h| h.as_ref().and_then(|h| h.get(id).cloned())))
     };
-    let thread = {
+    // CHAT-8: the window of messages held (src/window.rs), not the chat.
+    let window_t = {
         let held = held.clone();
-        Memo::new(move |_| held.with(|h| h.as_ref().and_then(|h| h.thread(id).map(|t| t.list.clone()))).unwrap_or_default())
+        Memo::new(move |_| held.with(|h| h.as_ref().and_then(|h| h.thread(id).cloned())).unwrap_or_default())
     };
-    // The read mark as the chat opened: the *new* line, and what arrives after.
+    let thread = Memo::new(move |_| window_t.with(|t| t.list.clone()));
+    // A page is sized to the window; the first is the newest, or the page
+    // around the read mark (more unread than a page), or `?at=MSG`.
+    let size = scale::page_size(dom::window().inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(900.0));
+    let at_url = at_in(&dom::window().location().hash().unwrap_or_default());
+    let started = StoredValue::new(false);
+    Effect::new(move |_| {
+        let Some(c) = chat.get() else { return };
+        if started.get_value() {
+            return;
+        }
+        started.set_value(true);
+        let around = at_url.or_else(|| (c.unread > size).then_some(c.mark.map(|m| m.get())).flatten());
+        chats::load(id, size, around);
+    });
+    // The read mark as the chat opened: the *new* line (the first message
+    // after the mark), what arrives after it, and where opening lands.
     let mark = StoredValue::new(None::<(Option<u64>, u64)>);
+    let landing = StoredValue::new(None::<turns::Landing>);
     Effect::new(move |_| {
         if mark.get_value().is_some() {
             return;
         }
-        let (Some(c), list) = (chat.get(), thread.get()) else { return };
-        if c.last_message.is_some() && list.is_empty() {
+        let Some(c) = chat.get() else { return };
+        let fetched = window_t.with(|t| t.fetched);
+        if !fetched && c.last_message.is_some() {
             return; // not fetched yet
         }
-        mark.set_value(Some((new_from(&list, c.unread), list.last().map_or(0, |m| m.id.get()))));
+        let (new_at, last) = window_t.with(|t| (c.mark.map(|m| m.get()).and_then(|m| t.list.iter().find(|x| x.id.get() > m)).filter(|_| c.unread > 0).map(|x| x.id.get()), t.last().unwrap_or(0)));
+        mark.set_value(Some((new_at, last)));
+        landing.set_value(Some(match at_url.or(new_at) {
+            Some(m) => turns::Landing::At(m),
+            None => turns::Landing::Newest,
+        }));
     });
     // Reading: what is shown is read, up to its last message.
     let sent = StoredValue::new(0u64);
@@ -488,48 +517,185 @@ pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) ->
             }
         });
     });
-    // CHAT-7: manifest's two scroll rules (src/turns.rs's Scroll).
+    // CHAT-8: the virtual list — only what is within two viewports of the
+    // visible is mounted, the rest spacers of measured heights; and the
+    // scroll held on what is being read through every change (CHAT-7's
+    // rules, src/turns.rs's Scroll, on top).
     let list_ref = NodeRef::<leptos::html::Div>::new();
+    let rows_ref = NodeRef::<leptos::html::Div>::new();
+    let heights = RwSignal::new(std::collections::HashMap::<u64, f64>::new());
+    let view_h = RwSignal::new(0.0f64);
+    let rel_top = RwSignal::new(0.0f64);
+    let layout = Memo::new(move |_| heights.with(|h| scale::Layout::new(thread.with(|t| t.iter().map(|m| m.id.get()).collect()), h)));
+    let range = Memo::new(move |_| layout.with(|l| l.mounted(rel_top.get(), view_h.get().max(1.0))));
+    let mounted = Memo::new(move |_| {
+        let (i0, i1) = range.get();
+        thread.with(|t| t.get(i0..i1).map(<[Message]>::to_vec).unwrap_or_default())
+    });
+    let space_above = Memo::new(move |_| layout.with(|l| l.tops.get(range.get().0).copied().unwrap_or(0.0)));
+    let space_below = Memo::new(move |_| layout.with(|l| l.total() - l.tops.get(range.get().1).copied().unwrap_or(l.total())));
     let scroll = StoredValue::new(turns::Scroll::default());
     let arrow = RwSignal::new(None::<String>);
-    let seen_len = StoredValue::new(0usize);
-    let to_bottom = move || {
-        if let Some(el) = list_ref.get_untracked() {
+    let anchor = StoredValue::new(None::<(u64, f64)>);
+    let stick = StoredValue::new(true);
+    let landed = StoredValue::new(false);
+    let fetching = StoredValue::new(false);
+    let seen_last = StoredValue::new(0u64);
+    // When the view last set the scroll itself: the scroll events that
+    // follow are its own, not the reader's.
+    let ours = StoredValue::new(0.0f64);
+    // Where the list begins inside the scroller's content.
+    let list_offset = move || -> Option<(web_sys::HtmlDivElement, f64)> {
+        let el = list_ref.get_untracked()?;
+        let rows = rows_ref.get_untracked()?;
+        let off = rows.get_bounding_client_rect().top() - el.get_bounding_client_rect().top() + f64::from(el.scroll_top());
+        Some((el, off))
+    };
+    let read_scroll = move || {
+        let Some((el, off)) = list_offset() else { return };
+        view_h.set(f64::from(el.client_height()));
+        rel_top.set(f64::from(el.scroll_top()) - off);
+    };
+    // Measure what is mounted: each row's height, once it differs.
+    let measure = move || {
+        let Some(rows) = rows_ref.get_untracked() else { return };
+        let Ok(list) = rows.query_selector_all(".trow") else { return };
+        let mut changed = Vec::new();
+        for i in 0..list.length() {
+            let Some(el) = list.item(i).and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok()) else { continue };
+            let Some(mid) = el.get_attribute("data-mid").and_then(|v| v.parse::<u64>().ok()) else { continue };
+            let h = el.get_bounding_client_rect().height();
+            if heights.with_untracked(|m| m.get(&mid).is_none_or(|old| (old - h).abs() > 0.5)) {
+                changed.push((mid, h));
+            }
+        }
+        if !changed.is_empty() {
+            heights.update(|m| m.extend(changed));
+        }
+    };
+    // After any change of the list or a height: land once, else stick to
+    // the bottom, else put the anchor back.
+    let settle_scroll = move || {
+        let Some((el, off)) = list_offset() else { return };
+        let total = layout.with_untracked(scale::Layout::total);
+        if !landed.get_value() {
+            let Some(l) = landing.get_value() else { return };
+            if !window_t.with_untracked(|t| t.fetched) {
+                return;
+            }
+            landed.set_value(true);
+            scroll.update_value(|s| {
+                s.land(None);
+            });
+            match l {
+                turns::Landing::Newest => stick.set_value(true),
+                turns::Landing::At(m) => {
+                    stick.set_value(false);
+                    anchor.set_value(Some((m, -40.0)));
+                }
+            }
+        }
+        if stick.get_value() {
+            ours.set_value(js_sys::Date::now());
             el.set_scroll_top(el.scroll_height());
+        } else if let Some(y) = anchor.get_value().and_then(|a| layout.with_untracked(|l| l.restore(a))) {
+            ours.set_value(js_sys::Date::now());
+            el.set_scroll_top((off + y).round() as i32);
+        }
+        let _ = total;
+        read_scroll();
+    };
+    // CHAT-8: grow the window as you near its edge, trim its far end.
+    let grow = move |side: scale::Side| {
+        if fetching.get_value() {
+            return;
+        }
+        fetching.set_value(true);
+        spawn_local(async move {
+            chats::grow(id, side, size).await;
+            fetching.try_set_value(false);
+            // What is held stays bounded: the far end goes.
+            let (n, (i0, i1)) = (thread.with_untracked(Vec::len), range.get_untracked());
+            if let Some((far, k)) = scale::trim(n, i0, i1, size as usize) {
+                chats::drop_side(id, far, k);
+            }
+        });
+    };
+    let near_edges = move || {
+        let (rel, vh) = (rel_top.get_untracked(), view_h.get_untracked());
+        let total = layout.with_untracked(scale::Layout::total);
+        let (older, newer) = window_t.with_untracked(|t| (t.older, t.newer));
+        if older && rel < vh {
+            grow(scale::Side::Older);
+        } else if newer && total - (rel + vh) < vh {
+            grow(scale::Side::Newer);
         }
     };
     Effect::new(move |_| {
-        let n = thread.with(Vec::len);
-        chat.track();
-        let Some(marked) = mark.get_value() else { return };
-        let before = seen_len.get_value();
-        seen_len.set_value(n);
+        layout.track();
+        window_t.track();
         spawn_local(async move {
-            // After the turns are drawn.
             dom::sleep_ms(0).await;
-            let Some(el) = list_ref.get_untracked() else { return };
-            if let Some(landing) = scroll.try_update_value(|s| s.land(marked.0)).flatten() {
-                land_at(&el, landing);
-                // Once more as code highlights and cards settle — still the landing.
-                dom::sleep_ms(120).await;
-                land_at(&el, landing);
-            } else if n > before && scroll.try_update_value(|s| s.arrived((n - before) as u32)).unwrap_or(false) {
-                el.set_scroll_top(el.scroll_height());
-            }
-            arrow.try_set(scroll.try_with_value(turns::Scroll::arrow).flatten());
+            settle_scroll();
+            measure();
+            near_edges();
         });
+    });
+    // Arrivals at the bottom: kept there when you were; else counted.
+    Effect::new(move |_| {
+        let last = thread.with(|t| t.last().map_or(0, |m| m.id.get()));
+        let before = seen_last.get_value();
+        seen_last.set_value(last);
+        if !landed.get_value() || before == 0 || last <= before {
+            return;
+        }
+        let n = thread.with(|t| t.iter().filter(|m| m.id.get() > before).count()) as u32;
+        if !scroll.try_update_value(|s| s.arrived(n)).unwrap_or(true) {
+            arrow.set(scroll.with_value(turns::Scroll::arrow));
+        }
+    });
+    // A row's height changes after it mounts (code highlighted, a long
+    // message shown whole): measured again, the scroll held.
+    rows_ref.on_load(move |el| {
+        let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || measure());
+        if let Ok(obs) = web_sys::MutationObserver::new(cb.as_ref().unchecked_ref()) {
+            let init = web_sys::MutationObserverInit::new();
+            init.set_child_list(true);
+            init.set_subtree(true);
+            let _ = obs.observe_with_options(&el, &init);
+            on_cleanup(move || obs.disconnect());
+        }
+        cb.forget();
     });
     let on_scroll = move |_| {
         let Some(el) = list_ref.get_untracked() else { return };
+        read_scroll();
+        if js_sys::Date::now() - ours.get_value() < 80.0 {
+            // The view's own move: what is mounted follows, nothing else.
+            near_edges();
+            return;
+        }
         let at = !turns::off_bottom(f64::from(el.scroll_height()), f64::from(el.scroll_top()), f64::from(el.client_height()));
+        stick.set_value(at && !window_t.with_untracked(|t| t.newer));
+        anchor.set_value(layout.with_untracked(|l| l.anchor(rel_top.get_untracked())));
         scroll.update_value(|s| s.moved(at));
         arrow.set(scroll.with_value(turns::Scroll::arrow));
+        near_edges();
     };
     let jump = move |_| {
-        to_bottom();
+        if window_t.with_untracked(|t| t.newer) {
+            // The window stops short of the newest: fetch the newest again.
+            chats::jump_newest(id, size);
+        }
+        stick.set_value(true);
+        if let Some(el) = list_ref.get_untracked() {
+            ours.set_value(js_sys::Date::now());
+            el.set_scroll_top(el.scroll_height());
+        }
         scroll.update_value(|s| s.moved(true));
         arrow.set(None);
     };
+    let loading_earlier = Memo::new(move |_| window_t.with(|t| t.older) && thread.with(|t| !t.is_empty()));
     let body = RwSignal::new(String::new());
     let adding = RwSignal::new(false);
     let name = names();
@@ -599,7 +765,7 @@ pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) ->
             let mid = m.id.get();
             let line = (new_at == Some(mid)).then(|| view! { <div class="pnewline" role="separator">"new"</div> });
             let mine = m.author == me;
-            view! { {line}{turn_view(m, mine, mid > seen, &name)} }
+            view! { <div class="trow" data-mid=mid.to_string()>{line}{turn_view(m, mine, mid > seen, &name)}</div> }
         }
     };
     let waits = {
@@ -671,8 +837,13 @@ pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) ->
             })}
             <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=on_scroll on:click=acts>
                 <div class="tcol">
+                    {move || loading_earlier.get().then(|| view! { <div class="tearlier" role="status">"loading earlier…"</div> })}
                     {empty}
-                    <For each=move || thread.get() key=|m| m.id.get() children=rows />
+                    <div class="tlist" node_ref=rows_ref data-first=move || thread.with(|t| t.first().map_or(0, |m| m.id.get())).to_string() data-held=move || thread.with(Vec::len).to_string()>
+                        <div class="tspace" style=move || format!("height:{:.0}px", space_above.get())></div>
+                        <For each=move || mounted.get() key=|m| m.id.get() children=rows />
+                        <div class="tspace" style=move || format!("height:{:.0}px", space_below.get())></div>
+                    </div>
                     {waits}
                 </div>
             </div>
@@ -686,21 +857,6 @@ pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) ->
             }}
             {move || foot().map(|f| view! { <p class="sfoot">{f}</p> })}
         </div>
-    }
-}
-
-/// Opening's landing, at once and without animation.
-fn land_at(el: &web_sys::HtmlDivElement, landing: turns::Landing) {
-    match landing {
-        turns::Landing::Newest => el.set_scroll_top(el.scroll_height()),
-        turns::Landing::At(m) => {
-            let target = el.query_selector(&format!("[data-message-id=\"{m}\"]")).ok().flatten().and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok());
-            match target {
-                // The *new* line sits just above it.
-                Some(t) => el.set_scroll_top((t.offset_top() - el.offset_top() - 40).max(0)),
-                None => el.set_scroll_top(el.scroll_height()),
-            }
-        }
     }
 }
 
@@ -750,12 +906,61 @@ fn turn_view(m: Message, mine: bool, fresh: bool, name: &impl Fn(&str) -> String
     let agent = chats::is_agent(&m.author) || m.via.is_some();
     // A ticket card follows its row: drawn once the app holds the ticket,
     // its status live.
+    // CHAT-8: past 200 lines, the head and *show all N lines*, the rest
+    // rendered a chunk of blocks a task (src/scale.rs's split_long).
+    let (head, rest, lines) = {
+        let (h, r, n) = scale::split_long(&m.body);
+        (h.to_string(), r.into_iter().map(str::to_string).collect::<Vec<_>>(), n)
+    };
     let html = {
-        let m = m.clone();
+        let head = head.clone();
         Memo::new(move |_| {
             let card = |code: &str| crate::cache::find(code).map(|r| r.with(|t| (t.title.clone(), t.status.to_string())));
-            turns::body_html(&m, &card)
+            turns::source_html(&head, &card)
         })
+    };
+    let chunks = RwSignal::new(Vec::<String>::new());
+    let showing = RwSignal::new(false);
+    let rest = StoredValue::new(rest);
+    let show_all = move |_| {
+        if showing.get_untracked() {
+            return;
+        }
+        showing.set(true);
+        spawn_local(async move {
+            let parts = rest.try_get_value().unwrap_or_default();
+            for part in parts {
+                let card = |code: &str| crate::cache::get(code).map(|r| r.with_untracked(|t| (t.title.clone(), t.status.to_string())));
+                let h = turns::source_html(&part, &card);
+                if chunks.try_update(|c| c.push(h)).is_none() {
+                    return;
+                }
+                // One chunk a task: the page answers between them.
+                dom::sleep_ms(0).await;
+            }
+            showing.try_set(false);
+        });
+    };
+    let more = move || {
+        let n = rest.with_value(Vec::len);
+        let done = chunks.with(Vec::len) >= n;
+        (n > 0 && !done).then(|| {
+            view! {
+                <button type="button" class="tmore" disabled=move || showing.get() on:click=show_all>
+                    {move || if showing.get() { format!("showing all {lines} lines…") } else { format!("show all {lines} lines") }}
+                </button>
+            }
+        })
+    };
+    let tail = move || {
+        view! {
+            <For each=move || 0..chunks.with(Vec::len) key=|i| *i children=move |i| {
+                let h = chunks.with_untracked(|c| c.get(i).cloned().unwrap_or_default());
+                let node = NodeRef::<leptos::html::Div>::new();
+                node.on_load(|el: web_sys::HtmlDivElement| crate::highlight::mount(&el));
+                view! { <div class="md tchunk" data-links="chat" node_ref=node inner_html=h></div> }
+            } />
+        }
     };
     let node = NodeRef::<leptos::html::Div>::new();
     Effect::new(move |_| {
@@ -775,7 +980,11 @@ fn turn_view(m: Message, mine: bool, fresh: bool, name: &impl Fn(&str) -> String
     if mine {
         view! {
             <div class="turn mine pmsg" class:fresh=fresh data-message-id=mid>
-                <div class="bubble md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
+                <div class="bubble">
+                    <div class="md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
+                    {tail}
+                    {more}
+                </div>
                 <div class="tmeta"><span title=fmt_unix(m.at)>{format!("{who} · {}", clock(m.at))}</span>{acts}</div>
             </div>
         }
@@ -791,7 +1000,11 @@ fn turn_view(m: Message, mine: bool, fresh: bool, name: &impl Fn(&str) -> String
                         {m.via.clone().map(|v| view! { <span class="via" title=v.clone()>{format!("via {}", short(&v))}</span> })}
                         <span class="t" title=fmt_unix(m.at)>{clock(m.at)}</span>
                     </div>
-                    <div class="pmb md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
+                    <div class="pmb">
+                        <div class="md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
+                        {tail}
+                        {more}
+                    </div>
                     {acts}
                 </div>
             </div>

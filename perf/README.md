@@ -7,6 +7,17 @@ measures every user-visible path against a release `menger` on ephemeral
 ports, and writes `plans/PERF/artifacts/MAGNITUDE-<date>.md` with the raw
 JSON and screenshots beside it.
 
+**The chat probe** (CHAT-8, `chat-probe.mjs`): a chat of 10, 1,000, 10,000
+and 100,000 messages and one message of 5,000 and 50,000 lines, seeded by
+the server (`--seed-synthetic-chat`), the app signed in at 1440×900, held to
+CHAT-8's budgets (open → painted, mounted and DOM flat across sizes, older
+pages, long tasks, show all, a writer at 20/s); FAIL rows and a report with
+its raw JSON in `--out` (default `perf/out/chat`):
+
+```sh
+node perf/chat-probe.mjs --dist /path/to/trunk-dist [--bin PATH] [--runs 5] [--writer-secs 30]
+```
+
 ```sh
 cd perf
 npm install                       # playwright, pinned in package-lock.json

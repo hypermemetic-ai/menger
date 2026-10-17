@@ -5483,7 +5483,7 @@ mod replies;
 pub use replies::{comment_on, reply_key, Awaiting};
 /// CHAT-3: chats on a ticket among participants — opened, posted, read.
 mod chats;
-pub use chats::{ChatChange, ChatError, ChatQuery, ChatRecord, MessageWait, Signer, Standing};
+pub use chats::{ChatChange, ChatError, ChatQuery, ChatRecord, ChatSeed, MessageWait, Paging, Signer, Standing};
 pub use deployments::{DeployPage, DeployQuery, Due, RequestAsk};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
