@@ -101,7 +101,7 @@ pub async fn build_rpc_offering(
     let providers: Vec<AuthProvider> =
         offers.iter().map(|o| AuthProvider { name: o.name.clone(), kind: AuthKind::Browser, label: None }).collect();
     let backend = Arc::new(MengerAuth::new(access.clone(), providers, None, crate::login_access::BRANDING.app));
-    build_rpc_login(db_path, seed, shape, offers, access, backend, None, menger_tickets_api::store::BODY_MAX_DEFAULT).await
+    build_rpc_login(db_path, seed, shape, offers, access, backend, None, menger_tickets_api::store::BODY_MAX_DEFAULT, Vec::new()).await
 }
 
 /// AUTH-7: the hub, the protocol's gate in front of every call and its
@@ -121,6 +121,7 @@ pub async fn build_rpc_login(
     backend: Arc<dyn AuthBackend>,
     resource_metadata: Option<String>,
     body_max: usize,
+    chat_members: Vec<String>,
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
@@ -187,7 +188,17 @@ pub async fn build_rpc_login(
     // DEPLOY-25: each deploy request POSTed to its environment's webhook.
     crate::webhooks::spawn(Arc::clone(&store), Arc::clone(&system));
     // IDENTITY-21: the members that decide, from the same store.
+    let seating = Arc::clone(&system);
     access.attach_with(Arc::clone(&store), system);
+    // CHAT-13: the standing chat members (`--chat-member`), in every chat
+    // opened from now and seated in every open chat now — once: a chat
+    // that holds them is not written again.
+    if !chat_members.is_empty() {
+        store.set_chat_members(chat_members);
+        let reads = |p: &str, key: &str| access.reads_ticket(p, key, &store);
+        let seated = store.seat_chat_members(&seating, reads).await.map_err(|e| anyhow::anyhow!("seating the standing chat members failed: {e:?}"))?;
+        tracing::info!("CHAT-13: standing chat members {:?}; seated in {} open chat(s)", store.chat_members(), seated.len());
+    }
     let tickets = TicketsActivation::with_access(Arc::clone(&store), access.clone());
     let mut hub = DynamicHub::new("menger")
         .register(tickets)

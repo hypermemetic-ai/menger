@@ -3308,7 +3308,14 @@ a throwaway login-on server, `tests/throwaway.mjs WORKDIR [--real]`.
   key must be granted on whichever tracker it names.
 - **Who it signs in as:** the builder's key (`MENGER_KEY_FILE`,
   `~/.plexus/keys/builder.key`), a key proof at each upgrade. It watches
-  the chats the builder is **in** — a chat for it names the builder.
+  the chats the builder is **in** — and the builder is in every chat
+  (CHAT-13): the server's `--chat-member PRINCIPAL` (repeatable;
+  `MENGER_CHAT_MEMBERS`, `;`-separated) is a participant of every chat
+  opened, a chat of one too, and is seated in every open chat at startup
+  (once, an `added` participant signed `system`). One without read on a
+  chat's ticket is added anyway, with a warning in the log. A chat names
+  them in `agents`, and the app draws them as agents. `app-prod.env` and
+  `app-test.env` set it to the builder's key.
 - **Who it answers:** the principals in `~/.config/menger/chat-bridge.allow`,
   one a line (`#` comments), read on every message — an edit needs no
   restart. RUN-13's admin bootstrap appends the owner's production

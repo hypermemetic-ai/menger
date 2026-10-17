@@ -162,6 +162,7 @@ impl Held {
         let mut held = Held::default();
         for ev in events {
             if let ChatsEvent::Chat { chat } = ev {
+                note_agents(&chat);
                 held.chats.insert(chat.id.get(), chat);
             }
         }
@@ -177,6 +178,7 @@ impl Held {
                 if self.chats.get(&id) == Some(chat) {
                     return false;
                 }
+                note_agents(chat);
                 self.chats.insert(id, chat.clone());
                 true
             }
@@ -352,13 +354,24 @@ pub(crate) fn short(principal: &str) -> String {
     }
 }
 
-/// Whether `principal` is an agent (AGENT-1's `agent:<name>`): marked in
+/// Whether `principal` is an agent (AGENT-1's `agent:<name>`, or CHAT-13's
+/// standing chat member, which a chat names in its `agents`): marked in
 /// the participants row and on its messages.
 pub(crate) fn is_agent(principal: &str) -> bool {
-    principal.starts_with("agent:")
+    principal.starts_with("agent:") || AGENTS.with(|a| a.borrow().contains(principal))
+}
+
+/// CHAT-13: the standing members `chat` names, kept as agents for the
+/// session — a principal the server seats in every chat is one everywhere.
+fn note_agents(chat: &Chat) {
+    if !chat.agents.is_empty() {
+        AGENTS.with(|a| a.borrow_mut().extend(chat.agents.iter().cloned()));
+    }
 }
 
 thread_local! {
+    /// CHAT-13: the standing chat members heard of ([`note_agents`]).
+    static AGENTS: RefCell<std::collections::BTreeSet<String>> = const { RefCell::new(std::collections::BTreeSet::new()) };
     static HELD: ArcRwSignal<Option<Held>> = ArcRwSignal::new(None);
     static WANTED: Cell<bool> = const { Cell::new(false) };
     static FETCH: Cell<u32> = const { Cell::new(0) };
@@ -683,6 +696,7 @@ pub(crate) mod tests {
             count: 0,
             mark: None,
             waiting: Vec::new(),
+            agents: Vec::new(),
         }
     }
 
@@ -807,5 +821,11 @@ pub(crate) mod tests {
         assert_eq!(short("anonymous"), "anonymous");
         assert_eq!(short("agent:builder"), "agent:builder");
         assert!(is_agent("agent:builder") && !is_agent("idp:ada"));
+        // CHAT-13: a standing member a chat names is an agent from then on.
+        assert!(!is_agent("key:54a9"));
+        let mut seated = chat(9, "KILN-7", &["idp:ada", "key:54a9"]);
+        seated.agents = vec!["key:54a9".into()];
+        Held::from_events([ChatsEvent::Chat { chat: seated }]);
+        assert!(is_agent("key:54a9") && !is_agent("idp:ada"));
     }
 }
