@@ -441,12 +441,20 @@ ticked under it are excluded — and-ed: Kind, `is not`, doc and spike is
 ticks `not ready`.
 
 **The filter panel** (FILTER-39, FILTER-38's mockups; `src/filter.rs`,
-`src/ors.rs`) is every bar's one builder. The bar is one line: the `Filter`
-button, a chevron, the query's **name** (a field; empty, "unnamed query"),
-its canonical text (on a surface the global filter's first, muted), then
-`text`, `reset`, Make global (the nav) and `Saved ▾`. The button, the
-chevron, a click on the text, <kbd>f</kbd> (<kbd>F</kbd> the global one)
-open the panel **in the page's flow** under the bar — the board moves down
+`src/ors.rs`) is every bar's one builder. Over each surface sits **the
+chips line** (FILTER-41): the `Filter` button (its badge the number of
+clauses), the global filter as a dashed chip, the surface's clauses as
+chips — the field muted, the value inked, × to take one out, a click to
+open its section — with **and** between them and **or** between the groups
+(each group boxed when there are two or more), the surface's own clauses
+(the wave board's, the inputs page's) as chips beside them, the count
+(*11 of 45*) and `save as…`. Empty, it says what is shown (*all 41
+tickets*) and offers the saved filters the reader uses most (the recently
+used first), each counted — a click applies one, bound by its name (with
+none saved yet, three of FILTER-27's suggestions). The name field, `text`
+and `Saved ▾` are gone from it: text is the panel's foot, choosing is the
+panel's Saved section or a chip here. The button, <kbd>f</kbd>
+(<kbd>F</kbd> the global one) open the panel **in the page's flow** under the bar — the board moves down
 under it, nothing floats over it — and fold it again; Escape folds it.
 
 **One panel for every level** (FILTER-40): its head holds a tab per level —
@@ -531,16 +539,16 @@ on the owner is the saved filter named "Needs you"
 (`VIEW/_MENGER/view/needs-you`; until one is saved, the default
 `(queued or asking or label needs-you)` — MENGER-39's queue first). `g n`,
 or a click on the header's **needs you N**, puts it on the nav exactly as
-`Saved ▾` puts a saved filter there (the nav's own clauses replaced; its
-pills, its text and the URL's `n=` following), focuses the nav's first row,
+a saved filter's chip puts it on a surface (the nav's own clauses replaced;
+its chips, its text and the URL's `n=` following), focuses the nav's first row,
 and leaves the route where it is. The nav shows `global and nav`
 (FILTER-21), so the global filter reaches it: filtered to one shortcode,
 the nav shows what waits on the owner there. The same press while the nav
 holds exactly that filter puts the nav's default back. The header's count
 is the saved filter's, live (`entered` / `left` / `recount` of a membership
 watch), whatever the lens holds. The filter is changed as any saved filter
-is — apply it (the bar wears its name), edit the tree (every edit amends
-it), or **Save as…** "Needs you" (replace); the next
+is — apply it (the line wears its name), edit it (every edit amends it),
+or `save as…` "Needs you" (replace); the next
 `g n` applies the new text. The questions are where they are answered: the
 ticket page (its frame scrolls to the input), `#/inputs`, and the tray for
 a queued ticket. Home is the board; MENGER-12's panel, which answered to
@@ -550,11 +558,13 @@ the ticket page, where an editor adds and removes them; the menus offer
 counts), and the palette takes `filter <text>` — `filter label needs-you`,
 `filter asking` — as the global filter.
 
-**Saved filters** (FILTER-6): `Saved ▾` beside each level's `Filter`
-button (the global one in the header) lists the saved filters by name; a
-name applies its filter to that level (a surface's own categories cleared),
-`rename` and `remove` act on it, and `Save as…` keeps the level's filter
-under a name. They live in the tracker, so every browser and agent reads
+**Saved filters** (FILTER-6, FILTER-41): the panel's Saved section lists
+them by name, each counted (ticked, one joins the selected group by name,
+`saved "Name"`); an empty chips line offers the most used, and a click there
+applies its filter to that level (a surface's own categories cleared),
+bound by its name; `save as…` — on the line, or in the panel's foot for any
+level — keeps the level's filter under a name, and the bound name, clicked,
+renames it (emptied, it is unlisted). They live in the tracker, so every browser and agent reads
 the same ones: the collection is `VIEW-1`, a doc titled "Saved filters"
 under `FILTER-1` (the first save creates it), whose body lists them in
 order as `- <m-demand id="open-builds">open builds</m-demand>` (DEMAND-1's
@@ -565,11 +575,12 @@ name; a rename changes the doc's title and the line (the path stays);
 remove takes the line out and leaves the doc, unlisted — saving that name
 again takes it over. The wave board's Wave, Readiness, Off-board blockers
 and Title (the inputs page's State and Removed) are not in the language,
-so Save as… leaves them out and says so. The app reads `VIEW-1` when a
-menu opens — nothing at startup — and, once read, follows its `amended`.
+so a save leaves them out. The app reads `VIEW-1` when the panel or an
+empty line first needs it — nothing at startup — and, once read, follows
+its `amended`.
 
-**Naming saves** (FILTER-37, `src/naming.rs`): the name at the top of a
-tree *is* its save. Given a name (Enter, or leaving the field), the level's
+**Naming saves** (FILTER-37, `src/naming.rs`; FILTER-41: behind `save
+as…`): the name a level is given *is* its save. Given a name (Enter, or leaving the field), the level's
 filter is written as Save as… writes it — the doc at `_MENGER/view/<slug>`
 and its line in `VIEW-1` — and the name is underlined in `--live`; from then
 on **every edit** amends that doc, 400 ms after the last change, one write
@@ -577,14 +588,13 @@ at a time, the last always written. A name another listed filter holds
 offers to replace it or to choose another; typing another name renames it
 (the title and the line; the path stays); emptying the name unlists it (the
 line goes, the doc stays). A name given to an empty tree is saved with its
-first clause. A filter chosen in `Saved ▾` opens with its name in the bar,
+first clause. A filter chosen from a chip opens with its name on the line,
 and editing it there edits it — and every filter that names it. What lets
-go of a name: a filter applied from outside the bar (a link's `g=` / `n=`,
-another `Saved ▾` pick, Make global and its undo, `reset`, `g n`, the
+go of a name: a filter applied from outside the line (a link's `g=` / `n=`,
+another saved filter chosen, Make global and its undo, `reset`, `g n`, the
 palette's `filter …`); the binding is kept per viewer and level and comes
 back while the level holds the text it last wrote. An unnamed tree is the
-level's filter alone. `Save as…` stays as a second door, and binds the
-level to what it saved.
+level's filter alone.
 
 **Nesting and names** (FILTER-36). The language (FILTER-10's, in
 `tickets-api/src/filter.rs`) is groups joined by `and`, each group one `or`
@@ -658,14 +668,13 @@ under "The app's own" (the registry above them is the tickets'
 components). **Hasn't changed** (FILTER-30) builds `not touched <window>`
 — within 1d · 3d · 1w · 2w · 1mo, or Custom… for since a day — a pill
 reading "hasn't changed in 2 weeks"; any time pill has **negate**
-(`created today` ⇄ `not created today`), wherever it sits in the tree. `Saved ▾` suggests four filters until one of
-their names is saved — **New today** (`created today`), **Moved today**
+(`created today` ⇄ `not created today`), wherever it sits. An empty chips line suggests three of four filters while
+no filter is saved — **New today** (`created today`), **Moved today**
 (`changed today`), **Stuck** (`category in (ready, active, review) for over
 1w`), **Untouched 2w** (`not touched within 2w and not category done and
 not kind doc`) —
-each applied by a click, and `keep` saves it as an ordinary saved filter
-(the app offers them; nothing is written into the tracker until you keep
-one). A ticket's History says since when it has held its status — "since
+each applied by a click (the app offers them; nothing is written into the
+tracker until one is saved with `save as…`). A ticket's History says since when it has held its status — "since
 at least …" for a ticket from before the log.
 
 **A tag is a filter** (FILTER-22, `src/tags.rs`): a right-click on any tag
@@ -4466,7 +4475,7 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        board, waves, inputs — their URL and storage, the
                        header's bar (FILTER-11), src/counts.rs menu counts and
                        the header's n of N (FILTER-12), src/saved.rs saved
-                       filters — Saved ▾, Save as…, VIEW-1 (FILTER-6),
+                       filters — VIEW-1, choosing and naming (FILTER-6, 41),
                        src/when.rs + src/when_view.rs the When category —
                        time clauses as pills, the window editor (FILTER-27),
                        src/calendar.rs the calendar and time selector,

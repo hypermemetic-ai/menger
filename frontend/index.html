@@ -1971,6 +1971,49 @@
   .fbar .for { color: var(--accent); font-weight: var(--weight-strong); }
   .lens-na { padding: .2rem .9rem; color: var(--muted); font-style: italic; font-size: calc(12px * var(--text-scale)); }
   .ftop > .fpanel { margin: .5rem .9rem .6rem; }
+  /* FILTER-41: the chips line over a surface — Filter (its clauses
+     counted), the global filter dashed, the level's clauses as chips (the
+     field muted, the value inked, ×) with and / or drawn, the count and
+     save as…; empty, what is shown and the saved filters most used. */
+  .fbar.fline { display: block; }
+  .fline-row { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+  .fline-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; min-width: 0; flex: 1 1 auto; font-size: calc(12px * var(--text-scale)); }
+  .fline-end { display: inline-flex; align-items: center; gap: .6rem; flex: none; margin-left: auto; font-size: calc(12px * var(--text-scale)); }
+  .fline-n { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .fline-n b { color: var(--ink); font-weight: var(--weight-medium); }
+  .fbar .fchip { padding: 0; gap: 0; }
+  .fbar span.fchip:not(:has(.fchip-b)) { padding: 0 .45rem; }
+  .fbar .fchip-b, .fbar button.fchip {
+    display: inline-flex; align-items: baseline; gap: .35rem; padding: 0 .1rem 0 .45rem; font: inherit; color: var(--ink);
+    background: none; border: 0; cursor: pointer; white-space: nowrap;
+  }
+  .fbar button.fchip { padding: 0 .45rem; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .fbar .fchip-b:hover .fchip-v, .fbar button.fchip:hover .fchip-v { color: var(--accent); }
+  .fbar .fchip-f, .fbar .fchip-n { color: var(--muted); }
+  .fbar .fchip-sug .fchip-f { color: var(--accent); }
+  .fbar .fchip .p-x { background: none; border: 0; font: inherit; color: var(--muted); cursor: pointer; padding: 0 .35rem; }
+  .fbar .fchip .p-x:hover, .fbar .fchip .p-x:focus-visible { color: var(--err-fg); }
+  .fbar .fchip-local { border-style: dotted; }
+  .fbar .fsave-b, .fbar .fsaved { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; white-space: nowrap; }
+  .fbar .fsaved { color: var(--ink); border-bottom: 2px solid var(--live); }
+  .fbar .fsave-b:hover, .fbar .fsaved:hover { text-decoration: underline; }
+  .fbar .fsave { display: inline-flex; align-items: center; gap: .4rem; }
+  .fbar .fsave-in, .fpanel .fsave-in {
+    font: inherit; width: 11rem; padding: .05rem .4rem; color: var(--ink); background: var(--card);
+    border: var(--border) solid var(--accent); border-radius: var(--radius); outline: none;
+  }
+  .fbar .fsave .fhint { color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
+  .fpanel .fsave-b, .fpanel .fsaved { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+  .fpanel .fsaved { color: var(--ink); border-bottom: 2px solid var(--live); }
+  .fline :is(.qtaken, .qnote, .qeval) { margin-top: .3rem; }
+  .fline .fline-saved { margin-left: .4rem; }
+  .bempty-pills.fbar, .tout-pills.fbar { display: inline-flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
+  @media (max-width: 640px) {
+    .fline-end { gap: .4rem; }
+    .fline-of, .fline:not(.open) .fsave-b { display: none; }
+    .fline:not(.open) .fline-chips { flex-wrap: nowrap; overflow: hidden; -webkit-mask-image: linear-gradient(to right, var(--ink) 85%, transparent); mask-image: linear-gradient(to right, var(--ink) 85%, transparent); }
+    .fline:not(.open) .fline-chips > * { flex-shrink: 0; }
+  }
   .wform .wback {
     display: flex; align-items: center; gap: .45rem; padding: 3px 8px; cursor: pointer; color: var(--muted);
     border-bottom: var(--border) solid var(--line) !important; margin-bottom: 4px;
@@ -2134,7 +2177,7 @@
     border: var(--border) dashed var(--line); border-radius: var(--radius-pill); padding: 0 .5rem;
   }
   .qbar button.qadd:hover, .qbar button.qadd:focus-visible, .qbar button.qadd[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); outline: none; }
-  .qbar button.qrm, .qbar .qref .p-x, .qbar .qnote .p-x, .qbar .frefused .p-x {
+  .qbar button.qrm, .qbar .qref .p-x, :is(.qbar, .fline) .qnote .p-x, .qbar .frefused .p-x {
     font: inherit; background: none; border: 0; padding: 0 .3rem; color: var(--muted); cursor: pointer;
   }
   .qbar button.qrm:hover, .qbar .qref .p-x:hover { color: var(--err-fg); }
@@ -2158,8 +2201,8 @@
   .qbar .qinherited { display: flex; flex-direction: column; gap: .15rem; padding-bottom: .3rem; border-bottom: var(--border) dashed var(--line); }
   .qbar .qinherited > .p-lvl { align-self: flex-start; }
   .qbar .qlocal { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; padding-top: .3rem; border-top: var(--border) dashed var(--line); }
-  .qbar .qeval { margin: .35rem 0 0; font: calc(11px * var(--text-scale))/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
-  .qbar .qeval .qeval-l { font-family: var(--sans); }
+  :is(.qbar, .fline) .qeval { margin: .35rem 0 0; font: calc(11px * var(--text-scale))/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  :is(.qbar, .fline) .qeval .qeval-l { font-family: var(--sans); }
   .qbar .qpick {
     position: static; display: flex; flex-direction: column; gap: .3rem; margin: .1rem 0 .2rem 1.2rem; padding: .4rem .5rem; max-width: 28rem;
     max-height: none; box-shadow: none;
@@ -2170,13 +2213,13 @@
   .qbar .qpick .qpick-n .qrecent { font: calc(10px * var(--text-scale)) var(--sans); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
   .qbar .qpick .qpick-n .fcount { margin-left: auto; }
   .qbar .qpick .qmore { padding: .15rem .5rem; font: calc(11px * var(--text-scale)) var(--mono); color: var(--muted); }
-  .qbar .qtaken, .qbar .qnote {
+  :is(.qbar, .fline) .qtaken, :is(.qbar, .fline) .qnote {
     display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .35rem 0 0; padding: .2rem .55rem;
     font-size: calc(12px * var(--text-scale)); font-family: var(--sans); border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card);
   }
-  .qbar .qtaken button { font: inherit; padding: 0 .55rem; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); cursor: pointer; }
-  .qbar .qtaken button.primary { border-color: var(--accent); color: var(--accent); }
-  .qbar .qnote.sproblem { background: var(--err-bg); color: var(--err-fg); border-color: var(--err-line); }
+  :is(.qbar, .fline) .qtaken button { font: inherit; padding: 0 .55rem; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); cursor: pointer; }
+  :is(.qbar, .fline) .qtaken button.primary { border-color: var(--accent); color: var(--accent); }
+  :is(.qbar, .fline) .qnote.sproblem { background: var(--err-bg); color: var(--err-fg); border-color: var(--err-line); }
   .qbar .frefused { display: block; margin: .35rem 0 0; }
   .lensbar.qbar .qline { gap: .4rem; }
   @media (max-width: 640px) {

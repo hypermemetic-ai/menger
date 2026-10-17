@@ -1363,13 +1363,18 @@ fn document() -> Option<web_sys::Document> {
 // ---------------------------------------------------------------------
 // The view: the bar
 
-/// The generic filter bar. One line: the level's `Filter` button, the
-/// chevron (the panel open ⇄ folded), the query's name ([`QueryHead`]; a
-/// name saves it, src/naming.rs), its canonical text (on a surface, the
-/// global filter's before it, muted), the `text` toggle, `reset`, Make
-/// global (the nav), `Saved ▾` (FILTER-6). Under it the surface's own
-/// clauses, and — FILTER-39 — the panel, in the page's flow; under the
-/// bar, the contradiction notice.
+/// FILTER-41: the chips line over a surface (FILTER-38's mockups 1 and 3)
+/// — one line: the `Filter` button (its badge the number of clauses), the
+/// global filter as a dashed chip, the level's clauses as chips (the
+/// field muted, the value inked, ×; a click opens its section) with **and**
+/// between them and **or** between the groups, the surface's own clauses
+/// likewise, the count (*4 of 37*) and `save as…` (FILTER-37's naming:
+/// a name binds the filter, and every edit after amends its doc). Empty,
+/// it says what is shown (*all 39 tickets*) and offers the saved filters
+/// the reader uses most, each counted. The name field, `text` and `Saved ▾`
+/// are gone: text is the panel's foot, choosing is its Saved section or a
+/// chip here. Under the line: naming's prompts, "as evaluated", the
+/// panel (FILTER-39, in the page's flow), and the contradiction notice.
 /// `cats`: the level's categories, server-backed and local, in its panel's
 /// order; `counts`: what the panel's values count.
 #[component]
@@ -1377,31 +1382,341 @@ pub(crate) fn FilterBar(
     level: Level,
     #[prop(into)] cats: Vec<Cat>,
     counts: CountsProvider,
-    /// What the bar's Filter button says when hovered.
+    /// What the line's Filter button says when hovered.
     #[prop(optional, into)]
     hint: Option<String>,
 ) -> impl IntoView {
     let lens = lens::use_lens();
     let pop = lens.pop(level);
     pop.configure(&cats, counts);
-    let texting = RwSignal::new(false);
     let hint = hint.unwrap_or_else(|| "Filter (f)".into());
+    let shown = tab_count(lens, level);
+    let all = total_count();
     view! {
-        <div class="fbar qbar" data-fbar=level.name() data-level=level.name() class:open=move || pop.open_tracked() on:keydown=move |ev| fold_key(pop, ev)>
-            <div class="qline">
-                <FilterButton level hint />
-                <QueryHead level texting />
-                <TextMode level texting />
-                <Reset level />
-                // FILTER-26: the nav's filter made global.
-                {(level == Level::Nav).then(|| view! { <crate::promote::MakeGlobal /> })}
-                // FILTER-6: the level's saved filters, and Save as….
-                <crate::saved::SavedButton level />
+        <div class="fbar fline" data-fbar=level.name() data-level=level.name() class:open=move || pop.open_tracked() on:keydown=move |ev| fold_key(pop, ev)>
+            <div class="fline-row">
+                <FilterButton level hint badge=true />
+                <span class="fline-chips">{line_chips(lens, level, shown)}</span>
+                <span class="fline-end">
+                    <span class="fline-n" title="tickets this surface shows, of every ticket" aria-live="polite">
+                        <b>{move || shown.get().map_or_else(|| "\u{2026}".to_string(), |n| n.to_string())}</b>
+                        <span class="fline-of">{move || all.get().map(|n| format!(" of {n}")).unwrap_or_default()}</span>
+                    </span>
+                    <SaveAs level />
+                    {flash_view(level)}
+                </span>
             </div>
-            <QueryTree level texting />
+            <LineNotes level />
             <PanelHost host=Host::Surface />
         </div>
         <Clash level />
+    }
+}
+
+/// FILTER-41: every ticket the store holds — counted once.
+fn total_count() -> RwSignal<Option<usize>> {
+    let n = RwSignal::new(None);
+    Effect::new(move |_| {
+        crate::session::link().track();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Some(got) = crate::counts::count_once(String::new()).await {
+                n.try_set(Some(got));
+            }
+        });
+    });
+    n
+}
+
+/// FILTER-41: what was just done at `level` (a saved filter chosen, `g n`)
+/// — for a moment, beside its line.
+pub(crate) fn flash_view(level: Level) -> impl IntoView {
+    move || crate::saved::hook().and_then(|s| s.flash_for(level)).map(|w| view! { <span class="sflash" role="status">{w}</span> })
+}
+
+/// FILTER-41: the line's chips — the global filter's dashed chip; the
+/// level's groups, each clause a chip with ×, **and** inside a group and
+/// **or** between them (boxed when there are two or more); the surface's
+/// own clauses; empty, what is shown and the saved filters most used.
+fn line_chips(lens: Lens, level: Level, shown: RwSignal<Option<usize>>) -> impl IntoView {
+    move || {
+        let global = lens.filter(Level::Global).with(|f| f.format());
+        let own = lens.filter(level).with(|f| !f.groups.is_empty());
+        let local = lens.kept(level).map(|k| k.local).unwrap_or_default();
+        let any = own || local.iter().next().is_some();
+        view! {
+            {(!global.is_empty()).then(|| view! {
+                {global_chip(lens, global.clone())}
+                <span class="fw">"and"</span>
+            })}
+            {if any {
+                view! {
+                    {own.then(|| edit_chips(lens, level))}
+                    {local_chips(lens, level, local, own)}
+                }
+                .into_any()
+            } else {
+                empty_line(level, shown).into_any()
+            }}
+        }
+    }
+}
+
+/// FILTER-41: the level's groups as chips to edit — × takes a clause out
+/// (a group left empty goes); a click on one opens the panel on its
+/// section, its group selected (a time clause: its pane, on that clause).
+fn edit_chips(lens: Lens, level: Level) -> AnyView {
+    let pop = lens.pop(level);
+    let Some(o) = lens.ors(level) else {
+        let text = lens.filter(level).with(|f| f.format());
+        return view! {
+            <button type="button" class="fchip fchip-text" title="deeper than groups joined by or \u{2014} edit it as text in the panel" on:click=move |_| lens.open_panel(level, None)>{text}</button>
+        }
+        .into_any();
+    };
+    let many = o.live().count() > 1;
+    o.groups
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| !g.is_empty())
+        .enumerate()
+        .map(|(k, (gi, g))| {
+            let items = g
+                .iter()
+                .enumerate()
+                .map(|(ii, p)| {
+                    let (field, value) = chip_words(p);
+                    let words = crate::ors::words(p);
+                    let cat = crate::ors::cat_of(p);
+                    let slot = crate::ors::Slot { group: gi, item: ii };
+                    let saved = matches!(p.field, menger_tickets_api::filter::Field::Saved(_));
+                    let open = move |_| {
+                        pop.sel.set(gi);
+                        if let Some(c) = cat.filter(|c| matches!(c, Cat::When | Cat::Deployed | Cat::Chats)) {
+                            pop.when.set((c, crate::when_view::Step::Edit { at: slot, only: None }));
+                        }
+                        lens.open_panel(level, cat);
+                    };
+                    let remove = move |_| {
+                        let r = lens.edit_ors(level, |o| {
+                            o.remove(slot);
+                            Ok(())
+                        });
+                        pop.answer(r);
+                        let left = untrack(|| lens.ors(level)).map_or(1, |o| o.groups.len().max(1));
+                        pop.sel.update(|s| *s = (*s).min(left - 1));
+                    };
+                    view! {
+                        {(ii > 0).then(|| view! { <span class="fw">"and"</span> })}
+                        <span class="fchip" class:saved=saved data-group=gi data-item=ii>
+                            <button type="button" class="fchip-b" title=format!("{words} \u{2014} open its section") on:click=open>
+                                {(!field.is_empty()).then(|| view! { <span class="fchip-f">{field.clone()}</span> })}
+                                <span class="fchip-v">{value.clone()}</span>
+                            </button>
+                            <button type="button" class="p-x" title=format!("remove {words}") aria-label=format!("remove {words}") on:click=remove>"\u{d7}"</button>
+                        </span>
+                    }
+                })
+                .collect_view();
+            view! {
+                {(k > 0).then(|| view! { <span class="for">"or"</span> })}
+                <span class="fchips-g" class:boxed=many>{items}</span>
+            }
+        })
+        .collect_view()
+        .into_any()
+}
+
+/// FILTER-41: a clause's chip words — its field (muted) and its value
+/// (inked): `kind` `build`, `status not` `Ready`, `` `ready`, a time
+/// clause whole, a saved filter `⌗` and its name.
+pub(crate) fn chip_words(p: &menger_tickets_api::filter::Predicate) -> (String, String) {
+    use menger_tickets_api::filter::Field;
+    let not = if p.not { " not" } else { "" };
+    match &p.field {
+        Field::History(_) => (String::new(), crate::ors::words(p)),
+        Field::Saved(n) => (format!("\u{2317}{not}"), n.clone()),
+        f => match (f.value(), crate::ors::cat_of(p)) {
+            (Some(v), Some(c)) if c != Cat::Shortcode => {
+                let field = match c {
+                    Cat::Label => "label",
+                    Cat::Severity => "severity",
+                    Cat::Status => "status",
+                    Cat::Kind => "kind",
+                    _ => f.name(),
+                };
+                (format!("{field}{not}"), c.value_label(&v))
+            }
+            (Some(v), _) => (format!("{}{not}", f.name()), v),
+            (None, _) => (String::new(), p.format()),
+        },
+    }
+}
+
+/// FILTER-41: the surface's own clauses as chips — beside the groups,
+/// and-ed with every one: its values joined by **or** (`is`) or **and not**
+/// (`is not`), × taking it out; a click opens its section.
+fn local_chips(lens: Lens, level: Level, local: Clauses, after: bool) -> impl IntoView {
+    local
+        .iter()
+        .map(|(c, cl)| (c, cl.clone()))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .enumerate()
+        .map(|(i, (c, cl))| {
+            let joiner = if cl.op == Op::Is { " or " } else { " and not " };
+            let values = cl.values.iter().map(|v| c.value_label(v)).collect::<Vec<_>>().join(joiner);
+            let field = format!("{}{}", c.label().to_ascii_lowercase(), if cl.op == Op::Not && !c.is_flag() { " not" } else { "" });
+            view! {
+                {(after || i > 0).then(|| view! { <span class="fw">"and"</span> })}
+                <span class="fchip fchip-local" data-cat=c.key() title=format!("{} \u{2014} beside the groups, and-ed with every one", crate::saved::surface_words(level))>
+                    <button type="button" class="fchip-b" on:click=move |_| lens.open_panel(level, Some(c))>
+                        <span class="fchip-f">{field}</span>
+                        <span class="fchip-v">{values.clone()}</span>
+                    </button>
+                    <button type="button" class="p-x" title=format!("remove the {} filter", c.label()) aria-label=format!("remove the {} filter", c.label()) on:click=move |_| lens.edit(level, |k| k.remove(c))>"\u{d7}"</button>
+                </span>
+            }
+        })
+        .collect_view()
+}
+
+/// FILTER-41: an empty line — what is shown (*all 39 tickets*), then the
+/// saved filters the reader uses most (the recently used first), each
+/// counted; a chip applies it (bound by its name), as the panel's Saved
+/// section would choose it. With none saved yet, FILTER-27's suggestions.
+fn empty_line(level: Level, shown: RwSignal<Option<usize>>) -> impl IntoView {
+    let naming = crate::naming::use_naming();
+    let saved = crate::saved::hook();
+    let recent = naming.recent();
+    let mut entries: Vec<crate::saved::Entry> = saved.map(|s| s.listed()).unwrap_or_default();
+    entries.sort_by_key(|e| recent.iter().position(|r| crate::saved::slug(r) == crate::saved::slug(&e.name)).unwrap_or(usize::MAX));
+    entries.truncate(3);
+    let words = move || shown.get().map_or_else(|| "every ticket".to_string(), |n| format!("all {n} ticket{}", if n == 1 { "" } else { "s" }));
+    let chips = if entries.is_empty() {
+        crate::saved::SUGGESTED
+            .iter()
+            .take(3)
+            .map(|(name, text)| {
+                let (name, text) = (*name, *text);
+                view! {
+                    <button type="button" class="fchip fchip-sug" title=format!("apply \u{201c}{name}\u{201d}: {text}") on:click=move |_| {
+                        if let Some(s) = saved {
+                            s.suggest(level, name, text);
+                        }
+                    }>
+                        <span class="fchip-f">"\u{2317}"</span>
+                        <span class="fchip-v">{name}</span>
+                    </button>
+                }
+            })
+            .collect_view()
+            .into_any()
+    } else {
+        entries
+            .into_iter()
+            .map(|e| {
+                untrack(|| naming.ask_count(&e.name));
+                let name = e.name.clone();
+                let count = move || naming.count(&name).flatten().map(|n| n.to_string()).unwrap_or_default();
+                let title = format!("apply \u{201c}{}\u{201d}", e.name);
+                let label = e.name.clone();
+                view! {
+                    <button type="button" class="fchip fchip-sug" title=title on:click=move |_| {
+                        if let Some(s) = saved {
+                            naming.touch(&e.name);
+                            s.choose(level, e.clone());
+                        }
+                    }>
+                        <span class="fchip-f">"\u{2317}"</span>
+                        <span class="fchip-v">{label}</span>
+                        <span class="fchip-n">{count}</span>
+                    </button>
+                }
+            })
+            .collect_view()
+            .into_any()
+    };
+    view! {
+        <span class="fchips-empty">{words}</span>
+        <span class="fw fline-saved">"saved:"</span>
+        {chips}
+    }
+}
+
+/// FILTER-41: `save as…` — FILTER-37's naming behind a button: a name
+/// saves the level's filter and binds it (every edit after amends its
+/// doc); bound, the name shows (`⌗ open builds`), and a click renames it
+/// (emptied, it is unlisted, its doc kept).
+#[component]
+pub(crate) fn SaveAs(level: Level) -> impl IntoView {
+    let lens = lens::use_lens();
+    let naming = crate::naming::use_naming();
+    let editing = RwSignal::new(false);
+    let field = NodeRef::<leptos::html::Input>::new();
+    focus_each_load(field);
+    let bound = Memo::new(move |_| naming.bound(level).map(|b| b.name));
+    let pending = Memo::new(move |_| naming.pending(level));
+    let empty = Memo::new(move |_| lens.filter(level).with(|f| f.groups.is_empty()));
+    let done = move |v: Option<String>| {
+        editing.set(false);
+        if let Some(v) = v {
+            naming.name(level, &v);
+        }
+    };
+    move || {
+        if editing.get() {
+            let seed = untrack(|| bound.get().or_else(|| pending.get())).unwrap_or_default();
+            return view! {
+                <span class="fsave">
+                    <input
+                        class="fsave-in"
+                        node_ref=field
+                        type="text"
+                        autocomplete="off"
+                        spellcheck="false"
+                        maxlength=crate::saved::NAME_MAX.to_string()
+                        placeholder="a name"
+                        aria-label=format!("save the {} filter as", level.name())
+                        value=seed
+                        on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
+                            Some("form.submit") => {
+                                ev.prevent_default();
+                                done(Some(event_target_value(&ev)));
+                            }
+                            Some("form.cancel") => {
+                                ev.prevent_default();
+                                ev.stop_propagation();
+                                done(None);
+                            }
+                            _ => {}
+                        }
+                    />
+                    <span class="fhint">"Enter saves \u{00b7} Esc"</span>
+                </span>
+            }
+            .into_any();
+        }
+        match bound.get() {
+            Some(name) => view! {
+                <button
+                    type="button"
+                    class="fsaved"
+                    data-saved-as=level.name()
+                    title=format!("saved as \u{201c}{name}\u{201d} \u{2014} every edit keeps it saved; click to rename it, or empty the name to unlist it")
+                    on:click=move |_| editing.set(true)
+                >
+                    "\u{2317} "{name.clone()}
+                </button>
+            }
+            .into_any(),
+            None => (!empty.get() || pending.get().is_some())
+                .then(|| view! {
+                    <button type="button" class="fsave-b" data-save-as=level.name() title="save this filter under a name" on:click=move |_| editing.set(true)>
+                        {move || pending.get().map_or_else(|| "save as\u{2026}".to_string(), |p| format!("saved with its first clause: \u{201c}{p}\u{201d}"))}
+                    </button>
+                })
+                .into_any(),
+        }
     }
 }
 
@@ -1463,6 +1778,7 @@ pub(crate) fn NavChips(#[prop(into)] cats: Vec<Cat>, counts: CountsProvider) -> 
             }}
             {chips_view(lens, Level::Nav, "every ticket")}
             <Reset level=Level::Nav />
+            {flash_view(Level::Nav)}
         </div>
         <Clash level=Level::Nav />
     }
@@ -1484,7 +1800,7 @@ pub(crate) fn fold_key(pop: Pop, ev: web_sys::KeyboardEvent) {
 pub(crate) fn FilterButton(level: Level, #[prop(into)] hint: String, #[prop(optional)] badge: bool) -> impl IntoView {
     let lens = lens::use_lens();
     let pop = lens.pop(level);
-    let count = move || lens.group_count(level);
+    let count = move || lens.clause_count(level);
     view! {
         <button
             class="fbtn"
@@ -1505,98 +1821,19 @@ pub(crate) fn FilterButton(level: Level, #[prop(into)] hint: String, #[prop(opti
                 <path d="M2 3.5h12l-4.6 5.4v4.1l-2.8-1.3V8.9z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
             </svg>
             "Filter"
-            {move || (badge && count() > 0).then(|| view! { <span class="fbadge" title="global filter groups">{count}</span> })}
+            {move || (badge && count() > 0).then(|| view! { <span class="fbadge" title="clauses in this filter">{count}</span> })}
         </button>
     }
 }
 
-/// The bar's one line — the chevron (the panel open ⇄ folded), the
-/// query's name (empty: "unnamed query"; saved, underlined in `--live`),
-/// on a surface the global filter's text (muted), and the level's
-/// canonical text (a click opens the panel).
+/// Under the line — naming's prompt (a name already saved: replace it,
+/// or another) and its note; with saved names, "as evaluated"; an edit
+/// refused while the panel is folded.
 #[component]
-pub(crate) fn QueryHead(level: Level, texting: RwSignal<bool>) -> impl IntoView {
+pub(crate) fn LineNotes(level: Level) -> impl IntoView {
     let lens = lens::use_lens();
     let pop = lens.pop(level);
     let naming = crate::naming::use_naming();
-    let text = Memo::new(move |_| lens.filter(level).with(|f| f.format()));
-    let global = Memo::new(move |_| (level != Level::Global).then(|| lens.filter(Level::Global).with(|f| f.format())).filter(|t| !t.is_empty()));
-    let name = Memo::new(move |_| naming.bound(level).map(|b| b.name).or_else(|| naming.pending(level)).unwrap_or_default());
-    let field = NodeRef::<leptos::html::Input>::new();
-    let toggle = move || {
-        if pop.is_open() {
-            lens.close_panel(true);
-        } else {
-            lens.open_panel(level, None);
-        }
-    };
-    view! {
-        <button
-            class="qchev"
-            data-qchev=level.name()
-            aria-controls=pop_id(level)
-            aria-expanded=move || pop.open_tracked().to_string()
-            title=move || if pop.open_tracked() { "fold the filter panel (Escape)" } else { "open the filter panel" }
-            on:click=move |_| toggle()
-        >
-            {move || if pop.open_tracked() { "\u{25be}" } else { "\u{25b8}" }}
-        </button>
-        <input
-            class="qname"
-            data-qname=level.name()
-            node_ref=field
-            type="text"
-            autocomplete="off"
-            spellcheck="false"
-            maxlength=crate::saved::NAME_MAX.to_string()
-            placeholder="unnamed query"
-            aria-label=format!("the {} query's name — a name saves it", level.name())
-            class:saved=move || naming.bound(level).is_some()
-            title=move || match naming.bound(level) {
-                Some(b) => format!("saved as \u{201c}{}\u{201d} — every edit keeps it saved; empty the name to unlist it", b.name),
-                None => "a name saves this query".to_string(),
-            }
-            prop:value=move || name.get()
-            on:change=move |ev| naming.name(level, &event_target_value(&ev))
-            on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
-                Some("form.submit") => {
-                    ev.prevent_default();
-                    if let Some(el) = field.get() {
-                        let _ = el.blur();
-                    }
-                }
-                Some("form.cancel") => {
-                    ev.prevent_default();
-                    ev.stop_propagation();
-                    if let Some(el) = field.get() {
-                        el.set_value(&name.get_untracked());
-                        let _ = el.blur();
-                    }
-                }
-                _ => {}
-            }
-        />
-        {move || global.get().map(|g| global_chip(lens, g))}
-        {move || (!texting.get()).then(|| view! {
-            <code class="qtext" data-qtext=level.name() title=move || text.get() on:click=move |_| lens.open_panel(level, None)>
-                {move || {
-                    let t = text.get();
-                    if t.is_empty() { "every ticket".to_string() } else { t }
-                }}
-            </code>
-        })}
-    }
-}
-
-/// Under the bar's line — naming's prompt (a name already saved: replace
-/// it, or another) and its note; the surface's own clauses; with saved
-/// names, "as evaluated"; an edit refused while the panel is folded.
-#[component]
-pub(crate) fn QueryTree(level: Level, texting: RwSignal<bool>) -> impl IntoView {
-    let lens = lens::use_lens();
-    let pop = lens.pop(level);
-    let naming = crate::naming::use_naming();
-    let _ = texting;
     view! {
         {move || naming.taken(level).map(|(typed, e)| view! {
             <div class="qtaken" role="alert" data-level=level.name()>
@@ -1604,9 +1841,8 @@ pub(crate) fn QueryTree(level: Level, texting: RwSignal<bool>) -> impl IntoView 
                 <button class="primary" data-act="replace" disabled=move || naming.busy(level) on:click=move |_| naming.replace(level)>"Replace it"</button>
                 <button data-act="another" on:click=move |_| {
                     naming.another(level);
-                    if let Some(el) = document().and_then(|d| d.query_selector(&format!("[data-qname=\"{}\"]", level.name())).ok().flatten()).and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) {
-                        let _ = el.focus();
-                        el.select();
+                    if let Some(el) = document().and_then(|d| d.query_selector(&format!("[data-save-as=\"{}\"], [data-saved-as=\"{}\"]", level.name(), level.name())).ok().flatten()).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
+                        el.click();
                     }
                 }>"Choose another name"</button>
             </div>
@@ -1617,45 +1853,9 @@ pub(crate) fn QueryTree(level: Level, texting: RwSignal<bool>) -> impl IntoView 
                 <button class="p-x" title="dismiss" aria-label="dismiss" on:click=move |_| naming.dismiss(level)>"\u{d7}"</button>
             </div>
         })}
-        {move || local_view(lens, level)}
         {evaluated_view(lens, level)}
         {refused_view(pop)}
     }
-}
-
-/// The surface's own clauses (the wave board's, the inputs page's) — beside
-/// the groups, and-ed with every one: a pill each, its values joined by `or`
-/// (`is`) or `and not` (`is not`), its operator toggling, × taking it out;
-/// a click on its values opens its section.
-fn local_view(lens: Lens, level: Level) -> Option<impl IntoView> {
-    let local = lens.kept(level).map(|k| k.local).unwrap_or_default();
-    let pills: Vec<(Cat, Clause)> = local.iter().map(|(c, cl)| (c, cl.clone())).collect();
-    (!pills.is_empty()).then(|| {
-        let drawn = pills
-            .into_iter()
-            .map(|(c, cl)| {
-                let joiner = if cl.op == Op::Is { " or " } else { " and not " };
-                let values = cl.values.iter().map(|v| c.value_label(v)).collect::<Vec<_>>().join(joiner);
-                let op = op_label(c, cl.op, 1);
-                view! {
-                    <span class="pill" data-fpill=level.name() data-cat=c.key() data-op=cl.op.word()>
-                        <span class="p-cat">{c.label()}</span>
-                        <button class="p-op" title="toggle the operator" on:click=move |_| lens.edit(level, |k| k.flip(c))>{op}</button>
-                        <button class="p-vals" data-fopen=level.name() title=values.clone() on:click=move |_| lens.open_panel(level, Some(c))>{values.clone()}</button>
-                        <button class="p-x" title="remove this filter" aria-label=format!("remove the {} filter", c.label()) on:click=move |_| lens.edit(level, |k| k.remove(c))>
-                            "\u{d7}"
-                        </button>
-                    </span>
-                }
-            })
-            .collect_view();
-        view! {
-            <div class="qlocal" title=format!("{} — beside the groups, and-ed with every one", crate::saved::surface_words(level))>
-                <span class="p-lvl">"this view"</span>
-                {drawn}
-            </div>
-        }
-    })
 }
 
 /// FILTER-37: "as evaluated" — the level's filter with its saved names
@@ -2132,7 +2332,7 @@ fn tabs_view(lens: Lens, open: Level) -> impl IntoView {
 
 /// FILTER-40: what `level` shows — its effective filter counted, asked
 /// again whenever it changes (an empty one: every ticket).
-fn tab_count(lens: Lens, level: Level) -> RwSignal<Option<usize>> {
+pub(crate) fn tab_count(lens: Lens, level: Level) -> RwSignal<Option<usize>> {
     let n = RwSignal::new(None);
     let text = Memo::new(move |_| lens.effective(level).with(|f| (f.admits_nothing().is_none()).then(|| crate::counts::wire_text(f))));
     let asked = StoredValue::new(0u32);
@@ -2209,6 +2409,7 @@ fn panel(lens: Lens, pop: Pop) -> impl IntoView {
             <div class="fp-foot">
                 <TextMode level texting />
                 <Reset level />
+                <SaveAs level />
                 <span class="fp-count">{move || foot_words(lens, level)}</span>
             </div>
         </section>

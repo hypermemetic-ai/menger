@@ -529,7 +529,7 @@ pub(crate) fn epics(eff: &Filter, route: &str, tree: &ScTree) -> BTreeSet<String
     for g in &eff.groups {
         // FILTER-39: a host shortcode ticked is `under` it — its tree.
         if let [Predicate { field: Field::Under(x), not: false }] = g.preds.as_slice() {
-            if tree.known().contains(x) {
+            if !x.contains('-') {
                 let these: BTreeSet<String> = tree.subtree(x).into_iter().collect();
                 out = Some(match out {
                     Some(o) => o.intersection(&these).cloned().collect(),
@@ -2063,7 +2063,7 @@ mod tests {
         // Global ∧ waves: the global Ready over the board's default.
         let t = platform();
         let mut d = waves_default("PLEXUS", &t);
-        d.filter.groups.retain(|g| crate::lens::clause_of(g).is_some_and(|(c, _)| c == Cat::Shortcode));
+        d.filter.groups.retain(|g| matches!(g.preds.as_slice(), [Predicate { field: Field::Under(_), .. }]));
         let both = eff("status Ready").and(&d.filter);
         assert_eq!(narrow(&fixture(), &(both, Clauses::default()), Some(&t)).cards.len(), 1);
         let clash = eff("status Ready").and(&eff("status Coding"));

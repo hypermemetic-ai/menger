@@ -623,12 +623,15 @@ pub(crate) fn promoted(global: &Kept, nav: &Filter, default: &Filter) -> Kept {
     Kept { filter, local: global.local.clone() }
 }
 
-/// The wave board a route opens on (WAVE-12): Shortcode is any of the
-/// route's tree, Kind is any of build, spike, gap —
-/// `in (…) and kind in (build, spike, gap)`.
+/// The wave board a route opens on (WAVE-12): the route's tree, Kind one
+/// of build, spike, gap — `under SC and kind in (build, spike, gap)`.
 pub(crate) fn waves_default(sc: &str, tree: &ScTree) -> Kept {
+    let _ = tree;
     let mut k = Kept::default();
-    k.set(Cat::Shortcode, Op::Is, tree.subtree(&sc.to_ascii_uppercase()));
+    // FILTER-41: the route's tree is `under` it — one clause, so the
+    // board's default reads as three groups joined by or, not a group per
+    // shortcode and kind.
+    k.filter.groups.push(Group::one(Predicate::is(Field::Under(sc.to_ascii_uppercase()))));
     k.set(Cat::Kind, Op::Is, DEFAULT_KINDS.iter().map(|k| k.to_string()));
     k
 }
@@ -1055,15 +1058,19 @@ impl Lens {
         self.chosen[level.index()].with(Option::is_some)
     }
 
-    /// `level`'s pills. Tracked.
-    pub(crate) fn pills(self, level: Level) -> Vec<Pill> {
-        self.kept(level).map(|k| k.pills()).unwrap_or_default()
-    }
 
     /// `level`'s clauses, one per category (the menu's checked boxes).
     /// Tracked.
     pub(crate) fn clauses(self, level: Level) -> Clauses {
         self.kept(level).map(|k| k.clauses()).unwrap_or_default()
+    }
+
+    /// FILTER-41: how many clauses `level` holds — its line's Filter badge:
+    /// every clause of its groups (a filter deeper than or-of-and, its
+    /// top-level groups), and its surface's own. Tracked.
+    pub(crate) fn clause_count(self, level: Level) -> usize {
+        let own = self.ors(level).map(|o| o.clauses()).unwrap_or_else(|| self.filter(level).with(|f| f.groups.len()));
+        own + self.kept(level).map_or(0, |k| k.local.iter().count())
     }
 
     /// How many groups `level` holds — the header button's badge. Tracked.
@@ -1801,9 +1808,11 @@ mod tests {
     fn the_wave_board_opens_on_its_tree() {
         let t = platform();
         let d = waves_default("plexus", &t);
-        assert_eq!(d.filter.format(), format!("in ({}) and kind in (build, spike, gap)", PLEXUS_TREE.join(", ")));
+        assert_eq!(d.filter.format(), "under PLEXUS and kind in (build, spike, gap)");
         assert_eq!(d.local, Clauses::default());
-        assert_eq!(waves_default("WAVE", &t).filter.format(), "in WAVE and kind in (build, spike, gap)");
+        assert_eq!(waves_default("WAVE", &t).filter.format(), "under WAVE and kind in (build, spike, gap)");
+        // FILTER-41: drawn as three groups joined by or.
+        assert_eq!(crate::ors::Ors::of_filter(&d.filter).map(|o| o.groups.len()), Some(3));
     }
 
     /// FILTER-21: the nav opens on `not menger doc` — one pill, Menger docs
