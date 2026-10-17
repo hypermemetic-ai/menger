@@ -58,9 +58,12 @@ deploy/pipeline media          # landing/media regenerated from the release prod
 - **Production changes only through `promote`**, and only to a release that
   passed the test environment. A `cargo build` or `trunk build` in a checkout
   changes nothing that is serving.
-- Merging to main is not deploying: a ticket is `Complete` at the merge,
-  and reaches users when its release is promoted — say which release in the
-  ticket when it matters.
+- Merging to main is not deploying, and **Complete means deployed to the
+  lowest environment** (owner, 2026-10-17; DEPLOY-22): the merge links its
+  commit and leaves the ticket In Review; the `deploy test` that carries it
+  sets Complete; it reaches users when its release is promoted — say which
+  release in the ticket when it matters. Work in a repository with no
+  environment (`repo@hash` outside menger) is Complete at its merge.
 - Check work on the test environment (http://127.0.0.1:4451/) or a throwaway
   server — never on prod. The tracker itself is prod: `synapse -P 4455` is
   still how tickets are read and written.
@@ -889,7 +892,8 @@ and `view: mockup` + `widths:` makes a whole body one.
   the legacy words — `active` is `Coding`, `in review` is `In Review` —
   and stores the canonical spelling (through `-p`, the app and REST;
   synapse's own `--status` flag takes the canonical spelling only,
-  ACCESS-8). The merge sets `Complete`. **Link the commit** (SDLC-9): in the step that flips the
+  ACCESS-8). The deploy to test sets `Complete` (DEPLOY-22: the lowest
+  environment; a repository with no environment, its merge). **Link the commit** (SDLC-9): in the step that flips the
   ticket to `In Review`, the worker links its commit(s) with
   `tickets.commits.link` (`synapse -P 4455 menger tickets commits link
   --id MNG-10 --commits 77df9a0`, the flag repeated per commit;
