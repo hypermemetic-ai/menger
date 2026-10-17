@@ -1042,6 +1042,10 @@ pub(crate) struct Pop {
     /// FILTER-39: the value hovered and what ticking it would leave — its
     /// key, and the count once it is in.
     hover: RwSignal<Option<(String, Option<usize>)>>,
+    /// FILTER-43: the text drawer is open, and what it holds does not read
+    /// — the level keeps the last filter that read, and its chips say so.
+    pub(crate) drawer: RwSignal<bool>,
+    pub(crate) stale: RwSignal<bool>,
 }
 
 impl Pop {
@@ -1061,6 +1065,8 @@ impl Pop {
             refusal: RwSignal::new(None),
             focus: RwSignal::new(None),
             hover: RwSignal::new(None),
+            drawer: RwSignal::new(false),
+            stale: RwSignal::new(false),
         }
     }
 
@@ -1276,6 +1282,9 @@ pub(crate) fn FilterBar(
                     <SaveAs level />
                     {flash_view(level)}
                 </span>
+                {move || pop.stale.get().then(|| view! {
+                    <span class="fstale" role="status" title="the text being edited does not read yet; the line shows the last filter that did">"\u{26a0} the last filter that read"</span>
+                })}
             </div>
             <LineNotes level />
             <PanelHost host=Host::Surface />
@@ -1815,80 +1824,148 @@ fn focus_each_load(field: NodeRef<leptos::html::Input>) {
     });
 }
 
-/// The text mode: a toggle; on, the level's filter as canonical text,
-/// editable — Enter applies it; a parse error lists every bad chunk under
-/// the box and applies nothing; Escape (or the toggle) goes back.
+/// FILTER-43: what a fix says on its button — `use build`, `close it`,
+/// `remove it`.
+pub(crate) fn fix_words(fix: &str) -> String {
+    match fix {
+        "" => "remove it".into(),
+        f if f.chars().all(|c| c == ')') => "close it".into(),
+        f => format!("use {f}"),
+    }
+}
+
+/// FILTER-43: the text with each mistake marked — the runs between them
+/// plain, each mistake's span (a caret where something is missing) marked;
+/// overlapping marks after the first dropped.
+pub(crate) fn marked(text: &str, mistakes: &[menger_tickets_api::filter::Mistake]) -> Vec<(bool, String)> {
+    let mut ms: Vec<&menger_tickets_api::filter::Mistake> = mistakes.iter().filter(|m| m.at + m.len <= text.len()).collect();
+    ms.sort_by_key(|m| m.at);
+    let (mut out, mut at) = (Vec::new(), 0usize);
+    for m in ms {
+        if m.at < at || !text.is_char_boundary(m.at) || !text.is_char_boundary(m.at + m.len) {
+            continue;
+        }
+        if m.at > at {
+            out.push((false, text[at..m.at].to_string()));
+        }
+        out.push((true, if m.len == 0 { "\u{2038}".to_string() } else { text[m.at..m.at + m.len].to_string() }));
+        at = m.at + m.len;
+    }
+    if at < text.len() {
+        out.push((false, text[at..].to_string()));
+    }
+    out
+}
+
+/// FILTER-43: the text drawer at the panel's foot — the level's filter as
+/// canonical text, edited in place. As you type, each mistake is
+/// underlined where it is and listed once, with its fix (`use build`,
+/// `close it`; a click puts it in) — the language's placed mistakes, never
+/// its grammar. Enter (or apply) applies the text once it reads; until
+/// then the level keeps the last filter that read, and its chips say so.
+/// Escape leaves the drawer.
 #[component]
-pub(crate) fn TextMode(level: Level, texting: RwSignal<bool>) -> impl IntoView {
+pub(crate) fn TextDrawer(level: Level) -> impl IntoView {
     let lens = lens::use_lens();
-    let draft = RwSignal::new(String::new());
-    let errors = RwSignal::new(Vec::<(String, String)>::new());
-    let field = NodeRef::<leptos::html::Input>::new();
-    focus_each_load(field);
-    let toggle = move |_| {
-        if texting.get_untracked() {
-            texting.set(false);
-        } else {
-            draft.set(lens.text(level));
-            errors.set(Vec::new());
-            texting.set(true);
+    let pop = lens.pop(level);
+    let draft = RwSignal::new(untrack(|| lens.text(level)));
+    let field = NodeRef::<leptos::html::Textarea>::new();
+    Effect::new(move |_| {
+        if let Some(el) = field.get() {
+            let _ = el.focus();
+        }
+    });
+    let read = Memo::new(move |_| draft.with(|t| menger_tickets_api::filter::Filter::parse(t).err()));
+    // The chips line follows: stale while the draft does not read.
+    Effect::new(move |_| pop.stale.set(read.with(Option::is_some)));
+    on_cleanup(move || {
+        pop.stale.try_set(false);
+    });
+    let apply = move || {
+        if read.with_untracked(Option::is_some) {
+            return;
+        }
+        if lens.apply_text(level, &draft.get_untracked()).is_ok() {
+            pop.sel.set(0);
+            draft.set(untrack(|| lens.text(level)));
         }
     };
-    let apply = move || match lens.apply_text(level, &draft.get_untracked()) {
-        Ok(()) => {
-            errors.set(Vec::new());
-            texting.set(false);
-            lens.pop(level).sel.set(0);
+    let fix = move |at: usize, len: usize, with: String| {
+        draft.update(|t| {
+            if at + len <= t.len() && t.is_char_boundary(at) && t.is_char_boundary(at + len) {
+                t.replace_range(at..at + len, &with);
+            }
+        });
+        if let Some(el) = field.get_untracked() {
+            let _ = el.focus();
         }
-        Err(bad) => errors.set(bad),
     };
     view! {
-        <button
-            class="ftext-t"
-            data-ftext=level.name()
-            aria-pressed=move || texting.get().to_string()
-            title="the filter as text"
-            on:click=toggle
-        >
-            "text"
-        </button>
-        {move || texting.get().then(|| view! {
-            <span class="ftext">
-                <input
-                    class="ftext-in"
-                    node_ref=field
-                    type="text"
-                    autocomplete="off"
-                    spellcheck="false"
-                    aria-label=format!("the {} filter as text", level.name())
-                    placeholder="(kind build and status Ready) or kind gap"
-                    prop:value=move || draft.get()
-                    on:input=move |ev| draft.set(event_target_value(&ev))
-                    on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
-                        Some("form.submit") => {
-                            ev.prevent_default();
-                            apply();
-                        }
-                        Some("form.cancel") => {
-                            ev.prevent_default();
-                            ev.stop_propagation();
-                            texting.set(false);
-                        }
-                        _ => {}
+        <div class="fp-drawer" data-level=level.name()>
+            <textarea
+                class="fdraft"
+                class:bad=move || read.with(Option::is_some)
+                node_ref=field
+                rows="2"
+                spellcheck="false"
+                aria-label=format!("the {} filter as text", level.name())
+                placeholder="(kind build and status Ready) or kind gap"
+                prop:value=move || draft.get()
+                on:input=move |ev| draft.set(event_target_value(&ev))
+                on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
+                    Some("form.submit") => {
+                        ev.prevent_default();
+                        apply();
                     }
-                />
-            </span>
-        })}
-        {move || {
-            let bad = errors.get();
-            (texting.get() && !bad.is_empty()).then(|| view! {
-                <ul class="ferrs" role="alert">
-                    {bad.into_iter().map(|(text, why)| view! {
-                        <li><code>{text}</code>" — "{why}</li>
-                    }).collect_view()}
-                </ul>
-            })
-        }}
+                    Some("form.cancel") => {
+                        ev.prevent_default();
+                        ev.stop_propagation();
+                        pop.drawer.set(false);
+                    }
+                    _ => {}
+                }
+            ></textarea>
+            {move || read.get().map(|e| {
+                let text = draft.get();
+                let all: Vec<menger_tickets_api::filter::Mistake> = e.chunks.iter().flat_map(|c| c.mistakes.iter().cloned()).collect();
+                let runs = marked(&text, &all);
+                let lines = e
+                    .chunks
+                    .iter()
+                    .flat_map(|c| {
+                        if c.mistakes.is_empty() {
+                            // A chunk read no closer: its own words, shortened.
+                            let why = if c.why.starts_with("not understood: a predicate is") { "not understood".to_string() } else { c.why.clone() };
+                            vec![(format!("`{}` \u{2014} {why}", c.text), None)]
+                        } else {
+                            c.mistakes.iter().map(|m| (m.words.clone(), m.fix.clone().map(|f| (m.at, m.len, f)))).collect()
+                        }
+                    })
+                    .map(|(words, f)| {
+                        let parts: Vec<(bool, String)> = words.split('`').enumerate().map(|(i, p)| (i % 2 == 1, p.to_string())).collect();
+                        view! {
+                            <li>
+                                {parts.into_iter().map(|(code, p)| if code { view! { <b>{p}</b> }.into_any() } else { view! { <span>{p}</span> }.into_any() }).collect_view()}
+                                {f.map(|(at, len, with)| {
+                                    let label = fix_words(&with);
+                                    view! { <button type="button" class="ffix" on:click=move |_| fix(at, len, with.clone())>{label}</button> }
+                                })}
+                            </li>
+                        }
+                    })
+                    .collect_view();
+                view! {
+                    <div class="fmarked" aria-hidden="true">
+                        {runs.into_iter().map(|(bad, t)| if bad { view! { <span class="fbad">{t}</span> }.into_any() } else { view! { <span>{t}</span> }.into_any() }).collect_view()}
+                    </div>
+                    <ul class="fmistakes" role="alert">{lines}</ul>
+                }
+            })}
+            <div class="fp-drawer-foot">
+                <button type="button" class="fapply" disabled=move || read.with(Option::is_some) on:click=move |_| apply()>"apply"</button>
+                <span class="fhint">"Enter applies \u{00b7} the chips keep the last filter that read"</span>
+            </div>
+        </div>
     }
 }
 
@@ -2233,7 +2310,6 @@ pub(crate) fn tab_count(lens: Lens, level: Level) -> RwSignal<Option<usize>> {
 fn panel(lens: Lens, pop: Pop) -> impl IntoView {
     let level = pop.level;
     let label = if level == Level::Global { "Filter every view".to_string() } else { format!("Filter the {}", level.name()) };
-    let texting = RwSignal::new(false);
     let secs = Memo::new(move |_| sections(level, &pop.cats.get()));
     view! {
         <section
@@ -2283,11 +2359,21 @@ fn panel(lens: Lens, pop: Pop) -> impl IntoView {
                 {move || secs.get().into_iter().map(|s| section_view(lens, pop, s)).collect_view()}
             </div>
             <div class="fp-foot">
-                <TextMode level texting />
+                <button
+                    type="button"
+                    class="fp-text"
+                    data-ftext=level.name()
+                    aria-expanded=move || pop.drawer.get().to_string()
+                    title="the filter as text, in FILTER-3's language"
+                    on:click=move |_| pop.drawer.update(|d| *d = !*d)
+                >
+                    {move || if pop.drawer.get() { "\u{25be} edit as text" } else { "\u{25b8} edit as text" }}
+                </button>
                 <Reset level />
                 <SaveAs level />
                 <span class="fp-count">{move || foot_words(lens, level)}</span>
             </div>
+            {move || pop.drawer.get().then(|| view! { <TextDrawer level /> })}
         </section>
     }
 }
@@ -3305,5 +3391,21 @@ pub(crate) mod tests {
         assert_eq!(host_of(true, true), Host::Top, "the phone's sheet");
         assert_eq!(host_of(true, false), Host::Top);
         assert_eq!(Level::ALL.map(tab_words), ["everywhere", "nav", "this board", "this wave board", "the inputs"]);
+    }
+
+    /// FILTER-43: the drawer marks each mistake where it is (a caret where
+    /// something is missing) and says each fix in two words.
+    #[test]
+    fn the_drawer_marks_each_mistake_and_says_its_fix() {
+        let text = "(kind build and status Ready) or (kind bild and severity hgh";
+        let e = menger_tickets_api::filter::Filter::parse(text).unwrap_err();
+        let ms: Vec<_> = e.chunks.iter().flat_map(|c| c.mistakes.iter().cloned()).collect();
+        let runs = marked(text, &ms);
+        assert_eq!(runs.iter().filter(|(bad, _)| *bad).map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["bild", "hgh", "\u{2038}"]);
+        assert_eq!(runs.iter().map(|(_, t)| t.as_str()).filter(|t| *t != "\u{2038}").collect::<String>(), text, "every run as written");
+        assert_eq!(ms.iter().map(|m| fix_words(m.fix.as_deref().unwrap())).collect::<Vec<_>>(), ["use build", "use high", "close it"]);
+        assert_eq!(fix_words(""), "remove it");
+        // Nothing marked past the text's end.
+        assert_eq!(marked("ready", &[]), [(false, "ready".to_string())]);
     }
 }

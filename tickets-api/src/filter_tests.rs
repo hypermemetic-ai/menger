@@ -1636,3 +1636,64 @@ fn access_21_ticket_is_one_ticket_alone() {
     assert!(f.matches(&cell));
     assert!(Filter::parse("ticket MNG-40 and not ticket MNG-40").unwrap().admits_nothing().is_some());
 }
+
+/// FILTER-43: a chunk the language refuses carries where it stands and each
+/// mistake in it, placed in the text read, with the nearest names and the
+/// text that fixes it — never the grammar's listing.
+#[test]
+fn a_mistake_is_placed_with_its_fix() {
+    let mistakes = |text: &str| -> Vec<(String, String, Option<String>, Vec<String>)> {
+        let e = Filter::parse(text).expect_err(text);
+        e.chunks
+            .iter()
+            .flat_map(|c| c.mistakes.iter())
+            .map(|m| (text[m.at..m.at + m.len].to_string(), m.words.clone(), m.fix.clone(), m.near.clone()))
+            .collect()
+    };
+    // A value its field does not hold: the nearest, as the fix.
+    assert_eq!(mistakes("kind bild"), [("bild".into(), "`bild` is no kind".into(), Some("build".into()), vec!["build".to_string()])]);
+    assert_eq!(mistakes("ready and severity hgh")[0].0, "hgh");
+    assert_eq!(mistakes("ready and severity hgh")[0].2.as_deref(), Some("high"));
+    // A status is quoted where it holds a space.
+    assert_eq!(mistakes("status \"In Reveiw\"")[0].2.as_deref(), Some("\"In Review\""));
+    // A field no one has: the nearest fields.
+    let m = &mistakes("ready and kidn build")[0];
+    assert_eq!((m.0.as_str(), m.1.as_str(), m.2.as_deref()), ("kidn", "`kidn` is not a field", Some("kind")));
+    // A list's value.
+    assert_eq!(mistakes("kind in (build, gapp)")[0].0, "gapp");
+    // FILTER-38's mockup 5: three mistakes in one chunk, each placed, the
+    // group left open closed at the end.
+    let text = "(kind build and status Ready) or (kind bild and severity hgh";
+    let e = Filter::parse(text).unwrap_err();
+    assert_eq!(e.chunks.len(), 1);
+    assert_eq!(e.chunks[0].at, 0);
+    let ms = &e.chunks[0].mistakes;
+    assert_eq!(ms.iter().map(|m| &text[m.at..m.at + m.len]).collect::<Vec<_>>(), ["bild", "hgh", ""]);
+    assert_eq!(ms[2].at, text.len());
+    assert_eq!(ms[2].fix.as_deref(), Some(")"));
+    // Each fix, applied, and the text reads.
+    let mut fixed = text.to_string();
+    for m in ms.iter().rev() {
+        fixed.replace_range(m.at..m.at + m.len, m.fix.as_deref().unwrap());
+    }
+    assert_eq!(parsed(&fixed).format(), "((kind build and status Ready) or (kind build and severity high))");
+    // A chunk's place in a longer text; a stray `)`.
+    let e = Filter::parse("ready and kind bild").unwrap_err();
+    assert_eq!(e.chunks[0].at, 10);
+    assert_eq!(e.chunks[0].mistakes[0].at, 15);
+    let m = &mistakes("kind build)")[0];
+    assert_eq!((m.0.as_str(), m.2.as_deref()), (")", Some("")));
+    // Nothing near: no fix, and the words never list the grammar.
+    let m = &mistakes("zzzzzz")[0];
+    assert_eq!((m.2.clone(), m.3.is_empty()), (None, true));
+    for text in ["zzzzzz", "kind bild", "(a or b and c)", "status \"x"] {
+        let e = Filter::parse(text).unwrap_err();
+        assert!(e.chunks.iter().flat_map(|c| &c.mistakes).all(|m| !m.words.contains("a predicate is")), "{text}: {e:?}");
+    }
+    // Mixed joins are placed on the group.
+    assert!(mistakes("(ready or blocked and asking)")[0].1.contains("mixed"));
+    // The nearest: within two edits (or a third of the word), best first.
+    assert_eq!(nearest("bild", ["build", "gap", "spike"]), ["build"]);
+    assert_eq!(nearest("statu", ["status", "state", "kind"]), ["status", "state"]);
+    assert!(nearest("xxxxxxxx", ["build"]).is_empty());
+}

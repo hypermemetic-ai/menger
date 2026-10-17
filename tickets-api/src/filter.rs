@@ -640,6 +640,32 @@ pub struct BadChunk {
     /// The chunk as written: one `and`-joined group, or one display part.
     pub text: String,
     pub why: String,
+    /// FILTER-43: where the chunk starts in the text read (bytes; 0 for a
+    /// chunk no text holds — a name that does not resolve).
+    pub at: usize,
+    /// FILTER-43: each mistake inside it, placed, with its fix where one
+    /// can be named ([`Mistake`]) — none when the chunk cannot be read
+    /// closer than its `why`.
+    pub mistakes: Vec<Mistake>,
+}
+
+/// FILTER-43: one mistake in a filter text, placed — what an editor
+/// underlines and says in one line, never the grammar.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Mistake {
+    /// Where it is in the text read, in bytes, and how long (0: something
+    /// is missing there).
+    pub at: usize,
+    pub len: usize,
+    /// What it is, in a few words: "`bild` is no kind".
+    pub words: String,
+    /// The names the language holds nearest to what was written, nearest
+    /// first (edit distance; statuses, kinds, severities and categories as
+    /// the vocabulary has them) — empty when none is near.
+    pub near: Vec<String>,
+    /// The text that, put in its place, fixes it — the nearest name, a
+    /// closing `)` — or none.
+    pub fix: Option<String>,
 }
 
 /// Every chunk a filter text holds that the language did not take — a
@@ -745,13 +771,13 @@ impl Filter {
         for chunk in parts(split_and(filter_text)) {
             match parse_group(chunk) {
                 Ok(g) => groups.push(g),
-                Err(why) => bad.push(BadChunk { text: chunk.into(), why }),
+                Err(why) => bad.push(BadChunk { text: chunk.into(), why, at: offset_in(raw, chunk), mistakes: mistakes(raw, chunk) }),
             }
         }
         let mut display = Display::default();
         for chunk in sections.map(str::trim).filter(|c| !c.is_empty()) {
             if let Err(why) = display.read(chunk) {
-                bad.push(BadChunk { text: chunk.into(), why });
+                bad.push(BadChunk { text: chunk.into(), why, at: offset_in(raw, chunk), mistakes: Vec::new() });
             }
         }
         match bad.is_empty() {
@@ -900,7 +926,7 @@ impl Filter {
             };
             match read {
                 Ok(gs) => groups.extend(gs),
-                Err(why) => bad.push(BadChunk { text: g.format(), why }),
+                Err(why) => bad.push(BadChunk { text: g.format(), why, at: 0, mistakes: Vec::new() }),
             }
         }
         match bad.is_empty() {
@@ -971,6 +997,224 @@ impl FromStr for Filter {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Filter::parse(s)
     }
+}
+
+// ---------------------------------------------------------------------
+// FILTER-43: mistakes, placed
+
+/// Where `part` (a slice of `raw`) starts in it.
+fn offset_in(raw: &str, part: &str) -> usize {
+    (part.as_ptr() as usize).saturating_sub(raw.as_ptr() as usize).min(raw.len())
+}
+
+/// The names a filter may begin a predicate with, as menger reads them —
+/// [`NAMES`] less manifest's that menger refuses.
+fn readable_names() -> impl Iterator<Item = &'static str> {
+    const REFUSED: [&str; 9] = ["discussion", "unattested", "past cap", "session", "lowest", "depth", "tag", "written", "age"];
+    NAMES.into_iter().filter(|n| !REFUSED.contains(n))
+}
+
+/// Levenshtein's distance, ASCII case folded.
+fn distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.to_lowercase().chars().collect(), b.to_lowercase().chars().collect());
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let next = (row[j + 1] + 1).min(row[j] + 1).min(prev + usize::from(ca != cb));
+            prev = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}
+
+/// FILTER-43: the names nearest to `word` among `names`, nearest first —
+/// within two edits, or a third of the word's length, whichever is more;
+/// at most three.
+pub fn nearest<'n>(word: &str, names: impl IntoIterator<Item = &'n str>) -> Vec<String> {
+    let most = 2.max(word.chars().count() / 3);
+    let mut found: Vec<(usize, &str)> = names.into_iter().map(|n| (distance(word, n), n)).filter(|(d, _)| *d <= most && *d > 0).collect();
+    found.sort_by_key(|(d, _)| *d);
+    let mut out: Vec<String> = Vec::new();
+    for (_, n) in found {
+        if !out.iter().any(|o| o.eq_ignore_ascii_case(n)) && out.len() < 3 {
+            out.push(n.to_string());
+        }
+    }
+    out
+}
+
+/// The values a field takes from a closed list, as the vocabulary holds
+/// them — `None` for a field whose values are free.
+fn values_of(field: &str) -> Option<Vec<String>> {
+    Some(match field {
+        "status" => Status::ALL.iter().map(|s| s.as_str().to_string()).collect(),
+        "kind" => Kind::ALL.iter().map(|k| k.as_str().to_string()).collect(),
+        "severity" => ["critical", "high", "medium", "low", "none"].map(String::from).to_vec(),
+        "category" => Category::ALL.iter().map(|c| c.as_str().to_string()).collect(),
+        _ => return None,
+    })
+}
+
+/// FILTER-43: every mistake in `chunk` (a slice of `raw`), placed in
+/// `raw`: a group opened and never closed (fixed by closing it), a `)`
+/// closing none, a quote left open; inside, each predicate that does not
+/// read — a field no one has (the nearest fields), a value its field does
+/// not hold (the nearest values), `or` and `and` mixed in one pair; and,
+/// placed on the predicate, anything else, in the language's words.
+pub fn mistakes(raw: &str, chunk: &str) -> Vec<Mistake> {
+    let mut out = Vec::new();
+    let base = offset_in(raw, chunk);
+    // The parentheses and quotes first: where they leave off.
+    let (mut depth, mut quoted, mut quote_at) = (0i32, false, 0usize);
+    for (i, c) in chunk.char_indices() {
+        if quoted {
+            quoted = c != '"';
+            continue;
+        }
+        match c {
+            '"' => {
+                quoted = true;
+                quote_at = i;
+            }
+            '(' => depth += 1,
+            ')' if depth == 0 => out.push(Mistake { at: base + i, len: 1, words: "a `)` that closes no group".into(), near: Vec::new(), fix: Some(String::new()) }),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    if quoted {
+        out.push(Mistake { at: base + quote_at, len: 1, words: "a quote opened and never closed".into(), near: Vec::new(), fix: None });
+    }
+    walk(raw, chunk, &mut out);
+    if depth > 0 && !quoted {
+        let end = base + chunk.len();
+        out.push(Mistake { at: end, len: 0, words: "a group opened and never closed".into(), near: Vec::new(), fix: Some(")".repeat(depth as usize)) });
+    }
+    out.sort_by_key(|m| m.at);
+    out
+}
+
+/// The predicates of `s` (a slice of `raw`), walked through its groups —
+/// a group left open read as if it closed at the end.
+fn walk(raw: &str, s: &str, out: &mut Vec<Mistake>) {
+    let (_, s) = strip_not(s);
+    let s = s.trim();
+    if s.is_empty() {
+        return;
+    }
+    let inner = wrapped(s).or_else(|| never_closed(s));
+    if let Some(inner) = inner {
+        return walk_list(raw, inner, out);
+    }
+    if split_top(s, " or ").len() > 1 || split_and(s).len() > 1 {
+        return walk_list(raw, s, out);
+    }
+    if parse_predicate(s).is_err() && list_group(s).is_none_or(|g| g.is_err()) {
+        out.extend(predicate_mistake(raw, s));
+    }
+}
+
+/// What follows a `(` that opens `s` and never closes — `None` when `s`
+/// does not open so.
+fn never_closed(s: &str) -> Option<&str> {
+    if !s.starts_with('(') {
+        return None;
+    }
+    let (mut depth, mut quoted) = (0usize, false);
+    for c in s.chars() {
+        if quoted {
+            quoted = c != '"';
+            continue;
+        }
+        match c {
+            '"' => quoted = true,
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(&s[1..])
+}
+
+/// One join's items, each walked; `or` and `and` mixed is placed on them.
+fn walk_list(raw: &str, s: &str, out: &mut Vec<Mistake>) {
+    let ors = split_top(s, " or ");
+    let ands = split_and(s);
+    if ors.len() > 1 && ands.len() > 1 {
+        out.push(Mistake {
+            at: offset_in(raw, s),
+            len: s.len(),
+            words: "`or` and `and` mixed in one pair of parentheses \u{2014} put the `and`s in a group of their own".into(),
+            near: Vec::new(),
+            fix: None,
+        });
+    }
+    let items = if ors.len() > 1 { ors } else { ands };
+    for item in items {
+        walk(raw, item, out);
+    }
+}
+
+/// The mistake a predicate that does not read holds — a field, a value, or
+/// the predicate as a whole.
+fn predicate_mistake(raw: &str, s: &str) -> Option<Mistake> {
+    // A `)` the walk placed already is not the predicate's.
+    let t = s.trim_end_matches(')').trim_end();
+    if t.len() < s.len() && parse_predicate(t).is_ok() {
+        return None;
+    }
+    let (_, rest) = strip_not(s);
+    let rest = rest.trim();
+    let at = offset_in(raw, rest);
+    let Some((name, tail)) = split_field(rest) else {
+        let word = rest.split(|c: char| c.is_whitespace() || c == '(' || c == ')').next().unwrap_or(rest);
+        let near = nearest(word, readable_names());
+        return Some(Mistake {
+            at,
+            len: word.len(),
+            words: format!("`{word}` is not a field"),
+            fix: near.first().cloned(),
+            near,
+        });
+    };
+    let why = parse_predicate(s).err().unwrap_or_default();
+    if let Some(values) = values_of(name) {
+        // One value, or a list `in (a, b)`: the first that is none of them.
+        let list = tail.strip_prefix("in").map(str::trim_start).and_then(wrapped);
+        let vals: Vec<&str> = match list {
+            Some(inner) => inner.split(',').map(str::trim).collect(),
+            None => vec![tail],
+        };
+        for v in vals {
+            // A `)` the walk placed already is not the value's.
+            let v = v.trim_end_matches(')').trim_end();
+            let bare = v.trim_matches('"');
+            if bare.is_empty() || values.iter().any(|x| x.eq_ignore_ascii_case(bare)) {
+                continue;
+            }
+            let near = nearest(bare, values.iter().map(String::as_str));
+            return Some(Mistake {
+                at: offset_in(raw, v),
+                len: v.len(),
+                words: format!("`{bare}` is no {name}"),
+                fix: near.first().map(|n| quoted(n)),
+                near,
+            });
+        }
+    }
+    let words = match why.as_str() {
+        w if w == NOT_UNDERSTOOD || w.is_empty() => format!("`{rest}` is not understood"),
+        w => w.to_string(),
+    };
+    Some(Mistake { at, len: rest.len(), words, near: Vec::new(), fix: None })
 }
 
 // ---------------------------------------------------------------------

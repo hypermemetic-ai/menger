@@ -1864,6 +1864,29 @@
   .fpanel button.frow:hover, .fpanel button.frow:focus-visible { background: var(--hover); outline: none; }
   .fpanel .fp-foot { display: flex; align-items: center; gap: .75rem; padding: .35rem .75rem; }
   .fpanel .fp-foot .reset { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+  /* FILTER-43: the text drawer — each mistake underlined where it is,
+     listed once with its fix; the chips keep the last filter that read. */
+  .fpanel .fp-text { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+  .fpanel .fp-drawer { padding: .45rem .75rem .6rem; border-top: var(--border) solid var(--line); }
+  .fpanel .fdraft {
+    display: block; width: 100%; box-sizing: border-box; resize: vertical; min-height: 3.2em; font: calc(12.5px * var(--text-scale))/1.6 var(--mono);
+    padding: .3rem .5rem; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); outline: none;
+  }
+  .fpanel .fdraft:focus { border-color: var(--accent); }
+  .fpanel .fdraft.bad { border-color: var(--err-fg); }
+  .fpanel .fmarked { margin-top: .3rem; white-space: pre-wrap; overflow-wrap: anywhere; font: calc(12px * var(--text-scale))/1.6 var(--mono); color: var(--muted); }
+  .fpanel .fbad { color: var(--err-fg); text-decoration: wavy underline var(--err-fg); text-underline-offset: 3px; }
+  .fpanel .fmistakes { margin: .25rem 0 0; padding: 0; list-style: none; color: var(--err-fg); font-size: calc(11.5px * var(--text-scale)); }
+  .fpanel .fmistakes li { margin: .1rem 0; }
+  .fpanel .fmistakes b { color: var(--ink); font-weight: var(--weight-medium); }
+  .fpanel .ffix { margin-left: .6rem; background: none; border: 0; border-bottom: 1px dotted var(--accent); padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+  .fpanel .fp-drawer-foot { display: flex; align-items: center; gap: .6rem; margin-top: .4rem; }
+  .fpanel .fapply {
+    font: var(--weight-medium) calc(11px * var(--text-scale)) var(--mono); letter-spacing: .06em; text-transform: uppercase; padding: .25rem .8rem; cursor: pointer;
+    color: var(--bg); background: var(--accent); border: var(--border) solid var(--accent); border-radius: var(--radius);
+  }
+  .fpanel .fapply:disabled { opacity: .45; cursor: default; }
+  .fline .fstale { flex-basis: 100%; color: var(--err-fg); font-size: calc(11.5px * var(--text-scale)); }
   .fpanel .fp-count { margin-left: auto; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
   #nav .fpanel { margin: .35rem .5rem; }
   /* FILTER-40: one panel, its level tabs counted; the global filter a
@@ -1898,7 +1921,7 @@
      field muted, the value inked, ×) with and / or drawn, the count and
      save as…; empty, what is shown and the saved filters most used. */
   .fbar.fline { display: block; }
-  .fline-row { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+  .fline-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; min-width: 0; }
   .fline-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; min-width: 0; flex: 1 1 auto; font-size: calc(12px * var(--text-scale)); }
   .fline-end { display: inline-flex; align-items: center; gap: .6rem; flex: none; margin-left: auto; font-size: calc(12px * var(--text-scale)); }
   .fline-n { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
