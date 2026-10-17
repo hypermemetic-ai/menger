@@ -1,11 +1,18 @@
+import type { ChatId } from '../media/types';
 /** One chat, as one caller sees it: `unread` is the caller's own count —
 the messages after its read mark (zero for an admin who is not in it). */
 export interface Chat {
+    /** CHAT-13: the participants who are the server's standing chat members
+  (`--chat-member`, in every chat) — agents, drawn as CHAT-4/7 draw an
+  `agent:` principal. */
+    agents?: string[];
     /** CHAT-8: how many messages it holds — the app's spacer for what it
   has not fetched. */
     count?: number;
     /** Its id: 1, 2, … in the order chats were opened, never reused. */
     id: ChatId;
+    /** CHAT-14: a ticket's chat, a direct message or a group. */
+    kind?: ChatKind;
     /** The time of its last message — its opening, until one is posted. */
     lastAt: number;
     /** Its last message's id, when it has one. */
@@ -21,8 +28,9 @@ export interface Chat {
   the order they joined — the opener first. */
     participants: string[];
     state: ChatState;
-    /** The ticket it was opened on, by its key as it stands now. */
-    ticket: string;
+    /** The ticket it was opened on, by its key as it stands now — none for a
+  direct message or a group (CHAT-14). */
+    ticket?: string | null;
     title?: string | null;
     /** The caller's unread messages in it. */
     unread: number;
@@ -30,8 +38,9 @@ export interface Chat {
   "waiting for a message"): who is listening, as the pane shows it. */
     waiting?: string[];
 }
-/** CHAT-3: a chat's number, from 1 in the order opened. */
-export type ChatId = number;
+/** CHAT-14: what a chat is — on a ticket (CHAT-1), or outside tickets: a
+direct message between two, or a group. */
+export type ChatKind = "ticket" | "direct" | "group";
 /** Where a chat stands: open, or closed (read-only) (any case) */
 export type ChatState = "open" | "closed";
 /** `open`'s answer, and on `watch` a chat opened with the caller in it.
@@ -49,9 +58,16 @@ export interface ChatsEventChat {
 }
 /** CHAT-4: one of `candidates`' rows — a principal who could be named in
 a chat on the ticket, and whether it can read the ticket now (one
-that cannot is shown in the picker and cannot be picked). */
+that cannot is shown in the picker and cannot be picked).
+CHAT-14: `name` — the name the server knows it by (the name it last
+signed in with, a synapse key's name included), and `agent` — drawn
+as an agent (an `agent:` or `key:` principal, or a standing chat
+member). Without a ticket, `reads` says it may be in a chat outside
+tickets (it holds a grant in the caller's organization). */
 export interface ChatsEventCandidate {
     type: 'candidate';
+    agent: boolean;
+    name: string | null;
     principal: string;
     reads: boolean;
 }
@@ -69,6 +85,13 @@ export interface ChatsEventMessage {
 export interface ChatsEventAdded {
     type: 'added';
     chat: Chat;
+}
+/** CHAT-14: `remove`'s answer, and on `watch` to those still in it: the
+chat with its participants now. The one removed hears `left`. */
+export interface ChatsEventRemoved {
+    type: 'removed';
+    chat: Chat;
+    principal: string;
 }
 /** `read`'s answer, and on the reader's own other `watch`es: its mark
 in `chat` is `upto`, and `unread` are after it. */
@@ -169,13 +192,14 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 export declare function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened;
 export declare function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat;
 export declare function isChatsEventCandidate(e: ChatsEvent): e is ChatsEventCandidate;
 export declare function isChatsEventPosted(e: ChatsEvent): e is ChatsEventPosted;
 export declare function isChatsEventMessage(e: ChatsEvent): e is ChatsEventMessage;
 export declare function isChatsEventAdded(e: ChatsEvent): e is ChatsEventAdded;
+export declare function isChatsEventRemoved(e: ChatsEvent): e is ChatsEventRemoved;
 export declare function isChatsEventRead(e: ChatsEvent): e is ChatsEventRead;
 export declare function isChatsEventClosed(e: ChatsEvent): e is ChatsEventClosed;
 export declare function isChatsEventReopened(e: ChatsEvent): e is ChatsEventReopened;

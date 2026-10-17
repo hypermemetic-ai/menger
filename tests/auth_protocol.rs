@@ -322,6 +322,10 @@ fn now_needs(today: Today, method: &str) -> Today {
         // Who am I, my grants, the providers: a signed-in caller's; an
         // anonymous one asks auth.providers / auth.login.
         (Today::Anyone, _) => Today::SignedIn,
+        // CHAT-14: a viewer chats, and pastes images there — `media.put` is
+        // a viewer's grant; a ticket's image still takes an editor's permit
+        // on it (answered `not_found` without one).
+        (Today::Editor, "media.put") => Today::Viewer,
         (t, _) => t,
     }
 }
@@ -724,13 +728,14 @@ async fn an_image_is_seen_through_its_tickets_reach() {
 
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
     let agent = as_key(s.port, &AGENT, "worker-1").await;
-    assert_eq!(view(&agent).await["media"], names(&["get"]), "a viewer reads images");
+    assert_eq!(view(&agent).await["media"], names(&["get", "put"]), "a viewer reads images, and (CHAT-14) puts them in its chats");
     let none = "0".repeat(64);
     let hidden = one(&agent, "media.get", json!({ "hash": secret })).await;
     assert_eq!(hidden, json!({ "type": "not_found", "hash": secret }), "B's image, to A's viewer: not found");
     assert_eq!(one(&agent, "media.get", json!({ "hash": none })).await, json!({ "type": "not_found", "hash": none }), "as for none");
+    // A viewer's put for a ticket: no editor's permit on it — not found (CHAT-14: the gate admits a viewer, for its chats).
     let no = one(&agent, "media.put", json!({ "ticket": "A-2", "mime": "image/gif", "data": GIF })).await;
-    assert_eq!((no["error_kind"].as_str(), no["grant"].as_str(), no["scope"].as_str()), (Some("forbidden"), Some("media.put"), Some("A-2")), "{no}");
+    assert_eq!((no["type"].as_str(), no["ticket"].as_str()), (Some("not_found"), Some("A-2")), "{no}");
 
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "editor" })).await;
     let mine = one(&agent, "media.put", json!({ "ticket": "C-2", "mime": "image/gif", "data": GIF })).await;

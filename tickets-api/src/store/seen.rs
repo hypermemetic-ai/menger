@@ -68,6 +68,9 @@ pub trait Reader: sealed::Sealed + Sync {
     /// ACCESS-19: which comments on the app (a comment naming no ticket)
     /// it sees — every one, or only those its principal left.
     fn app_comments(&self) -> AppSight;
+
+    /// CHAT-14: who reads — `None` for the system, which reads everything.
+    fn principal_of(&self) -> Option<String>;
 }
 
 /// ACCESS-19 (ACCESS-1's first question, as proposed): a comment on the app
@@ -97,6 +100,10 @@ impl Reader for System {
         Ok(None)
     }
 
+    fn principal_of(&self) -> Option<String> {
+        None
+    }
+
     fn app_comments(&self) -> AppSight {
         AppSight::All
     }
@@ -105,6 +112,10 @@ impl Reader for System {
 impl Reader for VerifiedUser {
     fn reach(&self) -> Result<Option<Filter>, StoreError> {
         self.read_filter().map_err(StoreError::Filter)
+    }
+
+    fn principal_of(&self) -> Option<String> {
+        Some(self.principal_text())
     }
 
     fn app_comments(&self) -> AppSight {
@@ -118,6 +129,10 @@ impl Reader for VerifiedUser {
 impl Reader for ReadingAs<'_> {
     fn reach(&self) -> Result<Option<Filter>, StoreError> {
         self.read_filter().map_err(StoreError::Filter)
+    }
+
+    fn principal_of(&self) -> Option<String> {
+        Some(self.user().principal_text())
     }
 
     fn app_comments(&self) -> AppSight {
@@ -334,6 +349,8 @@ impl<'c> Sees<'c> {
         owners.iter().any(|o| match o {
             super::media::Owner::Ticket(t) => self.all() || self.cache.resolve(t).is_ok_and(|k| self.id(&k)),
             super::media::Owner::App(p) => self.app.admits(p.as_deref()),
+            // CHAT-14: a chat's image is its participants' ([`super::Store::media_info`]).
+            super::media::Owner::Chat(_) => false,
         })
     }
 

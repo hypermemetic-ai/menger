@@ -173,12 +173,19 @@ pub struct OnMedia(MediaBy);
 enum MediaBy {
     Ticket(Permit<Editor>),
     App,
+    /// CHAT-14: a chat its putter is in (checked again under the lock).
+    Chat(u64),
 }
 
 impl OnMedia {
     /// An image on the app: its putter's.
     pub fn app() -> Self {
         Self(MediaBy::App)
+    }
+
+    /// CHAT-14: an image in chat `chat`, for a participant's seat in it.
+    pub fn chat(chat: u64, _seat: &super::Standing) -> Self {
+        Self(MediaBy::Chat(chat))
     }
 
     /// ACCESS-11: under the write lock, whose the image is — the permit's
@@ -188,6 +195,10 @@ impl OnMedia {
         match &self.0 {
             MediaBy::Ticket(p) => key_of(cache, p.id()).map(super::media::Owner::Ticket).ok_or_else(|| StoreError::NotFound(p.id().to_string())),
             MediaBy::App => Ok(super::media::Owner::App(principal)),
+            MediaBy::Chat(c) => match (cache.chats.by_id.get(c), principal.as_deref()) {
+                (Some(chat), Some(p)) if chat.has(p) => Ok(super::media::Owner::Chat(*c)),
+                _ => Err(StoreError::NotFound(format!("chat {c}"))),
+            },
         }
     }
 }

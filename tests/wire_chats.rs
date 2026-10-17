@@ -8,7 +8,10 @@
 //! required (-32602 naming it), a participant who cannot read the ticket is
 //! refused by name, a reader of the ticket who is not in the chat finds
 //! nothing there, and a participant whose grant on the ticket is revoked is
-//! told `left` on its watch. Every server has its own throwaway database
+//! told `left` on its watch. CHAT-14: a direct message and a group
+//! outside tickets — the same two again is that one, a group's members
+//! added and removed, only participants read it (a chat's image too), and
+//! an agent's key found in `candidates` by the name it signed in with. Every server has its own throwaway database
 //! and port; prod and test are never touched. The keys are fixtures.
 
 use ed25519_dalek::SigningKey;
@@ -173,10 +176,9 @@ async fn open_post_and_await_message_across_two_connections() {
     let ada = as_key(port, &ADA, "ada").await;
     let builder = as_key(port, &BUILDER, "builder").await;
 
-    // A ticket is required: refused before the method runs, naming it.
-    let none = one(&ada, "chats.open", json!({ "others": [principal(&BUILDER)] })).await;
-    assert_eq!(none["type"], "error", "{none}");
-    assert!(none.to_string().contains("ticket"), "{none}");
+    // CHAT-14: without a ticket, a chat of one is refused (it belongs on a ticket).
+    let none = one(&ada, "chats.open", json!({})).await;
+    assert_eq!(none["type"], "refused", "{none}");
 
     // Someone who can't read the ticket: refused by name, nothing made.
     let sam = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [principal(&SAM)] })).await;
@@ -311,4 +313,69 @@ async fn candidates_say_who_can_read_the_ticket() {
     // A participant is a candidate though its grant is gone (it is shown, not pickable).
     let opened = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [principal(&RUI)] })).await;
     assert_eq!(opened["type"], "opened", "{opened}");
+}
+
+/// CHAT-14: chats outside tickets over the wire — a direct message (the same
+/// two again: that one), a group with a title whose members add and remove,
+/// a reader of every ticket who is not in it finding nothing — its image
+/// `not_found` too — and builder's key named `builder` in the picker.
+#[tokio::test]
+async fn direct_messages_and_groups_outside_tickets() {
+    let port = start().await;
+    let boss = as_key(port, &BOSS, "boss").await;
+    kiln(&boss).await;
+    let ada = as_key(port, &ADA, "ada").await;
+    let builder = as_key(port, &BUILDER, "builder").await;
+    let rui = as_key(port, &RUI, "rui").await;
+    // builder has signed in as `builder`: the picker finds it by that name, an agent.
+    one(&builder, "chats.list", json!({})).await;
+    let mut found = None;
+    for _ in 0..50 {
+        let rows = call(&ada, "chats.candidates", json!({})).await;
+        found = rows.into_iter().find(|r| r["principal"] == principal(&BUILDER) && r["name"] == "builder");
+        if found.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    let found = found.expect("builder named in the picker");
+    assert_eq!((found["agent"].as_bool(), found["reads"].as_bool()), (Some(true), Some(true)), "{found}");
+
+    let dm = one(&ada, "chats.open", json!({ "others": [principal(&BUILDER)] })).await;
+    assert_eq!((dm["type"].as_str(), dm["chat"]["kind"].as_str(), dm["chat"].get("ticket")), (Some("opened"), Some("direct"), None), "{dm}");
+    let id = dm["chat"]["id"].as_u64().unwrap();
+    let again = one(&builder, "chats.open", json!({ "others": [principal(&ADA)] })).await;
+    assert_eq!((again["chat"]["id"].as_u64(), again["existing"].as_bool()), (Some(id), Some(true)));
+    one(&ada, "chats.post", json!({ "chat": id, "body": "just us" })).await;
+    // The boss (admin of everything) and rui (who reads A) are not in it.
+    for outside in [&boss, &rui] {
+        assert_eq!(one(outside, "chats.messages", json!({ "chat": id })).await, json!({ "type": "not_found", "chat": id }));
+    }
+    // A chat's image: its participants', `not_found` to the rest.
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    let stored = one(&ada, "media.put", json!({ "chat": id, "mime": "image/png", "data": png })).await;
+    assert_eq!(stored["type"], "stored", "{stored}");
+    let hash = stored["hash"].as_str().unwrap().to_string();
+    assert_eq!(one(&builder, "media.get", json!({ "hash": hash })).await["type"], "media");
+    for outside in [&boss, &rui] {
+        assert_eq!(one(outside, "media.get", json!({ "hash": hash })).await["type"], "not_found");
+    }
+    assert_eq!(one(&rui, "media.put", json!({ "chat": id, "mime": "image/png", "data": png })).await["type"], "not_found", "rui is not in it");
+
+    // A group: several, titled; a member adds rui, then removes builder, who is told `left`.
+    let g = one(&ada, "chats.open", json!({ "others": [principal(&BUILDER), principal(&RUI)], "title": "the A crew" })).await;
+    assert_eq!((g["chat"]["kind"].as_str(), g["chat"]["title"].as_str()), (Some("group"), Some("the A crew")), "{g}");
+    let gid = g["chat"]["id"].as_u64().unwrap();
+    let mut watch = subscribe(&builder, "chats.watch", json!({})).await;
+    let removed = one(&rui, "chats.remove", json!({ "chat": gid, "principal": principal(&BUILDER) })).await;
+    assert_eq!(removed["type"], "removed", "{removed}");
+    assert_eq!(next(&mut watch).await, json!({ "type": "left", "chat": gid }));
+    assert_eq!(one(&builder, "chats.messages", json!({ "chat": gid })).await, json!({ "type": "not_found", "chat": gid }));
+    // The boss, an admin of the org, adds builder back without reading it.
+    let back = one(&boss, "chats.add", json!({ "chat": gid, "principal": principal(&BUILDER) })).await;
+    assert_eq!(back["type"], "added", "{back}");
+    assert_eq!(one(&boss, "chats.messages", json!({ "chat": gid })).await, json!({ "type": "not_found", "chat": gid }));
+    // A direct message stays between two.
+    let refused = one(&ada, "chats.add", json!({ "chat": id, "principal": principal(&RUI) })).await;
+    assert_eq!(refused["type"], "refused", "{refused}");
 }

@@ -396,18 +396,31 @@ pub(crate) struct Attach {
     body: RwSignal<String>,
     area: NodeRef<Textarea>,
     ticket: StoredValue<Option<String>>,
+    /// CHAT-14: the chat an image is for, in a chat's composer — seen by
+    /// its participants alone.
+    chat: StoredValue<Option<u64>>,
     note: RwSignal<Option<(bool, String)>>,
     out: RwSignal<u32>,
 }
 
 impl Attach {
     pub(crate) fn new(body: RwSignal<String>, area: NodeRef<Textarea>, ticket: Option<String>) -> Self {
-        Self { body, area, ticket: StoredValue::new(ticket), note: RwSignal::new(None), out: RwSignal::new(0) }
+        Self { body, area, ticket: StoredValue::new(ticket), chat: StoredValue::new(None), note: RwSignal::new(None), out: RwSignal::new(0) }
+    }
+
+    /// CHAT-14: a chat composer's attaching — images put for `chat`.
+    pub(crate) fn for_chat(body: RwSignal<String>, area: NodeRef<Textarea>, chat: u64) -> Self {
+        Self { chat: StoredValue::new(Some(chat)), ..Self::new(body, area, None) }
     }
 
     /// Whether an image is still on its way (the box's Send waits for it).
     pub(crate) fn busy(self) -> bool {
         self.out.get() > 0
+    }
+
+    /// [`Attach::busy`], untracked.
+    pub(crate) fn busy_untracked(self) -> bool {
+        self.out.get_untracked() > 0
     }
 
     /// A paste: its images attached (and the paste itself not typed).
@@ -474,9 +487,10 @@ impl Attach {
         let found = refusal(name, &file.type_(), &bytes)?;
         let client = crate::session::media_client().ok_or_else(|| "not connected — the image was not sent".to_string())?;
         let ticket = crate::typed::opt(self.ticket.get_value())?;
+        let chat = self.chat.get_value().map(menger_tickets_api::vocab::ChatId::new);
         let mime = crate::typed::typed(found.mime)?;
         let data = crate::typed::typed(&base64::engine::general_purpose::STANDARD.encode(&bytes))?;
-        let events = client.put_all(ticket, mime, data).await.map_err(|e| crate::session::describe(&e))?;
+        let events = client.put_all(ticket, chat, mime, data).await.map_err(|e| crate::session::describe(&e))?;
         for ev in events {
             match ev {
                 MediaEvent::Stored { hash, .. } => {
@@ -488,7 +502,10 @@ impl Attach {
                 }
                 MediaEvent::Refused { message, .. } | MediaEvent::Error { message } => return Err(format!("{name}: {message}")),
                 MediaEvent::NotFound { ticket, .. } => {
-                    return Err(format!("{name}: not kept — {} is no ticket you can add images to", ticket.unwrap_or_default()))
+                    return Err(match self.chat.get_value() {
+                        Some(c) => format!("{name}: not kept — chat {c} is not one you are in"),
+                        None => format!("{name}: not kept — {} is no ticket you can add images to", ticket.unwrap_or_default()),
+                    })
                 }
                 MediaEvent::Media { .. } => {}
             }

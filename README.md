@@ -3217,7 +3217,8 @@ its name); `via` is kept for AGENT-3 and never set by a call.
 | `chats.rename { chat, title? }` | `renamed { chat }` (CHAT-7: the composer's `/title`) — by any participant; no title, or a blank one, clears it; the same title writes nothing. On watch too |
 | `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `renamed`, `listening { chat, principal, waiting }`, `left`, `lagged`, `watch_closed`. `claim_line` is declared for AGENT-3 and not emitted |
 | `chats.await_message { chat?, ticket?, since?, after?, timeout_minutes? }` | `waiting { chat?, ticket?, since }` at once, then one `message { message }` by someone else — in the chat, or any of the caller's chats (on `ticket`) — and the end; `timed_out` after the timeout. Without `since` or `after`, only what comes after the call; `since` (seconds) is at or after it, at least once; `after` (a message id) is exact. While it waits its chats show the caller in `waiting` (`listening` on watch) |
-| `chats.candidates { ticket }` | CHAT-4's picker: `candidate { principal, reads }` each, by principal — every principal holding a grant in the ticket's organization (on `*`, the org, a shortcode in it, a ticket or a subtree there; a team's members by name; the operator's `--admin`s) and every participant of the caller's chats there, but the caller; `reads` whether it can read the ticket now (`open` and `add` refuse one that cannot). A ticket the caller cannot read is `refused` (`no ticket X`). With login off nobody holds a grant: the list is the chats' participants |
+| `chats.remove { chat, principal }` | CHAT-14: `removed { chat, principal }` — a group's or a ticket's chat, by a participant (itself: it leaves) or, outside tickets, an admin of its organization; a direct message is refused. The one removed hears `left` |
+| `chats.candidates { ticket? }` | CHAT-4's picker: `candidate { principal, reads, name?, agent? }` each (CHAT-14: without a ticket, who may be in a direct message or a group), by principal — every principal holding a grant in the ticket's organization (on `*`, the org, a shortcode in it, a ticket or a subtree there; a team's members by name; the operator's `--admin`s) and every participant of the caller's chats there, but the caller; `reads` whether it can read the ticket now (`open` and `add` refuse one that cannot). A ticket the caller cannot read is `refused` (`no ticket X`). With login off nobody holds a grant: the list is the chats' participants |
 
 **In the app** (CHAT-4; in the section dock since CHAT-10, CHAT-9's
 answer): the dock lists your open chats on the ticket under its sections
@@ -3244,7 +3245,8 @@ box (AGENT-3's *stop the session* waits on AGENT-3), **↑** in an empty box
 recalls your last message; `@` at a word's start opens the people menu
 (the one picked is added), `/` the commands — `/add NAME`, `/ticket CODE`,
 `/title TEXT`, `/close` — a command that can't run refused in a strip over
-the card (*not sent · why*), as is a pasted image; ticket codes typed show
+the card (*not sent · why*); a pasted, dropped or picked image is kept for
+the chat (CHAT-14, below); ticket codes typed show
 as chips there; each chat's draft is kept per browser
 (`menger.chat.draft.<id>`); Settings → Chat sets its font size. **Full
 screen**: ⤢ on the dock's chat head, *full ↗* in its composer, `g c`, or
@@ -3279,6 +3281,65 @@ testing a ticket; a `watch { filter }` asking either follows every chat
 write. Kept in `chats`, `chat_participants` (each one's read mark) and
 `chat_messages` behind the cache, gained empty on open; who is listening is
 the cache's alone, never stored.
+
+#### Direct messages and groups (CHAT-14)
+
+A chat may be **outside tickets** (owner, 2026-10-17: *"I think we should
+also support direct messages and groups outside of ticketing"*): `open`
+with no `ticket` and one other is a **direct message** — opening it again,
+by either of the two, answers the one they have (`existing: true`), the
+standing chat members (CHAT-13) beside them not making it another — and
+with several others a **group**, named by `title`. A `Chat` says its
+`kind` (`ticket`, `direct`, `group`) and names a `ticket` only when it has
+one. Such a chat lives in the caller's organization: each participant must
+hold a grant there (`refused`: `X holds no grant in hypermemetic`), and
+**only its participants read it** — no ticket's reach and no admin's read;
+to anyone else it is `not_found`. A group's members are added (`add`) and
+taken out (`chats.remove { chat, principal }` → `removed { chat, principal
+}`; the one removed hears `left`; removing yourself leaves) by its members
+and by an admin of its organization, who adds and removes without reading
+it. A direct message stays between two: `add` and `remove` are refused
+there (start a group; close it). `list` and `watch` carry them as any
+chat; the filter cells `chatting` / `unread` stay a ticket's.
+
+**Names.** `candidates` without a ticket lists who may be in one — every
+principal holding a grant in the caller's organizations, and the
+participants of its chats outside tickets — and every `candidate` now says
+`name` and `agent`. The name is the one the principal last signed in with
+(the identity's `name`: a provider's display name, or a key's — synapse's
+`--as builder` signs in as `builder`), kept by the store in
+`principal_names` when it changes ([`Store::note_name`], off the call),
+else the last name its messages carried; it is the caller's own word,
+shown, never trusted for access. `agent` is an `agent:` (AGENT-1) or
+`key:` principal — a key is how an agent signs in — or a standing chat
+member. AGENT-3's named agents will be `agent:<name>` principals and need
+nothing more here.
+
+**Images** (owner, 2026-10-17: *"allow pasting images into chat and
+comments"*): the composer takes pasted, dropped or picked images as a
+comment does (COMMENT-5) — `media.put { chat, mime, data }` (beside
+`ticket`, never with it; `put` is a viewer's now: a viewer chats, and a
+ticket's image still takes an editor's permit on it) keeps it for the
+chat, seen by **its participants alone**, never the ticket's other
+readers; `not_found` to anyone else, the same 7 MiB cap and refusals
+(SVG, a non-image, a mismatch). A turn draws `![name](media:<hash>)` as a
+comment does (asked for when its row mounts — the window mounts only what
+is near the view — and measured again when it loads), full size on a
+click. The bridge passes one to the agent as a note, `[image: name,
+size]`.
+
+**In the app**: `#/chats` (the header's **chats N**, N your unread across
+every chat) is CHAT-7's full-screen session with no ticket beside it — a
+rail of every chat you are in, unread first, then the newest (each its
+ticket's chip, or *direct* / *group*, who or its title, its last line, your
+unread), **＋ New message** (`c`, `#/chats/new`: one person picked is a
+direct message, several a group with a title; agents found by name), and
+the chat at `#/chats/ID` in one column — who is in it (agents marked; a
+group's members taken out with ×), **＋ add**, **KILN-7 ⟩** for a ticket's
+chat, **⋯** (rename, close or reopen, leave a group, copy link). **Esc**
+leaves for the board; at ≤ 760 the rail is the page until a chat is
+chosen. `#/members` names each person (an agent marked) and gives each
+**chat**: the direct message with them.
 
 #### The chat bridge (CHAT-11)
 

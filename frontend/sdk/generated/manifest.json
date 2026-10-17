@@ -77,6 +77,10 @@
         "chat",
         "upto"
       ],
+      "remove": [
+        "chat",
+        "principal"
+      ],
       "rename": [
         "chat",
         "title"
@@ -189,6 +193,7 @@
         "hash"
       ],
       "put": [
+        "chat",
         "data",
         "mime",
         "ticket"

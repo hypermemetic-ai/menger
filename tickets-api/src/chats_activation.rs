@@ -60,27 +60,30 @@ impl ChatsActivation {
 // A viewer chats, as a viewer comments: every method is a viewer's — what
 // a call may do in a chat is the chat's to say (its participants), not a
 // role's.
-/// Chats on a ticket among participants — open, post, add, list, messages, read, close, reopen, watch, await_message.
+/// Chats among participants, on a ticket or outside tickets (direct messages and groups) — open, post, add, remove, list, messages, read, close, reopen, watch, await_message.
 #[plexus_macros::activation(
     auth = "required",
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["open", "post", "add", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "candidates"],
+        viewer = ["open", "post", "add", "remove", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "candidates"],
         editor = [viewer],
     )
 )]
 impl ChatsActivation {
-    /// Open a chat on a ticket with the principals named; yields opened { chat } — the open chat they already have there, when they do (existing: true).
+    /// Open a chat on a ticket, or outside tickets — a direct message or a group — with the principals named; yields opened { chat } — the open chat they already have, when they do (existing: true).
     ///
     /// The caller and `others` are the participants (CHAT-1's `with`, which
-    /// TypeScript does not take as a parameter's name) — `others` empty or
-    /// absent is a chat of one, the caller's alone, to add to later (CHAT-6);
-    /// every one of them must be
-    /// able to read the ticket, or the call is `refused { reasons }`, naming
-    /// each who cannot, and nothing is made. A ticket the caller cannot read
-    /// is refused as one that is none. `watch` carries `opened` to each
-    /// participant.
+    /// TypeScript does not take as a parameter's name). On a ticket,
+    /// `others` empty or absent is a chat of one, the caller's alone, to
+    /// add to later (CHAT-6); every one of them must be able to read the
+    /// ticket, or the call is `refused { reasons }`, naming each who cannot,
+    /// and nothing is made. A ticket the caller cannot read is refused as
+    /// one that is none. CHAT-14: without a ticket, one other is a direct
+    /// message (the one the two have, when they have one) and several a
+    /// group (`title` names it); each must hold a grant in the caller's
+    /// organization, and only its participants read it. `watch` carries
+    /// `opened` to each participant.
     #[plexus_macros::method(
         group = "write",
         example(note = "ada asks builder about KILN-7", params = r#"{"ticket": "KILN-7", "others": ["key:4b2e0000000000000000000000000000000000000000000000000000000000aa"]}"#)
@@ -88,16 +91,16 @@ impl ChatsActivation {
     pub async fn open(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// The ticket the chat is about, e.g. KILN-7 (required: there is no chat without a ticket).
-        ticket: TicketRef,
-        /// Who else is in it: principals, each able to read the ticket (none, or absent: a chat of one).
+        /// The ticket the chat is about, e.g. KILN-7 (optional: none for a direct message or a group).
+        ticket: Option<TicketRef>,
+        /// Who else is in it: principals, each able to read the ticket (on a ticket, none or absent: a chat of one; without one: one for a direct message, several for a group).
         others: Option<Vec<Principal>>,
         /// A title for it (optional).
         title: Option<Title>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let (store, access) = (self.store.clone(), self.access.clone());
         let others = others.unwrap_or_default().into_iter().map(Principal::into_string).collect();
-        futures::stream::once(async move { open(store, access, user, ticket.into_string(), others, title.map(Title::into_string)).await })
+        futures::stream::once(async move { open(store, access, user, ticket.map(TicketRef::into_string), others, title.map(Title::into_string)).await })
     }
 
     /// Post a message in a chat; yields posted { message }, signed by the caller.
@@ -123,6 +126,9 @@ impl ChatsActivation {
     ///
     /// By a participant, to an open chat; the one added must be able to read
     /// the ticket, or it is `refused`. One already in it is the chat as it is.
+    /// CHAT-14: to a group, one holding a grant in its organization, by a
+    /// participant or an admin of the organization; a direct message is
+    /// refused (it stays between two: start a group).
     #[plexus_macros::method(group = "write")]
     pub async fn add(
         &self,
@@ -157,7 +163,7 @@ impl ChatsActivation {
         /// At most this many chats (default 50, at most 500) (optional).
         limit: Option<u32>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
-        let q = ChatQuery { ticket: ticket.map(TicketRef::into_string), unread, state };
+        let q = ChatQuery { ticket: ticket.map(TicketRef::into_string), unread, state, kind: None };
         list_stream(self.store.clone(), user, q, after.map(ChatId::get), limit)
     }
 
@@ -185,6 +191,25 @@ impl ChatsActivation {
         limit: Option<u32>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         messages_stream(self.store.clone(), user, chat.get(), paging(after, before, newest), limit)
+    }
+
+    /// Take a participant out of a chat; yields removed { chat, principal } (CHAT-14).
+    ///
+    /// A group's or a ticket's chat, by a participant (itself too: it
+    /// leaves) or, outside tickets, an admin of the chat's organization; a
+    /// direct message is refused (close it instead). One not in it is the
+    /// chat as it is. The one removed hears `left` on its `watch`.
+    #[plexus_macros::method(group = "write")]
+    pub async fn remove(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 41.
+        chat: ChatId,
+        /// Who to take out: a principal.
+        principal: Principal,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        let (store, access) = (self.store.clone(), self.access.clone());
+        futures::stream::once(async move { remove(store, access, user, chat.get(), principal.into_string()).await })
     }
 
     /// Mark a chat read up to a message; yields read { chat, upto, unread }.
@@ -269,23 +294,27 @@ impl ChatsActivation {
         watch_stream(self.access.clone(), self.store.clone(), user, ticket.map(TicketRef::into_string))
     }
 
-    /// Who could be in a chat on a ticket: a candidate { principal, reads } each — every principal holding a grant in the ticket's organization (a team's members by name), and those in the caller's chats there — then the end.
+    /// Who could be in a chat — on a ticket, or (without one) outside tickets: a candidate { principal, reads, name?, agent } each — every principal holding a grant in the organization (a team's members by name), and those in the caller's chats there — then the end.
     ///
     /// CHAT-4's picker: `reads` says whether the principal can read the
     /// ticket now (`open` and `add` refuse one that cannot). The caller is
     /// not among them. A ticket the caller cannot read is `refused` as one
     /// that is none. A participant who holds no grant there now (one kept
     /// before ACCESS-24, when login could be off) is listed all the same, as
-    /// one of the chats' participants.
+    /// one of the chats' participants. CHAT-14: without a ticket, those
+    /// holding a grant in the caller's organizations (`reads`: may be in a
+    /// direct message or a group); each by the `name` the server knows it
+    /// by (signed in with — a synapse key's name too), and `agent` for an
+    /// agent (an `agent:` or `key:` principal, or a standing chat member).
     #[plexus_macros::method(group = "read")]
     pub async fn candidates(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// The ticket, e.g. KILN-7.
-        ticket: TicketRef,
+        /// The ticket, e.g. KILN-7 (optional: none for who may be in a direct message or a group).
+        ticket: Option<TicketRef>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let (store, access) = (self.store.clone(), self.access.clone());
-        futures::stream::iter(candidates(&store, &access, &user, &ticket.into_string()))
+        futures::stream::iter(candidates(&store, &access, &user, ticket.map(TicketRef::into_string).as_deref()))
     }
 
     /// Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — and the end; timed_out after timeout_minutes.

@@ -14,6 +14,13 @@
 //! by its caller; `via` is kept for AGENT-3 (an agent's message names the
 //! process that held the agent) and is never set by a call.
 //!
+//! CHAT-14: a chat may also be **outside tickets** — a direct message
+//! between two people ([`ChatKind::Direct`]) or a group with a title
+//! ([`ChatKind::Group`]). Such a chat has no ticket and no ticket's reach:
+//! only its participants read it, and it lives in one organization, whose
+//! members (anyone holding a grant there) may be added, and whose admins
+//! may add and remove members as its participants may.
+//!
 //! Wasm-safe, with no feature gate.
 
 use crate::vocab::{ChatId, MessageId};
@@ -69,14 +76,70 @@ impl FromStr for ChatState {
     }
 }
 
+/// CHAT-14: what a chat is — on a ticket (CHAT-1), or outside tickets: a
+/// direct message between two, or a group.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatKind {
+    /// Opened inside a ticket; read through the ticket's reach.
+    #[default]
+    Ticket,
+    /// A direct message: the opener and one other (and the standing chat
+    /// members, CHAT-13). Opening one again answers the one there is.
+    Direct,
+    /// A group outside tickets: the opener and several others, with a title.
+    Group,
+}
+
+impl ChatKind {
+    pub const ALL: [ChatKind; 3] = [ChatKind::Ticket, ChatKind::Direct, ChatKind::Group];
+
+    /// The wire and stored spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ChatKind::Ticket => "ticket",
+            ChatKind::Direct => "direct",
+            ChatKind::Group => "group",
+        }
+    }
+
+    /// Whether it is outside tickets.
+    pub const fn outside(self) -> bool {
+        !matches!(self, ChatKind::Ticket)
+    }
+}
+
+impl FromStr for ChatKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ChatKind::ALL
+            .into_iter()
+            .find(|c| c.as_str().eq_ignore_ascii_case(s.trim()))
+            .ok_or_else(|| format!("unknown chat kind '{}' (expected ticket, direct or group)", s.trim()))
+    }
+}
+
+/// CHAT-14: whether `principal` is drawn as an agent — an `agent:` (AGENT-1)
+/// or a `key:` principal (a key is how an agent signs in: synapse's
+/// `--as builder`). The standing chat members (CHAT-13) are named as agents
+/// by `Chat.agents` beside this.
+pub fn is_agent_principal(principal: &str) -> bool {
+    principal.starts_with("agent:") || principal.starts_with("key:")
+}
+
 /// One chat, as one caller sees it: `unread` is the caller's own count —
 /// the messages after its read mark (zero for an admin who is not in it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Chat {
     /// Its id: 1, 2, … in the order chats were opened, never reused.
     pub id: ChatId,
-    /// The ticket it was opened on, by its key as it stands now.
-    pub ticket: String,
+    /// CHAT-14: a ticket's chat, a direct message or a group.
+    #[serde(default)]
+    pub kind: ChatKind,
+    /// The ticket it was opened on, by its key as it stands now — none for a
+    /// direct message or a group (CHAT-14).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Every participant, by principal (`anonymous` on one kept before ACCESS-24, when login could be off), in
@@ -154,13 +217,28 @@ pub enum ChatsEvent {
     /// CHAT-4: one of `candidates`' rows — a principal who could be named in
     /// a chat on the ticket, and whether it can read the ticket now (one
     /// that cannot is shown in the picker and cannot be picked).
-    Candidate { principal: String, reads: bool },
+    /// CHAT-14: `name` — the name the server knows it by (the name it last
+    /// signed in with, a synapse key's name included), and `agent` — drawn
+    /// as an agent (an `agent:` or `key:` principal, or a standing chat
+    /// member). Without a ticket, `reads` says it may be in a chat outside
+    /// tickets (it holds a grant in the caller's organization).
+    Candidate {
+        principal: String,
+        reads: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        agent: bool,
+    },
     /// `post`'s answer, and on every participant's `watch`.
     Posted { message: Message },
     /// One of `messages`' rows (oldest first), and `await_message`'s answer.
     Message { message: Message },
     /// `add`'s answer, and on `watch`: the chat with its participants now.
     Added { chat: Chat },
+    /// CHAT-14: `remove`'s answer, and on `watch` to those still in it: the
+    /// chat with its participants now. The one removed hears `left`.
+    Removed { chat: Chat, principal: String },
     /// `read`'s answer, and on the reader's own other `watch`es: its mark
     /// in `chat` is `upto`, and `unread` are after it.
     Read { chat: ChatId, upto: MessageId, unread: u32 },

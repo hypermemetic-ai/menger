@@ -327,6 +327,26 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 -j menger chats await_message --chat 41 --timeout-minutes 240
   ```
 
+  **Outside tickets** (CHAT-14): `open` with no `--ticket` is a direct
+  message (one other — the one the two have, when they have one) or a
+  group (several, `--title`); each must hold a grant in the caller's
+  organization, and only its participants read it (no ticket's reach, no
+  admin's). `remove` takes a group's member out (itself: it leaves); an
+  admin of the organization adds and removes without reading it.
+  `candidates` (no `--ticket`: who may be in one) names each principal as
+  the server knows it — the name it last signed in with, a synapse key's
+  name too (`--as builder`), kept in `principal_names` — with `agent: true`
+  for an `agent:` or `key:` principal or a standing chat member. The app's
+  `#/chats` lists every chat, unread first. A chat's images are `media.put
+  { chat, … }`, seen by its participants alone:
+
+  ```sh
+  synapse -P 4455 menger chats open --others key:54a9…                 # a direct message
+  synapse -P 4455 menger chats open --others idp:…,key:54a9… --title "the kiln crew"
+  synapse -P 4455 menger chats remove --chat 52 --principal key:54a9…
+  synapse -P 4455 menger chats candidates                                 # names, agents
+  ```
+
   **The chat bridge** (CHAT-11) answers the owner in chats: the user unit
   `menger-chat-bridge` holds the builder's `chats watch` on `MENGER_URL`
   (`~/.config/menger/chat-bridge.env`) and, for a message by a principal in

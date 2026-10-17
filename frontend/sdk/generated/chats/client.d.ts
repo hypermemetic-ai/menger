@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { ChatId, ChatState, ChatsEvent, MessageId } from './types';
+import type { ChatState, ChatsEvent, MessageId } from './types';
+import type { ChatId } from '../media/types';
 import type { Body, TicketRef, Title } from '../notes/types';
 import type { Principal } from '../orgs/types';
 /** Typed client interface for chats plugin */
@@ -9,6 +10,9 @@ export interface ChatsClient {
   
   By a participant, to an open chat; the one added must be able to read
   the ticket, or it is `refused`. One already in it is the chat as it is.
+  CHAT-14: to a group, one holding a grant in its organization, by a
+  participant or an admin of the organization; a direct message is
+  refused (it stays between two: start a group).
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.add` anywhere it is held
@@ -30,19 +34,23 @@ export interface ChatsClient {
      */
     awaitMessage(after?: MessageId | null, chat?: ChatId | null, since?: number | null, ticket?: TicketRef | null, timeoutMinutes?: number | null): AsyncGenerator<ChatsEvent>;
     /**
-     * Who could be in a chat on a ticket: a candidate { principal, reads } each — every principal holding a grant in the ticket's organization (a team's members by name), and those in the caller's chats there — then the end.
+     * Who could be in a chat — on a ticket, or (without one) outside tickets: a candidate { principal, reads, name?, agent } each — every principal holding a grant in the organization (a team's members by name), and those in the caller's chats there — then the end.
   
   CHAT-4's picker: `reads` says whether the principal can read the
   ticket now (`open` and `add` refuse one that cannot). The caller is
   not among them. A ticket the caller cannot read is `refused` as one
   that is none. A participant who holds no grant there now (one kept
   before ACCESS-24, when login could be off) is listed all the same, as
-  one of the chats' participants.
+  one of the chats' participants. CHAT-14: without a ticket, those
+  holding a grant in the caller's organizations (`reads`: may be in a
+  direct message or a group); each by the `name` the server knows it
+  by (signed in with — a synapse key's name too), and `agent` for an
+  agent (an `agent:` or `key:` principal, or a standing chat member).
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.candidates` anywhere it is held
      */
-    candidates(ticket: TicketRef): AsyncGenerator<ChatsEvent>;
+    candidates(ticket?: TicketRef | null): AsyncGenerator<ChatsEvent>;
     /**
      * Close a chat; yields closed { chat }. A closed chat is read-only, kept on its ticket.
   
@@ -79,21 +87,24 @@ export interface ChatsClient {
      */
     messages(chat: ChatId, after?: MessageId | null, before?: MessageId | null, limit?: number | null, newest?: boolean | null): AsyncGenerator<ChatsEvent>;
     /**
-     * Open a chat on a ticket with the principals named; yields opened { chat } — the open chat they already have there, when they do (existing: true).
+     * Open a chat on a ticket, or outside tickets — a direct message or a group — with the principals named; yields opened { chat } — the open chat they already have, when they do (existing: true).
   
   The caller and `others` are the participants (CHAT-1's `with`, which
-  TypeScript does not take as a parameter's name) — `others` empty or
-  absent is a chat of one, the caller's alone, to add to later (CHAT-6);
-  every one of them must be
-  able to read the ticket, or the call is `refused { reasons }`, naming
-  each who cannot, and nothing is made. A ticket the caller cannot read
-  is refused as one that is none. `watch` carries `opened` to each
-  participant.
+  TypeScript does not take as a parameter's name). On a ticket,
+  `others` empty or absent is a chat of one, the caller's alone, to
+  add to later (CHAT-6); every one of them must be able to read the
+  ticket, or the call is `refused { reasons }`, naming each who cannot,
+  and nothing is made. A ticket the caller cannot read is refused as
+  one that is none. CHAT-14: without a ticket, one other is a direct
+  message (the one the two have, when they have one) and several a
+  group (`title` names it); each must hold a grant in the caller's
+  organization, and only its participants read it. `watch` carries
+  `opened` to each participant.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.open` anywhere it is held
      */
-    open(ticket: TicketRef, others?: Principal[] | null, title?: Title | null): AsyncGenerator<ChatsEvent>;
+    open(others?: Principal[] | null, ticket?: TicketRef | null, title?: Title | null): AsyncGenerator<ChatsEvent>;
     /**
      * Post a message in a chat; yields posted { message }, signed by the caller.
   
@@ -117,6 +128,18 @@ export interface ChatsClient {
      * @requires `chats.read` anywhere it is held
      */
     read(chat: ChatId, upto: MessageId): AsyncGenerator<ChatsEvent>;
+    /**
+     * Take a participant out of a chat; yields removed { chat, principal } (CHAT-14).
+  
+  A group's or a ticket's chat, by a participant (itself too: it
+  leaves) or, outside tickets, an admin of the chat's organization; a
+  direct message is refused (close it instead). One not in it is the
+  chat as it is. The one removed hears `left` on its `watch`.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `chats.remove` anywhere it is held
+     */
+    remove(chat: ChatId, principal: Principal): AsyncGenerator<ChatsEvent>;
     /**
      * Rename a chat; yields renamed { chat } — the composer's /title (CHAT-7).
   
@@ -195,6 +218,10 @@ export declare const requires: {
     };
     readonly "chats.read": {
         readonly grant: "chats.read";
+        readonly target: null;
+    };
+    readonly "chats.remove": {
+        readonly grant: "chats.remove";
         readonly target: null;
     };
     readonly "chats.rename": {

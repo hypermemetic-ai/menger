@@ -3,7 +3,7 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { MediaData, MediaEvent, MediaHash, MediaType } from './types';
+import type { ChatId, MediaData, MediaEvent, MediaHash, MediaType } from './types';
 import type { TicketRef } from '../notes/types';
 
 /** Typed client interface for media plugin */
@@ -36,7 +36,10 @@ reason, message, bytes?, max? }` (`too_large`, `not_an_image`,
 `type_mismatch`, `truncated`, `bad_data`), naming why, with nothing
 kept; `not_found { ticket }` for a ticket that is none or out of
 reach. The image belongs to `ticket`: `get` answers it to whoever can
-see that ticket. Without `ticket` (a comment on the app) it is the
+see that ticket (an editor's: a viewer is answered `not_found`).
+CHAT-14: with `chat` instead, it is that chat's — `get` answers it to
+its participants alone; `not_found { hash: null }` for a chat the
+caller is not in. Without `ticket` (a comment on the app) it is the
 putter's, and the admins' of `*`. Through synapse the data is a file
 (`base64 -w0 shot.png > shot.b64`, then `--data @shot.b64`) or stdin
 (`--data -`), never `"$(base64 …)"`, which Linux caps at 128 KB
@@ -45,7 +48,7 @@ putter's, and the admins' of `*`. Through synapse the data is a file
    * @requiresAuth — resolver: self.access.verify
    * @requires `media.put` on the scope of `ticket`
    */
-  put(data: MediaData, mime: MediaType, ticket?: TicketRef | null): AsyncGenerator<MediaEvent>;
+  put(data: MediaData, mime: MediaType, chat?: ChatId | null, ticket?: TicketRef | null): AsyncGenerator<MediaEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `media.schema` anywhere it is held
@@ -63,8 +66,8 @@ class MediaClientImpl implements MediaClient {
     yield* extractData<MediaEvent>(stream);
   }
 
-  async *put(data: MediaData, mime: MediaType, ticket?: TicketRef | null): AsyncGenerator<MediaEvent> {
-    const stream = this.rpc.call('media.put', { data, mime, ticket });
+  async *put(data: MediaData, mime: MediaType, chat?: ChatId | null, ticket?: TicketRef | null): AsyncGenerator<MediaEvent> {
+    const stream = this.rpc.call('media.put', { chat, data, mime, ticket });
     yield* extractData<MediaEvent>(stream);
   }
 

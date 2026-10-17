@@ -155,6 +155,16 @@ fn under_name(scope: &str) -> String {
     }
 }
 
+/// CHAT-14: whether `scope` is in the organization `org`.
+fn in_org(scope: &crate::members::Scope, org: &crate::address::OrgId, store: &Store) -> bool {
+    match (scope, scope.org(), scope.ticket()) {
+        (crate::members::Scope::Everywhere, ..) => true,
+        (_, Some(o), _) => o == org,
+        (_, None, Some(t)) => store.org_of(t.as_str()).as_ref() == Some(org),
+        _ => false,
+    }
+}
+
 /// Someone signed in with no grant yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Waiting {
@@ -481,6 +491,50 @@ impl Access {
         Reach::of_grants(&self.book, &self.gate, principal).covers::<Viewer>(key, &chain)
     }
 
+    /// CHAT-14: whether `principal` holds a grant in the organization `org`
+    /// — on `*`, on the org or a shortcode in it, on a ticket or a subtree
+    /// there (a team's grant by each of its members; the operator's
+    /// `--admin`s): who may be in a chat outside tickets there.
+    pub fn member_of(&self, principal: &str, org: &crate::address::OrgId, store: &Store) -> bool {
+        self.book.grants_of(principal).iter().any(|g| in_org(&g.scope, org, store))
+    }
+
+    /// CHAT-14: every principal holding a grant in `org` (`None`: in any) —
+    /// each team's members by name, the operator's `--admin`s.
+    pub fn members_in(&self, org: Option<&crate::address::OrgId>, store: &Store) -> std::collections::BTreeSet<String> {
+        let mut grants = self.stored();
+        for admin in self.admins() {
+            grants.extend(self.grants_of(&admin));
+        }
+        let mut who = std::collections::BTreeSet::new();
+        for g in grants.into_iter().filter(|g| org.is_none_or(|o| in_org(&g.scope, o, store))) {
+            match g.principal {
+                crate::vocab::Grantee::Principal(p) => {
+                    who.insert(p.to_string());
+                }
+                crate::vocab::Grantee::Team(t) => who.extend(self.team(&t).into_iter().flat_map(|(_, members, _)| members).map(|m| m.principal.to_string())),
+            }
+        }
+        who
+    }
+
+    /// CHAT-14: the name `ctx` signs in with, kept by the store when it is
+    /// new — so a key's name (`--as builder`) finds it in the picker after
+    /// it has gone. Off the call: a write spawned when one is due.
+    fn note_name(&self, principal: &str, name: Option<&str>) {
+        let (Some(name), Some(store), Some(system)) = (name, self.book.store.get(), self.book.system.get()) else { return };
+        if store.knows_name(principal, name) {
+            return;
+        }
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+        let (store, system, principal, name) = (Arc::clone(store), Arc::clone(system), principal.to_string(), name.to_string());
+        rt.spawn(async move {
+            if let Err(e) = store.note_name(&system, &principal, &name).await {
+                tracing::warn!("CHAT-14: the name of {principal} was not kept: {e:?}");
+            }
+        });
+    }
+
     /// AUTH-7: the roles, memberships and scopes the gate reads.
     pub fn book(&self) -> Arc<Book> {
         self.book.clone()
@@ -637,6 +691,7 @@ impl Access {
         let principal: crate::vocab::Principal = p.to_string().parse().map_err(|_| Refusal::NoPrincipal)?;
         let reach = Reach::resolve(&self.book, &self.gate, principal.as_str(), ctx)?;
         let name = ctx.get_metadata_string("name");
+        self.note_name(principal.as_str(), name.as_deref());
         if self.book.grants_of(principal.as_str()).is_empty() {
             self.book.wait(principal.as_str(), name.clone(), ctx.get_metadata_string("provider"));
         } else {

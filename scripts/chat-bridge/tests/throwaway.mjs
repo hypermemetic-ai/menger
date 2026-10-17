@@ -3,6 +3,8 @@
 // posts and gets a reply from a spawned agent; a second message resumes the
 // same session; a principal not on the list gets nothing; a server restart
 // mid-wait, and a bridge restart, lose nothing and answer nothing twice.
+// CHAT-14: a direct message and a group, on no ticket, answered too; an
+// image passed to the agent as a note.
 //
 //   node scripts/chat-bridge/tests/throwaway.mjs WORKDIR [--real] [--port 6150]
 //
@@ -179,6 +181,22 @@ try {
     check(JSON.stringify(t) === JSON.stringify([[m6.id], [m7.id, m8.id]]), `the messages posted during a turn are the next turn, together (${JSON.stringify(t)})`);
     const working = (await messages(chat)).filter((m) => m.author === builder.principal && m.body === "_working…_");
     check(working.length === 2, `"working…" posted once per slow turn (${working.length})`);
+  }
+
+  // 8. CHAT-14: a direct message (no ticket) with an image — answered, the image passed as a note; a group too
+  {
+    const dm = (await rpc(owner, "chats.open", { others: [builder.principal] })).find((i) => i.type === "opened").chat;
+    check(dm.kind === "direct" && dm.ticket === undefined, `a direct message with builder, on no ticket (${dm.kind})`);
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const hash = (await rpc(owner, "media.put", { chat: dm.id, mime: "image/png", data: png })).find((i) => i.type === "stored").hash;
+    await post(owner, dm.id, `what is this? ![kiln shot](media:${hash})`);
+    const dr = await waitReplies(dm.id, 1, waitReply);
+    check(dr.length === 1, `a reply in the direct message (${dr[0]?.body?.slice(0, 160) ?? "none"})`);
+    if (!real) check(/\[image: kiln shot, 1 KB\]/.test(dr[0]?.body ?? ""), "the image reached the agent as a note, [image: name, size]");
+    const g = (await rpc(owner, "chats.open", { others: [builder.principal, stranger.principal], title: "the bridge crew" })).find((i) => i.type === "opened").chat;
+    await post(owner, g.id, "a group question");
+    const gr = await waitReplies(g.id, 1, waitReply);
+    check(g.kind === "group" && gr.length === 1, `a reply in the group (${gr[0]?.body?.slice(0, 120) ?? "none"})`);
   }
 } catch (e) {
   log(`FAIL ${e.stack || e.message}`); failures++;
