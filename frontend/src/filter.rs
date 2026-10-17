@@ -1212,6 +1212,11 @@ impl Pop {
         self.mounted.get_untracked() > 0
     }
 
+    /// FILTER-40: whether a view draws this level's line (tracked).
+    pub(crate) fn mounted_tracked(self) -> bool {
+        self.mounted.get() > 0
+    }
+
     pub(crate) fn is_open(self) -> bool {
         self.open.get_untracked()
     }
@@ -1222,10 +1227,13 @@ impl Pop {
         self.open.get()
     }
 
-    /// Opened — on `cat`'s section when given.
-    pub(crate) fn show(self, cat: Option<Cat>) {
+    /// Opened — on `cat`'s section when given; FILTER-40: `switched`: from another level's tab, the
+    /// focus to give back already remembered.
+    pub(crate) fn show_from(self, cat: Option<Cat>, switched: bool) {
         if !self.open.get_untracked() {
-            keys::remember_focus();
+            if !switched {
+                keys::remember_focus();
+            }
             if let Some(n) = crate::naming::hook() {
                 n.fresh_counts();
             }
@@ -1236,6 +1244,16 @@ impl Pop {
         }
         self.focus.set(cat);
         self.open.set(true);
+    }
+
+    /// FILTER-40: folded because another level's tab took the panel — the
+    /// focus to give back stays remembered.
+    pub(crate) fn hand_over(self) {
+        if self.open.try_get_untracked().unwrap_or(false) {
+            self.open.set(false);
+            self.query.set(String::new());
+            self.hover.set(None);
+        }
     }
 
     /// Folded — focus handed back where it was (`restore`: a key folded
@@ -1381,9 +1399,72 @@ pub(crate) fn FilterBar(
                 <crate::saved::SavedButton level />
             </div>
             <QueryTree level texting />
-            <Panel level />
+            <PanelHost host=Host::Surface />
         </div>
         <Clash level />
+    }
+}
+
+/// FILTER-40: a level's filter as chips — its groups joined by **or**, the
+/// clauses in each joined by **and** (src/ors.rs's words); one deeper than
+/// that as its text; nothing, `empty`.
+pub(crate) fn chips_view(lens: Lens, level: Level, empty: &'static str) -> impl IntoView {
+    move || {
+        let f = lens.filter(level).get();
+        if f.groups.is_empty() {
+            return view! { <span class="fchips-empty">{empty}</span> }.into_any();
+        }
+        match lens.ors(level) {
+            None => view! { <code class="fchip fchip-text">{f.format()}</code> }.into_any(),
+            Some(o) => {
+                let live: Vec<Vec<menger_tickets_api::filter::Predicate>> = o.live().cloned().collect();
+                let many = live.len() > 1;
+                live.into_iter()
+                    .enumerate()
+                    .map(|(gi, g)| {
+                        let items = g
+                            .iter()
+                            .enumerate()
+                            .map(|(ii, p)| {
+                                view! {
+                                    {(ii > 0).then(|| view! { <span class="fw">"and"</span> })}
+                                    <span class="fchip" class:saved=matches!(p.field, menger_tickets_api::filter::Field::Saved(_))>{crate::ors::words(p)}</span>
+                                }
+                            })
+                            .collect_view();
+                        view! {
+                            {(gi > 0).then(|| view! { <span class="for">"or"</span> })}
+                            <span class="fchips-g" class:boxed=many>{items}</span>
+                        }
+                    })
+                    .collect_view()
+                    .into_any()
+            }
+        }
+    }
+}
+
+/// FILTER-40: the nav's head — its filter as chips: the global filter's
+/// dashed chip, then the nav's own groups (or "every ticket"); its
+/// `Filter` button opens the one panel on the nav's tab. The nav's bar is
+/// gone: its name, text and `Saved ▾` are the panel's.
+#[component]
+pub(crate) fn NavChips(#[prop(into)] cats: Vec<Cat>, counts: CountsProvider) -> impl IntoView {
+    let lens = lens::use_lens();
+    let pop = lens.pop(Level::Nav);
+    pop.configure(&cats, counts);
+    let global = Memo::new(move |_| lens.filter(Level::Global).with(|f| f.format()));
+    view! {
+        <div class="fbar nchips" data-fbar="nav" data-level="nav">
+            <FilterButton level=Level::Nav hint="Filter the nav (f — on a ticket page, f filters it to that ticket and its children)" />
+            {move || {
+                let g = global.get();
+                (!g.is_empty()).then(|| view! { {global_chip(lens, g)}<span class="fw">"and"</span> })
+            }}
+            {chips_view(lens, Level::Nav, "every ticket")}
+            <Reset level=Level::Nav />
+        </div>
+        <Clash level=Level::Nav />
     }
 }
 
@@ -1414,7 +1495,7 @@ pub(crate) fn FilterButton(level: Level, #[prop(into)] hint: String, #[prop(opti
             aria-expanded=move || pop.open_tracked().to_string()
             on:click=move |_| {
                 if pop.is_open() {
-                    pop.close(true);
+                    lens.close_panel(true);
                 } else {
                     lens.open_panel(level, None);
                 }
@@ -1444,7 +1525,7 @@ pub(crate) fn QueryHead(level: Level, texting: RwSignal<bool>) -> impl IntoView 
     let field = NodeRef::<leptos::html::Input>::new();
     let toggle = move || {
         if pop.is_open() {
-            pop.close(true);
+            lens.close_panel(true);
         } else {
             lens.open_panel(level, None);
         }
@@ -1495,12 +1576,7 @@ pub(crate) fn QueryHead(level: Level, texting: RwSignal<bool>) -> impl IntoView 
                 _ => {}
             }
         />
-        {move || global.get().map(|g| view! {
-            <span class="qglobal" title=format!("the global filter, above this one: {g}")>
-                <span class="p-lvl">"global"</span>
-                <code>{g.clone()}</code>
-            </span>
-        })}
+        {move || global.get().map(|g| global_chip(lens, g))}
         {move || (!texting.get()).then(|| view! {
             <code class="qtext" data-qtext=level.name() title=move || text.get() on:click=move |_| lens.open_panel(level, None)>
                 {move || {
@@ -1947,20 +2023,53 @@ pub(crate) fn flag_rows(cats: &[Cat], q: &str) -> Vec<Cat> {
         .collect()
 }
 
-/// A level's panel while it is open — in its page's flow (FILTER-39): the
-/// head (the level, the search over every value, ×), the groups joined by
-/// `or`, what the last tick said, every section flowing into as many
-/// columns as the width holds, the foot.
+/// FILTER-40: where the one panel is drawn — under the route's surface
+/// line (the board's, a wave board's, the inputs page's), or under the
+/// header (a page with no line; at phone widths always: the filter sheet).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Host {
+    Top,
+    Surface,
+}
+
+/// FILTER-40: the panel's host: the phone's sheet, else the surface's line
+/// where the route draws one, else under the header.
+pub(crate) fn host_of(phone: bool, surface_line: bool) -> Host {
+    match (phone, surface_line) {
+        (false, true) => Host::Surface,
+        _ => Host::Top,
+    }
+}
+
+/// FILTER-40: the global filter as a dashed chip, read-only — on every
+/// surface's line and in the nav's head; a click opens the panel on its ⌂
+/// everywhere tab.
+pub(crate) fn global_chip(lens: Lens, text: String) -> impl IntoView {
+    view! {
+        <button
+            type="button"
+            class="fchip-g"
+            data-fopen="global"
+            title=format!("the filter everywhere \u{2014} every view shows what it admits: {text}")
+            on:click=move |_| lens.open_panel(Level::Global, None)
+        >
+            <span class="fchip-g-h" aria-hidden="true">"\u{2302}"</span>
+            <span class="fchip-g-w">{text.clone()}</span>
+        </button>
+    }
+}
+
+/// FILTER-40: the one panel, drawn here while `host` is where it goes —
+/// in the page's flow (FILTER-39), editing the level whose tab is lit.
 #[component]
-pub(crate) fn Panel(level: Level) -> impl IntoView {
+pub(crate) fn PanelHost(host: Host) -> impl IntoView {
     let lens = lens::use_lens();
-    let pop = lens.pop(level);
-    // The search takes focus as the panel opens; a section asked for is
-    // scrolled to and lit.
+    let here = Memo::new(move |_| (lens.host() == host).then(|| lens.open_level()).flatten());
+    // The search takes focus as the panel opens or changes tab; a section
+    // asked for is scrolled to and lit.
     Effect::new(move |_| {
-        if !pop.open_tracked() {
-            return;
-        }
+        let Some(level) = here.get() else { return };
+        let pop = lens.pop(level);
         let focus = pop.focus.get();
         request_animation_frame(move || {
             let Some(doc) = document() else { return };
@@ -1979,19 +2088,76 @@ pub(crate) fn Panel(level: Level) -> impl IntoView {
             }
         });
     });
-    move || pop.open_tracked().then(|| panel(lens, pop))
+    move || here.get().map(|level| panel(lens, lens.pop(level)))
+}
+
+/// FILTER-40: a level as its tab says it.
+pub(crate) fn tab_words(level: Level) -> &'static str {
+    match level {
+        Level::Global => "everywhere",
+        Level::Nav => "nav",
+        Level::Board => "this board",
+        Level::Waves => "this wave board",
+        Level::Inputs => "the inputs",
+    }
+}
+
+/// FILTER-40: the panel's tabs — each level it edits, with what that level
+/// shows (`global ∧ own`), counted; the open one lit.
+fn tabs_view(lens: Lens, open: Level) -> impl IntoView {
+    view! {
+        <span class="fp-tabs" role="tablist" aria-label="which filter the panel edits">
+            {move || lens.tabs().into_iter().map(|l| {
+                let n = tab_count(lens, l);
+                view! {
+                    <button
+                        type="button"
+                        class="fp-tab"
+                        class:on=l == open
+                        role="tab"
+                        data-tab=l.name()
+                        aria-selected=(l == open).to_string()
+                        title=format!("edit the filter {}", if l == Level::Global { "every view shows".to_string() } else { format!("of {}", tab_words(l)) })
+                        on:click=move |_| if l != open { lens.open_panel(l, None) }
+                    >
+                        {(l == Level::Global).then(|| view! { <span class="fp-home" aria-hidden="true">"\u{2302}"</span> })}
+                        {tab_words(l)}
+                        <b>{move || n.get().map(|n| n.to_string()).unwrap_or_default()}</b>
+                    </button>
+                }
+            }).collect_view()}
+        </span>
+    }
+}
+
+/// FILTER-40: what `level` shows — its effective filter counted, asked
+/// again whenever it changes (an empty one: every ticket).
+fn tab_count(lens: Lens, level: Level) -> RwSignal<Option<usize>> {
+    let n = RwSignal::new(None);
+    let text = Memo::new(move |_| lens.effective(level).with(|f| (f.admits_nothing().is_none()).then(|| crate::counts::wire_text(f))));
+    let asked = StoredValue::new(0u32);
+    Effect::new(move |_| {
+        let t = text.get();
+        crate::session::link().track();
+        let k = asked.get_value().wrapping_add(1);
+        asked.set_value(k);
+        match t {
+            None => n.set(Some(0)),
+            Some(t) => wasm_bindgen_futures::spawn_local(async move {
+                let got = crate::counts::count_once(t).await;
+                if asked.try_get_value() == Some(k) {
+                    n.try_set(got);
+                }
+            }),
+        }
+    });
+    n
 }
 
 fn panel(lens: Lens, pop: Pop) -> impl IntoView {
     let level = pop.level;
     let label = if level == Level::Global { "Filter every view".to_string() } else { format!("Filter the {}", level.name()) };
-    let lvl_words = match level {
-        Level::Global => "everywhere",
-        Level::Nav => "the nav",
-        Level::Board => "this board",
-        Level::Waves => "this wave board",
-        Level::Inputs => "the inputs",
-    };
+    let texting = RwSignal::new(false);
     let secs = Memo::new(move |_| sections(level, &pop.cats.get()));
     view! {
         <section
@@ -2004,13 +2170,13 @@ fn panel(lens: Lens, pop: Pop) -> impl IntoView {
                 if bindings::is(&ev, Context::Menu, "dialog.close") && !ev.default_prevented() {
                     ev.prevent_default();
                     ev.stop_propagation();
-                    pop.close(true);
+                    lens.close_panel(true);
                 }
             }
         >
             <div class="fp-head">
                 <span class="fp-title">"Filter"</span>
-                <span class="fp-lvl">{lvl_words}</span>
+                {tabs_view(lens, level)}
                 <input
                     class="fsearch"
                     type="text"
@@ -2031,7 +2197,7 @@ fn panel(lens: Lens, pop: Pop) -> impl IntoView {
                         }
                     }
                 />
-                <button class="fp-x" title="fold the panel (Escape)" aria-label="fold the panel" on:click=move |_| pop.close(true)>"\u{d7}"</button>
+                <button class="fp-x" title="fold the panel (Escape)" aria-label="fold the panel" on:click=move |_| lens.close_panel(true)>"\u{d7}"</button>
             </div>
             {(level == Level::Nav).then(|| view! { <crate::promote::MakeGlobal menu=true /> })}
             {groups_view(lens, pop)}
@@ -2041,6 +2207,7 @@ fn panel(lens: Lens, pop: Pop) -> impl IntoView {
                 {move || secs.get().into_iter().map(|s| section_view(lens, pop, s)).collect_view()}
             </div>
             <div class="fp-foot">
+                <TextMode level texting />
                 <Reset level />
                 <span class="fp-count">{move || foot_words(lens, level)}</span>
             </div>
@@ -3032,5 +3199,17 @@ pub(crate) mod tests {
         assert_eq!(flag_rows(&Cat::SERVER, "commits"), [Cat::Commits]);
         assert_eq!(flag_rows(&Cat::SERVER, "flags").len(), 5);
         assert_eq!(flag_rows(&Cat::INPUTS, ""), [Cat::Ready, Cat::Blocked, Cat::Commits, Cat::MengerDocs, Cat::Asking], "Removed is the page's own");
+    }
+
+    /// FILTER-40: one panel — under the route's surface line on a wide
+    /// window, under the header where there is none, and in the phone
+    /// bar's filter sheet at phone widths; each level its tab.
+    #[test]
+    fn the_one_panel_is_drawn_in_one_place() {
+        assert_eq!(host_of(false, true), Host::Surface);
+        assert_eq!(host_of(false, false), Host::Top);
+        assert_eq!(host_of(true, true), Host::Top, "the phone's sheet");
+        assert_eq!(host_of(true, false), Host::Top);
+        assert_eq!(Level::ALL.map(tab_words), ["everywhere", "nav", "this board", "this wave board", "the inputs"]);
     }
 }

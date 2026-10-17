@@ -1944,6 +1944,33 @@
   .fpanel .fp-foot .reset { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
   .fpanel .fp-count { margin-left: auto; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
   #nav .fpanel { margin: .35rem .5rem; }
+  /* FILTER-40: one panel, its level tabs counted; the global filter a
+     dashed chip on every surface and in the nav's head. */
+  .fpanel .fp-tabs { display: inline-flex; flex-wrap: wrap; gap: 2px; }
+  .fpanel .fp-tab {
+    background: none; font: inherit; color: var(--muted); cursor: pointer; padding: .05rem .6rem;
+    border: var(--border) solid transparent; border-radius: var(--radius);
+  }
+  .fpanel .fp-tab b { color: var(--ink); font-weight: var(--weight-medium); margin-left: .4rem; font-variant-numeric: tabular-nums; }
+  .fpanel .fp-tab:hover { color: var(--ink); }
+  .fpanel .fp-tab.on { border-color: var(--accent); color: var(--accent); background: var(--sel); }
+  .fpanel .fp-home, .fchip-g-h { margin-right: .3rem; font-family: var(--sans); }
+  .fchip-g {
+    display: inline-flex; align-items: center; max-width: 24rem; padding: 0 .5rem; font: inherit; font-size: calc(12px * var(--text-scale));
+    color: var(--muted); cursor: pointer; background: transparent; border: var(--border) dashed var(--tree-line); border-radius: var(--radius);
+  }
+  .fchip-g-w { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+  .fchip-g:hover, .fchip-g:focus-visible { border-color: var(--accent); }
+  .fbar.nchips { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; padding: .35rem .6rem; font-size: calc(11.5px * var(--text-scale)); }
+  .fbar .fchip { display: inline-flex; align-items: center; padding: 0 .45rem; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); white-space: nowrap; }
+  .fbar .fchip.saved { border-color: var(--accent); }
+  .fbar .fchip-text { white-space: normal; }
+  .fbar .fchips-g { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
+  .fbar .fchips-g.boxed { padding: 2px 4px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
+  .fbar .fw, .fbar .fchips-empty { color: var(--muted); }
+  .fbar .for { color: var(--accent); font-weight: var(--weight-strong); }
+  .lens-na { padding: .2rem .9rem; color: var(--muted); font-style: italic; font-size: calc(12px * var(--text-scale)); }
+  .ftop > .fpanel { margin: .5rem .9rem .6rem; }
   .wform .wback {
     display: flex; align-items: center; gap: .45rem; padding: 3px 8px; cursor: pointer; color: var(--muted);
     border-bottom: var(--border) solid var(--line) !important; margin-bottom: 4px;
@@ -4389,7 +4416,8 @@
     #lens-top > :is(.lensbar, .fclash) { order: 1; flex: none; margin: 0; border-radius: 0; }
     /* FILTER-39: the global panel fills the sheet between the lens bar's
        line and the foot, and scrolls there. */
-    #lens-top > .lensbar:has(.fpanel) { flex: 1 1 auto; min-height: 0; overflow: auto; }
+    #lens-top > .ftop:has(.fpanel) { order: 1; flex: 1 1 auto; min-height: 0; overflow: auto; }
+    #lens-top > .ftop > .fpanel { margin: 0; }
     #lens-top .fpanel { margin: 0; border: 0; border-radius: 0; }
     #lens-top .fpanel .fp-head { border-radius: 0; }
     #lens-top > header {

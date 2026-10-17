@@ -2469,10 +2469,9 @@ fn App() -> impl IntoView {
                             }
                         })
                     }}
-                    // FILTER-11: the global filter — its groups as a badge.
-                    <lens::GlobalButton />
-                    // FILTER-6: the global filter's saved filters.
-                    <saved::SavedButton level=lens::Level::Global />
+                    // FILTER-40: the global filter is edited in the one panel
+                    // (its ⌂ everywhere tab) and shown as a dashed chip on
+                    // every surface; the header keeps its count.
                     // FILTER-12: while the global filter is non-empty, what
                     // it admits of every ticket — `n of N`, live.
                     <counts::GlobalCount board />

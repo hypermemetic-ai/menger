@@ -406,8 +406,9 @@ live, and an id that is no ticket is left as written. A body without one
 renders byte for byte as before.
 
 **Filters** (FILTER-9) reach every view. There is one **global** filter
-(the header's `Filter` button, or <kbd>F</kbd>; a bar under the header while
-it holds anything, and `n of N` beside the button) and one per surface: the
+(<kbd>F</kbd>, or the panel's ⌂ everywhere tab; a dashed chip on every
+surface and in the nav's head, and `n of N` in the header while it holds
+anything) and one per surface: the
 **board**, the **wave board**, the **nav** and the **inputs** page (each
 surface's own bar, or <kbd>f</kbd> on it). A surface shows what *both*
 admit — `global.and(own)`, which merges groups on the same field (lists
@@ -446,8 +447,20 @@ its canonical text (on a surface the global filter's first, muted), then
 `text`, `reset`, Make global (the nav) and `Saved ▾`. The button, the
 chevron, a click on the text, <kbd>f</kbd> (<kbd>F</kbd> the global one)
 open the panel **in the page's flow** under the bar — the board moves down
-under it, nothing floats over it — and fold it again; Escape folds it. The
-phone bar's filter place opens the global panel in its sheet.
+under it, nothing floats over it — and fold it again; Escape folds it.
+
+**One panel for every level** (FILTER-40): its head holds a tab per level —
+**⌂ everywhere**, **nav** (where the nav is drawn), and the route's surface
+(**this board**, **this wave board**, **the inputs**) — each with what that
+level shows counted (`global ∧ own`, `counts` asked again as it changes), so
+which filter is being edited is never a guess. It is drawn under the
+surface's line, under the header on a page with none (a ticket's), and in
+the phone bar's filter sheet at phone widths. The header's `Filter` and
+`Saved ▾`, the GLOBAL row and the nav's bar are gone: the global filter is a
+dashed, read-only chip at the head of each surface's line and of the nav's
+chips (a click opens its tab), the nav shows its own filter as chips in its
+head, and the panel's foot keeps `text` and `reset` / `clear`. The wire is
+unchanged (`global ∧ own`), and so is the URL's `g=` `n=` `f=`.
 
 The filter it builds is **groups joined by an explicit `or`, the clauses
 inside a group joined by `and`** (owner, 2026-10-17: *"ors should be
