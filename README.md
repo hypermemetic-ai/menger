@@ -155,7 +155,13 @@ WebSocket answers the upgrade on any path, `/ws` included. With login on,
 | beyond loopback, any other `http://`, or none with a `--bind` off loopback | refused at startup |
 
 The page's policy lets it connect to its own origin over TLS (`wss://<host>`
-in `connect-src`, beside the hub's `ws:`/`wss:` at its port). An https URL
+in `connect-src`, beside the hub's `ws:`/`wss:` at its port). RUN-9: RFC
+9728's protected resource is then the public origin's socket,
+`https://<host>/ws` (§1.2's identifier is an https URL; the socket is
+`wss://` on the same origin and path), and its document
+`https://<host>/.well-known/oauth-protected-resource/ws` — answered by the
+shell, where the proxy sends it, as by the socket's port; `_info`'s
+`resource_metadata` and every 401's `WWW-Authenticate` name it. An https URL
 with no `--trusted-proxy` is warned about: every client would count as the
 proxy. The proxy recipe and the checklist are in `deploy/README.md`,
 "Behind https".
@@ -4344,7 +4350,8 @@ commenting check the rest themselves, as before.
 - **The anonymous view**: an anonymous socket's `_info` says `view:
   anonymous`, names `auth.providers`, `auth.login`, `auth.signup` and the
   RFC 9728 metadata (`GET /.well-known/oauth-protected-resource` on the
-  socket's port); every schema shows only those; every other call is
+  socket's port; behind https `https://<host>/.well-known/oauth-protected-resource/ws`,
+  RUN-9); every schema shows only those; every other call is
   refused `unauthenticated`.
 - **A caller's view**: `_info` and every `schema` list only the methods
   the caller holds, each with `grant`, `target` and `held_on`; `view_hash`

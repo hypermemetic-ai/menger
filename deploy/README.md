@@ -478,6 +478,9 @@ it on a throwaway name behind Caddy with its internal CA):
 | a write (create a ticket) | answered over that socket |
 | an upgrade at `/ws` with `Origin: https://evil.example` | `403` |
 | `/login/start` for an IdP button | `redirect_uri=https://app.example/login/callback` |
+| `curl -s https://app.example/.well-known/oauth-protected-resource/ws` (RUN-9) | `200`, `"resource":"https://app.example/ws"` — the shell answers it, so the proxy needs no route of its own |
+| an upgrade at `/ws` with a forged bearer | `401`, `WWW-Authenticate: … resource_metadata="https://app.example/.well-known/oauth-protected-resource/ws"` |
+| `synapse --url wss://app.example/ws -t <key proof> menger tickets health` | answered through the proxy |
 | the server's startup log | no `plain http on the LAN` warning; no `no --trusted-proxy` warning |
 
 A public URL that is `http://` beyond loopback is refused at startup; one

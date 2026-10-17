@@ -2081,6 +2081,7 @@ dependencies = [
  "sha1 0.10.7",
  "sha2",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "url",
