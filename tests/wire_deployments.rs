@@ -240,3 +240,101 @@ async fn record_test_then_prod_then_a_rollback() {
     let refused = one(&client, "deployments.record", json!({"project": "nope", "environment": "prod", "state": "succeeded", "revision": "29a50be"})).await;
     assert_eq!(refused["type"], "error");
 }
+
+/// DEPLOY-25 over the wire: a webhook set (and shown without its secret; a
+/// plain-http URL elsewhere refused before the method runs), a request
+/// queued for prod — what test runs, the tickets it would carry, heard by
+/// `deployments.watch` and by `tickets.watch { filter: "requested prod" }`,
+/// said by `for_ticket` — POSTed signed to a local receiver; then a CI's
+/// record naming it, which the request follows, and a cancel refused.
+#[tokio::test]
+async fn a_request_is_kept_signed_and_followed() {
+    use axum::http::HeaderMap;
+    let posts: Arc<std::sync::Mutex<Vec<(HeaderMap, axum::body::Bytes)>>> = Default::default();
+    let kept = Arc::clone(&posts);
+    let app = axum::Router::new().route(
+        "/ci",
+        axum::routing::post(move |h: HeaderMap, b: axum::body::Bytes| async move {
+            kept.lock().unwrap().push((h, b));
+            "queued"
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/ci", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let port = start_server().await;
+    let client = connect(port).await;
+    one(&client, "tickets.create", json!({"epic": "MENGER", "title": "menger", "kind": "scope"})).await;
+    one(&client, "tickets.create", json!({"epic": "MENGER", "title": "the work", "kind": "build"})).await;
+    one(&client, "tickets.commits.link", json!({"id": "MENGER-2", "commits": ["824e943"]})).await;
+    one(&client, "deployments.record", json!({"project": "menger", "environment": "test", "state": "succeeded", "revision": "824e943", "release": "r-824e943", "from": null})).await;
+    one(&client, "deployments.promotes", json!({"project": "menger", "environment": "prod", "from": "test"})).await;
+
+    // The webhook: https or loopback; the secret never said back.
+    let secret = "wire-secret-0123456789abcdef";
+    let refused = client.subscribe::<Value, _>("menger.call", {
+        let mut p = ObjectParams::new();
+        p.insert("method", "deployments.webhook.set").unwrap();
+        p.insert("params", json!({"project": "menger", "environment": "prod", "url": "http://ci.example.com/hook", "secret": secret})).unwrap();
+        p
+    }, "menger.call_unsub").await;
+    let item = refused.expect("subscribed").next().await.expect("an item").unwrap();
+    assert_eq!((item["type"].as_str(), item["error_kind"].as_str()), (Some("error"), Some("invalid_params")), "{item}");
+    assert!(item["message"].as_str().unwrap().contains("url:") && !item.to_string().contains(secret), "{item}");
+    let set = one(&client, "deployments.webhook.set", json!({"project": "menger", "environment": "prod", "url": url, "secret": secret})).await;
+    let shown = one(&client, "deployments.webhook.show", json!({"project": "menger", "environment": "prod"})).await;
+    for ev in [&set, &shown] {
+        assert_eq!((ev["type"].clone(), ev["webhook"]["url"].clone(), ev["webhook"]["secret_set"].clone()), (json!("webhook"), json!(url), json!(true)), "{ev}");
+        assert!(!ev.to_string().contains(secret), "{ev}");
+    }
+
+    let mut heard = call(&client, "deployments.watch", json!({})).await;
+    let mut entering = call(&client, "tickets.watch", json!({"filter": "requested prod"})).await;
+    let asked = one(&client, "deployments.request", json!({"project": "menger", "environment": "prod", "note": "the week's work"})).await;
+    assert_eq!(asked["type"], "request", "{asked}");
+    let d = &asked["deployment"];
+    assert_eq!((d["state"].clone(), d["revision"].clone(), d["release"].clone()), (json!("requested"), json!("824e943"), json!("r-824e943")));
+    assert_eq!((d["requested"]["from"].clone(), d["requested"]["state"].clone(), d["requested"]["note"].clone()), (json!("test"), json!("pending"), json!("the week's work")));
+    assert_eq!(asked["carried"], json!(["MENGER-2"]));
+    let id = d["id"].as_u64().unwrap();
+    let rows = collect(call(&client, "deployments.for_ticket", json!({"id": "MENGER-2"})).await).await;
+    assert!(rows.iter().any(|r| r["type"] == "requested" && r["environment"] == "prod" && r["request"] == id), "{rows:?}");
+    // The filtered watch hears MENGER-2 enter `requested prod`.
+    let entered = loop {
+        let item = tokio::time::timeout(Duration::from_secs(10), entering.next()).await.expect("an entered").unwrap().unwrap();
+        if item["content"]["type"] == "entered" {
+            break item["content"].clone();
+        }
+    };
+    assert!(entered.to_string().contains("MENGER-2"), "{entered}");
+
+    // The worker POSTs it, signed; the watch hears it delivered.
+    loop {
+        let ev = watch_until(&mut heard, "request").await.pop().unwrap();
+        if ev["deployment"]["requested"]["webhook"] == "delivered" {
+            break;
+        }
+    }
+    let (h, body) = posts.lock().unwrap()[0].clone();
+    assert_eq!(h["x-menger-signature"].to_str().unwrap(), menger::webhooks::signature(secret, &body));
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!((payload["request"].as_u64(), payload["environment"].as_str(), payload["from"].as_str()), (Some(id), Some("prod"), Some("test")));
+
+    // A CI picks it up: the request follows its records; it cannot be canceled now.
+    one(&client, "deployments.record", json!({"project": "menger", "environment": "prod", "state": "started", "revision": "824e943", "request": id})).await;
+    let ev = one(&client, "deployments.record", json!({"project": "menger", "environment": "prod", "state": "succeeded", "revision": "824e943", "request": id})).await;
+    assert_eq!(ev["deployment"]["request"], json!(id));
+    let followed = loop {
+        let ev = watch_until(&mut heard, "request").await.pop().unwrap();
+        if ev["deployment"]["requested"]["state"] == "succeeded" {
+            break ev;
+        }
+    };
+    assert_eq!(followed["deployment"]["requested"]["outcome"], ev["deployment"]["id"]);
+    let no = one(&client, "deployments.cancel_request", json!({"id": id})).await;
+    assert!(no["type"] == "error" && no["message"].as_str().unwrap().contains("picked up"), "{no}");
+    let listed = collect(call(&client, "deployments.list", json!({"state": "requested"})).await).await;
+    assert_eq!(types(&listed), ["deployment", "page"]);
+    assert!(!listed.iter().any(|e| e.to_string().contains(secret)));
+}

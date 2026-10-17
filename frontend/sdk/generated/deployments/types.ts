@@ -3,12 +3,46 @@
 
 import type { WatchEnd } from '../chats/types';
 
+/** DEPLOY-25: one attempt to deliver a request's webhook. */
+export interface DeliveryAttempt {
+  /** When it was made, unix seconds. */
+  at: number;
+  /** 1 for the first. */
+  attempt: number;
+  /** What went wrong, in a line (at most 200 bytes) — `None` on a 2xx. */
+  error?: string | null;
+  /** The receiver's HTTP status — `None` when nothing answered. */
+  status?: number | null;
+}
+
 /** DEPLOY-21: a ticket's delivery stage in an environment, short of running
 its current version there (`deployed <env>`, and not `behind`) — each a
 filter cell, `<stage> <env>`; a ticket is in at most one of them per
 environment, the first that holds of: deploying, failed, ready for,
 waiting. */
 export type DeliveryStage = "waiting" | "deploying" | "ready_for" | "failed";
+
+/** DEPLOY-25: what a `requested` deployment carries beyond a record. */
+export interface DeployRequest {
+  /** Each attempt, oldest first. */
+  attempts?: DeliveryAttempt[];
+  canceledAt?: number | null;
+  canceledBy?: string | null;
+  /** The webhook delivery's id (`X-Menger-Delivery`) — the same on every
+attempt; `None` when no webhook was set. */
+  delivery?: string | null;
+  /** The environment it takes its revision from, when it asked for "what
+the environment this one promotes from runs" (DEPLOY-21's `from`). */
+  from?: string | null;
+  /** When the next attempt is due, unix seconds — while `retrying`. */
+  nextAttemptAt?: number | null;
+  /** Why, in the asker's words. */
+  note?: string | null;
+  /** The latest CI record that names it. */
+  outcome?: number | null;
+  state: RequestState;
+  webhook: WebhookState;
+}
 
 /** Where to read the run that made a deployment. */
 export interface DeploySource {
@@ -19,8 +53,8 @@ export interface DeploySource {
   url?: string | null;
 }
 
-/** What a deployment did (any case; rolled-back too) */
-export type DeployState = "started" | "succeeded" | "failed" | "rolled_back";
+/** What a deployment did, or (DEPLOY-25) requested: asked for, not yet done (any case; rolled-back too) */
+export type DeployState = "started" | "succeeded" | "failed" | "rolled_back" | "requested";
 
 /** A deployment as menger keeps it: the record, read, with its id, `at` as
 unix seconds, and who recorded it when. */
@@ -40,6 +74,11 @@ export interface Deployment {
   /** Who sent it: a principal, `anonymous` with login off. */
   recordedBy: string;
   release?: string | null;
+  /** DEPLOY-25: the request a CI's record answers. */
+  request?: number | null;
+  /** DEPLOY-25: a `requested` deployment's note, source, state and
+webhook delivery. */
+  requested?: DeployRequest | null;
   revision: string;
   source: DeploySource;
   state: DeployState;
@@ -76,6 +115,37 @@ export interface DeploymentsEventDeployed {
   left: string[];
   live: boolean;
   unlinked: string[];
+}
+
+/** DEPLOY-25: a request — `request`'s and `cancel_request`'s answer, and
+`watch`'s each time one moves (asked, canceled, a delivery attempt,
+a CI record naming it): the `requested` deployment whole, and the
+tickets it would carry while it is pending. */
+export interface DeploymentsEventRequest {
+  type: 'request';
+  carried: string[];
+  deployment: Deployment;
+}
+
+/** DEPLOY-25: `for_ticket`: a pending request to this environment would
+carry the ticket. */
+export interface DeploymentsEventRequested {
+  type: 'requested';
+  at: number;
+  environment: string;
+  project: string;
+  request: number;
+  requestedBy: string;
+  revision: string;
+  ticket: string;
+  webhook: WebhookState;
+}
+
+/** DEPLOY-25: `webhook show`'s, `set`'s and `clear`'s answer — never
+the secret. */
+export interface DeploymentsEventWebhook {
+  type: 'webhook';
+  webhook: WebhookConfig;
 }
 
 /** One environment (`environments`' rows). */
@@ -169,10 +239,13 @@ export interface DeploymentsEventError {
 
 /** What the `deployments` activation streams. Every method returns
 `impl Stream<Item = DeploymentsEvent>`; a refusal is the in-band `Error`. */
-export type DeploymentsEvent = DeploymentsEventDeployment | DeploymentsEventDeployed | DeploymentsEventEnvironment | DeploymentsEventEnvironmentChanged | DeploymentsEventRunning | DeploymentsEventNotRunning | DeploymentsEventCells | DeploymentsEventPromotes | DeploymentsEventPage | DeploymentsEventLagged | DeploymentsEventWatchClosed | DeploymentsEventError;
+export type DeploymentsEvent = DeploymentsEventDeployment | DeploymentsEventDeployed | DeploymentsEventRequest | DeploymentsEventRequested | DeploymentsEventWebhook | DeploymentsEventEnvironment | DeploymentsEventEnvironmentChanged | DeploymentsEventRunning | DeploymentsEventNotRunning | DeploymentsEventCells | DeploymentsEventPromotes | DeploymentsEventPage | DeploymentsEventLagged | DeploymentsEventWatchClosed | DeploymentsEventError;
 
 export function isDeploymentsEventDeployment(e: DeploymentsEvent): e is DeploymentsEventDeployment { return e.type === 'deployment'; }
 export function isDeploymentsEventDeployed(e: DeploymentsEvent): e is DeploymentsEventDeployed { return e.type === 'deployed'; }
+export function isDeploymentsEventRequest(e: DeploymentsEvent): e is DeploymentsEventRequest { return e.type === 'request'; }
+export function isDeploymentsEventRequested(e: DeploymentsEvent): e is DeploymentsEventRequested { return e.type === 'requested'; }
+export function isDeploymentsEventWebhook(e: DeploymentsEvent): e is DeploymentsEventWebhook { return e.type === 'webhook'; }
 export function isDeploymentsEventEnvironment(e: DeploymentsEvent): e is DeploymentsEventEnvironment { return e.type === 'environment'; }
 export function isDeploymentsEventEnvironmentChanged(e: DeploymentsEvent): e is DeploymentsEventEnvironmentChanged { return e.type === 'environment_changed'; }
 export function isDeploymentsEventRunning(e: DeploymentsEvent): e is DeploymentsEventRunning { return e.type === 'running'; }
@@ -222,6 +295,10 @@ export type Project = string;
 one word, at most 256 bytes. */
 export type Release = string;
 
+/** DEPLOY-25: where a request stands — `pending` until a CI's record names
+it (then that record's state) or it is canceled. */
+export type RequestState = "pending" | "canceled" | "started" | "succeeded" | "failed" | "rolled_back";
+
 /** DEPLOY-13: one ticket running in an environment — a kept cell, as
 `running` answers it. */
 export interface RunningCell {
@@ -252,3 +329,18 @@ export interface StagedCell {
 /** DEPLOY-10: when — RFC 3339 (`2026-10-12T22:04:19Z`) or unix seconds,
 by its shape; the server reads the moment. */
 export type Timestamp = string;
+
+/** DEPLOY-25: an environment's webhook as menger says it — never its
+secret, only whether one is set. */
+export interface WebhookConfig {
+  environment: string;
+  project: string;
+  secretSet: boolean;
+  setAt?: number | null;
+  setBy?: string | null;
+  /** `None`: no webhook — a request is kept and shown as "no CI configured". */
+  url?: string | null;
+}
+
+/** DEPLOY-25: where a request's webhook delivery stands. */
+export type WebhookState = "none" | "pending" | "retrying" | "delivered" | "failed" | "stopped";

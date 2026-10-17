@@ -5,10 +5,26 @@ import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
 import type { DeploySource, DeployState, DeploymentId, DeploymentsEvent, EnvironmentName, Project, Release, Timestamp } from './types';
 import type { TicketRef } from '../notes/types';
-import type { CommitRef } from '../tickets/types';
+import type { CommitRef, Message } from '../tickets/types';
+import type { DeploymentsWebhookClient } from '../deployments/webhook/client';
+import { createDeploymentsWebhookClient } from '../deployments/webhook/client';
 
 /** Typed client interface for deployments plugin */
 export interface DeploymentsClient {
+  /** DEPLOY-25: each environment's webhook — where a request is POSTed,
+signed: `deployments.webhook.set|clear|show`. Admin's alone. */
+  readonly webhook: DeploymentsWebhookClient;
+  /**
+   * Cancel a pending request (one no CI has picked up); yields request { deployment, carried }
+   *
+   * DEPLOY-25: withdraws a pending request — `canceled`, by the caller;
+   * its webhook sends no more. One a CI has picked up (a record names
+   * it), or one canceled already, is refused in band, naming why. Yields
+   * exactly one `request { deployment, carried }` or an in-band `error`.
+   * The deployer's (or admin's) on the request's project.
+   * @requires `deployments.cancel_request` anywhere it is held
+   */
+  cancelRequest(id: DeploymentId): AsyncGenerator<DeploymentsEvent>;
   /**
    * Each environment: what it runs, since when, its last deployment, how many tickets run there
    *
@@ -81,10 +97,31 @@ export interface DeploymentsClient {
    * else `at`) is kept already — or an in-band `error` naming every
    * problem, with nothing kept. DEPLOY-21: `from` names the environment
    * this one promotes from (`test`, for `prod`), set (or moved) with the
-   * record — `promotes` follows it on `watch`.
+   * record — `promotes` follows it on `watch`. DEPLOY-25: `request` names
+   * the request it answers (`requested` is not a state a CI records); the
+   * request then says this record's state, and `request` follows on
+   * `watch`.
    * @requires `deployments.record` on the scope of `project`
    */
-  record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent>;
+  record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, request?: DeploymentId | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent>;
+  /**
+   * Queue a deploy: kept as a requested deployment, POSTed to the environment's webhook (signed); yields request { deployment, carried }
+   *
+   * DEPLOY-25: queues a deploy from menger — kept as a deployment in the
+   * state `requested`: who asked, when, `project`'s `environment`, what
+   * to deploy (`revision`; else the latest recorded deploy of `release`;
+   * else what the environment it promotes from runs, DEPLOY-21's `from`)
+   * and `note`. It runs nothing and completes nothing. When the
+   * environment has a webhook (`webhook set`), menger POSTs the request
+   * to it, signed, retrying with backoff; without one it is kept and
+   * says `webhook: none` ("no CI configured"). A CI's `record` names it
+   * as `request` when it picks it up. Yields exactly one `request
+   * { deployment, carried }` — the request as kept and the tickets it
+   * would carry — or an in-band `error`, nothing kept. The deployer's
+   * (or admin's) on the project.
+   * @requires `deployments.request` on the scope of `project`
+   */
+  request(environment: EnvironmentName, project: Project, note?: Message | null, release?: Release | null, revision?: CommitRef | null): AsyncGenerator<DeploymentsEvent>;
   /**
    * The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }], staged: [{ ticket, stage }] } per environment
    *
@@ -121,7 +158,16 @@ export interface DeploymentsClient {
 /** Typed client implementation for deployments plugin */
 class DeploymentsClientImpl implements DeploymentsClient {
   private rpc: RpcClient;
-  constructor(rpc: RpcClient) { this.rpc = rpc; }
+  readonly webhook: DeploymentsWebhookClient;
+  constructor(rpc: RpcClient) {
+    this.rpc = rpc;
+    this.webhook = createDeploymentsWebhookClient(rpc);
+  }
+
+  async *cancelRequest(id: DeploymentId): AsyncGenerator<DeploymentsEvent> {
+    const stream = this.rpc.call('deployments.cancel_request', { id });
+    yield* extractData<DeploymentsEvent>(stream);
+  }
 
   async *environments(project?: Project | null): AsyncGenerator<DeploymentsEvent> {
     const stream = this.rpc.call('deployments.environments', { project });
@@ -143,8 +189,13 @@ class DeploymentsClientImpl implements DeploymentsClient {
     yield* extractData<DeploymentsEvent>(stream);
   }
 
-  async *record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent> {
-    const stream = this.rpc.call('deployments.record', { at, commits, environment, from, previous, project, release, revision, source, state, tickets });
+  async *record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, request?: DeploymentId | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent> {
+    const stream = this.rpc.call('deployments.record', { at, commits, environment, from, previous, project, release, request, revision, source, state, tickets });
+    yield* extractData<DeploymentsEvent>(stream);
+  }
+
+  async *request(environment: EnvironmentName, project: Project, note?: Message | null, release?: Release | null, revision?: CommitRef | null): AsyncGenerator<DeploymentsEvent> {
+    const stream = this.rpc.call('deployments.request', { environment, note, project, release, revision });
     yield* extractData<DeploymentsEvent>(stream);
   }
 
@@ -171,11 +222,13 @@ export function createDeploymentsClient(rpc: RpcClient): DeploymentsClient {
 
 /** What each deployments method needs (AUTH-9): its grant, and the param that locates what it acts on (`null`: allowed wherever the grant is held). The gate decides, server-side. */
 export const requires = {
+  "deployments.cancel_request": { grant: "deployments.cancel_request", target: null },
   "deployments.environments": { grant: "deployments.environments", target: null },
   "deployments.for_ticket": { grant: "deployments.for_ticket", target: "id" },
   "deployments.list": { grant: "deployments.list", target: null },
   "deployments.promotes": { grant: "deployments.promotes", target: "project" },
   "deployments.record": { grant: "deployments.record", target: "project" },
+  "deployments.request": { grant: "deployments.request", target: "project" },
   "deployments.running": { grant: "deployments.running", target: null },
   "deployments.schema": { grant: "deployments.schema", target: null },
   "deployments.watch": { grant: "deployments.watch", target: null },
@@ -183,7 +236,7 @@ export const requires = {
 
 /** The deployments activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
 export const defaultRoles = {
-  "deployer": ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch", "deployments.record"],
+  "deployer": ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch", "deployments.record", "deployments.request", "deployments.cancel_request"],
   "editor": ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch"],
   "viewer": ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch"],
 } as const;

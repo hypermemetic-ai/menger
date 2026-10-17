@@ -52,8 +52,8 @@ closed_schema!(CommentIntent, "What a comment is: a comment, or a change request
 closed_schema!(CommentState, "Where a comment stands (any case)", [CommentState::Open, CommentState::Resolved]);
 closed_schema!(ChatState, "Where a chat stands: open, or closed (read-only) (any case)", [ChatState::Open, ChatState::Closed]);
 closed_schema!(NoteState, "Where a note stands: still a note, or made a ticket (any case)", [NoteState::Open, NoteState::Upgraded]);
-closed_schema!(DeployState, "What a deployment did (any case; rolled-back too)", [
-    DeployState::Started, DeployState::Succeeded, DeployState::Failed, DeployState::RolledBack,
+closed_schema!(DeployState, "What a deployment did, or (DEPLOY-25) requested: asked for, not yet done (any case; rolled-back too)", [
+    DeployState::Started, DeployState::Succeeded, DeployState::Failed, DeployState::RolledBack, DeployState::Requested,
 ]);
 closed_schema!(Urgency, "How urgently the owner should look (any case)", [Urgency::Whenever, Urgency::Today, Urgency::Now, Urgency::Blocking]);
 closed_schema!(ThemeReach, "How far a theme's adoption reaches (any case)", [ThemeReach::Frame, ThemeReach::Ticket, ThemeReach::Site]);

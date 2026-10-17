@@ -357,6 +357,75 @@ text_type!(
 );
 
 text_type!(
+    /// DEPLOY-25: where an environment's webhook POSTs — `https://…`, or
+    /// `http://` to this machine (`localhost`, `127.0.0.1`, `[::1]`) for a
+    /// local CI; no credentials in it, at most 2,048 bytes:
+    /// [`crate::deployments::webhook_url_of`].
+    WebhookUrl,
+    crate::deployments::webhook_url_of
+);
+
+/// DEPLOY-25: an environment's webhook secret — what keys the HMAC a
+/// receiver checks. 16 to 256 bytes, no whitespace or control character.
+///
+/// Never said back: it is not [`std::fmt::Display`], its `Debug` is
+/// `WebhookSecret(…)`, and a refusal never quotes it. It serializes (the
+/// app and the generated clients send it) and is read by its rule.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct WebhookSecret(String);
+
+/// The secret's rule — its length, never its text, in a refusal.
+fn webhook_secret(text: &str) -> Result<String, String> {
+    let n = text.len();
+    if text.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("a webhook secret has no whitespace or control character (its text is not repeated here)".into());
+    }
+    match n {
+        16..=256 => Ok(text.to_string()),
+        _ => Err(format!("a webhook secret is 16 to 256 bytes; this one is {n} (its text is not repeated here)")),
+    }
+}
+
+impl WebhookSecret {
+    /// The secret itself — for the HMAC and the store, nowhere else.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Its text, owned — for the store.
+    pub fn into_secret(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Debug for WebhookSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WebhookSecret(…)")
+    }
+}
+
+impl TryFrom<String> for WebhookSecret {
+    type Error = String;
+    fn try_from(text: String) -> Result<Self, String> {
+        webhook_secret(&text).map(Self)
+    }
+}
+
+impl std::str::FromStr for WebhookSecret {
+    type Err = String;
+    fn from_str(text: &str) -> Result<Self, String> {
+        webhook_secret(text).map(Self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WebhookSecret {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::try_from(<String as serde::Deserialize>::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+}
+
+text_type!(
     /// THEME-8: a theme's name — lower case letters, digits and `-`,
     /// starting with a letter, at most 40 (`ocean`): [`crate::themes::name_of`].
     ThemeName,

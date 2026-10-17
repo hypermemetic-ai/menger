@@ -69,8 +69,11 @@ fn activation() -> Surface {
     // NOTE-2: and notes.
     let notes = NotesActivation::new(Arc::clone(&store)).plugin_schema();
     // DEPLOY-11: and deployments.
-    let deployments = DeploymentsActivation::new(Arc::clone(&store)).plugin_schema();
+    let deployments_hub = DeploymentsActivation::new(Arc::clone(&store));
+    let deployments = deployments_hub.plugin_schema();
     assert_eq!(deployments.namespace, "deployments");
+    // DEPLOY-25: deployments' child, `deployments.webhook`.
+    let deployment_children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&deployments_hub).into_iter().map(|(path, c)| surface_at(&format!("deployments.{path}"), c)).collect();
     // THEME-8: and themes.
     // ORG-4: and orgs.
     let orgs = OrgsActivation::new(Arc::clone(&store)).plugin_schema();
@@ -96,7 +99,7 @@ fn activation() -> Surface {
     out.extend(surface(session));
     out.extend(surface(members));
     out.extend(surface(orgs));
-    children.into_iter().chain(member_children).for_each(|c| out.extend(c));
+    children.into_iter().chain(member_children).chain(deployment_children).for_each(|c| out.extend(c));
     out
 }
 

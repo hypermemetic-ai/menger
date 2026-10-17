@@ -178,6 +178,8 @@ pub async fn build_rpc_login(
     // ACT-5: a deleted ticket's body is kept 30 days for its undo — purged
     // past that now, and every day after, inside the server.
     purge_daily(Arc::clone(&store), Arc::clone(&system));
+    // DEPLOY-25: each deploy request POSTed to its environment's webhook.
+    crate::webhooks::spawn(Arc::clone(&store), Arc::clone(&system));
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
     let tickets = TicketsActivation::with_access(Arc::clone(&store), access.clone());

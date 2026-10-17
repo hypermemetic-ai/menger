@@ -25,8 +25,19 @@
 //!
 //! A source's link leaves menger through MENGER-14's dialog
 //! (`data-links="deployment"`).
+//!
+//! **DEPLOY-25: Queue a deploy.** Each column has a *Queue a deploy*: what
+//! it would deploy (by default what the environment it promotes from runs,
+//! with the work that would move in — `ready for <p>/<env>`), a note, then
+//! Queue (`deployments.request`). The column's open requests sit at its top
+//! — *requested by … · webhook delivered / retrying / failed / no CI* — and
+//! follow the CI's records live (`request` on `deployments.watch` ticks the
+//! epoch); a pending one can be canceled. Each arrives, and each change of
+//! its state is drawn, with the row's entrance (Motion's rules: `none` stops
+//! it).
 
 use leptos::prelude::*;
+use menger_tickets_api::deployments::{DeliveryStage, RequestState};
 use menger_tickets_api::{DeployState, Deployment, DeploymentsEvent, Environment, TicketSummary, TicketsEvent};
 use wasm_bindgen_futures::spawn_local;
 
@@ -45,6 +56,12 @@ const LANE: u32 = 8;
 /// How many of a deploy's tickets show before "+n more".
 const CARRIED: usize = 8;
 
+/// DEPLOY-25: how many requests a column asks for, to show the open ones.
+const REQUESTS: u32 = 10;
+
+/// DEPLOY-25: how many tickets the Queue form's preview lists.
+const MOVES: u32 = 8;
+
 /// `?d=<id>` of a hash — the deployment picked out.
 pub(crate) fn picked_of(hash: &str) -> Option<u64> {
     let (_, q) = hash.split_once('?')?;
@@ -58,6 +75,7 @@ pub(crate) fn state_words(state: DeployState, live: bool) -> String {
     match (state, live) {
         (DeployState::Succeeded, false) => "succeeded · undone".into(),
         (DeployState::RolledBack, _) => "rolled back".into(),
+        (DeployState::Requested, _) => "requested".into(),
         (s, _) => s.as_str().into(),
     }
 }
@@ -450,9 +468,60 @@ async fn page(project: String, name: String, after: Option<u64>) -> Result<(Vec<
     Ok((rows, next))
 }
 
+/// DEPLOY-25: whether a row is an open request — shown at the column's
+/// top, not in its timeline.
+fn open_request(r: &Row) -> bool {
+    r.d.requested.as_ref().is_some_and(|q| q.state.open())
+}
+
+/// DEPLOY-25: the open requests to one environment, newest first.
+async fn open_requests(project: String, name: String) -> Result<Vec<Row>, String> {
+    let client = session::deployments_client().ok_or_else(|| "not connected".to_string())?;
+    let (project, name) = (crate::typed::typed(&project)?, crate::typed::typed(&name)?);
+    let events = client
+        .list_all(Some(project), Some(name), Some(DeployState::Requested), None, None, Some(REQUESTS))
+        .await
+        .map_err(|e| session::describe(&e))?;
+    let mut rows = Vec::new();
+    for ev in events {
+        match ev {
+            DeploymentsEvent::Deployment { deployment, carried, unlinked, live } => rows.push(Row { d: deployment, carried, unlinked, live }),
+            DeploymentsEvent::Error { message } => return Err(message),
+            _ => {}
+        }
+    }
+    rows.retain(open_request);
+    Ok(rows)
+}
+
+/// A row's key in a list: it is drawn again when anything it shows moves
+/// (DEPLOY-25: a request's state, its webhook, its attempts).
+type RowKey = (u64, bool, usize, usize, Option<(RequestState, menger_tickets_api::deployments::WebhookState, usize)>);
+
+fn row_key(r: &Row) -> RowKey {
+    (r.d.id, r.live, r.carried.len(), r.unlinked.len(), r.d.requested.as_ref().map(|q| (q.state, q.webhook, q.attempts.len())))
+}
+
 /// One environment's column: what it runs, then its deploys, newest first.
 #[component]
 fn EnvColumn(project: String, name: String, env: Memo<Option<Environment>>, picked: Option<u64>) -> impl IntoView {
+    let requests = RwSignal::new(Vec::<Row>::new());
+    {
+        let (project, name) = (project.clone(), name.clone());
+        let (epoch, link) = (deploys::epoch(), session::link());
+        Effect::new(move |_| {
+            epoch.track();
+            if !link.get() {
+                return;
+            }
+            let (project, name) = (project.clone(), name.clone());
+            spawn_local(async move {
+                if let Ok(open) = open_requests(project, name).await {
+                    requests.try_set(open);
+                }
+            });
+        });
+    }
     let rows = RwSignal::new(Vec::<Row>::new());
     let next = RwSignal::new(None::<u64>);
     let problem = RwSignal::new(None::<String>);
@@ -532,23 +601,38 @@ fn EnvColumn(project: String, name: String, env: Memo<Option<Environment>>, pick
             }
         })
     };
+    // DEPLOY-25: the open requests are at the top, not in the timeline.
+    let timeline = move || rows.get().into_iter().filter(|r| !open_request(r)).collect::<Vec<Row>>();
     view! {
         <div class="denv" role="listitem" data-env=name.clone()>
             {head}
+            <Queue project=project.clone() name=name.clone() />
+            {move || {
+                let open = requests.get();
+                (!open.is_empty()).then(|| view! {
+                    <ol class="drequests" aria-label="requested deploys">
+                        <For each=move || requests.get() key=row_key children=move |r: Row| request_view(r, picked) />
+                    </ol>
+                })
+            }}
             <div class="dcount">{move || {
                 let n = count();
                 format!("{n} ticket{} running here", if n == 1 { "" } else { "s" })
             }}</div>
             {move || problem.get().map(|p| view! { <p class="derr">{p}</p> })}
             <ol class="dtimeline">
-                <For
-                    each=move || rows.get()
-                    key=|r| (r.d.id, r.live, r.carried.len(), r.unlinked.len())
-                    children=move |r: Row| deploy_view(r, picked)
-                />
+                <For each=timeline key=row_key children=move |r: Row| timeline_row(r, picked) />
             </ol>
             {move || next.get().map(|_| view! { <button type="button" class="dmore" on:click=older.clone()>"older deploys"</button> })}
         </div>
+    }
+}
+
+/// A timeline's row: a deploy, or (DEPLOY-25) a request no longer open.
+fn timeline_row(r: Row, picked: Option<u64>) -> AnyView {
+    match r.d.state {
+        DeployState::Requested => request_view(r, picked).into_any(),
+        _ => deploy_view(r, picked).into_any(),
     }
 }
 
@@ -561,6 +645,7 @@ fn deploy_view(r: Row, picked: Option<u64>) -> impl IntoView {
         (DeployState::Failed, _) => "failed",
         (DeployState::Started, _) => "started",
         (DeployState::RolledBack, _) => "rolledback",
+        (DeployState::Requested, _) => "requested",
     };
     let source = source_words(&d);
     let url = d.source.url.clone().filter(|u| !u.trim().is_empty());
@@ -611,6 +696,257 @@ fn deploy_view(r: Row, picked: Option<u64>) -> impl IntoView {
                 view! { <div class="dunlinked" title=unlinked.join(" ")>{format!("{n} commit{} no ticket links", if n == 1 { "" } else { "s" })}</div> }
             })}
         </li>
+    }
+}
+
+/// DEPLOY-25: one request — *requested by … · webhook …*, its revision, its
+/// note, what the CI made of it, what it would carry; a pending one may be
+/// canceled. Drawn again (with its entrance) as it moves.
+fn request_view(r: Row, picked: Option<u64>) -> impl IntoView {
+    let Row { d, carried, .. } = r;
+    let Some(q) = d.requested.clone() else {
+        return view! { <li class="ddeploy dreq" data-deploy=d.id>"requested"</li> }.into_any();
+    };
+    let state = q.state;
+    let cls = match state {
+        RequestState::Pending => "pending",
+        RequestState::Canceled => "canceled",
+        RequestState::Started => "started",
+        RequestState::Succeeded => "ok",
+        RequestState::Failed | RequestState::RolledBack => "failed",
+    };
+    let hook = deploys::webhook_words(&q);
+    let attempts = q
+        .attempts
+        .iter()
+        .map(|a| format!("attempt {} at {}: {}", a.attempt, fmt_unix(a.at), a.status.map_or_else(|| a.error.clone().unwrap_or_default(), |s| s.to_string())))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let from = q.from.clone().map(|f| view! { <span class="dfrom">" — what "<span class="envmark">{f}</span>" ran"</span> });
+    let project_of_row = d.project.clone();
+    let outcome = q.outcome.map(|o| {
+        view! { <a class="doutcome" href=deploys::href(&project_of_row, Some(o)) on:click=move |ev| { ev.prevent_default(); scroll_to(o); }>{format!("→ deploy {o}")}</a> }
+    });
+    let canceled = q.canceled_by.clone().map(|by| view! { <span class="dhint">{format!("by {by}")}</span> });
+    let problem = RwSignal::new(None::<String>);
+    let cancel = (state == RequestState::Pending).then(|| {
+        let id = d.id;
+        view! {
+            <button type="button" class="dlink dcancel" title="withdraw this request (its CI has not picked it up)" on:click=move |_| {
+                spawn_local(async move {
+                    if let Err(e) = cancel_request(id).await {
+                        problem.try_set(Some(e));
+                    }
+                });
+            }>"cancel"</button>
+        }
+    });
+    let more = carried.len().saturating_sub(CARRIED);
+    let chips = carried
+        .iter()
+        .take(CARRIED)
+        .map(|t| view! { <a class="code" href=format!("#/ticket/{t}") data-ticket-id=t.clone()>{t.clone()}</a> })
+        .collect_view();
+    view! {
+        <li class=format!("ddeploy dreq {cls}") class:picked=picked == Some(d.id) data-deploy=d.id data-state="requested" data-request=state.as_str() data-webhook=q.webhook.as_str()>
+            <div class="dline">
+                <span class="dstate requested">"requested"</span>
+                <code class="rev" title=d.revision.clone()>{deploys::short(&d.revision)}</code>
+                {from}
+                <time title=fmt_unix(d.at)>{fmt_relative(now_unix(), d.at)}</time>
+            </div>
+            {d.release.clone().map(|r| view! { <div class="rel">{r}</div> })}
+            <div class="dby">"by "{d.recorded_by.clone()}" · "<span class=format!("dhook {}", q.webhook.as_str()) title=attempts>{hook}</span></div>
+            {q.note.clone().map(|n| view! { <div class="dnote">{n}</div> })}
+            <div class="dreqstate">
+                <span class=format!("dreqword {cls}")>{deploys::request_words(&q)}</span>
+                {outcome}
+                {canceled}
+                {cancel}
+            </div>
+            {(!carried.is_empty() && state == RequestState::Pending).then(|| view! {
+                <div class="dcarried" aria-label="the tickets it would carry">
+                    {chips}
+                    {(more > 0).then(|| view! { <span class="dhint">{format!("+{more} more")}</span> })}
+                </div>
+            })}
+            {move || problem.get().map(|p| view! { <p class="derr">{p}</p> })}
+        </li>
+    }
+    .into_any()
+}
+
+/// The deployment `id`, scrolled to where it is drawn.
+fn scroll_to(id: u64) {
+    if let Some(el) = crate::dom::window().document().and_then(|d| d.query_selector(&format!("[data-deploy=\"{id}\"]")).ok().flatten()) {
+        el.scroll_into_view();
+    }
+}
+
+/// DEPLOY-25: `deployments.cancel_request`, its refusal in words.
+async fn cancel_request(id: u64) -> Result<(), String> {
+    let client = session::deployments_client().ok_or_else(|| "not connected".to_string())?;
+    let events = client.cancel_request_all(menger_tickets_api::vocab::DeploymentId::new(id)).await.map_err(|e| session::describe(&e))?;
+    match events.into_iter().find_map(|e| match e {
+        DeploymentsEvent::Error { message } => Some(message),
+        _ => None,
+    }) {
+        Some(message) => Err(message),
+        None => Ok(()),
+    }
+}
+
+/// DEPLOY-25: what a Queue would deploy when it names no revision — the
+/// environment it promotes from, and what that runs (revision, release).
+fn source_of(project: &str, name: &str) -> Option<(String, Option<String>, Option<String>)> {
+    deploys::held().with(|h| {
+        let h = h.as_ref()?;
+        let from = h.from_of(project, name)?;
+        let src = h.of_project(project).into_iter().find(|e| e.name == from);
+        Some((from, src.as_ref().and_then(|e| e.revision.clone()), src.and_then(|e| e.release)))
+    })
+}
+
+/// DEPLOY-25: `deployments.request` — the request as kept, or why not.
+async fn queue(project: String, name: String, revision: String, note: String) -> Result<Deployment, String> {
+    let client = session::deployments_client().ok_or_else(|| "not connected".to_string())?;
+    let (p, e) = (crate::typed::typed(&project)?, crate::typed::typed(&name)?);
+    let (rev, note) = (crate::typed::opt(Some(revision))?, crate::typed::opt(Some(note))?);
+    let events = client.request_all(p, e, rev, None, note).await.map_err(|e| session::describe(&e))?;
+    for ev in events {
+        match ev {
+            DeploymentsEvent::Request { deployment, .. } => return Ok(deployment),
+            DeploymentsEvent::Error { message } => return Err(message),
+            _ => {}
+        }
+    }
+    Err("no answer".into())
+}
+
+/// DEPLOY-25: a column's **Queue a deploy** — closed, a button; open, what
+/// it would deploy (the source's revision, or one named), the work that
+/// would move in, a note, and Queue.
+#[component]
+fn Queue(project: String, name: String) -> impl IntoView {
+    let open = RwSignal::new(false);
+    let revision = RwSignal::new(String::new());
+    let note = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    let problem = RwSignal::new(None::<String>);
+    let source = {
+        let (project, name) = (project.clone(), name.clone());
+        Memo::new(move |_| source_of(&project, &name))
+    };
+    let moves = RwSignal::new(None::<Result<(Vec<TicketSummary>, u64), String>>);
+    {
+        let filter = lane_filter(DeliveryStage::ReadyFor, &project, &name);
+        let (epoch, link) = (deploys::epoch(), session::link());
+        Effect::new(move |_| {
+            epoch.track();
+            if !open.get() || !link.get() || source.with(Option::is_none) {
+                return;
+            }
+            let f = filter.clone();
+            spawn_local(async move {
+                moves.try_set(Some(matching(f, MOVES).await));
+            });
+        });
+    }
+    let submit = {
+        let (project, name) = (project.clone(), name.clone());
+        move |ev: leptos::ev::SubmitEvent| {
+            ev.prevent_default();
+            if busy.get_untracked() {
+                return;
+            }
+            busy.set(true);
+            problem.set(None);
+            let (project, name, rev, why) = (project.clone(), name.clone(), revision.get_untracked(), note.get_untracked());
+            spawn_local(async move {
+                match queue(project, name, rev, why).await {
+                    Ok(_) => {
+                        open.try_set(false);
+                        revision.try_set(String::new());
+                        note.try_set(String::new());
+                    }
+                    Err(e) => {
+                        problem.try_set(Some(e));
+                    }
+                }
+                busy.try_set(false);
+            });
+        }
+    };
+    let env_name = name.clone();
+    let what = move || {
+        let named = revision.with(|r| !r.trim().is_empty());
+        match (named, source.get()) {
+            (true, _) => view! { <span>"Deploys the revision named below."</span> }.into_any(),
+            (false, Some((from, Some(rev), release))) => view! {
+                <span>"Deploys what "<span class="envmark">{from}</span>" runs: "<code class="rev" title=rev.clone()>{deploys::short(&rev)}</code>
+                {release.map(|r| view! { <span class="rel">{format!(" · {r}")}</span> })}</span>
+            }
+            .into_any(),
+            (false, Some((from, None, _))) => view! { <span class="derr">{format!("{from} runs nothing yet: name a revision.")}</span> }.into_any(),
+            (false, None) => view! { <span>{format!("{} promotes from no environment: name a revision.", env_name.clone())}</span> }.into_any(),
+        }
+    };
+    let preview = move || {
+        if revision.with(|r| !r.trim().is_empty()) || source.with(Option::is_none) {
+            return None;
+        }
+        Some(match moves.get() {
+            None => view! { <p class="loading">"…"</p> }.into_any(),
+            Some(Err(e)) => view! { <p class="derr">{e}</p> }.into_any(),
+            Some(Ok((list, _))) if list.is_empty() => view! { <p class="none">"Nothing new moves in: it runs here already."</p> }.into_any(),
+            Some(Ok((list, n))) => {
+                let more = (n as usize > list.len()).then(|| view! { <li class="more">{format!("and {} more", n as usize - list.len())}</li> });
+                view! {
+                    <p class="dsub">{format!("Moves in — {n} ticket{}:", if n == 1 { "" } else { "s" })}</p>
+                    <ul class="drows dqmoves">
+                        {list.into_iter().map(|t| {
+                            let href = format!("#/ticket/{}", t.id);
+                            view! {
+                                <li data-ticket-id=t.id.to_string()>
+                                    <a class="code" href=href.clone()>{t.id.to_string()}</a>
+                                    <a class="dtitle" href=href>{t.title.clone()}</a>
+                                </li>
+                            }
+                        }).collect_view()}
+                        {more}
+                    </ul>
+                }
+                .into_any()
+            }
+        })
+    };
+    let label = format!("Queue a deploy to {name}");
+    view! {
+        <div class="dqueue" class:open=move || open.get()>
+            {move || (!open.get()).then(|| view! {
+                <button type="button" class="dqbtn" title=label.clone() on:click=move |_| { problem.set(None); open.set(true); }>"Queue a deploy"</button>
+            })}
+            {move || open.get().then(|| view! {
+                <form class="dqform" on:submit=submit.clone()>
+                    <div class="dqwhat">{what.clone()}</div>
+                    {preview}
+                    <label class="dqfield">
+                        <span>"Revision"</span>
+                        <input type="text" name="revision" autocomplete="off" spellcheck="false" placeholder=move || source.get().and_then(|(_, r, _)| r).map_or_else(|| "a commit, e.g. 235ff62".to_string(), |r| format!("default: {}", deploys::short(&r)))
+                            prop:value=move || revision.get() on:input=move |ev| revision.set(event_target_value(&ev)) />
+                    </label>
+                    <label class="dqfield">
+                        <span>"Note"</span>
+                        <textarea name="note" rows="2" placeholder="why — the CI gets it too" prop:value=move || note.get() on:input=move |ev| note.set(event_target_value(&ev))></textarea>
+                    </label>
+                    {move || problem.get().map(|p| view! { <p class="derr">{p}</p> })}
+                    <div class="dqact">
+                        <button type="submit" class="dqgo" disabled=move || busy.get()>{move || if busy.get() { "Queueing…" } else { "Queue" }}</button>
+                        <button type="button" class="dlink" on:click=move |_| open.set(false)>"cancel"</button>
+                    </div>
+                </form>
+            })}
+        </div>
     }
 }
 

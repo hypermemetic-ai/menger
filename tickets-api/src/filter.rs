@@ -1223,13 +1223,15 @@ fn predicate_mistake(raw: &str, s: &str) -> Option<Mistake> {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 42] = [
+const NAMES: [&str; 43] = [
     "has commits",
     "menger doc",
     "discussion",
     "unattested",
     // DEPLOY-21: a delivery stage (`ready for` before `ready`).
     "deploying",
+    // DEPLOY-25: what a pending request would carry.
+    "requested",
     "ready for",
     // DEPLOY-11: where a ticket's work runs.
     "deployed",
@@ -1288,7 +1290,7 @@ const UNBALANCED: &str = "a group's parentheses close where they open: `(a or (b
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
                               `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
                               `entered`, `left`, `changed`, `by`, `created`, `for`, `deployed`, `behind`, `waiting`, \
-                              `deploying`, `ready for`, `failed`, `queued` or \
+                              `deploying`, `ready for`, `failed`, `requested`, `queued` or \
                               `saved`, a group in parentheses, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
@@ -1572,6 +1574,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "behind" => read_history(name, tail).map(Field::History),
         // DEPLOY-21: over the deployments' kept stages.
         "waiting" | "deploying" | "ready for" | "failed" => read_history(name, tail).map(Field::History),
+        // DEPLOY-25: over the pending requests.
+        "requested" => read_history(name, tail).map(Field::History),
         // MENGER-39: over the queue's kept entries.
         "queued" => read_history(name, tail).map(Field::History),
         // CHAT-3: over the chats, for the reader.
@@ -1766,6 +1770,12 @@ pub enum Event {
     /// that name ([`crate::deployments::DeliveryStage`]). No window, no
     /// `by`; answered from the deployments' kept stages and cells.
     Stage(crate::deployments::DeliveryStage, String),
+    /// DEPLOY-25: `requested <env>` — a pending request to an environment
+    /// of that name would carry the ticket: its current version runs where
+    /// the request's revision runs (or it links that revision), and not
+    /// there. No window, no `by`; answered from the pending requests and
+    /// the kept cells.
+    Requested(String),
     /// MENGER-39: `queued` — the ticket is in the owner's queue; `queued
     /// <urgency>`, at that urgency (a snooze does not take it out). Answered
     /// from the queue's kept entries; no window, no `by`.
@@ -1802,6 +1812,7 @@ impl Event {
             Event::Deployed(_) => "deployed",
             Event::Behind(_) => "behind",
             Event::Stage(s, _) => s.as_str(),
+            Event::Requested(_) => "requested",
             Event::Queued(_) => "queued",
             Event::Chatting => "chatting",
             Event::Unread => "unread",
@@ -2115,6 +2126,7 @@ impl History {
             Event::Deployed(env) => format!("deployed {}", quoted(env)),
             Event::Behind(env) => format!("behind {}", quoted(env)),
             Event::Stage(s, env) => format!("{s} {}", quoted(env)),
+            Event::Requested(env) => format!("requested {}", quoted(env)),
             Event::Queued(None) => "queued".to_string(),
             Event::Queued(Some(u)) => format!("queued {u}"),
             Event::Chatting => "chatting".to_string(),
@@ -2230,6 +2242,14 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
                 return Err(format!("`{extra}` is not understood here — `{name}` takes an environment and nothing else: no window, no `by`"));
             }
             return Ok(History { event: Event::Stage(stage, deployed_env(env)?), window: None, by: None });
+        }
+        // DEPLOY-25: `requested <env>`, and nothing after it.
+        "requested" => {
+            let env = w.first().ok_or("`requested` names an environment, as `requested prod` or `requested menger/prod`")?;
+            if let Some(extra) = w.get(1) {
+                return Err(format!("`{extra}` is not understood here — `requested` takes an environment and nothing else: no window, no `by`"));
+            }
+            return Ok(History { event: Event::Requested(deployed_env(env)?), window: None, by: None });
         }
         // MENGER-39: `queued [urgency]`, and nothing after it.
         "queued" => {

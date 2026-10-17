@@ -118,12 +118,30 @@ fn the_small_names_hold_their_rules() {
     holds::<FacetField>(&["status", "has commits", "in"], &["", "colour", "Status"]);
     holds::<EnvironmentName>(&["prod", "Prod", "review/pr-412"], &["", "-x", "a b"]);
     holds::<Release>(&["20261012T220402Z-235ff62"], &["", "a b"]);
+    holds::<WebhookUrl>(&["https://ci.example.com/hook", "http://127.0.0.1:6091/"], &["", "http://ci.example.com/", "https://u:p@x/"]);
     holds::<ThemeName>(&["ocean", "Ocean"], &["", "1x", "a b", &"a".repeat(41)]);
     holds::<ThemeScope>(&["site", "SITE", "PANTRY", "pantry"], &["", "PANTRY-4"]);
     assert!("Site".parse::<ThemeScope>().unwrap().is_site());
     holds::<TokenName>(&["--accent", "accent"], &["", "---accent", "Accent", "--"]);
     holds::<TokenValue>(&["#00796b", "1px solid red"], &["", "red;", "a{", &"a".repeat(201)]);
     holds::<Under>(&["FILTER", "FILTER-9", "menger/theme"], &["", "a b"]);
+}
+
+/// DEPLOY-25: a webhook secret is read by its rule and never said back —
+/// not by `Debug`, not by a refusal.
+#[test]
+fn a_webhook_secret_is_never_said() {
+    let secret = "s3cret-0123456789abcdef";
+    let s: WebhookSecret = secret.parse().unwrap();
+    assert_eq!(s.expose(), secret);
+    assert!(!format!("{s:?}").contains(secret));
+    let short = "short-s3cret";
+    let e = short.parse::<WebhookSecret>().unwrap_err();
+    assert!(!e.contains(short), "{e}");
+    let spaced = "a secret with spaces in it";
+    let e = serde_json::from_value::<WebhookSecret>(serde_json::json!(spaced)).unwrap_err().to_string();
+    assert!(!e.contains(spaced), "{e}");
+    assert_eq!(serde_json::to_value(&s).unwrap(), serde_json::json!(secret));
 }
 
 #[test]
@@ -263,7 +281,7 @@ fn every_enum_a_method_takes_is_a_closed_enum_in_the_schema() {
     assert_eq!(closed::<crate::members::Role>(), ["viewer", "deployer", "editor", "admin"]);
     assert_eq!(closed::<crate::comments::CommentState>(), ["open", "resolved"]);
     assert_eq!(closed::<crate::notes::NoteState>(), ["open", "upgraded"]);
-    assert_eq!(closed::<crate::deployments::DeployState>(), ["started", "succeeded", "failed", "rolled_back"]);
+    assert_eq!(closed::<crate::deployments::DeployState>(), ["started", "succeeded", "failed", "rolled_back", "requested"]);
     assert_eq!(closed::<crate::queue::Urgency>(), ["whenever", "today", "now", "blocking"]);
     assert_eq!(closed::<crate::themes::ThemeReach>(), ["frame", "ticket", "site"]);
     assert_eq!(closed::<crate::themes::Takeover>(), ["on", "off"]);

@@ -582,6 +582,8 @@ PANTRY's `prod` are two (DEPLOY-9's decisions).
 | `release` | | the artifact's name |
 | `at` | | when, UTC (`2026-10-12T22:04:19Z`); `deploy/record` fills in now |
 | `source` | | `{ system, run, url }`: who sent it and where to read the run |
+| `from` | | DEPLOY-21: the environment this one promotes from (`--promotes-from`) |
+| `request` | | DEPLOY-25: the request this deployment answers — the webhook payload's `request` (`--request N`, or `MENGER_REQUEST` in a CI job) |
 
 A hash is 7 to 64 lowercase hex digits; a field the record does not know is
 refused, and an absent field is simply left out (`null` means the same).
@@ -866,6 +868,66 @@ method over the WebSocket — one call per params line on stdin, or
 MENGER_DEPLOY_KEY=… node deploy/menger-call.mjs --url wss://menger.example.com deployments.for_ticket --params '{"id":"PANTRY-12"}'
 node deploy/menger-call.mjs --principal      # key:<hex> of $MENGER_DEPLOY_KEY: what to grant
 ```
+
+## A deploy request's webhook (DEPLOY-25)
+
+A deploy can be queued from menger (`deployments request`, or *Queue a
+deploy* on `#/deployments`). menger keeps the request and POSTs it to the
+environment's webhook, which an admin sets:
+
+```sh
+cat > webhook.json <<'JSON'   # 0600; the secret never goes in argv
+{"project": "menger", "environment": "prod", "url": "https://ci.example.com/hooks/menger", "secret": "…16 to 256 bytes…"}
+JSON
+synapse -P 4455 -p @webhook.json menger deployments webhook set
+synapse -P 4455 menger deployments webhook show --project menger --environment prod   # url, secret_set — never the secret
+```
+
+The URL is https, or http to this machine (`127.0.0.1`, `localhost`,
+`[::1]`) for a CI that runs here. Each delivery is:
+
+```http
+POST /hooks/menger HTTP/1.1
+Content-Type: application/json
+X-Menger-Event: deploy.requested
+X-Menger-Delivery: 3f6c0e9a-…            the same on every attempt of one request
+X-Menger-Attempt: 1
+X-Menger-Signature: sha256=5bdcc146…     lower-case hex HMAC-SHA256 of the body, keyed by the secret
+
+{"request":41,"project":"MENGER","environment":"prod","revision":"235ff62","release":"20261012T220402Z-235ff62",
+ "from":"test","requested_by":"key:4b…","note":"the week's work","at":"2026-10-17T07:00:00Z"}
+```
+
+A 2xx answers it. Anything else, or no answer within 10 s, is tried again
+after 1 s, 5 s, 30 s, 2 min and 10 min; after the sixth attempt the delivery
+is `failed`. Redirects are not followed. The request shows each attempt.
+
+**Verifying a delivery.** Compute HMAC-SHA256 of the raw body bytes — as
+received, before parsing — keyed by the secret, and compare its hex with
+the header after `sha256=` in constant time. Refuse anything else. Then
+treat `X-Menger-Delivery` as the idempotency key (a retry repeats it):
+
+```js
+// Node: verify, then answer before the deploy runs (menger waits 10 s at most).
+import { createHmac, timingSafeEqual } from "node:crypto";
+function verified(rawBody, header, secret) {
+  const want = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
+  return typeof header === "string" && header.length === want.length && timingSafeEqual(Buffer.from(header), Buffer.from(want));
+}
+```
+
+```sh
+# a shell receiver, the body in body.json: the signature it should carry
+printf 'sha256=%s\n' "$(openssl dgst -sha256 -hmac "$SECRET" -hex < body.json | sed 's/^.*= //')"
+```
+
+**Closing the loop.** The CI records what it did as any deploy, naming the
+request, so menger shows its outcome: `deploy/record --state started
+--request 41 … --send`, then `succeeded` or `failed` the same way (or
+`MENGER_REQUEST=41` in the job's environment). menger's own pipeline is not
+a receiver yet; this machine's `deploy/pipeline` would be one added later.
+A request can be canceled (`deployments cancel_request --id 41`) until a
+record names it; its delivery then stops.
 
 ## Where things are
 

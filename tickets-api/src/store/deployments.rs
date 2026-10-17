@@ -102,7 +102,8 @@ pub(super) const TABLES: &str = "
             url         TEXT,
             recorded_at INTEGER NOT NULL,
             recorded_by TEXT NOT NULL,
-            dedupe      TEXT NOT NULL UNIQUE
+            dedupe      TEXT NOT NULL UNIQUE,
+            request     INTEGER
         );
         CREATE INDEX IF NOT EXISTS deployments_by_environment ON deployments (project, environment, at_unix, id);
         CREATE TABLE IF NOT EXISTS deployment_commits (
@@ -147,13 +148,32 @@ fn has_table(conn: &Connection) -> rusqlite::Result<bool> {
 pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
     // DEPLOY-21: and one without the sources gains that table, empty.
     conn.execute_batch(SOURCES)?;
+    // DEPLOY-25: and the requests', the deliveries' and the webhooks'.
+    conn.execute_batch(requests::TABLES)?;
     if has_table(conn)? {
+        // DEPLOY-25: a record names the request it answers.
+        if !has_request_column(conn)? {
+            conn.execute_batch("ALTER TABLE deployments ADD COLUMN request INTEGER")?;
+            tracing::warn!("DEPLOY-25: deployments gained its request column, empty");
+        }
         return Ok(false);
     }
     conn.execute_batch(TABLES)?;
     tracing::warn!("DEPLOY-11: the file gained the deployments tables, empty, durably; every later open reads them");
     Ok(true)
 }
+
+/// DEPLOY-25: whether `deployments` has its `request` column (a file
+/// `--verify-derived` reads, unmigrated, may not).
+fn has_request_column(conn: &Connection) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT count(*) FROM pragma_table_info('deployments') WHERE name = 'request'", [], |r| r.get::<_, i64>(0).map(|n| n > 0))
+}
+
+/// DEPLOY-25: a request — what menger asked a CI for — and its webhook.
+mod requests;
+pub use requests::{Due, RequestAsk};
+#[cfg(test)]
+pub(super) use requests::NOTE_MAX;
 
 // ---------------------------------------------------------------------
 // Commits, without git
@@ -368,10 +388,12 @@ pub(super) fn fold(ds: &[&Deployment]) -> Kept {
                 k.ends.push(Touch::of(d.state, d.at, &[d]));
             }
             DeployState::RolledBack => k.starts.clear(),
+            // DEPLOY-25: a request is folded nowhere (never reaches here).
+            DeployState::Requested => {}
         }
         let before = (d.state == DeployState::RolledBack).then(|| k.stack.clone());
         match d.state {
-            DeployState::Started | DeployState::Failed => continue,
+            DeployState::Started | DeployState::Failed | DeployState::Requested => continue,
             DeployState::Succeeded => {
                 if let Some(i) = at(&k.stack, &d.revision) {
                     k.stack.truncate(i + 1);
@@ -533,11 +555,20 @@ pub(crate) struct Deploys {
     links: Links,
     /// DEPLOY-21: `(project, environment)` → the environment it promotes from.
     pub(super) sources: BTreeMap<(String, String), String>,
+    /// DEPLOY-25: the pending requests' ids — what `requested <env>` reads.
+    pending: BTreeSet<u64>,
+    /// DEPLOY-25: each environment's webhook, its secret with it (never
+    /// answered; the deliveries' alone).
+    webhooks: BTreeMap<(String, String), requests::Hook>,
 }
 
 /// What makes two records one deployment: the project, the environment, the
 /// state, the revision, and the run when the CI names one, else `at`.
 fn dedupe(d: &Deployment) -> String {
+    // DEPLOY-25: a request is its own — two asks are two requests.
+    if d.state == DeployState::Requested {
+        return format!("request:{}", d.id);
+    }
     let when = match &d.source.run {
         Some(run) => format!("run:{run}"),
         None => format!("at:{}", d.at),
@@ -603,7 +634,7 @@ impl Deploys {
             .get(&(project.to_string(), name.to_string()))
             .map(|k| k.records.iter().map(|(_, id)| &self.by_id[id]).collect())
             .unwrap_or_default();
-        ds.extend(extra);
+        ds.extend(extra.filter(|d| d.state != DeployState::Requested));
         ds.sort_by_key(|d| (d.at, d.id));
         let mut k = fold(&ds);
         k.join(&self.links);
@@ -616,6 +647,10 @@ impl Deploys {
         self.keys.insert(dedupe(&d), d.id);
         self.by_time.insert((d.at, d.id));
         self.envs.insert((d.project.clone(), d.environment.clone()), kept);
+        // DEPLOY-25: a record naming a request moves it.
+        if let Some(r) = d.request {
+            self.answered(r, &d);
+        }
         self.by_id.insert(d.id, d);
     }
 
@@ -624,13 +659,18 @@ impl Deploys {
     fn load_records(&mut self, records: Vec<Deployment>) {
         let mut envs: BTreeSet<(String, String)> = BTreeSet::new();
         for d in records {
-            envs.insert((d.project.clone(), d.environment.clone()));
+            // DEPLOY-25: a request is kept and listed, and folded nowhere.
+            if d.state != DeployState::Requested {
+                envs.insert((d.project.clone(), d.environment.clone()));
+            }
             self.keys.insert(dedupe(&d), d.id);
             self.by_time.insert((d.at, d.id));
             self.by_id.insert(d.id, d);
         }
+        self.settle_requests();
         for (p, e) in envs {
-            let mut ds: Vec<&Deployment> = self.by_id.values().filter(|d| d.project == p && d.environment == e).collect();
+            let mut ds: Vec<&Deployment> =
+                self.by_id.values().filter(|d| d.project == p && d.environment == e && d.state != DeployState::Requested).collect();
             ds.sort_by_key(|d| (d.at, d.id));
             let mut k = fold(&ds);
             k.join(&self.links);
@@ -792,6 +832,8 @@ impl Cache {
             crate::filter::Event::Behind(env) => self.deploys.holds_behind(env, &self.at),
             // DEPLOY-21: from the kept stages, the cells and the cell table.
             crate::filter::Event::Stage(stage, env) => self.holds_stage(*stage, env),
+            // DEPLOY-25: from the pending requests and the kept cells.
+            crate::filter::Event::Requested(env) => self.holds_requested(env),
             // MENGER-39: `queued` from the queue's kept entries.
             crate::filter::Event::Queued(u) => self.queue.holds(*u, &self.at),
             // CHAT-3: for the reader, from the chats.
@@ -810,6 +852,7 @@ impl Cache {
             crate::filter::Event::Queued(_)
             | crate::filter::Event::Behind(_)
             | crate::filter::Event::Stage(..)
+            | crate::filter::Event::Requested(_)
             | crate::filter::Event::Chatting
             | crate::filter::Event::Unread => None,
             _ => self.log.next_boundary(h, clock),
@@ -894,6 +937,10 @@ impl Cache {
     /// What `d` carried, and the commits of it no ticket links, and whether
     /// it still counts in its environment.
     fn carried(&self, d: &Deployment) -> (Vec<String>, Vec<String>, bool) {
+        // DEPLOY-25: a request carries what it would, while it is pending.
+        if d.state == DeployState::Requested {
+            return (self.request_carries(d), Vec::new(), false);
+        }
         let links = &self.deploys.links;
         let mut tickets: Vec<&str> = Vec::new();
         let mut unlinked: Vec<String> = Vec::new();
@@ -966,6 +1013,9 @@ fn read(rec: Record, now: i64) -> Result<Deployment, StoreError> {
     let project = project_of(&rec.project).map_err(bad)?;
     let environment = environment_of(&rec.environment).map_err(bad)?;
     let state: DeployState = rec.state.parse().map_err(bad)?;
+    if state == DeployState::Requested {
+        return Err(bad("a CI records started, succeeded, failed or rolled_back — a request is made with `deployments request`".into()));
+    }
     let reference = |what: &str, c: &str| {
         super::commits::reference(c.trim())
             .ok_or_else(|| bad(format!("{what} `{c}` is not a commit reference: 7–64 hex characters, `repo@` before them outside the project's repository")))
@@ -1030,6 +1080,8 @@ fn read(rec: Record, now: i64) -> Result<Deployment, StoreError> {
         source,
         recorded_at: now,
         recorded_by: String::new(),
+        request: rec.request,
+        requested: None,
     })
 }
 
@@ -1088,6 +1140,10 @@ impl Store {
                 let deployment = kept.clone();
                 return Ok(DeploymentsEvent::Deployed { deployment, carried, unlinked, live, entered: Vec::new(), left: Vec::new(), duplicate: true });
             }
+            // DEPLOY-25: the request it answers is a request to this environment.
+            if let Some(r) = d.request {
+                cache.deploys.answers(r, &d)?;
+            }
             let at = (d.project.clone(), d.environment.clone());
             let source = from.filter(|f| cache.deploys.sources.get(&at) != Some(f));
             if let Some(why) = source.as_deref().and_then(|f| cache.deploys.source_refused(&d.project, &d.environment, f)) {
@@ -1105,6 +1161,8 @@ impl Store {
             let no = BTreeSet::new();
             let (deploying, failed) = (had.map_or(&no, |k| &k.deploying), had.map_or(&no, |k| &k.failed));
             let staged = source.as_ref().map(|_| cache.deploys.staged_in(&d.project)).unwrap_or_default();
+            // DEPLOY-25: what a pending request in the project would carry moves with what runs.
+            let requested = cache.requested_moves(&d.project, &kept);
             // DEPLOY-20: a ticket whose version there moved is moved too.
             let moved: Vec<&str> = before
                 .iter()
@@ -1115,6 +1173,7 @@ impl Store {
                 .chain(deploying.symmetric_difference(&kept.deploying).map(String::as_str))
                 .chain(failed.symmetric_difference(&kept.failed).map(String::as_str))
                 .chain(staged)
+                .chain(requested.iter().map(String::as_str))
                 .collect();
             let entered = cache.in_order(kept.running.keys().map(String::as_str).filter(|t| !before.contains_key(*t)));
             let left = cache.in_order(before.keys().map(String::as_str).filter(|t| !kept.running.contains_key(*t)));
@@ -1129,6 +1188,10 @@ impl Store {
             move |tx| {
                 store(tx, &stored)?;
                 store_environment(tx, &stored.project, &stored.environment, &env)?;
+                // DEPLOY-25: a request picked up sends no more.
+                if let Some(r) = stored.request {
+                    requests::stop_delivery(tx, r)?;
+                }
                 if let Some(f) = &set {
                     store_source(tx, &stored.project, &stored.environment, Some(f), stored.recorded_at, &stored.recorded_by)?;
                 }
@@ -1139,16 +1202,21 @@ impl Store {
                 if let Some(f) = &source {
                     cache.deploys.sources.insert((project.clone(), name.clone()), f.clone());
                 }
+                let request = d.request;
                 cache.deploys.install(d.clone(), kept);
                 let (carried, unlinked, live) = cache.carried(&d);
                 let deployed = DeploymentsEvent::Deployed { deployment: d, carried, unlinked, live, entered, left, duplicate: false };
                 let promotes = source.map(|from| DeploymentsEvent::Promotes { project: project.clone(), environment: name.clone(), from: Some(from) });
-                (deployed, cache.environment(&project, &name), promotes)
+                let request = request.and_then(|r| cache.request_event(r));
+                (deployed, cache.environment(&project, &name), (promotes, request))
             },
-            move |(), (deployed, environment, promotes), tx| {
+            move |(), (deployed, environment, (promotes, request)), tx| {
                 tx.deployment(deployed.clone());
                 if let Some(p) = promotes {
                     tx.deployment(p);
+                }
+                if let Some(r) = request {
+                    tx.deployment(r);
                 }
                 if let Some(environment) = environment {
                     tx.deployment(DeploymentsEvent::EnvironmentChanged { environment });
@@ -1269,7 +1337,9 @@ impl Store {
     /// DEPLOY-11: the projects deployments have been recorded for.
     pub fn deploy_projects(&self) -> Vec<String> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let projects: BTreeSet<String> = cache.deploys.envs.keys().map(|(p, _)| p.clone()).collect();
+        let mut projects: BTreeSet<String> = cache.deploys.envs.keys().map(|(p, _)| p.clone()).collect();
+        // DEPLOY-25: and those with only a request so far.
+        projects.extend(cache.deploys.request_projects());
         projects.into_iter().collect()
     }
 
@@ -1310,6 +1380,8 @@ impl Store {
                 None => DeploymentsEvent::NotRunning { ticket: row.id.to_string(), project: env.project, environment: env.name },
             });
         }
+        // DEPLOY-25: and each pending request that would carry it.
+        out.extend(cache.requested_for(row.id.as_str(), allowed));
         Ok(out)
     }
 
@@ -1391,8 +1463,8 @@ impl Store {
 fn store(conn: &Connection, d: &Deployment) -> rusqlite::Result<()> {
     conn.prepare_cached(
         "INSERT INTO deployments (id, project, environment, state, revision, previous, tickets, release, at_unix, system, run, url,
-                                  recorded_at, recorded_by, dedupe)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                                  recorded_at, recorded_by, dedupe, request)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
     )?
     .execute(params![
         d.id as i64,
@@ -1410,6 +1482,7 @@ fn store(conn: &Connection, d: &Deployment) -> rusqlite::Result<()> {
         d.recorded_at,
         d.recorded_by,
         dedupe(d),
+        d.request.map(|r| r as i64),
     ])?;
     let mut insert = conn.prepare_cached("INSERT INTO deployment_commits (deployment, pos, sha) VALUES (?1, ?2, ?3)")?;
     for (pos, c) in d.commits.iter().enumerate() {
@@ -1462,10 +1535,12 @@ fn read_all(conn: &Connection) -> anyhow::Result<Vec<Deployment>> {
             commits.entry(r.get::<_, i64>(0)? as u64).or_default().push(r.get(1)?);
         }
     }
-    let mut stmt = conn.prepare(
-        "SELECT id, project, environment, state, revision, previous, tickets, release, at_unix, system, run, url, recorded_at, recorded_by
-             FROM deployments ORDER BY id",
-    )?;
+    // DEPLOY-25: a file `--verify-derived` reads unmigrated has no request column.
+    let request = if has_request_column(conn)? { "request" } else { "NULL" };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, project, environment, state, revision, previous, tickets, release, at_unix, system, run, url, recorded_at, recorded_by, {request}
+             FROM deployments ORDER BY id"
+    ))?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
@@ -1486,6 +1561,8 @@ fn read_all(conn: &Connection) -> anyhow::Result<Vec<Deployment>> {
             source: DeploySource { system: r.get(9)?, run: r.get(10)?, url: r.get(11)? },
             recorded_at: r.get(12)?,
             recorded_by: r.get(13)?,
+            request: r.get::<_, Option<i64>>(14)?.map(|r| r as u64),
+            requested: None,
         });
     }
     Ok(out)
@@ -1500,7 +1577,9 @@ impl Deploys {
         self.links.record = versions::load(conn)?;
         // DEPLOY-21: and where each environment promotes from.
         self.sources = read_sources(conn)?;
-        let records = read_all(conn)?;
+        let mut records = read_all(conn)?;
+        // DEPLOY-25: each request's note, delivery and attempts, and the webhooks.
+        requests::load(conn, &mut records, &mut self.webhooks)?;
         self.load_records(records);
         tracing::info!(
             "DEPLOY-11: read {} deployment(s) to {} environment(s) and kept their cells in {:.1} ms",
