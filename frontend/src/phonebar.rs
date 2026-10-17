@@ -203,7 +203,7 @@ pub(crate) fn open(to: Option<Place>) {
     let pop = h.lens.pop(Level::Global);
     if to == Some(Place::Filter) {
         if !pop.is_open() {
-            h.lens.open_menu(Level::Global, None, None);
+            h.lens.open_panel(Level::Global, None);
         }
     } else if was == Some(Place::Filter) && pop.is_open() {
         pop.close(false);

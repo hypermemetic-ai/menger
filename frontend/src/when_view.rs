@@ -34,8 +34,8 @@ use menger_tickets_api::Status;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::calendar::{now_local, reader_h12, today, Calendar, Day, TimeSelect};
-use crate::anyof::{self, Slot};
-use crate::filter::Pop;
+use crate::filter::{Cat, Pop};
+use crate::ors::Slot;
 use crate::lens::{Lens, Level};
 use crate::when::{self, Kind, Part, Timed};
 
@@ -68,17 +68,16 @@ fn keep_focus(level: Level) {
     });
 }
 
-/// The time clause at `at` in `level`'s query tree (FILTER-37).
+/// The time clause at `at` in `level`'s groups (FILTER-39).
 fn clause_at(lens: Lens, level: Level, at: Slot) -> Option<Timed> {
-    anyof::time_at(&lens.tree(level), at)
+    lens.ors(level).and_then(|o| o.time_at(at))
 }
 
 /// `t` written at `at` (replacing that clause) or — `None` — added last to
-/// the block the menu adds to (FILTER-37: a block's `+ clause`, else the
-/// root); where it now is.
+/// the group the panel edits (FILTER-39); where it now is.
 fn put(lens: Lens, pop: Pop, at: Option<Slot>, t: &Timed) -> Option<Slot> {
-    let into = pop.into.get_untracked().unwrap_or(anyof::Path::ROOT);
-    match lens.edit_tree(pop.level, |tree| anyof::put_time(tree, into, at, t)) {
+    let sel = pop.sel.get_untracked();
+    match lens.edit_ors(pop.level, |o| Ok(o.put_time(sel, at, t))) {
         Ok(slot) => Some(slot),
         Err(why) => {
             pop.refusal.set(Some(why));
@@ -87,15 +86,17 @@ fn put(lens: Lens, pop: Pop, at: Option<Slot>, t: &Timed) -> Option<Slot> {
     }
 }
 
-/// The When pane, as `pop`'s step says.
-pub(crate) fn pane(lens: Lens, pop: Pop) -> impl IntoView {
+/// `cat`'s pane (When, Deployed or Chats), as `pop`'s step says — its
+/// rows while the step is another section's.
+pub(crate) fn pane(lens: Lens, pop: Pop, cat: Cat) -> impl IntoView {
     let level = pop.level;
-    move || match pop.when.get() {
-        Step::Root => root_view(lens, pop).into_any(),
-        Step::New(kind) => new_view(lens, pop, kind).into_any(),
+    let step = Memo::new(move |_| pop.when.with(|(c, s)| if *c == cat { *s } else { Step::Root }));
+    move || match step.get() {
+        Step::Root => root_view(lens, pop, cat).into_any(),
+        Step::New(kind) => new_view(lens, pop, kind, cat).into_any(),
         Step::Edit { at, only } => match untrack(|| clause_at(lens, level, at)) {
-            Some(_) => edit_view(lens, pop, at, only).into_any(),
-            None => root_view(lens, pop).into_any(),
+            Some(_) => edit_view(lens, pop, at, only, cat).into_any(),
+            None => root_view(lens, pop, cat).into_any(),
         },
     }
 }
@@ -128,15 +129,15 @@ fn chats_view(lens: Lens, pop: Pop) -> impl IntoView {
     }
 }
 
-fn root_view(lens: Lens, pop: Pop) -> impl IntoView {
-    if untrack(|| pop.open_cat_tracked()) == Some(crate::filter::Cat::Chats) {
+fn root_view(lens: Lens, pop: Pop, cat: Cat) -> impl IntoView {
+    if cat == Cat::Chats {
         return chats_view(lens, pop).into_any();
     }
     // DEPLOY-13: under Deployed, its two rows; else When's six.
-    let deployed = untrack(|| pop.open_cat_tracked()) == Some(crate::filter::Cat::Deployed);
+    let deployed = cat == Cat::Deployed;
     let rows: Vec<Kind> = if deployed { Kind::DEPLOYED.to_vec() } else { Kind::ALL.to_vec() };
     // DEPLOY-21: and, under Deployed, the delivery rows.
-    let stages = deployed.then(|| stage_rows(lens, pop));
+    let stages = deployed.then(|| stage_rows(lens, pop, cat));
     view! {
         <div class="when-rows wform" role="menu" aria-label=if deployed { "deployed" } else { "when" }>
             {rows.into_iter().map(|k| view! {
@@ -146,7 +147,7 @@ fn root_view(lens: Lens, pop: Pop) -> impl IntoView {
                     role="menuitem"
                     data-when=k.key()
                     on:mousedown=|ev| ev.prevent_default()
-                    on:click=move |_| pop.when.set(Step::New(k))
+                    on:click=move |_| pop.when.set((cat, Step::New(k)))
                 >
                     <span class="flabel">{k.label()}</span>
                     <span class="arrow" aria-hidden="true">"▸"</span>
@@ -172,10 +173,10 @@ fn stage_filter(stage: DeliveryStage, envs: &[String]) -> Option<String> {
 }
 
 /// DEPLOY-21: the Deployed pane's delivery rows, each with its live count.
-fn stage_rows(lens: Lens, pop: Pop) -> impl IntoView {
+fn stage_rows(lens: Lens, pop: Pop, cat: Cat) -> impl IntoView {
     let start = move |t: Option<Timed>| {
         if let Some(at) = t.and_then(|t| put(lens, pop, None, &t)) {
-            pop.when.set(Step::Edit { at, only: None });
+            pop.when.set((cat, Step::Edit { at, only: None }));
         }
     };
     view! {
@@ -200,7 +201,7 @@ fn stage_rows(lens: Lens, pop: Pop) -> impl IntoView {
                     on:mousedown=|ev| ev.prevent_default()
                     on:click=move |_| match one() {
                         Some(e) => start(when::new_stage(stage, &e)),
-                        None => pop.when.set(Step::New(k)),
+                        None => pop.when.set((cat, Step::New(k))),
                     }
                 >
                     <span class="flabel">{label}</span>
@@ -268,10 +269,10 @@ fn status_label(s: Status) -> String {
 }
 
 /// A new clause's first choice.
-fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
+fn new_view(lens: Lens, pop: Pop, kind: Kind, cat: Cat) -> impl IntoView {
     let start = move |t: Option<Timed>| {
         if let Some(at) = t.and_then(|t| put(lens, pop, None, &t)) {
-            pop.when.set(Step::Edit { at, only: None });
+            pop.when.set((cat, Step::Edit { at, only: None }));
         }
     };
     let body = match kind {
@@ -316,7 +317,7 @@ fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
                     }).collect_view()}
                     {chip("custom…".into(), "custom".into(), || false, move || {
                         if let Some(at) = when::new_clause(kind, None, None).and_then(|t| put(lens, pop, None, &t)) {
-                            pop.when.set(Step::Edit { at, only: Some(Part::Window) });
+                            pop.when.set((cat, Step::Edit { at, only: Some(Part::Window) }));
                             pop.custom.set(true);
                         }
                     })}
@@ -327,7 +328,7 @@ fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
     };
     view! {
         <div class="when-pane wform" data-when=kind.key()>
-            <button type="button" class="wback" on:mousedown=|ev| ev.prevent_default() on:click=move |_| pop.when.set(Step::Root)>
+            <button type="button" class="wback" on:mousedown=|ev| ev.prevent_default() on:click=move |_| pop.when.set((cat, Step::Root))>
                 <span class="glyph">"‹"</span>
                 <span class="flabel">{kind.label()}</span>
             </button>
@@ -337,7 +338,7 @@ fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
 }
 
 /// Editing the clause at `at`.
-fn edit_view(lens: Lens, pop: Pop, at: Slot, only: Option<Part>) -> impl IntoView {
+fn edit_view(lens: Lens, pop: Pop, at: Slot, only: Option<Part>, cat: Cat) -> impl IntoView {
     let level = pop.level;
     let h12 = reader_h12();
     let current = Memo::new(move |_| clause_at(lens, level, at));
@@ -435,8 +436,8 @@ fn edit_view(lens: Lens, pop: Pop, at: Slot, only: Option<Part>) -> impl IntoVie
     let who_sec = (shows(Part::Who) && kind.has_who()).then(|| who_view(current, set));
     let said = move || current.get().map(|t| when::words(&t, h12)).unwrap_or_default();
     view! {
-        <div class="when-pane wform" data-when=kind.key() data-at=at.block.key() data-item=at.item>
-            <button type="button" class="wback" title="another time clause" on:mousedown=|ev| ev.prevent_default() on:click=move |_| pop.when.set(Step::Root)>
+        <div class="when-pane wform" data-when=kind.key() data-group=at.group data-item=at.item>
+            <button type="button" class="wback" title="another time clause" on:mousedown=|ev| ev.prevent_default() on:click=move |_| pop.when.set((cat, Step::Root))>
                 <span class="glyph">"‹"</span>
                 <span class="flabel">"another time clause"</span>
             </button>
@@ -448,7 +449,7 @@ fn edit_view(lens: Lens, pop: Pop, at: Slot, only: Option<Part>) -> impl IntoVie
             {length_sec}
             {who_sec}
             <div class="wdone">
-                <button type="button" class="wbtn" on:click=move |_| pop.close(true)>"Done"</button>
+                <button type="button" class="wbtn" on:click=move |_| pop.when.set((cat, Step::Root))>"Done"</button>
             </div>
         </div>
     }

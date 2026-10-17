@@ -33,13 +33,14 @@
 //!   pages show no ticket: the lens bar says the filter does not apply there
 //!   ([`applies`]).
 //!
-//! - FILTER-37: **the query tree** of each level ([`Lens::tree`],
-//!   src/anyof.rs) — the tree last edited while the filter still says it,
-//!   else the filter's own; [`Lens::edit_tree`] and [`Lens::edit_in`] (the
-//!   category menu, through a [`Scope`] on a block) commit it as the
-//!   level's filter and open the bar's tree. A filter applied from outside
-//!   the bar ([`Lens::apply`], a link's URL, Make global, `reset`) moves the
-//!   level's [`Lens::stamp`], and naming saves lets go of the name.
+//! - FILTER-39: **the groups** of each level ([`Lens::ors`], src/ors.rs —
+//!   groups joined by an explicit `or`, clauses inside a group `and`) — the
+//!   groups last edited while the filter still says them (a draft group
+//!   `+ or` made), else the filter's own; [`Lens::edit_ors`] (the panel's
+//!   ticks) commits them as the level's filter. A filter applied from
+//!   outside the panel ([`Lens::apply`], a link's URL, Make global, `reset`)
+//!   moves the level's [`Lens::stamp`], and naming saves lets go of the
+//!   name.
 //!
 //! Everything that decides — the query both ways, the storage keys, the
 //! carrying, what a route's surface is — is a pure function here, pinned by
@@ -52,11 +53,11 @@ use std::collections::HashSet;
 
 use menger_tickets_api::filter::{Conj, Field, Filter, Group, Predicate};
 
-use crate::anyof::{self, Block, Path};
+use crate::ors::Ors;
 
 use crate::filter::{
-    fold_key, pop_id, Cat, Clash, Clausal, Clause, Clauses, FilterButton, Op, Pill, Pop, Popover, QueryHead, QueryTree, Reset, ScTree,
-    TextMode, DEFAULT_KINDS,
+    fold_key, Cat, Clash, Clausal, Clause, Clauses, FilterButton, Op, Panel, Pill, Pop, QueryHead, QueryTree, Reset, ScTree, TextMode,
+    DEFAULT_KINDS,
 };
 use crate::{bindings, dom, keys, nav, Route};
 
@@ -510,43 +511,6 @@ impl Clausal for Kept {
     }
 }
 
-/// FILTER-37: what the category menu edits — a block of the level's
-/// query tree (`into`; the root, with the surface's own categories beside
-/// it), and in it a category's clause: `item`'s when the menu was opened
-/// from that pill, else the block's first of the category
-/// ([`crate::anyof::set_cat`]). An edit the language refuses is `refused`,
-/// and the lens commits nothing.
-pub(crate) struct Scope<'a> {
-    pub(crate) tree: &'a mut Block,
-    pub(crate) local: &'a mut Clauses,
-    pub(crate) into: Path,
-    pub(crate) item: Option<usize>,
-    pub(crate) refused: Option<String>,
-}
-
-impl Clausal for Scope<'_> {
-    fn clause(&self, c: Cat) -> Option<Clause> {
-        if c.is_local() {
-            // A surface's own categories are the root's neighbours; no
-            // block holds them.
-            return self.into.is_root().then(|| self.local.clause(c)).flatten();
-        }
-        anyof::clause_in(self.tree, self.into, self.item, c)
-    }
-
-    fn set_clause(&mut self, c: Cat, cl: Option<Clause>) {
-        if c.is_local() {
-            if self.into.is_root() {
-                self.local.set_clause(c, cl);
-            }
-            return;
-        }
-        if let Err(why) = anyof::set_cat(self.tree, self.into, self.item, c, cl) {
-            self.refused.get_or_insert(why);
-        }
-    }
-}
-
 /// The local categories a level's surface has (the wave board's; the
 /// inputs page's, FILTER-16).
 pub(crate) fn locals(level: Level) -> &'static [Cat] {
@@ -763,11 +727,11 @@ pub(crate) struct Lens {
     /// every effective filter reads within it.
     org_choice: RwSignal<Option<String>>,
     org: Memo<Option<String>>,
-    /// FILTER-37: per level, the query tree last edited (kept while the
-    /// filter is still what it says: a draft block, an any-of root of one
-    /// item), and the tree the bar draws.
-    trees: [RwSignal<Option<Block>>; 5],
-    drawn: [Memo<Block>; 5],
+    /// FILTER-39: per level, the groups last edited (kept while the filter
+    /// is still what they say: a draft group), and the groups the panel
+    /// draws — `None` for a filter deeper than or-of-and.
+    drafts: [RwSignal<Option<Ors>>; 5],
+    drawn: [Memo<Option<Ors>>; 5],
     /// FILTER-37: moves whenever a level's filter is changed from outside
     /// its bar (a link's URL, Make global and its undo, reset) — naming
     /// saves lets go of the name then (src/saved.rs).
@@ -824,9 +788,16 @@ impl Lens {
         let clashes = Level::ALL.map(|level| {
             Memo::new(move |_| filters[g].with(|gf| filters[level.index()].with(|own| clash_of(gf, own, level))))
         });
-        let trees: [RwSignal<Option<Block>>; 5] = std::array::from_fn(|_| RwSignal::new(None));
-        let drawn: [Memo<Block>; 5] = std::array::from_fn(|i| {
-            Memo::new(move |_| filters[i].with(|f| trees[i].with(|t| anyof::tree_for(t.as_ref(), f))))
+        let drafts: [RwSignal<Option<Ors>>; 5] = std::array::from_fn(|_| RwSignal::new(None));
+        let drawn: [Memo<Option<Ors>>; 5] = std::array::from_fn(|i| {
+            Memo::new(move |_| {
+                filters[i].with(|f| {
+                    drafts[i].with(|d| match d {
+                        Some(o) if o.to_groups().is_ok_and(|g| g == f.groups) => Some(o.clone()),
+                        _ => Ors::of_filter(f),
+                    })
+                })
+            })
         });
         let lens = Lens {
             chosen,
@@ -841,7 +812,7 @@ impl Lens {
             clashes,
             org_choice,
             org,
-            trees,
+            drafts,
             drawn,
             stamps: std::array::from_fn(|_| RwSignal::new(0)),
         };
@@ -999,66 +970,41 @@ impl Lens {
         self.commit(level, Some(next));
     }
 
-    /// FILTER-37: the query tree `level`'s bar draws. Tracked.
-    pub(crate) fn tree(self, level: Level) -> Block {
+    /// FILTER-39: `level`'s filter as the panel draws it — groups joined by
+    /// `or` — `None` while it is deeper than that (or not known). Tracked.
+    pub(crate) fn ors(self, level: Level) -> Option<Ors> {
         self.drawn[level.index()].get()
     }
 
-    /// FILTER-37: `tree` as `level`'s filter (its local clauses and display
-    /// kept) — kept as the tree last edited, the tree opened (an edit opens
-    /// it), committed. What the language refuses is refused, nothing
-    /// committed.
-    fn put_tree(self, level: Level, mut next: Kept, tree: Block) -> Result<(), String> {
-        next.filter.groups = anyof::to_groups(&tree)?;
-        self.trees[level.index()].set(Some(tree));
-        self.pop(level).tree_open.set(true);
+    /// FILTER-39: `level`'s groups changed by one of src/ors.rs's edits and
+    /// committed as its filter (its local clauses and display kept), the
+    /// groups kept as the draft the panel goes on drawing; what the
+    /// language refuses is refused, nothing committed.
+    pub(crate) fn edit_ors<T>(self, level: Level, f: impl FnOnce(&mut Ors) -> Result<T, String>) -> Result<T, String> {
+        let Some(mut next) = untrack(|| self.kept(level)) else { return Err("the filter is not known yet".into()) };
+        let Some(mut o) = untrack(|| self.ors(level)) else {
+            return Err("this filter nests deeper than groups joined by or \u{2014} edit it as text".into());
+        };
+        let out = f(&mut o)?;
+        next.filter.groups = o.to_groups()?;
+        self.drafts[level.index()].set(Some(o));
         self.commit(level, Some(next));
-        Ok(())
-    }
-
-    /// FILTER-37: `level`'s query tree changed by one of src/anyof.rs's
-    /// edits; refused, nothing is committed.
-    pub(crate) fn edit_tree<T>(self, level: Level, f: impl FnOnce(&mut Block) -> Result<T, String>) -> Result<T, String> {
-        let Some(next) = untrack(|| self.kept(level)) else { return Err("the filter is not known yet".into()) };
-        let mut tree = untrack(|| self.tree(level));
-        let out = f(&mut tree)?;
-        self.put_tree(level, next, tree)?;
         Ok(out)
     }
 
-    /// FILTER-37: `level`'s state changed by `f` through a [`Scope`] — the
-    /// block at `into` (`None`: the root, and the surface's own categories),
-    /// `item` the pill the menu was opened from; refused, nothing is
-    /// committed and the refusal is answered.
-    pub(crate) fn edit_in(self, level: Level, into: Option<Path>, item: Option<usize>, f: impl FnOnce(&mut Scope)) -> Result<(), String> {
-        let Some(mut next) = untrack(|| self.kept(level)) else { return Ok(()) };
-        let mut tree = untrack(|| self.tree(level));
-        let mut scope = Scope { tree: &mut tree, local: &mut next.local, into: into.unwrap_or(Path::ROOT), item, refused: None };
-        f(&mut scope);
-        if let Some(why) = scope.refused {
-            return Err(why);
-        }
-        self.put_tree(level, next, tree)
-    }
-
-    /// A click on a value of `c`: a shortcode takes its subtree with it. A
-    /// clause it starts takes `op` (FILTER-19: the menu's switch). `into`:
-    /// the block it is made in (FILTER-37), `item` the pill it edits.
-    pub(crate) fn toggle(self, level: Level, into: Option<Path>, item: Option<usize>, c: Cat, token: &str, op: Op) -> Result<(), String> {
-        let tree = self.sctree.get_untracked();
-        self.edit_in(level, into, item, |k| {
-            k.edit_as(c, op, |k| match (c, &tree) {
-                (Cat::Shortcode, Some(t)) => k.toggle_code(t, token),
-                _ => k.toggle(c, token),
-            })
-        })
-    }
-
-    /// Shortcode is (any of, or — `op`, a new clause's — none of) `code`'s
-    /// tree only.
-    pub(crate) fn only(self, level: Level, into: Option<Path>, item: Option<usize>, code: &str, op: Op) -> Result<(), String> {
-        let Some(t) = self.sctree.get_untracked() else { return Ok(()) };
-        self.edit_in(level, into, item, |k| k.edit_as(Cat::Shortcode, op, |k| k.set_values(Cat::Shortcode, t.subtree(code))))
+    /// FILTER-39: what `level`'s surface would show were its groups changed
+    /// by `f` — the effective filter's wire text (`global ∧ own`, in the
+    /// chosen organization); `None` when it cannot be said.
+    pub(crate) fn would_be(self, level: Level, f: impl FnOnce(&mut Ors) -> Result<(), String>) -> Option<String> {
+        let mut o = untrack(|| self.ors(level))?;
+        f(&mut o).ok()?;
+        let own = Filter { groups: o.to_groups().ok()?, ..Filter::default() };
+        let eff = match level {
+            Level::Global => own,
+            _ => untrack(|| self.filters[Level::Global.index()].with(|g| g.and(&own))),
+        };
+        let eff = untrack(|| self.org.with(|org| crate::orgs::within(org.as_deref(), &eff)));
+        Some(crate::counts::wire_text(&eff))
     }
 
     /// FILTER-26: Make global — the global filter becomes `global and nav`
@@ -1117,25 +1063,6 @@ impl Lens {
     /// Tracked.
     pub(crate) fn clauses(self, level: Level) -> Clauses {
         self.kept(level).map(|k| k.clauses()).unwrap_or_default()
-    }
-
-    /// FILTER-37: the clauses the menu checks — the block at `into`'s (the
-    /// root's, with the surface's own, when `None`), one per category:
-    /// `item`'s for its category, else the block's first. Tracked.
-    pub(crate) fn clauses_in(self, level: Level, into: Option<Path>, item: Option<usize>) -> Clauses {
-        let tree = self.tree(level);
-        let at = into.unwrap_or(Path::ROOT);
-        let mut out = if at.is_root() { self.kept(level).map(|k| k.local).unwrap_or_default() } else { Clauses::default() };
-        for c in Cat::SERVER {
-            out.set_clause(c, anyof::clause_in(&tree, at, item, c));
-        }
-        out
-    }
-
-    /// FILTER-37: whether `c` draws a clause in a block below `level`'s
-    /// root. Tracked.
-    pub(crate) fn in_group(self, level: Level, c: Cat) -> bool {
-        anyof::nested_cat(&self.tree(level), c)
     }
 
     /// How many groups `level` holds — the header button's badge. Tracked.
@@ -1206,30 +1133,20 @@ impl Lens {
         self.pops[level.index()]
     }
 
-    /// `level`'s menu opened — on `c`'s values when given; under `at`'s
-    /// selector (alone, when it says direct) or under its Filter button —
-    /// every other level's closed.
-    pub(crate) fn open_menu(self, level: Level, c: Option<Cat>, at: Option<(String, bool)>) {
+    /// FILTER-39: `level`'s panel opened in its page's flow — on `c`'s
+    /// section when given (scrolled to and lit) — every other level's
+    /// folded.
+    pub(crate) fn open_panel(self, level: Level, c: Option<Cat>) {
         for l in Level::ALL.into_iter().filter(|l| *l != level) {
             self.pop(l).close(false);
         }
-        let pop = self.pop(level);
-        match at {
-            Some((sel, direct)) => pop.show(sel, c, direct),
-            None => pop.show_at_button(c),
-        }
+        self.pop(level).show(c);
     }
 
-    /// The level whose menu is open.
-    fn open_level(self) -> Option<Level> {
-        Level::ALL.into_iter().find(|l| self.pop(*l).is_open())
-    }
-
-    /// The keys and the pointer, for the app's lifetime: `F` opens the
-    /// global menu anywhere unless typing (or in a dialog, a menu, an
-    /// overlay); `f` the route's surface's, where its bar is drawn; a
-    /// mousedown outside an open menu (and what opens it) closes it; a
-    /// resize places it again.
+    /// The keys, for the app's lifetime: `F` opens or folds the global
+    /// panel anywhere unless typing (or in a dialog, a menu, an overlay);
+    /// `f` the route's surface's, where its bar is drawn (FILTER-39: the
+    /// panel is in the page's flow — a click elsewhere leaves it open).
     pub(crate) fn install(self) {
         window_event_listener(leptos::ev::keydown, move |ev: web_sys::KeyboardEvent| {
             // AGS-28: `f` and `F` are the table's `filter.view` and
@@ -1254,24 +1171,10 @@ impl Lens {
                 }
             };
             ev.prevent_default();
-            if !self.pop(level).is_open() {
-                self.open_menu(level, None, None);
-            }
-        });
-        window_event_listener(leptos::ev::mousedown, move |ev: web_sys::MouseEvent| {
-            let Some(level) = self.open_level() else { return };
-            let sel = format!("#{}, [data-fopen=\"{}\"]", pop_id(level), level.name());
-            let inside = ev
-                .target()
-                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                .is_some_and(|el| el.closest(&sel).ok().flatten().is_some());
-            if !inside {
-                self.pop(level).close(false);
-            }
-        });
-        window_event_listener(leptos::ev::resize, move |_| {
-            if let Some(level) = self.open_level() {
-                self.pop(level).reposition();
+            if self.pop(level).is_open() {
+                self.pop(level).close(true);
+            } else {
+                self.open_panel(level, None);
             }
         });
     }
@@ -1295,9 +1198,9 @@ pub(crate) fn GlobalButton() -> impl IntoView {
     view! { <FilterButton level=Level::Global hint="Filter every view (F)" badge=true /> }
 }
 
-/// Under the header while the global filter is non-empty (or its tree is
-/// open): FILTER-37's bar — the chevron, the name, the text, the tree —
-/// the text toggle and `clear`, and the global menu, which hangs from here.
+/// Under the header while the global filter is non-empty (or its panel is
+/// open): the bar — the chevron, the name, the text — the text toggle and
+/// `clear`, and FILTER-39's panel, in the flow under it.
 /// FILTER-16: on a route it does not apply to (`applies` false: the
 /// components and settings pages) it says so.
 #[component]
@@ -1307,10 +1210,10 @@ pub(crate) fn LensBar(#[prop(into)] applies: Signal<bool>) -> impl IntoView {
     lens.pop(Level::Global).configure(&Cat::SERVER, crate::counts::provider(Level::Global));
     let texting = RwSignal::new(false);
     let pop = lens.pop(Level::Global);
-    let shown = Memo::new(move |_| lens.differs(Level::Global) || texting.get() || pop.tree_open.get());
+    let shown = Memo::new(move |_| lens.differs(Level::Global) || texting.get() || pop.open_tracked());
     view! {
         {move || shown.get().then(|| view! {
-            <div class="lensbar fbar qbar" data-fbar="global" data-level="global" class:na=move || !applies.get() class:open=move || pop.tree_open.get() on:keydown=move |ev| fold_key(pop, ev)>
+            <div class="lensbar fbar qbar" data-fbar="global" data-level="global" class:na=move || !applies.get() class:open=move || pop.open_tracked() on:keydown=move |ev| fold_key(pop, ev)>
                 <div class="qline">
                     <span class="lens-l" title="the global filter: every view shows what it admits">"global"</span>
                     {move || (!applies.get()).then(|| view! {
@@ -1321,10 +1224,10 @@ pub(crate) fn LensBar(#[prop(into)] applies: Signal<bool>) -> impl IntoView {
                     <Reset level=Level::Global />
                 </div>
                 <QueryTree level=Level::Global texting />
+                <Panel level=Level::Global />
             </div>
             <Clash level=Level::Global />
         })}
-        <Popover level=Level::Global />
     }
 }
 
@@ -1791,42 +1694,6 @@ mod tests {
         // A shape the language still refuses draws nothing: `or` and `and` in one pair.
         let e = Filter::parse("(changed today and kind build or created today)").unwrap_err();
         assert!(e.chunks.iter().any(|c| c.why.contains("do not mix")), "{e}");
-    }
-
-    /// FILTER-37: the category menu adding to a block of the tree — `+
-    /// clause` on a block, a pill's values — edits that block's clauses
-    /// through the same clause edits as the root's; a surface's own
-    /// categories stay beside the root.
-    #[test]
-    fn the_menu_edits_a_blocks_clauses() {
-        let mut k = Kept { filter: parsed("status Ready and kind build"), ..Kept::default() };
-        let mut tree = crate::anyof::from_filter(&k.filter);
-        // + group on the root, then Kind › gap and spike in it.
-        let g = crate::anyof::add_group(&mut tree, Path::ROOT).unwrap();
-        let mut sc = Scope { tree: &mut tree, local: &mut k.local, into: g, item: None, refused: None };
-        sc.edit_as(Cat::Kind, Op::Is, |s| s.toggle(Cat::Kind, "gap"));
-        sc.toggle(Cat::Status, "Coding");
-        assert!(sc.refused.is_none());
-        // The switch inside the block: `is not` of a clause there is fine now.
-        sc.set_op(Cat::Kind, Op::Not);
-        assert!(sc.refused.is_none());
-        k.filter.groups = crate::anyof::to_groups(&tree).unwrap();
-        assert_eq!(k.filter.format(), "status Ready and kind build and (not kind gap or status Coding)");
-        // The root's own Kind is untouched; the menu marks Kind as nested.
-        assert_eq!(crate::anyof::clause_in(&tree, Path::ROOT, None, Cat::Kind), Some(clause(Op::Is, &["build"])));
-        assert!(crate::anyof::nested_cat(&tree, Cat::Kind));
-        // A surface's own categories are no block's, but the root's.
-        let mut sc = Scope { tree: &mut tree, local: &mut k.local, into: g, item: None, refused: None };
-        sc.set(Cat::Wave, Op::Is, strs(&["1"]));
-        assert_eq!(k.local, Clauses::default());
-        let mut sc = Scope { tree: &mut tree, local: &mut k.local, into: Path::ROOT, item: None, refused: None };
-        sc.set(Cat::Wave, Op::Is, strs(&["1"]));
-        assert_eq!(k.local.get(Cat::Wave), Some(&clause(Op::Is, &["1"])));
-        // Taking every value out: the clause goes; the block stays a draft.
-        let mut sc = Scope { tree: &mut tree, local: &mut k.local, into: g, item: None, refused: None };
-        sc.remove(Cat::Kind);
-        sc.remove(Cat::Status);
-        assert_eq!(crate::anyof::to_groups(&tree).map(|g| Filter { groups: g, ..Filter::default() }.format()), Ok("status Ready and kind build".to_string()));
     }
 
     /// Acceptance 1: each level's query and storage round trip — the same

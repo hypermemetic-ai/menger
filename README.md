@@ -414,7 +414,7 @@ admit — `global.and(own)`, which merges groups on the same field (lists
 intersect, exclusions unite) and names a contradiction under the bar. Every
 bar is the same component (WAVE-12's menu made generic, `src/lens.rs`):
 categories with counts (`facets`, Linear's: a category's counts ignore its
-own clause, never the global one), the query tree (FILTER-37, below), a
+own clause, never the global one), the filter panel (FILTER-39, below), a
 text mode in FILTER-3's language, and the global filter shown muted in
 each surface's bar. The
 board windows over `counts` (FILTER-12); the nav shows each shortcode with
@@ -432,47 +432,54 @@ and a ticket page says when its ticket is outside and filters its children
 `f=` the surface's own — and the viewer's local storage, so global and nav
 filters survive navigation and reload.
 
-The menu builds a NOT (FILTER-19): a category's values open with an `is` /
-`is not` switch (Title's `contains` / `does not contain`) showing the
-clause's operator. Set to `is not`, it makes the clause a pill's toggle
-makes, and values checked under it are excluded — Filter ▸ Kind, `is not`,
-doc and spike is `not kind in (spike, doc)`. A flag (Ready, Blocked,
-Commits) has no switch; its `yes` / `no` is the negation. Tab from the
-search reaches the switch; Space or Enter flips it.
+The panel builds a NOT (FILTER-19): each section's head has an `is` /
+`is not` switch (Title's `contains` / `does not contain`). Set to `is
+not`, the selected group's clauses of that category turn, and values
+ticked under it are excluded — and-ed: Kind, `is not`, doc and spike is
+`not kind doc and not kind spike`. The flags share one switch: `is not`
+ticks `not ready`.
 
-**The query tree** (FILTER-37) is every bar's one builder. Folded — the
-default, "when not working on it" — the bar is one line: a chevron, the
-query's **name** (a field; empty, "unnamed query"), its canonical text (one
-line; on a surface the global filter's first, muted), then `text`, `reset`,
-Make global (the nav) and `Saved ▾`. The chevron, focusing the name or any
-edit opens it; **done**, Escape or applying a filter (Enter in the text
-mode, a `Saved ▾` pick) folds it. Open, the tree is a root block and blocks
-within, each drawn as its head and its items in a hairline: the head's
-joiner is a button, `any of` ⇄ `all of` (the root's too: `Needs you or
-Plexus-Ready` is an any-of root of two names), then **+ clause** (the
-category menu, adding to that block), **+ group** (a block within under the
-other join, so the nesting shows, the menu opened adding to it), **+ saved**
-and, but on the root, ×. A clause is its pill — its operator toggles, its
-values reopen its category in that block, × takes it out; a time pill's
-parts reopen the When pane and **negate** turns it around. A saved query is
-a node, `SAVED · Name`, with a peek at its clauses (its doc's text, read
-the first time) and **inline** (the name replaced by its clauses, one level;
-its own names stay names). **+ saved** opens a search-first picker: a search
-box, then the names — the most recently used first (kept per viewer), then
-the collection's order (a level's own, filed under its shortcode, will come
-between) — eight shown, "N more: type to narrow", a name already in the tree
-marked ✓, each counted (`counts { filter: saved "Name" }`) where the level
-counts; Enter takes the first, Escape closes; "Needs you" is always there.
-With names, a second line says the filter **as evaluated**, the names
-expanded by the texts fetched ("…" until they are in). On a surface the
-global root is drawn first, read-only and muted (a pill opens the global
-menu at its category); the wave board's and the inputs page's own
-categories sit after the tree, joined by `and`. Every edit is a pure
-function of `src/anyof.rs`; the tree last edited is kept while the filter
-still says it, so a new empty group or an any-of root of one name keeps its
-shape. FILTER-31's box, the `⋯` menu, Or…, Group as any of and Shift-click
-are gone. Colour: blocks in `--line`, the accent on the joiners and focus
-only.
+**The filter panel** (FILTER-39, FILTER-38's mockups; `src/filter.rs`,
+`src/ors.rs`) is every bar's one builder. The bar is one line: the `Filter`
+button, a chevron, the query's **name** (a field; empty, "unnamed query"),
+its canonical text (on a surface the global filter's first, muted), then
+`text`, `reset`, Make global (the nav) and `Saved ▾`. The button, the
+chevron, a click on the text, <kbd>f</kbd> (<kbd>F</kbd> the global one)
+open the panel **in the page's flow** under the bar — the board moves down
+under it, nothing floats over it — and fold it again; Escape folds it. The
+phone bar's filter place opens the global panel in its sheet.
+
+The filter it builds is **groups joined by an explicit `or`, the clauses
+inside a group joined by `and`** (owner, 2026-10-17: *"ors should be
+explicit not any of. clauses between ors are anded"*) — no "any of", no
+"all of", no join to toggle. The panel draws the groups at its top, each a
+row of clauses with **and** between them and **or** between the groups;
+the selected group is lit, and the sections tick its clauses (a value
+another group holds says `in group 2`). × takes out a clause or a group,
+**+ or** starts a group. Under them every category is a section — the
+saved filters (each counted), Shortcode as its tree, Status (its groups as
+headings), Kind, Severity, the flags together, Label, When, Deployed,
+Chats, and a surface's own — flowing into as many columns as the width
+holds (four at 1440, one in the nav or on a phone), each value with its
+count; hovering one says what ticking it would leave (`→ 13`). Typing in
+the panel's search narrows every section at once; Enter ticks the first
+value left.
+
+A tick goes into the selected group. A second value of a category a ticket
+holds one of — a second status, kind, severity or shortcode — is an
+alternative, so it makes **a group of its own** after the selected one, the
+group's other clauses kept in both, and the panel says so: with `kind build
+and status Ready`, ticking gap makes `(kind build and status Ready) or (kind
+gap and status Ready)`. A shortcode that hosts others is ticked as `under`
+it (it and every shortcode hosted under it), the hosted ones marked covered.
+A saved filter ticked is a group by name (`saved "Hot gaps"`), filling the
+selected group while it is empty. Any filter the language holds is drawn so,
+its lists spelled out — `kind build and status in (Ready, Coding)` is two
+groups — up to 32 groups; deeper, the panel says to edit it as text. The
+groups last edited are kept while the filter still says them, so a new empty
+group keeps its place. With names, a line under the bar says the filter **as
+evaluated**, the names expanded; the wave board's and the inputs page's own
+categories are pills under the bar, and-ed with every group.
 
 Menger's own documents are a filter (FILTER-21): `menger doc` admits the
 tickets whose path starts with `_MENGER/` (each shortcode's board note) on
@@ -4377,10 +4384,12 @@ scripts/shot.mjs       screenshots of the app once it is ready, signed in where
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
                        src/waves.rs the wave board (WAVE-5, WAVE-6),
-                       src/filter.rs the generic filter bar, its query tree
-                       and the menu (WAVE-12, FILTER-11, FILTER-37),
-                       src/anyof.rs the tree's edits, src/naming.rs naming
-                       saves and + saved's picker (FILTER-37),
+                       src/filter.rs the generic filter bar and its panel
+                       (WAVE-12, FILTER-11, FILTER-39); src/ors.rs the
+                       filter as groups joined by or (FILTER-39),
+                       src/anyof.rs a filter's members in words (until
+                       FILTER-42), src/naming.rs naming saves and the
+                       saved filters' counts (FILTER-37),
                        src/lens.rs the levels — global, nav,
                        board, waves, inputs — their URL and storage, the
                        header's bar (FILTER-11), src/counts.rs menu counts and

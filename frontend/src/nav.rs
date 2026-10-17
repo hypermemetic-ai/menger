@@ -3217,7 +3217,7 @@ fn nav_f(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
         return;
     }
     if !lens.pop(Level::Nav).is_open() {
-        lens.open_menu(Level::Nav, None, None);
+        lens.open_panel(Level::Nav, None);
     }
 }
 
