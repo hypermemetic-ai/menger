@@ -465,6 +465,12 @@ deploy/record --validate < record.json
 Tests: `deploy/tests/run` (fixtures in `deploy/tests/fixtures/`: a GitHub
 Actions environment, a `deployment_status` payload, a GitLab environment, a
 pipeline log, any JSON); `cargo test` runs it, so the gate does.
+The same fixtures are menger's own input: the store test
+`deploy_10s_records_are_taken_whole` (`tickets-api/src/store/tests_deployments.rs`)
+records each one and checks what every environment runs and where each
+ticket's work runs. So a change to a fixture runs `cargo test --workspace`,
+not only `deploy/tests/run` and `deploy/tests/pipeline` (DEPLOY-24: DEPLOY-23's
+two new pipeline lines merged with that test red).
 
 ## Deployments from any CI (DEPLOY-14)
 
