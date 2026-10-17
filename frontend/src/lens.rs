@@ -1049,17 +1049,14 @@ impl Lens {
         untrack(|| self.kept(level)).map(|k| k.filter.format()).unwrap_or_default()
     }
 
-    /// `level`'s filter from text (its local clauses kept) — or every bad
-    /// chunk, each with why, and nothing applied.
-    pub(crate) fn apply_text(self, level: Level, text: &str) -> Result<(), Vec<(String, String)>> {
-        match Filter::parse(text) {
-            Ok(filter) => {
-                let local = untrack(|| self.kept(level)).map(|k| k.local).unwrap_or_default();
-                self.commit(level, Some(Kept { filter, local }));
-                Ok(())
-            }
-            Err(e) => Err(e.chunks.into_iter().map(|c| (c.text, c.why)).collect()),
-        }
+    /// `level`'s filter from text (its local clauses kept) — or, FILTER-43,
+    /// what the language refused (each chunk, its mistakes placed), and
+    /// nothing applied.
+    pub(crate) fn apply_text(self, level: Level, text: &str) -> Result<(), menger_tickets_api::filter::FilterError> {
+        let filter = Filter::parse(text)?;
+        let local = untrack(|| self.kept(level)).map(|k| k.local).unwrap_or_default();
+        self.commit(level, Some(Kept { filter, local }));
+        Ok(())
     }
 
     /// `level`'s filter (the empty filter while its default is not known).

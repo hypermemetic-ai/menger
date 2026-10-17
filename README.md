@@ -416,8 +416,8 @@ intersect, exclusions unite) and names a contradiction under the bar. Every
 bar is the same component (WAVE-12's menu made generic, `src/lens.rs`):
 categories with counts (`facets`, Linear's: a category's counts ignore its
 own clause, never the global one), the filter panel (FILTER-39, below), a
-text mode in FILTER-3's language, and the global filter shown muted in
-each surface's bar. The
+text drawer in FILTER-3's language (FILTER-43), and the global filter
+shown as a dashed chip on each surface. The
 board windows over `counts` (FILTER-12); the nav shows each shortcode with
 its matches and, inside, only the matches, each with the matches below it —
 a ticket the filter excludes is not drawn, and the matches under it move up
@@ -457,6 +457,20 @@ panel's Saved section or a chip here. The button, <kbd>f</kbd>
 (<kbd>F</kbd> the global one) open the panel **in the page's flow** under the bar — the board moves down
 under it, nothing floats over it — and fold it again; Escape folds it.
 
+**The text drawer** (FILTER-43): the panel's foot's `edit as text` opens
+the level's filter as canonical text, edited in place. As you type, the
+language places each mistake ([`Mistake`], `tickets-api/src/filter.rs`: a
+refused chunk now carries where it starts and each mistake in it — where,
+how long, a few words, the nearest names, the text that fixes it) — so the
+drawer underlines it where it is and lists it once with its fix: `` `bild`
+is no kind `` **use build**, `` `kidn` is not a field `` **use kind**, *a
+group opened and never closed* **close it**, *a `)` that closes no group*
+**remove it**; a click puts the fix in. The nearest names are by edit
+distance over the vocabulary's own (statuses, kinds, severities,
+categories) and menger's fields, never the grammar's listing. Enter (or
+`apply`) applies the text once it reads; until then the level keeps the
+last filter that read and its chips line says so. Escape leaves the drawer.
+
 **One panel for every level** (FILTER-40): its head holds a tab per level —
 **⌂ everywhere**, **nav** (where the nav is drawn), and the route's surface
 (**this board**, **this wave board**, **the inputs**) — each with what that
@@ -467,7 +481,7 @@ the phone bar's filter sheet at phone widths. The header's `Filter` and
 `Saved ▾`, the GLOBAL row and the nav's bar are gone: the global filter is a
 dashed, read-only chip at the head of each surface's line and of the nav's
 chips (a click opens its tab), the nav shows its own filter as chips in its
-head, and the panel's foot keeps `text` and `reset` / `clear`. The wire is
+head, and the panel's foot keeps `edit as text` and `reset` / `clear`. The wire is
 unchanged (`global ∧ own`), and so is the URL's `g=` `n=` `f=`.
 
 The filter it builds is **groups joined by an explicit `or`, the clauses
@@ -659,7 +673,7 @@ folded in). Every choice is a pill of its own, read in words — "created
 today", "Pending for over 2 weeks", "moved into Ready in the last 2 days
 by owner" — and each part of it (the status, the window, the length, who)
 is a button that reopens the menu on that part alone; a time clause typed
-in the text mode comes back as the same pill, and the pill prints the
+in the text drawer comes back as the same clause, and the clause prints the
 canonical text. **Custom…** opens the window editor: *within* (a number
 and a unit), *since* or *before* a moment — a day on the calendar with an
 optional time, or a length ago — and *between* two moments, picked as a
