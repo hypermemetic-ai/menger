@@ -4364,6 +4364,33 @@
     #chatfull .pmsgs { padding: 0 12px; }
     #chatfull .asugs { grid-template-columns: 1fr; }
   }
+  /* ── CHAT-14: #/chats — every chat (direct messages, groups, the tickets'),
+     the full-screen session with no ticket beside it; a chat's images. ── */
+  #chatfull.inbox a { color: inherit; text-decoration: none; }
+  #chatfull.inbox .srow .slabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  #chatfull.inbox .srow.un .slabel { font-weight: var(--weight-strong); }
+  #chatfull .kchip { flex: none; padding: 0 6px; border-radius: var(--radius-sm); border: var(--border) solid var(--line); color: var(--muted); font: calc(10px * var(--text-scale)) var(--mono); }
+  #chatfull .shead .kchip { align-self: center; }
+  #chatfull .sintro { width: min(100% - 32px, 560px); margin: 48px auto; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+  #chatfull .sintro h3 { margin: 0; font: var(--weight-strong) calc(20px * var(--text-scale)) var(--font-display); }
+  #chatfull .sintro p { margin: 0; color: var(--muted); font: calc(13px * var(--text-scale))/1.55 var(--sans); }
+  #chatfull .sbtn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  #chatfull .ppicker .ptitle { border: var(--border) solid var(--line); border-radius: var(--radius-lg); padding: 6px 10px; background: var(--bg); color: var(--ink); font: inherit; }
+  #chatfull .ppicker .ptitle:focus { border-color: var(--accent); outline: 0; }
+  #chatfull .smenu-pop .sleave { color: var(--err-fg); }
+  :is(#chatpane, #chatfull) .pp .prm { margin-left: 2px; color: var(--muted); font-size: calc(11px * var(--text-scale)); background: none; border: 0; cursor: pointer; padding: 0 2px; }
+  :is(#chatpane, #chatfull) .pp .prm:hover { color: var(--err-fg); }
+  :is(#chatpane, #chatfull) .md img.cimg { max-height: 320px; width: auto; object-fit: contain; }
+  :is(#chatpane, #chatfull) .md img.cimg:not([src]) { min-height: 120px; min-width: 160px; }
+  .ccompose .crow .cattach { margin-right: 0; flex: none; }
+  #members .mname { font-weight: var(--weight-strong); margin-right: .35rem; }
+  #members .ag { font: calc(10px * var(--text-scale)) var(--mono); padding: 0 5px; border-radius: var(--radius-sm); background: var(--st-epic-bg); color: var(--st-epic-fg); margin-right: .35rem; }
+  #members .chatwith { margin-right: .5rem; }
+  @media (max-width: 760px) {
+    #chatfull.inbox.list .srail { position: static; transform: none; width: auto; box-shadow: none; border-right: 0; }
+    #chatfull.inbox.list .smain { display: none; }
+    #chatfull.inbox .shead .sbtn:is(.smore) { display: inline-block; }
+  }
   /* ── CHAT-10: the chat in the dock (CHAT-9's answer, `dock`). The dock's
      Chats: a row per open chat — who, a dot green and pulsing while
      someone waits on await_message, the unread — then + chat. ── */

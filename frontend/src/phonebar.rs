@@ -119,6 +119,7 @@ pub(crate) fn page_words(r: &Route) -> String {
         Route::Settings => "settings".into(),
         Route::Comments => "comments".into(),
         Route::Members => "members".into(),
+        Route::Chats(_) => "chats".into(),
         Route::Deployments(_) => "deployments".into(),
     }
 }
@@ -454,6 +455,7 @@ pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
                     "needs you"{move || needs.count.n().filter(|n| *n > 0).map(|n| view! { <b>{n}</b> })}
                 </button>
                 <a href="#/comments" aria-current=cur(|r| matches!(r, Route::Comments))>"comments"</a>
+                <a href="#/chats" aria-current=cur(|r| matches!(r, Route::Chats(_)))>"chats"</a>
                 <a href="#/deployments" aria-current=cur(|r| matches!(r, Route::Deployments(_)))>"deployments"</a>
                 <a href="#/components" aria-current=cur(|r| matches!(r, Route::Components(_)))>"components"</a>
                 {move || admin.get().then(|| view! { <a href="#/members" aria-current=cur(|r| matches!(r, Route::Members))>"members"</a> })}

@@ -265,6 +265,7 @@ mod cite;
 mod compare;
 mod comments;
 mod comments_page;
+mod chats_page;
 mod composer;
 mod conversation;
 mod components;
@@ -435,6 +436,9 @@ pub(crate) enum Route {
     Comments,
     /// IDENTITY-22: `#/members` — who holds which role; an admin's page.
     Members,
+    /// CHAT-14: `#/chats` — every chat the reader is in; `#/chats/new` a
+    /// new message; `#/chats/<id>` one chat.
+    Chats(chats_page::Pick),
     /// DEPLOY-13: `#/deployments` (`None`) — every project's environments
     /// and deploys; `#/deployments/<SHORTCODE>` one project's (held upper
     /// case). `?d=<id>` (a deploy to pick out) is the page's.
@@ -464,6 +468,8 @@ fn parse_route(hash: &str) -> Route {
         _ if path.trim_end_matches('/') == "settings" => Route::Settings,
         _ if path.trim_end_matches('/') == "comments" => Route::Comments,
         _ if path.trim_end_matches('/') == "members" => Route::Members,
+        Some(("chats", rest)) => Route::Chats(chats_page::pick_of(rest)),
+        _ if path.trim_end_matches('/') == "chats" => Route::Chats(chats_page::Pick::List),
         Some(("deployments", sc)) => {
             let sc = sc.trim_end_matches('/').to_ascii_uppercase();
             Route::Deployments((!sc.is_empty()).then_some(sc))
@@ -489,6 +495,9 @@ pub(crate) fn route_text(route: &Route) -> String {
         Route::Settings => "#/settings".to_string(),
         Route::Comments => "#/comments".to_string(),
         Route::Members => "#/members".to_string(),
+        Route::Chats(chats_page::Pick::List) => "#/chats".to_string(),
+        Route::Chats(chats_page::Pick::New) => "#/chats/new".to_string(),
+        Route::Chats(chats_page::Pick::Chat(id)) => format!("#/chats/{id}"),
         Route::Deployments(None) => "#/deployments".to_string(),
         Route::Deployments(Some(sc)) => format!("#/deployments/{sc}"),
     }
@@ -2420,6 +2429,9 @@ fn App() -> impl IntoView {
                             })
                         }}
                     </a>
+                    // CHAT-14: every chat — direct messages, groups and the
+                    // tickets' — and the reader's unread across them.
+                    <chats_page::HeaderLink on=Signal::derive(move || matches!(route.get(), Route::Chats(_))) />
                     // DEPLOY-13: where work runs — every project's
                     // environments and deploys.
                     <a
@@ -2509,6 +2521,7 @@ fn App() -> impl IntoView {
                                 Route::Settings => "settings (MFE-21)",
                                 Route::Comments => "comments (COMMENT-3)",
                                 Route::Members => "members (IDENTITY-22)",
+                                Route::Chats(_) => "chats (CHAT-14)",
                                 Route::Deployments(_) => "deployments (DEPLOY-13)",
                             }}
                         </span>
@@ -2547,6 +2560,7 @@ fn App() -> impl IntoView {
                         Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
                         Route::Comments => view! { <comments_page::CommentsPage /> }.into_any(),
                         Route::Members => view! { <members_page::MembersPage /> }.into_any(),
+                        Route::Chats(p) => view! { <chats_page::ChatsPage pick=p /> }.into_any(),
                         Route::Deployments(project) => view! { <deploys_page::DeploymentsPage project /> }.into_any(),
                     }}
                 </main>

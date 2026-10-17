@@ -16,10 +16,13 @@
 //! editor's, on the ticket (`target = "ticket"`, an editor's permit on it,
 //! ACCESS-11) — or, put with no ticket (for a comment on the app), held
 //! anywhere, and the image is then its putter's and the admins' of `*`.
+//! CHAT-14: put for a chat (`chat`), by one of its participants — a
+//! viewer chats, so `put` is a viewer's, and a ticket's image still takes
+//! an editor's permit on it — and seen by its participants alone.
 
 use crate::media::MediaEvent;
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
-use crate::vocab::{MediaData, MediaHash, MediaType, TicketRef};
+use crate::vocab::{ChatId, MediaData, MediaHash, MediaType, TicketRef};
 #[cfg(feature = "server")]
 use crate::access::{Access, MengerRequest, VerifiedUser};
 #[cfg(feature = "server")]
@@ -65,8 +68,8 @@ impl MediaActivation {
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["get"],
-        editor = [viewer, "put"],
+        viewer = ["get", "put"],
+        editor = [viewer],
     )
 )]
 impl MediaActivation {
@@ -84,7 +87,10 @@ impl MediaActivation {
     /// `type_mismatch`, `truncated`, `bad_data`), naming why, with nothing
     /// kept; `not_found { ticket }` for a ticket that is none or out of
     /// reach. The image belongs to `ticket`: `get` answers it to whoever can
-    /// see that ticket. Without `ticket` (a comment on the app) it is the
+    /// see that ticket (an editor's: a viewer is answered `not_found`).
+    /// CHAT-14: with `chat` instead, it is that chat's — `get` answers it to
+    /// its participants alone; `not_found { hash: null }` for a chat the
+    /// caller is not in. Without `ticket` (a comment on the app) it is the
     /// putter's, and the admins' of `*`. Through synapse the data is a file
     /// (`base64 -w0 shot.png > shot.b64`, then `--data @shot.b64`) or stdin
     /// (`--data -`), never `"$(base64 …)"`, which Linux caps at 128 KB
@@ -99,13 +105,15 @@ impl MediaActivation {
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// The ticket it is for, e.g. KILN-4 (optional: none for a comment on the app — the image is then the putter's).
         ticket: Option<TicketRef>,
+        /// CHAT-14: the chat it is for, e.g. 41 — one the caller is in; seen by its participants alone (optional; not with ticket).
+        chat: Option<ChatId>,
         /// What it is: image/png | image/jpeg | image/gif | image/webp (checked against its bytes).
         mime: MediaType,
         /// The bytes, standard base64 (`base64 -w0 shot.png`); a `data:image/png;base64,` prefix is read past.
         data: MediaData,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
         let store = self.store.clone();
-        futures::stream::once(async move { streams::put(store, user, ticket, mime, data).await })
+        futures::stream::once(async move { streams::put(store, user, ticket, chat.map(ChatId::get), mime, data).await })
     }
 
     /// An image's bytes by its hash; yields media { hash, mime, bytes, width, height, data } (data base64), or not_found.

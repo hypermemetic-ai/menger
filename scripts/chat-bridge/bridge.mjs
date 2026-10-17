@@ -220,7 +220,7 @@ const busy = new Set();       // chats with a turn running
 let running = 0;
 const queue = [];             // chats waiting for a slot
 
-function remember(chat) { if (chat?.id !== undefined) { chats.set(chat.id, chat); const s = chatState(chat.id); if (s.ticket !== chat.ticket) { s.ticket = chat.ticket; save(); } } }
+function remember(chat) { if (chat?.id !== undefined) { chats.set(chat.id, chat); const s = chatState(chat.id); const t = chat.ticket ?? null; if (s.ticket !== t) { s.ticket = t; save(); } } }
 
 /** The mark a chat is caught up from: the last handled, else (a chat the
  *  bridge has never handled) the builder's read mark, else nothing. */
@@ -313,7 +313,8 @@ async function turn(chatId) {
   const started = Date.now();
   let chat = chats.get(chatId);
   if (!chat) { await listChats().catch(() => {}); chat = chats.get(chatId); }
-  const ticket = chat?.ticket ?? s.ticket ?? "?";
+  // CHAT-14: a direct message or a group has no ticket.
+  const ticket = chat ? (chat.ticket ?? null) : (s.ticket ?? null);
 
   await rpc("chats.read", { chat: chatId, upto }).catch((e) => log(`chat ${chatId}: read: ${e.message}`));
 
@@ -371,11 +372,33 @@ async function flushOutbox() {
   return flushing;
 }
 
+/** CHAT-14: a chat's images, for the agent, as notes — `[image: name, size]` (the bytes are not passed yet). */
+const sizes = new Map();
+async function imageNotes(body) {
+  const found = [...body.matchAll(/!\[([^\]\n]*)\]\(media:([0-9a-f]{64})\)/g)];
+  for (const [, , hash] of found) {
+    if (sizes.has(hash)) continue;
+    const got = (await rpc("media.get", { hash }).catch(() => [])).find((i) => i.type === "media");
+    sizes.set(hash, got ? got.bytes : null);
+  }
+  return body.replace(/!\[([^\]\n]*)\]\(media:([0-9a-f]{64})\)/g, (_, alt, hash) => {
+    const n = sizes.get(hash);
+    const size = n == null ? "not readable" : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+    return `[image: ${alt || "image"}, ${size}]`;
+  });
+}
+async function withNotes(ms) {
+  return Promise.all(ms.map(async (m) => (/\(media:[0-9a-f]{64}\)/.test(m.body) ? { ...m, body: await imageNotes(m.body) } : m)));
+}
+
+/** Where a chat is, in words: on a ticket, or (CHAT-14) a direct message or a group. */
+const where = (chat, ticket) => (ticket ? `on ticket ${ticket}` : chat?.kind === "group" ? "a group chat outside tickets" : "a direct message outside tickets");
+
 const fmt = (m) => `[message ${m.id} · ${m.name ? `${m.name} (${m.author})` : m.author} · ${new Date(m.at * 1000).toISOString().slice(0, 16).replace("T", " ")}Z]\n${m.body}`;
 
-function systemPrompt(chatId, ticket, title) {
+function systemPrompt(chatId, ticket, title, chat) {
   return [
-    `You are the owner's builder on this machine, answering the owner in menger chat ${chatId} on ticket ${ticket}${title ? ` (${title})` : ""}.`,
+    `You are the owner's builder on this machine, answering the owner in menger chat ${chatId}, ${where(chat, ticket)}${title ? ` (${title})` : ""}.`,
     `The chat bridge (menger's scripts/chat-bridge, CHAT-11) runs you. Your final message is posted to that chat as the builder, verbatim, so do not post it yourself with chats.post.`,
     ``,
     `Keep chat answers short: a few sentences of markdown, the answer first. The owner is reading on a phone.`,
@@ -395,25 +418,28 @@ function systemPrompt(chatId, ticket, title) {
 async function runAgent(chatId, chat, ticket, batch, session) {
   let title = null;
   let prompt;
+  const fresh = await withNotes(batch);
   if (session) {
-    prompt = `New in chat ${chatId}:\n\n${batch.map(fmt).join("\n\n")}`;
+    prompt = `New in chat ${chatId}:\n\n${fresh.map(fmt).join("\n\n")}`;
   } else {
-    try {
-      const t = (await rpc("tickets.get", { id: ticket })).find((i) => i.type === "ticket")?.ticket;
-      title = t?.title ?? null;
-    } catch {}
-    const recent = (await rpc("chats.messages", { chat: chatId, newest: true, limit: 30 }).catch(() => []))
-      .filter((i) => i.type === "message").map((i) => i.message).filter((m) => m.id < batch[0].id);
+    if (ticket) {
+      try {
+        const t = (await rpc("tickets.get", { id: ticket })).find((i) => i.type === "ticket")?.ticket;
+        title = t?.title ?? null;
+      } catch {}
+    }
+    const recent = await withNotes((await rpc("chats.messages", { chat: chatId, newest: true, limit: 30 }).catch(() => []))
+      .filter((i) => i.type === "message").map((i) => i.message).filter((m) => m.id < batch[0].id));
     prompt = [
-      `Chat ${chatId} on ${ticket}${title ? ` — ${title}` : ""}${chat?.title ? `, titled "${chat.title}"` : ""}. Participants: ${(chat?.participants ?? []).join(", ") || "?"}; you are ${SELF}.`,
+      `Chat ${chatId}, ${where(chat, ticket)}${title ? ` — ${title}` : ""}${chat?.title ? `, titled "${chat.title}"` : ""}. Participants: ${(chat?.participants ?? []).join(", ") || "?"}; you are ${SELF}.`,
       recent.length ? `Earlier in the chat:\n\n${recent.map(fmt).join("\n\n")}` : `Nothing earlier in the chat.`,
-      `New — answer this:\n\n${batch.map(fmt).join("\n\n")}`,
+      `New — answer this:\n\n${fresh.map(fmt).join("\n\n")}`,
     ].join("\n\n---\n\n");
   }
-  let r = await claude(prompt, session, systemPrompt(chatId, ticket, title));
+  let r = await claude(prompt, session, systemPrompt(chatId, ticket, title, chat));
   if (!r.ok && session && /No conversation found|session/i.test(r.why ?? "")) {
     log(`chat ${chatId}: session ${session} could not be resumed (${r.why}); a new one`);
-    r = await claude(prompt, null, systemPrompt(chatId, ticket, title));
+    r = await claude(prompt, null, systemPrompt(chatId, ticket, title, chat));
   }
   return r;
 }

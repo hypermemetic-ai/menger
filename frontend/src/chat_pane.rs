@@ -139,9 +139,13 @@ pub(crate) fn new_from(thread: &[Message], unread: u32) -> Option<u64> {
     (n > 0).then(|| thread.len().checked_sub(n).and_then(|at| thread.get(at)).map(|m| m.id.get())).flatten()
 }
 
-/// What the picker says of one who cannot be picked.
+/// What the picker says of one who cannot be picked: it can't read the
+/// ticket — or, outside tickets (CHAT-14), holds no grant there.
 pub(crate) fn refusal(ticket: &str) -> String {
-    format!("can't read {ticket}, so can't be added")
+    match ticket {
+        "the organization" => "holds no grant here, so can't be added".to_string(),
+        t => format!("can't read {t}, so can't be added"),
+    }
 }
 
 /// The picker's rows: every candidate but the reader (and, adding, those
@@ -367,8 +371,8 @@ fn pane_view(s: Shown, lit: Signal<String>, back: Callback<bool>) -> impl IntoVi
     };
     let body = match current.clone() {
         View::Auto => view! { <p class="pempty">"loading chats…"</p> }.into_any(),
-        View::Chat(id) => view! { <ChatView ticket=ticket.clone() id /> }.into_any(),
-        View::Pick => view! { <Picker ticket=ticket.clone() add_to=None on_done=Callback::new(|_| ()) /> }.into_any(),
+        View::Chat(id) => view! { <ChatView ticket=Some(ticket.clone()) id /> }.into_any(),
+        View::Pick => view! { <Picker ticket=Some(ticket.clone()) add_to=None on_done=Callback::new(|_| ()) /> }.into_any(),
         View::Closed => closed_view(ticket.clone()).into_any(),
     };
     let label = format!("chats on {ticket}");
@@ -455,7 +459,8 @@ pub(crate) fn Grab(target: &'static str, dismiss: Callback<()>) -> impl IntoView
 /// turns (src/turns.rs), the composer (src/composer.rs) — or, closed,
 /// reopen. CHAT-7: the same view in the dock and full screen (`full`).
 #[component]
-pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) -> impl IntoView {
+/// CHAT-14: `ticket` none for a direct message or a group.
+pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: bool) -> impl IntoView {
     let held = chats::signal();
     let chat = {
         let held = held.clone();
@@ -665,6 +670,9 @@ pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) ->
             let _ = obs.observe_with_options(&el, &init);
             on_cleanup(move || obs.disconnect());
         }
+        // CHAT-14: an image drawn changes its row's height with no mutation:
+        // its `load` (which does not bubble) heard on the way down.
+        let _ = el.add_event_listener_with_callback_and_bool("load", cb.as_ref().unchecked_ref(), true);
         cb.forget();
     });
     let on_scroll = move |_| {
@@ -705,22 +713,34 @@ pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) ->
         move || {
             let Some(c) = chat.get() else { return view! { <div class="pwho"></div> }.into_any() };
             let open = c.state == ChatState::Open;
+            let err = RwSignal::new(None::<String>);
+            // CHAT-14: a group's members are taken out by its members.
+            let removable = open && c.kind == menger_tickets_api::ChatKind::Group;
             let people = c
                 .participants
                 .iter()
                 .map(|p| {
                     let waiting = c.waiting.contains(p);
                     let tip = if waiting { format!("{p} — waiting for a message") } else { p.clone() };
+                    let who = p.clone();
+                    let out = move |_| {
+                        let who = who.clone();
+                        spawn_local(async move {
+                            if let Err(e) = chats::remove(id, &who).await {
+                                err.try_set(Some(e));
+                            }
+                        });
+                    };
                     view! {
                         <span class="pp" title=tip data-principal=p.clone()>
                             <span class="dot" class:wait=waiting></span>
                             {name(p)}
                             {chats::is_agent(p).then(|| view! { <span class="ag">"agent"</span> })}
+                            {removable.then(|| view! { <button type="button" class="prm" title="take them out of the group" aria-label=format!("remove {}", name(p)) on:click=out>"×"</button> })}
                         </span>
                     }
                 })
                 .collect_view();
-            let err = RwSignal::new(None::<String>);
             let flip = move |_| {
                 spawn_local(async move {
                     match chats::settle_state(id, !open).await {
@@ -754,7 +774,7 @@ pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) ->
             if !thread.with(Vec::is_empty) || chat.with(|c| c.as_ref().is_some_and(|c| c.last_message.is_some())) {
                 return None;
             }
-            Some(if alone.get() { alone_view(&t, body).into_any() } else { view! { <p class="pempty">"No messages yet. Say what this chat is about."</p> }.into_any() })
+            Some(if alone.get() { alone_view(t.as_deref().unwrap_or("this chat"), body).into_any() } else { view! { <p class="pempty">"No messages yet. Say what this chat is about."</p> }.into_any() })
         }
     };
     let rows = {
@@ -801,7 +821,11 @@ pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) ->
                 Some("link") => {
                     let w = dom::window();
                     let base = format!("{}{}", w.location().origin().unwrap_or_default(), w.location().pathname().unwrap_or_default());
-                    copy_text(&format!("{base}{}", turns::turn_link(&t, id, mid)));
+                    let link = match &t {
+                        Some(t) => turns::turn_link(t, id, mid),
+                        None => format!("#/chats/{id}?at={mid}"),
+                    };
+                    copy_text(&format!("{base}{link}"));
                 }
                 _ => return,
             }
@@ -957,7 +981,10 @@ fn turn_view(m: Message, mine: bool, fresh: bool, name: &impl Fn(&str) -> String
             <For each=move || 0..chunks.with(Vec::len) key=|i| *i children=move |i| {
                 let h = chunks.with_untracked(|c| c.get(i).cloned().unwrap_or_default());
                 let node = NodeRef::<leptos::html::Div>::new();
-                node.on_load(|el: web_sys::HtmlDivElement| crate::highlight::mount(&el));
+                node.on_load(|el: web_sys::HtmlDivElement| {
+                    crate::highlight::mount(&el);
+                    crate::media::hydrate(&el);
+                });
                 view! { <div class="md tchunk" data-links="chat" node_ref=node inner_html=h></div> }
             } />
         }
@@ -967,6 +994,10 @@ fn turn_view(m: Message, mine: bool, fresh: bool, name: &impl Fn(&str) -> String
         html.track();
         if let Some(el) = node.get() {
             crate::highlight::mount(&el);
+            // CHAT-14: a message's images (COMMENT-5's), asked for as the
+            // row mounts — the window mounts only what is near the view, so
+            // an image far off is never fetched.
+            crate::media::hydrate(&el);
         }
     });
     let acts = view! {
@@ -1016,23 +1047,28 @@ fn turn_view(m: Message, mine: bool, fresh: bool, name: &impl Fn(&str) -> String
 
 /// The picker: **+ chat** (`add_to` none) — people and agents, who can read
 /// the ticket, the same people's chat opened instead; or *add* to a chat
-/// (`add_to`: it and who is in it) — one picked is added.
+/// (`add_to`: it and who is in it) — one picked is added. CHAT-14: with no
+/// ticket, **New message** — one picked is a direct message, several a
+/// group (with a title); everyone holding a grant in the organization,
+/// agents by name; `on_open` goes to the chat opened.
 #[component]
-pub(crate) fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done: Callback<()>) -> impl IntoView {
+pub(crate) fn Picker(ticket: Option<String>, add_to: Option<(u64, Vec<String>)>, on_done: Callback<()>, #[prop(optional)] on_open: Option<Callback<u64>>) -> impl IntoView {
     let cands = RwSignal::new(None::<Result<Vec<(String, bool)>, String>>);
     {
         let t = ticket.clone();
         spawn_local(async move {
-            let r = chats::candidates(&t).await;
+            let r = chats::candidates(t.as_deref()).await;
             cands.try_set(Some(r));
         });
     }
     let query = RwSignal::new(String::new());
     let picked = RwSignal::new(Vec::<String>::new());
+    let title = RwSignal::new(String::new());
     let error = RwSignal::new(None::<String>);
     let held = chats::signal();
     let me = chats::me();
     let name = names();
+    let outside = ticket.is_none();
     let (chat_id, already) = match add_to {
         Some((c, ps)) => (Some(c), ps),
         None => (None, Vec::new()),
@@ -1040,7 +1076,7 @@ pub(crate) fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done
     let waiting = {
         let t = ticket.clone();
         let held = held.clone();
-        Memo::new(move |_| held.with(|h| h.as_ref().map(|h| h.waiting_on(&t)).unwrap_or_default()))
+        Memo::new(move |_| held.with(|h| h.as_ref().zip(t.as_deref()).map(|(h, t)| h.waiting_on(t)).unwrap_or_default()))
     };
     let existing = {
         let (t, me) = (ticket.clone(), me.clone());
@@ -1049,18 +1085,20 @@ pub(crate) fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done
             if chat_id.is_some() {
                 return None;
             }
-            held.with(|h| h.as_ref().and_then(|h| h.existing(&t, &me, &p)))
+            let t = t.as_deref()?;
+            held.with(|h| h.as_ref().and_then(|h| h.existing(t, &me, &p)))
         })
     };
+    let where_ = ticket.clone().unwrap_or_else(|| "the organization".to_string());
     let list = {
-        let (ticket, name, me) = (ticket.clone(), name.clone(), me.clone());
+        let (where_, name, me) = (where_.clone(), name.clone(), me.clone());
         move || match cands.get() {
-            None => view! { <p class="pempty">"asking who can read it…"</p> }.into_any(),
+            None => view! { <p class="pempty">{if outside { "asking who is here…" } else { "asking who can read it…" }}</p> }.into_any(),
             Some(Err(e)) => view! { <p class="perr" role="alert">{e}</p> }.into_any(),
             Some(Ok(all)) => {
                 let shown = rows(&all, &me, &already, &query.get(), &name);
-                // CHAT-6: the picker's first row, "just me" — nobody picked is a chat of one.
-                let alone = (chat_id.is_none()).then(|| {
+                // CHAT-6: the picker's first row, "just me" — nobody picked is a chat of one (on a ticket).
+                let alone = (chat_id.is_none() && !outside).then(|| {
                     let who = name(&me);
                     view! {
                         <ul class="pcands pjust">
@@ -1081,11 +1119,13 @@ pub(crate) fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done
                     .map(|(p, reads)| {
                         let on = picked.with(|v| v.contains(&p));
                         let what = if !reads {
-                            refusal(&ticket)
+                            refusal(&where_)
                         } else if waiting.contains(&p) {
                             "waiting for a message".to_string()
+                        } else if outside {
+                            short(&p)
                         } else {
-                            format!("can read {ticket}")
+                            format!("can read {where_}")
                         };
                         let pc = p.clone();
                         let click = move |_| {
@@ -1153,10 +1193,19 @@ pub(crate) fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done
                 show(View::Chat(c));
                 return;
             }
+            if outside && others.is_empty() {
+                error.set(Some("pick someone: one for a direct message, several for a group".into()));
+                return;
+            }
             let t = t.clone();
+            let named = title.get_untracked();
             spawn_local(async move {
-                match chats::open(&t, &others).await {
-                    Ok(c) => show(View::Chat(c)),
+                let title = (others.len() > 1).then_some(named.as_str());
+                match chats::open(t.as_deref(), &others, title).await {
+                    Ok(c) => match on_open {
+                        Some(go) => go.run(c),
+                        None => show(View::Chat(c)),
+                    },
                     Err(e) => {
                         error.try_set(Some(e));
                     }
@@ -1164,27 +1213,41 @@ pub(crate) fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done
             });
         }
     };
-    let heading = match chat_id {
-        Some(_) => "Add someone to this chat".to_string(),
-        None => format!("Chat about {ticket}"),
+    let heading = match (chat_id, ticket.as_deref()) {
+        (Some(_), _) => "Add someone to this chat".to_string(),
+        (None, Some(t)) => format!("Chat about {t}"),
+        (None, None) => "New message".to_string(),
     };
     let adding = chat_id.is_some();
+    let hint = move || match (outside, picked.with(Vec::len)) {
+        (true, 0) => "one person for a direct message, several for a group".to_string(),
+        (true, 1) => "a direct message — the one you have with them, if you do".to_string(),
+        (true, _) => "a group: give it a title".to_string(),
+        (false, _) => start_of(&picked.get(), existing.get()).hint().to_string(),
+    };
+    let label = move || match (outside, picked.with(Vec::len)) {
+        (true, n) if n > 1 => "start group",
+        (true, _) => "message",
+        (false, _) => start_of(&picked.get(), existing.get()).label(),
+    };
     view! {
-        <div class="ppicker" class:adding=adding>
+        <div class="ppicker" class:adding=adding class:outside=outside>
             <h4>{heading}</h4>
             <div class="pq">
                 {tokens}
-                <input type="text" class="pqi" aria-label="who to talk to" placeholder="who…" autocomplete="off" spellcheck="false"
+                <input type="text" class="pqi" aria-label="who to talk to" placeholder="who… (a name, or an agent: builder)" autocomplete="off" spellcheck="false"
                     prop:value=move || query.get() on:input=move |ev| query.set(event_target_value(&ev)) />
             </div>
+            {move || (outside && !adding && picked.with(|p| p.len() > 1)).then(|| view! {
+                <input type="text" class="ptitle" aria-label="the group's title" placeholder="the group's title" maxlength="200"
+                    prop:value=move || title.get() on:input=move |ev| title.set(event_target_value(&ev)) />
+            })}
             {list}
             {move || error.get().map(|e| view! { <p class="perr" role="alert">{e}</p> })}
             {(!adding).then(|| view! {
                 <div class="prow">
-                    <span>{move || start_of(&picked.get(), existing.get()).hint()}</span>
-                    <button type="button" class="psend" on:click=start>
-                        {move || start_of(&picked.get(), existing.get()).label()}
-                    </button>
+                    <span>{hint}</span>
+                    <button type="button" class="psend" on:click=start>{label}</button>
                 </div>
             })}
             {adding.then(|| view! { <div class="prow"><button type="button" class="pcancel" on:click=move |_| on_done.run(())>"cancel"</button></div> })}

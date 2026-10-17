@@ -1,3 +1,5 @@
+/** CHAT-3: a chat's number, from 1 in the order opened. */
+export type ChatId = number;
 /** An image's bytes, in standard base64 (`base64 -w0 shot.png`); a
 `data:image/png;base64,` before them is read past by the store. */
 export type MediaData = string;

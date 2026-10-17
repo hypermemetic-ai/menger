@@ -5507,7 +5507,7 @@ mod replies;
 pub use replies::{comment_on, reply_key, Awaiting};
 /// CHAT-3: chats on a ticket among participants — opened, posted, read.
 mod chats;
-pub use chats::{ChatChange, ChatError, ChatQuery, ChatRecord, ChatSeed, MessageWait, Paging, Signer, Standing};
+pub use chats::{ChatChange, ChatError, ChatOn, ChatQuery, ChatRecord, ChatSeed, MessageWait, Paging, Seat, Signer, Standing};
 pub use deployments::{DeployPage, DeployQuery, Due, RequestAsk};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
@@ -5660,6 +5660,8 @@ mod tests_replies;
 /// CHAT-3: CHAT-1's scenarios.
 #[cfg(test)]
 mod tests_chats;
+#[cfg(test)]
+mod tests_chats_outside;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

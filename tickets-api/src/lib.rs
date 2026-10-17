@@ -128,7 +128,7 @@ pub use comments_activation::CommentsActivation;
 /// CHAT-3: the chats vocabulary — [`Chat`], [`Message`], [`ChatState`],
 /// [`ChatsEvent`]. Wasm-safe, like [`comments`].
 pub mod chats;
-pub use chats::{Chat, ChatState, ChatsEvent, Message};
+pub use chats::{Chat, ChatKind, ChatState, ChatsEvent, Message};
 /// CHAT-3: the `chats` activation, declared once: the server's [`Chats`]
 /// and the browser's [`ChatsClient`].
 pub mod chats_activation;

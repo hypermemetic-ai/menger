@@ -79,18 +79,29 @@ pub(crate) enum Owner {
     Ticket(String),
     /// Put with no ticket: its putter's principal (`None` with login off).
     App(Option<String>),
+    /// CHAT-14: put in a chat (its id): seen by its participants alone —
+    /// never by its ticket's readers who are not in it. Stored as `chat:N`
+    /// in the `ticket` column.
+    Chat(u64),
 }
+
+/// CHAT-14: the `ticket` column's prefix for a chat's image.
+const CHAT_PREFIX: &str = "chat:";
 
 impl Owner {
     /// Its two stored columns.
-    fn columns(&self) -> (&str, &str) {
+    fn columns(&self) -> (String, String) {
         match self {
-            Owner::Ticket(t) => (t.as_str(), ""),
-            Owner::App(p) => ("", p.as_deref().unwrap_or("")),
+            Owner::Ticket(t) => (t.clone(), String::new()),
+            Owner::App(p) => (String::new(), p.clone().unwrap_or_default()),
+            Owner::Chat(c) => (format!("{CHAT_PREFIX}{c}"), String::new()),
         }
     }
 
     fn of(ticket: String, principal: String) -> Self {
+        if let Some(c) = ticket.strip_prefix(CHAT_PREFIX).and_then(|n| n.parse().ok()) {
+            return Owner::Chat(c);
+        }
         match ticket.is_empty() {
             false => Owner::Ticket(ticket),
             true => Owner::App((!principal.is_empty()).then_some(principal)),
@@ -257,10 +268,18 @@ impl Store {
     /// `who` sees it ([`Store::media`]'s rule). From the cache alone.
     pub fn media_info(&self, who: &(impl Reader + ?Sized), hash: &str) -> Result<MediaInfo, StoreError> {
         let seen = Seen::of(who)?;
+        let me = who.principal_of();
         let cache = self.tickets.read().expect("store lock poisoned");
         let sees = seen.sees(&cache);
+        // CHAT-14: a chat's image, to its participants (who see its ticket,
+        // for a ticket's chat) — the system sees every one.
+        let in_chat = |c: u64| {
+            let Some(chat) = cache.chats.by_id.get(&c) else { return false };
+            let Some(me) = me.as_deref() else { return true };
+            chat.has(me) && (chat.kind.outside() || cache.resolve(&chat.ticket).is_ok_and(|k| sees.id(&k)))
+        };
         match cache.media.get(hash) {
-            Some(k) if sees.media(&k.owners) => Ok(k.info.clone()),
+            Some(k) if sees.media(&k.owners) || k.owners.iter().any(|o| matches!(o, Owner::Chat(c) if in_chat(*c))) => Ok(k.info.clone()),
             _ => Err(StoreError::MediaNotFound(hash.to_string())),
         }
     }

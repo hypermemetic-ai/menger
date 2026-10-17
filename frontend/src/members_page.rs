@@ -7,6 +7,10 @@
 //! each with revoke; and a form to grant a role to any principal. Every
 //! change asks the server, which checks it (IDENTITY-21), then the page
 //! reads again.
+//!
+//! CHAT-14: each person is named as the server knows them — an agent's key
+//! by the name it signs in with (`builder`), marked *agent* — and has
+//! **Chat**: the direct message with them, opened in `#/chats`.
 
 use leptos::prelude::*;
 use menger_tickets_api::{Grant, MembersClient, MembersEvent};
@@ -92,6 +96,12 @@ pub(crate) fn MembersPage() -> impl IntoView {
     let r_text = RwSignal::new("viewer".to_string());
 
     let admin = signin::account();
+    // CHAT-14: the names (and agents) the server knows.
+    spawn_local(async {
+        let _ = crate::chats::candidates(None).await;
+    });
+    let name = crate::chat_pane::names();
+    let me = crate::chats::me();
     view! {
         <section id="members">
             <h2>"Members"</h2>
@@ -152,13 +162,26 @@ pub(crate) fn MembersPage() -> impl IntoView {
                                 outcome(client.revoke_all(principal, team, scope).await)
                             }));
                         };
+                        // CHAT-14: a person (not a team, not the reader) has Chat.
+                        let person = match &g.principal {
+                            menger_tickets_api::vocab::Grantee::Principal(p) => Some(p.to_string()),
+                            menger_tickets_api::vocab::Grantee::Team(_) => None,
+                        };
+                        let chat = person.clone().filter(|p| *p != me).map(|p| {
+                            let go = move |_| crate::chats_page::message(p.clone(), move |e| note.set(Some(Err(e))));
+                            view! { <button class="link chatwith" title="a direct message, in #/chats" on:click=go>"chat"</button> }
+                        });
+                        let named = person.as_deref().map(|p| (name(p), crate::chats::is_agent(p)));
                         view! {
                             <tr>
-                                <td><code>{g.principal.to_string()}</code></td>
+                                <td>
+                                    {named.map(|(n, agent)| view! { <strong class="mname">{n}</strong>{agent.then(|| view! { <span class="ag">"agent"</span> })}" " })}
+                                    <code>{g.principal.to_string()}</code>
+                                </td>
                                 <td><code>{g.scope.to_string()}</code></td>
                                 <td>{g.role.to_string()}</td>
                                 <td class="lbl">{g.granted_by.to_string()}</td>
-                                <td>{(!operator).then(|| view! { <button class="link revoke" on:click=revoke>"revoke"</button> })}</td>
+                                <td>{chat}" "{(!operator).then(|| view! { <button class="link revoke" on:click=revoke>"revoke"</button> })}</td>
                             </tr>
                         }
                     }).collect_view())}

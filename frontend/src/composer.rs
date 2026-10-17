@@ -22,8 +22,12 @@
 //!   that cannot run is refused in a strip over the card — *not sent ·
 //!   reason ×* — and the text stays.
 //! - **Ticket codes** in the text show as chips in a strip over the card
-//!   ([`codes_in`]); a pasted or dropped image is refused there too
-//!   ([`IMAGES_REFUSED`]) rather than lost.
+//!   ([`codes_in`]).
+//! - **Images** (CHAT-14, owner 2026-10-17: *"allow pasting images into
+//!   chat and comments"*): pasted, dropped or picked, as a comment's are
+//!   (COMMENT-5, src/media.rs) — checked, kept with `media.put` for the
+//!   chat (seen by its participants alone), a thumbnail in the box, drawn
+//!   in the turn, full size on a click. Send waits while one is on its way.
 //! - **Drafts** ([`Drafts`]): each chat's unsent text, per browser, under
 //!   `menger.chat.draft.<id>` — restored on return, cleared on send, put
 //!   back when a send is refused.
@@ -252,6 +256,7 @@ pub(crate) fn resolve_add(name: &str, cands: &[(String, bool)], already: &[Strin
     match hits.as_slice() {
         [] => Err(format!("/add {name} — no one called {name} holds a grant here")),
         [(p, _)] if already.contains(p) => Err(format!("/add {name} — {name} is in this chat already")),
+        [(_, false)] if ticket.is_empty() => Err(format!("/add {name} — {name} holds no grant here")),
         [(_, false)] => Err(format!("/add {name} — {name} can't read {ticket}")),
         [(p, true)] => Ok(p.clone()),
         _ => Err(format!("/add {name} — more than one goes by {name}: pick from @'s menu")),
@@ -335,15 +340,13 @@ pub(crate) fn recall(thread: &[menger_tickets_api::Message], me: &str) -> Option
 
 // -- the rest ----------------------------------------------------------------------
 
-/// What the strip says of a pasted or dropped image.
-pub(crate) const IMAGES_REFUSED: &str = "images aren't kept yet — paste or drop text";
-
-/// The box's placeholder.
-pub(crate) fn placeholder(ticket: &str, alone: bool) -> String {
-    if alone {
-        format!("Write a note on {ticket}, or @ someone… (Enter sends · Shift+Enter newline · / commands)")
-    } else {
-        format!("message {ticket}'s chat… (Enter sends · Shift+Enter newline · / commands · @ adds)")
+/// The box's placeholder — CHAT-14: a chat outside tickets (`None`) is
+/// "the chat".
+pub(crate) fn placeholder(ticket: Option<&str>, alone: bool) -> String {
+    match (ticket, alone) {
+        (Some(t), true) => format!("Write a note on {t}, or @ someone… (Enter sends · Shift+Enter newline · / commands)"),
+        (Some(t), false) => format!("message {t}'s chat… (Enter sends · Shift+Enter newline · / commands · @ adds)"),
+        (None, _) => "message the chat… (Enter sends · Shift+Enter newline · / commands · paste an image)".to_string(),
     }
 }
 
@@ -419,7 +422,8 @@ impl Drafts {
 #[derive(Clone)]
 pub(crate) struct Props {
     pub(crate) id: u64,
-    pub(crate) ticket: String,
+    /// CHAT-14: none for a direct message or a group.
+    pub(crate) ticket: Option<String>,
     pub(crate) body: RwSignal<String>,
     pub(crate) full: bool,
 }
@@ -445,6 +449,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
     let menu_shut = RwSignal::new(false);
     let cands = RwSignal::new(None::<Vec<(String, bool)>>);
     let area = NodeRef::<Textarea>::new();
+    // CHAT-14: images, as a comment takes them (COMMENT-5), for this chat.
+    let attach = crate::media::Attach::for_chat(body, area, id);
     // Settings → Chat: the composer's font.
     crate::settings::apply_chat_px(crate::settings::load().chat_px);
     // The draft: restored once, kept on every change.
@@ -477,7 +483,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
             cands.set(Some(Vec::new()));
             let t = t.clone();
             spawn_local(async move {
-                if let Ok(c) = chats::candidates(&t).await {
+                if let Ok(c) = chats::candidates(t.as_deref()).await {
                     cands.try_set(Some(c));
                 }
             });
@@ -554,7 +560,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
         let add_one = add_one.clone();
         move || {
             let text = body.get_untracked();
-            if text.trim().is_empty() || sending.get_untracked() {
+            if text.trim().is_empty() || sending.get_untracked() || attach.busy_untracked() {
                 return;
             }
             match act_of(&text) {
@@ -579,7 +585,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                     let (t, me, name, add_one) = (t.clone(), me.clone(), name.clone(), add_one.clone());
                     sending.set(true);
                     spawn_local(async move {
-                        let r = run(cmd, id, &t, &me, &participants.get_untracked(), &name, add_one).await;
+                        let r = run(cmd, id, t.as_deref(), &me, &participants.get_untracked(), &name, add_one).await;
                         sending.try_set(false);
                         match r {
                             Ok(()) => {
@@ -651,19 +657,9 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
             }
         }
     };
-    let paste = move |ev: web_sys::ClipboardEvent| {
-        let has_image = ev.clipboard_data().is_some_and(|d| has_files(&d));
-        if has_image {
-            ev.prevent_default();
-            refusal.set(Some(format!("not pasted · {IMAGES_REFUSED}")));
-        }
-    };
-    let drop = move |ev: web_sys::DragEvent| {
-        if ev.data_transfer().is_some_and(|d| has_files(&d)) {
-            ev.prevent_default();
-            refusal.set(Some(format!("not dropped · {IMAGES_REFUSED}")));
-        }
-    };
+    let paste = move |ev: web_sys::ClipboardEvent| attach.paste(ev);
+    let drop = move |ev: web_sys::DragEvent| attach.dropped(ev);
+    let dragover = move |ev: web_sys::DragEvent| attach.dragover(ev);
     let alone = Memo::new(move |_| participants.with(|p| p.len() <= 1));
     let t_ph = ticket.clone();
     let hint = move || {
@@ -705,6 +701,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
         }
     };
     let expand = move |_| crate::chat_full::set_full(!full);
+    let on_ticket = ticket.is_some();
     view! {
         <div class="ccompose" class:full=full>
             {move || refusal.get().map(|r| view! {
@@ -725,8 +722,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                     node_ref=area
                     class="cbox grow"
                     rows="2"
-                    aria-label=format!("message the chat on {ticket}")
-                    placeholder=move || placeholder(&t_ph, alone.get())
+                    aria-label=match &ticket { Some(t) => format!("message the chat on {t}"), None => "message the chat".to_string() }
+                    placeholder=move || placeholder(t_ph.as_deref(), alone.get())
                     prop:value=move || body.get()
                     on:input=move |ev| {
                         menu_shut.set(false);
@@ -743,13 +740,17 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                     on:keydown=keydown
                     on:paste=paste
                     on:drop=drop
+                    on:dragover=dragover
                 ></textarea>
                 <div class="crow">
                     <span class="chint">{hint}</span>
-                    <button type="button" class="cfull" title=if full { "back to the dock" } else { "the chat full screen (g c)" } on:click=expand>
-                        {if full { "⤡ pane" } else { "full ↗" }}
-                    </button>
-                    <button type="button" class="csend" aria-label="send" title="send (Enter)" disabled=move || sending.get() || body.with(|b| b.trim().is_empty()) on:click=move |_| send()>
+                    <crate::media::Attachments a=attach />
+                    {on_ticket.then(|| view! {
+                        <button type="button" class="cfull" title=if full { "back to the dock" } else { "the chat full screen (g c)" } on:click=expand>
+                            {if full { "⤡ pane" } else { "full ↗" }}
+                        </button>
+                    })}
+                    <button type="button" class="csend" aria-label="send" title="send (Enter)" disabled=move || sending.get() || attach.busy() || body.with(|b| b.trim().is_empty()) on:click=move |_| send()>
                         {move || if sending.get() { "sending…" } else { "send" }}
                     </button>
                 </div>
@@ -773,19 +774,15 @@ fn leave_box(ev: &web_sys::KeyboardEvent, full: bool) {
     }
 }
 
-fn has_files(d: &web_sys::DataTransfer) -> bool {
-    d.types().iter().any(|t| t.as_string().is_some_and(|t| t == "Files"))
-}
-
 /// A command, run.
-async fn run(cmd: Command, id: u64, ticket: &str, _me: &str, already: &[String], name: &impl Fn(&str) -> String, add_one: impl Fn(String)) -> Result<(), String> {
+async fn run(cmd: Command, id: u64, ticket: Option<&str>, _me: &str, already: &[String], name: &impl Fn(&str) -> String, add_one: impl Fn(String)) -> Result<(), String> {
     match cmd {
         Command::Close => chats::settle_state(id, false).await.map_err(|e| format!("/close — {e}")),
         Command::Title(t) => chats::rename(id, Some(&t)).await.map_err(|e| format!("/title — {e}")),
         Command::Ticket(code) => chats::post(id, &format!("{code}\n")).await,
         Command::Add(who) => {
             let cands = chats::candidates(ticket).await?;
-            let p = resolve_add(&who, &cands, already, ticket, name)?;
+            let p = resolve_add(&who, &cands, already, ticket.unwrap_or(""), name)?;
             add_one(p);
             Ok(())
         }
@@ -928,7 +925,8 @@ mod tests {
 
     #[test]
     fn the_placeholder_says_the_keys() {
-        assert_eq!(placeholder("KILN-7", false), "message KILN-7's chat… (Enter sends · Shift+Enter newline · / commands · @ adds)");
-        assert!(placeholder("KILN-7", true).starts_with("Write a note on KILN-7"));
+        assert_eq!(placeholder(Some("KILN-7"), false), "message KILN-7's chat… (Enter sends · Shift+Enter newline · / commands · @ adds)");
+        assert!(placeholder(Some("KILN-7"), true).starts_with("Write a note on KILN-7"));
+        assert!(placeholder(None, false).contains("paste an image"), "CHAT-14: a chat outside tickets");
     }
 }

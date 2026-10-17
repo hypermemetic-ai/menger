@@ -34,8 +34,17 @@ fn proof(store: &Store, user: &VerifiedUser, ticket: Option<&TicketRef>) -> Resu
 
 /// `media.put`: the image checked and kept by the store, for the ticket the
 /// caller may edit — signed by its principal.
-pub(super) async fn put(store: Arc<Store>, user: VerifiedUser, ticket: Option<TicketRef>, mime: MediaType, data: MediaData) -> MediaEvent {
-    let on = match proof(&store, &user, ticket.as_ref()) {
+pub(super) async fn put(store: Arc<Store>, user: VerifiedUser, ticket: Option<TicketRef>, chat: Option<u64>, mime: MediaType, data: MediaData) -> MediaEvent {
+    let proved = match (chat, ticket.as_ref()) {
+        (Some(_), Some(_)) => Err(MediaEvent::Error { message: "an image is for a ticket or for a chat, not both (nothing was kept)".into() }),
+        // CHAT-14: a participant's seat in the chat.
+        (Some(c), None) => match store.chat_seen(&user, c) {
+            Ok((_, s)) if s.participant => Ok(OnMedia::chat(c, &s)),
+            _ => Err(MediaEvent::NotFound { hash: None, ticket: None }),
+        },
+        (None, t) => proof(&store, &user, t),
+    };
+    let on = match proved {
         Ok(on) => on,
         Err(ev) => return ev,
     };

@@ -102,7 +102,7 @@ pub(super) fn await_message_stream(store: Arc<Store>, access: Access, user: Veri
         let chats: Vec<u64> = match ask.chat {
             Some(c) => vec![c],
             None => {
-                let q = ChatQuery { ticket: ticket.clone(), state: Some(ChatState::Open), unread: None };
+                let q = ChatQuery { ticket: ticket.clone(), state: Some(ChatState::Open), unread: None, kind: None };
                 store.chats(following.user(), &q, None, u32::MAX).map(|(rows, _)| rows.iter().filter(|c| c.participants.contains(&principal)).map(|c| c.id.get()).collect()).unwrap_or_default()
             }
         };

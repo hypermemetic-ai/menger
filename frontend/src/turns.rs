@@ -236,9 +236,10 @@ pub(crate) fn body_html(m: &Message, card: &dyn Fn(&str) -> Option<(String, Stri
 }
 
 /// Markdown as a turn draws it — a whole body, or a long one's head or a
-/// chunk of it (CHAT-8).
+/// chunk of it (CHAT-8). CHAT-14: a comment's images (COMMENT-5) — a
+/// `media:` image is drawn from `media.get`, another origin's is its alt.
 pub(crate) fn source_html(src: &str, card: &dyn Fn(&str) -> Option<(String, String)>) -> String {
-    let html = crate::md::render_body(src).html;
+    let html = crate::md::render_comment(src).html;
     chip_codes(&code_heads(&html, &fence_infos(src)), card)
 }
 
