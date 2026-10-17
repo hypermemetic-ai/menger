@@ -20,7 +20,7 @@ commit on main → build → gate → release → deploy test → smoke → prom
 | database | `~/.local/share/menger/tickets.db` | `~/.local/share/menger-test/tickets.db` — prod's, copied at each deploy |
 | units | `menger@prod`, `menger-diagrams@prod` | `menger@test`, `menger-diagrams@test` |
 | settings | `~/.config/menger/prod.env` + `prod.local.env` | `~/.config/menger/test.env` (`PLEXUS_NO_REGISTRY=1`) + `test.local.env` + `test.smoke.env` |
-| login the smoke requires | `MENGER_EXPECT_LOGIN=off` (until ACCESS-24) | `MENGER_EXPECT_LOGIN=required` |
+| login the smoke requires | `MENGER_EXPECT_LOGIN=required` (since ACCESS-47, 2026-10-17) | `MENGER_EXPECT_LOGIN=required` |
 
 ## Settings (ACCESS-27)
 
@@ -336,10 +336,24 @@ where its work runs:
   fails a run.
 - **Where.** `MENGER_DEPLOY_TRACKER_PORT` (4455, prod's tracker — test's
   deploys are recorded there too), `MENGER_DEPLOY_TRACKER_HOST`,
-  `MENGER_DEPLOY_TRACKER_TOKEN` (a key holding `deployer` when the tracker
-  requires login).
+  `MENGER_DEPLOY_TRACKER_TOKEN` (a token, through synapse — argv; prefer the key).
+- **Signed in as the pipeline's key** (ACCESS-47; prod requires login).
+  Where `MENGER_DEPLOY_KEY_FILE` (default `~/.plexus/keys/pipeline.key`,
+  `synapse _key new pipeline --store file`; `none`: no key) is a file, every
+  record goes over the socket — `deploy/record --url
+  ws://127.0.0.1:$MENGER_DEPLOY_TRACKER_PORT --agent pipeline`, whose
+  `deploy/menger-call.mjs` reads the seed from the file (0600, or it is
+  refused) and signs a key proof; the seed is in no environment and no argv.
+  The key holds `viewer` on `*` and `deployer` on `MENGER` on prod (the
+  operator granted them at the switch; test's database is prod's copy, so
+  test has them from its next `deploy test` / `sync test`). A gate's refusal
+  (the key not granted, or not admitted) is the tracker's setup, not the
+  record's: the record waits in the outbox, said, and is never moved to
+  `refused/`. No key file: synapse, anonymous, as before.
 - **`status`** shows each environment's last record sent (`sent/<env>.json`)
-  and how many wait in the outbox.
+  and how many wait in the outbox, and reads `tickets.health` signed in as
+  the pipeline's key (ACCESS-47) — `health    no answer on :4450 (forbidden)`
+  names a gate's refusal (the key not granted there yet).
 - **`backfill`** replays `deployments.log` (`deploy/record --from
   pipeline-log`, each with its commits from git) through the outbox.
   Idempotent: run it again and menger answers each record `duplicate`.

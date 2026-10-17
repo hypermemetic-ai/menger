@@ -37,6 +37,10 @@
 # longer than a bounded send. Where:
 #   MENGER_DEPLOY_TRACKER_PORT (4455) · MENGER_DEPLOY_TRACKER_HOST · MENGER_DEPLOY_TRACKER_TOKEN
 #   MENGER_DEPLOY_OUTBOX (~/.local/share/menger-deploy/outbox) · MENGER_DEPLOY_RECORD_TIMEOUT (10 s a send)
+#   MENGER_DEPLOY_KEY_FILE (~/.plexus/keys/pipeline.key; `none`: no key) — ACCESS-47:
+#   the pipeline's own key; where the file is, records go over the socket
+#   signed in as it (deploy/menger-call.mjs reads the file — the seed is never
+#   in an environment or an argv) and `status` reads health as it
 set -euo pipefail
 
 # ── where things are ────────────────────────────────────────────────────────
@@ -55,6 +59,10 @@ RECORD=$REPO/deploy/record
 TRACKER_PORT=${MENGER_DEPLOY_TRACKER_PORT:-4455}
 TRACKER_HOST=${MENGER_DEPLOY_TRACKER_HOST:-}
 TRACKER_TOKEN=${MENGER_DEPLOY_TRACKER_TOKEN:-}
+# ACCESS-47: prod behind login — the pipeline signs in with its key, a file.
+DEPLOY_KEY_FILE=${MENGER_DEPLOY_KEY_FILE:-$HOME/.plexus/keys/pipeline.key}
+[[ $DEPLOY_KEY_FILE == none || ! -f $DEPLOY_KEY_FILE ]] && DEPLOY_KEY_FILE=""
+CALL_JS=$REPO/deploy/menger-call.mjs
 OUTBOX=${MENGER_DEPLOY_OUTBOX:-$HOME_DIR/outbox}
 SENT=$HOME_DIR/sent
 SEND_TIMEOUT=${MENGER_DEPLOY_RECORD_TIMEOUT:-10}
@@ -193,14 +201,27 @@ flush_outbox() {
   local lock f out rc sent=0 dup=0 refused=0 left
   exec {lock}>>"$OUTBOX/.lock"
   flock -n "$lock" || { say "record: another run is sending the outbox"; return 0; }
-  local sargs=(--send --port "$TRACKER_PORT")
+  local sargs=(--send --port "$TRACKER_PORT") via=synapse kenv=()
   [[ -n $TRACKER_HOST ]] && sargs+=(--host "$TRACKER_HOST")
   [[ -n $TRACKER_TOKEN ]] && sargs+=(--token "$TRACKER_TOKEN")
+  # ACCESS-47: with the pipeline's key (and no token given), over the socket
+  # signed in as it; the seed stays in its file, read by menger-call.
+  if [[ -n $DEPLOY_KEY_FILE && -z $TRACKER_TOKEN ]]; then
+    via=key sargs=(--send --url "ws://${TRACKER_HOST:-127.0.0.1}:$TRACKER_PORT" --agent pipeline)
+    kenv=(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE")
+  fi
   # A run's flush stops after a few sends' worth of time; backfill's does not.
   local until=$((SECONDS + 3 * SEND_TIMEOUT))
   for f in $(queued); do
     [[ ${QUIET:-} == 1 || $SECONDS -lt $until ]] || break
-    rc=0; out=$(timeout "$SEND_TIMEOUT" "$RECORD" --from json "$OUTBOX/$f" "${sargs[@]}" 2>&1) || rc=$?
+    rc=0; out=$("${kenv[@]}" timeout "$SEND_TIMEOUT" "$RECORD" --from json "$OUTBOX/$f" "${sargs[@]}" 2>&1) || rc=$?
+    # menger-call answers JSON lines, synapse its text: one reading of both
+    if [[ $via == key ]]; then
+      out=$(jq -Rr 'fromjson? // {line: .} | if .type == "deployed" then "type: deployed", "duplicate: \(.duplicate)"
+             elif .type == "error" and has("error_kind") then "gate: \(.error_kind): \(.message)"
+             elif .type == "error" then "type: error", "message: \(.message)" else (.line // empty) end' <<<"$out")
+      [[ $rc == 3 ]] && grep -q '^type: error' <<<"$out" && rc=0
+    fi
     if [[ $rc == 0 ]] && grep -q '^type: deployed' <<<"$out"; then
       local env how=sent; env=$(jq -r .environment "$OUTBOX/$f")
       if grep -q '^duplicate: true' <<<"$out"; then dup=$((dup + 1)); how="already kept"; else sent=$((sent + 1)); fi
@@ -213,6 +234,9 @@ flush_outbox() {
       say "record: menger refused $(what "$OUTBOX/$f"): $(sed -n 's/^message: //p; s/^record: //p' <<<"$out" | head -n 3 | tr '\n' ' ')— kept in $OUTBOX/refused/"
       mkdir -p "$OUTBOX/refused"; mv "$OUTBOX/$f" "$OUTBOX/refused/"
     else
+      # a gate's refusal (the key not signed in, or not granted) is the
+      # tracker's setup, not the record's: it waits, and is said once
+      grep -q '^gate: ' <<<"$out" && say "record: menger :$TRACKER_PORT refused the pipeline's key ($(sed -n 's/^gate: //p' <<<"$out" | head -n 1)) — grant it deployer on MENGER (deploy/README.md \"Recording deployments\")"
       break
     fi
   done
@@ -875,14 +899,26 @@ cmd_status() {
         "$(systemctl --user show -p ActiveEnterTimestamp --value "$u" 2>/dev/null)"
     done
     # a refused or silent health (test behind its login) is a line, never the end of status
-    local h; h=$(timeout 5 synapse -P "$MENGER_WS_PORT" menger tickets health 2>/dev/null | sed -n 's/^ *ticket_count: *//p' || true)
-    if [[ -n $h ]]; then printf '  health    %s tickets on :%s\n' "$h" "$MENGER_WS_PORT"
-    else printf '  health    no answer on :%s\n' "$MENGER_WS_PORT"; fi
+    local h; h=$(health_of "$MENGER_WS_PORT")
+    if [[ $h =~ ^[0-9]+$ ]]; then printf '  health    %s tickets on :%s%s\n' "$h" "$MENGER_WS_PORT" "${DEPLOY_KEY_FILE:+ (signed in as the pipeline key)}"
+    else printf '  health    no answer on :%s%s\n' "$MENGER_WS_PORT" "${h:+ ($h)}"; fi
     printf '  app       http://127.0.0.1:%s/\n' "$MENGER_SHELL_PORT"
     local f; f=$(foreign_holders "$env"); [[ -n $f ]] && printf '  outside   pids %s hold its ports outside systemd\n' "$f"
     record_status "$env"
   done
   edge_status
+}
+# ACCESS-47: tickets.health on PORT — its ticket count, or why not (a gate's
+# refusal, the key not granted there); signed in as the pipeline's key where
+# it has one, else anonymous through synapse (login off answers it).
+health_of() {
+  if [[ -n $DEPLOY_KEY_FILE ]]; then
+    env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE" timeout 8 node "$CALL_JS" \
+        --url "ws://127.0.0.1:$1" --agent pipeline --timeout 5 tickets.health --params '{}' 2>/dev/null \
+      | jq -rs 'map(select(.type == "health") | .ticket_count) + map(select(.type == "error") | .error_kind // .message) | .[0] // empty' 2>/dev/null || true
+  else
+    timeout 5 synapse -P "$1" menger tickets health 2>/dev/null | sed -n 's/^ *ticket_count: *//p' || true
+  fi
 }
 record_status() { # ENV → its last deployment record sent (DEPLOY-12), and what waits to be
   local f=$SENT/${1//\//_}.json n=0 q

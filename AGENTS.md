@@ -366,6 +366,30 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4460 -t "$TOKEN" menger session whoami
   ```
 
+  **Prod requires login** (ACCESS-47, since 2026-10-17), as test does:
+  WorkOS (staging client) for people, plexus-idp for the smoke account,
+  and `key` for agents (`ws://127.0.0.1:4455` and the LAN's
+  `ws://192.168.8.117:4455`); `--require-login`, `--no-rest` (REST :4457
+  is gone), `--public-url http://192.168.8.117:4456` — all in
+  `prod.local.env`. An anonymous socket reaches the anonymous view and
+  nothing else. This machine's agents sign in with Ed25519 keys kept by
+  synapse (`~/.plexus/keys/<name>.key`, 0600):
+
+  | key | principal | holds on prod |
+  |---|---|---|
+  | `builder` | `key:54a9677a…3b0d28` | `editor` on `*` — the machine's default agent; every `synapse -P 4455 menger …` line above runs as it |
+  | `pipeline` | `key:0ca8b6d1…227f60` | `viewer` on `*` + `deployer` on `MENGER` — `deploy/pipeline`'s records and status (deploy/README.md "Recording deployments") |
+  | `operator` | `key:ba720a3d…3974b8e` | `--admin` (in `MENGER_ADMINS`, with the owner's WorkOS principal) — grants and break-glass, by hand only |
+
+  **Exit 77 means sign in**, not a dead server: once per machine (and
+  after `~/.plexus/sessions` is lost), `synapse -P 4455 _login menger --key
+  builder --as builder`; synapse then re-mints the session from the key
+  after every restart or expiry by itself (≥ 3.14.10). Run `_login` for
+  another key with `--as` *and then* `_login` builder again last: an
+  agent login moves the default agent (SYNAPSE-16). A refused credential
+  shows as `Protocol handshake failed` (a 401). Never put a token or a
+  seed in argv or the environment. menger-skills `reaching` "Under login".
+
   **Under login, menger speaks the AUTH protocol** (AUTH-7): every method
   is its own grant, `viewer` / `editor` are explicit grant lists declared
   with `roles(...)` on each activation (`admin` holds all), and plexus-core's

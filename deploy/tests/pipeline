@@ -27,7 +27,7 @@ has()  { [[ $2 == *"$3"* ]] && ok || bad "$1: wanted '$3' in: $2"; }
 
 # ── the throwaway root ──────────────────────────────────────────────────────
 export HOME=$SCRATCH/home
-unset MENGER_DEPLOY_HOME MENGER_DEPLOY_OUTBOX MENGER_DEPLOY_TRACKER_HOST MENGER_DEPLOY_TRACKER_TOKEN DEPLOY_SMOKE_FAIL SMOKE_DRILLED
+unset MENGER_DEPLOY_HOME MENGER_DEPLOY_OUTBOX MENGER_DEPLOY_TRACKER_HOST MENGER_DEPLOY_TRACKER_TOKEN DEPLOY_SMOKE_FAIL SMOKE_DRILLED MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE MENGER_CALL
 export MENGER_DEPLOY_TRACKER_PORT=4769
 # Belt and braces: even a real systemctl --user would find no bus.
 export XDG_RUNTIME_DIR=$SCRATCH/no-runtime DBUS_SESSION_BUS_ADDRESS=unix:path=$SCRATCH/no-bus
@@ -49,10 +49,23 @@ for t in ss npm sqlite3; do stub $t 'exit 0'; done
 # smoke account in (its form read from stdin) and serves the login page. Both
 # keep their argv in $STUB_ARGV, and curl its stdin in $STUB_STDIN, so a
 # check can say no secret rode in argv.
+# ACCESS-47: and deploy/menger-call.mjs as the tracker under login answers
+# the pipeline's key (STUB_TRACKER: gate — the key refused; refuse — in band),
+# keeping the key's file and any key in the environment in $STUB_ARGV.
 stub node 'echo "node $*" >>"$STUB_ARGV"
 case " $* " in
   *smoke-mode.mjs*) echo "login: ${STUB_MODE:-off}" ;;
   *smoke-health.mjs*" - "*) read -r t; [[ -n $t ]] && echo "ticket_count: 3" ;;
+  *menger-call.mjs*)
+    echo "keyfile=${MENGER_DEPLOY_KEY_FILE:-} key=${MENGER_DEPLOY_KEY:-}" >>"$STUB_ARGV"
+    while [[ $# -gt 0 ]]; do [[ $1 == --params ]] && rec=$2; shift; done
+    [[ ${STUB_TRACKER:-up} == gate ]] && { echo "{\"code\":\"-32003\",\"error_kind\":\"forbidden\",\"message\":\"needs deployments.record\",\"type\":\"error\"}"; exit 3; }
+    case " $* " in *" tickets.health "*) ;; esac
+    if [[ $rec == "{}" ]]; then echo "{\"ticket_count\":3,\"type\":\"health\"}"; exit 0; fi
+    [[ ${STUB_TRACKER:-up} == refuse ]] && { echo "{\"message\":\"no shortcode MENGER\",\"type\":\"error\"}"; exit 3; }
+    key=$(jq -c "[.project, .environment, .state, .revision, (.source.run // .at)]" <<<"$rec")
+    grep -qxF -- "$key" "$STUB_KEYS" 2>/dev/null && dup=true || { dup=false; echo "$key" >>"$STUB_KEYS"; echo "$rec" >>"$STUB_SENT"; }
+    echo "{\"type\":\"deployed\",\"deployment\":{\"id\":1},\"duplicate\":$dup}" ;;
 esac; exit 0'
 stub curl '[[ " $* " == *"Host: evil.example"* ]] && { printf %s "${STUB_HOST_CODE:-421}"; exit 0; }
 echo "curl $*" >>"$STUB_ARGV"
@@ -292,6 +305,37 @@ run status
 out=$(<"$SCRATCH/out")
 has "status: the edge's pin" "$out" "landing   $S2"
 has "status: the edge's last record" "$out" "record    failed $S1"
+
+# ── ACCESS-47: under login the pipeline signs in with its key, a file ─────
+K=$HOME/.plexus/keys/pipeline.key; mkdir -p "${K%/*}"
+( umask 077; echo "seed-$STUB_SECRET" >"$K" )
+: >"$STUB_ARGV"; m=$(mark); MENGER_DEPLOY_KEY=from-env run sync test
+same "the key: sync exits 0" "$code" 0
+same "the key: started, succeeded sent" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
+has "the key: over the socket, as the pipeline" "$(<"$STUB_ARGV")" "--url ws://127.0.0.1:4769 --agent pipeline deployments.record"
+has "the key: menger-call reads its file, no key in its environment" "$(<"$STUB_ARGV")" "keyfile=$K key="$'\n'
+[[ $(<"$STUB_ARGV") != *"seed-$STUB_SECRET"* ]] && ok || bad "the pipeline's key rode in argv"
+has "the key: said as sent" "$err" "record: test succeeded $S1 → menger :4769 (sent)"
+run status
+has "status: health signed in as the pipeline key" "$(<"$SCRATCH/out")" "health    3 tickets on :1 (signed in as the pipeline key)"
+STUB_TRACKER=gate run status
+has "status: the gate's refusal named" "$(<"$SCRATCH/out")" "health    no answer on :1 (forbidden)"
+# the key refused at the gate (not yet granted): the records wait, said; never refused/
+nref=$(ls "$OUT/refused" | grep -c '\.json$')
+m=$(mark); STUB_TRACKER=gate run sync test
+same "the key refused: sync exits 0" "$code" 0
+same "the key refused: two wait in the outbox" "$(ls "$OUT" | grep -c '\.json$')" 2
+same "the key refused: none refused" "$(ls "$OUT/refused" | grep -c '\.json$')" "$nref"
+has "the key refused: said" "$err" "refused the pipeline's key (forbidden: needs deployments.record)"
+m=$(mark); run sync test
+same "granted: the outbox first, then its own" "$(since "$m" '.state' | paste -sd' ')" '"started" "succeeded" "started" "succeeded"'
+STUB_TRACKER=refuse run sync test
+same "in band refused under the key: kept aside" "$(ls "$OUT/refused" | grep -c '\.json$')" "$((nref + 2))"
+has "in band refused under the key: said" "$err" "menger refused test started $S1: no shortcode MENGER"
+: >"$STUB_ARGV"; m=$(mark); MENGER_DEPLOY_KEY_FILE=none run sync test
+same "no key (none): synapse, as before" "$(since "$m" .state)" '"started" "succeeded"'
+[[ $(<"$STUB_ARGV") != *menger-call.mjs* ]] && ok || bad "MENGER_DEPLOY_KEY_FILE=none still used the key"
+mv "$K" "$K.off"
 
 # ── ACCESS-25: the smoke asks every port for evil.example ──────────────────
 run smoke test

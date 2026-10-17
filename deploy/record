@@ -39,7 +39,8 @@
 # --send --url URL [--agent ID] [--header 'Name: value']…        (DEPLOY-14: no synapse)
 #                                   ws(s)://HOST[:PORT] — the WebSocket, through
 #                                   deploy/menger-call.mjs (Node ≥ 18, nothing else); a
-#                                   deploy key in $MENGER_DEPLOY_KEY (an Ed25519 seed, base64)
+#                                   deploy key in $MENGER_DEPLOY_KEY (an Ed25519 seed, base64),
+#                                   or in the 0600 file $MENGER_DEPLOY_KEY_FILE names (ACCESS-47),
 #                                   signs in as key:<hex>, agent ID (default ci)
 #                                   http(s)://HOST[:PORT] — the REST bridge, through curl: a
 #                                   menger without login only (REST carries no identity)
@@ -109,7 +110,7 @@ done
 case $url in
   ""|ws://*|wss://*) ;;
   http://*|https://*)
-    [[ -z ${MENGER_DEPLOY_KEY:-} ]] || die "--url $url is the REST bridge, which carries no identity: a deploy key signs in over the WebSocket — --url ws(s)://…" ;;
+    [[ -z ${MENGER_DEPLOY_KEY:-}${MENGER_DEPLOY_KEY_FILE:-} ]] || die "--url $url is the REST bridge, which carries no identity: a deploy key signs in over the WebSocket — --url ws(s)://…" ;;
   *) die "--url $url: ws:// or wss:// (the WebSocket), http:// or https:// (the REST bridge)" ;;
 esac
 read_input() { if [[ -n $input ]]; then [[ -r $input ]] || die "cannot read $input"; cat -- "$input"; else cat; fi; }
