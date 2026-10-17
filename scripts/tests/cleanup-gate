@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2015,SC2181,SC2143  # `check && ok || bad` is the house assertion (deploy/tests)
+# RUN-21: scripts/cleanup-gate.sh on a throwaway root — a workspace with a
+# main checkout and its worktrees (merged, unmerged, dirty, an agent's), gate
+# scratch dirs, cargo targets shared and not, menger's data, scratch DBs, a
+# session's scratch, symlinks out, a file held open. Every shape removed, every
+# refusal refused, and the dry run removes nothing. The root lives under
+# /tmp/claude-UID/run21/ and is removed at the end by the script itself — the
+# test holds no `rm -r`. `cargo test` runs it (tests/deploy_record.rs).
+#
+#   scripts/tests/cleanup-gate     exit 1 if any check failed
+set -uo pipefail
+
+SELF=$(readlink -f "$0"); HERE=$(dirname "$SELF")
+CG=$(dirname "$HERE")/cleanup-gate.sh
+PARENT=/tmp/claude-$(id -u)/run21
+mkdir -p "$PARENT"
+T=$(mktemp -d "$PARENT/t.XXXXXX")
+cd / || exit 1
+pass=0 fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); printf 'FAIL %s\n' "$*" >&2; }
+has() { [[ $2 == *"$3"* ]] && ok || bad "$1: wanted '$3' in: $2"; }
+hasnt() { [[ $2 != *"$3"* ]] && ok || bad "$1: did not want '$3' in: $2"; }
+there() { [[ -e $2 || -L $2 ]] && ok || bad "$1: $2 is gone"; }
+gone()  { [[ ! -e $2 && ! -L $2 ]] && ok || bad "$1: $2 is still there"; }
+# cg NAME CODE ARGS… — the script on the throwaway root exits CODE; its output in $out
+cg() { local name=$1 want=$2; shift 2
+  out=$(CLEANUP_GATE_ROOT=$T "$CG" "$@" 2>&1); local got=$?
+  [[ $got == "$want" ]] && ok || bad "$name: exit $got, wanted $want — $out"; }
+
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
+  GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+unset CLEANUP_GATE_LOG
+
+# ── the throwaway machine ───────────────────────────────────────────────────
+H=$T/home WS=$T/home/dev/controlflow/hypermemetic CT=$T/home/.cache/cargo-target
+TM=$T/tmp SCR=$T/tmp/claude-$(id -u) LOG=$T/home/.local/state/menger/cleanup-gate.log
+mkdir -p "$WS/plexus-core" "$CT"/{menger,plexus-core,gate-a,gate-b}/debug "$H/.local/share/menger" \
+  "$SCR"/{sess1,sess2,sess3} "$TM/theme-sweep" "$WS/.logs-only" "$WS/.has-git/sub/.git" \
+  "$WS/.menger-publish" "$T/elsewhere"
+M=$WS/menger
+git init -q -b main "$M"; echo a >"$M/f"; printf 'target/\n' >"$M/.gitignore"
+git -C "$M" add f .gitignore; git -C "$M" commit -qm one
+git -C "$M" worktree add -q -b gate-a "$WS/.gate-a"                 # merged: its branch goes
+git -C "$M" worktree add -q -b gate-b "$WS/.gate-b"                 # unmerged: its branch stays
+echo b >"$WS/.gate-b/f"; git -C "$WS/.gate-b" commit -qam two
+git -C "$M" worktree add -q -b gate-dirty "$WS/.gate-dirty"; echo x >"$WS/.gate-dirty/untracked"
+git -C "$M" worktree add -q -b agent-x "$M/.claude/worktrees/agent-x"
+git -C "$M" worktree add -q --detach "$T/elsewhere/wt"              # a worktree outside the workspace
+mkdir -p "$WS/.gate-a/target/debug"; echo build >"$WS/.gate-a/target/debug/x"   # ignored: no refusal
+for f in fe.log mg.log; do echo log >"$WS/.logs-only/$f"; done
+echo 1 >"$CT/gate-a/debug/obj"; echo log >"$CT/a12-gate.log"; echo 1 >"$CT/menger/debug/obj"
+echo db >"$H/.local/share/menger/tickets.db"
+for s in .db .db-shm .db-wal .log; do echo x >"$TM/menger-gate-a$s"; done
+echo x >"$TM/menger-look4-sweep.db"; echo x >"$TM/other.db"
+echo s >"$SCR/sess1/shot.png"; echo s >"$SCR/sess2/held"; echo s >"$SCR/sess3/f"; echo s >"$TM/theme-sweep/a.png"
+ln -s "$M" "$SCR/to-main"; ln -s "$H" "$SCR/to-home"; ln -s "$T/elsewhere" "$SCR/to-elsewhere"
+ln -s "$CT/gate-b" "$SCR/to-target"
+
+# ── the root is a throwaway, or nothing runs ───────────────────────────────
+out=$(CLEANUP_GATE_ROOT=/tmp "$CG" gate-a 2>&1); [[ $? == 1 ]] && ok || bad "a root of /tmp is refused"
+has "a root of /tmp" "$out" "two levels below /tmp"
+out=$(CLEANUP_GATE_ROOT=$H "$CG" gate-a 2>&1); [[ $? == 0 ]] && ok || bad "a deep root is taken: $out"
+cg "no arguments" 1
+cg "an unknown flag" 1 --force gate-a
+cg "--list --yes" 1 --list --yes
+has "--list --yes" "$out" "never removes"
+
+# ── the dry run is the default and removes nothing ─────────────────────────
+cg "dry run gate-a" 0 gate-a
+has "dry run: the worktree" "$out" "would remove  worktree   $WS/.gate-a"
+has "dry run: its branch" "$out" "branch gate-a (merged)"
+has "dry run: the target" "$out" "target     $CT/gate-a"
+has "dry run: the db" "$out" "scratch-db $TM/menger-gate-a.db-wal"
+has "dry run: the log" "$out" "$TM/menger-gate-a.log"
+has "dry run: the space" "$out" "would free"
+for p in "$WS/.gate-a" "$CT/gate-a" "$TM/menger-gate-a.db" "$TM/menger-gate-a.log"; do there "dry run keeps" "$p"; done
+git -C "$M" rev-parse -q --verify gate-a >/dev/null && ok || bad "dry run kept branch gate-a"
+[[ ! -e $LOG ]] && ok || bad "a dry run writes no log"
+cg "--dry-run after --yes wins" 0 --yes --dry-run gate-a; there "--dry-run wins" "$WS/.gate-a"
+
+# ── --list sees every candidate and judges each ────────────────────────────
+cg "--list" 2 --list
+for p in "$WS/.gate-a" "$WS/.gate-b" "$M/.claude/worktrees/agent-x" "$WS/.logs-only" "$CT/gate-a" "$CT/a12-gate.log" \
+         "$TM/menger-look4-sweep.db" "$SCR/sess1" "$TM/theme-sweep"; do has "--list: $p" "$out" "would remove"; has "--list: $p" "$out" "$p"; done
+has "--list: the shared target refused" "$out" "refused  $CT/menger — a shared cargo target"
+has "--list: the publish stage refused" "$out" ".menger-publish — scripts/publish.sh's stage"
+has "--list: the dirty worktree refused" "$out" ".gate-dirty — a worktree with uncommitted"
+has "--list: the outside worktree refused" "$out" "a git worktree outside"
+there "--list removes nothing" "$WS/.gate-a"; there "--list removes nothing" "$SCR/sess1"
+
+# ── --yes removes, logs, and frees ─────────────────────────────────────────
+cg "remove gate-a" 0 --yes gate-a
+has "removed: the worktree" "$out" "removed  worktree   $WS/.gate-a"
+has "removed: the branch" "$out" "branch gate-a deleted"
+has "removed: freed" "$out" "freed"
+for p in "$WS/.gate-a" "$CT/gate-a" "$TM/menger-gate-a.db" "$TM/menger-gate-a.db-shm" "$TM/menger-gate-a.db-wal" "$TM/menger-gate-a.log"; do gone "gate-a" "$p"; done
+git -C "$M" rev-parse -q --verify gate-a >/dev/null && bad "branch gate-a still there" || ok
+[[ -z $(git -C "$M" worktree list --porcelain | grep "gate-a") ]] && ok || bad "git still knows .gate-a"
+has "the log" "$(<"$LOG")" "removed worktree $WS/.gate-a"
+has "the log" "$(<"$LOG")" "removed target $CT/gate-a"
+there "the main checkout stays" "$M/f"
+cg "gate-a again: nothing" 0 --yes gate-a; has "nothing left" "$out" "nothing  left by gate-a"
+
+cg "gate-b: unmerged" 0 --yes gate-b
+has "gate-b: the branch kept" "$out" "branch gate-b kept"
+gone "gate-b" "$WS/.gate-b"; gone "gate-b" "$CT/gate-b"
+git -C "$M" rev-parse -q --verify gate-b >/dev/null && ok || bad "unmerged branch gate-b was deleted"
+
+cg "an agent's worktree by name" 0 --yes agent-x; gone "agent-x" "$M/.claude/worktrees/agent-x"
+cg "gate scratch by path" 0 --yes --path "$WS/.logs-only"; gone "ws-scratch" "$WS/.logs-only"
+cg "a cargo-target log by path" 0 --yes --path "$CT/a12-gate.log"; gone "target file" "$CT/a12-gate.log"
+cg "a scratch db by path" 0 --yes --path "$TM/menger-look4-sweep.db"; gone "scratch-db" "$TM/menger-look4-sweep.db"
+cg "a session's scratch" 0 --yes --path "$SCR/sess1"; gone "session" "$SCR/sess1"
+cg "theme-sweep" 0 --yes --path "$TM/theme-sweep"; gone "sweep" "$TM/theme-sweep"
+cg "a symlink to a target: the target goes" 0 --yes --path "$SCR/to-target"
+has "symlink shown resolved" "$out" "$SCR/to-target → "
+cg "a relative path" 0 --path "tmp/claude-$(id -u)/sess3"  # PWD is /: names the real /tmp/…, not the root's
+has "a relative path is absolute from PWD" "$out" "/tmp/claude-$(id -u)/sess3"
+
+# ── refusals: each said, nothing touched, exit 2 ───────────────────────────
+refused() { local name=$1 why=$2; shift 2; cg "$name" 2 --yes "$@"; has "$name" "$out" "refused"; has "$name" "$out" "$why"; }
+refused "/" "a root" --path /
+refused "\$HOME" "a root" --path "$H"
+refused "the workspace" "a root" --path "$WS"
+refused "the target root" "a root" --path "$CT"
+refused "the session root" "a root" --path "$SCR"
+refused "/tmp itself" "a root" --path "$TM"
+refused "menger's data" "menger's data" --path "$H/.local/share/menger"
+refused "menger's db" "menger's data" --path "$H/.local/share/menger/tickets.db"
+refused "a main checkout" "main checkout" --path "$M"
+refused "a main checkout by name" "main checkout" menger
+has "by name, the shared target too" "$out" "$CT/menger — a shared cargo target"
+refused "a repo-named target" "shared cargo target" --path "$CT/plexus-core"
+refused "a dirty worktree" "uncommitted or untracked" --path "$WS/.gate-dirty"
+refused "a worktree outside the workspace" "outside" --path "$T/elsewhere/wt"
+refused "scratch holding a checkout" "holds a git checkout" --path "$WS/.has-git"
+refused "the publish stage" "publish.sh" --path "$WS/.menger-publish"
+refused "a db of no known shape" "not a leftover shape" --path "$TM/other.db"
+refused "a source dir" "not a leftover shape" --path "$WS/plexus-core"
+refused "named with .." "named with .." --path "$CT/../cargo-target/menger"
+refused "a name with .." "not a gate name" ../x
+refused "a symlink to the main checkout" "main checkout" --path "$SCR/to-main"
+refused "a symlink to \$HOME" "a root" --path "$SCR/to-home"
+refused "a symlink out of every root" "not a leftover shape" --path "$SCR/to-elsewhere"
+for p in "$M/f" "$H/.local/share/menger/tickets.db" "$CT/menger/debug/obj" "$CT/plexus-core" "$WS/.gate-dirty/untracked" \
+         "$T/elsewhere/wt" "$WS/.has-git/sub" "$WS/.menger-publish" "$TM/other.db" "$WS/plexus-core" "$SCR/to-main"; do
+  there "refusals touch nothing" "$p"; done
+has "refusals are logged under --yes" "$(<"$LOG")" "refused $M"
+
+# in use: a file held open, a directory something works in, the caller's own directory
+# shellcheck disable=SC2217  # the point: sleep holds the file open
+sleep 60 <"$SCR/sess2/held" & held=$!
+(cd "$WS/.gate-dirty" && exec sleep 60) & inside=$!
+sleep 0.3
+refused "a file held open" "in use by pid $held" --path "$SCR/sess2"
+there "held" "$SCR/sess2/held"
+git -C "$WS/.gate-dirty" clean -qf
+refused "a worktree something works in" "in use by pid $inside" --path "$WS/.gate-dirty"
+kill "$held" "$inside" 2>/dev/null; wait "$held" "$inside" 2>/dev/null
+cg "let go, it goes" 0 --yes --path "$SCR/sess2"; gone "let go" "$SCR/sess2"
+out=$(cd "$SCR/sess3" && CLEANUP_GATE_ROOT=$T "$CG" --yes --path "$SCR/sess3" 2>&1); [[ $? == 2 ]] && ok || bad "inside: $out"
+has "the caller's own directory" "$out" "you are inside it"; there "inside" "$SCR/sess3/f"
+hasnt "no hand-written rm -r in this test" "$(grep -v '^#' "$SELF" | grep -v hasnt)" "rm -r"
+
+# ── done: the root goes through the script itself (a session's scratch) ───
+printf 'cleanup-gate: %d passed, %d failed\n' "$pass" "$fail"
+CLEANUP_GATE_LOG=/dev/null "$CG" --yes --path "$T" >/dev/null || printf 'cleanup-gate: the test root %s was not removed\n' "$T" >&2
+[[ $fail == 0 ]]

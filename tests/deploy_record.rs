@@ -24,6 +24,25 @@ fn deploy_record_adapter() {
     assert!(stdout.contains(" 0 failed"), "{stdout}");
 }
 
+/// RUN-21: `scripts/cleanup-gate.sh` (`scripts/tests/cleanup-gate`) — every
+/// leftover shape removed and every refusal refused, on a throwaway root under
+/// `/tmp/claude-UID/run21/` that the script itself removes at the end.
+#[test]
+fn cleanup_gate_script() {
+    let run = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/tests/cleanup-gate");
+    let out = Command::new("bash")
+        .arg(run)
+        .output()
+        .expect("scripts/tests/cleanup-gate needs bash on PATH");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "scripts/tests/cleanup-gate failed:\n{stdout}\n{stderr}"
+    );
+    assert!(stdout.contains(" 0 failed"), "{stdout}");
+}
+
 /// DEPLOY-12: `deploy/pipeline`'s deployment records (`deploy/tests/pipeline`)
 /// — deploy test, sync, promote with the drill's rollback, rollback, a
 /// tracker down or hung (the outbox), a refusal, a run that dies after
