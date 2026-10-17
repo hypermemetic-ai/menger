@@ -34,6 +34,14 @@
 #                                           ghcr.io/hypermemetic-ai/menger:<release> + :latest, pushed.
 #                                           Prints image=… and release=… (and appends them to
 #                                           $HF_OUTPUTS when set)
+#   deploy/pipeline local --image IMAGE     RUN-25: IMAGE here as the container menger-app-local
+#                                           (127.0.0.1:4470 WebSocket, :4471 shell, volume
+#                                           menger-app-local-data); replaced when run again; waits
+#                                           for health; prints url=… (and to $HF_OUTPUTS)
+#   deploy/pipeline remote test --image IMAGE
+#   deploy/pipeline remote prod             RUN-25: app-test.menger.sh / app.menger.sh through
+#                                           hypermemetic-infra (app.yml; promote.yml for prod) —
+#                                           refused, changing nothing, until deploy/app.yml (RUN-11)
 #
 # DEPLOY-12: deploy test, sync, promote and rollback each tell menger what they
 # did — a deployment record (deploy/record → deployments.record): `started`
@@ -851,6 +859,128 @@ cmd_image() {
   printf '%s\n' "$out"
 }
 
+# ── the image, deployed (RUN-25) ────────────────────────────────────────────
+# The menger-app pipeline's deploy stages (.hyperforge/pipelines.toml, run by
+# hyperforge's ci): each a subcommand here, so the same step runs from a shell.
+#
+# `local --image IMAGE` runs IMAGE on this machine as one container,
+# menger-app-local, with its own volume and its own ports (127.0.0.1:4470 the
+# WebSocket, :4471 the shell — never 4450–4462, prod's and test's and a dev
+# server's). Until RUN-9 puts the socket behind the shell's origin, the page
+# dials the WebSocket on the port number it was given, so each port is the
+# same number inside the container and out. Triggered again, the container is
+# replaced and the volume kept. It waits for tickets.health over synapse and
+# the page stamped with the WebSocket's port, then answers url=… (and appends
+# it to $HF_OUTPUTS when set).
+LOCAL_CONTAINER=${MENGER_LOCAL_CONTAINER:-menger-app-local}
+LOCAL_VOLUME=${MENGER_LOCAL_VOLUME:-menger-app-local-data}
+LOCAL_WS_PORT=${MENGER_LOCAL_WS_PORT:-4470}
+LOCAL_SHELL_PORT=${MENGER_LOCAL_SHELL_PORT:-4471}
+LOCAL_WAIT=${MENGER_LOCAL_WAIT:-90} # seconds for the container to answer
+hf_output() { # KEY=VALUE … → stdout, and $HF_OUTPUTS when set
+  local l; for l in "$@"; do
+    [[ -n ${HF_OUTPUTS:-} ]] && printf '%s\n' "$l" >>"$HF_OUTPUTS"
+    printf '%s\n' "$l"
+  done
+}
+image_arg() { # the args of local/remote → IMAGE (--image, else $IMAGE), or empty
+  local img=${IMAGE:-}
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --image) [[ $# -ge 2 ]] || die "--image needs a value"; img=$2; shift ;;
+      --image=*) img=${1#--image=} ;;
+      *) die "unknown argument '$1'" ;;
+    esac; shift
+  done
+  echo "$img"
+}
+cmd_local() {
+  local img; img=$(image_arg "$@")
+  [[ -n $img ]] || die "local needs an image: deploy/pipeline local --image menger:<release> (deploy/pipeline image makes one)"
+  local p
+  for p in "$LOCAL_WS_PORT" "$LOCAL_SHELL_PORT"; do
+    [[ $p =~ ^[0-9]+$ ]] || die "port '$p' is not a number"
+    (( p >= 4450 && p <= 4462 )) && die "port $p is prod's, test's or a dev server's (4450–4462) — the local app keeps to its own"
+  done
+  [[ $LOCAL_WS_PORT != "$LOCAL_SHELL_PORT" ]] || die "the WebSocket and the shell need two ports"
+  need docker; need synapse; need curl
+  docker image inspect "$img" >/dev/null 2>&1 || die "no image '$img' in this machine's Docker — run: deploy/pipeline image"
+  local rel; rel=$(docker image inspect -f '{{index .Config.Labels "sh.menger.release"}}' "$img" 2>/dev/null || true)
+  [[ -n $rel && $rel != "<no value>" ]] || rel=${img##*:}
+  step "local: $img as $LOCAL_CONTAINER on 127.0.0.1:$LOCAL_WS_PORT (WebSocket) and :$LOCAL_SHELL_PORT (shell)"
+  if docker container inspect "$LOCAL_CONTAINER" >/dev/null 2>&1; then
+    say "local: replacing the running $LOCAL_CONTAINER ($(docker container inspect -f '{{.Config.Image}}' "$LOCAL_CONTAINER" 2>/dev/null)); its volume $LOCAL_VOLUME stays"
+    docker rm -f "$LOCAL_CONTAINER" >/dev/null || die "could not remove the old $LOCAL_CONTAINER"
+  fi
+  docker volume inspect "$LOCAL_VOLUME" >/dev/null 2>&1 || docker volume create "$LOCAL_VOLUME" >/dev/null \
+    || die "could not create the volume $LOCAL_VOLUME"
+  docker run -d --name "$LOCAL_CONTAINER" --restart unless-stopped \
+      --label sh.menger.deploy=local --label "sh.menger.release=$rel" \
+      -v "$LOCAL_VOLUME:/data" \
+      -e "MENGER_WS_PORT=$LOCAL_WS_PORT" -e "MENGER_SHELL_PORT=$LOCAL_SHELL_PORT" \
+      -p "127.0.0.1:$LOCAL_WS_PORT:$LOCAL_WS_PORT" -p "127.0.0.1:$LOCAL_SHELL_PORT:$LOCAL_SHELL_PORT" \
+      "$img" >/dev/null \
+    || { record app-local run "$rel" "docker run failed"; die "docker run $img failed (is :$LOCAL_WS_PORT or :$LOCAL_SHELL_PORT held by something else?)"; }
+  local h="" page="" until=$((SECONDS + LOCAL_WAIT))
+  while (( SECONDS < until )); do
+    [[ -n $h ]] || h=$(timeout 5 synapse -P "$LOCAL_WS_PORT" menger tickets health 2>/dev/null | sed -n 's/^ *ticket_count: *//p' || true)
+    # grep reads the whole page (DEPLOY-6: no -q under pipefail)
+    [[ -n $page ]] || page=$(curl -fsS -m 5 "http://127.0.0.1:$LOCAL_SHELL_PORT/" 2>/dev/null \
+                              | grep -o "name=\"menger-ws-port\" content=\"$LOCAL_WS_PORT\"" || true)
+    [[ -n $h && -n $page ]] && break
+    docker container inspect -f '{{.State.Running}}' "$LOCAL_CONTAINER" 2>/dev/null | grep true >/dev/null || break
+    sleep 0.5
+  done
+  if [[ -z $h || -z $page ]]; then
+    say "local: its log, the last lines:"
+    docker logs --tail 20 "$LOCAL_CONTAINER" 2>&1 | sed 's/^/  /' >&2 || true
+    record app-local run "$rel" "not healthy"
+    die "$LOCAL_CONTAINER did not answer in ${LOCAL_WAIT}s:${h:+ health ok}${h:- no tickets.health on :$LOCAL_WS_PORT};${page:+ page ok}${page:- no page stamped :$LOCAL_WS_PORT on :$LOCAL_SHELL_PORT} — the container is left for a look (docker logs $LOCAL_CONTAINER)"
+  fi
+  say "ok   tickets.health on :$LOCAL_WS_PORT — $h tickets"
+  say "ok   the app on :$LOCAL_SHELL_PORT, stamped with :$LOCAL_WS_PORT"
+  record app-local run "$rel" "ok $img"
+  hf_output "url=http://127.0.0.1:$LOCAL_SHELL_PORT/"
+}
+
+# `remote test|prod` — app-test.menger.sh and app.menger.sh, through
+# hypermemetic-infra's Plexus app role, driven by menger's own deploy/app.yml
+# (SCAFFOLD-12's contract; RUN-11 writes it). test: `bin/infra app.yml -e
+# env=test -e sha=<the image's commit>`; prod: `bin/infra promote.yml` only —
+# the image test runs and passed (infra's rule). Until deploy/app.yml exists
+# each refuses, naming RUN-11, before it touches anything.
+APP_YML=${MENGER_APP_YML:-$REPO/deploy/app.yml}
+cmd_remote() {
+  local env=${1:-}; shift || true
+  case $env in
+    test) local host=app-test.menger.sh url=${MENGER_APP_TEST_URL:-https://app-test.menger.sh/} ;;
+    prod) local host=app.menger.sh url=${MENGER_APP_URL:-https://app.menger.sh/} ;;
+    *) die "usage: deploy/pipeline remote test --image IMAGE | remote prod" ;;
+  esac
+  local img; img=$(image_arg "$@")
+  if [[ ! -f $APP_YML ]]; then
+    die "$host is not declared yet (RUN-11): menger has no deploy/app.yml for hypermemetic-infra to deploy — nothing was changed"
+  fi
+  [[ -x $INFRA/bin/infra ]] || die "no infra at $INFRA — MENGER_INFRA_DIR names a hypermemetic-infra checkout with bin/infra"
+  # infra mounts the app's checkout read-only: the main repository, not a worktree
+  local src; src=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")
+  if [[ $env == test ]]; then
+    [[ -n $img ]] || die "remote test needs an image: deploy/pipeline remote test --image menger:<release>"
+    local sha; sha=$(sha_of "${img##*:}")
+    [[ -n $sha ]] || die "'$img' names no release (menger:<release>, the release ending in its commit)"
+    step "remote test: $img → $host (bin/infra app.yml -e env=test -e sha=$sha)"
+    "$INFRA/bin/infra" app.yml -e "app_dir=$src" -e env=test -e "sha=$sha" >&2 \
+      || { record app-test run "${img##*:}" "infra failed"; die "infra did not deploy $img to $host"; }
+    record app-test run "${img##*:}" "ok $img"
+  else
+    step "remote prod: test's image → $host (bin/infra promote.yml)"
+    "$INFRA/bin/infra" promote.yml -e "app_dir=$src" >&2 \
+      || { record app-prod run - "infra failed"; die "infra did not promote to $host (it rolls prod back by itself)"; }
+    record app-prod run - ok
+  fi
+  hf_output "url=$url"
+}
+
 # ── status, releases, logs ──────────────────────────────────────────────────
 # ── the landing page (DEPLOY-17) ────────────────────────────────────────────
 # One command from a commit on main to menger.sh: landing/ exported at the
@@ -1049,5 +1179,7 @@ case $cmd in
   landing)  cmd_landing "$@" ;;
   media)    cmd_media "$@" ;;
   image)    cmd_image "$@" ;;
+  local)    cmd_local "$@" ;;
+  remote)   cmd_remote "$@" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -1,0 +1,52 @@
+# RUN-25: the menger-app pipeline, run by hyperforge's ci (HYPERFORGE-22) —
+# build the app's image from the newest TESTED release and store it, then
+# deploy it: local, remote test, remote prod, each its own trigger. Every
+# stage is a deploy/pipeline subcommand, so it runs from a shell the same way
+# (deploy/README.md "The menger-app pipeline (RUN-25)").
+#
+#   synapse -P 44104 lforge-v5 hyperforge ci add --path ~/dev/controlflow/hypermemetic/menger
+#   synapse -P 44104 lforge-v5 hyperforge ci menger-app start                          # build → run N
+#   synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage deploy-local
+#   synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage deploy-test   # RUN-11
+#   synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage deploy-prod   # RUN-11/13
+#
+# Each command puts ~/.local/bin (synapse, node) and the system's bin first on
+# PATH itself: a stage inherits hyperforge's environment (its unit's PATH),
+# and an env value here is taken literally, never expanded.
+
+[[pipeline]]
+name = "menger-app"
+# Where the image is kept: local (this machine's Docker, menger:<release>) or
+# ghcr (ghcr.io/hypermemetic-ai/menger:<release> + :latest, pushed).
+env = { IMAGE_STORE = "local" }
+
+[[pipeline.stage]]
+name = "build"
+trigger = "auto"
+run = 'PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH" deploy/pipeline image'
+outputs = ["image", "release"]
+timeout_minutes = 30
+
+[[pipeline.stage]]
+name = "deploy-local"
+needs = ["build"]
+trigger = "manual"
+run = 'PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH" deploy/pipeline local --image "$IMAGE"'
+outputs = ["url"]
+timeout_minutes = 10
+
+[[pipeline.stage]]
+name = "deploy-test"
+needs = ["build"]
+trigger = "manual"
+run = 'PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH" deploy/pipeline remote test --image "$IMAGE"'
+outputs = ["url"]
+timeout_minutes = 30
+
+[[pipeline.stage]]
+name = "deploy-prod"
+needs = ["deploy-test"]
+trigger = "manual"
+run = 'PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH" deploy/pipeline remote prod'
+outputs = ["url"]
+timeout_minutes = 30

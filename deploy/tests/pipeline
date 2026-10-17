@@ -73,13 +73,14 @@ case " $* " in
   *" -X POST "*) cat >>"$STUB_STDIN"; echo "{\"access_token\":\"tok-$STUB_SECRET\"}" ;;
   *redirect_url*) printf "http://127.0.0.1:2/login?next=%%2F" ;;
   */login" "*) echo "<h1>Sign in</h1>" ;;
-  *) echo "<meta name=\"menger-ws-port\" content=\"1\">" ;;
+  *) echo "<meta name=\"menger-ws-port\" content=\"${STUB_WS_PORT:-1}\">" ;;
 esac'
 # synapse: the smoke's reads answered; deployments.record kept in $SCRATCH/sent.ndjson
 # and answered as DEPLOY-11 does, or as STUB_TRACKER says (down, refuse, hang).
 stub synapse 'args=" $* "
+echo "synapse $*" >>"${STUB_SYNAPSE_ARGV:-/dev/null}"
 [[ $args == *" diagrams "* ]] && { echo "diagram_type: flowchart"; exit 0; }
-[[ $args == *" health "* ]] && { echo "ticket_count: 3"; exit 0; }
+[[ $args == *" health "* ]] && { [[ ${STUB_HEALTH:-up} == down ]] && exit 1; echo "ticket_count: 3"; exit 0; }
 case ${STUB_TRACKER:-up} in
   down) echo "Protocol handshake failed" >&2; exit 1 ;;
   hang) sleep 30; exit 1 ;;
@@ -516,6 +517,112 @@ same "image (ghcr): the token on stdin" "$(<"$STUB_DOCKER_STDIN")" "ghp-$STUB_SE
 [[ $(<"$STUB_DOCKER") != *"$STUB_SECRET"* ]] && ok || bad "image (ghcr): the token rode in docker's argv"
 MENGER_IMAGE_GHCR=ghcr.io/acme/m IMAGE_STORE=ghcr irun image "$I0"
 has "image (ghcr): the repository is configurable" "$(<"$SCRATCH/out")" "image=ghcr.io/acme/m:$I0"
+
+# ── RUN-25: local — the image as menger-app-local on 4470/4471 ─────────────
+# docker is a stand-in with state: a container and a volume exist once made
+# (files in $STUB_STATE), so a second run is seen replacing the first.
+export STUB_STATE=$SCRATCH/dstate STUB_SYNAPSE_ARGV=$SCRATCH/synapse.argv; mkdir -p "$STUB_STATE"
+stub docker 'echo "docker $*" >>"$STUB_DOCKER"
+case "$1 $2" in
+  "image inspect") [[ ${STUB_NOIMAGE:-} == 1 ]] && exit 1; [[ " $* " == *" -f "* ]] && echo "${STUB_LABEL:-<no value>}"; exit 0 ;;
+  "container inspect") [[ -f $STUB_STATE/container ]] || exit 1
+                       [[ " $* " == *Running* ]] && echo true; [[ " $* " == *Config.Image* ]] && cat "$STUB_STATE/container"; exit 0 ;;
+  "volume inspect") [[ -f $STUB_STATE/volume ]]; exit ;;
+  "volume create") touch "$STUB_STATE/volume" ;;
+  "rm -f") rm -f "$STUB_STATE/container" ;;
+  run\ *) [[ ${STUB_RUN_FAIL:-} == 1 ]] && exit 125; echo "${*: -1}" >"$STUB_STATE/container"; echo c0ffee ;;
+  logs\ *) echo "menger: a log line" ;;
+esac; exit 0'
+LI=menger:$I1
+lrun() { : >"$STUB_DOCKER"; : >"$STUB_SYNAPSE_ARGV"; : >"$HF"; HOME=$H3 STUB_WS_PORT=4470 MENGER_LOCAL_WAIT=2 HF_OUTPUTS=$HF run "$@"; }
+lrun local
+same "local, no image: exits 1" "$code" 1
+has "local, no image: said" "$err" "local needs an image: deploy/pipeline local --image menger:<release>"
+same "local, no image: docker never asked" "$(wc -l <"$STUB_DOCKER")" 0
+MENGER_LOCAL_WS_PORT=4455 lrun local --image "$LI"
+same "local on prod's port: exits 1" "$code" 1
+has "local on prod's port: said" "$err" "port 4455 is prod's, test's or a dev server's (4450–4462)"
+same "local on prod's port: docker never asked" "$(wc -l <"$STUB_DOCKER")" 0
+STUB_NOIMAGE=1 lrun local --image "$LI"
+same "local, no such image: exits 1" "$code" 1
+has "local, no such image: said" "$err" "no image '$LI' in this machine's Docker — run: deploy/pipeline image"
+[[ $(<"$STUB_DOCKER") != *"docker run"* ]] && ok || bad "local, no such image: ran something"
+# the first run: a volume made, a container started, health waited for
+STUB_LABEL=$I1 lrun local --image "$LI"
+same "local: exits 0" "$code" 0
+same "local: url= on stdout" "$(<"$SCRATCH/out")" "url=http://127.0.0.1:4471/"
+same "local: url= in \$HF_OUTPUTS" "$(<"$HF")" "url=http://127.0.0.1:4471/"
+has "local: the volume made" "$(<"$STUB_DOCKER")" "docker volume create menger-app-local-data"
+r=$(grep '^docker run' "$STUB_DOCKER")
+has "local: named menger-app-local" "$r" "--name menger-app-local "
+has "local: on its volume" "$r" "-v menger-app-local-data:/data "
+has "local: the ports, loopback, the same number inside" "$r" "-p 127.0.0.1:4470:4470 -p 127.0.0.1:4471:4471 "
+has "local: the container told its ports" "$r" "-e MENGER_WS_PORT=4470 -e MENGER_SHELL_PORT=4471 "
+has "local: the image last" "$r" " $LI"
+[[ $r != *0.0.0.0* ]] && ok || bad "local: published beyond loopback: $r"
+[[ $(<"$STUB_DOCKER") != *"docker rm"* ]] && ok || bad "local, first run: removed something"
+has "local: health over synapse on 4470" "$(<"$STUB_SYNAPSE_ARGV")" "synapse -P 4470 menger tickets health"
+same "local: a line in deployments.log, no deployment" "$(tail -n 1 "$D3/deployments.log" | cut -f2-)" $'app-local\trun\t'"$I1"$'\tok '"$LI"
+same "local: the log line is no record" "$("$REPO/deploy/record" --from pipeline-log "$D3/deployments.log" -c | grep -c app-local)" 0
+# the second run replaces the container and keeps the volume
+STUB_LABEL=$I0 lrun local --image "menger:$I0"
+same "local again: exits 0" "$code" 0
+same "local again: the old container removed, then the new one run" \
+  "$(grep -oE '^docker (rm -f menger-app-local|run|volume create|volume rm)' "$STUB_DOCKER" | paste -sd'|')" "docker rm -f menger-app-local|docker run"
+has "local again: said" "$err" "replacing the running menger-app-local ($LI); its volume menger-app-local-data stays"
+same "local again: the new image runs" "$(<"$STUB_STATE/container")" "menger:$I0"
+# not healthy: no url, the container's log shown, the log line says so
+STUB_HEALTH=down lrun local --image "$LI"
+same "local, no health: exits 1" "$code" 1
+same "local, no health: no url" "$(<"$SCRATCH/out")$(<"$HF")" ""
+has "local, no health: said" "$err" "no tickets.health on :4470"
+has "local, no health: its log shown" "$err" "menger: a log line"
+same "local, no health: logged" "$(tail -n 1 "$D3/deployments.log" | cut -f3,5)" $'run\tnot healthy'
+# a page stamped with another port is not the local app
+HOME=$H3 STUB_WS_PORT=1 MENGER_LOCAL_WAIT=1 HF_OUTPUTS=$HF run local --image "$LI"
+same "local, the page stamped another port: exits 1" "$code" 1
+has "local, the page stamped another port: said" "$err" "no page stamped :4470 on :4471"
+STUB_RUN_FAIL=1 lrun local --image "$LI"
+same "local, docker run fails: exits 1" "$code" 1
+has "local, docker run fails: said" "$err" "docker run $LI failed"
+
+# ── RUN-25: remote test / prod — refused until deploy/app.yml (RUN-11) ──────
+INF=$SCRATCH/infra; mkdir -p "$INF/bin"
+printf '#!/usr/bin/env bash\necho "infra $*" >>"%s"\n' "$SCRATCH/infra.argv" >"$INF/bin/infra"; chmod +x "$INF/bin/infra"
+rrun() { : >"$STUB_DOCKER"; : >"$SCRATCH/infra.argv"; : >"$HF"; HOME=$H3 MENGER_INFRA_DIR=$INF HF_OUTPUTS=$HF run "$@"; }
+rrun remote test --image "$LI"
+same "remote test, no app.yml: exits 1" "$code" 1
+has "remote test, no app.yml: RUN-11 named" "$err" "app-test.menger.sh is not declared yet (RUN-11): menger has no deploy/app.yml"
+has "remote test, no app.yml: nothing changed" "$err" "nothing was changed"
+same "remote test, no app.yml: no outputs" "$(<"$SCRATCH/out")$(<"$HF")" ""
+same "remote test, no app.yml: neither infra nor docker asked" "$(cat "$SCRATCH/infra.argv" "$STUB_DOCKER")" ""
+rrun remote prod
+same "remote prod, no app.yml: exits 1" "$code" 1
+has "remote prod, no app.yml: RUN-11 named" "$err" "app.menger.sh is not declared yet (RUN-11)"
+same "remote prod, no app.yml: neither infra nor docker asked" "$(cat "$SCRATCH/infra.argv" "$STUB_DOCKER")" ""
+rrun remote staging
+same "remote, an unknown environment: exits 1" "$code" 1
+has "remote, an unknown environment: usage" "$err" "usage: deploy/pipeline remote test --image IMAGE | remote prod"
+# once deploy/app.yml exists: infra's own playbooks, test by the image's commit, prod by promotion only
+echo 'app: menger' >"$SCRATCH/app.yml"
+MENGER_APP_YML=$SCRATCH/app.yml rrun remote test
+same "remote test, no image: exits 1" "$code" 1
+has "remote test, no image: said" "$err" "remote test needs an image"
+MENGER_APP_YML=$SCRATCH/app.yml rrun remote test --image "$LI"
+same "remote test: exits 0" "$code" 0
+same "remote test: infra's app.yml, test, the release's commit" "$(<"$SCRATCH/infra.argv")" \
+  "infra app.yml -e app_dir=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)") -e env=test -e sha=${IC[1]:0:7}"
+same "remote test: url" "$(<"$HF")" "url=https://app-test.menger.sh/"
+MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
+same "remote prod: exits 0" "$code" 0
+has "remote prod: promote.yml only" "$(<"$SCRATCH/infra.argv")" "infra promote.yml -e app_dir="
+same "remote prod: url" "$(<"$HF")" "url=https://app.menger.sh/"
+# the pipeline declares these very commands
+PT=$REPO/.hyperforge/pipelines.toml
+has "pipelines.toml: build is deploy/pipeline image" "$(grep -A3 'name = "build"' "$PT")" "deploy/pipeline image'"
+has "pipelines.toml: deploy-local" "$(grep -A4 'name = "deploy-local"' "$PT")" 'deploy/pipeline local --image "$IMAGE"'
+has "pipelines.toml: deploy-test" "$(grep -A4 'name = "deploy-test"' "$PT")" 'deploy/pipeline remote test --image "$IMAGE"'
+has "pipelines.toml: deploy-prod needs deploy-test" "$(grep -A4 'name = "deploy-prod"' "$PT")" 'needs = ["deploy-test"]'
 
 printf 'deploy/pipeline records: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]
