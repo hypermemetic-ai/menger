@@ -187,7 +187,12 @@ struct Args {
 
     /// IDENTITY-19: where people reach this shell (the login page's base for
     /// the code flow's redirect URI and the nostr URL); default
-    /// http://127.0.0.1:<shell-port>.
+    /// http://127.0.0.1:<shell-port>. ACCESS-30: with login on and the
+    /// server reached beyond loopback (`--bind`, or this URL's host), it is
+    /// required and `https://` — a proxy terminates TLS in front, the app
+    /// opens `wss://<host>/ws`, cookies are `Secure` and `__Host-`, and the
+    /// provider's redirect URI is `<this>/login/callback`. An `http://` URL
+    /// on the LAN is served with a warning.
     #[arg(long, env = "MENGER_PUBLIC_URL", value_name = "URL")]
     public_url: Option<String>,
 
@@ -359,6 +364,23 @@ async fn main() -> anyhow::Result<()> {
         allow_development_backends: dev_login_allowed(args.env.as_deref()),
         ..LoginOptions::new(menger::login_access::BRANDING, args.port, args.shell_port)
     })?;
+    // ACCESS-30: beyond loopback, a sign-in is made over https — the public
+    // URL says where, and the cookies, the redirect URI and the app's socket
+    // follow it. An http URL on the LAN is served, and said.
+    if !args.stdio {
+        match menger::bind::check_public_url(args.bind, args.public_url.as_deref(), wiring.login_on()) {
+            Err(why) => anyhow::bail!(why),
+            Ok(Some(warning)) => tracing::warn!("{warning}"),
+            Ok(None) => {}
+        }
+    }
+    let https = args.public_url.as_deref().is_some_and(|u| u.starts_with("https://"));
+    if https && args.trusted_proxy.is_empty() {
+        tracing::warn!(
+            "--public-url is https, so a proxy is in front, but no --trusted-proxy names it: \
+             every client is counted as the proxy's address (quotas, throttles)"
+        );
+    }
     if args.require_login && !args.no_rest && !args.stdio {
         anyhow::bail!(
             "--require-login closes the WebSocket, but the REST bridge cannot carry an \
@@ -458,6 +480,8 @@ async fn main() -> anyhow::Result<()> {
     if wired.login_on() {
         let names: Vec<&str> = wired.providers.iter().map(|p| p.name()).collect();
         tracing::info!("Login:     {} — anonymous callers see only the auth door", names.join(", "));
+        // ACCESS-30: the one redirect URI a provider must list, derived.
+        tracing::info!("Sign-in:   returns to {}/login/callback", wiring_public_url(&args.public_url, args.shell_port));
     }
     if let Some(spec) = &args.identity {
         tracing::info!("Sign-in:   our own page over {spec}");
@@ -497,6 +521,8 @@ async fn main() -> anyhow::Result<()> {
             env: args.env.clone(),
             login: wired.login.clone(),
             allowed_hosts: hosts(args.shell_port),
+            // ACCESS-30: reached over https — every answer says so (HSTS).
+            https,
         };
         let bind = args.bind;
         tokio::spawn(async move {
@@ -609,6 +635,12 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             2
         }
     }
+}
+
+/// ACCESS-30: the public URL as the login reads it (plexus-login's default
+/// when none is given), without a trailing `/`.
+fn wiring_public_url(public_url: &Option<String>, shell_port: u16) -> String {
+    public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{shell_port}")).trim_end_matches('/').to_string()
 }
 
 /// IDENTITY-30: `--login-email <provider>[:<connection>]`, a button with no

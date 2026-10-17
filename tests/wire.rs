@@ -1067,6 +1067,7 @@ async fn shell_serves_the_page() {
             env: None,
             login: None,
             allowed_hosts: Vec::new(),
+            https: false,
         })
         .await;
     });

@@ -99,6 +99,28 @@ once: with `none`, with nothing said, or with a proxy named elsewhere, every
 socket counts as its TCP peer. `tests/wire_hosts.rs` opens sockets through
 a fake proxy on loopback to show both cases.
 
+**Behind https** (ACCESS-30). A deploy reached beyond this machine is one
+https origin: a proxy terminates TLS for menger's own hostname and sends
+`/ws` to the WebSocket and everything else to the shell. Over https the app
+(and `/vanilla`) opens its socket at `wss://<the page's host>/ws` — never
+`wss://host:<port>` — and over http as before (`ws://<name>:<stamped port>`),
+so loopback, the test environment and a dev server are unchanged. The
+WebSocket answers the upgrade on any path, `/ws` included. With login on,
+`--public-url` follows from where the server is reached:
+
+| reached | `--public-url` |
+|---|---|
+| loopback only (`--bind` loopback, no URL or a loopback one) | anything; default `http://127.0.0.1:<shell-port>` |
+| beyond loopback, `https://<host>` | served: cookies `Secure`, the session's and the flow's `__Host-`, the login's `__Secure-`; the provider's redirect URI `<url>/login/callback` (logged at startup); every shell answer carries `Strict-Transport-Security: max-age=31536000`; key proofs may name `wss://<host>` or `wss://<host>/ws` |
+| beyond loopback, `http://` on the LAN (a private, link-local or unique-local address; `.local`, `.lan`, `.home.arpa`, `.internal`, one label) | served, with a warning at startup: sign-ins travel in clear |
+| beyond loopback, any other `http://`, or none with a `--bind` off loopback | refused at startup |
+
+The page's policy lets it connect to its own origin over TLS (`wss://<host>`
+in `connect-src`, beside the hub's `ws:`/`wss:` at its port). An https URL
+with no `--trusted-proxy` is warned about: every client would count as the
+proxy. The proxy recipe and the checklist are in `deploy/README.md`,
+"Behind https".
+
 ```sh
 PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 \
   --db-path /tmp/menger-dev.db --bind 0.0.0.0 --trusted-proxy 172.30.0.2 \
