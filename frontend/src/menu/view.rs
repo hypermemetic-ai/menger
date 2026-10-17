@@ -107,10 +107,16 @@ fn menu_view(
     };
     let tree = lens::use_lens().sctree();
     let granted = grants();
+    let one = (ids.len() == 1).then(|| ids[0].clone());
+    // CHAT-5: the reader's chats on the one ticket, live.
+    let chat_facts = {
+        let one = one.clone();
+        Memo::new(move |_| one.as_deref().map(chat::facts))
+    };
     let entries = {
         let (ids, shortcode, chip, nav_here) = (ids.clone(), shortcode.clone(), chip.clone(), nav.is_some());
         Memo::new(move |_| {
-            rows.with(|rows| {
+            chat_facts.with(|cf| rows.with(|rows| {
                 tree.with(|tree| {
                     model::entries(&Facts {
                         ids: &ids,
@@ -122,12 +128,12 @@ fn menu_view(
                         tree: tree.as_ref(),
                         global: level == Level::Global,
                         framed,
+                        chat: cf.as_ref(),
                     })
                 })
-            })
+            }))
         })
     };
-    let one = (ids.len() == 1).then(|| ids[0].clone());
     let head_row = {
         let one = one.clone();
         Memo::new(move |_| one.as_ref().and_then(|id| rows.with(|r| r.iter().find(|r| &r.id == id).map(|r| (r.status, r.title.clone())))))
@@ -196,19 +202,12 @@ fn menu_view(
         match id {
             Some("menu.into") if on_parent => {
                 let Some(w) = which(current.map(|i| list[i].as_ref())) else { return };
-                open_sub.set(Some(w));
-                // The list mounts on the next render tick; focus its
-                // first row once it exists.
-                spawn_local(async move {
-                    dom::sleep_ms(0).await;
-                    let first = root.get_untracked().and_then(|el| {
-                        let group = el.query_selector(&format!(".sub[data-sub='{}']", w.name())).ok().flatten()?;
-                        items(&group).into_iter().next()
-                    });
-                    if let Some(first) = first {
-                        focus(&first);
-                    }
-                });
+                open_at_first(root, open_sub, w);
+                ev.prevent_default();
+            }
+            // CHAT-5: `c` chooses Chat — never while a form's field is typed in.
+            Some("menu.chat") if !typing(&ev) => {
+                chat::key(root, open_sub);
                 ev.prevent_default();
             }
             Some("menu.out") if open_sub.get_untracked().is_some() => {
@@ -264,12 +263,34 @@ fn menu_view(
     }
 }
 
+/// Open submenu `w` and focus its first row — it mounts on the next render
+/// tick, so once it exists.
+pub(super) fn open_at_first(root: NodeRef<leptos::html::Div>, open_sub: RwSignal<Option<Sub>>, w: Sub) {
+    open_sub.set(Some(w));
+    spawn_local(async move {
+        dom::sleep_ms(0).await;
+        let first = root.get_untracked().and_then(|el| {
+            let group = el.query_selector(&format!(".sub[data-sub='{}']", w.name())).ok().flatten()?;
+            items(&group).into_iter().next()
+        });
+        if let Some(first) = first {
+            focus(&first);
+        }
+    });
+}
+
+/// Whether a key went to a text field (a form in the menu's place).
+fn typing(ev: &web_sys::KeyboardEvent) -> bool {
+    ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|el| matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA"))
+}
+
 /// One line of the menu.
 fn entry_view(e: Entry, ctx: &Ctx) -> AnyView {
     let target = ctx.target;
     let close = move || close_menu(target);
     match e {
         Entry::Rule => view! { <div class="rule" role="separator"></div> }.into_any(),
+        Entry::Chat(c) => chat::item(c, ctx.open_sub, target),
         Entry::Open(id) => {
             view! { <a class="item" role="menuitem" data-act="open" href=format!("#/ticket/{id}") on:click=move |_| close()>"Open"</a> }.into_any()
         }

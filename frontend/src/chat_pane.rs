@@ -191,6 +191,13 @@ pub(crate) fn open_on(ticket: &str, chat: Option<u64>) {
     shown().set(Some(Shown { ticket: ticket.to_string(), view }));
 }
 
+/// CHAT-5: open the pane on `ticket` at `view` — the ticket menu's Chat
+/// opening a chat, the picker, or the pane as it chooses.
+pub(crate) fn open_view(ticket: &str, view: View) {
+    chats::want();
+    shown().set(Some(Shown { ticket: ticket.to_string(), view }));
+}
+
 /// Close the pane.
 pub(crate) fn close() {
     shown().set(None);
@@ -302,7 +309,7 @@ pub(crate) fn Pane(ticket: Signal<Option<String>>) -> impl IntoView {
     }
 }
 
-fn names() -> impl Fn(&str) -> String + Clone + 'static {
+pub(crate) fn names() -> impl Fn(&str) -> String + Clone + 'static {
     let me = chats::me();
     let my = chats::my_name();
     let held = chats::signal();

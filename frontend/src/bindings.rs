@@ -363,6 +363,8 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("menu.out", &[C::Menu], &["ArrowLeft", "Backspace"], G::Dialogs, "close the submenu, back to its item (Backspace: in the filter's menu, its search empty)"),
     b("menu.leave", &[C::Menu], &["Tab"], G::Dialogs, "close the menu and move on (in the filter's menu, to its operator first)"),
     b("menu.leave-back", &[C::Menu], &["Shift+Tab"], G::Dialogs, "close the menu and move back"),
+    // CHAT-5: the ticket menu's Chat item, by its letter (drawn beside it).
+    b("menu.chat", &[C::Menu], &["c"], G::Dialogs, "in a ticket's menu: Chat — its chats (or, with none, the picker), the ticket opened with its chat pane"),
     b("dialog.close", &[C::Palette, C::Dialog, C::Menu, C::DatePicker], &["Escape"], G::Dialogs, "close it; focus goes back where it was"),
     b("dialog.next-field", &[C::Palette, C::Dialog], &["Tab"], G::Dialogs, "the next control, kept inside the dialog"),
     b("dialog.prev-field", &[C::Palette, C::Dialog], &["Shift+Tab"], G::Dialogs, "the previous control, kept inside the dialog"),
@@ -874,6 +876,13 @@ pub(crate) fn moves_focus(ev: &web_sys::Event) -> bool {
 /// The chords of a binding as this platform spells them, apart by ` · `.
 pub(crate) fn keys_text(e: &Entry, mac: bool) -> String {
     e.chords.iter().map(|c| c.show(mac)).collect::<Vec<_>>().join(" · ")
+}
+
+/// The first chord of binding `id` as this platform spells it — what a
+/// menu draws beside the item the key chooses (CHAT-5's Chat).
+pub(crate) fn shown(id: &str) -> Option<String> {
+    let mac = is_mac();
+    with_table(|t| t.iter().find(|e| e.binding.id == id).and_then(|e| e.chords.first()).map(|c| c.show(mac)))
 }
 
 /// Where a binding applies, in words.

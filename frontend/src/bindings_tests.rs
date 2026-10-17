@@ -141,6 +141,34 @@ fn keys_match_with_their_case_and_their_modifiers() {
     assert_eq!(pick_single(&t, &Press::key("z"), Context::Frame, false), Some("view.full-screen"));
 }
 
+/// CHAT-5: in an open menu, `c` is Chat — free there, and Chat's initial; and
+/// a menu owns its keys, so the page's `c` (comment on a ticket page) is not
+/// it; Shift+C is nothing; outside a menu `c` is never Chat. The menu draws
+/// the key beside the item as the table spells it.
+#[test]
+fn c_in_a_menu_is_chat() {
+    let t = t();
+    let menu = |p: Press| pick_single(&t, &p, Context::Menu, false);
+    assert_eq!(menu(key("c")), Some("menu.chat"));
+    assert_eq!(menu(key("C")), Some("menu.chat"), "caps lock");
+    assert_eq!(menu(shifted("C")), None);
+    assert_eq!(menu(Press { key: "c".into(), ctrl: true, ..Press::default() }), None, "Ctrl+C copies");
+    assert_eq!(pick_single(&t, &key("c"), Context::TicketPage, false), Some("comment.focus"));
+    for ctx in [Context::Nav, Context::Board, Context::Ticket, Context::Global] {
+        assert_ne!(pick_single(&t, &key("c"), ctx, false), Some("menu.chat"), "{ctx:?}");
+    }
+    // No other Menu binding holds a letter it would shadow.
+    let letters: Vec<char> = t
+        .iter()
+        .filter(|e| e.binding.contexts.contains(&Context::Menu) && e.binding.id != "menu.chat")
+        .flat_map(|e| e.chords.iter().filter_map(|c| match &c.steps[0].key { Key::Char(ch) if ch.is_ascii_alphabetic() => Some(*ch), _ => None }))
+        .collect();
+    assert!(!letters.contains(&'c'), "{letters:?}");
+    let chat = binding("menu.chat").unwrap();
+    assert_eq!(Chord::parse(chat.chords[0]).unwrap().show(false), "c");
+    assert_eq!(Chord::parse(chat.chords[0]).unwrap().show(true), "c");
+}
+
 /// MENGER-6's chord, as the table says it: ⌘K on a Mac (Ctrl+K is a
 /// field's kill-line there), Ctrl+K or ⌘K elsewhere; no Shift, no Alt.
 #[test]
