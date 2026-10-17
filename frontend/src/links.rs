@@ -778,6 +778,8 @@ pub(crate) fn install() {
             .filter(|t| !t.is_empty());
         let place = match holder.get_attribute("data-links").as_deref() {
             Some("comment") => "comment",
+            // CHAT-4: a chat message, in the ticket's chat pane.
+            Some("chat") => "chat message",
             // DEPLOY-13: a deploy's source on #/deployments.
             Some("deployment") => "deployment",
             _ if holder.closest("#waves").ok().flatten().is_some() => "board note",

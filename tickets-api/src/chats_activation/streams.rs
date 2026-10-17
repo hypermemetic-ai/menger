@@ -46,6 +46,53 @@ pub(super) async fn open(store: Arc<Store>, access: Access, user: VerifiedUser, 
     }
 }
 
+/// `chats.candidates` (CHAT-4's picker): who could be named in a chat on
+/// `ticket` — every principal holding a grant in its organization (on `*`,
+/// on the org or a shortcode in it, on a ticket or a subtree there; a
+/// team's grant by each of its members; the operator's `--admin`s), and
+/// every participant of the caller's chats there — but the caller, each
+/// with whether it reads the ticket now ([`Access::reads_ticket`]). By
+/// principal. A ticket the caller cannot read is refused as one that is
+/// none, as `open` refuses it.
+pub(super) fn candidates(store: &Store, access: &Access, user: &VerifiedUser, ticket: &str) -> Vec<ChatsEvent> {
+    let on = store.ticket_id(ticket).filter(|k| user.permit::<Viewer>(&TicketId::new(k.clone()), store).is_ok());
+    let Some(key) = on else {
+        return vec![ChatsEvent::Refused { reasons: vec![format!("no ticket {}", ticket.trim().to_ascii_uppercase())] }];
+    };
+    let org = store.org_of(&key);
+    let in_org = |scope: &crate::members::Scope| match (scope, scope.org(), scope.ticket()) {
+        (crate::members::Scope::Everywhere, ..) => true,
+        (_, Some(o), _) => Some(o) == org.as_ref(),
+        (_, None, Some(t)) => store.org_of(t.as_str()) == org,
+        _ => false,
+    };
+    let mut grants = access.stored();
+    for admin in access.admins() {
+        grants.extend(access.grants_of(&admin));
+    }
+    let mut who: BTreeSet<String> = BTreeSet::new();
+    for g in grants.into_iter().filter(|g| in_org(&g.scope)) {
+        match g.principal {
+            crate::vocab::Grantee::Principal(p) => {
+                who.insert(p.to_string());
+            }
+            crate::vocab::Grantee::Team(t) => who.extend(access.team(&t).into_iter().flat_map(|(_, members, _)| members).map(|m| m.principal.to_string())),
+        }
+    }
+    let q = ChatQuery { ticket: Some(key.clone()), ..ChatQuery::default() };
+    if let Ok((rows, _)) = store.chats(user, &q, None, u32::MAX) {
+        who.extend(rows.into_iter().flat_map(|c| c.participants));
+    }
+    let me = Signer::of(user).principal;
+    who.into_iter()
+        .filter(|p| *p != me)
+        .map(|principal| {
+            let reads = access.reads_ticket(&principal, &key, store);
+            ChatsEvent::Candidate { principal, reads }
+        })
+        .collect()
+}
+
 /// `chats.post`.
 pub(super) async fn post(store: Arc<Store>, user: VerifiedUser, chat: u64, body: String) -> ChatsEvent {
     let s = match store.chat_seen(&user, chat) {

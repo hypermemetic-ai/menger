@@ -3601,6 +3601,151 @@
   }
   @keyframes menger-pill-in { from { opacity: 0; transform: translateY(16px) scale(.96); } }
 
+  /* ── CHAT-4: chats inside their ticket (CHAT-1's Figs 1–4, its 390
+     sheet; src/chat_pane.rs). The field: the mockup's `.chatbtn`. The
+     pane: a column of the app's grid beside the content, the whole height
+     of the window; under 760px a sheet over the ticket, its handle dragged
+     down to dismiss it. Tokens only (THEME-2: the mockup's --line-2 is
+     --tree-line, its --accent-ink --bg, its --agent the Epic chip's
+     pair). ── */
+  #ticket-page .chatbtn {
+    display: inline-flex; gap: 8px; align-items: center; cursor: pointer;
+    border: var(--border) solid var(--accent); color: var(--accent); background: var(--card);
+    border-radius: var(--radius); padding: 1px 10px; font: inherit; font-family: var(--mono); font-size: calc(11.5px * var(--text-scale));
+  }
+  #ticket-page .chatbtn[aria-pressed="true"] { background: var(--sel); }
+  #ticket-page .chatbtn .count, #chatpane .count {
+    background: var(--accent); color: var(--bg); padding: 0 6px; border-radius: var(--radius-sm);
+    font-weight: var(--weight-strong); font-size: calc(10.5px * var(--text-scale)); font-variant-numeric: tabular-nums;
+  }
+  @media (min-width: 761px) {
+    #app.chatting { grid-template-columns: 360px minmax(0, 1fr) clamp(300px, 30vw, 420px); }
+    #app.chatting.nonav { grid-template-columns: minmax(0, 1fr) clamp(300px, 30vw, 420px); }
+    #app.chatting .content, #app.chatting #qtray { grid-column: -3 / -2; }
+    #chatpane { grid-column: -2 / -1; grid-row: 1; height: 100vh; border-left: var(--border) solid var(--line); }
+    #chatpane .pgrab { display: none; }
+    /* The section dock's rail stays clear of the pane. */
+    #app.chatting #ticket-page > #tdock { right: calc(clamp(300px, 30vw, 420px) + 10px); }
+  }
+  #chatpane {
+    display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); color: var(--ink);
+    font-family: var(--mono); font-size: calc(12px * var(--text-scale)); line-height: 1.5; z-index: 5;
+  }
+  #chatpane button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+  #chatpane .ptabs {
+    display: flex; align-items: flex-end; gap: 4px; padding: 8px 10px 0; min-height: 48px; flex: none;
+    border-bottom: var(--border) solid var(--line); font-size: calc(11.5px * var(--text-scale)); overflow: hidden;
+  }
+  #chatpane .ptab {
+    padding: 6px 10px; border: var(--border) solid transparent; border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    color: var(--muted); white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; flex: 0 1 auto; min-width: 4em; max-width: 190px;
+  }
+  #chatpane .ptabs > :is(.pnew, .pclosed, .px) { flex: none; }
+  #chatpane .ptab .pl { overflow: hidden; text-overflow: ellipsis; }
+  #chatpane .ptab:hover { color: var(--ink); }
+  #chatpane .ptab.on { background: var(--card); border-color: var(--line); color: var(--ink); margin-bottom: -1px; }
+  #chatpane .pnew { margin-left: auto; color: var(--accent); padding: 6px 4px; white-space: nowrap; }
+  #chatpane :is(.pnew, .pclosed).on { text-decoration: underline; text-underline-offset: 3px; }
+  #chatpane .pclosed { color: var(--muted); padding: 6px 4px; white-space: nowrap; }
+  #chatpane .px { color: var(--muted); padding: 6px 4px; font-size: calc(14px * var(--text-scale)); line-height: 1; }
+  #chatpane .px:hover, #chatpane .pclosed:hover { color: var(--ink); }
+  /* Who is in it: a dot each — green while one waits for a message,
+     pulsing (calm and none hold it still). */
+  #chatpane .pwho {
+    display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 10px 14px; flex: none;
+    background: var(--card); border-bottom: var(--border) solid var(--line); font-size: calc(11.5px * var(--text-scale));
+  }
+  #chatpane .pp { display: inline-flex; align-items: center; gap: 6px; }
+  #chatpane .pmore { margin-left: auto; display: inline-flex; gap: 10px; color: var(--muted); }
+  #chatpane .pmore button:hover { color: var(--accent); }
+  #chatpane .dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--tree-line); display: inline-block; flex: none; }
+  #chatpane .dot.wait {
+    background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent);
+    animation: menger-chat-ping 1.6s ease-in-out infinite;
+  }
+  @keyframes menger-chat-ping { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--live) 0%, transparent); } }
+  #chatpane .ag {
+    font-size: calc(9.5px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--st-epic-fg); background: var(--st-epic-bg); padding: 0 5px; border-radius: var(--radius-sm);
+  }
+  /* The messages: the mockup's `.msg` — an avatar, who and when in mono,
+     the words in the text face; one arriving slides in. */
+  #chatpane .pmsgs {
+    flex: 1; min-height: 0; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; background: var(--card);
+  }
+  #chatpane .pmsg { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
+  #chatpane .pmsg.fresh { animation: menger-chat-arrive .32s ease-out; }
+  @keyframes menger-chat-arrive { from { opacity: 0; transform: translateY(6px); } }
+  #chatpane .pav {
+    width: 28px; height: 28px; border-radius: var(--radius-lg); display: grid; place-items: center;
+    font-weight: var(--weight-strong); font-size: calc(11px * var(--text-scale)); background: var(--sel); color: var(--accent);
+  }
+  #chatpane .pav.agent { background: var(--st-epic-bg); color: var(--st-epic-fg); border-radius: var(--radius-pill); }
+  #chatpane .pmh { font-size: calc(11.5px * var(--text-scale)); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  #chatpane .pmh b { font-weight: var(--weight-strong); }
+  #chatpane :is(.pmh .t, .pmh .via, .pclosedrow .t) { color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
+  #chatpane .pmb { font-family: var(--sans); font-size: calc(14px * var(--text-scale)); line-height: 1.5; margin-top: 2px; overflow-wrap: anywhere; }
+  #chatpane .pmb > :first-child { margin-top: 0; }
+  #chatpane .pmb > :last-child { margin-bottom: 0; }
+  #chatpane .pmb code { font-family: var(--mono); font-size: calc(12px * var(--text-scale)); background: var(--panel); padding: 0 4px; border-radius: var(--radius-sm); }
+  #chatpane .pnewline {
+    display: flex; align-items: center; gap: 10px; color: var(--accent);
+    font-size: calc(10.5px * var(--text-scale)); letter-spacing: .1em; text-transform: uppercase;
+  }
+  #chatpane .pnewline::before, #chatpane .pnewline::after { content: ""; flex: 1; height: var(--border); background: var(--accent); opacity: .4; }
+  #chatpane .pnote { font-size: calc(11.5px * var(--text-scale)); padding: 8px 12px; border-radius: var(--radius-lg); display: flex; gap: 8px; align-items: center; }
+  #chatpane .pnote.listen { background: color-mix(in srgb, var(--live) 10%, var(--card)); color: var(--live); }
+  #chatpane .pempty { color: var(--muted); margin: 14px; font-size: calc(12px * var(--text-scale)); }
+  #chatpane .pmsgs .pempty { margin: 0; }
+  #chatpane .perr { color: var(--err-fg); font-size: calc(11px * var(--text-scale)); }
+  /* The composer. */
+  #chatpane .pcompose { border-top: var(--border) solid var(--line); padding: 10px 12px 12px; background: var(--panel); flex: none; }
+  #chatpane textarea.pbox {
+    width: 100%; box-sizing: border-box; resize: none; min-height: 54px; border: var(--border) solid var(--tree-line); background: var(--card);
+    color: var(--ink); border-radius: var(--radius-lg); padding: 8px 10px; font-family: var(--sans); font-size: calc(14px * var(--text-scale));
+  }
+  #chatpane textarea.pbox:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  #chatpane .prow { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: calc(11px * var(--text-scale)); color: var(--muted); }
+  #chatpane .psend { margin-left: auto; background: var(--accent); color: var(--bg); border-radius: var(--radius); padding: 4px 12px; font-size: calc(11.5px * var(--text-scale)); }
+  #chatpane .psend[disabled] { background: var(--tree-line); color: var(--muted); cursor: default; }
+  #chatpane .pshut { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: var(--border) solid var(--line); color: var(--muted); flex: none; }
+  #chatpane :is(.preopen, .popen, .pcancel) { color: var(--accent); }
+  #chatpane .pshut .preopen { margin-left: auto; }
+  /* The picker: the mockup's Fig 2. */
+  #chatpane .ppicker { background: var(--card); padding: 14px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; min-height: 0; }
+  #chatpane .ppicker:not(.adding) { flex: 1; }
+  #chatpane .ppicker.adding { border-bottom: var(--border) solid var(--line); max-height: 55%; flex: none; }
+  #chatpane .ppicker h4 { margin: 0; font-family: var(--font-display); font-size: calc(15px * var(--text-scale)); font-weight: var(--weight-strong); }
+  #chatpane .pq { border: var(--border) solid var(--accent); border-radius: var(--radius-lg); padding: 6px 10px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  #chatpane .pqi { flex: 1; min-width: 6em; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
+  #chatpane .ptok { background: var(--sel); color: var(--accent); border-radius: var(--radius-sm); padding: 0 6px; font-size: calc(11.5px * var(--text-scale)); }
+  #chatpane .ptok.agent { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  #chatpane ul.pcands, #chatpane ul.pclosedlist { list-style: none; margin: 0; padding: 0; border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
+  #chatpane li.pcand { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 10px; font-size: calc(12px * var(--text-scale)); cursor: pointer; }
+  #chatpane li.pcand + li.pcand, #chatpane li.pclosedrow + li.pclosedrow { border-top: var(--border) solid var(--line); }
+  #chatpane li.pcand:hover { background: var(--hover); }
+  #chatpane li.pcand.hi { background: var(--sel); }
+  #chatpane li.pcand.no { color: var(--muted); cursor: not-allowed; }
+  #chatpane li.pcand small { display: block; color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
+  #chatpane li.pcand small.refuse { color: var(--err-fg); }
+  #chatpane li.pclosedrow { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; }
+  #chatpane li.pclosedrow .popen { text-align: left; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatpane .pclosedlist { margin: 14px; }
+  /* Under 760px: a sheet over the ticket — fixed while the page scrolls
+     under it, its handle dragged down to dismiss it. */
+  @media (max-width: 760px) {
+    #chatpane {
+      position: fixed; left: 0; right: 0; bottom: 0; height: min(470px, 72vh); z-index: 950;
+      border-top: var(--border) solid var(--tree-line); border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+      box-shadow: 0 -10px 30px var(--shadow); overflow: hidden;
+    }
+    #chatpane .pgrab {
+      flex: none; width: 36px; height: 4px; padding: 8px 40% 6px; margin: 0 auto; background: var(--tree-line);
+      background-clip: content-box; border-radius: var(--radius-xs); cursor: grab; touch-action: none; user-select: none;
+    }
+    #chatpane .ptabs { padding-top: 0; min-height: 0; }
+    #app.chatting .content { padding-bottom: min(470px, 72vh); }
+  }
   /* Everywhere else (LOOK-8's walk, a child doc of the ticket). A page
      arriving on a route change; a ticket's own opening stays DESIGN-39's. */
   main > :is(.bbar, table.board, #ticket-page, #waves, #waves-index, #components, #inputs, #settings, #members, #comments, #deployments-page, #checking, #no-access) {
@@ -3645,6 +3790,8 @@
      and the live mark's pulse. */
   html[data-motion="calm"] #tdock ol.dlist li.i.open .dot { animation: none; }
   html[data-motion="calm"] #tdock ol.dlist li.i.open.turned .dot { animation: menger-dot-turn .2s cubic-bezier(.2, .8, .2, 1.4); }
+  /* CHAT-4: and a participant's waiting dot — held still, its ring kept. */
+  html[data-motion="calm"] #chatpane .dot.wait { animation: none; }
   /* Before the script has stamped the setting, the system's preference
      stops every move as none does. */
   @media (prefers-reduced-motion: reduce) {

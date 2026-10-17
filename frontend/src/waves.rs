@@ -607,7 +607,7 @@ pub(crate) fn value_of(c: Cat, card: &Card, off: bool) -> Option<String> {
         // MENGER-12: a card holds any number of labels — counted apart
         // ([`counts`]); Asking is not the board's.
         // FILTER-27: nor is When, which the log and the times answer.
-        Cat::Asking | Cat::Label | Cat::When | Cat::Deployed => None,
+        Cat::Asking | Cat::Label | Cat::When | Cat::Deployed | Cat::Chats => None,
         Cat::Wave => Some(match card.placement {
             Placement::Wave { n } => n.to_string(),
             Placement::MissingBlocker => "missing".into(),

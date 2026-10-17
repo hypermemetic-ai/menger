@@ -30,6 +30,19 @@ export interface ChatsClient {
      */
     awaitMessage(after?: MessageId | null, chat?: ChatId | null, since?: number | null, ticket?: TicketRef | null, timeoutMinutes?: number | null): AsyncGenerator<ChatsEvent>;
     /**
+     * Who could be in a chat on a ticket: a candidate { principal, reads } each — every principal holding a grant in the ticket's organization (a team's members by name), and those in the caller's chats there — then the end.
+  
+  CHAT-4's picker: `reads` says whether the principal can read the
+  ticket now (`open` and `add` refuse one that cannot). The caller is
+  not among them. A ticket the caller cannot read is `refused` as one
+  that is none. With login off, nobody holds a grant: the list is the
+  chats' participants.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `chats.candidates` anywhere it is held
+     */
+    candidates(ticket: TicketRef): AsyncGenerator<ChatsEvent>;
+    /**
      * Close a chat; yields closed { chat }. A closed chat is read-only, kept on its ticket.
   
   By any participant. Closing a closed chat changes nothing.
@@ -140,6 +153,10 @@ export declare const requires: {
         readonly grant: "chats.await_message";
         readonly target: null;
     };
+    readonly "chats.candidates": {
+        readonly grant: "chats.candidates";
+        readonly target: null;
+    };
     readonly "chats.close": {
         readonly grant: "chats.close";
         readonly target: null;
@@ -179,6 +196,6 @@ export declare const requires: {
 };
 /** The chats activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
 export declare const defaultRoles: {
-    readonly editor: readonly ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.watch", "chats.await_message"];
-    readonly viewer: readonly ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.watch", "chats.await_message"];
+    readonly editor: readonly ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.watch", "chats.await_message", "chats.candidates"];
+    readonly viewer: readonly ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.watch", "chats.await_message", "chats.candidates"];
 };

@@ -2757,6 +2757,18 @@ its name); `via` is kept for AGENT-3 and never set by a call.
 | `chats.close { chat }` · `chats.reopen { chat }` | `closed { chat }` · `reopened { chat }` — by any participant; a closed chat is read-only, kept on its ticket |
 | `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `listening { chat, principal, waiting }`, `left`, `lagged`, `watch_closed`. `claim_line` is declared for AGENT-3 and not emitted |
 | `chats.await_message { chat?, ticket?, since?, after?, timeout_minutes? }` | `waiting { chat?, ticket?, since }` at once, then one `message { message }` by someone else — in the chat, or any of the caller's chats (on `ticket`) — and the end; `timed_out` after the timeout. Without `since` or `after`, only what comes after the call; `since` (seconds) is at or after it, at least once; `after` (a message id) is exact. While it waits its chats show the caller in `waiting` (`listening` on watch) |
+| `chats.candidates { ticket }` | CHAT-4's picker: `candidate { principal, reads }` each, by principal — every principal holding a grant in the ticket's organization (on `*`, the org, a shortcode in it, a ticket or a subtree there; a team's members by name; the operator's `--admin`s) and every participant of the caller's chats there, but the caller; `reads` whether it can read the ticket now (`open` and `add` refuse one that cannot). A ticket the caller cannot read is `refused` (`no ticket X`). With login off nobody holds a grant: the list is the chats' participants |
+
+**In the app** (CHAT-4): the ticket page's **chat N** field (N your unread
+there) opens the chat pane — a column beside the content, a sheet under
+760px — with a tab per open chat (its unread), **+ chat** (the picker,
+from `candidates`: one who can't read the ticket is shown and cannot be
+picked; the same people's open chat opens instead), the closed list, who
+is in it (a pulsing dot while one waits on `await_message`), the messages
+through `md.rs`, a *new* line at your read mark, and the composer (`@`
+adds someone, ⌘↵ / Ctrl+Enter sends). What the pane shows is read.
+`#/ticket/KILN-7?chat=41` opens it on that chat. The filter menu's
+**Chats** and the palette's `chat…` / `unread` add the two cells below.
 
 Two filter cells read the caller's chats: `chatting` (the caller is in an
 open chat on the ticket) and `unread` (it has unread there) — answered for

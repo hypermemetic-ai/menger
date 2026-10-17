@@ -279,6 +279,32 @@ pub(crate) fn deployed_offers(query: &str, choices: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// CHAT-4: the palette's chats cells — typed `chat…` (`chats`, `filter
+/// chatting`) or `unr…`, `not` before either: `chatting` (the reader is in
+/// an open chat on the ticket) and `unread` (it has unread there), each a
+/// filter's canonical text.
+pub(crate) fn chat_offers(query: &str) -> Vec<String> {
+    let q = query.trim().to_ascii_lowercase();
+    let q = q.strip_prefix("filter ").map_or(q.as_str(), str::trim_start);
+    let words: Vec<&str> = q.split_whitespace().collect();
+    let (not, w) = match words.as_slice() {
+        ["not", w] => (true, *w),
+        [w] => (false, *w),
+        _ => return Vec::new(),
+    };
+    let cells: &[&str] = if w.len() >= 4 && (w.starts_with("chat") || "chatting".starts_with(w)) {
+        if "chatting".starts_with(w) && w.len() > 4 { &["chatting"] } else { &["chatting", "unread"] }
+    } else if w.len() >= 3 && "unread".starts_with(w) {
+        &["unread"]
+    } else {
+        return Vec::new();
+    };
+    cells
+        .iter()
+        .filter_map(|c| menger_tickets_api::filter::Filter::parse(&format!("{}{c}", if not { "not " } else { "" })).ok().map(|f| f.format()))
+        .collect()
+}
+
 /// A command row the palette offers above the tickets.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PalCmd {
@@ -1387,6 +1413,12 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                 out.push(PalCmd::Text(text));
             }
         }
+        // CHAT-4: `chat…` / `unread` — the reader's chats' cells.
+        for text in chat_offers(&q) {
+            if !out.contains(&PalCmd::Text(text.clone())) {
+                out.push(PalCmd::Text(text));
+            }
+        }
         // THEME-7: `theme <name>` — the themes the app holds.
         if let Some(typed) = theme_command(&q) {
             let names = crate::scopes::held().with(crate::scopes::Held::names);
@@ -1851,7 +1883,7 @@ pub(crate) fn KeyTable(#[prop(into)] query: Signal<String>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_words, deployed_offers, filter_command, filter_offers, filter_text_command, narrows, palette_match, pass, theme_command, theme_offers, Found, Pass, FILTER_OFFERS};
+    use super::{chat_offers, count_words, deployed_offers, filter_command, filter_offers, filter_text_command, narrows, palette_match, pass, theme_command, theme_offers, Found, Pass, FILTER_OFFERS};
 
     /// THEME-7: `theme <name>` and `theme: <name>` in the palette — the
     /// themes held that begin with what is typed, and the site's own.
@@ -2124,6 +2156,19 @@ mod tests {
         for not in ["", "filter", "filter ", "filters demand", "filter demand now", "filter de$mand", "demand", "find demand"] {
             assert_eq!(filter_command(not), None, "{not:?}");
         }
+    }
+
+    /// CHAT-4: the palette offers the chats' cells — `chat…` both,
+    /// `chatting` / `unr…` one, `not` turning either around.
+    #[test]
+    fn the_palette_offers_the_chats_cells() {
+        assert_eq!(chat_offers("chat"), ["chatting", "unread"]);
+        assert_eq!(chat_offers("filter chats"), ["chatting", "unread"]);
+        assert_eq!(chat_offers("chatti"), ["chatting"]);
+        assert_eq!(chat_offers("unr"), ["unread"]);
+        assert_eq!(chat_offers("not unread"), ["not unread"]);
+        assert!(chat_offers("ch").is_empty() && chat_offers("unicorn").is_empty() && chat_offers("chat with ada").is_empty());
+        assert_eq!(filter_text_command("filter chatting and unread"), Some("chatting and unread".into()));
     }
 
     /// DEPLOY-13: `deployed …` offers the environments held — `not` turns

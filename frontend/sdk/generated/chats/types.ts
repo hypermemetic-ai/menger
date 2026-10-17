@@ -48,6 +48,15 @@ export interface ChatsEventChat {
   chat: Chat;
 }
 
+/** CHAT-4: one of `candidates`' rows — a principal who could be named in
+a chat on the ticket, and whether it can read the ticket now (one
+that cannot is shown in the picker and cannot be picked). */
+export interface ChatsEventCandidate {
+  type: 'candidate';
+  principal: string;
+  reads: boolean;
+}
+
 /** `post`'s answer, and on every participant's `watch`. */
 export interface ChatsEventPosted {
   type: 'posted';
@@ -174,10 +183,11 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 
 export function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened { return e.type === 'opened'; }
 export function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat { return e.type === 'chat'; }
+export function isChatsEventCandidate(e: ChatsEvent): e is ChatsEventCandidate { return e.type === 'candidate'; }
 export function isChatsEventPosted(e: ChatsEvent): e is ChatsEventPosted { return e.type === 'posted'; }
 export function isChatsEventMessage(e: ChatsEvent): e is ChatsEventMessage { return e.type === 'message'; }
 export function isChatsEventAdded(e: ChatsEvent): e is ChatsEventAdded { return e.type === 'added'; }

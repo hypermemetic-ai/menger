@@ -261,3 +261,32 @@ async fn a_reader_outside_the_chat_finds_nothing_and_a_revoked_participant_is_to
     let rui2 = as_key(port, &RUI, "rui").await;
     assert_eq!(one(&rui2, "chats.messages", json!({ "chat": shared })).await, json!({ "type": "not_found", "chat": shared }));
 }
+
+/// CHAT-4: `candidates` — the picker's list. Every principal with a grant in
+/// the ticket's organization but the caller, each saying whether it reads
+/// the ticket: sam (of B only) is listed and cannot be picked for A-2; the
+/// operator reads everything. A ticket the caller cannot read is none.
+#[tokio::test]
+async fn candidates_say_who_can_read_the_ticket() {
+    let port = start().await;
+    let boss = as_key(port, &BOSS, "boss").await;
+    kiln(&boss).await;
+    let ada = as_key(port, &ADA, "ada").await;
+    let rows = call(&ada, "chats.candidates", json!({ "ticket": "a-2" })).await;
+    assert!(rows.iter().all(|r| r["type"] == "candidate"), "{rows:?}");
+    let got: std::collections::BTreeMap<String, bool> =
+        rows.iter().map(|r| (r["principal"].as_str().unwrap().to_string(), r["reads"].as_bool().unwrap())).collect();
+    let want: std::collections::BTreeMap<String, bool> =
+        [(principal(&BOSS), true), (principal(&BUILDER), true), (principal(&RUI), true), (principal(&SAM), false)].into_iter().collect();
+    assert_eq!(got, want, "everyone in the org but ada; sam can't read A-2");
+    // sam reads B and not A: A-2 is no ticket to it.
+    let sam = as_key(port, &SAM, "sam").await;
+    assert_eq!(one(&sam, "chats.candidates", json!({ "ticket": "A-2" })).await, json!({ "type": "refused", "reasons": ["no ticket A-2"] }));
+    // On B: rui reads it; ada does not.
+    let on_b = call(&sam, "chats.candidates", json!({ "ticket": "B-2" })).await;
+    let reads: Vec<(String, bool)> = on_b.iter().map(|r| (r["principal"].as_str().unwrap().to_string(), r["reads"].as_bool().unwrap())).collect();
+    assert!(reads.contains(&(principal(&ADA), false)) && reads.contains(&(principal(&RUI), true)), "{reads:?}");
+    // A participant is a candidate though its grant is gone (it is shown, not pickable).
+    let opened = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [principal(&RUI)] })).await;
+    assert_eq!(opened["type"], "opened", "{opened}");
+}

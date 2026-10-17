@@ -143,6 +143,9 @@ function synapse(args) {
     .filter((x) => x.type === 'data')
     .map((x) => x.content);
 }
+/** CHAT-4: the sweep's chat's other participant — a fixed key, never used to sign in. */
+const SWEEP_PEER = 'key:5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed';
+
 function one(args) {
   const items = synapse(args);
   const err = items.find((i) => i.type === 'error');
@@ -490,6 +493,13 @@ async function sweep(browserName, idsBy) {
   await open('framed', `#/ticket/${framed}`);
   await open('mockup', `#/ticket/${mockup}`);
   await open('full', `#/ticket/${framed}?view=full`);
+  // CHAT-4: the chat pane, open on a chat of the framed ticket (login off:
+  // anyone reads it; the peer is a fixed key, never signed in).
+  const chat = one(['chats', 'open', '--ticket', framed, '--others', SWEEP_PEER]).chat.id;
+  if (!synapse(['chats', 'messages', '--chat', String(chat)]).some((e) => e.type === 'message')) {
+    one(['chats', 'post', '--chat', String(chat), '--body', 'The pane follows the theme: `code`, **bold**, a [link](#/).']);
+  }
+  await open('chat', `#/ticket/${framed}?chat=${chat}`);
   await open('waves', `#/waves/${EPIC}`);
   await open('waves-to', `#/waves/to/${framed}`);
   await open('components', '#/components');

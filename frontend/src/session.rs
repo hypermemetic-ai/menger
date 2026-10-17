@@ -799,6 +799,12 @@ pub(crate) fn comments_client() -> Option<CommentsClient<Rc<WsTransport>>> {
     TRANSPORT.with(|t| t.borrow().clone()).map(CommentsClient::new)
 }
 
+/// CHAT-4: the `chats` activation's typed client, over the same
+/// connection — `ChatsClient`, emitted from CHAT-3's declaration.
+pub(crate) fn chats_client() -> Option<menger_tickets_api::ChatsClient<Rc<WsTransport>>> {
+    TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::ChatsClient::new)
+}
+
 /// THEME-8: the `themes` activation's typed client, over the same
 /// connection.
 pub(crate) fn themes_client() -> Option<menger_tickets_api::ThemesClient<Rc<WsTransport>>> {
@@ -922,6 +928,9 @@ async fn session(
     // COMMENT-3: the comments — `comments.watch`, then the list — only once
     // a view has asked (annotation mode, #/comments, a ticket page's count).
     comments::refresh();
+    // CHAT-4: the reader's chats — `chats.watch`, then the list — only once
+    // a ticket page has asked.
+    crate::chats::refresh();
     // DEPLOY-13: where work runs — `deployments.watch`, then the
     // environments and their cells — only once a view draws a mark.
     crate::deploys::refresh();

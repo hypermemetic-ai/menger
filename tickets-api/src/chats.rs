@@ -137,6 +137,10 @@ pub enum ChatsEvent {
     },
     /// One of `list`'s rows.
     Chat { chat: Chat },
+    /// CHAT-4: one of `candidates`' rows — a principal who could be named in
+    /// a chat on the ticket, and whether it can read the ticket now (one
+    /// that cannot is shown in the picker and cannot be picked).
+    Candidate { principal: String, reads: bool },
     /// `post`'s answer, and on every participant's `watch`.
     Posted { message: Message },
     /// One of `messages`' rows (oldest first), and `await_message`'s answer.

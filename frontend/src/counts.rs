@@ -86,7 +86,7 @@ pub(crate) fn cat_of_field(field: &str) -> Option<Cat> {
 pub(crate) fn counts_of(facets: impl IntoIterator<Item = (String, String, u64)>, codes: impl IntoIterator<Item = String>) -> Counts {
     let mut out: Counts = HashMap::new();
     // FILTER-27: When is no facet: its clauses go uncounted.
-    for c in Cat::SERVER.into_iter().filter(|c| !matches!(c, Cat::When | Cat::Deployed)) {
+    for c in Cat::SERVER.into_iter().filter(|c| !matches!(c, Cat::When | Cat::Deployed | Cat::Chats)) {
         let m = out.entry(c).or_default();
         for v in c.fixed() {
             m.insert(v.to_string(), 0);
