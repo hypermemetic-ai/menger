@@ -292,6 +292,17 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
     Some(Timed { not: kind == Kind::Untouched, h: History { event, window, by: None } })
 }
 
+/// CHAT-4: `chatting` (`unread: false`) or `unread` — the filter menu's
+/// Chats category builds them; no window, no who.
+pub(crate) fn new_chats(unread: bool) -> Timed {
+    Timed { not: false, h: History { event: if unread { Event::Unread } else { Event::Chatting }, window: None, by: None } }
+}
+
+/// CHAT-4: whether a time pill is one of the reader's chats' cells.
+pub(crate) fn is_chats(t: &Timed) -> bool {
+    matches!(t.h.event, Event::Chatting | Event::Unread)
+}
+
 /// The window a clause that must have one falls back to: a birth's today, a
 /// touch's two weeks.
 fn default_window(e: &Event) -> Window {

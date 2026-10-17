@@ -67,7 +67,7 @@ impl Chats {
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core",
     roles(
-        viewer = ["open", "post", "add", "list", "messages", "read", "close", "reopen", "watch", "await_message"],
+        viewer = ["open", "post", "add", "list", "messages", "read", "close", "reopen", "watch", "await_message", "candidates"],
         editor = [viewer],
     )
 )]
@@ -242,6 +242,24 @@ impl Chats {
         ticket: Option<TicketRef>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         watch_stream(self.access.clone(), self.store.clone(), user, ticket.map(TicketRef::into_string))
+    }
+
+    /// Who could be in a chat on a ticket: a candidate { principal, reads } each — every principal holding a grant in the ticket's organization (a team's members by name), and those in the caller's chats there — then the end.
+    ///
+    /// CHAT-4's picker: `reads` says whether the principal can read the
+    /// ticket now (`open` and `add` refuse one that cannot). The caller is
+    /// not among them. A ticket the caller cannot read is `refused` as one
+    /// that is none. With login off, nobody holds a grant: the list is the
+    /// chats' participants.
+    #[plexus_macros::method(group = "read")]
+    pub async fn candidates(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The ticket, e.g. KILN-7.
+        ticket: TicketRef,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        let (store, access) = (self.store.clone(), self.access.clone());
+        futures::stream::iter(candidates(&store, &access, &user, &ticket.into_string()))
     }
 
     /// Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — and the end; timed_out after timeout_minutes.

@@ -118,6 +118,10 @@ pub(crate) enum Cat {
     /// deployed <env>`: time pills too (src/when.rs), built from the
     /// environments the app holds (src/deploys.rs); uncounted.
     Deployed,
+    /// CHAT-4: the reader's chats — `chatting` (in an open chat on the
+    /// ticket), `unread` (unread there): pills of When's kind
+    /// (src/when.rs), built from this category's own pane; uncounted.
+    Chats,
     Wave,
     Readiness,
     OffBoard,
@@ -163,7 +167,7 @@ pub(crate) const INPUT_STATES: [&str; 3] = ["open", "answered", "closed"];
 pub(crate) const ALL: &str = "all";
 
 impl Cat {
-    pub(crate) const ALL: [Cat; 18] = [
+    pub(crate) const ALL: [Cat; 19] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -176,6 +180,7 @@ impl Cat {
         Cat::Label,
         Cat::When,
         Cat::Deployed,
+        Cat::Chats,
         Cat::Wave,
         Cat::Readiness,
         Cat::OffBoard,
@@ -202,7 +207,7 @@ impl Cat {
 
     /// The server-backed categories, offered at every level, in the menu's
     /// order.
-    pub(crate) const SERVER: [Cat; 12] = [
+    pub(crate) const SERVER: [Cat; 13] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -215,6 +220,7 @@ impl Cat {
         Cat::Label,
         Cat::When,
         Cat::Deployed,
+        Cat::Chats,
     ];
 
     /// The wave board's categories, in its menu's order: WAVE-12's, with the
@@ -240,7 +246,7 @@ impl Cat {
     /// FILTER-16: the inputs page's categories, in its menu's order — its
     /// own (State, Removed) first, then the server-backed ones, which filter
     /// the inputs' tickets.
-    pub(crate) const INPUTS: [Cat; 14] = [
+    pub(crate) const INPUTS: [Cat; 15] = [
         Cat::State,
         Cat::Removed,
         Cat::Shortcode,
@@ -255,6 +261,7 @@ impl Cat {
         Cat::Label,
         Cat::When,
         Cat::Deployed,
+        Cat::Chats,
     ];
 
     /// A surface's own category — evaluated by the surface, kept beside the
@@ -285,6 +292,7 @@ impl Cat {
             Cat::Label => "label",
             Cat::When => "when",
             Cat::Deployed => "deployed",
+            Cat::Chats => "chats",
             Cat::Wave => "wave",
             Cat::Readiness => "ready",
             Cat::OffBoard => "off",
@@ -313,6 +321,7 @@ impl Cat {
             Cat::Label => "Label",
             Cat::When => "When",
             Cat::Deployed => "Deployed",
+            Cat::Chats => "Chats",
             Cat::Wave => "Wave",
             Cat::Readiness => "Readiness",
             Cat::OffBoard => "Off-board blockers",
@@ -328,6 +337,7 @@ impl Cat {
         match self {
             Cat::When => "created moved changed recently in status for since before between today",
             Cat::Deployed => "deploy deployment environment running released prod test staging waiting",
+            Cat::Chats => "chat chatting unread messages conversation",
             _ => "",
         }
     }
@@ -354,6 +364,7 @@ impl Cat {
             Cat::Label => "⌗",
             Cat::When => "◷",
             Cat::Deployed => "⇡",
+            Cat::Chats => "@",
             Cat::Wave => "≋",
             Cat::Readiness => "▸",
             Cat::OffBoard => "⧖",
@@ -374,7 +385,7 @@ impl Cat {
             Cat::Readiness => &["workable", "waiting", "missing"],
             Cat::State => &INPUT_STATES,
             Cat::OffBoard => &["some", "none"],
-            Cat::Shortcode | Cat::Wave | Cat::Title | Cat::Label | Cat::When | Cat::Deployed => &[],
+            Cat::Shortcode | Cat::Wave | Cat::Title | Cat::Label | Cat::When | Cat::Deployed | Cat::Chats => &[],
         }
     }
 
@@ -482,7 +493,9 @@ pub(crate) fn op_label(c: Cat, op: Op, n: usize) -> &'static str {
 /// DEPLOY-13: the category a time pill is drawn under — Deployed for a
 /// `deployed`, When for the rest.
 pub(crate) fn time_cat(t: &crate::when::Timed) -> Cat {
-    if crate::when::env_of(t).is_some() {
+    if crate::when::is_chats(t) {
+        Cat::Chats
+    } else if crate::when::env_of(t).is_some() {
         Cat::Deployed
     } else {
         Cat::When
@@ -494,7 +507,7 @@ pub(crate) fn time_cat(t: &crate::when::Timed) -> Cat {
 /// pill's, for one value); a flag has none: its `yes` / `no` is already the
 /// negation (nor When and Deployed: a time pill's parts are its own).
 pub(crate) fn switch_words(c: Cat) -> Option<(&'static str, &'static str)> {
-    (!c.is_flag() && c != Cat::When && c != Cat::Deployed).then(|| (op_label(c, Op::Is, 1), op_label(c, Op::Not, 1)))
+    (!c.is_flag() && !matches!(c, Cat::When | Cat::Deployed | Cat::Chats)).then(|| (op_label(c, Op::Is, 1), op_label(c, Op::Not, 1)))
 }
 
 /// FILTER-19: the operator the switch shows — the clause's; with no clause,
@@ -2563,7 +2576,7 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
                     {move || list_view(lens, pop, main_rows.get(), move || pop.cat.get().is_none())}
                 </div>
                 {move || pop.cat.get().map(|c| view! {
-                    <div class="fpane fsub" role=if matches!(c, Cat::When | Cat::Deployed) { "group" } else { "menu" } aria-label=format!("{} values", c.label()) data-cat=c.key()>
+                    <div class="fpane fsub" role=if matches!(c, Cat::When | Cat::Deployed | Cat::Chats) { "group" } else { "menu" } aria-label=format!("{} values", c.label()) data-cat=c.key()>
                         <div class="frow back" on:mousedown=|ev| ev.prevent_default() on:click=move |_| pop.back()>
                             <span class="glyph">"‹"</span>
                             <span class="flabel">{c.menu_label()}</span>
@@ -2571,7 +2584,7 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
                         {switch_view(lens, pop, c)}
                         {if c == Cat::Title {
                             title_view(lens, pop).into_any()
-                        } else if matches!(c, Cat::When | Cat::Deployed) {
+                        } else if matches!(c, Cat::When | Cat::Deployed | Cat::Chats) {
                             crate::when_view::pane(lens, pop).into_any()
                         } else {
                             view! { {move || list_view(lens, pop, sub_rows.get(), move || true)} }.into_any()
@@ -2724,7 +2737,7 @@ fn row_view(lens: Lens, pop: Pop, row: Row, at: Option<usize>, live: impl Fn() -
         }
         Row::Cat(c) => {
             let applied = move || match c {
-                Cat::When | Cat::Deployed => {
+                Cat::When | Cat::Deployed | Cat::Chats => {
                     let at = pop.into.get().unwrap_or(Path::ROOT);
                     anyof::block_at(&lens.tree(level), at)
                         .is_some_and(|b| b.items.iter().any(|n| matches!(n, Node::Leaf(Member::Time(t)) if time_cat(t) == c)))
@@ -3181,7 +3194,16 @@ pub(crate) mod tests {
 
         // The global menu: the server's categories, no Title to offer.
         let g = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        assert_eq!(search("", &g).len(), 12, "FILTER-27: When among them; DEPLOY-13: Deployed");
+        assert_eq!(search("", &g).len(), 13, "FILTER-27: When among them; DEPLOY-13: Deployed; CHAT-4: Chats");
+        // CHAT-4: Chats — its own pane of two cells, found by them, and the
+        // pills it builds drawn under it.
+        assert!(offered(Cat::Chats, &g).is_empty());
+        assert_eq!(search("unread", &g)[0], Row::Cat(Cat::Chats));
+        assert_eq!(search("chat", &g)[0], Row::Cat(Cat::Chats));
+        assert_eq!(switch_words(Cat::Chats), None);
+        assert_eq!(time_cat(&crate::when::new_chats(false)), Cat::Chats);
+        assert_eq!(crate::when::group(&crate::when::new_chats(true)).format(), "unread");
+        assert_eq!(crate::when::group(&crate::when::new_chats(false)).format(), "chatting");
         assert!(offered(Cat::When, &g).is_empty(), "When draws its own pane");
         assert!(offered(Cat::Deployed, &g).is_empty(), "DEPLOY-13: and Deployed, When's pane");
         assert_eq!(search("deploy", &g)[0], Row::Cat(Cat::Deployed));

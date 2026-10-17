@@ -85,16 +85,47 @@ fn put(lens: Lens, pop: Pop, at: Option<Slot>, t: &Timed) -> Option<Slot> {
 pub(crate) fn pane(lens: Lens, pop: Pop) -> impl IntoView {
     let level = pop.level;
     move || match pop.when.get() {
-        Step::Root => root_view(pop).into_any(),
+        Step::Root => root_view(lens, pop).into_any(),
         Step::New(kind) => new_view(lens, pop, kind).into_any(),
         Step::Edit { at, only } => match untrack(|| clause_at(lens, level, at)) {
             Some(_) => edit_view(lens, pop, at, only).into_any(),
-            None => root_view(pop).into_any(),
+            None => root_view(lens, pop).into_any(),
         },
     }
 }
 
-fn root_view(pop: Pop) -> impl IntoView {
+/// CHAT-4: the Chats category's pane — its two cells, each a pill at once
+/// (`chatting`: you are in an open chat on it; `unread`: you have unread
+/// there).
+fn chats_view(lens: Lens, pop: Pop) -> impl IntoView {
+    let cells: [(bool, &'static str, &'static str); 2] =
+        [(false, "Chatting", "you're in an open chat on it"), (true, "Unread", "you have unread messages there")];
+    view! {
+        <div class="when-rows wform" role="menu" aria-label="chats">
+            {cells.into_iter().map(|(unread, label, what)| view! {
+                <button
+                    type="button"
+                    class="frow cat when-row"
+                    role="menuitem"
+                    data-when=if unread { "unread" } else { "chatting" }
+                    title=what
+                    on:mousedown=|ev| ev.prevent_default()
+                    on:click=move |_| {
+                        put(lens, pop, None, &when::new_chats(unread));
+                    }
+                >
+                    <span class="flabel">{label}</span>
+                    <span class="fmeta">{what}</span>
+                </button>
+            }).collect_view()}
+        </div>
+    }
+}
+
+fn root_view(lens: Lens, pop: Pop) -> impl IntoView {
+    if untrack(|| pop.open_cat_tracked()) == Some(crate::filter::Cat::Chats) {
+        return chats_view(lens, pop).into_any();
+    }
     // DEPLOY-13: under Deployed, its two rows; else When's six.
     let deployed = untrack(|| pop.open_cat_tracked()) == Some(crate::filter::Cat::Deployed);
     let rows: Vec<Kind> = if deployed { Kind::DEPLOYED.to_vec() } else { Kind::ALL.to_vec() };
@@ -115,6 +146,7 @@ fn root_view(pop: Pop) -> impl IntoView {
             }).collect_view()}
         </div>
     }
+    .into_any()
 }
 
 /// A chip: a choice, `on` when it is the clause's.

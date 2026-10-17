@@ -13,6 +13,9 @@
         "ticket",
         "timeout_minutes"
       ],
+      "candidates": [
+        "ticket"
+      ],
       "close": [
         "chat"
       ],

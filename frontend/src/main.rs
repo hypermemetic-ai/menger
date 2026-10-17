@@ -258,6 +258,8 @@ mod bridge;
 mod calendar;
 mod cache;
 mod card;
+mod chat_pane;
+mod chats;
 mod carpet;
 mod cite;
 mod comments;
@@ -1568,6 +1570,7 @@ fn ticket_view(
     // COMMENT-3: the open comments on this ticket, live — `None` until the
     // app holds the comments (the page asks for them).
     let comments_id = header_id.clone();
+    let chats_id = header_id.to_string();
     let open_comments = {
         let held = comments::signal();
         let id = header_id.clone();
@@ -1676,6 +1679,11 @@ fn ticket_view(
                 <div><dt>"Running"</dt><dd id="t-running"><deploys::Running id=running_id.to_string() commits /></dd></div>
                 // MENGER-12: its labels — chips, editable by a writer.
                 <div><dt>"Labels"</dt><dd id="t-labels"><labels::Editor ticket /></dd></div>
+                // CHAT-4: chat N — the reader's unread here; opens the pane.
+                <div>
+                    <dt>"Chats"</dt>
+                    <dd id="t-chats"><chat_pane::Field ticket=chats_id /></dd>
+                </div>
                 // COMMENT-3: its open comments, linking to them on #/comments.
                 <div>
                     <dt>"Comments"</dt>
@@ -2180,6 +2188,11 @@ fn App() -> impl IntoView {
     // MENGER-39: a hidden tab's title carries the queue's count.
     queue::install_title();
     let route = use_route(lens);
+    // CHAT-4: the route's ticket, for the chat pane.
+    let route_ticket = Signal::derive(move || match route.get() {
+        Route::Ticket(id) => Some(id),
+        _ => None,
+    });
     // COMMENT-3: annotation mode — its state, its listeners, its layer.
     let annot = annotate::install(route);
     // APP-45: and its keyboard path inside mockups.
@@ -2305,7 +2318,7 @@ fn App() -> impl IntoView {
     };
 
     view! {
-        <div id="app" class:nonav=move || nav_hidden.get() || !can_view.get() class:annotating=move || annot.on.get() data-rows-held=move || held.get()>
+        <div id="app" class:nonav=move || nav_hidden.get() || !can_view.get() class:annotating=move || annot.on.get() class:chatting=move || chat_pane::open_for(route_ticket.get().as_deref()) data-rows-held=move || held.get()>
             // IDENTITY-22: a person holding no grant sees no nav: there is
             // nothing in it they may read.
             {move || can_view.get().then(|| view! { <nav::Nav tree route hidden=nav_hidden /> })}
@@ -2525,6 +2538,9 @@ fn App() -> impl IntoView {
             // MENGER-39: the tray — the owner's queue along the main
             // column's bottom edge (a grid item over the content's cell).
             {move || can_view.get().then(|| view! { <queue::Tray /> })}
+            // CHAT-4: the chat pane — a column of the grid beside the content
+            // (a sheet under 760px), drawn while open on the route's ticket.
+            {move || can_view.get().then(|| view! { <chat_pane::Pane ticket=route_ticket /> })}
             // AGS-16: mounted once, outside every ticket element, so a
             // right-click inside the menu itself never re-targets it.
             <menu::TicketMenu last_error />

@@ -319,7 +319,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("annotate.walk-in", &[C::Annotate], &["ArrowRight"], G::Annotate, "into the chosen element: its first child"),
     b("annotate.walk-out", &[C::Annotate], &["ArrowLeft"], G::Annotate, "out to the chosen element's parent"),
     b("annotate.walk-pick", &[C::Annotate], &["Enter"], G::Annotate, "comment on the element chosen"),
-    b("comment.save", &[C::Dialog, C::Field], &["Mod+Enter"], G::Annotate, "save the comment being written — in a comment box, or send it from a ticket's Conversation"),
+    b("comment.save", &[C::Dialog, C::Field], &["Mod+Enter"], G::Annotate, "save the comment being written — in a comment box, or send it from a ticket's Conversation or its chat pane"),
     // APP-22: the ticket page's Conversation box.
     b("comment.focus", &[C::TicketPage], &["c"], G::Annotate, "comment on the ticket as a whole: its Conversation box, focused"),
     // -- View
