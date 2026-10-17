@@ -211,6 +211,14 @@ struct Args {
     #[arg(long = "admin", env = "MENGER_ADMINS", value_name = "PRINCIPAL", value_delimiter = ';')]
     admin: Vec<String>,
 
+    /// CHAT-13: a standing chat member (repeatable; a principal, e.g. the
+    /// chat bridge's key) — a participant of every chat opened, beside the
+    /// caller and the others named (a chat of one too), and added to every
+    /// open chat at startup, once. One without read on a chat's ticket is
+    /// added anyway, with a warning. In the env var, separated by `;`.
+    #[arg(long = "chat-member", env = "MENGER_CHAT_MEMBERS", value_name = "PRINCIPAL", value_delimiter = ';')]
+    chat_member: Vec<String>,
+
     /// IDENTITY-35: the dev sign-in, test only (only with `--env test`, IDENTITY-38):
     /// the login page's checkbox sends this browser's sign-in to this
     /// `--auth-provider` (plexus-idp's name, e.g. `plexus-idp`), where a
@@ -429,7 +437,7 @@ async fn main() -> anyhow::Result<()> {
     let wired = wiring.finish(MengerAccess(access.clone()), dev)?;
     let offers = wired.offered().map(menger::offer).collect();
     let metadata = wired.metadata_url();
-    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes).await?;
+    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, args.chat_member.clone()).await?;
 
     local::log_activations(&hub);
 

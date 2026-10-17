@@ -493,3 +493,68 @@ async fn synthetic_chats_are_seeded_in_bulk() {
     assert!(lines > 100, "{lines}");
     assert!(synthetic_message(4).contains("```rust"), "some code");
 }
+
+/// CHAT-13: the standing members (`--chat-member`) are in every chat
+/// opened — beside the caller and the others named, and in a chat of one —
+/// even one that can't read the ticket (added, and said in the log); the
+/// same chat again is that chat; a member opening is in it once; each is
+/// drawn as an agent (`Chat.agents`).
+#[tokio::test]
+async fn every_chat_opened_holds_the_standing_members() {
+    let store = kiln().await;
+    store.set_chat_members(vec![REVIEWER.into(), SAM.into(), " ".into(), REVIEWER.into()]);
+    assert_eq!(store.chat_members(), [REVIEWER, SAM], "blank and repeated set aside");
+    let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    assert_eq!(c.parts.iter().map(|p| p.principal.as_str()).collect::<Vec<_>>(), [ADA, BUILDER, REVIEWER, SAM], "sam can't read KILN, and is added anyway");
+    assert!(c.parts.iter().all(|p| p.added_by == ADA));
+    let (again, existing) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    assert!(existing && again.id == c.id, "the same chat again is that chat");
+    // A chat of one is the caller's and the members'.
+    let (one, existing) = open(&store, ADA, "KILN-6", &[]).await.unwrap();
+    assert!(!existing);
+    assert_eq!(one.parts.iter().map(|p| p.principal.as_str()).collect::<Vec<_>>(), [ADA, REVIEWER, SAM]);
+    // A member opening is in it once.
+    let (own, _) = open(&store, REVIEWER, "KILN-5", &[ADA]).await.unwrap();
+    assert_eq!(own.parts.iter().map(|p| p.principal.as_str()).collect::<Vec<_>>(), [REVIEWER, ADA, SAM]);
+    // Naming one who can't read is still refused: the members' pass is theirs alone.
+    assert!(matches!(open(&store, ADA, "KILN-4", &[SAM]).await, Err(ChatError::Refused(_))));
+    // The view names them as agents.
+    let view = store.chat_view(&reader(ADA), c.id).unwrap();
+    assert_eq!(view.agents, [REVIEWER, SAM]);
+    assert!(store.chat_view(&reader(REVIEWER), c.id).is_some(), "a member sees the chat");
+}
+
+/// CHAT-13: at startup every open chat gains the standing members it
+/// lacks — signed `system`, an `added` change each — once: a second run
+/// writes nothing; a closed chat is left as it is; nothing set, nothing done.
+#[tokio::test]
+async fn the_startup_back_fill_seats_the_members_once() {
+    let store = kiln().await;
+    let (a, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    let (b, _) = open(&store, ADA, "KILN-6", &[]).await.unwrap();
+    let (closed, _) = open(&store, ADA, "KILN-5", &[]).await.unwrap();
+    store.set_chat_state(SYS.permit::<Viewer>("KILN-5"), closed.id, Signer::named(ADA), false).await.unwrap();
+    let (held, _) = open(&store, REVIEWER, "KILN-4", &[ADA]).await.unwrap();
+    assert!(store.seat_chat_members(SYS, |_, _| true).await.unwrap().is_empty(), "no members: nothing");
+    store.set_chat_members(vec![REVIEWER.into()]);
+    let mut rx = store.subscribe_chats();
+    let seated = store.seat_chat_members(SYS, |p, _| p != SAM).await.unwrap();
+    assert_eq!(seated, [a.id, b.id], "the open chats that lacked it; not the closed one, nor one it is in");
+    for id in [a.id, b.id] {
+        let ChatChange::Added(c) = rx.try_recv().unwrap() else { panic!("an added change") };
+        assert_eq!(c.id, id);
+        let p = c.parts.last().unwrap();
+        assert_eq!((p.principal.as_str(), p.added_by.as_str(), p.read_upto), (REVIEWER, "system", 0));
+    }
+    assert!(rx.try_recv().is_err());
+    let kept = store.tickets.read().unwrap().chats.by_id.clone();
+    assert!(!kept[&closed.id].has(REVIEWER) && kept[&held.id].parts.len() == 2);
+    // Again: nothing written, nothing said.
+    assert!(store.seat_chat_members(SYS, |_, _| true).await.unwrap().is_empty());
+    assert!(rx.try_recv().is_err());
+    assert_eq!(store.tickets.read().unwrap().chats.by_id, kept);
+    // A member without read is seated anyway.
+    store.set_chat_members(vec![REVIEWER.into(), SAM.into()]);
+    assert_eq!(store.seat_chat_members(SYS, |p, _| p != SAM).await.unwrap(), [a.id, b.id, held.id]);
+    assert!(store.tickets.read().unwrap().chats.by_id[&held.id].has(SAM));
+}

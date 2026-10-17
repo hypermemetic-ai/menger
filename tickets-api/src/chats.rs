@@ -106,6 +106,11 @@ pub struct Chat {
     /// "waiting for a message"): who is listening, as the pane shows it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waiting: Vec<String>,
+    /// CHAT-13: the participants who are the server's standing chat members
+    /// (`--chat-member`, in every chat) — agents, drawn as CHAT-4/7 draw an
+    /// `agent:` principal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
 }
 
 /// One message, as kept.

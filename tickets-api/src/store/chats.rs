@@ -246,6 +246,10 @@ pub(crate) struct Chats {
     by_principal: HashMap<String, BTreeSet<u64>>,
     /// Who waits on each chat now, and how many waits each holds.
     listening: HashMap<u64, BTreeMap<String, u32>>,
+    /// CHAT-13: the standing members (`--chat-member`) — in every chat
+    /// opened, and added to every open chat at startup
+    /// ([`Store::seat_chat_members`]). Configuration, never stored.
+    members: Vec<String>,
 }
 
 impl Chats {
@@ -308,6 +312,7 @@ impl Chats {
             count: self.ids(c.id).len() as u64,
             mark: c.part(me).map(|p| p.read_upto).filter(|m| *m > 0).map(MessageId::new),
             waiting: self.listening.get(&c.id).map(|w| w.keys().cloned().collect()).unwrap_or_default(),
+            agents: c.parts.iter().filter(|p| self.members.contains(&p.principal)).map(|p| p.principal.clone()).collect(),
         }
     }
 }
@@ -524,11 +529,20 @@ impl Store {
                 set.push(p.to_string());
             }
         }
-        let mut reasons = Vec::new();
-        if set.len() > PARTICIPANTS_MAX {
-            reasons.push(format!("a chat holds at most {PARTICIPANTS_MAX} participants; this one would hold {}", set.len()));
+        let mut reasons: Vec<String> = set[1..].iter().filter(|p| !reads(p)).map(|p| format!("{p} can't read {key}")).collect();
+        // CHAT-13: and the standing members, whoever opens it — one that
+        // can't read the ticket is added anyway, and said in the log.
+        for m in self.chat_members() {
+            if !set.contains(&m) {
+                if !reads(&m) {
+                    tracing::warn!("CHAT-13: standing chat member {m} can't read {key}; added to the chat anyway");
+                }
+                set.push(m);
+            }
         }
-        reasons.extend(set[1..].iter().filter(|p| !reads(p)).map(|p| format!("{p} can't read {key}")));
+        if set.len() > PARTICIPANTS_MAX {
+            reasons.insert(0, format!("a chat holds at most {PARTICIPANTS_MAX} participants; this one would hold {}", set.len()));
+        }
         if !reasons.is_empty() {
             return Err(ChatError::Refused(reasons));
         }
@@ -547,6 +561,62 @@ impl Store {
             (record, self.chats_before(&cache, &key))
         };
         self.chat_write(serial, record.clone(), None, under, ChatChange::Opened(record.clone())).await.map(|()| (record, false))
+    }
+
+    /// CHAT-13: the standing chat members (main's `--chat-member`) — set
+    /// once, at startup, before anything is served.
+    pub fn set_chat_members(&self, members: Vec<String>) {
+        let mut members: Vec<String> = members.into_iter().map(|m| m.trim().to_string()).filter(|m| !m.is_empty()).collect();
+        let mut seen = BTreeSet::new();
+        members.retain(|m| seen.insert(m.clone()));
+        self.tickets.write().expect("store lock poisoned").chats.members = members;
+    }
+
+    /// CHAT-13: the standing chat members.
+    pub fn chat_members(&self) -> Vec<String> {
+        self.tickets.read().expect("store lock poisoned").chats.members.clone()
+    }
+
+    /// CHAT-13: every open chat gains the standing members it lacks — each
+    /// an `added` participant signed `system`, one write per chat. Run at
+    /// startup; a chat that holds them all is not written, so a second run
+    /// writes nothing. A member that `reads` (principal, ticket) says can't
+    /// read the chat's ticket is added anyway, and said in the log. Answers
+    /// the chats written.
+    pub async fn seat_chat_members(&self, _sys: &super::System, reads: impl Fn(&str, &str) -> bool) -> Result<Vec<u64>, ChatError> {
+        let lacking: Vec<u64> = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let members = &cache.chats.members;
+            cache.chats.by_id.values().filter(|c| c.state == ChatState::Open && members.iter().any(|m| !c.has(m))).map(|c| c.id).collect()
+        };
+        let mut seated = Vec::new();
+        for chat in lacking {
+            let serial = self.serial().await;
+            let now = chrono::Utc::now().timestamp();
+            let (record, under) = {
+                let cache = self.tickets.read().expect("store lock poisoned");
+                let Some(mut c) = cache.chats.by_id.get(&chat).cloned() else { continue };
+                let key = cache.resolve(&c.ticket).ok().unwrap_or_else(|| c.ticket.clone());
+                let mut added = false;
+                for m in &cache.chats.members {
+                    if c.state != ChatState::Open || c.has(m) || c.parts.len() >= PARTICIPANTS_MAX {
+                        continue;
+                    }
+                    if !reads(m, &key) {
+                        tracing::warn!("CHAT-13: standing chat member {m} can't read {key}; added to chat {chat} anyway");
+                    }
+                    c.parts.push(Part { principal: m.clone(), added_by: "system".into(), added_at: now, read_upto: 0 });
+                    added = true;
+                }
+                if !added {
+                    continue;
+                }
+                (c, self.chats_before(&cache, &key))
+            };
+            self.chat_write(serial, record.clone(), None, under, ChatChange::Added(record)).await?;
+            seated.push(chat);
+        }
+        Ok(seated)
     }
 
     /// CHAT-3: `by` posts `body` in chat `chat`, on the ticket `on` names.
