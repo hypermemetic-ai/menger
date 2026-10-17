@@ -50,7 +50,7 @@ use menger_tickets_api::{Ticket, TicketsEvent};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::filter::{pill_words, Clauses, Pill};
+use crate::filter::Clauses;
 use crate::lens::{Kept, Lens, Level};
 use crate::{dom, session};
 
@@ -84,11 +84,6 @@ pub(crate) const SUGGESTED: [(&str, &str); 4] = [
     // FILTER-30: open work nobody has touched in two weeks.
     ("Untouched 2w", "not touched within 2w and not category done and not kind doc"),
 ];
-
-/// The suggestions not yet listed (by their name's slug).
-pub(crate) fn suggestions(listed: &[Entry]) -> Vec<(&'static str, &'static str)> {
-    SUGGESTED.into_iter().filter(|(name, _)| !listed.iter().any(|e| slug(&e.name) == slug(name) || e.id == slug(name))).collect()
-}
 
 /// A name as a path's last part (FILTER-36: the server's rule, the one
 /// `saved "Name"` is resolved by).
@@ -475,18 +470,6 @@ pub(crate) fn taken_words(typed: &str, e: &Entry) -> String {
 
 // ---------------------------------------------------------------------
 // What a level saves
-
-/// What a level's surface-only part is, in its words — each local clause
-/// as its pill reads (`Wave is 1`): what Save as… leaves out.
-pub(crate) fn left_out(k: &Kept) -> Vec<String> {
-    k.local
-        .iter()
-        .map(|(cat, clause)| {
-            let (c, v) = pill_words(&Pill::Clause { cat, clause: clause.clone() });
-            format!("{c} {v}")
-        })
-        .collect()
-}
 
 /// Whose filter a level's is, as the dialog says it.
 pub(crate) fn level_words(level: Level) -> &'static str {
@@ -895,20 +878,17 @@ impl Saved {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::filter::{Cat, Clausal, Op};
 
     /// The slug: lower case, letters and digits, one `-` per run of anything
     /// else, none at the ends — empty for a name with no letter or digit;
     /// at most 64 characters, never ending in `-`.
     #[test]
-    fn the_suggestions_parse_and_step_aside_once_listed() {
+    fn the_suggestions_parse() {
         for (name, text) in SUGGESTED {
             let f = Filter::parse(text).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(f.format(), text, "{name}: canonical");
         }
-        assert_eq!(suggestions(&[]).len(), 4);
-        let listed = [Entry::new("stuck", "Stuck"), Entry::new("x", "new today"), Entry::new("untouched-2w", "Untouched 2w")];
-        assert_eq!(suggestions(&listed), [("Moved today", "changed today")]);
+        assert_eq!(SUGGESTED.len(), 4);
     }
 
     #[test]
@@ -1070,20 +1050,4 @@ mod tests {
         assert_eq!(plan_rename(&listed, "mine", "  "), Err(Refusal::NoName));
     }
 
-    /// What Save as… leaves out: a level's surface-only clauses, as their
-    /// pills read; nothing where there are none. A chosen filter carries
-    /// none.
-    #[test]
-    fn the_surface_only_part_is_left_out() {
-        let mut k = Kept { filter: Filter::parse("kind in (build)").unwrap(), local: Clauses::default() };
-        assert!(left_out(&k).is_empty());
-        k.set(Cat::Wave, Op::Is, ["1".to_string()]);
-        k.set(Cat::Title, Op::Is, ["filter".to_string()]);
-        assert_eq!(left_out(&k), vec!["Wave is wave 1".to_string(), "Title contains \u{201c}filter\u{201d}".to_string()]);
-        assert_eq!(saved_text(&k.filter), "filter: kind build", "the language part alone is saved");
-        let c = chosen(k.filter.clone());
-        assert_eq!((c.filter, c.local), (k.filter.clone(), Clauses::default()));
-        assert_eq!(level_words(Level::Waves), "the wave board's filter");
-        assert_eq!(surface_words(Level::Waves), "the wave board's own");
-    }
 }

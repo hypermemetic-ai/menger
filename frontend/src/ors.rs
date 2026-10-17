@@ -321,18 +321,6 @@ impl Ors {
         Slot { group: sel, item: g.len() - 1 }
     }
 
-    /// The time clauses group `sel` holds of category `c` (When, Deployed,
-    /// Chats), with where each is.
-    pub(crate) fn times_in(&self, sel: usize, c: Cat) -> Vec<(Slot, Timed)> {
-        let Some(g) = self.groups.get(sel) else { return Vec::new() };
-        g.iter()
-            .enumerate()
-            .filter_map(|(item, _)| {
-                let s = Slot { group: sel, item };
-                self.time_at(s).filter(|t| crate::filter::time_cat(t) == c).map(|t| (s, t))
-            })
-            .collect()
-    }
 }
 
 /// The category a clause is drawn under — none for one no category draws
@@ -389,11 +377,57 @@ pub(crate) fn words(p: &Predicate) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn f(text: &str) -> Filter {
         Filter::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"))
+    }
+
+    /// Tickets enough to tell two filters apart: every status, kind,
+    /// severity, flag, label, shortcode and a few histories.
+    pub(crate) fn grid() -> Vec<menger_tickets_api::filter::Facts> {
+        use menger_tickets_api::{Kind, Severity, Status};
+        let mut out = Vec::new();
+        let statuses = [Status::Ready, Status::Coding, Status::Pending, Status::Complete, Status::InReview];
+        let kinds = [Kind::Build, Kind::Gap, Kind::Spike, Kind::Doc];
+        let sevs = [None, Some(Severity::High), Some(Severity::Low)];
+        let hists: [&[&str]; 3] = [&[], &["changed today"], &["created today"]];
+        let mut n = 0;
+        for st in statuses {
+            for k in kinds {
+                for sev in sevs {
+                    for flags in 0..8u8 {
+                        for (hi, h) in hists.iter().enumerate() {
+                            n += 1;
+                            let epic = if n % 3 == 0 { "MNG" } else { "WAVE" };
+                            out.push(menger_tickets_api::filter::Facts {
+                                id: format!("{epic}-{n}"),
+                                epic: epic.into(),
+                                title: if n % 5 == 0 { "the menger envelope".into() } else { "a title".into() },
+                                status: st,
+                                kind: k,
+                                severity: sev,
+                                blocked: flags & 1 != 0,
+                                has_commits: flags & 2 != 0,
+                                menger_doc: false,
+                                asking: flags & 4 != 0,
+                                labels: if hi == 1 { vec!["needs-you".into()] } else { Vec::new() },
+                                archived: false,
+                                lineage: vec![format!("{epic}-{n}"), epic.into(), "PLEXUS-1".into()],
+                                history: h.iter().map(|s| s.to_string()).collect(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether two filters admit the same tickets of [`grid`].
+    pub(crate) fn same_meaning(a: &Filter, b: &Filter) -> bool {
+        grid().iter().all(|t| a.matches(t) == b.matches(t))
     }
 
     fn texts(o: &Ors) -> Vec<String> {
@@ -561,8 +595,6 @@ mod tests {
         let s = o.put_time(1, None, &t);
         assert_eq!(s, Slot { group: 1, item: 1 });
         assert_eq!(back(&o), "(kind build or (kind gap and created today))");
-        assert_eq!(o.times_in(1, Cat::When).len(), 1);
-        assert!(o.times_in(0, Cat::When).is_empty());
         let t2 = crate::when::negate(&t);
         assert_eq!(o.put_time(1, Some(s), &t2), s);
         assert_eq!(back(&o), "(kind build or (kind gap and not created today))");

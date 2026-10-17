@@ -1742,91 +1742,11 @@
     background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--accent); cursor: pointer;
   }
   .fbar button.reset:hover { text-decoration: underline; }
-  /* FILTER-26: Make global, at the top of the nav's filter menu. */
-  .fmenu .fpromote { display: flex; align-items: baseline; gap: .5rem; padding: .3rem .6rem; border-bottom: var(--border) solid var(--line); }
-  .fmenu .fpromote button {
-    background: none; border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 .5rem;
-    font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--accent); cursor: pointer; white-space: nowrap; flex: none;
-  }
-  .fmenu .fpromote button:hover, .fmenu .fpromote button:focus-visible { border-color: var(--accent); }
-  .fmenu .fpromote-hint { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
-  .fmenu {
-    position: absolute; z-index: 30; display: flex; flex-direction: column; max-width: calc(100vw - 16px);
-    background: var(--bg); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius-xl);
-    box-shadow: 0 10px 30px var(--shadow); font: calc(12.5px * var(--text-scale))/1.5 var(--mono); overflow: hidden;
-  }
-  .fmenu input.fsearch {
-    flex: none; font: inherit; padding: .45rem .75rem; border: 0; border-bottom: var(--border) solid var(--line);
-    background: var(--bg); color: var(--ink); outline: none;
-  }
-  .fmenu input.fsearch::placeholder { color: var(--muted); }
-  .fmenu .panes { display: flex; min-height: 0; flex: 1 1 auto; }
-  .fmenu .fpane { overflow-y: auto; padding: 4px; min-height: 0; overscroll-behavior: contain; }
-  .fmenu .fmain { width: 17rem; flex: none; }
-  .fmenu .fsub { width: 18rem; flex: none; border-left: var(--border) solid var(--line); }
-  .fmenu.direct .fmain { display: none; }
-  .fmenu.direct .fsub { border-left: 0; }
-  .fmenu .frow {
-    display: flex; align-items: center; gap: .45rem; padding: 3px 8px; border-radius: var(--radius-md);
-    cursor: pointer; white-space: nowrap; user-select: none;
-  }
-  .fmenu .frow.hi { background: var(--hover); }
-  .fmenu .frow.cat.open { background: var(--sel); }
-  .fmenu .frow.cat.open .flabel { color: var(--accent); }
-  .fmenu .frow .flabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .fmenu .frow .glyph { width: 1.2em; flex: none; text-align: center; color: var(--muted); }
-  .fmenu .frow .arrow, .fmenu .fscope { color: var(--muted); }
-  .fmenu .fscope { margin-right: .3rem; font-size: calc(11px * var(--text-scale)); }
-  .fmenu .frow .fcount { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; font-size: calc(11px * var(--text-scale)); }
-  .fmenu .frow .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-  .fmenu .fhead {
-    padding: 6px 8px 2px; font-family: var(--sans); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-strong);
-    letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
-  }
-  .fmenu .fhead.fdiv { border-top: var(--border) solid var(--line); margin-top: 4px; padding-top: 6px; }
-  .fmenu .box {
-    flex: none; width: 13px; height: 13px; border: var(--border) solid var(--muted); border-radius: var(--radius-sm);
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-bold); line-height: 1; color: var(--bg);
-  }
-  .fmenu .box[data-state="on"], .fmenu .box[data-state="mixed"] { background: var(--accent); border-color: var(--accent); }
-  .fmenu .frow .only {
-    display: none; background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: calc(10.5px * var(--text-scale));
-    color: var(--accent); cursor: pointer;
-  }
-  .fmenu .frow:hover .only, .fmenu .frow.hi .only { display: inline; }
-  .fmenu .frow .only:hover { text-decoration: underline; }
-  .fmenu .frow .tag { font-size: calc(10.5px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-lg); }
-  .fmenu .kind .kglyph { color: var(--muted); }
-  .fmenu .kind[data-kind="scope"] .kglyph { color: var(--kind-scope); }
-  .fmenu .kind[data-kind="build"] .kglyph { color: var(--kind-build); }
-  .fmenu .kind[data-kind="execution"] .kglyph { color: var(--kind-execution); }
-  .fmenu .kind[data-kind="gap"] .kglyph { color: var(--kind-gap); }
-  .fmenu .kind[data-kind="spike"] .kglyph { color: var(--kind-spike); }
-  .fmenu .frow.back { display: none; color: var(--muted); border-bottom: var(--border) solid var(--line); border-radius: 0; margin-bottom: 4px; }
-  .fmenu .ftitle { padding: .5rem .6rem; display: flex; flex-direction: column; gap: .35rem; }
-  .fmenu .ftitle input {
-    font: inherit; padding: .25rem .45rem; background: var(--card); color: var(--ink);
-    border: var(--border) solid var(--line); border-radius: var(--radius); outline: none;
-  }
-  .fmenu .ftitle input:focus { border-color: var(--accent); }
-  .fmenu .fhint, .fmenu .fempty { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
-  .fmenu .fempty { padding: 4px 8px; }
-  /* Too little room for two panes (src/filter.rs measures the column). */
-  .fmenu.narrow .fpane { width: 18rem; max-width: 100%; flex: 0 1 auto; }
-  .fmenu.narrow.has-sub .fmain { display: none; }
-  .fmenu.narrow .fsub { border-left: 0; }
-  .fmenu.narrow:not(.direct) .frow.back { display: flex; }
-  /* FILTER-27: the When pane (src/when_view.rs) — its rows, a clause's
-     parts as chips, the window editor; a time pill's parts each a button. */
-  .fmenu .fsub[data-cat="when"], .fmenu .fsub[data-cat="deployed"] { width: 20rem; }
+
   .app-comp-demo { display: inline-flex; flex-direction: column; gap: 6px; padding: 8px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--bg); }
-  .fmenu.narrow .fsub[data-cat="when"], .fmenu.narrow .fsub[data-cat="deployed"] { width: 20rem; }
+  
   .when-rows { display: flex; flex-direction: column; }
-  .fmenu button.frow, .fmenu button.wback {
-    font: inherit; color: inherit; background: none; border: 0; text-align: left; width: 100%;
-  }
-  .fmenu button.frow:hover, .fmenu button.frow:focus-visible { background: var(--hover); outline: none; }
+
   /* FILTER-39: the filter panel — the menu, kept open in the page's flow
      (the content moves down under it): its head, the groups joined by or,
      every category a section flowing into as many columns as the width
@@ -1880,6 +1800,8 @@
   .fpanel .fchip-w.part:hover { color: var(--accent); }
   .fpanel .p-x { background: none; border: 0; font: inherit; color: var(--muted); cursor: pointer; padding: 0 .35rem; }
   .fpanel .p-x:hover, .fpanel .p-x:focus-visible { color: var(--err-fg); }
+  .fpanel .fp-peek { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+  .fpanel .fp-deep { flex-basis: 100%; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
   .fpanel .fp-addor {
     background: none; font: inherit; color: var(--accent); cursor: pointer; padding: .15rem .6rem;
     border: var(--border) dashed var(--accent); border-radius: var(--radius-lg);
@@ -2098,17 +2020,9 @@
     display: inline-block; padding: 0 5px; border-radius: var(--radius-xl); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-strong); line-height: 1.5;
     background: var(--accent); color: var(--bg);
   }
-  .lensbar {
-    padding: .4rem 1.25rem; border-bottom: var(--border) solid var(--line); background: var(--panel); font-size: calc(.85rem * var(--text-scale));
-  }
-  .lensbar .lens-l {
-    font-family: var(--sans); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
-  }
+
   #lens-top > .fclash { margin: .4rem 1.25rem; }
-  /* FILTER-16: on a page the filter does not reach (components, settings)
-     the bar says so, its pills quieter. */
-  .lensbar .lens-na { font-size: calc(12px * var(--text-scale)); font-style: italic; color: var(--muted); }
-  .lensbar.na .pill { opacity: .55; }
+
   .fbar .pill.inherited { opacity: .72; border-style: dashed; }
   .fbar .pill.inherited .p-cat, .fbar .pill.inherited .p-op { color: var(--muted); }
   .fbar .pill .p-lvl, .fclash .p-lvl {
@@ -2118,127 +2032,29 @@
   .fclash .p-lvl { margin-right: .3rem; }
   .fbar .pill.custom .p-cat { font-style: italic; }
   .fbar .pill.custom .p-vals { max-width: 26rem; }
-  /* FILTER-37: the query tree — the bar one line, folded (a chevron, the
-     name — underlined in --live once saved —, the canonical text, `done`
-     while open); opened, a root block and blocks within, each its head
-     (the joiner a button: the accent's one place but focus; `+ clause`,
-     `+ group`, `+ saved`, ×) and its items in a hairline; a saved query as
-     `SAVED · Name`, its peek; the picker, the category menu's card; "as
-     evaluated". No block is filled: the tree is drawn in --line. */
-  .fbar.qbar { display: block; }
-  .qbar .qline { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; min-width: 0; }
-  .qbar button.qchev {
-    font: inherit; font-size: calc(12px * var(--text-scale)); line-height: 1.6; background: none; border: 0; padding: 0 .2rem; color: var(--muted); cursor: pointer;
-  }
-  .qbar button.qchev:hover, .qbar button.qchev:focus-visible { color: var(--accent); }
-  .qbar input.qname {
-    font: var(--weight-strong) calc(12.5px * var(--text-scale)) var(--sans); color: var(--ink); background: transparent;
-    border: 0; border-bottom: var(--border) dashed var(--line); border-radius: 0; padding: .05rem .2rem; width: 10rem; min-width: 6rem; outline: none;
-  }
-  .qbar input.qname::placeholder { color: var(--muted); font-weight: var(--weight-medium); }
-  .qbar input.qname:focus { border-bottom-color: var(--accent); }
-  .qbar input.qname.saved { border-bottom: 2px solid var(--live); }
-  .qbar .qtext {
-    flex: 1 1 12rem; min-width: 8rem; font: calc(11.5px * var(--text-scale)) var(--mono); color: var(--muted);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
-  }
-  .qbar.open .qtext { white-space: normal; overflow-wrap: anywhere; cursor: default; }
-  .qbar .qglobal { display: inline-flex; align-items: baseline; gap: .3rem; max-width: 40%; opacity: .72; }
-  .qbar .qglobal code { font: calc(11px * var(--text-scale)) var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .qbar.open .qglobal code { white-space: normal; }
-  .qbar button.qdone {
-    font: inherit; font-size: calc(12px * var(--text-scale)); line-height: 1.6; padding: 0 .6rem; cursor: pointer;
-    background: var(--card); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius-pill);
-  }
-  .qbar button.qdone:hover, .qbar button.qdone:focus-visible { color: var(--accent); }
-  .qbar .p-lvl {
-    font-family: var(--sans); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
-  }
-  .qbar .qtree {
-    margin: .45rem 0 0; padding-top: .45rem; border-top: var(--border) solid var(--line);
-    font: calc(12px * var(--text-scale))/1.7 var(--mono); display: flex; flex-direction: column; gap: .2rem;
-  }
-  .qbar .qblock { display: flex; flex-direction: column; gap: .15rem; }
-  .qbar .qhead { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
-  .qbar .qkids {
-    display: flex; flex-direction: column; gap: .15rem; margin-left: .55rem; padding-left: .7rem; border-left: var(--border) dashed var(--line);
-  }
-  .qbar .qnode { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; min-width: 0; }
-  .qbar .qnode > .qblock { flex: 1 1 100%; }
-  .qbar button.qjoin, .qbar span.qjoin {
-    font: var(--weight-strong) calc(11px * var(--text-scale))/1.6 var(--mono); letter-spacing: .03em; color: var(--accent);
-    background: transparent; border: var(--border) dashed transparent; border-radius: var(--radius); padding: 0 .35rem;
-  }
-  .qbar button.qjoin { cursor: pointer; }
-  .qbar button.qjoin:hover, .qbar button.qjoin:focus-visible { border-color: var(--accent); outline: none; }
-  .qbar span.qjoin.ro { color: var(--muted); }
-  .qbar button.qadd {
-    font: calc(11.5px * var(--text-scale))/1.6 var(--mono); color: var(--muted); background: transparent; cursor: pointer;
-    border: var(--border) dashed var(--line); border-radius: var(--radius-pill); padding: 0 .5rem;
-  }
-  .qbar button.qadd:hover, .qbar button.qadd:focus-visible, .qbar button.qadd[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); outline: none; }
-  .qbar button.qrm, .qbar .qref .p-x, :is(.qbar, .fline) .qnote .p-x, .qbar .frefused .p-x {
+
+  .fline .qnote .p-x {
     font: inherit; background: none; border: 0; padding: 0 .3rem; color: var(--muted); cursor: pointer;
   }
-  .qbar button.qrm:hover, .qbar .qref .p-x:hover { color: var(--err-fg); }
-  .qbar .qempty { color: var(--muted); font-style: italic; font-family: var(--sans); font-size: calc(11.5px * var(--text-scale)); }
-  .qbar .qref {
-    display: inline-flex; align-items: center; gap: .3rem; padding: 0 .15rem 0 .5rem; white-space: nowrap;
-    border: var(--border) solid var(--line); border-radius: var(--radius-pill); background: var(--card); color: var(--ink);
-  }
-  .qbar .qref .qlab, .qbar .qref .qnot {
-    font: var(--weight-strong) calc(10px * var(--text-scale)) var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
-  }
-  .qbar .qref button.qpeek, .qbar .qref button.qinline {
-    font: inherit; background: none; border: 0; padding: 0 .25rem; color: var(--muted); cursor: pointer;
-  }
-  .qbar .qref button.qinline { border: var(--border) dashed var(--line); border-radius: var(--radius-pill); padding: 0 .45rem; font-size: calc(11px * var(--text-scale)); }
-  .qbar .qref button:hover, .qbar .qref button:focus-visible { color: var(--accent); }
-  .qbar .qref.inherited, .qbar .qblock.ro .pill { opacity: .72; border-style: dashed; }
-  .qbar .qpeeked {
-    flex-basis: 100%; margin: 0 0 .1rem 1.2rem; font: calc(11.5px * var(--text-scale))/1.5 var(--mono); color: var(--muted); white-space: normal;
-  }
-  .qbar .qinherited { display: flex; flex-direction: column; gap: .15rem; padding-bottom: .3rem; border-bottom: var(--border) dashed var(--line); }
-  .qbar .qinherited > .p-lvl { align-self: flex-start; }
-  .qbar .qlocal { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; padding-top: .3rem; border-top: var(--border) dashed var(--line); }
-  :is(.qbar, .fline) .qeval { margin: .35rem 0 0; font: calc(11px * var(--text-scale))/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
-  :is(.qbar, .fline) .qeval .qeval-l { font-family: var(--sans); }
-  .qbar .qpick {
-    position: static; display: flex; flex-direction: column; gap: .3rem; margin: .1rem 0 .2rem 1.2rem; padding: .4rem .5rem; max-width: 28rem;
-    max-height: none; box-shadow: none;
-  }
-  .qbar .qpick .qnames { display: flex; flex-direction: column; }
-  .qbar .qpick .qpick-n { display: flex; align-items: center; gap: .4rem; width: 100%; text-align: left; font: inherit; background: none; border: 0; cursor: pointer; }
-  .qbar .qpick .qpick-n .qin { color: var(--live); }
-  .qbar .qpick .qpick-n .qrecent { font: calc(10px * var(--text-scale)) var(--sans); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-  .qbar .qpick .qpick-n .fcount { margin-left: auto; }
-  .qbar .qpick .qmore { padding: .15rem .5rem; font: calc(11px * var(--text-scale)) var(--mono); color: var(--muted); }
-  :is(.qbar, .fline) .qtaken, :is(.qbar, .fline) .qnote {
+
+  .fline .qeval { margin: .35rem 0 0; font: calc(11px * var(--text-scale))/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  .fline .qeval .qeval-l { font-family: var(--sans); }
+
+  .fline .qtaken, .fline .qnote {
     display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .35rem 0 0; padding: .2rem .55rem;
     font-size: calc(12px * var(--text-scale)); font-family: var(--sans); border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card);
   }
-  :is(.qbar, .fline) .qtaken button { font: inherit; padding: 0 .55rem; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); cursor: pointer; }
-  :is(.qbar, .fline) .qtaken button.primary { border-color: var(--accent); color: var(--accent); }
-  :is(.qbar, .fline) .qnote.sproblem { background: var(--err-bg); color: var(--err-fg); border-color: var(--err-line); }
-  .qbar .frefused { display: block; margin: .35rem 0 0; }
-  .lensbar.qbar .qline { gap: .4rem; }
-  @media (max-width: 640px) {
-    .qbar .qkids { margin-left: .2rem; padding-left: .45rem; }
-    .qbar input.qname { width: 7rem; }
-    .qbar .qglobal { max-width: 100%; }
-    .qbar .qpick { margin-left: .3rem; }
-  }
-  .fbar .frefused, .fmenu .frefused {
+  .fline .qtaken button { font: inherit; padding: 0 .55rem; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); cursor: pointer; }
+  .fline .qtaken button.primary { border-color: var(--accent); color: var(--accent); }
+  .fline .qnote.sproblem { background: var(--err-bg); color: var(--err-fg); border-color: var(--err-line); }
+
+  .fbar .frefused {
     padding: .2rem .55rem; font-size: calc(12px * var(--text-scale)); font-family: var(--sans);
     background: var(--err-bg); color: var(--err-fg); border: var(--border) solid var(--err-line); border-radius: var(--radius-lg);
   }
   .fbar .frefused { flex-basis: 100%; order: 9; }
   .fbar .frefused .p-x { font: inherit; background: none; border: 0; color: var(--muted); cursor: pointer; }
-  .fmenu .frefused { flex: none; margin: 4px 8px; }
-  .fmenu .finto {
-    flex: none; padding: 4px 10px; border-bottom: var(--border) solid var(--line); font-family: var(--sans); font-size: calc(11.5px * var(--text-scale)); color: var(--accent);
-  }
-  .fmenu .frow .ingrp { color: var(--accent); margin-left: .3rem; font-family: var(--sans); }
+
   .fbar button.ftext-t {
     background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--muted); cursor: pointer;
   }
@@ -2261,26 +2077,7 @@
   .fclash code { font-family: var(--mono); }
   .fclash-g { white-space: nowrap; }
   #waves .wbar > .fclash { order: 9; margin-top: .2rem; }
-  .fmenu .flevel {
-    flex: none; padding: 4px 10px; border-bottom: var(--border) solid var(--line); font-family: var(--sans); font-size: calc(10.5px * var(--text-scale));
-    font-weight: var(--weight-strong); letter-spacing: .06em; text-transform: uppercase; color: var(--accent);
-  }
-  .fmenu .frow.fgroup { margin-top: 2px; }
-  .fmenu .frow.fgroup .fhead-l {
-    font-family: var(--sans); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
-  }
-  /* FILTER-19: the operator switch heading a category's values — one
-     button, its two words as segments, the clause's operator lit. */
-  .fmenu .fop-row { padding: 2px 4px 6px; }
-  .fmenu button.fop {
-    display: inline-flex; padding: 0; font: inherit; font-size: calc(11.5px * var(--text-scale)); background: var(--card); color: var(--muted);
-    border: var(--border) solid var(--line); border-radius: var(--radius-lg); overflow: hidden; cursor: pointer;
-  }
-  .fmenu button.fop .fop-w { padding: 1px 9px; }
-  .fmenu button.fop .fop-w + .fop-w { border-left: var(--border) solid var(--line); }
-  .fmenu button.fop .fop-w.on { background: var(--sel); color: var(--accent); }
-  .fmenu button.fop:hover { border-color: var(--accent); }
-  .fmenu button.fop:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
   /* FILTER-12: the board's bar over its table; the board when nothing
      matches — the words, the effective filter's pills (the global ones
      dashed and marked), a button to clear each level; the header's
@@ -2360,61 +2157,11 @@
   button.fbtn.sbtn .caret { color: var(--muted); font-size: calc(10px * var(--text-scale)); }
   button.fbtn.sbtn:hover .caret, button.fbtn.sbtn[aria-expanded="true"] .caret { color: var(--accent); }
   .saved .sflash { font-size: calc(11px * var(--text-scale)); color: var(--live); white-space: nowrap; }
-  .fmenu.smenu {
-    top: calc(100% + 4px); left: 0; width: 17rem; max-width: calc(100vw - 16px); padding: 4px;
-  }
-  .fmenu.smenu:focus { outline: none; }
-  #nav .fmenu.smenu { width: 16rem; }
-  .fmenu.smenu .slist { display: flex; flex-direction: column; max-height: 50vh; overflow-y: auto; overscroll-behavior: contain; }
-  .fmenu.smenu[data-reading] .slist { opacity: .6; }
-  .fmenu.smenu .srow { gap: .3rem; cursor: default; }
-  .fmenu.smenu .srow:hover, .fmenu.smenu .srow:focus-within { background: var(--hover); }
-  .fmenu.smenu button.schoose {
-    flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 0; font: inherit; color: var(--ink);
-    cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .fmenu.smenu button.schoose:hover, .fmenu.smenu button.schoose:focus-visible { color: var(--accent); outline: none; }
-  .fmenu.smenu .sact {
-    display: none; flex: none; background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: calc(10.5px * var(--text-scale));
-    color: var(--muted); cursor: pointer;
-  }
-  .fmenu.smenu .srow:hover .sact, .fmenu.smenu .srow:focus-within .sact,
-  .fmenu.smenu .srow.renaming .sact, .fmenu.smenu .srow.removing .sact { display: inline; }
-  .fmenu.smenu .sact:hover, .fmenu.smenu .sact.on { color: var(--accent); }
-  .fmenu.smenu .sact:hover { text-decoration: underline; }
-  .fmenu.smenu .srow.removing .flabel { white-space: normal; }
-  .fmenu.smenu input.sname-in {
-    flex: 1; min-width: 0; font: inherit; padding: .05rem .35rem; background: var(--card); color: var(--ink);
-    border: var(--border) solid var(--accent); border-radius: var(--radius); outline: none;
-  }
-  .fmenu.smenu button.ssave { background: none; border: 0; font: inherit; color: var(--accent); text-align: left; width: 100%; }
-  .fmenu.smenu button.ssave:hover, .fmenu.smenu button.ssave:focus-visible { background: var(--hover); outline: none; }
-  .fmenu.smenu button.ssave:disabled { color: var(--muted); cursor: default; background: none; }
-  .fmenu.smenu .sproblem { color: var(--err-fg); white-space: normal; overflow-wrap: anywhere; }
+
   #save-as { width: 32rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .7rem; }
   #save-as h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0; }
   #save-as p { margin: 0; }
-  #save-as .sname { display: flex; flex-direction: column; gap: .25rem; font-size: calc(.8rem * var(--text-scale)); color: var(--muted); }
-  #save-as .sname input {
-    font: inherit; font-size: calc(.9rem * var(--text-scale)); padding: .3rem .5rem; background: var(--card); color: var(--ink);
-    border: var(--border) solid var(--line); border-radius: var(--radius); outline: none;
-  }
-  #save-as .sname input:focus { border-color: var(--accent); }
-  #save-as .stext { display: flex; gap: .5rem; align-items: baseline; font-size: calc(.8rem * var(--text-scale)); }
-  #save-as .stext .slab { color: var(--muted); flex: none; }
-  #save-as .stext code {
-    font-family: var(--mono); font-size: calc(12px * var(--text-scale)); color: var(--chip-fg); background: var(--chip-bg);
-    border: var(--border) solid var(--chip-line); border-radius: var(--radius-md); padding: .1rem .4rem; overflow-wrap: anywhere;
-  }
-  #save-as .sleft {
-    font-size: calc(.8rem * var(--text-scale)); color: var(--muted); background: var(--panel); border: var(--border) dashed var(--line);
-    border-radius: var(--radius-lg); padding: .4rem .6rem;
-  }
-  #save-as .sleft strong { color: var(--ink); font-weight: var(--weight-strong); }
-  #save-as .staken {
-    display: flex; flex-direction: column; gap: .5rem; font-size: calc(.85rem * var(--text-scale));
-    background: var(--sel); border: var(--border) solid var(--accent); border-radius: var(--radius-lg); padding: .5rem .65rem;
-  }
+
   #save-as .sproblem {
     font-size: calc(.8rem * var(--text-scale)); color: var(--err-fg); background: var(--err-bg); border: var(--border) solid var(--err-line);
     border-radius: var(--radius-lg); padding: .35rem .6rem; overflow-wrap: anywhere;
@@ -3022,31 +2769,21 @@
   #nav .nsel-clear:hover { color: var(--bg); opacity: 1; }
   /* Menus: a card on the stronger hairline, 6px corners, a deep soft shadow;
      items 5px 9px; the one under the cursor or the keys tinted with the bar. */
-  #tmenu, #tagmenu, .fmenu {
+  #tmenu, #tagmenu {
     background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-lg);
     box-shadow: 0 18px 50px var(--shadow); font-size: calc(12px * var(--text-scale));
   }
   #tmenu, #tagmenu { padding: 5px; }
-  #tmenu .item, #tagmenu .item, .fmenu .frow { padding: 5px 9px; border-radius: var(--radius); }
-  #tmenu .item:hover, #tmenu .item:focus, #tagmenu .item:hover, #tagmenu .item:focus,
-  .fmenu .frow.hi, .fmenu.smenu .srow:hover, .fmenu.smenu .srow:focus-within {
+  #tmenu .item, #tagmenu .item { padding: 5px 9px; border-radius: var(--radius); }
+  #tmenu .item:hover, #tmenu .item:focus, #tagmenu .item:hover, #tagmenu .item:focus {
     background: var(--row-sel); color: var(--ink); box-shadow: inset 2px 0 var(--accent);
   }
-  .fmenu .frow.cat.open { background: var(--sel); }
+  
   #tmenu .h, #tagmenu .h { padding: 5px 9px 7px; border-bottom-color: var(--line); }
   #tmenu .rule, #tagmenu .rule { margin: 4px 2px; }
   #tmenu .sub { border-top-color: var(--line); }
-  .fmenu .fhead {
-    font-family: var(--mono); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-medium);
-    letter-spacing: .12em; padding: 5px 9px 3px;
-  }
-  .fmenu .fpane { padding: 5px; }
-  .fmenu .fmain { background: var(--panel); }
-  .fmenu .fsub { border-left-color: var(--line); }
-  .fmenu input.fsearch { background: var(--card); }
-  .fmenu .box { border-color: var(--tree-line); background: var(--card); }
-  .fmenu .box[data-state="on"], .fmenu .box[data-state="mixed"] { background: var(--accent); border-color: var(--accent); }
-  .fmenu .frow .tag, #tmenu .sub .st, #tmenu .flat .st, #tmenu .h .tag, #tagmenu .h .tag, #tmenu .pick .tag { border-radius: var(--radius-sm); }
+
+  #tmenu .sub .st, #tmenu .flat .st, #tmenu .h .tag, #tagmenu .h .tag, #tmenu .pick .tag { border-radius: var(--radius-sm); }
   /* Dialogs: the overlay's scrim, then a card — 8px corners, the deep
      shadow; the title in the display face; the buttons on a panel foot. */
   .overlay { background: var(--scrim); }
@@ -3071,10 +2808,7 @@
   #save-as .sacts button.primary, #leave .sacts button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   #save-as .sacts button.primary:hover, #leave .sacts button.primary:hover { color: var(--bg); border-color: var(--accent); }
   #delete .sacts button.danger, #delete .sacts button.danger:hover { background: var(--err-fg); border-color: var(--err-fg); color: var(--bg); }
-  #save-as .sname input, #save-as .sname input:focus { background: var(--bg); border-color: var(--tree-line); border-radius: var(--radius-md); }
-  #save-as .sname input:focus { border-color: var(--accent); }
-  #save-as .sname { font-family: var(--mono); font-size: calc(10px * var(--text-scale)); letter-spacing: .12em; text-transform: uppercase; }
-  #save-as .sname input { text-transform: none; letter-spacing: 0; font-family: var(--sans); font-size: calc(13.5px * var(--text-scale)); }
+
   /* Toasts: ink, the page's colour for their words, its buttons ruled in it. */
   #toast, #ftoast {
     background: var(--ink); color: var(--bg); border: 0; border-radius: var(--radius-lg);
@@ -3672,7 +3406,7 @@
   #qtray .qopts.multi, #qtray .qopts.text { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
   #qtray .qopts.text textarea { flex: 1 1 320px; min-height: 3em; min-height: calc(2lh + 4px + 2 * var(--border)); font-family: var(--sans); }
   #qtray .qtick { display: inline-flex; align-items: center; gap: 6px; }
-  #qtray .qdone { color: var(--live); margin: 0 0 12px; }
+  
   #qtray .qacts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   #qtray .qbtn {
     font-family: var(--mono); font-size: calc(11px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap;
@@ -4308,8 +4042,8 @@
      by menu::place); the filter and saved-filter menus drop from their bar;
      a query folded open; m-mockup's size menu. */
   #tagmenu { animation: menger-menu-in .14s cubic-bezier(.2, .8, .2, 1); }
-  :is(.fmenu, .framed-menu:not([hidden])) { animation: menger-drop-in .14s cubic-bezier(.2, .8, .2, 1); }
-  .qbar .qtree, .fbar .ftext, .fbadge, .qnote, .fclash { animation: menger-fade-in .14s ease-out; }
+  
+  .fbar .ftext, .fbadge, .qnote, .fclash { animation: menger-fade-in .14s ease-out; }
   /* The header: the connection's colour moves, a badge appears. */
   #conn { transition: color .2s ease-out; }
   header .hlink .hbadge { animation: menger-pop-in .16s cubic-bezier(.2, .8, .2, 1.3); }
@@ -4473,7 +4207,7 @@
     #app[data-sheet="filter"] #lens-top { transform: none; visibility: visible; transition: transform .32s cubic-bezier(.2, .9, .3, 1); }
     #app:is([data-sheet="filter"], :has(#tdock-sheet.on)) .content { position: relative; z-index: 896; }
     #lens-top > .pfilter-head { order: 0; }
-    #lens-top > :is(.lensbar, .fclash) { order: 1; flex: none; margin: 0; border-radius: 0; }
+    
     /* FILTER-39: the global panel fills the sheet between the lens bar's
        line and the foot, and scrolls there. */
     #lens-top > .ftop:has(.fpanel) { order: 1; flex: 1 1 auto; min-height: 0; overflow: auto; }
@@ -4486,7 +4220,7 @@
     }
     #lens-top > header > :not(button.fbtn, .saved, .gcount, .org-switch, .pfilter-foot) { display: none; }
     #lens-top > header button.fbtn { margin-left: 0; }
-    #lens-top > header .fmenu.smenu { top: auto; bottom: calc(100% + 4px); }
+    
     .pfilter-foot { display: flex; gap: 8px; margin-left: auto; }
     .pbtn {
       font-family: var(--mono); font-size: calc(11px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: .08em; text-transform: uppercase;

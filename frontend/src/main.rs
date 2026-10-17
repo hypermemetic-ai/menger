@@ -250,7 +250,6 @@
 //! side panel its own, linking there.
 
 mod anchor;
-mod anyof;
 mod annotate;
 mod bindings;
 mod board;

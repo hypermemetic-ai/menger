@@ -494,9 +494,16 @@ and status Ready`, ticking gap makes `(kind build and status Ready) or (kind
 gap and status Ready)`. A shortcode that hosts others is ticked as `under`
 it (it and every shortcode hosted under it), the hosted ones marked covered.
 A saved filter ticked is a group by name (`saved "Hot gaps"`), filling the
-selected group while it is empty. Any filter the language holds is drawn so,
-its lists spelled out — `kind build and status in (Ready, Coding)` is two
-groups — up to 32 groups; deeper, the panel says to edit it as text. The
+selected group while it is empty, and the panel shows what it holds beside
+it (`= kind gap and severity high`, read the first time it is shown).
+FILTER-42: these groups are FILTER-36's groups in a group, one level deep,
+with no join to toggle — FILTER-37's tree and `src/anyof.rs` are gone. Any
+filter the language holds is drawn so, its lists spelled out and its
+negated groups turned (De Morgan) — `kind build and status in (Ready,
+Coding)` is two groups, `not (ready and blocked)` is `not ready` or `not
+blocked` — admitting the same tickets; one that would spell out into more
+than 32 groups is shown as its text, read-only in the panel and edited as
+text in its foot, never rewritten. The
 groups last edited are kept while the filter still says them, so a new empty
 group keeps its place. With names, a line under the bar says the filter **as
 evaluated**, the names expanded; the wave board's and the inputs page's own
@@ -4468,9 +4475,8 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        src/filter.rs the generic filter bar and its panel
                        (WAVE-12, FILTER-11, FILTER-39); src/ors.rs the
                        filter as groups joined by or (FILTER-39),
-                       src/anyof.rs a filter's members in words (until
-                       FILTER-42), src/naming.rs naming saves and the
-                       saved filters' counts (FILTER-37),
+                       src/naming.rs naming saves, "as evaluated" and
+                       the saved filters' counts (FILTER-37),
                        src/lens.rs the levels — global, nav,
                        board, waves, inputs — their URL and storage, the
                        header's bar (FILTER-11), src/counts.rs menu counts and
