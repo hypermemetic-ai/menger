@@ -253,7 +253,9 @@ form_json() {
 # the run is `action@when[#pid]` (DEPLOY-12: a run's line ends with its id; an older
 # line's is made from it), so one line is one deployment and a re-read keeps it one.
 # Builds are not deployments. What runs on each env is followed down the log,
-# so each record's previous is what that env ran before it.
+# and what it last ran with its smoke passed: a record's previous — the start
+# of its commits — is that last good release, never a failed run's (DEPLOY-23);
+# a rollback's is what it took out, what the env ran when it began.
 form_pipeline_log() {
   read_input | jq -Rnc '
     def sha: capture("-(?<s>[0-9a-f]{7,40})$").s // null;
@@ -263,18 +265,20 @@ form_pipeline_log() {
         release: $rel, at: $l.at, source: {system: "menger-pipeline", run: ($l.run // "\($l.action)@\($l.at)"), url: null}}};
     foreach (inputs | select(test("\\S")) | split("\t")
              | {at: .[0], env: .[1], action: .[2], release: .[3], result: (.[4] // ""), run: (.[5] // "" | if . == "" then null else . end)}) as $l
-      ({runs: {}};
+      ({runs: {}, good: {}};
        .runs[$l.env] as $was
+       | .good[$l.env] as $good
+       | (if $l.action == "rollback" then $was else $good end) as $from
        | .emit = null
        | if $l.env == "build" or ($l.action | IN("deploy", "sync", "promote", "rollback") | not) then .
          elif $l.result == "ok" then
-           .emit = rec($l; if $l.action == "rollback" then "rolled_back" else "succeeded" end; $l.release; $was)
-           | .runs[$l.env] = $l.release
+           .emit = rec($l; if $l.action == "rollback" then "rolled_back" else "succeeded" end; $l.release; $from)
+           | .runs[$l.env] = $l.release | .good[$l.env] = $l.release
          elif ($l.result | test("rolled back to \\S+$")) then
            ($l.result | capture("rolled back to (?<w>\\S+)$").w) as $w
-           | .emit = rec($l; "rolled_back"; $w; $l.release) | .runs[$l.env] = $w
+           | .emit = rec($l; "rolled_back"; $w; $l.release) | .runs[$l.env] = $w | .good[$l.env] = $w
          else
-           .emit = rec($l; "failed"; $l.release; $was)
+           .emit = rec($l; "failed"; $l.release; $from)
            | .runs[$l.env] = (if ($l.result | test("no previous release")) then null
                               elif ($l.result | test("rollback to \\S+ ALSO failed")) then ($l.result | capture("rollback to (?<w>\\S+) ALSO").w)
                               else $l.release end)

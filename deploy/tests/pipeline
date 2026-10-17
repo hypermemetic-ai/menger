@@ -191,6 +191,54 @@ STUB_TRACKER=down run backfill
 same "backfill, tracker down: exits 0" "$code" 0
 has "backfill, tracker down: queued" "$err" "wait in $OUT"
 
+# ── DEPLOY-23: a record's commits start at the last run that passed ────────
+# A failed run's commits ride with the next run that passes — never lost
+# because the range began at the failed (or rolled-back) one.
+run backfill # the outbox drained: what follows is only these runs' records
+has "backfill drains the outbox" "$err" "record: 0 sent, "
+range() { git -C "$REPO" rev-list --count "${C[$1]}..${C[$2]}"; }
+holds() { echo "(.commits // [] | index(\"${C[$1]}\") != null)"; }
+# test died on R2 above (no log line): the last run that passed ran R1
+m=$(mark); run deploy test "$R0"
+same "after a run that died: previous the last that passed" "$(since "$m" '[.state, .previous]')" \
+  "[\"started\",\"$S1\"] [\"succeeded\",\"$S1\"]"
+# fail, then succeed: the success carries both ranges
+m=$(mark); DEPLOY_SMOKE_FAIL=test run deploy test "$R1"
+same "fail: exits 1" "$code" 1
+same "fail: started, failed, from R0" "$(since "$m" "[.state, .revision, .previous, (.commits | length)]")" \
+  "[\"started\",\"$S1\",\"$S0\",$(range 0 1)] [\"failed\",\"$S1\",\"$S0\",$(range 0 1)]"
+m=$(mark); run deploy test "$R2"
+same "then succeed: exits 0" "$code" 0
+same "then succeed: previous the last that passed (R0), not the failed R1" \
+  "$(since "$m" "[.state, .revision, .previous, (.commits | length), $(holds 1), $(holds 2)]")" \
+  "[\"started\",\"$S2\",\"$S0\",$(range 0 2),true,true] [\"succeeded\",\"$S2\",\"$S0\",$(range 0 2),true,true]"
+# a sync that passes on a release whose deploy failed carries that deploy's commits
+run deploy test "$R0"; same "back on R0" "$code" 0
+DEPLOY_SMOKE_FAIL=test run deploy test "$R1"; same "R1 fails" "$code" 1
+m=$(mark); run sync test
+same "sync after a failed deploy: exits 0" "$code" 0
+same "sync after a failed deploy: R1 from R0, its commits" "$(since "$m" "[.state, .revision, .previous, (.commits | length), $(holds 1)]")" \
+  "[\"started\",\"$S1\",\"$S0\",$(range 0 1),true] [\"succeeded\",\"$S1\",\"$S0\",$(range 0 1),true]"
+m=$(mark); run sync test
+same "sync again: nothing new" "$(since "$m" '[.previous, (.commits // [] | length)]')" "[\"$S1\",0] [\"$S1\",0]"
+# promote: rolled back by itself, then succeed — from the release it returned to
+same "prod runs R0" "$(basename "$(readlink -f "$D/envs/prod/current")")" "$R0"
+m=$(mark); DEPLOY_SMOKE_FAIL=prod run promote "$R1"
+same "promote rolled back: exits 1" "$code" 1
+same "promote rolled back: started, failed from R0; rolled_back to R0" "$(since "$m" '[.state, .revision, .previous]')" \
+  "[\"started\",\"$S1\",\"$S0\"] [\"failed\",\"$S1\",\"$S0\"] [\"rolled_back\",\"$S0\",\"$S1\"]"
+m=$(mark); run promote "$R2"
+same "then promote: exits 0" "$code" 0
+same "then promote: from R0, both ranges" "$(since "$m" "[.state, .previous, (.commits | length), $(holds 1), $(holds 2)]")" \
+  "[\"started\",\"$S0\",$(range 0 2),true,true] [\"succeeded\",\"$S0\",$(range 0 2),true,true]"
+# a rollback whose smoke failed is no start: prod runs R0, last passed on R2
+DEPLOY_SMOKE_FAIL=prod run rollback prod; same "a failed rollback exits 1" "$code" 1
+same "the failed rollback left prod on R0" "$(basename "$(readlink -f "$D/envs/prod/current")")" "$R0"
+m=$(mark); run promote "$R1"
+same "promote after a failed rollback: exits 0" "$code" 0
+same "promote after a failed rollback: from R2, the last that passed" "$(since "$m" '[.state, .previous, (.commits // [] | length)]')" \
+  "[\"started\",\"$S2\",$(range 2 1)] [\"succeeded\",\"$S2\",$(range 2 1)]"
+
 # ── DEPLOY-17: the landing page — infra a stand-in, the export of landing/ real ──
 INFRA=$SCRATCH/infra; mkdir -p "$INFRA/bin" "$INFRA/inventory/group_vars/all"
 printf '# pins\nmenger_landing_commit: %s\nedge_www: []\n' "${C[0]}" >"$INFRA/inventory/group_vars/all/main.yml"
