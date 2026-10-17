@@ -114,6 +114,16 @@ export interface ChatsClient {
      */
     read(chat: ChatId, upto: MessageId): AsyncGenerator<ChatsEvent>;
     /**
+     * Rename a chat; yields renamed { chat } — the composer's /title (CHAT-7).
+  
+  By any participant. No title, or a blank one, clears it (the chat is
+  then named by who is in it). The same title changes nothing.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `chats.rename` anywhere it is held
+     */
+    rename(chat: ChatId, title?: Title | null): AsyncGenerator<ChatsEvent>;
+    /**
      * Reopen a closed chat; yields reopened { chat }.
   
   By any participant. Reopening an open chat changes nothing.
@@ -183,6 +193,10 @@ export declare const requires: {
         readonly grant: "chats.read";
         readonly target: null;
     };
+    readonly "chats.rename": {
+        readonly grant: "chats.rename";
+        readonly target: null;
+    };
     readonly "chats.reopen": {
         readonly grant: "chats.reopen";
         readonly target: null;
@@ -198,6 +212,6 @@ export declare const requires: {
 };
 /** The chats activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
 export declare const defaultRoles: {
-    readonly editor: readonly ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.watch", "chats.await_message", "chats.candidates"];
-    readonly viewer: readonly ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.watch", "chats.await_message", "chats.candidates"];
+    readonly editor: readonly ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.rename", "chats.watch", "chats.await_message", "chats.candidates"];
+    readonly viewer: readonly ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.rename", "chats.watch", "chats.await_message", "chats.candidates"];
 };

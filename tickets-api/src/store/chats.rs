@@ -133,6 +133,8 @@ pub enum ChatChange {
     Read { chat: u64, principal: String, upto: u64 },
     Closed(ChatRecord),
     Reopened(ChatRecord),
+    /// CHAT-7: the chat's title set (or cleared).
+    Renamed(ChatRecord),
     /// `principal` began or stopped waiting on `await_message` for `chat`.
     Listening { chat: u64, principal: String, waiting: bool },
 }
@@ -141,7 +143,7 @@ impl ChatChange {
     /// The chat it is a change of.
     pub fn chat(&self) -> u64 {
         match self {
-            ChatChange::Opened(c) | ChatChange::Added(c) | ChatChange::Closed(c) | ChatChange::Reopened(c) => c.id,
+            ChatChange::Opened(c) | ChatChange::Added(c) | ChatChange::Closed(c) | ChatChange::Reopened(c) | ChatChange::Renamed(c) => c.id,
             ChatChange::Posted(m) => m.chat.get(),
             ChatChange::Read { chat, .. } | ChatChange::Listening { chat, .. } => *chat,
         }
@@ -618,6 +620,27 @@ impl Store {
         };
         let change = if open { ChatChange::Reopened(record.clone()) } else { ChatChange::Closed(record.clone()) };
         self.chat_write(serial, record.clone(), None, under, change).await.map(|()| record)
+    }
+
+    /// CHAT-7: `by` sets chat `chat`'s title (`None`, or blank, clears it) —
+    /// the composer's `/title` and the session's *rename*. As it already is:
+    /// the chat, and nothing written.
+    pub async fn rename_chat(&self, on: Permit<Viewer>, chat: u64, by: Signer, title: Option<String>) -> Result<ChatRecord, ChatError> {
+        let title = title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let serial = self.serial().await;
+        let (record, under) = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let mut c = self.held(&cache, &on, chat)?;
+            if !c.has(&by.principal) && !by.anyone {
+                return Err(refused(format!("you are not in chat {chat}: only its participants rename it")));
+            }
+            if c.title == title {
+                return Ok(c);
+            }
+            c.title = title;
+            (c, self.chats_before(&cache, on.id().as_str()))
+        };
+        self.chat_write(serial, record.clone(), None, under, ChatChange::Renamed(record.clone())).await.map(|()| record)
     }
 
     /// ACCESS-11: chat `chat` as kept, when it is on the ticket `on` names

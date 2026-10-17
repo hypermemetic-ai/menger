@@ -63,7 +63,7 @@ impl ChatsActivation {
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["open", "post", "add", "list", "messages", "read", "close", "reopen", "watch", "await_message", "candidates"],
+        viewer = ["open", "post", "add", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "candidates"],
         editor = [viewer],
     )
 )]
@@ -207,6 +207,23 @@ impl ChatsActivation {
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let store = self.store.clone();
         futures::stream::once(async move { settle(store, user, chat.get(), false).await })
+    }
+
+    /// Rename a chat; yields renamed { chat } — the composer's /title (CHAT-7).
+    ///
+    /// By any participant. No title, or a blank one, clears it (the chat is
+    /// then named by who is in it). The same title changes nothing.
+    #[plexus_macros::method(group = "write")]
+    pub async fn rename(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 41.
+        chat: ChatId,
+        /// Its title (optional: none clears it).
+        title: Option<Title>,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        let store = self.store.clone();
+        futures::stream::once(async move { rename(store, user, chat.get(), title.map(Title::into_string)).await })
     }
 
     /// Reopen a closed chat; yields reopened { chat }.

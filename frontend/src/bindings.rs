@@ -120,11 +120,17 @@ pub(crate) enum Context {
     MockBox,
     /// APP-44: the mockup compare is open (it owns every key while it is up).
     Compare,
+    /// CHAT-7: a chat's composer (the dock's or the full-screen session's).
+    Composer,
+    /// CHAT-7: the composer's `@` or `/` menu is open over it.
+    ComposerMenu,
+    /// CHAT-7: the full-screen chat session (it owns the page's keys while it is up).
+    Session,
 }
 
 impl Context {
     #[cfg(test)]
-    pub(crate) const ALL: [Context; 19] = [
+    pub(crate) const ALL: [Context; 22] = [
         Context::Anywhere,
         Context::Global,
         Context::Nav,
@@ -144,6 +150,9 @@ impl Context {
         Context::Mockup,
         Context::MockBox,
         Context::Compare,
+        Context::Composer,
+        Context::ComposerMenu,
+        Context::Session,
     ];
 
     /// Where, in the reader's words — the tables' last column.
@@ -168,6 +177,9 @@ impl Context {
             Context::Mockup => "on a mockup device's edge",
             Context::MockBox => "in a mockup's box",
             Context::Compare => "in the mockup compare",
+            Context::Composer => "in a chat's composer",
+            Context::ComposerMenu => "in the composer's @ or / menu",
+            Context::Session => "in a full-screen chat",
         }
     }
 
@@ -177,7 +189,7 @@ impl Context {
     fn modal(self) -> bool {
         matches!(
             self,
-            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field | Context::Mockup | Context::Compare
+            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field | Context::Mockup | Context::Compare | Context::Composer | Context::ComposerMenu | Context::Session
         )
     }
 
@@ -330,7 +342,19 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("annotate.walk-in", &[C::Annotate], &["ArrowRight"], G::Annotate, "into the chosen element: its first child"),
     b("annotate.walk-out", &[C::Annotate], &["ArrowLeft"], G::Annotate, "out to the chosen element's parent"),
     b("annotate.walk-pick", &[C::Annotate], &["Enter"], G::Annotate, "comment on the element chosen"),
-    b("comment.save", &[C::Dialog, C::Field], &["Mod+Enter"], G::Annotate, "save the comment being written — in a comment box, or send it from a ticket's Conversation or its chat pane"),
+    b("comment.save", &[C::Dialog, C::Field], &["Mod+Enter"], G::Annotate, "save the comment being written — in a comment box, or send it from a ticket's Conversation"),
+    // CHAT-7: a chat's composer (src/composer.rs) — manifest's keys.
+    b("chat.send", &[C::Composer], &["Enter", "Mod+Enter"], G::Forms, "in a chat's composer: send (or run the / command)"),
+    Binding { id: "chat.newline", contexts: &[C::Composer], chords: &["Shift+Enter"], group: G::Forms, does: "a new line in the message", native: true },
+    b("chat.leave", &[C::Composer], &["Escape"], G::Forms, "leave the composer (an agent mid-turn: stop it — AGENT-3)"),
+    b("chat.recall", &[C::Composer], &["ArrowUp"], G::Forms, "in an empty composer: your last message, to edit and send as new"),
+    b("chat.menu-up", &[C::ComposerMenu], &["ArrowUp"], G::Forms, "the @ or / menu: the row above"),
+    b("chat.menu-down", &[C::ComposerMenu], &["ArrowDown"], G::Forms, "the row below"),
+    b("chat.menu-pick", &[C::ComposerMenu], &["Tab", "Enter"], G::Forms, "pick it: complete the command, add the one named"),
+    b("chat.menu-close", &[C::ComposerMenu], &["Escape"], G::Forms, "close the menu; the text stays"),
+    b("chat.full", &[C::Global], &["g c"], G::View, "with a chat open on the ticket: the chat full screen, as an agent session"),
+    b("session.new", &[C::Session], &["c"], G::View, "in the full-screen chat: a new chat on its ticket"),
+    b("session.leave", &[C::Session], &["Escape"], G::View, "leave the full-screen chat: back to the ticket, the chat in its dock"),
     // APP-22: the ticket page's Conversation box.
     b("comment.focus", &[C::TicketPage], &["c"], G::Annotate, "comment on the ticket as a whole: its Conversation box, focused"),
     // -- View

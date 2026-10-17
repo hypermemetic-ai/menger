@@ -223,7 +223,14 @@ pub(crate) struct Settings {
     /// APP-25: whether hovering (or focusing) a tray tab shows its full
     /// question in a card (`true`: the default).
     pub(crate) queue_hover: bool,
+    /// CHAT-7: the chat composer's font size in px (manifest's
+    /// `composerFontPx`; [`CHAT_PX_DEFAULT`] unless chosen).
+    pub(crate) chat_px: u8,
 }
+
+/// CHAT-7: the composer's font sizes on offer, and the default.
+pub(crate) const CHAT_PX: [u8; 5] = [13, 14, 15, 16, 18];
+pub(crate) const CHAT_PX_DEFAULT: u8 = 14;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -234,6 +241,7 @@ impl Default for Settings {
             motion: crate::motion::Pref::default(),
             typing: crate::motion::Typing::default(),
             queue_hover: true,
+            chat_px: CHAT_PX_DEFAULT,
         }
     }
 }
@@ -262,6 +270,9 @@ struct Record {
     /// is on, so a record without it reads and writes as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     queue_hover: Option<bool>,
+    /// CHAT-7: the composer's font in px; omitted while it is the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chat_px: Option<u8>,
 }
 
 /// Only the version — read first, so a record of another version reads as
@@ -299,7 +310,8 @@ impl Settings {
         let motion = crate::motion::Pref::parse(record.motion.as_deref());
         let typing = crate::motion::Typing::parse(record.typing.as_deref());
         let queue_hover = record.queue_hover.unwrap_or(true);
-        Settings { ws_url, recent, test_url, motion, typing, queue_hover }
+        let chat_px = record.chat_px.filter(|p| CHAT_PX.contains(p)).unwrap_or(CHAT_PX_DEFAULT);
+        Settings { ws_url, recent, test_url, motion, typing, queue_hover, chat_px }
     }
 
     /// The stored string.
@@ -312,6 +324,7 @@ impl Settings {
             motion: self.motion.word().map(str::to_string),
             typing: self.typing.word().map(str::to_string),
             queue_hover: (!self.queue_hover).then_some(false),
+            chat_px: (self.chat_px != CHAT_PX_DEFAULT).then_some(self.chat_px),
         })
         .expect("a record of strings serializes")
     }
@@ -341,6 +354,12 @@ impl Settings {
     /// DESIGN-43: the record with the Typed text speed `t`.
     pub(crate) fn with_typing(mut self, t: crate::motion::Typing) -> Self {
         self.typing = t;
+        self
+    }
+
+    /// CHAT-7: the record with the composer's font size.
+    pub(crate) fn with_chat_px(mut self, px: u8) -> Self {
+        self.chat_px = if CHAT_PX.contains(&px) { px } else { CHAT_PX_DEFAULT };
         self
     }
 
@@ -804,9 +823,54 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
             <MotionGroup />
             // APP-25: the tray — the question on hover.
             <QueueGroup />
+            // CHAT-7: the chat composer's font.
+            <ChatGroup />
             // AGS-28: every key and gesture — the table the `?` sheet draws.
             <KeyboardGroup />
         </section>
+    }
+}
+
+/// CHAT-7: Settings → Chat — the composer's font size (manifest's
+/// `composerFontPx`). Kept in the record at once, and set on `<html>` as
+/// `--chat-px` ([`apply_chat_px`]).
+#[component]
+fn ChatGroup() -> impl IntoView {
+    let chosen = RwSignal::new(load().chat_px);
+    let problem = RwSignal::new(None::<String>);
+    let pick = move |px: u8| {
+        chosen.set(px);
+        apply_chat_px(px);
+        problem.set(store(&load().with_chat_px(px)).err());
+    };
+    view! {
+        <fieldset class="group" id="settings-chat">
+            <legend>"Chat"</legend>
+            <p class="now">"The composer's font size — what you type into a chat."</p>
+            <div class="field motion-choices" role="radiogroup" aria-label="the composer's font size">
+                {CHAT_PX
+                    .map(|px| {
+                        let id = format!("chat-px-{px}");
+                        let for_id = id.clone();
+                        view! {
+                            <label class="radio" for=for_id>
+                                <input type="radio" name="chat-px" id=id value=px.to_string() prop:checked=move || chosen.get() == px on:change=move |_| pick(px) />
+                                <b>{format!("{px} px")}</b>
+                                {(px == CHAT_PX_DEFAULT).then(|| view! { <span class="muted">"the default"</span> })}
+                            </label>
+                        }
+                    })
+                    .collect_view()}
+            </div>
+            {move || problem.get().map(|p| view! { <p class="problem" role="alert">{p}</p> })}
+        </fieldset>
+    }
+}
+
+/// CHAT-7: the composer's font, as `--chat-px` on `<html>`.
+pub(crate) fn apply_chat_px(px: u8) {
+    if let Some(root) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.document_element()).and_then(|e| wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(e).ok()) {
+        let _ = root.style().set_property("--chat-px", &format!("{px}px"));
     }
 }
 
@@ -1041,6 +1105,16 @@ mod tests {
     /// MFE-21 acceptance 1: the record round-trips through its stored
     /// string; missing, corrupt and other-version records read as the
     /// defaults.
+    #[test]
+    fn the_composer_font_is_kept_and_omitted_at_its_default() {
+        let s = Settings::default().with_chat_px(16);
+        assert_eq!(Settings::decode(Some(&s.encode())).chat_px, 16);
+        assert!(s.encode().contains("\"chat_px\":16"));
+        assert!(!Settings::default().encode().contains("chat_px"), "a record without it writes as before");
+        assert_eq!(Settings::default().with_chat_px(99).chat_px, CHAT_PX_DEFAULT, "only the sizes on offer");
+        assert_eq!(Settings::decode(Some(r#"{"version":1,"chat_px":7}"#)).chat_px, CHAT_PX_DEFAULT);
+    }
+
     #[test]
     fn the_record_round_trips_and_anything_else_reads_as_the_defaults() {
         let s = Settings {

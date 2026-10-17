@@ -404,3 +404,23 @@ async fn messages_and_chats_page() {
     assert_eq!((page.len() + more.len(), last), (4, None));
     assert!(matches!(store.chats(&ada, &ChatQuery::default(), Some(99), 10), Err(ChatError::Refused(_))));
 }
+
+/// CHAT-7: `/title` — a participant renames a chat; blank clears it; the
+/// same title writes nothing; one outside it is refused.
+#[tokio::test]
+async fn a_participant_renames_a_chat() {
+    let store = kiln().await;
+    let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    let mut rx = store.subscribe_chats();
+    let named = store.rename_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), Some("  The hold at 1240 °C ".into())).await.unwrap();
+    assert_eq!(named.title.as_deref(), Some("The hold at 1240 °C"));
+    assert!(matches!(rx.try_recv().unwrap(), ChatChange::Renamed(r) if r.id == c.id));
+    let same = store.rename_chat(SYS.permit("KILN-7"), c.id, Signer::named(BUILDER), Some("The hold at 1240 °C".into())).await.unwrap();
+    assert_eq!(same.title.as_deref(), Some("The hold at 1240 °C"));
+    assert!(rx.try_recv().is_err(), "the same title: nothing written");
+    let e = store.rename_chat(SYS.permit("KILN-7"), c.id, Signer::named(RUI), Some("mine".into())).await.unwrap_err();
+    assert_eq!(e, ChatError::Refused(vec![format!("you are not in chat {}: only its participants rename it", c.id)]));
+    let cleared = store.rename_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), Some(" ".into())).await.unwrap();
+    assert_eq!(cleared.title, None);
+    assert_eq!(store.chat_view(&reader(ADA), c.id).unwrap().title, None);
+}

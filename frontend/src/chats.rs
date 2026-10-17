@@ -91,7 +91,7 @@ impl Held {
     /// whether the copy moved.
     pub(crate) fn apply(&mut self, ev: &ChatsEvent, me: &str) -> bool {
         match ev {
-            ChatsEvent::Opened { chat, .. } | ChatsEvent::Added { chat } | ChatsEvent::Chat { chat } => {
+            ChatsEvent::Opened { chat, .. } | ChatsEvent::Added { chat } | ChatsEvent::Chat { chat } | ChatsEvent::Renamed { chat } => {
                 let id = chat.id.get();
                 if self.chats.get(&id) == Some(chat) {
                     return false;
@@ -471,6 +471,16 @@ pub(crate) async fn settle_state(chat: u64, open: bool) -> Result<(), String> {
     let c = client()?;
     let events = if open { c.reopen_all(ChatId::new(chat)).await } else { c.close_all(ChatId::new(chat)).await };
     answer_of(if open { "reopen" } else { "close" }, events).map(|_| ())
+}
+
+/// CHAT-7: `chats.rename { chat, title }` — `/title`, and *rename*; none
+/// (or blank) clears it.
+pub(crate) async fn rename(chat: u64, title: Option<&str>) -> Result<(), String> {
+    let title = match title.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => Some(crate::typed::typed(t)?),
+        None => None,
+    };
+    answer_of("rename", client()?.rename_all(ChatId::new(chat), title).await).map(|_| ())
 }
 
 /// `chats.candidates { ticket }` — each principal and whether it reads the

@@ -96,6 +96,12 @@ export interface ChatsEventReopened {
   chat: ChatId;
 }
 
+/** CHAT-7: `rename`'s answer, and on `watch`: the chat with its title now. */
+export interface ChatsEventRenamed {
+  type: 'renamed';
+  chat: Chat;
+}
+
 /** On `watch`: `principal` began (`waiting: true`) or stopped waiting on
 `await_message` for `chat` — the pane's "waiting for a message". */
 export interface ChatsEventListening {
@@ -183,7 +189,7 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 
 export function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened { return e.type === 'opened'; }
 export function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat { return e.type === 'chat'; }
@@ -194,6 +200,7 @@ export function isChatsEventAdded(e: ChatsEvent): e is ChatsEventAdded { return 
 export function isChatsEventRead(e: ChatsEvent): e is ChatsEventRead { return e.type === 'read'; }
 export function isChatsEventClosed(e: ChatsEvent): e is ChatsEventClosed { return e.type === 'closed'; }
 export function isChatsEventReopened(e: ChatsEvent): e is ChatsEventReopened { return e.type === 'reopened'; }
+export function isChatsEventRenamed(e: ChatsEvent): e is ChatsEventRenamed { return e.type === 'renamed'; }
 export function isChatsEventListening(e: ChatsEvent): e is ChatsEventListening { return e.type === 'listening'; }
 export function isChatsEventClaimLine(e: ChatsEvent): e is ChatsEventClaimLine { return e.type === 'claim_line'; }
 export function isChatsEventWaiting(e: ChatsEvent): e is ChatsEventWaiting { return e.type === 'waiting'; }

@@ -119,6 +119,16 @@ the chat's messages at or before `upto`; `unread` counts after it.
    */
   read(chat: ChatId, upto: MessageId): AsyncGenerator<ChatsEvent>;
   /**
+   * Rename a chat; yields renamed { chat } — the composer's /title (CHAT-7).
+
+By any participant. No title, or a blank one, clears it (the chat is
+then named by who is in it). The same title changes nothing.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `chats.rename` anywhere it is held
+   */
+  rename(chat: ChatId, title?: Title | null): AsyncGenerator<ChatsEvent>;
+  /**
    * Reopen a closed chat; yields reopened { chat }.
 
 By any participant. Reopening an open chat changes nothing.
@@ -199,6 +209,11 @@ class ChatsClientImpl implements ChatsClient {
     yield* extractData<ChatsEvent>(stream);
   }
 
+  async *rename(chat: ChatId, title?: Title | null): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.rename', { chat, title });
+    yield* extractData<ChatsEvent>(stream);
+  }
+
   async *reopen(chat: ChatId): AsyncGenerator<ChatsEvent> {
     const stream = this.rpc.call('chats.reopen', { chat });
     yield* extractData<ChatsEvent>(stream);
@@ -231,6 +246,7 @@ export const requires = {
   "chats.open": { grant: "chats.open", target: null },
   "chats.post": { grant: "chats.post", target: null },
   "chats.read": { grant: "chats.read", target: null },
+  "chats.rename": { grant: "chats.rename", target: null },
   "chats.reopen": { grant: "chats.reopen", target: null },
   "chats.schema": { grant: "chats.schema", target: null },
   "chats.watch": { grant: "chats.watch", target: null },
@@ -238,6 +254,6 @@ export const requires = {
 
 /** The chats activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
 export const defaultRoles = {
-  "editor": ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.watch", "chats.await_message", "chats.candidates"],
-  "viewer": ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.watch", "chats.await_message", "chats.candidates"],
+  "editor": ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.rename", "chats.watch", "chats.await_message", "chats.candidates"],
+  "viewer": ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.rename", "chats.watch", "chats.await_message", "chats.candidates"],
 } as const;

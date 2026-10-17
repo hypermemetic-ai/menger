@@ -3103,7 +3103,8 @@ its name); `via` is kept for AGENT-3 and never set by a call.
 | `chats.messages { chat, after?, limit? }` | `message { message }` each, oldest first, then `page { next }`; 100 a page, at most 1,000 |
 | `chats.read { chat, upto }` | `read { chat, upto, unread }` — the caller's mark moved forward (never back) to its latest message at or before `upto` |
 | `chats.close { chat }` · `chats.reopen { chat }` | `closed { chat }` · `reopened { chat }` — by any participant; a closed chat is read-only, kept on its ticket |
-| `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `listening { chat, principal, waiting }`, `left`, `lagged`, `watch_closed`. `claim_line` is declared for AGENT-3 and not emitted |
+| `chats.rename { chat, title? }` | `renamed { chat }` (CHAT-7: the composer's `/title`) — by any participant; no title, or a blank one, clears it; the same title writes nothing. On watch too |
+| `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `renamed`, `listening { chat, principal, waiting }`, `left`, `lagged`, `watch_closed`. `claim_line` is declared for AGENT-3 and not emitted |
 | `chats.await_message { chat?, ticket?, since?, after?, timeout_minutes? }` | `waiting { chat?, ticket?, since }` at once, then one `message { message }` by someone else — in the chat, or any of the caller's chats (on `ticket`) — and the end; `timed_out` after the timeout. Without `since` or `after`, only what comes after the call; `since` (seconds) is at or after it, at least once; `after` (a message id) is exact. While it waits its chats show the caller in `waiting` (`listening` on watch) |
 | `chats.candidates { ticket }` | CHAT-4's picker: `candidate { principal, reads }` each, by principal — every principal holding a grant in the ticket's organization (on `*`, the org, a shortcode in it, a ticket or a subtree there; a team's members by name; the operator's `--admin`s) and every participant of the caller's chats there, but the caller; `reads` whether it can read the ticket now (`open` and `add` refuse one that cannot). A ticket the caller cannot read is `refused` (`no ticket X`). With login off nobody holds a grant: the list is the chats' participants |
 
@@ -3116,8 +3117,31 @@ unread there) — turns the dock into the chat in place: *← sections* and
 the lit section at its head, ×, a chip per open chat, **+ chat** (the
 picker, from `candidates`: one who can't read the ticket is shown and
 cannot be picked; the same people's open chat opens instead), the closed
-list, who is in it, the messages through `md.rs`, a *new* line at your
-read mark, and the composer (`@` adds someone, ⌘↵ / Ctrl+Enter sends).
+list, who is in it, the turns, a *new* line at your read mark, and the
+composer. CHAT-7: **the turns** are a traditional agent chat's — yours
+bubbles on the right, theirs full-width prose under a mono line (a mark,
+the name, an agent tag, `via`, the time); a fence's code gets a head (its
+language, the path the fence names after it, *copy*), a ticket code in
+the text is a chip and one alone on its line a card with the ticket's
+title and status; copy · quote · link on hover; manifest's two scroll
+rules — opening lands on your read mark (or the newest) once, and a
+message arriving never moves you; more than 48 px off the bottom, **↓ N
+new · jump to latest**. **The composer** is manifest's: one card (an
+accent ring at focus), growing to 40% of the view; **Enter** sends,
+**Shift+Enter** is a newline, ⌘/Ctrl+Enter sends too, **Esc** leaves the
+box (AGENT-3's *stop the session* waits on AGENT-3), **↑** in an empty box
+recalls your last message; `@` at a word's start opens the people menu
+(the one picked is added), `/` the commands — `/add NAME`, `/ticket CODE`,
+`/title TEXT`, `/close` — a command that can't run refused in a strip over
+the card (*not sent · why*), as is a pasted image; ticket codes typed show
+as chips there; each chat's draft is kept per browser
+(`menger.chat.draft.<id>`); Settings → Chat sets its font size. **Full
+screen**: ⤢ on the dock's chat head, *full ↗* in its composer, `g c`, or
+`#/ticket/KILN-7?chat=41&full` makes the chat the whole app — a rail of
+the ticket's chats (and your other chats with unread), the chat in one
+780 px column, **ticket ⟩** bringing the ticket back beside it (its width
+dragged and kept, `menger.chat.split`); `c` starts a new chat, **Esc** or
+**← KILN-7** goes back to the dock.
 At ≥ 1760 the dock's column widens from 248 to 400; from 821 to 1759 the
 rail carries a chat mark per chat and an open chat pins the dock open as a
 400 px column; at ≤ 820 the phone bar's sections place counts the chats'
