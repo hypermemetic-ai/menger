@@ -77,6 +77,9 @@ deploy/pipeline image          # RUN-10: the release test last passed → menger
                                # (IMAGE_STORE=ghcr pushes :<release> + :latest); prints image= / release=
 deploy/pipeline local --image menger:<release>  # RUN-25: the image as menger-app-local on 127.0.0.1:4470/4471;
                                # hyperforge's `ci menger-app` (.hyperforge/pipelines.toml) runs it, and `remote test|prod`
+deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
+                               # RUN-11: app-test.menger.sh on the Linode through hypermemetic-infra (deploy/app.yml;
+                               # prod app.menger.sh only through `remote prod` = infra's promote.yml) — deploy/README "On the Linode"
 ```
 
 - **Every deploy test, sync, promote and rollback records itself in menger**

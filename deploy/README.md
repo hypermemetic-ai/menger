@@ -69,7 +69,7 @@ deploy/pipeline landing --check      # the gate and infra's dry run, nothing wri
 deploy/pipeline media                # landing/media regenerated from the release prod runs
 deploy/pipeline image [RELEASE]      # RUN-10: a TESTED release as an image (menger:<release> here; IMAGE_STORE=ghcr pushes)
 deploy/pipeline local --image IMG    # RUN-25: the image here as menger-app-local, 127.0.0.1:4470/4471
-deploy/pipeline remote test|prod     # RUN-25: app-test / app.menger.sh through infra — refused until RUN-11
+deploy/pipeline remote test|prod     # RUN-25: app-test / app.menger.sh through infra (deploy/app.yml, RUN-11)
 ```
 
 1. **Build** (`build [REV]`, default `main`). A commit, never a working
@@ -332,15 +332,13 @@ synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage depl
   IMAGE`), not a deployment record.
 - **`remote test --image IMAGE`** deploys to `app-test.menger.sh` through
   hypermemetic-infra's Plexus app role: `bin/infra app.yml -e
-  app_dir=<the main checkout> -e env=test -e sha=<the release's commit>`.
-  **`remote prod`** is `bin/infra promote.yml -e app_dir=…` only: prod takes
-  the image test runs and passed, by infra's rule. Both are driven by
-  menger's own `deploy/app.yml` (SCAFFOLD-12's contract), which RUN-11
-  writes; **until it exists, each refuses before touching anything**:
-  `app-test.menger.sh is not declared yet (RUN-11): menger has no
-  deploy/app.yml for hypermemetic-infra to deploy — nothing was changed`.
-  RUN-11 owns the rest of the contract (the image infra pulls is named by
-  commit, `menger:<release>` here) and may change these two lines.
+  app_dir=<the main checkout> -e env=test -e sha=<the release>` — the tag
+  infra deploys is the release's name on `ghcr.io/hypermemetic-ai/menger`
+  (deploy/app.yml's image), so a local `menger:<release>` is tagged that
+  way first for infra to ship. **`remote prod`** is `bin/infra promote.yml
+  -e app_dir=…` only: prod takes the image test runs and passed, by infra's
+  rule. Both are driven by menger's own `deploy/app.yml` (RUN-11, below);
+  without it each refuses before touching anything.
 - **The stages' environment.** A stage inherits hyperforge's (its unit's
   `PATH` holds `~/.local/bin`, where `synapse` and `node` are, and
   `/usr/bin`, where `docker` is); each `run` line also puts
@@ -350,6 +348,52 @@ synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage depl
   registry's ref — a change to the file, not to hyperforge.
 - None of this touches the 4450–4458 environments: `deploy test` and
   `promote` are unchanged, and `build` reads the releases they made.
+
+## On the Linode (RUN-11)
+
+`deploy/app.yml` describes menger to hypermemetic-infra in plexus-starter's
+host-layer contract (SCAFFOLD-12/-19): the image
+`ghcr.io/hypermemetic-ai/menger:<release>` (RUN-10, `IMAGE_STORE=ghcr
+deploy/pipeline image [RELEASE]`), two hosts, the WebSocket (8080) and the
+shell (8081) inside the container, the standard routes (`/ws` and any
+upgrade → the WebSocket, the rest → the shell, so RUN-9's metadata needs no
+route), a `/data` volume per environment (each its own tracker), 512 MB,
+and the health checks below. infra makes `/opt/apps/menger-test` (test)
+and `/opt/apps/menger` (prod) on the box, the edge's site per host (Caddy:
+Let's Encrypt over HTTP-01, http → https 308), the A record (DNS-only →
+45.56.124.48), and sets `MENGER_TRUSTED_PROXIES=172.30.0.2/32` (the edge's
+pinned address, SCAFFOLD-22) over `app.env`.
+
+| environment | host | settings (copied to the box as `app.env`) | state |
+|---|---|---|---|
+| test | `app-test.menger.sh` | `deploy/env/app-test.env` | live since 2026-10-17, its own empty tracker |
+| prod | `app.menger.sh` | `deploy/env/app-prod.env` | declared, not deployed: RUN-11's `sign-in`, then RUN-13 |
+
+The settings are menger's own (README "Bind", "Trusted proxies", "Behind
+https", Login): `MENGER_PUBLIC_URL=https://<host>`, `MENGER_BIND=0.0.0.0`,
+`MENGER_AUTH_PROVIDERS` = WorkOS (AuthKit — no secret on the box; test uses
+the staging client, as this machine's prod and test do) and
+`key=wss://<host>/ws` for agents, `MENGER_LOGIN_EMAIL=workos:authkit`, the
+four provider buttons, `MENGER_REQUIRE_LOGIN`, `MENGER_NO_REST`, and
+`MENGER_ADMINS` = the owner's WorkOS principal and the `operator` key —
+nothing else is granted. Nothing in either file is a secret; one would go in
+the box's own `secret.env`, which infra never reads or writes.
+
+```sh
+IMAGE_STORE=ghcr deploy/pipeline image 20261017T081530Z-5773250   # a TESTED release → GHCR
+../hypermemetic-infra/bin/infra app.yml -e app_dir=. -e env=test -e sha=20261017T081530Z-5773250 --check --diff
+../hypermemetic-infra/bin/infra app.yml -e app_dir=. -e env=test -e sha=20261017T081530Z-5773250
+synapse --url wss://app-test.menger.sh/ws _login menger --key operator --as operator   # its session is the host's own
+synapse --url wss://app-test.menger.sh/ws menger tickets health
+```
+
+**Healthy** (infra probes each, through the edge, retrying while the
+certificate is issued): `http://<host>/` 308 to `https://<host>/`; `/` 303
+to `/login` and `strict-transport-security: max-age=31536000`; `/login` 200,
+titled *Sign in*, with HSTS; an upgrade at `/ws` 101 from the site's origin
+and 403 from another. The login page has its own policy (`connect-src
+'self'`), so the `wss://` origin in `connect-src` is the app's page, checked
+after a sign-in.
 
 ## Hardening (ACCESS-27)
 

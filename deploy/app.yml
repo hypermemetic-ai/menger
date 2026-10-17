@@ -1,0 +1,87 @@
+# menger — what hypermemetic-infra's Plexus app role needs to run it behind
+# the Linode's edge (RUN-11; plexus-starter's layer host contract,
+# SCAFFOLD-12/-19). A description, not a procedure: infra reads it and does
+# the deploying — `bin/infra app.yml -e app_dir=<menger> -e env=test -e
+# sha=<release>`, or `deploy/pipeline remote test --image …` (RUN-25); prod
+# only through `bin/infra promote.yml` (`deploy/pipeline remote prod`).
+# Nothing here is a secret. deploy/README.md "On the Linode" has the rest.
+app: menger
+
+image:
+  name: ghcr.io/hypermemetic-ai/menger
+  # deploy/pipeline image (RUN-10) builds a TESTED release's own bytes and,
+  # with IMAGE_STORE=ghcr, pushes :<release> (+ :latest). The tag infra
+  # deploys (its `-e sha=`) is the release's name, e.g.
+  # 20261017T081530Z-5773250 — never a build from a checkout.
+  tag: release
+  user: menger         # uid 10001, non-root (deploy/image/Dockerfile)
+  stop_signal: SIGTERM # tini hands it to menger, which stops at once
+
+# Two environments. test runs a release first; prod is promoted to exactly
+# the image (same image id) test ran and passed the health checks on.
+# app.menger.sh is declared here and not deployed until RUN-13 (the owner's
+# `sign-in` answer on RUN-11, the WorkOS production client, prod's data moved).
+environments:
+  prod:
+    host: app.menger.sh
+    env_file: deploy/env/app-prod.env
+  test:
+    host: app-test.menger.sh
+    env_file: deploy/env/app-test.env
+# Secrets never enter the repository: each environment may have a secret env
+# file kept on the box only, read after env_file. AuthKit (RUN-11's
+# `sign-in`, recommended) needs none.
+secret_env_file: secret.env
+
+# Inside the container (published on no host port; the edge reaches it as
+# menger-<env> on its `edge` network). The image sets MENGER_BIND=0.0.0.0,
+# these ports, MENGER_NO_REST=1 and MENGER_DB_PATH=/data/tickets.db.
+ports:
+  websocket: 8080
+  shell: 8081
+
+# The edge's site for each host, first match wins: the page dials
+# wss://<host>/ws (ACCESS-30); RFC 9728's document is the shell's (RUN-9).
+routes:
+  - match: { path: /ws }
+    to: websocket
+  - match: { header: { Upgrade: websocket } }   # an upgrade at any other path (a client that dials /)
+    to: websocket
+  - match: default
+    to: shell
+    encode: [zstd, gzip]
+
+# The database: one volume per environment, each its own tracker.
+data:
+  mount: /data
+  per_environment: true
+
+resources:
+  memory: 512m
+
+# Healthy means all of these, over https through the edge (infra's probe:
+# one GET, redirects not followed, or one WebSocket upgrade).
+health:
+  - get: http://{host}/
+    status: 308
+    header: location
+    header_contains: https://{host}/
+  - get: https://{host}/
+    status: 303
+    header: location
+    header_contains: /login
+  - get: https://{host}/
+    status: 303
+    header: strict-transport-security
+    header_contains: max-age=31536000
+  - get: https://{host}/login
+    status: 200
+    title_contains: Sign in
+    header: strict-transport-security
+    header_contains: max-age=31536000
+  - websocket_upgrade: wss://{host}/ws
+    origin: https://{host}
+    status: 101
+  - websocket_upgrade: wss://{host}/ws
+    origin: https://evil.example
+    status: 403

@@ -586,17 +586,17 @@ STUB_RUN_FAIL=1 lrun local --image "$LI"
 same "local, docker run fails: exits 1" "$code" 1
 has "local, docker run fails: said" "$err" "docker run $LI failed"
 
-# ── RUN-25: remote test / prod — refused until deploy/app.yml (RUN-11) ──────
+# ── RUN-25: remote test / prod — refused without deploy/app.yml (RUN-11) ────
 INF=$SCRATCH/infra; mkdir -p "$INF/bin"
 printf '#!/usr/bin/env bash\necho "infra $*" >>"%s"\n' "$SCRATCH/infra.argv" >"$INF/bin/infra"; chmod +x "$INF/bin/infra"
 rrun() { : >"$STUB_DOCKER"; : >"$SCRATCH/infra.argv"; : >"$HF"; HOME=$H3 MENGER_INFRA_DIR=$INF HF_OUTPUTS=$HF run "$@"; }
-rrun remote test --image "$LI"
+MENGER_APP_YML=$SCRATCH/none.yml rrun remote test --image "$LI"
 same "remote test, no app.yml: exits 1" "$code" 1
 has "remote test, no app.yml: RUN-11 named" "$err" "app-test.menger.sh is not declared yet (RUN-11): menger has no deploy/app.yml"
 has "remote test, no app.yml: nothing changed" "$err" "nothing was changed"
 same "remote test, no app.yml: no outputs" "$(<"$SCRATCH/out")$(<"$HF")" ""
 same "remote test, no app.yml: neither infra nor docker asked" "$(cat "$SCRATCH/infra.argv" "$STUB_DOCKER")" ""
-rrun remote prod
+MENGER_APP_YML=$SCRATCH/none.yml rrun remote prod
 same "remote prod, no app.yml: exits 1" "$code" 1
 has "remote prod, no app.yml: RUN-11 named" "$err" "app.menger.sh is not declared yet (RUN-11)"
 same "remote prod, no app.yml: neither infra nor docker asked" "$(cat "$SCRATCH/infra.argv" "$STUB_DOCKER")" ""
@@ -610,9 +610,21 @@ same "remote test, no image: exits 1" "$code" 1
 has "remote test, no image: said" "$err" "remote test needs an image"
 MENGER_APP_YML=$SCRATCH/app.yml rrun remote test --image "$LI"
 same "remote test: exits 0" "$code" 0
-same "remote test: infra's app.yml, test, the release's commit" "$(<"$SCRATCH/infra.argv")" \
-  "infra app.yml -e app_dir=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)") -e env=test -e sha=${IC[1]:0:7}"
+same "remote test: infra's app.yml, test, the image's release" "$(<"$SCRATCH/infra.argv")" \
+  "infra app.yml -e app_dir=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)") -e env=test -e sha=$I1"
 same "remote test: url" "$(<"$HF")" "url=https://app-test.menger.sh/"
+[[ $(<"$STUB_DOCKER") != *"docker tag"* ]] && ok || bad "remote test: tagged an image infra already has"
+MENGER_APP_YML=$SCRATCH/app.yml STUB_NOIMAGE=1 rrun remote test --image "$LI"
+same "remote test, a local image: exits 0" "$code" 0
+has "remote test, a local image: tagged as app.yml's image" "$(<"$STUB_DOCKER")" "docker tag $LI ghcr.io/hypermemetic-ai/menger:$I1"
+# menger's own deploy/app.yml: both hosts, its env files, prod not deployed
+AY=$REPO/deploy/app.yml
+has "app.yml: test is app-test.menger.sh" "$(<"$AY")" "host: app-test.menger.sh"
+has "app.yml: prod is app.menger.sh" "$(<"$AY")" "host: app.menger.sh"
+has "app.yml: the image is GHCR's" "$(<"$AY")" "name: ghcr.io/hypermemetic-ai/menger"
+for f in $(sed -n 's/^ *env_file: *//p' "$AY"); do [[ -f $REPO/$f ]] && ok || bad "app.yml: no $f"; done
+has "app-test.env: its public URL" "$(<"$REPO/deploy/env/app-test.env")" "MENGER_PUBLIC_URL=https://app-test.menger.sh"
+has "app-test.env: the edge trusted" "$(<"$REPO/deploy/env/app-test.env")" "MENGER_TRUSTED_PROXIES=172.30.0.2/32"
 MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
 same "remote prod: exits 0" "$code" 0
 has "remote prod: promote.yml only" "$(<"$SCRATCH/infra.argv")" "infra promote.yml -e app_dir="
