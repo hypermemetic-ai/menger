@@ -1,0 +1,38 @@
+# CHAT-11: the chat bridge — a perpetual listener on menger's chats that
+# spawns a Claude Code agent here to answer the owner there. Installed by
+# scripts/chat-bridge/install.sh as ~/.config/systemd/user/menger-chat-bridge.service,
+# running the installed copy in ~/.local/share/menger-chat-bridge (never a checkout).
+#
+#   systemctl --user status menger-chat-bridge
+#   journalctl --user -u menger-chat-bridge -f
+#   systemctl --user stop menger-chat-bridge              # stop it now
+#   systemctl --user disable --now menger-chat-bridge     # stop it for good
+#
+# Which tracker: MENGER_URL in ~/.config/menger/chat-bridge.env, then
+# `systemctl --user restart menger-chat-bridge`. Who it answers:
+# ~/.config/menger/chat-bridge.allow (read on every message; no restart).
+[Unit]
+Description=menger chat bridge (CHAT-11) - answers the owner in menger's chats with a Claude Code agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:%h/.ghcup/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=%h/.config/menger/chat-bridge.env
+WorkingDirectory=%h
+# The spawned agent's model and permission mode are written here, never
+# chosen at runtime. Permission mode: bypassPermissions — the mode the owner
+# runs his builders in: the agent runs every tool without asking (no
+# --allowedTools list narrows it). Its rules are its system prompt's: the
+# house's AGENTS.md, no `rm -r`, prod only through deploy/pipeline,
+# questions as inputs.
+ExecStart=%h/.local/bin/node %h/.local/share/menger-chat-bridge/scripts/chat-bridge/bridge.mjs --model claude-opus-5-5 --permission-mode bypassPermissions
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
