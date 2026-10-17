@@ -2482,8 +2482,6 @@ fn App() -> impl IntoView {
                     </button>
                     // AGS-17: the theme toggle (system → light → dark).
                     <theme::Toggle />
-                    // APP-50: the filter sheet's foot — clear, done.
-                    <phonebar::FilterFoot />
                 </header>
                 // FILTER-16: on a page the filter does not reach, it says so.
                 <lens::LensBar applies=Signal::derive(move || lens::applies(&route.get())) />

@@ -1954,6 +1954,10 @@
   .fline .fline-saved { margin-left: .4rem; }
   .bempty-pills.fbar, .tout-pills.fbar { display: inline-flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
   @media (max-width: 640px) {
+    .fpanel .fp-flow { columns: 1; }
+    /* FILTER-44: closed, one row of chips over the content. */
+    .fline:not(.open) .fline-row { flex-wrap: nowrap; }
+    .fline:not(.open) .fline-chips { flex: 1 1 0; }
     .fline-end { gap: .4rem; }
     .fline-of, .fline:not(.open) .fsave-b { display: none; }
     .fline:not(.open) .fline-chips { flex-wrap: nowrap; overflow: hidden; -webkit-mask-image: linear-gradient(to right, var(--ink) 85%, transparent); mask-image: linear-gradient(to right, var(--ink) 85%, transparent); }
@@ -4109,7 +4113,7 @@
      sits clear of the bar. Motion (LOOK-8): sheets rise in .32s eased out
      and leave in .2s, the lit place fades in .12s; calm stops the queue
      place's nudge; none moves nothing (the global rule). Tokens only. ── */
-  #phead, #pbar, #pscrim, .pscrim-in, .psheet-head, .psheet-foot, .pfilter-foot { display: none; }
+  #phead, #pbar, #pscrim, .pscrim-in, .psheet-head, .psheet-foot { display: none; }
   @media (max-width: 820px) {
     :root { --pbar-h: calc(62px + env(safe-area-inset-bottom, 0px)); }
     #app, #app.nonav, #app.chatting, #app.chatting.nonav { grid-template-columns: minmax(0, 1fr); height: 100dvh; }
@@ -4235,16 +4239,38 @@
        line and the foot, and scrolls there. */
     #lens-top > .ftop:has(.fpanel) { order: 1; flex: 1 1 auto; min-height: 0; overflow: auto; }
     #lens-top > .ftop > .fpanel { margin: 0; }
+    /* FILTER-44: the panel on a phone — its head (the level tabs across
+       it) held at the sheet's top, touch-sized rows, one column under 640
+       px, clear and show N tickets pinned at its foot. */
+    #lens-top .fpanel .fp-head { position: sticky; top: 0; z-index: 2; gap: 6px; padding: 8px 12px; }
+    #lens-top .fpanel .fp-tabs { order: 5; flex-basis: 100%; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+    #lens-top .fpanel .fp-tab { text-align: center; padding: 5px 0; }
+    #lens-top .fpanel .fp-tab b { display: block; margin: 0; }
+    #lens-top .fpanel input.fsearch { flex: 1 1 auto; margin-left: 0; font-size: calc(14px * var(--text-scale)); padding: .35rem .5rem; }
+    #lens-top .fpanel .fp-x { display: none; }
+    #lens-top .fpanel .fv { min-height: 40px; padding: 4px; font-size: calc(14px * var(--text-scale)); }
+    #lens-top .fpanel .box { width: 18px; height: 18px; font-size: calc(13px * var(--text-scale)); }
+    #lens-top .fpanel :is(.fgrp-n, .fp-addor, .fop button) { min-height: 32px; }
+    #lens-top .fpanel .fp-showbar {
+      position: sticky; bottom: 0; z-index: 2; display: flex; gap: 8px; padding: 10px 12px 12px;
+      background: var(--card); border-top: var(--border) solid var(--line);
+    }
+    #lens-top .fpanel .fp-showbar button {
+      flex: 1; min-height: 44px; font: var(--weight-medium) calc(12px * var(--text-scale)) var(--mono); letter-spacing: .06em; text-transform: uppercase;
+      cursor: pointer; border-radius: var(--radius); border: var(--border) solid var(--ink); background: transparent; color: var(--ink);
+    }
+    #lens-top .fpanel .fp-showbar .fp-show { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+    #lens-top .fpanel .fp-showbar .fp-clear:disabled { opacity: .45; cursor: default; }
     #lens-top .fpanel { margin: 0; border: 0; border-radius: 0; }
     #lens-top .fpanel .fp-head { border-radius: 0; }
     #lens-top > header {
       order: 3; flex: none; flex-wrap: nowrap; align-items: center; gap: 8px; min-height: 0; padding: 10px 14px 12px;
       background: var(--panel); border-top: var(--border) solid var(--line); border-bottom: 0;
     }
-    #lens-top > header > :not(button.fbtn, .saved, .gcount, .org-switch, .pfilter-foot) { display: none; }
+    #lens-top > header > :not(.org-switch) { display: none; }
+    #lens-top > header:not(:has(.org-switch)) { display: none; }
     #lens-top > header button.fbtn { margin-left: 0; }
     
-    .pfilter-foot { display: flex; gap: 8px; margin-left: auto; }
     .pbtn {
       font-family: var(--mono); font-size: calc(11px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: .08em; text-transform: uppercase;
       padding: 9px 14px; cursor: pointer; background: transparent; color: var(--ink); border: var(--border) solid var(--ink); border-radius: var(--radius);

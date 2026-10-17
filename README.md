@@ -457,6 +457,16 @@ panel's Saved section or a chip here. The button, <kbd>f</kbd>
 (<kbd>F</kbd> the global one) open the panel **in the page's flow** under the bar — the board moves down
 under it, nothing floats over it — and fold it again; Escape folds it.
 
+**On a phone** (FILTER-44; APP-50's shape, up to 820 px): the panel is the
+phone bar's filter sheet — the bar's filter place opens it on ⌂ everywhere,
+a surface's own `Filter` on its tab. Its head (the search, the level tabs
+across it) stays at the sheet's top; rows are touch-sized (40 px); under
+640 px the sections are one column; `clear` (or `reset`) and **show N
+tickets** — N what the level shows, counting as you tick — are pinned at
+its foot, and *show* folds it and lowers the sheet. Closed, one row of
+chips is all that sits over the board (the line's chips clipped to it,
+nothing scrolling sideways).
+
 **The text drawer** (FILTER-43): the panel's foot's `edit as text` opens
 the level's filter as canonical text, edited in place. As you type, the
 language places each mistake ([`Mistake`], `tickets-api/src/filter.rs`: a

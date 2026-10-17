@@ -2374,7 +2374,36 @@ fn panel(lens: Lens, pop: Pop) -> impl IntoView {
                 <span class="fp-count">{move || foot_words(lens, level)}</span>
             </div>
             {move || pop.drawer.get().then(|| view! { <TextDrawer level /> })}
+            // FILTER-44: on a phone, pinned at the panel's foot: clear, and
+            // show N tickets — counting as you tick — which folds it.
+            {move || lens.phone().then(|| show_bar(lens, level))}
         </section>
+    }
+}
+
+/// FILTER-44: the phone's pinned foot — `clear` (the level back to its
+/// default) and `show N tickets`, N what the level shows now, which folds
+/// the panel and lowers the sheet.
+fn show_bar(lens: Lens, level: Level) -> impl IntoView {
+    let n = tab_count(lens, level);
+    view! {
+        <div class="fp-showbar">
+            <button type="button" class="fp-clear" disabled=move || !lens.differs(level) on:click=move |_| {
+                lens.reset(level);
+                lens.pop(level).sel.set(0);
+            }>
+                {if level == Level::Global { "clear" } else { "reset" }}
+            </button>
+            <button type="button" class="fp-show" on:click=move |_| {
+                lens.close_panel(false);
+                crate::phonebar::open(None);
+            }>
+                {move || match n.get() {
+                    Some(n) => format!("show {n} ticket{}", if n == 1 { "" } else { "s" }),
+                    None => "show tickets".to_string(),
+                }}
+            </button>
+        </div>
     }
 }
 
