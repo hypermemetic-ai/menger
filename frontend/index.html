@@ -3046,14 +3046,31 @@
   #toast button:hover, #ftoast button:hover { background: var(--bg); color: var(--ink); border-color: var(--bg); }
   @keyframes menger-toast-in { from { transform: translateY(140%); opacity: 0; } }
   #toast, #ftoast { animation: menger-toast-in .5s cubic-bezier(.2, .9, .25, 1.15) both; }
+  /* RUN-24: a column beside the nav (1280's is ~57rem, 1440's ~67rem)
+     keeps every column, the fixed ones a size down so the title has room:
+     39rem of them where the full widths take 47rem. */
+  @container (max-width: 72rem) {
+    table.board th.c-id { width: 9rem; }
+    table.board th.c-kind { width: 5.5rem; }
+    table.board th.c-status { width: 11rem; }
+    table.board th.c-sev { width: 5.5rem; }
+    table.board th.c-blk { width: 8rem; }
+  }
   /* The board in a narrow column: the id, the title and the status — the
      kind, severity and blockers are the ticket's page's (and the nav's
-     glyph says the kind). APP-50: up to 60rem — the fixed columns are
-     47rem, so between 40rem and 60rem (a tablet's 768, a 1128 window
-     beside the nav) the title had no room left at all. */
-  @container (max-width: 60rem) {
-    table.board :is(th.c-kind, th.c-sev, th.c-blk) { display: none; }
-    tbody#board tr[data-ticket-id] td:is(:nth-child(3), :nth-child(5), :nth-child(6)) { display: none; }
+     glyph says the kind). APP-50: a tablet's 768 (or a 1128 window beside
+     the nav) had no room left for the title under the fixed columns;
+     RUN-24: up to 52rem, so that and every phone width, and no column
+     beside the nav at 1280 or wider.
+     The three columns collapse to nothing rather than leave the table
+     (display: none): the window's spacer rows span six columns, and a
+     column that only a spacer names takes an equal share of the width —
+     three empty columns that drew the board at half its width. */
+  @container (max-width: 52rem) {
+    table.board :is(th.c-kind, th.c-sev, th.c-blk),
+    tbody#board tr[data-ticket-id] td:is(:nth-child(3), :nth-child(5), :nth-child(6)) {
+      width: 0; padding: 0; border-left: 0; border-right: 0; overflow: hidden; visibility: hidden; font-size: 0;
+    }
     table.board th.c-id { width: 7.5rem; }
     table.board th.c-status { width: calc(86px * var(--text-scale) + 24px); }
     tbody#board td, table.board th { padding-left: 10px; padding-right: 10px; }
