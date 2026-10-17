@@ -496,6 +496,10 @@ cmd_smoke() {
   local configured=off
   [[ -n ${MENGER_AUTH_PROVIDERS:-}${MENGER_IDENTITY:-} ]] && configured=on
   [[ ${MENGER_REQUIRE_LOGIN:-} =~ ^(1|true|yes)$ ]] && configured=required
+  # ACCESS-24: a release with no open mode requires login whenever a
+  # provider is configured (`--require-login` is its only mode) — it says so
+  # with `--help`'s lack of the flag.
+  if [[ $configured == on ]] && ! "$bin/menger" --help 2>/dev/null | grep -q -e --require-login; then configured=required; fi
   if [[ $configured == "$expect" ]]; then say "ok   the settings configure login: $expect, as MENGER_EXPECT_LOGIN says"
   else say "FAIL the settings configure login: $configured, but MENGER_EXPECT_LOGIN says $expect — is ${lo##*/} the one $env had?"; fail=1; fi
   for _ in $(seq 1 60); do
@@ -565,7 +569,8 @@ cmd_smoke() {
   # checked where the release's menger knows --allowed-host.
   if "$bin/menger" --help 2>/dev/null | grep -e --allowed-host >/dev/null; then
     local p code ports="$MENGER_WS_PORT $MENGER_SHELL_PORT $MENGER_DIAGRAMS_PORT"
-    [[ ${MENGER_NO_REST:-} =~ ^(1|true|yes)$ ]] || ports="$ports $MENGER_REST_PORT"
+    # ACCESS-24: a release with no REST bridge has no --rest-port.
+    [[ ${MENGER_NO_REST:-} =~ ^(1|true|yes)$ ]] || ! "$bin/menger" --help 2>/dev/null | grep -q -e --rest-port || ports="$ports $MENGER_REST_PORT"
     for p in $ports; do
       code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -H 'Host: evil.example' "http://127.0.0.1:$p/" || true)
       [[ $code == 421 ]] && say "ok   :$p refuses Host: evil.example (421)" || { say "FAIL :$p answers Host: evil.example ($code)"; fail=1; }

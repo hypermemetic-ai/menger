@@ -108,11 +108,9 @@ impl Reader for VerifiedUser {
     }
 
     fn app_comments(&self) -> AppSight {
-        // Login off, `administers` is everywhere; a principal-less user
-        // past it is none — it sees the ones left by no one.
-        match (self.administers("*"), self.principal_text()) {
-            (true, _) => AppSight::All,
-            (false, p) => AppSight::By(p.unwrap_or_default()),
+        match self.administers("*") {
+            true => AppSight::All,
+            false => AppSight::By(self.principal_text()),
         }
     }
 }

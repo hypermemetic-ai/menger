@@ -166,30 +166,26 @@ impl From<StoreError> for ChatError {
     }
 }
 
-/// Who acts in a chat: the caller's principal (`anonymous` with login
-/// off), the name it goes by, and whether it is anyone (login off: every
-/// caller is, and may do what a participant does).
+/// Who acts in a chat: the caller's principal and the name it goes by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signer {
     pub principal: String,
     pub name: Option<String>,
-    pub anyone: bool,
 }
 
 impl Signer {
     /// The caller, as it signs.
     pub fn of(user: &VerifiedUser) -> Self {
         Self {
-            principal: user.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string()),
+            principal: user.principal_text(),
             name: user.name().map(str::to_string),
-            anyone: user.principal().is_none(),
         }
     }
 
     /// A signer by principal alone — a test's.
     #[cfg(test)]
     pub fn named(principal: &str) -> Self {
-        Self { principal: principal.into(), name: None, anyone: false }
+        Self { principal: principal.into(), name: None }
     }
 }
 
@@ -434,7 +430,7 @@ impl Store {
                 let ids = chats.ids(*chat);
                 ids[ids.partition_point(|&i| i <= w.after)..].iter().filter_map(|i| chats.messages.get(i))
             })
-            .filter(|m| w.since.is_none_or(|s| m.at >= s) && (signer.anyone || m.author != signer.principal))
+            .filter(|m| w.since.is_none_or(|s| m.at >= s) && m.author != signer.principal)
             .min_by_key(|m| m.id)
             .cloned()
     }
@@ -526,7 +522,7 @@ impl Store {
         let (record, message, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let mut c = self.held(&cache, &on, chat)?;
-            if !c.has(&by.principal) && !by.anyone {
+            if !c.has(&by.principal) {
                 return Err(refused(format!("you are not in chat {chat}: only its participants post")));
             }
             if c.state == ChatState::Closed {
@@ -550,7 +546,7 @@ impl Store {
         let (record, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let mut c = self.held(&cache, &on, chat)?;
-            if !c.has(&by.principal) && !by.anyone {
+            if !c.has(&by.principal) {
                 return Err(refused(format!("you are not in chat {chat}: only its participants add")));
             }
             if c.has(&principal) {
@@ -608,7 +604,7 @@ impl Store {
         let (record, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let mut c = self.held(&cache, &on, chat)?;
-            if !c.has(&by.principal) && !by.anyone {
+            if !c.has(&by.principal) {
                 return Err(refused(format!("you are not in chat {chat}: only its participants close and reopen it")));
             }
             let state = if open { ChatState::Open } else { ChatState::Closed };
@@ -631,7 +627,7 @@ impl Store {
         let (record, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let mut c = self.held(&cache, &on, chat)?;
-            if !c.has(&by.principal) && !by.anyone {
+            if !c.has(&by.principal) {
                 return Err(refused(format!("you are not in chat {chat}: only its participants rename it")));
             }
             if c.title == title {

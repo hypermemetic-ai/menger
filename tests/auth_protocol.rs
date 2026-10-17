@@ -83,9 +83,9 @@ impl Drop for Server {
     }
 }
 
-/// The binary on `db`, its socket on a free port; `login`: with `--auth-provider
-/// key --admin key:<boss>`.
-async fn spawn(db: &Path, login: bool) -> Server {
+/// The binary on `db`, its socket on a free port, with `--auth-provider key
+/// --admin key:<boss>` (ACCESS-24: there is no start without a provider).
+async fn spawn(db: &Path) -> Server {
     for _ in 0..3 {
         let port = free_port().await;
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_menger"));
@@ -104,9 +104,7 @@ async fn spawn(db: &Path, login: bool) -> Server {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        if login {
-            cmd.arg("--auth-provider").arg("key").arg("--admin").arg(principal(&BOSS));
-        }
+        cmd.arg("--auth-provider").arg("key").arg("--admin").arg(principal(&BOSS));
         let mut server = Server { child: cmd.spawn().expect("spawn menger"), port };
         for _ in 0..200 {
             if server.child.try_wait().unwrap().is_some() {
@@ -328,7 +326,7 @@ fn now_needs(today: Today, method: &str) -> Today {
 async fn the_roles_are_what_identity_21_asked_method_by_method() {
     let dir = tmp();
     let sessions = Arc::new(menger::sessions::Sessions::new(3600, &menger::login_names()));
-    let access = menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), true, Vec::new()).minting(menger::session_table(&sessions));
+    let access = menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), Vec::new()).minting(menger::session_table(&sessions));
     let hub = menger::build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access).await.unwrap();
     // MACRO-20: the children's roles are in it, each grant under its path.
     let declared = hub.declared_roles();
@@ -343,7 +341,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     let mut seen = BTreeSet::new();
     // MACRO-20: the hub lists them by path (`tickets.commits`), each schema
     // its own (namespace and grants as the macro wrote them).
-    let children = plexus_core::plexus::Activation::static_child_schemas(&menger_tickets_api::TicketsActivation::new(Arc::new(menger_tickets_api::store::Store::new())))
+    let children = plexus_core::plexus::Activation::static_child_schemas(&menger_tickets_api::TicketsActivation::with_access(Arc::new(menger_tickets_api::store::Store::new()), menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), Vec::new())))
         .into_iter()
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = hub.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
@@ -387,7 +385,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
 #[tokio::test]
 async fn an_anonymous_connection_sees_only_the_door_and_can_call_nothing_else() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let anon = connect(s.port, None).await;
 
     let i = info(&anon).await;
@@ -440,7 +438,7 @@ async fn an_anonymous_connection_sees_only_the_door_and_can_call_nothing_else() 
 #[tokio::test]
 async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
 
@@ -532,7 +530,7 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
 #[tokio::test]
 async fn a_child_s_methods_are_held_by_their_path() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
     let agent = as_key(s.port, &AGENT, "worker-1").await;
@@ -597,7 +595,7 @@ async fn a_child_s_methods_are_held_by_their_path() {
 #[tokio::test]
 async fn the_inputs_child_is_held_by_its_path() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
     let body = "<m-input id=\"notes\" kind=\"text\"><m-question data-field=\"question\">Anything?</m-question></m-input>";
@@ -633,7 +631,7 @@ async fn the_inputs_child_is_held_by_its_path() {
 #[tokio::test]
 async fn tickets_work_is_held_by_its_path() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
     let agent = as_key(s.port, &AGENT, "worker-1").await;
@@ -654,7 +652,7 @@ async fn tickets_work_is_held_by_its_path() {
 #[tokio::test]
 async fn tickets_components_is_held_by_its_path() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
     let a = one(&boss, "tickets.amend", json!({ "id": "A-2", "body": "```component m-a\n<b>a</b>\n```\n" })).await;
@@ -682,7 +680,7 @@ async fn tickets_components_is_held_by_its_path() {
 #[tokio::test]
 async fn tickets_work_answers_a_viewer_and_counts_what_it_hides() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
     let made = one(&boss, "tickets.create", json!({ "epic": "A", "title": "waits on B", "parent": "A-1", "blocked_by": ["A-2", "B-2"] })).await;
@@ -708,7 +706,7 @@ async fn tickets_work_answers_a_viewer_and_counts_what_it_hides() {
 #[tokio::test]
 async fn keep_lists_nothing_outside_the_reach() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
@@ -728,7 +726,7 @@ async fn keep_lists_nothing_outside_the_reach() {
 #[tokio::test]
 async fn keep_answers_nothing_outside_the_reach() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
@@ -746,7 +744,7 @@ async fn keep_answers_nothing_outside_the_reach() {
 async fn an_admin_s_role_set_changes_a_caller_s_view_and_is_kept_across_a_restart() {
     let dir = tmp();
     let db: PathBuf = dir.path().join("t.db");
-    let s = spawn(&db, true).await;
+    let s = spawn(&db).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "*", "role": "viewer" })).await;
@@ -772,7 +770,7 @@ async fn an_admin_s_role_set_changes_a_caller_s_view_and_is_kept_across_a_restar
     // Kept in the store: the next process reads it.
     drop((boss, agent));
     drop(s);
-    let s = spawn(&db, true).await;
+    let s = spawn(&db).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     let roles = call(&boss, "auth.roles", json!({})).await;
     let viewer = roles.iter().find(|r| r["role"] == "viewer").unwrap();
@@ -786,7 +784,7 @@ async fn an_admin_s_role_set_changes_a_caller_s_view_and_is_kept_across_a_restar
 #[tokio::test]
 async fn an_agent_asks_for_access_with_auth_signup() {
     let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), true).await;
+    let s = spawn(&dir.path().join("t.db")).await;
     let boss = as_key(s.port, &BOSS, "boss").await;
     let agent = as_key(s.port, &AGENT, "worker-1").await;
     let w = one(&agent, "auth.signup", json!({})).await;
@@ -799,56 +797,52 @@ async fn an_agent_asks_for_access_with_auth_signup() {
     assert_eq!((mine[1]["grant"]["scope"].as_str(), mine[1]["grant"]["role"].as_str()), (Some("hypermemetic:A"), Some("viewer")), "{mine:?}");
 }
 
-// ── Over the wire, login off ─────────────────────────────────────────────
+// ── No open mode (ACCESS-24) ──────────────────────────────────────────
 
-/// Login off (prod today): no gate. `_info` is what it was, every method's
-/// params are what they were (no `reach` leaks into a schema), the schema
-/// carries no view, and an anonymous caller is answered.
-#[tokio::test]
-async fn login_off_menger_is_as_it_was() {
-    let dir = tmp();
-    let s = spawn(&dir.path().join("t.db"), false).await;
-    let c = connect(s.port, None).await;
-    assert_eq!(info(&c).await.to_string(), r#"{"auth_capabilities":{"mechanisms":[{"kind":"anonymous"}]},"backend":"menger"}"#);
-    let hub = one(&c, "menger.schema", json!({})).await;
-    assert!(hub.get("view").is_none());
-    let kids: BTreeSet<String> = hub["children"].as_array().unwrap().iter().map(|k| k["namespace"].as_str().unwrap().to_string()).collect();
-    assert_eq!(kids, names(&["chats", "comments", "deployments", "members", "notes", "orgs", "session", "themes", "tickets"]), "no auth activation without login");
-    for ns in ["tickets", "comments", "chats", "notes", "members", "session", "themes", "deployments"] {
-        let schema = one(&c, &format!("{ns}.schema"), json!({})).await;
-        assert!(schema.get("view").is_none());
-        for m in schema["methods"].as_array().unwrap() {
-            assert!(m.get("held_on").is_none(), "{m}");
-            let props = m["params"]["properties"].as_object().cloned().unwrap_or_default();
-            // THEME-8: `themes.set`'s `reach` is the setting's own (how far a
-            // theme takes over — ACCESS-8: a `ThemeReach`), declared by the
-            // method; the gate's answer it does not take.
-            let own_reach = ns == "themes" && m["name"] == "set" && props.get("reach").is_some_and(|r| r.to_string().contains("#/$defs/ThemeReach"));
-            // ACCESS-13: what the frame injects (`auth`, the resolved
-            // `user`) is listed, marked as the server's (`x-plexus-source`).
-            let injected = |k: &str| props.get(k).is_some_and(|p| p.get("x-plexus-source").is_some());
-            assert!((own_reach || !props.contains_key("reach")) && (!props.contains_key("auth") || injected("auth")), "{ns}.{}: {props:?}", m["name"]);
+/// The binary on `db` with `args` and no provider in the environment: how it
+/// ended, and what it said.
+fn refused(db: &Path, args: &[&str]) -> (Option<i32>, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_menger"))
+        .args(["--port", "0", "--no-shell", "--db-path"])
+        .arg(db)
+        .args(args)
+        .env("PLEXUS_NO_REGISTRY", "1")
+        .env_remove("MENGER_DB_PATH")
+        .env_remove("MENGER_AUTH_PROVIDERS")
+        .env_remove("MENGER_IDENTITY")
+        .env_remove("MENGER_ADMINS")
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run menger");
+    // A start that is not refused serves forever: give it ten seconds.
+    let mut child = out;
+    for _ in 0..200 {
+        if child.try_wait().unwrap().is_some() {
+            let out = child.wait_with_output().unwrap();
+            return (out.status.code(), String::from_utf8_lossy(&out.stderr).into_owned());
         }
+        std::thread::sleep(Duration::from_millis(50));
     }
-    let tickets = one(&c, "tickets.schema", json!({})).await;
-    let set_status = tickets["methods"].as_array().unwrap().iter().find(|m| m["name"] == "set_status").unwrap();
-    // ACCESS-13: the caller's parameters as they were; beside them the
-    // frame's, marked as the server's.
-    let all = set_status["params"]["properties"].as_object().unwrap();
-    let mut props: Vec<&String> = all.iter().filter(|(_, p)| p.get("x-plexus-source").is_none()).map(|(k, _)| k).collect();
-    props.sort();
-    assert_eq!(props, ["id", "message", "restore_children", "source", "status"]);
-    assert_eq!(all["user"]["x-plexus-source"], json!({ "from": "auth", "resolver": "self.access.verify" }));
-    assert_eq!(set_status["params"]["required"], json!(["id", "status"]));
-    // Additive only: the grant and target the protocol adds.
-    assert_eq!((set_status["grant"].as_str(), set_status["target"].as_str()), (Some("tickets.set_status"), Some("id")));
+    let _ = child.kill();
+    let out = child.wait_with_output().unwrap();
+    (None, format!("still serving after 10 s — not refused: {}", String::from_utf8_lossy(&out.stderr)))
+}
 
-    // Anonymous calls answered, writes included.
-    assert_eq!(one(&c, "tickets.create", json!({ "epic": "A", "title": "root", "kind": "scope" })).await["type"], "created");
-    assert_eq!(one(&c, "tickets.set_status", json!({ "id": "A-1", "status": "Ready" })).await["type"], "status_changed");
-    assert_eq!(call(&c, "tickets.list", json!({})).await.len(), 2, "a ticket and its page");
-    assert_eq!(one(&c, "session.whoami", json!({})).await, json!({ "type": "anonymous" }));
-    assert!(call(&c, "members.requests", json!({})).await.is_empty(), "everyone is admin everywhere, and no one waits");
-    let e = one(&c, "auth.providers", json!({})).await;
-    assert_eq!(e["type"], "error", "no auth activation: {e}");
+/// ACCESS-24: without a login provider menger refuses to start, and says
+/// which flag it needs; it opens no database and serves nothing. `--stdio`
+/// (no credential rides it) is refused with a provider too.
+#[test]
+fn without_a_provider_menger_refuses_to_start_naming_the_flag() {
+    let dir = tmp();
+    let db = dir.path().join("t.db");
+    let (code, err) = refused(&db, &[]);
+    assert!(matches!(code, Some(c) if c != 0), "exited non-zero: {code:?} {err}");
+    assert!(err.contains("no open mode") && err.contains("--auth-provider"), "{err}");
+    assert!(!db.exists(), "nothing opened before the refusal");
+    let (code, err) = refused(&db, &["--auth-provider", "key", "--stdio"]);
+    assert!(matches!(code, Some(c) if c != 0), "exited non-zero: {code:?} {err}");
+    assert!(err.contains("--stdio"), "{err}");
 }

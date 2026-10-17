@@ -4,9 +4,8 @@ use menger::login::{LoginButton, Provider};
 use menger::wiring::{LoginOptions, Wiring};
 use menger_tickets_api::access::Access;
 use menger::{build_rpc_login, default_db_path, local, shell, MengerAccess};
-use plexus_transport::{ConnectionQuotas, RestHttpConfig, RouteFn, TransportServer};
+use plexus_transport::{ConnectionQuotas, TransportServer};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(name = "menger")]
@@ -20,8 +19,7 @@ struct Args {
     #[arg(long, default_value = "4456")]
     shell_port: u16,
 
-    /// RUN-8: the address the WebSocket, the shell and the REST bridge
-    /// listen on — `0.0.0.0` / `::` for every address this machine has, or
+    /// RUN-8: the address the WebSocket and the shell listen on — `0.0.0.0` / `::` for every address this machine has, or
     /// one of them (IPv6 with or without brackets). Default loopback. The
     /// names they answer to are still ACCESS-25's: a specific address adds
     /// its own literal (and the shell's origin at it may open the socket);
@@ -29,19 +27,16 @@ struct Args {
     #[arg(long, env = "MENGER_BIND", default_value = "127.0.0.1", value_name = "ADDR", value_parser = menger::bind::parse_bind)]
     bind: std::net::IpAddr,
 
-    /// REST HTTP port (POST /rest/{namespace}/{method}; streaming methods
-    /// respond as SSE)
-    #[arg(long, default_value = "4457")]
-    rest_port: u16,
-
-    /// Disable the REST HTTP listener. IDENTITY-23: also `MENGER_NO_REST`
-    /// (1/true/yes), so an environment that requires login can say it in
-    /// its env file.
+    /// ACCESS-24: the REST bridge cannot carry an identity, and menger has
+    /// no open mode, so it is not served at all; `--no-rest` (and
+    /// `MENGER_NO_REST`) is accepted and changes nothing, so a launcher or
+    /// an env file that says it still starts.
     #[arg(
         long,
         env = "MENGER_NO_REST",
         action = clap::ArgAction::SetTrue,
-        value_parser = clap::builder::FalseyValueParser::new()
+        value_parser = clap::builder::FalseyValueParser::new(),
+        hide = true
     )]
     no_rest: bool,
 
@@ -59,8 +54,9 @@ struct Args {
     #[arg(long, env = "MENGER_ENV", value_name = "NAME")]
     env: Option<String>,
 
-    /// Run in stdio mode (MCP-compatible); implies no web shell
-    #[arg(long)]
+    /// ACCESS-24: stdio carries no credential, and menger has no open mode
+    /// — `--stdio` is refused with the reason.
+    #[arg(long, hide = true)]
     stdio: bool,
 
     /// Disable the web shell
@@ -137,25 +133,16 @@ struct Args {
     /// --public-url) or a URL given; not offered on the login page. A caller's credential rides the
     /// `access_token` or `nostr` cookie, or `Authorization: Bearer`, and its
     /// provider's adapter makes it a Plexus identity at the WebSocket
-    /// upgrade. In the env var, specs are separated by `;`. None: no login,
-    /// as before.
+    /// upgrade. In the env var, specs are separated by `;`. ACCESS-24: at
+    /// least one (or --identity) — menger has no open mode and refuses to
+    /// start without a login provider (a development server runs `key`).
+    /// Login is always required: the app's routes go to the login page, an
+    /// upgrade that proves no one is admitted into the anonymous view
+    /// (auth.providers, auth.login, auth.signup, and nothing else), and the
+    /// gate decides every call (`--require-login` went: it is the only mode).
     #[arg(long = "auth-provider", env = "MENGER_AUTH_PROVIDERS", value_name = "SPEC", value_delimiter = ';')]
     auth_provider: Vec<Provider>,
 
-    /// IDENTITY-14: the shell's pages need a session (the app's routes go
-    /// to the login page). Needs an --auth-provider, and --no-rest: the REST
-    /// bridge cannot carry an identity yet. As an env var, 1/true/yes enable
-    /// it. AUTH-7: the socket no longer refuses an upgrade that proves no
-    /// one — with any --auth-provider it admits it into the anonymous view
-    /// (auth.providers, auth.login, auth.signup, and nothing else), and the
-    /// gate decides every call.
-    #[arg(
-        long,
-        env = "MENGER_REQUIRE_LOGIN",
-        action = clap::ArgAction::SetTrue,
-        value_parser = clap::builder::FalseyValueParser::new()
-    )]
-    require_login: bool,
 
     /// IDENTITY-19: a button on the login page (repeatable),
     /// `<Label>=<provider>[:<connection>]`, e.g. `Google=auth0:google-oauth2`,
@@ -313,12 +300,7 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let filter = if args.stdio {
-        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())
-    } else {
-        tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "info,menger=debug".into())
-    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,menger=debug".into());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
@@ -327,6 +309,11 @@ async fn main() -> anyhow::Result<()> {
     let db_path = args.db_path.unwrap_or_else(default_db_path);
     if args.verify_derived {
         std::process::exit(verify_derived(db_path).await);
+    }
+    // ACCESS-24: no open mode — no provider, no start; and nothing that
+    // cannot carry a credential (stdio) is served.
+    if let Some(refusal) = refusal(&args.auth_provider, args.identity.is_some(), args.stdio) {
+        anyhow::bail!(refusal);
     }
     let seed = args.seed_synthetic.map(|count| SeedSpec {
         count,
@@ -352,8 +339,8 @@ async fn main() -> anyhow::Result<()> {
         shell_loopback: args.bind.is_loopback(),
         session_ttl_secs: args.session_hours * 3600,
         session_idle_secs: args.session_idle_minutes * 60,
-        require: args.require_login,
-        page: !args.no_shell && !args.stdio,
+        require: true,
+        page: !args.no_shell,
         title: shell::tab_title(args.env.as_deref()),
         names: menger::login_names(),
         identity: args.identity.as_ref().map(|s| s.build(menger::login_access::BRANDING.app)).transpose()?,
@@ -367,12 +354,10 @@ async fn main() -> anyhow::Result<()> {
     // ACCESS-30: beyond loopback, a sign-in is made over https — the public
     // URL says where, and the cookies, the redirect URI and the app's socket
     // follow it. An http URL on the LAN is served, and said.
-    if !args.stdio {
-        match menger::bind::check_public_url(args.bind, args.public_url.as_deref(), wiring.login_on()) {
-            Err(why) => anyhow::bail!(why),
-            Ok(Some(warning)) => tracing::warn!("{warning}"),
-            Ok(None) => {}
-        }
+    match menger::bind::check_public_url(args.bind, args.public_url.as_deref(), wiring.login_on()) {
+        Err(why) => anyhow::bail!(why),
+        Ok(Some(warning)) => tracing::warn!("{warning}"),
+        Ok(None) => {}
     }
     let https = args.public_url.as_deref().is_some_and(|u| u.starts_with("https://"));
     if https && args.trusted_proxy.is_empty() {
@@ -381,20 +366,13 @@ async fn main() -> anyhow::Result<()> {
              every client is counted as the proxy's address (quotas, throttles)"
         );
     }
-    if args.require_login && !args.no_rest && !args.stdio {
-        anyhow::bail!(
-            "--require-login closes the WebSocket, but the REST bridge cannot carry an \
-             identity yet and would stay open: add --no-rest"
-        );
+    if args.no_rest {
+        tracing::debug!("--no-rest: there is no REST bridge to turn off (ACCESS-24)");
     }
     // IDENTITY-19: the rule every method asks. IDENTITY-42: session.login
     // mints its tokens in the login's own table.
-    let access = if wiring.login_on() {
-        let table = menger::session_table(wiring.sessions());
-        Access::with_login(table.clone(), args.require_login, args.admin.clone()).minting(table)
-    } else {
-        Access::open()
-    };
+    let table = menger::session_table(wiring.sessions());
+    let access = Access::with_login(table.clone(), args.admin.clone()).minting(table);
     // IDENTITY-35: the dev sign-in is the test environment's, never prod's.
     // IDENTITY-38: allowed only where named for it, `--env test` — not
     // refused only where named prod, so an unnamed server is not open.
@@ -418,7 +396,7 @@ async fn main() -> anyhow::Result<()> {
     // names the OIDC issuers a client can sign in at.
     let wired = wiring.finish(MengerAccess(access.clone()), dev)?;
     let offers = wired.offered().map(menger::offer).collect();
-    let metadata = wired.metadata_url().filter(|_| !args.stdio);
+    let metadata = wired.metadata_url();
     let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes).await?;
 
     local::log_activations(&hub);
@@ -431,19 +409,6 @@ async fn main() -> anyhow::Result<()> {
         per_connection: args.max_calls_per_connection,
         idle: (args.idle_timeout_secs > 0).then(|| std::time::Duration::from_secs(args.idle_timeout_secs)),
     };
-    if args.stdio {
-        tracing::info!("Starting stdio transport");
-        if wired.gate.is_some() {
-            tracing::warn!("--auth-provider is ignored over stdio: there is no upgrade to carry a credential");
-        }
-        return TransportServer::builder(hub.clone(), move |hub| menger::calls::rpc_module(hub, limits))
-            .with_stdio()
-            .build()
-            .await?
-            .serve()
-            .await;
-    }
-
     // ACCESS-25: each listener answers only its own names — RUN-8: and a
     // specific --bind address by its literal.
     let hosts = |port| {
@@ -473,43 +438,17 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("WebSocket: ws://{}", std::net::SocketAddr::new(args.bind, args.port));
     // IDENTITY-29: only menger's own pages may open the socket from a
     // browser, login or not; synapse sends no Origin and is unaffected.
-    // AUTH-6/AUTH-7, with login on: no credential → admitted into the
-    // anonymous view (only the auth door); a credential presented and
+    // AUTH-6/AUTH-7: no credential → admitted into the anonymous view (only the auth door); a credential presented and
     // refused → 401 with RFC 6750's challenge (plexus-login's `apply`).
     builder = wired.apply(builder);
-    if wired.login_on() {
-        let names: Vec<&str> = wired.providers.iter().map(|p| p.name()).collect();
-        tracing::info!("Login:     {} — anonymous callers see only the auth door", names.join(", "));
-        // ACCESS-30: the one redirect URI a provider must list, derived.
-        tracing::info!("Sign-in:   returns to {}/login/callback", wiring_public_url(&args.public_url, args.shell_port));
-    }
+    let names: Vec<&str> = wired.providers.iter().map(|p| p.name()).collect();
+    tracing::info!("Login:     {} — anonymous callers see only the auth door", names.join(", "));
+    // ACCESS-30: the one redirect URI a provider must list, derived.
+    tracing::info!("Sign-in:   returns to {}/login/callback", wiring_public_url(&args.public_url, args.shell_port));
     if let Some(spec) = &args.identity {
         tracing::info!("Sign-in:   our own page over {spec}");
     }
-    if !args.no_rest {
-        let route_hub = hub.clone();
-        let route_fn: RouteFn = Arc::new(move |method, params| {
-            let hub = route_hub.clone();
-            // ACCESS-13: with login off, the anonymous caller.
-            Box::pin(async move {
-                let anonymous = plexus_core::plexus::AuthContext::anonymous();
-                hub.route(&method, params, menger::calls::caller(&hub, None, &anonymous)).await
-            })
-        });
-        builder = builder
-            .with_rest_http_config(
-                RestHttpConfig::new(args.rest_port)
-                    .with_server_name("menger".into())
-                    .with_server_version(env!("CARGO_PKG_VERSION").into())
-                    .with_allowed_hosts(hosts(args.rest_port)),
-            )
-            // registers /rest/tickets/*; ACCESS-20: and each static child
-            // under its whole path (`/rest/tickets.work/ready`), which the
-            // bridge's `/{namespace}/{method}` reaches no other way.
-            .with_flat_schemas(hub.list_plugin_schemas().into_iter().chain(hub.static_children()).collect())
-            .with_route_fn(route_fn); // dispatches via hub.route()
-        tracing::info!("REST:      http://{}/rest", std::net::SocketAddr::new(args.bind, args.rest_port));
-    }
+    // ACCESS-24: no REST bridge — it cannot carry an identity.
     if !args.no_shell {
         let cfg = shell::ShellConfig {
             port: args.shell_port,
@@ -649,6 +588,24 @@ fn parse_email(spec: &str) -> Result<LoginButton, String> {
     format!("email={spec}").parse()
 }
 
+/// ACCESS-24: why this start is refused, if it is — no login provider
+/// (menger has no open mode), or stdio (no credential rides it).
+fn refusal(providers: &[Provider], identity: bool, stdio: bool) -> Option<String> {
+    if stdio {
+        return Some(
+            "--stdio is gone: menger has no open mode, and stdio carries no credential (ACCESS-24) — \
+             reach it over the WebSocket with a key (synapse _login, or --auth-provider key)"
+                .into(),
+        );
+    }
+    (providers.is_empty() && !identity).then(|| {
+        "menger has no open mode: give it a login provider with --auth-provider <SPEC> \
+         (MENGER_AUTH_PROVIDERS) — `--auth-provider key` admits agents' Ed25519 keys, enough for \
+         a development server with `--admin key:<hex>` — or --identity (ACCESS-24)"
+            .into()
+    })
+}
+
 /// IDENTITY-38: the dev sign-in runs only on the environment named test.
 fn dev_login_allowed(env: Option<&str>) -> bool {
     env == Some("test")
@@ -656,6 +613,18 @@ fn dev_login_allowed(env: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// ACCESS-24: no provider, no start — the message names the flag;
+    /// stdio is refused with or without one.
+    #[test]
+    fn a_start_without_a_provider_is_refused_naming_the_flag() {
+        let none = super::refusal(&[], false, false).expect("refused");
+        assert!(none.contains("--auth-provider") && none.contains("no open mode"), "{none}");
+        let key: Vec<menger::login::Provider> = vec!["key".parse().unwrap()];
+        assert_eq!(super::refusal(&key, false, false), None);
+        assert_eq!(super::refusal(&[], true, false), None, "--identity is a provider");
+        assert!(super::refusal(&key, false, true).expect("stdio").contains("--stdio"));
+    }
+
     #[test]
     fn the_dev_sign_in_is_test_s_alone() {
         assert!(super::dev_login_allowed(Some("test")));

@@ -15,7 +15,12 @@
     "call": "session.whoami",
     "items": [
       {
-        "type": "anonymous"
+        "name": "test",
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
+        "provider": "key",
+        "roles": [],
+        "tenant": null,
+        "type": "identity"
       }
     ],
     "params": {}
@@ -46,9 +51,19 @@
     "items": [
       {
         "admin_everywhere": true,
-        "name": null,
-        "principal": null,
+        "name": "test",
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "type": "me"
+      },
+      {
+        "grant": {
+          "at": 0,
+          "granted_by": "--admin",
+          "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
+          "role": "admin",
+          "scope": "*"
+        },
+        "type": "grant"
       }
     ],
     "params": {}
@@ -1015,8 +1030,9 @@
         "action": "queued",
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "source": "api",
@@ -1064,8 +1080,9 @@
       {
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "snoozed_until_unix": 0,
@@ -1112,8 +1129,9 @@
       {
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "snoozed_until_unix": 0,
@@ -1163,11 +1181,12 @@
       {
         "action": "unqueued",
         "at_unix": 0,
-        "by": "anonymous",
+        "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "snoozed_until_unix": 0,
@@ -1228,9 +1247,10 @@
         "tombstones": [
           {
             "at_unix": 0,
-            "by": "anonymous",
+            "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
             "id": "GOLD-6",
             "message": "filed twice",
+            "name": "test",
             "parent": "GOLD-1",
             "restorable_until_unix": 0,
             "title": "a mistake"
@@ -2773,7 +2793,7 @@
     "items": [
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -2781,7 +2801,7 @@
           "from": null,
           "id": 2,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "to": "Pending"
@@ -2790,7 +2810,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -2798,7 +2818,7 @@
           "from": "Pending",
           "id": 8,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "to": "Ready"
@@ -2807,7 +2827,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -2815,7 +2835,7 @@
           "from": "Ready",
           "id": 9,
           "message": "claimed",
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "to": "Coding"
@@ -2825,10 +2845,11 @@
       {
         "record": {
           "action": "queued",
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "id": 1,
           "input": "landing",
+          "name": "test",
           "reason": "the import waits",
           "source": "api",
           "ticket": "GOLD-2",
@@ -2839,10 +2860,11 @@
       {
         "record": {
           "action": "snoozed",
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "id": 2,
           "input": "landing",
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "until_unix": 0,
@@ -2853,10 +2875,11 @@
       {
         "record": {
           "action": "unqueued",
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "id": 3,
           "input": "landing",
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "urgency": "blocking"
@@ -2926,9 +2949,10 @@
           "version": 0
         },
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "rename it",
         "id": 1,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "state": "open",
         "type": "comment"
       }
@@ -2955,9 +2979,10 @@
           "route": "#/"
         },
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "slow",
         "id": 2,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "state": "open",
         "type": "comment"
       }
@@ -2985,9 +3010,10 @@
           "version": 0
         },
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "rename it",
         "id": 1,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "state": "resolved",
         "type": "comment"
       }
@@ -3009,9 +3035,10 @@
           "version": 0
         },
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "rename it",
         "id": 1,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "state": "open",
         "type": "comment"
       }
@@ -3031,9 +3058,10 @@
           "route": "#/"
         },
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "slow",
         "id": 2,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "state": "open",
         "type": "comment"
       },
@@ -3047,9 +3075,10 @@
           "version": 0
         },
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "rename it",
         "id": 1,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "state": "open",
         "type": "comment"
       },
@@ -3073,9 +3102,10 @@
           "version": 0
         },
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "rename it",
         "id": 1,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "state": "open",
         "type": "comment"
       },
@@ -3094,9 +3124,10 @@
     "items": [
       {
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "## watch drops events\nseen twice",
         "id": 1,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "ticket": null,
         "type": "note",
         "upgraded_at": null
@@ -3111,9 +3142,10 @@
     "items": [
       {
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "## watch drops events\nseen twice",
         "id": 1,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "ticket": null,
         "type": "note",
         "upgraded_at": null
@@ -3130,9 +3162,10 @@
     "items": [
       {
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "## watch drops events\nseen twice",
         "id": 1,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "ticket": null,
         "type": "note",
         "upgraded_at": null
@@ -3147,9 +3180,10 @@
     "items": [
       {
         "at": 0,
-        "author": "owner",
+        "author": "test",
         "body": "## watch drops events\nseen twice",
         "id": 1,
+        "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "ticket": "GOLD-7",
         "type": "note",
         "upgraded_at": 0
@@ -3324,7 +3358,7 @@
           "previous": null,
           "project": "GOLD",
           "recorded_at": 0,
-          "recorded_by": "anonymous",
+          "recorded_by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "release": "r1",
           "revision": "4f7114a",
           "source": {
@@ -3378,7 +3412,7 @@
           "previous": null,
           "project": "GOLD",
           "recorded_at": 0,
-          "recorded_by": "anonymous",
+          "recorded_by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "release": "r1",
           "revision": "4f7114a",
           "source": {
@@ -3460,7 +3494,18 @@
   },
   {
     "call": "members.list",
-    "items": [],
+    "items": [
+      {
+        "grant": {
+          "at": 0,
+          "granted_by": "--admin",
+          "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
+          "role": "admin",
+          "scope": "*"
+        },
+        "type": "grant"
+      }
+    ],
     "params": {}
   },
   {
@@ -3508,7 +3553,7 @@
         ],
         "mark": {
           "at_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "write": 0
         },
         "type": "archived",
@@ -3538,7 +3583,7 @@
         ],
         "mark": {
           "at_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "message": "parked",
           "write": 13
         },
@@ -3561,7 +3606,7 @@
           "address": "hypermemetic:PLAT-2",
           "archived": {
             "at_unix": 0,
-            "by": "anonymous",
+            "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
             "message": "parked",
             "write": 13
           },
@@ -3612,7 +3657,7 @@
           "address": "hypermemetic:PLAT-2",
           "archived": {
             "at_unix": 0,
-            "by": "anonymous",
+            "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
             "message": "parked",
             "write": 13
           },
@@ -3653,7 +3698,7 @@
     "items": [
       {
         "ancestors": [],
-        "by": "anonymous",
+        "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "dry_run": false,
         "ids": [
           "PLAT-2"
@@ -3735,7 +3780,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -3743,7 +3788,7 @@
           "from": null,
           "id": 1,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-1",
           "to": "Pending"
@@ -3796,7 +3841,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -3804,7 +3849,7 @@
           "from": null,
           "id": 2,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "to": "Pending"
@@ -3891,7 +3936,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -3899,7 +3944,7 @@
           "from": null,
           "id": 3,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-3",
           "to": "Pending"
@@ -3984,7 +4029,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -3992,7 +4037,7 @@
           "from": null,
           "id": 4,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-4",
           "to": "Doc"
@@ -4051,7 +4096,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -4059,7 +4104,7 @@
           "from": null,
           "id": 5,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-5",
           "to": "Pending"
@@ -4128,7 +4173,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -4136,7 +4181,7 @@
           "from": null,
           "id": 6,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "PLAT-1",
           "to": "Pending"
@@ -4189,7 +4234,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -4197,7 +4242,7 @@
           "from": null,
           "id": 7,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "PLAT-2",
           "to": "Pending"
@@ -4259,7 +4304,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -4267,7 +4312,7 @@
           "from": "Pending",
           "id": 8,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "to": "Ready"
@@ -4305,7 +4350,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -4313,7 +4358,7 @@
           "from": "Ready",
           "id": 9,
           "message": "claimed",
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "to": "Coding"
@@ -4349,7 +4394,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -4357,7 +4402,7 @@
           "from": "build",
           "id": 10,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-5",
           "to": "spike"
@@ -4963,8 +5008,9 @@
         "action": "queued",
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "source": "api",
@@ -5001,8 +5047,9 @@
       {
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "snoozed_until_unix": 0,
@@ -5040,11 +5087,12 @@
       {
         "action": "unqueued",
         "at_unix": 0,
-        "by": "anonymous",
+        "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "snoozed_until_unix": 0,
@@ -5083,7 +5131,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -5091,7 +5139,7 @@
           "from": null,
           "id": 11,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-6",
           "to": "Pending"
@@ -5135,9 +5183,10 @@
         "tombstones": [
           {
             "at_unix": 0,
-            "by": "anonymous",
+            "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
             "id": "GOLD-6",
             "message": "filed twice",
+            "name": "test",
             "parent": "GOLD-1",
             "restorable_until_unix": 0,
             "title": "a mistake"
@@ -5377,7 +5426,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -5385,7 +5434,7 @@
           "from": "live",
           "id": 13,
           "message": "parked",
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "PLAT-2",
           "to": "archived"
@@ -5424,7 +5473,7 @@
         ],
         "mark": {
           "at_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "message": "parked",
           "write": 13
         },
@@ -5433,7 +5482,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -5441,7 +5490,7 @@
           "from": "archived",
           "id": 14,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "PLAT-2",
           "to": "live"
@@ -5468,7 +5517,7 @@
       },
       {
         "ancestors": [],
-        "by": "anonymous",
+        "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "dry_run": false,
         "ids": [
           "PLAT-2"
@@ -5536,7 +5585,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -5544,7 +5593,7 @@
           "from": null,
           "id": 1,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-1",
           "to": "Pending"
@@ -5604,7 +5653,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -5612,7 +5661,7 @@
           "from": null,
           "id": 2,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "to": "Pending"
@@ -5706,7 +5755,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -5714,7 +5763,7 @@
           "from": null,
           "id": 3,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-3",
           "to": "Pending"
@@ -5806,7 +5855,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -5814,7 +5863,7 @@
           "from": null,
           "id": 4,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-4",
           "to": "Doc"
@@ -5873,7 +5922,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -5881,7 +5930,7 @@
           "from": null,
           "id": 5,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-5",
           "to": "Pending"
@@ -5957,7 +6006,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -5965,7 +6014,7 @@
           "from": null,
           "id": 6,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "PLAT-1",
           "to": "Pending"
@@ -6025,7 +6074,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -6033,7 +6082,7 @@
           "from": null,
           "id": 7,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "PLAT-2",
           "to": "Pending"
@@ -6102,7 +6151,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -6110,7 +6159,7 @@
           "from": "Pending",
           "id": 8,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "to": "Ready"
@@ -6148,7 +6197,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -6156,7 +6205,7 @@
           "from": "Ready",
           "id": 9,
           "message": "claimed",
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
           "to": "Coding"
@@ -6192,7 +6241,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -6200,7 +6249,7 @@
           "from": "build",
           "id": 10,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-5",
           "to": "spike"
@@ -6806,8 +6855,9 @@
         "action": "queued",
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "source": "api",
@@ -6844,8 +6894,9 @@
       {
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "snoozed_until_unix": 0,
@@ -6883,11 +6934,12 @@
       {
         "action": "unqueued",
         "at_unix": 0,
-        "by": "anonymous",
+        "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "entry": {
           "asked_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "input": "landing",
+          "name": "test",
           "queued_unix": 0,
           "reason": "the import waits",
           "snoozed_until_unix": 0,
@@ -6926,7 +6978,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -6934,7 +6986,7 @@
           "from": null,
           "id": 11,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "GOLD-6",
           "to": "Pending"
@@ -6985,9 +7037,10 @@
         "tombstones": [
           {
             "at_unix": 0,
-            "by": "anonymous",
+            "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
             "id": "GOLD-6",
             "message": "filed twice",
+            "name": "test",
             "parent": "GOLD-1",
             "restorable_until_unix": 0,
             "title": "a mistake"
@@ -7262,7 +7315,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -7270,7 +7323,7 @@
           "from": "live",
           "id": 13,
           "message": "parked",
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "PLAT-2",
           "to": "archived"
@@ -7309,7 +7362,7 @@
         ],
         "mark": {
           "at_unix": 0,
-          "by": "anonymous",
+          "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "message": "parked",
           "write": 13
         },
@@ -7325,7 +7378,7 @@
       },
       {
         "transition": {
-          "actor": "anonymous",
+          "actor": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "at_unix": 0,
           "cause": null,
           "cause_ticket": null,
@@ -7333,7 +7386,7 @@
           "from": "archived",
           "id": 14,
           "message": null,
-          "name": null,
+          "name": "test",
           "source": "api",
           "ticket": "PLAT-2",
           "to": "live"
@@ -7360,7 +7413,7 @@
       },
       {
         "ancestors": [],
-        "by": "anonymous",
+        "by": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
         "dry_run": false,
         "ids": [
           "PLAT-2"
@@ -7419,9 +7472,10 @@
             "version": 0
           },
           "at": 0,
-          "author": "owner",
+          "author": "test",
           "body": "rename it",
           "id": 1,
+          "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "state": "open"
         },
         "type": "added"
@@ -7435,9 +7489,10 @@
             "route": "#/"
           },
           "at": 0,
-          "author": "owner",
+          "author": "test",
           "body": "slow",
           "id": 2,
+          "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "state": "open"
         },
         "type": "added"
@@ -7453,9 +7508,10 @@
             "version": 0
           },
           "at": 0,
-          "author": "owner",
+          "author": "test",
           "body": "rename it",
           "id": 1,
+          "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "state": "resolved"
         },
         "type": "resolved"
@@ -7471,9 +7527,10 @@
             "version": 0
           },
           "at": 0,
-          "author": "owner",
+          "author": "test",
           "body": "rename it",
           "id": 1,
+          "principal": "key:51bfae7fa92c515512cd3ad442760e41612e59dfec3913f670b721c04255b068",
           "state": "open"
         },
         "type": "reopened"

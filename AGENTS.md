@@ -8,12 +8,27 @@ online from the first commit — every noun visible the day it is written.
 ## Commands
 
 ```sh
-cargo test         # unit tests + wire tests (tests/wire.rs speaks the real protocol)
-# a development server: its own ports and its own database, never prod's
-PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 --db-path /tmp/menger-dev.db
+cargo test         # unit tests + wire tests (tests/wire.rs speaks the real protocol, signed in)
+# a development server: its own ports and its own database, never prod's —
+# and a login provider: menger has no open mode (ACCESS-24)
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
+  --auth-provider key --admin "$(synapse _key show builder)"
+synapse -P 4460 _login menger --key builder --as builder   # once per server start; then synapse -P 4460 … as usual
 ```
 
-Bare `cargo run` takes prod's ports (4455–4457) **and prod's database**
+**There is no open mode** (ACCESS-24): `menger` without `--auth-provider`
+(or `--identity`) exits at once — `menger has no open mode: give it a login
+provider with --auth-provider <SPEC> …` — and opens nothing. A dev server
+runs `key` with your key as `--admin`; add `idp=…`, `workos=…` and the rest
+for people. Login is always required (`--require-login` is gone: it is the
+only mode), there is no REST bridge (`--rest-port` is gone; `--no-rest` is
+accepted and changes nothing) and no `--stdio`. The tests run the same way:
+`tests/support` starts every server under `key` with a fixture key as
+`--admin`, and every client proves that key. The first start of this build
+on a database purges the grants planted while it ran open (README "Login"
+→ The purge).
+
+Bare `cargo run` takes prod's ports (4455–4456) **and prod's database**
 (the default `--db-path` is `~/.local/share/menger/tickets.db`) — never run
 it that way while prod is installed.
 
@@ -100,7 +115,7 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
 
 - **`synapse`** (`../synapse`; on PATH) — the CLI over any Plexus backend.
   This is how an agent, a worker or a shell script reads and writes
-  tickets; prefer it to hand-rolled curl against the REST bridge.
+  tickets (ACCESS-24: there is no REST bridge to curl).
 
   **The paths moved** (ACCESS-14..18; every client, ACCESS-20): a ticket's
   inputs, commits, nav reads, order of work and components are children of
@@ -389,14 +404,15 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   anything is painted is checked with the sweep test,
   `scripts/theme-sweep.mjs`, on a throwaway server (README "On the fly").
 
-  **Login** (IDENTITY-14) is off unless `--auth-provider` names a
-  provider: `idp=…`, `auth0=…`, `oidc:<name>=…` or `nostr=…`. Each
-  becomes an adapter that turns its credential into a Plexus identity at
+  **Login** (IDENTITY-14) is always on (ACCESS-24): `--auth-provider`
+  names at least one provider — `key` (agents), `idp=…`, `auth0=…`,
+  `oidc:<name>=…`, `workos=…` or `nostr=…` — or menger refuses to start.
+  Each becomes an adapter that turns its credential into a Plexus identity at
   the WebSocket upgrade, and nothing past the upgrade knows the provider.
   `session.whoami` reports the identity. README "Login" has the rest:
 
   ```sh
-  synapse -P 4460 -t "$TOKEN" menger session whoami
+  synapse -P 4460 menger session whoami    # as the key you _login'd with
   ```
 
   **Prod requires login** (ACCESS-47, since 2026-10-17), as test does:
@@ -404,7 +420,8 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   and `key` for agents (`ws://127.0.0.1:4455` and the LAN's
   `ws://192.168.8.117:4455`); `--require-login`, `--no-rest` (REST :4457
   is gone), `--public-url http://192.168.8.117:4456` — all in
-  `prod.local.env`. An anonymous socket reaches the anonymous view and
+  `prod.local.env` (from ACCESS-24's release on, login and no REST are
+  the only mode, whatever the file says). An anonymous socket reaches the anonymous view and
   nothing else. This machine's agents sign in with Ed25519 keys kept by
   synapse (`~/.plexus/keys/<name>.key`, 0600):
 
@@ -568,8 +585,10 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   fails until it is.
 - **A new language target** is a new `hub-codegen` generator over the same
   IR — never a hand-written client that mirrors the wire.
-- **REST + SSE** (:4457) — for curl and for scripts that cannot run
-  synapse. Unary responses are capped at 10,000 items (TRANSPORT-2).
+- **No REST** (ACCESS-24): the REST + SSE bridge could not carry an
+  identity, and menger has no open mode, so it is not served. A script that
+  cannot run synapse signs in through `deploy/menger-call.mjs` (a key file,
+  the socket).
 
 ## Inputs — asking the owner inside a ticket (INPUT)
 
@@ -601,7 +620,7 @@ An option's value is its `value`, else its `name`.
 **The owner answers; an agent doesn't** (menger-skills `asking`: an agent
 never answers its own decision). A reader's click records the answer — its source
 the server's, from the caller (ACCESS-14: `app` for a person signed in through a
-provider, `api` for a key and with login off); a reader may change or clear it
+provider, `api` for a key); a reader may change or clear it
 until the input is closed.
 
 **Read what's waiting, act, then close:**
@@ -782,8 +801,8 @@ and `view: mockup` + `widths:` makes a whole body one.
   bridge (MFE-9): one `WsTransport` for the app's lifetime, the typed
   client from `tickets-api`'s `client` feature, `watch` opened before
   anything else the session asks (SCALE-26: `health`, `groups`,
-  `extents` and one board window — no walk). The REST bridge (its own
-  port) stays for curl, scripts and non-Rust clients; the shell has no
+  `extents` and one board window — no walk). There is no REST bridge
+  (ACCESS-24); the shell has no
   `/rest` proxy (ACCESS-33) and serves only menger's pages and the app's
   build, read into a table — never a request path on disk. `frontend/src`
   must contain no `/rest/`, no hand-parsed SSE, and no `serde_json::Value`
@@ -918,8 +937,9 @@ and `view: mockup` + `widths:` makes a whole body one.
   `params(…)`), and its body is at most 15 lines — a permit or a scoped
   read, then `answered!` or a `*_stream` beside it (`tests/sizes.rs`
   holds both). A new activation, and comments / members / session in
-  ACCESS-19, take the same shape. With login off, menger's transports
-  hand a call with no identity the anonymous one (`menger::calls::caller`).
+  ACCESS-19, take the same shape. A call with no identity is the
+  anonymous one (`menger::calls::caller`), which the gate holds to the
+  anonymous view — there is no open mode (ACCESS-24).
 - A ticket's outputs are tickets (owner, 2026-09-06): a report, spike
   result, checkpoint, or evaluation memo is filed as a CHILD ticket of
   the ticket that generated it (`parent:` in frontmatter; typed once
@@ -965,7 +985,7 @@ and `view: mockup` + `widths:` makes a whole body one.
   under menger's names: set **`Coding`** when work starts and **`In
   Review`** in the commit that finishes it. `set_status` also takes
   the legacy words — `active` is `Coding`, `in review` is `In Review` —
-  and stores the canonical spelling (through `-p`, the app and REST;
+  and stores the canonical spelling (through `-p` and the app;
   synapse's own `--status` flag takes the canonical spelling only,
   ACCESS-8). The deploy to test sets `Complete` (DEPLOY-22: the lowest
   environment; a repository with no environment, its merge). **Link the commit** (SDLC-9): in the step that flips the

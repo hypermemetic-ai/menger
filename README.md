@@ -14,11 +14,29 @@ clients; the app does not use it.
 ## Run
 
 ```sh
-cargo run                     # the app http://127.0.0.1:4456/, WebSocket :4455,
-                              # REST :4457, day-one page /vanilla
-cargo run -- --stdio          # MCP-compatible stdio mode
-cargo test
+# ACCESS-24: menger has no open mode — it needs a login provider to start
+cargo run -- --auth-provider key --admin "$(synapse _key show builder)"
+                              # the app http://127.0.0.1:4456/ (behind /login),
+                              # WebSocket :4455, day-one page /vanilla
+synapse -P 4455 _login menger --key builder --as builder   # then synapse as usual
+cargo test                    # every test server runs `key`, every client is its --admin
 ```
+
+**No open mode** (ACCESS-24). Without `--auth-provider` (or `--identity`)
+menger exits before it opens anything:
+
+```
+Error: menger has no open mode: give it a login provider with --auth-provider <SPEC> (MENGER_AUTH_PROVIDERS) — `--auth-provider key` admits agents' Ed25519 keys, enough for a development server with `--admin key:<hex>` — or --identity (ACCESS-24)
+```
+
+Login is always required — the shell's pages are behind `/login`, an
+upgrade that proves no one reaches the anonymous view and nothing else
+("The AUTH protocol") — so `--require-login` went (it is the only mode),
+and so did what could not carry an identity: the REST bridge (`--rest-port`;
+`--no-rest` / `MENGER_NO_REST` is accepted and changes nothing) and
+`--stdio`. On its first start on a database this build purges the grants
+open mode planted ("Login" → The purge). `menger::local` runs behind the
+gate too ("As a library").
 
 `http://127.0.0.1:4456/` is the Leptos app (MFE-4). Until you build the
 frontend it serves the day-one vanilla page instead — the binary alone
@@ -29,8 +47,8 @@ the deep-link prefix (`/app/#/ticket/MNG-1`); it serves the app too.
 Open the app in two browser windows; create a ticket or flip a status in
 one and watch the other update. No polling — the server pushes.
 
-**Hosts** (ACCESS-25). Every listener — the WebSocket, the shell, the REST
-bridge, and `diagrams` — answers only its own names, so a page that rebinds
+**Hosts** (ACCESS-25). Every listener — the WebSocket, the shell, and
+`diagrams` — answers only its own names, so a page that rebinds
 its own name to 127.0.0.1 (DNS rebinding) gets nothing: a request naming any
 other `Host` is refused before anything routes it,
 
@@ -45,17 +63,15 @@ and `--public-url`'s host (as it names it, and its hostname on the port);
 `--allowed-host` adds more — repeatable, `host:port` or `host` for a default
 port, every listener; `MENGER_ALLOWED_HOSTS` with `;` between. `diagrams`
 is loopback only and takes no list. The check is plexus-transport's (the
-WebSocket upgrade and the REST bridge) and the shell's own, with or without
-login:
+WebSocket upgrade) and the shell's own:
 
 ```sh
-PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 \
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --auth-provider key --admin "$(synapse _key show builder)" \
   --db-path /tmp/menger-dev.db --allowed-host menger.lan:4461 --allowed-host menger.lan:4460
-curl -si -H 'Host: evil.example' http://127.0.0.1:4462/debug   # 421
+curl -si -H 'Host: evil.example' http://127.0.0.1:4461/login   # 421
 ```
 
-**Bind** (RUN-8). Every listener — the WebSocket, the shell and the REST
-bridge — listens on loopback unless `--bind ADDR` (`MENGER_BIND`) names
+**Bind** (RUN-8). Every listener — the WebSocket and the shell — listens on loopback unless `--bind ADDR` (`MENGER_BIND`) names
 another address: `0.0.0.0` or `::` for every address this machine has, or
 one of them (`192.168.8.117`, `fd00::1`, `[fd00::1]`). The startup log names
 each bound address. Binding changes where menger listens, not what it
@@ -70,9 +86,9 @@ CIDR, or `none`) is required at startup (AUTH-22). `menger::local`,
 units pass no `--bind`.
 
 ```sh
-PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 \
-  --db-path /tmp/menger-dev.db --bind 0.0.0.0 --allowed-host box.lan:4460 --allowed-host box.lan:4461 \
-  --allowed-origin http://box.lan:4461
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --auth-provider key=ws://box.lan:4460 \
+  --admin "$(synapse _key show builder)" --db-path /tmp/menger-dev.db --bind 0.0.0.0 --allowed-host box.lan:4460 --allowed-host box.lan:4461 \
+  --allowed-origin http://box.lan:4461 --public-url http://box.lan:4461   # login is always on: ACCESS-30 wants the URL (http on a LAN is warned)
 synapse -H box.lan -P 4460 menger tickets health
 ```
 
@@ -122,8 +138,8 @@ proxy. The proxy recipe and the checklist are in `deploy/README.md`,
 "Behind https".
 
 ```sh
-PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 \
-  --db-path /tmp/menger-dev.db --bind 0.0.0.0 --trusted-proxy 172.30.0.2 \
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --auth-provider key=wss://menger.example \
+  --admin "$(synapse _key show builder)" --db-path /tmp/menger-dev.db --bind 0.0.0.0 --trusted-proxy 172.30.0.2 \
   --allowed-host menger.example --public-url https://menger.example
 ```
 
@@ -147,7 +163,7 @@ surface is unchanged.
 
 ```sh
 cargo run --release -- --db-path /tmp/scratch.db --seed-synthetic 100000 \
-    --port 4470 --shell-port 4471 --rest-port 4472
+    --port 4470 --shell-port 4471 --auth-provider key --admin "$(synapse _key show builder)"
 ```
 
 The magnitude ladder in `perf/` (PERF-3) drives this option per
@@ -409,7 +425,7 @@ ticket's value, or how many of the selection hold each. One ticket's update
 is one `update` (status: `set_status`, which keeps MENGER-13's restore
 prompt; labels: `label`). A refusal lands in the error banner in the
 server's words. The updates are absent for a reader who cannot write, Delete
-for anyone but an admin (with login off, everyone may). Delete… confirms in
+for anyone but an admin. Delete… confirms in
 the app — every ticket, its children (moved to its parent, or deleted too)
 and the tickets that wait on it (unblocked) — and then offers **Undo**
 (`undelete`) in its toast. A shortcode's row is its root's menu with the
@@ -1954,7 +1970,7 @@ A reader can **answer a ticket in place** (INPUT-1): a body declares
   one entry — `{ action, value, rationale, source, at_unix }`, oldest
   first; `source` is the server's, from the verified caller (ACCESS-14):
   `app` for a person signed in through a provider, `api` for an agent's
-  key and for every call with login off; `close` and `reopen` are always
+  key; `close` and `reopen` are always
   `api`. Each
   `answer` is recorded, the same value again included; a clear, close or
   reopen that changes nothing (no answer, closed already, not closed)
@@ -2230,7 +2246,7 @@ capability-types pattern). `tickets-api/src/access/` (server-only):
 
 | type | holding one proves | minted by |
 |---|---|---|
-| `VerifiedUser` | signed in (or login off), the sign-in alive and unexpired, the principal parsed by the identity layer — never its `user_id` instead —, the ceiling readable, the grants resolved | `Access::verify(&AuthContext)`, the frame's resolver (ACCESS-13: and the grant the call was admitted for); `verify_now` the same, outside a dispatch; `verify_call` for an activation not on the frame yet |
+| `VerifiedUser` | signed in (ACCESS-24: always), the sign-in alive and unexpired, the principal parsed by the identity layer — never its `user_id` instead —, the ceiling readable, the grants resolved | `Access::verify(&AuthContext)`, the frame's resolver (ACCESS-13: and the grant the call was admitted for); `verify_now` the same, outside a dispatch; `verify_call` for an activation not on the frame yet |
 | `Reach` (inside it) | its grants — direct ∪ its teams' (`team:<name>`; ACCESS-22 keeps the teams) ∪ the operator's — each scope compiled (`*`, `acme:`, a shortcode and those hosted under it, `under ID`, `ID`), the ceiling likewise, at the grants generation of the moment | `verify` |
 | `Permit<Viewer \| Editor \| Admin>` | a role the mark admits, on the ticket it names, by the kept tree as it stands (editor ⇒ viewer) | `VerifiedUser::permit(&TicketId, &Store)` |
 | `AdminOf` | admin on the scope it names (or one covering it), within the ceiling | `VerifiedUser::admin_of(&Scope, &Store)` |
@@ -2352,7 +2368,7 @@ what its proofs are for — a stale or mismatched proof writes nothing.
 | `update_many`, `label` / `commits.link` over `ids`, `reshortcode` | an editor's permit per ticket selected (the store checks they are exactly its selection) |
 | `delete` | `Permit<Admin>` per ticket that goes; `undelete`, `AdminOf` each one's shortcode |
 | `comments.add` / `resolve` / `reopen` | a viewer's (an editor's) permit on the comment's ticket; nothing more for a comment on the app |
-| `members.grant` / `revoke` | `AdminOf` exactly its scope, minted while login is on — with login off a grant would be planted for when it turns on (ACCESS-3 #11), and is refused |
+| `members.grant` / `revoke` | `AdminOf` exactly its scope, minted for a signed-in admin (ACCESS-24: there is no other) |
 | `orgs.create` · `rename` · `delete` | `AdminOf` `*` · the organization (or `*`) |
 | `themes.define` · `themes.set` | `On<Editor>` `*` · `AdminOf` `*` for the site, `On<Editor>` the shortcode |
 | `deployments.record` | `On<Deployer>` the project's shortcode |
@@ -2406,13 +2422,12 @@ impl TicketsActivation {
   takes `auth: Option<&AuthContext>` or `reach: Reach`, and none admits by
   hand. Its refusal is typed (MACRO-14): a sign-in that does not stand is
   `-32001 unauthenticated`, anything else `-32003 forbidden`; a call with no
-  identity at all is refused `unauthenticated` by the dispatch itself. With
-  login on, the gate refuses an anonymous call before any of it (only the
-  auth door is in the anonymous view). **With login off** the resolver
-  admits anyone; menger's own transports (`menger.call` over the WebSocket
-  and stdio, `menger::calls`; the REST bridge) hand a call that carries no
-  identity the anonymous one (`calls::caller`), since the dispatch runs no
-  resolver without one. ACCESS-24 ends open mode.
+  identity at all is refused `unauthenticated` by the dispatch itself. The
+  gate refuses an anonymous call before any of it (only the auth door is in
+  the anonymous view). ACCESS-24: there is no login off — `Access::open` and
+  the resolver's "anyone" went; menger's own `menger.call`
+  (`menger::calls`) hands a call that carries no identity the anonymous one
+  (`calls::caller`), which the gate holds to the anonymous view.
 - **Descriptions are doc comments** — the method's `///` (its first
   sentence is what synapse's listing shows; the whole is the schema's
   `description` until MACRO-19 splits off the long description) and each
@@ -2467,7 +2482,7 @@ impl TicketsActivation {
   `client.inputs()` on the Rust client (MACRO-16). An answer's and a clear's
   `source` is no parameter any more: the server says it from the verified
   caller (ACCESS-3 #12) — `app` for a person signed in through a provider,
-  `api` for an agent's key and for every call with login off. Its grants and
+  `api` for an agent's key. Its grants and
   what it inherits are a child's, as above.
 - **`tickets work`** (ACCESS-17) is mounted: `ready` (was `tickets
   ready_set`), `waves`, `waves_under`, `waves_to`, `blockers`, on the wire
@@ -2609,7 +2624,7 @@ refused by name). Tickets go into one by their address — `--epic acme:MENGER`
 caller's **only** organization, and is refused, naming them, when it holds
 roles in several and the epic names no shortcode in exactly one of them. A
 new root in an organization takes `tickets.create` on it (`acme:`), not on
-`*`. Login off: one organization, as before, and nothing needs naming.
+`*`.
 
 ```sh
 synapse -P 4460 -t "$ADMIN" menger orgs create --name acme --admin key:9f86…
@@ -3282,8 +3297,7 @@ on the ticket by someone other than the caller (`kind: commented`), the
 ticket unqueued by someone other than the caller (`kind: unqueued` —
 `action`, `by`, `at_unix`), the ticket canceled or deleted (`kind: ended` —
 `how`, `by`, `at_unix`). A snooze, a queueing or a raise is none. "Other
-than the caller" is by principal; with login off everyone is `anonymous`
-and nothing is set aside. `timeout_minutes` ends a wait with nothing as
+than the caller" is by principal. `timeout_minutes` ends a wait with nothing as
 `timed_out { ticket }`. It is answered from the cache, asked again at every
 change on either channel (both subscribed before the first ask), so a
 response between the lookup and the subscription is neither lost nor said
@@ -3749,7 +3763,8 @@ shortcode), `--signin-shell` the sign-in page:
 ```sh
 cargo build && (cd frontend && trunk build --release)
 cp ~/.local/share/menger/tickets.db /tmp/sweep.db      # a copy; never prod's file
-PLEXUS_NO_REGISTRY=1 target/debug/menger --port 4510 --shell-port 4511 --rest-port 4512 --db-path /tmp/sweep.db &
+PLEXUS_NO_REGISTRY=1 target/debug/menger --port 4510 --shell-port 4511 --db-path /tmp/sweep.db \
+  --auth-provider key --admin "$(synapse _key show builder)" &   # ACCESS-24: a provider, always
 node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --seed --browsers chromium,firefox --rows --project
 ```
 
@@ -3915,8 +3930,8 @@ in one chain at the WebSocket upgrade. Whichever claims a caller's
 credential verifies it and turns it into the same Plexus types: a
 principal, a name, roles and a tenant. Past the upgrade there is only the
 connection's identity: `session.whoami` reports it, and `comments.add`
-signs with it. No `--auth-provider` means no chain, and menger serves
-exactly as before.
+signs with it. ACCESS-24: at least one `--auth-provider` (or `--identity`)
+is required — with none, menger refuses to start, naming the flag.
 
 | `--auth-provider` | the credential | principal |
 |---|---|---|
@@ -3937,26 +3952,27 @@ door (`auth.providers`, `auth.login`, `auth.signup`; "The AUTH protocol"
 below); a credential presented as a bearer or the `access_token` cookie and
 refused is a 401 at the upgrade, with RFC 6750's challenge. (A bad `nostr`
 cookie, or a stale browser session cookie, presents nothing: the anonymous
-view.) `--require-login` puts the shell's pages behind the login page; it
-needs `--no-rest`, because the REST bridge cannot carry an identity yet. `MENGER_AUTH_PROVIDERS` takes the specs separated by `;`, and
-`MENGER_REQUIRE_LOGIN=1` sets the flag. A bad spec, or an issuer that is
-not `https://` off loopback, stops startup.
+view.) The shell's pages are always behind the login page (ACCESS-24:
+`--require-login` was the flag, and is now the only mode; there is no REST
+bridge, which could not carry an identity). `MENGER_AUTH_PROVIDERS` takes
+the specs separated by `;`. A bad spec, or an issuer that is not
+`https://` off loopback, stops startup.
 
 | method | yields |
 |---|---|
-| `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`, or `anonymous` (login off). Under login a signed-out or expired session is refused `unauthenticated` (ACCESS-19), as an anonymous connection is (AUTH-7: it asks `auth.*`) |
-| `session.providers {}` | one `provider { name, kind, issuer, audience }` per `--auth-provider` (`kind` `oidc` or `nostr`), none when login is off: what a sign-in needs, nothing secret |
+| `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`. A signed-out or expired session is refused `unauthenticated` (ACCESS-19), as an anonymous connection is (AUTH-7: it asks `auth.*`) |
+| `session.providers {}` | one `provider { name, kind, issuer, audience }` per `--auth-provider` (`kind` `oidc` or `nostr`): what a sign-in needs, nothing secret |
 
 `comments.add` is signed by its caller (ACCESS-19): authored by its
-identity's name (its principal when it has none), `owner` with login off;
-`add` has no `author` parameter. `session.whoami`, `login` and `logout`
+identity's name (its principal when it has none); `add` has no `author`
+parameter. `session.whoami`, `login` and `logout`
 verify their caller as every method does — a signed-out or expired sign-in
 is refused `unauthenticated` — and `session.providers` is `public`: an
 anonymous connection's view holds it beside `auth.*`.
 
 ```sh
 # a dev server admitting plexus-idp, an Auth0 tenant and nostr keys
-PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 --db-path /tmp/menger-dev.db \
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
   --auth-provider idp=http://127.0.0.1:4481,plexus:menger \
   --auth-provider auth0=https://acme.auth0.com/,https://menger.example,https://menger.example/roles \
   --auth-provider nostr=ws://127.0.0.1:4460/
@@ -3966,6 +3982,24 @@ synapse -P 4460 --cookie nostr="$EVENT" menger session whoami
 
 `tests/login.rs` runs each provider over the real wire against fixture
 issuers.
+
+**The purge** (ACCESS-24; ACCESS-4 C2, ACCESS-3 #11). While menger could
+run with login off, every caller acted for no one, and a grant one wrote
+was kept signed `granted_by = --admin` — the operator's mark (an anonymous
+REST `members.grant` once made a stranger admin on `*` that way; ACCESS-51:
+`orgs create --admin P`). Under login every write is signed by a
+principal and the operator's own `--admin` grants are never stored, so a
+stored row signed `--admin` is one written while open. The first start of
+this build on a database removes each such grant, and each team membership
+added by `--admin`, unless an `--admin` principal of that start accounts for
+it (the row's principal is one the operator names, admin on `*` by the flag
+anyway): one transaction, which also writes its mark — the `open_purge`
+table's one row, when, what was removed, what was kept. Each removal is
+logged (`ACCESS-24: removed, planted while open: …`, a warning), the total
+once; a later start finds the mark and does nothing; a purge that fails
+stops the start (`Store::purge_open_grants`,
+`tickets-api/src/store/open_purge.rs`). Grants made under login — a
+principal's, `auth.grant`'s, the dev sign-in's — are never touched.
 
 **In the app** (IDENTITY-15): `#/settings` opens on a **Sign in** group
 with one button per provider that `session.providers` lists. For an OIDC
@@ -4026,8 +4060,8 @@ alone; a body's scripts, styles, images and fonts load as before. The
 landing (menger.sh) is served by the edge under its own (`landing/menger.sh.caddy`). The page is
 self-contained (`plexus-login/web/login.html`), so an IdP can host it later.
 
-`--require-login` puts the whole app behind it. `/`, `/app/…` and `/vanilla`
-redirect to `/login?next=…`. AUTH-7: with any provider, the socket admits an
+The whole app is behind it (ACCESS-24: always; `--require-login` was the
+flag). `/`, `/app/…` and `/vanilla` redirect to `/login?next=…`. AUTH-7: with any provider, the socket admits an
 upgrade without a session or a provider token into the anonymous view (the
 auth door, nothing else), the protocol's gate decides **every call**, and
 **every method re-checks its caller's sign-in on every call**
@@ -4153,7 +4187,8 @@ refused by the gate, typed (`forbidden { grant: tickets.amend, scope: OUGHT,
 roles, held_on }`). A comment is signed with the
 caller's principal (`principal` beside `author`); no call names its author.
 Someone signed in with no grant reaches nothing and waits in
-`members.requests` for an admin. With login off, nothing here applies.
+`members.requests` for an admin. ACCESS-24: there is no login off; a grant
+planted while there was is purged ("Login" → The purge).
 
 | method | yields |
 |---|---|
@@ -4246,8 +4281,8 @@ A key is granted like anyone: `members grant --principal key:<hex>`.
 `tests/agent_login.rs` runs it over the real socket.
 
 ```sh
-PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --no-rest --db-path /tmp/menger-dev.db \
-  --auth-provider key --require-login --admin key:<hex>
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
+  --auth-provider key --admin key:<hex>
 synapse -P 4460 _login menger --key agent-7 --as worker-3 --scope editor@MENGER-12   # synapse's side: IDENTITY-43
 ```
 
@@ -4259,9 +4294,8 @@ grants**, and plexus-core's **gate** decides every call before it runs — the
 grant, held through a role on the scope the call's **target** lives in,
 within the session's ceiling. Default deny. menger supplies the gate its
 roles, memberships and scopes (`tickets-api/src/access/`, `Book`) and an
-`AuthBackend` (`src/auth_backend.rs`). Login off: no gate, no `auth`
-activation — every method answers everyone, as before; schemas only gain
-`grant` and `target` on each method.
+`AuthBackend` (`src/auth_backend.rs`). ACCESS-24: every hub carries the
+gate and the `auth` activation — there is no hub without them.
 
 | role | its grants (declared with `roles(...)` on each activation) |
 |---|---|
@@ -4431,11 +4465,17 @@ the new bundle.
 
 ## As a library (DIST-3)
 
-`menger::local` starts the whole server from code — what the binary does
-with no `--auth-provider`, `--no-rest` and no `--stdio`: the store, every
-activation, the Plexus WebSocket and the web shell on loopback; no login, no
-REST bridge, no registry announcement. It is how a host (DIST-1's desktop
-app) runs menger without copying `main.rs`:
+`menger::local` starts the whole server from code: the store, every
+activation, the Plexus WebSocket and the web shell on loopback; no login
+page, no REST bridge, no registry announcement. It is how a host (DIST-1's
+desktop app) runs menger without copying `main.rs`. ACCESS-24: **behind the
+gate, as every menger is** — it has one owner (`LocalConfig::owner`, a
+principal; `None`, a `key:` principal made for the start), admin on `*` as
+an `--admin` is, and the host signs its connections in with a session it
+mints for the owner, `owner_token(ttl_secs)` (≤ 24 h), sent as
+`Authorization: Bearer <token>` or the `access_token` cookie — a webview's,
+set for `127.0.0.1` before it opens the shell. Anyone else reaches the
+anonymous view:
 
 ```rust
 use menger::local::{LocalConfig, LocalServer, TAURI_ORIGINS};
@@ -4443,12 +4483,14 @@ use menger::local::{LocalConfig, LocalServer, TAURI_ORIGINS};
 let mut cfg = LocalConfig::new(data_dir.join("tickets.db")); // ports 0: free ones
 cfg.extra_origins = TAURI_ORIGINS.iter().map(|o| o.to_string()).collect();
 let server = LocalServer::start(cfg).await?;  // both listening when it returns
+let token = server.owner_token(12 * 3600)?;   // the owner's session
+set_cookie("127.0.0.1", "access_token", &token);
 open_window(&server.shell_url());             // http://127.0.0.1:<port>/
-// … server.ws_url() is the socket synapse or a client can use
+// … server.ws_url() is the socket synapse or a client can use, with the token
 server.shutdown().await;                      // both stopped, ports released
 ```
 
-`LocalConfig { db_path, ws_port, shell_port, env, app, extra_origins }`:
+`LocalConfig { db_path, ws_port, shell_port, env, app, extra_origins, owner }`:
 a port of 0 is a free one (bound before anything serves, so the reported
 port is held); the database's directory is made if missing; `env` titles
 the tab as `--env` does; `app` is an `AppSource` — `Dir(path)` or

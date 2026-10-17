@@ -148,38 +148,41 @@ async fn providers() -> Providers {
     Providers { port, auth0, idp, list }
 }
 
-/// menger as `main` wires it: the boundary from the providers. AUTH-7: with
-/// any provider, an upgrade that presents no credential enters the
-/// anonymous view and one presenting a bad one is refused (AUTH-6), whether
-/// or not `require_login`; the gate decides every call.
-async fn start(port: u16, providers: &[Provider], require_login: bool) {
-    start_with(port, providers, require_login, &[]).await
+/// menger as `main` wires it: the boundary from the providers. AUTH-7: an
+/// upgrade that presents no credential enters the anonymous view and one
+/// presenting a bad one is refused (AUTH-6); the gate decides every call.
+/// ACCESS-24: always — there is no start without a provider.
+async fn start(port: u16, providers: &[Provider]) {
+    start_with(port, providers, &[]).await
 }
 
 /// [`start`], with operator admins (`--admin`).
-async fn start_with(port: u16, providers: &[Provider], require_login: bool, admins: &[&str]) {
+async fn start_with(port: u16, providers: &[Provider], admins: &[&str]) {
+    assert!(!providers.is_empty(), "ACCESS-24: menger starts only with a provider");
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
     let offers = providers.iter().map(menger::offer).collect();
     // As main wires it (IDENTITY-19): sessions, the per-call rule, the gate.
     let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
-    let access = if providers.is_empty() { Access::open() } else { Access::with_login(menger::session_table(&sessions), require_login, admins.iter().map(|a| a.to_string()).collect()) };
+    let access = Access::with_login(menger::session_table(&sessions), admins.iter().map(|a| a.to_string()).collect());
     let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access.clone())
         .await
         .expect("open database");
-    let boundary = login::boundary(providers).expect("providers");
-    // As main serves it (ACCESS-19): menger's own `menger.call`, which hands
-    // a call with no identity the anonymous one while login is off.
+    let carriers = login::boundary(providers).expect("providers").expect("a boundary");
+    // As main serves it (ACCESS-19): menger's own `menger.call`.
     let conv = |arc: Arc<DynamicHub>| menger::calls::rpc_module(arc, menger::calls::CallLimits::default());
     tokio::spawn(async move {
         let _keep = dir;
-        let mut builder = TransportServer::builder(hub, conv).with_websocket(port);
-        if let Some(carriers) = boundary {
-            builder = builder
-                .with_session_validator(Arc::new(Gate::new(sessions, Some(carriers)).noticing(menger::MengerAccess(access))))
-                .anonymous_view()
-                .credential_cookies(["access_token"]);
-        }
-        builder.build().await.expect("build server").serve().await.expect("serve");
+        TransportServer::builder(hub, conv)
+            .with_websocket(port)
+            .with_session_validator(Arc::new(Gate::new(sessions, Some(carriers)).noticing(menger::MengerAccess(access))))
+            .anonymous_view()
+            .credential_cookies(["access_token"])
+            .build()
+            .await
+            .expect("build server")
+            .serve()
+            .await
+            .expect("serve");
     });
     for _ in 0..100 {
         if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
@@ -287,21 +290,9 @@ fn comment_by(author: &str) -> Value {
 }
 
 #[tokio::test]
-async fn with_no_provider_menger_is_as_it_was() {
-    let port = free_port().await;
-    start(port, &[], false).await;
-    let client = connect(port, &[("authorization", "Bearer whatever".into())]).await.unwrap();
-    assert_eq!(whoami(&client).await, json!({ "type": "anonymous" }));
-    // ACCESS-19: a comment is signed by its caller, never named by the
-    // call — with login off, `owner`; the `author` sent is no parameter.
-    let added = call(&client, "comments.add", comment_by("mallory")).await;
-    assert_eq!(added[0]["author"], "owner", "{added:?}");
-}
-
-#[tokio::test]
 async fn each_provider_becomes_the_same_kind_of_plexus_identity() {
     let p = providers().await;
-    start(p.port, &p.list, false).await;
+    start(p.port, &p.list).await;
 
     let idp = connect(p.port, &[("cookie", format!("theme=dark; access_token={}", idp_token(&p.idp, now() + 600)))]).await.unwrap();
     assert_eq!(whoami(&idp).await, json!({
@@ -333,7 +324,7 @@ async fn each_provider_becomes_the_same_kind_of_plexus_identity() {
 async fn a_signed_in_comment_carries_its_identity() {
     let p = providers().await;
     let alice_principal = format!("idp:{ALICE}");
-    start_with(p.port, &p.list, false, &[&alice_principal]).await;
+    start_with(p.port, &p.list, &[&alice_principal]).await;
     let alice = connect(p.port, &[("cookie", format!("access_token={}", idp_token(&p.idp, now() + 600)))]).await.unwrap();
     let added = call(&alice, "comments.add", comment_by("mallory")).await;
     assert_eq!(added[0]["author"], "alice", "the identity, not the claim: {added:?}");
@@ -351,7 +342,7 @@ async fn a_signed_in_comment_carries_its_identity() {
 #[tokio::test]
 async fn a_bad_credential_is_refused_and_no_credential_is_the_anonymous_view() {
     let p = providers().await;
-    start(p.port, &p.list, false).await;
+    start(p.port, &p.list).await;
     let expired = idp_token(&p.idp, now() - 60);
     let mut tampered = auth0_token(&p.auth0);
     tampered.push('x');
@@ -368,13 +359,13 @@ async fn a_bad_credential_is_refused_and_no_credential_is_the_anonymous_view() {
     }
 }
 
-/// AUTH-7: under --require-login too, an upgrade that proves no one is
+/// AUTH-7 (ACCESS-24: login is always required): an upgrade that proves no one is
 /// admitted — into the anonymous view, which can call only the auth door
 /// (it was refused 401 before); a bad credential is still 401.
 #[tokio::test]
 async fn require_login_admits_an_upgrade_that_proves_no_one_into_the_anonymous_view() {
     let p = providers().await;
-    start(p.port, &p.list, true).await;
+    start(p.port, &p.list).await;
     let anonymous = connect(p.port, &[]).await.unwrap();
     assert_eq!(call(&anonymous, "tickets.health", json!({})).await[0]["error_kind"], "unauthenticated");
     let door = call(&anonymous, "auth.providers", json!({})).await;
@@ -389,7 +380,7 @@ async fn require_login_admits_an_upgrade_that_proves_no_one_into_the_anonymous_v
 #[tokio::test]
 async fn providers_says_what_a_sign_in_needs_and_nothing_more() {
     let p = providers().await;
-    start(p.port, &p.list, false).await;
+    start(p.port, &p.list).await;
     // AUTH-7: session.providers is a signed-in caller's; an anonymous one
     // asks auth.providers (below).
     let client = connect(p.port, &[("cookie", format!("access_token={}", idp_token(&p.idp, now() + 600)))]).await.unwrap();
@@ -409,8 +400,4 @@ async fn providers_says_what_a_sign_in_needs_and_nothing_more() {
         ]
     );
 
-    let port = free_port().await;
-    start(port, &[], false).await;
-    let client = connect(port, &[]).await.unwrap();
-    assert!(call(&client, "session.providers", json!({})).await.is_empty(), "login off: none");
 }

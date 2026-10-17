@@ -68,6 +68,19 @@ impl LocalServer {
     /// its host builds it (menger's holds its calls to its limits and hands
     /// a call with no identity the anonymous one while login is off).
     pub async fn start_module(hub: Arc<DynamicHub>, module: jsonrpsee::RpcModule<()>, cfg: LocalConfig) -> anyhow::Result<LocalServer> {
+        Self::start_guarded(hub, module, cfg, None, UpgradeOptions::default()).await
+    }
+
+    /// [`LocalServer::start_module`], its WebSocket upgrade checked by
+    /// `validator` with `options` (ACCESS-24: menger's local server is
+    /// behind login, as every menger is).
+    pub async fn start_guarded(
+        hub: Arc<DynamicHub>,
+        module: jsonrpsee::RpcModule<()>,
+        cfg: LocalConfig,
+        validator: Option<Arc<dyn plexus_core::plexus::SessionValidator>>,
+        options: UpgradeOptions,
+    ) -> anyhow::Result<LocalServer> {
         log_activations(&hub);
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.shell_port))
             .await
@@ -77,7 +90,7 @@ impl LocalServer {
         let mut ws_config = WebSocketConfig::new(cfg.ws_port);
         ws_config.allowed_origins = loopback_origins(shell_port);
         ws_config.allowed_origins.extend(cfg.extra_origins);
-        let (ws, addr) = serve_websocket_with(module, ws_config, None, UpgradeOptions::default()).await?;
+        let (ws, addr) = serve_websocket_with(module, ws_config, validator, options).await?;
         let ws_port = addr.port();
         tracing::info!("WebSocket: ws://127.0.0.1:{ws_port}");
 

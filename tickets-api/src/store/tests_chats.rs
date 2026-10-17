@@ -198,7 +198,7 @@ async fn a_message_is_signed_by_its_caller() {
     let store = kiln().await;
     let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
     let mut rx = store.subscribe_chats();
-    let signer = Signer { principal: BUILDER.into(), name: Some("builder".into()), anyone: false };
+    let signer = Signer { principal: BUILDER.into(), name: Some("builder".into()) };
     let m = store.post_chat(SYS.permit("KILN-7"), c.id, signer, "The test.".into()).await.unwrap();
     assert_eq!((m.id.get(), m.chat.get(), m.author.as_str(), m.name.as_deref(), m.via.as_deref(), m.body.as_str()), (1, 1, BUILDER, Some("builder"), None, "The test."));
     assert_eq!(rx.try_recv().unwrap(), ChatChange::Posted(m.clone()), "to every participant's watch");

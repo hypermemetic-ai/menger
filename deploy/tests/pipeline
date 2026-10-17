@@ -103,7 +103,7 @@ release() { # N → a release directory at commit C[N]
   r=$D/releases/$id; mkdir -p "$r/bin"
   printf 'release:   %s\ncommit:    %s\nsubject:   r%s\n' "$id" "${C[$1]}" "$1" >"$r/RELEASE"
   # ACCESS-25: a release's menger knows --allowed-host, so the smoke asks every port
-  printf '#!/usr/bin/env bash\n[[ ${1:-} == --help ]] && echo "--allowed-host <HOST>"\nexit 0\n' >"$r/bin/menger"; chmod +x "$r/bin/menger"
+  printf '#!/usr/bin/env bash\n[[ ${1:-} == --help ]] && echo "--allowed-host <HOST> --rest-port <PORT>"\nexit 0\n' >"$r/bin/menger"; chmod +x "$r/bin/menger"
   echo "$id"
 }
 R0=$(release 0) R1=$(release 1) R2=$(release 2)

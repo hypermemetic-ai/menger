@@ -47,10 +47,10 @@ pub(super) async fn add(store: Arc<Store>, user: VerifiedUser, anchor: Anchor, b
     if let Err(message) = allowed {
         return CommentsEvent::Error { message };
     }
-    let author = user.name().map(str::to_string).or_else(|| user.principal_text());
+    let author = user.name().map(str::to_string).or_else(|| Some(user.principal_text()));
     // ACCESS-11: a viewer's permit on each ticket it is on.
     let permits = OnComment::new(crate::activation::comment_permits::<Viewer>(&store, &user, &on));
-    answer(store.add_comment_as(permits, anchor, body, author, user.principal_text()).await)
+    answer(store.add_comment_as(permits, anchor, body, author, Some(user.principal_text())).await)
 }
 
 /// IDENTITY-21 / ACCESS-11: what resolving or reopening the comment `id`

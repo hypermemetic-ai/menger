@@ -16,7 +16,9 @@
 # 8080 and the shell on 8081, the database in the /data volume; the REST
 # bridge is off (it carries no identity). Every name it is reached by is an
 # --allowed-host (MENGER_ALLOWED_HOSTS), or --public-url's (MENGER_PUBLIC_URL),
-# as ACCESS-25 requires: 0.0.0.0 adds no name.
+# as ACCESS-25 requires: 0.0.0.0 adds no name. ACCESS-24: menger has no open
+# mode — a container started without MENGER_AUTH_PROVIDERS (or
+# MENGER_IDENTITY) exits at once, saying so; the run supplies them.
 FROM debian:bookworm-slim
 # ca-certificates: login providers' keys are fetched over https.
 # tini: PID 1 that hands SIGTERM to menger (which keeps the default

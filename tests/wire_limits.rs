@@ -3,6 +3,9 @@
 //! idle with none open closed, and AUTH-12's connection quotas as main sets
 //! them (`--max-connections-per-ip` …).
 
+
+/// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
+mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
@@ -20,12 +23,17 @@ async fn free_port() -> u16 {
 /// `quotas`.
 async fn start(limits: CallLimits, quotas: ConnectionQuotas) -> u16 {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let hub = menger::build_rpc(&dir.path().join("t.db")).await.unwrap();
+    let login = support::Login::new();
+    let hub = support::hub(&dir.path().join("t.db"), &login).await;
     let port = free_port().await;
+    let gate = login.gate(port);
     tokio::spawn(async move {
         let _keep = dir;
         TransportServer::builder(hub, move |hub| menger::calls::rpc_module(hub, limits))
             .with_websocket(port)
+            .with_session_validator(gate)
+            .anonymous_view()
+            .credential_cookies(["access_token"])
             .with_connection_quotas(quotas)
             .build()
             .await
@@ -44,7 +52,7 @@ async fn start(limits: CallLimits, quotas: ConnectionQuotas) -> u16 {
 }
 
 async fn connect(port: u16) -> Result<WsClient, String> {
-    WsClientBuilder::default().build(format!("ws://127.0.0.1:{port}")).await.map_err(|e| e.to_string())
+    WsClientBuilder::default().set_headers(support::admin_headers(port)).build(format!("ws://127.0.0.1:{port}")).await.map_err(|e| e.to_string())
 }
 
 async fn call(c: &WsClient, method: &str, params: Value) -> Subscription<Value> {
