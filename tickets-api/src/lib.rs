@@ -26,6 +26,11 @@
 //! ```
 
 pub mod types;
+/// TICKETS-7: line and word diffs, and a body's visible text. Wasm-safe.
+pub mod diff;
+/// TICKETS-7: a ticket's revisions — the vocabulary. Wasm-safe.
+pub mod revisions;
+pub use revisions::{FieldChange, Revision, RevisionDiff, RevisionSource};
 /// ACCESS-8: the vocabulary — every domain value a method takes, as a type
 /// validated once at the wire ([`vocab::TicketRef`], [`vocab::Principal`],
 /// [`vocab::FilterText`], …). Wasm-safe.

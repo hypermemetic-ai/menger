@@ -291,6 +291,8 @@ pub(crate) struct Broadcast {
     deployments: broadcast::Sender<crate::deployments::DeploymentsEvent>,
     /// CHAT-3: `chats.watch`'s and `await_message`'s — the chats' changes.
     chats: broadcast::Sender<chats::ChatChange>,
+    /// TICKETS-7: the revisions writes keep — `watch { revisions }`'s.
+    revisions: broadcast::Sender<Change>,
     /// ACCESS-12: the grants generation, as the last write left it — what
     /// wakes an open watch to verify its caller again (never a value it
     /// trusts: it reads [`Store::grants_generation`]).
@@ -308,6 +310,7 @@ impl Broadcast {
             comments: broadcast::channel(BROADCAST_CAPACITY).0,
             deployments: broadcast::channel(BROADCAST_CAPACITY).0,
             chats: broadcast::channel(BROADCAST_CAPACITY).0,
+            revisions: broadcast::channel(BROADCAST_CAPACITY).0,
             grants: Arc::new(tokio::sync::watch::channel(0).0),
         }
     }
@@ -885,6 +888,8 @@ pub enum Change {
     /// MENGER-39: a queue write — `queued`, `unqueued`, `snoozed` on the
     /// wire; `shortcode` is its ticket's (ORG-3: by identity), what `watch { epic }` filters by.
     Queue { shortcode: ShortcodeId, change: queue::QueueChange },
+    /// TICKETS-7: a revision a write kept — after the write's other events.
+    Revised { shortcode: ShortcodeId, ticket: TicketId, rev: u32, fields: Vec<String> },
 }
 
 impl Change {
@@ -917,7 +922,7 @@ impl Change {
             // INPUT-3: its ticket's.
             Self::InputChanged { shortcode, .. } => Some(shortcode),
             // MENGER-13: its ticket's.
-            Self::Transition { shortcode, .. } | Self::Queue { shortcode, .. } => Some(shortcode),
+            Self::Transition { shortcode, .. } | Self::Queue { shortcode, .. } | Self::Revised { shortcode, .. } => Some(shortcode),
             // FILTER-4: one per write, its moves in any shortcode.
             Self::CellsMoved { .. } => None,
             // FILTER-13: one per write, each watch's events already in its epic.
@@ -3128,6 +3133,8 @@ impl Store {
         deployments::migrate(&mut conn)?;
         // DEPLOY-20: and one without the commit-link record gains it, empty.
         versions::migrate(&mut conn)?;
+        // TICKETS-7: and one without the revisions gains them, empty.
+        revisions::migrate(&mut conn)?;
         // MENGER-39: and one without the queue's tables gains them, empty.
         queue::migrate(&mut conn)?;
         // CHAT-3: and one without the chats' tables gains them, empty.
@@ -3325,15 +3332,18 @@ impl Store {
         // Counted and spawned in one poll: there is no await between them
         // for a caller to be dropped at.
         committing.fetch_add(1, Ordering::SeqCst);
+        // TICKETS-7: the write keeps its revisions, as its caller.
+        let by = revisions::caller_act();
         tokio::task::spawn_blocking(move || {
             let _serial = serial;
+            let _kept = revisions::Writing::begin(by);
             let durable = {
                 let mut conn = db.lock().expect("db lock poisoned");
                 conn.transaction()
                     .map_err(StoreError::from)
                     .and_then(|txn| {
                         let out = commit(&txn)?;
-                        txn.commit()?;
+                        revisions::commit(txn)?;
                         Ok(out)
                     })
             };
@@ -3350,7 +3360,9 @@ impl Store {
             // ACCESS-12: a write that moved who holds what wakes the watches
             // before anything it broadcasts reaches them.
             tx.grants_at(tickets.read().expect("store lock poisoned").members.generation());
-            Ok(publish(out, applied, &tx))
+            let answer = publish(out, applied, &tx);
+            revisions::publish(&tx);
+            Ok(answer)
         })
         .await
         .map_err(|e| StoreError::Db(format!("write task failed: {e}")))?
@@ -5453,6 +5465,9 @@ mod theme_registry;
 /// ticket's work runs — the `deployed` cells.
 mod deployments;
 mod versions;
+// TICKETS-7: every change keeps a revision.
+pub(crate) mod revisions;
+pub use revisions::{acting, say_act, DiffView, RevisionPage, Restoring};
 mod queue;
 pub use queue::QueueChange;
 /// APP-23: a change request — a comment and an unqueue, one write.
@@ -5769,6 +5784,8 @@ mod tests_history;
 /// random walk of updates leaving `--verify-derived` clean.
 #[cfg(test)]
 mod tests_update;
+#[cfg(test)]
+mod tests_revisions;
 /// ACT-2: `update_many`, and `label` / `link_commits` over many ids.
 #[cfg(test)]
 mod tests_update_many;

@@ -192,6 +192,21 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets create --epic PLEXUS/THEME --title "a build in PLEXUS's THEME"
   ```
 
+  **Revisions** (TICKETS-7): every write that changes a ticket's own
+  fields keeps one, in its transaction (a cascade or a bulk write one per
+  ticket, each naming its cause) — `tickets revisions list|get|diff|restore`;
+  a restore is an `update` of a revision's fields and itself a revision;
+  `watch --revisions true` adds `revised`. A new write path that moves a
+  ticket's row goes through `db::upsert` / `update_row` / `set_body` inside
+  a write runner, or it keeps no revision (`store/revisions.rs`). README
+  "Revisions":
+
+  ```sh
+  synapse -P 4455 menger tickets revisions list --id DEPLOY-9
+  synapse -P 4455 menger tickets revisions diff --id DEPLOY-9 --from 3 --to 5
+  synapse -P 4455 menger tickets revisions restore --id DEPLOY-9 --rev 3 --fields body --message "why"
+  ```
+
   **Search inside tickets** (SEARCH-2) is `search` — titles and bodies,
   every word required, prefixes and typos too, best first; each `hit`
   carries the passage that matched (`find` stays the jump by id or title).

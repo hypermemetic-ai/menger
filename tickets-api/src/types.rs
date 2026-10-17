@@ -2025,6 +2025,27 @@ pub enum TicketsEvent {
     /// after its transitions, oldest first): who queued it, why and at what
     /// urgency; who snoozed it until when; who took it out.
     QueueRecord { record: crate::queue::QueueRecord },
+    /// TICKETS-7: one revision of a ticket (yielded per revision by
+    /// `revisions list`, newest first).
+    Revision { revision: crate::revisions::Revision },
+    /// TICKETS-7: the last event of `revisions list` — how many revisions the
+    /// ticket has (`count`), its latest (`latest`, 0 with none), and the `before`
+    /// that asks the next page (`null`: this page holds the oldest).
+    RevisionsEnd { count: u32, latest: u32, next: Option<u32> },
+    /// TICKETS-7: `revisions get`'s answer — the revision, and the ticket
+    /// exactly as it was then: every field it keeps from the revision, the
+    /// rest (its id, shortcode, address, children, placement) as it is now.
+    RevisionAt { revision: crate::revisions::Revision, ticket: Ticket },
+    /// TICKETS-7: `revisions diff`'s answer.
+    RevisionDiff { diff: crate::revisions::RevisionDiff },
+    /// TICKETS-7: `revisions restore`'s answer — the ticket as the restore
+    /// left it, the fields it put back from `from_rev` (empty: they already
+    /// matched, and nothing was written), and the revision it made (`rev`,
+    /// `null` with nothing written).
+    RevisionRestored { ticket: Ticket, from_rev: u32, changed: Vec<String>, rev: Option<u32> },
+    /// TICKETS-7: on `watch`, after a write's other events — a revision the
+    /// write kept: its ticket, its number, and the fields it changed.
+    Revised { ticket: TicketId, rev: u32, fields: Vec<String> },
 }
 
 #[cfg(test)]

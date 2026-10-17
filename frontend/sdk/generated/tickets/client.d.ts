@@ -6,6 +6,7 @@ import type { TicketsCommitsClient } from '../tickets/commits/client';
 import type { TicketsComponentsClient } from '../tickets/components/client';
 import type { TicketsInputsClient } from '../tickets/inputs/client';
 import type { TicketsNavClient } from '../tickets/nav/client';
+import type { TicketsRevisionsClient } from '../tickets/revisions/client';
 import type { TicketsWorkClient } from '../tickets/work/client';
 /** Typed client interface for tickets plugin */
 export interface TicketsClient {
@@ -17,6 +18,8 @@ export interface TicketsClient {
     readonly inputs: TicketsInputsClient;
     /** What the nav and the menus ask — `tickets.nav.<method>`: groups, extents, tree, counts, facets, member (ACCESS-16). */
     readonly nav: TicketsNavClient;
+    /** A ticket's revisions — `tickets revisions list | get | diff | restore` (TICKETS-7, activation/revisions.rs). */
+    readonly revisions: TicketsRevisionsClient;
     /** The order of work — `tickets work ready | waves | waves_under | waves_to | blockers` (ACCESS-17, activation/work.rs). */
     readonly work: TicketsWorkClient;
     /**
@@ -522,7 +525,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.watch` anywhere it is held
      */
-    watch(epic?: ShortcodeRef | null, filter?: FilterText | null, membership?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    watch(epic?: ShortcodeRef | null, filter?: FilterText | null, membership?: boolean | null, revisions?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
 }
 /** Create a typed tickets client from an RPC client */
 export declare function createTicketsClient(rpc: RpcClient): TicketsClient;

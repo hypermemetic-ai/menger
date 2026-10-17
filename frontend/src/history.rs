@@ -9,6 +9,11 @@
 //! Asked once when the page opens, and again whenever `watch` carries a
 //! transition of this ticket or one its changes caused — so a cascade, a
 //! restore or a change made elsewhere shows without a reload.
+//!
+//! TICKETS-7: and its **revisions** in the same list, by time — every
+//! version the store kept (`revisions list`), each opened read-only on a
+//! click and two ticked to diff ([`crate::revisions`]); asked again on each
+//! `revised` of it.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -175,11 +180,64 @@ fn row(t: Transition, show_ticket: bool) -> impl IntoView {
     }
 }
 
+/// TICKETS-7: one line of the History — a transition or a revision.
+enum Item {
+    Tr(Transition),
+    Rev(menger_tickets_api::Revision),
+}
+
+impl Item {
+    fn at(&self) -> i64 {
+        match self {
+            Item::Tr(t) => t.at_unix,
+            Item::Rev(r) => r.at_unix,
+        }
+    }
+}
+
+/// TICKETS-7: the ticket's own transitions and its revisions, newest first
+/// (at one moment, the revision the write kept after the transition it
+/// made).
+fn merged(own: Vec<Transition>, revs: Vec<menger_tickets_api::Revision>) -> Vec<Item> {
+    let mut items: Vec<Item> = own.into_iter().map(Item::Tr).chain(revs.into_iter().map(Item::Rev)).collect();
+    items.sort_by(|a, b| {
+        let rank = |i: &Item| matches!(i, Item::Rev(_)) as u8;
+        b.at().cmp(&a.at()).then(rank(b).cmp(&rank(a)))
+    });
+    items
+}
+
 /// The ticket page's History section.
 #[component]
 pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
     let answer: RwSignal<Option<Answer>> = RwSignal::new(None);
     let asked = StoredValue::new(0u32);
+    // TICKETS-7: its revisions, and the two picked to diff.
+    let revs: RwSignal<Option<crate::revisions::Listed>> = RwSignal::new(None);
+    let picked: RwSignal<Vec<u32>> = RwSignal::new(Vec::new());
+    let ask_revs = {
+        let id = ticket.clone();
+        move || {
+            let Some(client) = session::client() else { return };
+            let id = id.clone();
+            spawn_local(async move {
+                let Ok(t) = crate::typed::typed(&id) else { return };
+                if let Ok(events) = client.revisions().list_all(t, None, Some(100)).await {
+                    revs.try_set(crate::revisions::listed_of(events));
+                }
+            });
+        }
+    };
+    ask_revs();
+    {
+        let me = ticket.clone();
+        let again = ask_revs.clone();
+        session::listen(move |ev| {
+            if crate::revisions::touches(&me, ev) {
+                again();
+            }
+        });
+    }
     let id = ticket.clone();
     let ask = move || {
         let Some(client) = session::client() else { return };
@@ -206,16 +264,32 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
     let id = ticket.clone();
     view! {
         <section class="histsec" id="t-history">
-            <h3>"History"</h3>
+            <h3>"History"{move || revs.with(|r| r.as_ref().filter(|l| l.count > 0).map(|l| format!(" · {}", l.count)))}</h3>
             {move || match answer.get() {
                 None => view! { <p class="loading">"loading history…"</p> }.into_any(),
                 Some(a) => {
                     let began = began_line(a.began);
                     let since = since_line(a.since).map(|s| view! { <p class="since">{s}</p> });
-                    let own = if a.own.is_empty() {
+                    let listed = revs.get().unwrap_or_default();
+                    let latest = listed.latest;
+                    let more = (listed.count as usize > listed.revisions.len()).then(|| {
+                        view! { <p class="none">{format!("The {} newest revisions of {}.", listed.revisions.len(), listed.count)}</p> }
+                    });
+                    let own = if a.own.is_empty() && listed.revisions.is_empty() {
                         view! { <p class="none">"No change recorded yet."</p> }.into_any()
                     } else {
-                        view! { <ol class="transitions">{a.own.into_iter().rev().map(|t| row(t, false)).collect_view()}</ol> }.into_any()
+                        let items = merged(a.own, listed.revisions);
+                        view! {
+                            <ol class="transitions">
+                                {items.into_iter().map(|i| match i {
+                                    Item::Tr(t) => row(t, false).into_any(),
+                                    Item::Rev(r) => crate::revisions::rev_row(r, latest, picked).into_any(),
+                                }).collect_view()}
+                            </ol>
+                            {more}
+                            <p class="hint">"Tick two revisions to diff them · click one to open it as it was."</p>
+                        }
+                        .into_any()
                     };
                     let caused = (!a.caused.is_empty()).then(|| {
                         let n = a.caused.len();
@@ -244,8 +318,19 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
                             </ul>
                         }
                     });
+                    let diff = {
+                        let id = id.clone();
+                        move || {
+                            let p = picked.get();
+                            (p.len() == 2).then(|| {
+                                let (a, b) = (p[0].min(p[1]), p[0].max(p[1]));
+                                view! { <crate::revisions::DiffPanel id=id.clone() from=a to=Some(b) /> }
+                            })
+                        }
+                    };
                     view! {
                         {own}
+                        {diff}
                         {deletions}
                         {caused}
                         {restorable}

@@ -278,6 +278,8 @@ mod grow;
 mod gesture;
 mod highlight;
 mod history;
+// TICKETS-7: a ticket's revisions — open one, diff two, restore one.
+mod revisions;
 mod inputs;
 mod inputs_page;
 mod inspect;
@@ -1592,6 +1594,12 @@ fn ticket_view(
             <h2 data-ticket-id=header_id node_ref=head>
                 <span class="id code" data-tag=move || ticket.with(|t| tags::Tag::ticket(&t.id).attr())>{move || ticket.with(|t| t.id.to_string())}</span>
                 <span class="t">{move || ticket.with(|t| t.title.clone())}</span>
+                // TICKETS-7: to its History — every version it had.
+                <button class="histjump" title="every version of this ticket: open one, diff two, restore one" on:click=move |_| {
+                    if let Some(el) = dom::window().document().and_then(|d| d.get_element_by_id("t-history")) {
+                        el.scroll_into_view();
+                    }
+                }>"History"</button>
             </h2>
             {move || lensed.outside(&me).then(outside_notice)}
             // THEME-8: the body is the ticket's frame — its own token scope.
@@ -2127,7 +2135,11 @@ fn TicketPage(
         <div id="ticket-page" data-tag-level="global">
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
-                Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more, all, lensed, refs).into_any(),
+                // TICKETS-7: a revision open (`?rev=N`) is drawn as the page, read-only.
+                Some(t) => match revisions::viewing().get() {
+                    Some(rev) => view! { <revisions::Version id=id_view.clone() rev=rev /> }.into_any(),
+                    None => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more, all, lensed, refs).into_any(),
+                },
                 // ACT-5: a deleted ticket — opened, or deleted while open.
                 None if session::tombstone(&id_view).is_some() => {
                     tombstone_view(session::tombstone(&id_view).expect("checked")).into_any()

@@ -190,6 +190,12 @@ mod work;
 #[cfg(feature = "server")]
 pub use work::Work;
 pub use work::WorkClient;
+// TICKETS-7: `tickets revisions` — list, get, diff, restore. Not gated: its
+// attribute emits `RevisionsClient` for the client-only build too.
+mod revisions;
+#[cfg(feature = "server")]
+pub use revisions::Revisions;
+pub use revisions::RevisionsClient;
 
 // The attribute is NOT `#[cfg]`-gated: it has to run in the client-only
 // build too, or there would be no client. `server_cfg` tells it to put the
@@ -1199,10 +1205,12 @@ impl Tickets {
         membership: Option<bool>,
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
+        /// Also send revised { ticket, rev, fields } for every revision a write keeps, after its other events (optional; default false; TICKETS-7).
+        revisions: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // ACCESS-12: the caller followed as the grants move, every change
         // cut to its reach (activation/watch.rs).
-        let ask = WatchAsk { epic, filter, membership: membership.unwrap_or(false), tz };
+        let ask = WatchAsk { epic, filter, membership: membership.unwrap_or(false), tz, revisions: revisions.unwrap_or(false) };
         watch_stream(Arc::clone(&self.store), self.access.clone(), user, ask)
     }
 
@@ -1210,5 +1218,11 @@ impl Tickets {
     #[plexus_macros::child]
     pub fn work(&self) -> Work {
         Work { store: Arc::clone(&self.store), access: self.access.clone() }
+    }
+
+    /// A ticket's revisions — `tickets revisions list | get | diff | restore` (TICKETS-7, activation/revisions.rs).
+    #[plexus_macros::child]
+    pub fn revisions(&self) -> Revisions {
+        Revisions { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 }

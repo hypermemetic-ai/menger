@@ -256,6 +256,37 @@
     return new TicketsNavClientImpl(rpc);
   }
 
+  // generated/tickets/revisions/client.ts
+  class TicketsRevisionsClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* diff(id, from, text, to) {
+      const stream = this.rpc.call("tickets.revisions.diff", { from, id, text, to });
+      yield* extractData(stream);
+    }
+    async* get(id, rev) {
+      const stream = this.rpc.call("tickets.revisions.get", { id, rev });
+      yield* extractData(stream);
+    }
+    async* list(id, before, limit) {
+      const stream = this.rpc.call("tickets.revisions.list", { before, id, limit });
+      yield* extractData(stream);
+    }
+    async* restore(id, rev, fields, message, source) {
+      const stream = this.rpc.call("tickets.revisions.restore", { fields, id, message, rev, source });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.revisions.schema", {});
+      return collectOne(stream);
+    }
+  }
+  function createTicketsRevisionsClient(rpc) {
+    return new TicketsRevisionsClientImpl(rpc);
+  }
+
   // generated/tickets/work/client.ts
   class TicketsWorkClientImpl {
     rpc;
@@ -298,6 +329,7 @@
     components;
     inputs;
     nav;
+    revisions;
     work;
     constructor(rpc) {
       this.rpc = rpc;
@@ -305,6 +337,7 @@
       this.components = createTicketsComponentsClient(rpc);
       this.inputs = createTicketsInputsClient(rpc);
       this.nav = createTicketsNavClient(rpc);
+      this.revisions = createTicketsRevisionsClient(rpc);
       this.work = createTicketsWorkClient(rpc);
     }
     async* amend(id, body, title) {
@@ -411,8 +444,8 @@
       const stream = this.rpc.call("tickets.update_many", { block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unblock, unlabel });
       yield* extractData(stream);
     }
-    async* watch(epic, filter, membership, tz) {
-      const stream = this.rpc.call("tickets.watch", { epic, filter, membership, tz });
+    async* watch(epic, filter, membership, revisions, tz) {
+      const stream = this.rpc.call("tickets.watch", { epic, filter, membership, revisions, tz });
       yield* extractData(stream);
     }
   }

@@ -386,8 +386,12 @@ impl Store {
         let (db, tickets, tx) = (Arc::clone(&self.db), Arc::clone(&self.tickets), self.tx.clone());
         let (committing, unders) = (Arc::clone(&self.committing), Arc::clone(&self.unders));
         committing.fetch_add(1, Ordering::SeqCst);
+        // TICKETS-7: the write keeps its revisions (each step's commit is
+        // `revisions::commit`), as its caller.
+        let by = super::revisions::caller_act();
         tokio::task::spawn_blocking(move || {
             let _serial = serial;
+            let _kept = super::revisions::Writing::begin(by);
             let mut cache = tickets.write().expect("store lock poisoned");
             let mut conn = db.lock().expect("db lock poisoned");
             let written = cache.written;
@@ -399,6 +403,7 @@ impl Store {
                     for c in &changes {
                         tx.send(c.clone());
                     }
+                    super::revisions::publish(&tx);
                     Ok(answer)
                 }
                 Err(e) => {
@@ -433,7 +438,7 @@ impl Store {
         for step in steps {
             status_step(&txn, cache, unders, step, now, &mut out)?;
         }
-        txn.commit()?;
+        super::revisions::commit(txn)?;
         Ok(out.finish())
     }
 }

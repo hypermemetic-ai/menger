@@ -14,6 +14,8 @@ import type { TicketsInputsClient } from '../tickets/inputs/client';
 import { createTicketsInputsClient } from '../tickets/inputs/client';
 import type { TicketsNavClient } from '../tickets/nav/client';
 import { createTicketsNavClient } from '../tickets/nav/client';
+import type { TicketsRevisionsClient } from '../tickets/revisions/client';
+import { createTicketsRevisionsClient } from '../tickets/revisions/client';
 import type { TicketsWorkClient } from '../tickets/work/client';
 import { createTicketsWorkClient } from '../tickets/work/client';
 
@@ -27,6 +29,8 @@ export interface TicketsClient {
   readonly inputs: TicketsInputsClient;
   /** What the nav and the menus ask — `tickets.nav.<method>`: groups, extents, tree, counts, facets, member (ACCESS-16). */
   readonly nav: TicketsNavClient;
+  /** A ticket's revisions — `tickets revisions list | get | diff | restore` (TICKETS-7, activation/revisions.rs). */
+  readonly revisions: TicketsRevisionsClient;
   /** The order of work — `tickets work ready | waves | waves_under | waves_to | blockers` (ACCESS-17, activation/work.rs). */
   readonly work: TicketsWorkClient;
   /**
@@ -532,7 +536,7 @@ expired, held nowhere — it ends with `watch_closed { reason, message }`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.watch` anywhere it is held
    */
-  watch(epic?: ShortcodeRef | null, filter?: FilterText | null, membership?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+  watch(epic?: ShortcodeRef | null, filter?: FilterText | null, membership?: boolean | null, revisions?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
 }
 
 /** Typed client implementation for tickets plugin */
@@ -542,6 +546,7 @@ class TicketsClientImpl implements TicketsClient {
   readonly components: TicketsComponentsClient;
   readonly inputs: TicketsInputsClient;
   readonly nav: TicketsNavClient;
+  readonly revisions: TicketsRevisionsClient;
   readonly work: TicketsWorkClient;
   constructor(rpc: RpcClient) {
     this.rpc = rpc;
@@ -549,6 +554,7 @@ class TicketsClientImpl implements TicketsClient {
     this.components = createTicketsComponentsClient(rpc);
     this.inputs = createTicketsInputsClient(rpc);
     this.nav = createTicketsNavClient(rpc);
+    this.revisions = createTicketsRevisionsClient(rpc);
     this.work = createTicketsWorkClient(rpc);
   }
 
@@ -682,8 +688,8 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *watch(epic?: ShortcodeRef | null, filter?: FilterText | null, membership?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.watch', { epic, filter, membership, tz });
+  async *watch(epic?: ShortcodeRef | null, filter?: FilterText | null, membership?: boolean | null, revisions?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.watch', { epic, filter, membership, revisions, tz });
     yield* extractData<TicketsEvent>(stream);
   }
 }

@@ -283,7 +283,7 @@ async fn a_body_past_the_cap_is_the_typed_body_too_large() {
 async fn amend_yields_amended_and_watch_carries_only_what_changed() {
     let hub = hub();
     one(hub.create(anyone(), "AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(hub.watch(anyone(), None, None, None, None).await);
+    let mut watch = Box::pin(hub.watch(anyone(), None, None, None, None, None).await);
 
     let ev = one(hub.amend(anyone(), "am-1".into(), None, Some("the body, now".into())).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
@@ -323,7 +323,7 @@ async fn amend_yields_amended_and_watch_carries_only_what_changed() {
 #[tokio::test]
 async fn watch_sees_creations_and_status_changes() {
     let hub = hub();
-    let mut watch = Box::pin(hub.watch(anyone(), None, None, None, None).await);
+    let mut watch = Box::pin(hub.watch(anyone(), None, None, None, None, None).await);
 
     one(hub.create(anyone(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     match watch.next().await.expect("change") {
@@ -390,7 +390,7 @@ async fn ids_and_page(
 async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
     let hub = hub();
     one(hub.create(anyone(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(untransitioned(hub.watch(anyone(), None, None, None, None).await));
+    let mut watch = Box::pin(untransitioned(hub.watch(anyone(), None, None, None, None, None).await));
 
     one(hub
         .create(anyone(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
@@ -437,7 +437,7 @@ async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
 async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
     let hub = hub();
     one(hub.create(anyone(), "FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(untransitioned(hub.watch(anyone(), None, None, None, None).await));
+    let mut watch = Box::pin(untransitioned(hub.watch(anyone(), None, None, None, None, None).await));
 
     match one(
         hub.create(anyone(), 
@@ -774,7 +774,7 @@ async fn create_rejects_longer_cycles() {
 #[tokio::test]
 async fn watch_epic_filter_drops_other_epics() {
     let hub = hub();
-    let mut watch = Box::pin(hub.watch(anyone(), Some("mng".into()), None, None, None).await);
+    let mut watch = Box::pin(hub.watch(anyone(), Some("mng".into()), None, None, None, None).await);
 
     one(hub.create(anyone(), "OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     one(hub.create(anyone(), "MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
@@ -813,8 +813,8 @@ async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
     const HELD: u64 = 256; // Store::with_connection's broadcast capacity
     let hub = hub();
     one(hub.create(anyone(), "LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(hub.watch(anyone(), None, None, None, None).await);
-    let mut other = Box::pin(hub.watch(anyone(), Some("other".into()), None, None, None).await);
+    let mut watch = Box::pin(hub.watch(anyone(), None, None, None, None, None).await);
+    let mut other = Box::pin(hub.watch(anyone(), Some("other".into()), None, None, None, None).await);
 
     let mut broadcast: Vec<String> = Vec::new();
     for k in 2..=CREATES + 1 {
@@ -865,7 +865,7 @@ async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
     one(hub.create(anyone(), "SP".into(), "a".into(), None, None, None, None, None, None, None).await).await; // SP-2 → SP-1
     one(hub.create(anyone(), "SP".into(), "b".into(), None, None, None, None, None, None, None).await).await; // SP-3 → SP-1
     one(hub.create(anyone(), "OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(hub.watch(anyone(), None, None, None, None).await);
+    let mut watch = Box::pin(hub.watch(anyone(), None, None, None, None, None).await);
 
     match one(hub.set_parent(anyone(), "sp-3".into(), "sp-2".into()).await).await {
         TicketsEvent::ParentChanged { ticket, previous } => {

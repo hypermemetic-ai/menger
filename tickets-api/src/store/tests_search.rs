@@ -441,8 +441,9 @@ async fn verify_finds_an_index_that_is_not_the_tickets() {
         let store = Store::open(&path).unwrap();
         holding(&store, &[("Placement", "kept in the cache")]).await;
     }
+    // TICKETS-7: the revisions say the hand edits too; this is the index's.
     let differs = |path: &Path| match Store::verify_derived(path).unwrap() {
-        Verdict::Differs(lines) => lines,
+        Verdict::Differs(lines) => lines.into_iter().filter(|l| l.starts_with("search")).collect::<Vec<_>>(),
         other => panic!("expected differences, got {other:?}"),
     };
     let conn = Connection::open(&path).unwrap();

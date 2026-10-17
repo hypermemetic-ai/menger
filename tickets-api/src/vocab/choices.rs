@@ -34,7 +34,7 @@ use std::fmt;
 use std::str::FromStr;
 
 lenient!(Status, Kind, Severity, InputState, AnswerSource, TransitionSource, Role, CommentState, NoteState, DeployState, Urgency, ThemeReach, Takeover);
-lenient!(CallerSource, InputSource, DeleteChildren, AmendedField, CommentIntent, ChatState);
+lenient!(CallerSource, InputSource, DeleteChildren, AmendedField, CommentIntent, ChatState, RevisionField);
 
 closed_schema!(Status, "A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case", [
     Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Complete,
@@ -63,6 +63,65 @@ closed_schema!(CallerSource, "Where a write comes from: app, api (default) or pi
 ]);
 closed_schema!(InputSource, "Who answers or clears an input: app (a viewer's click) or api (default)", [InputSource::App, InputSource::Api]);
 closed_schema!(DeleteChildren, "What becomes of a deleted ticket's children: reparent or delete", [DeleteChildren::Reparent, DeleteChildren::Delete]);
+closed_schema!(RevisionField, "A field a restore puts back: title, body, status, kind, severity, parent, blocked_by or labels", [
+    RevisionField::Title, RevisionField::Body, RevisionField::Status, RevisionField::Kind,
+    RevisionField::Severity, RevisionField::Parent, RevisionField::BlockedBy, RevisionField::Labels,
+]);
+
+/// TICKETS-7: a field `revisions restore` puts back from a revision — every
+/// one a revision keeps but the commits, which are linked, never restored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevisionField {
+    Title,
+    Body,
+    Status,
+    Kind,
+    Severity,
+    Parent,
+    BlockedBy,
+    Labels,
+}
+
+impl RevisionField {
+    /// The wire spelling — a revision's field name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Body => "body",
+            Self::Status => "status",
+            Self::Kind => "kind",
+            Self::Severity => "severity",
+            Self::Parent => "parent",
+            Self::BlockedBy => "blocked_by",
+            Self::Labels => "labels",
+        }
+    }
+}
+
+impl fmt::Display for RevisionField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for RevisionField {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "title" => Ok(Self::Title),
+            "body" => Ok(Self::Body),
+            "status" => Ok(Self::Status),
+            "kind" => Ok(Self::Kind),
+            "severity" => Ok(Self::Severity),
+            "parent" => Ok(Self::Parent),
+            "blocked_by" | "blockers" => Ok(Self::BlockedBy),
+            "labels" => Ok(Self::Labels),
+            "commits" => Err("commits are linked, never restored".to_string()),
+            other => Err(format!("field '{other}': title, body, status, kind, severity, parent, blocked_by or labels")),
+        }
+    }
+}
 
 /// MENGER-13: where a write says it comes from — `app` (a viewer in the
 /// app), `api` (synapse, an agent, a script: the default), `pipeline` (the

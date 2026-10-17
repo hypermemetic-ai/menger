@@ -255,6 +255,11 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.amend", Today::Editor, Some("id")),
     ("tickets.commits.link", Today::Editor, Some("id")),
     ("tickets.commits.unlink", Today::Editor, Some("id")),
+    // TICKETS-7: a ticket's revisions — read as the ticket is; restored by an editor of it.
+    ("tickets.revisions.list", Today::Viewer, None),
+    ("tickets.revisions.get", Today::Viewer, None),
+    ("tickets.revisions.diff", Today::Viewer, None),
+    ("tickets.revisions.restore", Today::Editor, Some("id")),
     // MENGER-12: an editor's, on the ticket it labels.
     ("tickets.label", Today::Editor, Some("id")),
     // MENGER-30: any part of a ticket in one write — an editor's, on it.

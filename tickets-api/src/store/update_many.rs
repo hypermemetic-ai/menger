@@ -204,6 +204,7 @@ impl Store {
             return Ok(UpdatedMany { tickets, ids: Vec::new(), unchanged: unchanged.into_iter().map(String::from).collect::<Vec<String>>(), changed: Vec::new() });
         }
         self.in_one_write(serial, move |conn, cache, unders| {
+            super::revisions::act(&act);
             let txn = conn.transaction()?;
             let now = chrono::Utc::now().timestamp();
             let mut out = Gathered::default();
@@ -222,7 +223,7 @@ impl Store {
                 let body = db::body(&txn, id)?.ok_or_else(|| missing(id))?;
                 tickets.push(whole(row, body));
             }
-            txn.commit()?;
+            super::revisions::commit(txn)?;
             let changes = out.finish_with(Change::UpdatedMany { ids: moved.clone(), changed: changed.clone() });
             Ok((UpdatedMany { tickets, ids: moved, unchanged: unchanged.into_iter().map(String::from).collect::<Vec<String>>(), changed }, changes))
         })
@@ -349,7 +350,7 @@ impl Store {
                 cell_step(&txn, cache, unders, row, &mut out, |t| moved.change(t))?;
                 answer.push(out.tickets.last().cloned().expect("the step's own change"));
             }
-            txn.commit()?;
+            super::revisions::commit(txn)?;
             Ok((answer, out.finish()))
         })
         .await

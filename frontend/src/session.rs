@@ -509,7 +509,7 @@ fn pump(client: Client, filter: &str, then: Option<futures::future::AbortHandle>
                 return;
             }
         };
-        let mut stream = client.watch(None, Some(asked), Some(true), zone());
+        let mut stream = client.watch(None, Some(asked), Some(true), zone(), None);
         if let Some(then) = then {
             then.abort();
         }
@@ -910,7 +910,7 @@ async fn session(
 
     // 1. `watch` first — subscribed eagerly, so a ticket born while the
     //    calls below are out arrives behind them (MNG-9 acceptance 5).
-    let mut live = client.watch(None, None, None, None);
+    let mut live = client.watch(None, None, None, None, Some(true));
     // FILTER-12: the views' membership watches, on this connection — after
     // `watch`, before anything they count is asked (none while no filter is
     // set: nothing new at startup).
