@@ -245,6 +245,13 @@ impl Lens {
                 }
             }
         }
+        // TICKETS-9: `unassigned` reads `assigned`'s truth.
+        if history.iter().any(|h| h.event == crate::filter::Event::Unassigned) {
+            let any = crate::filter::History { event: crate::filter::Event::Assigned(None), window: None, by: None };
+            if !history.contains(&any) {
+                history.push(any);
+            }
+        }
         if history.len() > HISTORY_MAX {
             return Err(StoreError::Filter(format!(
                 "a filter asks at most {HISTORY_MAX} history predicates; this one asks {}",

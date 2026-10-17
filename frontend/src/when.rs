@@ -100,6 +100,9 @@ pub(crate) enum Kind {
     /// store; a pill (from the palette or a saved filter), never a row of
     /// When's menu. CHAT-4 draws them.
     Chats,
+    /// TICKETS-9: `assigned [who]` / `unassigned` — who holds it, kept by
+    /// the store; the People category's cells, never a row of When's menu.
+    People,
 }
 
 impl Kind {
@@ -131,6 +134,7 @@ impl Kind {
             Event::Requested(_) => Kind::Requested,
             Event::Queued(_) => Kind::Queued,
             Event::Chatting | Event::Unread => Kind::Chats,
+            Event::Assigned(_) | Event::Unassigned => Kind::People,
             Event::Archived => Kind::Archived,
             Event::Restored => Kind::Restored,
         }
@@ -155,6 +159,7 @@ impl Kind {
             Kind::Requested => "Requested for",
             Kind::Queued => "Queued",
             Kind::Chats => "Chats",
+            Kind::People => "People",
             Kind::Archived => "Archived",
             Kind::Restored => "Restored",
         }
@@ -179,6 +184,7 @@ impl Kind {
             Kind::Requested => "requested",
             Kind::Queued => "queued",
             Kind::Chats => "chats",
+            Kind::People => "people",
             Kind::Archived => "archived",
             Kind::Restored => "restored",
         }
@@ -197,7 +203,7 @@ impl Kind {
 
     /// Whether its clause has a window (all but In status for).
     pub(crate) fn windowed(self) -> bool {
-        !matches!(self, Kind::Held | Kind::Queued | Kind::Behind | Kind::Stage(_) | Kind::Chats)
+        !matches!(self, Kind::Held | Kind::Queued | Kind::Behind | Kind::Stage(_) | Kind::Chats | Kind::People)
     }
 
     /// Whether its clause may say who (the transitions'; not a birth).
@@ -312,7 +318,7 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         // DEPLOY-21: [`new_stage`]).
         Kind::Deployed | Kind::NotDeployed | Kind::Stage(_) => return None,
         // MENGER-39 / DEPLOY-20: never built by When's menu.
-        Kind::Queued | Kind::Behind | Kind::Chats | Kind::Requested => return None,
+        Kind::Queued | Kind::Behind | Kind::Chats | Kind::People | Kind::Requested => return None,
         // ARCHIVE-2: the archive's two ends.
         Kind::Archived => Event::Archived,
         Kind::Restored => Event::Restored,
@@ -329,6 +335,19 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
 /// Chats category builds them; no window, no who.
 pub(crate) fn new_chats(unread: bool) -> Timed {
     Timed { not: false, h: History { event: if unread { Event::Unread } else { Event::Chatting }, window: None, by: None } }
+}
+
+/// TICKETS-9: the People category's cells — `assigned me` (`Some(Me)`),
+/// `assigned "<principal>"`, `assigned` (`None`: anyone) or, `unassigned`,
+/// `unassigned`; no window, no who.
+pub(crate) fn new_people(who: Option<menger_tickets_api::filter::Who>, unassigned: bool) -> Timed {
+    let event = if unassigned { Event::Unassigned } else { Event::Assigned(who) };
+    Timed { not: false, h: History { event, window: None, by: None } }
+}
+
+/// TICKETS-9: whether a time pill is one of the People category's cells.
+pub(crate) fn is_people(t: &Timed) -> bool {
+    matches!(t.h.event, Event::Assigned(_) | Event::Unassigned)
 }
 
 /// CHAT-4: whether a time pill is one of the reader's chats' cells.
@@ -605,6 +624,11 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
         Event::Restored => out.push((None, "restored".into())),
         Event::Chatting => out.push((None, "chatting".into())),
         Event::Unread => out.push((None, "unread".into())),
+        // TICKETS-9: "assigned to me", "assigned to <principal>", "assigned", "unassigned".
+        Event::Assigned(None) => out.push((None, "assigned".into())),
+        Event::Assigned(Some(menger_tickets_api::filter::Who::Me)) => out.push((None, "assigned to me".into())),
+        Event::Assigned(Some(w)) => out.push((None, format!("assigned to {}", crate::chats::short(&w.format().replace('"', ""))))),
+        Event::Unassigned => out.push((None, "unassigned".into())),
         Event::Queued(u) => {
             out.push((None, "queued".into()));
             if let Some(u) = u {

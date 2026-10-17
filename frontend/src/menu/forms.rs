@@ -8,6 +8,10 @@
 //! - **Link commits…** takes hashes (`abc1234 def5678`, or `repo@hash`).
 //! - **Add a label…** (from Labels ▸) takes one label, normalized as the
 //!   page's editor takes it (src/labels.rs).
+//! - **Assign to…** (TICKETS-9) is the person picker (src/assignees.rs):
+//!   the reader, then who holds a grant in the first ticket's organization,
+//!   those who read it first — one who cannot is drawn, never offered;
+//!   typing narrows it, Enter takes the first.
 //!
 //! Each, done, is one write (src/menu/write.rs) and closes the menu; Escape
 //! closes it untouched.
@@ -20,7 +24,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use super::model::{self, Change, Form};
 use super::{close_menu, write, Target};
-use crate::{labels, session, st_class};
+use crate::{assignees, labels, session, st_class};
 
 /// How many tickets a picker shows.
 const PICKS: u32 = 8;
@@ -34,6 +38,9 @@ pub(super) fn view(
     target: RwSignal<Option<Target>>,
     form: RwSignal<Option<Form>>,
 ) -> AnyView {
+    if f == Form::Assign {
+        return assign_view(ids, last_error, target, form);
+    }
     let input = NodeRef::<leptos::html::Input>::new();
     input.on_load(|el: web_sys::HtmlInputElement| {
         let _ = el.focus();
@@ -131,6 +138,7 @@ pub(super) fn view(
                     }
                     Change::Commits(c)
                 }
+                Form::Assign => return,
                 Form::AddLabel => match labels::parse_add(&text) {
                     Ok(l) if l.len() == 1 => Change::Label(l[0].clone()),
                     Ok(_) => {
@@ -171,6 +179,7 @@ pub(super) fn view(
         Form::Rename => "the title",
         Form::Commits => "commit hashes, or repo@hash",
         Form::AddLabel => "a label, as needs-you",
+        Form::Assign => "",
     };
     let action = match f {
         Form::MoveUnder => "Move",
@@ -178,6 +187,7 @@ pub(super) fn view(
         Form::Rename => "Rename",
         Form::Commits => "Link",
         Form::AddLabel => "Add",
+        Form::Assign => "Assign",
     };
     let picks = f.picks();
     view! {
@@ -229,6 +239,111 @@ pub(super) fn view(
                     }}
                 </div>
             })}
+        </div>
+    }
+    .into_any()
+}
+
+/// TICKETS-9: **Assign to…** — the person picker in the menu's place: the
+/// reader, then the candidates of the first ticket (src/assignees.rs); one
+/// pick is one `assign` over every ticket acted on.
+fn assign_view(ids: Arc<Vec<String>>, last_error: RwSignal<Option<String>>, target: RwSignal<Option<Target>>, form: RwSignal<Option<Form>>) -> AnyView {
+    let input = NodeRef::<leptos::html::Input>::new();
+    input.on_load(|el: web_sys::HtmlInputElement| {
+        let _ = el.focus();
+    });
+    let first = ids.first().cloned().unwrap_or_default();
+    let cands = RwSignal::new(None::<Result<Vec<(String, bool)>, String>>);
+    {
+        let t = first.clone();
+        spawn_local(async move {
+            let r = crate::chats::candidates(Some(&t)).await;
+            cands.try_set(Some(r));
+        });
+    }
+    let query = RwSignal::new(String::new());
+    let (me, name) = (crate::chats::me(), crate::chat_pane::names());
+    let rows = {
+        let (me, name) = (me.clone(), name.clone());
+        Memo::new(move |_| match cands.get() {
+            Some(Ok(all)) => assignees::picker_rows(&all, &me, &[], &query.get(), &name),
+            _ => Vec::new(),
+        })
+    };
+    let done = {
+        let ids = ids.clone();
+        move |p: String| {
+            let change = Change::Assign(p);
+            if let Some(c) = model::call(&ids, &change) {
+                write::send(c, change, last_error);
+            }
+            close_menu(target);
+        }
+    };
+    let on_key = {
+        let done = done.clone();
+        move |ev: web_sys::KeyboardEvent| {
+            use crate::bindings::{is, Context};
+            if is(&ev, Context::Field, "form.submit") {
+                ev.prevent_default();
+                ev.stop_propagation();
+                if let Some((p, true)) = rows.get_untracked().into_iter().find(|(_, reads)| *reads) {
+                    done(p);
+                }
+                return;
+            }
+            let menus = ["list.next", "list.prev", "dialog.close", "menu.leave", "menu.leave-back"];
+            if !menus.iter().any(|id| is(&ev, Context::Menu, id)) {
+                ev.stop_propagation();
+            }
+        }
+    };
+    let list = move || match cands.get() {
+        None => view! { <p class="merr quiet">"asking who can read it…"</p> }.into_any(),
+        Some(Err(e)) => view! { <p class="merr" role="alert">{e}</p> }.into_any(),
+        Some(Ok(_)) => rows
+            .get()
+            .into_iter()
+            .map(|(p, reads)| {
+                let who = if p == me { format!("{} (me)", name(&p)) } else { name(&p) };
+                let (pc, done) = (p.clone(), done.clone());
+                view! {
+                    <button
+                        class="item pick person"
+                        role="menuitem"
+                        data-principal=p.clone()
+                        aria-disabled=(!reads).to_string()
+                        disabled=!reads
+                        title=if reads { p.clone() } else { format!("{p} can't read {first}, so can't be assigned") }
+                        on:click=move |_| done(pc.clone())
+                    >
+                        <span class="aav" class:agent=crate::chats::is_agent(&p) aria-hidden="true">{crate::conversation::initials(&name(&p))}</span>
+                        " "
+                        <span class="ptitle">{who}</span>
+                    </button>
+                }
+            })
+            .collect_view()
+            .into_any(),
+    };
+    view! {
+        <div class="mform" data-form=Form::Assign.name()>
+            <div class="mform-h">
+                <button class="item back" role="menuitem" data-act="back" on:click=move |_| form.set(None)>"‹ "{Form::Assign.words()}</button>
+            </div>
+            <div class="mform-row">
+                <input
+                    node_ref=input
+                    class="mfield"
+                    type="text"
+                    aria-label=Form::Assign.words()
+                    placeholder="a person or an agent"
+                    prop:value=move || query.get()
+                    on:input=move |ev| query.set(event_target_value(&ev))
+                    on:keydown=on_key
+                />
+            </div>
+            <div class="picks" role="group">{list}</div>
         </div>
     }
     .into_any()

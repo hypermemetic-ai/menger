@@ -33,6 +33,8 @@ pub(super) fn update_of(
         unblock: unblock.unwrap_or_default(),
         label: Vec::new(),
         unlabel: Vec::new(),
+        assign: Vec::new(),
+        unassign: Vec::new(),
         refused: Vec::new(),
     }
 }
@@ -141,6 +143,7 @@ fn one_or_many(id: Option<String>, ids: Option<Vec<String>>) -> Result<Result<St
 /// reach on every ticket selected, then the store's one write.
 pub(super) fn update_many_stream(
     store: Arc<Store>,
+    access: Access,
     caller: VerifiedUser,
     ids: Option<Vec<TicketRef>>,
     filter: Option<FilterText>,
@@ -185,6 +188,11 @@ pub(super) fn update_many_stream(
         let (gate, reach_of, at) = (Arc::clone(&caller), asked.clone(), store.clone());
         let may = move |ids: &[String]| -> Result<Vec<crate::store::Updating>, String> {
             let on = permits::<crate::access::Editor>(&at, &gate, ids)?;
+            // TICKETS-9: every principal assigned reads every ticket.
+            let keys: Vec<String> = on.iter().map(|p| p.id().to_string()).collect();
+            if let Some(why) = super::assign::unreadable(&at, &access, &keys, &reach_of.assign) {
+                return Err(why);
+            }
             on.into_iter().map(|p| updating(&at, &gate, p, &reach_of)).collect()
         };
         match store.update_many_by(select, asked, act, may).await {

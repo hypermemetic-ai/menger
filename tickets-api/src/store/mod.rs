@@ -212,6 +212,7 @@ fn whole(row: Row, body: String) -> Ticket {
         path,
         placement,
         labels,
+        assignees,
         archived,
         created_unix,
         updated_unix,
@@ -237,6 +238,7 @@ fn whole(row: Row, body: String) -> Ticket {
         path,
         placement,
         labels,
+        assignees,
         archived,
         body,
         created_unix,
@@ -779,6 +781,9 @@ pub enum Change {
     /// are what moved, in the order given. Only broadcast when something
     /// did. Carries the full ticket.
     LabelsChanged { ticket: Ticket, added: Vec<Label>, removed: Vec<Label> },
+    /// TICKETS-9: a ticket's assignees moved (`assign`); `added` and
+    /// `removed` are the principals that moved. Carries the full ticket.
+    AssigneesChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
     /// An existing ticket's `unlocks` gained `added` because a newly
     /// created ticket named it in `blocked_by`. Carries the full updated
     /// ticket so watch-only clients stay coherent.
@@ -908,6 +913,7 @@ impl Change {
             | Self::CommitsLinked { ticket, .. }
             | Self::CommitsUnlinked { ticket, .. }
             | Self::LabelsChanged { ticket, .. }
+            | Self::AssigneesChanged { ticket, .. }
             | Self::UnlocksChanged { ticket, .. }
             | Self::UnlocksRemoved { ticket, .. }
             | Self::BlockersChanged { ticket, .. }
@@ -1888,6 +1894,8 @@ struct Cache {
     shortcodes: shortcodes::Registry,
     /// MENGER-39: the queue and its history ([`queue::Queue`]).
     queue: queue::Queue,
+    /// TICKETS-9: who holds each ticket, and the assignment history.
+    assignments: assignees::Assignments,
     /// FILTER-36: every saved filter's text, by its doc's id
     /// ([`saved::SavedFilters`]) — read from the bodies at open, moved by a
     /// body's write with the component registry.
@@ -2263,6 +2271,7 @@ impl Cache {
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
             queue: Default::default(),
+            assignments: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
             chats: Default::default(),
@@ -2351,6 +2360,7 @@ impl Cache {
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
             queue: Default::default(),
+            assignments: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
             chats: Default::default(),
@@ -3121,6 +3131,8 @@ impl Store {
         db::migrate_add_labels(&mut conn)?;
         // ARCHIVE-2: and `archived` — every ticket live. No row is rewritten.
         db::migrate_add_archived(&mut conn)?;
+        // TICKETS-9: and the assignees beside them, `[]` for every ticket.
+        db::migrate_add_assignees(&mut conn)?;
         // COMP-3: a database written before COMP-3 — or a new one — gains the
         // `components` table here, once, durably, with the registry built
         // from every body; after it, every open reads the table.
@@ -3154,6 +3166,7 @@ impl Store {
         revisions::migrate(&mut conn)?;
         // MENGER-39: and one without the queue's tables gains them, empty.
         queue::migrate(&mut conn)?;
+        assignees::migrate(&mut conn)?;
         // CHAT-3: and one without the chats' tables gains them, empty.
         chats::migrate(&mut conn)?;
         // APP-23: and comments without an intent, and queue records without
@@ -3278,6 +3291,8 @@ impl Store {
         teams::load(conn, &mut cache.members)?;
         // MENGER-39: the queue, as stored.
         cache.queue = queue::load(conn)?;
+        // TICKETS-9: the assignment log, and the index from the rows.
+        cache.assignments = assignees::load(conn, cache.order.values())?;
         // FILTER-36: the saved filters, from their docs' bodies.
         cache.saved = saved::load(conn)?;
         // CHAT-3: the chats, as stored.
@@ -5499,6 +5514,8 @@ pub(crate) mod revisions;
 pub use revisions::{acting, say_act, DiffView, RevisionPage, Restoring};
 mod queue;
 pub use queue::QueueChange;
+/// TICKETS-9: the assignees and their history.
+mod assignees;
 /// APP-23: a change request — a comment and an unqueue, one write.
 mod changes;
 pub use changes::{conversation_anchor, CONVERSATION_PATH};
@@ -5651,6 +5668,8 @@ mod tests_themes;
 /// MENGER-39: the queue.
 #[cfg(test)]
 mod tests_queue;
+#[cfg(test)]
+mod tests_assignees;
 /// APP-23: a change request.
 #[cfg(test)]
 mod tests_changes;

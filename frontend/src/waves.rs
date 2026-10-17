@@ -637,7 +637,7 @@ pub(crate) fn value_of(c: Cat, card: &Card, off: bool) -> Option<String> {
         // MENGER-12: a card holds any number of labels — counted apart
         // ([`counts`]); Asking is not the board's.
         // FILTER-27: nor is When, which the log and the times answer.
-        Cat::Asking | Cat::Label | Cat::When | Cat::Deployed | Cat::Chats => None,
+        Cat::Asking | Cat::Label | Cat::When | Cat::Deployed | Cat::Chats | Cat::People => None,
         Cat::Wave => Some(match card.placement {
             Placement::Wave { n } => n.to_string(),
             Placement::MissingBlocker => "missing".into(),
@@ -1606,6 +1606,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),
@@ -1732,6 +1733,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             id: s.id,
             epic: s.epic,
             shortcode: s.shortcode,

@@ -66,6 +66,10 @@ pub(super) fn history_stream(store: Arc<Store>, caller: VerifiedUser, id: String
                 for record in store.queue_history(&caller, &id) {
                     yield TicketsEvent::QueueRecord { record };
                 }
+                // TICKETS-9: who was assigned or unassigned, when, by whom.
+                for record in store.assign_history(&caller, &id) {
+                    yield TicketsEvent::AssignRecord { record };
+                }
                 let (status_since_unix, status_since_exact) = (h.since.map(|s| s.0), h.since.map(|s| s.1));
                 yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable: h.restorable, status_since_unix, status_since_exact, deletions: h.deletions };
             }

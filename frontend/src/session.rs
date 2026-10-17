@@ -1094,7 +1094,9 @@ async fn session(
                 TicketsEvent::CommitsLinked { ticket, .. }
                 | TicketsEvent::CommitsUnlinked { ticket, .. }
                 // MENGER-12: labels are on the row the same way.
-                | TicketsEvent::LabelsChanged { ticket, .. },
+                | TicketsEvent::LabelsChanged { ticket, .. }
+                // TICKETS-9: and the assignees.
+                | TicketsEvent::AssigneesChanged { ticket, .. },
             ) => {
                 let summary = TicketSummary::from(&ticket);
                 remember(&summary);
@@ -1604,6 +1606,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
