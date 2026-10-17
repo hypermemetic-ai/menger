@@ -291,6 +291,7 @@ mod labels;
 mod lens;
 mod links;
 mod md;
+mod media;
 mod menu;
 mod mock_anchor;
 mod mockpick;

@@ -1,5 +1,5 @@
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, MembersActivation, NotesActivation, OrgsActivation, ProviderOffer, SessionActivation, ThemesActivation, TicketsActivation};
+use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, MediaActivation, MembersActivation, NotesActivation, OrgsActivation, ProviderOffer, SessionActivation, ThemesActivation, TicketsActivation};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
@@ -194,6 +194,8 @@ pub async fn build_rpc_login(
         .register(CommentsActivation::with_access(Arc::clone(&store), access.clone()))
         // CHAT-3: `chats` beside them — conversations inside tickets.
         .register(ChatsActivation::with_access(Arc::clone(&store), access.clone()))
+        // COMMENT-5: `media` beside them — the images comments show.
+        .register(MediaActivation::with_access(Arc::clone(&store), access.clone()))
         // NOTE-2: `notes` beside them, over the same store.
         .register(NotesActivation::with_access(Arc::clone(&store), access.clone()))
         // THEME-8: `themes` beside them — the themes and what each level adopts.

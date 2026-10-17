@@ -3493,6 +3493,88 @@
     "params": {}
   },
   {
+    "call": "media.put",
+    "items": [
+      {
+        "bytes": 74,
+        "duplicate": false,
+        "hash": "191a9e3df08408abb45c996790d3d22cd0287c1c9e1344671b2c97414dd5f2e4",
+        "height": 1,
+        "mime": "image/png",
+        "type": "stored",
+        "width": 2
+      }
+    ],
+    "params": {
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII=",
+      "mime": "image/png",
+      "ticket": "GOLD-2"
+    }
+  },
+  {
+    "call": "media.put",
+    "items": [
+      {
+        "bytes": 74,
+        "duplicate": true,
+        "hash": "191a9e3df08408abb45c996790d3d22cd0287c1c9e1344671b2c97414dd5f2e4",
+        "height": 1,
+        "mime": "image/png",
+        "type": "stored",
+        "width": 2
+      }
+    ],
+    "params": {
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII=",
+      "mime": "image/png",
+      "ticket": "GOLD-2"
+    }
+  },
+  {
+    "call": "media.get",
+    "items": [
+      {
+        "bytes": 74,
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII=",
+        "hash": "191a9e3df08408abb45c996790d3d22cd0287c1c9e1344671b2c97414dd5f2e4",
+        "height": 1,
+        "mime": "image/png",
+        "type": "media",
+        "width": 2
+      }
+    ],
+    "params": {
+      "hash": "191a9e3df08408abb45c996790d3d22cd0287c1c9e1344671b2c97414dd5f2e4"
+    }
+  },
+  {
+    "call": "media.put",
+    "items": [
+      {
+        "message": "an SVG is not kept — it is a document and can run script; menger keeps image/png, image/jpeg, image/gif, image/webp (nothing was kept)",
+        "reason": "not_an_image",
+        "type": "refused"
+      }
+    ],
+    "params": {
+      "data": "PHN2Zy8+",
+      "mime": "image/svg+xml",
+      "ticket": "GOLD-2"
+    }
+  },
+  {
+    "call": "media.get",
+    "items": [
+      {
+        "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "type": "not_found"
+      }
+    ],
+    "params": {
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  {
     "call": "members.list",
     "items": [
       {

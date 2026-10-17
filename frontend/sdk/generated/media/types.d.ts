@@ -1,0 +1,66 @@
+/** An image's bytes, in standard base64 (`base64 -w0 shot.png`); a
+`data:image/png;base64,` before them is read past by the store. */
+export type MediaData = string;
+/** `put`'s answer: the image as kept — new, or the same bytes kept
+already (`duplicate`: no second row). */
+export interface MediaEventStored {
+    type: 'stored';
+    bytes: number;
+    /** The same bytes were kept already (for this ticket or another):
+  nothing new was stored but, for a new ticket, that it is its too. */
+    duplicate: boolean;
+    hash: string;
+    height: number;
+    mime: string;
+    width: number;
+}
+/** `get`'s answer: the image and its bytes, in base64. */
+export interface MediaEventMedia {
+    type: 'media';
+    bytes: number;
+    /** The bytes, standard base64. */
+    data: string;
+    hash: string;
+    height: number;
+    mime: string;
+    width: number;
+}
+/** `get` of an image there is none of — or one the caller may not see
+(ACCESS-10: one answer). `put` for a ticket that is none, or out of
+reach, says it of the ticket (`ticket`). */
+export interface MediaEventNotFound {
+    type: 'not_found';
+    hash: string | null;
+    ticket: string | null;
+}
+/** `put` refused the image: `reason` is `too_large` (with `bytes` and
+`max`), `not_an_image` (an SVG, or bytes none of the kept types),
+`type_mismatch`, `truncated` or `bad_data`; `message` says it in
+words. Nothing was kept. */
+export interface MediaEventRefused {
+    type: 'refused';
+    bytes: number | null;
+    max: number | null;
+    message: string;
+    reason: string;
+}
+/** Any other in-band refusal, naming the problem; nothing was written. */
+export interface MediaEventError {
+    type: 'error';
+    message: string;
+}
+/** What the `media` activation streams. Every method returns
+`impl Stream<Item = MediaEvent>`; a refusal is in band. */
+export type MediaEvent = MediaEventStored | MediaEventMedia | MediaEventNotFound | MediaEventRefused | MediaEventError;
+export declare function isMediaEventStored(e: MediaEvent): e is MediaEventStored;
+export declare function isMediaEventMedia(e: MediaEvent): e is MediaEventMedia;
+export declare function isMediaEventNotFound(e: MediaEvent): e is MediaEventNotFound;
+export declare function isMediaEventRefused(e: MediaEvent): e is MediaEventRefused;
+export declare function isMediaEventError(e: MediaEvent): e is MediaEventError;
+/** An image's name: its SHA-256, 64 hex digits (lower-cased; a
+`media:` before it is read past), as `media.put` answers it. */
+export type MediaHash = string;
+/** What an image is said to be: a media type, `type/subtype` (lower-
+cased). Which ones are kept, and whether the bytes are that, is the
+store's rule (`image/png`, `image/jpeg`, `image/gif`, `image/webp`). */
+export type MediaType = string;

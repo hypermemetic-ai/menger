@@ -27,7 +27,7 @@ use futures::StreamExt;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
-use menger_tickets_api::{CommentsEvent, DeploymentsEvent, MembersEvent, NotesEvent, OrgsEvent, SessionEvent, ThemesEvent, TicketsEvent};
+use menger_tickets_api::{CommentsEvent, DeploymentsEvent, MediaEvent, MembersEvent, NotesEvent, OrgsEvent, SessionEvent, ThemesEvent, TicketsEvent};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
 use serde_json::{json, Value};
@@ -111,6 +111,7 @@ fn round_trip(namespace: &str, v: &Value) {
         "tickets" => again::<TicketsEvent>(v),
         "comments" => again::<CommentsEvent>(v),
         "notes" => again::<NotesEvent>(v),
+        "media" => again::<MediaEvent>(v),
         "themes" => again::<ThemesEvent>(v),
         "members" => again::<MembersEvent>(v),
         "orgs" => again::<OrgsEvent>(v),
@@ -259,6 +260,12 @@ fn script() -> Vec<(&'static str, Value)> {
         ("deployments.environments", json!({})),
         ("deployments.for_ticket", json!({"id": "GOLD-2"})),
         ("deployments.running", json!({})),
+        // COMMENT-5: an image put, put again, read back; refused; not there.
+        ("media.put", json!({"ticket": "GOLD-2", "mime": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII="})),
+        ("media.put", json!({"ticket": "GOLD-2", "mime": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII="})),
+        ("media.get", json!({"hash": "191a9e3df08408abb45c996790d3d22cd0287c1c9e1344671b2c97414dd5f2e4"})),
+        ("media.put", json!({"ticket": "GOLD-2", "mime": "image/svg+xml", "data": "PHN2Zy8+"})),
+        ("media.get", json!({"hash": "0000000000000000000000000000000000000000000000000000000000000000"})),
         ("members.list", json!({})),
         ("orgs.list", json!({})),
         // ARCHIVE-2 (added deliberately, last, so nothing before it moves):

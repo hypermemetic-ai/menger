@@ -923,6 +923,9 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
     };
     let error = move || a.draft.with(|d| d.as_ref().filter(|d| d.seq == seq).and_then(|d| d.error.clone()));
     let saving = move || a.draft.with(|d| d.as_ref().is_some_and(|d| d.seq == seq && d.saving));
+    // COMMENT-5: images pasted, dropped or picked — for the comment's ticket
+    // (the element's, else the page's); on the app, none.
+    let attach = crate::media::Attach::new(body, area, crate::media::ticket_of(&anchor));
     let mut where_ = match &anchor.ticket {
         Some(t) => format!("{} · {t}", anchor.route),
         None => anchor.route.clone(),
@@ -965,11 +968,15 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
                 placeholder="Leave a comment — Ctrl+Enter saves, Esc cancels"
                 prop:value=move || body.get()
                 on:input=move |ev| body.set(event_target_value(&ev))
+                on:paste=move |ev| attach.paste(ev)
+                on:dragover=move |ev| attach.dragover(ev)
+                on:drop=move |ev| attach.dropped(ev)
             ></textarea>
             {move || error().map(|e| view! { <p class="annot-err" role="alert">{e}</p> })}
             <div class="annot-acts">
+                <crate::media::Attachments a=attach />
                 <button class="annot-cancel" on:click=move |_| cancel(a)>"Cancel"</button>
-                <button class="annot-save" disabled=saving on:click=move |_| save(a, body.get_untracked())>
+                <button class="annot-save" disabled=move || saving() || attach.busy() on:click=move |_| save(a, body.get_untracked())>
                     {move || if saving() { "Saving…" } else { "Save" }}
                 </button>
             </div>

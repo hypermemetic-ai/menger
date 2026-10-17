@@ -2404,6 +2404,7 @@ what its proofs are for — a stale or mismatched proof writes nothing.
 | `update_many`, `label` / `commits.link` over `ids`, `reshortcode` | an editor's permit per ticket selected (the store checks they are exactly its selection) |
 | `delete` | `Permit<Admin>` per ticket that goes; `undelete`, `AdminOf` each one's shortcode |
 | `comments.add` / `resolve` / `reopen` | a viewer's (an editor's) permit on the comment's ticket; nothing more for a comment on the app |
+| `media.put` | `Permit<Editor>` for the ticket the image is for (`OnMedia`); with no ticket (an image on the app), nothing more than the call's grant — the image is then its putter's |
 | `members.grant` / `revoke` | `AdminOf` exactly its scope, minted for a signed-in admin (ACCESS-24: there is no other) |
 | `orgs.create` · `rename` · `delete` | `AdminOf` `*` · the organization (or `*`) |
 | `themes.define` · `themes.set` | `On<Editor>` `*` · `AdminOf` `*` for the site, `On<Editor>` the shortcode |
@@ -2848,6 +2849,65 @@ synapse -P 4455 menger comments list --ticket APP-22
 synapse -P 4455 -p '{"ticket": "APP-22", "path": "conversation"}' menger comments list   # whole-ticket only
 synapse -P 4455 menger comments add --anchor.route '#/ticket/APP-22' --anchor.path conversation \
   --anchor.label Conversation --anchor.ticket APP-22 --body "not what I meant: do X instead"
+```
+
+### Images in comments (COMMENT-5)
+
+A comment can show **images**: pasted (a screenshot from the clipboard),
+dropped on the box, or picked with its **Image** button — in every box that
+writes a comment (a ticket's Conversation, the annotation box, the tray's
+Request changes). The app checks the file first by the server's own rule,
+keeps it with `media.put` for the comment's ticket, writes its markdown into
+the box at the cursor and shows it there as a thumbnail (× takes it out;
+deleting the markdown does too). A posted comment draws it inline, at most
+the column's width, wherever comments are drawn (the Conversation, the
+annotation pins, `#/comments`); a click opens it full size, a click or Esc
+closes it. The image is named in the body as markdown:
+
+```markdown
+the hold drifts here ![the curve](media:9f2c6ae2b4d1e1a8f7c3b0d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718)
+```
+
+Only `media:` images (and `data:` PNG, JPEG, GIF or WebP) are drawn; an image
+from another origin is not (the page's CSP refuses it anyway) — its alt is
+drawn as a link to it.
+
+**Stored by menger, on the wire** — the `media` activation; no side door
+(the shell serves no upload route and no image path). The app turns
+`media.get`'s bytes into a `blob:` URL, once per image per page load.
+
+| method | yields |
+|---|---|
+| `media.put { ticket?, mime, data }` | `stored { hash, mime, bytes, width, height, duplicate }` — the image kept, named by its SHA-256 (64 hex digits); `data` is standard base64 (a `data:…;base64,` before it is read past). Its type is read from its magic bytes — PNG, JPEG, GIF or WebP, **never SVG** — and must be the `mime` given; width and height from its header. At most **7 MiB**. A refusal is `refused { reason, message, bytes?, max? }` (`too_large`, `not_an_image`, `type_mismatch`, `truncated`, `bad_data`), naming the limit, and nothing is kept; a ticket that is none, or out of the caller's reach, is `not_found { ticket }`. The same bytes again are one row (`duplicate: true`); put for a second ticket, the one image is that ticket's too. Without `ticket` (a comment on the app) the image is the putter's and the admins' of `*` |
+| `media.get { hash }` | `media { hash, mime, bytes, width, height, data }` (data base64) — or `not_found { hash }`, alike for a hash that names nothing and for an image put only for tickets the caller cannot see (ACCESS-10) |
+
+**Reach.** An image belongs to the ticket it was put for: `get` answers it to
+a reader who sees that ticket (by its id through the resolver, so a
+reshortcoded ticket keeps its images and a deleted one hides them); `put` is
+the editor's, a `Permit` on that ticket (ACCESS-11; under login `media.get`
+is a viewer's grant, `media.put` an editor's, `target = "ticket"`).
+
+Kept in two tables of their own, `media` (a row per image, its bytes a BLOB)
+and `media_owners` (a row per ticket, or app putter, it is for); the cache
+holds what each image is, never its bytes, which `get` reads from the file on
+a read connection. A file gains the tables, empty, on its first open; no
+stored form moves (a release before COMMENT-5 opens such a file and never
+looks at them).
+
+The limit is 7 MiB, not 8 MB: an image travels as base64 (4/3 of its size)
+inside one WebSocket message, and the transport takes a message of at most
+10 MiB. A file past the cap is refused by the app before it is read; a
+call past the transport's 10 MiB closes the socket instead of answering
+(synapse waits on it — COMMENT-6). From a shell, the data is a **file** or stdin — never
+`"$(base64 …)"`, which Linux caps at 128 KB:
+
+```sh
+base64 -w0 shot.png > shot.b64
+synapse -P 4455 menger media put --ticket KILN-4 --mime image/png --data @shot.b64      # → stored { hash, … }
+base64 -w0 shot.png | synapse -P 4455 menger media put --ticket KILN-4 --mime image/png --data -
+synapse -P 4455 menger comments add --anchor.route '#/ticket/KILN-4' --anchor.path conversation \
+  --anchor.label Conversation --anchor.ticket KILN-4 --body 'the hold drifts here ![the curve](media:<hash>)'
+synapse -P 4455 -j menger media get --hash <hash> | jq -r 'select(.content.data) | .content.data' | base64 -d > back.png
 ```
 
 ### History and cancellation (MENGER-13)

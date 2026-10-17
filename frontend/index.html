@@ -2418,6 +2418,43 @@
   section.convsec .cnewacts { display: flex; align-items: center; justify-content: flex-end; gap: .6rem; }
   section.convsec .csend { padding: .15rem .9rem; }
   section.convsec .csend:disabled { opacity: .5; cursor: default; }
+  /* COMMENT-5: images in comments. A box's images — its draft's thumbnails,
+     the Image button and what it says — sit at the start of its actions; a
+     comment's image is drawn at most the column's width and opens full size
+     on a click (.lightbox). One not the reader's stays its alt. */
+  .cattach { display: inline-flex; align-items: center; flex-wrap: wrap; gap: .35rem; margin-right: auto; min-width: 0; }
+  .cthumbs { display: inline-flex; flex-wrap: wrap; gap: .3rem; }
+  .cthumbs:empty { display: none; }
+  .cthumb { position: relative; display: inline-block; line-height: 0; }
+  .cthumb img {
+    width: 48px; height: 48px; object-fit: cover; cursor: zoom-in; background: var(--panel);
+    border: var(--border) solid var(--line); border-radius: var(--radius);
+  }
+  .cthumb-x {
+    position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; line-height: 16px; cursor: pointer;
+    font: calc(11px * var(--text-scale))/16px var(--sans); color: var(--ink); background: var(--panel);
+    border: var(--border) solid var(--line); border-radius: var(--radius-lg);
+  }
+  .cthumb-x:hover { border-color: var(--accent); color: var(--accent); }
+  .cpick {
+    font: inherit; font-size: calc(.75rem * var(--text-scale)); cursor: pointer; background: var(--panel); color: var(--muted);
+    border: var(--border) solid var(--line); border-radius: var(--radius); padding: .1rem .55rem;
+  }
+  .cpick:hover { border-color: var(--accent); color: var(--accent); }
+  .cnote { font-size: calc(.75rem * var(--text-scale)); color: var(--muted); overflow-wrap: anywhere; }
+  .cnote.bad { color: var(--err-fg); }
+  img.cimg {
+    display: block; max-width: 100%; height: auto; margin: .35rem 0; cursor: zoom-in;
+    border: var(--border) solid var(--line); border-radius: var(--radius);
+  }
+  img.cimg:not([src]) { display: inline-block; min-width: 4rem; min-height: 2rem; cursor: default; background: var(--panel); }
+  img.cimg[data-state="missing"] { border-style: dashed; }
+  .lightbox {
+    position: fixed; inset: 0; z-index: 2100; display: grid; place-items: center; padding: 2rem;
+    background: var(--scrim); cursor: zoom-out;
+  }
+  .lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; background: var(--panel); box-shadow: 0 8px 32px var(--shadow); border-radius: var(--radius); }
+  .lightbox:focus { outline: none; }
   /* MENGER-12: a ticket's labels — chips on its rows and its page;
      `needs-you` wears the accent (it puts the ticket under Needs you, on the nav). */
   .lchips { display: inline-flex; flex-wrap: nowrap; gap: .25rem; margin-left: .4rem; vertical-align: 1px; }

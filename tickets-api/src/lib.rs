@@ -136,6 +136,18 @@ pub use chats_activation::ChatsClient;
 #[cfg(feature = "server")]
 pub use chats_activation::ChatsActivation;
 
+/// COMMENT-5: the media vocabulary — [`MediaEvent`], the kept image types
+/// and the rule that reads an image's type and size from its bytes
+/// ([`media::check`]). Wasm-safe: the app refuses a file with it first.
+pub mod media;
+pub use media::{MediaEvent, MediaInfo};
+/// COMMENT-5: the `media` activation, declared once: the server's
+/// [`MediaActivation`] and the browser's [`MediaClient`].
+pub mod media_activation;
+pub use media_activation::MediaClient;
+#[cfg(feature = "server")]
+pub use media_activation::MediaActivation;
+
 /// NOTE-2: the notes vocabulary — [`Note`], [`NoteState`], [`NotesEvent`]
 /// — the rules `add` keeps a note by, and the title a note gives its
 /// ticket. Wasm-safe, like [`comments`].

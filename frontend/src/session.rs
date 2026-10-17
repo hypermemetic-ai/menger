@@ -805,6 +805,12 @@ pub(crate) fn chats_client() -> Option<menger_tickets_api::ChatsClient<Rc<WsTran
     TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::ChatsClient::new)
 }
 
+/// COMMENT-5: the `media` activation's typed client, over the same
+/// connection — the images comments show.
+pub(crate) fn media_client() -> Option<menger_tickets_api::MediaClient<Rc<WsTransport>>> {
+    TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::MediaClient::new)
+}
+
 /// THEME-8: the `themes` activation's typed client, over the same
 /// connection.
 pub(crate) fn themes_client() -> Option<menger_tickets_api::ThemesClient<Rc<WsTransport>>> {

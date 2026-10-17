@@ -251,11 +251,13 @@ macro_rules! closed_schema {
 }
 
 mod choices;
+mod media;
 mod names;
 mod prose;
 mod who;
 
 pub use choices::*;
+pub use media::*;
 pub use names::*;
 pub use prose::*;
 pub use who::*;
