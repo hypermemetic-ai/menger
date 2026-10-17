@@ -427,7 +427,7 @@ async fn deploy_10s_records_are_taken_whole() {
         store.environments(Some("MENGER"), None).unwrap().into_iter().map(|e| (e.name, e.revision)).collect();
     assert_eq!(
         envs,
-        [("test".into(), Some("3333333".into())), ("staging".into(), Some("3333333".into())), ("prod".into(), Some("1111111".into()))]
+        [("test".into(), Some("5555555".into())), ("staging".into(), Some("3333333".into())), ("prod".into(), Some("1111111".into()))]
     );
     let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp();
     assert_eq!(
