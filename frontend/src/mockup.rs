@@ -708,6 +708,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             labels: Vec::new(),
+            assignees: Vec::new(),
             archived: None,
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic),

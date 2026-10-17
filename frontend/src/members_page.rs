@@ -172,6 +172,10 @@ pub(crate) fn MembersPage() -> impl IntoView {
                             view! { <button class="link chatwith" title="a direct message, in #/chats" on:click=go>"chat"</button> }
                         });
                         let named = person.as_deref().map(|p| (name(p), crate::chats::is_agent(p)));
+                        // TICKETS-9: a person's tickets — the board under `assigned "<principal>"`.
+                        let assigned = person.clone().map(|p| {
+                            view! { <a class="assigned-link" href=crate::assignees::board_link(&p) title=format!("the board: tickets assigned to {p}")>"assigned"</a> }
+                        });
                         view! {
                             <tr>
                                 <td>
@@ -181,7 +185,7 @@ pub(crate) fn MembersPage() -> impl IntoView {
                                 <td><code>{g.scope.to_string()}</code></td>
                                 <td>{g.role.to_string()}</td>
                                 <td class="lbl">{g.granted_by.to_string()}</td>
-                                <td>{chat}" "{(!operator).then(|| view! { <button class="link revoke" on:click=revoke>"revoke"</button> })}</td>
+                                <td>{chat}" "{assigned}" "{(!operator).then(|| view! { <button class="link revoke" on:click=revoke>"revoke"</button> })}</td>
                             </tr>
                         }
                     }).collect_view())}

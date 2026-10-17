@@ -2475,6 +2475,49 @@
     background: var(--card); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius);
   }
   .lproblem { margin: .3rem 0 0; font-size: calc(.8rem * var(--text-scale)); color: var(--err-fg); overflow-wrap: anywhere; }
+  /* TICKETS-9: a ticket's assignees — avatars (the chats' initials square;
+     an agent's round), overlapped on a board row, named on the ticket page,
+     and the person picker under + assign. */
+  .aav-w { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+  .aav {
+    flex: none; width: 20px; height: 20px; border-radius: var(--radius); display: inline-grid; place-items: center;
+    font-family: var(--sans); font-weight: var(--weight-strong); font-size: calc(9px * var(--text-scale)); line-height: 1;
+    background: var(--sel); color: var(--accent); border: var(--border) solid var(--card);
+  }
+  .aav.agent { background: var(--st-epic-bg); color: var(--st-epic-fg); border-radius: var(--radius-pill); }
+  .aname { font-size: calc(12px * var(--text-scale)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 14rem; }
+  .aavs { display: inline-flex; align-items: center; vertical-align: middle; }
+  .aavs .aav-w + .aav-w { margin-left: -3px; }
+  .amore { margin-left: 3px; font-family: var(--mono); font-size: calc(10px * var(--text-scale)); color: var(--muted); }
+  table.board th.c-who { width: 5.5rem; }
+  tbody#board td.who { overflow: visible; }
+  tbody#board tr[data-ticket-id]:hover td.who .amore { color: var(--bg); }
+  #t-assignees .achips { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; }
+  #t-assignees .awrap { display: inline-flex; align-items: center; min-width: 0; }
+  #t-assignees .lx {
+    border: none; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: calc(12px * var(--text-scale)); line-height: 1;
+  }
+  #t-assignees .lx:hover, #t-assignees .lx:focus-visible { color: var(--err-fg); }
+  #t-assignees .aadd { font-size: calc(11.5px * var(--text-scale)); padding: 1px 8px; }
+  #t-assignees .apicker {
+    margin-top: .4rem; padding: 8px; display: flex; flex-direction: column; gap: 6px; width: min(22rem, 100%);
+    background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 6px 20px var(--shadow);
+  }
+  #t-assignees .aq {
+    font: inherit; font-size: calc(12px * var(--text-scale)); padding: 4px 8px; color: var(--ink); background: var(--bg);
+    border: var(--border) solid var(--accent); border-radius: var(--radius);
+  }
+  #t-assignees ul.acands { list-style: none; margin: 0; padding: 0; max-height: 16rem; overflow-y: auto; }
+  #t-assignees li.acand {
+    display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: center; padding: 5px 6px;
+    border-radius: var(--radius); cursor: pointer; font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere;
+  }
+  #t-assignees li.acand:hover { background: var(--hover); }
+  #t-assignees li.acand.no { color: var(--muted); cursor: not-allowed; }
+  #t-assignees li.acand small { display: block; color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
+  #t-assignees li.acand small.refuse { color: var(--err-fg); }
+  #t-assignees :is(.pempty, .perr) { margin: 0; font-size: calc(11.5px * var(--text-scale)); color: var(--muted); }
+  #t-assignees .perr { color: var(--err-fg); }
   /* MENGER-12: the header's `needs you` count — the accent while anything
      waits, quiet at 0 (the inputs badge's look). */
   header .hlink .hbadge.needs { background: var(--accent); color: var(--bg); }
@@ -2896,6 +2939,7 @@
     table.board th.c-status { width: 11rem; }
     table.board th.c-sev { width: 5.5rem; }
     table.board th.c-blk { width: 8rem; }
+    table.board th.c-who { width: 4.5rem; }
   }
   /* The board in a narrow column: the id, the title and the status — the
      kind, severity and blockers are the ticket's page's (and the nav's
@@ -2914,6 +2958,7 @@
     }
     table.board th.c-id { width: 7.5rem; }
     table.board th.c-status { width: calc(86px * var(--text-scale) + 24px); }
+    table.board th.c-who { width: calc(38px * var(--text-scale) + 20px); }
     tbody#board td, table.board th { padding-left: 10px; padding-right: 10px; }
   }
   /* (At a phone's width the shell is APP-50's — the bar along the bottom
@@ -4475,6 +4520,7 @@
   /* The ticket page: a label's chip, the label form and its problem; the
      history, children and a details opened anywhere in the chrome. */
   #t-labels :is(.lwrap, .ladd, .lproblem) { animation: menger-pop-in .16s cubic-bezier(.2, .8, .2, 1); }
+  #t-assignees :is(.awrap, .apicker, .lproblem) { animation: menger-pop-in .16s cubic-bezier(.2, .8, .2, 1); }
   :is(#t-history, #children, #kids-more, #kids-hidden) { animation: menger-fade-in .16s ease-out; }
   main details[open] > :not(summary) { animation: menger-drop-in .16s cubic-bezier(.2, .8, .2, 1); }
   /* Inputs, waves, settings, members: a chosen option, a layout segment, a

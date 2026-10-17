@@ -332,6 +332,14 @@
         "message",
         "tz"
       ],
+      "assign": [
+        "add",
+        "id",
+        "ids",
+        "message",
+        "remove",
+        "source"
+      ],
       "await_reply": [
         "id",
         "input",
@@ -474,6 +482,7 @@
         "unblock"
       ],
       "update_many": [
+        "assign",
         "block",
         "filter",
         "ids",
@@ -486,6 +495,7 @@
         "source",
         "status",
         "tz",
+        "unassign",
         "unblock",
         "unlabel"
       ],

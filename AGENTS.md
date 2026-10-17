@@ -262,6 +262,19 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets revisions restore --id DEPLOY-9 --rev 3 --fields body --message "why"
   ```
 
+  **Assignees** (TICKETS-9): a ticket's people and agents — principals
+  that read it — moved by `tickets assign --id X --add P --remove P` (or
+  `--ids`; `update_many --assign / --unassign`); one who cannot read the
+  ticket is refused, naming why. Each move is an `assign_record` in
+  `history`; `watch` carries `assignees_changed`. Cells: `assigned
+  "<principal>"`, `assigned me`, `assigned`, `unassigned`. README
+  "Assignees":
+
+  ```sh
+  synapse -P 4455 menger tickets assign --id TICKETS-9 --add key:4b…
+  synapse -P 4455 menger tickets list --filter 'assigned me and not category done' --summary true
+  ```
+
   **Search inside tickets** (SEARCH-2) is `search` — titles and bodies,
   every word required, prefixes and typos too, best first; each `hit`
   carries the passage that matched (`find` stays the jump by id or title).

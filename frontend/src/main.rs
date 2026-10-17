@@ -289,6 +289,8 @@ mod inspect;
 mod keys;
 mod kids;
 mod labels;
+// TICKETS-9: a ticket's assignees — avatars, the picker.
+mod assignees;
 mod lens;
 mod links;
 mod md;
@@ -902,7 +904,7 @@ fn Board(
             present.get().then(|| {
                 view! {
                     <tr class="spacer" aria-hidden="true">
-                        <td colspan="6" style:height=move || format!("{}px", layout.with(px))></td>
+                        <td colspan="7" style:height=move || format!("{}px", layout.with(px))></td>
                     </tr>
                 }
             })
@@ -924,6 +926,7 @@ fn Board(
                 <tr aria-rowindex="1">
                     <th class="c-id">"id"</th><th class="c-title">"title"</th><th class="c-kind">"kind"</th>
                     <th class="c-status">"status"</th><th class="c-sev">"severity"</th><th class="c-blk">"blocked by"</th>
+                    <th class="c-who" title="assignees">"who"</th>
                 </tr>
             </thead>
             <tbody
@@ -958,7 +961,7 @@ fn Board(
                             board::Slot::Gap(_, len) => {
                                 return view! {
                                     <tr class="pending" aria-hidden="true">
-                                        <td colspan="6" style:height=move || format!("{}px", len as f64 * geom.with(|g| g.pitch()))>"…"</td>
+                                        <td colspan="7" style:height=move || format!("{}px", len as f64 * geom.with(|g| g.pitch()))>"…"</td>
                                     </tr>
                                 }
                                 .into_any();
@@ -1137,6 +1140,8 @@ fn Board(
                                             .collect_view()
                                     })}
                                 </td>
+                                // TICKETS-9: who holds it — avatars, live.
+                                <td class="who">{assignees::row_avatars(move || ticket.with(|t| t.assignees.clone()))}</td>
                             </tr>
                         }
                         .into_any()
@@ -1686,6 +1691,8 @@ fn ticket_view(
                 <div><dt>"Running"</dt><dd id="t-running"><deploys::Running id=running_id.to_string() commits /></dd></div>
                 // MENGER-12: its labels — chips, editable by a writer.
                 <div><dt>"Labels"</dt><dd id="t-labels"><labels::Editor ticket /></dd></div>
+                // TICKETS-9: who holds it — avatars, + assign through the picker.
+                <div class="assignees"><dt>"Assignees"</dt><dd id="t-assignees"><assignees::Editor ticket /></dd></div>
                 // CHAT-4: chat N — the reader's unread here; opens the dock on
                 // a chat (CHAT-10).
                 <div>

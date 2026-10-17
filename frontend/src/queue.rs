@@ -1752,6 +1752,7 @@ mod tests {
             path: None,
             placement: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             created_unix: 0,
             updated_unix: 0,
         }
@@ -1850,6 +1851,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             labels: s.labels,
+            assignees: Vec::new(),
             id: s.id,
             epic: s.epic,
             shortcode: s.shortcode,

@@ -34,6 +34,7 @@ fn put_answered(events: &[TicketsEvent]) {
         match ev {
             TicketsEvent::Updated { ticket, .. }
             | TicketsEvent::LabelsChanged { ticket, .. }
+            | TicketsEvent::AssigneesChanged { ticket, .. }
             | TicketsEvent::CommitsLinked { ticket, .. }
             | TicketsEvent::StatusChanged { ticket, .. } => {
                 cache::put(TicketSummary::from(ticket));
@@ -86,6 +87,8 @@ pub(crate) fn send(call: Call, change: Change, last_error: RwSignal<Option<Strin
     let what = format!("{} {}", change.words(), match &call {
         Call::Update(id, _) | Call::Label { id, .. } | Call::Commits(id, _) | Call::SetStatus(id, _) => id.clone(),
         Call::Many(ids, _) => format!("on {} tickets", ids.len()),
+        Call::Assign { ids, .. } if ids.len() == 1 => ids[0].clone(),
+        Call::Assign { ids, .. } => format!("on {} tickets", ids.len()),
     });
     wasm_bindgen_futures::spawn_local(async move {
         let Some(client) = session::client() else {
@@ -104,11 +107,15 @@ pub(crate) fn send(call: Call, change: Change, last_error: RwSignal<Option<Strin
                 Call::Many(ids, args) => {
                     let (_, kind, status, parent, severity, block, unblock, label, unlabel) = typed_args(args)?;
                     client
-                        .update_many_all(Some(many(ids)?), None, None, None, kind, status, parent, severity, block, unblock, label, unlabel, source, None)
+                        .update_many_all(Some(many(ids)?), None, None, None, kind, status, parent, severity, block, unblock, label, unlabel, None, None, source, None)
                         .await
                 }
                 Call::Label { id, add, remove } => client.label_all(Some(typed(&id)?), None, some_list(Some(add))?, some_list(Some(remove))?).await,
                 Call::Commits(id, commits) => client.commits().link_all(Some(typed(&id)?), None, many(commits)?).await,
+                Call::Assign { ids, add } => match ids.as_slice() {
+                    [id] => client.assign_all(Some(typed(id)?), None, Some(many(add)?), None, source, None).await,
+                    _ => client.assign_all(None, Some(many(ids)?), Some(many(add)?), None, source, None).await,
+                },
                 Call::SetStatus(..) => unreachable!("sent above"),
             })
         };

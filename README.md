@@ -3432,6 +3432,49 @@ held anywhere — and `upgrade` is an editor's that also needs
 `tickets.create` where the ticket lands (the parent, else the shortcode's
 root, else `*`).
 
+### Assignees (TICKETS-9)
+
+A ticket has **assignees**: zero or more principals, people or agents
+(owner, 2026-10-17: *"oh make tickets assignable"*). They are a set on the
+row — `assignees`, sorted, each once, at most 16 — so every read that
+carries a row carries them (the board's column, the ticket page, `watch`).
+Every principal assigned must read the ticket: one who cannot is refused in
+band, naming why, and nothing is written.
+
+```sh
+synapse -P 4455 menger tickets assign --id TICKETS-9 --add key:4b5c… --message "yours"
+synapse -P 4455 menger tickets assign --id TICKETS-9 --remove key:4b5c… --add idp:0f8f…
+synapse -P 4455 menger tickets update_many --filter 'label kiln and unassigned' --assign key:4b5c…
+synapse -P 4455 menger tickets list --filter 'assigned me and not category done' --summary true
+```
+
+| method | yields |
+| -- | -- |
+| `tickets.assign { id \| ids, add?, remove?, source?, message? }` | `assignees_changed { ticket, added, removed }` per ticket — the whole ticket, its `assignees` as the write left them; `added` / `removed` the principals that moved (both empty: nothing moved, nothing written). A principal in both is added. `ids`: every one in one write, all or none. A principal who cannot read a ticket, a result past 16, a value that is no principal (`-32602`, naming `add`): refused, nothing written |
+| `tickets.update_many { …, assign?, unassign? }` | the same, beside `update_many`'s other aspects (`changed` names `assignees`); every principal assigned reads every ticket selected |
+
+Each principal moved is a line of the ticket's history: `history { id }`
+yields `assign_record { record }` after its queue records — `principal`,
+`action` (`assigned` / `unassigned`), `at_unix`, `actor`, `name`, `source`,
+`message`. They are a log of their own (`assignment_log`, gained empty on
+open), not transitions, as the queue's are; the set itself is a column of
+`tickets` (`assignees`, `[]` for every ticket from before it), which an
+older release, naming its columns, never reads. **The cells**: `assigned
+<principal>` (quoted, as `assigned "key:4b…"`), `assigned me` (the reader),
+`assigned` (anyone) and `unassigned` — answered from a kept index, principal
+→ tickets, on every filtered read and watch (`entered` / `left` in the write
+that moves it). Under login `assign` is an editor's, on the ticket.
+
+In the app: the board's **who** column (up to three avatars, then `+n`; an
+agent's round); the ticket page's **Assignees** — each one named, × to
+unassign, **+ assign** opening the person picker (the reader first, then
+who holds a grant in the ticket's organization, people and agents, named, an agent
+marked — CHAT-14's `chats.candidates` —, those who read it first; one who cannot is drawn but
+not offered); the right-click menu's **Assign to…** (one ticket or a
+selection); the filter menu's **People** (Assigned to me · Assigned ·
+Unassigned); and on `#/members`, each principal's **assigned →** — the board
+under `assigned "<principal>"`.
+
 ### Queue (MENGER-39)
 
 A ticket is **queued for the owner** with an urgency and a reason — one

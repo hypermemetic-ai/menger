@@ -839,6 +839,15 @@ impl Cache {
             // CHAT-3: for the reader, from the chats.
             crate::filter::Event::Chatting => super::chats::holds(self, &clock.me, false),
             crate::filter::Event::Unread => super::chats::holds(self, &clock.me, true),
+            // TICKETS-9: from the kept assignments — `me`, the reader.
+            crate::filter::Event::Assigned(who) => match who {
+                None => self.assignments.holds(None, &self.at),
+                Some(crate::filter::Who::Me) => self.assignments.holds(Some(&clock.me), &self.at),
+                Some(crate::filter::Who::Principal(p)) => self.assignments.holds(Some(p), &self.at),
+                Some(crate::filter::Who::System) => BTreeMap::new(),
+            },
+            // Read as `not assigned` ([`crate::filter::ASSIGNED`]).
+            crate::filter::Event::Unassigned => BTreeMap::new(),
             _ => self.log.holds(h, clock),
         }
     }
@@ -854,7 +863,9 @@ impl Cache {
             | crate::filter::Event::Stage(..)
             | crate::filter::Event::Requested(_)
             | crate::filter::Event::Chatting
-            | crate::filter::Event::Unread => None,
+            | crate::filter::Event::Unread
+            | crate::filter::Event::Assigned(_)
+            | crate::filter::Event::Unassigned => None,
             _ => self.log.next_boundary(h, clock),
         }
     }

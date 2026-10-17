@@ -543,6 +543,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::CommitsLinked { ref ticket, .. }
         | E::CommitsUnlinked { ref ticket, .. }
         | E::LabelsChanged { ref ticket, .. }
+        | E::AssigneesChanged { ref ticket, .. }
         | E::UnlocksChanged { ref ticket, .. }
         | E::UnlocksRemoved { ref ticket, .. }
         | E::BlockersChanged { ref ticket, .. }
@@ -566,6 +567,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         E::Unqueued { ref id, .. } | E::ChangesRequested { ref id, .. } => reach.holds_id(id).then_some(ev),
         E::Waiting { ref ticket, .. } | E::Replied { ref ticket, .. } | E::TimedOut { ref ticket } => reach.holds_id(ticket).then_some(ev),
         E::QueueRecord { ref record } => reach.holds_id(&record.ticket).then_some(ev),
+        E::AssignRecord { ref record } => reach.holds_id(&record.ticket).then_some(ev),
         E::QueueEnd { .. } | E::NotQueued { .. } => None,
         // TICKETS-7: a revision is its ticket's; a frame reads none of
         // them (its SDK has no `revisions`), only a `revised` it hears.
@@ -1287,6 +1289,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
