@@ -3117,6 +3117,30 @@ synapse -P 4455 menger tickets list --filter 'not category done or not deployed 
   commit; a record that names the ticket (`tickets`) carries every commit
   linked by its `at`. The link record is the `commit_links` table, written
   in the link's transaction and rekeyed by a reshortcode.
+- **Environments promote from one another** (DEPLOY-21). An environment
+  may name the one it promotes from — menger's `prod` from `test`; `edge`
+  (the landing page) from none, its own track. A record's `from` sets (or
+  moves) it, and `deployments promotes` (admin on the project) sets or, with
+  no `from`, clears it; itself and a cycle are refused. `environments`
+  answers `from`; `deploy/pipeline` sends `from: test` with every prod
+  record (`deploy/record --promotes-from`). An environment's **track** is it
+  and every environment it promotes from or to. The `deploy_sources` table
+  keeps them (set, not derived).
+- **A ticket's delivery stage** (DEPLOY-21), per environment, for a ticket
+  short of running its current version there — the first that holds of:
+  **deploying** (an open `started` record — no record has ended a deploy
+  there since — carries its current version), **failed** (the last record
+  that carried its current version there failed, or was a rollback that
+  undid it), **ready for** (its current version runs on the environment
+  this one promotes from) and **waiting** (Complete, with commits, of the
+  project or a shortcode hosted under it, its current version running
+  nowhere on the track). Running it is `deployed <env> and not behind
+  <env>`. A record "carries a version" as DEPLOY-20 says: its newest linked
+  version is among the record's commits (or the record names the ticket). A
+  new commit is a new version — back to waiting; a rollback moves it at
+  once. Deploying and failed are kept per environment beside the cells;
+  ready for and waiting are set algebra over the kept cells and the cell
+  table, read on demand — never a test of a ticket.
 - **A deployment never changes a status** — where a ticket runs is a fact
   beside it (DEPLOY-9).
 - **A retry is one deployment**: the same project, environment, state,
@@ -3125,12 +3149,13 @@ synapse -P 4455 menger tickets list --filter 'not category done or not deployed 
 
 | method | yields |
 | -- | -- |
-| `deployments.record { project, environment, state, revision, previous?, commits?, tickets?, release?, at?, source? }` | `deployed { deployment, carried, unlinked, live, entered, left, duplicate }` — the deployment kept (`at` RFC 3339 or unix seconds, now when omitted; `recorded_by` the caller), the tickets it carried, its commits no ticket links, whether it still counts, and the tickets that began and stopped running in its environment. A bad field is one `error` naming it, nothing kept |
+| `deployments.record { project, environment, state, revision, previous?, commits?, tickets?, release?, at?, source?, from? }` | `deployed { deployment, carried, unlinked, live, entered, left, duplicate }` — the deployment kept (`at` RFC 3339 or unix seconds, now when omitted; `recorded_by` the caller), the tickets it carried, its commits no ticket links, whether it still counts, and the tickets that began and stopped running in its environment. A bad field is one `error` naming it, nothing kept |
+| `deployments.promotes { project, environment, from? }` | DEPLOY-21 (admin): `promotes { project, environment, from }` — where the environment promotes from now (`from` omitted: none); the same answer, nothing written, when nothing moved; an `error` for itself or a cycle |
 | `deployments.list { project?, environment?, state?, ticket?, after?, limit? }` | `deployment { deployment, carried, unlinked, live }` newest first by `(at, id)`, then `page { next }` |
-| `deployments.environments { project? }` | `environment { project, name, order, revision, release, since, deployment, last, last_state, last_at, tickets }` per environment |
+| `deployments.environments { project? }` | `environment { project, name, order, revision, release, since, deployment, last, last_state, last_at, tickets, from }` per environment (`from`, DEPLOY-21, when it promotes from one) |
 | `deployments.for_ticket { id }` | `running { environment, since, deployment, revision, release, behind, version }` for each environment it runs in — `behind` the commits not carried there, in link order, and `version` the newest carried one, when it runs an earlier version (DEPLOY-20; absent when current) — `not_running` for each other environment of its projects (its shortcode's, its hosts', any it ran in) |
-| `deployments.running { project?, environment?, ids? }` | DEPLOY-13: `cells { project, environment, running: [{ ticket, since, deployment, behind, version }] }` per environment (an empty one too), each ticket running there — only `ids`' (at most 1,000) when given — in the store's order: what the app's board marks are drawn from, in one read |
-| `deployments.watch` | `deployed`, then `environment_changed`, as each is recorded; `lagged { missed }` |
+| `deployments.running { project?, environment?, ids? }` | DEPLOY-13: `cells { project, environment, running: [{ ticket, since, deployment, behind, version }] }` per environment (an empty one too), each ticket running there — only `ids`' (at most 1,000) when given — in the store's order: what the app's board marks are drawn from, in one read; DEPLOY-21: `staged: [{ ticket, stage }]`, each ticket deploying, ready for or failed there |
+| `deployments.watch` | `deployed`, then `environment_changed`, as each is recorded; `promotes` when where an environment promotes from moves; `lagged { missed }` |
 
 **Filter cells.** `deployed <env>` (FILTER-3's language) is a ticket running
 in an environment of that name — `prod` of any project, `menger/prod` of one —
@@ -3145,7 +3170,19 @@ an earlier version there — its newest linked commit is not there; `deployed
 prod and not behind prod` one running its current version. A link and a
 deploy move it; a watch says `entered` / `left`.
 
+DEPLOY-21: the stages are cells too — `waiting <env>`, `deploying <env>`,
+`ready for <env>`, `failed <env>` (`ready for menger/prod`; no window, no
+`by`). `ready for prod` is what is moving in: on test at its current
+version, not on prod at it. A deploy, a rollback, a link, a status change
+(waiting) and a `promotes` move them, and a filtered watch says `entered` /
+`left` — a deploy to test enters `ready for prod`, the promote leaves it.
+The saved filter **Moving in** is `ready for prod or deploying prod`.
+
 ```sh
+synapse -P 4455 menger tickets list --filter 'ready for prod' --summary true
+synapse -P 4455 menger tickets list --filter 'ready for prod or deploying prod' --summary true
+synapse -P 4455 menger tickets watch --filter 'ready for prod'
+synapse -P 4455 menger deployments promotes --project menger --environment prod --from test
 synapse -P 4455 menger tickets list --filter 'behind prod' --summary true
 synapse -P 4455 menger deployments for_ticket --id LOOK-7     # running … behind [68e1271, 4145520], version d607756
 ```
@@ -3161,10 +3198,19 @@ environment, or running an earlier version there (`status Complete and under
 MENGER and (not deployed menger/prod or behind menger/prod)`). DEPLOY-20: a
 ticket behind says so — Running reads `prod runs an earlier version
 (d607756); 68e1271, 4145520 not deployed`, and its board mark is drawn
-apart (dashed, `behind` in its title).
+apart (dashed, `behind` in its title). DEPLOY-21: a stage is a mark of its
+own — *ready for prod* the accent's outline and an arrow in, *deploying*
+breathing (under the Motion setting: calm and none hold it still),
+*failed* the error tint; and `#/deployments` has a lane per promotion edge
+above the columns — *test → prod: N ready*, the ready work listed,
+deploying and failed counted, each count a link that filters every view.
 The filter menu's **Deployed** category builds `deployed <env> [window]` and
 `not deployed <env>` from the environments recorded (a pill like When's), and
-the palette offers them as you type `deployed`, `not deployed` or `waiting`.
+the palette offers them as you type `deployed` or `not deployed`. DEPLOY-21:
+under them, the delivery rows with their live counts — *Ready for prod*
+(one click), *Deploying*, *Waiting for a deploy* and *Failed* (an
+environment each, its chip counted) — and the palette offers `ready for …`,
+`deploying …`, `waiting …` and `failed …`.
 The app holds the environments and their cells (`environments`, `running`),
 kept by `deployments.watch` — a deploy asks again only for its environment —
 so every mark moves live, with no request per row.

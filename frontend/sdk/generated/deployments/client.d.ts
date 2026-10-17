@@ -9,8 +9,8 @@ export interface DeploymentsClient {
      *
      * Every environment — of `project` when given — one `environment`
      * event each, by project and then in display order (test → staging →
-     * prod): what it runs, since when, its last deployment, and how many
-     * tickets run there.
+     * prod): what it runs, since when, its last deployment, how many
+     * tickets run there, and (DEPLOY-21) `from`, where it promotes from.
      * @requires `deployments.environments` anywhere it is held
      */
     environments(project?: Project | null): AsyncGenerator<DeploymentsEvent>;
@@ -40,6 +40,20 @@ export interface DeploymentsClient {
      */
     list(after?: DeploymentId | null, environment?: EnvironmentName | null, limit?: number | null, project?: Project | null, state?: DeployState | null, ticket?: TicketRef | null): AsyncGenerator<DeploymentsEvent>;
     /**
+     * Set where an environment promotes from (admin): prod from test; without from, from none; yields promotes { project, environment, from }
+     *
+     * DEPLOY-21: where an environment promotes from — `from` (`test`, for
+     * menger's `prod`), or, without it, from none (its own track, as the
+     * landing page's `edge`). Admin on the project's shortcode. A ticket's
+     * `ready for <environment>` is its current version running on `from`
+     * and not here; the environment's track (it and every environment it
+     * promotes from or to) is where `waiting` looks. Yields exactly one
+     * `promotes { project, environment, from }` — the same when nothing
+     * moved — or an in-band `error` (itself, a cycle), nothing written.
+     * @requires `deployments.promotes` on the scope of `project`
+     */
+    promotes(environment: EnvironmentName, project: Project, from?: EnvironmentName | null): AsyncGenerator<DeploymentsEvent>;
+    /**
      * Record a deployment (DEPLOY-10's record): the tickets its commits carry run in the environment; yields deployed { deployment, carried, unlinked, entered, left, duplicate }
      *
      * Records one deployment — DEPLOY-10's record, its fields as the
@@ -60,12 +74,14 @@ export interface DeploymentsClient {
      * the environment; `duplicate: true` and nothing written when the same
      * record (project, environment, state, revision, and `source.run`,
      * else `at`) is kept already — or an in-band `error` naming every
-     * problem, with nothing kept.
+     * problem, with nothing kept. DEPLOY-21: `from` names the environment
+     * this one promotes from (`test`, for `prod`), set (or moved) with the
+     * record — `promotes` follows it on `watch`.
      * @requires `deployments.record` on the scope of `project`
      */
-    record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, previous?: CommitRef | null, release?: Release | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent>;
+    record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent>;
     /**
-     * The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }] } per environment
+     * The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }], staged: [{ ticket, stage }] } per environment
      *
      * DEPLOY-13: the kept cells — one `cells { project, environment,
      * running }` per environment (of `project`, named `environment`, when
@@ -73,7 +89,8 @@ export interface DeploymentsClient {
      * 1,000), each with since when and the deploy that brought it, in the
      * store's order — an empty one too, so a copy can replace what it held.
      * DEPLOY-20: a cell's `behind` (and `version`) when the ticket runs an
-     * earlier version there.
+     * earlier version there. DEPLOY-21: `staged`, each ticket deploying,
+     * ready for or failed there.
      * What the app's board marks are drawn from, one read for every row.
      * @requires `deployments.running` anywhere it is held
      */
@@ -110,6 +127,10 @@ export declare const requires: {
     readonly "deployments.list": {
         readonly grant: "deployments.list";
         readonly target: null;
+    };
+    readonly "deployments.promotes": {
+        readonly grant: "deployments.promotes";
+        readonly target: "project";
     };
     readonly "deployments.record": {
         readonly grant: "deployments.record";

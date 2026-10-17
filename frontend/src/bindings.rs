@@ -291,7 +291,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding { id: "focus.tab", contexts: &[C::Global], chords: &["Tab"], group: G::Move, does: "into the nav tree, the board rows, and the controls", native: true },
     // -- Open
     b("open.focused", &[C::Nav, C::Board], &["Enter"], G::Open, "open the focused ticket (a group's row in the nav opens or closes)"),
-    b("palette.open", &[C::Global], &["/"], G::Open, "jump to a ticket by its code, its title or words inside — or type `filter SC`, `filter <text>`, `deployed <env>`, `theme <name>`"),
+    b("palette.open", &[C::Global], &["/"], G::Open, "jump to a ticket by its code, its title or words inside — or type `filter SC`, `filter <text>`, `deployed <env>`, `ready for <env>`, `theme <name>`"),
     b("palette.toggle", &[C::Anywhere, C::Frame], &["Mod+k"], G::Open, "the jump palette from anywhere — a text field, a dialog, a framed body; again, it closes"),
     b("go.board", &[C::Global], &["g h"], G::Open, "go to the board"),
     b("go.needs", &[C::Global], &["g n"], G::Open, "the nav under the Needs you filter — what waits on you, within the header's Filter; again, the nav's default"),

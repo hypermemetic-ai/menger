@@ -51,6 +51,11 @@
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
     },
+    "from": {
+      "description": "DEPLOY-21: the environment this one promotes from (test, for prod), set with the record; omitted, left as it was.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
     "source": {
       "description": "Where the record came from and where to read the run.",
       "type": "object",

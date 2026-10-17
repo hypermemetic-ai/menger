@@ -133,6 +133,9 @@ m2=$(mark); run promote "$R2"; same "second promote exits 0" "$code" 0
 m3=$(mark); run rollback prod; same "rollback exits 0" "$code" 0
 same "promote prod: started, succeeded" "$(since "$m" '[.environment, .state, .revision]' | cut -d' ' -f1,2)" \
   "[\"prod\",\"started\",\"$S0\"] [\"prod\",\"succeeded\",\"$S0\"]"
+# DEPLOY-21: prod promotes from test — every prod record says so; test's none.
+same "promote prod: from test" "$(since "$m" '.from // "none"' | cut -d' ' -f1,2)" '"test" "test"'
+same "deploy test: from none" "$(jq -c 'select(.environment == "test") | .from // "none"' "$STUB_SENT" | sort -u | paste -sd' ')" '"none"'
 same "rollback: started, rolled_back to the previous" "$(since "$m3" '[.state, .revision, .previous, .source.run[0:9]]')" \
   "[\"started\",\"$S0\",\"$S2\",\"rollback@\"] [\"rolled_back\",\"$S0\",\"$S2\",\"rollback@\"]"
 

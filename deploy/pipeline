@@ -137,14 +137,18 @@ tell() {
   if [[ $2 == started ]]; then PENDING=("$1" "$3" "${4:-}"); else PENDING=(); fi
   ( set +e; tell_ "$@" ) || true
 }
+# DEPLOY-21: the environment ENV promotes from — prod from test; test and the
+# landing page's edge from none (each its own track).
+promotes_from() { case $1 in prod) echo test ;; esac; }
 tell_() {
-  local env=$1 state=$2 rel=$3 prev=${4:-} rev p at rec=""
+  local env=$1 state=$2 rel=$3 prev=${4:-} rev p at rec="" from
   rev=$(sha_of "$rel"); p=$(sha_of "$prev")
   [[ -n $rev ]] || { say "record: release '$rel' names no commit — nothing recorded"; return 0; }
   at=$(date -u +%FT%TZ); [[ $state == started && -n $RUN ]] && at=$RUN_AT
   local args=(--project menger --env "$env" --state "$state" --revision "$rev" --release "$rel" --at "$at"
               --source-system menger-pipeline --source-run "${RUN:-$state@$at}" -c)
   [[ -n $p ]] && args+=(--previous "$p")
+  from=$(promotes_from "$env"); [[ -n $from ]] && args+=(--promotes-from "$from")
   # Its commits: git log previous..revision in the build checkout, when the
   # run moves forward (a rollback carries none). Without them menger works
   # from the commits it has seen.

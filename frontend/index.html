@@ -2419,6 +2419,43 @@
   .envmark.behind { color: var(--st-in-review-fg); background: var(--st-in-review-bg); border-style: dashed; border-color: currentColor; }
   .envmark.behind::after { content: " \2193"; }
   .envmark.big { font-size: calc(12px * var(--text-scale)); padding: 1px 8px; font-weight: var(--weight-strong); }
+  /* DEPLOY-21: a delivery stage is a mark of its own — ready for an
+     environment the accent's outline and an arrow in (apart from running's
+     fill and behind's dashed review tint), deploying the same breathing
+     (ornament: calm and none stop it), failed the error tint. */
+  .envmark.ready { color: var(--accent); background: transparent; border-color: var(--accent); }
+  .envmark.ready::before { content: "\2192\00a0"; }
+  .envmark.deploying { color: var(--accent); background: var(--chip-bg); border-color: var(--accent); border-style: dotted; animation: menger-deploying 1.6s ease-in-out infinite; }
+  .envmark.deploying::before { content: "\21bb\00a0"; }
+  .envmark.failed { color: var(--err-fg); background: var(--err-bg); border-color: currentColor; }
+  .envmark.failed::before { content: "\00d7\00a0"; }
+  @keyframes menger-deploying { 50% { opacity: .45; } }
+  html[data-motion="calm"] .envmark.deploying { animation: none; }
+  /* The filter menu's delivery rows: a count that holds work in the accent. */
+  .when-rows .whead.wstages { margin: .45rem .5rem .1rem; }
+  .when-rows .stage-row .fcount { margin-left: auto; }
+  .when-rows .stage-row .fcount.some { color: var(--accent); font-weight: var(--weight-strong); }
+  .wchip .wn { color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* #/deployments' lanes: one per promotion edge, the ready count arriving
+     as a state change (none stops it; calm keeps it). */
+  .dlanes { display: flex; flex-direction: column; gap: .6rem; margin: 0 0 .9rem; }
+  .dlanes:empty { display: none; }
+  .dlane {
+    background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-lg);
+    box-shadow: inset 2px 0 var(--accent); padding: 10px 14px 10px 16px; min-width: 0;
+  }
+  .dlane h4 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; font-family: var(--sans); font-size: calc(14px * var(--text-scale)); font-weight: var(--weight-strong); }
+  .dlane .larrow { color: var(--muted); }
+  .dlane .lready { font-family: var(--sans); font-size: calc(14px * var(--text-scale)); font-weight: var(--weight-strong); color: var(--ink); padding: 0; }
+  .dlane .lready .lcount { display: inline-block; color: var(--accent); font-variant-numeric: tabular-nums; animation: menger-count-in .35s cubic-bezier(.2, .9, .25, 1.2) both; }
+  .dlane .lstages { margin-left: auto; color: var(--muted); font-family: var(--mono); font-size: calc(11px * var(--text-scale)); }
+  .dlane .lstages .dlink { color: var(--muted); }
+  .dlane .lstages .ldeploying.some { color: var(--accent); }
+  .dlane .lstages .lfailed.some { color: var(--err-fg); }
+  .dlane .hint { margin: .25rem 0 0; }
+  .dlane ul.lrows li { animation: menger-row-in .3s ease-out both; }
+  @keyframes menger-count-in { from { transform: translateY(-40%); opacity: 0; } }
+  @keyframes menger-row-in { from { transform: translateX(-6px); opacity: 0; } }
   .wave-board .card .foot .envmarks, #waves .card .foot .envmarks { margin-left: 0; }
   #t-running { line-height: 1.9; }
   #t-running a.run, #t-running a.notrun { color: var(--ink); text-decoration: none; white-space: nowrap; }

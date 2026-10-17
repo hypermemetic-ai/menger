@@ -3,6 +3,13 @@
 
 import type { WatchEnd } from '../chats/types';
 
+/** DEPLOY-21: a ticket's delivery stage in an environment, short of running
+its current version there (`deployed <env>`, and not `behind`) — each a
+filter cell, `<stage> <env>`; a ticket is in at most one of them per
+environment, the first that holds of: deploying, failed, ready for,
+waiting. */
+export type DeliveryStage = "waiting" | "deploying" | "ready_for" | "failed";
+
 /** Where to read the run that made a deployment. */
 export interface DeploySource {
   /** Its run, as the CI names it — what a retry of the same record repeats. */
@@ -113,12 +120,24 @@ export interface DeploymentsEventNotRunning {
 /** DEPLOY-13: `running`: an environment's kept cells — every ticket
 running there (of the `ids` asked, when given), in the store's order.
 One per environment asked, an empty one included, so a copy can
-replace what it held for it. */
+replace what it held for it.
+DEPLOY-21: `staged` each ticket deploying, ready for or failed there
+(of the `ids` asked, when given), in the store's order. */
 export interface DeploymentsEventCells {
   type: 'cells';
   environment: string;
   project: string;
   running: RunningCell[];
+  staged: StagedCell[];
+}
+
+/** DEPLOY-21: `promotes`' answer and `watch`'s event — the environment
+`(project, environment)` promotes from `from` now (`None`: from none). */
+export interface DeploymentsEventPromotes {
+  type: 'promotes';
+  environment: string;
+  from: string | null;
+  project: string;
 }
 
 /** Where a `list` stands, once, last: `next` is the id to pass as the
@@ -150,7 +169,7 @@ export interface DeploymentsEventError {
 
 /** What the `deployments` activation streams. Every method returns
 `impl Stream<Item = DeploymentsEvent>`; a refusal is the in-band `Error`. */
-export type DeploymentsEvent = DeploymentsEventDeployment | DeploymentsEventDeployed | DeploymentsEventEnvironment | DeploymentsEventEnvironmentChanged | DeploymentsEventRunning | DeploymentsEventNotRunning | DeploymentsEventCells | DeploymentsEventPage | DeploymentsEventLagged | DeploymentsEventWatchClosed | DeploymentsEventError;
+export type DeploymentsEvent = DeploymentsEventDeployment | DeploymentsEventDeployed | DeploymentsEventEnvironment | DeploymentsEventEnvironmentChanged | DeploymentsEventRunning | DeploymentsEventNotRunning | DeploymentsEventCells | DeploymentsEventPromotes | DeploymentsEventPage | DeploymentsEventLagged | DeploymentsEventWatchClosed | DeploymentsEventError;
 
 export function isDeploymentsEventDeployment(e: DeploymentsEvent): e is DeploymentsEventDeployment { return e.type === 'deployment'; }
 export function isDeploymentsEventDeployed(e: DeploymentsEvent): e is DeploymentsEventDeployed { return e.type === 'deployed'; }
@@ -159,6 +178,7 @@ export function isDeploymentsEventEnvironmentChanged(e: DeploymentsEvent): e is 
 export function isDeploymentsEventRunning(e: DeploymentsEvent): e is DeploymentsEventRunning { return e.type === 'running'; }
 export function isDeploymentsEventNotRunning(e: DeploymentsEvent): e is DeploymentsEventNotRunning { return e.type === 'not_running'; }
 export function isDeploymentsEventCells(e: DeploymentsEvent): e is DeploymentsEventCells { return e.type === 'cells'; }
+export function isDeploymentsEventPromotes(e: DeploymentsEvent): e is DeploymentsEventPromotes { return e.type === 'promotes'; }
 export function isDeploymentsEventPage(e: DeploymentsEvent): e is DeploymentsEventPage { return e.type === 'page'; }
 export function isDeploymentsEventLagged(e: DeploymentsEvent): e is DeploymentsEventLagged { return e.type === 'lagged'; }
 export function isDeploymentsEventWatchClosed(e: DeploymentsEvent): e is DeploymentsEventWatchClosed { return e.type === 'watch_closed'; }
@@ -168,6 +188,9 @@ export function isDeploymentsEventError(e: DeploymentsEvent): e is DeploymentsEv
 export interface Environment {
   /** The deployment that made it run `revision` (a deploy or a rollback). */
   deployment?: number | null;
+  /** DEPLOY-21: the environment it promotes from, when it names one
+(`deployments promotes`, or a record's `from`). */
+  from?: string | null;
   /** The latest deployment recorded to it, whatever its state. */
   last?: number | null;
   lastAt?: number | null;
@@ -216,6 +239,14 @@ carried it. */
 carried commit (`None` when only a record naming the ticket carried
 it). */
   version?: string | null;
+}
+
+/** DEPLOY-21: one ticket's stage in an environment, as `running` answers it
+beside the running cells — deploying, ready for or failed (waiting is
+every other Complete ticket, asked with the filter cell). */
+export interface StagedCell {
+  stage: DeliveryStage;
+  ticket: string;
 }
 
 /** DEPLOY-10: when — RFC 3339 (`2026-10-12T22:04:19Z`) or unix seconds,

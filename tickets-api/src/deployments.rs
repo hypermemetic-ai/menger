@@ -123,6 +123,68 @@ pub struct Record {
     pub at: Option<String>,
     #[serde(default)]
     pub source: Option<DeploySource>,
+    /// DEPLOY-21: the environment this one promotes from (`test`, for
+    /// menger's `prod`) — set (or moved) by the record; omitted, left as it
+    /// was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+}
+
+/// DEPLOY-21: a ticket's delivery stage in an environment, short of running
+/// its current version there (`deployed <env>`, and not `behind`) — each a
+/// filter cell, `<stage> <env>`; a ticket is in at most one of them per
+/// environment, the first that holds of: deploying, failed, ready for,
+/// waiting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryStage {
+    /// Complete, its current version running nowhere on the environment's
+    /// track (it, and the environments it promotes from and to).
+    Waiting,
+    /// A `started` record to the environment carries its current version,
+    /// and no record has ended that deploy yet.
+    Deploying,
+    /// Its current version runs on the environment this one promotes from,
+    /// not here (absent, or behind).
+    ReadyFor,
+    /// The last record that carried its current version here failed or was
+    /// rolled back, and that version does not run here.
+    Failed,
+}
+
+impl DeliveryStage {
+    /// In the order a ticket moves through them.
+    pub const ALL: [DeliveryStage; 4] = [DeliveryStage::Waiting, DeliveryStage::Deploying, DeliveryStage::ReadyFor, DeliveryStage::Failed];
+
+    /// The filter cell's name: `waiting`, `deploying`, `ready for`, `failed`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            DeliveryStage::Waiting => "waiting",
+            DeliveryStage::Deploying => "deploying",
+            DeliveryStage::ReadyFor => "ready for",
+            DeliveryStage::Failed => "failed",
+        }
+    }
+
+    /// The cell named `name` (`ready for`, any case).
+    pub fn of(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.as_str().eq_ignore_ascii_case(name))
+    }
+}
+
+impl fmt::Display for DeliveryStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// DEPLOY-21: one ticket's stage in an environment, as `running` answers it
+/// beside the running cells — deploying, ready for or failed (waiting is
+/// every other Complete ticket, asked with the filter cell).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct StagedCell {
+    pub ticket: String,
+    pub stage: DeliveryStage,
 }
 
 /// A deployment as menger keeps it: the record, read, with its id, `at` as
@@ -171,6 +233,10 @@ pub struct Environment {
     pub last_at: Option<i64>,
     /// How many tickets run there.
     pub tickets: u64,
+    /// DEPLOY-21: the environment it promotes from, when it names one
+    /// (`deployments promotes`, or a record's `from`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 /// DEPLOY-13: one ticket running in an environment — a kept cell, as
@@ -248,7 +314,18 @@ pub enum DeploymentsEvent {
     /// running there (of the `ids` asked, when given), in the store's order.
     /// One per environment asked, an empty one included, so a copy can
     /// replace what it held for it.
-    Cells { project: String, environment: String, running: Vec<RunningCell> },
+    /// DEPLOY-21: `staged` each ticket deploying, ready for or failed there
+    /// (of the `ids` asked, when given), in the store's order.
+    Cells {
+        project: String,
+        environment: String,
+        running: Vec<RunningCell>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        staged: Vec<StagedCell>,
+    },
+    /// DEPLOY-21: `promotes`' answer and `watch`'s event — the environment
+    /// `(project, environment)` promotes from `from` now (`None`: from none).
+    Promotes { project: String, environment: String, from: Option<String> },
     /// Where a `list` stands, once, last: `next` is the id to pass as the
     /// next call's `after`, `null` when nothing more matches.
     Page { next: Option<u64> },

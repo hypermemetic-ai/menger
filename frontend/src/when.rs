@@ -26,9 +26,14 @@
 //!   menu's own Deployed category: Deployed to ▸ and Not deployed to ▸ an
 //!   environment ([`new_deployed`], [`with_env`]), windows of what reached it
 //!   lately ([`DEPLOYED_PRESETS`]).
+//! - **DEPLOY-21**: a delivery stage — `ready for <env>`, `deploying
+//!   <env>`, `waiting <env>`, `failed <env>` — is a time pill too, its
+//!   environment its part ([`new_stage`]); the Deployed category's rows
+//!   below Deployed to and Not deployed to build them, each with its count.
 //!
 //! Everything that decides is a pure function here, pinned by native tests.
 
+use menger_tickets_api::deployments::DeliveryStage;
 use menger_tickets_api::filter::{Category, Event, Field, Filter, Group, Held, HeldOf, History, Moment, Predicate, Unit, When, Who, Window};
 use menger_tickets_api::Status;
 
@@ -75,6 +80,9 @@ pub(crate) enum Kind {
     /// DEPLOY-20: `behind <env>` — running an earlier version there; a pill
     /// (from the palette or a saved filter), never a row of a menu.
     Behind,
+    /// DEPLOY-21: `<stage> <env>` — a delivery stage there; the Deployed
+    /// category's rows (src/when_view.rs).
+    Stage(DeliveryStage),
     /// MENGER-39: `queued [urgency]` — the owner's queue, kept by the
     /// store; a pill (from the palette or a saved filter), never a row of
     /// When's menu.
@@ -97,6 +105,14 @@ impl Kind {
     /// DEPLOY-13: the Deployed category's rows.
     pub(crate) const DEPLOYED: [Kind; 2] = [Kind::Deployed, Kind::NotDeployed];
 
+    /// DEPLOY-21: …and its delivery rows, in the order the owner reads them.
+    pub(crate) const STAGES: [Kind; 4] = [
+        Kind::Stage(DeliveryStage::ReadyFor),
+        Kind::Stage(DeliveryStage::Deploying),
+        Kind::Stage(DeliveryStage::Waiting),
+        Kind::Stage(DeliveryStage::Failed),
+    ];
+
     pub(crate) fn of(e: &Event) -> Kind {
         match e {
             Event::Created => Kind::Created,
@@ -107,6 +123,7 @@ impl Kind {
             Event::Touched => Kind::Untouched,
             Event::Deployed(_) => Kind::Deployed,
             Event::Behind(_) => Kind::Behind,
+            Event::Stage(s, _) => Kind::Stage(*s),
             Event::Queued(_) => Kind::Queued,
             Event::Chatting | Event::Unread => Kind::Chats,
             Event::Archived => Kind::Archived,
@@ -126,6 +143,10 @@ impl Kind {
             Kind::Deployed => "Deployed to",
             Kind::NotDeployed => "Not deployed to",
             Kind::Behind => "Behind on",
+            Kind::Stage(DeliveryStage::ReadyFor) => "Ready for",
+            Kind::Stage(DeliveryStage::Deploying) => "Deploying",
+            Kind::Stage(DeliveryStage::Waiting) => "Waiting for a deploy",
+            Kind::Stage(DeliveryStage::Failed) => "Failed",
             Kind::Queued => "Queued",
             Kind::Chats => "Chats",
             Kind::Archived => "Archived",
@@ -145,6 +166,10 @@ impl Kind {
             Kind::Deployed => "deployed",
             Kind::NotDeployed => "notdeployed",
             Kind::Behind => "behind",
+            Kind::Stage(DeliveryStage::ReadyFor) => "readyfor",
+            Kind::Stage(DeliveryStage::Deploying) => "deploying",
+            Kind::Stage(DeliveryStage::Waiting) => "waiting",
+            Kind::Stage(DeliveryStage::Failed) => "failed",
             Kind::Queued => "queued",
             Kind::Chats => "chats",
             Kind::Archived => "archived",
@@ -160,12 +185,12 @@ impl Kind {
     /// DEPLOY-13: whether its clause names an environment first (Deployed
     /// to, Not deployed to).
     pub(crate) fn needs_env(self) -> bool {
-        matches!(self, Kind::Deployed | Kind::NotDeployed)
+        matches!(self, Kind::Deployed | Kind::NotDeployed | Kind::Stage(_))
     }
 
     /// Whether its clause has a window (all but In status for).
     pub(crate) fn windowed(self) -> bool {
-        !matches!(self, Kind::Held | Kind::Queued | Kind::Behind | Kind::Chats)
+        !matches!(self, Kind::Held | Kind::Queued | Kind::Behind | Kind::Stage(_) | Kind::Chats)
     }
 
     /// Whether its clause may say who (the transitions'; not a birth).
@@ -276,8 +301,9 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         Kind::Changed => Event::Changed,
         Kind::Held => Event::Held(Held { of: HeldOf::Any, over: true, n: 1, unit: Unit::Week }),
         Kind::Untouched => Event::Touched,
-        // DEPLOY-13: names an environment first ([`new_deployed`]).
-        Kind::Deployed | Kind::NotDeployed => return None,
+        // DEPLOY-13: names an environment first ([`new_deployed`];
+        // DEPLOY-21: [`new_stage`]).
+        Kind::Deployed | Kind::NotDeployed | Kind::Stage(_) => return None,
         // MENGER-39 / DEPLOY-20: never built by When's menu.
         Kind::Queued | Kind::Behind | Kind::Chats => return None,
         // ARCHIVE-2: the archive's two ends.
@@ -319,19 +345,28 @@ pub(crate) fn new_deployed(env: &str, not: bool, window: Option<Window>) -> Opti
     Some(Timed { not, h: History { event: Event::Deployed(env), window, by: None } })
 }
 
-/// DEPLOY-13: `t` with the environment its `deployed` names set.
+/// DEPLOY-21: `<stage> <env>` — or `None` when `env` is no environment
+/// name.
+pub(crate) fn new_stage(stage: DeliveryStage, env: &str) -> Option<Timed> {
+    let env = menger_tickets_api::deployments::environment_of(env).ok()?;
+    Some(Timed { not: false, h: History { event: Event::Stage(stage, env), window: None, by: None } })
+}
+
+/// DEPLOY-13: `t` with the environment its `deployed` (DEPLOY-21: or its
+/// stage) names set.
 pub(crate) fn with_env(t: &Timed, env: &str) -> Timed {
     let mut t = t.clone();
-    if let (Event::Deployed(e), Ok(env)) = (&mut t.h.event, menger_tickets_api::deployments::environment_of(env)) {
+    if let (Event::Deployed(e) | Event::Behind(e) | Event::Stage(_, e), Ok(env)) = (&mut t.h.event, menger_tickets_api::deployments::environment_of(env)) {
         *e = env;
     }
     t
 }
 
-/// DEPLOY-13: the environment `t` names, when it is a `deployed`.
+/// DEPLOY-13: the environment `t` names, when it is a `deployed`
+/// (DEPLOY-21: or a stage).
 pub(crate) fn env_of(t: &Timed) -> Option<&str> {
     match &t.h.event {
-        Event::Deployed(e) => Some(e),
+        Event::Deployed(e) | Event::Behind(e) | Event::Stage(_, e) => Some(e),
         _ => None,
     }
 }
@@ -540,6 +575,18 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
         }
         Event::Behind(env) => {
             out.push((None, "behind on".into()));
+            out.push((Some(Part::Env), env.clone()));
+        }
+        // DEPLOY-21: "ready for prod", "deploying to test", "waiting for
+        // prod", "failed on prod".
+        Event::Stage(s, env) => {
+            let words = match s {
+                DeliveryStage::ReadyFor => "ready for",
+                DeliveryStage::Deploying => "deploying to",
+                DeliveryStage::Waiting => "waiting for",
+                DeliveryStage::Failed => "failed on",
+            };
+            out.push((None, words.into()));
             out.push((Some(Part::Env), env.clone()));
         }
         Event::Archived => out.push((None, "archived".into())),
@@ -756,6 +803,31 @@ mod tests {
         // The saved suggestion reads back as the same pill (FILTER-6).
         let f = Filter::parse("not touched within 2w and not category done and not kind doc").unwrap();
         assert_eq!(of_group(&f.groups[0]), Some(t));
+    }
+
+    /// DEPLOY-21: the stage rows build `<stage> <env>`, read in words, an
+    /// environment their one part; no window, no who.
+    #[test]
+    fn stage_pills_build_and_read() {
+        let text = |t: &Timed| Filter { groups: vec![group(t)], display: Default::default() }.format();
+        for (text, said) in [
+            ("ready for prod", "ready for prod"),
+            ("deploying test", "deploying to test"),
+            ("waiting menger/prod", "waiting for menger/prod"),
+            ("failed prod", "failed on prod"),
+        ] {
+            let f = Filter::parse(text).unwrap();
+            let t = of_group(&f.groups[0]).unwrap();
+            assert_eq!(words(&t, false), said);
+            assert_eq!(Kind::of(&t.h.event).needs_env(), true);
+            assert!(!Kind::of(&t.h.event).windowed() && !Kind::of(&t.h.event).has_who());
+        }
+        let t = new_stage(DeliveryStage::ReadyFor, "Prod").unwrap();
+        assert_eq!(text(&t), "ready for prod");
+        assert_eq!(text(&with_env(&t, "staging")), "ready for staging");
+        assert_eq!(env_of(&t), Some("prod"));
+        assert!(new_stage(DeliveryStage::Failed, "no such env!").is_none());
+        assert_eq!(Kind::STAGES.map(Kind::label), ["Ready for", "Deploying", "Waiting for a deploy", "Failed"]);
     }
 
     /// DEPLOY-13: Deployed to and Not deployed to build `deployed <env>`

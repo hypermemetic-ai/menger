@@ -278,6 +278,12 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   ids it names; a rollback takes out what only the undone deploys carried;
   `failed` and `started` run nothing; a deployment never moves a status.
   `deployed <env> [window]` and `not deployed <env>` are filter cells.
+  DEPLOY-21: an environment may promote from another (`prod` from `test`:
+  a record's `from`, or `deployments promotes`, admin); a ticket short of
+  running its current version there is in one delivery stage per
+  environment — `deploying <env>`, `failed <env>`, `ready for <env>`,
+  `waiting <env>` (first that holds), each a filter cell; `ready for prod`
+  is what is moving in, and `running`'s cells carry `staged`.
   `record` is the `deployer` grant (a CI's key on the project's
   shortcode). README "Deployments" has the rest:
 
@@ -288,6 +294,8 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger deployments for_ticket --id MENGER-34
   synapse -P 4455 menger deployments running --project menger --environment prod   # the kept cells
   synapse -P 4455 menger tickets list --filter 'category done and not deployed prod' --summary true
+  synapse -P 4455 menger tickets list --filter 'ready for prod' --summary true
+  synapse -P 4455 menger deployments promotes --project menger --environment prod --from test
   ```
 
   The app (DEPLOY-13) shows it: a ticket page's Running, a mark per

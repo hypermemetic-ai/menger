@@ -25,6 +25,14 @@
 //! answer lands only when nothing about it was asked since (its own ask or a
 //! whole fetch), and a whole fetch's only when it is the newest.
 //!
+//! **DEPLOY-21: the stages.** A `cells` answer carries each ticket
+//! deploying, ready for or failed there (`staged`), kept beside the running
+//! cells: a mark of its own on the row (ready apart from running and from
+//! behind, deploying moving under the Motion setting, failed in the error
+//! tint). A deploy to an environment asks again every environment that
+//! promotes from it (ready for moves with its source), and `promotes` —
+//! where an environment promotes from, moved — fetches everything.
+//!
 //! What decides — the marks of a ticket, an environment's place, the
 //! choices the filter menu offers, a since in words — is pure and pinned by
 //! native tests; the rest is the session's socket.
@@ -34,7 +42,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use futures::StreamExt;
 use leptos::prelude::*;
-use menger_tickets_api::deployments::rank;
+use menger_tickets_api::deployments::{rank, DeliveryStage};
 use menger_tickets_api::{DeploymentsEvent, Environment, RunningCell};
 use plexus_client::ClientEvent;
 use wasm_bindgen_futures::spawn_local;
@@ -54,6 +62,22 @@ pub(crate) struct Mark {
     pub(crate) behind: Vec<String>,
     /// DEPLOY-20: the version that runs there, when behind.
     pub(crate) version: Option<String>,
+    /// DEPLOY-21: its stage there, when deploying, ready for or failed —
+    /// drawn in place of a running mark (a ticket behind there and ready
+    /// for it is ready).
+    pub(crate) stage: Option<DeliveryStage>,
+}
+
+/// DEPLOY-21: a mark's stage in words — `ready for prod: on test, not yet
+/// here`.
+pub(crate) fn stage_words(stage: DeliveryStage, env: &str, from: Option<&str>) -> String {
+    match (stage, from) {
+        (DeliveryStage::ReadyFor, Some(f)) => format!("ready for {env} — on {f}, not yet on {env}"),
+        (DeliveryStage::ReadyFor, None) => format!("ready for {env}"),
+        (DeliveryStage::Deploying, _) => format!("deploying to {env} now"),
+        (DeliveryStage::Failed, _) => format!("its deploy to {env} failed or was rolled back"),
+        (DeliveryStage::Waiting, _) => format!("waiting for a deploy to {env}"),
+    }
 }
 
 /// One kept cell: since when, brought by which deploy, and (DEPLOY-20)
@@ -91,6 +115,9 @@ pub(crate) struct Held {
     /// Each environment's running tickets: since when, brought by which
     /// deploy — by `(project, name)`.
     cells: BTreeMap<(String, String), BTreeMap<String, KeptCell>>,
+    /// DEPLOY-21: each environment's staged tickets — deploying, ready for
+    /// or failed there — by `(project, name)`.
+    staged: BTreeMap<(String, String), BTreeMap<String, DeliveryStage>>,
     /// Each ticket's marks, in display order — derived from `cells`.
     marks: HashMap<String, Vec<Mark>>,
 }
@@ -126,25 +153,31 @@ impl Held {
     /// A `cells` answer: the environment's cells — all of them, or (`only`)
     /// those of the tickets asked. Whether anything moved.
     pub(crate) fn take_cells(&mut self, ev: DeploymentsEvent, only: Option<&[String]>) -> bool {
-        let DeploymentsEvent::Cells { project, environment, running } = ev else { return false };
+        let DeploymentsEvent::Cells { project, environment, running, staged } = ev else { return false };
         let key = (project, environment);
         let had = self.cells.get(&key).cloned().unwrap_or_default();
+        let had_staged = self.staged.get(&key).cloned().unwrap_or_default();
+        let asked = |t: &String| only.is_some_and(|ids| ids.iter().any(|i| i.eq_ignore_ascii_case(t)));
         let mut next = match only {
             None => BTreeMap::new(),
-            Some(ids) => {
-                let mut kept = had.clone();
-                kept.retain(|t, _| !ids.iter().any(|i| i.eq_ignore_ascii_case(t)));
-                kept
-            }
+            Some(_) => had.iter().filter(|(t, _)| !asked(t)).map(|(t, c)| (t.clone(), c.clone())).collect(),
+        };
+        let mut next_staged: BTreeMap<String, DeliveryStage> = match only {
+            None => BTreeMap::new(),
+            Some(_) => had_staged.iter().filter(|(t, _)| !asked(t)).map(|(t, s)| (t.clone(), *s)).collect(),
         };
         for RunningCell { ticket, since, deployment, behind, version } in running {
             next.insert(ticket, KeptCell { since, deployment, behind, version });
         }
-        if next == had {
+        for c in staged {
+            next_staged.insert(c.ticket, c.stage);
+        }
+        if next == had && next_staged == had_staged {
             return false;
         }
-        let touched: Vec<String> = had.keys().chain(next.keys()).cloned().collect();
-        self.cells.insert(key, next);
+        let touched: Vec<String> = had.keys().chain(next.keys()).chain(had_staged.keys()).chain(next_staged.keys()).cloned().collect();
+        self.cells.insert(key.clone(), next);
+        self.staged.insert(key, next_staged);
         for t in touched {
             self.remark(&t);
         }
@@ -155,12 +188,21 @@ impl Held {
     /// longer — what is drawn until the environment's own answer lands.
     pub(crate) fn apply_deployed(&mut self, ev: &DeploymentsEvent) -> bool {
         let DeploymentsEvent::Deployed { deployment, entered, left, duplicate: false, .. } = ev else { return false };
-        let cells = self.cells.entry((deployment.project.clone(), deployment.environment.clone())).or_default();
+        let key = (deployment.project.clone(), deployment.environment.clone());
+        let cells = self.cells.entry(key.clone()).or_default();
         let mut moved = Vec::new();
         for t in entered {
             let cell = KeptCell { since: deployment.at, deployment: deployment.id, behind: Vec::new(), version: None };
             if cells.insert(t.clone(), cell).is_none() {
                 moved.push(t.clone());
+            }
+        }
+        // DEPLOY-21: what entered runs there now — no longer staged there.
+        if let Some(staged) = self.staged.get_mut(&key) {
+            for t in entered {
+                if staged.remove(t).is_some() && !moved.contains(t) {
+                    moved.push(t.clone());
+                }
             }
         }
         for t in left {
@@ -175,17 +217,23 @@ impl Held {
     }
 
     fn remark(&mut self, ticket: &str) {
-        let mut ms: Vec<Mark> = self
-            .cells
-            .iter()
-            .filter_map(|((p, e), c)| {
-                c.get(ticket).map(|c| Mark {
-                    project: p.clone(),
-                    env: e.clone(),
-                    since: c.since,
-                    deployment: c.deployment,
-                    behind: c.behind.clone(),
-                    version: c.version.clone(),
+        let keys: std::collections::BTreeSet<&(String, String)> = self.cells.keys().chain(self.staged.keys()).collect();
+        let mut ms: Vec<Mark> = keys
+            .into_iter()
+            .filter_map(|k| {
+                let cell = self.cells.get(k).and_then(|c| c.get(ticket));
+                let stage = self.staged.get(k).and_then(|s| s.get(ticket)).copied();
+                if cell.is_none() && stage.is_none() {
+                    return None;
+                }
+                Some(Mark {
+                    project: k.0.clone(),
+                    env: k.1.clone(),
+                    since: cell.map_or(0, |c| c.since),
+                    deployment: cell.map_or(0, |c| c.deployment),
+                    behind: if stage.is_some() { Vec::new() } else { cell.map(|c| c.behind.clone()).unwrap_or_default() },
+                    version: if stage.is_some() { None } else { cell.and_then(|c| c.version.clone()) },
+                    stage,
                 })
             })
             .collect();
@@ -217,6 +265,39 @@ impl Held {
     /// `project`'s environments, in display order.
     pub(crate) fn of_project(&self, project: &str) -> Vec<Environment> {
         self.envs.iter().filter(|e| e.project == project).cloned().collect()
+    }
+
+    /// DEPLOY-21: where `(project, name)` promotes from, when it says.
+    pub(crate) fn from_of(&self, project: &str, name: &str) -> Option<String> {
+        self.envs.iter().find(|e| e.project == project && e.name == name).and_then(|e| e.from.clone())
+    }
+
+    /// DEPLOY-21: the promotion edges of `project`: `(from, to)`, in the
+    /// order of `to`.
+    pub(crate) fn edges(&self, project: &str) -> Vec<(String, String)> {
+        self.envs.iter().filter(|e| e.project == project).filter_map(|e| Some((e.from.clone()?, e.name.clone()))).collect()
+    }
+
+    /// DEPLOY-21: the environments that promote from `(project, name)` —
+    /// whose `ready for` moves with it.
+    pub(crate) fn promoting_from(&self, project: &str, name: &str) -> Vec<String> {
+        self.envs.iter().filter(|e| e.project == project && e.from.as_deref() == Some(name)).map(|e| e.name.clone()).collect()
+    }
+
+    /// DEPLOY-21: the environment choices for a stage, as the language
+    /// writes them: `ready for` only those that promote from one; `waiting`
+    /// those on a promotion edge (else every one); the rest, every one.
+    pub(crate) fn stage_choices(&self, stage: DeliveryStage) -> Vec<String> {
+        let all = self.choices();
+        let edged: Vec<&Environment> = self.envs.iter().filter(|e| e.from.is_some() || self.envs.iter().any(|x| x.project == e.project && x.from.as_deref() == Some(&e.name))).collect();
+        let keep = |c: &String, on: &dyn Fn(&Environment) -> bool| {
+            self.envs.iter().filter(|e| on(e)).any(|e| *c == e.name || *c == format!("{}/{}", e.project.to_ascii_lowercase(), e.name))
+        };
+        match stage {
+            DeliveryStage::ReadyFor => all.into_iter().filter(|c| keep(c, &|e: &Environment| e.from.is_some())).collect(),
+            DeliveryStage::Waiting if !edged.is_empty() => all.into_iter().filter(|c| keep(c, &|e: &Environment| edged.iter().any(|x| x.project == e.project && x.name == e.name))).collect(),
+            _ => all,
+        }
     }
 
     /// How many tickets run in `(project, name)`, as the app holds them.
@@ -437,7 +518,19 @@ fn heard(ev: DeploymentsEvent) {
             if !duplicate {
                 HELD.with(|s| s.maybe_update(|h| h.as_mut().is_some_and(|h| h.apply_deployed(&ev))));
                 ask_env(deployment.project.clone(), deployment.environment.clone());
+                // DEPLOY-21: and every environment promoting from it — its
+                // ready for moved.
+                let next = HELD.with(|s| s.with_untracked(|h| h.as_ref().map(|h| h.promoting_from(&deployment.project, &deployment.environment)).unwrap_or_default()));
+                for name in next {
+                    ask_env(deployment.project.clone(), name);
+                }
             }
+            EPOCH.with(|e| e.update(|n| *n = n.wrapping_add(1)));
+        }
+        // DEPLOY-21: where an environment promotes from moved: every stage
+        // of the project may have.
+        DeploymentsEvent::Promotes { .. } => {
+            fetch();
             EPOCH.with(|e| e.update(|n| *n = n.wrapping_add(1)));
         }
         DeploymentsEvent::EnvironmentChanged { environment } => {
@@ -529,8 +622,30 @@ pub(crate) fn row_marks(ticket: String) -> impl IntoView {
                         };
                         let label = if m.env.chars().count() > 8 { m.env.chars().take(7).chain(['…']).collect() } else { m.env.clone() };
                         let behind = !m.behind.is_empty();
+                        // DEPLOY-21: a stage is its own mark.
+                        let from = m.stage.and_then(|_| held().with_untracked(|h| h.as_ref().and_then(|h| h.from_of(&m.project, &m.env))));
+                        let title = match m.stage {
+                            Some(s) => format!("{pre}{}", stage_words(s, &m.env, from.as_deref())),
+                            None => title,
+                        };
+                        let stage = m.stage.map(|s| match s {
+                            DeliveryStage::ReadyFor => "ready",
+                            DeliveryStage::Deploying => "deploying",
+                            DeliveryStage::Failed => "failed",
+                            DeliveryStage::Waiting => "waiting",
+                        });
+                        let link = href(&m.project, (m.deployment > 0).then_some(m.deployment));
                         view! {
-                            <a class="envmark" class:behind=behind data-env=m.env.clone() data-project=m.project.clone() data-behind=behind.then_some("true") href=href(&m.project, Some(m.deployment)) title=title>
+                            <a
+                                class=format!("envmark{}", stage.map(|s| format!(" {s}")).unwrap_or_default())
+                                class:behind=behind
+                                data-env=m.env.clone()
+                                data-project=m.project.clone()
+                                data-behind=behind.then_some("true")
+                                data-stage=stage
+                                href=link
+                                title=title
+                            >
                                 {label}
                             </a>
                         }
@@ -700,6 +815,7 @@ mod tests {
                 last_state: None,
                 last_at: None,
                 tickets: 0,
+                from: (name == "prod").then(|| "test".to_string()),
             },
         }
     }
@@ -712,6 +828,7 @@ mod tests {
                 .iter()
                 .map(|(t, s, d)| RunningCell { ticket: t.to_string(), since: *s, deployment: *d, behind: vec![], version: None })
                 .collect(),
+            staged: vec![],
         }
     }
 
@@ -759,7 +876,7 @@ mod tests {
         assert!(h.marks("MENGER-4").is_empty());
         assert_eq!(
             h.marks("MENGER-2")[1],
-            Mark { project: "MENGER".into(), env: "prod".into(), since: 10, deployment: 1, behind: vec![], version: None }
+            Mark { project: "MENGER".into(), env: "prod".into(), since: 10, deployment: 1, behind: vec![], version: None, stage: None }
         );
         assert_eq!((h.count("MENGER", "test"), h.count("MENGER", "staging")), (2, 0));
     }
@@ -867,6 +984,7 @@ mod tests {
                 behind: vec!["68e1271".into(), "4145520".into()],
                 version: Some("d607756".into()),
             }],
+            staged: vec![],
         };
         let mut h = Held::from_events([env("MENGER", "test"), env("MENGER", "prod")], [behind, cells("MENGER", "test", &[("LOOK-7", 20, 5)])]);
         let ms = h.marks("LOOK-7");
@@ -892,6 +1010,40 @@ mod tests {
         }])
         .unwrap();
         assert!(matches!(&ws[0], Where::On { behind, version: Some(v), .. } if behind.len() == 1 && v == "d607756"));
+    }
+
+    /// DEPLOY-21: a staged cell is a mark of its own — ready for prod in
+    /// place of a behind one there — and a deploy that brings it in makes
+    /// it running; the choices a stage offers; the edges.
+    #[test]
+    fn a_staged_cell_marks_its_stage() {
+        use menger_tickets_api::deployments::StagedCell;
+        let staged = |name: &str, s: &[(&str, DeliveryStage)]| DeploymentsEvent::Cells {
+            project: "MENGER".into(),
+            environment: name.into(),
+            running: vec![],
+            staged: s.iter().map(|(t, stage)| StagedCell { ticket: t.to_string(), stage: *stage }).collect(),
+        };
+        let mut h = Held::from_events(
+            [env("MENGER", "test"), env("MENGER", "prod"), env("MENGER", "edge")],
+            [cells("MENGER", "test", &[("MENGER-2", 5, 1)]), staged("prod", &[("MENGER-2", DeliveryStage::ReadyFor), ("MENGER-3", DeliveryStage::Deploying)])],
+        );
+        let ms = h.marks("MENGER-2");
+        assert_eq!(ms.iter().map(|m| (m.env.as_str(), m.stage)).collect::<Vec<_>>(), [("test", None), ("prod", Some(DeliveryStage::ReadyFor))]);
+        assert_eq!(h.marks("MENGER-3")[0].stage, Some(DeliveryStage::Deploying));
+        assert_eq!(stage_words(DeliveryStage::ReadyFor, "prod", Some("test")), "ready for prod — on test, not yet on prod");
+        // The promote: MENGER-2 runs on prod, no longer staged.
+        assert!(h.apply_deployed(&deployed("prod", 2, 50, &["MENGER-2"], &[])));
+        assert_eq!(h.marks("MENGER-2").iter().map(|m| m.stage).collect::<Vec<_>>(), [None, None]);
+        // A relink's answer for one id replaces only its own.
+        let ids = vec!["MENGER-3".to_string()];
+        assert!(h.take_cells(staged("prod", &[("MENGER-3", DeliveryStage::Failed)]), Some(&ids)));
+        assert_eq!(h.marks("MENGER-3")[0].stage, Some(DeliveryStage::Failed));
+        assert_eq!(h.edges("MENGER"), [("test".to_string(), "prod".to_string())]);
+        assert_eq!(h.promoting_from("MENGER", "test"), ["prod"]);
+        assert_eq!(h.stage_choices(DeliveryStage::ReadyFor), ["prod"]);
+        assert_eq!(h.stage_choices(DeliveryStage::Waiting), ["test", "prod"], "the promotion's track, not edge");
+        assert_eq!(h.stage_choices(DeliveryStage::Deploying), ["test", "edge", "prod"]);
     }
 
     /// A since in words: the time today, the day this year, else the date.

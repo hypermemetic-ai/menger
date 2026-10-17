@@ -21,8 +21,14 @@
 //!   with two rows: Deployed to ▸ and Not deployed to ▸ an environment (a
 //!   chip for each the app holds, or one typed), then its window; a
 //!   deployed pill's environment segment reopens the environments.
+//! - **DEPLOY-21: the delivery rows** — under those two, Ready for, Deploying,
+//!   Waiting for a deploy and Failed, each with its count (live, every
+//!   environment it may name at once). A stage with one environment to
+//!   name (Ready for prod, menger's one promotion) is that row, one click;
+//!   the others open the environments, each chip with its own count.
 
 use leptos::prelude::*;
+use menger_tickets_api::deployments::DeliveryStage;
 use menger_tickets_api::filter::{HeldOf, Unit, When, Who, Window};
 use menger_tickets_api::Status;
 use wasm_bindgen_futures::spawn_local;
@@ -129,6 +135,8 @@ fn root_view(lens: Lens, pop: Pop) -> impl IntoView {
     // DEPLOY-13: under Deployed, its two rows; else When's six.
     let deployed = untrack(|| pop.open_cat_tracked()) == Some(crate::filter::Cat::Deployed);
     let rows: Vec<Kind> = if deployed { Kind::DEPLOYED.to_vec() } else { Kind::ALL.to_vec() };
+    // DEPLOY-21: and, under Deployed, the delivery rows.
+    let stages = deployed.then(|| stage_rows(lens, pop));
     view! {
         <div class="when-rows wform" role="menu" aria-label=if deployed { "deployed" } else { "when" }>
             {rows.into_iter().map(|k| view! {
@@ -144,6 +152,94 @@ fn root_view(lens: Lens, pop: Pop) -> impl IntoView {
                     <span class="arrow" aria-hidden="true">"▸"</span>
                 </button>
             }).collect_view()}
+            {stages}
+        </div>
+    }
+    .into_any()
+}
+
+/// DEPLOY-21: the environments a stage may name, as the app holds them.
+fn stage_choices(stage: DeliveryStage) -> Memo<Vec<String>> {
+    crate::deploys::want();
+    let held = crate::deploys::held();
+    Memo::new(move |_| held.with(|h| h.as_ref().map(|h| h.stage_choices(stage)).unwrap_or_default()))
+}
+
+/// DEPLOY-21: what a stage row counts — the stage in every environment it
+/// may name, at once (`None`: none to name).
+fn stage_filter(stage: DeliveryStage, envs: &[String]) -> Option<String> {
+    (!envs.is_empty()).then(|| envs.iter().map(|e| format!("{stage} {e}")).collect::<Vec<_>>().join(" or "))
+}
+
+/// DEPLOY-21: the Deployed pane's delivery rows, each with its live count.
+fn stage_rows(lens: Lens, pop: Pop) -> impl IntoView {
+    let start = move |t: Option<Timed>| {
+        if let Some(at) = t.and_then(|t| put(lens, pop, None, &t)) {
+            pop.when.set(Step::Edit { at, only: None });
+        }
+    };
+    view! {
+        <div class="whead wstages">"delivery"</div>
+        {Kind::STAGES.into_iter().map(|k| {
+            let Kind::Stage(stage) = k else { unreachable!("the stage rows are stages") };
+            let envs = stage_choices(stage);
+            let counted = crate::counts::LiveCounts::new(Signal::derive(move || envs.with(|e| stage_filter(stage, e))));
+            // One environment to name: the row is the pill.
+            let one = move || envs.with(|e| (e.len() == 1).then(|| e[0].clone()));
+            let label = move || match (stage, one()) {
+                (DeliveryStage::ReadyFor, Some(e)) => format!("Ready for {e}"),
+                _ => k.label().to_string(),
+            };
+            view! {
+                <button
+                    type="button"
+                    class="frow cat when-row stage-row"
+                    role="menuitem"
+                    data-when=k.key()
+                    data-stage=stage.as_str()
+                    on:mousedown=|ev| ev.prevent_default()
+                    on:click=move |_| match one() {
+                        Some(e) => start(when::new_stage(stage, &e)),
+                        None => pop.when.set(Step::New(k)),
+                    }
+                >
+                    <span class="flabel">{label}</span>
+                    <span class="fcount" class:some=move || counted.n().is_some_and(|n| n > 0)>{move || counted.n().map(|n| n.to_string()).unwrap_or_default()}</span>
+                    <span class="arrow" aria-hidden="true">{move || if one().is_some() { "" } else { "▸" }}</span>
+                </button>
+            }
+        }).collect_view()}
+    }
+}
+
+/// DEPLOY-21: a stage's environments, each a chip with its own count.
+fn stage_env_view(stage: DeliveryStage, pick: impl Fn(String) + Copy + Send + Sync + 'static) -> impl IntoView {
+    let envs = stage_choices(stage);
+    view! {
+        <div class="wsec" data-part="env">
+            <div class="whead">"environment"</div>
+            <div class="wchips">
+                {move || {
+                    let es = envs.get();
+                    if es.is_empty() {
+                        let none = match stage {
+                            DeliveryStage::ReadyFor => "no environment promotes from another yet",
+                            _ => "no deployment recorded yet",
+                        };
+                        return view! { <span class="whint">{none}</span> }.into_any();
+                    }
+                    es.into_iter().map(|e| {
+                        let counted = crate::counts::LiveCounts::new(Signal::stored(Some(format!("{stage} {e}"))));
+                        let (v, data) = (e.clone(), e.clone());
+                        view! {
+                            <button type="button" class="wchip" data-v=data on:mousedown=|ev| ev.prevent_default() on:click=move |_| pick(v.clone())>
+                                {e}
+                                <span class="wn">{move || counted.n().map(|n| format!(" · {n}")).unwrap_or_default()}</span>
+                            </button>
+                        }
+                    }).collect_view().into_any()
+                }}
+            </div>
         </div>
     }
     .into_any()
@@ -194,6 +290,8 @@ fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
             let not = kind == Kind::NotDeployed;
             env_view(|| None, move |env: String| start(when::new_deployed(&env, not, None))).into_any()
         }
+        // DEPLOY-21: a stage's environments, each with its count.
+        Kind::Stage(stage) => stage_env_view(stage, move |env: String| start(when::new_stage(stage, &env))).into_any(),
         Kind::Held => view! {
             <div class="wsec" data-part="length">
                 <div class="whead">"in its status for over"</div>
@@ -759,5 +857,19 @@ fn WindowEditor(initial: Option<Window>, apply: Callback<Window>, h12: bool) -> 
             </div>
             {move || problem.get().map(|p| view! { <p class="werr" role="alert">{p}</p> })}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DEPLOY-21: a stage row counts the stage everywhere it may name.
+    #[test]
+    fn a_stage_row_counts_every_environment() {
+        assert_eq!(stage_filter(DeliveryStage::Deploying, &["test".into(), "prod".into()]).as_deref(), Some("deploying test or deploying prod"));
+        assert_eq!(stage_filter(DeliveryStage::ReadyFor, &[]), None);
+        let f = menger_tickets_api::filter::Filter::parse(&stage_filter(DeliveryStage::Waiting, &["test".into(), "prod".into()]).unwrap()).unwrap();
+        assert_eq!(f.format(), "(waiting test or waiting prod)");
     }
 }

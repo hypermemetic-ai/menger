@@ -979,11 +979,14 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 38] = [
+const NAMES: [&str; 42] = [
     "has commits",
     "menger doc",
     "discussion",
     "unattested",
+    // DEPLOY-21: a delivery stage (`ready for` before `ready`).
+    "deploying",
+    "ready for",
     // DEPLOY-11: where a ticket's work runs.
     "deployed",
     "category",
@@ -1002,6 +1005,9 @@ const NAMES: [&str; 38] = [
     "blocked",
     "session",
     "asking",
+    // DEPLOY-21: the other delivery stages.
+    "waiting",
+    "failed",
     // DEPLOY-20: running an earlier version.
     "behind",
     // MENGER-39: the owner's queue.
@@ -1037,7 +1043,8 @@ const MIXED: &str = "`or` and `and` do not mix inside one pair of parentheses: a
 const UNBALANCED: &str = "a group's parentheses close where they open: `(a or (b and c))`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
                               `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
-                              `entered`, `left`, `changed`, `by`, `created`, `for`, `deployed`, `behind`, `queued` or \
+                              `entered`, `left`, `changed`, `by`, `created`, `for`, `deployed`, `behind`, `waiting`, \
+                              `deploying`, `ready for`, `failed`, `queued` or \
                               `saved`, a group in parentheses, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
@@ -1319,6 +1326,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "deployed" => read_history(name, tail).map(Field::History),
         // DEPLOY-20: over the deployments' kept behind.
         "behind" => read_history(name, tail).map(Field::History),
+        // DEPLOY-21: over the deployments' kept stages.
+        "waiting" | "deploying" | "ready for" | "failed" => read_history(name, tail).map(Field::History),
         // MENGER-39: over the queue's kept entries.
         "queued" => read_history(name, tail).map(Field::History),
         // CHAT-3: over the chats, for the reader.
@@ -1508,6 +1517,11 @@ pub enum Event {
     /// one carried there is not. No window, no `by`; answered from the
     /// deployments' kept behind.
     Behind(String),
+    /// DEPLOY-21: `waiting <env>`, `deploying <env>`, `ready for <env>`,
+    /// `failed <env>` — the ticket's delivery stage in an environment of
+    /// that name ([`crate::deployments::DeliveryStage`]). No window, no
+    /// `by`; answered from the deployments' kept stages and cells.
+    Stage(crate::deployments::DeliveryStage, String),
     /// MENGER-39: `queued` — the ticket is in the owner's queue; `queued
     /// <urgency>`, at that urgency (a snooze does not take it out). Answered
     /// from the queue's kept entries; no window, no `by`.
@@ -1543,6 +1557,7 @@ impl Event {
             Event::Held(_) => "for",
             Event::Deployed(_) => "deployed",
             Event::Behind(_) => "behind",
+            Event::Stage(s, _) => s.as_str(),
             Event::Queued(_) => "queued",
             Event::Chatting => "chatting",
             Event::Unread => "unread",
@@ -1855,6 +1870,7 @@ impl History {
             Event::Touched => "touched".to_string(),
             Event::Deployed(env) => format!("deployed {}", quoted(env)),
             Event::Behind(env) => format!("behind {}", quoted(env)),
+            Event::Stage(s, env) => format!("{s} {}", quoted(env)),
             Event::Queued(None) => "queued".to_string(),
             Event::Queued(Some(u)) => format!("queued {u}"),
             Event::Chatting => "chatting".to_string(),
@@ -1961,6 +1977,15 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
                 return Err(format!("`{extra}` is not understood here — `behind` takes an environment and nothing else: no window, no `by`"));
             }
             return Ok(History { event: Event::Behind(deployed_env(env)?), window: None, by: None });
+        }
+        // DEPLOY-21: `<stage> <env>`, and nothing after it.
+        "waiting" | "deploying" | "ready for" | "failed" => {
+            let stage = crate::deployments::DeliveryStage::of(name).expect("a stage's name");
+            let env = w.first().ok_or_else(|| format!("`{name}` names an environment, as `{name} prod` or `{name} menger/prod`"))?;
+            if let Some(extra) = w.get(1) {
+                return Err(format!("`{extra}` is not understood here — `{name}` takes an environment and nothing else: no window, no `by`"));
+            }
+            return Ok(History { event: Event::Stage(stage, deployed_env(env)?), window: None, by: None });
         }
         // MENGER-39: `queued [urgency]`, and nothing after it.
         "queued" => {

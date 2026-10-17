@@ -5,6 +5,14 @@
 //! environment (`status Complete and under P and not deployed p/prod`, the
 //! filter cell DEPLOY-11 keeps), each row with where it does run.
 //!
+//! **DEPLOY-21: a lane per promotion edge** — *test → prod: N ready* —
+//! between the waiting work and the columns: the work whose current
+//! version runs where the environment promotes from and not on it
+//! (`ready for <p>/<env>`), the first few listed, what is deploying there
+//! and what failed there counted beside it; each count a link that filters
+//! every view by its cell. The counts are live (a membership watch each);
+//! the list asks again on every deploy and every count that moves.
+//!
 //! `#/deployments` shows every project that has environments;
 //! `#/deployments/<SHORTCODE>` one; `?d=<id>` picks one deployment out
 //! (a Running link on a ticket page, a board row's mark) — scrolled to and
@@ -30,6 +38,9 @@ const PAGE: u32 = 10;
 
 /// How many waiting tickets are listed (the rest are counted).
 const WAITING: u32 = 25;
+
+/// How many ready tickets a lane lists (the rest are counted).
+const LANE: u32 = 8;
 
 /// How many of a deploy's tickets show before "+n more".
 const CARRIED: usize = 8;
@@ -145,6 +156,7 @@ fn ProjectView(project: String, picked: Option<u64>) -> impl IntoView {
                 }}</span>
             </h3>
             <Waiting project=project.clone() last />
+            <Lanes project=project.clone() />
             <div class="denvs" role="list">
                 <For
                     each=move || names.get()
@@ -279,6 +291,127 @@ fn Waiting(project: String, last: Memo<Option<String>>) -> impl IntoView {
                             {more}
                         </ul>
                         {rest}
+                    }
+                    .into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+/// DEPLOY-21: a stage's cell in one project's environment, as the language
+/// writes it — `ready for menger/prod`.
+pub(crate) fn lane_filter(stage: menger_tickets_api::deployments::DeliveryStage, project: &str, env: &str) -> String {
+    format!("{stage} {}/{env}", project.to_ascii_lowercase())
+}
+
+/// DEPLOY-21: every promotion edge of `project`, a lane each.
+#[component]
+fn Lanes(project: String) -> impl IntoView {
+    let held = deploys::held();
+    let edges = {
+        let project = project.clone();
+        Memo::new(move |_| held.with(|h| h.as_ref().map(|h| h.edges(&project)).unwrap_or_default()))
+    };
+    view! {
+        <div class="dlanes">
+            <For
+                each=move || edges.get()
+                key=|e| e.clone()
+                children=move |(from, to): (String, String)| view! { <Lane project=project.clone() from to /> }
+            />
+        </div>
+    }
+}
+
+/// The whole of every view filtered by `filter`, and the board shown.
+fn on_board(lens: crate::lens::Lens, filter: &str) {
+    if let Ok(f) = menger_tickets_api::filter::Filter::parse(filter) {
+        lens.apply(crate::lens::Level::Global, Some(crate::saved::chosen(f)));
+        crate::dom::window().location().set_hash("#/").ok();
+    }
+}
+
+/// DEPLOY-21: one promotion edge — *test → prod: N ready* — the ready work
+/// listed, deploying and failed counted; each count filters every view.
+#[component]
+fn Lane(project: String, from: String, to: String) -> impl IntoView {
+    use menger_tickets_api::deployments::DeliveryStage;
+    let ready_f = lane_filter(DeliveryStage::ReadyFor, &project, &to);
+    let deploying_f = lane_filter(DeliveryStage::Deploying, &project, &to);
+    let failed_f = lane_filter(DeliveryStage::Failed, &project, &to);
+    let ready = crate::counts::LiveCounts::new(Signal::stored(Some(ready_f.clone())));
+    let deploying = crate::counts::LiveCounts::new(Signal::stored(Some(deploying_f.clone())));
+    let failed = crate::counts::LiveCounts::new(Signal::stored(Some(failed_f.clone())));
+    let rows = RwSignal::new(None::<Result<Vec<TicketSummary>, String>>);
+    let epoch = deploys::epoch();
+    let link = session::link();
+    {
+        let ready_f = ready_f.clone();
+        Effect::new(move |_| {
+            epoch.track();
+            ready.n();
+            if !link.get() {
+                return;
+            }
+            let f = ready_f.clone();
+            spawn_local(async move {
+                let answer = matching(f, LANE).await.map(|(rows, _)| rows);
+                rows.try_set(Some(answer));
+            });
+        });
+    }
+    let lens = crate::lens::use_lens();
+    let n = move |c: crate::counts::LiveCounts| c.n().map_or_else(|| "…".to_string(), |n| n.to_string());
+    let (rf, df, ff) = (ready_f.clone(), deploying_f.clone(), failed_f.clone());
+    let none = format!("Nothing waits for {to}: what runs on {from} runs there too.");
+    view! {
+        <div class="dlane" data-from=from.clone() data-to=to.clone() data-ready=move || ready.n().map(|n| n.to_string())>
+            <h4>
+                <span class="envmark">{from.clone()}</span>
+                <span class="larrow" aria-hidden="true">"→"</span>
+                <span class="envmark ready">{to.clone()}</span>
+                <button type="button" class="dlink lready" title=format!("filter every view by {rf}") on:click=move |_| on_board(lens, &rf)>
+                    // Keyed by the count: a new count arrives, as a state change.
+                    {move || {
+                        let k = n(ready);
+                        let shown = k.clone();
+                        view! { <span class="lcount" data-n=k>{shown}</span> }
+                    }}
+                    " ready"
+                </button>
+                <span class="lstages">
+                    <button type="button" class="dlink ldeploying" class:some=move || deploying.n().is_some_and(|n| n > 0) title=format!("filter every view by {df}") on:click=move |_| on_board(lens, &df)>
+                        {move || n(deploying)}" deploying"
+                    </button>
+                    " · "
+                    <button type="button" class="dlink lfailed" class:some=move || failed.n().is_some_and(|n| n > 0) title=format!("filter every view by {ff}") on:click=move |_| on_board(lens, &ff)>
+                        {move || n(failed)}" failed"
+                    </button>
+                </span>
+            </h4>
+            <p class="hint"><code>{ready_f.clone()}</code></p>
+            {move || match rows.get() {
+                None => view! { <p class="loading">"…"</p> }.into_any(),
+                Some(Err(e)) => view! { <p class="derr">{e}</p> }.into_any(),
+                Some(Ok(list)) if list.is_empty() => view! { <p class="none">{none.clone()}</p> }.into_any(),
+                Some(Ok(list)) => {
+                    let total = ready.n().unwrap_or(list.len());
+                    let more = (total > list.len()).then(|| view! { <li class="more">{format!("and {} more ready", total - list.len())}</li> });
+                    view! {
+                        <ul class="drows lrows">
+                            {list.into_iter().map(|t| {
+                                let href = format!("#/ticket/{}", t.id);
+                                view! {
+                                    <li data-ticket-id=t.id.to_string()>
+                                        <a class="code" href=href.clone()>{t.id.to_string()}</a>
+                                        <a class="dtitle" href=href>{t.title.clone()}</a>
+                                        {deploys::row_marks(t.id.to_string())}
+                                    </li>
+                                }
+                            }).collect_view()}
+                            {more}
+                        </ul>
                     }
                     .into_any()
                 }
