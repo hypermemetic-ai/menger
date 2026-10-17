@@ -337,35 +337,20 @@ impl<A: LoginAccess> Login<A> {
     }
 
     /// POSTs a form to a provider's token endpoint; the access token and
-    /// the whole response, or the words to show.
-    async fn token(&self, endpoint: &str, form: &[(&str, &str)]) -> Result<(String, Value), String> {
-        let body = url::form_urlencoded::Serializer::new(String::new()).extend_pairs(form).finish();
-        let resp = self
-            .http
-            .post(endpoint)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(body)
-            .send()
-            .await
-            .map_err(|_| UNREACHABLE.to_string())?;
-        let v: Value = resp.json().await.map_err(|_| ODD.to_string())?;
-        if let Some(t) = v.get("access_token").and_then(Value::as_str) {
-            return Ok((t.to_string(), v.clone()));
-        }
-        Err(match v.get("error").and_then(Value::as_str) {
-            Some("invalid_grant") => "Wrong username or password.".to_string(),
-            _ => "Sign-in was refused.".to_string(),
-        })
+    /// the whole response, or the words to show (IDENTITY-44: a refusal
+    /// logged at warn — [`token_exchange`]).
+    async fn token(&self, provider: &str, endpoint: &str, form: &[(&str, &str)]) -> Result<(String, Value), String> {
+        token_exchange(&self.http, provider, endpoint, form).await
     }
 
     /// The provider's adapter checks the token: the identity, or why not.
     async fn verify(&self, provider: &str, token: String) -> Result<AuthContext, String> {
         let (_, adapter) = self.providers.get(provider).ok_or("unknown provider")?;
-        adapter
-            .authenticate(&Presentation::Bearer { token })
-            .await
-            .map(|a| a.into_auth_context())
-            .map_err(|_| "The sign-in service's answer could not be verified.".to_string())
+        adapter.authenticate(&Presentation::Bearer { token }).await.map(|a| a.into_auth_context()).map_err(|e| {
+            // IDENTITY-44: why, at warn — the rejection names a kind, never the token.
+            tracing::warn!(provider = %clean(provider, 64), "sign-in token not verified: {}", clean(&e.to_string(), 300));
+            "The sign-in service's answer could not be verified.".to_string()
+        })
     }
 
     /// A password grant at an OIDC provider, its token verified: the
@@ -378,7 +363,7 @@ impl<A: LoginAccess> Login<A> {
         if let Some(c) = client {
             form.push(("client_id", c));
         }
-        let (token, _) = self.token(&d.token_endpoint, &form).await?;
+        let (token, _) = self.token(name, &d.token_endpoint, &form).await?;
         self.verify(name, token).await
     }
 
@@ -823,7 +808,7 @@ pub async fn callback<A: LoginAccess>(State(login): State<Arc<Login<A>>>, header
             ("client_id", client.unwrap_or_default()),
             ("code_verifier", pending.verifier.as_str()),
         ];
-        let (token, response) = login.token(&d.token_endpoint, &form).await?;
+        let (token, response) = login.token(&pending.provider, &d.token_endpoint, &form).await?;
         let mut ctx = login.verify(&pending.provider, token).await?;
         named_by(&mut ctx, &pending.provider, &response);
         Ok::<_, String>(ctx)
@@ -1337,6 +1322,105 @@ pub(crate) fn icon_for_label(label: &str, connection: &str) -> &'static str {
     }
 }
 
+/// IDENTITY-44: a provider's text, one line, at most `max` characters.
+fn clean(s: &str, max: usize) -> String {
+    s.chars().filter(|c| !c.is_control()).take(max).collect()
+}
+
+/// IDENTITY-44: the fields of a token endpoint's refusal that may be
+/// logged and shown — never a code, a token, a verifier or a secret. The
+/// OAuth fields (`error`, `error_description`) and WorkOS's (`code`,
+/// `message`); every other top-level key by its name only.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Refusal {
+    pub error: Option<String>,
+    pub description: Option<String>,
+    pub code: Option<String>,
+    pub message: Option<String>,
+    pub other_keys: Vec<String>,
+}
+
+impl Refusal {
+    pub(crate) fn of(v: &Value) -> Self {
+        let s = |k: &str| v.get(k).and_then(Value::as_str).map(|t| clean(t, 300)).filter(|t| !t.is_empty());
+        let named = ["error", "error_description", "code", "message"];
+        let other_keys = v
+            .as_object()
+            .map(|o| o.keys().filter(|k| !named.contains(&k.as_str())).map(|k| clean(k, 64)).collect())
+            .unwrap_or_default();
+        Refusal { error: s("error"), description: s("error_description"), code: s("code"), message: s("message"), other_keys }
+    }
+
+    /// The words for the reader: a pending-authentication step named
+    /// plainly, else the provider's own short description.
+    pub(crate) fn words(&self, password: bool) -> String {
+        let kind = self.code.as_deref().or(self.error.as_deref());
+        let step = match kind {
+            Some("email_verification_required") => Some("the sign-in service wants your email address verified first"),
+            Some("organization_selection_required") => Some("the sign-in service wants you to choose an organization"),
+            Some("mfa_enrollment") => Some("the sign-in service wants you to set up two-factor authentication"),
+            Some("mfa_challenge") => Some("the sign-in service wants a two-factor code"),
+            Some("radar_challenge_required") => Some("the sign-in service flagged this sign-in and wants the code it emailed you"),
+            _ => None,
+        };
+        if let Some(step) = step {
+            return format!("Sign-in was refused: {step} ({}).", kind.unwrap_or_default());
+        }
+        if password && self.error.as_deref() == Some("invalid_grant") {
+            return "Wrong username or password.".to_string();
+        }
+        match self.description.as_deref().or(self.message.as_deref()).or(kind) {
+            Some(why) => format!("Sign-in was refused: {}", clean(why, 200)),
+            None => "Sign-in was refused.".to_string(),
+        }
+    }
+}
+
+/// POSTs a form to a provider's token endpoint; the access token and the
+/// whole response, or the words to show. IDENTITY-44: an answer without a
+/// token is logged at warn — the provider, the HTTP status and
+/// [`Refusal`]'s fields — so a refused sign-in says why, in the log and
+/// (shortly) on the page.
+pub(crate) async fn token_exchange(http: &reqwest::Client, provider: &str, endpoint: &str, form: &[(&str, &str)]) -> Result<(String, Value), String> {
+    let body = url::form_urlencoded::Serializer::new(String::new()).extend_pairs(form).finish();
+    let provider = clean(provider, 64);
+    let resp = http
+        .post(endpoint)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::warn!(%provider, "sign-in token endpoint unreachable: {}", clean(&e.without_url().to_string(), 200));
+            UNREACHABLE.to_string()
+        })?;
+    let status = resp.status().as_u16();
+    let v: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::warn!(%provider, status, "sign-in refused: the token endpoint answered no JSON");
+            return Err(ODD.to_string());
+        }
+    };
+    if let Some(t) = v.get("access_token").and_then(Value::as_str) {
+        return Ok((t.to_string(), v.clone()));
+    }
+    let r = Refusal::of(&v);
+    let o = |s: &Option<String>| s.clone().unwrap_or_default();
+    tracing::warn!(
+        %provider,
+        status,
+        error = %o(&r.error),
+        error_description = %o(&r.description),
+        code = %o(&r.code),
+        message = %o(&r.message),
+        other_keys = %r.other_keys.join(","),
+        "sign-in refused by the token endpoint"
+    );
+    let password = form.iter().any(|&(k, v)| k == "grant_type" && v == "password");
+    Err(r.words(password))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1379,5 +1463,81 @@ mod tests {
     #[test]
     fn text_is_escaped_into_the_page() {
         assert_eq!(esc(r#"<b a="1">'&"#), "&lt;b a=&quot;1&quot;&gt;&#39;&amp;");
+    }
+
+    /// IDENTITY-44: a stub token endpoint answering each refusal; the
+    /// words the reader sees, and a warn line that names the error and
+    /// never the code, the verifier, or the pending token.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_refused_exchange_is_logged_and_said() {
+        use std::io::Write;
+        #[derive(Clone, Default)]
+        struct Buf(Arc<Mutex<Vec<u8>>>);
+        impl Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buf = Buf::default();
+        let sink = buf.clone();
+        let sub = tracing_subscriber::fmt().with_writer(move || sink.clone()).with_ansi(false).with_max_level(tracing::Level::WARN).finish();
+        let _g = tracing::subscriber::set_default(sub);
+
+        let answers: Vec<(u16, Value)> = vec![
+            (403, json!({ "code": "email_verification_required", "message": "Email ownership must be verified before authentication.",
+                          "pending_authentication_token": "PENDINGSECRET", "email": "ada@example.com", "email_verification_id": "email_verification_01X" })),
+            (403, json!({ "code": "organization_selection_required", "message": "pick one", "pending_authentication_token": "PENDINGSECRET", "organizations": [] })),
+            (403, json!({ "code": "mfa_enrollment", "message": "enroll", "pending_authentication_token": "PENDINGSECRET" })),
+            (403, json!({ "code": "mfa_challenge", "message": "challenge", "pending_authentication_token": "PENDINGSECRET" })),
+            (400, json!({ "error": "invalid_grant", "error_description": "Invalid code verifier." })),
+            (400, json!({ "error": "invalid_client", "error_description": "Invalid client secret." })),
+            (500, json!({})),
+            (200, json!({ "access_token": "AT", "user": { "id": "u" } })),
+        ];
+        let answers = Arc::new(Mutex::new(answers.into_iter()));
+        let app = axum::Router::new().route(
+            "/token",
+            axum::routing::post(move || {
+                let (status, body) = answers.lock().unwrap().next().unwrap();
+                async move { (StatusCode::from_u16(status).unwrap(), axum::Json(body)) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/token", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = reqwest::Client::new();
+        let form = [("grant_type", "authorization_code"), ("code", "CODESECRET"), ("client_id", "client_01"), ("code_verifier", "VERIFIERSECRET")];
+        let mut said = vec![];
+        for _ in 0..7 {
+            said.push(token_exchange(&http, "workos", &endpoint, &form).await.unwrap_err());
+        }
+        let (token, whole) = token_exchange(&http, "workos", &endpoint, &form).await.unwrap();
+        assert_eq!((token.as_str(), whole["user"]["id"].as_str()), ("AT", Some("u")));
+        assert_eq!(said[0], "Sign-in was refused: the sign-in service wants your email address verified first (email_verification_required).");
+        assert!(said[1].contains("choose an organization (organization_selection_required)"), "{}", said[1]);
+        assert!(said[2].contains("set up two-factor authentication (mfa_enrollment)"), "{}", said[2]);
+        assert!(said[3].contains("a two-factor code (mfa_challenge)"), "{}", said[3]);
+        assert_eq!(said[4], "Sign-in was refused: Invalid code verifier.", "a code flow's invalid_grant is no wrong password");
+        assert_eq!(said[5], "Sign-in was refused: Invalid client secret.");
+        assert_eq!(said[6], "Sign-in was refused.");
+
+        let log = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        let lines: Vec<&str> = log.lines().filter(|l| l.contains("sign-in refused by the token endpoint")).collect();
+        assert_eq!(lines.len(), 7, "{log}");
+        assert!(lines.iter().all(|l| l.contains("WARN") && l.contains("provider=workos")), "{log}");
+        assert!(lines[0].contains("status=403") && lines[0].contains("code=email_verification_required"), "{}", lines[0]);
+        assert!(lines[0].contains("pending_authentication_token") && lines[0].contains("email_verification_id"), "other keys by name: {}", lines[0]);
+        assert!(lines[4].contains("status=400") && lines[4].contains("error=invalid_grant") && lines[4].contains("Invalid code verifier."), "{}", lines[4]);
+        for secret in ["PENDINGSECRET", "CODESECRET", "VERIFIERSECRET", "ada@example.com", "AT "] {
+            assert!(!log.contains(secret), "{secret} logged: {log}");
+        }
+
+        // a password grant's invalid_grant is still a wrong password
+        let refusal = Refusal::of(&json!({ "error": "invalid_grant", "error_description": "Wrong email or password." }));
+        assert_eq!(refusal.words(true), "Wrong username or password.");
     }
 }
