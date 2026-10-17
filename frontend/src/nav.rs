@@ -1247,7 +1247,7 @@ pub(crate) struct Tree {
     epoch: RwSignal<u32>,
     /// The nav scrolled or resized, or something in it changed height: each
     /// windowed list measures where it is.
-    viewport: Trigger,
+    pub(crate) viewport: Trigger,
     pitch: RwSignal<f64>,
     reveal: RwSignal<Option<Reveal>>,
     /// The top-level shortcode rows, in shortcode order.
@@ -3009,6 +3009,9 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             // AGS-26: on a ticket page, filters it to the open ticket's tree.
             on:keydown=move |ev| nav_f(ev, ctx, lens)
         >
+            // APP-50: at phone widths the nav is the tree's sheet — its head
+            // and the views as pills.
+            <crate::phonebar::TreeHead route />
             <div class="brand">
                 "menger"
                 <span class="muted">"· tickets"</span>
@@ -3089,6 +3092,8 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             </div>
             // ACT-3: what is selected, at the nav's foot.
             {selection_foot(under)}
+            // APP-50: and the sheet's, under the thumb.
+            <crate::phonebar::TreeFoot />
         </aside>
     }
 }
