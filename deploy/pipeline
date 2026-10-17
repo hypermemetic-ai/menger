@@ -667,6 +667,15 @@ cmd_sync() {
 # ── promote ─────────────────────────────────────────────────────────────────
 # Moves an environment (prod; `--to test` exists for the rollback drill) to a
 # tested release, rolling back by itself if the smoke checks fail.
+# RUN-13: prod's data moved to app.menger.sh. While $HOME_DIR/prod.moved
+# exists, this machine's prod is the move's rollback, stopped with its
+# database untouched: promote and rollback would start it beside the live
+# tracker, so they refuse. The rollback itself (RUN-13) removes the mark.
+moved_guard() {
+  [[ $1 == prod && -f $HOME_DIR/prod.moved ]] || return 0
+  die "prod moved to app.menger.sh ($(head -n1 "$HOME_DIR/prod.moved")); this machine's prod is the rollback, kept stopped — see RUN-13"
+}
+
 cmd_promote() {
   local rel="" adopt=0 to=prod
   while [[ $# -gt 0 ]]; do
@@ -678,6 +687,7 @@ cmd_promote() {
     esac; shift
   done
   check_env "$to"
+  moved_guard "$to"
   [[ -n $rel ]] || rel=$(running_release test)
   rel=$(resolve_release "$rel")
   [[ -f $RELEASES/$rel/TESTED ]] || die "$rel has not passed the test environment — run: deploy/pipeline deploy test $rel"
@@ -748,6 +758,7 @@ foreign_holders() { # ENV → pids listening on the env's ports that are not its
 # ── rollback ────────────────────────────────────────────────────────────────
 cmd_rollback() {
   local env=${1:-}; shift || true; check_env "$env"
+  moved_guard "$env"
   local restore=""
   [[ ${1:-} == --restore ]] && { restore=${2:-}; [[ -f $restore ]] || die "no backup '$restore'"; }
   local prev; prev=$(previous_release "$env"); [[ -n $prev ]] || die "$env has no previous release"

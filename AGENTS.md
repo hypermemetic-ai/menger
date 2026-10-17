@@ -55,6 +55,19 @@ edge: only its `X-Forwarded-For` is believed, by the login throttles and by
 the WebSocket's per-IP and anonymous quotas, and a forwarded header from any
 other peer is ignored (README "Run" → Trusted proxies).
 
+> **2026-10-17 (RUN-13): the tracker moved to https://app.menger.sh.** Prod's
+> data moved there (ACCESS-47 `move`); this machine's prod (`:4455`–`:4458`)
+> is stopped, its database untouched — it is the move's rollback, and
+> `deploy/pipeline promote` / `rollback prod` refuse while
+> `~/.local/share/menger-deploy/prod.moved` exists. Agents reach the tracker
+> as `synapse --url wss://app.menger.sh/ws --as <agent> menger …` (once:
+> `synapse --url wss://app.menger.sh/ws _login menger --key <agent> --as
+> <agent>`; `builder`, `pipeline`, `operator` keep their grants). Read every
+> `synapse -P 4455 menger …` below as that. People sign in at
+> https://app.menger.sh/ through WorkOS production. Deployment records wait
+> in the outbox (`deploy/record` still dials :4455). The rollback is on
+> RUN-13.
+
 ## Deploying
 
 menger runs in two environments on this machine, **prod** (4455–4458) and
