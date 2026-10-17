@@ -28,6 +28,12 @@
 #                                           (--check: the gate and infra's dry run, nothing written)
 #   deploy/pipeline media [RELEASE]         landing/media regenerated from a release's own binary
 #                                           (default: what prod runs); the worker commits them
+#   deploy/pipeline image [RELEASE]         RUN-10: a TESTED release (default: the one test last
+#                                           passed) as an image — IMAGE_STORE=local (default):
+#                                           menger:<release> in this machine's Docker; ghcr:
+#                                           ghcr.io/hypermemetic-ai/menger:<release> + :latest, pushed.
+#                                           Prints image=… and release=… (and appends them to
+#                                           $HF_OUTPUTS when set)
 #
 # DEPLOY-12: deploy test, sync, promote and rollback each tell menger what they
 # did — a deployment record (deploy/record → deployments.record): `started`
@@ -148,6 +154,7 @@ PENDING=() # ENV RELEASE PREVIOUS of a run that told `started` and has not ended
 on_exit() {
   [[ ${#PENDING[@]} -eq 3 ]] && tell "${PENDING[0]}" failed "${PENDING[1]}" "${PENDING[2]}"
   [[ -n $LANDING_EXPORT && -d $LANDING_EXPORT ]] && rm -rf "$LANDING_EXPORT"
+  [[ -n ${IMAGE_CONTEXT:-} && -d $IMAGE_CONTEXT ]] && { chmod -R u+w "$IMAGE_CONTEXT"; rm -rf "$IMAGE_CONTEXT"; }
   return 0
 }
 trap on_exit EXIT
@@ -762,6 +769,88 @@ cmd_backfill() {
   QUIET=1 flush_outbox
 }
 
+# ── the image (RUN-10) ──────────────────────────────────────────────────────
+# menger as a container image, built from a TESTED release's own bytes (its
+# bin/menger, bin/run-menger, app/ and RELEASE, staged beside
+# deploy/image/Dockerfile) — never from a checkout. IMAGE_STORE says where it
+# is kept: `local` (default) tags menger:<release> in this machine's Docker;
+# `ghcr` tags ghcr.io/hypermemetic-ai/menger:<release> and :latest and pushes
+# both. It answers `image=REF` and `release=NAME` on stdout, and appends them
+# to $HF_OUTPUTS when set (RUN-25's build stage passes them on).
+IMAGE_LOCAL=${MENGER_IMAGE_LOCAL:-menger}
+IMAGE_GHCR=${MENGER_IMAGE_GHCR:-ghcr.io/hypermemetic-ai/menger}
+IMAGE_CONTEXT="" # the staged context an image run made, removed on exit
+# The release test last passed, as deployments.log says (a deploy or sync of
+# test that ended ok), whose directory is still here and marked TESTED; with
+# no such line, the newest TESTED release by name.
+newest_tested() {
+  local r rels=()
+  [[ -f $LOG ]] && mapfile -t rels < <(awk -F'\t' '$2 == "test" && ($3 == "deploy" || $3 == "sync") && $5 == "ok" {print $4}' "$LOG")
+  for ((i = ${#rels[@]} - 1; i >= 0; i--)); do
+    r=${rels[i]}; [[ -n $r && -f $RELEASES/$r/RELEASE && -f $RELEASES/$r/TESTED ]] && { echo "$r"; return 0; }
+  done
+  for r in $(ls -1 "$RELEASES" 2>/dev/null | grep -v '\.tmp$' | sort -r); do
+    [[ -f $RELEASES/$r/RELEASE && -f $RELEASES/$r/TESTED ]] && { echo "$r"; return 0; }
+  done
+  return 1
+}
+cmd_image() {
+  local rel="" store=${IMAGE_STORE:-local}
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -*) die "unknown flag $1 (usage: deploy/pipeline image [RELEASE]; IMAGE_STORE=local|ghcr)" ;;
+      *) [[ -z $rel ]] || die "one release at most"; rel=$1 ;;
+    esac; shift
+  done
+  case $store in local|ghcr) ;; *) die "IMAGE_STORE '$store' — local or ghcr" ;; esac
+  if [[ -z $rel ]]; then
+    rel=$(newest_tested) || die "no TESTED release — run: deploy/pipeline build, then deploy/pipeline deploy test"
+  fi
+  rel=$(resolve_release "$rel")
+  [[ -f $RELEASES/$rel/TESTED ]] || die "$rel has not passed the test environment — run: deploy/pipeline deploy test $rel"
+  local r=$RELEASES/$rel
+  [[ -x $r/bin/menger && -f $r/bin/run-menger && -f $r/app/index.html ]] || die "$rel lacks bin/menger, bin/run-menger or app/index.html"
+  # The image binds 0.0.0.0 inside the container: a menger from before RUN-8
+  # listens on loopback only and could not be reached through its ports.
+  "$r/bin/menger" --help 2>/dev/null | grep -e '--bind' >/dev/null \
+    || die "$rel's menger has no --bind (RUN-8, c2b5723): an image of it could not be reached — deploy test a newer release first"
+  need docker
+  local sha subject ref tags=()
+  sha=$(sed -n 's/^commit: *//p' "$r/RELEASE" | head -n 1)
+  subject=$(sed -n 's/^subject: *//p' "$r/RELEASE" | head -n 1 | cut -c1-70)
+  if [[ $store == local ]]; then ref=$IMAGE_LOCAL:$rel; tags=(-t "$ref")
+  else ref=$IMAGE_GHCR:$rel; tags=(-t "$ref" -t "$IMAGE_GHCR:latest"); fi
+  step "image $rel ($store) — $subject"
+  IMAGE_CONTEXT=$(mktemp -d "${TMPDIR:-/tmp}/menger-image.XXXXXX")
+  mkdir -p "$IMAGE_CONTEXT/release/bin"
+  cp "$r/bin/menger" "$r/bin/run-menger" "$IMAGE_CONTEXT/release/bin/"
+  cp "$r/RELEASE" "$IMAGE_CONTEXT/release/"
+  cp -r "$r/app" "$IMAGE_CONTEXT/release/app"
+  cp "$REPO/deploy/image/Dockerfile" "$IMAGE_CONTEXT/Dockerfile"
+  chmod -R u+w "$IMAGE_CONTEXT"
+  DOCKER_BUILDKIT=1 docker build --quiet --build-arg "MENGER_RELEASE=$rel" --build-arg "MENGER_COMMIT=${sha:-unknown}" \
+      "${tags[@]}" "$IMAGE_CONTEXT" >/dev/null || { record image "$store" "$rel" "build failed"; die "docker build failed"; }
+  say "image: $(docker image inspect -f '{{.Id}} {{.Size}} bytes' "$ref" 2>/dev/null)"
+  if [[ $store == ghcr ]]; then
+    # The machine's gh token (write:packages) signs Docker in, on stdin; with
+    # no gh, Docker's own stored login for ghcr.io is used.
+    if command -v gh >/dev/null; then
+      local user; user=$(gh api user --jq .login 2>/dev/null) || die "gh is not signed in (gh auth login; the token needs write:packages)"
+      gh auth token | docker login ghcr.io -u "$user" --password-stdin >/dev/null || die "docker login ghcr.io failed"
+    fi
+    local t
+    for t in "$ref" "$IMAGE_GHCR:latest"; do
+      docker push --quiet "$t" >/dev/null || { record image "$store" "$rel" "push failed"; die "docker push $t failed"; }
+      say "pushed $t"
+    done
+  fi
+  record image "$store" "$rel" "ok $ref"
+  local out
+  out=$(printf 'image=%s\nrelease=%s\n' "$ref" "$rel")
+  [[ -n ${HF_OUTPUTS:-} ]] && printf '%s\n' "$out" >>"$HF_OUTPUTS"
+  printf '%s\n' "$out"
+}
+
 # ── status, releases, logs ──────────────────────────────────────────────────
 # ── the landing page (DEPLOY-17) ────────────────────────────────────────────
 # One command from a commit on main to menger.sh: landing/ exported at the
@@ -959,5 +1048,6 @@ case $cmd in
   backfill) cmd_backfill ;;
   landing)  cmd_landing "$@" ;;
   media)    cmd_media "$@" ;;
+  image)    cmd_image "$@" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

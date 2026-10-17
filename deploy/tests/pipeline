@@ -428,5 +428,94 @@ same "install, a hand-added setting in the templated half: refused" "$code" 1
 has "install: the setting named" "$err" "sets what its template does not (MENGER_PUBLIC_URL)"
 same "install, refused: nothing changes" "$(sums)" "$before"
 
+# ── RUN-10: image — a TESTED release as menger:<release>, never a checkout ──
+# docker and gh are stand-ins: docker keeps its argv and, for a build, the
+# file list of the context it was handed; gh answers a user and a token.
+# (C was reused above for the config dir: the commits again, as IC)
+mapfile -t IC < <(git -C "$REPO" log --first-parent --format=%H -3 HEAD | tac)
+H3=$SCRATCH/home3; D3=$H3/.local/share/menger-deploy; mkdir -p "$D3/releases" "$SCRATCH/tmp"
+stub docker 'echo "docker $*" >>"$STUB_DOCKER"
+case $1 in
+  build) [[ ${STUB_DOCKER_FAIL:-} == build ]] && exit 1
+         ctx=${*: -1}; (cd "$ctx" && find . -type f | LC_ALL=C sort | paste -sd" ") >"$STUB_CONTEXT" ;;
+  image) echo "sha256:5ca1ab1e 123 bytes" ;;
+  login) cat >>"$STUB_DOCKER_STDIN" ;;
+esac; exit 0'
+stub gh 'case "$*" in "api user --jq .login") echo octo ;; "auth token") echo "ghp-$STUB_SECRET" ;; esac'
+export STUB_DOCKER=$SCRATCH/docker.argv STUB_CONTEXT=$SCRATCH/docker.context STUB_DOCKER_STDIN=$SCRATCH/docker.stdin
+irelease() { # N TESTED(0/1) BIND(0/1) → a release at C[N] laid out as build makes one
+  local id=2026101${1}T100000Z-${IC[$1]:0:7} r
+  r=$D3/releases/$id; mkdir -p "$r/bin" "$r/app" "$r/diagrams-node"
+  printf 'release:   %s\ncommit:    %s\nsubject:   i%s\n' "$id" "${IC[$1]}" "$1" >"$r/RELEASE"
+  if [[ $3 == 1 ]]; then printf '#!/usr/bin/env bash\n[[ ${1:-} == --help ]] && echo "--bind <ADDR>"\nexit 0\n' >"$r/bin/menger"
+  else printf '#!/usr/bin/env bash\n[[ ${1:-} == --help ]] && echo "--allowed-host <HOST>"\nexit 0\n' >"$r/bin/menger"; fi
+  echo '#!/bin/sh' >"$r/bin/run-menger"; echo '#!/bin/sh' >"$r/bin/menger-diagrams"; chmod +x "$r/bin/"*
+  echo '<!doctype html>' >"$r/app/index.html"; echo '{}' >"$r/diagrams-node/package.json"
+  [[ $2 == 1 ]] && date -u +%FT%TZ >"$r/TESTED"
+  chmod -R a-w "$r"; echo "$id"
+}
+irun() { HOME=$H3 TMPDIR=$SCRATCH/tmp run "$@"; }
+: >"$STUB_DOCKER"
+irun image
+same "image, no release: exits 1" "$code" 1
+has "image, no release: said" "$err" "no TESTED release"
+I0=$(irelease 0 1 1) I1=$(irelease 1 1 1) I2=$(irelease 2 0 1)
+# test passed I1 last (I0 before it; I2 failed its smoke): the log decides, not the name
+printf '2026-10-10T10:00:00Z\ttest\tdeploy\t%s\tok\n2026-10-11T10:00:00Z\ttest\tdeploy\t%s\tok\n2026-10-11T11:00:00Z\ttest\tsync\t%s\tok\n2026-10-12T10:00:00Z\ttest\tdeploy\t%s\tsmoke failed\n' \
+  "$I0" "$I1" "$I1" "$I2" >"$D3/deployments.log"
+HF=$SCRATCH/hf-outputs; : >"$HF"
+HF_OUTPUTS=$HF irun image
+same "image (local): exits 0" "$code" 0
+same "image (local): image= and release= on stdout" "$(<"$SCRATCH/out")" $'image=menger:'"$I1"$'\nrelease='"$I1"
+same "image (local): the same lines in \$HF_OUTPUTS" "$(<"$HF")" $'image=menger:'"$I1"$'\nrelease='"$I1"
+b=$(grep '^docker build' "$STUB_DOCKER")
+has "image (local): tagged menger:<release>" "$b" "-t menger:$I1 "
+has "image (local): the release named in the build" "$b" "--build-arg MENGER_RELEASE=$I1 --build-arg MENGER_COMMIT=${IC[1]}"
+[[ $b != *":latest"* ]] && ok || bad "image (local) tagged :latest: $b"
+same "image (local): the context is the release's bytes and the Dockerfile, nothing else" "$(<"$STUB_CONTEXT")" \
+  "./Dockerfile ./release/RELEASE ./release/app/index.html ./release/bin/menger ./release/bin/run-menger"
+[[ $(grep -c -e '^docker push' -e '^docker login' "$STUB_DOCKER") == 0 ]] && ok || bad "image (local) pushed or logged in"
+same "image: the staged context removed" "$(ls -A "$SCRATCH/tmp")" ""
+same "image: a line in deployments.log" "$(tail -n 1 "$D3/deployments.log" | cut -f2-)" $'image\tlocal\t'"$I1"$'\tok menger:'"$I1"
+same "image: the log line is no deployment" "$("$REPO/deploy/record" --from pipeline-log "$D3/deployments.log" -c | jq -s 'map(select(.revision == "'"${IC[1]:0:7}"'")) | length')" 2
+# a named release
+: >"$STUB_DOCKER"; irun image "$I0"
+same "image RELEASE: exits 0" "$code" 0
+has "image RELEASE: that one" "$(<"$SCRATCH/out")" "image=menger:$I0"
+irun image "$I2"
+same "image, an untested release: exits 1" "$code" 1
+has "image, an untested release: said" "$err" "$I2 has not passed the test environment — run: deploy/pipeline deploy test $I2"
+irun image nonesuch
+same "image, no such release: exits 1" "$code" 1
+# a tested release from before RUN-8: no --bind, no image
+OLD=$(id=20261009T100000Z-${IC[0]:0:7}; r=$D3/releases/$id; mkdir -p "$r/bin" "$r/app"
+  printf 'release:   %s\ncommit:    %s\n' "$id" "${IC[0]}" >"$r/RELEASE"
+  printf '#!/usr/bin/env bash\necho "--allowed-host <HOST>"\n' >"$r/bin/menger"; echo '#!/bin/sh' >"$r/bin/run-menger"
+  chmod +x "$r/bin/"*; echo x >"$r/app/index.html"; date >"$r/TESTED"; chmod -R a-w "$r"; echo "$id")
+: >"$STUB_DOCKER"; irun image "$OLD"
+same "image, a release without --bind: exits 1" "$code" 1
+has "image, a release without --bind: RUN-8 named" "$err" "has no --bind (RUN-8"
+same "image, refused: docker never asked" "$(wc -l <"$STUB_DOCKER")" 0
+IMAGE_STORE=s3 irun image
+same "image, an unknown store: exits 1" "$code" 1
+has "image, an unknown store: said" "$err" "IMAGE_STORE 's3' — local or ghcr"
+# the build fails: no outputs, the log says so
+: >"$HF"; STUB_DOCKER_FAIL=build HF_OUTPUTS=$HF irun image
+same "image, docker build fails: exits 1" "$code" 1
+same "image, docker build fails: no outputs" "$(<"$SCRATCH/out")$(<"$HF")" ""
+same "image, docker build fails: logged" "$(tail -n 1 "$D3/deployments.log" | cut -f2-)" $'image\tlocal\t'"$I1"$'\tbuild failed'
+same "image, docker build fails: the context removed" "$(ls -A "$SCRATCH/tmp")" ""
+# ghcr: :<release> and :latest, both pushed, signed in with gh's token on stdin
+: >"$STUB_DOCKER"; : >"$HF"; IMAGE_STORE=ghcr HF_OUTPUTS=$HF irun image
+same "image (ghcr): exits 0" "$code" 0
+same "image (ghcr): outputs" "$(<"$HF")" $'image=ghcr.io/hypermemetic-ai/menger:'"$I1"$'\nrelease='"$I1"
+has "image (ghcr): both tags built" "$(grep '^docker build' "$STUB_DOCKER")" "-t ghcr.io/hypermemetic-ai/menger:$I1 -t ghcr.io/hypermemetic-ai/menger:latest"
+same "image (ghcr): login, then both pushed" "$(grep -e '^docker login' -e '^docker push' "$STUB_DOCKER" | paste -sd'|')" \
+  "docker login ghcr.io -u octo --password-stdin|docker push --quiet ghcr.io/hypermemetic-ai/menger:$I1|docker push --quiet ghcr.io/hypermemetic-ai/menger:latest"
+same "image (ghcr): the token on stdin" "$(<"$STUB_DOCKER_STDIN")" "ghp-$STUB_SECRET"
+[[ $(<"$STUB_DOCKER") != *"$STUB_SECRET"* ]] && ok || bad "image (ghcr): the token rode in docker's argv"
+MENGER_IMAGE_GHCR=ghcr.io/acme/m IMAGE_STORE=ghcr irun image "$I0"
+has "image (ghcr): the repository is configurable" "$(<"$SCRATCH/out")" "image=ghcr.io/acme/m:$I0"
+
 printf 'deploy/pipeline records: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]
