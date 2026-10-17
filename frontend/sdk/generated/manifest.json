@@ -184,6 +184,17 @@
         "project"
       ]
     },
+    "media": {
+      "get": [
+        "hash"
+      ],
+      "put": [
+        "data",
+        "mime",
+        "ticket"
+      ],
+      "schema": []
+    },
     "members": {
       "grant": [
         "principal",

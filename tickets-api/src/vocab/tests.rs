@@ -211,6 +211,12 @@ fn prose_has_a_name_and_one_rule_each() {
     holds::<Title>(&["Wrap long titles", " padded "], &["", "   ", &"a".repeat(crate::limits::TITLE_MAX + 1)]);
     assert_eq!(" padded ".parse::<Title>().unwrap().as_str(), " padded ", "a title is kept as written");
     holds::<Body>(&["", "# a body\n\nwith $ and `code`"], &[]);
+    // COMMENT-5: an image's hash, type and data.
+    let (hash, named, bad) = ("9f".repeat(32), format!("media:{}", "AB".repeat(32)), "g".repeat(64));
+    holds::<MediaHash>(&[hash.as_str(), named.as_str()], &["", "abc", bad.as_str()]);
+    assert_eq!(named.parse::<MediaHash>().unwrap().as_str(), "ab".repeat(32));
+    holds::<MediaType>(&["image/png", "IMAGE/JPEG", "image/svg+xml", "text/plain; charset=utf-8"], &["", "png", "image/", "/png", "image png"]);
+    holds::<MediaData>(&["", "iVBORw0KGgo="], &[]);
     holds::<Message>(&["folded into MNG-9", "", "  why  "], &["a\u{7}b"]);
     assert_eq!("  why  ".parse::<Message>().unwrap().given().as_deref(), Some("why"));
     assert_eq!("".parse::<Message>().unwrap().given(), None);

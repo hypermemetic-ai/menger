@@ -302,11 +302,15 @@ pub fn pieces(text: &str) -> Vec<Piece> {
 pub(crate) fn CommentText(#[prop(into)] text: String) -> impl leptos::IntoView {
     use leptos::prelude::*;
     let node = NodeRef::<leptos::html::Div>::new();
-    node.on_load(move |el: web_sys::HtmlDivElement| mount(&el));
+    node.on_load(move |el: web_sys::HtmlDivElement| {
+        mount(&el);
+        // COMMENT-5: its images drawn.
+        crate::media::hydrate(&el);
+    });
     let parts = pieces(&text)
         .into_iter()
         .map(|p| match p {
-            Piece::Text(t) => view! { <crate::links::Linkified text=t /> }.into_any(),
+            Piece::Text(t) => crate::media::segments(&t).into_iter().map(segment).collect_view().into_any(),
             Piece::Code { lang, code } => {
                 let class = lang.map(|l| format!("language-{l}"));
                 view! { <pre class="ccode"><code class=class>{code}</code></pre> }.into_any()
@@ -314,6 +318,23 @@ pub(crate) fn CommentText(#[prop(into)] text: String) -> impl leptos::IntoView {
         })
         .collect_view();
     view! { <div class="ctext" node_ref=node>{parts}</div> }
+}
+
+/// COMMENT-5: one stretch of a comment's prose — its words linkified, an
+/// image it shows drawn (a `media:` one filled by `media::hydrate`), one
+/// from another origin not drawn: its alt, linked.
+fn segment(s: crate::media::Seg) -> leptos::prelude::AnyView {
+    use crate::media::Seg;
+    use leptos::prelude::*;
+    match s {
+        Seg::Text(t) => view! { <crate::links::Linkified text=t /> }.into_any(),
+        Seg::Media { alt, hash } => view! { <img class="cimg" data-media=hash alt=alt.clone() title=alt /> }.into_any(),
+        Seg::Data { alt, url } => view! { <img class="cimg" src=url alt=alt.clone() title=alt /> }.into_any(),
+        Seg::Remote { alt, url } => {
+            let text = if alt.trim().is_empty() { url.clone() } else { alt };
+            view! { <a class="ulink" href=url>{text}</a> }.into_any()
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1257,6 +1257,12 @@ pub enum StoreError {
     NoteUpgraded { id: u64, ticket: String },
     /// NOTE-2: `list`'s `after` names no note.
     NoteCursor(u64),
+    /// COMMENT-5: `media.put` refused the image — too large, not a kept
+    /// type by its bytes, not the type declared ([`crate::media::Problem`],
+    /// which names it). Nothing was kept.
+    MediaRefused(crate::media::Problem),
+    /// COMMENT-5: no image by this hash — or one the reader may not see.
+    MediaNotFound(String),
     /// MENGER-30: an `update`'s `block` / `unblock` named a blank id, or one
     /// id in both — `why` says which. Nothing was written.
     Blockers { id: String, why: String },
@@ -1573,6 +1579,8 @@ impl std::fmt::Display for StoreError {
             Self::NoteNotFound { id, newest: Some(n) } => write!(f, "no note {id}: note ids run from 1 to {n} (nothing changed)"),
             Self::NoteUpgraded { id, ticket } => write!(f, "note {id} is already a ticket: {ticket} (nothing changed)"),
             Self::NoteCursor(id) => write!(f, "after: no note {id} to resume after"),
+            Self::MediaRefused(problem) => write!(f, "{problem} (nothing was kept)"),
+            Self::MediaNotFound(hash) => write!(f, "no image {hash}"),
             Self::Ambiguous { text, candidates } => write!(
                 f,
                 "'{text}' names more than one: {} — name one in full, or by a short form only it has (nothing was read \
@@ -1852,6 +1860,9 @@ struct Cache {
     /// NOTE-2: every note ([`notes::Notes`]) — read at open, moved by `add`
     /// and by the birth of the ticket a note becomes.
     notes: notes::Notes,
+    /// COMMENT-5: every kept image, without its bytes ([`media::Media`]) —
+    /// read at open, moved by `put` alone.
+    media: media::Media,
     /// IDENTITY-21: every grant ([`members::Members`]) — read at open, moved
     /// by `grant` and `revoke` alone.
     members: members::Members,
@@ -2238,6 +2249,8 @@ impl Cache {
             comments: comments::Comments::default(),
             // NOTE-2: and the notes.
             notes: notes::Notes::default(),
+            // COMMENT-5: and the images.
+            media: media::Media::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
@@ -2324,6 +2337,8 @@ impl Cache {
             comments: comments::Comments::default(),
             // NOTE-2: and the notes.
             notes: notes::Notes::default(),
+            // COMMENT-5: and the images.
+            media: media::Media::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
@@ -3120,6 +3135,8 @@ impl Store {
         search::migrate(&mut conn)?;
         // NOTE-2: a file without the notes table gains it, empty, here.
         notes::migrate(&mut conn)?;
+        // COMMENT-5: and one without the media tables gains them, empty.
+        media::migrate(&mut conn)?;
         // MENGER-13: and one without the transition log gains it, empty,
         // with the moment it began — no ticket gets a history it never had.
         history::migrate(&mut conn)?;
@@ -3235,6 +3252,8 @@ impl Store {
         cache.comments = comments::load(conn)?;
         // NOTE-2: the notes, as stored.
         cache.notes = notes::load(conn)?;
+        // COMMENT-5: what each image is, as stored (its bytes stay there).
+        cache.media = media::load(conn)?;
         // IDENTITY-21: the members, as stored — ACCESS-48: their rows, read
         // as grants once ORG-4 has settled them (below).
         let grant_rows = members::rows(conn)?;
@@ -5408,6 +5427,11 @@ pub use comments::{CommentChange, CommentPage, CommentQuery};
 /// NOTE-2: the notes store — every note, kept beside the tickets; a note
 /// made a ticket in the ticket's own write.
 mod notes;
+
+/// COMMENT-5: the images comments show — content-addressed, the bytes in
+/// the file, read through the reach of the ticket each was put for.
+mod media;
+pub use media::Put;
 pub use notes::{NotePage, NoteQuery};
 /// IDENTITY-21: the members store — every grant of a role on a scope, kept
 /// beside the tickets, behind the cache.
@@ -5425,7 +5449,7 @@ mod system;
 pub use system::System;
 // ACCESS-11: what a write takes.
 mod writs;
-pub use writs::{Authority, Blocker, Filing, Move, OnComment, Parenting, Rehost, Under, Updating};
+pub use writs::{Authority, Blocker, Filing, Move, OnComment, OnMedia, Parenting, Rehost, Under, Updating};
 #[cfg(test)]
 pub(crate) use system::SYS;
 pub use members::Members;
@@ -5605,6 +5629,10 @@ mod tests_search;
 /// one write and its refusals; across a reopen.
 #[cfg(test)]
 mod tests_notes;
+/// COMMENT-5: images — kept by hash, one row twice, read through a reach,
+/// refused naming why, across a reopen.
+#[cfg(test)]
+mod tests_media;
 /// DEPLOY-11: deployments — the fold, rollbacks, the kept join, the cells.
 #[cfg(test)]
 mod tests_deployments;

@@ -173,6 +173,83 @@ pub fn render_body(src: &str) -> Rendered {
     render(src, None, false, false)
 }
 
+/// COMMENT-5: a comment's body — [`render_body`]'s, but its images are a
+/// comment's: `![alt](media:<hash>)` is drawn, as an `img.cimg` the page
+/// fills from `media.get` (src/media.rs: no `src` until the bytes are in
+/// hand, then a `blob:` URL); a `data:image/…` one is drawn as it is; any
+/// other (another origin's, which the page's CSP would refuse anyway) is not
+/// drawn — its alt is, as a link to it.
+pub fn render_comment(src: &str) -> Rendered {
+    render_as(src, None, false, false, true)
+}
+
+/// COMMENT-5: whether `dest` is an image a comment draws as it is: a
+/// `data:` URL of one of the kept types.
+fn is_data_image(dest: &str) -> bool {
+    let d = dest.trim().to_ascii_lowercase();
+    ["png", "jpeg", "gif", "webp"].iter().any(|t| d.starts_with(&format!("data:image/{t};")) || d.starts_with(&format!("data:image/{t},")))
+}
+
+/// COMMENT-5: the markup a `media:` image becomes — a fixed wrapper, the
+/// hash (hex) and the alt escaped into its attributes.
+fn media_img(hash: &str, alt: &str) -> String {
+    let mut esc = String::new();
+    escape_html(&mut esc, alt.trim()).expect("escaping into a String cannot fail");
+    format!("<img class=\"cimg\" data-media=\"{hash}\" alt=\"{esc}\" title=\"{esc}\" />")
+}
+
+/// COMMENT-5: a comment's images, after the rest — see [`render_comment`].
+/// Every image here passed the allow-list (or is a `media:` or `data:image`
+/// one, which a comment lets through to be drawn here).
+fn comment_images<'a>(events: Vec<Event<'a>>) -> Vec<Event<'a>> {
+    let mut out: Vec<Event<'a>> = Vec::with_capacity(events.len());
+    // Inside a `media:` image: its hash, its alt so far, images nested in it.
+    let mut media: Option<(String, String, u32)> = None;
+    // Each open image outside one: drawn (`None`), or made a link — where
+    // its Start went and its destination, for an alt that is empty.
+    let mut open: Vec<Option<(usize, String)>> = Vec::new();
+    for ev in events {
+        if let Some((_, alt, depth)) = media.as_mut() {
+            match ev {
+                Event::Text(t) | Event::Code(t) => alt.push_str(&t),
+                Event::SoftBreak | Event::HardBreak => alt.push(' '),
+                Event::Start(Tag::Image { .. }) => *depth += 1,
+                Event::End(TagEnd::Image) if *depth > 0 => *depth -= 1,
+                Event::End(TagEnd::Image) => {
+                    let (hash, alt, _) = media.take().expect("checked");
+                    out.push(Event::Html(media_img(&hash, &alt).into()));
+                }
+                _ => {}
+            }
+            continue;
+        }
+        match ev {
+            Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
+                if let Some(hash) = menger_tickets_api::media::hash_of(&dest_url) {
+                    media = Some((hash, String::new(), 0));
+                } else if is_data_image(&dest_url) {
+                    open.push(None);
+                    out.push(Event::Start(Tag::Image { link_type, dest_url, title, id }));
+                } else {
+                    open.push(Some((out.len(), dest_url.to_string())));
+                    out.push(Event::Start(Tag::Link { link_type, dest_url, title, id }));
+                }
+            }
+            Event::End(TagEnd::Image) => match open.pop() {
+                Some(Some((at, dest))) => {
+                    if out.len() == at + 1 {
+                        out.push(Event::Text(dest.into()));
+                    }
+                    out.push(Event::End(TagEnd::Link));
+                }
+                _ => out.push(Event::End(TagEnd::Image)),
+            },
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// WAVE-11: what a `{wave: ID}` renders as — the ticket's placement, as the
 /// caller holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -722,6 +799,12 @@ fn options() -> Options {
 /// text (MFE-7) — the one difference between the two modes. `cards`
 /// (framed only, COMP-9): a definition block renders as its docs card.
 fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: bool, cards: bool) -> Rendered {
+    render_as(src, resolve, framed, cards, false)
+}
+
+/// [`render`], and COMMENT-5's `comment`: a comment's images drawn
+/// ([`render_comment`]).
+fn render_as(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: bool, cards: bool, comment: bool) -> Rendered {
     let opts = options();
     // COMP-12: a NUL is [`push_marked`]'s sentinel — CommonMark's U+FFFD
     // stands for a source's own.
@@ -873,7 +956,10 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
                 title,
                 id,
             }) => {
-                if dest_allowed(&dest_url, false) {
+                // COMMENT-5: a comment keeps its `media:` and `data:image`
+                // images, for [`comment_images`] to draw.
+                let drawn = comment && (menger_tickets_api::media::hash_of(&dest_url).is_some() || is_data_image(&dest_url));
+                if dest_allowed(&dest_url, false) || drawn {
                     Some(Event::Start(Tag::Image {
                         link_type,
                         dest_url,
@@ -897,6 +983,7 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
 
     let mut html = String::new();
     match resolve {
+        None if comment => push_marked(&mut html, comment_images(autolink(events)).into_iter(), framed),
         None => push_marked(&mut html, autolink(events).into_iter(), framed),
         Some(resolve) => {
             // WAVE-11: the prose, each run of text taken whole (the parser
@@ -1139,6 +1226,28 @@ mod tests {
             render_markdown("![x](data:text/html,<script>1</script>) ![y](https://e.com/i.png)");
         assert!(!out.contains("data:"), "{out}");
         assert!(out.contains("src=\"https://e.com/i.png\""), "{out}");
+    }
+
+    /// COMMENT-5: a comment draws its `media:` images (no `src` until the
+    /// page fills it) and its `data:image` ones; another origin's is not
+    /// drawn — its alt is, linked; an executable scheme is still its text.
+    #[test]
+    fn a_comment_draws_only_its_own_images() {
+        let hash = "9f".repeat(32);
+        let src = format!("the hold ![the <curve>](media:{hash}) ![d](data:image/png;base64,AAAA) ![r](https://e.com/i.png) ![](https://e.com/j.png) ![x](javascript:alert(1)) ![s](data:image/svg+xml,<svg/>)");
+        let out = render_comment(&src).html;
+        assert!(out.contains(&format!("<img class=\"cimg\" data-media=\"{hash}\" alt=\"the &lt;curve&gt;\" title=\"the &lt;curve&gt;\" />")), "{out}");
+        assert!(out.contains("<img src=\"data:image/png;base64,AAAA\" alt=\"d\" />"), "{out}");
+        assert!(out.contains("<a href=\"https://e.com/i.png\">r</a>"), "{out}");
+        assert!(out.contains("<a href=\"https://e.com/j.png\">https://e.com/j.png</a>"), "an empty alt: the link says where: {out}");
+        assert!(!out.contains("src=\"https://") && !out.contains("javascript:") && !out.contains("svg+xml"), "{out}");
+        assert!(out.contains(" x ") && out.contains(" s"), "a dropped image's alt is text: {out}");
+        // A ticket body is not a comment: a media image there is its alt.
+        let body = render_body(&format!("![a](media:{hash})")).html;
+        assert!(!body.contains("data-media") && !body.contains("<img"), "{body}");
+        // An image inside a media image's alt is flattened into it.
+        let nested = render_comment(&format!("![a ![b](https://e.com/b.png) c](media:{hash})")).html;
+        assert!(nested.contains("alt=\"a b c\""), "{nested}");
     }
 
     // -- formatting (acceptance criterion 2's positive half) ----------

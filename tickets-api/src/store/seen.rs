@@ -327,6 +327,16 @@ impl<'c> Sees<'c> {
         self.all() || on.all(|t| self.cache.resolve(t).is_ok_and(|k| self.id(&k)))
     }
 
+    /// COMMENT-5: whether the reach admits an image — one of the tickets it
+    /// was put for (by its key then, read through the resolver), or, put on
+    /// the app, as a comment on the app is: its putter's and the admins'.
+    pub(super) fn media(&self, owners: &[super::media::Owner]) -> bool {
+        owners.iter().any(|o| match o {
+            super::media::Owner::Ticket(t) => self.all() || self.cache.resolve(t).is_ok_and(|k| self.id(&k)),
+            super::media::Owner::App(p) => self.app.admits(p.as_deref()),
+        })
+    }
+
     /// Whether the reach admits the ticket at `k`.
     pub(super) fn key(&self, k: &OrderKey) -> bool {
         self.view.as_ref().is_none_or(|v| v.contains(&k.shortcode, k.seq))

@@ -159,6 +159,8 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
     let send_key = send.clone();
     let area = NodeRef::<leptos::html::Textarea>::new();
     crate::grow::follow(area, move || body.track());
+    // COMMENT-5: images pasted, dropped or picked — for this ticket.
+    let attach = crate::media::Attach::new(body, area, Some(ticket.clone()));
     let count = move || rows.with(|r| r.as_ref().map(|r| r.len()));
     view! {
         <section class="convsec" id="conversation" data-ticket-id=ticket.clone()>
@@ -185,6 +187,9 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                     placeholder=placeholder(&ticket)
                     prop:value=move || body.get()
                     on:input=move |ev| body.set(event_target_value(&ev))
+                    on:paste=move |ev| attach.paste(ev)
+                    on:dragover=move |ev| attach.dragover(ev)
+                    on:drop=move |ev| attach.dropped(ev)
                     on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
                         Some("comment.save") => {
                             ev.prevent_default();
@@ -200,10 +205,11 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                     }
                 ></textarea>
                 <div class="cnewacts">
+                    <crate::media::Attachments a=attach />
                     {move || error.get().map(|e| view! { <span class="cerr" role="alert">{e}</span> })}
                     <button
                         class="csend"
-                        disabled=move || sending.get() || body.with(|b| b.trim().is_empty())
+                        disabled=move || sending.get() || attach.busy() || body.with(|b| b.trim().is_empty())
                         on:click=move |_| send()
                     >
                         {move || if sending.get() { "Sending…" } else { "Send" }}
@@ -228,9 +234,13 @@ fn row(c: Comment, fresh: bool) -> impl IntoView {
             err.try_set(r.err());
         });
     };
-    let html = md::render_body(&c.body).html;
+    // COMMENT-5: a comment's images — `media:` drawn, another origin's not.
+    let html = md::render_comment(&c.body).html;
     let node = NodeRef::<leptos::html::Div>::new();
-    node.on_load(|el: web_sys::HtmlDivElement| crate::highlight::mount(&el));
+    node.on_load(|el: web_sys::HtmlDivElement| {
+        crate::highlight::mount(&el);
+        crate::media::hydrate(&el);
+    });
     let place = match place(&c) {
         Place::Whole => None,
         Place::Pinned { label, href } => {

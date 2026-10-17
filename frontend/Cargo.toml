@@ -142,9 +142,23 @@ web-sys = { version = "0.3", features = [
   "DocumentFragment",
   "DragEvent",
   "DataTransfer",
+  # COMMENT-5: images in comments — a pasted, dropped or picked file read
+  # (File, FileList, Blob, ClipboardEvent), and the bytes media.get answers
+  # made a blob: URL (Blob, BlobPropertyBag, Url). DragEvent and
+  # DataTransfer are APP-44's, above.
+  "File",
+  "FileList",
+  "Blob",
+  "BlobPropertyBag",
+  "Url",
+  "ClipboardEvent",
 ] }
 
 console_error_panic_hook = "0.1"
+
+# COMMENT-5: an image travels as base64 (media.put, media.get) — already in
+# the tree (the server takes it; plexus-client's backends do).
+base64 = "0.22"
 
 # The WebSocket backend is picked by target, and `WsTransport` is one type
 # either way (MACRO-6). wasm32 is the app; the host build exists so

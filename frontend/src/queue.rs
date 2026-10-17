@@ -1556,6 +1556,8 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
             let _ = el.focus();
         });
         crate::grow::follow(area, move || draft.text.track());
+        // COMMENT-5: images pasted, dropped or picked — for this ticket.
+        let attach = crate::media::Attach::new(draft.text, area, Some(id.clone()));
         view! {
             <div class="qchange open">
                 <textarea
@@ -1566,6 +1568,9 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
                     placeholder=CHANGES_PLACEHOLDER
                     prop:value=move || draft.text.get()
                     on:input=move |ev| draft.text.set(event_target_value(&ev))
+                    on:paste=move |ev| attach.paste(ev)
+                    on:dragover=move |ev| attach.dragover(ev)
+                    on:drop=move |ev| attach.dropped(ev)
                     on:keydown=move |ev: web_sys::KeyboardEvent| match crate::bindings::hit(&ev, crate::bindings::Context::Field) {
                         Some("comment.save") => {
                             ev.prevent_default();
@@ -1581,10 +1586,11 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
                     }
                 ></textarea>
                 <div class="qchange-acts">
+                    <crate::media::Attachments a=attach />
                     <button
                         type="button"
                         class="qbtn fill"
-                        disabled=move || busy.get() || draft.text.with(|t| t.trim().is_empty())
+                        disabled=move || busy.get() || attach.busy() || draft.text.with(|t| t.trim().is_empty())
                         on:click=move |_| send()
                     >
                         "send — request changes"

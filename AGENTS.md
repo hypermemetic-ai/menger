@@ -338,6 +338,20 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   update it with `scripts/chat-bridge/install.sh --start` from main.
   README "The chat bridge".
 
+  A comment shows **images** (COMMENT-5) as `![alt](media:<hash>)`: the
+  `media` activation keeps one for a ticket — `put { ticket, mime, data }`
+  (base64; PNG, JPEG, GIF or WebP by its bytes, never SVG, at most 7 MiB;
+  refused in band naming why) answers `stored { hash, … }`, `get { hash }`
+  its bytes, `not_found` to a reader who cannot see the ticket. The app
+  pastes, drops and picks them in every comment box. The data goes as a
+  file (`--data @shot.b64`) or stdin, never `"$(base64 …)"`. README
+  "Images in comments":
+
+  ```sh
+  base64 -w0 shot.png > shot.b64
+  synapse -P 4455 menger media put --ticket KILN-4 --mime image/png --data @shot.b64
+  ```
+
   **Notes** (NOTE-2) are the `notes` activation: dated, untitled thoughts
   kept in one place — `add { body }`, `list` (newest first; `state`
   open/upgraded, `author`, `text`; `after` + `limit`), `get { id }`, and
