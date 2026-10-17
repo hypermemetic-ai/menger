@@ -1141,27 +1141,20 @@ fn Board(
 #[component]
 fn BoardEmpty(board: board::Board) -> impl IntoView {
     let lens = lens::use_lens();
+    // FILTER-41: its filter as the chips line draws it — the global filter
+    // dashed, then the board's groups joined by or.
     let pills = move || {
-        lens::bar_pills(lens::Level::Board, lens.pills(lens::Level::Global), lens.pills(lens::Level::Board))
-            .into_iter()
-            .map(|(level, p)| {
-                let (cat, words) = filter::pill_words(&p);
-                let global = level == lens::Level::Global;
-                view! {
-                    <span class="pill" class:inherited=global data-level=level.name()>
-                        <span class="p-cat">{cat}</span>
-                        <span class="p-vals">{words}</span>
-                        {global.then(|| view! { <span class="p-lvl">"global"</span> })}
-                    </span>
-                }
-            })
-            .collect_view()
+        let g = lens.filter(lens::Level::Global).with(|f| f.format());
+        view! {
+            {(!g.is_empty()).then(|| view! { {filter::global_chip(lens, g.clone())}<span class="fw">"and"</span> })}
+            {filter::chips_view(lens, lens::Level::Board, "every ticket")}
+        }
     };
     view! {
         <div class="bempty" role="status">
             <p class="bempty-h">"No tickets match"</p>
             {move || board.refused().map(|why| view! { <p class="bempty-why">"The server did not take this filter: "<code>{why}</code></p> })}
-            <div class="bempty-pills">{pills}</div>
+            <div class="bempty-pills fbar">{pills}</div>
             <div class="bempty-acts">
                 {move || lens.differs(lens::Level::Board).then(|| view! {
                     <button class="bempty-clear" data-clear="board" on:click=move |_| lens.reset(lens::Level::Board)>"Clear the board's filter"</button>
@@ -1325,24 +1318,12 @@ impl UnderLens {
 /// `clear`. The page itself always opens.
 fn outside_notice() -> impl IntoView {
     let lens = lens::use_lens();
-    let pills = move || {
-        lens.pills(lens::Level::Global)
-            .into_iter()
-            .map(|p| {
-                let (cat, words) = filter::pill_words(&p);
-                view! {
-                    <span class="pill">
-                        <span class="p-cat">{cat}</span>
-                        <span class="p-vals">{words}</span>
-                    </span>
-                }
-            })
-            .collect_view()
-    };
+    // FILTER-41: the global filter as chips — groups joined by or.
+    let pills = move || filter::chips_view(lens, lens::Level::Global, "every ticket");
     view! {
         <div id="t-outside" class="tout" role="status">
             <strong>"Outside the global filter"</strong>
-            <span class="tout-pills">{pills}</span>
+            <span class="tout-pills fbar">{pills}</span>
             <button class="tout-clear" title="clear the global filter" on:click=move |_| lens.reset(lens::Level::Global)>"clear"</button>
         </div>
     }
@@ -2584,8 +2565,6 @@ fn App() -> impl IntoView {
             // FILTER-26: Make global's toast, with its Undo.
             <promote::PromoteToast />
             <keys::Overlays overlay />
-            // FILTER-6: Save as…, mounted once.
-            <saved::SaveDialog />
             // MENGER-14: "This link leaves menger", and the refusal notice.
             <links::LeaveDialog />
         </div>

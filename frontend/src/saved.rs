@@ -52,8 +52,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::filter::{pill_words, Clauses, Pill};
 use crate::lens::{Kept, Lens, Level};
-use crate::bindings::{self, Context};
-use crate::{dom, keys, session};
+use crate::{dom, session};
 
 // ---------------------------------------------------------------------
 // Where they live
@@ -671,15 +670,6 @@ pub(crate) async fn load_if_saved(id: &str) -> Result<Option<Filter>, String> {
     }
 }
 
-/// MENGER-12: Save as… `name` with `filter`, replacing what that name holds —
-/// the entry saved (FILTER-27's `keep`).
-pub(crate) async fn save_as(filter: Filter, name: &str) -> Result<Entry, String> {
-    save(filter, name.to_string(), true).await.map(|(e, _)| e).map_err(|f| match f {
-        Failure::Refused(r) => r.words(),
-        Failure::Failed(why) => why,
-    })
-}
-
 /// The filter `id`'s doc holds.
 async fn load(id: String) -> Result<Filter, String> {
     let client = connected()?;
@@ -700,14 +690,6 @@ pub(crate) enum Listing {
     Failed(String),
 }
 
-/// The Save as… dialog's subject: whose filter, the filter it saves, and
-/// what of the level is left out.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Draft {
-    level: Level,
-    filter: Filter,
-    left_out: Vec<String>,
-}
 
 /// Saved filters for the app's lifetime — every handle `Copy`; [`use_saved`]
 /// finds it.
@@ -722,18 +704,12 @@ pub(crate) struct Saved {
     /// In the open menu: the entry being renamed and its draft, the entry
     /// whose removal waits for a yes, what went wrong, a write in flight.
     renaming: RwSignal<Option<String>>,
-    rename_draft: RwSignal<String>,
     removing: RwSignal<Option<String>>,
     problem: RwSignal<Option<String>>,
     busy: RwSignal<bool>,
     /// The Save as… dialog, while it is up: its subject, the name typed,
     /// the listed filter the name collides with, what went wrong, a write in
     /// flight.
-    dialog: RwSignal<Option<Draft>>,
-    name: RwSignal<String>,
-    taken: RwSignal<Option<Entry>>,
-    d_problem: RwSignal<Option<String>>,
-    d_busy: RwSignal<bool>,
     /// What was just done, beside a level's Saved button, for a moment.
     flash: RwSignal<Option<(Level, String)>>,
     flashes: StoredValue<u32>,
@@ -748,11 +724,6 @@ thread_local! {
 /// The app's saved filters, from anywhere (`None` before the App made them).
 pub(crate) fn hook() -> Option<Saved> {
     HOOK.with(std::cell::Cell::get)
-}
-
-/// The app's saved filters.
-pub(crate) fn use_saved() -> Saved {
-    use_context::<Saved>().expect("saved filters are provided by the App")
 }
 
 fn saved_sel(level: Level) -> String {
@@ -779,15 +750,9 @@ impl Saved {
             reading: RwSignal::new(false),
             open: RwSignal::new(None),
             renaming: RwSignal::new(None),
-            rename_draft: RwSignal::new(String::new()),
             removing: RwSignal::new(None),
             problem: RwSignal::new(None),
             busy: RwSignal::new(false),
-            dialog: RwSignal::new(None),
-            name: RwSignal::new(String::new()),
-            taken: RwSignal::new(None),
-            d_problem: RwSignal::new(None),
-            d_busy: RwSignal::new(false),
             flash: RwSignal::new(None),
             flashes: StoredValue::new(0),
         };
@@ -856,17 +821,6 @@ impl Saved {
         });
     }
 
-    fn open_menu(self, level: Level) {
-        for l in Level::ALL {
-            self.lens.pop(l).close(false);
-        }
-        self.renaming.set(None);
-        self.removing.set(None);
-        self.problem.set(None);
-        self.open.set(Some(level));
-        self.refresh();
-    }
-
     /// The menu closed — focus back on its button when a key closed it.
     fn close_menu(self, restore: bool) {
         let Some(level) = self.open.get_untracked() else { return };
@@ -877,6 +831,11 @@ impl Saved {
         if restore {
             focus(&format!("{} button.sbtn", saved_sel(level)));
         }
+    }
+
+    /// FILTER-41: what is flashed at `level` now, beside its line. Tracked.
+    pub(crate) fn flash_for(self, level: Level) -> Option<String> {
+        self.flash.get().filter(|(l, _)| *l == level).map(|(_, w)| w)
     }
 
     /// Words flashed beside `level`'s `Saved ▾` — MENGER-43's `g n` says
@@ -894,38 +853,15 @@ impl Saved {
     }
 
     /// FILTER-27: a suggestion chosen — its filter becomes the level's.
-    fn suggest(self, level: Level, name: &'static str, text: &'static str) {
+    pub(crate) fn suggest(self, level: Level, name: &'static str, text: &'static str) {
         let Ok(filter) = Filter::parse(text) else { return };
         self.lens.apply(level, Some(chosen(filter)));
         self.close_menu(true);
         self.say(level, format!("\u{201c}{name}\u{201d} applied"));
     }
 
-    /// FILTER-27: a suggestion kept — saved as an ordinary saved filter.
-    fn keep(self, level: Level, name: &'static str, text: &'static str) {
-        let Ok(filter) = Filter::parse(text) else { return };
-        if self.busy.get_untracked() {
-            return;
-        }
-        self.busy.set(true);
-        self.problem.set(None);
-        spawn_local(async move {
-            let got = save_as(filter, name).await;
-            self.busy.try_set(false);
-            match got {
-                Ok(_) => {
-                    self.refresh();
-                    self.say(level, format!("\u{201c}{name}\u{201d} kept among the saved filters"));
-                }
-                Err(why) => {
-                    self.problem.try_set(Some(format!("not kept: {why}")));
-                }
-            }
-        });
-    }
-
     /// A saved filter chosen: its filter becomes the level's.
-    fn choose(self, level: Level, e: Entry) {
+    pub(crate) fn choose(self, level: Level, e: Entry) {
         if self.busy.get_untracked() {
             return;
         }
@@ -951,544 +887,10 @@ impl Saved {
         });
     }
 
-    fn start_rename(self, e: &Entry) {
-        self.removing.set(None);
-        self.problem.set(None);
-        self.rename_draft.set(e.name.clone());
-        self.renaming.set(Some(e.id.clone()));
-        request_animation_frame(|| {
-            if let Some(el) = dom::window()
-                .document()
-                .and_then(|d| d.query_selector(".smenu input.sname-in").ok().flatten())
-                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-            {
-                let _ = el.focus();
-                el.select();
-            }
-        });
-    }
-
-    fn finish_rename(self, level: Level, id: String) {
-        if self.busy.get_untracked() {
-            return;
-        }
-        let name = self.rename_draft.get_untracked();
-        self.busy.set(true);
-        self.problem.set(None);
-        spawn_local(async move {
-            let got = rename(id, name).await;
-            self.busy.try_set(false);
-            match got {
-                Ok(list) => {
-                    self.list.try_set(Listing::Read(list));
-                    self.renaming.try_set(None);
-                    let first = format!("{} [role=menuitem]", saved_sel(level));
-                    request_animation_frame(move || focus(&first));
-                }
-                Err(Failure::Refused(r)) => {
-                    self.problem.try_set(Some(format!("not renamed: {}", r.words())));
-                }
-                Err(Failure::Failed(why)) => {
-                    self.problem.try_set(Some(format!("not renamed: {why}")));
-                }
-            }
-        });
-    }
-
-    fn finish_remove(self, level: Level, id: String) {
-        if self.busy.get_untracked() {
-            return;
-        }
-        self.busy.set(true);
-        self.problem.set(None);
-        spawn_local(async move {
-            let got = remove(id).await;
-            self.busy.try_set(false);
-            match got {
-                Ok(list) => {
-                    self.list.try_set(Listing::Read(list));
-                    self.removing.try_set(None);
-                    let first = format!("{} [role=menuitem]", saved_sel(level));
-                    request_animation_frame(move || focus(&first));
-                }
-                Err(why) => {
-                    self.problem.try_set(Some(format!("not removed: {why}")));
-                }
-            }
-        });
-    }
-
-    /// Save as… for `level`: the dialog, over what the level keeps now.
-    fn open_dialog(self, level: Level) {
-        let Some(k) = untrack(|| self.lens.kept(level)) else { return };
-        self.close_menu(false);
-        focus(&format!("{} button.sbtn", saved_sel(level)));
-        keys::remember_focus();
-        self.name.set(String::new());
-        self.taken.set(None);
-        self.d_problem.set(None);
-        self.d_busy.set(false);
-        self.dialog.set(Some(Draft { level, left_out: left_out(&k), filter: k.filter }));
-    }
-
-    fn close_dialog(self) {
-        if self.dialog.get_untracked().is_none() {
-            return;
-        }
-        self.dialog.set(None);
-        keys::restore_focus();
-    }
-
-    fn submit(self, replace: bool) {
-        let Some(d) = self.dialog.get_untracked() else { return };
-        if self.d_busy.get_untracked() {
-            return;
-        }
-        self.d_busy.set(true);
-        self.d_problem.set(None);
-        let name = self.name.get_untracked();
-        spawn_local(async move {
-            let got = save(d.filter.clone(), name, replace).await;
-            self.d_busy.try_set(false);
-            match got {
-                Ok((entry, list)) => {
-                    self.list.try_set(Listing::Read(list));
-                    // FILTER-37: saved under a name, the level wears it.
-                    if let Some(n) = crate::naming::hook() {
-                        if untrack(|| self.lens.filter(d.level).get()) == d.filter {
-                            n.bind(d.level, crate::naming::Bound { id: entry.id.clone(), name: entry.name.clone() }, d.filter.format());
-                        }
-                    }
-                    self.close_dialog();
-                    self.say(d.level, format!("saved as \u{201c}{}\u{201d}", entry.name));
-                }
-                Err(Failure::Refused(Refusal::Taken(e))) => {
-                    self.taken.try_set(Some(e));
-                }
-                Err(Failure::Refused(r)) => {
-                    self.d_problem.try_set(Some(r.words()));
-                }
-                Err(Failure::Failed(why)) => {
-                    self.d_problem.try_set(Some(format!("not saved: {why}")));
-                }
-            }
-        });
-    }
-
-    /// Choose another name: the collision put away, the name selected.
-    fn rename_instead(self) {
-        self.taken.set(None);
-        request_animation_frame(|| {
-            if let Some(el) = dom::window()
-                .document()
-                .and_then(|d| d.get_element_by_id("save-as-name"))
-                .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-            {
-                let _ = el.focus();
-                el.select();
-            }
-        });
-    }
-}
-
-// ---------------------------------------------------------------------
-// The menu
-
-/// The focusable rows of the open menu, and which has focus.
-fn menu_items(level: Level) -> (Vec<web_sys::HtmlElement>, Option<usize>) {
-    let Some(doc) = dom::window().document() else { return (Vec::new(), None) };
-    let Ok(list) = doc.query_selector_all(&format!("{} .smenu [role=menuitem]:not([disabled])", saved_sel(level))) else {
-        return (Vec::new(), None);
-    };
-    let items: Vec<web_sys::HtmlElement> = (0..list.length()).filter_map(|i| list.get(i).and_then(|n| n.dyn_into().ok())).collect();
-    let at = doc.active_element().and_then(|a| items.iter().position(|el| el.is_same_node(Some(&a))));
-    (items, at)
-}
-
-/// `Saved ▾` beside a level's `Filter` button, and its menu while open.
-#[component]
-pub(crate) fn SavedButton(level: Level) -> impl IntoView {
-    let s = use_saved();
-    let is_open = Memo::new(move |_| s.open.get() == Some(level));
-    let toggle = move |_| {
-        if s.open.get_untracked() == Some(level) {
-            s.close_menu(true);
-        } else {
-            s.open_menu(level);
-        }
-    };
-    let on_key = move |ev: web_sys::KeyboardEvent| {
-        if !is_open.get_untracked() {
-            return;
-        }
-        let id = bindings::hit(&ev, Context::Menu);
-        // A rename's field keeps its own keys but Escape.
-        let in_field = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-            .is_some_and(|el| el.tag_name() == "INPUT");
-        match id {
-            Some("dialog.close") => {
-                ev.prevent_default();
-                ev.stop_propagation();
-                if s.renaming.get_untracked().is_some() || s.removing.get_untracked().is_some() {
-                    s.renaming.set(None);
-                    s.removing.set(None);
-                    s.problem.set(None);
-                    let first = format!("{} [role=menuitem]", saved_sel(level));
-                    request_animation_frame(move || focus(&first));
-                } else {
-                    s.close_menu(true);
-                }
-            }
-            Some("list.next" | "list.prev") if !in_field => {
-                ev.prevent_default();
-                let (items, at) = menu_items(level);
-                if let Some(n) = crate::menu::step(at, items.len(), id) {
-                    let _ = items[n].focus();
-                }
-            }
-            _ => {}
-        }
-    };
-    // Focus leaving the menu for elsewhere (Tab past it) closes it; focus
-    // dropped by a row redrawn under it (`relatedTarget` none) does not.
-    let on_focusout = move |ev: web_sys::FocusEvent| {
-        let gone = ev
-            .related_target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-            .is_some_and(|el| el.closest(&saved_sel(level)).ok().flatten().is_none());
-        if gone && is_open.get_untracked() {
-            s.close_menu(false);
-        }
-    };
-    let flash = move || s.flash.get().filter(|(l, _)| *l == level).map(|(_, w)| view! { <span class="sflash" role="status">{w}</span> });
-    view! {
-        <span class="saved" data-saved=level.name() on:keydown=on_key on:focusout=on_focusout>
-            <button
-                class="fbtn sbtn"
-                title=format!("saved filters — choose one for {}, or save it under a name", level_words(level))
-                aria-haspopup="menu"
-                aria-expanded=move || is_open.get().to_string()
-                on:click=toggle
-            >
-                "Saved"
-                <span class="caret" aria-hidden="true">"▾"</span>
-            </button>
-            {move || is_open.get().then(|| menu_view(s, level))}
-            {flash}
-        </span>
-    }
-}
-
-/// Where focus goes in the open menu: its first item — once there is one
-/// to take it (the list read, Save as… enabled) — unless an item or a
-/// field already has it; the menu itself until then, so the keys reach it.
-fn focus_in_menu(level: Level) {
-    let Some(doc) = dom::window().document() else { return };
-    let menu = format!("{} .smenu", saved_sel(level));
-    let on_item = doc
-        .active_element()
-        .is_some_and(|a| a.closest(&format!("{menu} [role=menuitem], {menu} input")).ok().flatten().is_some());
-    if !on_item {
-        let (items, _) = menu_items(level);
-        match items.first() {
-            Some(el) => {
-                let _ = el.focus();
-            }
-            None => focus(&menu),
-        }
-    }
-}
-
-/// The open menu kept inside the window: hung from its button's left edge,
-/// moved left by what would pass the right one (a narrow window, a button
-/// near the edge).
-fn fit_menu(level: Level) {
-    let Some(el) = dom::window()
-        .document()
-        .and_then(|d| d.query_selector(&format!("{} .smenu", saved_sel(level))).ok().flatten())
-        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
-    else {
-        return;
-    };
-    let Some(anchor) = el.parent_element() else { return };
-    let vw = dom::window().inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY);
-    let (at, width) = (anchor.get_bounding_client_rect().left(), el.get_bounding_client_rect().width());
-    let left = ((vw - 8.0 - width) - at).min(0.0).max(8.0 - at).min(0.0);
-    let _ = el.style().set_property("left", &format!("{left}px"));
-}
-
-fn menu_view(s: Saved, level: Level) -> impl IntoView {
-    let empty = Memo::new(move |_| s.lens.kept(level).map_or(true, |k| k.filter.is_empty()));
-    // Drawn, and again whenever the list changes: placed, and focused.
-    Effect::new(move |_| {
-        s.list.track();
-        request_animation_frame(move || {
-            fit_menu(level);
-            focus_in_menu(level);
-            // Pulled in, the menu no longer widens the page, and the row its
-            // button sits in can settle elsewhere: placed again from there.
-            request_animation_frame(move || fit_menu(level));
-        });
-    });
-    // What stands in for the rows (reading, a failure, none yet), and the
-    // rows — keyed, so a list read again unchanged keeps each row's DOM (and
-    // the focus on it).
-    let note = Memo::new(move |_| match s.list.get() {
-        Listing::Unread | Listing::Reading => Some((false, "reading the saved filters…".to_string())),
-        Listing::Failed(why) => Some((true, format!("the saved filters could not be read: {why}"))),
-        Listing::Read(list) if list.is_empty() => Some((false, "none yet — Save as… keeps this filter under a name".to_string())),
-        Listing::Read(_) => None,
-    });
-    let listed = Memo::new(move |_| match s.list.get() {
-        Listing::Read(list) => list,
-        _ => Vec::new(),
-    });
-    // FILTER-27: the suggestions not yet listed — once the list is read.
-    let suggested = Memo::new(move |_| match s.list.get() {
-        Listing::Read(list) => suggestions(&list),
-        Listing::Failed(_) => SUGGESTED.to_vec(),
-        _ => Vec::new(),
-    });
-    let rows = view! {
-        {move || note.get().map(|(bad, words)| view! { <div class="fempty" class:sproblem=bad>{words}</div> })}
-        <For
-            each=move || listed.get()
-            key=|e: &Entry| (e.id.clone(), e.name.clone())
-            children=move |e: Entry| row_view(s, level, e)
-        />
-    };
-    view! {
-        <div class="fmenu smenu" role="menu" tabindex="-1" aria-label="saved filters" data-level=level.name() data-reading=move || s.reading.get().then_some("")>
-            <div class="fhead">"Saved filters"</div>
-            <div class="slist">{rows}</div>
-            {move || (!suggested.get().is_empty()).then(|| view! {
-                <div class="fhead fdiv">"Suggested"</div>
-                {suggested.get().into_iter().map(|(name, text)| view! {
-                    <div class="frow srow suggested" data-suggested=slug(name)>
-                        <button class="schoose" role="menuitem" title=format!("{name}: {text}") on:click=move |_| s.suggest(level, name, text)>
-                            {name}
-                        </button>
-                        <button class="sact" data-act="keep" title="keep it among the saved filters" disabled=move || s.busy.get() on:click=move |_| s.keep(level, name, text)>
-                            "keep"
-                        </button>
-                    </div>
-                }).collect_view()}
-            })}
-            {move || s.problem.get().map(|p| view! { <div class="fempty sproblem" role="alert">{p}</div> })}
-            <div class="fhead fdiv"></div>
-            <button
-                class="frow ssave"
-                role="menuitem"
-                disabled=move || empty.get()
-                title=move || if empty.get() { "nothing to save — the filter is empty".to_string() } else { format!("save {} under a name", level_words(level)) }
-                on:click=move |_| s.open_dialog(level)
-            >
-                <span class="flabel">"Save as…"</span>
-            </button>
-        </div>
-    }
-}
-
-fn row_view(s: Saved, level: Level, e: Entry) -> impl IntoView {
-    let id = e.id.clone();
-    let renaming = {
-        let id = id.clone();
-        Memo::new(move |_| s.renaming.with(|r| r.as_deref() == Some(id.as_str())))
-    };
-    let removing = {
-        let id = id.clone();
-        Memo::new(move |_| s.removing.with(|r| r.as_deref() == Some(id.as_str())))
-    };
-    move || {
-        let e = e.clone();
-        let id = id.clone();
-        if renaming.get() {
-            let done = {
-                let id = id.clone();
-                move || s.finish_rename(level, id.clone())
-            };
-            let done_key = done.clone();
-            view! {
-                <div class="frow srow renaming" data-saved-id=id.clone()>
-                    <input
-                        class="sname-in"
-                        type="text"
-                        maxlength=NAME_MAX.to_string()
-                        aria-label=format!("rename \u{201c}{}\u{201d}", e.name)
-                        prop:value=move || s.rename_draft.get()
-                        on:input=move |ev| s.rename_draft.set(event_target_value(&ev))
-                        on:keydown=move |ev: web_sys::KeyboardEvent| {
-                            if bindings::is(&ev, Context::Field, "form.submit") {
-                                ev.prevent_default();
-                                done_key();
-                            }
-                        }
-                    />
-                    <button class="sact on" data-act="rename-ok" disabled=move || s.busy.get() on:click=move |_| done()>"rename"</button>
-                    <button class="sact" data-act="rename-cancel" on:click=move |_| { s.renaming.set(None); s.problem.set(None); }>"cancel"</button>
-                </div>
-            }
-            .into_any()
-        } else if removing.get() {
-            let yes = id.clone();
-            view! {
-                <div class="frow srow removing" data-saved-id=id.clone()>
-                    <span class="flabel">{format!("remove \u{201c}{}\u{201d} from the list?", e.name)}</span>
-                    <button class="sact on" role="menuitem" data-act="remove-ok" disabled=move || s.busy.get() on:click=move |_| s.finish_remove(level, yes.clone())>"remove"</button>
-                    <button class="sact" role="menuitem" data-act="remove-cancel" on:click=move |_| s.removing.set(None)>"keep"</button>
-                </div>
-            }
-            .into_any()
-        } else {
-            let pick = e.clone();
-            let ren = e.clone();
-            let rid = id.clone();
-            view! {
-                <div class="frow srow" data-saved-id=id.clone()>
-                    <button
-                        class="schoose"
-                        role="menuitem"
-                        title=format!("{}: {}", e.name, address_of(&e.id))
-                        on:click=move |_| s.choose(level, pick.clone())
-                    >
-                        {e.name.clone()}
-                    </button>
-                    <button class="sact" data-act="rename" title="rename it" on:click=move |_| s.start_rename(&ren)>"rename"</button>
-                    <button
-                        class="sact"
-                        data-act="remove"
-                        title="take it out of the list (its doc stays)"
-                        on:click=move |_| {
-                            s.renaming.set(None);
-                            s.problem.set(None);
-                            s.removing.set(Some(rid.clone()));
-                        }
-                    >
-                        "remove"
-                    </button>
-                </div>
-            }
-            .into_any()
-        }
-    }
 }
 
 // ---------------------------------------------------------------------
 // The dialog
-
-/// Save as…: mounted once beside the app's columns; up while a level's
-/// Save as… is.
-#[component]
-pub(crate) fn SaveDialog() -> impl IntoView {
-    let s = use_saved();
-    move || s.dialog.get().map(|d| dialog_view(s, d))
-}
-
-fn dialog_view(s: Saved, d: Draft) -> impl IntoView {
-    let field = NodeRef::<leptos::html::Input>::new();
-    field.on_load(|el: web_sys::HtmlInputElement| {
-        let _ = el.focus();
-    });
-    let on_key = move |ev: web_sys::KeyboardEvent| {
-        match bindings::hit(&ev, Context::Dialog) {
-            Some("dialog.close") => {
-                ev.prevent_default();
-                s.close_dialog();
-            }
-            Some(id @ ("dialog.next-field" | "dialog.prev-field")) => {
-                ev.prevent_default();
-                keys::trap_tab(id == "dialog.prev-field");
-            }
-            _ => {}
-        }
-        ev.stop_propagation();
-    };
-    let text = d.filter.format();
-    let left = (!d.left_out.is_empty()).then(|| {
-        let what = d.left_out.join(" · ");
-        view! {
-            <p class="sleft" data-left-out="">
-                <strong>"Left out: "</strong>
-                {what}
-                {format!(" — {}, which a saved filter does not keep.", surface_words(d.level))}
-            </p>
-        }
-    });
-    view! {
-        <div class="overlay" on:click=move |_| s.close_dialog()>
-            <div
-                id="save-as"
-                class="dialog"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="save-as-h"
-                data-level=d.level.name()
-                on:click=|ev| ev.stop_propagation()
-                on:keydown=on_key
-            >
-                <h2 id="save-as-h">{format!("Save {}", level_words(d.level))}</h2>
-                <label class="sname">
-                    <span>"Name"</span>
-                    <input
-                        id="save-as-name"
-                        node_ref=field
-                        type="text"
-                        autocomplete="off"
-                        spellcheck="false"
-                        maxlength=NAME_MAX.to_string()
-                        placeholder="open builds"
-                        prop:value=move || s.name.get()
-                        on:input=move |ev| {
-                            s.name.set(event_target_value(&ev));
-                            s.taken.set(None);
-                            s.d_problem.set(None);
-                        }
-                        on:keydown=move |ev: web_sys::KeyboardEvent| {
-                            if bindings::is(&ev, Context::Field, "form.submit") {
-                                ev.prevent_default();
-                                if s.taken.get_untracked().is_none() {
-                                    s.submit(false);
-                                }
-                            }
-                        }
-                    />
-                </label>
-                <div class="stext">
-                    <span class="slab">"saves"</span>
-                    <code>{saved_text(&d.filter)}</code>
-                </div>
-                {(text.is_empty()).then(|| view! { <p class="sleft">"The filter is empty."</p> })}
-                {left}
-                {move || {
-                    let name = s.name.get();
-                    s.taken.get().map(|e| view! {
-                        <div class="staken" role="alert">
-                            <p>{taken_words(&clean_name(&name), &e)}</p>
-                            <div class="sacts">
-                                <button class="primary" data-act="replace" disabled=move || s.d_busy.get() on:click=move |_| s.submit(true)>"Replace it"</button>
-                                <button data-act="another" on:click=move |_| s.rename_instead()>"Choose another name"</button>
-                            </div>
-                        </div>
-                    })
-                }}
-                {move || s.d_problem.get().map(|p| view! { <p class="sproblem" role="alert">{p}</p> })}
-                <div class="sacts">
-                    <button data-act="cancel" on:click=move |_| s.close_dialog()>"Cancel"</button>
-                    <button
-                        class="primary"
-                        data-act="save"
-                        disabled=move || s.d_busy.get() || s.taken.with(Option::is_some) || slug(&s.name.get()).is_empty()
-                        on:click=move |_| s.submit(false)
-                    >
-                        {move || if s.d_busy.get() { "Saving…" } else { "Save" }}
-                    </button>
-                </div>
-            </div>
-        </div>
-    }
-}
 
 #[cfg(test)]
 mod tests {
