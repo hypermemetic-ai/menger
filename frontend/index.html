@@ -1528,6 +1528,19 @@
   .mmock-state { margin: 0; padding: .5rem .7rem; font-size: calc(13px * var(--text-scale)); color: var(--muted);
     border: var(--border) dashed var(--line); border-radius: var(--radius-lg); }
   .mmock[data-state="failed"] .mmock-state { color: var(--err-fg); background: var(--err-bg); border-style: solid; }
+  /* APP-46: answering on the mock — a decision's option's look carries its
+     name, its mark and *pick this* at the head of its bar; every mockup
+     *comment*. The answer's box takes the pass border, as its card does. */
+  .mpick { display: inline-flex; align-items: center; gap: .4rem; min-width: 0; }
+  .mpick-name { color: var(--ink); font-weight: var(--weight-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 18rem; }
+  .mpick-mark { font-family: var(--mono); font-size: calc(.72rem * var(--text-scale)); color: var(--live); border: var(--border) solid var(--live);
+    border-radius: var(--radius); padding: 0 .35rem; }
+  .mpick[data-mark="weighed"] .mpick-mark { color: var(--muted); border-color: var(--line); }
+  .mpick-go:not(:disabled) { border-color: var(--accent); color: var(--accent); font-weight: var(--weight-strong); }
+  .mpick-err { color: var(--err-fg); }
+  .mmock:has(.mpick[data-mark="answer"]), .mmock:has(.mpick[data-mark="decided"]) {
+    outline: 2px solid var(--live); outline-offset: 4px; border-radius: var(--radius-lg); }
+  .mmock:has(.mpick[data-mark="weighed"]) .framed-stage { opacity: .62; }
   .md .wave-ref {
     font-family: var(--mono); font-size: calc(.85em * var(--text-scale)); white-space: nowrap; text-decoration: none;
     border: var(--border) solid var(--chip-line); background: var(--chip-bg); color: var(--chip-fg); border-radius: var(--radius-lg); padding: 0 5px;
@@ -2152,7 +2165,7 @@
     box-shadow: 0 12px 32px var(--shadow); padding: .55rem .65rem; font: calc(13px * var(--text-scale))/1.45 var(--sans);
   }
   #annot-layer .annot-list { width: 21rem; max-height: 60vh; overflow: auto; }
-  #annot-layer .annot-for { display: flex; align-items: baseline; gap: .5rem; margin-bottom: .4rem; min-width: 0; }
+  #annot-layer .annot-for { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem; margin-bottom: .4rem; min-width: 0; }
   #annot-layer .annot-what { font-weight: var(--weight-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   #annot-layer .annot-where { margin-left: auto; color: var(--muted); font: calc(11px * var(--text-scale))/1.5 var(--mono); white-space: nowrap; }
   #annot-layer textarea {

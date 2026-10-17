@@ -145,6 +145,46 @@ async fn a_body_written_declares_its_inputs() {
     assert_eq!((go.state, actions(&go)), (InputState::Answered, vec![InputAction::Answered]), "history kept");
 }
 
+/// APP-46: a decision between looks puts a mockup in each option — an
+/// inline `<m-mockup>` or a ```mockup fence. The body is taken, the input
+/// is the decision with its three options (value, name, recommended), and
+/// nothing inside a mocked page is an input of the ticket, though a page
+/// holds a decision of its own.
+#[tokio::test]
+async fn a_decision_between_looks_holds_a_mockup_in_each_option() {
+    let store = store().await;
+    let page = |n: &str| {
+        format!("<!doctype html><html><body><h1>{n}</h1><m-decision id=\"inside\"><m-option name=\"X\"></m-option></m-decision></body></html>")
+    };
+    let body = format!(
+        "Which look?\n\n<m-decision data-field=\"decision\" id=\"look\">\n\n<m-question data-field=\"question\">Which look ships?</m-question>\n\n\
+         <m-option data-field=\"option\" name=\"Dense\" value=\"dense\" recommended cost=\"more to scan\">\n\n\
+         <m-mockup widths=\"390,1440\" title=\"Dense\">\n{}\n</m-mockup>\n\n</m-option>\n\n\
+         <m-option data-field=\"option\" name=\"Airy\" value=\"airy\" cost=\"one screen holds less\">\n\n\
+         ```mockup widths=390,1440\n{}\n```\n\n</m-option>\n\n\
+         <m-option data-field=\"option\" name=\"Cards\" cost=\"a second layout\">\n\n\
+         <m-mockup widths=\"390\">\n<m-description>Cards at a phone's width.</m-description>\n{}\n</m-mockup>\n\n</m-option>\n\n\
+         <m-recommendation data-field=\"recommendation\">Dense: the owner scans.</m-recommendation>\n\n</m-decision>\n",
+        page("Dense"),
+        page("Airy"),
+        page("Cards")
+    );
+    let id = born(&store, &body).await;
+    let inputs = store.inputs(SYS, Some(&id), None, None).unwrap();
+    assert_eq!(inputs.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["look"], "a mocked page's own decision is no input");
+    assert_eq!(
+        inputs[0].options,
+        vec![
+            InputOption { value: "dense".into(), label: "Dense".into(), recommended: true },
+            InputOption { value: "airy".into(), label: "Airy".into(), recommended: false },
+            InputOption { value: "Cards".into(), label: "Cards".into(), recommended: false },
+        ]
+    );
+    // Picked on a mockup's bar, the answer is the decision's like any other.
+    changed(store.answer(SYS.permit(&id), "look", choice("airy"), None, AnswerSource::App).await.unwrap());
+    assert_eq!(one(&store, &id, "look").state, InputState::Answered);
+}
+
 /// Row 1's refusal: a duplicate id in one body refuses the write in-band,
 /// naming the id — a create stores nothing and spends no id; an amend
 /// changes nothing, title included; nothing is heard. Other malformed

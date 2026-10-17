@@ -323,7 +323,7 @@ pub(crate) fn escape() -> bool {
 }
 
 /// The page's route, as anchors spell it.
-fn route_now() -> String {
+pub(crate) fn route_now() -> String {
     crate::route_text(&crate::parse_route(&dom::window().location().hash().unwrap_or_default()))
 }
 
@@ -521,6 +521,14 @@ fn open_box(a: Annot, anchor: Anchor, target: Target) {
     a.open.set(None);
     a.draft_at.set(rect);
     a.draft.set(Some(Draft { seq, anchor, error: None, saving: false }));
+}
+
+/// APP-46: the comment box for `anchor`, opened at `at` (a control the host
+/// drew — a mockup bar's *comment*), without entering the mode.
+pub(crate) fn compose(anchor: Anchor, at: web_sys::Element) {
+    if let Some(a) = get() {
+        open_box(a, anchor, Target::App(at));
+    }
 }
 
 fn pick_app(a: Annot, el: web_sys::Element) {

@@ -110,6 +110,14 @@
  *     `<m-description>` child opening the element, or a fence's
  *     `title=` / `description=`, which md.rs moves onto the placeholder)
  *     are posted too, and the host draws them above the devices.
+ *     APP-46 (2.4): a mockup inside an `<m-option>` of an `<m-decision
+ *     id>` posts that option too (`option: { input, value, name }`): the
+ *     host draws *pick this* (the option's answer, on the host's own
+ *     click) on the mockup's bar, beside *comment* (the composer, anchored
+ *     to the mockup as APP-45's anchors are). Nothing inside the mocked
+ *     page answers an input. A decision
+ *     whose options hold mockups draws its chosen option first once it
+ *     is DECIDED.
  *   - **a cited window's frame** (init `cite`: `{ field }` or `{ anchor }`)
  *     shows that one section of its body: everything but the element and
  *     its ancestors is hidden (the ancestors' own boxes invisible), and
@@ -251,10 +259,12 @@
  *   host → frame  menger:cited { cite, height }           its window's
  *                 height in px — all the host says of it
  *   frame → host  menger:mockup { mock, ref, widths, source, title,
- *                 description, rect } an `<m-mockup>` (1.21; title and
- *                 description 2.2, APP-42): its number in this frame, its
- *                 attributes as written (null when absent), its box — at
- *                 connect, on a change of an attribute, whenever it moves
+ *                 description, rect, option } an `<m-mockup>` (1.21; title
+ *                 and description 2.2, APP-42; option 2.4, APP-46): its
+ *                 number in this frame, its attributes as written (null
+ *                 when absent), its box and the decision's option it sits
+ *                 in (`{ input, value, name }`, or null) — at connect, on a
+ *                 change of an attribute, whenever it moves
  *   frame → host  menger:unmock { mock }                  it left the body
  *   host → frame  menger:mocked { mock, height }          its mockup's
  *                 height in px — all the host says of it
@@ -334,7 +344,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.3.0";
+  var VERSION = "2.4.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -2528,7 +2538,21 @@
       title: el.getAttribute("title"),
       description: el.getAttribute("description"),
       rect: rect,
+      option: mockOption(el),
     });
+  }
+
+  // APP-46: the option of a decision with an id that this mockup sits in —
+  // its input, its value (its `value`, else its `name`, as the decision
+  // reads it) and its name — or null. Only an option of that very decision.
+  function mockOption(el) {
+    var o = el.closest("m-option");
+    var d = o && o.parentElement && o.parentElement.closest("m-decision, m-input");
+    if (!d || d.localName !== "m-decision") return null;
+    var input = String(d.getAttribute("id") || "").trim();
+    var name = String(o.getAttribute("name") || "").trim();
+    var value = String(o.getAttribute("value") || "").trim() || name;
+    return input && value ? { input: input, value: value, name: name || null } : null;
   }
 
   function reportMocks() {
@@ -2600,6 +2624,29 @@
   }
   window.addEventListener("resize", reportMocks);
   doc.addEventListener("scroll", reportMocks, true);
+
+  // APP-46: a decision whose options hold mockups draws its chosen option
+  // first once it is DECIDED (the house decision marks the others weighed).
+  // A reorder moves the mockups without resizing anything, so where they
+  // are is told again whenever an option's mark changes.
+  (function () {
+    var D = "m-decision:has(> m-option m-mockup):has(> m-option[data-m-weighed])";
+    var css = doc.createElement("style");
+    css.setAttribute("data-menger", "mockup-decided");
+    css.textContent =
+      D + " > m-option { order: 2; }\n" + D + " > m-option ~ :not(m-option) { order: 3; }\n" + D + " > m-option[data-m-ans] { order: 1; }";
+    (doc.head || doc.documentElement).appendChild(css);
+    if (typeof MutationObserver !== "function") return;
+    var queued = false;
+    new MutationObserver(function () {
+      if (queued || !mocks.size) return;
+      queued = true;
+      setTimeout(function () {
+        queued = false;
+        reportMocks();
+      }, 0);
+    }).observe(doc.documentElement, { subtree: true, attributes: true, attributeFilter: ["data-m-ans", "data-m-weighed"] });
+  })();
 
   // -- a cited window's frame (COMP-14) ----------------------------------------
   // Everything but the section and its ancestors is hidden; the ancestors'
@@ -2990,8 +3037,10 @@
   var lastTop = -1;
 
   function report(force) {
-    // COMP-14: where this body's cites are, whenever the layout moved.
+    // COMP-14: where this body's cites are, whenever the layout moved
+    // (APP-46: and its mockups).
     reportCites();
+    reportMocks();
     if (citeTarget) {
       // A cited window: where the section runs, not the document.
       var el = isolate();
