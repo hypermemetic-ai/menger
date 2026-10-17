@@ -957,7 +957,7 @@ pub(crate) fn WaveBoard(
         let el: &web_sys::Element = el.as_ref();
         // The content pane is the scroller and starts at the viewport's top,
         // so the lanes sit `top + scrolled` into the page.
-        let scrolled = el.closest(".content").ok().flatten().map_or(0.0, |c| f64::from(c.scroll_top()));
+        let scrolled = dom::Scroller::around(el).map_or(0.0, |c| c.top());
         let top = el.get_bounding_client_rect().top() + scrolled;
         let vh = dom::window().inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
         lanes_h.set(Some(lane_height(vh, top)));

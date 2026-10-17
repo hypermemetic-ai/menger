@@ -1265,11 +1265,7 @@ pub(crate) fn ensure_board_tab_stop() {
     }
     let remembered = BOARD_FOCUS.with(|c| c.borrow().clone());
     let on_screen = || {
-        let top = all[0]
-            .closest(".content")
-            .ok()
-            .flatten()
-            .map_or(0.0, |s| s.get_bounding_client_rect().top());
+        let top = dom::Scroller::around(&all[0]).map_or(0.0, |s| s.view().0);
         all.iter().find(|el| el.get_bounding_client_rect().bottom() > top + 1.0)
     };
     let pick = remembered

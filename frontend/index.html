@@ -2414,6 +2414,14 @@
      (each box's min-height: its rows) to half the viewport, then it scrolls.
      field-sizing where the engine has it; src/grow.rs fits it elsewhere. */
   textarea.grow { max-height: 50vh; overflow-y: auto; }
+  /* APP-53: iOS zooms the page when a field under 16px takes focus, and
+     stays zoomed. On a touch screen every field reads at 16px or more;
+     pinch-zoom is left alone (no maximum-scale). The frames' SDK does the
+     same inside a body (frontend/sdk/menger-sdk.js, touchFields). */
+  @media (pointer: coarse) {
+    input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="button"], [type="submit"]),
+    textarea, select, [contenteditable]:not([contenteditable="false"]) { font-size: max(16px, 1em) !important; }
+  }
   @supports (field-sizing: content) { textarea.grow { field-sizing: content; } }
   section.convsec .cnewacts { display: flex; align-items: center; justify-content: flex-end; gap: .6rem; }
   section.convsec .csend { padding: .15rem .9rem; }
@@ -4585,9 +4593,17 @@
   #phead, #pbar, #pscrim, .pscrim-in, .psheet-head, .psheet-foot { display: none; }
   @media (max-width: 820px) {
     :root { --pbar-h: calc(62px + env(safe-area-inset-bottom, 0px)); }
-    #app, #app.nonav, #app.chatting, #app.chatting.nonav { grid-template-columns: minmax(0, 1fr); height: 100dvh; }
-    #app .content { height: calc(100dvh - var(--pbar-h)); }
-    #app:has(#qtray:not(.empty)) .content { padding-bottom: 0; }
+    /* APP-53: the document scrolls, not the column — a phone's browser
+       hides its own bars only when the document does. #phead stays at the
+       top (sticky), #pbar at the bottom (fixed); the column leaves the
+       bar's height free below the page. src/dom.rs's Scroller reads this
+       overflow to know which one scrolls. */
+    #app, #app.nonav, #app.chatting, #app.chatting.nonav { grid-template-columns: minmax(0, 1fr); height: auto; min-height: 100dvh; }
+    #app .content { height: auto; overflow: visible; padding-bottom: var(--pbar-h); }
+    #app:has(#qtray:not(.empty)) .content { padding-bottom: var(--pbar-h); }
+    /* A full-screen layer over the page keeps the page still under it. */
+    html:has(#chatfull, .framed.is-full, .cmp-view, .lightbox, #app[data-sheet], #tdock-sheet.on) { overflow: hidden; }
+    #app:has(#pbar) .cmp-pill { bottom: calc(14px + var(--pbar-h)); }
     main { padding: calc(14px * var(--space)) calc(16px * var(--space)) calc(32px * var(--space)); }
     /* The top: one line — the wordmark, the shortcode › the page, live. */
     #phead {

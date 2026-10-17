@@ -360,6 +360,35 @@
   var doc = document;
   var RO = window.ResizeObserver;
 
+  // APP-53: iOS zooms the whole page when a field under 16px takes focus —
+  // in a body's frame too. On a touch screen every field here (and in every
+  // shadow root a component opens) reads at 16px or more; pinch-zoom stays.
+  (function touchFields() {
+    if (!window.matchMedia || !matchMedia("(pointer: coarse)").matches || typeof CSSStyleSheet !== "function") return;
+    var sheet;
+    try {
+      sheet = new CSSStyleSheet();
+      sheet.replaceSync(
+        'input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="button"]):not([type="submit"]),' +
+          'textarea, select, [contenteditable]:not([contenteditable="false"]) { font-size: max(16px, 1em) !important; }'
+      );
+    } catch (e) {
+      return;
+    }
+    var adopt = function (root) {
+      try {
+        root.adoptedStyleSheets = root.adoptedStyleSheets.concat([sheet]);
+      } catch (e) {}
+    };
+    adopt(document);
+    var attach = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function () {
+      var root = attach.apply(this, arguments);
+      adopt(root);
+      return root;
+    };
+  })();
+
   var init = {};
   try {
     init = JSON.parse(doc.getElementById("menger-init").textContent) || {};
