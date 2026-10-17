@@ -10,7 +10,10 @@
 //!   the table is read; a stamped page when the router is built.
 //! - `{{HUB}}` — the hub's WebSocket origins ([`hub_sources`]): the host the
 //!   page was asked for (its `Host`), at the hub's port, `ws:` and `wss:`.
-//!   The socket is on its own port, so `'self'` does not reach it.
+//!   The socket is on its own port, so `'self'` does not reach it. And
+//!   (menger's ACCESS-30) the page's own origin as `wss:` — behind a proxy
+//!   that terminates TLS the socket is that origin's `/ws`, which `'self'`
+//!   reaches only in browsers that read CSP3's rule for it.
 
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
@@ -67,12 +70,27 @@ fn has_src(tag: &str) -> bool {
 }
 
 /// The hub's WebSocket origins for a page asked for at `host` (a `Host`
-/// header: `name`, `name:port`, `[v6]:port`): `ws://name:port wss://name:port`.
+/// header: `name`, `name:port`, `[v6]:port`): `ws://name:port wss://name:port`,
+/// then the page's own origin over TLS, `wss://<host as asked>` (ACCESS-30).
 /// A missing or malformed `host` gives none — the page then reaches only
 /// `'self'`.
 pub fn hub_sources(host: Option<&str>, ws_port: u16) -> String {
-    let Some(name) = host.and_then(host_name) else { return String::new() };
-    format!("ws://{name}:{ws_port} wss://{name}:{ws_port}")
+    let Some(host) = host else { return String::new() };
+    let Some(name) = host_name(host) else { return String::new() };
+    let mut out = format!("ws://{name}:{ws_port} wss://{name}:{ws_port}");
+    // The page's own origin: its name and the port it was asked at, if any
+    // (digits only — anything else gives no source).
+    let port = &host[name.len()..];
+    let own = match port.strip_prefix(':') {
+        None if port.is_empty() => Some(format!("wss://{name}")),
+        Some(p) if !p.is_empty() && p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit()) => Some(format!("wss://{name}:{p}")),
+        _ => None,
+    };
+    if let Some(own) = own.filter(|o| *o != format!("wss://{name}:{ws_port}")) {
+        out.push(' ');
+        out.push_str(&own);
+    }
+    out
 }
 
 /// The name part of a `Host` value, when it is only a name: letters,
@@ -115,9 +133,13 @@ mod tests {
     /// that is not a plain name gives none.
     #[test]
     fn the_hub_is_reached_at_the_name_the_page_was_asked_for() {
-        assert_eq!(hub_sources(Some("127.0.0.1:4456"), 4455), "ws://127.0.0.1:4455 wss://127.0.0.1:4455");
-        assert_eq!(hub_sources(Some("menger.example"), 4455), "ws://menger.example:4455 wss://menger.example:4455");
-        assert_eq!(hub_sources(Some("[::1]:4456"), 4455), "ws://[::1]:4455 wss://[::1]:4455");
+        assert_eq!(hub_sources(Some("127.0.0.1:4456"), 4455), "ws://127.0.0.1:4455 wss://127.0.0.1:4455 wss://127.0.0.1:4456");
+        assert_eq!(hub_sources(Some("menger.example"), 4455), "ws://menger.example:4455 wss://menger.example:4455 wss://menger.example");
+        assert_eq!(hub_sources(Some("[::1]:4456"), 4455), "ws://[::1]:4455 wss://[::1]:4455 wss://[::1]:4456");
+        // ACCESS-30: the page's own origin over TLS, port and all, once.
+        assert_eq!(hub_sources(Some("menger.lan:8443"), 4455), "ws://menger.lan:4455 wss://menger.lan:4455 wss://menger.lan:8443");
+        assert_eq!(hub_sources(Some("menger.lan:4455"), 4455), "ws://menger.lan:4455 wss://menger.lan:4455");
+        assert_eq!(hub_sources(Some("menger.lan:44x"), 4455), "ws://menger.lan:4455 wss://menger.lan:4455");
         for bad in [None, Some(""), Some("a b"), Some("a;script-src *"), Some("x'y"), Some("[::1"), Some("a]b")] {
             assert_eq!(hub_sources(bad, 4455), "", "{bad:?}");
         }
@@ -129,7 +151,7 @@ mod tests {
     fn the_default_policy_is_filled_per_page() {
         let p = page_policy(DEFAULT_CSP, "'sha256-x'", Some("localhost:1"), 2);
         assert!(p.contains("script-src 'self' 'wasm-unsafe-eval' 'sha256-x';"), "{p}");
-        assert!(p.contains("connect-src 'self' ws://localhost:2 wss://localhost:2;"), "{p}");
+        assert!(p.contains("connect-src 'self' ws://localhost:2 wss://localhost:2 wss://localhost:1;"), "{p}");
         assert!(p.ends_with("frame-ancestors 'none'"), "{p}");
         let bare = page_policy(DEFAULT_CSP, "", None, 2);
         assert!(bare.contains("script-src 'self' 'wasm-unsafe-eval';") && bare.contains("connect-src 'self';"), "{bare}");

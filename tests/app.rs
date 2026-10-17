@@ -546,8 +546,11 @@ async fn every_page_goes_out_under_its_policy() {
         }
         let ws = hub(csp);
         assert!(
-            csp.contains(&format!("connect-src 'self' ws://127.0.0.1:{ws} wss://127.0.0.1:{ws} ws://127.0.0.1:* ws://localhost:*;")),
-            "{path}: itself, its hub at the name asked for, and loopback: {csp}"
+            csp.contains(&format!(
+                "connect-src 'self' ws://127.0.0.1:{ws} wss://127.0.0.1:{ws} wss://127.0.0.1:{} ws://127.0.0.1:* ws://localhost:*;",
+                s.shell_port
+            )),
+            "{path}: itself, its hub at the name asked for, its own origin over TLS (ACCESS-30), and loopback: {csp}"
         );
         assert!(!csp.contains("'unsafe-eval'") && !script_src.contains("'unsafe-inline'"), "{path}: {csp}");
         assert_eq!(header_of(&h, "x-content-type-options"), "nosniff", "{path}");

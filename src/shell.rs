@@ -84,7 +84,17 @@ pub struct ShellConfig {
     /// ([`crate::local::listener_hosts`]); with login, the hosts its
     /// origins name are added. Empty: `127.0.0.1:<port>`, `localhost:<port>`.
     pub allowed_hosts: Vec<String>,
+    /// ACCESS-30: the shell is reached over https (`--public-url https://…`,
+    /// a proxy terminating TLS in front): every answer carries
+    /// [`HSTS`], so a browser that has been here once never asks over http
+    /// again.
+    pub https: bool,
 }
+
+/// ACCESS-30: Strict-Transport-Security, a year, on every answer of a shell
+/// reached over https. The host alone (no `includeSubDomains`): menger's
+/// hostname is its own, and says nothing for its parent's other names.
+pub const HSTS: &str = "max-age=31536000";
 
 /// MFE-23: the tab's title — `menger.test` on the test environment,
 /// `menger` everywhere else (prod, a dev server, none named).
@@ -269,7 +279,20 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     // DNS rebinding: a page on another name resolving here gets nothing —
     // login or not (ACCESS-25), and before anything routes.
     let hosts = Arc::new(allowed_hosts(cfg.port, &cfg.allowed_hosts, cfg.login.as_deref()));
-    app.layer(axum::middleware::from_fn_with_state(hosts, host_is_ours))
+    let app = app.layer(axum::middleware::from_fn_with_state(hosts, host_is_ours));
+    // ACCESS-30: over https, every answer — a refusal too — says to stay there.
+    if cfg.https {
+        app.layer(axum::middleware::from_fn(hsts))
+    } else {
+        app
+    }
+}
+
+/// ACCESS-30: [`HSTS`] on the answer.
+async fn hsts(req: Request, next: axum::middleware::Next) -> Response {
+    let mut r = next.run(req).await;
+    r.headers_mut().insert(header::STRICT_TRANSPORT_SECURITY, header::HeaderValue::from_static(HSTS));
+    r
 }
 
 /// IDENTITY-19: the app's routes without a session go to the login page;

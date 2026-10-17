@@ -361,6 +361,63 @@ and `menger-diagrams@.service` the same way (`User=menger`, no
 no bind needed). REST and diagrams stay on loopback; the public origin is a
 TLS proxy in front of the shell and the WebSocket (ACCESS-30).
 
+### Behind https (ACCESS-30)
+
+A deploy reached beyond this machine is **one https origin**: a proxy
+terminates TLS for menger's own hostname, sends `/ws` to the WebSocket and
+everything else to the shell, and redirects plain http. menger itself
+speaks plain http on loopback (or the address `--bind` names) behind it.
+README "Behind https" has what menger does with the URL; this is the proxy.
+
+```caddyfile
+# Caddy: a certificate for app.example (Let's Encrypt on a public name,
+# `tls internal` for a local CA), http → https by itself on :80.
+app.example {
+	@ws path /ws
+	handle @ws {
+		reverse_proxy 127.0.0.1:4455    # MENGER_WS_PORT
+	}
+	handle {
+		reverse_proxy 127.0.0.1:4456    # MENGER_SHELL_PORT
+	}
+}
+```
+
+Caddy passes the `Host` through and sets `X-Forwarded-For` /
+`X-Forwarded-Proto`; WebSockets need nothing more. In the environment's
+`<env>.local.env`:
+
+```sh
+MENGER_PUBLIC_URL=https://app.example        # required beyond loopback with login on
+MENGER_TRUSTED_PROXIES=127.0.0.1             # the proxy's address (the edge's, on a box)
+# MENGER_ALLOWED_HOSTS / MENGER_ALLOWED_ORIGINS: nothing more — the public
+# URL's host and origin are already answered and admitted.
+```
+
+and the provider's redirect URI, `https://app.example/login/callback`
+(the startup log says it: `Sign-in: returns to …`), registered with the
+provider (WorkOS: Redirects). Agents dial `wss://app.example/ws`; a `key`
+provider accepts proofs naming it (and `wss://app.example`).
+
+**The checklist** (ACCESS-32 runs it on test; ACCESS-30's acceptance ran
+it on a throwaway name behind Caddy with its internal CA):
+
+| check | expect |
+|---|---|
+| `curl -sI http://app.example/` | `308`/`301` to `https://app.example/` |
+| `curl -sI https://app.example/` | `303` to `/login?next=%2F`; `strict-transport-security: max-age=31536000` |
+| the page's `content-security-policy` | `connect-src` holds `wss://app.example` |
+| sign in in a browser | the session cookie is `__Host-<name>_session; Secure; HttpOnly; SameSite=Lax; Path=/` |
+| the app after sign-in | `live · WS`, its socket `wss://app.example/ws` |
+| a write (create a ticket) | answered over that socket |
+| an upgrade at `/ws` with `Origin: https://evil.example` | `403` |
+| `/login/start` for an IdP button | `redirect_uri=https://app.example/login/callback` |
+| the server's startup log | no `plain http on the LAN` warning; no `no --trusted-proxy` warning |
+
+A public URL that is `http://` beyond loopback is refused at startup; one
+on the LAN (a private address, `.local`, …) is served with a warning until
+it has TLS.
+
 ## Recording deployments
 
 Every `deploy test`, `sync test`, `promote` and `rollback` tells menger what

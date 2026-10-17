@@ -349,7 +349,9 @@ pub fn boundary(providers: &[Provider]) -> anyhow::Result<Option<Arc<Carriers>>>
 
 /// IDENTITY-42: the WebSocket URLs a server on `port` is dialed at — a key
 /// proof's audiences: `ws://127.0.0.1:<port>`, `ws://localhost:<port>`, and
-/// the ws form of `public_url` (http → ws, https → wss) when one is given.
+/// the ws form of `public_url` (http → ws, https → wss) when one is given,
+/// and (menger's ACCESS-30) that form at `/ws` — behind a proxy that
+/// terminates TLS, the socket is the public origin's `/ws`.
 pub fn socket_urls(port: u16, public_url: Option<&str>) -> Vec<String> {
     let mut out = vec![format!("ws://127.0.0.1:{port}"), format!("ws://localhost:{port}")];
     if let Some(mut u) = public_url.and_then(|p| url::Url::parse(p).ok()) {
@@ -360,8 +362,11 @@ pub fn socket_urls(port: u16, public_url: Option<&str>) -> Vec<String> {
         };
         if scheme.is_some_and(|s| u.set_scheme(s).is_ok()) {
             let text = u.to_string().trim_end_matches('/').to_string();
-            if !out.contains(&text) {
-                out.push(text);
+            let at_ws = format!("{text}/ws");
+            for t in [text, at_ws] {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
             }
         }
     }
@@ -456,8 +461,11 @@ mod tests {
     #[test]
     fn a_socket_is_dialed_at_its_ports_and_the_public_url() {
         assert_eq!(socket_urls(4460, None), ["ws://127.0.0.1:4460", "ws://localhost:4460"]);
-        assert_eq!(socket_urls(4455, Some("https://menger.example/")), ["ws://127.0.0.1:4455", "ws://localhost:4455", "wss://menger.example"]);
-        assert_eq!(socket_urls(4455, Some("http://box:8080")), ["ws://127.0.0.1:4455", "ws://localhost:4455", "ws://box:8080"]);
+        assert_eq!(
+            socket_urls(4455, Some("https://menger.example/")),
+            ["ws://127.0.0.1:4455", "ws://localhost:4455", "wss://menger.example", "wss://menger.example/ws"]
+        );
+        assert_eq!(socket_urls(4455, Some("http://box:8080")), ["ws://127.0.0.1:4455", "ws://localhost:4455", "ws://box:8080", "ws://box:8080/ws"]);
     }
 
     #[test]

@@ -21,7 +21,16 @@ Every listener answers only its own names (ACCESS-25): `127.0.0.1:<port>`,
 `localhost:<port>`, `--public-url`'s host, and each `--allowed-host`
 (repeatable; `MENGER_ALLOWED_HOSTS`, `;`-separated); any other `Host` is
 refused 421 before routing — reach a server by those names (synapse, curl
-and the scripts do). README "Run" → Hosts. Every listener binds loopback
+and the scripts do). README "Run" → Hosts.
+
+Beyond loopback, with login on, menger is one https origin (ACCESS-30): a
+proxy terminates TLS, `/ws` goes to the WebSocket and the rest to the
+shell, and `--public-url https://…` is required — the app then opens
+`wss://<host>/ws`, cookies are `Secure` / `__Host-`, every answer carries
+HSTS, and the provider's redirect URI is `<public-url>/login/callback`. An
+`http://` public URL on the LAN starts with a warning; any other is refused.
+README "Behind https"; the Caddy recipe and the checklist in
+`deploy/README.md`. Every listener binds loopback
 unless `--bind ADDR` (`MENGER_BIND`; `0.0.0.0`, `::`, one address) says
 otherwise (RUN-8, README "Run" → Bind); binding adds a specific address's
 literal to the names, never any other. The builder binds it
