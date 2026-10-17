@@ -26,6 +26,18 @@
 //! stays for a page without the bar. A body with fewer than three sections
 //! and no input has none.
 //!
+//! **Chats** (CHAT-10, CHAT-9's answer: the chat lives in the dock): under
+//! the sections a **Chats** heading lists the reader's open chats on the
+//! ticket — who, a green dot pulsing while someone waits on
+//! `await_message`, the unread ([`chat_rows`]) — then **+ chat**. Choosing
+//! one turns the dock into that conversation in place (src/chat_pane.rs's
+//! [`crate::chat_pane::Inside`]; *← sections* or × turn it back): at ≥ 1760
+//! the column widens from 248 to 400, from 821 to 1759 the dock is pinned
+//! open as a 400 px column at the right (the rail carries a chat mark per
+//! chat), and at ≤ 820 the sheet lists Inputs, Chats, then Sections and
+//! turns into the chat. A ticket with chats shows its dock whatever its
+//! sections ([`shows_with`]).
+//!
 //! **Keys** (owner, 2026-10-16, LOOK-3's `dock-keys`): `}` / `{` the next
 //! and previous section — `]` / `[` stay the status keys (ACT-10) — and `i`
 //! the next open input, wrapping.
@@ -38,12 +50,13 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use leptos::prelude::*;
-use menger_tickets_api::{InputState, TicketsEvent};
+use menger_tickets_api::{Chat, ChatState, InputState, TicketsEvent};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{dom, frame, motion, session};
+use crate::chat_pane::{self, View};
+use crate::{chats, dom, frame, motion, session};
 
 // ---------------------------------------------------------------------
 // The model
@@ -203,6 +216,32 @@ pub(crate) fn shows(sections: &[Section]) -> bool {
     sections.len() >= 3 || sections.iter().any(|s| !s.inputs.is_empty())
 }
 
+/// CHAT-10: whether the page shows a dock — its sections as [`shows`]
+/// says, or a chat of the reader's on the ticket, or one open there.
+pub(crate) fn shows_with(sections: &[Section], chats: usize, chatting: bool) -> bool {
+    shows(sections) || chats > 0 || chatting
+}
+
+/// CHAT-10: a chat's row in the dock (and the rail's mark, and the sheet's).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChatRow {
+    pub(crate) id: u64,
+    /// Who the reader talks to in it (CHAT-4's tab label).
+    pub(crate) label: String,
+    /// Someone other than the reader waits on `await_message` in it.
+    pub(crate) waits: bool,
+    pub(crate) unread: u32,
+}
+
+/// CHAT-10: the dock's chat rows — the reader's open chats on the ticket,
+/// oldest first, as `open` holds them.
+pub(crate) fn chat_rows(open: &[Chat], me: &str, name: impl Fn(&str) -> String) -> Vec<ChatRow> {
+    open.iter()
+        .filter(|c| c.state == ChatState::Open)
+        .map(|c| ChatRow { id: c.id.get(), label: chat_pane::tab_label(c, me, &name), waits: c.waiting.iter().any(|p| p != me), unread: c.unread })
+        .collect()
+}
+
 /// How many inputs wait on the reader.
 pub(crate) fn waiting(sections: &[Section]) -> usize {
     sections.iter().flat_map(|s| &s.inputs).filter(|i| i.ask == Ask::Waiting).count()
@@ -316,13 +355,21 @@ pub(crate) struct Face {
     pub(crate) len: usize,
     pub(crate) label: String,
     pub(crate) waiting: usize,
+    /// CHAT-10: the reader's unread in the ticket's chats.
+    pub(crate) chats: u32,
 }
 
 impl Face {
     /// The face of `sections` with `lit` the one being read.
     pub(crate) fn of(sections: &[Section], lit: usize) -> Option<Face> {
         let at = lit.min(sections.len().checked_sub(1)?);
-        Some(Face { at, len: sections.len(), label: sections[at].label.clone(), waiting: waiting(sections) })
+        Some(Face { at, len: sections.len(), label: sections[at].label.clone(), waiting: waiting(sections), chats: 0 })
+    }
+
+    /// CHAT-10: with the chats' unread.
+    pub(crate) fn with_chats(mut self, unread: u32) -> Face {
+        self.chats = unread;
+        self
     }
 
     /// `2/7 The ask`.
@@ -488,7 +535,22 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
     });
     let states = RwSignal::new(None::<States>);
     let sections = Memo::new(move |_| items.with(|it| states.with(|s| build(it, s.as_ref()))));
-    let shown = Memo::new(move |_| sections.with(|s| shows(s)));
+    // CHAT-10: the reader's open chats on the ticket, and whether one is
+    // open in the dock now.
+    chats::want();
+    let rows = {
+        let held = chats::signal();
+        Memo::new(move |_| {
+            let open = held.with(|h| h.as_ref().map(|h| h.on(&tid.get_value(), ChatState::Open)).unwrap_or_default());
+            chat_rows(&open, &chats::me(), chat_pane::names())
+        })
+    };
+    let unread = Memo::new(move |_| rows.with(|r| r.iter().map(|c| c.unread).sum::<u32>()));
+    let chatting = Memo::new(move |_| chat_pane::open_for(Some(&tid.get_value())));
+    let shown = Memo::new(move |_| sections.with(|s| shows_with(s, rows.with(Vec::len), chatting.get())));
+    // The dock's form is the pill's (≤ 820): the chat is drawn in the sheet.
+    let width_now = || dom::window().inner_width().ok().and_then(|w| w.as_f64()).unwrap_or(0.0);
+    let phone = RwSignal::new(form(width_now()) == Form::Pill);
     let lit = RwSignal::new(0usize);
     let rail_open = RwSignal::new(false);
     // APP-50: the sheet is shared with the phone bar; a new page's starts down.
@@ -503,7 +565,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
     {
         let face = FACE.with(Clone::clone);
         Effect::new(move |_| {
-            let now = if shown.get() { sections.with(|s| Face::of(s, lit.get())) } else { None };
+            let now = if shown.get() { sections.with(|s| Face::of(s, lit.get())).map(|f| f.with_chats(unread.get())) } else { None };
             if FACE_GEN.with(Cell::get) == face_gen && face.with_untracked(|f| *f != now) {
                 face.set(now);
             }
@@ -558,7 +620,24 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
         pill.try_update(|p| {
             p.scrolled(y, at_end);
         });
+        let narrow = form(width_now()) == Form::Pill;
+        if phone.try_get_untracked().is_some_and(|p| p != narrow) {
+            phone.try_set(narrow);
+        }
     };
+    // CHAT-10, ≤ 820: a chat opened raises the sheet (which turns into it);
+    // the sheet lowered closes the chat.
+    Effect::new(move |prev: Option<(bool, bool)>| {
+        let now = (chatting.get(), sheet.get());
+        if phone.get_untracked() {
+            if now.0 && !now.1 && prev.is_none_or(|p| !p.0) {
+                sheet.set(true);
+            } else if now.0 && !now.1 && prev.is_some_and(|p| p.1) {
+                chat_pane::close();
+            }
+        }
+        now
+    });
     Effect::new(move |_| {
         sections.track();
         tick();
@@ -626,6 +705,8 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
     let sheet_label = label.clone();
     let pos = move || sections.with(|s| format!("{} / {}", lit.get().min(s.len().saturating_sub(1)) + 1, s.len()));
     let n_waiting = Memo::new(move |_| sections.with(|s| waiting(s)));
+    // CHAT-10: the chat's head says where the reader is in the body.
+    let lit_words = Signal::derive(move || sections.with(|s| Face::of(s, lit.get()).map(|f| f.words()).unwrap_or_default()));
     // LOOK-8: the way the lit section went — its edge is drawn in from the
     // side it came from — and the inputs whose state just turned, which
     // the rows drawn for this change play once.
@@ -672,7 +753,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
 
     view! {
         <Show when=move || shown.get()>
-            <aside id="tdock" aria-label=label.clone() class:open=move || rail_open.get()>
+            <aside id="tdock" aria-label=label.clone() class:open=move || rail_open.get() class:chatting=move || chatting.get() && !phone.get()>
                 <div class="rail" aria-hidden="true" on:click=move |ev| { ev.stop_propagation(); rail_open.set(true); }>
                     {move || sections.with(|secs| {
                         secs.iter().enumerate().map(|(k, s)| {
@@ -683,6 +764,9 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                             view! { <i class="tick" class:on=move || lit.get() == k></i>{dots} }
                         }).collect_view()
                     })}
+                    {move || rows.get().into_iter().map(|c| view! {
+                        <i class="chat" class:wait=c.waits data-chat=c.id.to_string()>{(c.unread > 0).then(|| view! { <b>{c.unread}</b> })}</i>
+                    }).collect_view()}
                 </div>
                 <div class="dhead"><h2>"On this ticket"</h2><span class="pos">{pos}</span></div>
                 {move || (n_waiting.get() > 0).then(|| view! {
@@ -719,6 +803,24 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                         }).collect_view()
                     })}
                 </ol>
+                <div class="dsub">"Chats"</div>
+                <ol class="dlist chats">
+                    {move || rows.get().into_iter().map(|c| {
+                        let id = c.id;
+                        let cur = move || chatting.get() && chat_pane::showing(id);
+                        view! {
+                            <li class="c" class:un={c.unread > 0} class:cur=cur data-chat=id.to_string()>
+                                <button type="button" title=format!("the chat with {}", c.label) on:click=move |_| chat_pane::open_on(&tid.get_value(), Some(id))>
+                                    <span class="dot" class:wait=c.waits></span>
+                                    <span class="l">{c.label.clone()}</span>
+                                    {(c.unread > 0).then(|| view! { <span class="mini"><span class="count">{c.unread}</span></span> })}
+                                </button>
+                            </li>
+                        }
+                    }).collect_view()}
+                    <li class="cnew"><button type="button" on:click=move |_| chat_pane::open_view(&tid.get_value(), View::Pick)>"+ chat"</button></li>
+                </ol>
+                {move || (!phone.get()).then(|| view! { <chat_pane::Inside ticket=tid.get_value() lit=lit_words back=Callback::new(|_: bool| ()) /> })}
                 <div class="dfoot"><span><kbd>"{"</kbd>" "<kbd>"}"</kbd>" sections"</span><span><kbd>"i"</kbd>" next input"</span></div>
             </aside>
             <button
@@ -731,10 +833,11 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                 <span class="pos">{move || sections.with(|s| format!("{}/{}", lit.get().min(s.len().saturating_sub(1)) + 1, s.len()))}</span>
                 <span class="l">{move || sections.with(|s| s.get(lit.get()).map(|x| x.label.clone()).unwrap_or_default())}</span>
                 {move || (n_waiting.get() > 0).then(|| view! { <span class="ask"><i></i>{n_waiting.get()}</span> })}
+                {move || (unread.get() > 0).then(|| view! { <span class="cht"><i></i>{format!("chat {}", unread.get())}</span> })}
             </button>
             <div id="tdock-scrim" class:on=move || sheet.get() on:click=move |_| sheet.set(false)></div>
-            <div id="tdock-sheet" role="dialog" aria-label=sheet_label.clone() class:on=move || sheet.get()>
-                <div class="grab"></div>
+            <div id="tdock-sheet" role="dialog" aria-label=sheet_label.clone() class:on=move || sheet.get() class:chatting=move || chatting.get() && phone.get()>
+                <chat_pane::Grab target="tdock-sheet" dismiss=Callback::new(move |_| sheet.set(false)) />
                 <div class="shead"><h2>"On this ticket"</h2><span class="id">{tid.get_value()}</span><button type="button" on:click=move |_| sheet.set(false)>"Close"</button></div>
                 <div class="sscroll">
                     {move || sections.with(|secs| {
@@ -754,6 +857,19 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                             view! { <h3>{format!("Inputs · {w} waiting on you")}</h3><div class="ins">{rows}</div> }
                         })
                     })}
+                    <h3>"Chats"</h3>
+                    <div class="ins chats">
+                        {move || rows.get().into_iter().map(|c| {
+                            let id = c.id;
+                            view! {
+                                <button type="button" class="in chat" class:un={c.unread > 0} data-chat=id.to_string() on:click=move |_| chat_pane::open_on(&tid.get_value(), Some(id))>
+                                    <span class="dot" class:wait=c.waits></span><span class="q">{c.label.clone()}</span>
+                                    <small>{if c.unread > 0 { view! { <span class="count">{c.unread}</span> }.into_any() } else if c.waits { "waiting".into_any() } else { "".into_any() }}</small>
+                                </button>
+                            }
+                        }).collect_view()}
+                        <button type="button" class="in cnew" on:click=move |_| chat_pane::open_view(&tid.get_value(), View::Pick)><span></span><span class="q">"+ chat"</span><small></small></button>
+                    </div>
                     <h3>"Sections"</h3>
                     <ol class="slist" data-dir=move || went.get()>
                         {move || sections.with(|secs| {
@@ -772,6 +888,9 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                         })}
                     </ol>
                 </div>
+                {move || phone.get().then(|| view! {
+                    <chat_pane::Inside ticket=tid.get_value() lit=lit_words back=Callback::new(move |x: bool| if x { sheet.set(false) }) />
+                })}
             </div>
         </Show>
     }
@@ -900,6 +1019,35 @@ mod tests {
         let t = turned(Some(&a), &b);
         assert_eq!(t.len(), 2);
         assert!(t.contains("landing") && t.contains("checks"));
+    }
+
+    /// CHAT-10: a ticket with a chat (or one open) shows its dock whatever
+    /// its sections; the rows say who, whether someone waits, the unread.
+    #[test]
+    fn the_dock_holds_the_tickets_chats() {
+        let thin = build(&[field("standing", None, 0.0)], None);
+        assert!(!shows_with(&thin, 0, false), "two sections and no chat: no dock");
+        assert!(shows_with(&thin, 1, false), "a chat gives it one");
+        assert!(shows_with(&thin, 0, true), "and so does a chat open there (the picker, say)");
+        let mut a = crate::chats::tests::chat(41, "KILN-7", &["idp:ada", "agent:builder"]);
+        a.waiting = vec!["agent:builder".into()];
+        a.unread = 2;
+        let mut b = crate::chats::tests::chat(52, "KILN-7", &["idp:ada", "agent:reviewer"]);
+        b.waiting = vec!["idp:ada".into()];
+        let mut shut = crate::chats::tests::chat(60, "KILN-7", &["idp:ada", "idp:rui"]);
+        shut.state = ChatState::Closed;
+        let rows = chat_rows(&[a, b, shut], "idp:ada", |p: &str| p.split(':').nth(1).unwrap_or(p).to_string());
+        assert_eq!(
+            rows,
+            [
+                ChatRow { id: 41, label: "builder".into(), waits: true, unread: 2 },
+                ChatRow { id: 52, label: "reviewer".into(), waits: false, unread: 0 },
+            ],
+            "the open chats; the reader's own wait is no one waiting on the reader"
+        );
+        let f = Face::of(&thin, 0).unwrap();
+        assert_eq!(f.chats, 0);
+        assert_eq!(f.with_chats(3).chats, 3);
     }
 
     #[test]

@@ -1672,7 +1672,8 @@ fn ticket_view(
                 <div><dt>"Running"</dt><dd id="t-running"><deploys::Running id=running_id.to_string() commits /></dd></div>
                 // MENGER-12: its labels — chips, editable by a writer.
                 <div><dt>"Labels"</dt><dd id="t-labels"><labels::Editor ticket /></dd></div>
-                // CHAT-4: chat N — the reader's unread here; opens the pane.
+                // CHAT-4: chat N — the reader's unread here; opens the dock on
+                // a chat (CHAT-10).
                 <div>
                     <dt>"Chats"</dt>
                     <dd id="t-chats"><chat_pane::Field ticket=chats_id /></dd>
@@ -2321,7 +2322,7 @@ fn App() -> impl IntoView {
 
     let phone_sheet = RwSignal::from(phonebar::own());
     view! {
-        <div id="app" class:nonav=move || nav_hidden.get() || !can_view.get() class:annotating=move || annot.on.get() class:chatting=move || chat_pane::open_for(route_ticket.get().as_deref()) data-rows-held=move || held.get()
+        <div id="app" class:nonav=move || nav_hidden.get() || !can_view.get() class:annotating=move || annot.on.get() data-rows-held=move || held.get()
             // APP-50: the phone bar's own sheet up (the tree's, the filter's).
             data-sheet=move || phone_sheet.get().map(phonebar::Place::name)>
             // IDENTITY-22: a person holding no grant sees no nav: there is
@@ -2550,9 +2551,9 @@ fn App() -> impl IntoView {
             {move || can_view.get().then(|| view! { <queue::Tray /> })}
             // APP-50: the phone nav — a bar along the bottom edge (≤ 820).
             {move || can_view.get().then(|| view! { <phonebar::Bar route overlay tree /> })}
-            // CHAT-4: the chat pane — a column of the grid beside the content
-            // (a sheet under 760px), drawn while open on the route's ticket.
-            {move || can_view.get().then(|| view! { <chat_pane::Pane ticket=route_ticket /> })}
+            // CHAT-4: the route and the chat shown, in step — the chat itself
+            // is drawn in the section dock (CHAT-10).
+            {move || can_view.get().then(|| view! { <chat_pane::Follow ticket=route_ticket /> })}
             // AGS-16: mounted once, outside every ticket element, so a
             // right-click inside the menu itself never re-targets it.
             <menu::TicketMenu last_error />

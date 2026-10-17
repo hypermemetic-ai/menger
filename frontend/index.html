@@ -3071,7 +3071,7 @@
     #tdock .rail i.dec { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--live); }
     #ticket-page > #tdock:is(:hover, :focus-within, .open) { width: calc(260px * var(--text-scale)); align-items: stretch; padding: 0; max-height: calc(100vh - 140px); }
     #ticket-page > #tdock:is(:hover, :focus-within, .open) > .rail { display: none; }
-    #ticket-page > #tdock:is(:hover, :focus-within, .open) > :is(.dhead, .dfoot, button.waiting) { display: flex; }
+    #ticket-page > #tdock:is(:hover, :focus-within, .open) > :is(.dhead, .dfoot, button.waiting, .dsub) { display: flex; }
     #ticket-page > #tdock:is(:hover, :focus-within, .open) > ol.dlist { display: block; }
   }
   /* ≤ 820 (APP-50's phone shape): no dock — the phone bar's sections place
@@ -3923,37 +3923,39 @@
     background: var(--accent); color: var(--bg); padding: 0 6px; border-radius: var(--radius-sm);
     font-weight: var(--weight-strong); font-size: calc(10.5px * var(--text-scale)); font-variant-numeric: tabular-nums;
   }
-  @media (min-width: 821px) {
-    #app.chatting { grid-template-columns: 360px minmax(0, 1fr) clamp(300px, 30vw, 420px); }
-    #app.chatting.nonav { grid-template-columns: minmax(0, 1fr) clamp(300px, 30vw, 420px); }
-    #app.chatting .content, #app.chatting #qtray { grid-column: -3 / -2; }
-    #chatpane { grid-column: -2 / -1; grid-row: 1; height: 100vh; border-left: var(--border) solid var(--line); }
-    #chatpane .pgrab { display: none; }
-    /* The section dock's rail stays clear of the pane. */
-    #app.chatting #ticket-page > #tdock { right: calc(clamp(300px, 30vw, 420px) + 10px); }
-  }
+  /* CHAT-10: the chat is drawn in the section dock (or its sheet), which
+     it fills. */
   #chatpane {
-    display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); color: var(--ink);
+    display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--panel); color: var(--ink);
     font-family: var(--mono); font-size: calc(12px * var(--text-scale)); line-height: 1.5; z-index: 5;
   }
   #chatpane button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+  /* The chat's head in the dock (CHAT-9's option A): ← sections, where the
+     reader is in the body, ×. */
+  #chatpane .dchead {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 8px; flex: none;
+    border-bottom: var(--border) solid var(--line); font-size: calc(11px * var(--text-scale)); color: var(--muted); background: var(--card);
+  }
+  #chatpane .pback { color: var(--accent); padding: 2px 6px; border-radius: var(--radius); white-space: nowrap; }
+  #chatpane .pback:hover { background: var(--hover); }
+  #chatpane .plit { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #chatpane .px { margin-left: auto; color: var(--muted); padding: 2px 4px; font-size: calc(14px * var(--text-scale)); line-height: 1; }
+  #chatpane .px:hover, #chatpane .pclosed:hover { color: var(--ink); }
+  /* A chip per chat, + chat, the closed list. */
   #chatpane .ptabs {
-    display: flex; align-items: flex-end; gap: 4px; padding: 8px 10px 0; min-height: 48px; flex: none;
-    border-bottom: var(--border) solid var(--line); font-size: calc(11.5px * var(--text-scale)); overflow: hidden;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 8px 10px; flex: none;
+    border-bottom: var(--border) solid var(--line); font-size: calc(11.5px * var(--text-scale)); background: var(--card);
   }
   #chatpane .ptab {
-    padding: 6px 10px; border: var(--border) solid transparent; border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-    color: var(--muted); white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; flex: 0 1 auto; min-width: 4em; max-width: 190px;
+    padding: 3px 9px; border: var(--border) solid var(--line); border-radius: var(--radius-pill); background: var(--card);
+    color: var(--muted); white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; min-width: 0; max-width: 100%;
   }
-  #chatpane .ptabs > :is(.pnew, .pclosed, .px) { flex: none; }
   #chatpane .ptab .pl { overflow: hidden; text-overflow: ellipsis; }
   #chatpane .ptab:hover { color: var(--ink); }
-  #chatpane .ptab.on { background: var(--card); border-color: var(--line); color: var(--ink); margin-bottom: -1px; }
-  #chatpane .pnew { margin-left: auto; color: var(--accent); padding: 6px 4px; white-space: nowrap; }
-  #chatpane :is(.pnew, .pclosed).on { text-decoration: underline; text-underline-offset: 3px; }
-  #chatpane .pclosed { color: var(--muted); padding: 6px 4px; white-space: nowrap; }
-  #chatpane .px { color: var(--muted); padding: 6px 4px; font-size: calc(14px * var(--text-scale)); line-height: 1; }
-  #chatpane .px:hover, #chatpane .pclosed:hover { color: var(--ink); }
+  #chatpane .ptab.on { color: var(--ink); border-color: var(--accent); background: var(--sel); }
+  #chatpane .pnew { color: var(--accent); padding: 3px 9px; border: var(--border) dashed var(--accent); border-radius: var(--radius-pill); white-space: nowrap; }
+  #chatpane :is(.pnew, .pclosed).on { background: var(--sel); }
+  #chatpane .pclosed { color: var(--muted); padding: 3px 6px; white-space: nowrap; }
   /* Who is in it: a dot each — green while one waits for a message,
      pulsing (calm and none hold it still). */
   #chatpane .pwho {
@@ -4036,21 +4038,63 @@
   #chatpane li.pclosedrow { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; }
   #chatpane li.pclosedrow .popen { text-align: left; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #chatpane .pclosedlist { margin: 14px; }
-  /* Up to 820px (APP-50's phone shape): a sheet over the ticket — fixed
-     while the page scrolls under it, its handle dragged down to dismiss it,
-     above the phone bar. */
+  /* ── CHAT-10: the chat in the dock (CHAT-9's answer, `dock`). The dock's
+     Chats: a row per open chat — who, a dot green and pulsing while
+     someone waits on await_message, the unread — then + chat. ── */
+  #tdock .dsub {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px 2px 14px; border-top: var(--border) solid var(--line);
+    font: var(--weight-medium) calc(10px * var(--text-scale))/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+  }
+  #tdock ol.dlist.chats { flex: none; padding-top: 4px; }
+  #tdock ol.dlist :is(li.c, li.cnew) button { padding-left: 38px; font-size: calc(11.5px * var(--text-scale)); }
+  #tdock ol.dlist li.c .dot:not(.wait), #tdock-sheet .in.chat .dot:not(.wait) { background: var(--tree-line); }
+  #tdock ol.dlist li.c.un button { color: var(--ink); font-weight: var(--weight-strong); }
+  #tdock ol.dlist li.c.cur > button { color: var(--ink); background: var(--sel); border-left-color: var(--live); }
+  #tdock ol.dlist li.cnew button { color: var(--accent); }
+  :is(#tdock, #tdock-sheet) .count {
+    background: var(--accent); color: var(--bg); padding: 0 6px; border-radius: var(--radius-sm);
+    font-weight: var(--weight-strong); font-size: calc(10px * var(--text-scale)); font-variant-numeric: tabular-nums;
+  }
+  :is(#tdock, #tdock-sheet) .dot.wait {
+    background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent);
+    animation: menger-chat-ping 1.6s ease-in-out infinite;
+  }
+  /* Chatting: the dock is the chat, nothing else. */
+  #ticket-page > #tdock.chatting > :not(#chatpane) { display: none; }
+  #ticket-page > #tdock.chatting > #chatpane { display: flex; }
+  /* ≥ 1760: the column widens from 248 to 400 and fills the window's height. */
+  @media (min-width: 1760px) {
+    #ticket-page:has(> #tdock.chatting) { grid-template-columns: minmax(0, 1fr) calc(400px * var(--text-scale)); transition: grid-template-columns .2s var(--ease); }
+    #ticket-page > #tdock.chatting { height: calc(100vh - 120px); max-height: none; }
+  }
+  /* 821–1759: the rail's chat marks; an open chat pins the dock open as a
+     400 px column at the right, the body padded clear of it. */
+  @media (min-width: 821px) and (max-width: 1759.98px) {
+    #tdock .rail i.chat { width: 14px; height: 11px; border-radius: var(--radius-sm) var(--radius-sm) var(--radius-sm) 0; background: var(--tree-line); position: relative; margin-top: 3px; }
+    #tdock .rail i.chat.wait { background: var(--live); }
+    #tdock .rail i.chat b {
+      position: absolute; left: 10px; top: -8px; padding: 0 3px; border-radius: var(--radius-sm); font-style: normal;
+      font: var(--weight-strong) calc(9px * var(--text-scale))/12px var(--mono); color: var(--bg); background: var(--accent);
+    }
+    #ticket-page:has(> #tdock.chatting) { padding-right: calc(420px * var(--text-scale)); }
+    #ticket-page > #tdock.chatting { width: calc(400px * var(--text-scale)); top: 72px; bottom: 16px; max-height: none; padding: 0; align-items: stretch; }
+  }
+  /* ≤ 820: the sheet lists Inputs, Chats, Sections; a chat chosen turns it
+     into the chat. Its handle drags it down. */
+  #tdock-sheet .grab { touch-action: none; cursor: grab; user-select: none; }
   @media (max-width: 820px) {
-    #chatpane {
-      position: fixed; left: 0; right: 0; bottom: 0; height: min(470px, 72vh); z-index: 950;
-      border-top: var(--border) solid var(--tree-line); border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
-      box-shadow: 0 -10px 30px var(--shadow); overflow: hidden;
+    #tdock-sheet .grab.pgrab { flex: none; width: 36px; height: 4px; padding: 8px 40% 6px; margin: 0 auto; background: var(--tree-line); background-clip: content-box; box-sizing: content-box; }
+    #tdock-sheet .ins button.in.chat.un { color: var(--ink); font-weight: var(--weight-strong); }
+    #tdock-sheet .ins button.in.cnew { color: var(--accent); border-style: dashed; }
+    #tdock-sheet #chatpane { display: none; }
+    #tdock-sheet.chatting { height: calc(88dvh - var(--pbar-h, 0px)); }
+    #tdock-sheet.chatting > :is(.shead, .sscroll) { display: none; }
+    #tdock-sheet.chatting > #chatpane { display: flex; background: var(--card); }
+    #tdock-pill .cht {
+      display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: var(--radius-pill); flex: none;
+      background: var(--live); color: var(--bg); font-weight: var(--weight-strong); font-size: calc(11px * var(--text-scale));
     }
-    #chatpane .pgrab {
-      flex: none; width: 36px; height: 4px; padding: 8px 40% 6px; margin: 0 auto; background: var(--tree-line);
-      background-clip: content-box; border-radius: var(--radius-xs); cursor: grab; touch-action: none; user-select: none;
-    }
-    #chatpane .ptabs { padding-top: 0; min-height: 0; }
-    #app.chatting .content { padding-bottom: min(470px, 72vh); }
+    #tdock-pill .cht i { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--bg); }
   }
   /* Everywhere else (LOOK-8's walk, a child doc of the ticket). A page
      arriving on a route change; a ticket's own opening stays DESIGN-39's. */
@@ -4098,6 +4142,7 @@
   html[data-motion="calm"] #tdock ol.dlist li.i.open.turned .dot { animation: menger-dot-turn .2s cubic-bezier(.2, .8, .2, 1.4); }
   /* CHAT-4: and a participant's waiting dot — held still, its ring kept. */
   html[data-motion="calm"] #chatpane .dot.wait { animation: none; }
+  html[data-motion="calm"] :is(#tdock, #tdock-sheet) .dot.wait { animation: none; }
   /* ── APP-50 (APP-37's direction A): the phone nav as a bar along the
      bottom edge (src/phonebar.rs). Up to 820px — phones, and a tablet held
      upright — the shell takes the phone shape: no nav column and no header
@@ -4158,6 +4203,8 @@
       background: var(--accent); color: var(--bg);
     }
     #pbar .bdg.ask { background: var(--ask); }
+    /* CHAT-10: the chats' unread, green, beside the inputs' badge. */
+    #pbar .bdg.chat { background: var(--live); left: auto; right: calc(50% + 6px); }
     /* The queue's place: APP-38's control — the loudest urgency's colours,
        taller words for now and blocking, the nudge, an arrival's flash. */
     #pbar .pq.u-whenever { --u: var(--st-doc-fg); --ub: var(--st-doc-bg); }
@@ -4310,8 +4357,6 @@
     #qtray .qgrab { display: block; flex: none; width: 36px; height: 4px; border-radius: var(--radius-xs); background: var(--tree-line); margin: 8px auto 0; }
     #qtray .qarrived { position: fixed; right: 12px; bottom: calc(var(--pbar-h) + 8px); }
     #qtray .qedge { position: fixed; bottom: var(--pbar-h); }
-    /* The chat's sheet (CHAT-4): above the bar, under the bar's own sheets. */
-    #chatpane { bottom: var(--pbar-h); z-index: 890; }
   }
   @media (min-width: 641px) and (max-width: 820px) {
     :root { --pbar-h: calc(58px + env(safe-area-inset-bottom, 0px)); }

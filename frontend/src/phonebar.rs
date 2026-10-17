@@ -10,7 +10,8 @@
 //!   fixed, safe-area aware, four places ([`places`]) — **the tree**
 //!   (labelled with the shortcode you are in), **the filter** (the global
 //!   filter, the header's, with its count of groups) or, on a ticket page,
-//!   **the sections** (LOOK-3's dock: `2/7 the ask`, open inputs a badge),
+//!   **the sections** (LOOK-3's dock: `2/7 the ask`, open inputs a badge,
+//!   CHAT-10: the chats' unread a green one — its sheet holds the chats),
 //!   **find** (the palette), and **the queue** (APP-38's control: its count,
 //!   the loudest urgency's chip, its colours, nudge and arrival flash).
 //! - **A place tapped** raises its sheet above the bar and lights; tapping it
@@ -164,6 +165,12 @@ pub(crate) fn sections_face(face: Option<&sections::Face>) -> (String, Option<us
         Some(f) => (f.words(), (f.waiting > 0).then_some(f.waiting)),
         None => ("sections".into(), None),
     }
+}
+
+/// CHAT-10: the sections place's chat badge — the reader's unread in the
+/// ticket's chats, none at 0.
+pub(crate) fn chat_badge(face: Option<&sections::Face>) -> Option<u32> {
+    face.map(|f| f.chats).filter(|n| *n > 0)
 }
 
 // ---------------------------------------------------------------------
@@ -378,6 +385,7 @@ pub(crate) fn Bar(route: RwSignal<Route>, overlay: RwSignal<Overlay>, tree: nav:
                 on:click=move |_| tap(Place::Sections)>
                 {icon(Place::Sections)}
                 {move || face.with(|f| f.1).map(|n| view! { <span class="bdg ask">{n}</span> })}
+                {move || sface.with(|f| chat_badge(f.as_ref())).map(|n| view! { <span class="bdg chat" title="unread in this ticket's chats">{n}</span> })}
                 <span class="sub">{move || face.with(|f| f.0.clone())}</span>
             </button>
         }
@@ -603,5 +611,17 @@ mod tests {
         assert_eq!(f.words(), "4/4 Conversation");
         assert_eq!(sections::Face::of(&[], 0), None);
         assert_eq!(sections_face(None), ("sections".to_string(), None));
+    }
+
+    /// CHAT-10: the sections place counts the chats' unread, green, beside
+    /// the inputs; none at 0 or with no dock.
+    #[test]
+    fn the_sections_place_counts_the_chats() {
+        let s = |label: &str| sections::Section { label: label.into(), at: sections::Spot::Conversation, inputs: Vec::new() };
+        let secs = vec![s("Problem"), s("Conversation")];
+        let f = sections::Face::of(&secs, 0).unwrap();
+        assert_eq!(chat_badge(Some(&f)), None);
+        assert_eq!(chat_badge(Some(&f.with_chats(2))), Some(2));
+        assert_eq!(chat_badge(None), None);
     }
 }

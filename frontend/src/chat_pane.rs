@@ -1,13 +1,17 @@
-//! CHAT-4: chats inside their ticket — CHAT-1's Figs 1–4 and its 390 sheet.
+//! CHAT-4: chats inside their ticket — CHAT-1's Figs 1–4 — and, since
+//! CHAT-10 (CHAT-9's answer, owner 2026-10-17: `dock`), drawn **in the
+//! section dock** (src/sections.rs), not in a pane of their own.
 //!
 //! - **The field** ([`Field`]): **chat N** among the ticket page's fields,
 //!   N the reader's unread on the ticket ([`field_count`]); it opens the
-//!   pane, and closes it again.
-//! - **The pane** ([`Pane`]): a column of the app's grid beside the content
-//!   at a desktop width; under 760px a sheet over the ticket, its handle
-//!   dragged down to dismiss it ([`dismisses`]), fixed while the page
-//!   scrolls under it. A tab per open chat on the ticket (its participants,
-//!   its unread), **+ chat**, the closed list, ×. The participants row: a
+//!   dock on a chat, and closes it again.
+//! - **The chat in the dock** ([`Inside`]): the dock turned into the
+//!   conversation in place — its head (*← sections*, the lit section, ×),
+//!   a chip per open chat on the ticket (its participants, its unread),
+//!   **+ chat**, the closed list. At ≤ 820 it is the phone bar's sections
+//!   sheet that turns into it, its handle dragged down to dismiss it
+//!   ([`Grab`], [`dismisses`]). [`Follow`] keeps the route and the shown
+//!   chat in step, mounted once in the app. The participants row: a
 //!   dot each, pulsing while one waits on `await_message` (under the Motion
 //!   setting), agents marked ([`crate::chats::is_agent`]); *add* and *close
 //!   chat*. The messages through `md.rs` (never framed), an agent's `via`
@@ -198,7 +202,12 @@ pub(crate) fn open_view(ticket: &str, view: View) {
     shown().set(Some(Shown { ticket: ticket.to_string(), view }));
 }
 
-/// Close the pane.
+/// CHAT-10: whether chat `id` is the one shown.
+pub(crate) fn showing(id: u64) -> bool {
+    shown().with(|s| s.as_ref().is_some_and(|s| s.view == View::Chat(id)))
+}
+
+/// Close the chat.
 pub(crate) fn close() {
     shown().set(None);
 }
@@ -256,10 +265,10 @@ pub(crate) fn Field(ticket: String) -> impl IntoView {
     }
 }
 
-/// The pane: mounted once in the app's grid; drawn while it is open on the
-/// route's ticket.
+/// The route and the chat shown, kept in step — mounted once in the app;
+/// the chat itself is drawn in the dock ([`Inside`]).
 #[component]
-pub(crate) fn Pane(ticket: Signal<Option<String>>) -> impl IntoView {
+pub(crate) fn Follow(ticket: Signal<Option<String>>) -> impl IntoView {
     let shown = shown();
     // The route: `?chat=` opens it; another page closes it.
     {
@@ -303,9 +312,17 @@ pub(crate) fn Pane(ticket: Signal<Option<String>>) -> impl IntoView {
             show(default_view(&open));
         });
     }
+}
+
+/// CHAT-10: the chat as the dock draws it, while it is open on `ticket` —
+/// `lit` the head's words for the section being read (`2/6 Problem`),
+/// `back` what *← sections* and × do beyond closing the chat (`true` for ×).
+#[component]
+pub(crate) fn Inside(ticket: String, #[prop(into)] lit: Signal<String>, back: Callback<bool>) -> impl IntoView {
+    let shown = shown();
     move || {
         let s = shown.get()?;
-        ticket.get().is_some_and(|t| t.eq_ignore_ascii_case(&s.ticket)).then(|| pane_view(s))
+        s.ticket.eq_ignore_ascii_case(&ticket).then(|| pane_view(s, lit, back))
     }
 }
 
@@ -317,7 +334,7 @@ pub(crate) fn names() -> impl Fn(&str) -> String + Clone + 'static {
     move |p: &str| held.with(|h| display(p, &me, my.as_deref(), h.as_ref()))
 }
 
-fn pane_view(s: Shown) -> impl IntoView {
+fn pane_view(s: Shown, lit: Signal<String>, back: Callback<bool>) -> impl IntoView {
     let held = chats::signal();
     let ticket = s.ticket.clone();
     let open = {
@@ -342,8 +359,10 @@ fn pane_view(s: Shown) -> impl IntoView {
                     let id = c.id.get();
                     let on = current == View::Chat(id);
                     let label = tab_label(&c, &me, &name);
+                    let waits = c.waiting.iter().any(|p| *p != me);
                     view! {
                         <button type="button" class="ptab" class:on=on role="tab" aria-selected=on.to_string() data-chat=id.to_string() on:click=move |_| show(View::Chat(id))>
+                            <span class="dot" class:wait=waits></span>
                             <span class="pl">{label}</span>
                             {(c.unread > 0).then(|| view! { <span class="count">{c.unread}</span> })}
                         </button>
@@ -361,9 +380,17 @@ fn pane_view(s: Shown) -> impl IntoView {
     let label = format!("chats on {ticket}");
     let is_pick = current == View::Pick;
     let is_closed = current == View::Closed;
+    let close_x = move |_| {
+        close();
+        back.run(true);
+    };
     view! {
-        <aside id="chatpane" aria-label=label data-ticket=ticket.clone()>
-            <Grab />
+        <div id="chatpane" role="region" aria-label=label data-ticket=ticket.clone()>
+            <div class="dchead">
+                <button type="button" class="pback" title="back to the sections" on:click=move |_| { close(); back.run(false); }>"← sections"</button>
+                <span class="plit">{move || lit.get()}</span>
+                <button type="button" class="px" aria-label="close the chat" title="close the chat" on:click=close_x>"×"</button>
+            </div>
             <div class="ptabs" role="tablist">
                 {tabs}
                 <button type="button" class="pnew" class:on=is_pick on:click=move |_| show(View::Pick)>"+ chat"</button>
@@ -375,19 +402,19 @@ fn pane_view(s: Shown) -> impl IntoView {
                         </button>
                     })
                 }}
-                <button type="button" class="px" aria-label="close the chats" title="close the chats" on:click=move |_| close()>"×"</button>
             </div>
             {body}
-        </aside>
+        </div>
     }
 }
 
-/// The sheet's handle (under 760px): dragged down past [`DISMISS_PX`], the
-/// sheet goes; less, it springs back.
+/// A sheet's handle (≤ 820, the dock's sheet): dragged down past
+/// [`DISMISS_PX`], the sheet `target` (an element id) goes and `dismiss`
+/// runs; less, it springs back.
 #[component]
-fn Grab() -> impl IntoView {
+pub(crate) fn Grab(target: &'static str, dismiss: Callback<()>) -> impl IntoView {
     let start = StoredValue::new(None::<f64>);
-    let pane = || dom::window().document().and_then(|d| d.get_element_by_id("chatpane")).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok());
+    let pane = move || dom::window().document().and_then(|d| d.get_element_by_id(target)).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok());
     let place = move |dy: f64| {
         if let Some(p) = pane() {
             let _ = p.style().set_property("translate", &format!("0 {}px", dy.max(0.0)));
@@ -398,12 +425,12 @@ fn Grab() -> impl IntoView {
         start.set_value(None);
         place(0.0);
         if dismisses(f64::from(ev.client_y()) - y0) {
-            close();
+            dismiss.run(());
         }
     };
     view! {
         <div
-            class="pgrab"
+            class="grab pgrab"
             aria-hidden="true"
             on:pointerdown=move |ev: web_sys::PointerEvent| {
                 // No text selection or native drag to cancel the pointer.
@@ -468,12 +495,18 @@ fn ChatView(ticket: String, id: u64) -> impl IntoView {
             }
         });
     });
-    // The newest message in view.
+    // The newest message in view — and the notes under it (who waits),
+    // once they are drawn.
     let list_ref = NodeRef::<leptos::html::Div>::new();
     Effect::new(move |_| {
         thread.track();
+        chat.track();
         if let Some(el) = list_ref.get() {
             el.set_scroll_top(el.scroll_height());
+            spawn_local(async move {
+                dom::sleep_ms(0).await;
+                el.set_scroll_top(el.scroll_height());
+            });
         }
     });
     let adding = RwSignal::new(false);
