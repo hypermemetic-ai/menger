@@ -367,7 +367,7 @@ pinned address, SCAFFOLD-22) over `app.env`.
 | environment | host | settings (copied to the box as `app.env`) | state |
 |---|---|---|---|
 | test | `app-test.menger.sh` | `deploy/env/app-test.env` | live since 2026-10-17, its own empty tracker |
-| prod | `app.menger.sh` | `deploy/env/app-prod.env` | declared, not deployed: RUN-11's `sign-in`, then RUN-13 |
+| prod | `app.menger.sh` | `deploy/env/app-prod.env` | declared, not deployed: AuthKit on WorkOS production (RUN-11's `sign-in`); its client id and the owner's production user (RUN-11 `prod-ids`), then RUN-13 |
 
 The settings are menger's own (README "Bind", "Trusted proxies", "Behind
 https", Login): `MENGER_PUBLIC_URL=https://<host>`, `MENGER_BIND=0.0.0.0`,
@@ -378,6 +378,24 @@ four provider buttons, `MENGER_REQUIRE_LOGIN`, `MENGER_NO_REST`, and
 `MENGER_ADMINS` = the owner's WorkOS principal and the `operator` key —
 nothing else is granted. Nothing in either file is a secret; one would go in
 the box's own `secret.env`, which infra never reads or writes.
+
+prod signs in through WorkOS **production**, whose API key is sealed to the
+owner's Ledger (WORKOS-14): what needs it runs under `ledger-secret`, the
+owner approving on the device. `deploy/workos-redirect-uris` (RUN-12) keeps
+an environment's redirect URIs and names a user's principal — the staging
+key by default:
+
+```sh
+deploy/workos-redirect-uris list                               # staging
+ledger-secret run workos-prod WORKOS_API_KEY -- deploy/workos-redirect-uris ensure \
+  https://app.menger.sh/login/callback https://app-test.menger.sh/login/callback
+ledger-secret run workos-prod WORKOS_API_KEY -- deploy/workos-redirect-uris user <owner email>
+```
+
+menger has no admin-by-email form: `MENGER_ADMINS` names principals
+(`oidc:workos/user_…`). A person signed in with no grant waits in `members
+requests` (with the name the provider gave), where an admin — the
+`operator` key — grants them.
 
 ```sh
 IMAGE_STORE=ghcr deploy/pipeline image 20261017T081530Z-5773250   # a TESTED release → GHCR

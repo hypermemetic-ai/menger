@@ -19,8 +19,8 @@ image:
 
 # Two environments. test runs a release first; prod is promoted to exactly
 # the image (same image id) test ran and passed the health checks on.
-# app.menger.sh is declared here and not deployed until RUN-13 (the owner's
-# `sign-in` answer on RUN-11, the WorkOS production client, prod's data moved).
+# app.menger.sh is declared here and not deployed until RUN-13 (AuthKit on
+# WorkOS production, RUN-11's `sign-in`; its client id; prod's data moved).
 environments:
   prod:
     host: app.menger.sh
