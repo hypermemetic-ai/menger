@@ -115,11 +115,16 @@ pub(crate) enum Context {
     Field,
     /// APP-33: a mockup device's resize handle (its right edge, its corner).
     Mockup,
+    /// APP-44: focus in a mockup's box on a ticket page (its bar, its
+    /// devices' labels) — never inside a mocked page, whose keys are its own.
+    MockBox,
+    /// APP-44: the mockup compare is open (it owns every key while it is up).
+    Compare,
 }
 
 impl Context {
     #[cfg(test)]
-    pub(crate) const ALL: [Context; 17] = [
+    pub(crate) const ALL: [Context; 19] = [
         Context::Anywhere,
         Context::Global,
         Context::Nav,
@@ -137,6 +142,8 @@ impl Context {
         Context::TimeField,
         Context::Field,
         Context::Mockup,
+        Context::MockBox,
+        Context::Compare,
     ];
 
     /// Where, in the reader's words — the tables' last column.
@@ -159,6 +166,8 @@ impl Context {
             Context::TimeField => "in a time field",
             Context::Field => "in a text field",
             Context::Mockup => "on a mockup device's edge",
+            Context::MockBox => "in a mockup's box",
+            Context::Compare => "in the mockup compare",
         }
     }
 
@@ -168,7 +177,7 @@ impl Context {
     fn modal(self) -> bool {
         matches!(
             self,
-            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field | Context::Mockup
+            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field | Context::Mockup | Context::Compare
         )
     }
 
@@ -184,7 +193,9 @@ impl Context {
         if self.modal() || other.modal() {
             return false;
         }
-        let region = |c: Context| matches!(c, Context::Nav | Context::Board | Context::TicketPage);
+        // APP-44: a mockup's box is a region of its own: focus there is in
+        // no other part of the ticket page.
+        let region = |c: Context| matches!(c, Context::Nav | Context::Board | Context::TicketPage | Context::MockBox);
         if region(self) && region(other) {
             return false;
         }
@@ -336,6 +347,11 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("mockup.narrower-1", &[C::Mockup], &["Shift+ArrowLeft"], G::View, "1 px narrower"),
     b("mockup.taller-1", &[C::Mockup], &["Shift+ArrowDown"], G::View, "1 px taller"),
     b("mockup.shorter-1", &[C::Mockup], &["Shift+ArrowUp"], G::View, "1 px shorter"),
+    // APP-44: the mockup compare (src/compare.rs).
+    b("compare.toggle", &[C::MockBox], &["c"], G::View, "this mockup in or out of the page's comparison (or its bar's Compare)"),
+    b("compare.left", &[C::Compare], &["ArrowLeft"], G::View, "a focused column head: its column one place left"),
+    b("compare.right", &[C::Compare], &["ArrowRight"], G::View, "one place right"),
+    b("compare.close", &[C::Compare], &["Escape"], G::View, "close the side-by-side view; the set stays"),
     b("mockup.add-size", &[C::Menu, C::Field], &["Shift+Click", "Shift+Enter"], G::View, "in a mockup's Size menu or its Custom field: add that size beside the devices shown (without Shift, it is drawn alone)"),
     // -- Menus & dialogs
     b("list.next", &[C::Palette, C::Menu], &["ArrowDown"], G::Dialogs, "the next item (from the last, the first)"),

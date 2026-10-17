@@ -668,7 +668,12 @@ pub(crate) fn Framed(
     // APP-33: the devices it declares, sized by the viewer — kept per
     // mockup (its own name, else its ticket's) in this browser.
     let declared_devices = Memo::new(move |_| decl.with(|d| d.devices.clone()));
-    let sizer = crate::mocksize::Sizer::new(declared_devices.into(), remember.or_else(|| ticket.clone()));
+    // APP-44: a mockup's name — the same as its sizes' — is what the page's
+    // comparison holds it by.
+    let compare_key = remember.or_else(|| ticket.clone());
+    let sizer = crate::mocksize::Sizer::new(declared_devices.into(), compare_key.clone());
+    let compare_attr = compare_key.clone();
+    let compare_button = compare_key.map(|k| crate::compare::toggle_button(k, mockup));
     // APP-42: what the mockup shows, said above it; and the note when its
     // page at the narrowest device shown scrolls several screens.
     let caption = Memo::new(move |_| decl.with(|d| if d.mode == Mode::Mockup && !d.caption.is_empty() { Some(d.caption.clone()) } else { None }));
@@ -711,8 +716,9 @@ pub(crate) fn Framed(
             }
         })
     };
+    let data_compare = move || if mockup.get() { compare_attr.clone() } else { None };
     view! {
-        <div class="framed" class:is-full=move || is_full.get() data-framed=id.to_string() data-view=mode node_ref=root>
+        <div class="framed" class:is-full=move || is_full.get() data-framed=id.to_string() data-view=mode data-compare=data_compare node_ref=root>
             {move || caption.get().map(caption_view)}
             <div class="framed-bar">
                 {move || if is_full.get() { heading() } else { None }}
@@ -720,6 +726,7 @@ pub(crate) fn Framed(
                 {move || tall_screens.get().map(|n| view! { <span class="framed-note" role="note" title="A mockup is one screen at one state; another view is another mockup">{tall_note(n)}</span> })}
                 <span class="framed-gap"></span>
                 {controls}
+                {compare_button}
                 <button class="framed-btn framed-full" title="Full screen (z) — Esc leaves it" aria-pressed=move || is_full.get().to_string() on:click=toggle>
                     {label}
                 </button>
@@ -743,7 +750,7 @@ fn caption_view(c: Caption) -> impl IntoView {
 }
 
 /// The viewer's own `prefers-reduced-motion` — a mockup's toggle starts there.
-fn prefers_reduced_motion() -> bool {
+pub(crate) fn prefers_reduced_motion() -> bool {
     dom::window()
         .match_media("(prefers-reduced-motion: reduce)")
         .ok()
@@ -756,7 +763,7 @@ fn prefers_reduced_motion() -> bool {
 /// `size` has been disposed with its box — then the observer lets go of the
 /// stage instead of reading the dead signal, which panicked on every ticket
 /// left.
-fn observe(el: web_sys::HtmlDivElement, size: RwSignal<(f64, f64)>) {
+pub(crate) fn observe(el: web_sys::HtmlDivElement, size: RwSignal<(f64, f64)>) {
     // false once the box is gone
     let measure = {
         let el = el.clone();

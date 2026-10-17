@@ -136,6 +136,12 @@ web-sys = { version = "0.3", features = [
   "Event",
   "AddEventListenerOptions",
   "Performance",
+  # APP-44: the mockup compare reads a body's mockups from an inert
+  # <template>, and its columns reorder by drag and drop.
+  "HtmlTemplateElement",
+  "DocumentFragment",
+  "DragEvent",
+  "DataTransfer",
 ] }
 
 console_error_panic_hook = "0.1"

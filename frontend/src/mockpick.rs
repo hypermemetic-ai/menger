@@ -29,8 +29,10 @@
 //!   the mocked page's root ([`comment_anchor`]) — so its pin is drawn on
 //!   the device and `#/comments`' link back finds it as any comment inside
 //!   a mockup is found.
-//! - **Compare these** (APP-44's view) is absent until that view is on main
-//!   ([`COMPARE`]).
+//! - **compare these** — on an option's look, opens APP-44's compare view
+//!   (src/compare.rs) on every mockup of that decision; each column carries
+//!   this same [`bar`] — the option's name, its mark and *pick this*, so the
+//!   same answer path and the same gesture check ([`COMPARE`]).
 //!
 //! What decides is pure and pinned by native tests; the rest is DOM.
 
@@ -45,11 +47,9 @@ use wasm_bindgen_futures::spawn_local;
 use crate::mock_anchor::{self, MockRef};
 use crate::{anchor, bridge, gesture, mockup, session};
 
-/// APP-44's compare view is not on main yet: *Compare these* is absent —
-/// not drawn, never a broken button — until it is. Read by nothing yet: the
-/// bar draws the button once APP-44's view is there to open.
-#[allow(dead_code)]
-pub(crate) const COMPARE: bool = false;
+/// APP-44's compare view is there to open: an option's look carries
+/// *compare these* (in the page's bar, not in a compare column's own).
+pub(crate) const COMPARE: bool = true;
 
 /// The longest input id or option value a placeholder may name (the house
 /// writes short ones; a longer one is no option of a body).
@@ -258,6 +258,17 @@ fn pick(ev: &web_sys::MouseEvent, key: &str, c: &Choice, busy: ArcRwSignal<bool>
 /// name, its mark and *pick this*; on every mockup, *comment*. `ticket` is
 /// the body frame's (none: a preview or a help card — nothing to answer).
 pub(crate) fn bar(key: String, ticket: Option<String>, c: Option<Choice>, title: Option<String>) -> ViewFn {
+    bar_with(key, ticket, c, title, COMPARE)
+}
+
+/// [`bar`], in a compare column (APP-44): the same option name, mark, *pick
+/// this* and *comment* for the page's box `key`, without *compare these*
+/// (the view is open already).
+pub(crate) fn column_bar(key: String, ticket: Option<String>, c: Option<Choice>, title: Option<String>) -> ViewFn {
+    bar_with(key, ticket, c, title, false)
+}
+
+fn bar_with(key: String, ticket: Option<String>, c: Option<Choice>, title: Option<String>, compare_these: bool) -> ViewFn {
     let inputs = match (&c, &ticket) {
         (Some(_), Some(t)) => Some(held(t)),
         _ => None,
@@ -331,8 +342,19 @@ pub(crate) fn bar(key: String, ticket: Option<String>, c: Option<Choice>, title:
                 "comment"
             </button>
         });
+        // APP-44: an option's look opens the decision's looks side by side.
+        let compare = (compare_these && c.is_some() && ticket.is_some()).then(|| {
+            let k = key.clone();
+            view! {
+                <button class="framed-btn mcompare" title="Every option of this decision side by side, each with its pick this"
+                    on:click=move |_| crate::compare::open_decision(&k)>
+                    "compare these"
+                </button>
+            }
+        });
         view! {
             {option}
+            {compare}
             {comment}
             {move || problem.get().map(|p| view! { <span class="mpick-err" role="alert">{p}</span> })}
         }
