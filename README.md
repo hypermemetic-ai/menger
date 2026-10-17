@@ -1618,10 +1618,17 @@ the viewer could read: `list`, `find` and `inputs` (each also taking
 `filter`) answer under `(<filter>) and under SHORTCODE`; `get` and
 `blockers` of a ticket outside are `not_found`, and a blocker outside is
 left out; `waves` of a shortcode outside rejects; `groups`, `extents` and
-`health`'s count are the subtree's; `components` is the whole registry.
+`health`'s count are the subtree's. ACCESS-26: **and the registry too** —
+a frame is handed (in its init block, on ready, on every change) and
+answered (`components.list`) only the components its ticket could show:
+those defined or used inside the subtree, those its own markup names (an
+editor's draft, a `createElement('m-x')`), and what those use, each with
+only the references inside; the tooltip's checks know only what is inside
+(`frontend/src/held.rs`). It bounds enumeration: what exists elsewhere,
+and where it is used, is never handed over.
 The host stamps the scope on the frame (`data-scope`); an editor's preview
 reads as the ticket it edits, a component's help card as its owner, and a
-frame with neither reads only `components`; **`navigate(route)`** (COMP-9,
+frame with neither reads only the components its markup names; **`navigate(route)`** (COMP-9,
 below); **`input`** (INPUT-4, frozen) — `ticket`, `submit` and (INPUT-9,
 1.4) `clear`, the two writes (below), and (1.7, COMP-14) `displayOnly`,
 true in a cited window. Its types are

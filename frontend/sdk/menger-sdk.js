@@ -152,8 +152,10 @@
  *   - **docs cards** (COMP-9) — a definition in the body renders as its
  *     card (the host builds it: src/card.rs); the SDK keeps its
  *     "N references ↗" current, and flashes it when the route names it.
- *   - **components** — every name in the app's component registry is a
- *     custom element here (COMP-1 decisions 2, 4). A custom element cannot
+ *   - **components** — every name in the registry as the host hands it is
+ *     a custom element here (COMP-1 decisions 2, 4; ACCESS-26: the
+ *     components this frame's ticket could show — defined or used in its
+ *     shortcode's reach, named by its own markup, and what those use). A custom element cannot
  *     be redefined, so each name's class only delegates: an instance renders
  *     whatever source the name has now, and a changed source re-renders
  *     every live instance in place — no reload. A source (the ` ```component
@@ -221,9 +223,10 @@
  *                 text setting moved (DESIGN-43): `off`, `slow`, `normal`
  *                 or `fast`, worn as html[data-typing]
  *   host → frame  menger:components { components }        on ready, and
- *                 whenever the app (re)fetches the registry — the whole
- *                 registry (`[{ name, source, owner, references }]`); what
- *                 the frame has and this lacks has left it
+ *                 whenever the app (re)fetches the registry — the registry
+ *                 as this frame is handed it (ACCESS-26; `[{ name, source,
+ *                 owner, references }]`, references held to the frame's
+ *                 reach); what the frame has and this lacks has left it
  *   host → frame  menger:change { event }                 every `watch`
  *                 event; a `component_changed` / `component_removed` moves
  *                 the definitions first, then `on('change')` hears it

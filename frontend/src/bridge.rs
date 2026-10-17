@@ -55,9 +55,15 @@
 //! drops whatever comes back from outside the reach anyway (a blocker in
 //! another shortcode, a group or extent of one), so no title, body, input
 //! or answer from outside reaches the frame. `health`'s count is the
-//! reach's. `components.list` stays whole: the registry is the frames' code,
-//! handed to every frame already. A frame with no scope (a help card for
-//! an orphaned component) reads nothing but `components.list`.
+//! reach's. A frame with no scope (a help card for an orphaned component)
+//! reads nothing but `components.list`.
+//!
+//! ACCESS-26: **and the registry too.** `components.list` is answered as
+//! the frame is handed the registry (src/held.rs): only the components its
+//! ticket could show — defined or used inside the reach, named by the
+//! frame's own markup, and what those use — each with only the references
+//! inside. [`admit_event`] passes no component event: the host holds those
+//! itself, per frame (src/frame.rs), since only it knows the frame's markup.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -515,7 +521,8 @@ pub(crate) fn scope_call(call: Call, reach: Option<&Reach>) -> Result<Scoped, St
 /// (a group hosted under a ticket outside stands at the top, as the server
 /// draws it for a viewer without its host); a placement change with only
 /// its moves inside; `health` with the reach's count; components, pages,
-/// lags and refusals whole; anything of a shortcode outside — or an
+/// lags and refusals whole; no component event (ACCESS-26: held per frame,
+/// src/held.rs); anything of a shortcode outside — or an
 /// aggregate over the viewer's whole store — not at all. Every call's
 /// answer, and every `watch` event a frame hears, passes through here.
 pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEvent> {
@@ -629,10 +636,10 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::NotFound { .. }
         | E::Error { .. }
         | E::Ambiguous { .. }
-        | E::BodyTooLarge { .. }
-        | E::Component { .. }
-        | E::ComponentChanged { .. }
-        | E::ComponentRemoved { .. } => Some(ev),
+        | E::BodyTooLarge { .. } => Some(ev),
+        // ACCESS-26: the registry is held per frame (src/held.rs) — by
+        // [`held_components`] for a call, by the host for a change.
+        E::Component { .. } | E::ComponentChanged { .. } | E::ComponentRemoved { .. } => None,
         // Aggregates over the viewer's whole store: no frame's (ACCESS-17:
         // the viewer's count of blockers it is not shown, too).
         E::Facet { .. } | E::Searched { .. } | E::HiddenBlockers { .. } => None,
@@ -660,11 +667,30 @@ fn not_found(id: &str) -> TicketsEvent {
     }
 }
 
+/// ACCESS-26: `components.list`'s answer as a frame held to `reach`, whose
+/// markup names `names`, is handed it ([`crate::held::held_registry`]) —
+/// the components it could show, each with only the references inside —
+/// and whatever else the server said (a page, a refusal) as it said it.
+pub(crate) fn held_components(events: Vec<TicketsEvent>, reach: Option<&Reach>, names: &HashSet<String>) -> Vec<TicketsEvent> {
+    let (components, rest): (Vec<_>, Vec<_>) = events.into_iter().partition(|ev| matches!(ev, TicketsEvent::Component { .. }));
+    let all: Vec<menger_tickets_api::Component> = components
+        .into_iter()
+        .filter_map(|ev| match ev {
+            TicketsEvent::Component { component } => Some(component),
+            _ => None,
+        })
+        .collect();
+    let held = crate::held::held_registry(&all, reach, names);
+    held.into_iter().map(|component| TicketsEvent::Component { component }).chain(rest).collect()
+}
+
 /// A frame's read: `call` held to the reach of `scope` (the shortcode the
 /// host stamped on the frame; `None`: it renders no ticket's body) — the
 /// reach asked of the server ([`reach_of`]), the call narrowed
-/// ([`scope_call`]) and made, its answer held to the reach ([`held_to`]).
-pub(crate) async fn run_scoped(client: &Client, call: Call, scope: Option<&str>) -> Result<Vec<TicketsEvent>, String> {
+/// ([`scope_call`]) and made, its answer held to the reach ([`held_to`]);
+/// ACCESS-26: `components.list` held to the reach and to `names`, what the
+/// frame's markup names ([`held_components`]).
+pub(crate) async fn run_scoped(client: &Client, call: Call, scope: Option<&str>, names: &HashSet<String>) -> Result<Vec<TicketsEvent>, String> {
     let reach = match scope {
         Some(epic) => Some(reach_of(client, epic).await.map_err(|e| format!("{}: {e}", call.method()))?),
         None => None,
@@ -673,10 +699,14 @@ pub(crate) async fn run_scoped(client: &Client, call: Call, scope: Option<&str>)
         Call::Get { id } => Some(id.clone()),
         _ => None,
     };
+    let components = call == Call::Components;
     let events = match scope_call(call, reach.as_ref())? {
         Scoped::Answer(events) => return Ok(events),
         Scoped::Call(call) => run(client, call).await?,
     };
+    if components {
+        return Ok(held_components(events, reach.as_ref(), names));
+    }
     Ok(match &reach {
         Some(reach) => held_to(events, reach, get),
         None => events,
@@ -1512,9 +1542,10 @@ mod tests {
             Some(TicketsEvent::Health { ticket_count, .. }) => assert_eq!(ticket_count, 6),
             other => panic!("{other:?}"),
         }
-        // Components, pages, lags, refusals and the wave counts pass.
+        // ACCESS-26: no component event passes — the host holds those.
+        assert_eq!(kept(TicketsEvent::ComponentRemoved { name: "m-x".into() }), None);
+        // Pages, lags, refusals and the wave counts pass.
         for ev in [
-            TicketsEvent::ComponentRemoved { name: "m-x".into() },
             TicketsEvent::Page { next: None, remaining: 0, first: None },
             TicketsEvent::Lagged { missed: 3 },
             TicketsEvent::NotFound { id: "OTHER-1".parse().unwrap() },
@@ -1532,7 +1563,39 @@ mod tests {
         let none = Reach::none();
         assert!(admit_event(TicketsEvent::Ticket { ticket: tkt("AREA-1") }, &none).is_none());
         assert!(admit_event(TicketsEvent::Count { epic: menger_tickets_api::Code::stored("AREA"), shortcode: menger_tickets_api::ShortcodeId::new("AREA"), held: 1 }, &none).is_none());
-        assert!(admit_event(TicketsEvent::ComponentRemoved { name: "m-x".into() }, &none).is_some());
+        assert!(admit_event(TicketsEvent::ComponentRemoved { name: "m-x".into() }, &none).is_none(), "held by the host (ACCESS-26)");
+    }
+
+    /// ACCESS-26: `components.list`, answered to a frame — only what its
+    /// reach defines or uses, or its markup names; references held; the
+    /// server's refusal as it said it.
+    #[test]
+    fn components_list_is_held_to_the_frame() {
+        let comp = |name: &str, owner: &str, refs: &[&str]| menger_tickets_api::Component {
+            name: name.into(),
+            source: String::new(),
+            owner: Some(owner.into()),
+            references: refs.iter().map(|r| r.to_string()).collect(),
+            docs: None,
+            preview: vec![],
+        };
+        let events = vec![
+            TicketsEvent::Component { component: comp("m-house", "ART-1", &["AREA-2", "OTHER-5"]) },
+            TicketsEvent::Component { component: comp("m-secret", "OTHER-1", &["OTHER-2"]) },
+            TicketsEvent::Component { component: comp("m-named", "OTHER-3", &["OTHER-4"]) },
+            TicketsEvent::Error { message: "x".into() },
+        ];
+        let names = HashSet::from(["m-named".to_string()]);
+        let got = held_components(events, Some(&area()), &names);
+        let shown: Vec<String> = got
+            .iter()
+            .map(|e| match e {
+                TicketsEvent::Component { component } => format!("{} {:?}", component.name, component.references),
+                TicketsEvent::Error { message } => format!("error {message}"),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(shown, ["m-house [\"AREA-2\"]", "m-named []", "error x"]);
     }
 
     /// A call's answer, held: a `get` that lost its ticket is `not_found`;
