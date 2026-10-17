@@ -3,6 +3,9 @@
 # schema against the docs' examples, --commits-from-git on a scratch repo and
 # --send against a stand-in synapse. bash, git and jq only; under a second.
 # `cargo test` runs it (tests/deploy_record.rs), so the pipeline's gate does.
+# The fixtures are also read by the store test deploy_10s_records_are_taken_whole
+# (tickets-api/src/store/tests_deployments.rs): a fixture change runs
+# `cargo test --workspace` too (DEPLOY-24).
 #
 #   deploy/tests/run            all of them; exit 1 if any failed
 set -uo pipefail
