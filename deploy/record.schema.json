@@ -56,6 +56,10 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
     },
+    "request": {
+      "description": "DEPLOY-25: the request this deployment answers — the webhook payload's `request`, a requested deployment's id to the same environment.",
+      "type": "integer"
+    },
     "source": {
       "description": "Where the record came from and where to read the run.",
       "type": "object",

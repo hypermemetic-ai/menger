@@ -153,7 +153,7 @@ impl Lens {
     /// DEPLOY-11: whether it asks `deployed` (DEPLOY-20: or `behind`;
     /// DEPLOY-21: or a stage) — what a recorded deployment can move.
     pub fn asks_deployed(&self) -> bool {
-        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Deployed(_) | crate::filter::Event::Behind(_) | crate::filter::Event::Stage(..)))
+        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Deployed(_) | crate::filter::Event::Behind(_) | crate::filter::Event::Stage(..) | crate::filter::Event::Requested(_)))
     }
 
     /// MENGER-39: whether it asks `queued` — what a queue write can move.

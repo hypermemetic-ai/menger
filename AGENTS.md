@@ -324,8 +324,20 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   environment — `deploying <env>`, `failed <env>`, `ready for <env>`,
   `waiting <env>` (first that holds), each a filter cell; `ready for prod`
   is what is moving in, and `running`'s cells carry `staged`.
-  `record` is the `deployer` grant (a CI's key on the project's
-  shortcode). README "Deployments" has the rest:
+  DEPLOY-25: a deploy is **queued from menger** with `deployments
+  request` (a deployment in the state `requested`: what to deploy —
+  `--revision`, `--release`, else what the environment it promotes from
+  runs — and a note; it runs and completes nothing; `cancel_request`
+  while pending; a CI's `record --request <id>` closes it, and it says
+  that record's state); `requested <env>` is a filter cell. An admin sets
+  an environment's **webhook** (`deployments webhook set|clear|show`;
+  https, or http to loopback; the secret from a file, never argv, and
+  never said back): the server's worker POSTs each request to it,
+  `X-Menger-Signature: sha256=<HMAC-SHA256 of the body>`, retrying 1 s,
+  5 s, 30 s, 2 min, 10 min, then `failed`. Never set a webhook on prod
+  from a test. `record`, `request` and `cancel_request` are the
+  `deployer` grant (a CI's key on the project's shortcode). README
+  "Deployments" → "Queue a deploy" has the rest:
 
   ```sh
   synapse -P 4455 menger deployments record --project menger --environment prod --state succeeded --revision 235ff62 --commits 824e943,235ff62
@@ -336,6 +348,8 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets list --filter 'category done and not deployed prod' --summary true
   synapse -P 4455 menger tickets list --filter 'ready for prod' --summary true
   synapse -P 4455 menger deployments promotes --project menger --environment prod --from test
+  synapse -P 4455 menger deployments request --project menger --environment prod --note "the week's work"
+  synapse -P 4455 -p @webhook.json menger deployments webhook set   # admin; {project, environment, url, secret}
   ```
 
   The app (DEPLOY-13) shows it: a ticket page's Running, a mark per

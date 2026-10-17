@@ -83,6 +83,10 @@ pub(crate) enum Kind {
     /// DEPLOY-21: `<stage> <env>` — a delivery stage there; the Deployed
     /// category's rows (src/when_view.rs).
     Stage(DeliveryStage),
+    /// DEPLOY-25: `requested <env>` — a pending request there would carry
+    /// it; a pill (from the palette, a saved filter or a lane), never a row
+    /// of a menu.
+    Requested,
     /// MENGER-39: `queued [urgency]` — the owner's queue, kept by the
     /// store; a pill (from the palette or a saved filter), never a row of
     /// When's menu.
@@ -124,6 +128,7 @@ impl Kind {
             Event::Deployed(_) => Kind::Deployed,
             Event::Behind(_) => Kind::Behind,
             Event::Stage(s, _) => Kind::Stage(*s),
+            Event::Requested(_) => Kind::Requested,
             Event::Queued(_) => Kind::Queued,
             Event::Chatting | Event::Unread => Kind::Chats,
             Event::Archived => Kind::Archived,
@@ -147,6 +152,7 @@ impl Kind {
             Kind::Stage(DeliveryStage::Deploying) => "Deploying",
             Kind::Stage(DeliveryStage::Waiting) => "Waiting for a deploy",
             Kind::Stage(DeliveryStage::Failed) => "Failed",
+            Kind::Requested => "Requested for",
             Kind::Queued => "Queued",
             Kind::Chats => "Chats",
             Kind::Archived => "Archived",
@@ -170,6 +176,7 @@ impl Kind {
             Kind::Stage(DeliveryStage::Deploying) => "deploying",
             Kind::Stage(DeliveryStage::Waiting) => "waiting",
             Kind::Stage(DeliveryStage::Failed) => "failed",
+            Kind::Requested => "requested",
             Kind::Queued => "queued",
             Kind::Chats => "chats",
             Kind::Archived => "archived",
@@ -305,7 +312,7 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         // DEPLOY-21: [`new_stage`]).
         Kind::Deployed | Kind::NotDeployed | Kind::Stage(_) => return None,
         // MENGER-39 / DEPLOY-20: never built by When's menu.
-        Kind::Queued | Kind::Behind | Kind::Chats => return None,
+        Kind::Queued | Kind::Behind | Kind::Chats | Kind::Requested => return None,
         // ARCHIVE-2: the archive's two ends.
         Kind::Archived => Event::Archived,
         Kind::Restored => Event::Restored,
@@ -356,7 +363,7 @@ pub(crate) fn new_stage(stage: DeliveryStage, env: &str) -> Option<Timed> {
 /// stage) names set.
 pub(crate) fn with_env(t: &Timed, env: &str) -> Timed {
     let mut t = t.clone();
-    if let (Event::Deployed(e) | Event::Behind(e) | Event::Stage(_, e), Ok(env)) = (&mut t.h.event, menger_tickets_api::deployments::environment_of(env)) {
+    if let (Event::Deployed(e) | Event::Behind(e) | Event::Stage(_, e) | Event::Requested(e), Ok(env)) = (&mut t.h.event, menger_tickets_api::deployments::environment_of(env)) {
         *e = env;
     }
     t
@@ -366,7 +373,7 @@ pub(crate) fn with_env(t: &Timed, env: &str) -> Timed {
 /// (DEPLOY-21: or a stage).
 pub(crate) fn env_of(t: &Timed) -> Option<&str> {
     match &t.h.event {
-        Event::Deployed(e) | Event::Behind(e) | Event::Stage(_, e) => Some(e),
+        Event::Deployed(e) | Event::Behind(e) | Event::Stage(_, e) | Event::Requested(e) => Some(e),
         _ => None,
     }
 }
@@ -587,6 +594,11 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
                 DeliveryStage::Failed => "failed on",
             };
             out.push((None, words.into()));
+            out.push((Some(Part::Env), env.clone()));
+        }
+        // DEPLOY-25: "requested for prod".
+        Event::Requested(env) => {
+            out.push((None, "requested for".into()));
             out.push((Some(Part::Env), env.clone()));
         }
         Event::Archived => out.push((None, "archived".into())),

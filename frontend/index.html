@@ -3701,6 +3701,71 @@
   }
   .envmark { border-radius: var(--radius-sm); }
   ul.drows .tag { border-radius: var(--radius-sm); }
+  /* DEPLOY-25: Queue a deploy on each column, and the requests at its top —
+     dashed in the accent while open, arriving (and redrawn as each moves)
+     with the row's entrance; a delivery under way breathes (ornament: calm
+     and none stop it). */
+  .dqueue { padding: 8px 12px 0; }
+  .dqueue .dqbtn {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase;
+    line-height: 1.5; padding: 4px 9px; background: transparent; color: var(--accent); cursor: pointer;
+    border: var(--border) dashed var(--accent); border-radius: var(--radius); transition: transform var(--motion-fast) var(--ease);
+  }
+  .dqueue .dqbtn:hover, .dqueue .dqbtn:focus-visible { transform: translateY(-1px); background: var(--sel); }
+  .dqform {
+    display: flex; flex-direction: column; gap: 7px; padding: 9px 10px; background: var(--panel);
+    border: var(--border) dashed var(--accent); border-radius: var(--radius-lg); animation: menger-row-in .25s ease-out both;
+    font-size: calc(12px * var(--text-scale));
+  }
+  .dqform .dqwhat { color: var(--ink); overflow-wrap: anywhere; }
+  .dqform .dqwhat .rel { color: var(--muted); }
+  .dqform .dsub { margin: 0; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+  .dqform ul.dqmoves { margin: 0; }
+  .dqform ul.dqmoves li { font-size: calc(12px * var(--text-scale)); animation: menger-row-in .3s ease-out both; }
+  .dqfield {
+    display: flex; flex-direction: column; gap: 3px; font-family: var(--mono); font-size: calc(10px * var(--text-scale));
+    font-weight: var(--weight-medium); letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  }
+  .dqfield input, .dqfield textarea {
+    font-family: var(--sans); font-size: calc(12px * var(--text-scale)); letter-spacing: 0; text-transform: none; color: var(--ink);
+    background: var(--bg); border: var(--border) solid var(--tree-line); border-radius: var(--radius); padding: 4px 7px;
+    width: 100%; box-sizing: border-box; resize: vertical;
+  }
+  .dqfield input:focus-visible, .dqfield textarea:focus-visible { outline: none; border-color: var(--accent); }
+  .dqact { display: flex; align-items: center; gap: 10px; }
+  .dqact .dqgo {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase;
+    line-height: 1.5; padding: 4px 12px; color: var(--bg); background: var(--accent); border: var(--border) solid var(--accent);
+    border-radius: var(--radius); cursor: pointer; transition: transform var(--motion-fast) var(--ease);
+  }
+  .dqact .dqgo:hover:not(:disabled) { transform: translateY(-1px); }
+  .dqact .dqgo:disabled { opacity: .6; cursor: progress; }
+  .denv ol.drequests { list-style: none; margin: 8px 12px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .ddeploy.dreq { border-style: dashed; border-color: var(--accent); animation: menger-row-in .3s ease-out both; }
+  .ddeploy.dreq.canceled { opacity: .7; border-color: var(--line); }
+  .ddeploy.dreq.ok, .ddeploy.dreq.failed { border-style: solid; border-color: var(--line); }
+  .dstate.requested { color: var(--accent); background: var(--chip-bg); border: var(--border) dashed var(--accent); }
+  .ddeploy .dfrom { color: var(--muted); }
+  .ddeploy .dby, .ddeploy .dreqstate { color: var(--muted); font-size: calc(11px * var(--text-scale)); overflow-wrap: anywhere; }
+  .ddeploy .dnote { color: var(--ink); font-size: calc(11.5px * var(--text-scale)); margin-top: 2px; overflow-wrap: anywhere; }
+  .ddeploy .dreqstate { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin-top: 3px; }
+  .ddeploy .dreqword.started { color: var(--st-coding-fg); }
+  .ddeploy .dreqword.ok { color: var(--st-complete-fg); }
+  .ddeploy .dreqword.failed { color: var(--err-fg); }
+  .ddeploy .doutcome { color: var(--accent); text-decoration: none; font-family: var(--mono); }
+  .ddeploy .dcancel { margin-left: auto; }
+  .ddeploy .dhint { color: var(--muted); }
+  .dhook.delivered { color: var(--st-complete-fg); }
+  .dhook.retrying { color: var(--st-in-review-fg); }
+  .dhook.failed { color: var(--err-fg); }
+  .dhook.none, .dhook.stopped { color: var(--muted); }
+  .dhook.pending::before, .dhook.retrying::before {
+    content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%;
+    background: currentColor; vertical-align: 1px; animation: menger-deploying 1.6s ease-in-out infinite;
+  }
+  html[data-motion="calm"] .dhook.pending::before, html[data-motion="calm"] .dhook.retrying::before { animation: none; }
+  .envmark.requested { color: var(--accent); background: transparent; border-style: dashed; border-color: var(--accent); }
+  #t-running a.run.requested { white-space: normal; color: var(--muted); }
 
   /* The waves: lanes on the panel under the stronger hairline, their heads
      the mockup's small upper-case voice; a card a row's worth of words; the

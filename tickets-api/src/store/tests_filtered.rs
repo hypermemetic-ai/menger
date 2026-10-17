@@ -218,6 +218,7 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
             | Event::Deployed(_)
             | Event::Behind(_)
             | Event::Stage(..)
+            | Event::Requested(_)
             | Event::Queued(_)
             | Event::Chatting
             | Event::Unread => false,

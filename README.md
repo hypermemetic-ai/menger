@@ -3357,13 +3357,16 @@ synapse -P 4455 menger tickets list --filter 'not category done or not deployed 
 
 | method | yields |
 | -- | -- |
-| `deployments.record { project, environment, state, revision, previous?, commits?, tickets?, release?, at?, source?, from? }` | `deployed { deployment, carried, unlinked, live, entered, left, duplicate }` — the deployment kept (`at` RFC 3339 or unix seconds, now when omitted; `recorded_by` the caller), the tickets it carried, its commits no ticket links, whether it still counts, and the tickets that began and stopped running in its environment. A bad field is one `error` naming it, nothing kept |
+| `deployments.record { project, environment, state, revision, previous?, commits?, tickets?, release?, at?, source?, from?, request? }` | `deployed { deployment, carried, unlinked, live, entered, left, duplicate }` — the deployment kept (`at` RFC 3339 or unix seconds, now when omitted; `recorded_by` the caller), the tickets it carried, its commits no ticket links, whether it still counts, and the tickets that began and stopped running in its environment. A bad field is one `error` naming it, nothing kept |
 | `deployments.promotes { project, environment, from? }` | DEPLOY-21 (admin): `promotes { project, environment, from }` — where the environment promotes from now (`from` omitted: none); the same answer, nothing written, when nothing moved; an `error` for itself or a cycle |
 | `deployments.list { project?, environment?, state?, ticket?, after?, limit? }` | `deployment { deployment, carried, unlinked, live }` newest first by `(at, id)`, then `page { next }` |
 | `deployments.environments { project? }` | `environment { project, name, order, revision, release, since, deployment, last, last_state, last_at, tickets, from }` per environment (`from`, DEPLOY-21, when it promotes from one) |
-| `deployments.for_ticket { id }` | `running { environment, since, deployment, revision, release, behind, version }` for each environment it runs in — `behind` the commits not carried there, in link order, and `version` the newest carried one, when it runs an earlier version (DEPLOY-20; absent when current) — `not_running` for each other environment of its projects (its shortcode's, its hosts', any it ran in) |
+| `deployments.for_ticket { id }` | `running { environment, since, deployment, revision, release, behind, version }` for each environment it runs in — `behind` the commits not carried there, in link order, and `version` the newest carried one, when it runs an earlier version (DEPLOY-20; absent when current) — `not_running` for each other environment of its projects (its shortcode's, its hosts', any it ran in); DEPLOY-25: `requested { environment, request, requested_by, at, revision, webhook }` for each pending request that would carry it |
 | `deployments.running { project?, environment?, ids? }` | DEPLOY-13: `cells { project, environment, running: [{ ticket, since, deployment, behind, version }] }` per environment (an empty one too), each ticket running there — only `ids`' (at most 1,000) when given — in the store's order: what the app's board marks are drawn from, in one read; DEPLOY-21: `staged: [{ ticket, stage }]`, each ticket deploying, ready for or failed there |
-| `deployments.watch` | `deployed`, then `environment_changed`, as each is recorded; `promotes` when where an environment promotes from moves; `lagged { missed }` |
+| `deployments.request { project, environment, revision?, release?, note? }` | DEPLOY-25 (deployer or admin on the project): `request { deployment, carried }` — the request kept as a deployment in the state `requested` (below), and the tickets it would carry; an `error` naming why, nothing kept |
+| `deployments.cancel_request { id }` | DEPLOY-25 (deployer or admin): `request { deployment, carried }` — canceled; an `error` when a CI has picked it up, or it is canceled already |
+| `deployments.webhook.set { project, environment, url, secret }` · `.clear { project, environment }` · `.show { project, environment }` | DEPLOY-25 (admin): `webhook { webhook: { project, environment, url, secret_set, set_at, set_by } }` — never the secret |
+| `deployments.watch` | `deployed`, then `environment_changed`, as each is recorded; `promotes` when where an environment promotes from moves; `request` each time a request moves (asked, canceled, a delivery attempt, a CI record naming it); `lagged { missed }` |
 
 **Filter cells.** `deployed <env>` (FILTER-3's language) is a ticket running
 in an environment of that name — `prod` of any project, `menger/prod` of one —
@@ -3423,8 +3426,82 @@ The app holds the environments and their cells (`environments`, `running`),
 kept by `deployments.watch` — a deploy asks again only for its environment —
 so every mark moves live, with no request per row.
 
+#### Queue a deploy (DEPLOY-25)
+
+A deploy can be asked for from menger: the request is kept in the
+database, and a signed **webhook** tells the environment's CI to do it.
+
+```sh
+synapse -P 4455 menger deployments request --project menger --environment prod --note "the week's work"
+synapse -P 4455 menger deployments request --project menger --environment prod --revision 235ff62
+synapse -P 4455 menger deployments cancel_request --id 41
+synapse -P 4455 menger deployments list --state requested --limit 5
+synapse -P 4455 menger tickets list --filter 'requested prod' --summary true
+synapse -P 4455 -p @webhook.json menger deployments webhook set   # {"project","environment","url","secret"}: the secret from a file, never argv
+synapse -P 4455 menger deployments webhook show --project menger --environment prod
+synapse -P 4455 menger deployments webhook clear --project menger --environment prod
+```
+
+- **A request is a deployment** in the state `requested`, its id from the
+  same sequence: who asked (`recorded_by`), when (`at`), the project and
+  environment, what to deploy — `revision`; else the latest recorded deploy
+  of `release`; else what the environment it promotes from runs (DEPLOY-21's
+  `from`, kept as `requested.from`) — `previous` (what the environment runs
+  now) and the note. With neither, an environment that promotes from none,
+  or one whose source runs nothing, is refused. `list`, `watch` and
+  `#/deployments` carry it; `list --state requested` lists them.
+- **It runs nothing and completes nothing**, as `started` does: it is folded
+  into no environment and moves no cell, stage or status.
+- **Its state** (`requested.state`) is `pending` until a CI's `record` names
+  it (`request: <id>`, to the same environment) — then that record's state
+  (`started`, `succeeded`, `failed`, `rolled_back`), the latest such record
+  its `outcome` — or `canceled` (`cancel_request`), which only a pending one
+  may be.
+- **What it would carry** while pending (`carried`, `for_ticket`'s
+  `requested`, the filter cell `requested <env>`): the tickets running
+  their current version on an environment of the project that runs its
+  revision, and those linking the revision itself, less those running their
+  current version on its environment. A request, a cancel and a record move
+  it; a filtered watch says `entered` / `left`.
+- **The webhook** is an environment's, set by an admin: `url` is https, or
+  http to this machine (`localhost`, `127.0.0.1`, `[::1]`) for a local CI;
+  `secret` 16 to 256 bytes. The secret is never said back — `webhook` says
+  `secret_set` — and is in no event and no log line. No webhook: the request
+  is kept and says `webhook: none` (*no CI configured*).
+- **A delivery** is made by the server's worker (`src/webhooks.rs`), never
+  on the write path: a `POST` of the request as JSON — `{ request, project,
+  environment, revision, release, from, requested_by, note, at }` (`at` RFC
+  3339) — with `X-Menger-Signature: sha256=<lower-case hex HMAC-SHA256 of
+  the exact body, keyed by the secret>`, `X-Menger-Delivery: <id>` (the same
+  on every attempt of one request), `X-Menger-Event: deploy.requested`,
+  `X-Menger-Attempt: <n>`; redirects not followed, 10 s per attempt. A 2xx
+  is `delivered`; anything else is `retrying`, after 1 s, 5 s, 30 s, 2 min
+  and 10 min, then `failed`. Each attempt is kept (`requested.attempts`: its
+  number, time, status, a short error). A cancel, or a CI's record naming
+  the request, stops it (`stopped`); a restart picks up a delivery where its
+  last attempt left it. deploy/README.md "A deploy request's webhook" says
+  how a receiver checks the signature.
+- **Stored** in `deploy_requests` (note, source, cancellation, the
+  delivery's id and state), `deploy_deliveries` (each attempt) and
+  `deploy_webhooks` (each environment's URL and secret); a record's
+  `request` is `deployments.request`, a column a file gains on open. A
+  release before DEPLOY-25 cannot read a `requested` row: rolling back
+  across it after a request was made needs `--restore`.
+
+**In the app**: each column of `#/deployments` has **Queue a deploy** — what
+it would deploy (what the environment it promotes from runs, or a revision
+typed in), the work that would move in (`ready for <p>/<env>`), a note,
+then Queue. The column's open requests sit at its top — *requested by … ·
+webhook delivered / retrying / failed / no CI configured*, the note, what
+the CI made of it — and follow `deployments.watch` live; a pending one has
+*cancel*. Each arrives, and each move of it is drawn, with the row's
+entrance, and a delivery under way breathes (Motion: calm holds it still,
+none stops both). A ticket page's **Running** adds *requested for prod by …*
+for each pending request that would carry it.
+
 **Under login**, `record` is its own grant, held by the `deployer` role
-(`deployments.record` and the reads) — what a CI's key carries on the
+(`deployments.record`, DEPLOY-25's `request` and `cancel_request`, and the
+reads; `webhook.*` is admin's alone) — what a CI's key carries on the
 project's shortcode (a minted session scoped `deployer@MENGER`); `admin`
 holds it too, an editor does not. The reads are a viewer's and answer only
 of the projects where the caller holds them. DEPLOY-14: `deployer` is a

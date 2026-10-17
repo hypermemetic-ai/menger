@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use futures::StreamExt;
 use leptos::prelude::*;
-use menger_tickets_api::deployments::{rank, DeliveryStage};
+use menger_tickets_api::deployments::{rank, DeliveryStage, DeployRequest, RequestState, WebhookState};
 use menger_tickets_api::{DeploymentsEvent, Environment, RunningCell};
 use plexus_client::ClientEvent;
 use wasm_bindgen_futures::spawn_local;
@@ -77,6 +77,37 @@ pub(crate) fn stage_words(stage: DeliveryStage, env: &str, from: Option<&str>) -
         (DeliveryStage::Deploying, _) => format!("deploying to {env} now"),
         (DeliveryStage::Failed, _) => format!("its deploy to {env} failed or was rolled back"),
         (DeliveryStage::Waiting, _) => format!("waiting for a deploy to {env}"),
+    }
+}
+
+/// DEPLOY-25: a request's webhook delivery in words — what the column and
+/// the ticket page say beside "requested by …".
+pub(crate) fn webhook_words(q: &DeployRequest) -> String {
+    let n = q.attempts.len();
+    let last = q.attempts.last().and_then(|a| a.error.clone());
+    match q.webhook {
+        WebhookState::None => "no CI configured".into(),
+        WebhookState::Pending => "webhook sending…".into(),
+        WebhookState::Delivered => match n {
+            1 => "webhook delivered".into(),
+            n => format!("webhook delivered (attempt {n})"),
+        },
+        WebhookState::Retrying => format!("webhook retrying — attempt {n} {}", last.unwrap_or_else(|| "failed".into())),
+        WebhookState::Failed => format!("webhook failed after {n} attempt{}{}", if n == 1 { "" } else { "s" }, last.map(|e| format!(" — {e}")).unwrap_or_default()),
+        WebhookState::Stopped => "webhook stopped".into(),
+    }
+}
+
+/// DEPLOY-25: where a request stands, in words — `pending`, `canceled`,
+/// or the CI's state (`started`, `succeeded`, …).
+pub(crate) fn request_words(q: &DeployRequest) -> &'static str {
+    match q.state {
+        RequestState::Pending => "waiting for its CI",
+        RequestState::Canceled => "canceled",
+        RequestState::Started => "CI started",
+        RequestState::Succeeded => "CI succeeded",
+        RequestState::Failed => "CI failed",
+        RequestState::RolledBack => "CI rolled back",
     }
 }
 
@@ -537,6 +568,11 @@ fn heard(ev: DeploymentsEvent) {
             let e = environment.clone();
             HELD.with(|s| s.maybe_update(|h| h.as_mut().is_some_and(|h| h.upsert_env(e))));
         }
+        // DEPLOY-25: a request asked, canceled, delivered or picked up —
+        // the columns and every Running ask again.
+        DeploymentsEvent::Request { .. } => {
+            EPOCH.with(|e| e.update(|n| *n = n.wrapping_add(1)));
+        }
         _ => {}
     }
 }
@@ -662,6 +698,8 @@ pub(crate) fn row_marks(ticket: String) -> impl IntoView {
 pub(crate) enum Where {
     On { project: String, env: String, since: i64, deployment: u64, revision: Option<String>, behind: Vec<String>, version: Option<String> },
     NotOn { project: String, env: String },
+    /// DEPLOY-25: a pending request to `env` would carry it.
+    Requested { project: String, env: String, request: u64, by: String, at: i64, webhook: WebhookState },
 }
 
 /// `for_ticket`'s answer as the page says it: where it runs, the last
@@ -670,21 +708,28 @@ pub(crate) enum Where {
 pub(crate) fn where_of(events: Vec<DeploymentsEvent>) -> Result<Vec<Where>, String> {
     let mut on = Vec::new();
     let mut off = Vec::new();
+    let mut asked = Vec::new();
     for ev in events {
         match ev {
             DeploymentsEvent::Running { project, environment, since, deployment, revision, behind, version, .. } => {
                 on.push(Where::On { project, env: environment, since, deployment, revision, behind, version })
             }
             DeploymentsEvent::NotRunning { project, environment, .. } => off.push(Where::NotOn { project, env: environment }),
+            DeploymentsEvent::Requested { project, environment, request, requested_by, at, webhook, .. } => {
+                asked.push(Where::Requested { project, env: environment, request, by: requested_by, at, webhook })
+            }
             DeploymentsEvent::Error { message } => return Err(message),
             _ => {}
         }
     }
     let key = |w: &Where| match w {
-        Where::On { project, env, .. } | Where::NotOn { project, env } => place(project, env),
+        Where::On { project, env, .. } | Where::NotOn { project, env } | Where::Requested { project, env, .. } => place(project, env),
     };
     on.sort_by_key(|w| std::cmp::Reverse(key(w)));
     off.sort_by_key(key);
+    // DEPLOY-25: a pending request beside where it does run, before where it does not.
+    asked.sort_by_key(|w| std::cmp::Reverse(key(w)));
+    on.extend(asked);
     on.extend(off);
     Ok(on)
 }
@@ -731,7 +776,7 @@ pub(crate) fn Running(id: String, commits: Memo<Vec<String>>) -> impl IntoView {
             let many = ws
                 .iter()
                 .map(|w| match w {
-                    Where::On { project, .. } | Where::NotOn { project, .. } => project.clone(),
+                    Where::On { project, .. } | Where::NotOn { project, .. } | Where::Requested { project, .. } => project.clone(),
                 })
                 .collect::<std::collections::BTreeSet<_>>()
                 .len()
@@ -774,6 +819,25 @@ pub(crate) fn Running(id: String, commits: Memo<Vec<String>>) -> impl IntoView {
                             view! {
                                 <a class="run" data-env=env.clone() href=href(&project, Some(deployment)) title=title>
                                     {pre}<span class="envmark">{env.clone()}</span>{format!(" since {}", since(at))}
+                                </a>
+                            }
+                            .into_any()
+                        }
+                        // DEPLOY-25: a pending request would carry it there.
+                        Where::Requested { project, env, request, by, at, webhook } => {
+                            let pre = many.then(|| format!("{project} "));
+                            let hook = match webhook {
+                                WebhookState::None => "no CI configured",
+                                WebhookState::Pending => "webhook sending",
+                                WebhookState::Retrying => "webhook retrying",
+                                WebhookState::Delivered => "webhook delivered",
+                                WebhookState::Failed => "webhook failed",
+                                WebhookState::Stopped => "webhook stopped",
+                            };
+                            let title = format!("requested for {project} {env} by {by}, {} — request {request}; {hook}", crate::fmt_unix(at));
+                            view! {
+                                <a class="run requested" data-env=env.clone() data-request=request href=href(&project, Some(request)) title=title>
+                                    "requested for "{pre}<span class="envmark requested">{env.clone()}</span>{format!(" by {by} · {hook}")}
                                 </a>
                             }
                             .into_any()
@@ -848,6 +912,8 @@ mod tests {
                 source: Default::default(),
                 recorded_at: at,
                 recorded_by: "ci".into(),
+                request: None,
+                requested: None,
             },
             carried: vec![],
             unlinked: vec![],
@@ -963,10 +1029,54 @@ mod tests {
             .map(|w| match w {
                 Where::On { env, .. } => format!("on {env}"),
                 Where::NotOn { env, .. } => format!("not {env}"),
+                Where::Requested { env, .. } => format!("requested {env}"),
             })
             .collect();
         assert_eq!(names, ["on prod", "on test", "not staging"]);
         assert_eq!(where_of(vec![DeploymentsEvent::Error { message: "no ticket X".into() }]), Err("no ticket X".to_string()));
+        // DEPLOY-25: a pending request that would carry it, after where it runs.
+        let asked = DeploymentsEvent::Requested {
+            ticket: "MENGER-2".into(),
+            project: "MENGER".into(),
+            environment: "prod".into(),
+            request: 7,
+            requested_by: "owner".into(),
+            at: 1,
+            revision: "aaaaaaa".into(),
+            webhook: WebhookState::Delivered,
+        };
+        let ws = where_of(vec![off("prod"), asked, on("test", 5)]).unwrap();
+        assert!(matches!(&ws[1], Where::Requested { env, request: 7, .. } if env == "prod"), "{ws:?}");
+        assert!(matches!(&ws[0], Where::On { .. }) && matches!(&ws[2], Where::NotOn { .. }));
+    }
+
+    /// DEPLOY-25: a request's delivery and state in words.
+    #[test]
+    fn a_requests_words() {
+        use menger_tickets_api::deployments::DeliveryAttempt;
+        let mut q = DeployRequest {
+            note: None,
+            from: Some("test".into()),
+            state: RequestState::Pending,
+            outcome: None,
+            canceled_at: None,
+            canceled_by: None,
+            delivery: None,
+            webhook: WebhookState::None,
+            attempts: vec![],
+            next_attempt_at: None,
+        };
+        assert_eq!((webhook_words(&q), request_words(&q)), ("no CI configured".to_string(), "waiting for its CI"));
+        q.webhook = WebhookState::Retrying;
+        q.attempts.push(DeliveryAttempt { attempt: 1, at: 1, status: Some(500), error: Some("answered 500 Internal Server Error".into()) });
+        assert_eq!(webhook_words(&q), "webhook retrying — attempt 1 answered 500 Internal Server Error");
+        q.webhook = WebhookState::Delivered;
+        q.attempts.push(DeliveryAttempt { attempt: 2, at: 2, status: Some(200), error: None });
+        assert_eq!(webhook_words(&q), "webhook delivered (attempt 2)");
+        q.webhook = WebhookState::Failed;
+        assert!(webhook_words(&q).starts_with("webhook failed after 2 attempts"));
+        q.state = RequestState::Succeeded;
+        assert_eq!(request_words(&q), "CI succeeded");
     }
 
     /// DEPLOY-20: a cell behind makes its mark behind — the versions said

@@ -56,6 +56,11 @@ same_json pipeline-log "$("$REC" --from pipeline-log "$FX/pipeline.log" | jq -sc
   "$(jq -sc . "$FX/pipeline.expected.ndjson")"
 same_json pipeline-log-stdin "$("$REC" --from pipeline-log <"$FX/pipeline.log" | jq -sc .)" \
   "$(jq -sc . "$FX/pipeline.expected.ndjson")"
+# DEPLOY-25: the request a deploy answers — a flag, or MENGER_REQUEST in a CI job — a number
+same_json request-flag "$("$REC" --project menger --env prod --state started --revision 235ff62 --request 41 --at $AT)" \
+  '{"project":"menger","environment":"prod","state":"started","revision":"235ff62","request":41,"at":"'$AT'"}'
+has request-env "$(env -i PATH="$PATH" MENGER_REQUEST=7 MENGER_ENVIRONMENT=prod GITHUB_SHA=235ff62 GITHUB_REPOSITORY=o/menger "$REC" --from github-actions --at $AT --compact)" '"request":7'
+exits request-not-a-number 2 "$REC" --project menger --env prod --state started --revision 235ff62 --request soon --at $AT
 # a record already in the shape passes through --from json untouched
 same_json json-as-is "$(jq '.examples[1]' "$DEPLOY/record.schema.json" | "$REC" --from json --at $AT)" \
   "$(jq --arg at $AT '.examples[1] + {at: $at}' "$DEPLOY/record.schema.json")"

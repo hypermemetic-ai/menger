@@ -79,6 +79,9 @@
       "watch": []
     },
     "deployments": {
+      "cancel_request": [
+        "id"
+      ],
       "environments": [
         "project"
       ],
@@ -106,10 +109,18 @@
         "previous",
         "project",
         "release",
+        "request",
         "revision",
         "source",
         "state",
         "tickets"
+      ],
+      "request": [
+        "environment",
+        "note",
+        "project",
+        "release",
+        "revision"
       ],
       "running": [
         "environment",
@@ -118,6 +129,23 @@
       ],
       "schema": [],
       "watch": []
+    },
+    "deployments.webhook": {
+      "clear": [
+        "environment",
+        "project"
+      ],
+      "schema": [],
+      "set": [
+        "environment",
+        "project",
+        "secret",
+        "url"
+      ],
+      "show": [
+        "environment",
+        "project"
+      ]
     },
     "members": {
       "grant": [

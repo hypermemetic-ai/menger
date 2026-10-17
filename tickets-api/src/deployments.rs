@@ -42,10 +42,19 @@ pub enum DeployState {
     /// The environment went back to `revision`: what only the undone
     /// deploys carried leaves it.
     RolledBack,
+    /// DEPLOY-25: asked for from menger (`deployments request`), not yet
+    /// done — kept, shown, and handed to the environment's CI by its
+    /// webhook. Like `started`, it runs nothing and completes nothing; a
+    /// CI's record names it (`request`) when it picks it up.
+    Requested,
 }
 
 impl DeployState {
-    pub const ALL: [DeployState; 4] = [DeployState::Started, DeployState::Succeeded, DeployState::Failed, DeployState::RolledBack];
+    pub const ALL: [DeployState; 5] = [DeployState::Started, DeployState::Succeeded, DeployState::Failed, DeployState::RolledBack, DeployState::Requested];
+
+    /// What a CI records (`deployments record`): every state but
+    /// `requested`, which only `deployments request` makes.
+    pub const RECORDED: [DeployState; 4] = [DeployState::Started, DeployState::Succeeded, DeployState::Failed, DeployState::RolledBack];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -53,6 +62,7 @@ impl DeployState {
             DeployState::Succeeded => "succeeded",
             DeployState::Failed => "failed",
             DeployState::RolledBack => "rolled_back",
+            DeployState::Requested => "requested",
         }
     }
 
@@ -76,7 +86,8 @@ impl FromStr for DeployState {
             "succeeded" => Ok(Self::Succeeded),
             "failed" => Ok(Self::Failed),
             "rolled_back" => Ok(Self::RolledBack),
-            other => Err(format!("unknown deployment state '{other}' (expected started, succeeded, failed or rolled_back)")),
+            "requested" => Ok(Self::Requested),
+            other => Err(format!("unknown deployment state '{other}' (expected started, succeeded, failed, rolled_back or requested)")),
         }
     }
 }
@@ -128,6 +139,185 @@ pub struct Record {
     /// was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    /// DEPLOY-25: the request this record answers — the id of a
+    /// `requested` deployment to the same environment, which then shows
+    /// this record's outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<u64>,
+}
+
+/// DEPLOY-25: where a request stands — `pending` until a CI's record names
+/// it (then that record's state) or it is canceled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestState {
+    /// Kept; no CI has picked it up. It may be canceled.
+    Pending,
+    /// Withdrawn before a CI picked it up.
+    Canceled,
+    /// A CI's `started` names it.
+    Started,
+    /// A CI's `succeeded` names it.
+    Succeeded,
+    /// A CI's `failed` names it.
+    Failed,
+    /// A CI's `rolled_back` names it.
+    RolledBack,
+}
+
+impl RequestState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RequestState::Pending => "pending",
+            RequestState::Canceled => "canceled",
+            RequestState::Started => "started",
+            RequestState::Succeeded => "succeeded",
+            RequestState::Failed => "failed",
+            RequestState::RolledBack => "rolled_back",
+        }
+    }
+
+    /// The state a CI's record in `state` leaves its request in.
+    pub const fn of(state: DeployState) -> Self {
+        match state {
+            DeployState::Started => RequestState::Started,
+            DeployState::Succeeded => RequestState::Succeeded,
+            DeployState::Failed => RequestState::Failed,
+            DeployState::RolledBack => RequestState::RolledBack,
+            DeployState::Requested => RequestState::Pending,
+        }
+    }
+
+    /// Whether it is still open: pending, or under way (started).
+    pub const fn open(self) -> bool {
+        matches!(self, RequestState::Pending | RequestState::Started)
+    }
+}
+
+/// DEPLOY-25: where a request's webhook delivery stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WebhookState {
+    /// No webhook is set for the environment: kept, shown as "no CI
+    /// configured", never sent.
+    None,
+    /// Waiting for its first attempt.
+    Pending,
+    /// An attempt failed (a non-2xx answer, or none); another follows.
+    Retrying,
+    /// An attempt was answered 2xx.
+    Delivered,
+    /// Every attempt failed; no more are made.
+    Failed,
+    /// No more attempts: the request was canceled, or a CI picked it up,
+    /// before one was answered 2xx.
+    Stopped,
+}
+
+impl WebhookState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            WebhookState::None => "none",
+            WebhookState::Pending => "pending",
+            WebhookState::Retrying => "retrying",
+            WebhookState::Delivered => "delivered",
+            WebhookState::Failed => "failed",
+            WebhookState::Stopped => "stopped",
+        }
+    }
+
+    /// Whether another attempt is due.
+    pub const fn due(self) -> bool {
+        matches!(self, WebhookState::Pending | WebhookState::Retrying)
+    }
+}
+
+impl FromStr for WebhookState {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        [WebhookState::None, WebhookState::Pending, WebhookState::Retrying, WebhookState::Delivered, WebhookState::Failed, WebhookState::Stopped]
+            .into_iter()
+            .find(|w| w.as_str() == s)
+            .ok_or_else(|| format!("unknown webhook state '{s}'"))
+    }
+}
+
+/// DEPLOY-25: one attempt to deliver a request's webhook.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeliveryAttempt {
+    /// 1 for the first.
+    pub attempt: u32,
+    /// When it was made, unix seconds.
+    pub at: i64,
+    /// The receiver's HTTP status — `None` when nothing answered.
+    #[serde(default)]
+    pub status: Option<u16>,
+    /// What went wrong, in a line (at most 200 bytes) — `None` on a 2xx.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// DEPLOY-25: what a `requested` deployment carries beyond a record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeployRequest {
+    /// Why, in the asker's words.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// The environment it takes its revision from, when it asked for "what
+    /// the environment this one promotes from runs" (DEPLOY-21's `from`).
+    #[serde(default)]
+    pub from: Option<String>,
+    pub state: RequestState,
+    /// The latest CI record that names it.
+    #[serde(default)]
+    pub outcome: Option<u64>,
+    #[serde(default)]
+    pub canceled_at: Option<i64>,
+    #[serde(default)]
+    pub canceled_by: Option<String>,
+    /// The webhook delivery's id (`X-Menger-Delivery`) — the same on every
+    /// attempt; `None` when no webhook was set.
+    #[serde(default)]
+    pub delivery: Option<String>,
+    pub webhook: WebhookState,
+    /// Each attempt, oldest first.
+    #[serde(default)]
+    pub attempts: Vec<DeliveryAttempt>,
+    /// When the next attempt is due, unix seconds — while `retrying`.
+    #[serde(default)]
+    pub next_attempt_at: Option<i64>,
+}
+
+/// DEPLOY-25: what a request's webhook POSTs, as JSON, signed —
+/// `X-Menger-Signature: sha256=<hex HMAC-SHA256 of the body, keyed by the
+/// secret>`, `X-Menger-Delivery: <id>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WebhookPayload {
+    /// The request's id — what the CI's records name as `request`.
+    pub request: u64,
+    pub project: String,
+    pub environment: String,
+    pub revision: String,
+    pub release: Option<String>,
+    /// The environment the revision was taken from, when it was.
+    pub from: Option<String>,
+    pub requested_by: String,
+    pub note: Option<String>,
+    /// When it was asked for, RFC 3339.
+    pub at: String,
+}
+
+/// DEPLOY-25: an environment's webhook as menger says it — never its
+/// secret, only whether one is set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WebhookConfig {
+    pub project: String,
+    pub environment: String,
+    /// `None`: no webhook — a request is kept and shown as "no CI configured".
+    pub url: Option<String>,
+    pub secret_set: bool,
+    pub set_at: Option<i64>,
+    pub set_by: Option<String>,
 }
 
 /// DEPLOY-21: a ticket's delivery stage in an environment, short of running
@@ -211,6 +401,13 @@ pub struct Deployment {
     pub recorded_at: i64,
     /// Who sent it: a principal, `anonymous` with login off.
     pub recorded_by: String,
+    /// DEPLOY-25: the request a CI's record answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<u64>,
+    /// DEPLOY-25: a `requested` deployment's note, source, state and
+    /// webhook delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested: Option<DeployRequest>,
 }
 
 /// An environment as it stands.
@@ -285,6 +482,26 @@ pub enum DeploymentsEvent {
         left: Vec<String>,
         duplicate: bool,
     },
+    /// DEPLOY-25: a request — `request`'s and `cancel_request`'s answer, and
+    /// `watch`'s each time one moves (asked, canceled, a delivery attempt,
+    /// a CI record naming it): the `requested` deployment whole, and the
+    /// tickets it would carry while it is pending.
+    Request { deployment: Deployment, carried: Vec<String> },
+    /// DEPLOY-25: `for_ticket`: a pending request to this environment would
+    /// carry the ticket.
+    Requested {
+        ticket: String,
+        project: String,
+        environment: String,
+        request: u64,
+        requested_by: String,
+        at: i64,
+        revision: String,
+        webhook: WebhookState,
+    },
+    /// DEPLOY-25: `webhook show`'s, `set`'s and `clear`'s answer — never
+    /// the secret.
+    Webhook { webhook: WebhookConfig },
     /// One environment (`environments`' rows).
     Environment { environment: Environment },
     /// `watch`: an environment as a recorded deployment left it — after its
@@ -369,6 +586,53 @@ pub fn environment_of(text: &str) -> Result<String, String> {
     }
 }
 
+/// DEPLOY-25: the longest webhook URL, in bytes.
+pub const WEBHOOK_URL_MAX: usize = 2048;
+
+/// DEPLOY-25: a webhook's URL as kept — `https://host[:port]/…`, or
+/// `http://` to a loopback host (`localhost`, `127.x.x.x`, `[::1]`) for a
+/// local CI; no userinfo (credentials go in the secret), no whitespace —
+/// or why not.
+pub fn webhook_url_of(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    let bad = |why: &str| Err(format!("`{}` is not a webhook URL: {why}", t.escape_debug()));
+    if t.len() > WEBHOOK_URL_MAX {
+        return Err(format!("a webhook URL is at most {WEBHOOK_URL_MAX} bytes; this one is {}", t.len()));
+    }
+    if t.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return bad("no whitespace or control characters");
+    }
+    let lower = t.to_ascii_lowercase();
+    let (https, rest) = match (lower.strip_prefix("https://"), lower.strip_prefix("http://")) {
+        (Some(r), _) => (true, r),
+        (None, Some(r)) => (false, r),
+        _ => return bad("it is https://…, or http:// to this machine (localhost, 127.0.0.1, [::1])"),
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return bad("no credentials in the URL — the secret signs every delivery");
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => match v6.split_once(']') {
+            Some((h, port)) if port.is_empty() || port.strip_prefix(':').is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) => h,
+            _ => return bad("an IPv6 host is written [::1] or [::1]:port"),
+        },
+        None => match authority.rsplit_once(':') {
+            Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+            Some(_) => return bad("a port is digits"),
+            None => authority,
+        },
+    };
+    if host.is_empty() || (host.contains(':') && !authority.starts_with('[')) {
+        return bad("it names a host");
+    }
+    let loopback = host == "localhost" || host == "::1" || host.strip_prefix("127.").is_some_and(|r| r.split('.').count() == 3 && r.split('.').all(|o| o.parse::<u8>().is_ok()));
+    if !https && !loopback {
+        return bad("plain http only to this machine (localhost, 127.0.0.1, [::1]) — anywhere else it is https");
+    }
+    Ok(t.to_string())
+}
+
 /// A project as kept — its shortcode, upper case — or why not.
 /// ACCESS-8: the one shortcode rule, [`crate::address::Code::parse`]'s (a
 /// `_` it once took is in no shortcode).
@@ -409,6 +673,30 @@ mod tests {
         assert!(environment_of("").is_err() && environment_of("-x").is_err() && environment_of("a b").is_err());
         assert_eq!(project_of("menger").unwrap(), "MENGER");
         assert!(project_of("my project").is_err());
+    }
+
+    #[test]
+    fn a_webhook_url_is_https_or_loopback() {
+        for ok in ["https://ci.example.com/hooks/menger", "https://ci.example.com:8443/x?y=1", "http://127.0.0.1:6091/hook", "http://localhost/hook", "http://[::1]:9000/", "HTTPS://CI.EXAMPLE.COM/"] {
+            assert!(webhook_url_of(ok).is_ok(), "{ok}");
+        }
+        for no in ["http://ci.example.com/hook", "ftp://x/", "https://", "https://user:pw@ci.example.com/", "http://127.0.0.1.evil.com/", "http://10.0.0.1/", "https://a b/", "ci.example.com"] {
+            assert!(webhook_url_of(no).is_err(), "{no}");
+        }
+        assert!(webhook_url_of(&format!("https://x/{}", "a".repeat(WEBHOOK_URL_MAX))).is_err());
+    }
+
+    #[test]
+    fn a_requests_states_and_a_webhooks() {
+        assert_eq!(RequestState::of(DeployState::Succeeded), RequestState::Succeeded);
+        assert!(RequestState::Pending.open() && RequestState::Started.open() && !RequestState::Canceled.open());
+        for w in [WebhookState::None, WebhookState::Pending, WebhookState::Retrying, WebhookState::Delivered, WebhookState::Failed, WebhookState::Stopped] {
+            assert_eq!(w.as_str().parse::<WebhookState>(), Ok(w));
+            assert_eq!(serde_json::to_value(w).unwrap(), serde_json::json!(w.as_str()));
+        }
+        assert!(WebhookState::Retrying.due() && !WebhookState::Delivered.due());
+        assert_eq!("requested".parse::<DeployState>(), Ok(DeployState::Requested));
+        assert!(!DeployState::Requested.effective() && !DeployState::RECORDED.contains(&DeployState::Requested));
     }
 
     #[test]

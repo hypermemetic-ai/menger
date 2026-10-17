@@ -16,12 +16,18 @@
 //! editor does not. The reads are a viewer's, and answer only of the
 //! projects where the caller holds them; `for_ticket` where it holds it on
 //! the ticket.
+//!
+//! DEPLOY-25: `request` and `cancel_request` are the deployer's too — a deploy
+//! asked for from menger, kept as a `requested` deployment — and `webhook`
+//! is a child (`deployments.webhook.set|clear|show`), admin's alone: where
+//! a request is POSTed, signed. The new methods' logic is beside the
+//! activation, in `deployments_activation/streams.rs`.
 
 use crate::deployments::{DeploySource, DeployState, DeploymentsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
-use crate::vocab::{CommitRef, DeploymentId, EnvironmentName, Project, Release, TicketRef, Timestamp};
+use crate::vocab::{CommitRef, DeploymentId, EnvironmentName, Message, Project, Release, TicketRef, Timestamp};
 #[cfg(feature = "server")]
-use crate::access::{Access, VerifiedUser};
+use crate::access::Access;
 #[cfg(feature = "server")]
 use crate::deployments::Record;
 #[cfg(feature = "server")]
@@ -33,9 +39,16 @@ use futures::Stream;
 #[cfg(feature = "server")]
 use plexus_core::plexus::{AuthContext, Reach};
 #[cfg(feature = "server")]
-use std::collections::HashSet;
-#[cfg(feature = "server")]
 use std::sync::Arc;
+
+// DEPLOY-25: the new methods' logic, beside the activation; the webhook
+// child (not gated: its attribute emits `WebhookClient` in the client build).
+#[cfg(feature = "server")]
+mod streams;
+#[cfg(feature = "server")]
+use streams::*;
+mod webhook;
+pub use webhook::WebhookClient;
 
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
@@ -59,37 +72,10 @@ impl DeploymentsActivation {
     }
 }
 
-/// The projects `caller` holds its call's grant on, of those deployments
-/// were recorded for — `None`: every one (login off, or held on `*`).
-#[cfg(feature = "server")]
-fn allowed(caller: &VerifiedUser, store: &Store) -> Result<Option<HashSet<String>>, String> {
-    let Some(grant) = caller.grant().cloned() else { return Ok(None) };
-    if caller.reach_filter()?.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(store.deploy_projects().into_iter().filter(|p| caller.check(&grant, p).is_ok()).collect()))
-}
-
-/// The project an event of `watch` is about.
-#[cfg(feature = "server")]
-fn project_of(ev: &DeploymentsEvent) -> Option<&str> {
-    match ev {
-        DeploymentsEvent::Deployed { deployment, .. } | DeploymentsEvent::Deployment { deployment, .. } => Some(&deployment.project),
-        DeploymentsEvent::EnvironmentChanged { environment } | DeploymentsEvent::Environment { environment } => Some(&environment.project),
-        DeploymentsEvent::Promotes { project, .. } => Some(project),
-        _ => None,
-    }
-}
-
-/// A refusal, in band.
-#[cfg(feature = "server")]
-fn refused(e: StoreError) -> DeploymentsEvent {
-    DeploymentsEvent::Error { message: e.to_string() }
-}
 
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 #[plexus_macros::activation(
-    description = "Deployments: every deploy to any environment — record, promotes, list, environments, for_ticket, running, watch",
+    description = "Deployments: record, request, cancel_request, promotes, list, environments, for_ticket, running, watch; webhook",
     typed_params,
     // AUTH-7: reads are a viewer's; recording is a deployer's alone (a
     // CI's key on the project's shortcode) — and admin's, who holds all.
@@ -97,7 +83,7 @@ fn refused(e: StoreError) -> DeploymentsEvent {
     roles(
         viewer = ["list", "environments", "for_ticket", "running", "watch"],
         editor = [viewer],
-        deployer = [viewer, "record"],
+        deployer = [viewer, "record", "request", "cancel_request"],
     )
 )]
 impl DeploymentsActivation {
@@ -121,7 +107,10 @@ impl DeploymentsActivation {
     /// else `at`) is kept already — or an in-band `error` naming every
     /// problem, with nothing kept. DEPLOY-21: `from` names the environment
     /// this one promotes from (`test`, for `prod`), set (or moved) with the
-    /// record — `promotes` follows it on `watch`.
+    /// record — `promotes` follows it on `watch`. DEPLOY-25: `request` names
+    /// the request it answers (`requested` is not a state a CI records); the
+    /// request then says this record's state, and `request` follows on
+    /// `watch`.
     #[plexus_macros::method(
         group = "write",
         target = "project",
@@ -137,7 +126,8 @@ impl DeploymentsActivation {
             release = "The artifact's name (optional)",
             at = "When: RFC 3339 or unix seconds (optional; default now)",
             source = "Where to read the run: { system, run, url } (optional; run makes a retry one deployment)",
-            from = "The environment this one promotes from, e.g. test for prod (optional; set with the record)"
+            from = "The environment this one promotes from, e.g. test for prod (optional; set with the record)",
+            request = "The request this record answers: a requested deployment's id, to this environment (optional)"
         ),
         values(state = ["started", "succeeded", "failed", "rolled_back"]),
         example(note = "a promote to prod", params = r#"{"project": "menger", "environment": "prod", "state": "succeeded", "revision": "235ff62", "previous": "29a50be", "commits": ["824e943", "235ff62"], "release": "20261012T220402Z-235ff62", "at": "2026-10-12T22:04:19Z", "source": {"system": "menger-pipeline", "run": "promote"}}"#)
@@ -155,42 +145,82 @@ impl DeploymentsActivation {
         at: Option<Timestamp>,
         source: Option<DeploySource>,
         from: Option<EnvironmentName>,
+        request: Option<DeploymentId>,
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let texts = |v: Option<Vec<_>>| v.unwrap_or_default().into_iter().map(String::from).collect::<Vec<String>>();
-        let store = self.store.clone();
-        let admitted = self.access.verify_call(auth, &reach);
-        stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield DeploymentsEvent::Error { message };
-                    return;
-                }
-            };
-            let by = caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
-            let rec = Record {
-                project: project.into_string(),
-                environment: environment.into_string(),
-                state: state.as_str().to_string(),
-                revision: revision.into_string(),
-                previous: previous.map(String::from),
-                commits: texts(commits),
-                tickets: tickets.unwrap_or_default().into_iter().map(String::from).collect(),
-                release: release.map(String::from),
-                at: at.map(String::from),
-                source,
-                from: from.map(String::from),
-            };
-            // ACCESS-11: deployer on the project's shortcode (DEPLOY-14).
-            let on = match crate::activation::scope_named(&store, &rec.project).and_then(|s| caller.on::<crate::access::Deployer>(&s, &store).map_err(|r| r.to_string())) {
-                Ok(on) => on,
-                Err(message) => {
-                    yield DeploymentsEvent::Error { message };
-                    return;
-                }
-            };
-            yield store.record_deployment(on, rec, by).await.unwrap_or_else(refused);
-        }
+        let rec = Record {
+            project: project.into_string(),
+            environment: environment.into_string(),
+            state: state.as_str().to_string(),
+            revision: revision.into_string(),
+            previous: previous.map(String::from),
+            commits: texts(commits),
+            tickets: tickets.unwrap_or_default().into_iter().map(String::from).collect(),
+            release: release.map(String::from),
+            at: at.map(String::from),
+            source,
+            from: from.map(String::from),
+            request: request.map(DeploymentId::get),
+        };
+        record_stream(self.store.clone(), self.access.verify_call(auth, &reach), rec)
+    }
+
+    /// DEPLOY-25: queues a deploy from menger — kept as a deployment in the
+    /// state `requested`: who asked, when, `project`'s `environment`, what
+    /// to deploy (`revision`; else the latest recorded deploy of `release`;
+    /// else what the environment it promotes from runs, DEPLOY-21's `from`)
+    /// and `note`. It runs nothing and completes nothing. When the
+    /// environment has a webhook (`webhook set`), menger POSTs the request
+    /// to it, signed, retrying with backoff; without one it is kept and
+    /// says `webhook: none` ("no CI configured"). A CI's `record` names it
+    /// as `request` when it picks it up. Yields exactly one `request
+    /// { deployment, carried }` — the request as kept and the tickets it
+    /// would carry — or an in-band `error`, nothing kept. The deployer's
+    /// (or admin's) on the project.
+    #[plexus_macros::method(
+        group = "write",
+        target = "project",
+        description = "Queue a deploy: kept as a requested deployment, POSTed to the environment's webhook (signed); yields request { deployment, carried }",
+        params(
+            project = "Whose environment: a shortcode, any case (menger is MENGER)",
+            environment = "The environment to deploy to, e.g. prod",
+            revision = "The commit to deploy (optional; default: what the environment it promotes from runs)",
+            release = "The artifact to deploy (optional; alone, the revision of its latest recorded deploy)",
+            note = "Why, for the CI and the reader (optional; at most 2 KiB)"
+        ),
+        example(note = "promote what test runs to prod", params = r#"{"project": "menger", "environment": "prod", "note": "the week's work"}"#)
+    )]
+    pub async fn request(
+        &self, auth: Option<&AuthContext>, reach: Reach,
+        project: Project,
+        environment: EnvironmentName,
+        revision: Option<CommitRef>,
+        release: Option<Release>,
+        note: Option<Message>,
+    ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+        let ask = crate::store::RequestAsk {
+            project: project.into_string(),
+            environment: environment.into_string(),
+            revision: revision.map(String::from),
+            release: release.map(String::from),
+            note: note.and_then(Message::given),
+        };
+        request_stream(self.store.clone(), self.access.verify_call(auth, &reach), ask)
+    }
+
+    /// DEPLOY-25: withdraws a pending request — `canceled`, by the caller;
+    /// its webhook sends no more. One a CI has picked up (a record names
+    /// it), or one canceled already, is refused in band, naming why. Yields
+    /// exactly one `request { deployment, carried }` or an in-band `error`.
+    /// The deployer's (or admin's) on the request's project.
+    #[plexus_macros::method(
+        group = "write",
+        description = "Cancel a pending request (one no CI has picked up); yields request { deployment, carried }",
+        params(id = "The request's id (a requested deployment's), e.g. 41"),
+        example(note = "withdraw request 41", params = r#"{"id": 41}"#)
+    )]
+    pub async fn cancel_request(&self, auth: Option<&AuthContext>, reach: Reach, id: DeploymentId) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+        cancel_stream(self.store.clone(), self.access.verify_call(auth, &reach), id.get())
     }
 
     /// DEPLOY-21: where an environment promotes from — `from` (`test`, for
@@ -218,27 +248,8 @@ impl DeploymentsActivation {
         environment: EnvironmentName,
         from: Option<EnvironmentName>,
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.verify_call(auth, &reach);
-        stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield DeploymentsEvent::Error { message };
-                    return;
-                }
-            };
-            let by = caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
-            // ACCESS-11: admin on the project's shortcode.
-            let on = match crate::activation::scope_named(&store, &project).and_then(|s| caller.admin_of(&s, &store).map_err(|r| r.to_string())) {
-                Ok(on) => on,
-                Err(message) => {
-                    yield DeploymentsEvent::Error { message };
-                    return;
-                }
-            };
-            yield store.set_promotes(on, &project, &environment, from.as_deref(), by).await.unwrap_or_else(refused);
-        }
+        let (project, environment) = (project.into_string(), environment.into_string());
+        promotes_stream(self.store.clone(), self.access.verify_call(auth, &reach), project, environment, from.map(String::from))
     }
 
     /// The deployments matching every filter given, newest first — one
@@ -252,12 +263,12 @@ impl DeploymentsActivation {
         params(
             project = "Only this project's (a shortcode) (optional)",
             environment = "Only to this environment (optional)",
-            state = "Only in this state: started | succeeded | failed | rolled_back (optional)",
+            state = "Only in this state: started | succeeded | failed | rolled_back | requested (optional)",
             ticket = "Only those that carried this ticket (optional)",
             after = "Cursor: start strictly after (older than) this deployment id (optional)",
             limit = "At most this many; the page event carries the next cursor (optional)"
         ),
-        values(state = ["started", "succeeded", "failed", "rolled_back"]),
+        values(state = ["started", "succeeded", "failed", "rolled_back", "requested"]),
         example(note = "the last 20 to prod", params = r#"{"environment": "prod", "limit": 20}"#)
     )]
     pub async fn list(
@@ -466,5 +477,12 @@ impl DeploymentsActivation {
                 }
             }
         }
+    }
+
+    /// DEPLOY-25: each environment's webhook — where a request is POSTed,
+    /// signed: `deployments.webhook.set|clear|show`. Admin's alone.
+    #[plexus_macros::child]
+    fn webhook(&self) -> webhook::WebhookActivation {
+        webhook::WebhookActivation::new(Arc::clone(&self.store), self.access.clone())
     }
 }

@@ -60,6 +60,10 @@ pub mod bind;
 /// and a connection idle with none closed.
 pub mod calls;
 
+/// DEPLOY-25: the webhook worker — each deploy request POSTed, signed, to
+/// its environment's CI, off the store's write path.
+pub mod webhooks;
+
 /// DIST-3: the whole server started from code, without login or REST —
 /// `LocalServer::start(LocalConfig)`.
 pub mod local;

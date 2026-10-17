@@ -25,12 +25,14 @@
 #   --source-system S  --source-run R  --source-url URL
 #   --promotes-from ENV   the environment this one promotes from (DEPLOY-21:
 #                         test, for prod) — the record's `from`
+#   --request N           the request this deploy answers (DEPLOY-25: the
+#                         webhook payload's `request`) — the record's `request`
 # Mapping: --map 'FIELD=JQ' (repeatable) sets FIELD (dotted: source.url) from the
 #   input — the JSON for json/github-event, the process environment for
 #   github-actions/gitlab, the parsed line {at,env,action,release,result} for
 #   pipeline-log. Flags still win.
 # The CI forms also read MENGER_PROJECT, MENGER_ENVIRONMENT, MENGER_STATE,
-#   MENGER_PREVIOUS, MENGER_RELEASE and MENGER_TICKETS when a job sets them.
+#   MENGER_PREVIOUS, MENGER_RELEASE, MENGER_TICKETS and MENGER_REQUEST when a job sets them.
 # --commits-from-git [--repo DIR]   commits = git log previous..revision, oldest first
 # --send [--port 4455] [--host H] [--token JWT] [--dry-run]
 #                                   synapse -P PORT -p RECORD menger deployments record
@@ -87,6 +89,7 @@ while [[ $# -gt 0 ]]; do
     --source-run) arg "$@"; over+=(source.run "$2"); shift ;;
     --source-url) arg "$@"; over+=(source.url "$2"); shift ;;
     --promotes-from) arg "$@"; over+=(from "$2"); shift ;;
+    --request) arg "$@"; over+=(request "$2"); shift ;;
     --commits|--commit) arg "$@"; commits+=("$2"); shift ;;
     --tickets|--ticket) arg "$@"; tickets+=("$2"); shift ;;
     --map) arg "$@"; [[ $2 == *=* ]] || die "--map wants FIELD=JQ, got '$2'"; maps+=("$2"); shift ;;
@@ -181,7 +184,8 @@ def menger: {
   state: ($ENV.MENGER_STATE // "" | nz),
   previous: ($ENV.MENGER_PREVIOUS // "" | nz),
   release: ($ENV.MENGER_RELEASE // "" | nz),
-  tickets: ($ENV.MENGER_TICKETS // "" | nz)
+  tickets: ($ENV.MENGER_TICKETS // "" | nz),
+  request: ($ENV.MENGER_REQUEST // "" | nz)
 };'
 
 form_github_actions() {
@@ -194,7 +198,7 @@ form_github_actions() {
         state: (($m.state // "succeeded") as $s
                 | {success: "succeeded", failure: "failed", cancelled: "failed"}[$s] // $s),
         revision: ($e.GITHUB_SHA // "" | nz),
-        previous: $m.previous, release: $m.release, tickets: $m.tickets,
+        previous: $m.previous, release: $m.release, tickets: $m.tickets, request: $m.request,
         source: {system: "github-actions",
                  run: ($e.GITHUB_RUN_ID // "" | nz),
                  url: (if ($e.GITHUB_RUN_ID // "") != "" and ($e.GITHUB_REPOSITORY // "") != ""
@@ -212,7 +216,7 @@ form_gitlab() {
         revision: ($e.CI_COMMIT_SHA // "" | nz),
         previous: $m.previous,
         release: ($m.release // ($e.CI_COMMIT_TAG // "" | nz)),
-        tickets: $m.tickets,
+        tickets: $m.tickets, request: $m.request,
         source: {system: "gitlab",
                  run: ($e.CI_JOB_ID // $e.CI_PIPELINE_ID // "" | nz),
                  url: ($e.CI_JOB_URL // $e.CI_PIPELINE_URL // "" | nz)}}}'
@@ -243,7 +247,7 @@ form_github_event() {
     || die "the payload is not a GitHub deployment event"
 }
 
-FIELDS='["project","environment","state","revision","previous","commits","tickets","release","at","source","from"]'
+FIELDS='["project","environment","state","revision","previous","commits","tickets","release","at","source","from","request"]'
 form_json() {
   read_input | jq -c --argjson f "$FIELDS" '{input: ., record: (if type == "object"
       then with_entries(select(.key as $k | $f | index($k))) else {} end)}' \
@@ -333,6 +337,7 @@ records=$(jq -c "${margs[@]+"${margs[@]}"}" "${oargs[@]+"${oargs[@]}"}" \
   | (.commits, .tickets) |= (if . == null then null else list end)
   | .tickets |= (if type == "array" then map(ascii_upcase) else . end)
   | (.project, .environment, .state, .revision, .previous, .release, .at, .from) |= (if type == "string" then nz else . end)
+  | .request |= (if type == "string" then (nz | if . != null and test("^[0-9]+$") then tonumber else . end) else . end)
   | if .source == null then del(.source)
     else .source |= (if type == "object" then
                        with_entries(.value |= (if type == "number" then tostring elif type == "string" then nz else . end)
