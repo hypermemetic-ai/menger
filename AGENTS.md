@@ -24,7 +24,12 @@ refused 421 before routing — reach a server by those names (synapse, curl
 and the scripts do). README "Run" → Hosts. Every listener binds loopback
 unless `--bind ADDR` (`MENGER_BIND`; `0.0.0.0`, `::`, one address) says
 otherwise (RUN-8, README "Run" → Bind); binding adds a specific address's
-literal to the names, never any other.
+literal to the names, never any other. The builder binds it
+(`TransportServerBuilder::bind`, TRANSPORT-7), so every check the builder
+keeps applies there. `--trusted-proxy` (`MENGER_TRUSTED_PROXIES`) names the
+edge: only its `X-Forwarded-For` is believed, by the login throttles and by
+the WebSocket's per-IP and anonymous quotas, and a forwarded header from any
+other peer is ignored (README "Run" → Trusted proxies).
 
 ## Deploying
 
