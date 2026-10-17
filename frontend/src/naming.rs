@@ -40,7 +40,7 @@ use std::collections::HashMap;
 
 use leptos::prelude::*;
 use menger_tickets_api::filter::{Field, Filter, Predicate};
-use menger_tickets_api::saved_filters::{default_text, filter_line, path_slug, NEEDS_YOU, PATH_PREFIX};
+use menger_tickets_api::saved_filters::{default_text, filter_line, path_slug, PATH_PREFIX};
 use menger_tickets_api::TicketsEvent;
 use wasm_bindgen_futures::spawn_local;
 
@@ -50,8 +50,6 @@ use crate::{dom, session};
 
 /// How long after the last change a bound tree's doc is amended.
 pub(crate) const DEBOUNCE_MS: i32 = 400;
-/// How many names the picker shows before "N more: type to narrow".
-pub(crate) const SHOWN: usize = 8;
 /// How many recently used names are kept.
 pub(crate) const RECENT_MAX: usize = 12;
 /// Where they are kept, per viewer.
@@ -99,55 +97,6 @@ pub(crate) fn plan(bound: Option<&Bound>, raw: &str) -> Plan {
     }
 }
 
-/// The names `+ saved` offers: the collection's, in its order, and Needs
-/// you always (it resolves without a doc).
-pub(crate) fn names(listed: &[Entry]) -> Vec<String> {
-    let mut out: Vec<String> = listed.iter().map(|e| e.name.clone()).collect();
-    if !out.iter().any(|n| slug(n) == slug(NEEDS_YOU.0)) {
-        out.push(NEEDS_YOU.0.to_string());
-    }
-    out
-}
-
-/// A name in the picker.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Pick {
-    pub(crate) name: String,
-    pub(crate) recent: bool,
-    pub(crate) own: bool,
-}
-
-/// Whether `name` answers `query`: what is typed is in the name (case
-/// folded), or the query's slug in the name's (`plexus ready` finds
-/// Plexus-Ready).
-fn answers(name: &str, query: &str) -> bool {
-    name.to_lowercase().contains(&query.to_lowercase()) || (!slug(query).is_empty() && slug(name).contains(&slug(query)))
-}
-
-/// The picker's names for `query`: the recently used first (most recent
-/// first), then the level's own, then the rest in the collection's order —
-/// each once, by slug; those `query` answers.
-pub(crate) fn order(names: &[String], recent: &[String], own: &[String], query: &str) -> Vec<Pick> {
-    let known = |n: &String| names.iter().find(|x| slug(x) == slug(n)).cloned();
-    let rec: Vec<String> = recent.iter().filter_map(known).collect();
-    let mine: Vec<String> = own.iter().filter_map(known).collect();
-    let mut out: Vec<Pick> = Vec::new();
-    for n in rec.iter().chain(&mine).chain(names) {
-        if out.iter().any(|p| slug(&p.name) == slug(n)) || !answers(n, query.trim()) {
-            continue;
-        }
-        let is = |list: &[String]| list.iter().any(|x| slug(x) == slug(n));
-        out.push(Pick { name: n.clone(), recent: is(&rec), own: is(&mine) });
-    }
-    out
-}
-
-/// The first [`SHOWN`], and how many more there are.
-pub(crate) fn shown(mut all: Vec<Pick>) -> (Vec<Pick>, usize) {
-    let more = all.len().saturating_sub(SHOWN);
-    all.truncate(SHOWN);
-    (all, more)
-}
 
 /// The recency with `name` used now: first, once, at most [`RECENT_MAX`].
 pub(crate) fn with_recent(recent: &[String], name: &str) -> Vec<String> {
@@ -541,7 +490,7 @@ impl Naming {
         self.texts.with(|m| m.get(&slug(name)).cloned())
     }
 
-    /// What [`crate::anyof::evaluated`] reads: a name's text, `Some(None)`
+    /// What [`evaluated`] reads: a name's text, `Some(None)`
     /// for one nothing holds, `None` while not fetched. Tracked.
     pub(crate) fn lookup(self, name: &str) -> Option<Option<String>> {
         match self.text(name)? {
@@ -624,6 +573,30 @@ impl Naming {
     }
 }
 
+/// FILTER-37's "as evaluated": the filter with every name expanded by the
+/// texts known (`texts`: `Some(text)` a name's saved text, `Some(None)` no
+/// saved filter holds it, `None` not fetched yet) — or the names still to
+/// fetch, each once, while one is unknown. What the language refuses (a
+/// cycle, a name nothing holds) is the refusal, in its words.
+pub(crate) fn evaluated(f: &Filter, texts: &dyn Fn(&str) -> Option<Option<String>>) -> Result<Result<String, String>, Vec<String>> {
+    let mut missing: Vec<String> = Vec::new();
+    let mut lookup = |name: &str| match texts(name) {
+        Some(t) => t,
+        None => {
+            if !missing.iter().any(|m| crate::saved::slug(m) == crate::saved::slug(name)) {
+                missing.push(name.to_string());
+            }
+            // Something that reads, so the walk finds the rest.
+            Some("ready".to_string())
+        }
+    };
+    let out = f.resolve(&mut lookup);
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+    Ok(out.map(|r| crate::counts::wire_text(&r)).map_err(|e| e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,38 +634,6 @@ mod tests {
     }
 
     #[test]
-    fn the_picker_puts_the_recent_first_and_searches() {
-        let listed = [
-            Entry::new("plexus-readyu", "Plexus-Ready"),
-            Entry::new("plexus-coding", "Plexus-Coding"),
-            Entry::new("created-active-weekly", "Created-Active-Weekly"),
-            Entry::new("deployment", "Deployment"),
-        ];
-        let all = names(&listed);
-        assert_eq!(all, strs(&["Plexus-Ready", "Plexus-Coding", "Created-Active-Weekly", "Deployment", "Needs you"]), "Needs you always");
-        assert_eq!(names(&[Entry::new("needs-you", "Needs You")]), strs(&["Needs You"]), "listed once");
-        let o = order(&all, &strs(&["deployment", "Gone"]), &[], "");
-        assert_eq!(o.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Deployment", "Plexus-Ready", "Plexus-Coding", "Created-Active-Weekly", "Needs you"]);
-        assert!(o[0].recent && !o[1].recent);
-        // The level's own after the recent.
-        let o = order(&all, &[], &strs(&["Plexus-Coding"]), "");
-        assert_eq!(o[0], Pick { name: "Plexus-Coding".into(), recent: false, own: true });
-        // Search: words, case folded; a slug.
-        let names_of = |q: &str| order(&all, &[], &[], q).into_iter().map(|p| p.name).collect::<Vec<_>>();
-        assert_eq!(names_of("ready"), strs(&["Plexus-Ready"]));
-        assert_eq!(names_of("PLEXUS"), strs(&["Plexus-Ready", "Plexus-Coding"]));
-        assert_eq!(names_of("plexus ready"), strs(&["Plexus-Ready"]));
-        assert_eq!(names_of("needs"), strs(&["Needs you"]));
-        assert!(names_of("nothing like it").is_empty());
-        // Eight shown, the rest counted.
-        let crowd: Vec<String> = (0..32).map(|i| format!("Query {i}")).collect();
-        let (first, more) = shown(order(&crowd, &[], &[], ""));
-        assert_eq!((first.len(), more), (SHOWN, 24));
-        let (first, more) = shown(order(&crowd, &[], &[], "query 3"));
-        assert_eq!((first.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), more), (vec!["Query 3", "Query 30", "Query 31"], 0));
-    }
-
-    #[test]
     fn the_recent_are_kept_first_and_once() {
         let r = with_recent(&strs(&["A", "B"]), "b");
         assert_eq!(r, strs(&["b", "A"]));
@@ -703,4 +644,20 @@ mod tests {
         assert_eq!(saved_text_of("Needs you"), "saved \"Needs you\"");
         assert_eq!(saved_text_of("Plexus-Ready"), "saved Plexus-Ready");
     }
+
+    #[test]
+    fn as_evaluated_expands_the_names_known() {
+        let f = Filter::parse("saved \"Needs you\" or saved Plexus-Ready").unwrap();
+        let none = |_: &str| None;
+        assert_eq!(evaluated(&f, &none), Err(vec!["Needs you".to_string(), "Plexus-Ready".to_string()]));
+        let known = |n: &str| match crate::saved::slug(n).as_str() {
+            "needs-you" => Some(Some("queued or asking".to_string())),
+            "plexus-ready" => Some(Some("in PLEXUS and not blocked".to_string())),
+            _ => Some(None),
+        };
+        assert_eq!(evaluated(&f, &known), Ok(Ok("(queued or asking or (in PLEXUS and not blocked))".to_string())));
+        let gone = Filter::parse("saved Nope and ready").unwrap();
+        assert!(evaluated(&gone, &known).unwrap().unwrap_err().contains("no saved filter named"));
+    }
+
 }

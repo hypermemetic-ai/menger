@@ -48,11 +48,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use leptos::prelude::*;
-use menger_tickets_api::filter::Conj;
 use menger_tickets_api::{Group, Status};
 use wasm_bindgen::JsCast;
 
-use crate::anyof::{self, Member};
 use crate::bindings::{self, Context};
 use crate::keys::palette_match;
 use crate::lens::{self, Lens, Level};
@@ -426,14 +424,17 @@ impl Op {
     }
 }
 
-/// How a pill reads its operator: `is` / `is any of` / `is not`, and for
-/// Title `contains` / `does not contain`.
+/// How a clause reads its operator: `is` / `is not`, and for Title
+/// `contains` / `does not contain` — FILTER-42: never "is any of" (two
+/// values are two alternatives, joined by the word or).
 pub(crate) fn op_label(c: Cat, op: Op, n: usize) -> &'static str {
     match (c, op) {
         (Cat::Title, Op::Is) => "contains",
         (Cat::Title, Op::Not) => "does not contain",
-        (_, Op::Is) if n == 1 => "is",
-        (_, Op::Is) => "is any of",
+        (_, Op::Is) => {
+            let _ = n;
+            "is"
+        }
         (_, Op::Not) => "is not",
     }
 }
@@ -456,12 +457,6 @@ pub(crate) fn time_cat(t: &crate::when::Timed) -> Cat {
 /// negation (nor When and Deployed: a time pill's parts are its own).
 pub(crate) fn switch_words(c: Cat) -> Option<(&'static str, &'static str)> {
     (!c.is_flag() && !matches!(c, Cat::When | Cat::Deployed | Cat::Chats)).then(|| (op_label(c, Op::Is, 1), op_label(c, Op::Not, 1)))
-}
-
-/// FILTER-19: the operator the switch shows — the clause's; with no clause,
-/// `held`, the one the open pane holds (`is` until the switch is set).
-pub(crate) fn switch_op(cl: Option<&Clause>, held: Op) -> Op {
-    cl.map_or(held, |cl| cl.op)
 }
 
 /// One category's clause: its operator and its values — canonical, in the
@@ -541,18 +536,6 @@ pub(crate) trait Clausal {
                 values.remove(i);
             }
             None => values.push(t.to_string()),
-        }
-        self.set_values(c, values);
-    }
-
-    /// A group of `c`'s values (Status's group, by its header): every one
-    /// added — or, all there already, every one taken.
-    fn toggle_all(&mut self, c: Cat, ts: &[&str]) {
-        let mut values: Vec<String> = self.clause(c).map(|cl| cl.values).unwrap_or_default();
-        if ts.iter().all(|t| values.iter().any(|v| v == t)) {
-            values.retain(|v| !ts.contains(&v.as_str()));
-        } else {
-            values.extend(ts.iter().map(|t| t.to_string()));
         }
         self.set_values(c, values);
     }
@@ -898,64 +881,7 @@ impl ScTree {
 // ---------------------------------------------------------------------
 // The pills
 
-/// A pill of a level's bar.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Pill {
-    /// A category's clause.
-    Clause { cat: Cat, clause: Clause },
-    /// A group no category draws — its canonical text; `at`: which of the
-    /// level's groups it is.
-    Custom { text: String, at: usize },
-    /// FILTER-27: a time clause (When's) — `at`: which of the level's
-    /// groups it is; edited part by part.
-    Time { at: usize, t: crate::when::Timed },
-    /// FILTER-31: a group of two pills or more — `at`: which of the level's
-    /// groups it is; its join and its members (src/anyof.rs).
-    Group { at: usize, conj: Conj, members: Vec<Member> },
-}
 
-/// The order a clause's values show in on its pill: Shortcode's as the
-/// menu lists the tree (the route's own first), the rest as stored.
-pub(crate) fn display_order(c: Cat, cl: &Clause, route: Option<&str>, tree: Option<&ScTree>) -> Vec<String> {
-    match (c, tree) {
-        (Cat::Shortcode, Some(t)) => {
-            let at: HashMap<String, usize> = t
-                .rows(route, cl.values.iter())
-                .into_iter()
-                .filter_map(|r| if let ScRow::Code { code, .. } = r { Some(code) } else { None })
-                .enumerate()
-                .map(|(i, c)| (c, i))
-                .collect();
-            let mut v = cl.values.clone();
-            v.sort_by_key(|x| at.get(x).copied().unwrap_or(usize::MAX));
-            v
-        }
-        _ => cl.values.clone(),
-    }
-}
-
-/// FILTER-12: a pill in words — `Status is any of Ready, Coding`, `Kind is
-/// not doc`, a custom group's text — for where it is shown, not edited.
-pub(crate) fn pill_words(p: &Pill) -> (String, String) {
-    match p {
-        Pill::Clause { cat, clause } => {
-            let values = clause.values.iter().map(|v| cat.value_label(v)).collect::<Vec<_>>().join(", ");
-            (cat.label().to_string(), format!("{} {values}", op_label(*cat, clause.op, clause.values.len())))
-        }
-        Pill::Custom { text, .. } => ("custom".to_string(), text.clone()),
-        Pill::Time { t, .. } => (time_cat(t).label().to_string(), crate::when::words(t, crate::calendar::reader_h12())),
-        Pill::Group { conj, members, .. } => {
-            let words = members.iter().map(Member::words).collect::<Vec<_>>().join(&format!(" {} ", anyof::joiner(*conj)));
-            (anyof::conj_words(*conj).to_string(), words)
-        }
-    }
-}
-
-/// A pill's values: the first, then `+n` for the rest.
-pub(crate) fn pill_values(c: Cat, shown: &[String]) -> (String, Option<String>) {
-    let first = shown.first().map(|v| c.value_label(v)).unwrap_or_default();
-    (first, (shown.len() > 1).then(|| format!("+{}", shown.len() - 1)))
-}
 
 // ---------------------------------------------------------------------
 // The counts
@@ -1004,20 +930,15 @@ impl CountsProvider {
 // ---------------------------------------------------------------------
 // The menu's rows
 
-/// A row of the menu.
+/// A value a category offers, as [`offered`] lists them — the panel's
+/// sections draw them ([`section_rows`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Row {
-    /// A category, to open.
-    Cat(Cat),
-    /// A value to check or uncheck. `depth` indents a shortcode under its
-    /// host; `scoped`: shown among every category's (a search), so it names
-    /// its category.
+    /// A value to tick. `depth` indents a shortcode under its host.
     Value { cat: Cat, token: String, depth: usize, scoped: bool },
-    /// A group of a category's values, by its header — checks them all
-    /// (Status's groups).
+    /// A group of a category's values, by its header (Status's groups):
+    /// the panel's heading.
     Group { cat: Cat, label: &'static str, tokens: &'static [&'static str] },
-    /// The search's last offer: Title contains what was typed.
-    TitleContains(String),
     /// A heading over values — Shortcode's "other boards".
     Heading(&'static str),
 }
@@ -1025,7 +946,8 @@ pub(crate) enum Row {
 
 /// What the menu needs to know to list values.
 pub(crate) struct MenuFacts<'a> {
-    /// The level's categories, in its menu's order.
+    /// The level's categories, in its panel's order.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) cats: &'a [Cat],
     /// The route's shortcode — its tree first in Shortcode's values.
     pub(crate) route: Option<&'a str>,
@@ -1082,57 +1004,6 @@ pub(crate) fn label_values(k: &MenuFacts) -> Vec<String> {
     out.extend(k.counts.get(&Cat::Label).into_iter().flat_map(|m| m.keys().cloned()));
     out.extend(k.clauses.get(Cat::Label).into_iter().flat_map(|cl| cl.values.iter().cloned()));
     out.into_iter().collect()
-}
-
-/// `c`'s values matching what is typed (all of them, as offered, when
-/// nothing is): a match is the label or the value, case-insensitive; the
-/// headings go, and the tree flattens, while a query narrows.
-pub(crate) fn offered_matching(c: Cat, k: &MenuFacts, q: &str) -> Vec<Row> {
-    let rows = offered(c, k);
-    if q.trim().is_empty() {
-        return rows;
-    }
-    rows.into_iter()
-        .filter_map(|r| match r {
-            Row::Value { cat, token, .. } if palette_match(&token, &cat.value_label(&token), q) => {
-                Some(Row::Value { cat, token, depth: 0, scoped: false })
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// The menu with nothing open: the categories while nothing is typed;
-/// typed into, the categories whose name matches, every category's values
-/// that match (each naming its category), and last "Title contains" what
-/// was typed (when the level offers Title).
-pub(crate) fn search(q: &str, k: &MenuFacts) -> Vec<Row> {
-    let q = q.trim();
-    if q.is_empty() {
-        return k.cats.iter().copied().map(Row::Cat).collect();
-    }
-    let mut out: Vec<Row> = k.cats.iter().copied().filter(|c| palette_match(c.menu_label(), c.keywords(), q)).map(Row::Cat).collect();
-    for c in k.cats {
-        for r in offered_matching(*c, k, q) {
-            if let Row::Value { cat, token, .. } = r {
-                out.push(Row::Value { cat, token, depth: 0, scoped: true });
-            }
-        }
-    }
-    if k.cats.contains(&Cat::Title) {
-        out.push(Row::TitleContains(q.to_string()));
-    }
-    out
-}
-
-/// A Status group's box: all its statuses checked, none, or some.
-pub(crate) fn group_tri(cl: Option<&Clause>, tokens: &[&str]) -> Tri {
-    let n = tokens.iter().filter(|t| cl.is_some_and(|cl| cl.values.iter().any(|v| v == *t))).count();
-    match n {
-        0 => Tri::Off,
-        n if n == tokens.len() => Tri::On,
-        _ => Tri::Mixed,
-    }
 }
 
 // ---------------------------------------------------------------------
@@ -1859,23 +1730,28 @@ pub(crate) fn LineNotes(level: Level) -> impl IntoView {
 }
 
 /// FILTER-37: "as evaluated" — the level's filter with its saved names
-/// expanded ([`anyof::evaluated`]), "…" until every name's text is in.
+/// expanded ([`crate::naming::evaluated`]), "…" until every name's text is in.
 fn evaluated_view(lens: Lens, level: Level) -> impl IntoView {
     let naming = crate::naming::use_naming();
+    // FILTER-42: the names are fetched as the filter names them — an
+    // effect of the filter alone, so a text arriving never asks again (the
+    // view below only reads; drawing it fetched, it re-drew itself without
+    // end once the line drew it unfolded).
+    Effect::new(move |_| {
+        let names: Vec<String> = lens.filter(level).with(|f| f.saved_names().into_iter().map(str::to_string).collect());
+        untrack(|| {
+            for n in &names {
+                naming.fetch(n);
+            }
+        });
+    });
     move || {
         let f = lens.filter(level).get();
         if f.saved_names().is_empty() {
             return None;
         }
-        let said = match anyof::evaluated(&f, &|n| naming.lookup(n)) {
-            Err(missing) => {
-                wasm_bindgen_futures::spawn_local(async move {
-                    for m in missing {
-                        naming.fetch(&m);
-                    }
-                });
-                "\u{2026}".to_string()
-            }
+        let said = match crate::naming::evaluated(&f, &|n| naming.lookup(n)) {
+            Err(_) => "\u{2026}".to_string(),
             Ok(Ok(text)) => text,
             Ok(Err(why)) => why,
         };
@@ -2437,9 +2313,13 @@ fn groups_view(lens: Lens, pop: Pop) -> impl IntoView {
     let level = pop.level;
     move || {
         let Some(o) = lens.ors(level) else {
+            // FILTER-42: past what the panel draws, the filter is its text —
+            // read here, edited in the foot's text, never rewritten.
+            let text = lens.filter(level).with(|f| f.format());
             return view! {
                 <div class="fp-groups deep" role="note">
-                    "This filter nests deeper than groups joined by or. Its text is the bar's; edit it there."
+                    <span class="fp-hint">"This filter spells out into more groups than the panel draws: it is shown as its text, and edited as text in the foot."</span>
+                    <code class="fp-deep">{text}</code>
                 </div>
             }
             .into_any();
@@ -2482,12 +2362,18 @@ fn groups_view(lens: Lens, pop: Pop) -> impl IntoView {
                                 lens.open_panel(level, Some(c));
                             }
                         };
+                        // FILTER-42: a saved filter in a group shows what it holds.
+                        let peek = match &p.field {
+                            menger_tickets_api::filter::Field::Saved(n) => Some(saved_peek(n.clone())),
+                            _ => None,
+                        };
                         view! {
                             {(ii > 0).then(|| view! { <span class="fw">"and"</span> })}
                             <span class="fchip" class:saved=saved data-group=gi data-item=ii>
                                 <span class="fchip-w" class:part=time.is_some() on:click=open_time>{words.clone()}</span>
                                 <button class="p-x" title=format!("remove {words}") aria-label=format!("remove {words}") on:click=remove>"\u{d7}"</button>
                             </span>
+                            {peek}
                         }
                     })
                     .collect_view();
@@ -2540,6 +2426,23 @@ fn groups_view(lens: Lens, pop: Pop) -> impl IntoView {
             </div>
         }
         .into_any()
+    }
+}
+
+/// FILTER-42: what a saved filter in a group holds — its text, read the
+/// first time it is shown (`…` until then; said when no filter has the
+/// name).
+fn saved_peek(name: String) -> impl IntoView {
+    let naming = crate::naming::use_naming();
+    untrack(|| naming.fetch(&name));
+    move || {
+        let words = match naming.text(&name) {
+            Some(crate::naming::Fetch::Text(t)) => format!("= {t}"),
+            Some(crate::naming::Fetch::Missing) => "no saved filter has this name".to_string(),
+            Some(crate::naming::Fetch::Failed(why)) => format!("not read: {why}"),
+            _ => "= \u{2026}".to_string(),
+        };
+        view! { <span class="fp-peek" title="what the saved filter holds">{words}</span> }
     }
 }
 
@@ -3098,19 +3001,9 @@ pub(crate) mod tests {
         assert_eq!(Cat::Commits.value_label("yes"), "has commits");
     }
 
-    /// A Status group's header checks its statuses — or, all checked,
-    /// unchecks them; its box is tri-state.
+    /// Status's groups (the panel's headings) hold every status, once.
     #[test]
-    fn a_status_group_checks_its_statuses() {
-        let mut k = Clauses::default().with(Cat::Status, Op::Is, strs(&["Pending"]));
-        let not_started: &[&str] = STATUS_GROUPS[2].1;
-        assert_eq!(group_tri(k.get(Cat::Status), not_started), Tri::Mixed);
-        k.toggle_all(Cat::Status, not_started);
-        assert_eq!(k.get(Cat::Status).unwrap().values, strs(&["Pending", "Blocked", "Idea", "Epic"]));
-        assert_eq!(group_tri(k.get(Cat::Status), not_started), Tri::On);
-        k.toggle_all(Cat::Status, not_started);
-        assert!(k.get(Cat::Status).is_none());
-        assert_eq!(group_tri(None, STATUS_GROUPS[4].1), Tri::Off);
+    fn status_groups_hold_every_status() {
         assert_eq!(STATUS_GROUPS.iter().map(|g| g.1.len()).sum::<usize>(), Status::ALL.len(), "every status, once");
     }
 
@@ -3121,12 +3014,27 @@ pub(crate) mod tests {
     /// narrows its values.
     #[test]
     fn the_menu_lists_categories_values_and_search() {
+        // FILTER-42: what the panel's search leaves — the categories whose
+        // section still shows (a time section by its name and keywords,
+        // a value section by a value or its name, Title by its name).
+        fn found(q: &str, k: &MenuFacts) -> Vec<Cat> {
+            k.cats
+                .iter()
+                .copied()
+                .filter(|c| match c {
+                    Cat::When | Cat::Deployed | Cat::Chats => q.trim().is_empty() || palette_match(c.menu_label(), c.keywords(), q),
+                    Cat::Title => q.trim().is_empty() || palette_match("title", "contains text", q),
+                    c if c.is_flag() && !c.is_local() => flag_rows(&[*c], q).contains(c) || palette_match(c.label(), "", q),
+                    c => section_rows(*c, k, q).iter().any(|r| matches!(r, PanelRow::Value { .. })),
+                })
+                .collect()
+        }
         let t = platform();
         let clauses = Clauses::default().with(Cat::Shortcode, Op::Is, t.subtree("PLEXUS"));
         let mut counts: Counts = HashMap::new();
         counts.insert(Cat::Wave, [("1", 3), ("2", 1), ("4", 1), ("9", 0)].into_iter().map(|(k, v)| (k.to_string(), v)).collect());
         let k = MenuFacts { cats: &Cat::WAVES, route: Some("PLEXUS"), tree: Some(&t), clauses: &clauses, counts: &counts };
-        assert_eq!(search("", &k), Cat::WAVES.map(Row::Cat).to_vec());
+        assert_eq!(found("", &k), Cat::WAVES.to_vec(), "FILTER-42: the panel draws every category");
         assert_eq!(
             Cat::WAVES.map(Cat::menu_label),
             [
@@ -3156,47 +3064,45 @@ pub(crate) mod tests {
         assert_eq!(offered(Cat::Kind, &k).len(), 6);
         assert_eq!(offered(Cat::Ready, &k), [val(Cat::Ready, "yes"), val(Cat::Ready, "no")]);
 
-        let found = search("ret", &k);
-        assert!(found.contains(&Row::Value { cat: Cat::Shortcode, token: "RETURNS".into(), depth: 0, scoped: true }), "{found:?}");
-        assert_eq!(found.last(), Some(&Row::TitleContains("ret".into())));
-        let found = search("sta", &k);
-        assert_eq!(found[0], Row::Cat(Cat::Status), "a category by its name first");
-        assert!(search("review", &k).contains(&Row::Value { cat: Cat::Status, token: "In Review".into(), depth: 0, scoped: true }));
-        assert_eq!(offered_matching(Cat::Shortcode, &k, "gen"), [val(Cat::Shortcode, "CODEGEN"), val(Cat::Shortcode, "GEN")]);
-        assert_eq!(offered_matching(Cat::Readiness, &k, "now"), [val(Cat::Readiness, "workable")]);
-        assert_eq!(offered_matching(Cat::Commits, &k, "has"), [val(Cat::Commits, "yes")]);
+        let pv = |c: Cat, t: &str| PanelRow::Value { cat: c, token: t.into(), depth: 0 };
+        assert!(section_rows(Cat::Shortcode, &k, "ret").contains(&pv(Cat::Shortcode, "RETURNS")));
+        assert!(found("sta", &k).contains(&Cat::Status), "a category by its name");
+        assert!(section_rows(Cat::Status, &k, "review").contains(&pv(Cat::Status, "In Review")));
+        assert_eq!(section_rows(Cat::Shortcode, &k, "gen"), [pv(Cat::Shortcode, "CODEGEN"), pv(Cat::Shortcode, "GEN")]);
+        assert_eq!(section_rows(Cat::Readiness, &k, "now"), [pv(Cat::Readiness, "workable")]);
+        assert_eq!(flag_rows(&Cat::WAVES, "has"), [Cat::Commits]);
         assert!(offered(Cat::Title, &k).is_empty());
 
         // The global menu: the server's categories, no Title to offer.
         let g = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        assert_eq!(search("", &g).len(), 13, "FILTER-27: When among them; DEPLOY-13: Deployed; CHAT-4: Chats");
+        assert_eq!(found("", &g).len(), 13, "FILTER-27: When among them; DEPLOY-13: Deployed; CHAT-4: Chats");
         // CHAT-4: Chats — its own pane of two cells, found by them, and the
         // pills it builds drawn under it.
         assert!(offered(Cat::Chats, &g).is_empty());
-        assert_eq!(search("unread", &g)[0], Row::Cat(Cat::Chats));
-        assert_eq!(search("chat", &g)[0], Row::Cat(Cat::Chats));
+        assert!(found("unread", &g).contains(&Cat::Chats));
+        assert!(found("chat", &g).contains(&Cat::Chats));
         assert_eq!(switch_words(Cat::Chats), None);
         assert_eq!(time_cat(&crate::when::new_chats(false)), Cat::Chats);
         assert_eq!(crate::when::group(&crate::when::new_chats(true)).format(), "unread");
         assert_eq!(crate::when::group(&crate::when::new_chats(false)).format(), "chatting");
         assert!(offered(Cat::When, &g).is_empty(), "When draws its own pane");
         assert!(offered(Cat::Deployed, &g).is_empty(), "DEPLOY-13: and Deployed, When's pane");
-        assert_eq!(search("deploy", &g)[0], Row::Cat(Cat::Deployed));
-        assert_eq!(search("prod", &g)[0], Row::Cat(Cat::Deployed), "found by what it builds");
+        assert!(found("deploy", &g).contains(&Cat::Deployed));
+        assert!(found("prod", &g).contains(&Cat::Deployed), "found by what it builds");
         assert_eq!(switch_words(Cat::Deployed), None);
         let dep = crate::when::new_deployed("prod", false, None).unwrap();
         assert_eq!(time_cat(&dep), Cat::Deployed);
         assert_eq!(time_cat(&crate::when::new_clause(crate::when::Kind::Changed, None, None).unwrap()), Cat::When);
-        assert_eq!(search("created", &g)[0], Row::Cat(Cat::When), "FILTER-27: found by what it builds");
-        assert_eq!(search("moved", &g)[0], Row::Cat(Cat::When));
+        assert!(found("created", &g).contains(&Cat::When), "FILTER-27: found by what it builds");
+        assert!(found("moved", &g).contains(&Cat::When));
         // FILTER-21: typing finds Menger docs, by its name.
-        assert_eq!(search("menger", &g)[0], Row::Cat(Cat::MengerDocs));
+        assert!(found("menger", &g).contains(&Cat::MengerDocs));
         assert_eq!(offered(Cat::MengerDocs, &g), [val(Cat::MengerDocs, "yes"), val(Cat::MengerDocs, "no")]);
-        assert!(!search("ret", &g).iter().any(|r| matches!(r, Row::TitleContains(_))));
-        assert!(!search("wave", &g).iter().any(|r| matches!(r, Row::Cat(Cat::Wave))));
+        assert!(!found("ret", &g).contains(&Cat::Title));
+        assert!(!found("wave", &g).contains(&Cat::Wave));
         // MENGER-12: Asking is a flag; Label offers `needs-you`, every label
         // the counts name and the clause's own, in name order.
-        assert_eq!(search("asking", &g)[0], Row::Cat(Cat::Asking));
+        assert!(found("asking", &g).contains(&Cat::Asking));
         assert_eq!(offered(Cat::Asking, &g), [val(Cat::Asking, "yes"), val(Cat::Asking, "no")]);
         assert_eq!(offered(Cat::Label, &g), [val(Cat::Label, "needs-you")]);
         let mut counts = HashMap::new();
@@ -3218,15 +3124,13 @@ pub(crate) mod tests {
         let t = platform();
         let d = Clauses::default().with(Cat::Shortcode, Op::Is, t.subtree("PLEXUS")).with(Cat::Kind, Op::Is, strs(&DEFAULT_KINDS));
         let sc = d.get(Cat::Shortcode).unwrap();
-        let order = display_order(Cat::Shortcode, sc, Some("PLEXUS"), Some(&t));
-        assert_eq!(order[0], "PLEXUS");
-        assert_eq!(pill_values(Cat::Shortcode, &order), ("PLEXUS".into(), Some("+9".into())));
-        assert_eq!(op_label(Cat::Shortcode, Op::Is, 10), "is any of");
+        assert_eq!(sc.values.len(), 10);
+        assert_eq!(op_label(Cat::Shortcode, Op::Is, 10), "is", "FILTER-42: no any of anywhere");
         assert_eq!(op_label(Cat::Status, Op::Is, 1), "is");
         assert_eq!(op_label(Cat::Status, Op::Not, 2), "is not");
         assert_eq!(op_label(Cat::Title, Op::Is, 1), "contains");
         assert_eq!(op_label(Cat::Title, Op::Not, 1), "does not contain");
-        assert_eq!(pill_values(Cat::Wave, &strs(&["3"])), ("wave 3".into(), None));
+        assert_eq!(Cat::Wave.value_label("3"), "wave 3");
         assert_eq!(Cat::Readiness.value_label("workable"), "workable now");
 
         // Toggling, flipping, removing; a clause left empty is gone.
@@ -3263,12 +3167,6 @@ pub(crate) mod tests {
         assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 10, "every category but the flags and When");
         assert_eq!(switch_words(Cat::When), None, "FILTER-27: a time pill's parts are its own");
 
-        let not = Clause { op: Op::Not, values: strs(&["doc"]) };
-        let is = Clause { op: Op::Is, values: strs(&["doc"]) };
-        assert_eq!(switch_op(None, Op::Is), Op::Is, "a new clause: is");
-        assert_eq!(switch_op(None, Op::Not), Op::Not, "set before any value is checked");
-        assert_eq!(switch_op(Some(&not), Op::Is), Op::Not, "the clause's operator");
-        assert_eq!(switch_op(Some(&is), Op::Not), Op::Is);
     }
 
     /// FILTER-19: the switch set to `is not` is a pill's toggle — the same
@@ -3286,7 +3184,6 @@ pub(crate) mod tests {
         assert_eq!(by_switch, by_pill);
         let cl = by_switch.get(Cat::Status).unwrap().clone();
         assert_eq!(cl, Clause { op: Op::Not, values: strs(&["Coding", "Ready"]) });
-        assert_eq!(pill_words(&Pill::Clause { cat: Cat::Status, clause: cl }), ("Status".into(), "is not Coding, Ready".into()));
         by_switch.set_op(Cat::Status, Op::Not);
         assert_eq!(by_switch, by_pill, "set again: as it was");
         by_switch.set_op(Cat::Status, Op::Is);
@@ -3302,7 +3199,6 @@ pub(crate) mod tests {
         let kind = f.get(Cat::Kind).unwrap().clone();
         assert_eq!(kind, Clause { op: Op::Not, values: strs(&["spike", "doc"]) });
         assert!(!kind.admits(Some("doc")) && !kind.admits(Some("spike")) && kind.admits(Some("build")));
-        assert_eq!(pill_words(&Pill::Clause { cat: Cat::Kind, clause: kind }), ("Kind".into(), "is not spike, doc".into()));
 
         // From the search's results (checked under `is`): a clause keeps its
         // operator; a new one is `is`.
@@ -3317,10 +3213,7 @@ pub(crate) mod tests {
         }
         assert!(f.get(Cat::Kind).is_none());
 
-        // A Status group's header, a shortcode's subtree, a surface's own
-        // category: under the switch.
-        f.edit_as(Cat::Status, Op::Not, |k| k.toggle_all(Cat::Status, STATUS_GROUPS[3].1));
-        assert_eq!(f.get(Cat::Status), Some(&Clause { op: Op::Not, values: strs(&["Complete", "Superseded", "Canceled"]) }));
+        // A shortcode's subtree, a surface's own category: under the switch.
         let t = platform();
         f.edit_as(Cat::Shortcode, Op::Not, |k| k.toggle_code(&t, "MACRO"));
         assert_eq!(f.get(Cat::Shortcode), Some(&Clause { op: Op::Not, values: strs(&["CODEGEN", "GEN", "MACRO"]) }));

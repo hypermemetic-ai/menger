@@ -55,7 +55,7 @@ use menger_tickets_api::filter::{Conj, Field, Filter, Group, Predicate};
 
 use crate::ors::Ors;
 
-use crate::filter::{fold_key, Cat, Clash, Clausal, Clause, Clauses, Host, Op, PanelHost, Pill, Pop, ScTree, DEFAULT_KINDS};
+use crate::filter::{fold_key, Cat, Clash, Clausal, Clause, Clauses, Host, Op, PanelHost, Pop, ScTree, DEFAULT_KINDS};
 use crate::{bindings, dom, keys, nav, Route};
 
 // ---------------------------------------------------------------------
@@ -432,32 +432,6 @@ impl Kept {
         self.filter.groups.iter().map(|g| clause_of(g).filter(|(c, _)| taken.insert(*c))).collect()
     }
 
-    /// The pills: a category's clause per group a category draws, a custom
-    /// pill per other group — in the filter's order — then the local
-    /// clauses in their categories' order.
-    pub(crate) fn pills(&self) -> Vec<Pill> {
-        let mut out: Vec<Pill> = self
-            .drawn()
-            .into_iter()
-            .zip(&self.filter.groups)
-            .enumerate()
-            .map(|(at, (d, g))| match d {
-                Some((cat, clause)) => Pill::Clause { cat, clause },
-                // FILTER-36: a group holding a group or a saved name is its
-                // canonical text, edited as text, until FILTER-37's tree.
-                None if g.is_nested() => Pill::Custom { text: g.format(), at },
-                // FILTER-31: two members or more are a box.
-                None if crate::anyof::is_group(g) => Pill::Group { at, conj: g.conj, members: crate::anyof::members(g) },
-                None => match crate::when::of_group(g) {
-                    Some(t) => Pill::Time { at, t },
-                    None => Pill::Custom { text: g.format(), at },
-                },
-            })
-            .collect();
-        out.extend(self.local.iter().map(|(cat, cl)| Pill::Clause { cat, clause: cl.clone() }));
-        out
-    }
-
     /// Each category's clause (the menu's checked boxes).
     pub(crate) fn clauses(&self) -> Clauses {
         let mut out = self.local.clone();
@@ -634,14 +608,6 @@ pub(crate) fn waves_default(sc: &str, tree: &ScTree) -> Kept {
     k.filter.groups.push(Group::one(Predicate::is(Field::Under(sc.to_ascii_uppercase()))));
     k.set(Cat::Kind, Op::Is, DEFAULT_KINDS.iter().map(|k| k.to_string()));
     k
-}
-
-/// The pills a bar draws, each with the level it is of: a surface's bar
-/// shows the global pills first (inherited — muted, not editable there),
-/// then its own; the global bar, its own.
-pub(crate) fn bar_pills(bar: Level, global: Vec<Pill>, own: Vec<Pill>) -> Vec<(Level, Pill)> {
-    let inherited = if bar == Level::Global { Vec::new() } else { global };
-    inherited.into_iter().map(|p| (Level::Global, p)).chain(own.into_iter().map(|p| (bar, p))).collect()
 }
 
 /// The levels a group of `level`'s effective filter comes from: global,
@@ -1432,7 +1398,7 @@ mod tests {
         assert_eq!(join(&pairs("a=1&b&c=")), "a=1&b&c=");
     }
 
-    use crate::filter::tests::{platform, strs, PLEXUS_TREE};
+    use crate::filter::tests::{platform, strs};
 
     fn parsed(text: &str) -> Filter {
         Filter::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"))
@@ -1508,7 +1474,7 @@ mod tests {
         k.set_op(Cat::Status, Op::Not);
         assert_eq!(k, by_pill, "the same clause a pill's toggle makes");
         assert_eq!(k.filter.format(), "not status in (Coding, Ready) and in MNG");
-        assert_eq!(k.pills()[0], Pill::Clause { cat: Cat::Status, clause: clause(Op::Not, &["Coding", "Ready"]) });
+        assert_eq!(k.clauses().get(Cat::Status), Some(&clause(Op::Not, &["Coding", "Ready"])));
         k.set_op(Cat::Status, Op::Is);
         assert_eq!(k.filter.format(), "status in (Coding, Ready) and in MNG");
 
@@ -1517,7 +1483,7 @@ mod tests {
         assert_eq!(k.filter.format(), "status in (Coding, Ready) and in MNG and not kind doc");
         k.edit_as(Cat::Kind, Op::Not, |k| k.toggle(Cat::Kind, "spike"));
         assert_eq!(k.filter.format(), "status in (Coding, Ready) and in MNG and not kind in (spike, doc)");
-        assert_eq!(k.pills()[2], Pill::Clause { cat: Cat::Kind, clause: clause(Op::Not, &["spike", "doc"]) });
+        assert_eq!(k.clauses().get(Cat::Kind), Some(&clause(Op::Not, &["spike", "doc"])));
         assert_eq!(parsed(&k.filter.format()), k.filter, "the text parses back to the filter");
 
         // A shortcode's tree, excluded.
@@ -1532,12 +1498,14 @@ mod tests {
         assert_eq!(r.filter.format(), "ready");
     }
 
-    /// FILTER-27 acceptance 3: every time clause of the language block, typed
-    /// in the bar's text mode, comes back as a time pill — beside the
-    /// categories' pills, in the filter's order — and the pills print the
-    /// canonical text again: text ⇄ pills round-trips; × takes one out.
+    /// FILTER-27 acceptance 3, re-pointed at FILTER-42's groups: every time
+    /// clause of the language, typed in the text, is a clause of its group
+    /// beside the categories' clauses, in the filter's order, and the groups
+    /// print the canonical text again; × takes one out.
     #[test]
-    fn time_clauses_are_pills_and_round_trip() {
+    fn time_clauses_are_clauses_of_a_group_and_round_trip() {
+        use crate::ors::{Ors, Slot};
+        use menger_tickets_api::filter::Field;
         let forms = [
             "created today",
             "created within 3d",
@@ -1558,60 +1526,57 @@ mod tests {
         ];
         for form in forms {
             let text = format!("kind build and {form} and in MNG");
-            let k = Kept { filter: parsed(&text), ..Kept::default() };
-            let pills = k.pills();
-            assert_eq!(pills.len(), 3, "{form}");
-            assert!(matches!(&pills[0], Pill::Clause { cat: Cat::Kind, .. }), "{form}");
-            let Pill::Time { at, t } = &pills[1] else { panic!("{form}: {:?}", pills[1]) };
-            assert_eq!(*at, 1);
-            // The pill back to its group, and the whole back to text.
-            let mut back = k.clone();
-            back.filter.groups[1] = crate::when::group(t);
-            assert_eq!(back.filter.format(), parsed(&text).format(), "{form}");
-            assert_eq!(k.clauses().get(Cat::When), None, "a time clause is no category's value");
+            let f = parsed(&text);
+            let o = Ors::of_filter(&f).unwrap_or_else(|| panic!("{form}"));
+            assert_eq!(o.groups.len(), 1, "{form}");
+            assert_eq!(o.groups[0].len(), 3, "{form}");
+            assert!(matches!(o.groups[0][1].field, Field::History(_)), "{form}");
+            assert!(o.time_at(Slot { group: 0, item: 1 }).is_some(), "{form}");
+            assert_eq!(Filter { groups: o.to_groups().unwrap(), ..Filter::default() }.format(), f.format(), "{form}");
         }
-        let mut k = Kept { filter: parsed("created today and status Ready"), ..Kept::default() };
-        k.remove_group(0);
-        assert_eq!(k.filter.format(), "status Ready");
-        // Two time clauses are two pills.
-        let k = Kept { filter: parsed("created today and left Pending this week"), ..Kept::default() };
-        assert!(matches!(k.pills().as_slice(), [Pill::Time { at: 0, .. }, Pill::Time { at: 1, .. }]));
-        // FILTER-31: an `or` of time clauses is a group of time pills.
-        let k = Kept { filter: parsed("(changed within 1h or changed yesterday)"), ..Kept::default() };
-        let pills_of_k = k.pills();
-        let [Pill::Group { at: 0, conj: Conj::Any, members }] = pills_of_k.as_slice() else { panic!("{:?}", k.pills()) };
-        assert!(matches!(members.as_slice(), [crate::anyof::Member::Time(_), crate::anyof::Member::Time(_)]));
+        let mut o = Ors::of_filter(&parsed("created today and status Ready")).unwrap();
+        o.remove(Slot { group: 0, item: 0 });
+        assert_eq!(Filter { groups: o.to_groups().unwrap(), ..Filter::default() }.format(), "status Ready");
+        // An `or` of time clauses is two groups.
+        let o = Ors::of_filter(&parsed("(changed within 1h or changed yesterday)")).unwrap();
+        assert_eq!(o.groups.len(), 2);
+        assert!(o.groups.iter().all(|g| matches!(g.as_slice(), [p] if matches!(p.field, Field::History(_)))));
     }
 
-    /// FILTER-36: a group holding a group, and a saved name, are custom
-    /// pills of their canonical text — never a box nor a category's clause —
-    /// and × takes them out; the unnested pills beside them are as before.
+    /// FILTER-42: a filter the language nests — groups in groups, a saved
+    /// name, a negated group — reads as groups joined by or: the same
+    /// tickets (a saved name kept by name, in each group it reaches).
     #[test]
-    fn a_nested_group_or_a_name_is_a_custom_pill() {
-        let mut k = Kept {
-            filter: parsed("status Ready and (blocked or (kind build and asking)) and saved \"Needs you\" and (ready or saved Plexus-Ready)"),
-            ..Kept::default()
-        };
-        assert_eq!(
-            k.pills(),
-            vec![
-                Pill::Clause { cat: Cat::Status, clause: clause(Op::Is, &["Ready"]) },
-                Pill::Custom { text: "(blocked or (kind build and asking))".into(), at: 1 },
-                Pill::Custom { text: "saved \"Needs you\"".into(), at: 2 },
-                Pill::Custom { text: "(ready or saved Plexus-Ready)".into(), at: 3 },
-            ]
-        );
-        k.remove_group(2);
-        assert_eq!(k.filter.format(), "status Ready and (blocked or (kind build and asking)) and (ready or saved Plexus-Ready)");
-        assert_eq!(Kept { filter: parsed("not saved Deployment"), ..Kept::default() }.pills(), vec![Pill::Custom { text: "not saved Deployment".into(), at: 0 }]);
+    fn a_nested_group_or_a_name_reads_as_groups() {
+        use crate::ors::Ors;
+        use menger_tickets_api::filter::Field;
+        for form in [
+            "status Ready and (blocked or (kind build and asking))",
+            "(blocked or (kind build and (asking or ready)))",
+            "not (kind build and blocked) and ready",
+            "((changed today and kind build) or created today)",
+            "((changed today or created today) and kind build)",
+            "(not status Ready or not kind gap) and severity in (high, none)",
+            "text \"menger\" and kind build",
+        ] {
+            let f = parsed(form);
+            let o = Ors::of_filter(&f).unwrap_or_else(|| panic!("{form}"));
+            let back = Filter { groups: o.to_groups().unwrap(), ..Filter::default() };
+            assert!(crate::ors::tests::same_meaning(&f, &back), "{form} ≠ {}", back.format());
+            assert_eq!(Ors::of_filter(&back), Some(o.clone()), "{form}: stable");
+        }
+        let o = Ors::of_filter(&parsed("status Ready and saved \"Needs you\" and (ready or saved Plexus-Ready)")).unwrap();
+        assert_eq!(o.groups.len(), 2);
+        assert!(o.groups.iter().all(|g| g.iter().any(|p| p.field == Field::Saved("Needs you".into()))), "kept in each group");
+        assert_eq!(o.groups[1].last().map(|p| p.field.clone()), Some(Field::Saved("Plexus-Ready".into())));
     }
 
-    /// Acceptance 1: a group no category draws is a custom pill showing its
-    /// canonical text; × takes it out. A second group of one category is
-    /// custom too: a category has one pill. FILTER-31: a group of pills the
-    /// categories draw is a group pill, not custom.
+    /// Acceptance 1: a group no category draws (`under`, `category`, an
+    /// or of two categories) is no category's clause; a category's clause
+    /// edits its own group in place, a new one goes last, none takes it
+    /// out; local clauses ride beside the language.
     #[test]
-    fn a_group_no_category_draws_is_a_custom_pill() {
+    fn a_group_no_category_draws_is_no_clause() {
         for text in [
             "(blocked or status Blocked)",
             "under PLEXUS-1",
@@ -1624,54 +1589,32 @@ mod tests {
             assert_eq!(clause_of(g), None, "{text}");
         }
         let mut k = Kept { filter: parsed("status Ready and (blocked or status Blocked) and not status Coding and in MNG"), ..Kept::default() };
-        assert_eq!(
-            k.pills(),
-            vec![
-                Pill::Clause { cat: Cat::Status, clause: clause(Op::Is, &["Ready"]) },
-                Pill::Group {
-                    at: 1,
-                    conj: Conj::Any,
-                    members: vec![
-                        crate::anyof::Member::Clause { cat: Cat::Blocked, clause: clause(Op::Is, &["yes"]) },
-                        crate::anyof::Member::Clause { cat: Cat::Status, clause: clause(Op::Is, &["Blocked"]) },
-                    ],
-                },
-                Pill::Custom { text: "not status Coding".into(), at: 2 },
-                Pill::Clause { cat: Cat::Shortcode, clause: clause(Op::Is, &["MNG"]) },
-            ]
-        );
+        assert_eq!(k.clauses().get(Cat::Status), Some(&clause(Op::Is, &["Ready"])));
         assert_eq!(k.len(), 4);
         k.remove_group(1);
         assert_eq!(k.filter.format(), "status Ready and not status Coding and in MNG");
-        // A category's pill edits its own group in place; a new one goes last;
-        // none, its group goes.
         k.toggle(Cat::Status, "Coding");
         assert_eq!(k.filter.format(), "status in (Coding, Ready) and not status Coding and in MNG");
         k.set(Cat::Kind, Op::Is, strs(&["gap"]));
         assert_eq!(k.filter.format(), "status in (Coding, Ready) and not status Coding and in MNG and kind gap");
         k.remove(Cat::Status);
         assert_eq!(k.filter.format(), "not status Coding and in MNG and kind gap");
-        assert_eq!(
-            k.pills()[0],
-            Pill::Clause { cat: Cat::Status, clause: clause(Op::Not, &["Coding"]) },
-            "the custom group, alone of its category now, is its pill"
-        );
-        // Local clauses ride beside the language, after it.
+        assert_eq!(k.clauses().get(Cat::Status), Some(&clause(Op::Not, &["Coding"])), "alone of its category, it is its clause");
         k.set(Cat::Wave, Op::Is, strs(&["1"]));
         assert_eq!(k.filter.format(), "not status Coding and in MNG and kind gap");
-        assert_eq!(k.pills().last(), Some(&Pill::Clause { cat: Cat::Wave, clause: clause(Op::Is, &["1"]) }));
         assert_eq!(k.clauses().get(Cat::Wave), Some(&clause(Op::Is, &["1"])));
         assert_eq!(k.clauses().get(Cat::Shortcode), Some(&clause(Op::Is, &["MNG"])));
     }
 
-    /// FILTER-31 acceptance 1: every shape the language holds — `and` of
-    /// groups, each `and` or `or`, with time pills, flags, labels and
-    /// negated clauses inside — is drawn as pills and boxes (never one raw
-    /// pill), and comes back the same through the pills, the text, the URL
-    /// and a saved filter.
+    /// FILTER-31 acceptance 1, re-pointed at FILTER-42's groups: every shape
+    /// the language holds — `and` of groups, each `and` or `or`, with time
+    /// clauses, flags, labels and negated clauses inside — reads as groups
+    /// joined by or that admit the same tickets, read again the same; and
+    /// the level comes back the same through the text, the URL and a saved
+    /// filter.
     #[test]
-    fn groups_round_trip_through_pills_text_url_and_saved() {
-        use crate::anyof::{self, Member};
+    fn groups_round_trip_through_the_panel_text_url_and_saved() {
+        use crate::ors::Ors;
         let forms = [
             "(changed today or created today)",
             "(changed today or created today) and kind build",
@@ -1680,61 +1623,27 @@ mod tests {
             "(blocked or not ready or has commits)",
             "(label needs-you or asking) and not menger doc",
             "(not status Ready or not kind gap) and severity in (high, none)",
-            "(status Pending for over 2w or entered Ready today by owner)",
             "(not created today or status Coding or status \"In Review\")",
             "(not kind doc and not kind spike and not blocked)",
             "kind build and (in MNG or under PLEXUS-1)",
+            "((kind build and status Ready) or (kind gap and severity high))",
         ];
         for form in forms {
             let k = Kept { filter: parsed(form), ..Kept::default() };
-            let pills = k.pills();
-            assert!(pills.iter().any(|p| matches!(p, Pill::Group { .. })), "{form}: {pills:?}");
-            assert!(!pills.iter().any(|p| matches!(p, Pill::Custom { .. })), "{form}: never one raw pill");
-            // Pills → groups: each group pill's members build its group.
-            let mut back = k.clone();
-            for p in &pills {
-                if let Pill::Group { at, conj, members } = p {
-                    back.filter.groups[*at] = anyof::build(*conj, members).unwrap().unwrap();
-                }
-            }
-            // (Values in their category's order: the same pills read back.)
-            assert_eq!(back.pills(), pills, "{form}");
-            assert_eq!(Kept { filter: parsed(&back.filter.format()), ..Kept::default() }, back, "{form}");
-            // Text, the URL and a saved filter.
+            let o = Ors::of_filter(&k.filter).unwrap_or_else(|| panic!("{form}"));
+            let back = Filter { groups: o.to_groups().unwrap(), ..Filter::default() };
+            assert!(crate::ors::tests::same_meaning(&k.filter, &back), "{form} ≠ {}", back.format());
+            assert_eq!(Ors::of_filter(&back), Some(o), "{form}: read again the same");
             let text = k.filter.format();
-            assert_eq!(Kept { filter: parsed(&text), ..Kept::default() }.pills(), pills, "{form}: text");
+            assert_eq!(Kept { filter: parsed(&text), ..Kept::default() }, k, "{form}: text");
             for level in [Level::Global, Level::Nav, Level::Board] {
                 let q = join(&pairs_of(level, &k));
                 assert_eq!(read(&q, level), Some(Some(k.clone())), "{form}: the URL at {level:?}");
             }
             let saved = crate::saved::filter_of(&crate::saved::saved_text(&k.filter)).unwrap();
-            assert_eq!(crate::saved::chosen(saved).pills(), pills, "{form}: saved");
+            assert_eq!(crate::saved::chosen(saved), k, "{form}: saved");
         }
-        // A member keeps its own pill, operator and values; Status inside a
-        // group is not the level's Status clause, and the menu says so.
-        let k = Kept { filter: parsed("(status Ready or kind gap) and status Coding"), ..Kept::default() };
-        let pills = k.pills();
-        assert_eq!(
-            pills[0],
-            Pill::Group {
-                at: 0,
-                conj: Conj::Any,
-                members: vec![
-                    Member::Clause { cat: Cat::Status, clause: clause(Op::Is, &["Ready"]) },
-                    Member::Clause { cat: Cat::Kind, clause: clause(Op::Is, &["gap"]) },
-                ],
-            }
-        );
-        assert_eq!(k.clauses().get(Cat::Status), Some(&clause(Op::Is, &["Coding"])));
-        // FILTER-36: groups nest now — a nested shape is drawn as its text.
-        for (text, canonical) in [
-            ("(changed today and kind build) or created today", "((changed today and kind build) or created today)"),
-            ("((changed today or created today) and kind build)", "((changed today or created today) and kind build)"),
-        ] {
-            let k = Kept { filter: parsed(text), ..Kept::default() };
-            assert_eq!(k.pills(), vec![Pill::Custom { text: canonical.into(), at: 0 }], "{text}");
-        }
-        // A shape the language still refuses draws nothing: `or` and `and` in one pair.
+        // A shape the language refuses reads nothing: `or` and `and` in one pair.
         let e = Filter::parse("(changed today and kind build or created today)").unwrap_err();
         assert!(e.chunks.iter().any(|c| c.why.contains("do not mix")), "{e}");
     }
@@ -1825,7 +1734,6 @@ mod tests {
     fn the_nav_opens_without_menger_docs() {
         let d = nav_default();
         assert_eq!(d.filter.format(), "not menger doc");
-        assert_eq!(d.pills(), vec![Pill::Clause { cat: Cat::MengerDocs, clause: clause(Op::Is, &["no"]) }]);
         assert_eq!(d.clauses().get(Cat::MengerDocs), Some(&clause(Op::Is, &["no"])));
         assert_eq!(d.local, Clauses::default());
         let ticket = |id: &str, kind: menger_tickets_api::Kind, path: Option<&str>| menger_tickets_api::filter::Facts {
@@ -1866,25 +1774,6 @@ mod tests {
             Some(vec![("menger doc".to_string(), vec![Level::Global]), ("not menger doc".to_string(), vec![Level::Nav])])
         );
         assert_eq!(parsed("kind doc").and(&d.filter).format(), "kind doc and not menger doc");
-    }
-
-    /// Acceptance 1: a surface's bar shows the global pills first, each
-    /// marked global, then its own; the global bar, its own.
-    #[test]
-    fn a_surface_bar_inherits_the_global_pills() {
-        let g = Kept { filter: parsed("status Ready and under PLEXUS-1"), ..Kept::default() };
-        let own = Kept { filter: parsed("kind gap"), ..Kept::default() };
-        let shown = bar_pills(Level::Waves, g.pills(), own.pills());
-        assert_eq!(
-            shown,
-            vec![
-                (Level::Global, Pill::Clause { cat: Cat::Status, clause: clause(Op::Is, &["Ready"]) }),
-                (Level::Global, Pill::Custom { text: "under PLEXUS-1".into(), at: 1 }),
-                (Level::Waves, Pill::Clause { cat: Cat::Kind, clause: clause(Op::Is, &["gap"]) }),
-            ]
-        );
-        assert_eq!(bar_pills(Level::Global, Vec::new(), g.pills()).iter().filter(|(l, _)| *l == Level::Global).count(), 2);
-        assert!(bar_pills(Level::Board, Vec::new(), Vec::new()).is_empty());
     }
 
     /// Acceptance 1: the contradiction notice names each clashing group's
