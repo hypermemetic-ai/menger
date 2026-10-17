@@ -233,9 +233,11 @@ pub enum IdentityError {
     /// The backend requires a second factor and the user has none: one was
     /// enrolled; show it, then `continue_with_code(ticket, code)`.
     MfaEnrollmentRequired { ticket: Ticket, subject: Option<String>, enrolment: Box<TotpEnrolment> },
-    /// The email must be verified: the backend sent a code; then
-    /// `continue_with_code(ticket, code)`.
-    EmailUnverified { ticket: Ticket },
+    /// The email must be verified: the backend sent a code (to `email`,
+    /// when it says which — IDENTITY-45 names it on the page); then
+    /// `continue_with_code(ticket, code)`, and
+    /// [`IdentityBackend::resend_code`] for another.
+    EmailUnverified { ticket: Ticket, email: Option<String> },
     /// The backend wants an extra emailed code for this sign-in (risk
     /// checks): `continue_with_code(ticket, code)`.
     ExtraCheck { ticket: Ticket },
@@ -344,6 +346,12 @@ pub trait IdentityBackend: Send + Sync + 'static {
     /// person typed (a TOTP code, an emailed verification code).
     async fn continue_with_code(&self, _ticket: &Ticket, _code: &str, _req: &RequestInfo) -> IdResult<SignedIn> {
         unsupported("multi-step sign-in")
+    }
+
+    /// IDENTITY-45: another code for the step a [`Ticket`] carries (an
+    /// email to verify), when the backend can send one.
+    async fn resend_code(&self, _ticket: &Ticket, _req: &RequestInfo) -> IdResult<()> {
+        unsupported("sending another code")
     }
 
     /// The choice the person made ([`IdentityError::Choose`]).

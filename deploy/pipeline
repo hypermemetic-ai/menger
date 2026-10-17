@@ -42,6 +42,13 @@
 #   deploy/pipeline remote prod             RUN-25: app-test.menger.sh / app.menger.sh through
 #                                           hypermemetic-infra (app.yml; promote.yml for prod),
 #                                           driven by deploy/app.yml (RUN-11)
+#   deploy/pipeline remote-secret test|prod [--check] [--from FILE]
+#                                           IDENTITY-45: the WorkOS API key on app-test / app.menger.sh
+#                                           (infra's secret.yml: a 0400 file the container reads, then
+#                                           health; the old key back if unhealthy). The value from
+#                                           $WORKOS_API_KEY (ledger-secret run workos-prod WORKOS_API_KEY
+#                                           -- deploy/pipeline remote-secret prod), --from FILE, or stdin;
+#                                           never an argument, never printed
 #
 # DEPLOY-12: deploy test, sync, promote and rollback each tell menger what they
 # did — a deployment record (deploy/record → deployments.record): `started`
@@ -1004,6 +1011,59 @@ cmd_remote() {
   hf_output "url=$url"
 }
 
+# `remote-secret test|prod` (IDENTITY-45) — the WorkOS environment's API key
+# on the box, through hypermemetic-infra's secret.yml: deploy/app.yml declares
+# the file (`secrets`), infra writes it 0400 for the container's user, names
+# it to menger as MENGER_WORKOS_API_KEY_FILE, restarts and checks health (the
+# old value back if unhealthy). The value: $WORKOS_API_KEY (what `ledger-secret
+# run workos-prod WORKOS_API_KEY -- …` sets), else --from FILE, else stdin. It
+# reaches infra on a pipe (printf is a builtin: no argv), and is never printed.
+REMOTE_SECRET=workos-api-key
+cmd_remote_secret() {
+  local env=${1:-}; shift || true
+  case $env in
+    test) local host=app-test.menger.sh ;;
+    prod) local host=app.menger.sh ;;
+    *) die "usage: deploy/pipeline remote-secret test|prod [--check] [--from FILE]  (the value: \$WORKOS_API_KEY, --from FILE, or stdin)" ;;
+  esac
+  local check=() from=""
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --check) check=(--check --diff); shift ;;
+      --from) [[ $# -ge 2 ]] || die "--from FILE"; from=$2; shift 2 ;;
+      *) die "remote-secret: unknown argument '$1'" ;;
+    esac
+  done
+  [[ -f $APP_YML ]] && grep -q "name: $REMOTE_SECRET" "$APP_YML" || die "deploy/app.yml declares no secret $REMOTE_SECRET — nothing was changed"
+  [[ -x $INFRA/bin/infra && -f $INFRA/secret.yml ]] || die "no infra with secret.yml at $INFRA — MENGER_INFRA_DIR names a hypermemetic-infra checkout"
+  local src; src=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")
+  local value source
+  if [[ -n ${WORKOS_API_KEY:-} ]]; then
+    value=$WORKOS_API_KEY; source='$WORKOS_API_KEY'
+  elif [[ -n $from ]]; then
+    [[ -f $from && -r $from ]] || die "--from: no readable file $from"
+    value=$(<"$from"); source="the file $from"
+  elif [[ ! -t 0 ]]; then
+    value=$(cat); source=stdin
+  else
+    die "remote-secret: no value — set WORKOS_API_KEY (ledger-secret run workos-prod WORKOS_API_KEY -- deploy/pipeline remote-secret $env), --from FILE, or pipe it"
+  fi
+  value=${value//[$'\r\n']/}
+  [[ $value == sk_* && ${#value} -ge 16 && $value != *[[:space:]]* ]] \
+    || die "remote-secret: that is not a WorkOS API key (sk_…, one line) — nothing was sent"
+  step "remote-secret $env: the WorkOS API key from $source → $host (bin/infra secret.yml -e secret=$REMOTE_SECRET${check:+ --check})"
+  if printf '%s' "$value" | "$INFRA/bin/infra" secret.yml -e "app_dir=$src" -e "env=$env" -e "secret=$REMOTE_SECRET" "${check[@]}" >&2; then
+    unset value
+    [[ ${#check[@]} -gt 0 ]] && { say "ok   dry run: nothing written"; return 0; }
+    record "app-$env" secret "$REMOTE_SECRET" ok
+    say "ok   $host holds its WorkOS key: the GitHub button completes through WorkOS's API (email verification on menger's page)"
+  else
+    unset value
+    [[ ${#check[@]} -gt 0 ]] || record "app-$env" secret "$REMOTE_SECRET" "infra failed"
+    die "infra did not place the key on $host (an unhealthy box gets its old key back by itself)"
+  fi
+}
+
 # ── status, releases, logs ──────────────────────────────────────────────────
 # ── the landing page (DEPLOY-17) ────────────────────────────────────────────
 # One command from a commit on main to menger.sh: landing/ exported at the
@@ -1204,5 +1264,6 @@ case $cmd in
   image)    cmd_image "$@" ;;
   local)    cmd_local "$@" ;;
   remote)   cmd_remote "$@" ;;
+  remote-secret) cmd_remote_secret "$@" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

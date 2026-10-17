@@ -89,6 +89,9 @@ fn forbidden() -> Response {
 }
 
 const WRONG: &str = "That code didn't work. Check it and try again.";
+/// IDENTITY-45: an emailed verification code that did not work — a typo,
+/// or one that has expired (or been replaced by a newer one).
+const WRONG_OR_EXPIRED: &str = "That code didn't work: it is wrong, or it has expired. Check it, or send another.";
 const STALE: &str = "That sign-in took too long. Start again.";
 
 fn with_cookie(mut r: Response, set: Option<HeaderValue>) -> Response {
@@ -111,6 +114,7 @@ impl SignInPage {
             .route("/login/code", post(code))
             .route("/login/password", post(password))
             .route("/login/continue", post(continue_code))
+            .route("/login/continue/resend", post(resend_step))
             .route("/login/choose", post(choose))
             .route("/login/social", post(social))
             .route("/login/account", get(account))
@@ -411,7 +415,7 @@ async fn continue_code(State(p): State<Arc<SignInPage>>, headers: HeaderMap, pee
         Err(resp) => return resp,
     };
     let found = p.with_flow(&id, |fl| match &fl.step {
-        Step::Code { ticket, kind, subject } => Some((ticket.clone(), *kind, subject.clone())),
+        Step::Code { ticket, kind, subject, .. } => Some((ticket.clone(), *kind, subject.clone())),
         _ => None,
     });
     let Some(Some((ticket, kind, subject))) = found else { return p.restart(&id, "/", STALE, StatusCode::BAD_REQUEST) };
@@ -423,7 +427,8 @@ async fn continue_code(State(p): State<Arc<SignInPage>>, headers: HeaderMap, pee
         Ok(x) => x,
         Err(w) => return p.continue_page(&id, kind, None, Some(&wait_page_words(w)), StatusCode::TOO_MANY_REQUESTS),
     };
-    let wrong = |p: &SignInPage| p.continue_page(&id, kind, None, Some(WRONG), StatusCode::UNAUTHORIZED);
+    let words = if kind == CodeKind::VerifyEmail { WRONG_OR_EXPIRED } else { WRONG };
+    let wrong = |p: &SignInPage| p.continue_page(&id, kind, None, Some(words), StatusCode::UNAUTHORIZED);
     let Some(c) = clean_code(&f.code) else { return wrong(&p) };
     let res = p.flow_backend(&id).continue_with_code(&ticket, &c, &r.info).await;
     p.settle(reserved, &res);
@@ -433,6 +438,37 @@ async fn continue_code(State(p): State<Arc<SignInPage>>, headers: HeaderMap, pee
         }
     }
     p.answer(&id, res, wrong).await
+}
+
+/// IDENTITY-45: `POST /login/continue/resend` — another code for the email
+/// a step waits to verify, throttled as code sends are (per address and
+/// client).
+async fn resend_step(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<CsrfForm>) -> Response {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
+    let found = p.with_flow(&id, |fl| match &fl.step {
+        Step::Code { ticket, kind: CodeKind::VerifyEmail, sent_to, .. } => Some((ticket.clone(), sent_to.clone())),
+        _ => None,
+    });
+    let Some(Some((ticket, sent_to))) = found else { return p.restart(&id, "/", STALE, StatusCode::BAD_REQUEST) };
+    let key = sent_to.unwrap_or_else(|| format!("flow:{}", SignInPage::key(&id)));
+    if let Verdict::Wait(w) = p.throttles.send(&key, r.info.ip) {
+        return p.continue_page(&id, CodeKind::VerifyEmail, None, Some(&SignInPage::wait_words(w)), StatusCode::TOO_MANY_REQUESTS);
+    }
+    let backend = p.flow_backend(&id);
+    match backend.resend_code(&ticket, &r.info).await {
+        Ok(()) => {
+            tracing::info!(backend = backend.name(), "another email-verification code was sent");
+            p.continue_page(&id, CodeKind::VerifyEmail, None, Some("We sent another code. Use the newest one."), StatusCode::OK)
+        }
+        Err(IdentityError::RateLimited { .. }) => p.continue_page(&id, CodeKind::VerifyEmail, None, Some(&SignInPage::wait_words(60)), StatusCode::TOO_MANY_REQUESTS),
+        Err(e) => {
+            tracing::warn!(backend = backend.name(), refusal = e.kind(), "no other email-verification code was sent");
+            p.continue_page(&id, CodeKind::VerifyEmail, None, Some("Another code could not be sent. Use the one you have, or start again."), StatusCode::OK)
+        }
+    }
 }
 
 /// `POST /login/choose`: the organization picked.

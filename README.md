@@ -4295,6 +4295,26 @@ and stay the default until `--identity` is set.
 | `--trusted-proxy <cidr>\|none` | the edge whose `X-Forwarded-For` is believed for the client's IP (repeatable) — by the login throttles and the WebSocket's per-IP and anonymous quotas (TRANSPORT-7), or `none` when people connect directly; with `--identity` off loopback one is required (AUTH-24) — behind the infra's Caddy, the edge's address on the `edge` Docker network |
 | `--return-origin <origin>` | another origin a sign-in may return to (repeatable) |
 
+**The direct buttons with the key** (IDENTITY-45). WorkOS answers a direct
+social sign-in with a pending step when it needs one — always
+`email_verification_required` for a user whose address it has not verified
+(email verification is always on), and Radar's extra code, an organization
+to pick or a second factor — and every grant that completes such a step
+needs the client secret. So when menger holds the environment's API key
+(`--workos-api-key-file <file>`, `MENGER_WORKOS_API_KEY_FILE`; or the key in
+`MENGER_WORKOS_API_KEY`), a `workos=` provider's social `--login-button`s
+(`GitHub=workos:GitHubOAuth`, …) are drawn and completed by the page above
+over the WorkOS backend: the same `provider=…` round trip with PKCE, the code
+traded with the secret beside the verifier, and each pending step on its own
+page — *Verify your email* ("We sent a code to <address>"; *Send another
+code*; a wrong or expired code said so), Radar's code, *Choose an
+organization*, two-step verification. The pending token stays in the
+sign-in's server-side flow, never in a URL, a cookie or a log. No email
+field and no SSO by domain come with it; `--login-email workos:authkit`
+stays AuthKit's. Without a key nothing changes: the buttons are the PKCE
+path. On the box the key is a secret file (`/run/secrets/workos-api-key`,
+deploy/README.md "The WorkOS key on the box").
+
 The WorkOS environment lists `<public-url>/login/callback` as a redirect URI.
 plexus-login's README ("Our own sign-in page") has the safety design, the
 capability model and how a backend is swapped.

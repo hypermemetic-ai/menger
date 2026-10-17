@@ -183,7 +183,9 @@ enum Step {
     /// (AUTH-25 N4: a code is guessed only in the flow that asked for it,
     /// at most [`Limits::code_tries_per_flow`] times).
     CodeSent { email: String, wrong: u32 },
-    Code { ticket: Ticket, kind: CodeKind, subject: Option<String> },
+    /// `sent_to`: the address an emailed code went to, when the backend
+    /// said (IDENTITY-45: the verify page names it).
+    Code { ticket: Ticket, kind: CodeKind, subject: Option<String>, sent_to: Option<String> },
     Choose { ticket: Ticket, choices: Vec<Choice> },
     /// A flow id a flow was started from: it starts no other (one page's
     /// token, one flow — AUTH-25's note on the social form). It names the
@@ -666,14 +668,35 @@ impl SignInPage {
     /// The page for a code a [`Step::Code`] waits for.
     fn continue_page(&self, flow_id: &str, kind: CodeKind, enrolment: Option<&TotpEnrolment>, error: Option<&str>, status: StatusCode) -> Response {
         let form = self.code_form(flow_id, "/login/continue", if kind == CodeKind::Totp || kind == CodeKind::EnrollAtSignIn { "Code from your authenticator app" } else { "Code" });
+        let verify_sub;
         let (title, sub) = match kind {
             CodeKind::Totp => ("Two-step verification", "Enter the code from your authenticator app."),
             CodeKind::EnrollAtSignIn => ("Set up two-step verification", "Your organization requires it. Add this key to an authenticator app, then enter its code."),
-            CodeKind::VerifyEmail => ("Verify your email", "We emailed you a code to confirm the address is yours."),
+            // IDENTITY-45: the address the code went to, when the backend said.
+            CodeKind::VerifyEmail => {
+                let sent_to = self.with_flow(flow_id, |f| match &f.step {
+                    Step::Code { sent_to, .. } => sent_to.clone(),
+                    _ => None,
+                });
+                verify_sub = match sent_to.flatten() {
+                    Some(e) => format!("We sent a code to {e}. Enter it to confirm the address is yours."),
+                    None => "We emailed you a code to confirm the address is yours.".to_string(),
+                };
+                ("Verify your email", verify_sub.as_str())
+            }
             CodeKind::ExtraCheck => ("Check your email", "To keep your account safe, we emailed you a code to confirm this sign-in."),
         };
         let main = match enrolment {
             Some(e) => format!("{}\n    {form}", Self::qr_block(e)),
+            // IDENTITY-45: another verification code, and a way back.
+            None if kind == CodeKind::VerifyEmail => {
+                let csrf = self.csrf(flow_id);
+                format!(
+                    r#"{form}
+    <form method="post" action="/login/continue/resend"><input type="hidden" name="csrf" value="{csrf}"><button class="link" type="submit" id="resend">Send another code</button></form>
+    <p class="note"><a href="/login">Start again</a></p>"#
+                )
+            }
             None => form,
         };
         self.step_page(title, sub, error, main, status)
@@ -772,7 +795,7 @@ impl SignInPage {
     fn after(&self, flow_id: &str, err: IdentityError) -> Response {
         let next = self.next_of(flow_id);
         let set_code = |ticket: Ticket, kind: CodeKind, subject: Option<String>| {
-            self.with_flow(flow_id, |f| f.step = Step::Code { ticket, kind, subject });
+            self.with_flow(flow_id, |f| f.step = Step::Code { ticket, kind, subject, sent_to: None });
         };
         match err {
             IdentityError::MfaRequired { ticket, subject } => {
@@ -786,8 +809,9 @@ impl SignInPage {
                 set_code(ticket, CodeKind::EnrollAtSignIn, subject);
                 self.continue_page(flow_id, CodeKind::EnrollAtSignIn, Some(enrolment.as_ref()), None, StatusCode::OK)
             }
-            IdentityError::EmailUnverified { ticket } => {
-                set_code(ticket, CodeKind::VerifyEmail, None);
+            IdentityError::EmailUnverified { ticket, email } => {
+                let sent_to = email.as_deref().map(normalize).filter(|e| email_domain(e).is_some());
+                self.with_flow(flow_id, |f| f.step = Step::Code { ticket, kind: CodeKind::VerifyEmail, subject: None, sent_to });
                 self.continue_page(flow_id, CodeKind::VerifyEmail, None, None, StatusCode::OK)
             }
             IdentityError::ExtraCheck { ticket } => {

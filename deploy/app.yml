@@ -33,6 +33,20 @@ environments:
 # `sign-in`, recommended) needs none.
 secret_env_file: secret.env
 
+# IDENTITY-45: secret files the box holds, placed by infra's secret.yml from a
+# pipe (`deploy/pipeline remote-secret test|prod`), never from here. infra
+# mounts /opt/apps/<project>/secrets read-only at `mount` (0500, owned by
+# `owner`, the image's uid) and, for each file the box holds, sets `env` to
+# its path inside. The WorkOS key makes the GitHub button complete through
+# WorkOS's API on menger's own page (email verification, Radar); a box
+# without it runs the PKCE path, unchanged.
+secrets:
+  mount: /run/secrets
+  owner: 10001
+  files:
+    - name: workos-api-key
+      env: MENGER_WORKOS_API_KEY_FILE
+
 # Inside the container (published on no host port; the edge reaches it as
 # menger-<env> on its `edge` network). The image sets MENGER_BIND=0.0.0.0,
 # these ports, MENGER_NO_REST=1 and MENGER_DB_PATH=/data/tickets.db.
