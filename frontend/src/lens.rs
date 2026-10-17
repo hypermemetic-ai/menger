@@ -1100,6 +1100,12 @@ impl Lens {
         self.surface.get_untracked()
     }
 
+    /// FILTER-44: whether the viewport is the phone's (the panel is the
+    /// phone bar's filter sheet's). Tracked.
+    pub(crate) fn phone(self) -> bool {
+        self.phone.get()
+    }
+
     /// FILTER-40: the level whose panel is open — one at a time. Tracked.
     pub(crate) fn open_level(self) -> Option<Level> {
         Level::ALL.into_iter().find(|l| self.pop(*l).open_tracked())

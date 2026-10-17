@@ -498,18 +498,6 @@ pub(crate) fn FilterScrim() -> impl IntoView {
     }
 }
 
-/// The filter's sheet's foot: clear, and done.
-#[component]
-pub(crate) fn FilterFoot() -> impl IntoView {
-    let lens = lens::use_lens();
-    view! {
-        <span class="pfilter-foot">
-            <button type="button" class="pbtn" disabled=move || !lens.differs(Level::Global) on:click=move |_| lens.reset(Level::Global)>"clear"</button>
-            <button type="button" class="pbtn fill" on:click=move |_| open(None)>"done"</button>
-        </span>
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
