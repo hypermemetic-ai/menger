@@ -49,6 +49,8 @@ deploy/pipeline landing        # DEPLOY-17: main's landing/ → gate → menger.
                                # edge applied, the live page verified, recorded as env `edge`)
 deploy/pipeline landing --check  # the gate and infra's dry run, nothing written
 deploy/pipeline media          # landing/media regenerated from the release prod runs; then commit
+deploy/pipeline image          # RUN-10: the release test last passed → menger:<release> in local Docker
+                               # (IMAGE_STORE=ghcr pushes :<release> + :latest); prints image= / release=
 ```
 
 - **Every deploy test, sync, promote and rollback records itself in menger**

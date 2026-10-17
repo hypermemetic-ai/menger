@@ -67,6 +67,7 @@ deploy/pipeline backfill             # deployments.log → menger's deployments 
 deploy/pipeline landing              # main's landing/ → gate → the edge (menger.sh); recorded as env `edge`
 deploy/pipeline landing --check      # the gate and infra's dry run, nothing written
 deploy/pipeline media                # landing/media regenerated from the release prod runs
+deploy/pipeline image [RELEASE]      # RUN-10: a TESTED release as an image (menger:<release> here; IMAGE_STORE=ghcr pushes)
 ```
 
 1. **Build** (`build [REV]`, default `main`). A commit, never a working
@@ -218,6 +219,71 @@ has not seen (`https://menger.sh/?v=3`); X has no validator any more, and its
 composer often draws no card until the post is published. The edge logs
 every request to menger.sh (Caddy `log`, the edge container's output), so
 whether a crawler came, and what it was answered, can be read there.
+
+## The image (RUN-10)
+
+menger as a container image, made from a release test passed — the very
+bytes `deploy test` ran, never a build from a checkout. `deploy/pipeline
+image [RELEASE]` stages the release's `bin/menger`, `bin/run-menger` (its
+own launcher), `app/` and `RELEASE` beside `deploy/image/Dockerfile` and
+builds it; RUN-25's `build` stage is this command.
+
+```sh
+deploy/pipeline image                      # the release test last passed → menger:<release> in this machine's Docker
+deploy/pipeline image 20261017T054109Z-9501b9f   # a named one (it must be TESTED)
+IMAGE_STORE=ghcr deploy/pipeline image     # ghcr.io/hypermemetic-ai/menger:<release> and :latest, pushed
+```
+
+- **Which release.** Without one named, the release `deployments.log` last
+  shows test passing (a `deploy` or `sync` of test that ended `ok`) whose
+  directory is still here and marked `TESTED`; with no such line, the newest
+  `TESTED` release. A named release that has not passed test is refused, and
+  so is one whose menger predates `--bind` (RUN-8): bound to loopback inside
+  a container, it could not be reached.
+- **Where it is kept** is `IMAGE_STORE`: `local` (the default) tags
+  `menger:<release>` (`MENGER_IMAGE_LOCAL` names the repository); `ghcr`
+  tags `ghcr.io/hypermemetic-ai/menger:<release>` and `:latest`
+  (`MENGER_IMAGE_GHCR`) and pushes both, Docker signed in with `gh auth
+  token` on stdin (this machine's token has `write:packages`; without `gh`,
+  Docker's own stored login). A new GHCR package is private: make it public
+  once in GitHub's UI, or give the box a `read:packages` token
+  (SCAFFOLD-19's rule).
+- **What it answers**: `image=REF` and `release=NAME` on stdout, and the
+  same lines appended to `$HF_OUTPUTS` when it is set (hyperforge's stage
+  outputs). Each run is a line in `deployments.log` (`image  local|ghcr
+  RELEASE  ok REF`, or `build failed` / `push failed`) — not a deployment:
+  `backfill` and `deploy/record` pass it by.
+
+**Inside the image**: `debian:bookworm-slim`, user `menger` (uid 10001),
+`tini` as PID 1 (so `docker stop` is a SIGTERM menger heeds), menger bound
+to `0.0.0.0` (`MENGER_BIND`), the WebSocket on 8080 and the shell on 8081
+(`MENGER_WS_PORT`, `MENGER_SHELL_PORT`), the REST bridge off
+(`MENGER_NO_REST=1`: it carries no identity), the database at
+`/data/tickets.db` in the `/data` volume, `PLEXUS_NO_REGISTRY=1`. All of
+menger's settings are its environment (`MENGER_*`, `--help` names each).
+Binding `0.0.0.0` adds no name (ACCESS-25), so every name the container is
+reached by is an `--allowed-host` (`MENGER_ALLOWED_HOSTS`) or
+`MENGER_PUBLIC_URL`'s; the page dials the WebSocket on the shell's host at
+`MENGER_WS_PORT`, so publish each port on the same number inside and out
+until RUN-9 puts the socket behind the shell's origin:
+
+```sh
+docker volume create menger-scratch
+docker run -d --name menger-try -v menger-scratch:/data \
+  -e MENGER_WS_PORT=4475 -e MENGER_SHELL_PORT=4476 \
+  -p 127.0.0.1:4475:4475 -p 127.0.0.1:4476:4476 menger:<release>
+synapse -P 4475 menger tickets health           # Host 127.0.0.1:4475 — its own name
+curl -s http://127.0.0.1:4476/ | grep menger-ws-port
+docker rm -f menger-try && docker volume rm menger-scratch
+```
+
+**Diagrams are not in it** (decided in RUN-10). `menger-diagrams` and its
+Node program are a checker for agents and the smoke: menger never calls it,
+and it runs mermaid in a Node `vm`, which is no sandbox, with jsdom (~300 MB
+resident). A box serving people does not need it; if one ever does, it is a
+second image from the same release (`bin/menger-diagrams`,
+`bin/run-diagrams`, `app/vendor/mermaid-*.min.js`, `diagrams-node/`, on a
+Node base), never a second process in this one.
 
 ## Hardening (ACCESS-27)
 
