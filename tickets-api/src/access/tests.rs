@@ -73,7 +73,7 @@ async fn store() -> Arc<Store> {
 }
 
 fn login(admins: Vec<String>) -> Access {
-    let a = Access::with_login(Arc::new(Live::default()), true, admins);
+    let a = Access::with_login(Arc::new(Live::default()), admins);
     a.book().seed(declared());
     a
 }
@@ -82,9 +82,12 @@ fn reach_of(a: &Access, c: &AuthContext, grant: &str) -> GateReach {
     a.gate().check(Some(c), &GateGrant::new(grant), None).unwrap_or_else(|_| GateReach::everywhere())
 }
 
+/// ACCESS-24: there is no open mode — the test's operator is someone, an
+/// `--admin`, and reaches everything as admin on `*`.
 #[test]
-fn without_login_everyone_reaches_everything() {
-    let c = Access::open().verify_call(None, &GateReach::everywhere()).unwrap();
+fn the_operator_reaches_everything_and_is_someone() {
+    let c = Access::for_tests().test_admin();
+    assert_eq!(c.principal().as_str(), TEST_ADMIN);
     assert!(c.administers("*"));
     assert_eq!(c.scoped(Some("status Ready")).unwrap().map(|f| f.format()).as_deref(), Some("status Ready"));
 }
@@ -100,7 +103,7 @@ fn an_anonymous_call_is_refused() {
 fn a_session_signed_out_or_expired_is_refused() {
     let live = Arc::new(Live::default());
     live.0.lock().unwrap().insert("k1".into());
-    let a = Access::with_login(live.clone(), true, vec![]);
+    let a = Access::with_login(live.clone(), vec![]);
     let ok = ctx(json!({ SESSION_KEY: "k1", "expires_at": now() + 60, "name": "alice" }));
     assert_eq!(a.verify_call(Some(&ok), &GateReach::everywhere()).unwrap().name(), Some("alice"));
     live.0.lock().unwrap().clear();
@@ -597,13 +600,13 @@ async fn verify_needs_a_principal_and_never_falls_back_to_the_user_id() {
     assert!(a.waiting().is_empty(), "no one to wait");
     assert_eq!(a.verify_now(&AuthContext::anonymous()).unwrap_err(), Refusal::SignIn);
     let u = a.verify_now(&ctx(json!({ "name": "alice" }))).unwrap();
-    assert_eq!((u.principal().map(|p| p.as_str()), u.name()), (Some(ALICE), Some("alice")));
-    // Login off: anyone, everything — no principal at all.
+    assert_eq!((u.principal().as_str(), u.name()), (ALICE, Some("alice")));
+    // ACCESS-24: an operator's --admin, everything — and still someone.
     let s = store().await;
-    let anyone = Access::open().verify_now(&AuthContext::anonymous()).unwrap();
-    assert!(anyone.principal().is_none());
-    assert!(anyone.permit::<Admin>(&t("OUGHT-2"), &s).is_ok());
-    assert!(anyone.admin_of(&Scope::Everywhere, &s).is_ok());
+    let op = Access::for_tests().test_admin();
+    assert_eq!(op.principal().as_str(), TEST_ADMIN);
+    assert!(op.permit::<Admin>(&t("OUGHT-2"), &s).is_ok());
+    assert!(op.admin_of(&Scope::Everywhere, &s).is_ok());
 }
 
 /// ACCESS-13: the frame's resolver — `verify_now` for the call being
@@ -621,11 +624,10 @@ async fn the_frames_resolver_answers_typed_and_keeps_the_calls_reach() {
     let bare = AuthContext::new("user-1".into(), "s".into(), vec![], json!({}));
     assert!(matches!(a.verify(&bare).await, Err(PlexusError::Unauthenticated(_))), "no principal is no sign-in");
     let u = a.verify(&ctx(json!({ "name": "alice" }))).await.expect("alice signs in");
-    assert_eq!(u.principal().map(|p| p.as_str()), Some(ALICE));
+    assert_eq!(u.principal().as_str(), ALICE);
     assert!(u.context().is_some() && u.gate_reach().is_some(), "the identity and the call's reach, kept");
-    // Login off: anyone, whatever identity the transport handed it.
-    let anyone = Access::open().verify(&AuthContext::anonymous()).await.expect("login off admits anyone");
-    assert!(anyone.principal().is_none() && anyone.gate_reach().is_none());
+    // ACCESS-24: no open mode — whatever rule, anonymous is refused.
+    assert!(matches!(Access::for_tests().verify(&AuthContext::anonymous()).await, Err(PlexusError::Unauthenticated(_))));
     // Every other refusal is `forbidden`.
     let e: PlexusError = Refusal::Lacks("no".into()).into();
     assert!(matches!(e, PlexusError::Forbidden { .. }), "{e:?}");
@@ -755,7 +757,7 @@ async fn a_followed_caller_is_verified_again_only_when_the_grants_move() {
 async fn a_followed_caller_signed_out_or_expired_ends_typed() {
     let live = Arc::new(Live::default());
     live.0.lock().unwrap().insert("k1".into());
-    let a = Access::with_login(live.clone(), true, vec![]);
+    let a = Access::with_login(live.clone(), vec![]);
     a.book().seed(declared());
     let s = store().await;
     s.grant(SYS, grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
@@ -771,11 +773,8 @@ async fn a_followed_caller_signed_out_or_expired_ends_typed() {
     let mut f = Following::open(&a, &s, Some(&soon), &reach_of(&a, &soon, "tickets.list")).unwrap();
     assert!(wakes(&mut f, 3000).await, "the expiry wakes it");
     assert_eq!(f.again().unwrap_err().reason, crate::types::WatchEnd::Expired);
-    // Login off: never woken, never refused.
-    let open = Access::open();
-    let mut f = Following::open(&open, &s, None, &GateReach::everywhere()).unwrap();
-    assert!(!wakes(&mut f, 50).await);
-    assert!(matches!(f.again(), Ok(Followed::Same)));
+    // ACCESS-24: no identity is no follower — there is no open mode.
+    assert!(Following::open(&a, &s, None, &GateReach::everywhere()).is_err());
 }
 
 /// ACCESS-21: a grant on one ticket, and on a ticket and its subtree — kept

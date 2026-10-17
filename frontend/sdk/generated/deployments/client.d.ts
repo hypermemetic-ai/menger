@@ -193,9 +193,3 @@ export declare const requires: {
         readonly target: null;
     };
 };
-/** The deployments activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export declare const defaultRoles: {
-    readonly deployer: readonly ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch", "deployments.record", "deployments.request", "deployments.cancel_request"];
-    readonly editor: readonly ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch"];
-    readonly viewer: readonly ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch"];
-};

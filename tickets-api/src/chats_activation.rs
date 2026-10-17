@@ -42,9 +42,12 @@ pub struct ChatsActivation {
 
 #[cfg(feature = "server")]
 impl ChatsActivation {
-    /// No login: every call admitted, as always.
+    /// ACCESS-24: a test's, behind [`Access::for_tests`].
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(store: Arc<Store>) -> Self {
-        Self::with_access(store, Access::open())
+        let access = Access::for_tests();
+        access.attach(Arc::clone(&store));
+        Self::with_access(store, access)
     }
 
     /// Behind [`Access`].
@@ -264,8 +267,9 @@ impl ChatsActivation {
     /// CHAT-4's picker: `reads` says whether the principal can read the
     /// ticket now (`open` and `add` refuse one that cannot). The caller is
     /// not among them. A ticket the caller cannot read is `refused` as one
-    /// that is none. With login off, nobody holds a grant: the list is the
-    /// chats' participants.
+    /// that is none. A participant who holds no grant there now (one kept
+    /// before ACCESS-24, when login could be off) is listed all the same, as
+    /// one of the chats' participants.
     #[plexus_macros::method(group = "read")]
     pub async fn candidates(
         &self,

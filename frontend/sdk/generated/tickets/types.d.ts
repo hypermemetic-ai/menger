@@ -120,7 +120,8 @@ export interface Comment {
     /** When it was added, unix seconds. */
     at: number;
     /** Who left it: its name (ACCESS-19: signed by the caller — its
-  principal when it has no name; `owner` with login off). */
+  principal when it has no name; `owner` on one kept before ACCESS-24,
+  when login could be off). */
     author: string;
     /** What it says (markdown, as written). */
     body: string;
@@ -457,7 +458,7 @@ export type QueueAction = "queued" | "raised" | "requeued" | "snoozed" | "unqueu
 export interface QueueEntry {
     /** When it was last queued (a requeue moves it; a snooze does not). */
     askedUnix: number;
-    /** Who queued it last: a principal (`anonymous` with login off). */
+    /** Who queued it last: a principal (`anonymous` on one kept before ACCESS-24, when login could be off). */
     by: string;
     /** The input on the ticket whose answer is what is asked — required at
   `blocking`; closing it takes the ticket out of the queue. */
@@ -504,7 +505,8 @@ export type Reason = string;
 export type Reply = never;
 /** One revision, as `revisions list` answers it: the ticket and its number
 (`rev`, from 1), when, who (`actor`: a principal, `system`, `anonymous`
-with login off; `name`, the caller's display name), from where
+on one kept before ACCESS-24, when login could be off; `name`, the
+caller's display name), from where
 (`source`), why (`message`), what caused it (`cause`: the ticket whose
 change carried this one — a cancel's cascade, the first ticket of a
 write that revised several), the fields it changed against the revision
@@ -1594,7 +1596,7 @@ as the store keeps it, append-only: `id` (the log's own, from 1, in the
 order written), the `ticket`, the `field` it moved, `from` → `to` (the
 wire spellings: `In Review`, `build`; `from` is `null` at a ticket's
 birth), when (`at_unix`), who (`actor`: the caller's principal, `system`
-for the store's own, `anonymous` with login off; `name` the caller's
+for the store's own, `anonymous` on one kept before ACCESS-24, when login could be off; `name` the caller's
 display name, when it has one), where it came from (`source`), why
 (`message`, always given for `system`) and what caused it (`cause`: the
 transition a cascade carried down, or undid; `null` for a call's own).

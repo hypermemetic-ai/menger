@@ -213,8 +213,8 @@ mod tests {
     /// key, and a call proving no one (login off), `api`.
     #[test]
     fn the_source_is_the_server_s_from_the_caller() {
-        let anyone = Access::open().verify_now(&AuthContext::anonymous()).expect("login off admits anyone");
-        assert_eq!(source_of(&anyone), AnswerSource::Api, "login off: no one proved");
+        let op = Access::for_tests().test_admin();
+        assert_eq!(source_of(&op), AnswerSource::Api, "an operator proved by no provider");
         let person = signed_in(json!({ "principal": ALICE, "provider": "idp", "name": "alice" }));
         assert_eq!(source_of(&person), AnswerSource::App, "a person through a provider");
         let agent = signed_in(json!({ "principal": ALICE, "provider": "key", "agent": "builder" }));

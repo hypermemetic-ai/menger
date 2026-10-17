@@ -18,8 +18,10 @@
 //! mirrored menger's declarations by hand. The mirror is gone; the test
 //! lives where the declarations do.
 
+
+/// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
+mod support;
 use futures::StreamExt;
-use menger::build_rpc;
 use menger_tickets_api::vocab::{CommentId, TicketRef};
 use menger_tickets_api::{Anchor, Comment, CommentState, CommentsClient, CommentsEvent, Group, Kind, Status, Ticket, TicketsClient, TicketsEvent};
 use plexus_client::{ClientEvent, MethodRef, StreamItem, Transport, WsTransport};
@@ -56,7 +58,9 @@ async fn start_server() -> u16 {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
     let db_path = dir.path().join("tickets.db");
     let port = free_port().await;
-    let hub = build_rpc(&db_path).await.expect("open database");
+    let login = support::Login::new();
+    let hub = support::hub(&db_path, &login).await;
+    let gate = login.gate(port);
     let conv = |arc: Arc<DynamicHub>| {
         menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"))
     };
@@ -64,6 +68,9 @@ async fn start_server() -> u16 {
         let _keep = dir;
         TransportServer::builder(hub, conv)
             .with_websocket(port)
+            .with_session_validator(gate)
+            .anonymous_view()
+            .credential_cookies(["access_token"])
             .build()
             .await
             .expect("build server")
@@ -71,7 +78,8 @@ async fn start_server() -> u16 {
             .await
             .expect("serve");
     });
-    port
+    // ACCESS-24: WsTransport sends no header, so a proxy signs it in.
+    support::signing_proxy(port).await
 }
 
 async fn connect(port: u16) -> WsTransport {
@@ -812,11 +820,11 @@ async fn the_comments_through_the_generated_client() {
         Comment {
             id: CommentId::new(1),
             state: CommentState::Open,
-            author: p("owner"),
+            author: p("test"),
             at: added.at,
             anchor: Anchor { version: Some(version), ..anchor.clone() },
             body: p("show the parent's title too"),
-            principal: None,
+            principal: Some(support::admin()),
             intent: menger_tickets_api::CommentIntent::Comment,
         }
     );

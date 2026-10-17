@@ -41,9 +41,12 @@ pub struct CommentsActivation {
 
 #[cfg(feature = "server")]
 impl CommentsActivation {
-    /// No login: every call admitted, as always.
+    /// ACCESS-24: a test's, behind [`Access::for_tests`].
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(store: Arc<Store>) -> Self {
-        Self::with_access(store, Access::open())
+        let access = Access::for_tests();
+        access.attach(Arc::clone(&store));
+        Self::with_access(store, access)
     }
 
     /// IDENTITY-19: behind [`Access`].
@@ -76,7 +79,8 @@ impl CommentsActivation {
     /// and is kept with that ticket's `updated_unix` as `version` (set by
     /// the server). ACCESS-19: the comment is signed by the caller — its
     /// principal kept, its name the author (the principal when it has no
-    /// name; `owner` with login off); no call names its author. Yields
+    /// name; `owner` on one kept before ACCESS-24, when login could be off);
+    /// no call names its author. Yields
     /// exactly one event: `comment` — the comment as kept: its id, state
     /// `open`, the time (`at`, unix seconds), the author, its anchor and
     /// body — or an in-band `error` naming the problem (an empty body, a

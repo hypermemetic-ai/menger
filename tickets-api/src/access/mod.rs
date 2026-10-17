@@ -36,8 +36,9 @@
 //! scope, is minted; [`Hidden`] when the ticket is not there or not its.
 //! The store mints the one [`System`], for what acts for no user.
 //!
-//! **Without login** ([`Access::open`]) there is no gate and every caller
-//! reaches everything, as menger always did.
+//! ACCESS-24: **there is no open mode.** Every [`Access`] carries the gate
+//! and a session table; a caller that proves no one reaches the anonymous
+//! view and nothing else, and no [`VerifiedUser`] stands for "anyone".
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -73,6 +74,12 @@ pub use plexus_core::plexus::Reach as GateReach;
 
 /// The grantor named on `--admin` grants.
 pub use crate::vocab::OPERATOR;
+
+/// ACCESS-24: the operator a test acts as ([`Access::for_tests`],
+/// [`Access::test_admin`]) — a well-formed key principal whose key no one
+/// holds: a test verifies it in process, never over a socket.
+#[cfg(any(test, feature = "test-support"))]
+pub const TEST_ADMIN: &str = "key:7e57000000000000000000000000000000000000000000000000000000000001";
 
 /// IDENTITY-35: `granted_by` of the grants the dev sign-in makes; AUTH-7:
 /// of a grant made through `auth.grant`, which does not say who asked
@@ -380,9 +387,7 @@ impl Resolve for Book {
 /// The rule's state. Cheap to clone: one per activation, all sharing it.
 #[derive(Clone)]
 pub struct Access {
-    login: bool,
-    require_login: bool,
-    sessions: Option<Arc<dyn SessionCheck>>,
+    sessions: Arc<dyn SessionCheck>,
     minter: Option<Arc<dyn SessionMint>>,
     book: Arc<Book>,
     gate: Gate,
@@ -391,37 +396,23 @@ pub struct Access {
     ended: Arc<tokio::sync::watch::Sender<u64>>,
 }
 
-impl Default for Access {
-    fn default() -> Self {
-        Self::open()
-    }
-}
-
 impl Access {
-    fn build(login: bool, require_login: bool, sessions: Option<Arc<dyn SessionCheck>>, admins: Vec<String>) -> Self {
+    /// The rule: the hub carries the gate over this rule's [`Book`],
+    /// sessions are checked on every call, and `admins` hold admin on `*`
+    /// from the operator; an anonymous caller reaches only the door.
+    /// ACCESS-24: the only one there is — login is always on.
+    pub fn with_login(sessions: Arc<dyn SessionCheck>, admins: Vec<String>) -> Self {
         let book = Arc::new(Book::new(admins));
         let gate = Gate::new(book.clone(), book.clone(), book.clone());
-        Self { login, require_login, sessions, minter: None, book, gate, ended: Arc::new(tokio::sync::watch::channel(0).0) }
+        Self { sessions, minter: None, book, gate, ended: Arc::new(tokio::sync::watch::channel(0).0) }
     }
 
-    /// No login: every call is admitted and reaches everything; the hub
-    /// carries no gate.
-    pub fn open() -> Self {
-        Self::build(false, false, None, Vec::new())
-    }
-
-    /// Login is on: the hub carries the gate over this rule's [`Book`],
-    /// sessions are checked on every call, and `admins` hold admin on `*`
-    /// from the operator. `require_login` is kept for what still reads it
-    /// (the shell's redirects); an anonymous caller reaches only the door.
-    pub fn with_login(sessions: Arc<dyn SessionCheck>, require_login: bool, admins: Vec<String>) -> Self {
-        Self::build(true, require_login, Some(sessions), admins)
-    }
-
-    /// ACCESS-10: login on, for a test in another module (compiled out of
-    /// the server): no session to end, no operator, and the roles as the
-    /// activations declare a part of them — `viewer` the reads
-    /// (`tickets.get`, `tickets.list`), `editor` those and `tickets.set_status`.
+    /// ACCESS-10: for a test in another module (compiled out of the
+    /// server): no session to end, and the roles as the activations declare
+    /// a part of them — `viewer` the reads (`tickets.get`, `tickets.list`),
+    /// `editor` those and `tickets.set_status`. ACCESS-24: its one operator
+    /// is [`TEST_ADMIN`] (admin on `*`; [`Access::test_admin`] verifies it),
+    /// what a test that once ran with login off acts as.
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_tests() -> Self {
         struct Never;
@@ -433,12 +424,20 @@ impl Access {
                 "menger_session"
             }
         }
-        let a = Self::with_login(Arc::new(Never), false, Vec::new());
+        let a = Self::with_login(Arc::new(Never), vec![TEST_ADMIN.to_string()]);
         let viewer = vec!["tickets.get".to_string(), "tickets.list".to_string()];
         let mut editor = viewer.clone();
         editor.push("tickets.set_status".into());
         a.book().seed(BTreeMap::from([("viewer".to_string(), viewer), ("editor".to_string(), editor)]));
         a
+    }
+
+    /// ACCESS-24: [`TEST_ADMIN`], verified by this rule — an operator's
+    /// `--admin`, admin on `*` (a test's; any [`Access`] naming it).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_admin(&self) -> VerifiedUser {
+        let ctx = AuthContext::new(TEST_ADMIN.into(), "test".into(), vec![], serde_json::json!({ "principal": TEST_ADMIN, AGENT_KEY: "test" }));
+        self.verify_now(&ctx).expect("the test admin is an --admin of this rule")
     }
 
     /// IDENTITY-42: `session.login` / `auth.login {session}` and the logouts
@@ -449,9 +448,9 @@ impl Access {
     }
 
     /// SCAFFOLD-9: the metadata key a session-backed identity carries — the
-    /// session table's ([`SessionCheck::key`]); `None` with login off.
-    pub fn session_key(&self) -> Option<&str> {
-        self.sessions.as_ref().map(|s| s.key())
+    /// session table's ([`SessionCheck::key`]).
+    pub fn session_key(&self) -> &str {
+        self.sessions.key()
     }
 
     /// The store whose members and roles decide (the builder attaches it).
@@ -474,23 +473,10 @@ impl Access {
         let _ = self.book.store.set(store);
     }
 
-    /// Whether login is on.
-    pub fn login(&self) -> bool {
-        self.login
-    }
-
-    /// Whether `--require-login` was given.
-    pub fn require_login(&self) -> bool {
-        self.require_login
-    }
-
     /// CHAT-3: whether `principal` — named by a caller, not the caller —
     /// can read the ticket `key` by its grants (a viewer's role, or more,
-    /// on a scope covering it). Login off: anyone reads everything.
+    /// on a scope covering it).
     pub fn reads_ticket(&self, principal: &str, key: &str, store: &Store) -> bool {
-        if !self.login {
-            return true;
-        }
         let Some(chain) = store.gate_chain(key) else { return false };
         Reach::of_grants(&self.book, &self.gate, principal).covers::<Viewer>(key, &chain)
     }
@@ -602,7 +588,7 @@ impl Access {
     /// nothing, it waits for an admin ([`Access::waiting`]). ACCESS-9: an
     /// identity naming no principal is no one to wait.
     pub fn notice(&self, ctx: &AuthContext) {
-        if !self.login || !ctx.is_authenticated() {
+        if !ctx.is_authenticated() {
             return;
         }
         let Some(principal) = ctx.principal().map(|p| p.to_string()) else { return };
@@ -623,8 +609,8 @@ impl Access {
                 return Err(Refusal::Expired);
             }
         }
-        if let Some((sessions, key)) = self.sessions.as_ref().and_then(|s| Some((s, ctx.get_metadata_string(s.key())?))) {
-            if !sessions.alive(&key) {
+        if let Some(key) = ctx.get_metadata_string(self.sessions.key()) {
+            if !self.sessions.alive(&key) {
                 return Err(Refusal::SignedOut);
             }
         }
@@ -638,13 +624,11 @@ impl Access {
     /// `user_id` instead), its ceiling readable; its grants resolved —
     /// direct ∪ its teams' ∪ the operator's — at the grants generation of
     /// now. A signed-in user holding nothing joins the waiting list (and
-    /// is still verified: a read then says it holds nothing). Login off:
-    /// anyone, everything. Synchronous: it reads the cache and nothing
-    /// else, so a method verifies before its stream starts.
+    /// is still verified: a read then says it holds nothing). ACCESS-24:
+    /// never anyone — an identity that proves no one is refused.
+    /// Synchronous: it reads the cache and nothing else, so a method
+    /// verifies before its stream starts.
     pub fn verify_now(&self, ctx: &AuthContext) -> Result<VerifiedUser, Refusal> {
-        if !self.login {
-            return Ok(VerifiedUser::anyone());
-        }
         if !ctx.is_authenticated() {
             return Err(Refusal::SignIn);
         }
@@ -666,9 +650,6 @@ impl Access {
     /// gate admitted it for (`reach`), which the user's reads answer under.
     /// Its refusal in words, as an in-band error says it.
     pub fn verify_call(&self, auth: Option<&AuthContext>, reach: &GateReach) -> Result<VerifiedUser, String> {
-        if !self.login {
-            return Ok(VerifiedUser::anyone());
-        }
         let ctx = auth.filter(|c| c.is_authenticated()).ok_or(Refusal::SignIn)?;
         Ok(self.verify_now(ctx)?.for_call(reach.grant().cloned()))
     }
@@ -684,12 +665,7 @@ impl Access {
     /// the gate again as the grants move ([`Following::of`]). Its refusal is
     /// typed on the wire (MACRO-14): a sign-in that does not stand is
     /// `unauthenticated` (-32001), anything else `forbidden` (-32003).
-    /// Login off: anyone, everything — whatever identity the transport
-    /// handed it (menger's own hand the anonymous one: `menger::calls`).
     pub async fn verify(&self, ctx: &AuthContext) -> Result<VerifiedUser, plexus_core::plexus::PlexusError> {
-        if !self.login {
-            return Ok(VerifiedUser::anyone());
-        }
         let reach = plexus_core::plexus::current_reach();
         let user = self.verify_now(ctx).map_err(plexus_core::plexus::PlexusError::from)?;
         Ok(user.for_call(reach.grant().cloned()).following(reach))
@@ -749,8 +725,8 @@ impl Access {
     /// mint one; it acts as the caller's principal, agent, name and
     /// provider.
     pub fn mint(&self, auth: Option<&AuthContext>, ttl_secs: Option<u64>, scope: Option<Vec<String>>) -> Result<Minted, String> {
-        let Some(minter) = self.minter.as_ref().filter(|_| self.login) else {
-            return Err("login is off on this menger: there is no session to log in".into());
+        let Some(minter) = self.minter.as_ref() else {
+            return Err("this menger mints no sessions: there is no session to log in".into());
         };
         let Some(ctx) = auth.filter(|c| c.is_authenticated()) else {
             return Err("sign in first: only a signed-in caller can log in a session".into());
@@ -800,14 +776,14 @@ impl Access {
     /// loopback flow's code): no ceiling, `ttl_secs` long. Its metadata is
     /// the sign-in's, its session key and expiry the new session's own.
     pub fn mint_for(&self, ctx: AuthContext, ttl_secs: u64) -> Result<Minted, String> {
-        let Some(minter) = self.minter.as_ref().filter(|_| self.login) else {
-            return Err("login is off on this menger: there is no session to log in".into());
+        let Some(minter) = self.minter.as_ref() else {
+            return Err("this menger mints no sessions: there is no session to log in".into());
         };
         let principal = ctx.principal().map(|p| p.to_string()).ok_or_else(|| Refusal::NoPrincipal.to_string())?;
         let mut meta = serde_json::Map::new();
         if let Some(obj) = ctx.metadata.as_object() {
             for (k, v) in obj {
-                if Some(k.as_str()) != self.session_key() && k != "expires_at" && k != CEILING_KEY {
+                if k != self.session_key() && k != "expires_at" && k != CEILING_KEY {
                     meta.insert(k.clone(), v.clone());
                 }
             }
@@ -824,10 +800,10 @@ impl Access {
     /// connection is on. A connection a credential opened directly (a key
     /// proof, a provider's token) holds no session to end.
     pub fn logout(&self, auth: Option<&AuthContext>) -> Result<(), String> {
-        let Some(minter) = self.minter.as_ref().filter(|_| self.login) else {
-            return Err("login is off on this menger: there is no session to log out".into());
+        let Some(minter) = self.minter.as_ref() else {
+            return Err("this menger mints no sessions: there is no session to log out".into());
         };
-        match auth.filter(|c| c.is_authenticated()).and_then(|c| c.get_metadata_string(self.session_key()?)) {
+        match auth.filter(|c| c.is_authenticated()).and_then(|c| c.get_metadata_string(self.session_key())) {
             Some(key) => {
                 minter.end_key(&key);
                 // ACCESS-12: the open watches look again.

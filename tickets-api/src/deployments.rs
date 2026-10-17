@@ -399,7 +399,7 @@ pub struct Deployment {
     pub source: DeploySource,
     /// When menger kept it, unix seconds.
     pub recorded_at: i64,
-    /// Who sent it: a principal, `anonymous` with login off.
+    /// Who sent it: a principal, `anonymous` on one kept before ACCESS-24, when login could be off.
     pub recorded_by: String,
     /// DEPLOY-25: the request a CI's record answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]

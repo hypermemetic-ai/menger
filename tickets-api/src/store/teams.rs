@@ -78,10 +78,8 @@ impl OnTeam {
     /// Under the write lock: whether it covers every scope `team` holds.
     fn check(&self, cache: &Cache, team: &TeamName) -> Result<(), StoreError> {
         let Some(admins) = &self.0 else { return Ok(()) };
-        if admins.is_empty() || admins.iter().any(AdminOf::anyone) {
-            return Err(StoreError::Invalid(
-                "a team is changed by an admin, signed in (with login off a change would take effect when login turns on): nothing written".into(),
-            ));
+        if admins.is_empty() {
+            return Err(StoreError::Invalid("a team is changed by an admin: nothing written".into()));
         }
         let held = held_scopes(cache, team);
         match held.iter().find(|s| !admins.iter().any(|a| a.scope() == *s || *a.scope() == Scope::Everywhere)) {

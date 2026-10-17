@@ -19,7 +19,8 @@ page, beginning `#/`), `path` (where on the page), `label` and
 and is kept with that ticket's `updated_unix` as `version` (set by
 the server). ACCESS-19: the comment is signed by the caller — its
 principal kept, its name the author (the principal when it has no
-name; `owner` with login off); no call names its author. Yields
+name; `owner` on one kept before ACCESS-24, when login could be off);
+no call names its author. Yields
 exactly one event: `comment` — the comment as kept: its id, state
 `open`, the time (`at`, unix seconds), the author, its anchor and
 body — or an in-band `error` naming the problem (an empty body, a
@@ -156,10 +157,4 @@ export const requires = {
   "comments.resolve": { grant: "comments.resolve", target: null },
   "comments.schema": { grant: "comments.schema", target: null },
   "comments.watch": { grant: "comments.watch", target: null },
-} as const;
-
-/** The comments activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export const defaultRoles = {
-  "editor": ["comments.add", "comments.list", "comments.watch", "comments.resolve", "comments.reopen"],
-  "viewer": ["comments.add", "comments.list", "comments.watch"],
 } as const;

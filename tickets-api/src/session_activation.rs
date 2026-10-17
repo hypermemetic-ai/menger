@@ -40,30 +40,31 @@ use crate::access::{Access, MengerRequest, VerifiedUser};
 /// The activation. Server-only, like the others; it holds the providers it
 /// offers and the rule its callers are verified by.
 #[cfg(feature = "server")]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SessionActivation {
     offers: Arc<Vec<ProviderOffer>>,
     /// IDENTITY-37 / ACCESS-19: the rule `whoami`, `login` and `logout`'s
-    /// callers are verified by — open (login off) unless given.
+    /// callers are verified by.
     access: Access,
 }
 
 #[cfg(feature = "server")]
 impl SessionActivation {
-    /// A session offering no provider, login off: `whoami` is always
-    /// `anonymous`.
+    /// ACCESS-24: a test's — offering no provider, behind
+    /// [`Access::for_tests`].
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new() -> Self {
-        Self::default()
+        Self::offering(Vec::new(), Access::for_tests())
     }
 
-    /// A session offering these providers.
-    pub fn offering(offers: Vec<ProviderOffer>) -> Self {
-        Self { offers: Arc::new(offers), access: Access::open() }
+    /// A session offering these providers, IDENTITY-37: behind the same
+    /// rule as every other method — a connection whose session was signed
+    /// out, or whose credential expired, proves no one.
+    pub fn offering(offers: Vec<ProviderOffer>, access: Access) -> Self {
+        Self { offers: Arc::new(offers), access }
     }
 
-    /// IDENTITY-37: behind the same rule as every other method: a
-    /// connection whose session was signed out, or whose credential expired,
-    /// proves no one.
+    /// The same session behind another rule.
     pub fn with_access(mut self, access: Access) -> Self {
         self.access = access;
         self
@@ -91,9 +92,6 @@ pub fn identity(proved: Option<&AuthContext>) -> SessionEvent {
 #[cfg(feature = "server")]
 fn minted(access: &Access, user: &VerifiedUser, ttl_secs: Option<u64>, scope: Option<Vec<Ceiling>>) -> SessionEvent {
     let scope = scope.map(|s| s.into_iter().map(String::from).collect());
-    if !access.login() {
-        return SessionEvent::Error { message: "login is off on this menger: there is no session to log in".into() };
-    }
     match access.mint(user.context(), ttl_secs, scope) {
         Ok(m) => SessionEvent::Login { token: m.token, principal: m.principal, agent: m.agent, expires_at: m.expires_at, scope: m.scope },
         Err(message) => SessionEvent::Error { message },
@@ -112,7 +110,8 @@ impl SessionActivation {
     ///
     /// Yields exactly one event: `identity` — `principal` (`idp:<uuid>`,
     /// `oidc:<provider>/<sub>` or `nostr:<hex>`), `name`, `roles`, `tenant`
-    /// and `provider` — or `anonymous` with login off. The identity is
+    /// and `provider` — always someone: menger has no open mode (ACCESS-24),
+    /// and an anonymous connection reaches only `auth.*`. The identity is
     /// settled when the connection opens; reconnect to change it.
     /// ACCESS-19 (ACCESS-3 #14): the caller is verified as every method's
     /// is — a sign-in signed out or expired is refused `unauthenticated`,
@@ -163,7 +162,8 @@ impl SessionActivation {
     /// The providers this menger admits callers through: provider { name, kind, issuer, audience }.
     ///
     /// IDENTITY-15: one `provider { name, kind, issuer, audience }` each, in
-    /// the order they were configured; none when login is off. Nothing here
+    /// the order they were configured; none when only agents' keys are
+    /// admitted (`key` is offered to no person, ACCESS-24). Nothing here
     /// is secret: it is what a sign-in needs to find the provider — so it is
     /// `public` (ACCESS-19), answered before anyone has signed in.
     #[plexus_macros::method(group = "sign in", public)]
@@ -202,7 +202,7 @@ mod tests {
     #[tokio::test]
     async fn whoami_after_sign_out_is_refused_unauthenticated() {
         let live = Arc::new(Live(Mutex::new(true)));
-        let access = Access::with_login(live.clone(), true, vec![]);
+        let access = Access::with_login(live.clone(), vec![]);
         let s = SessionActivation::new().with_access(access.clone());
         let principal = "idp:c952acd3-0000-4000-8000-000000000001";
         let ctx = AuthContext::new("u1".into(), "s".into(), vec![], serde_json::json!({ SESSION_KEY: "k", "name": "alice", "principal": principal }));
@@ -212,8 +212,7 @@ mod tests {
         let refused = access.verify_now(&ctx).expect_err("signed out: it proves no one");
         let wire = plexus_core::plexus::PlexusError::from(refused);
         assert!(matches!(wire, plexus_core::plexus::PlexusError::Unauthenticated(_)), "{wire:?}");
-        // Login off: anyone, and anonymous.
-        let open = Access::open().verify_now(&AuthContext::anonymous()).unwrap();
-        assert_eq!(whoami(&SessionActivation::new(), open).await, SessionEvent::Anonymous);
+        // ACCESS-24: no open mode — an identity that proves no one is no user.
+        assert!(access.verify_now(&AuthContext::anonymous()).is_err());
     }
 }

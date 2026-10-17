@@ -5,6 +5,9 @@
 
 #![cfg(unix)]
 
+
+/// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
+mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
@@ -64,6 +67,7 @@ impl Drop for Server {
 fn spawn_server(db: &Path, log_dir: &Path, tag: &str, args: &[&str], envs: &[(&str, &str)], port: u16) -> Server {
     let stderr_path = log_dir.join(format!("stderr-{tag}.log"));
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_menger"));
+    cmd.args(support::login_args());
     cmd.arg("--no-shell")
         .arg("--no-rest")
         .arg("--port")
@@ -92,7 +96,7 @@ fn spawn_server(db: &Path, log_dir: &Path, tag: &str, args: &[&str], envs: &[(&s
 async fn connect(port: u16) -> WsClient {
     let url = format!("ws://127.0.0.1:{port}");
     for _ in 0..200 {
-        if let Ok(c) = WsClientBuilder::default().build(&url).await {
+        if let Ok(c) = WsClientBuilder::default().set_headers(support::admin_headers(port)).build(&url).await {
             return c;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

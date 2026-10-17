@@ -82,7 +82,7 @@ fn activation() -> Surface {
     assert_eq!(themes.namespace, "themes");
     assert_eq!(notes.namespace, "notes");
     let session = SessionActivation::new().plugin_schema();
-    let members_hub = MembersActivation::new(Arc::new(Store::new()), Access::open());
+    let members_hub = MembersActivation::new(Arc::new(Store::new()), Access::for_tests());
     let members = members_hub.plugin_schema();
     // ACCESS-22: members' child, `members.teams`.
     let member_children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&members_hub).into_iter().map(|(path, c)| surface_at(&format!("members.{path}"), c)).collect();
@@ -113,6 +113,10 @@ fn generated() -> Surface {
         .unwrap_or_else(|e| panic!("manifest.json's activations: {{ namespace: {{ method: [param, …] }} }} — {e}; run scripts/sdk-codegen.sh"));
     activations
         .into_iter()
+        // ACCESS-24/52: `auth` is on every hub now and in the generated
+        // client, but it is plexus-core's activation, not menger's — its
+        // surface is held there, not here.
+        .filter(|(ns, _)| ns != "auth")
         .flat_map(|(ns, methods)| methods.into_iter().map(move |(m, params)| (format!("{ns}.{m}"), params)))
         .collect()
 }

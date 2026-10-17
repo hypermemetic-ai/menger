@@ -366,7 +366,7 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
     .unwrap();
     assert_eq!(wiring.public_url(), public_url);
     let table = menger::session_table(wiring.sessions());
-    let access = Access::with_login(table.clone(), true, Vec::new()).minting(table);
+    let access = Access::with_login(table.clone(), Vec::new()).minting(table);
     let wired = wiring.finish(menger::MengerAccess(access.clone()), dev).unwrap();
     let offers = wired.offered().map(menger::offer).collect();
     // AUTH-7: the protocol's auth over menger's backend, whose loopback

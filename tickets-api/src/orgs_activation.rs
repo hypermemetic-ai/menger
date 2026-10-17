@@ -44,9 +44,12 @@ pub struct OrgsActivation {
 
 #[cfg(feature = "server")]
 impl OrgsActivation {
-    /// No login: every call admitted, as always.
+    /// ACCESS-24: a test's, behind [`Access::for_tests`].
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(store: Arc<Store>) -> Self {
-        Self::with_access(store, Access::open())
+        let access = Access::for_tests();
+        access.attach(Arc::clone(&store));
+        Self::with_access(store, access)
     }
 
     /// Behind [`Access`].
@@ -78,7 +81,7 @@ fn administered(store: &Store, caller: &VerifiedUser, name: &str) -> Result<(cra
     // ACCESS-11: admin on it, the proof the store's write takes.
     match caller.admin_of(&crate::members::Scope::Org(org.name.clone()), store) {
         Ok(a) => Ok((org, a)),
-        Err(_) => Err(OrgsEvent::Error { message: format!("{} needs admin on {}: (or on *)", caller.principal().map(|p| p.as_str()).unwrap_or("you"), org.name) }),
+        Err(_) => Err(OrgsEvent::Error { message: format!("{} needs admin on {}: (or on *)", caller.principal().as_str(), org.name) }),
     }
 }
 
@@ -95,7 +98,7 @@ fn administered(store: &Store, caller: &VerifiedUser, name: &str) -> Result<(cra
 )]
 impl OrgsActivation {
     /// The organizations the caller holds a role in — every one for a role
-    /// on `*`, and with login off — in the order they were made: one `org
+    /// on `*` — in the order they were made: one `org
     /// { name, aliases, roots, shortcodes, tickets }` each.
     #[plexus_macros::method(group = "read", description = "The organizations you hold a role in")]
     pub async fn list(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = OrgsEvent> + Send + 'static {
@@ -146,7 +149,7 @@ impl OrgsActivation {
                 yield OrgsEvent::Error { message: "a new organization needs admin on *".into() };
                 return;
             };
-            let admin = admin.map(|p| (p, caller.principal().cloned().map_or(GrantedBy::Operator, GrantedBy::Principal)));
+            let admin = admin.map(|p| (p, GrantedBy::Principal(caller.principal().clone())));
             match store.create_org(by, &name, admin).await {
                 Ok((org, admin)) => {
                     if let Some(g) = &admin {

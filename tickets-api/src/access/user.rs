@@ -19,7 +19,7 @@
 //! // A VerifiedUser: only Access::verify makes one.
 //! use menger_tickets_api::access::VerifiedUser;
 //! fn forge(reach: menger_tickets_api::access::Reach) -> VerifiedUser {
-//!     VerifiedUser { principal: None, name: None, reach, ctx: None, gate: None }
+//!     VerifiedUser { principal: todo!(), name: None, reach, ctx: None, gate: None }
 //! }
 //! ```
 //!
@@ -226,8 +226,6 @@ impl Permit<Admin> {
 #[derive(Debug)]
 pub struct AdminOf {
     scope: Scope,
-    /// Login off: minted for anyone (ACCESS-11).
-    anyone: bool,
 }
 
 impl AdminOf {
@@ -239,17 +237,7 @@ impl AdminOf {
     /// An `AdminOf` for a test in another module (compiled out of the server).
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_tests(scope: Scope) -> Self {
-        Self { scope, anyone: false }
-    }
-}
-
-impl AdminOf {
-    /// ACCESS-11: whether it was minted for no one in particular — login
-    /// off, where anyone reaches everything. A grant or a revoke refuses
-    /// one: planted while login is off, it would take effect when login
-    /// turns on (ACCESS-3 #11).
-    pub fn anyone(&self) -> bool {
-        self.anyone
+        Self { scope }
     }
 }
 
@@ -331,7 +319,7 @@ impl System {
 
     /// Admin on `scope`, unchecked.
     pub fn admin_of(&self, scope: &Scope) -> AdminOf {
-        AdminOf { scope: scope.clone(), anyone: false }
+        AdminOf { scope: scope.clone() }
     }
 
     /// A role `R` on `scope`, unchecked.
@@ -375,8 +363,8 @@ impl ReadingAs<'_> {
 /// [`Access::verify`] (and [`Access::verify_call`], which says which grant
 /// the call was admitted for). Every store read takes one (ACCESS-10).
 pub struct VerifiedUser {
-    /// `None`: login is off — anyone, reaching everything.
-    principal: Option<Who>,
+    /// ACCESS-24: always someone — there is no open mode.
+    principal: Who,
     name: Option<String>,
     reach: Reach,
     /// The identity verified — what the gate's own questions take.
@@ -394,13 +382,8 @@ impl std::fmt::Debug for VerifiedUser {
 }
 
 impl VerifiedUser {
-    /// Login off: anyone, everything.
-    pub(super) fn anyone() -> Self {
-        Self { principal: None, name: None, reach: Reach::everything(), ctx: None, gate: None }
-    }
-
     pub(super) fn verified(principal: Who, name: Option<String>, reach: Reach, ctx: AuthContext) -> Self {
-        Self { principal: Some(principal), name, reach, ctx: Some(ctx), gate: None }
+        Self { principal, name, reach, ctx: Some(ctx), gate: None }
     }
 
     pub(super) fn for_call(self, grant: Option<GateGrant>) -> Self {
@@ -428,17 +411,17 @@ impl VerifiedUser {
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_tests(access: &Access, principal: Who, grants: Vec<(Held, Role)>) -> Self {
         let reach = Reach::for_tests(principal.as_str(), grants, access.gate().clone());
-        Self { principal: Some(principal), name: None, reach, ctx: None, gate: None }
+        Self { principal, name: None, reach, ctx: None, gate: None }
     }
 
-    /// The principal (`None` with login off).
-    pub fn principal(&self) -> Option<&Who> {
-        self.principal.as_ref()
+    /// The principal.
+    pub fn principal(&self) -> &Who {
+        &self.principal
     }
 
     /// The principal's text, owned — what a stored row names it by.
-    pub fn principal_text(&self) -> Option<String> {
-        self.principal.as_ref().map(|p| p.as_str().to_string())
+    pub fn principal_text(&self) -> String {
+        self.principal.as_str().to_string()
     }
 
     /// The name to show, when signed in.
@@ -458,7 +441,7 @@ impl VerifiedUser {
     }
 
     fn who(&self) -> String {
-        self.principal.as_ref().map(|p| p.as_str().to_string()).unwrap_or_else(|| "an anonymous caller".into())
+        self.principal.as_str().to_string()
     }
 
     /// A [`Permit`] for the ticket `id` at role `R` — when the store holds
@@ -502,7 +485,7 @@ impl VerifiedUser {
             s => store.gate_chain(&s.text()).unwrap_or_default(),
         };
         match self.reach.covers::<Admin>("", &chain) {
-            true => Ok(AdminOf { scope: scope.clone(), anyone: self.reach.gate().is_none() }),
+            true => Ok(AdminOf { scope: scope.clone() }),
             false => Err(Refusal::Lacks(format!("{} needs admin on {scope}", self.who()))),
         }
     }

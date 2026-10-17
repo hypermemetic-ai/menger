@@ -5,15 +5,23 @@
 // (never the user's), starts the release `menger` binary on ephemeral
 // ports with `--seed-synthetic 10^m` (PERF-2), records the seed time,
 // checkpoints the WAL the way a clean close would, restarts the server
-// to record the startup load time and RSS, measures the REST paths
-// (health, list + payload bytes, get, ready_set, blockers), drives the
+// to record the startup load time and RSS, measures the calls over the
+// WebSocket (health, list + payload bytes, get, work.ready,
+// work.blockers), drives the
 // Leptos app in Playwright's chromium (load -> live, first rows, nav
 // shortcodes, scroll to the last ticket, ticket page, a created ticket
 // appearing, expanding the largest group — MFE-12's windowed definitions,
 // redefined again where SCALE-24 and SCALE-26 changed what they wait for,
 // and read in either nav shape since AGS-23 drew a shortcode as its root's
-// row, perf/notes.md), measures create -> watch push latency over SSE,
-// then stops the server and deletes the database. Every measurement has
+// row, perf/notes.md), measures create -> watch push latency over the
+// WebSocket, then stops the server and deletes the database.
+//
+// ACCESS-52: menger has no open mode (ACCESS-24) and no REST bridge, so
+// every server here runs `--auth-provider key --no-rest` with a key made in
+// --tmp as its `--admin`; once a server's socket answers, a session is
+// minted with that key (scripts/throwaway-login.mjs, agent `perf`) and
+// every socket carries it (`Authorization: Bearer mgs_…`), every browser
+// context as the shell's session cookie. Every measurement has
 // its own timeout and is recorded as a failure row when it exceeds it —
 // the breaking point is the finding, never a hang.
 //
@@ -26,6 +34,7 @@
 //
 // Options: --magnitudes 2,3,4 · --runs N (override the per-magnitude
 // schedule) · --date YYYY-MM-DD (report name) · --out DIR · --tmp DIR ·
+// --bin PATH (default $CARGO_TARGET_DIR or ../target, release/menger) ·
 // --timeout-scale X · --no-build · --keep-db · --headed ·
 // --report-only (regenerate the report from the raw files + notes.md
 // without measuring anything)
@@ -37,6 +46,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { makeKey, mintSession, signInContext } from "../scripts/throwaway-login.mjs";
 
 // ---------------------------------------------------------------------
 // Configuration
@@ -70,6 +80,7 @@ function parseArgs(argv) {
     else if (a === "--date") o.date = next();
     else if (a === "--out") o.out = path.resolve(next());
     else if (a === "--tmp") o.tmp = path.resolve(next());
+    else if (a === "--bin") o.bin = path.resolve(next());
     else if (a === "--timeout-scale") o.timeoutScale = parseFloat(next());
     else if (a === "--seed-value") o.seedValue = parseInt(next(), 10);
     else if (a === "--no-build") o.build = false;
@@ -78,7 +89,7 @@ function parseArgs(argv) {
     else if (a === "--smoke") o.smoke = true;
     else if (a === "--report-only") o.reportOnly = true;
     else if (a === "-h" || a === "--help") {
-      console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 29).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+      console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 39).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
       process.exit(0);
     } else throw new Error(`unknown option ${a}`);
   }
@@ -104,7 +115,7 @@ function budgetMs(m, kind, scale) {
   const base = {
     seed: { 2: 60e3, 3: 60e3, 4: 120e3, 5: 600e3, 6: 1800e3 },
     load: { 2: 30e3, 3: 30e3, 4: 60e3, 5: 300e3, 6: 900e3 },
-    rest: { 2: 30e3, 3: 30e3, 4: 60e3, 5: 180e3, 6: 600e3 },
+    calls: { 2: 30e3, 3: 30e3, 4: 60e3, 5: 180e3, 6: 600e3 },
     push: { 2: 30e3, 3: 30e3, 4: 30e3, 5: 60e3, 6: 120e3 },
     // A page that is not live after two or three minutes is not usable;
     // the budget exists to record that, not to wait for it.
@@ -208,7 +219,16 @@ function fmtInt(n) {
 // ---------------------------------------------------------------------
 // The server under measurement
 
-const BIN = path.join(REPO, "target", "release", "menger");
+let BIN = path.join(process.env.CARGO_TARGET_DIR || path.join(REPO, "target"), "release", "menger");
+
+/// ACCESS-52: the operator every server here runs as `--admin` — a key in
+/// --tmp, never ~/.plexus (set in main).
+const OPERATOR = { keyFile: null, principal: null };
+
+/// A socket to `port`, signed in with `token`.
+function openWs(port, token) {
+  return new WebSocket(`ws://127.0.0.1:${port}`, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+}
 
 class Server {
   constructor(dbPath, extraArgs, envExtra = {}) {
@@ -223,7 +243,7 @@ class Server {
   async start() {
     this.ws = await freePort();
     this.shell = await freePort();
-    this.rest = await freePort();
+    this.token = null;
     const env = { ...process.env, ...this.envExtra };
     delete env.MENGER_DB_PATH;
     delete env.MENGER_APP_DIST;
@@ -234,7 +254,9 @@ class Server {
     const args = [
       "--port", String(this.ws),
       "--shell-port", String(this.shell),
-      "--rest-port", String(this.rest),
+      "--no-rest",
+      "--auth-provider", "key",
+      "--admin", OPERATOR.principal,
       "--db-path", this.dbPath,
       ...this.extraArgs,
     ];
@@ -252,11 +274,6 @@ class Server {
     return this.child && this.child.exitCode === null && this.child.signalCode === null;
   }
 
-  // ACCESS-20: a child's method at its whole path, `/rest/tickets.work/ready`.
-  restUrl(method, ns = "tickets") {
-    return `http://127.0.0.1:${this.rest}/rest/${ns}/${method}`;
-  }
-
   appUrl(hash = "") {
     return `http://127.0.0.1:${this.shell}/app/${hash}`;
   }
@@ -267,9 +284,11 @@ class Server {
     const deadline = now() + budget;
     while (now() < deadline) {
       if (!this.alive()) throw new Error(`server exited at startup: ${this.stderr.trim().split("\n").pop()}`);
-      if ((await tcpUp(this.rest)) && (await tcpUp(this.shell)) && (await tcpUp(this.ws))) {
+      if ((await tcpUp(this.shell)) && (await tcpUp(this.ws))) {
         try {
-          const h = await restJson(this.restUrl("health"), {}, 5000);
+          // ACCESS-52: signed in as the operator, once the socket answers.
+          if (!this.token) this.token = (await mintSession(`ws://127.0.0.1:${this.ws}`, OPERATOR.keyFile, "perf")).token;
+          const h = await wsJson(this, "tickets.health", {}, 5000);
           const count = h?.data?.[0]?.ticket_count;
           if (expectCount == null || count === expectCount) return +(now() - this.startedAt).toFixed(1);
         } catch {
@@ -309,22 +328,52 @@ async function startServer(dbPath, extraArgs, expectCount, budget, envExtra) {
 }
 
 // ---------------------------------------------------------------------
-// REST clients
+// Calls over the WebSocket (ACCESS-52: the REST bridge is gone)
 
-async function httpError(url, res) {
-  const body = await res.text().catch(() => "");
-  return new Error(`${path.basename(url)} -> HTTP ${res.status} ${body.slice(0, 160)}`);
+/// One `menger.call` on its own signed-in socket: every data item's
+/// content, as `{ data: [content…], bytes }` — the shape the REST envelope
+/// had, so the checks read as before.
+function wsJson(server, method, params, timeoutMs) {
+  const data = [];
+  return wsCall(server, method, params, timeoutMs, (item) => data.push(item.content)).then((out) => ({ data, bytes: out.bytes }));
 }
 
-async function restJson(url, params, timeoutMs) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(params ?? {}),
-    signal: AbortSignal.timeout(timeoutMs),
+/// One `menger.call` streamed: counts bytes and data items, `onItem` per
+/// item, `scan` per notification's text; resolves at `done`.
+function wsCall(server, method, params, timeoutMs, onItem, scan) {
+  return new Promise((resolve, reject) => {
+    const t0 = now();
+    const ws = openWs(server.ws, server.token);
+    let bytes = 0, events = 0, first = null;
+    const fail = (e) => {
+      try { ws.close(); } catch { /* ignore */ }
+      reject(e instanceof Error ? e : new Error(String(e)));
+    };
+    const timer = setTimeout(() => fail(new MeasureTimeout(timeoutMs)), timeoutMs);
+    ws.onerror = () => fail(new Error(`${method}: websocket error`));
+    ws.onopen = () => ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "menger.call", params: { method, params: params ?? {} } }));
+    ws.onmessage = (m) => {
+      const text = typeof m.data === "string" ? m.data : String(m.data);
+      bytes += text.length;
+      let msg;
+      try { msg = JSON.parse(text); } catch { return; }
+      if (msg.error) return fail(new Error(`${method}: ${JSON.stringify(msg.error).slice(0, 160)}`));
+      const item = msg.params?.result;
+      if (!item) return;
+      if (item.type === "data") {
+        if (first == null) first = +(now() - t0).toFixed(1);
+        events++;
+        if (onItem) onItem(item);
+        if (scan) scan("", text);
+      } else if (item.type === "done") {
+        clearTimeout(timer);
+        ws.close();
+        resolve({ bytes, events, ttfb_ms: first });
+      } else if (item.type === "error") {
+        fail(new Error(`${method}: ${JSON.stringify(item).slice(0, 160)}`));
+      }
+    };
   });
-  if (!res.ok) throw await httpError(url, res);
-  return res.json();
 }
 
 /// Counts regex matches in `carry + chunk` that END inside the new
@@ -337,47 +386,15 @@ function* newMatches(re, carry, text) {
   }
 }
 
-/// Streams a (possibly huge) REST response: counts bytes and events
-/// without ever holding the whole body, and runs an optional scanner
-/// over `(carry, text)` so a 700 MB `list` can still be sampled for
-/// ids. Verifies the envelope's tail.
-async function restStream(url, params, timeoutMs, scan) {
-  const t0 = now();
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(params ?? {}),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) throw await httpError(url, res);
-  const ttfb = +(now() - t0).toFixed(1);
-  let bytes = 0;
-  let events = 0;
-  let carry = "";
-  let tail = "";
-  const dec = new TextDecoder();
-  for await (const chunk of res.body) {
-    bytes += chunk.length;
-    const text = carry + dec.decode(chunk, { stream: true });
-    // Count event objects by their type tag (every event carries one).
-    for (const _ of newMatches(/"type":"/g, carry, text)) events++;
-    if (scan) scan(carry, text);
-    carry = text.slice(-8192);
-    tail = text.slice(-16);
-  }
-  if (!/\]\s*\}\s*$/.test(tail)) throw new Error(`response did not end as a JSON envelope (tail ${JSON.stringify(tail)})`);
-  return { bytes, events, ttfb_ms: ttfb };
-}
-
 /// The same logical call over the WebSocket transport (what
 /// web/index.html speaks): one `menger.call` subscription, items
-/// streamed one notification each until `done`. The control for the
-/// REST gateway's buffering: the store's own cost of a full list, with
-/// no envelope to collect. Counts items and bytes; runs `scan` per item.
-function wsList(port, params, timeoutMs, scan) {
+/// streamed one notification each until `done`: the store's own cost of a
+/// full list, with no envelope to collect. Counts items and bytes; runs
+/// `scan` per item.
+function wsList(server, params, timeoutMs, scan) {
   return new Promise((resolve, reject) => {
     const t0 = now();
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const ws = openWs(server.ws, server.token);
     let bytes = 0;
     let events = 0;
     let first = null;
@@ -418,10 +435,10 @@ function wsList(port, params, timeoutMs, scan) {
 /// the paging cost and the body's weight, against `wsList` as the
 /// control. Reports the whole walk: bytes, rows, pages, the first item's
 /// latency, and the slowest single page (the number a UI feels).
-function wsListPaged(port, limit, timeoutMs) {
+function wsListPaged(server, limit, timeoutMs) {
   return new Promise((resolve, reject) => {
     const t0 = now();
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const ws = openWs(server.ws, server.token);
     let bytes = 0, events = 0, pages = 0, first = null, id = 0;
     let pageStart = 0, maxPage = 0;
     const ids = new Set();
@@ -478,55 +495,39 @@ function wsListPaged(port, limit, timeoutMs) {
   });
 }
 
-/// An open `tickets.watch` SSE stream (direct REST port, no proxy).
+/// An open `tickets.watch` over its own signed-in socket.
 class Watch {
   constructor() {
-    this.buf = "";
     this.waiters = [];
     this.events = [];
     this.closed = false;
   }
-  static async open(url, params, timeoutMs) {
-    const w = new Watch();
-    w.ctl = new AbortController();
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(params ?? {}),
-      signal: w.ctl.signal,
-    });
-    if (!res.ok) throw new Error(`watch -> HTTP ${res.status}`);
-    if (!(res.headers.get("content-type") || "").startsWith("text/event-stream")) throw new Error("watch is not SSE");
-    w.pump(res.body).catch(() => {});
-    // Give the stream a beat to be fully established server-side.
-    await sleep(Math.min(200, timeoutMs));
-    return w;
-  }
-  async pump(body) {
-    const dec = new TextDecoder();
-    for await (const chunk of body) {
-      this.buf += dec.decode(chunk, { stream: true });
-      let i;
-      while ((i = this.buf.indexOf("\n\n")) >= 0) {
-        const frame = this.buf.slice(0, i);
-        this.buf = this.buf.slice(i + 2);
-        const line = frame.split("\n").find((l) => l.startsWith("data:"));
-        if (!line) continue;
-        try {
-          const item = JSON.parse(line.slice(5).trim());
-          const content = item.content ?? item;
-          content._at = now();
-          this.events.push(content);
-          this.waiters.splice(0).forEach((w) => w());
-        } catch {
-          /* ignore */
+  static open(server, params, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const w = new Watch();
+      const ws = (w.ws = openWs(server.ws, server.token));
+      const timer = setTimeout(() => reject(new MeasureTimeout(timeoutMs)), timeoutMs);
+      ws.onerror = () => reject(new Error("watch: websocket error"));
+      ws.onclose = () => { w.closed = true; w.waiters.splice(0).forEach((f) => f()); };
+      ws.onopen = () => ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "menger.call", params: { method: "tickets.watch", params: params ?? {} } }));
+      ws.onmessage = (m) => {
+        let msg;
+        try { msg = JSON.parse(String(m.data)); } catch { return; }
+        if (msg.id === 1) {
+          clearTimeout(timer);
+          if (msg.error) return reject(new Error(`watch: ${JSON.stringify(msg.error).slice(0, 160)}`));
+          // Give the subscription a beat to be fully established server-side.
+          return void sleep(Math.min(200, timeoutMs)).then(() => resolve(w));
         }
-      }
-    }
-    this.closed = true;
+        const item = msg.params?.result;
+        if (item?.type !== "data") return;
+        const content = item.content;
+        content._at = now();
+        w.events.push(content);
+        w.waiters.splice(0).forEach((f) => f());
+      };
+    });
   }
-  /// Resolves with the first event matching `pred` (already received or
-  /// arriving later).
   async next(pred, timeoutMs) {
     const deadline = now() + timeoutMs;
     for (;;) {
@@ -539,22 +540,14 @@ class Watch {
     }
   }
   close() {
-    this.ctl?.abort();
+    try { this.ws?.close(); } catch { /* ignore */ }
   }
 }
 
-/// The literal "curl-created ticket": curl when present, fetch otherwise.
-function createViaCurl(server, params) {
-  const url = server.restUrl("create");
-  if (spawnSync("which", ["curl"]).status === 0) {
-    const r = spawnSync("curl", ["-sS", "-X", "POST", "-H", "content-type: application/json", "-d", JSON.stringify(params), url], {
-      encoding: "utf8",
-      timeout: 30000,
-    });
-    if (r.status !== 0) throw new Error(`curl failed: ${r.stderr}`);
-    return { tool: "curl", body: JSON.parse(r.stdout) };
-  }
-  return restJson(url, params, 30000).then((body) => ({ tool: "fetch", body }));
+/// A ticket created from outside the page — once curl against the REST
+/// bridge, since ACCESS-24 a `tickets.create` on a socket of its own.
+function createOutside(server, params) {
+  return wsJson(server, "tickets.create", params, 30000).then((body) => ({ tool: "socket", body }));
 }
 
 // ---------------------------------------------------------------------
@@ -653,7 +646,7 @@ async function runMagnitude(m, opts, browser) {
     {
       const r = await measure("seed", B("seed"), async () => {
         const { server: s, wallMs } = await startServer(dbPath, ["--seed-synthetic", String(N), "--seed-value", String(opts.seedValue)], N, B("seed"));
-        const line = s.stderr.match(/seeded (\d+) synthetic tickets in ([\d.]+) ms \(seed value \d+, (\d+) epics, (\d+) blocked_by edges; generate ([\d.]+) ms, persist ([\d.]+) ms\)/);
+        const line = s.stderr.match(/seeded (\d+) synthetic tickets in ([\d.]+) ms \(seed value \d+, (?:shape \w+, )?(\d+) epics, (\d+) blocked_by edges; generate ([\d.]+) ms, persist ([\d.]+) ms\)/);
         const rss = procStatus(s.pid);
         await s.stop();
         if (!line) throw new Error("seed log line not found in server stderr");
@@ -704,15 +697,15 @@ async function runMagnitude(m, opts, browser) {
     }
     R.rss_after_load_bytes = procStatus(server.pid).rss_bytes;
 
-    // ---- 3. REST ---------------------------------------------------------
+    // ---- 3. Calls over the WebSocket ---------------------------------------
     for (let i = 0; i < runs; i++) {
-      rows("rest_health").push(await measure("rest_health", B("rest"), async () => {
-        const h = await restJson(server.restUrl("health"), {}, B("rest"));
+      rows("ws_health").push(await measure("ws_health", B("calls"), async () => {
+        const h = await wsJson(server, "tickets.health", {}, B("calls"));
         if (h?.data?.[0]?.ticket_count !== N) throw new Error(`health count ${h?.data?.[0]?.ticket_count} != ${N}`);
-        return { bytes: JSON.stringify(h).length };
+        return { bytes: h.bytes };
       }));
     }
-    log(`health: ${fmtMs(summarize("rest_health").median_ms)}`);
+    log(`health: ${fmtMs(summarize("ws_health").median_ms)}`);
 
     // The samples every later measurement needs — per-epic sizes (the
     // largest nav group) and a ticket with several blockers — come from
@@ -742,8 +735,8 @@ async function runMagnitude(m, opts, browser) {
     // list over WebSocket first (streamed — the control, and the scan
     // source that works at every magnitude).
     for (let i = 0; i < runs; i++) {
-      const r = await measure("ws_list", B("rest"), async () => {
-        const out = await wsList(server.ws, {}, B("rest"), scanOnce(scanner));
+      const r = await measure("ws_list", B("calls"), async () => {
+        const out = await wsList(server, {}, B("calls"), scanOnce(scanner));
         // MNG-9: N tickets plus the one trailing `page` event.
         if (out.events !== N + 1) throw new Error(`ws list streamed ${out.events} items, expected ${N + 1}`);
         out.events = N;
@@ -757,8 +750,8 @@ async function runMagnitude(m, opts, browser) {
 
     // MNG-9: the same set, paged and body-less — what a renderer walks.
     for (let i = 0; i < runs; i++) {
-      const r = await measure("ws_list_paged", B("rest"), async () => {
-        const out = await wsListPaged(server.ws, PAGE_LIMIT, B("rest"));
+      const r = await measure("ws_list_paged", B("calls"), async () => {
+        const out = await wsListPaged(server, PAGE_LIMIT, B("calls"));
         if (out.distinct !== N) throw new Error(`paged walk visited ${fmtInt(out.distinct)} distinct ids, expected ${fmtInt(N)}`);
         if (out.events !== N) throw new Error(`paged walk streamed ${fmtInt(out.events)} rows, expected ${fmtInt(N)}`);
         if (out.remaining !== 0) throw new Error(`last page reported ${out.remaining} remaining`);
@@ -767,21 +760,6 @@ async function runMagnitude(m, opts, browser) {
       rows("ws_list_paged").push(r);
       if (r.status === "ok" && !R.samples.last) R.samples.last = { id: r.last_id, epic: r.last_epic };
       log(`ws list paged ${i + 1}/${runs}: ${r.status} ${fmtMs(r.ms)}${r.bytes ? ` ${fmtBytes(r.bytes)}` : ""}${r.pages ? ` in ${fmtInt(r.pages)} pages, worst ${fmtMs(r.max_page_ms)}` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
-    }
-
-    // list over REST: latency + payload bytes (streamed, counted).
-    for (let i = 0; i < runs; i++) {
-      const r = await measure("rest_list", B("rest"), async () => {
-        const out = await restStream(server.restUrl("list"), {}, B("rest"), scanOnce(scanner));
-        // MNG-9: N tickets plus the one trailing `page` event.
-        if (out.events !== N + 1) throw new Error(`list returned ${out.events} events, expected ${N + 1}`);
-        out.events = N;
-        return out;
-      });
-      if (r.status === "ok") scanned = true;
-      else if (!scanned) { epicCounts.clear(); multi.length = 0; }
-      rows("rest_list").push(r);
-      log(`list ${i + 1}/${runs}: ${r.status} ${fmtMs(r.ms)}${r.bytes ? ` ${fmtBytes(r.bytes)}` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
     }
 
     let largest = null;
@@ -794,29 +772,29 @@ async function runMagnitude(m, opts, browser) {
 
     const sampleId = multi[0]?.id ?? (largest ? `${largest.epic}-1` : null);
     for (let i = 0; i < runs; i++) {
-      rows("rest_get").push(await measure("rest_get", B("rest"), async () => {
+      rows("ws_get").push(await measure("ws_get", B("calls"), async () => {
         if (!sampleId) throw new Error("no sample id (list failed)");
-        const g = await restJson(server.restUrl("get"), { id: sampleId }, B("rest"));
+        const g = await wsJson(server, "tickets.get", { id: sampleId }, B("calls"));
         if (g?.data?.[0]?.type !== "ticket") throw new Error(`get ${sampleId}: ${JSON.stringify(g).slice(0, 120)}`);
-        return { id: sampleId, bytes: JSON.stringify(g).length };
+        return { id: sampleId, bytes: g.bytes };
       }));
-      rows("rest_ready_set").push(await measure("rest_ready_set", B("rest"), async () => {
-        const out = await restStream(server.restUrl("ready", "tickets.work"), {}, B("rest"));
+      rows("ws_ready_set").push(await measure("ws_ready_set", B("calls"), async () => {
+        const out = await wsCall(server, "tickets.work.ready", {}, B("calls"));
         // MNG-9: the ready set plus the one trailing `page` event.
         if (out.events <= 1) throw new Error("ready_set empty");
         out.events -= 1;
         return out;
       }));
-      rows("rest_blockers").push(await measure("rest_blockers", B("rest"), async () => {
+      rows("ws_blockers").push(await measure("ws_blockers", B("calls"), async () => {
         if (!multi[0]) throw new Error("no multi-blocker sample (list failed)");
-        const b = await restJson(server.restUrl("blockers", "tickets.work"), { id: multi[0].id }, B("rest"));
+        const b = await wsJson(server, "tickets.work.blockers", { id: multi[0].id }, B("calls"));
         const got = (b?.data ?? []).filter((e) => e.type === "blocker").length;
         if (got !== multi[0].blockers.length) throw new Error(`blockers ${multi[0].id}: ${got} resolved, expected ${multi[0].blockers.length}`);
-        return { id: multi[0].id, count: got, bytes: JSON.stringify(b).length };
+        return { id: multi[0].id, count: got, bytes: b.bytes };
       }));
     }
-    log(`get ${fmtMs(summarize("rest_get").median_ms)} · ready_set ${fmtMs(summarize("rest_ready_set").median_ms)} (${fmtInt(summarize("rest_ready_set", ["events"]).events)} tickets) · blockers ${fmtMs(summarize("rest_blockers").median_ms)}`);
-    R.rss_after_rest_bytes = procStatus(server.pid).rss_bytes;
+    log(`get ${fmtMs(summarize("ws_get").median_ms)} · work.ready ${fmtMs(summarize("ws_ready_set").median_ms)} (${fmtInt(summarize("ws_ready_set", ["events"]).events)} tickets) · blockers ${fmtMs(summarize("ws_blockers").median_ms)}`);
+    R.rss_after_calls_bytes = procStatus(server.pid).rss_bytes;
 
     // ---- 4. Browser --------------------------------------------------------
     // MFE-12: the app mounts a window of the board and a nav node's children
@@ -830,6 +808,7 @@ async function runMagnitude(m, opts, browser) {
     let coldFailed = null;
     for (let i = 0; i < runs; i++) {
       const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+      await signInContext(ctx, `http://127.0.0.1:${server.shell}`, server.token);
       const page = await ctx.newPage();
       const pageErrors = [];
       page.on("pageerror", (e) => pageErrors.push(String(e.message).slice(0, 200)));
@@ -1042,7 +1021,7 @@ async function runMagnitude(m, opts, browser) {
             for (let k = 0; k < 10 && sc; k++) { sc.scrollTop = sc.scrollHeight; await new Promise((r) => setTimeout(r, 50)); }
           });
           const t0 = now();
-          const { tool, body } = await createViaCurl(server, { epic: g, title: `live probe ${label} run ${i + 1}` });
+          const { tool, body } = await createOutside(server, { epic: g, title: `live probe ${label} run ${i + 1}` });
           const id = body?.data?.[0]?.ticket?.id;
           if (!id) throw new Error(`create failed: ${JSON.stringify(body).slice(0, 160)}`);
           const tCreated = now();
@@ -1121,6 +1100,7 @@ async function runMagnitude(m, opts, browser) {
         rows("ticket_page_cold").push({ name: "ticket_page_cold", status: "failed", ms: null, reason: `not retried after run ${coldFailed.run}: ${coldFailed.reason}` });
       } else {
         const ctx2 = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+        await signInContext(ctx2, `http://127.0.0.1:${server.shell}`, server.token);
         const p2 = await ctx2.newPage();
         const r2 = await measure("ticket_page_cold", B("browser"), async () => {
           if (!sampleId) throw new Error("no sample id");
@@ -1148,11 +1128,11 @@ async function runMagnitude(m, opts, browser) {
     }
     R.rss_after_browser_bytes = procStatus(server.pid).rss_bytes;
 
-    // ---- 5. create -> watch push (SSE, direct REST) ------------------------
+    // ---- 5. create -> watch push (WebSocket) --------------------------------
     {
       let watch = null;
       try {
-        watch = await Watch.open(server.restUrl("watch"), {}, B("push"));
+        watch = await Watch.open(server, {}, B("push"));
       } catch (e) {
         R.notes.push(`watch open failed: ${e.message}`);
       }
@@ -1160,7 +1140,7 @@ async function runMagnitude(m, opts, browser) {
         rows("create_watch_push").push(await measure("create_watch_push", B("push"), async () => {
           if (!watch) throw new Error("watch stream not open");
           const t0 = now();
-          const created = await restJson(server.restUrl("create"), { epic: "PROBE", title: `push probe ${label} ${i + 1}`, kind: i === 0 ? "scope" : "build" }, B("push"));
+          const created = await wsJson(server, "tickets.create", { epic: "PROBE", title: `push probe ${label} ${i + 1}`, kind: i === 0 ? "scope" : "build" }, B("push"));
           const id = created?.data?.[0]?.ticket?.id;
           if (!id) throw new Error(`create failed: ${JSON.stringify(created).slice(0, 160)}`);
           const tAck = now();
@@ -1206,14 +1186,13 @@ async function browserMemory(page) {
 const MEASUREMENTS = [
   { key: "seed", label: "seed time (logged)", extra: ["epics", "edges", "generate_ms", "persist_ms", "rss_after_seed_bytes"] },
   { key: "startup_load", label: "startup load into cache (logged)", extra: ["wall_to_live_ms", "rss_after_load_bytes"] },
-  { key: "rest_health", label: "REST health", extra: ["bytes"] },
+  { key: "ws_health", label: "health (WebSocket)", extra: ["bytes"] },
   { key: "ws_list", label: "WS list, streamed (control)", extra: ["bytes", "events", "ttfb_ms"] },
   { key: "ws_list_paged", label: `WS list, paged (${PAGE_LIMIT})`, extra: ["bytes", "events", "ttfb_ms", "pages", "max_page_ms"] },
-  { key: "rest_list", label: "REST list (all tickets)", extra: ["bytes", "events", "ttfb_ms"] },
-  { key: "rest_get", label: "REST get", extra: ["bytes"] },
-  { key: "rest_ready_set", label: "REST ready_set", extra: ["bytes", "events"] },
-  { key: "rest_blockers", label: "REST blockers", extra: ["count", "bytes"] },
-  { key: "create_watch_push", label: "create → watch push (SSE)", extra: ["create_ack_ms"] },
+  { key: "ws_get", label: "get (WebSocket)", extra: ["bytes"] },
+  { key: "ws_ready_set", label: "work.ready (WebSocket)", extra: ["bytes", "events"] },
+  { key: "ws_blockers", label: "work.blockers (WebSocket)", extra: ["count", "bytes"] },
+  { key: "create_watch_push", label: "create → watch push (WebSocket)", extra: ["create_ack_ms"] },
   // MFE-12: the browser rows as a windowed, socket-based app makes them
   // true — `board_render` ("all rows in the DOM") is gone, the two rows
   // that replace it and the redefined ones are in perf/notes.md.
@@ -1300,7 +1279,7 @@ function writeReport(opts, all, specs, notesPath) {
   L.push("");
   L.push(`## Method`);
   L.push("");
-  L.push(`Per magnitude, a fresh database seeded with \`--seed-synthetic 10^m --seed-value ${opts.seedValue}\` (PERF-2): Zipf-sized epics, every status and kind, ~25 % of tickets with 1–3 acyclic \`blocked_by\` edges mirrored in \`unlocks\`, ~500-byte markdown bodies. The seed server is stopped, the WAL checkpointed (what a clean close does), and the server restarted to measure the load; the same process then serves every REST and browser measurement. \`list\` is also streamed over the WebSocket transport (one item per notification, what \`web/index.html\` speaks) as the control for the REST gateway's collect-then-respond envelope. Runs per measurement: ${ms.map((r) => `10^${r.magnitude}: ${r.runs}`).join(", ")}; medians reported. Every measurement has a per-magnitude budget and is recorded as **FAIL** with the reason when it exceeds it. Browser timings are from navigation start (load → live, first rows, nav) or from the triggering action (scroll to the end, ticket page from board, a create, the expand); since MFE-12 the app mounts a window of the board and a nav node's children only when it opens, and since SCALE-26 it holds only what it shows — each browser row's exact definition is in the notes below ("What MFE-12 changed", "What SCALE-26 changed"). The server runs on ephemeral ports; the production server on 4455–4457 and its database were never touched.`);
+  L.push(`Per magnitude, a fresh database seeded with \`--seed-synthetic 10^m --seed-value ${opts.seedValue}\` (PERF-2): Zipf-sized epics, every status and kind, ~25 % of tickets with 1–3 acyclic \`blocked_by\` edges mirrored in \`unlocks\`, ~500-byte markdown bodies. The seed server is stopped, the WAL checkpointed (what a clean close does), and the server restarted to measure the load; the same process then serves every call and browser measurement — every call over the WebSocket transport (one item per notification, what \`web/index.html\` speaks), signed in as the server's \`--admin\` (ACCESS-52: a throwaway key; since ACCESS-24 there is no open mode and no REST bridge). Runs per measurement: ${ms.map((r) => `10^${r.magnitude}: ${r.runs}`).join(", ")}; medians reported. Every measurement has a per-magnitude budget and is recorded as **FAIL** with the reason when it exceeds it. Browser timings are from navigation start (load → live, first rows, nav) or from the triggering action (scroll to the end, ticket page from board, a create, the expand); since MFE-12 the app mounts a window of the board and a nav node's children only when it opens, and since SCALE-26 it holds only what it shows — each browser row's exact definition is in the notes below ("What MFE-12 changed", "What SCALE-26 changed"). The server runs on ephemeral ports; the production server on 4455–4458 and its database were never touched.`);
   L.push("");
 
   L.push(`## The ladder at a glance (medians)`);
@@ -1310,7 +1289,7 @@ function writeReport(opts, all, specs, notesPath) {
   for (const { key, label } of MEASUREMENTS) {
     L.push(`| ${label} | ${ms.map((r) => cell(r.summary?.[key])).join(" | ")} |`);
   }
-  L.push(`| list payload | ${ms.map((r) => fmtBytes(r.summary?.rest_list?.bytes)).join(" | ")} |`);
+  L.push(`| list payload | ${ms.map((r) => fmtBytes(r.summary?.ws_list?.bytes)).join(" | ")} |`);
   L.push(`| server RSS after load | ${ms.map((r) => fmtBytes(r.summary?.startup_load?.rss_after_load_bytes)).join(" | ")} |`);
   L.push(`| server peak RSS (run) | ${ms.map((r) => fmtBytes(r.peak_rss_bytes)).join(" | ")} |`);
   L.push(`| database file | ${ms.map((r) => fmtBytes(r.db_bytes)).join(" | ")} |`);
@@ -1344,7 +1323,7 @@ function writeReport(opts, all, specs, notesPath) {
     L.push(`## 10^${r.magnitude} — ${fmtInt(r.n)} tickets`);
     L.push("");
     const lg = r.samples?.largest_epic;
-    L.push(`${r.samples?.epics ?? "?"} epics, ${fmtInt(r.samples?.edges)} blocked_by edges, largest epic ${lg ? `${lg.epic} with ${fmtInt(lg.size)} tickets` : "unknown"}; database ${fmtBytes(r.db_bytes)}; server RSS after load ${fmtBytes(r.summary?.startup_load?.rss_after_load_bytes)}, after list ${fmtBytes(r.rss_after_rest_bytes)}, after the browser ${fmtBytes(r.rss_after_browser_bytes)}, peak ${fmtBytes(r.peak_rss_bytes)}. ${r.runs} run(s) per measurement.${r.aborted ? ` **Aborted:** ${r.aborted}.` : ""}`);
+    L.push(`${r.samples?.epics ?? "?"} epics, ${fmtInt(r.samples?.edges)} blocked_by edges, largest epic ${lg ? `${lg.epic} with ${fmtInt(lg.size)} tickets` : "unknown"}; database ${fmtBytes(r.db_bytes)}; server RSS after load ${fmtBytes(r.summary?.startup_load?.rss_after_load_bytes)}, after list ${fmtBytes(r.rss_after_calls_bytes ?? r.rss_after_rest_bytes)}, after the browser ${fmtBytes(r.rss_after_browser_bytes)}, peak ${fmtBytes(r.peak_rss_bytes)}. ${r.runs} run(s) per measurement.${r.aborted ? ` **Aborted:** ${r.aborted}.` : ""}`);
     L.push("");
     L.push(`| measurement | median | status | detail |`);
     L.push(`|---|---:|---|---|`);
@@ -1404,12 +1383,17 @@ async function main() {
     return;
   }
 
+  if (opts.bin) BIN = opts.bin;
   if (opts.build) {
     console.log("building the server (cargo build --release)…");
     const b = spawnSync("cargo", ["build", "--release"], { cwd: REPO, stdio: "inherit" });
     if (b.status !== 0) throw new Error("cargo build --release failed");
   }
   if (!fs.existsSync(BIN)) throw new Error(`missing ${BIN}`);
+  // ACCESS-52: the operator — a key of this run's, in --tmp.
+  fs.mkdirSync(opts.tmp, { recursive: true });
+  OPERATOR.keyFile = path.join(opts.tmp, "operator.key");
+  OPERATOR.principal = makeKey(OPERATOR.keyFile);
   const dist = path.join(REPO, "frontend", "dist", "index.html");
   if (!fs.existsSync(dist)) {
     console.log("frontend/dist missing — building it once (trunk build --release)…");

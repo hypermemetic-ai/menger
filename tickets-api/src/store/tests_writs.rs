@@ -193,26 +193,18 @@ async fn a_write_over_many_takes_a_permit_per_ticket() {
 }
 
 /// ACCESS-3 #11: a grant takes admin on exactly its scope, minted for a
-/// signed-in user — one minted with login off (anyone's) would take effect
-/// when login turns on, and is refused.
+/// signed-in user (ACCESS-24: there is no other kind).
 #[tokio::test]
-async fn a_grant_takes_admin_on_its_scope_minted_with_login_on() {
+async fn a_grant_takes_admin_on_its_scope() {
     let s = tracker().await;
     let g = |scope: &Scope| crate::members::Grant { principal: SOMEONE.parse().unwrap(), scope: scope.clone(), role: Role::Editor, granted_by: crate::vocab::GrantedBy::AuthGrant, at: 0 };
     let open = scope(&s, "OPEN");
-    let anyone = Access::open().verify_call(None, &plexus_core::plexus::Reach::everywhere()).unwrap();
-    let planted = anyone.admin_of(&open, &s).unwrap();
-    assert!(planted.anyone());
-    let e = s.grant(planted, g(&open)).await.unwrap_err();
-    assert!(e.to_string().contains("login is off"), "{e}");
-    assert!(s.grants_of(SYS, SOMEONE).is_empty(), "nothing planted");
+    assert!(Access::for_tests().verify_call(None, &plexus_core::plexus::Reach::everywhere()).is_err(), "no one is no admin");
     // Admin on another scope: refused; on this one: kept.
     assert!(mismatched(&s.grant(AdminOf::for_tests(scope(&s, "OTHER")), g(&open)).await.unwrap_err()));
     let admin = holding(Role::Admin, &["OPEN"]).admin_of(&open, &s).unwrap();
     s.grant(admin, g(&open)).await.unwrap();
     assert_eq!(s.grants_of(SYS, SOMEONE).len(), 1);
-    let e = s.revoke(Access::open().verify_call(None, &plexus_core::plexus::Reach::everywhere()).unwrap().admin_of(&open, &s).unwrap(), SOMEONE.parse().unwrap(), open.clone()).await.unwrap_err();
-    assert!(e.to_string().contains("login is off"), "{e}");
 }
 
 /// A comment write takes a permit on the comment's ticket.

@@ -152,11 +152,6 @@ impl std::fmt::Debug for Reach {
 }
 
 impl Reach {
-    /// Login off: everything.
-    pub(super) fn everything() -> Self {
-        Self { grants: Vec::new(), held: Vec::new(), ticket_orgs: Vec::new(), ceiling: Vec::new(), call: None, gate: None, generation: 0, who: "an anonymous caller".into() }
-    }
-
     /// `who`'s reach as `ctx` stands: its grants as the book resolves them
     /// (direct ∪ teams' ∪ the operator's), each scope compiled; `ctx`'s
     /// ceiling layers the same way.

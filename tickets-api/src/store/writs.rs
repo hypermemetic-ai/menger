@@ -392,26 +392,21 @@ impl<R: RoleMark> OnComment<R> {
 
 impl Authority {
     /// ACCESS-11: whether it may grant or revoke on the stored scope
-    /// `scope`: the system, or admin minted on exactly it while login is on
-    /// (ACCESS-3 #11: one minted with login off, for anyone, is refused —
-    /// it would take effect when login turns on).
+    /// `scope`: the system, or admin minted on exactly it.
     pub(super) fn grants_on(&self, scope: &Scope) -> Result<(), StoreError> {
         match &self.0 {
             AuthorityBy::System => Ok(()),
-            AuthorityBy::Admin(a) if a.anyone() => Err(StoreError::Invalid(
-                "login is off: a grant made now would take effect when login turns on — sign in to grant or revoke (nothing written)".into(),
-            )),
             AuthorityBy::Admin(a) if a.scope() == scope => Ok(()),
             _ => Err(mismatch("a grant or a revoke needs admin on its scope")),
         }
     }
 
-    /// ACCESS-22: whether it is admin on some scope (minted while login is
-    /// on), or the system — what making a team takes.
+    /// ACCESS-22: whether it is admin on some scope, or the system — what
+    /// making a team takes.
     pub(super) fn administers_somewhere(&self, what: &str) -> Result<(), StoreError> {
         match &self.0 {
             AuthorityBy::System => Ok(()),
-            AuthorityBy::Admin(a) if !a.anyone() => Ok(()),
+            AuthorityBy::Admin(_) => Ok(()),
             _ => Err(mismatch(what)),
         }
     }

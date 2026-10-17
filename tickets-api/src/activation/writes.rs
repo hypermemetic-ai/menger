@@ -141,7 +141,7 @@ pub(super) fn parenting(store: &Store, caller: &VerifiedUser, child: &TicketId, 
         true => {
             // A host the caller cannot see is not named (ACCESS-3 #8).
             let admin = |id: &str| -> Result<AdminOf, String> {
-                let hidden = || format!("{} needs admin on a host out of your reach", caller.principal().map_or("you", |p| p.as_str()));
+                let hidden = || format!("{} needs admin on a host out of your reach", caller.principal().as_str());
                 let scope = store.shortcode_scope_of(id).ok_or_else(hidden)?;
                 let seen = matches!(caller.sight_filter(), Ok(None)) || sees_id(store, &caller.sight(), id);
                 caller.admin_of(&scope, store).map_err(|r| if seen { r.to_string() } else { hidden() })

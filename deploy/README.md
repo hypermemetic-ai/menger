@@ -30,7 +30,7 @@ are stable (ACCESS-24 and ACCESS-7 read them):
 | file | holds | written by | mode | read by |
 |---|---|---|---|---|
 | `<env>.env` | ports, database, registry, `MENGER_EXPECT_LOGIN` — `deploy/env/<env>.env` filled in | **every** `pipeline install` | 0600 | both units; the pipeline |
-| `<env>.local.env` | menger's login and secrets: `MENGER_AUTH_PROVIDERS`, `MENGER_REQUIRE_LOGIN`, `MENGER_NO_REST`, `MENGER_ADMINS`, `MENGER_LOGIN_*`, `MENGER_DEV_*`, `MENGER_PUBLIC_URL` … | you, by hand (made once by `install`) | 0600 | `menger@<env>` (after `<env>.env`, so it wins); the smoke reads it, never exports it |
+| `<env>.local.env` | menger's login and secrets: `MENGER_AUTH_PROVIDERS` (ACCESS-24: required — a release refuses to start without one), `MENGER_REQUIRE_LOGIN`, `MENGER_NO_REST` (both the only mode from ACCESS-24 on, kept for older releases), `MENGER_ADMINS`, `MENGER_LOGIN_*`, `MENGER_DEV_*`, `MENGER_PUBLIC_URL` … | you, by hand (made once by `install`) | 0600 | `menger@<env>` (after `<env>.env`, so it wins); the smoke reads it, never exports it |
 | `<env>.smoke.env` | the smoke account: `MENGER_SMOKE_USER`, `MENGER_SMOKE_PASSWORD`, `MENGER_SMOKE_TOKEN_URL`, `MENGER_SMOKE_AUDIENCE` | you, by hand (made once by `install`) | 0600 | the smoke alone — never in menger's environment |
 
 - **`install` never rewrites the local halves.** Where `<env>.local.env` does
@@ -118,7 +118,7 @@ the env's port; `--verify-derived` is consistent; the app is served stamped
 with the env's WebSocket port; `diagrams` parses a diagram; a headless browser
 loads the app to `live · WS` with the nav drawn and no page errors, its page
 under its Content-Security-Policy and nothing refused by one (ACCESS-28); every port
-(WebSocket, shell, REST unless `MENGER_NO_REST`, diagrams) refuses a request
+(WebSocket, shell, REST unless `MENGER_NO_REST` or the release has none — ACCESS-24, diagrams) refuses a request
 naming `Host: evil.example` with 421 (ACCESS-25; skipped for a release whose
 menger predates `--allowed-host`, so a rollback to one still passes). On test,
 behind the login with the dev sign-in, `deploy/probe-auth.mjs` then plays the
@@ -758,8 +758,8 @@ not know the role): revoke it before going back past it.
 
 The WebSocket is the one way with a key: the proof rides the upgrade as
 `Authorization: Bearer plexus-key.…`, which the REST bridge never reads, and
-a menger with `--require-login` has no REST bridge at all. REST is for a
-menger without login on a private network.
+a menger with `--require-login` has no REST bridge at all — and from
+ACCESS-24 on, no menger has one (there is no open mode).
 
 **Behind a tunnel** (Cloudflare Tunnel, Tailscale Funnel, ngrok, `ssh -R`):
 point the tunnel's hostname at menger's WebSocket port and name it to menger

@@ -79,7 +79,7 @@ pub struct Chat {
     pub ticket: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Every participant, by principal (`anonymous` with login off), in
+    /// Every participant, by principal (`anonymous` on one kept before ACCESS-24, when login could be off), in
     /// the order they joined — the opener first.
     pub participants: Vec<String>,
     pub state: ChatState,
@@ -106,7 +106,7 @@ pub struct Message {
     /// — so a later message always has a greater id.
     pub id: MessageId,
     pub chat: ChatId,
-    /// Who wrote it: the caller's principal (`anonymous` with login off).
+    /// Who wrote it: the caller's principal (`anonymous` on one kept before ACCESS-24, when login could be off).
     pub author: String,
     /// The name the author went by when it wrote it, when signed in with one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

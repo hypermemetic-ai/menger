@@ -10,7 +10,11 @@
 // it prints is what the terminal shows. Only the session around them — the
 // prompt, the agent's sentences, the spinner — is drawn.
 //
-//   node scripts/ask-recorded.mjs --port 4471 --ws-port 4470 --raw DIR
+//   node scripts/ask-recorded.mjs --port 4471 --ws-port 4470 --session FILE --raw DIR
+//
+// --session FILE: a session token on that server (ACCESS-52; minted by
+// scripts/landing-media.sh): the synapse calls carry it as --token-file
+// (the terminal shows them without it), the app's page as its cookie.
 //
 // Output: DIR/clips/ask-recorded.mp4 — both screens side by side, 2080×860,
 // near-lossless; scripts/landing-media.sh runs it after landing-media.mjs and
@@ -18,6 +22,7 @@
 // terminal reads). It writes to the server (a queue, an answer, a close):
 // run it on a freshly seeded one.
 import { createRequire } from 'node:module';
+import { readToken, signInContext } from './throwaway-login.mjs';
 import { parseArgs } from 'node:util';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
@@ -28,9 +33,13 @@ const { values: opt } = parseArgs({
     port: { type: 'string', default: '4471' },
     'ws-port': { type: 'string', default: '4470' },
     raw: { type: 'string' },
+    session: { type: 'string' },
   },
 });
 if (!opt.raw) throw new Error('--raw DIR is required');
+if (!opt.session) throw new Error('--session FILE is required (a session token on the throwaway server: scripts/throwaway-login.mjs)');
+const TOKEN = readToken(opt.session);
+const signed = (args) => ['--token-file', opt.session, ...args];
 for (const p of [opt.port, opt['ws-port']]) if (+p >= 4450 && +p <= 4458) throw new Error(`port ${p} is prod's or test's`);
 const base = `http://127.0.0.1:${opt.port}/`;
 const WS = opt['ws-port'];
@@ -213,6 +222,7 @@ try {
   await term.evaluate(() => document.fonts.ready);
 
   const appCtx = await browser.newContext({ viewport: { width: AW, height: H }, deviceScaleFactor: 1, colorScheme: 'light' });
+  await signInContext(appCtx, base, TOKEN);
   await appCtx.addInitScript(prime);
   const app = await appCtx.newPage();
   app.on('pageerror', (e) => console.error(`page error: ${e.message.split('\n')[0]}`));
@@ -240,7 +250,7 @@ try {
   let id = await T_('tool', 'Bash', shown(QUEUE));
   await T_('spin', 'Queueing…');
   await sleep(700);
-  const queued = execFileSync('synapse', QUEUE, { encoding: 'utf8' }).trim().split('\n').filter((l) => /^type:/.test(l)).pop() || 'type: queued';
+  const queued = execFileSync('synapse', signed(QUEUE), { encoding: 'utf8' }).trim().split('\n').filter((l) => /^type:/.test(l)).pop() || 'type: queued';
   await T_('spin', '');
   await T_('done', id);
   await T_('result', queued);
@@ -251,7 +261,7 @@ try {
   // await_reply — run for real, its lines as they come
   id = await T_('tool', 'Bash', shown(AWAIT));
   const replied = new Promise((resolve, reject) => {
-    const child = spawn('synapse', AWAIT);
+    const child = spawn('synapse', signed(AWAIT));
     let buf = '';
     child.stdout.on('data', async (d) => {
       buf += d;
@@ -293,7 +303,7 @@ try {
   await sleep(700);
   id = await T_('tool', 'Bash', shown(CLOSE));
   await sleep(500);
-  const closed = execFileSync('synapse', CLOSE, { encoding: 'utf8' }).trim().split('\n').filter((l) => /^type:/.test(l)).pop() || 'type: input_changed';
+  const closed = execFileSync('synapse', signed(CLOSE), { encoding: 'utf8' }).trim().split('\n').filter((l) => /^type:/.test(l)).pop() || 'type: input_changed';
   await T_('done', id);
   await T_('result', closed);
   await sleep(2800);

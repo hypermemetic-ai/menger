@@ -11,13 +11,20 @@
 //   filters, with the ratio filtered / unfiltered;
 // - `member { ids, filter }` of 1,000 random ids for each of the nine;
 // - `ready_set { filter, summary, limit: 200 }` at the head and after MAP-1.
+// ACCESS-52: menger has no open mode (ACCESS-24), so every socket here
+// signs in: it carries `Authorization: Bearer <token>` from the file
+// $MENGER_SESSION_FILE names (an mgs_ session token) — for a throwaway
+// server started `--auth-provider key --admin <its key>`:
+//   node scripts/throwaway-login.mjs session --url ws://127.0.0.1:PORT --key KEY --out FILE
+//   MENGER_SESSION_FILE=FILE node perf/<probe>.mjs …
+import { bearer } from "../scripts/throwaway-login.mjs";
 const [port, runs] = process.argv.slice(2);
 const R = Number(runs);
 if (!port || !R) {
   console.error("usage: reads-probe.mjs PORT RUNS");
   process.exit(2);
 }
-const open = () => new Promise((ok, no) => { const ws = new WebSocket(`ws://127.0.0.1:${port}`); ws.onopen = () => ok(ws); ws.onerror = no; });
+const open = () => new Promise((ok, no) => { const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: bearer() }); ws.onopen = () => ok(ws); ws.onerror = no; });
 const med = (v) => { const s = [...v].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
 const ms = (v) => +v.toFixed(3);
 

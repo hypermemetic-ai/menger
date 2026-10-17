@@ -13,6 +13,9 @@
 
 #![cfg(unix)]
 
+/// ACCESS-24: the test provider — the shell is behind login, always.
+mod support;
+
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::client::conn::http1;
@@ -41,6 +44,13 @@ async fn free_port() -> u16 {
     }
 }
 
+/// ACCESS-24: each shell's session cookie (`menger_session_<port>=<token>`,
+/// minted for the test's operator), sent with every request to it.
+fn cookies() -> &'static std::sync::Mutex<std::collections::HashMap<u16, String>> {
+    static C: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u16, String>>> = std::sync::OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
 /// A spawned `menger` with the shell on a free port. Dropping SIGKILLs.
 struct Server {
     child: Child,
@@ -66,19 +76,19 @@ impl Drop for Server {
 /// can die *after* the shell port already answered. So: wait for shell
 /// AND REST, confirm the child is still alive, and on any startup death
 /// retry from scratch with fresh ports.
-async fn spawn_server(app_dist: &Path, rest: bool) -> Server {
-    spawn_server_in(app_dist, rest, None).await
+async fn spawn_server(app_dist: &Path) -> Server {
+    spawn_server_in(app_dist, None).await
 }
 
 /// MFE-23: a server that believes it is the named environment.
-async fn spawn_server_in(app_dist: &Path, rest: bool, env: Option<&str>) -> Server {
+async fn spawn_server_in(app_dist: &Path, env: Option<&str>) -> Server {
     for attempt in 0..3 {
         let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
         let ws_port = free_port().await;
         let shell_port = free_port().await;
-        let rest_port = free_port().await;
         let db: PathBuf = dir.path().join("tickets.db");
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_menger"));
+        cmd.args(support::login_args());
         cmd.arg("--port")
             .arg(ws_port.to_string())
             .arg("--shell-port")
@@ -97,11 +107,6 @@ async fn spawn_server_in(app_dist: &Path, rest: bool, env: Option<&str>) -> Serv
         if let Some(env) = env {
             cmd.arg("--env").arg(env);
         }
-        if rest {
-            cmd.arg("--rest-port").arg(rest_port.to_string());
-        } else {
-            cmd.arg("--no-rest");
-        }
         let child = cmd.spawn().expect("spawn menger");
 
         let mut server = Server {
@@ -116,15 +121,16 @@ async fn spawn_server_in(app_dist: &Path, rest: bool, env: Option<&str>) -> Serv
             let shell_up = TcpStream::connect(("127.0.0.1", server.shell_port))
                 .await
                 .is_ok();
-            let rest_up = !rest || TcpStream::connect(("127.0.0.1", rest_port)).await.is_ok();
             // ACCESS-46: the WebSocket listener is a TCP listener too — probe
             // it, so the loser of a port race (it dies after the shell
             // answered) is never trusted; then a beat long enough under a
             // loaded machine for a failed bind to take the process down.
             let ws_up = TcpStream::connect(("127.0.0.1", ws_port)).await.is_ok();
-            if shell_up && rest_up && ws_up {
+            if shell_up && ws_up {
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 if server.child.try_wait().expect("try_wait").is_none() {
+                    let token = support::mint_session(ws_port).await;
+                    cookies().lock().unwrap().insert(shell_port, format!("menger_session_{shell_port}={token}"));
                     return server;
                 }
                 break;
@@ -150,6 +156,7 @@ fn request(port: u16, method: Method, path: &str, body: &str) -> Request<Full<By
         .uri(path)
         .header(header::HOST, format!("127.0.0.1:{port}"))
         .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, cookies().lock().unwrap().get(&port).cloned().unwrap_or_default())
         .body(Full::new(Bytes::from(body.to_owned())))
         .unwrap()
 }
@@ -177,7 +184,7 @@ async fn fetch(port: u16, method: Method, path: &str, body: &str) -> (StatusCode
 #[tokio::test]
 async fn app_url_without_build_output_says_not_built() {
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let s = spawn_server(empty.path(), true).await;
+    let s = spawn_server(empty.path()).await;
 
     for path in ["/app", "/app/"] {
         let (status, ctype, body) = fetch(s.shell_port, Method::GET, path, "").await;
@@ -221,7 +228,7 @@ async fn app_url_serves_dist_from_disk() {
     .unwrap();
     std::fs::write(dist.path().join("app.js"), "console.log('stub')").unwrap();
     std::fs::write(dist.path().join("app_bg.wasm"), b"\0asm").unwrap();
-    let s = spawn_server(dist.path(), true).await;
+    let s = spawn_server(dist.path()).await;
 
     let (status, ctype, body) = fetch(s.shell_port, Method::GET, "/app/", "").await;
     assert_eq!(status, StatusCode::OK);
@@ -261,7 +268,7 @@ async fn app_refuses_an_absolute_path_out_of_dist() {
     let secret = secret.canonicalize().unwrap();
     let abs = secret.to_str().unwrap();
     assert!(abs.starts_with('/'));
-    let s = spawn_server(&dist, true).await;
+    let s = spawn_server(&dist).await;
 
     let encoded = abs.replace('/', "%2F");
     for path in [format!("/app/{abs}"), format!("/app/{encoded}"), format!("/app/%2E%2E/secret.txt")] {
@@ -291,7 +298,7 @@ async fn app_serves_nested_vendor_asset_whole() {
         .map(|i| PATTERN[i % PATTERN.len()])
         .collect();
     std::fs::write(dist.path().join("vendor/mermaid-1.2.3.min.js"), &bundle).unwrap();
-    let s = spawn_server(dist.path(), true).await;
+    let s = spawn_server(dist.path()).await;
 
     let (status, ctype, body) = fetch(
         s.shell_port,
@@ -317,7 +324,7 @@ async fn app_serves_nested_vendor_asset_whole() {
 #[tokio::test]
 async fn the_shell_has_no_rest_pass_through() {
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let s = spawn_server(empty.path(), true).await;
+    let s = spawn_server(empty.path()).await;
     for (method, path) in [(Method::POST, "/rest/tickets/list"), (Method::GET, "/rest/tickets/health"), (Method::POST, "/rest/tickets/watch")] {
         let (status, _, _) = fetch(s.shell_port, method.clone(), path, "{}").await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
@@ -334,7 +341,7 @@ async fn app_answers_only_the_build_it_read() {
     let dist = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     std::fs::write(dist.path().join("index.html"), "<html>build one</html>").unwrap();
     std::fs::write(dist.path().join("app.js"), "console.log('one')").unwrap();
-    let s = spawn_server(dist.path(), true).await;
+    let s = spawn_server(dist.path()).await;
 
     let (status, _, _) = fetch(s.shell_port, Method::GET, "/app/app.js", "").await;
     assert_eq!(status, StatusCode::OK);
@@ -362,7 +369,7 @@ async fn app_answers_only_the_build_it_read() {
 #[tokio::test]
 async fn vanilla_page_is_served_at_its_url_and_is_the_rootless_root() {
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let s = spawn_server(empty.path(), true).await;
+    let s = spawn_server(empty.path()).await;
 
     for path in ["/vanilla", "/"] {
         let (status, ctype, body) = fetch(s.shell_port, Method::GET, path, "").await;
@@ -395,7 +402,7 @@ async fn the_root_is_the_app_when_it_is_built() {
         "<html><meta name=\"menger-ws-port\" content=\"{{WS_PORT}}\">menger app stub</html>",
     )
     .unwrap();
-    let s = spawn_server(dist.path(), true).await;
+    let s = spawn_server(dist.path()).await;
 
     for path in ["/", "/app/"] {
         let (status, ctype, body) = fetch(s.shell_port, Method::GET, path, "").await;
@@ -424,7 +431,7 @@ async fn the_root_is_the_app_when_it_is_built() {
 #[tokio::test]
 async fn vanilla_page_rows_link_to_app_ticket_pages() {
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let s = spawn_server(empty.path(), true).await;
+    let s = spawn_server(empty.path()).await;
 
     let (status, _, body) = fetch(s.shell_port, Method::GET, "/vanilla", "").await;
     assert_eq!(status, StatusCode::OK);
@@ -446,7 +453,7 @@ async fn vanilla_page_rows_link_to_app_ticket_pages() {
 #[tokio::test]
 async fn vanilla_page_renders_a_doc_with_a_chip_not_a_status_control() {
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let s = spawn_server(empty.path(), true).await;
+    let s = spawn_server(empty.path()).await;
 
     let (status, _, body) = fetch(s.shell_port, Method::GET, "/vanilla", "").await;
     assert_eq!(status, StatusCode::OK);
@@ -469,7 +476,7 @@ async fn vanilla_page_renders_a_doc_with_a_chip_not_a_status_control() {
 async fn the_tab_title_names_the_environment_and_the_icon_is_served() {
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     for (env, want) in [(None, "<title>menger</title>"), (Some("test"), "<title>menger.test</title>"), (Some("prod"), "<title>menger</title>")] {
-        let s = spawn_server_in(empty.path(), false, env).await;
+        let s = spawn_server_in(empty.path(), env).await;
         let (status, _, body) = fetch(s.shell_port, Method::GET, "/vanilla", "").await;
         assert_eq!(status, StatusCode::OK);
         let text = String::from_utf8_lossy(&body);
@@ -518,7 +525,7 @@ async fn every_page_goes_out_under_its_policy() {
     )
     .unwrap();
     std::fs::write(dist.path().join("app.js"), "export default async function () {}").unwrap();
-    let s = spawn_server(dist.path(), false).await;
+    let s = spawn_server(dist.path()).await;
     let hub = |csp: &str| -> u16 {
         let at = csp.find("ws://127.0.0.1:").expect("the hub's origin") + "ws://127.0.0.1:".len();
         csp[at..].split(' ').next().unwrap().parse().unwrap()
@@ -584,7 +591,7 @@ async fn every_page_goes_out_under_its_policy() {
 
     // With no build: the "not built" page and the vanilla root, the same way.
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let bare = spawn_server(empty.path(), false).await;
+    let bare = spawn_server(empty.path()).await;
     for path in ["/", "/app/"] {
         let (_, h, _) = fetch_with_headers(bare.shell_port, path).await;
         let csp = header_of(&h, "content-security-policy");

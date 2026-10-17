@@ -10,6 +10,9 @@
 
 #![cfg(unix)]
 
+
+/// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
+mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
@@ -67,7 +70,7 @@ async fn spawn_server(db: &Path, log_dir: &Path, tag: &str) -> Server {
 async fn spawn_with(db: &Path, log_dir: &Path, tag: &str, extra: &[&str]) -> Server {
     let port = free_port().await;
     let stderr_path = log_dir.join(format!("stderr-{tag}.log"));
-    let child = Command::new(env!("CARGO_BIN_EXE_menger"))
+    let child = Command::new(env!("CARGO_BIN_EXE_menger")).args(support::login_args())
         .args(["--no-shell", "--no-rest", "--port", &port.to_string()])
         .args(extra)
         .arg("--db-path")
@@ -90,7 +93,7 @@ async fn spawn_with(db: &Path, log_dir: &Path, tag: &str, extra: &[&str]) -> Ser
 async fn connect(port: u16) -> WsClient {
     let url = format!("ws://127.0.0.1:{port}");
     for _ in 0..200 {
-        if let Ok(c) = WsClientBuilder::default().build(&url).await {
+        if let Ok(c) = WsClientBuilder::default().set_headers(support::admin_headers(port)).build(&url).await {
             return c;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -128,7 +131,7 @@ async fn one(client: &WsClient, method: &str, params: Value) -> Option<Value> {
 
 /// `menger --verify-derived` on `db`: the exit status, stdout and stderr.
 fn verify(db: &Path) -> (Option<i32>, String, String) {
-    let Output { status, stdout, stderr } = Command::new(env!("CARGO_BIN_EXE_menger"))
+    let Output { status, stdout, stderr } = Command::new(env!("CARGO_BIN_EXE_menger")).args(support::login_args())
         .arg("--verify-derived")
         .arg("--db-path")
         .arg(db)
@@ -455,7 +458,7 @@ async fn verify_derived_names_an_altered_tally_and_holder_and_a_form_4_file_is_b
     let db = dir.path().join("tickets.db");
     let port = free_port().await;
     let stderr_path = dir.path().join("stderr-seed.log");
-    let child = Command::new(env!("CARGO_BIN_EXE_menger"))
+    let child = Command::new(env!("CARGO_BIN_EXE_menger")).args(support::login_args())
         .args(["--no-shell", "--no-rest", "--port", &port.to_string(), "--seed-synthetic", "6000", "--seed-shape", "nested", "--db-path"])
         .arg(&db)
         .env_remove("MENGER_DB_PATH")

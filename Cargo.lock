@@ -1771,6 +1771,7 @@ dependencies = [
  "futures",
  "jiff",
  "jsonrpsee",
+ "menger-tickets-api",
  "plexus-auth-core",
  "plexus-client",
  "plexus-core",

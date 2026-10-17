@@ -1,11 +1,15 @@
 //! ACCESS-25: every listener answers only its configured hosts. The built
-//! binary on its three ports (WebSocket, shell, REST): a request naming
+//! binary on its two ports (WebSocket, shell; ACCESS-24: no REST bridge),
+//! behind its test provider: a request naming
 //! `Host: evil.example` — what a page that rebinds its own name to
 //! 127.0.0.1 sends — is refused 421 on each before anything routes it;
 //! `127.0.0.1:<port>`, `localhost:<port>`, `--public-url`'s host and an
 //! `--allowed-host` are served.
 
 #![cfg(unix)]
+
+/// ACCESS-24: the test provider.
+mod support;
 
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -67,9 +71,9 @@ async fn ask_at(ip: std::net::IpAddr, port: u16, path: &str, host: &str, extra: 
 #[tokio::test]
 async fn each_port_refuses_another_host_before_routing() {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let (ws, shell, rest) = (free_port().await, free_port().await, free_port().await);
-    let child = Command::new(env!("CARGO_BIN_EXE_menger"))
-        .args(["--port", &ws.to_string(), "--shell-port", &shell.to_string(), "--rest-port", &rest.to_string()])
+    let (ws, shell) = (free_port().await, free_port().await);
+    let child = Command::new(env!("CARGO_BIN_EXE_menger")).args(support::login_args())
+        .args(["--port", &ws.to_string(), "--shell-port", &shell.to_string()])
         .arg("--db-path")
         .arg(dir.path().join("tickets.db"))
         .args(["--public-url", "https://menger.example", "--allowed-host", "Proxy.Lan:8080"])
@@ -84,7 +88,7 @@ async fn each_port_refuses_another_host_before_routing() {
         .spawn()
         .expect("spawn menger");
     let _server = Server(child, dir);
-    for port in [ws, shell, rest] {
+    for port in [ws, shell] {
         let mut up = false;
         for _ in 0..200 {
             if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
@@ -97,7 +101,7 @@ async fn each_port_refuses_another_host_before_routing() {
     }
 
     // (port, a path it serves, the request's extra headers, what served looks like)
-    let ports = [(ws, "/", UPGRADE, 101), (shell, "/vanilla", "", 200), (rest, "/debug", "", 200)];
+    let ports = [(ws, "/", UPGRADE, 101), (shell, "/login", "", 200)];
     for (port, path, extra, served) in ports {
         for evil in ["evil.example", &format!("evil.example:{port}"), "127.0.0.1:1"] {
             let (code, text) = ask(port, path, evil, extra).await;
@@ -125,19 +129,19 @@ fn lan_address() -> Option<std::net::IpAddr> {
     Some(s.local_addr().ok()?.ip()).filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
 }
 
-/// RUN-8: the binary on three free ports with `args` (`{ws}`, `{shell}`,
-/// `{rest}` replaced by the ports), once every port accepts at `reach`.
-async fn spawn_at(reach: std::net::IpAddr, args: &[&str]) -> (Server, u16, u16, u16) {
+/// RUN-8: the binary on two free ports with `args` (`{ws}`, `{shell}`
+/// replaced by the ports), once every port accepts at `reach`.
+async fn spawn_at(reach: std::net::IpAddr, args: &[&str]) -> (Server, u16, u16) {
     // A port handed out is free only until something binds it: another
     // test process on this machine may take it first, and then our child
     // exits and the ports answer someone else's server. A child that is
     // not alive once its ports answer is spawned again on fresh ones.
     for _ in 0..5 {
         let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-        let (ws, shell, rest) = (free_port().await, free_port().await, free_port().await);
-        let fill = |a: &str| a.replace("{ws}", &ws.to_string()).replace("{shell}", &shell.to_string()).replace("{rest}", &rest.to_string());
-        let child = Command::new(env!("CARGO_BIN_EXE_menger"))
-            .args(["--port", &ws.to_string(), "--shell-port", &shell.to_string(), "--rest-port", &rest.to_string()])
+        let (ws, shell) = (free_port().await, free_port().await);
+        let fill = |a: &str| a.replace("{ws}", &ws.to_string()).replace("{shell}", &shell.to_string());
+        let child = Command::new(env!("CARGO_BIN_EXE_menger")).args(support::login_args())
+            .args(["--port", &ws.to_string(), "--shell-port", &shell.to_string()])
             .arg("--db-path")
             .arg(dir.path().join("tickets.db"))
             .args(args.iter().map(|a| fill(a)))
@@ -156,7 +160,7 @@ async fn spawn_at(reach: std::net::IpAddr, args: &[&str]) -> (Server, u16, u16, 
             .spawn()
             .expect("spawn menger");
         let mut server = Server(child, dir);
-        for port in [ws, shell, rest] {
+        for port in [ws, shell] {
             let mut up = false;
             for _ in 0..200 {
                 if tokio::net::TcpStream::connect((reach, port)).await.is_ok() {
@@ -169,7 +173,7 @@ async fn spawn_at(reach: std::net::IpAddr, args: &[&str]) -> (Server, u16, u16, 
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         if server.0.try_wait().unwrap().is_none() {
-            return (server, ws, shell, rest);
+            return (server, ws, shell);
         }
     }
     panic!("menger never kept its ports: each was taken first");
@@ -179,10 +183,11 @@ async fn spawn_at(reach: std::net::IpAddr, args: &[&str]) -> (Server, u16, u16, 
 async fn bound_to_every_address_each_port_answers_its_names_there_and_refuses_others() {
     let lan = lan_address();
     let loopback: std::net::IpAddr = std::net::Ipv4Addr::LOCALHOST.into();
-    let args = ["--bind", "0.0.0.0", "--allowed-host", "box.lan:{ws}", "--allowed-host", "box.lan:{shell}", "--allowed-host", "box.lan:{rest}"];
-    let (_server, ws, shell, rest) = spawn_at(lan.unwrap_or(loopback), &args).await;
+    // ACCESS-24/ACCESS-30: login is always on, so a server beyond loopback names its https URL.
+    let args = ["--bind", "0.0.0.0", "--public-url", "https://menger.test", "--allowed-host", "box.lan:{ws}", "--allowed-host", "box.lan:{shell}"];
+    let (_server, ws, shell) = spawn_at(lan.unwrap_or(loopback), &args).await;
     for ip in [Some(loopback), lan].into_iter().flatten() {
-        for (port, path, extra, served) in [(ws, "/", UPGRADE, 101), (shell, "/vanilla", "", 200), (rest, "/debug", "", 200)] {
+        for (port, path, extra, served) in [(ws, "/", UPGRADE, 101), (shell, "/login", "", 200)] {
             let mut evil = vec!["evil.example".to_string(), format!("evil.example:{port}")];
             // An unspecified bind names no address of its own.
             evil.extend(lan.map(|lan| format!("{lan}:{port}")));
@@ -205,8 +210,10 @@ async fn bound_to_one_address_it_answers_its_literal_and_its_shell_s_pages_open_
         return;
     };
     let bind = lan.to_string();
-    let (_server, ws, shell, rest) = spawn_at(lan, &["--bind", &bind]).await;
-    for (port, path, extra, served) in [(ws, "/", UPGRADE, 101), (shell, "/vanilla", "", 200), (rest, "/debug", "", 200)] {
+    // ACCESS-24/ACCESS-30: login is always on — a LAN URL in plain http is served, and said.
+    let public = format!("http://{lan}:{{shell}}");
+    let (_server, ws, shell) = spawn_at(lan, &["--bind", &bind, "--public-url", &public]).await;
+    for (port, path, extra, served) in [(ws, "/", UPGRADE, 101), (shell, "/login", "", 200)] {
         let (code, text) = ask_at(lan, port, path, &format!("{lan}:{port}"), extra).await;
         assert_eq!(code, served, "{port}: {text}");
         let (code, _) = ask_at(lan, port, path, "evil.example", extra).await;
@@ -228,8 +235,8 @@ async fn without_bind_every_port_is_loopback_only() {
         eprintln!("no address beyond loopback here: skipped");
         return;
     };
-    let (_server, ws, shell, rest) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &[]).await;
-    for port in [ws, shell, rest] {
+    let (_server, ws, shell) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &[]).await;
+    for port in [ws, shell] {
         assert!(tokio::net::TcpStream::connect((lan, port)).await.is_err(), "{port} reachable at {lan} with no --bind");
     }
 }
@@ -272,18 +279,18 @@ async fn open_n(port: u16, client: Option<&str>, n: usize, held: &mut Vec<tokio:
 }
 
 /// TRANSPORT-7: behind a `--trusted-proxy`, AUTH-12's per-IP quota and,
-/// with login on, its anonymous-per-IP quota count the client the proxy
+/// (ACCESS-24: login always on) its anonymous-per-IP quota count the client the proxy
 /// forwards: two forwarded clients each get their own two places, and the
 /// proxy's own socket (no header) is its own.
 #[tokio::test]
 async fn behind_a_trusted_proxy_each_forwarded_client_has_its_own_quota() {
     for quota in [
         &["--max-connections-per-ip", "2"][..],
-        &["--auth-provider", "key", "--max-anonymous-connections-per-ip", "2"][..],
+        &["--max-anonymous-connections-per-ip", "2"][..],
     ] {
         let mut args = vec!["--trusted-proxy", "127.0.0.1"];
         args.extend_from_slice(quota);
-        let (_server, ws, _, _) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &args).await;
+        let (_server, ws, _) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &args).await;
         let mut held = Vec::new();
         assert_eq!(open_n(ws, Some("203.0.113.1"), 3, &mut held).await, [101, 101, 429], "{quota:?}: the first client");
         assert_eq!(open_n(ws, Some("203.0.113.2"), 2, &mut held).await, [101, 101], "{quota:?}: the second client");
@@ -306,11 +313,11 @@ async fn a_forged_forwarded_header_from_an_untrusted_peer_is_ignored() {
     for proxies in [&["--trusted-proxy", "10.9.9.9"][..], &["--trusted-proxy", "none"][..], &[][..]] {
         for quota in [
             &["--max-connections-per-ip", "2"][..],
-            &["--auth-provider", "key", "--max-anonymous-connections-per-ip", "2"][..],
+            &["--max-anonymous-connections-per-ip", "2"][..],
         ] {
             let mut args = proxies.to_vec();
             args.extend_from_slice(quota);
-            let (_server, ws, _, _) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &args).await;
+            let (_server, ws, _) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &args).await;
             let mut held = Vec::new();
             assert_eq!(open_n(ws, Some("203.0.113.1"), 1, &mut held).await, [101], "{args:?}");
             assert_eq!(open_n(ws, Some("203.0.113.2"), 1, &mut held).await, [101], "{args:?}");

@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 /// Who the caller is, as a request or a webhook records it.
 fn by(caller: &VerifiedUser) -> String {
-    caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string())
+    caller.principal_text()
 }
 
 /// One answer, or the refusal in band.
