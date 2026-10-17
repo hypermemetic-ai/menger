@@ -26,7 +26,7 @@ export interface OrgsClient {
      * The organizations you hold a role in
      *
      * The organizations the caller holds a role in — every one for a role
-     * on `*`, and with login off — in the order they were made: one `org
+     * on `*` — in the order they were made: one `org
      * { name, aliases, roots, shortcodes, tickets }` each.
      * @requires `orgs.list` anywhere it is held
      */
@@ -71,9 +71,4 @@ export declare const requires: {
         readonly grant: "orgs.schema";
         readonly target: null;
     };
-};
-/** The orgs activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export declare const defaultRoles: {
-    readonly editor: readonly ["orgs.list"];
-    readonly viewer: readonly ["orgs.list"];
 };

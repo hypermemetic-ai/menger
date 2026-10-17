@@ -87,8 +87,3 @@ export declare const requires: {
         readonly target: null;
     };
 };
-/** The notes activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export declare const defaultRoles: {
-    readonly editor: readonly ["notes.add", "notes.list", "notes.get", "notes.upgrade"];
-    readonly viewer: readonly ["notes.add", "notes.list", "notes.get"];
-};

@@ -31,23 +31,29 @@
 // hosted shortcode inherits until it says its own; a reader's "project
 // themes off" (settings, in another tab) puts the site's back.
 //
-// Usage (a throwaway server first — README "The sweep test"):
-//   node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --seed
-//   node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --browsers chromium,firefox --rows --project
+// Usage (a throwaway server first — README "The sweep test"; ACCESS-52: it
+// runs `--auth-provider key --admin` a key of its own, and the sweep signs
+// in with that key — synapse and every browser page alike):
+//   node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --key /tmp/sweep.key --seed
+//   node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --key /tmp/sweep.key --browsers chromium,firefox --rows --project
 //
 // Exit 0 when every check held, 1 when one failed, 2 on usage. Playwright
 // comes from perf/node_modules ((cd perf && npm ci)).
 import { createRequire } from 'node:module';
+import { mintSession, signInContext } from './throwaway-login.mjs';
 import { parseArgs } from 'node:util';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const HELP = `usage: scripts/theme-sweep.mjs --ws PORT --shell PORT [options]
+const HELP = `usage: scripts/theme-sweep.mjs --ws PORT --shell PORT --key FILE [options]
 
   --ws PORT            the throwaway server's WebSocket port (synapse -P)
   --shell PORT         its shell port (the app)
+  --key FILE           the key the server runs as --admin (ACCESS-52:
+                       node scripts/throwaway-login.mjs key FILE makes one
+                       and prints its principal); the sweep signs in with it
   --seed               create the sweep's tickets and themes (idempotent)
   --epic CODE          the shortcode the sweep's tickets live in   [SWEEP]
   --browsers LIST      chromium,firefox                            [chromium]
@@ -73,6 +79,7 @@ try {
     options: {
       ws: { type: 'string' },
       shell: { type: 'string' },
+      key: { type: 'string' },
       seed: { type: 'boolean', default: false },
       epic: { type: 'string', default: 'SWEEP' },
       browsers: { type: 'string', default: 'chromium' },
@@ -106,6 +113,22 @@ const EPIC = opt.epic.toUpperCase();
 const OUT = resolve(opt.out ?? join(tmpdir(), 'theme-sweep'));
 mkdirSync(OUT, { recursive: true });
 const BASE = `http://127.0.0.1:${SHELL}`;
+// ACCESS-24/52: no open mode — signed in as the server's --admin, a session
+// minted with its key: synapse carries it as --token-file, every page as the
+// shell's session cookie.
+if (!opt.key) usage('--key: the key the throwaway server runs as --admin');
+const SESSION = join(OUT, 'session');
+const TOKEN = await (async () => {
+  try {
+    const s = await mintSession(`ws://127.0.0.1:${WS}`, opt.key, 'sweep');
+    rmSync(SESSION, { force: true });
+    writeFileSync(SESSION, s.token + '\n', { mode: 0o600, flag: 'wx' });
+    return s.token;
+  } catch (e) {
+    console.error(`theme-sweep: could not sign in to :${WS} with ${opt.key}: ${e.message}`);
+    process.exit(1);
+  }
+})();
 
 const pw = (() => {
   try {
@@ -135,7 +158,7 @@ const FACES = TOKENS.filter((t) => t.group === 'type.face');
 // ── synapse against the throwaway server ─────────────────────────────────
 
 function synapse(args) {
-  const out = execFileSync('synapse', ['-j', '-P', String(WS), 'menger', ...args], { encoding: 'utf8', maxBuffer: 64 << 20 });
+  const out = execFileSync('synapse', ['--token-file', SESSION, '-j', '-P', String(WS), 'menger', ...args], { encoding: 'utf8', maxBuffer: 64 << 20 });
   return out
     .split('\n')
     .filter(Boolean)
@@ -469,6 +492,7 @@ async function sweep(browserName, idsBy) {
   const mockup = idsBy.get('Sweep: a mockup');
   const browser = await pw[browserName].launch({ headless: !opt.headed });
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, colorScheme: 'light' });
+  await signInContext(ctx, BASE, TOKEN);
   // A clean reader: no pick, no toggle, before any page loads.
   synapse(['themes', 'set', '--scope', 'site']);
   const pages = {};
@@ -493,9 +517,11 @@ async function sweep(browserName, idsBy) {
   await open('framed', `#/ticket/${framed}`);
   await open('mockup', `#/ticket/${mockup}`);
   await open('full', `#/ticket/${framed}?view=full`);
-  // CHAT-4: the chat pane, open on a chat of the framed ticket (login off:
-  // anyone reads it; the peer is a fixed key, never signed in).
-  const chat = one(['chats', 'open', '--ticket', framed, '--others', SWEEP_PEER]).chat.id;
+  // CHAT-4: the chat pane, open on a chat of the framed ticket. The peer is
+  // a fixed key, never signed in; a chat takes only those who can read the
+  // ticket (ACCESS-24: there is no login off), so it is a viewer of EPIC.
+  one(['members', 'grant', '--principal', SWEEP_PEER, '--scope', EPIC, '--role', 'viewer']);
+  const chat =one(['chats', 'open', '--ticket', framed, '--others', SWEEP_PEER]).chat.id;
   if (!synapse(['chats', 'messages', '--chat', String(chat)]).some((e) => e.type === 'message')) {
     one(['chats', 'post', '--chat', String(chat), '--body', 'The pane follows the theme: `code`, **bold**, a [link](#/).']);
   }

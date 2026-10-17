@@ -113,6 +113,10 @@ fn generated() -> Surface {
         .unwrap_or_else(|e| panic!("manifest.json's activations: {{ namespace: {{ method: [param, …] }} }} — {e}; run scripts/sdk-codegen.sh"));
     activations
         .into_iter()
+        // ACCESS-24/52: `auth` is on every hub now and in the generated
+        // client, but it is plexus-core's activation, not menger's — its
+        // surface is held there, not here.
+        .filter(|(ns, _)| ns != "auth")
         .flat_map(|(ns, methods)| methods.into_iter().map(move |(m, params)| (format!("{ns}.{m}"), params)))
         .collect()
 }

@@ -1442,7 +1442,7 @@ impl FromStr for TransitionSource {
 /// the store's own cascades and restores.
 pub const SYSTEM_ACTOR: &str = "system";
 
-/// MENGER-13: the actor of a transition made with login off — nobody signed
+/// MENGER-13: the actor of a transition made with login off, before ACCESS-24 took the open mode away — nobody signed
 /// in to name (its `source` still says where it came from).
 pub const ANONYMOUS_ACTOR: &str = "anonymous";
 
@@ -1451,7 +1451,7 @@ pub const ANONYMOUS_ACTOR: &str = "anonymous";
 /// order written), the `ticket`, the `field` it moved, `from` → `to` (the
 /// wire spellings: `In Review`, `build`; `from` is `null` at a ticket's
 /// birth), when (`at_unix`), who (`actor`: the caller's principal, `system`
-/// for the store's own, `anonymous` with login off; `name` the caller's
+/// for the store's own, `anonymous` on one kept before ACCESS-24, when login could be off; `name` the caller's
 /// display name, when it has one), where it came from (`source`), why
 /// (`message`, always given for `system`) and what caused it (`cause`: the
 /// transition a cascade carried down, or undid; `null` for a call's own).

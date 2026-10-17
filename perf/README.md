@@ -21,16 +21,42 @@ node magnitude.mjs --help
 Options: `--magnitudes 2,3,4` · `--runs N` (override the schedule
 5/5/3/2/1) · `--date YYYY-MM-DD` (report name) · `--out DIR` ·
 `--tmp DIR` (temp databases; default `target/perf-tmp`, on disk — not
-tmpfs) · `--timeout-scale X` · `--no-build` · `--keep-db` · `--headed`.
+tmpfs) · `--bin PATH` (default `$CARGO_TARGET_DIR/release/menger`, else
+`../target/release/menger`) · `--timeout-scale X` · `--no-build` ·
+`--keep-db` · `--headed`.
+
+**Signed in** (ACCESS-52): menger has no open mode and no REST bridge
+(ACCESS-24), so every server the ladder starts runs `--auth-provider key
+--no-rest` with a key made in `--tmp` as its `--admin`; once its socket
+answers, a session is minted with that key (`scripts/throwaway-login.mjs`),
+every socket carries it as `Authorization: Bearer …` and every browser
+context as the shell's session cookie. The probes (`*-probe.mjs`,
+`*-identical.mjs`), which talk to a server you started, sign in the same
+way from `$MENGER_SESSION_FILE`:
+
+```sh
+op=$(node scripts/throwaway-login.mjs key /tmp/probe.key)
+target/release/menger --port 4650 --shell-port 4651 --no-rest --auth-provider key --admin "$op" \
+  --db-path /tmp/probe.db --seed-synthetic 1000 &
+node scripts/throwaway-login.mjs session --url ws://127.0.0.1:4650 --key /tmp/probe.key --out /tmp/probe.session
+MENGER_SESSION_FILE=/tmp/probe.session node perf/ready-probe.mjs pages 4650 3 -
+```
+
+A session belongs to the server that minted it, so the two-server
+comparisons (`*-identical.mjs BEFORE AFTER`) take one file per server:
+`MENGER_SESSION_FILES=BEFORE_FILE,AFTER_FILE` (`filter-sheet.py` passes it).
+The sheets (`filter-sheet.py`, `tree-sheet.py`, `large-parent.py`) start
+their servers the same way, through `perf/menger_ws.py`.
 
 ## What it measures, per magnitude
 
 Server: seed time (as logged by the server), startup load-into-cache
 time (a restart on the seeded file, after a WAL checkpoint — what a
 clean close does), RSS after load / after `list` / after the browser /
-peak; REST latencies for `health`, `list` (plus payload bytes and event
-count — streamed, never held in memory), `get`, `ready_set`, `blockers`;
-create → `watch` push latency over SSE.
+peak; latencies over the WebSocket for `health`, `get`, `work.ready`,
+`work.blockers` (the REST rows until ACCESS-24 removed the bridge; `list`'s
+payload is the streamed WS list's below); create → `watch` push latency,
+both over the socket (SSE until ACCESS-24).
 
 Two WebSocket `list` rows, the same set two ways (MNG-9):
 
@@ -53,7 +79,8 @@ Browser (Playwright chromium, fresh context per run): app load → "live"
 painted (plus what the page holds at live — DOM elements, nodes, rows
 mounted, the rows the client holds, wasm memory, JS heap); every nav
 shortcode visible; scrolling the board to its last ticket; opening the
-ticket page from the board and as a cold deep link; a curl-created ticket
+ticket page from the board and as a cold deep link; a ticket created from
+outside the page (curl until ACCESS-24, a `tickets.create` on its own socket since)
 appearing where the user is looking (the board at its end, the nav open on
 that epic and scrolled to its end); and, last, expanding the largest nav
 group until its first children show and its last is a scroll away. Since

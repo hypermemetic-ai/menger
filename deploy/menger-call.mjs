@@ -67,7 +67,7 @@ export function keyProof(seed, aud, agent, nonceRaw = crypto.randomBytes(32), ts
 }
 
 // ── a WebSocket client: RFC 6455, client side, text frames ──────────────────
-function connect(url, headers) {
+export function connect(url, headers) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const secure = u.protocol === "wss:";
@@ -147,7 +147,7 @@ class Socket {
 }
 
 // ── one menger call: a `menger.call` subscription, its items until `done` ──
-function call(ws, id, method, params, onItem) {
+export function call(ws, id, method, params, onItem) {
   return new Promise((resolve, reject) => {
     let sub = null;
     ws.onclose = (why) => reject(new Error(`${method}: ${why} before the call finished`));

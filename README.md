@@ -38,6 +38,29 @@ and so did what could not carry an identity: the REST bridge (`--rest-port`;
 open mode planted ("Login" → The purge). `menger::local` runs behind the
 gate too ("As a library").
 
+**Throwaway servers** (ACCESS-52). A script that starts its own menger —
+`scripts/sdk-codegen.sh`, `scripts/landing-media.sh` (and so `deploy/pipeline
+media`), the theme sweep, `perf/` — runs it under `key` with a key of its own
+as `--admin`, made in its scratch directory (never `~/.plexus`), and signs in
+with it through `scripts/throwaway-login.mjs`:
+
+```sh
+op=$(node scripts/throwaway-login.mjs key "$work/operator.key")      # key:<hex>
+menger --port 4510 --shell-port 4511 --no-rest --db-path "$work/t.db" \
+  --auth-provider key --admin "$op" &
+node scripts/throwaway-login.mjs session --url ws://127.0.0.1:4510 \
+  --key "$work/operator.key" --out "$work/session" [--agent NAME]  # an mgs_ token, 0600
+synapse --token-file "$work/session" -P 4510 menger tickets health
+```
+
+The token rides synapse's and synapse-cc's `--token-file` (the
+`access_token` cookie at the upgrade), a socket's `Authorization: Bearer`
+(`bearer()`; the perf probes read `$MENGER_SESSION_FILE`), and a browser's
+session cookie (`signInContext()`: `menger_session_<shell port>`, what
+`/login` sets). A session is its `--agent`'s name, so what it writes is
+signed with that name. `--no-rest` keeps a release from before ACCESS-24
+off prod's REST port.
+
 `http://127.0.0.1:4456/` is the Leptos app (MFE-4). Until you build the
 frontend it serves the day-one vanilla page instead — the binary alone
 always serves something live — and that page keeps its own URL,
@@ -3763,11 +3786,14 @@ shortcode), `--signin-shell` the sign-in page:
 ```sh
 cargo build && (cd frontend && trunk build --release)
 cp ~/.local/share/menger/tickets.db /tmp/sweep.db      # a copy; never prod's file
+op=$(node scripts/throwaway-login.mjs key /tmp/sweep.key)   # ACCESS-52: the sweep's own key, never ~/.plexus
 PLEXUS_NO_REGISTRY=1 target/debug/menger --port 4510 --shell-port 4511 --db-path /tmp/sweep.db \
-  --auth-provider key --admin "$(synapse _key show builder)" &   # ACCESS-24: a provider, always
-node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --seed --browsers chromium,firefox --rows --project
+  --auth-provider key --admin "$op" &   # ACCESS-24: a provider, always
+node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --key /tmp/sweep.key --seed --browsers chromium,firefox --rows --project
 ```
 
+It signs in with `--key` (a session minted with it: synapse's
+`--token-file`, every page's session cookie — "Throwaway servers" below).
 It refuses prod's and test's ports (4450–4458): it writes. Exit 0 when every
 check held; `report.json` and a screenshot per switch land in `--out`.
 

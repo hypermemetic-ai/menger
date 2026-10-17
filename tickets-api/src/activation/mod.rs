@@ -414,8 +414,8 @@ impl TicketsActivation {
     /// status — and `Doc` is a doc's own: setting it on any other kind is an
     /// in-band `Error` too. Neither writes anything.
     ///
-    /// MENGER-13: the change is a transition — the caller's (`anonymous`
-    /// with login off), from `source` (`api` unless the call says `app` or
+    /// MENGER-13: the change is a transition — the caller's (always
+    /// someone, ACCESS-24), from `source` (`api` unless the call says `app` or
     /// `pipeline`), with its `message` — kept in the log and said on `watch`
     /// right after the `StatusChanged`. Into `Canceled`, the ticket's open
     /// inputs are withdrawn and every descendant still open work is
@@ -975,8 +975,8 @@ impl TicketsActivation {
     /// MENGER-13: a ticket's history — every change of its status and its
     /// kind since the log began, as the store keeps them. Yields one
     /// `Transition` per transition of the ticket's, oldest first — `from` →
-    /// `to`, when, who (`actor`: a principal, `system`, or `anonymous` with
-    /// login off; `name`), from where (`source`: app, api, pipeline,
+    /// `to`, when, who (`actor`: a principal, `system`, or `anonymous` on one
+    /// kept before ACCESS-24, when login could be off; `name`), from where (`source`: app, api, pipeline,
     /// cascade), why (`message`) and what caused it (`cause`, a transition
     /// id) — then one per transition those caused in other tickets (a
     /// cancel's cascade, a restore's), in the order written, then exactly one

@@ -147,9 +147,3 @@ export const requires = {
   "themes.theme_for": { grant: "themes.theme_for", target: "id" },
   "themes.watch": { grant: "themes.watch", target: null },
 } as const;
-
-/** The themes activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export const defaultRoles = {
-  "editor": ["themes.list", "themes.get", "themes.theme_for", "themes.watch", "themes.define", "themes.set"],
-  "viewer": ["themes.list", "themes.get", "themes.theme_for", "themes.watch"],
-} as const;

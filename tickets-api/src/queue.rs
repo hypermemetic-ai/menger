@@ -87,7 +87,7 @@ pub struct QueueEntry {
     /// `blocking`; closing it takes the ticket out of the queue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
-    /// Who queued it last: a principal (`anonymous` with login off).
+    /// Who queued it last: a principal (`anonymous` on one kept before ACCESS-24, when login could be off).
     pub by: String,
     /// Their display name, when they have one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

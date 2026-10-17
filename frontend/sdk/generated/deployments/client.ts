@@ -233,10 +233,3 @@ export const requires = {
   "deployments.schema": { grant: "deployments.schema", target: null },
   "deployments.watch": { grant: "deployments.watch", target: null },
 } as const;
-
-/** The deployments activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export const defaultRoles = {
-  "deployer": ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch", "deployments.record", "deployments.request", "deployments.cancel_request"],
-  "editor": ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch"],
-  "viewer": ["deployments.list", "deployments.environments", "deployments.for_ticket", "deployments.running", "deployments.watch"],
-} as const;

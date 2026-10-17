@@ -98,7 +98,7 @@ fn administered(store: &Store, caller: &VerifiedUser, name: &str) -> Result<(cra
 )]
 impl OrgsActivation {
     /// The organizations the caller holds a role in — every one for a role
-    /// on `*`, and with login off — in the order they were made: one `org
+    /// on `*` — in the order they were made: one `org
     /// { name, aliases, roots, shortcodes, tickets }` each.
     #[plexus_macros::method(group = "read", description = "The organizations you hold a role in")]
     pub async fn list(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = OrgsEvent> + Send + 'static {

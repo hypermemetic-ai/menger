@@ -148,7 +148,8 @@ pub struct Comment {
     pub id: crate::vocab::CommentId,
     pub state: CommentState,
     /// Who left it: its name (ACCESS-19: signed by the caller — its
-    /// principal when it has no name; `owner` with login off).
+    /// principal when it has no name; `owner` on one kept before ACCESS-24,
+    /// when login could be off).
     pub author: String,
     /// When it was added, unix seconds.
     pub at: i64,

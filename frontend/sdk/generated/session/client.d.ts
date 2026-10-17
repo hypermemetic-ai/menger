@@ -33,7 +33,8 @@ export interface SessionClient {
      * The providers this menger admits callers through: provider { name, kind, issuer, audience }.
   
   IDENTITY-15: one `provider { name, kind, issuer, audience }` each, in
-  the order they were configured; none when login is off. Nothing here
+  the order they were configured; none when only agents' keys are
+  admitted (`key` is offered to no person, ACCESS-24). Nothing here
   is secret: it is what a sign-in needs to find the provider — so it is
   `public` (ACCESS-19), answered before anyone has signed in.
      * @requires `session.providers` anywhere it is held
@@ -49,7 +50,8 @@ export interface SessionClient {
   
   Yields exactly one event: `identity` — `principal` (`idp:<uuid>`,
   `oidc:<provider>/<sub>` or `nostr:<hex>`), `name`, `roles`, `tenant`
-  and `provider` — or `anonymous` with login off. The identity is
+  and `provider` — always someone: menger has no open mode (ACCESS-24),
+  and an anonymous connection reaches only `auth.*`. The identity is
   settled when the connection opens; reconnect to change it.
   ACCESS-19 (ACCESS-3 #14): the caller is verified as every method's
   is — a sign-in signed out or expired is refused `unauthenticated`,

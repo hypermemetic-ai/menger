@@ -13,9 +13,17 @@ the list and deep in it. EPIC defaults to MAP, the largest epic
 SCALE-4: a row carries `child_count` where it carried `children`, the list
 of every child id; the probe reads either, so the same command measures a
 binary from before the change and one from after. MENGER_BIN runs another
-binary (default: this checkout's release build); LARGE_PARENT_PORTS=WS,REST
-pins the two ports instead of taking ephemeral ones."""
-import json, os, socket, statistics, subprocess, sys, threading, time, urllib.request
+binary (default: this checkout's release build); LARGE_PARENT_PORTS=WS
+pins the socket's port instead of taking an ephemeral one.
+
+ACCESS-52: the server runs `--auth-provider key` with a key of the probe's
+own (target/perf-tmp/large-parent-N/operator.key) as --admin, and every
+call goes over the WebSocket signed in with it (perf/menger_ws.py) — the
+REST bridge is gone (ACCESS-24). Times are send to `done`; sizes are the
+bytes of the call's messages on the socket (the REST body's before), and a
+watch event's its own message's (the SSE line's before)."""
+import json, os, socket, statistics, subprocess, sys, threading, time
+from menger_ws import Socket, Throwaway, signed_in, wait_ready
 
 N = int(sys.argv[1]); BIG = sys.argv[2] if len(sys.argv) > 2 else "MAP"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the checkout this script lives in
@@ -38,40 +46,35 @@ def free(n):
     for s in socks: s.close()
     return ports
 pinned = os.environ.get("LARGE_PARENT_PORTS")
-ws, rest = [int(p) for p in pinned.split(",")] if pinned else free(2)
+ws = int(pinned.split(",")[0]) if pinned else free(1)[0]
+WHO = Throwaway(f"{TMP}/large-parent-{N}")
 log = open(LOG, "w")
 srv = subprocess.Popen([BIN, "--db-path", DB, "--seed-synthetic", str(N), "--port", str(ws),
-                        "--rest-port", str(rest), "--no-shell"], stderr=log, stdout=log,
+                        "--no-shell", *WHO.args()], stderr=log, stdout=log,
                        env={**os.environ, "PLEXUS_NO_REGISTRY": "1"})
-def call(method, params, timeout=120):
-    req = urllib.request.Request(f"http://127.0.0.1:{rest}/rest/tickets/{method}",
-        data=json.dumps(params).encode(), headers={"content-type": "application/json"})
-    t = time.perf_counter()
-    raw = urllib.request.urlopen(req, timeout=timeout).read()
-    return (time.perf_counter() - t) * 1000, raw
+CONN = None
+def call(method, params):
+    """`tickets.<method>`: (ms, the data items, the bytes they came in)."""
+    ms, data = CONN.timed(f"tickets.{method}", params)
+    return ms, data, CONN.last_bytes
 def child_count(t):
     # After SCALE-4 a row says how many; before it, it listed them all.
     return t["child_count"] if "child_count" in t else len(t["children"])
 try:
     # The seed runs before anything listens (~13 s at 10^6 on NVMe): wait
     # for as long as the server lives, with a ceiling that grows with N.
-    deadline = time.monotonic() + 120 + N / 5000
-    while True:
-        if srv.poll() is not None:
-            raise SystemExit(f"server exited ({srv.returncode}) before serving; see {LOG}")
-        if time.monotonic() > deadline:
-            raise SystemExit(f"server never came up; see {LOG}")
-        try: call("health", {}, timeout=5); break
-        except Exception: time.sleep(0.2)
-    _, raw = call("get", {"id": f"{BIG}-1"})
-    ev = json.loads(raw)["data"][0]
+    wait_ready(srv, ws, deadline_s=120 + N / 5000, log=LOG)
+    TOKEN = signed_in(WHO, ws)
+    CONN = Socket(ws, TOKEN)
+    _, data, size = call("get", {"id": f"{BIG}-1"})
+    ev = data[0]
     if ev.get("type") != "ticket":
         raise SystemExit(f"{BIG}-1: {ev}; name an epic the seed generated")
     root = ev["ticket"]
     kids = child_count(root)
-    print(f"N={N}  root {root['id']} kind={root['kind']} children={kids}  get payload={len(raw)} B")
-    _, raw = call("list", {"epic": BIG, "summary": True, "limit": 1})
-    print(f"  summary row of the root on a list page: {len(raw)} B")
+    print(f"N={N}  root {root['id']} kind={root['kind']} children={kids}  get payload={size} B")
+    _, _, size = call("list", {"epic": BIG, "summary": True, "limit": 1})
+    print(f"  summary row of the root on a list page: {size} B")
 
     # The root's children by page: the first 200, and 200 from 90 % of the
     # way down (seeded children of a root are its shortcode's other
@@ -82,33 +85,28 @@ try:
         for _ in range(7):
             params = {"parent": root["id"], "summary": True, "limit": 200}
             if after: params["after"] = after
-            ms, raw = call("list", params)
+            ms, data, size = call("list", params)
             ts.append(ms)
-        data = json.loads(raw)["data"]
         page = data[-1]
         print(f"  list {{parent: {root['id']}, limit: 200}} {label}{f' (after {after})' if after else ''}: "
-              f"{len(data) - 1} rows, remaining {page.get('remaining')}, {len(raw)} B; {med(ts)}")
+              f"{len(data) - 1} rows, remaining {page.get('remaining')}, {size} B; {med(ts)}")
 
-    # watch over SSE, record the size of each event line
+    # watch on a socket of its own, record the size of each event's message
     events = []
     def watch():
-        req = urllib.request.Request(f"http://127.0.0.1:{rest}/rest/tickets/watch", data=b"{}",
-                                     headers={"content-type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=600) as r:
-                for line in r:
-                    if line.startswith(b"data:"):
-                        try: ev = json.loads(line[5:])
-                        except Exception: continue
-                        events.append((ev.get("type") or ev.get("content", {}).get("type"), len(line)))
+            w = Socket(ws, TOKEN)
+            for raw, item in w.stream("tickets.watch", {}):
+                if item.get("type") == "data":
+                    events.append(((item.get("content") or {}).get("type"), len(raw)))
         except Exception: pass
     threading.Thread(target=watch, daemon=True).start(); time.sleep(0.5)
 
     def creates(epic, n=20, **kw):
         ts, ids = [], []
         for i in range(n):
-            ms, raw = call("create", {"epic": epic, "title": f"probe {i}", **kw})
-            ev = json.loads(raw)["data"][0]
+            ms, data, _ = call("create", {"epic": epic, "title": f"probe {i}", **kw})
+            ev = data[0]
             assert ev["type"] == "created", ev
             ts.append(ms)
             ids.append(ev["ticket"]["id"])
@@ -119,8 +117,8 @@ try:
     def completes(ids):
         ts = []
         for i in ids:
-            ms, raw = call("set_status", {"id": i, "status": "Complete"})
-            ev = json.loads(raw)["data"][0]
+            ms, data, _ = call("set_status", {"id": i, "status": "Complete"})
+            ev = data[0]
             assert ev["type"] == "status_changed", ev
             ts.append(ms)
         return ts
