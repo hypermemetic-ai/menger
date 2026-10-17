@@ -281,6 +281,7 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
 
   ```sh
   synapse -P 4455 menger chats open --ticket KILN-7 --others key:4b…
+  synapse -P 4455 menger chats open --ticket KILN-7            # a chat of one (CHAT-6); add to it later
   synapse -P 4455 -j menger chats await_message --chat 41 --timeout-minutes 240
   ```
 

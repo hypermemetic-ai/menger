@@ -83,7 +83,9 @@ answered `not_found`. `after` (a message id) continues a page;
    * Open a chat on a ticket with the principals named; yields opened { chat } — the open chat they already have there, when they do (existing: true).
 
 The caller and `others` are the participants (CHAT-1's `with`, which
-TypeScript does not take as a parameter's name); every one of them must be
+TypeScript does not take as a parameter's name) — `others` empty or
+absent is a chat of one, the caller's alone, to add to later (CHAT-6);
+every one of them must be
 able to read the ticket, or the call is `refused { reasons }`, naming
 each who cannot, and nothing is made. A ticket the caller cannot read
 is refused as one that is none. `watch` carries `opened` to each
@@ -92,7 +94,7 @@ participant.
    * @requiresAuth — resolver: self.access.verify
    * @requires `chats.open` anywhere it is held
    */
-  open(others: Principal[], ticket: TicketRef, title?: Title | null): AsyncGenerator<ChatsEvent>;
+  open(ticket: TicketRef, others?: Principal[] | null, title?: Title | null): AsyncGenerator<ChatsEvent>;
   /**
    * Post a message in a chat; yields posted { message }, signed by the caller.
 
@@ -182,7 +184,7 @@ class ChatsClientImpl implements ChatsClient {
     yield* extractData<ChatsEvent>(stream);
   }
 
-  async *open(others: Principal[], ticket: TicketRef, title?: Title | null): AsyncGenerator<ChatsEvent> {
+  async *open(ticket: TicketRef, others?: Principal[] | null, title?: Title | null): AsyncGenerator<ChatsEvent> {
     const stream = this.rpc.call('chats.open', { others, ticket, title });
     yield* extractData<ChatsEvent>(stream);
   }

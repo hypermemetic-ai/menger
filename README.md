@@ -3074,7 +3074,7 @@ its name); `via` is kept for AGENT-3 and never set by a call.
 
 | method | yields |
 |---|---|
-| `chats.open { ticket, others, title? }` | `opened { chat, existing? }` — the caller and `others` (CHAT-1's `with`: TypeScript takes no parameter of that name) on the ticket; the same set's open chat there is answered with `existing: true` and nothing made. `refused { reasons }`: a ticket the caller cannot read (`no ticket X`), each participant who can't read it, a chat with no one else, past 32 |
+| `chats.open { ticket, others?, title? }` | `opened { chat, existing? }` — the caller and `others` (CHAT-1's `with`: TypeScript takes no parameter of that name) on the ticket; `others` empty or absent is a chat of one, the caller's alone (CHAT-6); the same set's open chat there is answered with `existing: true` and nothing made. `refused { reasons }`: a ticket the caller cannot read (`no ticket X`), each participant who can't read it, past 32 |
 | `chats.post { chat, body }` | `posted { message { id, chat, author, name?, via?, at, body } }` — a participant's, in an open chat; markdown, not blank, at most the ticket body cap; the poster's mark moves to it. `refused`: `chat N is closed`, not a participant |
 | `chats.add { chat, principal }` | `added { chat }` — by a participant, to an open chat; the one added must read the ticket |
 | `chats.list { ticket?, unread?, state?, after?, limit? }` | `chat { chat }` each — by last activity, newest first — then `page { next }`. The caller's chats; with `ticket`, those on it (every one, for an admin of it). Each `chat`'s `unread` is the caller's, `waiting` who is on `await_message` for it now. 50 a page, at most 500 |
