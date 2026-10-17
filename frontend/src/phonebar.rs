@@ -200,13 +200,15 @@ pub(crate) fn open(to: Option<Place>) {
     if was != mine {
         own.set(mine);
     }
-    let pop = h.lens.pop(Level::Global);
+    // FILTER-40: the filter's sheet holds the one panel — the global
+    // filter's unless a tab is already open.
+    let any = Level::ALL.into_iter().any(|l| h.lens.pop(l).is_open());
     if to == Some(Place::Filter) {
-        if !pop.is_open() {
+        if !any {
             h.lens.open_panel(Level::Global, None);
         }
-    } else if was == Some(Place::Filter) && pop.is_open() {
-        pop.close(false);
+    } else if was == Some(Place::Filter) && any {
+        h.lens.close_panel(false);
     }
     match (to == Some(Place::Find), h.overlay.get_untracked() == Overlay::Palette) {
         (true, false) => keys::open_overlay(h.overlay, Overlay::Palette),
@@ -469,12 +471,18 @@ pub(crate) fn TreeFoot() -> impl IntoView {
 /// phone widths): *Filter*, close.
 #[component]
 pub(crate) fn FilterHead() -> impl IntoView {
+    let lens = lens::use_lens();
+    // FILTER-40: the level the panel's tab edits.
+    let which = move || match lens.open_level() {
+        None | Some(Level::Global) => "every view",
+        Some(l) => crate::filter::tab_words(l),
+    };
     view! {
         <div class="psheet-head pfilter-head">
             <div class="grab" aria-hidden="true"></div>
             <div class="sh">
                 <h3>"Filter"</h3>
-                <span class="m">"every view"</span>
+                <span class="m">{which}</span>
                 <button type="button" class="pclose" on:click=move |_| open(None)>"close ▾"</button>
             </div>
         </div>

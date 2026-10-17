@@ -336,7 +336,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::bindings::{self, Context};
 use crate::counts::{wire_text, LiveCounts};
-use crate::filter::{Cat, FilterBar, ScTree};
+use crate::filter::{Cat, ScTree};
 use crate::flat::{self, View};
 use crate::kids::key;
 use crate::lens::{use_lens, Lens, Level};
@@ -3048,11 +3048,11 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     "‹"
                 </button>
             </div>
-            // FILTER-14: the nav's bar — FILTER-11's generic bar at level
-            // nav: the server-backed categories, the inherited global pills,
-            // the menu's counts from `facets`.
+            // FILTER-14: the nav's filter — FILTER-40: as chips in its head,
+            // the global's dashed; the server-backed categories and the
+            // panel's counts from `facets`.
             <div class="nbar">
-                <FilterBar level=Level::Nav cats=Cat::SERVER.to_vec() counts=crate::counts::provider(Level::Nav) hint="Filter the nav (f — on a ticket page, f filters it to that ticket and its children)" />
+                <crate::filter::NavChips cats=Cat::SERVER.to_vec() counts=crate::counts::provider(Level::Nav) />
             </div>
             <div class="tree-scroll" on:scroll=move |_| tree.viewport.notify()>
                 <div

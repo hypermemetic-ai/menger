@@ -55,10 +55,7 @@ use menger_tickets_api::filter::{Conj, Field, Filter, Group, Predicate};
 
 use crate::ors::Ors;
 
-use crate::filter::{
-    fold_key, Cat, Clash, Clausal, Clause, Clauses, FilterButton, Op, Panel, Pill, Pop, QueryHead, QueryTree, Reset, ScTree, TextMode,
-    DEFAULT_KINDS,
-};
+use crate::filter::{fold_key, Cat, Clash, Clausal, Clause, Clauses, Host, Op, PanelHost, Pill, Pop, ScTree, DEFAULT_KINDS};
 use crate::{bindings, dom, keys, nav, Route};
 
 // ---------------------------------------------------------------------
@@ -711,6 +708,9 @@ pub(crate) struct Lens {
     sc: RwSignal<Option<String>>,
     /// The route's own surface.
     surface: RwSignal<Option<Level>>,
+    /// FILTER-40: the viewport is the phone's (APP-50's ≤ 820 px): the
+    /// panel lives in the phone bar's filter sheet.
+    phone: RwSignal<bool>,
     sctree: Memo<Option<ScTree>>,
     pops: [Pop; 5],
     /// The wave board's state is a WAVE-12 link's, not yet changed: its URL
@@ -804,6 +804,7 @@ impl Lens {
             defaults,
             sc,
             surface: RwSignal::new(None),
+            phone: RwSignal::new(crate::phonebar::is_phone(dom::window().inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1440.0))),
             sctree,
             pops: Level::ALL.map(Pop::new),
             legacy: RwSignal::new(false),
@@ -1129,6 +1130,31 @@ impl Lens {
         self.surface.get_untracked()
     }
 
+    /// FILTER-40: the level whose panel is open — one at a time. Tracked.
+    pub(crate) fn open_level(self) -> Option<Level> {
+        Level::ALL.into_iter().find(|l| self.pop(*l).open_tracked())
+    }
+
+    /// FILTER-40: where the one panel is drawn ([`crate::filter::host_of`]).
+    /// Tracked.
+    pub(crate) fn host(self) -> crate::filter::Host {
+        let line = self.surface.get().is_some_and(|l| self.pop(l).mounted_tracked());
+        crate::filter::host_of(self.phone.get(), line)
+    }
+
+    /// FILTER-40: the levels the panel's tabs offer — everywhere; the nav,
+    /// where it is drawn; the route's surface, where its line is. Tracked.
+    pub(crate) fn tabs(self) -> Vec<Level> {
+        let mut out = vec![Level::Global];
+        if self.pop(Level::Nav).mounted_tracked() {
+            out.push(Level::Nav);
+        }
+        if let Some(l) = self.surface.get().filter(|l| self.pop(*l).mounted_tracked()) {
+            out.push(l);
+        }
+        out
+    }
+
     pub(crate) fn pop(self, level: Level) -> Pop {
         self.pops[level.index()]
     }
@@ -1137,10 +1163,24 @@ impl Lens {
     /// section when given (scrolled to and lit) — every other level's
     /// folded.
     pub(crate) fn open_panel(self, level: Level, c: Option<Cat>) {
+        // FILTER-40: a tab changes which level the one panel edits; the
+        // focus it was opened from stays where it was.
+        let was = Level::ALL.into_iter().find(|l| self.pop(*l).is_open());
         for l in Level::ALL.into_iter().filter(|l| *l != level) {
-            self.pop(l).close(false);
+            self.pop(l).hand_over();
         }
-        self.pop(level).show(c);
+        self.pop(level).show_from(c, was.is_some());
+        // On a phone the panel is the filter sheet's: raise it.
+        if self.phone.get_untracked() {
+            crate::phonebar::open(Some(crate::phonebar::Place::Filter));
+        }
+    }
+
+    /// FILTER-40: the open panel folded, whichever level it edits.
+    pub(crate) fn close_panel(self, restore: bool) {
+        for l in Level::ALL {
+            self.pop(l).close(restore);
+        }
     }
 
     /// The keys, for the app's lifetime: `F` opens or folds the global
@@ -1172,9 +1212,17 @@ impl Lens {
             };
             ev.prevent_default();
             if self.pop(level).is_open() {
-                self.pop(level).close(true);
+                self.close_panel(true);
             } else {
                 self.open_panel(level, None);
+            }
+        });
+        // FILTER-40: the panel moves into the phone bar's sheet at phone
+        // widths, and back.
+        window_event_listener(leptos::ev::resize, move |_| {
+            let phone = crate::phonebar::is_phone(dom::window().inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1440.0));
+            if self.phone.get_untracked() != phone {
+                self.phone.set(phone);
             }
         });
     }
@@ -1189,45 +1237,33 @@ fn replace(win: &web_sys::Window, hash: &str, next: &str) {
 }
 
 // ---------------------------------------------------------------------
-// The header: the global filter
+// Under the header: the panel where no surface's line holds it
 
-/// The header's `Filter` button: the number of global groups as a badge;
-/// it opens the global menu.
-#[component]
-pub(crate) fn GlobalButton() -> impl IntoView {
-    view! { <FilterButton level=Level::Global hint="Filter every view (F)" badge=true /> }
-}
-
-/// Under the header while the global filter is non-empty (or its panel is
-/// open): the bar — the chevron, the name, the text — the text toggle and
-/// `clear`, and FILTER-39's panel, in the flow under it.
-/// FILTER-16: on a route it does not apply to (`applies` false: the
-/// components and settings pages) it says so.
+/// FILTER-40: under the header — the one panel while it is drawn here (a
+/// page with no surface line of its own, a ticket's; at phone widths
+/// always: this is the filter sheet's), the global filter's contradiction,
+/// and — FILTER-16 — on a route the filter does not reach (`applies`
+/// false: the components and settings pages), while it holds anything,
+/// that it does not apply there. The GLOBAL row is gone: the global filter
+/// is a dashed chip on every surface and the panel's ⌂ everywhere tab.
 #[component]
 pub(crate) fn LensBar(#[prop(into)] applies: Signal<bool>) -> impl IntoView {
     let lens = use_lens();
-    // FILTER-12: the global menu's counts are `facets { filter: global }`.
+    // FILTER-12: the global panel's counts are `facets { filter: global }`.
     lens.pop(Level::Global).configure(&Cat::SERVER, crate::counts::provider(Level::Global));
-    let texting = RwSignal::new(false);
-    let pop = lens.pop(Level::Global);
-    let shown = Memo::new(move |_| lens.differs(Level::Global) || texting.get() || pop.open_tracked());
+    let na = Memo::new(move |_| !applies.get() && lens.differs(Level::Global));
     view! {
-        {move || shown.get().then(|| view! {
-            <div class="lensbar fbar qbar" data-fbar="global" data-level="global" class:na=move || !applies.get() class:open=move || pop.open_tracked() on:keydown=move |ev| fold_key(pop, ev)>
-                <div class="qline">
-                    <span class="lens-l" title="the global filter: every view shows what it admits">"global"</span>
-                    {move || (!applies.get()).then(|| view! {
-                        <span class="lens-na" role="note" title="this page shows no ticket">"The filter doesn't apply here"</span>
-                    })}
-                    <QueryHead level=Level::Global texting />
-                    <TextMode level=Level::Global texting />
-                    <Reset level=Level::Global />
-                </div>
-                <QueryTree level=Level::Global texting />
-                <Panel level=Level::Global />
-            </div>
-            <Clash level=Level::Global />
+        {move || na.get().then(|| view! {
+            <div class="lens-na" role="note" title="this page shows no ticket">"The global filter doesn't apply here"</div>
         })}
+        <div class="ftop" on:keydown=move |ev| {
+            if let Some(l) = lens.open_level() {
+                fold_key(lens.pop(l), ev)
+            }
+        }>
+            <PanelHost host=Host::Top />
+        </div>
+        <Clash level=Level::Global />
     }
 }
 
