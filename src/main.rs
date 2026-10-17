@@ -244,6 +244,19 @@ struct Args {
     #[arg(long, env = "MENGER_IDENTITY", value_name = "SPEC")]
     identity: Option<plexus_login::backends::IdentitySpec>,
 
+    /// IDENTITY-45: a file holding the WorkOS environment's API key (one
+    /// line, 0600 — on a box, a secret mounted at /run/secrets/…), or the key
+    /// itself in MENGER_WORKOS_API_KEY (never a flag's value). With it, a
+    /// `workos=` --auth-provider's social --login-buttons (`GitHub=workos:GitHubOAuth`)
+    /// complete through WorkOS's API on menger's own login page — the steps
+    /// WorkOS asks for (an email to verify, Radar's extra code, an
+    /// organization, a second factor) taken there, the pending token kept
+    /// server-side. Without it the buttons are the PKCE path, unchanged. A
+    /// file named and unreadable stops startup. Not with --identity, whose
+    /// spec carries its own key.
+    #[arg(long, env = "MENGER_WORKOS_API_KEY_FILE", value_name = "FILE")]
+    workos_api_key_file: Option<std::path::PathBuf>,
+
     /// AUTH-22: a proxy (CIDR or address, repeatable) whose X-Forwarded-For
     /// is believed for the client's IP — the edge in front of the shell and
     /// the WebSocket (TRANSPORT-7: its per-IP and anonymous quotas count the
@@ -362,6 +375,12 @@ async fn main() -> anyhow::Result<()> {
         // AUTH-24 #8: `memory` and `plexus-idp` sign people in only where
         // the dev sign-in may (IDENTITY-38: `--env test`).
         allow_development_backends: dev_login_allowed(args.env.as_deref()),
+        // IDENTITY-45: the WorkOS key, when the box holds it.
+        workos_key: match &args.identity {
+            Some(_) if args.workos_api_key_file.is_some() => anyhow::bail!("--workos-api-key-file is for the workos= --auth-provider's buttons; --identity names its own key (key=@<file>)"),
+            Some(_) => None,
+            None => plexus_login::backends::workos::ApiKey::from_env_or_file(menger::login_access::BRANDING.app, args.workos_api_key_file.as_deref()).map_err(anyhow::Error::msg)?,
+        },
         ..LoginOptions::new(menger::login_access::BRANDING, args.port, args.shell_port)
     })?;
     // ACCESS-30: beyond loopback, a sign-in is made over https — the public

@@ -629,6 +629,40 @@ MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
 same "remote prod: exits 0" "$code" 0
 has "remote prod: promote.yml only" "$(<"$SCRATCH/infra.argv")" "infra promote.yml -e app_dir="
 same "remote prod: url" "$(<"$HF")" "url=https://app.menger.sh/"
+
+# ── IDENTITY-45: remote-secret — the WorkOS key through infra's secret.yml, on a pipe ──
+INS=$SCRATCH/infra-secret; mkdir -p "$INS/bin"; : >"$INS/secret.yml"
+printf '#!/usr/bin/env bash\necho "infra $*" >>"%s"\ncat >"%s"\n[[ ${STUB_INFRA:-ok} == fail ]] && exit 1\nexit 0\n' "$SCRATCH/infra.argv" "$SCRATCH/infra.stdin" >"$INS/bin/infra"; chmod +x "$INS/bin/infra"
+KEYV=sk_test_identity45_not_a_real_key
+srun() { : >"$SCRATCH/infra.argv"; : >"$SCRATCH/infra.stdin"; HOME=$H3 MENGER_INFRA_DIR=$INS run "$@"; }
+WORKOS_API_KEY=$KEYV srun remote-secret prod
+same "remote-secret prod: exits 0" "$code" 0
+same "remote-secret prod: infra's secret.yml, prod, the declared name" "$(<"$SCRATCH/infra.argv")" \
+  "infra secret.yml -e app_dir=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)") -e env=prod -e secret=workos-api-key"
+same "remote-secret prod: the key on infra's stdin" "$(<"$SCRATCH/infra.stdin")" "$KEYV"
+[[ $(<"$SCRATCH/infra.argv")$err$(<"$SCRATCH/out") != *"$KEYV"* ]] && ok || bad "remote-secret: the key in an argument or the output"
+same "remote-secret prod: logged, no value" "$(tail -n 1 "$D3/deployments.log" | cut -f2-5)" $'app-prod\tsecret\tworkos-api-key\tok'
+grep -q "$KEYV" "$D3/deployments.log" && bad "remote-secret: the key in deployments.log" || ok
+printf '%s\n' "$KEYV" >"$SCRATCH/key.file"
+srun remote-secret test --from "$SCRATCH/key.file" --check
+same "remote-secret test --from --check: exits 0" "$code" 0
+has "remote-secret --check: infra's dry run" "$(<"$SCRATCH/infra.argv")" "-e env=test -e secret=workos-api-key --check --diff"
+same "remote-secret --from: the file's line, no newline" "$(<"$SCRATCH/infra.stdin")" "$KEYV"
+[[ $(tail -n 1 "$D3/deployments.log") != *$'app-test\tsecret'* ]] && ok || bad "remote-secret --check: logged as done"
+printf '%s' "$KEYV" | HOME=$H3 MENGER_INFRA_DIR=$INS "$P" remote-secret test >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?
+same "remote-secret test from stdin: exits 0" "$code" 0
+WORKOS_API_KEY=not-a-key srun remote-secret prod
+same "remote-secret, not a key: exits 1" "$code" 1
+has "remote-secret, not a key: refused before infra" "$err" "not a WorkOS API key"
+same "remote-secret, not a key: infra not asked" "$(<"$SCRATCH/infra.argv")" ""
+[[ $err != *not-a-key* ]] && ok || bad "remote-secret: echoed a refused value"
+WORKOS_API_KEY=$KEYV STUB_INFRA=fail srun remote-secret prod
+same "remote-secret, infra fails: exits 1" "$code" 1
+has "remote-secret, infra fails: said" "$err" "infra did not place the key on app.menger.sh"
+srun remote-secret staging
+has "remote-secret, an unknown environment: usage" "$err" "usage: deploy/pipeline remote-secret test|prod"
+has "app.yml: the WorkOS key is a declared secret file" "$(<"$AY")" "env: MENGER_WORKOS_API_KEY_FILE"
+grep -q 'WORKOS_API_KEY=' "$REPO"/deploy/env/app-*.env && bad "app-*.env: a WorkOS key in the repository" || ok
 # the pipeline declares these very commands
 PT=$REPO/.hyperforge/pipelines.toml
 has "pipelines.toml: build is deploy/pipeline image" "$(grep -A3 'name = "build"' "$PT")" "deploy/pipeline image'"

@@ -70,6 +70,7 @@ deploy/pipeline media                # landing/media regenerated from the releas
 deploy/pipeline image [RELEASE]      # RUN-10: a TESTED release as an image (menger:<release> here; IMAGE_STORE=ghcr pushes)
 deploy/pipeline local --image IMG    # RUN-25: the image here as menger-app-local, 127.0.0.1:4470/4471
 deploy/pipeline remote test|prod     # RUN-25: app-test / app.menger.sh through infra (deploy/app.yml, RUN-11)
+deploy/pipeline remote-secret test|prod   # IDENTITY-45: the WorkOS API key on the box, from a pipe ("The WorkOS key on the box")
 ```
 
 1. **Build** (`build [REV]`, default `main`). A commit, never a working
@@ -367,7 +368,7 @@ pinned address, SCAFFOLD-22) over `app.env`.
 | environment | host | settings (copied to the box as `app.env`) | state |
 |---|---|---|---|
 | test | `app-test.menger.sh` | `deploy/env/app-test.env` | live since 2026-10-17, its own empty tracker |
-| prod | `app.menger.sh` | `deploy/env/app-prod.env` | live since 2026-10-17, prod's data moved there (RUN-13); AuthKit on WorkOS production |
+| prod | `app.menger.sh` | `deploy/env/app-prod.env` | live since 2026-10-17, prod's data moved there (RUN-13); WorkOS production, the GitHub button through WorkOS's API with the key on the box (IDENTITY-45) |
 
 The settings are menger's own (README "Bind", "Trusted proxies", "Behind
 https", Login): `MENGER_PUBLIC_URL=https://<host>`, `MENGER_BIND=0.0.0.0`,
@@ -404,6 +405,43 @@ not run at once. The rollback: `systemctl --user start menger@prod`, remove
 `prod.moved`, agents back to `-P 4455` — what was written on app.menger.sh
 since the move is only there (copy it back the same way first, if it
 matters).
+
+### The WorkOS key on the box (IDENTITY-45)
+
+WorkOS answers a direct GitHub sign-in with `email_verification_required`
+for every user whose address it has not verified (email verification is
+always on), and the grant that completes that step needs the client secret.
+So each environment's menger can hold its WorkOS environment's API key — a
+file on the box, never in the repository, `app-*.env`, the image or a log —
+and then the GitHub button completes through WorkOS's API on menger's own
+page (README "The direct buttons with the key"). Without the file the
+button is the PKCE path, as before.
+
+`deploy/app.yml` declares the file (`secrets`: `workos-api-key`, read by
+the image's uid 10001, named to menger as `MENGER_WORKOS_API_KEY_FILE`).
+hypermemetic-infra keeps `/opt/apps/<project>/secrets/` (0500) on the box,
+mounts it read-only at `/run/secrets`, and sets the variable only for a file
+the box holds. `deploy/pipeline remote-secret` puts the value there through
+infra's `secret.yml`, on a pipe: written 0400, the container recreated (or
+restarted), health checked, and on a failed check the old value (or none)
+put back by itself. The value comes from `$WORKOS_API_KEY`, `--from FILE`, or
+stdin, and is checked to be an `sk_…` key before anything is sent:
+
+```sh
+# app.menger.sh: WorkOS production's key, sealed to the owner's Ledger — one approval on the device
+ledger-secret run workos-prod WORKOS_API_KEY -- deploy/pipeline remote-secret prod
+# or from a key file the owner placed (0600)
+deploy/pipeline remote-secret prod --from ~/.config/workos/production.key
+# app-test.menger.sh: WorkOS staging's key
+deploy/pipeline remote-secret test --from ~/.config/workos/staging.key
+# a dry run: infra's secret.yml --check --diff, nothing written
+deploy/pipeline remote-secret prod --from ~/.config/workos/production.key --check
+```
+
+Each run is a line in `deployments.log` (`app-prod secret workos-api-key
+ok`) and in the box's own log, never the value. Rotating is the same
+command with the new key. A new image needs nothing: the file stays on the
+box, and every `remote test` / `remote prod` mounts it again.
 
 menger has no admin-by-email form: `MENGER_ADMINS` names principals
 (`oidc:workos/user_…`). A person signed in with no grant waits in `members

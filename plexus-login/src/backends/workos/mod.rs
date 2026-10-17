@@ -8,6 +8,7 @@
 //! | `federated_url` | `GET /user_management/authorize` with `provider=GoogleOAuth\|GitHubOAuth\|AppleOAuth\|MicrosoftOAuth`, `organization_id` or `connection_id`, `state`, PKCE S256 |
 //! | `complete_federated` | `authenticate`, grant `authorization_code` (client secret **and** PKCE verifier) |
 //! | `continue_with_code` | `authenticate`, grant `mfa-totp`, `email-verification:code` or `radar-email-challenge:code`, by the ticket |
+//! | `resend_code` | IDENTITY-45: `GET /user_management/email_verification/{id}` → `POST /user_management/users/{user}/email_verification/send` |
 //! | `choose` | `authenticate`, grant `organization-selection` |
 //! | `totp_enroll` / `totp_confirm` | `POST /user_management/users/{id}/auth_factors`; `POST /auth/challenges/{id}/verify` |
 //! | `totp_factors` / `totp_remove` / `totp_discard` | `GET /user_management/users/{id}/auth_factors`; `POST /auth/factors/{id}/challenge` + verify; `DELETE /auth/factors/{id}` |
@@ -150,7 +151,9 @@ impl WorkOs {
                     Err(e) => call(e),
                 }
             }
-            AuthError::EmailVerification { pending } => IdentityError::EmailUnverified { ticket: ticket("verify", &pending, None) },
+            AuthError::EmailVerification { pending, email, verification } => {
+                IdentityError::EmailUnverified { ticket: ticket("verify", &pending, verification.as_deref()), email }
+            }
             AuthError::RadarEmail { pending, challenge } => IdentityError::ExtraCheck { ticket: ticket("radar", &pending, Some(&challenge)) },
             AuthError::RadarSms => IdentityError::Unsupported("a text-message check"),
             AuthError::OrganizationSelection { pending, organizations } => IdentityError::Choose {
@@ -204,7 +207,7 @@ fn read(t: &Ticket) -> Option<(String, Secret, Option<String>)> {
     Some((v.get("k")?.as_str()?.to_string(), Secret(v.get("p")?.as_str()?.to_string()), v.get("c").and_then(Value::as_str).map(str::to_string)))
 }
 
-fn provider_name(s: Social) -> &'static str {
+pub(crate) fn provider_name(s: Social) -> &'static str {
     match s {
         Social::Google => "GoogleOAuth",
         Social::GitHub => "GitHubOAuth",
@@ -284,6 +287,13 @@ impl IdentityBackend for WorkOs {
             _ => return Err(IdentityError::InvalidCode),
         };
         self.answer(r, &kind).await
+    }
+
+    async fn resend_code(&self, t: &Ticket, _req: &RequestInfo) -> IdResult<()> {
+        match read(t) {
+            Some((k, _, Some(verification))) if k == "verify" => self.api.resend_verification(&verification).await.map_err(call),
+            _ => Err(IdentityError::Unsupported("sending another code for this step")),
+        }
     }
 
     async fn choose(&self, t: &Ticket, choice: &str, req: &RequestInfo) -> IdResult<SignedIn> {
