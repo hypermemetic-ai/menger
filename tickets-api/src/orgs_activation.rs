@@ -37,13 +37,13 @@ use std::sync::Arc;
 /// The activation. Server-only: it holds the store and the rule.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Orgs {
+pub struct OrgsActivation {
     store: Arc<Store>,
     access: Access,
 }
 
 #[cfg(feature = "server")]
-impl Orgs {
+impl OrgsActivation {
     /// No login: every call admitted, as always.
     pub fn new(store: Arc<Store>) -> Self {
         Self::with_access(store, Access::open())
@@ -84,12 +84,8 @@ fn administered(store: &Store, caller: &VerifiedUser, name: &str) -> Result<(cra
 
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 #[plexus_macros::activation(
-    namespace = "orgs",
     description = "Organizations: every ticket and shortcode is in one; list yours, and (admin) create, rename, delete",
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     // AUTH-7: any member lists the organizations it is in; create, rename and
     // delete are admin's (unlisted: admin holds every grant).
     roles(
@@ -97,7 +93,7 @@ fn administered(store: &Store, caller: &VerifiedUser, name: &str) -> Result<(cra
         editor = [viewer],
     )
 )]
-impl Orgs {
+impl OrgsActivation {
     /// The organizations the caller holds a role in — every one for a role
     /// on `*`, and with login off — in the order they were made: one `org
     /// { name, aliases, roots, shortcodes, tickets }` each.

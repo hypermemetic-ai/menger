@@ -425,3 +425,11 @@ mod tests {
         assert_eq!(r.source.unwrap().run.as_deref(), Some("promote"));
     }
 }
+
+/// MACRO-21: the emitted client implements the activation's trait; a client
+/// failure is the in-band error, the last item of its stream.
+impl plexus_client::FromClientError for DeploymentsEvent {
+    fn from_client_error(error: plexus_client::ClientError) -> Self {
+        DeploymentsEvent::Error { message: error.to_string() }
+    }
+}

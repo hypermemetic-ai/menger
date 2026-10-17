@@ -14,7 +14,7 @@
 #![cfg(feature = "server")]
 
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{Chats, Comments, Deployments, Members, Nav, Notes, Orgs, Session, Store, Themes, Tickets};
+use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, MembersActivation, NavActivation, NotesActivation, OrgsActivation, SessionActivation, Store, ThemesActivation, TicketsActivation};
 // (`Nav` is `tickets`' child, ACCESS-16.)
 use plexus_core::plexus::{Activation, MethodRole, PluginSchema};
 use std::collections::BTreeMap;
@@ -57,29 +57,29 @@ fn surface_at(path: &str, schema: PluginSchema) -> Surface {
 /// `menger::build_rpc` registers.
 fn activation() -> Surface {
     let store = Arc::new(Store::new());
-    let hub = Tickets::new(Arc::clone(&store));
+    let hub = TicketsActivation::new(Arc::clone(&store));
     let tickets = hub.plugin_schema();
     // ACCESS-15: the children, each under `tickets.<child>` (MACRO-20: the
     // activation lists its static children by path).
     let children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&hub).into_iter().map(|(path, c)| surface_at(&format!("tickets.{path}"), c)).collect();
-    let comments = Comments::new(Arc::clone(&store)).plugin_schema();
+    let comments = CommentsActivation::new(Arc::clone(&store)).plugin_schema();
     // CHAT-3: and chats.
-    let chats = Chats::new(Arc::clone(&store)).plugin_schema();
+    let chats = ChatsActivation::new(Arc::clone(&store)).plugin_schema();
     assert_eq!(chats.namespace, "chats");
     // NOTE-2: and notes.
-    let notes = Notes::new(Arc::clone(&store)).plugin_schema();
+    let notes = NotesActivation::new(Arc::clone(&store)).plugin_schema();
     // DEPLOY-11: and deployments.
-    let deployments = Deployments::new(Arc::clone(&store)).plugin_schema();
+    let deployments = DeploymentsActivation::new(Arc::clone(&store)).plugin_schema();
     assert_eq!(deployments.namespace, "deployments");
     // THEME-8: and themes.
     // ORG-4: and orgs.
-    let orgs = Orgs::new(Arc::clone(&store)).plugin_schema();
+    let orgs = OrgsActivation::new(Arc::clone(&store)).plugin_schema();
     assert_eq!(orgs.namespace, "orgs");
-    let themes = Themes::new(store).plugin_schema();
+    let themes = ThemesActivation::new(store).plugin_schema();
     assert_eq!(themes.namespace, "themes");
     assert_eq!(notes.namespace, "notes");
-    let session = Session::new().plugin_schema();
-    let members_hub = Members::new(Arc::new(Store::new()), Access::open());
+    let session = SessionActivation::new().plugin_schema();
+    let members_hub = MembersActivation::new(Arc::new(Store::new()), Access::open());
     let members = members_hub.plugin_schema();
     // ACCESS-22: members' child, `members.teams`.
     let member_children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&members_hub).into_iter().map(|(path, c)| surface_at(&format!("members.{path}"), c)).collect();

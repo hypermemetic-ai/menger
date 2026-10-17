@@ -234,3 +234,11 @@ mod tests {
         assert!(check_body("123456789", 8).unwrap_err().contains("9 bytes, past the 8"));
     }
 }
+
+/// MACRO-21: the emitted client implements the activation's trait; a client
+/// failure is the in-band error, the last item of its stream.
+impl plexus_client::FromClientError for ChatsEvent {
+    fn from_client_error(error: plexus_client::ClientError) -> Self {
+        ChatsEvent::Error { message: error.to_string() }
+    }
+}

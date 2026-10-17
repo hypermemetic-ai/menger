@@ -32,7 +32,7 @@ use streams::*;
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Comments {
+pub struct CommentsActivation {
     store: Arc<Store>,
     /// IDENTITY-19: the rule every method's caller is verified by
     /// ([`crate::access`]).
@@ -40,7 +40,7 @@ pub struct Comments {
 }
 
 #[cfg(feature = "server")]
-impl Comments {
+impl CommentsActivation {
     /// No login: every call admitted, as always.
     pub fn new(store: Arc<Store>) -> Self {
         Self::with_access(store, Access::open())
@@ -58,19 +58,15 @@ impl Comments {
 // is a viewer's. Resolving and reopening are an editor's.
 /// Comments on the app and on ticket bodies — add, list (filtered), resolve, reopen, watch.
 #[plexus_macros::activation(
-    namespace = "comments",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     roles(
         viewer = ["add", "list", "watch"],
         editor = [viewer, "resolve", "reopen"],
     )
 )]
-impl Comments {
+impl CommentsActivation {
     /// Leave a comment at an anchor (route, path, label, excerpt, and ticket when the element belongs to one); yields the comment.
     ///
     /// Keeps a comment: `anchor` says where it was left — `route` (the app

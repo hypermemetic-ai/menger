@@ -2369,3 +2369,11 @@ mod tests {
         }
     }
 }
+
+/// MACRO-21: the emitted client implements the activation's trait; a client
+/// failure is the in-band error, the last item of its stream.
+impl plexus_client::FromClientError for TicketsEvent {
+    fn from_client_error(error: plexus_client::ClientError) -> Self {
+        TicketsEvent::Error { message: error.to_string() }
+    }
+}

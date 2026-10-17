@@ -248,3 +248,11 @@ mod tests {
         assert!(json["ticket"].is_null() && json.get("principal").is_none(), "{json}");
     }
 }
+
+/// MACRO-21: the emitted client implements the activation's trait; a client
+/// failure is the in-band error, the last item of its stream.
+impl plexus_client::FromClientError for NotesEvent {
+    fn from_client_error(error: plexus_client::ClientError) -> Self {
+        NotesEvent::Error { message: error.to_string() }
+    }
+}

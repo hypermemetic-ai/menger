@@ -6,11 +6,12 @@
 //! | `menger` (the server binary) | *(default: `server`)* | [`types`], [`store`], [`Tickets`] — the activation with its real bodies — and [`TicketsClient`]; COMMENT-2's [`comments`], [`Comments`] and [`CommentsClient`] beside them; IDENTITY-14's [`session`], [`Session`] and [`SessionClient`] |
 //! | `menger-app` (wasm32) | `default-features = false` | [`types`] and [`TicketsClient`] over four wasm-safe crates: no plexus-core, tokio, jsonrpsee or rusqlite; [`comments`] and [`CommentsClient`] the same way |
 //!
-//! The client is emitted by `#[plexus_macros::activation(client, …)]` on
-//! the activation's own `impl`, so its parameters and events *are* the
-//! server's: a renamed field or parameter is a compile error in the
-//! browser, never a runtime surprise. The `server_cfg` flag keeps the
-//! server half of that expansion behind the `server` feature.
+//! The client is emitted by `#[plexus_macros::activation]` on the
+//! activation's own `impl TicketsActivation` (the crate depends on
+//! plexus-client), so its parameters and events *are* the server's: a
+//! renamed field or parameter is a compile error in the browser, never a
+//! runtime surprise. The crate's `server` feature keeps the server half of
+//! that expansion behind it (MACRO-13's default).
 //!
 //! ```no_run
 //! # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
@@ -105,7 +106,7 @@ pub use activation::TicketsClient;
 // ACCESS-16: `tickets nav`, a child of `tickets` (`TicketsClient::nav()`).
 pub use activation::NavClient;
 #[cfg(feature = "server")]
-pub use activation::{Nav, Tickets};
+pub use activation::{NavActivation, TicketsActivation};
 
 /// COMMENT-2: the comments vocabulary — [`Anchor`], [`Comment`],
 /// [`CommentState`], [`CommentsEvent`] — and the rules `add` keeps them by.
@@ -117,7 +118,7 @@ pub use comments::{Anchor, Comment, CommentIntent, CommentState, CommentsEvent};
 pub mod comments_activation;
 pub use comments_activation::CommentsClient;
 #[cfg(feature = "server")]
-pub use comments_activation::Comments;
+pub use comments_activation::CommentsActivation;
 
 /// CHAT-3: the chats vocabulary — [`Chat`], [`Message`], [`ChatState`],
 /// [`ChatsEvent`]. Wasm-safe, like [`comments`].
@@ -128,7 +129,7 @@ pub use chats::{Chat, ChatState, ChatsEvent, Message};
 pub mod chats_activation;
 pub use chats_activation::ChatsClient;
 #[cfg(feature = "server")]
-pub use chats_activation::Chats;
+pub use chats_activation::ChatsActivation;
 
 /// NOTE-2: the notes vocabulary — [`Note`], [`NoteState`], [`NotesEvent`]
 /// — the rules `add` keeps a note by, and the title a note gives its
@@ -140,7 +141,7 @@ pub use notes::{Note, NoteState, NotesEvent};
 pub mod notes_activation;
 pub use notes_activation::NotesClient;
 #[cfg(feature = "server")]
-pub use notes_activation::Notes;
+pub use notes_activation::NotesActivation;
 
 /// THEME-2: the token contract — every token menger draws with, its group
 /// and its defaults, read from `tokens.toml` ([`tokens::TOKENS`]), and
@@ -160,7 +161,7 @@ pub mod theme_block;
 pub mod themes_activation;
 pub use themes_activation::ThemesClient;
 #[cfg(feature = "server")]
-pub use themes_activation::Themes;
+pub use themes_activation::ThemesActivation;
 
 /// IDENTITY-21: the members vocabulary — [`Role`], [`Grant`],
 /// [`MembersEvent`]. Wasm-safe, like [`comments`].
@@ -171,7 +172,7 @@ pub use members::{Grant, MembersEvent, Role};
 pub mod members_activation;
 pub use members_activation::{MembersClient, TeamsClient};
 #[cfg(feature = "server")]
-pub use members_activation::Members;
+pub use members_activation::MembersActivation;
 
 /// IDENTITY-14: who a connection is — [`SessionEvent`], wasm-safe like
 /// [`comments`].
@@ -181,7 +182,7 @@ pub use orgs::{Org, OrgsEvent};
 pub mod orgs_activation;
 pub use orgs_activation::OrgsClient;
 #[cfg(feature = "server")]
-pub use orgs_activation::Orgs;
+pub use orgs_activation::OrgsActivation;
 
 pub mod session;
 pub use session::{ProviderKind, ProviderOffer, SessionEvent};
@@ -190,7 +191,7 @@ pub use session::{ProviderKind, ProviderOffer, SessionEvent};
 pub mod session_activation;
 pub use session_activation::SessionClient;
 #[cfg(feature = "server")]
-pub use session_activation::Session;
+pub use session_activation::SessionActivation;
 
 /// DEPLOY-11: the deployments vocabulary — [`Record`](deployments::Record),
 /// [`Deployment`], [`Environment`], [`DeploymentsEvent`]. Wasm-safe, like
@@ -202,4 +203,4 @@ pub use deployments::{DeployState, Deployment, DeploymentsEvent, Environment, Ru
 pub mod deployments_activation;
 pub use deployments_activation::DeploymentsClient;
 #[cfg(feature = "server")]
-pub use deployments_activation::Deployments;
+pub use deployments_activation::DeploymentsActivation;

@@ -17,7 +17,7 @@ use super::*;
 /// The component registry child. Server-only: it holds the store.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Components {
+pub struct ComponentsActivation {
     pub(super) store: Arc<Store>,
     pub(super) access: Access,
 }
@@ -26,16 +26,12 @@ pub struct Components {
 // build too, or there would be no `ComponentsClient`.
 /// The component registry: every component a ticket defines, through the caller's reach (COMP-3).
 #[plexus_macros::activation(
-    namespace = "components",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     roles(viewer = ["list"], editor = [viewer])
 )]
-impl Components {
+impl ComponentsActivation {
     /// Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes.
     ///
     /// COMP-3: the component registry. Yields one `Component` per component

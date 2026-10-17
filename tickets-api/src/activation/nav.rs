@@ -35,13 +35,13 @@ use std::sync::Arc;
 /// What the nav and the menus ask: the roll-ups, the extents, the tree under a filter, its counts and facets, and membership.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Nav {
+pub struct NavActivation {
     store: Arc<Store>,
     access: Access,
 }
 
 #[cfg(feature = "server")]
-impl Nav {
+impl NavActivation {
     /// Over the parent's store and access rule — what `tickets`' `nav`
     /// accessor hands the router.
     pub fn new(store: Arc<Store>, access: Access) -> Self {
@@ -51,19 +51,15 @@ impl Nav {
 
 /// What the nav and the menus ask — `tickets.nav.<method>`: the roll-ups, the extents, the tree under a filter, its counts and facets, and membership.
 #[plexus_macros::activation(
-    namespace = "nav",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     roles(
         viewer = ["groups", "extents", "tree", "counts", "facets", "member"],
         editor = [viewer],
     )
 )]
-impl Nav {
+impl NavActivation {
     /// One roll-up per shortcode: done/total over its subtree's work, its docs, its root (with the root's title, status and kind), and the host it nests under.
     ///
     /// MNG-10: the nav's tree without its rows. Yields one `Group` per

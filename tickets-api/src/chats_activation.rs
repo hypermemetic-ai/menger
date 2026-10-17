@@ -35,13 +35,13 @@ mod await_message;
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Chats {
+pub struct ChatsActivation {
     store: Arc<Store>,
     access: Access,
 }
 
 #[cfg(feature = "server")]
-impl Chats {
+impl ChatsActivation {
     /// No login: every call admitted, as always.
     pub fn new(store: Arc<Store>) -> Self {
         Self::with_access(store, Access::open())
@@ -59,19 +59,15 @@ impl Chats {
 // role's.
 /// Chats on a ticket among participants — open, post, add, list, messages, read, close, reopen, watch, await_message.
 #[plexus_macros::activation(
-    namespace = "chats",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     roles(
         viewer = ["open", "post", "add", "list", "messages", "read", "close", "reopen", "watch", "await_message", "candidates"],
         editor = [viewer],
     )
 )]
-impl Chats {
+impl ChatsActivation {
     /// Open a chat on a ticket with the principals named; yields opened { chat } — the open chat they already have there, when they do (existing: true).
     ///
     /// The caller and `others` are the participants (CHAT-1's `with`, which

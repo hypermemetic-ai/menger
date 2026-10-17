@@ -41,7 +41,7 @@ use crate::access::{Access, MengerRequest, VerifiedUser};
 /// offers and the rule its callers are verified by.
 #[cfg(feature = "server")]
 #[derive(Clone, Default)]
-pub struct Session {
+pub struct SessionActivation {
     offers: Arc<Vec<ProviderOffer>>,
     /// IDENTITY-37 / ACCESS-19: the rule `whoami`, `login` and `logout`'s
     /// callers are verified by — open (login off) unless given.
@@ -49,7 +49,7 @@ pub struct Session {
 }
 
 #[cfg(feature = "server")]
-impl Session {
+impl SessionActivation {
     /// A session offering no provider, login off: `whoami` is always
     /// `anonymous`.
     pub fn new() -> Self {
@@ -103,15 +103,11 @@ fn minted(access: &Access, user: &VerifiedUser, ttl_secs: Option<u64>, scope: Op
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 /// Who this connection is: its Plexus principal, name, roles and tenant.
 #[plexus_macros::activation(
-    namespace = "session",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core"
 )]
-impl Session {
+impl SessionActivation {
     /// Who this connection is: identity { principal, name, roles, tenant, provider }, or anonymous.
     ///
     /// Yields exactly one event: `identity` — `principal` (`idp:<uuid>`,
@@ -196,7 +192,7 @@ mod tests {
         }
     }
 
-    async fn whoami(s: &Session, user: VerifiedUser) -> SessionEvent {
+    async fn whoami(s: &SessionActivation, user: VerifiedUser) -> SessionEvent {
         Box::pin(s.whoami(user).await).next().await.unwrap()
     }
 
@@ -207,7 +203,7 @@ mod tests {
     async fn whoami_after_sign_out_is_refused_unauthenticated() {
         let live = Arc::new(Live(Mutex::new(true)));
         let access = Access::with_login(live.clone(), true, vec![]);
-        let s = Session::new().with_access(access.clone());
+        let s = SessionActivation::new().with_access(access.clone());
         let principal = "idp:c952acd3-0000-4000-8000-000000000001";
         let ctx = AuthContext::new("u1".into(), "s".into(), vec![], serde_json::json!({ SESSION_KEY: "k", "name": "alice", "principal": principal }));
         let user = access.verify_now(&ctx).expect("signed in");
@@ -218,6 +214,6 @@ mod tests {
         assert!(matches!(wire, plexus_core::plexus::PlexusError::Unauthenticated(_)), "{wire:?}");
         // Login off: anyone, and anonymous.
         let open = Access::open().verify_now(&AuthContext::anonymous()).unwrap();
-        assert_eq!(whoami(&Session::new(), open).await, SessionEvent::Anonymous);
+        assert_eq!(whoami(&SessionActivation::new(), open).await, SessionEvent::Anonymous);
     }
 }

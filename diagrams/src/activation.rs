@@ -8,8 +8,8 @@
 //! | `server` (default; the `menger-diagrams` binary) | the `Activation` impl, dispatch, the schema, these bodies |
 //! | `default-features = false` (a client: menger handing blocks off, wasm32 or not) | `MermaidClient<T>` — `parse`/`parse_all`, `check`/`check_all` — over the activation's own [`MermaidEvent`] |
 //!
-//! `server_cfg` puts the server half of the expansion behind the `server`
-//! feature; the struct and the server-only imports sit behind the same
+//! The crate's `server` feature gates the server half of the expansion
+//! (MACRO-13's default); the struct and the server-only imports sit behind the same
 //! `cfg`. A renamed parameter here is a compile error in every client.
 
 #[cfg(feature = "server")]
@@ -25,12 +25,12 @@ use futures::Stream;
 /// The activation. Server-only: it holds the Node driver.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Mermaid {
+pub struct MermaidActivation {
     driver: Driver,
 }
 
 #[cfg(feature = "server")]
-impl Mermaid {
+impl MermaidActivation {
     pub fn new(driver: Driver) -> Self {
         Self { driver }
     }
@@ -39,14 +39,10 @@ impl Mermaid {
 // The attribute is NOT `#[cfg]`-gated: it has to run in the client-only
 // build too, or there would be no client.
 #[plexus_macros::activation(
-    namespace = "mermaid",
     description = "Parse mermaid diagrams with the bundle the app serves, alone or in markdown",
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core"
 )]
-impl Mermaid {
+impl MermaidActivation {
     /// mermaid's verdict on one diagram. Yields exactly one event:
     /// `parsed { diagram_type }` when mermaid accepts it, `parse_error {
     /// message, line }` when it does not (`line` 1-based within `source`,

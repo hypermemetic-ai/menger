@@ -33,13 +33,13 @@ use std::sync::Arc;
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Themes {
+pub struct ThemesActivation {
     store: Arc<Store>,
     access: Access,
 }
 
 #[cfg(feature = "server")]
-impl Themes {
+impl ThemesActivation {
     /// No login: every call admitted, as always.
     pub fn new(store: Arc<Store>) -> Self {
         Self::with_access(store, Access::open())
@@ -59,12 +59,8 @@ fn refused(e: StoreError) -> ThemesEvent {
 
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 #[plexus_macros::activation(
-    namespace = "themes",
     description = "Themes: token overrides the site, a shortcode, a ticket or a frame adopts",
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     // AUTH-7: reading is a viewer's; defining and setting an editor's (the
     // site's theme admin's alone, asked in the method).
     roles(
@@ -72,7 +68,7 @@ fn refused(e: StoreError) -> ThemesEvent {
         editor = [viewer, "define", "set"],
     )
 )]
-impl Themes {
+impl ThemesActivation {
     /// THEME-3: the authoring path is a ticket's ` ```theme name
     /// [extends=parent] ` block (`tickets.create` / `amend` / `update`
     /// register it, owned by that ticket); `define` stays for admin and
