@@ -295,7 +295,8 @@ impl Wiring {
         let gate = (carriers.is_some() || login_on).then(|| Arc::new(Gate::new(sessions.clone(), carriers).noticing(access.clone())));
         // RFC 9728's metadata names the OIDC issuers a client can sign in at.
         let issuers: Vec<String> = opts.providers.iter().filter_map(|p| p.oidc().map(|(issuer, _, _)| issuer.to_string())).collect();
-        let protected = ProtectedResource::new(format!("http://127.0.0.1:{}", opts.ws_port), issuers);
+        // RUN-9: behind an https proxy, the socket the public reaches.
+        let protected = ProtectedResource::new(resource_url(opts.ws_port, opts.public_url.as_deref()), issuers);
         // IDENTITY-29: only the shell's own pages (and those named) may open
         // the socket from a browser; a client sends no Origin.
         let mut origins = shell_origins;
@@ -360,6 +361,23 @@ impl<A: LoginAccess> Wired<A> {
         self.login_on().then(|| self.protected.metadata_url())
     }
 
+    /// RUN-9: RFC 9728's document as a route for the shell, at its path,
+    /// when login is on and the resource is the public origin's `/ws`
+    /// ([`resource_url`]): behind the proxy everything but `/ws` reaches the
+    /// shell, so the metadata the 401s name is answered there too. Public,
+    /// like the socket port's copy; merge it outside any session layer.
+    pub fn metadata_route(&self) -> Option<axum::Router> {
+        if !self.login_on() || !self.protected.resource.starts_with("https://") {
+            return None;
+        }
+        let body = self.protected.to_json();
+        let handler = move || {
+            let body = body.clone();
+            async move { ([(axum::http::header::CONTENT_TYPE, "application/json")], body) }
+        };
+        Some(axum::Router::new().route(&self.protected.metadata_path(), axum::routing::get(handler)))
+    }
+
     /// The upgrade's half on a transport builder that has its WebSocket:
     /// the allowed origins, and with login on the gate, the anonymous view
     /// (AUTH-6/AUTH-7: no credential → only the auth door; a credential
@@ -393,6 +411,21 @@ fn is_loopback_url(url: &str) -> bool {
         Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
         Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost") || d.to_ascii_lowercase().ends_with(".localhost"),
         None => false,
+    }
+}
+
+/// RUN-9: RFC 9728's resource identifier for a socket on `ws_port`. With
+/// an https `public_url` a proxy terminates TLS in front, and the socket is
+/// that origin's `/ws` (the page dials `wss://<host>/ws`, ACCESS-30): the
+/// resource is `https://<host>/ws` — RFC 9728 §1.2's identifier is an https
+/// URL — and its metadata `https://<host>/.well-known/oauth-protected-resource/ws`,
+/// which the shell serves on the public origin ([`Wired::metadata_route`])
+/// as the socket's port does directly. Otherwise the socket's own address,
+/// `http://127.0.0.1:<ws_port>`, as before.
+pub fn resource_url(ws_port: u16, public_url: Option<&str>) -> String {
+    match public_url.and_then(|p| url::Url::parse(p).ok()).filter(|u| u.scheme() == "https") {
+        Some(u) => format!("{}/ws", u.origin().ascii_serialization().to_ascii_lowercase()),
+        None => format!("http://127.0.0.1:{ws_port}"),
     }
 }
 
@@ -433,8 +466,40 @@ mod tests {
         assert!(wired.login.is_some() && wired.gate.is_some() && wired.router().is_some());
         assert_eq!(wired.sessions.cookie_name(), "__Host-toy_session");
         assert_eq!(wired.offered().map(Provider::name).collect::<Vec<_>>(), ["plexus-idp"]);
-        assert_eq!(wired.metadata_url().as_deref(), Some("http://127.0.0.1:4590/.well-known/oauth-protected-resource"));
+        // RUN-9: behind https, the public origin's socket.
+        assert_eq!(wired.protected.resource, "https://toy.example/ws");
+        assert_eq!(wired.metadata_url().as_deref(), Some("https://toy.example/.well-known/oauth-protected-resource/ws"));
+        assert!(wired.metadata_route().is_some());
         assert_eq!(wired.origins, ["http://127.0.0.1:4591", "http://localhost:4591", "https://toy.example", "https://other.example"]);
+    }
+
+    #[test]
+    fn the_resource_is_the_public_origins_socket_only_behind_https() {
+        assert_eq!(resource_url(4590, None), "http://127.0.0.1:4590");
+        assert_eq!(resource_url(4590, Some("http://127.0.0.1:4591")), "http://127.0.0.1:4590");
+        assert_eq!(resource_url(4590, Some("http://menger.lan:4591/")), "http://127.0.0.1:4590");
+        assert_eq!(resource_url(4590, Some("https://Menger.Example/")), "https://menger.example/ws");
+        assert_eq!(resource_url(4590, Some("https://menger.example:8443/app")), "https://menger.example:8443/ws");
+        // Login on, no public URL: the socket port's copy only, no route.
+        let opts = LoginOptions::new(BRAND, 4590, 4591).with_providers(["key"]).unwrap();
+        let wired = Wiring::new(opts).unwrap().finish(TestAccess, None).unwrap();
+        assert_eq!(wired.metadata_url().as_deref(), Some("http://127.0.0.1:4590/.well-known/oauth-protected-resource"));
+        assert!(wired.metadata_route().is_none());
+    }
+
+    #[tokio::test]
+    async fn the_shells_route_answers_the_document() {
+        use tower::ServiceExt;
+        let opts = LoginOptions { public_url: Some("https://toy.example".into()), ..LoginOptions::new(BRAND, 4590, 4591) }
+            .with_providers(["key"])
+            .unwrap();
+        let wired = Wiring::new(opts).unwrap().finish(TestAccess, None).unwrap();
+        let req = axum::http::Request::get("/.well-known/oauth-protected-resource/ws").body(axum::body::Body::empty()).unwrap();
+        let res = wired.metadata_route().unwrap().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), 200);
+        let body = axum::body::to_bytes(res.into_body(), 1 << 16).await.unwrap();
+        let doc: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(doc["resource"], "https://toy.example/ws", "{doc}");
     }
 
     #[test]

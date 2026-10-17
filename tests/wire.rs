@@ -1068,6 +1068,7 @@ async fn shell_serves_the_page() {
             login: None,
             allowed_hosts: Vec::new(),
             https: false,
+            metadata: None,
         })
         .await;
     });

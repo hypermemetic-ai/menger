@@ -89,6 +89,11 @@ pub struct ShellConfig {
     /// [`HSTS`], so a browser that has been here once never asks over http
     /// again.
     pub https: bool,
+    /// RUN-9: RFC 9728's document on the public origin
+    /// ([`plexus_login::Wired::metadata_route`]) — behind an https proxy
+    /// only `/ws` reaches the socket's port, so the metadata its 401s name
+    /// is answered here. Public: never behind a session.
+    pub metadata: Option<Router>,
 }
 
 /// ACCESS-30: Strict-Transport-Security, a year, on every answer of a shell
@@ -252,6 +257,9 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
     }
     let mut app = app.merge(favicon_routes()).merge(frame_routes());
+    if let Some(metadata) = cfg.metadata {
+        app = app.merge(metadata);
+    }
     // DESIGN-40: a framed body's document has an opaque origin, so the
     // house faces it loads from `/app/fonts/` are cross-origin fetches —
     // answered with CORS (`*`: public files, no data).

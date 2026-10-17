@@ -319,3 +319,39 @@ async fn a_forged_forwarded_header_from_an_untrusted_peer_is_ignored() {
         }
     }
 }
+
+/// The whole answer to `GET path` naming `host`, to the connection's close.
+async fn fetch(port: u16, path: &str, host: &str, extra: &str) -> String {
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    s.write_all(format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n{extra}Connection: close\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), s.read_to_end(&mut out)).await;
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// RUN-9: behind an https proxy (`--public-url https://…`, the proxy
+/// trusted), RFC 9728's resource is the public origin's socket,
+/// `https://<host>/ws`; its document is answered on the public origin by
+/// the shell (where the proxy sends everything but `/ws`) and by the
+/// socket's port, and a refused credential's 401 names it; the socket
+/// takes its own origin's page at `/ws`, and no other origin's.
+#[tokio::test]
+async fn behind_https_the_protected_resource_is_the_public_origins_socket() {
+    let args = ["--public-url", "https://menger.example", "--trusted-proxy", "127.0.0.1", "--auth-provider", "key"];
+    let (_server, ws, shell, _) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &args).await;
+    let path = "/.well-known/oauth-protected-resource/ws";
+    for port in [shell, ws] {
+        let text = fetch(port, path, "menger.example", "").await;
+        assert!(text.starts_with("HTTP/1.1 200"), "{port}: {text}");
+        assert!(text.contains(r#""resource":"https://menger.example/ws""#), "{port}: {text}");
+    }
+    let refused = fetch(ws, "/ws", "menger.example", &format!("{UPGRADE}Authorization: Bearer mgs_forged\r\n")).await;
+    assert!(refused.starts_with("HTTP/1.1 401"), "{refused}");
+    assert!(refused.contains(r#"resource_metadata="https://menger.example/.well-known/oauth-protected-resource/ws""#), "{refused}");
+    let (code, text) = ask(ws, "/ws", "menger.example", &format!("{UPGRADE}Origin: https://menger.example\r\n")).await;
+    assert_eq!(code, 101, "{text}");
+    let (code, text) = ask(ws, "/ws", "menger.example", &format!("{UPGRADE}Origin: https://evil.example\r\n")).await;
+    assert_eq!(code, 403, "{text}");
+}

@@ -523,6 +523,8 @@ async fn main() -> anyhow::Result<()> {
             allowed_hosts: hosts(args.shell_port),
             // ACCESS-30: reached over https — every answer says so (HSTS).
             https,
+            // RUN-9: RFC 9728's document on the public origin, behind https.
+            metadata: wired.metadata_route(),
         };
         let bind = args.bind;
         tokio::spawn(async move {
