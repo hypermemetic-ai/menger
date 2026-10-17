@@ -212,7 +212,15 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
                     && own.iter().rev().find(|x| x.field == TransitionField::Archive).is_some_and(|x| x.id == t.id)
             }
             Event::Restored => t.field == TransitionField::Archive && t.to == crate::types::ARCHIVE_LIVE,
-            Event::Created | Event::Touched | Event::Held(_) | Event::Deployed(_) | Event::Behind(_) | Event::Queued(_) | Event::Chatting | Event::Unread => false,
+            Event::Created
+            | Event::Touched
+            | Event::Held(_)
+            | Event::Deployed(_)
+            | Event::Behind(_)
+            | Event::Stage(..)
+            | Event::Queued(_)
+            | Event::Chatting
+            | Event::Unread => false,
         };
         let when = lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h);
         let who = match &pred.by {

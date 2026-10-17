@@ -93,10 +93,16 @@
         "state",
         "ticket"
       ],
+      "promotes": [
+        "environment",
+        "from",
+        "project"
+      ],
       "record": [
         "at",
         "commits",
         "environment",
+        "from",
         "previous",
         "project",
         "release",

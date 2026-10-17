@@ -493,7 +493,15 @@ impl Log {
             Event::Restored => (&self.archive[0], actor.is_some()),
             // Answered from the times, above. DEPLOY-11: `deployed` from the
             // deployments' cells ([`Cache::holds`]), never here.
-            Event::Created | Event::Touched | Event::Held(_) | Event::Deployed(_) | Event::Behind(_) | Event::Queued(_) | Event::Chatting | Event::Unread => return out,
+            Event::Created
+            | Event::Touched
+            | Event::Held(_)
+            | Event::Deployed(_)
+            | Event::Behind(_)
+            | Event::Stage(..)
+            | Event::Queued(_)
+            | Event::Chatting
+            | Event::Unread => return out,
         };
         let mut by_epic: HashMap<u32, RoaringBitmap> = HashMap::new();
         for &p in range(list, &self.marks, lo, hi) {
@@ -533,7 +541,7 @@ impl Log {
             let list: &[u32] = match &pred.event {
                 Event::Created => return self.times.first_born_from(from),
                 Event::Touched => return self.times.first_touched_from(from),
-                Event::Held(_) | Event::Deployed(_) | Event::Behind(_) | Event::Queued(_) | Event::Chatting | Event::Unread => return None,
+                Event::Held(_) | Event::Deployed(_) | Event::Behind(_) | Event::Stage(..) | Event::Queued(_) | Event::Chatting | Event::Unread => return None,
                 Event::Entered(s) => self.entered.get(status_ix(*s) as usize).unwrap_or(&none),
                 Event::Left(s) => self.left.get(status_ix(*s) as usize).unwrap_or(&none),
                 Event::Changed => &self.by_time,

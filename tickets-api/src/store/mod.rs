@@ -5591,6 +5591,9 @@ mod tests_deployments;
 /// DEPLOY-20: a ticket's version — behind, current, rolled back, named.
 #[cfg(test)]
 mod tests_behind;
+/// DEPLOY-21: delivery stages — waiting, deploying, ready for, failed.
+#[cfg(test)]
+mod tests_stages;
 /// THEME-8: define, set, theme_for (every row), refusals, a reopen.
 #[cfg(test)]
 mod tests_themes;

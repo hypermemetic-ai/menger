@@ -76,6 +76,7 @@ fn project_of(ev: &DeploymentsEvent) -> Option<&str> {
     match ev {
         DeploymentsEvent::Deployed { deployment, .. } | DeploymentsEvent::Deployment { deployment, .. } => Some(&deployment.project),
         DeploymentsEvent::EnvironmentChanged { environment } | DeploymentsEvent::Environment { environment } => Some(&environment.project),
+        DeploymentsEvent::Promotes { project, .. } => Some(project),
         _ => None,
     }
 }
@@ -89,13 +90,14 @@ fn refused(e: StoreError) -> DeploymentsEvent {
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 #[plexus_macros::activation(
     namespace = "deployments",
-    description = "Deployments: every deploy to any environment — record, list, environments, for_ticket, running, watch",
+    description = "Deployments: every deploy to any environment — record, promotes, list, environments, for_ticket, running, watch",
     client,
     typed_params,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core",
     // AUTH-7: reads are a viewer's; recording is a deployer's alone (a
     // CI's key on the project's shortcode) — and admin's, who holds all.
+    // DEPLOY-21: `promotes` is listed nowhere: admin's alone.
     roles(
         viewer = ["list", "environments", "for_ticket", "running", "watch"],
         editor = [viewer],
@@ -121,7 +123,9 @@ impl Deployments {
     /// the environment; `duplicate: true` and nothing written when the same
     /// record (project, environment, state, revision, and `source.run`,
     /// else `at`) is kept already — or an in-band `error` naming every
-    /// problem, with nothing kept.
+    /// problem, with nothing kept. DEPLOY-21: `from` names the environment
+    /// this one promotes from (`test`, for `prod`), set (or moved) with the
+    /// record — `promotes` follows it on `watch`.
     #[plexus_macros::method(
         group = "write",
         target = "project",
@@ -136,7 +140,8 @@ impl Deployments {
             tickets = "Ticket ids the CI names itself, added to what the commits give (optional)",
             release = "The artifact's name (optional)",
             at = "When: RFC 3339 or unix seconds (optional; default now)",
-            source = "Where to read the run: { system, run, url } (optional; run makes a retry one deployment)"
+            source = "Where to read the run: { system, run, url } (optional; run makes a retry one deployment)",
+            from = "The environment this one promotes from, e.g. test for prod (optional; set with the record)"
         ),
         values(state = ["started", "succeeded", "failed", "rolled_back"]),
         example(note = "a promote to prod", params = r#"{"project": "menger", "environment": "prod", "state": "succeeded", "revision": "235ff62", "previous": "29a50be", "commits": ["824e943", "235ff62"], "release": "20261012T220402Z-235ff62", "at": "2026-10-12T22:04:19Z", "source": {"system": "menger-pipeline", "run": "promote"}}"#)
@@ -153,6 +158,7 @@ impl Deployments {
         release: Option<Release>,
         at: Option<Timestamp>,
         source: Option<DeploySource>,
+        from: Option<EnvironmentName>,
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let texts = |v: Option<Vec<_>>| v.unwrap_or_default().into_iter().map(String::from).collect::<Vec<String>>();
         let store = self.store.clone();
@@ -177,6 +183,7 @@ impl Deployments {
                 release: release.map(String::from),
                 at: at.map(String::from),
                 source,
+                from: from.map(String::from),
             };
             // ACCESS-11: deployer on the project's shortcode (DEPLOY-14).
             let on = match crate::activation::scope_named(&store, &rec.project).and_then(|s| caller.on::<crate::access::Deployer>(&s, &store).map_err(|r| r.to_string())) {
@@ -187,6 +194,54 @@ impl Deployments {
                 }
             };
             yield store.record_deployment(on, rec, by).await.unwrap_or_else(refused);
+        }
+    }
+
+    /// DEPLOY-21: where an environment promotes from — `from` (`test`, for
+    /// menger's `prod`), or, without it, from none (its own track, as the
+    /// landing page's `edge`). Admin on the project's shortcode. A ticket's
+    /// `ready for <environment>` is its current version running on `from`
+    /// and not here; the environment's track (it and every environment it
+    /// promotes from or to) is where `waiting` looks. Yields exactly one
+    /// `promotes { project, environment, from }` — the same when nothing
+    /// moved — or an in-band `error` (itself, a cycle), nothing written.
+    #[plexus_macros::method(
+        group = "write",
+        target = "project",
+        description = "Set where an environment promotes from (admin): prod from test; without from, from none; yields promotes { project, environment, from }",
+        params(
+            project = "Whose environment: a shortcode, any case (menger is MENGER)",
+            environment = "The environment that promotes, e.g. prod",
+            from = "The environment it promotes from, e.g. test (optional; omitted: from none)"
+        ),
+        example(note = "menger's prod promotes from test", params = r#"{"project": "menger", "environment": "prod", "from": "test"}"#)
+    )]
+    pub async fn promotes(
+        &self, auth: Option<&AuthContext>, reach: Reach,
+        project: Project,
+        environment: EnvironmentName,
+        from: Option<EnvironmentName>,
+    ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+        let store = self.store.clone();
+        let admitted = self.access.verify_call(auth, &reach);
+        stream! {
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield DeploymentsEvent::Error { message };
+                    return;
+                }
+            };
+            let by = caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
+            // ACCESS-11: admin on the project's shortcode.
+            let on = match crate::activation::scope_named(&store, &project).and_then(|s| caller.admin_of(&s, &store).map_err(|r| r.to_string())) {
+                Ok(on) => on,
+                Err(message) => {
+                    yield DeploymentsEvent::Error { message };
+                    return;
+                }
+            };
+            yield store.set_promotes(on, &project, &environment, from.as_deref(), by).await.unwrap_or_else(refused);
         }
     }
 
@@ -248,8 +303,8 @@ impl Deployments {
 
     /// Every environment — of `project` when given — one `environment`
     /// event each, by project and then in display order (test → staging →
-    /// prod): what it runs, since when, its last deployment, and how many
-    /// tickets run there.
+    /// prod): what it runs, since when, its last deployment, how many
+    /// tickets run there, and (DEPLOY-21) `from`, where it promotes from.
     #[plexus_macros::method(
         group = "read",
         description = "Each environment: what it runs, since when, its last deployment, how many tickets run there",
@@ -322,11 +377,12 @@ impl Deployments {
     /// 1,000), each with since when and the deploy that brought it, in the
     /// store's order — an empty one too, so a copy can replace what it held.
     /// DEPLOY-20: a cell's `behind` (and `version`) when the ticket runs an
-    /// earlier version there.
+    /// earlier version there. DEPLOY-21: `staged`, each ticket deploying,
+    /// ready for or failed there.
     /// What the app's board marks are drawn from, one read for every row.
     #[plexus_macros::method(
         group = "read",
-        description = "The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }] } per environment",
+        description = "The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }], staged: [{ ticket, stage }] } per environment",
         params(
             project = "Only this project's (a shortcode) (optional)",
             environment = "Only environments of this name (optional)",

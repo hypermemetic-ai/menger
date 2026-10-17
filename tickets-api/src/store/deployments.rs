@@ -50,6 +50,22 @@
 //! the ticket carries every commit linked by then. `behind <env>` is
 //! answered from it ([`Deploys::holds_behind`]); a rollback refolds it as
 //! it refolds the cells.
+//!
+//! **A ticket's delivery stage** (DEPLOY-21): an environment may name the
+//! one it promotes from ([`Deploys::sources`], the `deploy_sources` table:
+//! `deployments promotes`, or a record's `from`) — menger's `prod` from
+//! `test`. Short of running its current version in an environment, a
+//! ticket is, there, the first of: **deploying** (an open `started` record
+//! — none has ended a deploy since — carries its current version,
+//! [`Kept::deploying`]), **failed** (the last record that carried its
+//! current version there failed, or was rolled back, [`Kept::failed`]),
+//! **ready for** (its current version runs where the environment promotes
+//! from) and **waiting** (Complete, with commits, in the project, its
+//! current version running nowhere on the environment's track). The first
+//! two are kept per environment beside the cells and moved with them; the
+//! other two are set algebra over the kept cells and the cell table at
+//! read time ([`Cache::holds_stage`]). A record "carries a version" as
+//! DEPLOY-20 says a deploy does ([`Touch::current`]).
 
 use super::history::Clock;
 use super::versions::{self, Linked};
@@ -57,7 +73,8 @@ use super::{lineage, Authority, Cache, OrderKey, Row, Store, StoreError};
 use crate::address::ShortcodeId;
 use crate::vocab::CommitRef;
 use crate::deployments::{
-    environment_of, project_of, rank, DeploySource, DeployState, Deployment, DeploymentsEvent, Environment, Record, RunningCell, COMMITS_MAX, TICKETS_MAX,
+    environment_of, project_of, rank, DeliveryStage, DeploySource, DeployState, Deployment, DeploymentsEvent, Environment, Record, RunningCell, StagedCell,
+    COMMITS_MAX, TICKETS_MAX,
 };
 use crate::filter::{When, Window};
 use roaring::RoaringBitmap;
@@ -107,6 +124,18 @@ pub(super) const TABLES: &str = "
         );
     ";
 
+/// DEPLOY-21: which environment each promotes from — set, not derived.
+const SOURCES: &str = "
+        CREATE TABLE IF NOT EXISTS deploy_sources (
+            project TEXT NOT NULL,
+            name    TEXT NOT NULL,
+            source  TEXT NOT NULL,
+            set_at  INTEGER NOT NULL,
+            set_by  TEXT NOT NULL,
+            PRIMARY KEY (project, name)
+        );
+    ";
+
 fn has_table(conn: &Connection) -> rusqlite::Result<bool> {
     conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'deployments'", [], |r| {
         r.get::<_, i64>(0).map(|n| n > 0)
@@ -116,6 +145,8 @@ fn has_table(conn: &Connection) -> rusqlite::Result<bool> {
 /// A file without the tables gains them, empty, here — on every open, a
 /// no-op once they are there. Returns whether they were made.
 pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
+    // DEPLOY-21: and one without the sources gains that table, empty.
+    conn.execute_batch(SOURCES)?;
     if has_table(conn)? {
         return Ok(false);
     }
@@ -249,6 +280,69 @@ pub(crate) struct Kept {
     pub(super) running: BTreeMap<String, (i64, u64)>,
     /// DEPLOY-20: of `running`, each ticket that runs an earlier version.
     pub(super) behind: BTreeMap<String, Behind>,
+    /// DEPLOY-21: the `started` records no record has ended since, in order.
+    starts: Vec<Touch>,
+    /// DEPLOY-21: every record that ended a deploy — succeeded, failed, a
+    /// rollback (as what it undid) — in order.
+    ends: Vec<Touch>,
+    /// DEPLOY-21: the kept stages — each ticket an open start carries at
+    /// its current version, not running it here…
+    pub(super) deploying: BTreeSet<String>,
+    /// …and each whose last ending here failed or was rolled back, neither
+    /// running its current version here nor deploying.
+    pub(super) failed: BTreeSet<String>,
+}
+
+/// DEPLOY-21: a record as the stages read it — its state, the commits it
+/// carries (its own, or a rollback's: what it undid) by [`key_of`], the ids
+/// it names, and the moment a naming carries the commits linked by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Touch {
+    state: DeployState,
+    refs: HashMap<String, Vec<String>>,
+    tickets: Vec<String>,
+    at: i64,
+}
+
+impl Touch {
+    /// `ds` carried, as one record in `state` — `at` when `ds` is empty.
+    fn of(state: DeployState, at: i64, ds: &[&Deployment]) -> Self {
+        let mut t = Touch { state, refs: HashMap::new(), tickets: Vec::new(), at: ds.iter().map(|d| d.at).max().unwrap_or(at) };
+        for d in ds {
+            for c in d.commits.iter().chain(std::iter::once(&d.revision)) {
+                let list = t.refs.entry(key_of(c)).or_default();
+                if !list.iter().any(|h| h == hash_of(c)) {
+                    list.push(hash_of(c).to_string());
+                }
+            }
+            for n in &d.tickets {
+                if !t.tickets.contains(n) {
+                    t.tickets.push(n.clone());
+                }
+            }
+        }
+        t
+    }
+
+    fn carries(&self, c: &str) -> bool {
+        self.refs.get(&key_of(c)).is_some_and(|l| l.iter().any(|h| same(h, c)))
+    }
+
+    /// Whether it carries `ticket`'s current version: its newest version
+    /// is carried (DEPLOY-20's rule) — a ticket with no commits, when it
+    /// names it.
+    fn current(&self, ticket: &str, links: &Links) -> bool {
+        let named = self.tickets.iter().any(|t| t == ticket).then_some(self.at);
+        match links.of.contains_key(ticket) {
+            false => named.is_some(),
+            true => links.behind(ticket, |c| self.carries(c), named).is_none(),
+        }
+    }
+
+    /// The tickets it may carry: those linking its commits, and those it names.
+    fn candidates<'a>(&'a self, links: &'a Links) -> impl Iterator<Item = &'a str> + 'a {
+        self.refs.values().flatten().flat_map(move |h| links.tickets(h)).chain(self.tickets.iter().map(String::as_str))
+    }
 }
 
 /// The earlier of two `(since, deployment)`.
@@ -266,6 +360,16 @@ pub(super) fn fold(ds: &[&Deployment]) -> Kept {
     for d in ds {
         k.records.push((d.at, d.id));
         k.last = Some(d.id);
+        // DEPLOY-21: a start stays open until a record ends a deploy.
+        match d.state {
+            DeployState::Started => k.starts.push(Touch::of(d.state, d.at, &[d])),
+            DeployState::Failed | DeployState::Succeeded => {
+                k.starts.clear();
+                k.ends.push(Touch::of(d.state, d.at, &[d]));
+            }
+            DeployState::RolledBack => k.starts.clear(),
+        }
+        let before = (d.state == DeployState::RolledBack).then(|| k.stack.clone());
         match d.state {
             DeployState::Started | DeployState::Failed => continue,
             DeployState::Succeeded => {
@@ -285,6 +389,11 @@ pub(super) fn fold(ds: &[&Deployment]) -> Kept {
                     k.stack.pop();
                 }
             }
+        }
+        // DEPLOY-21: a rollback ends what it undid.
+        if let Some(before) = before {
+            let undone: Vec<&Deployment> = before.iter().filter(|id| !k.stack.contains(id)).map(|id| by_id[id]).collect();
+            k.ends.push(Touch::of(d.state, d.at, &undone));
         }
         k.revision = Some(d.revision.clone());
         k.release = d.release.clone();
@@ -308,6 +417,56 @@ pub(super) fn fold(ds: &[&Deployment]) -> Kept {
 }
 
 impl Kept {
+    /// DEPLOY-21: whether `ticket` runs its current version here.
+    pub(super) fn current(&self, ticket: &str) -> bool {
+        self.running.contains_key(ticket) && !self.behind.contains_key(ticket)
+    }
+
+    /// DEPLOY-21: the tickets running their current version here.
+    pub(super) fn currents(&self) -> impl Iterator<Item = &str> + '_ {
+        self.running.keys().map(String::as_str).filter(|t| !self.behind.contains_key(*t))
+    }
+
+    /// DEPLOY-21: the stages, from the starts and ends joined with `links`.
+    fn stage(&mut self, links: &Links) {
+        let mut deploying = BTreeSet::new();
+        for s in &self.starts {
+            for t in s.candidates(links) {
+                if !deploying.contains(t) && !self.current(t) && s.current(t, links) {
+                    deploying.insert(t.to_string());
+                }
+            }
+        }
+        let mut last: HashMap<&str, DeployState> = HashMap::new();
+        for e in &self.ends {
+            for t in e.candidates(links) {
+                if e.current(t, links) {
+                    last.insert(t, e.state);
+                }
+            }
+        }
+        let failed: BTreeSet<String> = last
+            .into_iter()
+            .filter(|(t, s)| matches!(s, DeployState::Failed | DeployState::RolledBack) && !self.current(t) && !deploying.contains(*t))
+            .map(|(t, _)| t.to_string())
+            .collect();
+        (self.deploying, self.failed) = (deploying, failed);
+    }
+
+    /// DEPLOY-21: `ticket`'s stages again — its links moved.
+    fn restage(&mut self, ticket: &str, links: &Links) {
+        let current = self.current(ticket);
+        let deploying = !current && self.starts.iter().any(|s| s.current(ticket, links));
+        let last = self.ends.iter().rev().find(|e| e.current(ticket, links)).map(|e| e.state);
+        let failed = !current && !deploying && matches!(last, Some(DeployState::Failed | DeployState::RolledBack));
+        for (set, on) in [(&mut self.deploying, deploying), (&mut self.failed, failed)] {
+            match on {
+                true => set.insert(ticket.to_string()),
+                false => set.remove(ticket),
+            };
+        }
+    }
+
     /// Whether the stack carries the commit `c` names.
     fn carries(&self, c: &str) -> bool {
         self.carried.get(&key_of(c)).is_some_and(|l| l.iter().any(|(h, ..)| same(h, c)))
@@ -334,6 +493,7 @@ impl Kept {
             self.running.insert(t.clone(), earlier(was, *v));
         }
         self.behind = self.running.keys().filter_map(|t| self.behind_of(t, links).map(|b| (t.clone(), b))).collect();
+        self.stage(links);
     }
 
     /// `ticket`'s cell again — its links moved.
@@ -354,6 +514,7 @@ impl Kept {
             Some(b) => self.behind.insert(ticket.to_string(), b),
             None => self.behind.remove(ticket),
         };
+        self.restage(ticket, links);
     }
 }
 
@@ -370,6 +531,8 @@ pub(crate) struct Deploys {
     keys: HashMap<String, u64>,
     pub(super) envs: BTreeMap<(String, String), Kept>,
     links: Links,
+    /// DEPLOY-21: `(project, environment)` → the environment it promotes from.
+    pub(super) sources: BTreeMap<(String, String), String>,
 }
 
 /// What makes two records one deployment: the project, the environment, the
@@ -518,6 +681,75 @@ impl Deploys {
         out
     }
 
+    /// DEPLOY-21: every environment kept or named by a source (either end),
+    /// of every project.
+    fn env_keys(&self) -> BTreeSet<(String, String)> {
+        let named = self.sources.iter().flat_map(|((p, e), f)| [(p.clone(), e.clone()), (p.clone(), f.clone())]);
+        self.envs.keys().cloned().chain(named).collect()
+    }
+
+    /// DEPLOY-21: the environment `(project, name)`'s track — it and every
+    /// environment it promotes from or to, transitively.
+    pub(super) fn track(&self, project: &str, name: &str) -> BTreeSet<String> {
+        let mut out: BTreeSet<String> = BTreeSet::from([name.to_string()]);
+        let mut todo = vec![name.to_string()];
+        while let Some(n) = todo.pop() {
+            let up = self.sources.get(&(project.to_string(), n.clone())).cloned();
+            let down = self.sources.iter().filter(|((p, _), f)| p == project && **f == n).map(|((_, e), _)| e.clone());
+            for e in up.into_iter().chain(down.collect::<Vec<_>>()) {
+                if out.insert(e.clone()) {
+                    todo.push(e);
+                }
+            }
+        }
+        out
+    }
+
+    /// DEPLOY-21: the tickets ready for `(project, name)`: running their
+    /// current version where it promotes from, not here, neither deploying
+    /// nor failed here.
+    pub(super) fn ready_for<'a>(&'a self, project: &str, name: &str, k: &'a Kept) -> Vec<&'a str> {
+        let Some(from) = self.sources.get(&(project.to_string(), name.to_string())) else { return Vec::new() };
+        let Some(src) = self.envs.get(&(project.to_string(), from.clone())) else { return Vec::new() };
+        src.currents().filter(|t| !k.current(t) && !k.deploying.contains(*t) && !k.failed.contains(*t)).collect()
+    }
+
+    /// DEPLOY-21: the tickets whose stage anywhere in `project` a change to
+    /// its sources may move — each running its current version somewhere
+    /// there, and each deploying or failed there.
+    fn staged_in(&self, project: &str) -> BTreeSet<&str> {
+        let mut out = BTreeSet::new();
+        for ((p, _), k) in &self.envs {
+            if p == project {
+                out.extend(k.currents());
+                out.extend(k.deploying.iter().chain(&k.failed).map(String::as_str));
+            }
+        }
+        out
+    }
+
+    /// DEPLOY-21: why `(project, name)` may not promote from `from`: itself,
+    /// or an environment that (transitively) promotes from it.
+    fn source_refused(&self, project: &str, name: &str, from: &str) -> Option<String> {
+        let mut at = from.to_string();
+        let mut seen = BTreeSet::new();
+        loop {
+            if at == name {
+                return Some(match from == name {
+                    true => format!("{project}/{name} cannot promote from itself (nothing was written)"),
+                    false => format!("{project}/{name} cannot promote from {from}: {from} promotes from {name}, a cycle (nothing was written)"),
+                });
+            }
+            if !seen.insert(at.clone()) {
+                return None;
+            }
+            match self.sources.get(&(project.to_string(), at.clone())) {
+                Some(next) => at = next.clone(),
+                None => return None,
+            }
+        }
+    }
+
     /// DEPLOY-11: the next moment after the clock's now at which time alone
     /// moves what `deployed <env> <window>` holds for — as
     /// [`super::history::Log::next_boundary`] says it for a transition.
@@ -558,6 +790,8 @@ impl Cache {
             crate::filter::Event::Deployed(env) => self.deploys.holds(env, h.window.as_ref(), clock, &self.at),
             // DEPLOY-20: from the kept behind.
             crate::filter::Event::Behind(env) => self.deploys.holds_behind(env, &self.at),
+            // DEPLOY-21: from the kept stages, the cells and the cell table.
+            crate::filter::Event::Stage(stage, env) => self.holds_stage(*stage, env),
             // MENGER-39: `queued` from the queue's kept entries.
             crate::filter::Event::Queued(u) => self.queue.holds(*u, &self.at),
             // CHAT-3: for the reader, from the chats.
@@ -573,8 +807,72 @@ impl Cache {
             crate::filter::Event::Deployed(env) => self.deploys.next_boundary(env, h.window.as_ref(), clock),
             // MENGER-39 / DEPLOY-20: time alone never moves the queue, or
             // which version runs.
-            crate::filter::Event::Queued(_) | crate::filter::Event::Behind(_) | crate::filter::Event::Chatting | crate::filter::Event::Unread => None,
+            crate::filter::Event::Queued(_)
+            | crate::filter::Event::Behind(_)
+            | crate::filter::Event::Stage(..)
+            | crate::filter::Event::Chatting
+            | crate::filter::Event::Unread => None,
             _ => self.log.next_boundary(h, clock),
+        }
+    }
+
+    /// DEPLOY-21: the tickets `<stage> <env>` holds for, per shortcode — in
+    /// each environment `env` names. Deploying and failed from the kept
+    /// stages; ready for from the kept cells of the environment it promotes
+    /// from; waiting from the cell table (Complete, with commits, in the
+    /// project or a shortcode hosted under it) less every ticket running its
+    /// current version on the track, deploying or failed there. Never a scan
+    /// of tickets.
+    pub(super) fn holds_stage(&self, stage: DeliveryStage, env: &str) -> BTreeMap<ShortcodeId, RoaringBitmap> {
+        let mut out: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
+        let none = Kept::default();
+        for (p, n) in self.deploys.env_keys() {
+            if !Deploys::names(env, &p, &n) {
+                continue;
+            }
+            let k = self.deploys.envs.get(&(p.clone(), n.clone())).unwrap_or(&none);
+            let ids: Vec<&str> = match stage {
+                DeliveryStage::Deploying => k.deploying.iter().map(String::as_str).collect(),
+                DeliveryStage::Failed => k.failed.iter().map(String::as_str).collect(),
+                DeliveryStage::ReadyFor => self.deploys.ready_for(&p, &n, k),
+                DeliveryStage::Waiting => {
+                    self.waiting_in(&p, &n, k, &mut out);
+                    continue;
+                }
+            };
+            for key in ids.into_iter().filter_map(|t| self.at.get(t)) {
+                out.entry(key.shortcode.clone()).or_default().insert(key.seq);
+            }
+        }
+        out
+    }
+
+    /// DEPLOY-21: `waiting` in `(project, name)`, added to `out`.
+    fn waiting_in(&self, project: &str, name: &str, k: &Kept, out: &mut BTreeMap<ShortcodeId, RoaringBitmap>) {
+        let mut gone: BTreeMap<&ShortcodeId, RoaringBitmap> = BTreeMap::new();
+        let track = self.deploys.track(project, name);
+        let running = track.iter().filter_map(|e| self.deploys.envs.get(&(project.to_string(), e.clone()))).flat_map(Kept::currents);
+        for key in running.chain(k.deploying.iter().chain(&k.failed).map(String::as_str)).filter_map(|t| self.at.get(t)) {
+            gone.entry(&key.shortcode).or_default().insert(key.seq);
+        }
+        let home = ShortcodeId::new(project);
+        let keys = self.cells.keys();
+        for (sc, held) in self.cells.shortcodes() {
+            if *sc != home && !lineage::host_chain(self, sc).contains(&home) {
+                continue;
+            }
+            let mut acc = RoaringBitmap::new();
+            for (cell, bm) in held {
+                if keys.get(*cell as usize).is_some_and(|c| c.commits() && c.status() == super::Status::Complete) {
+                    acc |= bm;
+                }
+            }
+            if let Some(g) = gone.get(sc) {
+                acc -= g;
+            }
+            if !acc.is_empty() {
+                *out.entry(sc.clone()).or_default() |= acc;
+            }
         }
     }
 
@@ -640,6 +938,7 @@ impl Cache {
             last_state: last.map(|d| d.state),
             last_at: last.map(|d| d.at),
             tickets: k.running.keys().filter(|t| self.at.contains_key(*t)).count() as u64,
+            from: self.deploys.sources.get(&(project.to_string(), name.to_string())).cloned(),
         })
     }
 
@@ -769,10 +1068,13 @@ impl Store {
     pub async fn record_deployment(&self, allowed: impl Into<Authority>, rec: Record, by: String) -> Result<DeploymentsEvent, StoreError> {
         let allowed = allowed.into();
         let now = chrono::Utc::now().timestamp();
+        // DEPLOY-21: where the environment promotes from, when the record says.
+        let from = rec.from.as_deref().map(str::trim).filter(|f| !f.is_empty()).map(environment_of).transpose();
+        let from = from.map_err(|m| StoreError::Invalid(format!("from: {m} (nothing was recorded)")))?;
         let mut d = read(rec, now)?;
         d.recorded_by = by;
         let serial = self.serial().await;
-        let (kept, entered, left, under) = {
+        let (kept, entered, left, under, source) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             if !cache.holds_shortcode(&d.project) {
                 return Err(StoreError::Invalid(format!(
@@ -786,12 +1088,23 @@ impl Store {
                 let deployment = kept.clone();
                 return Ok(DeploymentsEvent::Deployed { deployment, carried, unlinked, live, entered: Vec::new(), left: Vec::new(), duplicate: true });
             }
+            let at = (d.project.clone(), d.environment.clone());
+            let source = from.filter(|f| cache.deploys.sources.get(&at) != Some(f));
+            if let Some(why) = source.as_deref().and_then(|f| cache.deploys.source_refused(&d.project, &d.environment, f)) {
+                return Err(StoreError::Invalid(why.replace("nothing was written", "nothing was recorded")));
+            }
             d.id = cache.deploys.next_id();
             let kept = cache.deploys.refold(&d.project, &d.environment, Some(&d));
             let empty = BTreeMap::new();
-            let (empty_behind, had) = (BTreeMap::new(), cache.deploys.envs.get(&(d.project.clone(), d.environment.clone())));
+            let (empty_behind, had) = (BTreeMap::new(), cache.deploys.envs.get(&at));
             let before = had.map_or(&empty, |k| &k.running);
             let behind = had.map_or(&empty_behind, |k| &k.behind);
+            // DEPLOY-21: a ticket whose stage there moved is moved too — and,
+            // when the record moves where it promotes from, every ticket a
+            // stage of the project may name.
+            let no = BTreeSet::new();
+            let (deploying, failed) = (had.map_or(&no, |k| &k.deploying), had.map_or(&no, |k| &k.failed));
+            let staged = source.as_ref().map(|_| cache.deploys.staged_in(&d.project)).unwrap_or_default();
             // DEPLOY-20: a ticket whose version there moved is moved too.
             let moved: Vec<&str> = before
                 .iter()
@@ -799,31 +1112,44 @@ impl Store {
                 .map(|(t, _)| t.as_str())
                 .chain(kept.running.iter().filter(|(t, v)| before.get(*t) != Some(*v)).map(|(t, _)| t.as_str()))
                 .chain(behind.keys().chain(kept.behind.keys()).filter(|t| behind.get(*t) != kept.behind.get(*t)).map(String::as_str))
+                .chain(deploying.symmetric_difference(&kept.deploying).map(String::as_str))
+                .chain(failed.symmetric_difference(&kept.failed).map(String::as_str))
+                .chain(staged)
                 .collect();
             let entered = cache.in_order(kept.running.keys().map(String::as_str).filter(|t| !before.contains_key(*t)));
             let left = cache.in_order(before.keys().map(String::as_str).filter(|t| !kept.running.contains_key(*t)));
             let keys: Vec<(&ShortcodeId, u32)> = moved.iter().filter_map(|t| cache.at.get(*t)).map(|k| (&k.shortcode, k.seq)).collect();
             let under = lineage::deployed_before_with(&self.unders, &cache, &keys);
-            (kept, entered, left, under)
+            (kept, entered, left, under, source)
         };
-        let (stored, env) = (d.clone(), kept.clone());
+        let (stored, env, set) = (d.clone(), kept.clone(), source.clone());
         let tickets = Arc::clone(&self.tickets);
         self.write(
             serial,
             move |tx| {
                 store(tx, &stored)?;
                 store_environment(tx, &stored.project, &stored.environment, &env)?;
+                if let Some(f) = &set {
+                    store_source(tx, &stored.project, &stored.environment, Some(f), stored.recorded_at, &stored.recorded_by)?;
+                }
                 Ok(())
             },
             move |cache, _| {
                 let (project, name) = (d.project.clone(), d.environment.clone());
+                if let Some(f) = &source {
+                    cache.deploys.sources.insert((project.clone(), name.clone()), f.clone());
+                }
                 cache.deploys.install(d.clone(), kept);
                 let (carried, unlinked, live) = cache.carried(&d);
                 let deployed = DeploymentsEvent::Deployed { deployment: d, carried, unlinked, live, entered, left, duplicate: false };
-                (deployed, cache.environment(&project, &name))
+                let promotes = source.map(|from| DeploymentsEvent::Promotes { project: project.clone(), environment: name.clone(), from: Some(from) });
+                (deployed, cache.environment(&project, &name), promotes)
             },
-            move |(), (deployed, environment), tx| {
+            move |(), (deployed, environment, promotes), tx| {
                 tx.deployment(deployed.clone());
+                if let Some(p) = promotes {
+                    tx.deployment(p);
+                }
                 if let Some(environment) = environment {
                     tx.deployment(DeploymentsEvent::EnvironmentChanged { environment });
                 }
@@ -831,6 +1157,67 @@ impl Store {
                     tx.send(change);
                 }
                 deployed
+            },
+        )
+        .await
+    }
+
+    /// DEPLOY-21: the environment `(project, environment)` promotes from
+    /// `from` now — `None`: from none. A project is a shortcode the store
+    /// holds; an environment need not have a deployment yet. Refused when it
+    /// would promote from itself or close a cycle. Committed in its own
+    /// transaction, then the cache, then `promotes` on `deployments.watch`
+    /// and, on `tickets.watch { filter }`, each ticket a stage filter admits
+    /// or no longer admits because of it. The same source again writes
+    /// nothing and answers the same.
+    ///
+    /// ACCESS-11: `allowed` — the system, or admin on exactly the project's
+    /// shortcode, checked under the write-serial lock.
+    pub async fn set_promotes(&self, allowed: impl Into<Authority>, project: &str, environment: &str, from: Option<&str>, by: String) -> Result<DeploymentsEvent, StoreError> {
+        let allowed = allowed.into();
+        let bad = |m: String| StoreError::Invalid(format!("{m} (nothing was written)"));
+        let project = project_of(project).map_err(bad)?;
+        let environment = environment_of(environment).map_err(bad)?;
+        let from = from.map(environment_of).transpose().map_err(bad)?;
+        let answer = DeploymentsEvent::Promotes { project: project.clone(), environment: environment.clone(), from: from.clone() };
+        let serial = self.serial().await;
+        let key = (project.clone(), environment.clone());
+        let under = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            if !cache.holds_shortcode(&project) {
+                return Err(StoreError::Invalid(format!("no shortcode {project}: a project is a shortcode menger holds (nothing was written)")));
+            }
+            allowed.admin_on(&super::writs::scope_of(&cache, &ShortcodeId::new(&project)), "where an environment promotes from needs admin on its project")?;
+            if cache.deploys.sources.get(&key) == from.as_ref() {
+                return Ok(answer);
+            }
+            if let Some(why) = from.as_deref().and_then(|f| cache.deploys.source_refused(&project, &environment, f)) {
+                return Err(StoreError::Invalid(why));
+            }
+            let keys: Vec<(&ShortcodeId, u32)> = cache.deploys.staged_in(&project).into_iter().filter_map(|t| cache.at.get(t)).map(|k| (&k.shortcode, k.seq)).collect();
+            lineage::deployed_before_with(&self.unders, &cache, &keys)
+        };
+        let now = chrono::Utc::now().timestamp();
+        let (stored, set) = (key.clone(), from.clone());
+        let tickets = Arc::clone(&self.tickets);
+        self.write(
+            serial,
+            move |tx| {
+                store_source(tx, &stored.0, &stored.1, set.as_deref(), now, &by)?;
+                Ok(())
+            },
+            move |cache, _| {
+                match from {
+                    Some(f) => cache.deploys.sources.insert(key, f),
+                    None => cache.deploys.sources.remove(&key),
+                };
+            },
+            move |(), (), tx| {
+                tx.deployment(answer.clone());
+                if let Some(change) = under.and_then(|u| u.after(&tickets)) {
+                    tx.send(change);
+                }
+                answer
             },
         )
         .await
@@ -970,7 +1357,21 @@ impl Store {
                 })
                 .collect();
             cells.sort_by(|a, b| a.0.cmp(b.0));
-            out.push(DeploymentsEvent::Cells { project: env.project, environment: env.name, running: cells.into_iter().map(|(_, c)| c).collect() });
+            // DEPLOY-21: and each ticket deploying, ready for or failed there.
+            let ready = cache.deploys.ready_for(&env.project, &env.name, k);
+            let mut staged: Vec<(&OrderKey, StagedCell)> = [(DeliveryStage::Deploying, k.deploying.iter().map(String::as_str).collect::<Vec<_>>()), (DeliveryStage::Failed, k.failed.iter().map(String::as_str).collect()), (DeliveryStage::ReadyFor, ready)]
+                .into_iter()
+                .flat_map(|(stage, ids)| ids.into_iter().map(move |t| (stage, t)))
+                .filter(|(_, t)| only.as_ref().is_none_or(|o| o.contains(*t)))
+                .filter_map(|(stage, t)| cache.at.get(t).map(|key| (key, StagedCell { ticket: t.to_string(), stage })))
+                .collect();
+            staged.sort_by(|a, b| a.0.cmp(b.0));
+            out.push(DeploymentsEvent::Cells {
+                project: env.project,
+                environment: env.name,
+                running: cells.into_iter().map(|(_, c)| c).collect(),
+                staged: staged.into_iter().map(|(_, c)| c).collect(),
+            });
         }
         Ok(out)
     }
@@ -1029,6 +1430,28 @@ fn store_environment(conn: &Connection, project: &str, name: &str, k: &Kept) -> 
     Ok(())
 }
 
+/// DEPLOY-21: `(project, name)` promotes from `from` (`None`: from none),
+/// inside the caller's transaction.
+fn store_source(conn: &Connection, project: &str, name: &str, from: Option<&str>, at: i64, by: &str) -> rusqlite::Result<()> {
+    match from {
+        Some(f) => conn
+            .prepare_cached(
+                "INSERT INTO deploy_sources (project, name, source, set_at, set_by) VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT (project, name) DO UPDATE SET source = excluded.source, set_at = excluded.set_at, set_by = excluded.set_by",
+            )?
+            .execute(params![project, name, f, at, by])?,
+        None => conn.prepare_cached("DELETE FROM deploy_sources WHERE project = ?1 AND name = ?2")?.execute(params![project, name])?,
+    };
+    Ok(())
+}
+
+/// DEPLOY-21: every environment's source, as stored.
+fn read_sources(conn: &Connection) -> rusqlite::Result<BTreeMap<(String, String), String>> {
+    let mut stmt = conn.prepare("SELECT project, name, source FROM deploy_sources")?;
+    let rows = stmt.query_map([], |r| Ok(((r.get(0)?, r.get(1)?), r.get(2)?)))?;
+    rows.collect()
+}
+
 /// Every deployment as stored, its commits in order.
 fn read_all(conn: &Connection) -> anyhow::Result<Vec<Deployment>> {
     let mut commits: HashMap<u64, Vec<String>> = HashMap::new();
@@ -1075,6 +1498,8 @@ impl Deploys {
         let started = std::time::Instant::now();
         // DEPLOY-20: the link record first, so the cells join with it.
         self.links.record = versions::load(conn)?;
+        // DEPLOY-21: and where each environment promotes from.
+        self.sources = read_sources(conn)?;
         let records = read_all(conn)?;
         self.load_records(records);
         tracing::info!(
@@ -1216,6 +1641,19 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
         for t in have.keys().copied().chain(want.keys()).collect::<BTreeSet<_>>() {
             if have.get(t).copied() != want.get(t) {
                 out.push(format!("behind cell {t} in {}/{}: kept {:?}; a scan gives {:?}", env.0, env.1, have.get(t), want.get(t)));
+            }
+        }
+    }
+    // DEPLOY-21: and the stages kept link by link, against a fresh join of
+    // the same records with every link made first — as a reopen keeps them.
+    let mut fresh = Deploys::linked(rows.iter().copied());
+    fresh.links.record = versions::load(conn)?;
+    fresh.load_records(read_all(conn)?);
+    for (env, k) in &kept.envs {
+        let Some(f) = fresh.envs.get(env) else { continue };
+        for (what, have, want) in [("deploying", &k.deploying, &f.deploying), ("failed", &k.failed, &f.failed)] {
+            for t in have.symmetric_difference(want).filter(|t| cache.at.contains_key(*t)) {
+                out.push(format!("{what} cell {t} in {}/{}: kept {}; a fresh join {}", env.0, env.1, have.contains(t), want.contains(t)));
             }
         }
     }

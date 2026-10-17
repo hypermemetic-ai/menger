@@ -246,11 +246,11 @@ pub(crate) fn filter_text_command(query: &str) -> Option<String> {
 }
 
 /// DEPLOY-13: the palette's `deployed …` — typed `depl…`, `deployed pr`,
-/// `not depl…` or `waiting` (after `filter ` or not), the `deployed` cells
-/// it may mean, each a filter's canonical text: `deployed <env>` for every
+/// or `not depl…` (after `filter ` or not), the `deployed` cells it may
+/// mean, each a filter's canonical text: `deployed <env>` for every
 /// environment `choices` holds that begins with what follows, `not deployed
-/// <env>` after `not`, and `waiting` the Complete work not yet on the last
-/// one — at most [`FILTER_OFFERS`].
+/// <env>` after `not` — at most [`FILTER_OFFERS`]. (DEPLOY-21: `waiting` is
+/// [`stage_offers`]'.)
 pub(crate) fn deployed_offers(query: &str, choices: &[String]) -> Vec<String> {
     let q = query.trim().to_ascii_lowercase();
     let q = q.strip_prefix("filter ").map_or(q.as_str(), str::trim_start);
@@ -260,10 +260,7 @@ pub(crate) fn deployed_offers(query: &str, choices: &[String]) -> Vec<String> {
     let (not, rest) = match words.as_slice() {
         ["not", w, rest @ ..] if begins(w, "deployed", 3) => (true, rest),
         [w, rest @ ..] if begins(w, "deployed", 4) => (false, rest),
-        [w] if begins(w, "waiting", 4) => {
-            let last = choices.iter().filter(|c| !c.contains('/')).max_by_key(|c| (menger_tickets_api::deployments::rank(c), c.to_string()));
-            return last.and_then(|l| canon(format!("status Complete and not deployed {l}"))).into_iter().collect();
-        }
+        // DEPLOY-21: `waiting` is a stage now ([`stage_offers`]).
         _ => return Vec::new(),
     };
     let typed = match rest {
@@ -302,6 +299,36 @@ pub(crate) fn chat_offers(query: &str) -> Vec<String> {
     cells
         .iter()
         .filter_map(|c| menger_tickets_api::filter::Filter::parse(&format!("{}{c}", if not { "not " } else { "" })).ok().map(|f| f.format()))
+        .collect()
+}
+
+/// DEPLOY-21: the palette's delivery stages — typed `ready f…` (`ready
+/// for pr`), `deployi…`, `waiti…` or `fail…` (after `filter ` or not), the
+/// stage in every environment `choices(stage)` offers that begins with what
+/// follows, each a filter's canonical text — at most [`FILTER_OFFERS`].
+pub(crate) fn stage_offers(query: &str, choices: impl Fn(menger_tickets_api::deployments::DeliveryStage) -> Vec<String>) -> Vec<String> {
+    use menger_tickets_api::deployments::DeliveryStage;
+    let q = query.trim().to_ascii_lowercase();
+    let q = q.strip_prefix("filter ").map_or(q.as_str(), str::trim_start);
+    let words: Vec<&str> = q.split_whitespace().collect();
+    let begins = |w: &str, of: &str, min: usize| w.len() >= min && of.starts_with(w);
+    let (stage, rest) = match words.as_slice() {
+        ["ready", f, rest @ ..] if begins(f, "for", 1) => (DeliveryStage::ReadyFor, rest),
+        [w, rest @ ..] if begins(w, "deploying", 7) => (DeliveryStage::Deploying, rest),
+        [w, rest @ ..] if begins(w, "waiting", 4) => (DeliveryStage::Waiting, rest),
+        [w, rest @ ..] if begins(w, "failed", 4) => (DeliveryStage::Failed, rest),
+        _ => return Vec::new(),
+    };
+    let typed = match rest {
+        [] => "",
+        [one] => one,
+        _ => return Vec::new(),
+    };
+    choices(stage)
+        .iter()
+        .filter(|c| c.starts_with(typed))
+        .filter_map(|c| menger_tickets_api::filter::Filter::parse(&format!("{stage} {c}")).ok().map(|f| f.format()))
+        .take(FILTER_OFFERS)
         .collect()
 }
 
@@ -1417,7 +1444,9 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
         out.extend(filter_text_command(&q).map(PalCmd::Text));
         // DEPLOY-13: `deployed …` — the environments the app holds.
         let choices = deploy_choices.with(|h| h.as_ref().map(crate::deploys::Held::choices).unwrap_or_default());
-        for text in deployed_offers(&q, &choices) {
+        // DEPLOY-21: `ready for …`, `deploying …`, `waiting …`, `failed …`.
+        let staged = deploy_choices.with(|h| stage_offers(&q, |s| h.as_ref().map(|h| h.stage_choices(s)).unwrap_or_default()));
+        for text in deployed_offers(&q, &choices).into_iter().chain(staged) {
             if !out.contains(&PalCmd::Text(text.clone())) {
                 out.push(PalCmd::Text(text));
             }
@@ -1892,7 +1921,7 @@ pub(crate) fn KeyTable(#[prop(into)] query: Signal<String>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{chat_offers, count_words, deployed_offers, filter_command, filter_offers, filter_text_command, narrows, palette_match, pass, theme_command, theme_offers, Found, Pass, FILTER_OFFERS};
+    use super::{chat_offers, count_words, deployed_offers, filter_command, filter_offers, filter_text_command, narrows, palette_match, pass, stage_offers, theme_command, theme_offers, Found, Pass, FILTER_OFFERS};
 
     /// THEME-7: `theme <name>` and `theme: <name>` in the palette — the
     /// themes held that begin with what is typed, and the site's own.
@@ -2180,6 +2209,25 @@ mod tests {
         assert_eq!(filter_text_command("filter chatting and unread"), Some("chatting and unread".into()));
     }
 
+    /// DEPLOY-21: the stages — `ready for` only where an environment
+    /// promotes from one; the rest wherever the app has one.
+    #[test]
+    fn the_palette_offers_the_stages() {
+        use menger_tickets_api::deployments::DeliveryStage;
+        let choices = |s: DeliveryStage| match s {
+            DeliveryStage::ReadyFor => vec!["prod".to_string()],
+            _ => vec!["test".to_string(), "prod".to_string()],
+        };
+        assert_eq!(stage_offers("ready f", choices), ["ready for prod"]);
+        assert_eq!(stage_offers("filter ready for pr", choices), ["ready for prod"]);
+        assert_eq!(stage_offers("deploying", choices), ["deploying test", "deploying prod"]);
+        assert_eq!(stage_offers("wait p", choices), ["waiting prod"]);
+        assert_eq!(stage_offers("failed t", choices), ["failed test"]);
+        for none in ["ready", "ready and", "deploy", "fai", "waiting prod now"] {
+            assert!(stage_offers(none, choices).is_empty(), "{none:?}");
+        }
+    }
+
     /// DEPLOY-13: `deployed …` offers the environments held — `not` turns
     /// them around, a partial name narrows them, `waiting` is the Complete
     /// work not on the last one; anything else offers nothing.
@@ -2189,7 +2237,7 @@ mod tests {
         assert_eq!(deployed_offers("depl", &held), ["deployed test", "deployed prod", "deployed menger/test", "deployed menger/prod"]);
         assert_eq!(deployed_offers("filter deployed pr", &held), ["deployed prod"]);
         assert_eq!(deployed_offers("not dep m", &held), ["not deployed menger/test", "not deployed menger/prod"]);
-        assert_eq!(deployed_offers("waiting", &held), ["status Complete and not deployed prod"]);
+        assert!(deployed_offers("waiting", &held).is_empty(), "DEPLOY-21: waiting is a stage");
         for none in ["", "dep", "deploy a b", "notes", "waste", "deployment x y"] {
             assert!(deployed_offers(none, &held).is_empty(), "{none:?}");
         }

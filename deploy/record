@@ -23,6 +23,8 @@
 #   --revision SHA  --previous SHA  --commits A,B (repeatable)  --tickets ID,ID (repeatable)
 #   --release NAME  --at 2026-10-12T22:04:19Z (default: now)
 #   --source-system S  --source-run R  --source-url URL
+#   --promotes-from ENV   the environment this one promotes from (DEPLOY-21:
+#                         test, for prod) — the record's `from`
 # Mapping: --map 'FIELD=JQ' (repeatable) sets FIELD (dotted: source.url) from the
 #   input — the JSON for json/github-event, the process environment for
 #   github-actions/gitlab, the parsed line {at,env,action,release,result} for
@@ -83,6 +85,7 @@ while [[ $# -gt 0 ]]; do
     --source-system) arg "$@"; over+=(source.system "$2"); shift ;;
     --source-run) arg "$@"; over+=(source.run "$2"); shift ;;
     --source-url) arg "$@"; over+=(source.url "$2"); shift ;;
+    --promotes-from) arg "$@"; over+=(from "$2"); shift ;;
     --commits|--commit) arg "$@"; commits+=("$2"); shift ;;
     --tickets|--ticket) arg "$@"; tickets+=("$2"); shift ;;
     --map) arg "$@"; [[ $2 == *=* ]] || die "--map wants FIELD=JQ, got '$2'"; maps+=("$2"); shift ;;
@@ -239,7 +242,7 @@ form_github_event() {
     || die "the payload is not a GitHub deployment event"
 }
 
-FIELDS='["project","environment","state","revision","previous","commits","tickets","release","at","source"]'
+FIELDS='["project","environment","state","revision","previous","commits","tickets","release","at","source","from"]'
 form_json() {
   read_input | jq -c --argjson f "$FIELDS" '{input: ., record: (if type == "object"
       then with_entries(select(.key as $k | $f | index($k))) else {} end)}' \
@@ -324,7 +327,7 @@ records=$(jq -c "${margs[@]+"${margs[@]}"}" "${oargs[@]+"${oargs[@]}"}" \
   | if ($tickets | length) > 0 then .tickets = $tickets else . end
   | (.commits, .tickets) |= (if . == null then null else list end)
   | .tickets |= (if type == "array" then map(ascii_upcase) else . end)
-  | (.project, .environment, .state, .revision, .previous, .release, .at) |= (if type == "string" then nz else . end)
+  | (.project, .environment, .state, .revision, .previous, .release, .at, .from) |= (if type == "string" then nz else . end)
   | if .source == null then del(.source)
     else .source |= (if type == "object" then
                        with_entries(.value |= (if type == "number" then tostring elif type == "string" then nz else . end)
