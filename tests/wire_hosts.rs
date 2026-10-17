@@ -128,39 +128,51 @@ fn lan_address() -> Option<std::net::IpAddr> {
 /// RUN-8: the binary on three free ports with `args` (`{ws}`, `{shell}`,
 /// `{rest}` replaced by the ports), once every port accepts at `reach`.
 async fn spawn_at(reach: std::net::IpAddr, args: &[&str]) -> (Server, u16, u16, u16) {
-    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let (ws, shell, rest) = (free_port().await, free_port().await, free_port().await);
-    let fill = |a: &str| a.replace("{ws}", &ws.to_string()).replace("{shell}", &shell.to_string()).replace("{rest}", &rest.to_string());
-    let child = Command::new(env!("CARGO_BIN_EXE_menger"))
-        .args(["--port", &ws.to_string(), "--shell-port", &shell.to_string(), "--rest-port", &rest.to_string()])
-        .arg("--db-path")
-        .arg(dir.path().join("tickets.db"))
-        .args(args.iter().map(|a| fill(a)))
-        .env("PLEXUS_NO_REGISTRY", "1")
-        .env_remove("MENGER_DB_PATH")
-        .env_remove("MENGER_ALLOWED_HOSTS")
-        .env_remove("MENGER_ALLOWED_ORIGINS")
-        .env_remove("MENGER_PUBLIC_URL")
-        .env_remove("MENGER_BIND")
-        .env_remove("RUST_LOG")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn menger");
-    let server = Server(child, dir);
-    for port in [ws, shell, rest] {
-        let mut up = false;
-        for _ in 0..200 {
-            if tokio::net::TcpStream::connect((reach, port)).await.is_ok() {
-                up = true;
-                break;
+    // A port handed out is free only until something binds it: another
+    // test process on this machine may take it first, and then our child
+    // exits and the ports answer someone else's server. A child that is
+    // not alive once its ports answer is spawned again on fresh ones.
+    for _ in 0..5 {
+        let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+        let (ws, shell, rest) = (free_port().await, free_port().await, free_port().await);
+        let fill = |a: &str| a.replace("{ws}", &ws.to_string()).replace("{shell}", &shell.to_string()).replace("{rest}", &rest.to_string());
+        let child = Command::new(env!("CARGO_BIN_EXE_menger"))
+            .args(["--port", &ws.to_string(), "--shell-port", &shell.to_string(), "--rest-port", &rest.to_string()])
+            .arg("--db-path")
+            .arg(dir.path().join("tickets.db"))
+            .args(args.iter().map(|a| fill(a)))
+            .env("PLEXUS_NO_REGISTRY", "1")
+            .env_remove("MENGER_DB_PATH")
+            .env_remove("MENGER_ALLOWED_HOSTS")
+            .env_remove("MENGER_ALLOWED_ORIGINS")
+            .env_remove("MENGER_PUBLIC_URL")
+            .env_remove("MENGER_BIND")
+            .env_remove("MENGER_TRUSTED_PROXIES")
+            .env_remove("MENGER_AUTH_PROVIDERS")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn menger");
+        let mut server = Server(child, dir);
+        for port in [ws, shell, rest] {
+            let mut up = false;
+            for _ in 0..200 {
+                if tokio::net::TcpStream::connect((reach, port)).await.is_ok() {
+                    up = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(up, "port {port} never came up at {reach}");
         }
-        assert!(up, "port {port} never came up at {reach}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if server.0.try_wait().unwrap().is_none() {
+            return (server, ws, shell, rest);
+        }
     }
-    (server, ws, shell, rest)
+    panic!("menger never kept its ports: each was taken first");
 }
 
 #[tokio::test]
@@ -219,5 +231,91 @@ async fn without_bind_every_port_is_loopback_only() {
     let (_server, ws, shell, rest) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &[]).await;
     for port in [ws, shell, rest] {
         assert!(tokio::net::TcpStream::connect((lan, port)).await.is_err(), "{port} reachable at {lan} with no --bind");
+    }
+}
+
+/// TRANSPORT-7: a socket opened through a fake proxy — this test, on
+/// loopback — that says it forwards `client` (`X-Forwarded-For`), held open
+/// while the stream lives; the upgrade's status code.
+async fn open_as(port: u16, client: Option<&str>) -> (u16, tokio::net::TcpStream) {
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let xff = client.map(|c| format!("X-Forwarded-For: {c}\r\n")).unwrap_or_default();
+    s.write_all(format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{UPGRADE}{xff}\r\n").as_bytes()).await.unwrap();
+    let mut buf = vec![0u8; 4096];
+    let mut out = Vec::new();
+    while !out.windows(4).any(|w| w == b"\r\n\r\n") {
+        match tokio::time::timeout(Duration::from_secs(5), s.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => out.extend_from_slice(&buf[..n]),
+            _ => break,
+        }
+    }
+    if !out.starts_with(b"HTTP/1.1 101") {
+        if let Ok(Ok(n)) = tokio::time::timeout(Duration::from_millis(300), s.read(&mut buf)).await {
+            out.extend_from_slice(&buf[..n]);
+        }
+        // Shown when a test fails: which quota refused, and for whom.
+        eprintln!("{port} as {client:?}: {}", String::from_utf8_lossy(&out));
+    }
+    let text = String::from_utf8_lossy(&out).to_string();
+    (text.split(' ').nth(1).and_then(|c| c.parse().ok()).unwrap_or(0), s)
+}
+
+/// TRANSPORT-7: the codes of `n` sockets opened as `client`, all held.
+async fn open_n(port: u16, client: Option<&str>, n: usize, held: &mut Vec<tokio::net::TcpStream>) -> Vec<u16> {
+    let mut codes = Vec::new();
+    for _ in 0..n {
+        let (code, s) = open_as(port, client).await;
+        codes.push(code);
+        held.push(s);
+    }
+    codes
+}
+
+/// TRANSPORT-7: behind a `--trusted-proxy`, AUTH-12's per-IP quota and,
+/// with login on, its anonymous-per-IP quota count the client the proxy
+/// forwards: two forwarded clients each get their own two places, and the
+/// proxy's own socket (no header) is its own.
+#[tokio::test]
+async fn behind_a_trusted_proxy_each_forwarded_client_has_its_own_quota() {
+    for quota in [
+        &["--max-connections-per-ip", "2"][..],
+        &["--auth-provider", "key", "--max-anonymous-connections-per-ip", "2"][..],
+    ] {
+        let mut args = vec!["--trusted-proxy", "127.0.0.1"];
+        args.extend_from_slice(quota);
+        let (_server, ws, _, _) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &args).await;
+        let mut held = Vec::new();
+        assert_eq!(open_n(ws, Some("203.0.113.1"), 3, &mut held).await, [101, 101, 429], "{quota:?}: the first client");
+        assert_eq!(open_n(ws, Some("203.0.113.2"), 2, &mut held).await, [101, 101], "{quota:?}: the second client");
+        // The rightmost hop that is not a proxy is the client: a hop the
+        // first client prepends does not move it.
+        assert_eq!(open_n(ws, Some("198.51.100.9, 203.0.113.1"), 1, &mut held).await, [429], "{quota:?}: prepended");
+        assert_eq!(open_n(ws, None, 1, &mut held).await, [101], "{quota:?}: the proxy itself");
+        // A closed socket gives its client's place back.
+        held.remove(0);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(open_n(ws, Some("203.0.113.1"), 1, &mut held).await, [101], "{quota:?}: a place given back");
+    }
+}
+
+/// TRANSPORT-7: a forwarded header from a peer that is not a trusted proxy
+/// is ignored — whatever it names, every socket is the peer's — with a
+/// proxy named elsewhere, with `none`, and with nothing said.
+#[tokio::test]
+async fn a_forged_forwarded_header_from_an_untrusted_peer_is_ignored() {
+    for proxies in [&["--trusted-proxy", "10.9.9.9"][..], &["--trusted-proxy", "none"][..], &[][..]] {
+        for quota in [
+            &["--max-connections-per-ip", "2"][..],
+            &["--auth-provider", "key", "--max-anonymous-connections-per-ip", "2"][..],
+        ] {
+            let mut args = proxies.to_vec();
+            args.extend_from_slice(quota);
+            let (_server, ws, _, _) = spawn_at(std::net::Ipv4Addr::LOCALHOST.into(), &args).await;
+            let mut held = Vec::new();
+            assert_eq!(open_n(ws, Some("203.0.113.1"), 1, &mut held).await, [101], "{args:?}");
+            assert_eq!(open_n(ws, Some("203.0.113.2"), 1, &mut held).await, [101], "{args:?}");
+            assert_eq!(open_n(ws, Some("203.0.113.3"), 1, &mut held).await, [429], "{args:?}: one peer, one quota");
+            assert_eq!(open_n(ws, None, 1, &mut held).await, [429], "{args:?}");
+        }
     }
 }

@@ -29,8 +29,8 @@
 use std::sync::Arc;
 
 use plexus_auth_core::adapters::Carriers;
-use plexus_core::plexus::{Activation, SessionValidator};
-use plexus_transport::{ProtectedResource, TransportServerBuilder, UpgradeOptions};
+use plexus_core::plexus::Activation;
+use plexus_transport::{ProtectedResource, TransportServerBuilder};
 
 use crate::access::{Branding, LoginAccess};
 use crate::client_ip::TrustedProxies;
@@ -379,42 +379,11 @@ impl<A: LoginAccess> Wired<A> {
         }
     }
 
-    /// RUN-8: [`Self::apply`]'s half for a socket served through
-    /// plexus-transport's `serve_websocket_with` (an address the builder
-    /// cannot bind yet, TRANSPORT-7): the same origins, validator and
-    /// upgrade options, as values.
-    pub fn upgrade(&self) -> Upgrade {
-        match &self.gate {
-            Some(gate) => Upgrade {
-                origins: self.origins.clone(),
-                validator: Some(gate.clone() as Arc<dyn SessionValidator>),
-                options: UpgradeOptions {
-                    anonymous_view: true,
-                    credential_cookies: vec!["access_token".into()],
-                    protected_resource: Some(self.protected.clone()),
-                    ..UpgradeOptions::default()
-                },
-            },
-            None => Upgrade { origins: self.origins.clone(), validator: None, options: UpgradeOptions::default() },
-        }
-    }
-
     /// The login page's routes ([`web_login::router`]), when there is a
     /// page: merge it beside the app's own.
     pub fn router(&self) -> Option<axum::Router> {
         self.login.clone().map(web_login::router)
     }
-}
-
-/// RUN-8: what [`Wired::apply`] puts on a builder, for a socket served
-/// without one ([`Wired::upgrade`]).
-pub struct Upgrade {
-    /// The origins whose pages may open the socket.
-    pub origins: Vec<String>,
-    /// The upgrade's validator (login on).
-    pub validator: Option<Arc<dyn SessionValidator>>,
-    /// The anonymous view, the credential cookie, the protected resource.
-    pub options: UpgradeOptions,
 }
 
 /// Whether a URL's host is this machine (127.0.0.0/8, ::1, localhost).
@@ -466,23 +435,6 @@ mod tests {
         assert_eq!(wired.offered().map(Provider::name).collect::<Vec<_>>(), ["plexus-idp"]);
         assert_eq!(wired.metadata_url().as_deref(), Some("http://127.0.0.1:4590/.well-known/oauth-protected-resource"));
         assert_eq!(wired.origins, ["http://127.0.0.1:4591", "http://localhost:4591", "https://toy.example", "https://other.example"]);
-    }
-
-    #[test]
-    fn the_upgrade_as_values_is_what_apply_puts_on_a_builder() {
-        // RUN-8: login off — the origins, nothing else.
-        let off = Wiring::new(LoginOptions::new(BRAND, 4590, 4591)).unwrap().finish(TestAccess, None).unwrap().upgrade();
-        assert_eq!(off.origins, ["http://127.0.0.1:4591", "http://localhost:4591"]);
-        assert!(off.validator.is_none() && !off.options.anonymous_view && off.options.credential_cookies.is_empty());
-        assert!(off.options.protected_resource.is_none() && !off.options.reject_on_session_failure);
-        // Login on — the gate, the anonymous view, `access_token`, RFC 9728.
-        let opts = LoginOptions::new(BRAND, 4590, 4591).with_providers(["idp=http://127.0.0.1:4592,plexus:toy"]).unwrap();
-        let wired = Wiring::new(opts).unwrap().finish(TestAccess, None).unwrap();
-        let on = wired.upgrade();
-        assert_eq!(on.origins, wired.origins);
-        assert!(on.validator.is_some() && on.options.anonymous_view && !on.options.reject_on_session_failure);
-        assert_eq!(on.options.credential_cookies, ["access_token"]);
-        assert_eq!(on.options.protected_resource.map(|p| p.metadata_url()), wired.metadata_url());
     }
 
     #[test]

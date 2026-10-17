@@ -2145,6 +2145,7 @@ dependencies = [
  "http",
  "http-body",
  "hyper",
+ "ipnet",
  "jsonrpsee",
  "plexus-core",
  "serde",

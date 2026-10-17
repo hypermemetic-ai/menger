@@ -76,10 +76,34 @@ PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462
 synapse -H box.lan -P 4460 menger tickets health
 ```
 
-The WebSocket is served through plexus-transport's `serve_websocket_with`
-(`src/serve.rs`) — the same upgrade and checks `TransportServer` applies —
-because the transport's builder binds it to loopback only; TRANSPORT-7 gives
-the builder an address, and the module goes.
+The WebSocket and the REST bridge take the address from plexus-transport's
+builder (`TransportServerBuilder::bind`, TRANSPORT-7), with every check it
+keeps — the hosts, the origins, the quotas, the login gate and RED-4's check
+at build — and the registry is told a specific address (loopback for
+`0.0.0.0` / `::`). The shell binds it itself. `src/bind.rs` holds the
+flag's spelling and the names a specific address adds.
+
+**Trusted proxies** (TRANSPORT-7). `--trusted-proxy` (`MENGER_TRUSTED_PROXIES`,
+`;`-separated: CIDRs, bare addresses, or `none` alone) names the edge in
+front. One flag, read twice: by the login page's throttles (AUTH-22) and by
+the WebSocket (`TransportServerBuilder::with_trusted_proxies`).
+`X-Forwarded-For` / `X-Forwarded-Proto` are believed only from a peer in
+that set, and the client is the rightmost hop that is not itself a proxy (a
+hop the client prepends moves nothing). The WebSocket's per-IP and
+anonymous-per-IP quotas (`--max-connections-per-ip`,
+`--max-anonymous-connections-per-ip`) then count that client, not the
+proxy. Every upgrade carries a `ForwardedClient { ip, peer, via_proxy,
+secure }`, and plexus-transport's `ClientIp` / `SecureTransport` read the
+same set. From any other peer, a forwarded header is ignored and logged
+once: with `none`, with nothing said, or with a proxy named elsewhere, every
+socket counts as its TCP peer. `tests/wire_hosts.rs` opens sockets through
+a fake proxy on loopback to show both cases.
+
+```sh
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 \
+  --db-path /tmp/menger-dev.db --bind 0.0.0.0 --trusted-proxy 172.30.0.2 \
+  --allowed-host menger.example --public-url https://menger.example
+```
 
 ### Synthetic seeding (PERF-2)
 
@@ -3927,7 +3951,7 @@ and stay the default until `--identity` is set.
 | flag | |
 |---|---|
 | `--identity <spec>` | the backend (`MENGER_IDENTITY`); its provider joins the gate's, so its tokens open the socket as a bearer; `memory` and `plexus-idp` only with `--env test` |
-| `--trusted-proxy <cidr>\|none` | the edge whose `X-Forwarded-For` is believed for the client's IP (repeatable), or `none` when people connect directly; with `--identity` off loopback one is required (AUTH-24) — behind the infra's Caddy, the edge's address on the `edge` Docker network |
+| `--trusted-proxy <cidr>\|none` | the edge whose `X-Forwarded-For` is believed for the client's IP (repeatable) — by the login throttles and the WebSocket's per-IP and anonymous quotas (TRANSPORT-7), or `none` when people connect directly; with `--identity` off loopback one is required (AUTH-24) — behind the infra's Caddy, the edge's address on the `edge` Docker network |
 | `--return-origin <origin>` | another origin a sign-in may return to (repeatable) |
 
 The WorkOS environment lists `<public-url>/login/callback` as a redirect URI.
@@ -4182,9 +4206,9 @@ limit is a flag (and its `MENGER_*` variable) or a named constant:
 The login page shows only its own words — never a link's `?error=` or a
 provider's `error_description` (IDENTITY-38; ACCESS-4 L1). The dev sign-in
 (`/login/dev`, test only) is not throttled. Behind a proxy, the throttles
-read the client from `X-Forwarded-For` only from a `--trusted-proxy`; the
-WebSocket's per-IP quotas see the proxy (the transport reads no proxy
-header yet — ACCESS-29's divergence note). `perf/flood.mjs` floods a
+read the client from `X-Forwarded-For` only from a `--trusted-proxy`, and so
+do the WebSocket's per-IP and anonymous-per-IP quotas (TRANSPORT-7; "Run" →
+Trusted proxies). `perf/flood.mjs` floods a
 throwaway menger with upgrades and logins from a spread of addresses and
 checks its memory settles.
 
