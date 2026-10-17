@@ -897,7 +897,6 @@ impl Saved {
     fn suggest(self, level: Level, name: &'static str, text: &'static str) {
         let Ok(filter) = Filter::parse(text) else { return };
         self.lens.apply(level, Some(chosen(filter)));
-        self.lens.pop(level).tree_open.set(false);
         self.close_menu(true);
         self.say(level, format!("\u{201c}{name}\u{201d} applied"));
     }
@@ -942,8 +941,7 @@ impl Saved {
                         n.bind(level, crate::naming::Bound { id: e.id.clone(), name: e.name.clone() }, filter.format());
                     }
                     self.lens.apply(level, Some(chosen(filter)));
-                    self.lens.pop(level).tree_open.set(false);
-                    self.close_menu(true);
+                                self.close_menu(true);
                     self.say(level, format!("\u{201c}{}\u{201d} applied", e.name));
                 }
                 Err(why) => {

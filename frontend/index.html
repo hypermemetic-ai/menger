@@ -1753,6 +1753,123 @@
     font: inherit; color: inherit; background: none; border: 0; text-align: left; width: 100%;
   }
   .fmenu button.frow:hover, .fmenu button.frow:focus-visible { background: var(--hover); outline: none; }
+  /* FILTER-39: the filter panel — the menu, kept open in the page's flow
+     (the content moves down under it): its head, the groups joined by or,
+     every category a section flowing into as many columns as the width
+     holds (FILTER-38's mockups). */
+  .fpanel {
+    display: flex; flex-direction: column; margin: .45rem 0 .6rem; color: var(--ink);
+    background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-xl);
+    font: calc(12.5px * var(--text-scale))/1.5 var(--mono);
+  }
+  .fpanel .fp-head {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; padding: .4rem .75rem;
+    background: var(--panel); border-bottom: var(--border) solid var(--line); border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+  .fpanel .fp-title { font-family: var(--sans); font-weight: var(--weight-strong); font-size: calc(13.5px * var(--text-scale)); }
+  .fpanel .fp-lvl { color: var(--muted); }
+  .fpanel input.fsearch {
+    margin-left: auto; flex: 0 1 15rem; min-width: 8rem; font: inherit; padding: .2rem .55rem; color: var(--ink);
+    background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); outline: none;
+  }
+  .fpanel input.fsearch:focus { border-color: var(--accent); }
+  .fpanel input.fsearch::placeholder { color: var(--muted); }
+  .fpanel .fp-x { background: none; border: 0; font: inherit; font-size: calc(15px * var(--text-scale)); color: var(--muted); cursor: pointer; padding: 0 .25rem; }
+  .fpanel .fp-x:hover, .fpanel .fp-x:focus-visible { color: var(--accent); }
+  .fpanel .fpromote { display: flex; align-items: baseline; gap: .5rem; padding: .3rem .75rem; border-bottom: var(--border) solid var(--line); }
+  .fpanel .fpromote button {
+    background: none; border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 .5rem;
+    font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--accent); cursor: pointer; white-space: nowrap; flex: none;
+  }
+  .fpanel .fpromote-hint { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+  .fpanel .fp-groups { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: .5rem .75rem; border-bottom: var(--border) solid var(--line); }
+  .fpanel .fp-groups.deep { color: var(--muted); }
+  .fpanel .fp-hint { flex-basis: 100%; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+  .fpanel .fp-hint b { color: var(--ink); font-weight: var(--weight-medium); }
+  .fpanel .for, .fpanel .fp-hint b.for { color: var(--accent); font-weight: var(--weight-strong); letter-spacing: .02em; }
+  .fpanel .fgrp {
+    display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem; padding: .2rem .35rem .2rem .45rem; cursor: pointer;
+    background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg);
+  }
+  .fpanel .fgrp.sel { border-color: var(--accent); background: var(--sel); box-shadow: inset 3px 0 var(--accent); }
+  .fpanel .fgrp-n {
+    background: none; border: 0; padding: 0; font: inherit; cursor: pointer; color: var(--muted);
+    font-size: calc(10px * var(--text-scale)); letter-spacing: .1em; text-transform: uppercase;
+  }
+  .fpanel .fgrp.sel .fgrp-n { color: var(--accent); }
+  .fpanel .fgrp-empty { color: var(--muted); font-style: italic; }
+  .fpanel .fw { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+  .fpanel .fchip { display: inline-flex; align-items: center; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .fpanel .fchip.saved { border-color: var(--accent); }
+  .fpanel .fchip-w { padding: 0 .1rem 0 .45rem; white-space: nowrap; }
+  .fpanel .fchip-w.part { cursor: pointer; }
+  .fpanel .fchip-w.part:hover { color: var(--accent); }
+  .fpanel .p-x { background: none; border: 0; font: inherit; color: var(--muted); cursor: pointer; padding: 0 .35rem; }
+  .fpanel .p-x:hover, .fpanel .p-x:focus-visible { color: var(--err-fg); }
+  .fpanel .fp-addor {
+    background: none; font: inherit; color: var(--accent); cursor: pointer; padding: .15rem .6rem;
+    border: var(--border) dashed var(--accent); border-radius: var(--radius-lg);
+  }
+  .fpanel .fp-note { padding: .3rem .75rem; background: var(--sel); border-bottom: var(--border) solid var(--line); font-size: calc(11.5px * var(--text-scale)); }
+  .fpanel .frefused { margin: .35rem .75rem; }
+  .fpanel .fp-flow { columns: 14.5rem; column-gap: 0; column-rule: var(--border) solid var(--line); }
+  .fpanel .fsec { break-inside: avoid; padding: .45rem .75rem .6rem; border-bottom: var(--border) solid var(--line); }
+  .fpanel .fsec.lit { animation: menger-dock-flash 1.2s ease-out; }
+  .fpanel .fsec-h {
+    display: flex; align-items: center; gap: .5rem; margin: 0 0 .25rem; font: var(--weight-medium) calc(10.5px * var(--text-scale)) var(--mono);
+    letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  }
+  .fpanel .fsec-sub { padding: .3rem 0 .05rem; font-size: calc(10px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .fpanel .fop { margin-left: auto; display: inline-flex; border: var(--border) solid var(--line); border-radius: var(--radius-sm); overflow: hidden; text-transform: none; letter-spacing: 0; }
+  .fpanel .fop button { background: none; border: 0; font: inherit; padding: 0 .4rem; color: var(--muted); cursor: pointer; }
+  .fpanel .fop button + button { border-left: var(--border) solid var(--line); }
+  .fpanel .fop button.on { background: var(--sel); color: var(--accent); }
+  .fpanel .fv {
+    display: flex; align-items: center; gap: .5rem; width: 100%; padding: 2px 4px; margin: 0; font: inherit; color: inherit; text-align: left;
+    background: none; border: 0; border-radius: var(--radius-md); cursor: pointer; white-space: nowrap;
+  }
+  .fpanel .fv:hover, .fpanel .fv:focus-visible { background: var(--hover); outline: none; }
+  .fpanel .fv .flabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .fpanel .fv-in { margin-left: .4rem; color: var(--accent); font-size: calc(10.5px * var(--text-scale)); }
+  .fpanel .fcount { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; font-size: calc(11px * var(--text-scale)); }
+  .fpanel .fcount.delta { color: var(--accent); }
+  .fpanel .box {
+    flex: none; width: 13px; height: 13px; border: var(--border) solid var(--tree-line); border-radius: var(--radius-sm); background: var(--card);
+    display: inline-flex; align-items: center; justify-content: center; font-size: calc(10px * var(--text-scale)); line-height: 1; color: var(--bg);
+  }
+  .fpanel .box.round { border-radius: 50%; }
+  .fpanel .box[data-state="on"] { background: var(--accent); border-color: var(--accent); }
+  .fpanel .box[data-state="on"]::after { content: "\2713"; }
+  .fpanel .box[data-state="not"] { background: var(--err-fg); border-color: var(--err-fg); }
+  .fpanel .box[data-state="not"]::after { content: "\2212"; }
+  .fpanel .fv[data-mark="not"] .flabel > :first-child { text-decoration: line-through; text-decoration-color: var(--err-fg); }
+  .fpanel .box[data-state="covered"] { border-color: var(--accent); }
+  .fpanel .box[data-state="covered"]::after { content: "\2013"; color: var(--accent); }
+  .fpanel .tag { font-size: calc(10.5px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-sm); }
+  .fpanel .kind .kglyph { color: var(--muted); }
+  .fpanel .kind[data-kind="scope"] .kglyph { color: var(--kind-scope); }
+  .fpanel .kind[data-kind="build"] .kglyph { color: var(--kind-build); }
+  .fpanel .kind[data-kind="execution"] .kglyph { color: var(--kind-execution); }
+  .fpanel .kind[data-kind="gap"] .kglyph { color: var(--kind-gap); }
+  .fpanel .kind[data-kind="spike"] .kglyph { color: var(--kind-spike); }
+  .fpanel .ftitle { display: flex; flex-direction: column; gap: .3rem; }
+  .fpanel .ftitle input {
+    font: inherit; padding: .2rem .45rem; background: var(--card); color: var(--ink);
+    border: var(--border) solid var(--line); border-radius: var(--radius); outline: none;
+  }
+  .fpanel .ftitle input:focus { border-color: var(--accent); }
+  .fpanel .fhint { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+  .fpanel .frow { display: flex; align-items: center; gap: .45rem; padding: 2px 4px; border-radius: var(--radius-md); cursor: pointer; white-space: nowrap; user-select: none; }
+  .fpanel .frow .flabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .fpanel .frow .arrow, .fpanel .frow .fmeta { color: var(--muted); }
+  .fpanel .frow:has(.fmeta) { flex-wrap: wrap; row-gap: 0; }
+  .fpanel .frow .fmeta { flex-basis: 100%; white-space: normal; font-size: calc(11px * var(--text-scale)); }
+  .fpanel button.frow, .fpanel button.wback { font: inherit; color: inherit; background: none; border: 0; text-align: left; width: 100%; }
+  .fpanel button.frow:hover, .fpanel button.frow:focus-visible { background: var(--hover); outline: none; }
+  .fpanel .fp-foot { display: flex; align-items: center; gap: .75rem; padding: .35rem .75rem; }
+  .fpanel .fp-foot .reset { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+  .fpanel .fp-count { margin-left: auto; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+  #nav .fpanel { margin: .35rem .5rem; }
   .wform .wback {
     display: flex; align-items: center; gap: .45rem; padding: 3px 8px; cursor: pointer; color: var(--muted);
     border-bottom: var(--border) solid var(--line) !important; margin-bottom: 4px;
@@ -4196,11 +4313,11 @@
     #app:is([data-sheet="filter"], :has(#tdock-sheet.on)) .content { position: relative; z-index: 896; }
     #lens-top > .pfilter-head { order: 0; }
     #lens-top > :is(.lensbar, .fclash) { order: 1; flex: none; margin: 0; border-radius: 0; }
-    #lens-top > .fmenu {
-      order: 2; position: relative; left: auto !important; top: auto !important; max-width: none !important; max-height: none !important;
-      flex: 1 1 auto; min-height: 200px; overflow: auto; border: 0; border-radius: 0; box-shadow: none; background: var(--card);
-    }
-    #lens-top > .fmenu :is(.fmain, .fsub) { width: auto; flex: 1 1 0; min-width: 0; }
+    /* FILTER-39: the global panel fills the sheet between the lens bar's
+       line and the foot, and scrolls there. */
+    #lens-top > .lensbar:has(.fpanel) { flex: 1 1 auto; min-height: 0; overflow: auto; }
+    #lens-top .fpanel { margin: 0; border: 0; border-radius: 0; }
+    #lens-top .fpanel .fp-head { border-radius: 0; }
     #lens-top > header {
       order: 3; flex: none; flex-wrap: nowrap; align-items: center; gap: 8px; min-height: 0; padding: 10px 14px 12px;
       background: var(--panel); border-top: var(--border) solid var(--line); border-bottom: 0;

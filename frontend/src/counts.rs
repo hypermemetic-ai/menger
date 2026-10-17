@@ -271,6 +271,27 @@ impl LiveCounts {
     }
 }
 
+/// FILTER-39: how many tickets `text` (a filter's wire text) admits —
+/// `counts { filter }` asked once, its shortcodes summed; `None` when it
+/// cannot be asked or is refused.
+pub(crate) async fn count_once(text: String) -> Option<usize> {
+    let client = session::client()?;
+    let filter = (!text.is_empty()).then(|| crate::typed::typed(&text).ok()).flatten();
+    if !text.is_empty() && filter.is_none() {
+        return None;
+    }
+    let events = client.nav().counts_all(filter, None, crate::session::zone()).await.ok()?;
+    let mut n = 0usize;
+    for ev in events {
+        match ev {
+            TicketsEvent::Count { held, .. } => n += held as usize,
+            TicketsEvent::Error { .. } => return None,
+            _ => {}
+        }
+    }
+    Some(n)
+}
+
 /// The header's count, beside the global `Filter` button while the global
 /// filter is non-empty: `n of N` — n the tickets it admits, live; N the
 /// store's. A global filter that admits nothing is `0 of N`, asked of no

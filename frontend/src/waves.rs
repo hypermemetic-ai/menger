@@ -73,7 +73,7 @@ use std::cmp::Ordering;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use menger_tickets_api::filter::{Facts, Filter};
+use menger_tickets_api::filter::{Facts, Field, Filter, Predicate};
 
 use crate::filter::{Cat, Clauses, Counts, CountsProvider, FilterBar, Op, ScTree, WORK_KINDS};
 use crate::keys::palette_match;
@@ -521,7 +521,23 @@ pub(crate) type Effective = (Filter, Clauses);
 /// them), all of them; with none, every shortcode. A group no category
 /// draws asks for nothing narrower — it is evaluated on the cards.
 pub(crate) fn epics(eff: &Filter, route: &str, tree: &ScTree) -> BTreeSet<String> {
+    // FILTER-39: groups joined by `or` ask for what any of them asks for.
+    if let Some(gs) = or_groups(eff) {
+        return gs.iter().flat_map(|g| epics(g, route, tree)).collect();
+    }
     let mut out: Option<BTreeSet<String>> = None;
+    for g in &eff.groups {
+        // FILTER-39: a host shortcode ticked is `under` it — its tree.
+        if let [Predicate { field: Field::Under(x), not: false }] = g.preds.as_slice() {
+            if tree.known().contains(x) {
+                let these: BTreeSet<String> = tree.subtree(x).into_iter().collect();
+                out = Some(match out {
+                    Some(o) => o.intersection(&these).cloned().collect(),
+                    None => these,
+                });
+            }
+        }
+    }
     for (_, cl) in eff.groups.iter().filter_map(lens::clause_of).filter(|(c, _)| *c == Cat::Shortcode) {
         let these: BTreeSet<String> = match cl.op {
             Op::Is => cl.values.iter().cloned().collect(),
@@ -539,11 +555,25 @@ pub(crate) fn epics(eff: &Filter, route: &str, tree: &ScTree) -> BTreeSet<String
 /// admits (`is`: its values; `is not`: the rest); with none, every kind of
 /// work. Docs are never cards.
 pub(crate) fn kinds(eff: &Filter) -> Vec<String> {
+    // FILTER-39: groups joined by `or` ask for the kinds any of them does.
+    if let Some(gs) = or_groups(eff) {
+        let any: BTreeSet<String> = gs.iter().flat_map(kinds).collect();
+        return WORK_KINDS.iter().map(|k| k.to_string()).filter(|k| any.contains(k)).collect();
+    }
     let mut out: Vec<String> = WORK_KINDS.iter().map(|k| k.to_string()).collect();
     for (_, cl) in eff.groups.iter().filter_map(lens::clause_of).filter(|(c, _)| *c == Cat::Kind) {
         out.retain(|k| cl.values.contains(k) == (cl.op == Op::Is));
     }
     out
+}
+
+/// FILTER-39: a filter of two groups or more joined by `or` (as the panel
+/// builds them) — each group as a filter of its own; `None` for one group,
+/// or one too wide to spell out.
+fn or_groups(eff: &Filter) -> Option<Vec<Filter>> {
+    let o = crate::ors::Ors::of_filter(eff)?;
+    let live: Vec<&Vec<Predicate>> = o.live().collect();
+    (live.len() > 1).then(|| live.into_iter().map(|g| Filter { groups: g.iter().cloned().map(menger_tickets_api::filter::Group::one).collect(), ..Filter::default() }).collect())
 }
 
 /// What the language reads of a card (FILTER-10's `Facts`): its summary;
@@ -2086,6 +2116,12 @@ mod tests {
         assert_eq!(epics(&eff("in (MNG, RETURNS)").and(&d.filter), "PLEXUS", &t), set(&["RETURNS"]));
         assert_eq!(kinds(&eff("kind in (build, doc)").and(&d.filter)), strs(&["build"]), "docs are never cards");
         assert_eq!(epics(&eff("(in MNG or ready)"), "PLEXUS", &t).len(), 13, "a custom group asks nothing narrower");
+        // FILTER-39: groups joined by or ask for what any of them asks;
+        // a host ticked in the panel is `under` it, its tree.
+        assert_eq!(epics(&eff("(in MNG and kind build) or (in WAVE and kind gap)"), "PLEXUS", &t), set(&["MNG", "WAVE"]));
+        assert_eq!(epics(&eff("under MACRO"), "PLEXUS", &t), set(&["CODEGEN", "GEN", "MACRO"]));
+        assert_eq!(kinds(&eff("(in MNG and kind build) or (in WAVE and kind gap)")), strs(&["build", "gap"]));
+        assert_eq!(kinds(&eff("(kind build and ready) or in WAVE")), strs(&WORK_KINDS));
     }
 
     /// Acceptance 1 (WAVE-12): the count per value — how many of the

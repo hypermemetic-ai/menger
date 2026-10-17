@@ -31,7 +31,7 @@ const FALLBACK_RULE: &str = "@media (prefers-reduced-motion: reduce) {\n    html
 const NOT_MOTION: &[(&str, usize, &str)] = &[
     ("annotate", 1, "places the annotation layer after layout"),
     ("calendar", 2, "focuses a day after the grid is drawn"),
-    ("filter", 2, "focuses the bar's input; places a menu after layout"),
+    ("filter", 1, "focuses the panel's search, and brings a section asked for into view at once"),
     ("grow", 1, "fits a textarea to its text"),
     ("phonebar", 1, "the tree measures the sheet it now fills"),
     ("saved", 7, "focuses a menu's first item; fits the menu to the viewport"),

@@ -426,7 +426,7 @@ pub(crate) fn run(lens: Lens, level: Level, act: Act, clause: &TagClause) {
     lens.edit(level, |k| *k = apply(act, clause, k));
     if act == Act::Build {
         if let Some(c) = clause.cat() {
-            lens.open_menu(level, Some(c), None);
+            lens.open_panel(level, Some(c));
         }
     }
 }

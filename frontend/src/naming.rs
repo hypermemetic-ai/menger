@@ -585,35 +585,17 @@ impl Naming {
         }
     }
 
-    /// `name`'s text, fetched now when not known.
-    pub(crate) async fn text_now(self, name: &str) -> Result<String, String> {
-        if let Some(Fetch::Text(t)) = untrack(|| self.text(name)) {
-            return Ok(t);
-        }
-        match self.read(name).await {
-            Fetch::Text(t) => {
-                self.texts.try_update(|m| {
-                    m.insert(slug(name), Fetch::Text(t.clone()));
-                });
-                Ok(t)
-            }
-            Fetch::Missing => Err(format!("no saved filter named \u{201c}{name}\u{201d}")),
-            Fetch::Failed(why) => Err(why),
-            Fetch::Loading => Err("still reading".into()),
-        }
-    }
-
-    /// The picker opened: its counts asked again as it shows names.
+    /// The panel opened (FILTER-39): its saved filters' counts asked again.
     pub(crate) fn fresh_counts(self) {
         self.counts.set(HashMap::new());
     }
 
-    /// `name`'s count in the picker (`Some(None)`: asked). Tracked.
+    /// `name`'s count in the panel's Saved section (`Some(None)`: asked). Tracked.
     pub(crate) fn count(self, name: &str) -> Option<Option<usize>> {
         self.counts.with(|m| m.get(&slug(name)).copied())
     }
 
-    /// `counts { filter: saved "Name" }`, once per picker.
+    /// `counts { filter: saved "Name" }`, once each time the panel opens.
     pub(crate) fn ask_count(self, name: &str) {
         let key = slug(name);
         if self.counts.with_untracked(|m| m.contains_key(&key)) {
