@@ -5681,6 +5681,8 @@ mod tests_replies;
 mod tests_chats;
 #[cfg(test)]
 mod tests_chats_outside;
+#[cfg(test)]
+mod tests_chats_grants;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

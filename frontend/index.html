@@ -4436,6 +4436,29 @@
     #chatfull.inbox.list .smain { display: none; }
     #chatfull.inbox .shead .sbtn:is(.smore) { display: inline-block; }
   }
+  /* ── CHAT-16: an admin's add that grants, and the remove that revokes —
+     a dialog over the chat (above the full-screen session). ── */
+  .overlay.gdlg { z-index: 1500; }
+  :is(#chat-grant, #chat-revoke) { width: 32rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .7rem; font-family: var(--sans); color: var(--ink); }
+  :is(#chat-grant, #chat-revoke) h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0; }
+  :is(#chat-grant, #chat-revoke) p { margin: 0; font-size: calc(.85rem * var(--text-scale)); color: var(--muted); }
+  #chat-grant .gwho code { font-size: calc(11px * var(--text-scale)); overflow-wrap: anywhere; }
+  #chat-grant .gopts { display: flex; flex-direction: column; gap: .4rem; }
+  :is(#chat-grant, #chat-revoke) .gopt { display: flex; gap: .6rem; align-items: flex-start; padding: .55rem .7rem; border: var(--border) solid var(--line); border-radius: var(--radius-lg); cursor: pointer; }
+  :is(#chat-grant, #chat-revoke) .gopt.on { border-color: var(--accent); background: var(--sel); }
+  :is(#chat-grant, #chat-revoke) .gopt span { display: flex; flex-direction: column; gap: .15rem; font-size: calc(.85rem * var(--text-scale)); }
+  :is(#chat-grant, #chat-revoke) .gopt small { color: var(--muted); font-size: calc(.78rem * var(--text-scale)); }
+  :is(#chat-grant, #chat-revoke) .sacts { display: flex; gap: .5rem; justify-content: flex-end; flex-wrap: wrap; }
+  :is(#chat-grant, #chat-revoke) .sacts button {
+    font: inherit; font-size: calc(.8rem * var(--text-scale)); cursor: pointer; background: var(--panel); border: var(--border) solid var(--line);
+    color: var(--ink); border-radius: var(--radius); padding: .2rem .75rem;
+  }
+  :is(#chat-grant, #chat-revoke) .sacts button:hover { border-color: var(--accent); color: var(--accent); }
+  :is(#chat-grant, #chat-revoke) .sacts button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  :is(#chat-grant, #chat-revoke) .sacts button:disabled { opacity: .5; cursor: default; }
+  :is(#chatpane, #chatfull) li.pcand.grant small { color: var(--ask); }
+  #chatfull .shead .stt { color: var(--muted); font: calc(11.5px * var(--text-scale)) var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 2 auto; }
+  @media (max-width: 760px) { #chatfull .shead .stt { display: none; } }
   /* ── CHAT-10: the chat in the dock (CHAT-9's answer, `dock`). The dock's
      Chats: a row per open chat — who, a dot green and pulsing while
      someone waits on await_message, the unread — then + chat. ── */

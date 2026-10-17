@@ -119,6 +119,46 @@ impl FromStr for ChatKind {
     }
 }
 
+/// CHAT-16: what an admin's add grants one who can't read the chat's
+/// ticket — the ticket alone, as a viewer (ACCESS-21's single-ticket
+/// scope), or this chat only (the `chatter` role on the ticket: its chats
+/// they are in, nothing of the ticket but its id and title). A direct
+/// message or a group takes `chat` (the `chatter` role on its organization).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatGrant {
+    Ticket,
+    Chat,
+}
+
+impl ChatGrant {
+    pub const ALL: [ChatGrant; 2] = [ChatGrant::Ticket, ChatGrant::Chat];
+
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ChatGrant::Ticket => "ticket",
+            ChatGrant::Chat => "chat",
+        }
+    }
+}
+
+impl fmt::Display for ChatGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ChatGrant {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ChatGrant::ALL
+            .into_iter()
+            .find(|c| c.as_str().eq_ignore_ascii_case(s.trim()))
+            .ok_or_else(|| format!("unknown grant '{}' (expected ticket or chat)", s.trim()))
+    }
+}
+
 /// CHAT-14: whether `principal` is drawn as an agent — an `agent:` (AGENT-1)
 /// or a `key:` principal (a key is how an agent signs in: synapse's
 /// `--as builder`). The standing chat members (CHAT-13) are named as agents
@@ -140,6 +180,10 @@ pub struct Chat {
     /// direct message or a group (CHAT-14).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ticket: Option<String>,
+    /// CHAT-16: its ticket's title — what one who holds this chat only
+    /// sees of the ticket, beside its id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Every participant, by principal (`anonymous` on one kept before ACCESS-24, when login could be off), in
@@ -165,6 +209,10 @@ pub struct Chat {
     /// with more unread than a page around it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mark: Option<MessageId>,
+    /// CHAT-16: the participants whose seat came with a grant an admin's
+    /// add made, still held — removing one offers to revoke it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub granted: Vec<String>,
     /// The participants waiting on `await_message` for it now (CHAT-1's
     /// "waiting for a message"): who is listening, as the pane shows it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -174,6 +222,14 @@ pub struct Chat {
     /// `agent:` principal.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<String>,
+}
+
+impl Chat {
+    /// CHAT-16: whether `principal`'s seat came with a grant an admin's add
+    /// made — what removing them offers to revoke.
+    pub fn granted_to(&self, principal: &str) -> bool {
+        self.granted.iter().any(|g| g == principal)
+    }
 }
 
 /// One message, as kept.
@@ -235,10 +291,27 @@ pub enum ChatsEvent {
     /// One of `messages`' rows (oldest first), and `await_message`'s answer.
     Message { message: Message },
     /// `add`'s answer, and on `watch`: the chat with its participants now.
-    Added { chat: Chat },
+    /// CHAT-16: `granted` — what the add granted, in words (`viewer on
+    /// KILN-7`, `chatter on KILN-7`), when it granted.
+    Added {
+        chat: Chat,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        granted: Option<String>,
+    },
+    /// CHAT-16: `add`'s answer when the one named can't read the chat's
+    /// ticket (or, outside tickets, holds no grant in its organization) and
+    /// the call named no `grant`: nothing written; an admin adds again
+    /// with one of `choices` (`ticket`, `chat`). The app's dialog.
+    NeedsGrant { chat: ChatId, principal: String, #[serde(default, skip_serializing_if = "Option::is_none")] ticket: Option<String>, choices: Vec<ChatGrant> },
     /// CHAT-14: `remove`'s answer, and on `watch` to those still in it: the
     /// chat with its participants now. The one removed hears `left`.
-    Removed { chat: Chat, principal: String },
+    /// CHAT-16: `revoked` — the grant the add made was revoked with it.
+    Removed {
+        chat: Chat,
+        principal: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        revoked: bool,
+    },
     /// `read`'s answer, and on the reader's own other `watch`es: its mark
     /// in `chat` is `upto`, and `unread` are after it.
     Read { chat: ChatId, upto: MessageId, unread: u32 },

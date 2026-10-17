@@ -13,7 +13,7 @@
 //! beside it, in `chats_activation/` (MENGER-29): each body here is its
 //! attribute, the caller and one call.
 
-use crate::chats::{ChatState, ChatsEvent};
+use crate::chats::{ChatGrant, ChatState, ChatsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
 use crate::vocab::{Body, ChatId, MessageId, Principal, TicketRef, Title};
 #[cfg(feature = "server")]
@@ -31,6 +31,8 @@ mod streams;
 use streams::*;
 #[cfg(feature = "server")]
 mod await_message;
+#[cfg(feature = "server")]
+mod grants;
 
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
@@ -68,6 +70,8 @@ impl ChatsActivation {
     roles(
         viewer = ["open", "post", "add", "remove", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "candidates"],
         editor = [viewer],
+        // CHAT-16: one granted a chat only — the chats it is in, nothing of the tickets.
+        chatter = ["post", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message"],
     )
 )]
 impl ChatsActivation {
@@ -128,8 +132,13 @@ impl ChatsActivation {
     /// the ticket, or it is `refused`. One already in it is the chat as it is.
     /// CHAT-14: to a group, one holding a grant in its organization, by a
     /// participant or an admin of the organization; a direct message is
-    /// refused (it stays between two: start a group).
-    #[plexus_macros::method(group = "write")]
+    /// refused (it stays between two: start a group). CHAT-16: an admin of
+    /// the chat's scope adds anyone, in it or not; one who can't read it is
+    /// added only with `grant` — `ticket` (viewer on the ticket alone) or
+    /// `chat` (this chat only) — the add and the grant one write, answered
+    /// `added { chat, granted }`; without it, `needs_grant { choices }` and
+    /// nothing written.
+    #[plexus_macros::method(group = "write", values(grant = ["ticket", "chat"]))]
     pub async fn add(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
@@ -137,9 +146,11 @@ impl ChatsActivation {
         chat: ChatId,
         /// Who to add: a principal.
         principal: Principal,
+        /// What an admin grants one who can't read the chat's ticket: ticket | chat (optional; CHAT-16).
+        grant: Option<ChatGrant>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let (store, access) = (self.store.clone(), self.access.clone());
-        futures::stream::once(async move { add(store, access, user, chat.get(), principal.into_string()).await })
+        futures::stream::once(async move { grants::add(store, access, user, chat.get(), principal.into_string(), grant).await })
     }
 
     /// The caller's chats, by last activity, newest first — on a ticket, with or without unread, open or closed; a chat { chat } each, then page { next }.
@@ -193,7 +204,7 @@ impl ChatsActivation {
         messages_stream(self.store.clone(), user, chat.get(), paging(after, before, newest), limit)
     }
 
-    /// Take a participant out of a chat; yields removed { chat, principal } (CHAT-14).
+    /// Take a participant out of a chat; yields removed { chat, principal, revoked } (CHAT-14; CHAT-16: revoke takes back the grant their add made).
     ///
     /// A group's or a ticket's chat, by a participant (itself too: it
     /// leaves) or, outside tickets, an admin of the chat's organization; a
@@ -207,9 +218,11 @@ impl ChatsActivation {
         chat: ChatId,
         /// Who to take out: a principal.
         principal: Principal,
+        /// Also revoke the grant their add made (an admin's; optional; CHAT-16).
+        revoke: Option<bool>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
-        let (store, access) = (self.store.clone(), self.access.clone());
-        futures::stream::once(async move { remove(store, access, user, chat.get(), principal.into_string()).await })
+        let store = self.store.clone();
+        futures::stream::once(async move { grants::remove(store, user, chat.get(), principal.into_string(), revoke.unwrap_or(false)).await })
     }
 
     /// Mark a chat read up to a message; yields read { chat, upto, unread }.

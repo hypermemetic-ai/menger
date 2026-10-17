@@ -70,6 +70,8 @@ impl MediaActivation {
     roles(
         viewer = ["get", "put"],
         editor = [viewer],
+        // CHAT-16: a chat-only seat's images, in its chats.
+        chatter = ["get", "put"],
     )
 )]
 impl MediaActivation {

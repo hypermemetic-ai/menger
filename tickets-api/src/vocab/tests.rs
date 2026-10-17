@@ -284,7 +284,8 @@ fn every_enum_a_method_takes_is_a_closed_enum_in_the_schema() {
     assert_eq!(closed::<Kind>(), Kind::ALL.map(|k| k.as_str().to_string()));
     assert_eq!(closed::<Severity>(), ["Critical", "High", "Medium", "Low"]);
     assert_eq!(closed::<crate::types::InputState>().len(), 5);
-    assert_eq!(closed::<crate::members::Role>(), ["viewer", "deployer", "editor", "admin"]);
+    assert_eq!(closed::<crate::members::Role>(), ["chatter", "viewer", "deployer", "editor", "admin"]);
+    assert_eq!(closed::<crate::chats::ChatGrant>(), ["ticket", "chat"]);
     assert_eq!(closed::<crate::comments::CommentState>(), ["open", "resolved"]);
     assert_eq!(closed::<crate::notes::NoteState>(), ["open", "upgraded"]);
     assert_eq!(closed::<crate::deployments::DeployState>(), ["started", "succeeded", "failed", "rolled_back", "requested"]);

@@ -384,7 +384,11 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     assert_eq!(seen.len(), TODAY.len(), "every row is a method: {seen:?}");
     // admin is built in, never declared; nothing else is — but DEPLOY-11's
     // deployer: a CI's key, recording deployments and reading them.
-    assert_eq!(declared.keys().cloned().collect::<BTreeSet<_>>(), names(&["deployer", "editor", "member", "viewer"]));
+    // CHAT-16: and `chatter` — one granted a chat only: its chats, its images, nothing of the tickets.
+    assert_eq!(declared.keys().cloned().collect::<BTreeSet<_>>(), names(&["chatter", "deployer", "editor", "member", "viewer"]));
+    let chatter: BTreeSet<String> = declared["chatter"].iter().cloned().collect();
+    assert!(chatter.contains("chats.post") && chatter.contains("media.put") && !chatter.iter().any(|g| g.starts_with("tickets.")), "{chatter:?}");
+    assert!(!chatter.contains("chats.add") && !chatter.contains("chats.open"), "a chat-only seat adds no one: {chatter:?}");
     let deployer: BTreeSet<String> = declared["deployer"].iter().cloned().collect();
     assert!(deployer.contains("deployments.record") && deployer.contains("deployments.list"), "{deployer:?}");
     assert!(!editor.contains("deployments.record") && !deployer.contains("tickets.create"), "record is its own grant");

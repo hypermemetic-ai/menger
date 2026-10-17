@@ -110,7 +110,7 @@ impl MembersActivation {
     #[plexus_macros::method(
         group = "admin",
         target = "scope",
-        values(role = ["viewer", "editor", "admin", "deployer"]),
+        values(role = ["viewer", "editor", "admin", "deployer", "chatter"]),
         example(note = "make a person an editor on IDENTITY", params = r#"{"principal": "oidc:workos/user_01M4", "scope": "IDENTITY", "role": "editor"}"#),
         example(note = "make a team viewers of a ticket's subtree", params = r#"{"team": "release-crew", "scope": "under IDENTITY-12", "role": "viewer"}"#)
     )]

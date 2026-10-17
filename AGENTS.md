@@ -360,6 +360,19 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger chats candidates                                 # names, agents
   ```
 
+  **An admin adds anyone** (CHAT-16): an admin of a chat's ticket (or,
+  outside tickets, its organization) adds anyone, in the chat or not; one
+  who can't read it needs `--grant ticket` (viewer on that ticket alone)
+  or `--grant chat` (the `chatter` role: their chats there, nothing of the
+  ticket) — the add and the grant one write; without it the answer is
+  `needs_grant { choices }` and nothing is written, so nothing grants by
+  accident. `remove … --revoke true` takes the grant back with the seat.
+  README "An admin adds anyone":
+
+  ```sh
+  synapse -P 4455 menger chats add --chat 41 --principal key:5a… --grant chat
+  ```
+
   **The chat bridge** (CHAT-11) answers the owner in chats: the user unit
   `menger-chat-bridge` holds the builder's `chats watch` on `MENGER_URL`
   (`~/.config/menger/chat-bridge.env`) and, for a message by a principal in

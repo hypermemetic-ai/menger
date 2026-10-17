@@ -706,6 +706,8 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     let loading_earlier = Memo::new(move |_| window_t.with(|t| t.older) && thread.with(|t| !t.is_empty()));
     let body = RwSignal::new(String::new());
     let adding = RwSignal::new(false);
+    // CHAT-16: removing a seat that came with a grant asks first.
+    let revoking = RwSignal::new(None::<String>);
     let name = names();
     let me = chats::me();
     let who = {
@@ -715,7 +717,9 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             let open = c.state == ChatState::Open;
             let err = RwSignal::new(None::<String>);
             // CHAT-14: a group's members are taken out by its members.
-            let removable = open && c.kind == menger_tickets_api::ChatKind::Group;
+            // CHAT-16: an admin takes anyone out of a ticket's chat too.
+            let admin = crate::signin::account().with_untracked(|a| a.is_admin());
+            let removable = open && (c.kind == menger_tickets_api::ChatKind::Group || (admin && c.kind == menger_tickets_api::ChatKind::Ticket));
             let people = c
                 .participants
                 .iter()
@@ -723,8 +727,13 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                     let waiting = c.waiting.contains(p);
                     let tip = if waiting { format!("{p} — waiting for a message") } else { p.clone() };
                     let who = p.clone();
+                    let granted = c.granted_to(p);
                     let out = move |_| {
                         let who = who.clone();
+                        if granted {
+                            revoking.set(Some(who));
+                            return;
+                        }
                         spawn_local(async move {
                             if let Err(e) = chats::remove(id, &who).await {
                                 err.try_set(Some(e));
@@ -856,6 +865,16 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         <div class="chatview" class:full=full>
             {move || (held_some.get() && !found.get()).then(|| view! { <p class="pempty">"This chat is not one you are in."</p> })}
             {(!full).then(|| who.clone())}
+            {move || revoking.get().map(|p| view! {
+                <crate::chat_grant::RevokeDialog chat=id principal=p
+                    done=Callback::new(move |r: Result<(), String>| {
+                        revoking.set(None);
+                        if let Err(e) = r {
+                            leptos::logging::log!("chats.remove: {e}");
+                        }
+                    })
+                    cancel=Callback::new(move |_| revoking.set(None)) />
+            })}
             {move || adding.get().then(|| view! {
                 <Picker ticket=t_picker.clone() add_to=Some((id, participants.get_untracked())) on_done=Callback::new(move |_| adding.set(false)) />
             })}
@@ -1064,6 +1083,9 @@ pub(crate) fn Picker(ticket: Option<String>, add_to: Option<(u64, Vec<String>)>,
     let query = RwSignal::new(String::new());
     let picked = RwSignal::new(Vec::<String>::new());
     let title = RwSignal::new(String::new());
+    // CHAT-16: an admin adds anyone — one who can't read it after a dialog.
+    let admin = crate::signin::account().with_untracked(|a| a.is_admin());
+    let asking = RwSignal::new(None::<crate::chat_grant::Ask>);
     let error = RwSignal::new(None::<String>);
     let held = chats::signal();
     let me = chats::me();
@@ -1118,7 +1140,10 @@ pub(crate) fn Picker(ticket: Option<String>, add_to: Option<(u64, Vec<String>)>,
                     .into_iter()
                     .map(|(p, reads)| {
                         let on = picked.with(|v| v.contains(&p));
-                        let what = if !reads {
+                        let grantable = !reads && admin && chat_id.is_some();
+                        let what = if grantable {
+                            "can't read it — adding grants access (you confirm)".to_string()
+                        } else if !reads {
                             refusal(&where_)
                         } else if waiting.contains(&p) {
                             "waiting for a message".to_string()
@@ -1129,15 +1154,18 @@ pub(crate) fn Picker(ticket: Option<String>, add_to: Option<(u64, Vec<String>)>,
                         };
                         let pc = p.clone();
                         let click = move |_| {
-                            if !reads {
+                            if !reads && !grantable {
                                 return;
                             }
                             match chat_id {
                                 Some(c) => {
                                     let p = pc.clone();
                                     spawn_local(async move {
-                                        match chats::add(c, &p).await {
-                                            Ok(()) => on_done.run(()),
+                                        match chats::add_granting(c, &p, None).await {
+                                            Ok(chats::Added::Added(_)) => on_done.run(()),
+                                            Ok(chats::Added::NeedsGrant(ask)) => {
+                                                asking.try_set(Some(ask));
+                                            }
                                             Err(e) => {
                                                 error.try_set(Some(e));
                                             }
@@ -1155,7 +1183,7 @@ pub(crate) fn Picker(ticket: Option<String>, add_to: Option<(u64, Vec<String>)>,
                         };
                         let who = name(&p);
                         view! {
-                            <li class="pcand" class:hi=on class:no=!reads aria-disabled=(!reads).to_string() data-principal=p.clone() on:click=click>
+                            <li class="pcand" class:hi=on class:no=!reads && !grantable class:grant=grantable aria-disabled=(!reads && !grantable).to_string() data-principal=p.clone() on:click=click>
                                 <span class="pav" class:agent=chats::is_agent(&p) aria-hidden="true">{crate::conversation::initials(&who)}</span>
                                 <div>
                                     {who}
@@ -1251,6 +1279,17 @@ pub(crate) fn Picker(ticket: Option<String>, add_to: Option<(u64, Vec<String>)>,
                 </div>
             })}
             {adding.then(|| view! { <div class="prow"><button type="button" class="pcancel" on:click=move |_| on_done.run(())>"cancel"</button></div> })}
+            {move || asking.get().map(|ask| view! {
+                <crate::chat_grant::GrantDialog ask
+                    done=Callback::new(move |r: Result<Option<String>, String>| {
+                        asking.set(None);
+                        match r {
+                            Ok(_) => on_done.run(()),
+                            Err(e) => error.set(Some(e)),
+                        }
+                    })
+                    cancel=Callback::new(move |_| asking.set(None)) />
+            })}
         </div>
     }
 }

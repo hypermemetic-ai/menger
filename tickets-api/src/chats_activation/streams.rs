@@ -94,6 +94,10 @@ pub(super) fn candidates(store: &Store, access: &Access, user: &VerifiedUser, ti
             None => store.orgs().into_iter().map(|o| o.name).collect(),
         };
         let mut who: BTreeSet<String> = orgs.iter().flat_map(|o| access.members_in(Some(o), store)).collect();
+        // CHAT-16: an admin adds anyone — those signed in who hold nothing yet too.
+        if orgs.iter().any(|o| user.admin_of(&crate::members::Scope::Org(o.clone()), store).is_ok()) {
+            who.extend(access.waiting().into_iter().map(|w| w.principal));
+        }
         let q = ChatQuery::default();
         if let Ok((rows, _)) = store.chats(user, &q, None, u32::MAX) {
             who.extend(rows.into_iter().filter(|c| c.kind.outside()).flat_map(|c| c.participants));
@@ -108,6 +112,10 @@ pub(super) fn candidates(store: &Store, access: &Access, user: &VerifiedUser, ti
         return vec![ChatsEvent::Refused { reasons: vec![format!("no ticket {}", ticket.trim().to_ascii_uppercase())] }];
     };
     let mut who = access.members_in(store.org_of(&key).as_ref(), store);
+    // CHAT-16: an admin of the ticket adds anyone — those waiting for a role too.
+    if user.permit::<crate::access::Admin>(&TicketId::new(key.clone()), store).is_ok() {
+        who.extend(access.waiting().into_iter().map(|w| w.principal));
+    }
     let q = ChatQuery { ticket: Some(key.clone()), ..ChatQuery::default() };
     if let Ok((rows, _)) = store.chats(user, &q, None, u32::MAX) {
         who.extend(rows.into_iter().flat_map(|c| c.participants));
@@ -125,9 +133,18 @@ pub(super) fn candidates(store: &Store, access: &Access, user: &VerifiedUser, ti
 /// in it, or, outside tickets, admin of its organization (which reads
 /// nothing); and who may be in it: one who reads its ticket, or, outside
 /// tickets, a member of its organization.
-fn membership(store: &Store, user: &VerifiedUser, chat: u64) -> Result<(ChatOn, Fits), ChatsEvent> {
+/// CHAT-16: an admin of a ticket's chat's ticket who is not in it adds and
+/// removes as an admin ([`ChatOn::TicketAdmin`]).
+pub(super) fn membership(store: &Store, user: &VerifiedUser, chat: u64) -> Result<(ChatOn, Fits), ChatsEvent> {
     match store.chat_seen(user, chat) {
-        Ok((c, s)) => Ok((s.on, s.key.map_or_else(|| Fits::Org(OrgId::new(&c.org).ok()), Fits::Ticket))),
+        Ok((c, s)) => {
+            let fits = s.key.clone().map_or_else(|| Fits::Org(OrgId::new(&c.org).ok()), Fits::Ticket);
+            let on = match (&s.key, s.admin && !s.participant) {
+                (Some(k), true) => user.permit::<crate::access::Admin>(&TicketId::new(k.clone()), store).map(ChatOn::TicketAdmin).unwrap_or(s.on),
+                _ => s.on,
+            };
+            Ok((on, fits))
+        }
         Err(e) => {
             let hidden = || ChatsEvent::NotFound { chat: ChatId::new(chat) };
             let c = store.chat_record(chat).filter(|c| c.kind.outside()).ok_or_else(|| refusal(e))?;
@@ -140,13 +157,13 @@ fn membership(store: &Store, user: &VerifiedUser, chat: u64) -> Result<(ChatOn, 
 
 /// CHAT-14: who may be in a chat — one who reads its ticket, or a member
 /// of its organization.
-enum Fits {
+pub(super) enum Fits {
     Ticket(String),
     Org(Option<OrgId>),
 }
 
 impl Fits {
-    fn admits(&self, access: &Access, store: &Store, p: &str) -> bool {
+    pub(super) fn admits(&self, access: &Access, store: &Store, p: &str) -> bool {
         match self {
             Fits::Ticket(k) => access.reads_ticket(p, k, store),
             Fits::Org(Some(o)) => access.member_of(p, o, store),
@@ -167,37 +184,10 @@ pub(super) async fn post(store: Arc<Store>, user: VerifiedUser, chat: u64, body:
     }
 }
 
-/// `chats.add`: the one added must read the ticket (CHAT-14: outside
-/// tickets, hold a grant in the chat's organization).
-pub(super) async fn add(store: Arc<Store>, access: Access, user: VerifiedUser, chat: u64, principal: String) -> ChatsEvent {
-    let (on, fits) = match membership(&store, &user, chat) {
-        Ok(m) => m,
-        Err(ev) => return ev,
-    };
-    let admits = |p: &str| fits.admits(&access, &store, p);
-    match store.add_to_chat(on, chat, Signer::of(&user), principal, admits).await {
-        Ok(c) => viewed_or_record(&store, &user, &c, |chat| ChatsEvent::Added { chat }),
-        Err(e) => refusal(e),
-    }
-}
-
-/// CHAT-14: `chats.remove`.
-pub(super) async fn remove(store: Arc<Store>, access: Access, user: VerifiedUser, chat: u64, principal: String) -> ChatsEvent {
-    let _ = &access;
-    let (on, _) = match membership(&store, &user, chat) {
-        Ok(m) => m,
-        Err(ev) => return ev,
-    };
-    match store.remove_from_chat(on, chat, Signer::of(&user), principal.clone()).await {
-        Ok(c) => viewed_or_record(&store, &user, &c, |chat| ChatsEvent::Removed { chat, principal }),
-        Err(e) => refusal(e),
-    }
-}
-
 /// The chat as `user` sees it, or — an admin who adds or removes in a chat
 /// it does not read, or one who just left — as kept, named by no one's
 /// reach: its participants, its kind, no unread.
-fn viewed_or_record(store: &Store, user: &VerifiedUser, c: &crate::store::ChatRecord, ev: impl FnOnce(Chat) -> ChatsEvent) -> ChatsEvent {
+pub(super) fn viewed_or_record(store: &Store, user: &VerifiedUser, c: &crate::store::ChatRecord, ev: impl FnOnce(Chat) -> ChatsEvent) -> ChatsEvent {
     match store.chat_view(user, c.id) {
         Some(chat) => ev(chat),
         None => ev(store.chat_bare(c)),
@@ -306,14 +296,14 @@ fn relay(store: &Store, user: &VerifiedUser, ticket: Option<&str>, change: &Chat
     Some(match change {
         ChatChange::Opened(_) => ChatsEvent::Opened { chat: view, existing: false },
         ChatChange::Posted(m) => ChatsEvent::Posted { message: m.clone() },
-        ChatChange::Added(_) => ChatsEvent::Added { chat: view },
+        ChatChange::Added(_) => ChatsEvent::Added { chat: view, granted: None },
         ChatChange::Read { principal, upto, .. } if *principal == me => ChatsEvent::Read { chat, upto: MessageId::new(*upto), unread: view.unread },
         ChatChange::Read { .. } => return None,
         ChatChange::Closed(_) => ChatsEvent::Closed { chat },
         ChatChange::Reopened(_) => ChatsEvent::Reopened { chat },
         ChatChange::Renamed(_) => ChatsEvent::Renamed { chat: view },
         ChatChange::Listening { principal, waiting, .. } => ChatsEvent::Listening { chat, principal: principal.clone(), waiting: *waiting },
-        ChatChange::Removed { principal, .. } => ChatsEvent::Removed { chat: view, principal: principal.clone() },
+        ChatChange::Removed { principal, .. } => ChatsEvent::Removed { chat: view, principal: principal.clone(), revoked: false },
     })
 }
 

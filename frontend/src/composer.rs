@@ -701,7 +701,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
         }
     };
     let expand = move |_| crate::chat_full::set_full(!full);
-    let on_ticket = ticket.is_some();
+    // `#/chats` has no dock to fold the chat into (CHAT-14).
+    let on_ticket = ticket.is_some() && !crate::chat_full::in_inbox();
     view! {
         <div class="ccompose" class:full=full>
             {move || refusal.get().map(|r| view! {
