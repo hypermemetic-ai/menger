@@ -304,6 +304,7 @@ mod naming;
 mod needs;
 // ORG-4: the organizations held, and the header's switcher.
 mod orgs;
+mod phonebar;
 mod registry;
 mod rowclick;
 mod saved;
@@ -2236,6 +2237,9 @@ fn App() -> impl IntoView {
         };
         settings::conn_text(state, live, over.as_deref())
     };
+    // APP-50: the phone head's live mark says the same.
+    let phone_conn_class = Signal::derive(conn_class);
+    let phone_conn_words = Signal::derive(conn_words.clone());
     // DESIGN-39: the first `health` plays the boot (once — a reconnect's
     // finds it done).
     Effect::new(move |_| {
@@ -2321,15 +2325,24 @@ fn App() -> impl IntoView {
         Memo::new(move |_| account.with(|a| a.no_access()))
     };
 
+    let phone_sheet = RwSignal::from(phonebar::own());
     view! {
-        <div id="app" class:nonav=move || nav_hidden.get() || !can_view.get() class:annotating=move || annot.on.get() class:chatting=move || chat_pane::open_for(route_ticket.get().as_deref()) data-rows-held=move || held.get()>
+        <div id="app" class:nonav=move || nav_hidden.get() || !can_view.get() class:annotating=move || annot.on.get() class:chatting=move || chat_pane::open_for(route_ticket.get().as_deref()) data-rows-held=move || held.get()
+            // APP-50: the phone bar's own sheet up (the tree's, the filter's).
+            data-sheet=move || phone_sheet.get().map(phonebar::Place::name)>
             // IDENTITY-22: a person holding no grant sees no nav: there is
             // nothing in it they may read.
             {move || can_view.get().then(|| view! { <nav::Nav tree route hidden=nav_hidden /> })}
             <div class="content" on:scroll=move |_| viewport.notify()>
                 // FILTER-11: the header, the lens bar under it, and the
                 // global menu hanging from both.
-                <div id="lens-top">
+                // APP-50: the phone's top line — where you are, and live.
+                <phonebar::Head route conn_class=phone_conn_class conn_words=phone_conn_words />
+                <phonebar::FilterScrim />
+                // APP-50: at phone widths this is the filter's sheet; while it
+                // is up a press inside it keeps the global menu open.
+                <div id="lens-top" data-fopen=move || (phone_sheet.get() == Some(phonebar::Place::Filter)).then_some("global")>
+                <phonebar::FilterHead />
                 <header>
                     {move || {
                         nav_hidden.get().then(|| view! {
@@ -2477,6 +2490,8 @@ fn App() -> impl IntoView {
                     </button>
                     // AGS-17: the theme toggle (system → light → dark).
                     <theme::Toggle />
+                    // APP-50: the filter sheet's foot — clear, done.
+                    <phonebar::FilterFoot />
                 </header>
                 // FILTER-16: on a page the filter does not reach, it says so.
                 <lens::LensBar applies=Signal::derive(move || lens::applies(&route.get())) />
@@ -2542,6 +2557,8 @@ fn App() -> impl IntoView {
             // MENGER-39: the tray — the owner's queue along the main
             // column's bottom edge (a grid item over the content's cell).
             {move || can_view.get().then(|| view! { <queue::Tray /> })}
+            // APP-50: the phone nav — a bar along the bottom edge (≤ 820).
+            {move || can_view.get().then(|| view! { <phonebar::Bar route overlay tree /> })}
             // CHAT-4: the chat pane — a column of the grid beside the content
             // (a sheet under 760px), drawn while open on the route's ticket.
             {move || can_view.get().then(|| view! { <chat_pane::Pane ticket=route_ticket /> })}

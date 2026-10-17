@@ -33,6 +33,7 @@ const NOT_MOTION: &[(&str, usize, &str)] = &[
     ("calendar", 2, "focuses a day after the grid is drawn"),
     ("filter", 2, "focuses the bar's input; places a menu after layout"),
     ("grow", 1, "fits a textarea to its text"),
+    ("phonebar", 1, "the tree measures the sheet it now fills"),
     ("saved", 7, "focuses a menu's first item; fits the menu to the viewport"),
     ("waves", 2, "measures the lanes; scrolls a card into view at once"),
     ("when_view", 1, "focuses the picker after it opens"),

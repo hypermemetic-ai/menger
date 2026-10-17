@@ -13,8 +13,10 @@
 //!   count, `queued`, the loudest urgency's chip with how many share it
 //!   (`3 blocking`) and `▴`. Its ground and border are the loudest
 //!   urgency's ([`Control`]); `now` / `blocking` are taller, red, and nudge
-//!   while one of them is unopened. At a phone's width it is a 46 px pill
-//!   at the bottom right.
+//!   while one of them is unopened. At a phone's width (≤ 820, APP-50) it
+//!   is the phone bar's last place (src/phonebar.rs): the count a badge,
+//!   the loudest's chip its label, its colours, its nudge and its arrival
+//!   flash, read from [`Face`]; the sheet rises above the bar.
 //! - **The sheet**: the control slides it in from the bottom of the main
 //!   column (a phone's: the whole width, 88% tall, over a scrim, with a grab
 //!   handle). Its head says `queue N`, a chip per urgency (each jumps to its
@@ -590,6 +592,34 @@ thread_local! {
     static HIDDEN: ArcRwSignal<bool> = ArcRwSignal::new(false);
 }
 
+/// APP-50: what the phone bar's queue place reads — the one control's model
+/// ([`Control`]), whether the sheet is up, the arrival it blinks for — as
+/// the tray keeps them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Face {
+    pub(crate) ctl: Option<Control>,
+    pub(crate) open: bool,
+    pub(crate) fresh: Option<Urgency>,
+}
+
+thread_local! {
+    /// APP-50: the tray's face, for the bar.
+    static FACE: ArcRwSignal<Face> = ArcRwSignal::new(Face::default());
+    /// APP-50: the bar asking the sheet up or down — numbered, so the same
+    /// ask twice is two asks.
+    static WANT: ArcRwSignal<(u32, bool)> = ArcRwSignal::new((0, false));
+}
+
+/// APP-50: the tray's face, as a signal.
+pub(crate) fn face() -> ArcRwSignal<Face> {
+    FACE.with(Clone::clone)
+}
+
+/// APP-50: the bar's queue place tapped — the sheet up (`true`) or down.
+pub(crate) fn want(open: bool) {
+    WANT.with(|w| w.update(|w| *w = (w.0.wrapping_add(1), open)));
+}
+
 /// Arrivals to play, once the page is visible.
 fn announce(arrivals: Vec<Arrival>) {
     if !arrivals.is_empty() {
@@ -1084,6 +1114,31 @@ pub(crate) fn Tray() -> impl IntoView {
             }
         }
     };
+    // APP-50: the phone bar's queue place — it reads the tray's face, and
+    // asks the sheet up or down as the control does.
+    {
+        let face = FACE.with(Clone::clone);
+        Effect::new(move |_| {
+            let now = Face { ctl: ctl.get(), open: open.get(), fresh: fresh.get() };
+            if face.with_untracked(|f| *f != now) {
+                face.set(now);
+            }
+        });
+        let want = WANT.with(Clone::clone);
+        let heard = StoredValue::new(want.get_untracked().0);
+        Effect::new(move |_| {
+            let (n, up) = want.get();
+            if heard.get_value() == n {
+                return;
+            }
+            heard.set_value(n);
+            match (up, open.get_untracked()) {
+                (true, false) if !order.with_untracked(Vec::is_empty) => open_sheet(),
+                (false, true) => close_sheet(false),
+                _ => {}
+            }
+        });
+    }
     // The queue moved: a picked row that left (submitted, snoozed, done
     // with, answered elsewhere) hands the pick to the next; the last one
     // leaving takes the sheet down, and the tray stays as long as it slides.
@@ -1130,7 +1185,8 @@ pub(crate) fn Tray() -> impl IntoView {
     // inside. A press in a frame never reaches this window: focus going
     // into the frame blurs it instead, and that is heard as the press.
     let lower_outside = move |target: Option<web_sys::Element>| {
-        let inside = target.is_some_and(|el| el.closest("#qtray").ok().flatten().is_some());
+        // APP-50: the phone bar's queue place is the control there.
+        let inside = target.is_some_and(|el| el.closest("#qtray, #pbar .pq").ok().flatten().is_some());
         let (Some(is_open), Some(is_busy)) = (open.try_get_untracked(), busy.try_get_untracked()) else { return };
         if outside_lowers(is_open, is_busy, inside) {
             open.set(false);
@@ -1151,6 +1207,7 @@ pub(crate) fn Tray() -> impl IntoView {
     on_cleanup(move || {
         press.remove();
         into_frame.remove();
+        FACE.with(|f| f.set(Face::default()));
     });
     // j / k: the next or previous row, picked and brought into view.
     let step_by = move |by: i32| {

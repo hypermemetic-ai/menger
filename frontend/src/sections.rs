@@ -18,10 +18,13 @@
 //!
 //! **Its forms**, by the viewport's width: at ≥ 1760 (LOOK-7: the owner's
 //! full-HD width less 10em, 1920 − 160) a card in its own column, sticky;
-//! between 640 and 1760 a rail of ticks at the right edge
-//! that opens over the body; at ≤ 640 no dock but a pill above the tray
-//! (hiding while the reader scrolls down) that opens a bottom sheet, inputs
-//! first. A body with fewer than three sections and no input has none.
+//! between 820 and 1760 a rail of ticks at the right edge
+//! that opens over the body; at ≤ 820 (APP-50's phone shape) no dock but
+//! the phone bar's sections place (src/phonebar.rs: `2/7 the ask`, a badge
+//! counting open inputs — [`Face`]), which raises a bottom sheet, inputs
+//! first, above the bar; the pill (hiding while the reader scrolls down)
+//! stays for a page without the bar. A body with fewer than three sections
+//! and no input has none.
 //!
 //! **Keys** (owner, 2026-10-16, LOOK-3's `dock-keys`): `}` / `{` the next
 //! and previous section — `]` / `[` stay the status keys (ACT-10) — and `i`
@@ -31,7 +34,7 @@
 //! pill's rule and the form — is pure and pinned by native tests below; the
 //! rest reads the DOM.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use leptos::prelude::*;
@@ -279,7 +282,7 @@ pub(crate) enum Form {
 pub(crate) fn form(width: f64) -> Form {
     if width >= 1760.0 {
         Form::Column
-    } else if width > 640.0 {
+    } else if width > 820.0 {
         Form::Rail
     } else {
         Form::Pill
@@ -293,8 +296,49 @@ thread_local! {
     /// Each body frame's last report, by its channel.
     static REPORTS: RefCell<HashMap<String, Vec<Item>>> = RefCell::new(HashMap::new());
     static VERSION: ArcRwSignal<u64> = ArcRwSignal::new(0);
+    /// APP-50: the newest dock — only it writes the face, and clears it.
+    static FACE_GEN: Cell<u32> = const { Cell::new(0) };
     /// The dock on screen, for the keys.
     static ACTIVE: RefCell<Option<Handle>> = const { RefCell::new(None) };
+    /// APP-50: the dock's face, for the phone bar's sections place — None
+    /// while no dock shows.
+    static FACE: ArcRwSignal<Option<Face>> = ArcRwSignal::new(None);
+    /// APP-50: whether the bottom sheet is up — the dock's, raised by the
+    /// pill or the phone bar's place.
+    static SHEET: ArcRwSignal<bool> = ArcRwSignal::new(false);
+}
+
+/// APP-50: what the phone bar's sections place says — the lit section of
+/// how many, its name, how many inputs wait on the reader.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Face {
+    pub(crate) at: usize,
+    pub(crate) len: usize,
+    pub(crate) label: String,
+    pub(crate) waiting: usize,
+}
+
+impl Face {
+    /// The face of `sections` with `lit` the one being read.
+    pub(crate) fn of(sections: &[Section], lit: usize) -> Option<Face> {
+        let at = lit.min(sections.len().checked_sub(1)?);
+        Some(Face { at, len: sections.len(), label: sections[at].label.clone(), waiting: waiting(sections) })
+    }
+
+    /// `2/7 The ask`.
+    pub(crate) fn words(&self) -> String {
+        format!("{}/{} {}", self.at + 1, self.len, self.label)
+    }
+}
+
+/// APP-50: the dock's face, as a signal.
+pub(crate) fn face() -> ArcRwSignal<Option<Face>> {
+    FACE.with(Clone::clone)
+}
+
+/// APP-50: the dock's sheet, as a signal.
+pub(crate) fn sheet() -> ArcRwSignal<bool> {
+    SHEET.with(Clone::clone)
 }
 
 /// A body frame's report (src/frame.rs) — kept by its channel; a frame no
@@ -447,8 +491,24 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
     let shown = Memo::new(move |_| sections.with(|s| shows(s)));
     let lit = RwSignal::new(0usize);
     let rail_open = RwSignal::new(false);
-    let sheet = RwSignal::new(false);
+    // APP-50: the sheet is shared with the phone bar; a new page's starts down.
+    let sheet = RwSignal::from(SHEET.with(Clone::clone));
+    sheet.set(false);
     let pill = RwSignal::new(Pill::default());
+    // APP-50: the face the phone bar reads, while this dock is the page's.
+    let face_gen = FACE_GEN.with(|g| {
+        g.set(g.get().wrapping_add(1));
+        g.get()
+    });
+    {
+        let face = FACE.with(Clone::clone);
+        Effect::new(move |_| {
+            let now = if shown.get() { sections.with(|s| Face::of(s, lit.get())) } else { None };
+            if FACE_GEN.with(Cell::get) == face_gen && face.with_untracked(|f| *f != now) {
+                face.set(now);
+            }
+        });
+    }
 
     // The server's inputs for this ticket, then each `input_changed`.
     {
@@ -531,6 +591,10 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
     let held = StoredValue::new_local(Some((on_scroll, on_click, on_key)));
     ACTIVE.with(|a| *a.borrow_mut() = Some(Handle { sections, lit, ticket: tid }));
     on_cleanup(move || {
+        if FACE_GEN.with(Cell::get) == face_gen {
+            FACE.with(|f| f.set(None));
+            SHEET.with(|s| s.set(false));
+        }
         ACTIVE.with(|a| {
             let mut a = a.borrow_mut();
             // Only this dock's handle: a newer page's may already be there.
@@ -845,8 +909,10 @@ mod tests {
         assert_eq!(form(1760.0), Form::Column);
         assert_eq!(form(1759.0), Form::Rail);
         assert_eq!(form(1440.0), Form::Rail);
-        assert_eq!(form(768.0), Form::Rail);
-        assert_eq!(form(641.0), Form::Rail);
+        // APP-50: the phone shape runs to 820 — a tablet held upright too.
+        assert_eq!(form(821.0), Form::Rail);
+        assert_eq!(form(820.0), Form::Pill);
+        assert_eq!(form(768.0), Form::Pill);
         assert_eq!(form(640.0), Form::Pill);
         assert_eq!(form(390.0), Form::Pill);
     }
