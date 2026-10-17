@@ -338,7 +338,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     let mut seen = BTreeSet::new();
     // MACRO-20: the hub lists them by path (`tickets.commits`), each schema
     // its own (namespace and grants as the macro wrote them).
-    let children = plexus_core::plexus::Activation::static_child_schemas(&menger_tickets_api::Tickets::new(Arc::new(menger_tickets_api::store::Store::new())))
+    let children = plexus_core::plexus::Activation::static_child_schemas(&menger_tickets_api::TicketsActivation::new(Arc::new(menger_tickets_api::store::Store::new())))
         .into_iter()
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = hub.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));

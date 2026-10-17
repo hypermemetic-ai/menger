@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// The teams a grant may name (ACCESS-22).
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Teams {
+pub struct TeamsActivation {
     pub(super) store: Arc<Store>,
     pub(super) access: Access,
 }
@@ -40,15 +40,11 @@ pub struct Teams {
 // Not `#[cfg]`-gated: the client-only build needs `TeamsClient` too.
 /// Teams: a named set of principals that holds grants; its members hold what it holds.
 #[plexus_macros::activation(
-    namespace = "teams",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core"
 )]
-impl Teams {
+impl TeamsActivation {
     /// The teams in your organizations, by name; one team { name, org, created_by, at, members } each.
     ///
     /// Every team in an organization the caller holds a role in (every

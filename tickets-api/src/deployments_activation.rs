@@ -40,14 +40,14 @@ use std::sync::Arc;
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Deployments {
+pub struct DeploymentsActivation {
     store: Arc<Store>,
     /// The rule every method asks first ([`crate::access`]).
     access: Access,
 }
 
 #[cfg(feature = "server")]
-impl Deployments {
+impl DeploymentsActivation {
     /// No login: every call admitted, as always.
     pub fn new(store: Arc<Store>) -> Self {
         Self::with_access(store, Access::open())
@@ -89,12 +89,8 @@ fn refused(e: StoreError) -> DeploymentsEvent {
 
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 #[plexus_macros::activation(
-    namespace = "deployments",
     description = "Deployments: every deploy to any environment — record, promotes, list, environments, for_ticket, running, watch",
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     // AUTH-7: reads are a viewer's; recording is a deployer's alone (a
     // CI's key on the project's shortcode) — and admin's, who holds all.
     // DEPLOY-21: `promotes` is listed nowhere: admin's alone.
@@ -104,7 +100,7 @@ fn refused(e: StoreError) -> DeploymentsEvent {
         deployer = [viewer, "record"],
     )
 )]
-impl Deployments {
+impl DeploymentsActivation {
     /// Records one deployment — DEPLOY-10's record, its fields as the
     /// parameters (`deploy/record --send` passes the record whole as the
     /// params object). `project` is a shortcode the store holds, any case;

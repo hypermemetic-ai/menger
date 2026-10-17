@@ -31,23 +31,19 @@ use std::sync::Arc;
 /// The commits that finished a ticket: linked and unlinked (SDLC-9).
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Commits {
+pub struct CommitsActivation {
     pub(super) store: Arc<Store>,
     pub(super) access: Access,
 }
 
 /// The commits that finished a ticket — link them, unlink them (SDLC-9).
 #[plexus_macros::activation(
-    namespace = "commits",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     roles(editor = ["link", "unlink"])
 )]
-impl Commits {
+impl CommitsActivation {
     /// Link commits to a ticket, or to many (ids; one write, all or none) — the commits that finished it; yields commits_linked { ticket, added } per ticket.
     ///
     /// SDLC-9: records which commits finished a ticket. Each entry is a

@@ -9,8 +9,8 @@ mod commits;
 mod nav;
 mod work;
 
-fn hub() -> Tickets {
-    Tickets::new(Arc::new(Store::new()))
+fn hub() -> TicketsActivation {
+    TicketsActivation::new(Arc::new(Store::new()))
 }
 
 /// ACCESS-13: the caller every method takes — with login off, anyone, as
@@ -265,7 +265,7 @@ async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
 /// real change.
 #[tokio::test]
 async fn a_body_past_the_cap_is_the_typed_body_too_large() {
-    let hub = Tickets::new(Arc::new(Store::new().with_body_max(10)));
+    let hub = TicketsActivation::new(Arc::new(Store::new().with_body_max(10)));
     one(hub.create(anyone(), "BIG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let ev = one(hub.create(anyone(), "BIG".into(), "page".into(), Some("doc".into()), None, None, Some("x".repeat(11).as_str().into()), None, None, None).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
@@ -945,7 +945,7 @@ async fn list_pages_by_default_and_never_past_the_most() {
     use crate::limits::{LIST_PAGE_DEFAULT, LIST_PAGE_MAX};
     let store = Arc::new(Store::new());
     store.seed_synthetic(SYS, crate::store::SeedSpec { count: 1_200, seed: 7, into_existing: false }).unwrap();
-    let hub = Tickets::new(store);
+    let hub = TicketsActivation::new(store);
     let list = |after: Option<crate::vocab::Cursor>, limit: Option<u32>| {
         hub.list(anyone(), None, None, None, after, limit, Some(true), None, None, None, None)
     };
@@ -991,7 +991,7 @@ async fn comments_list_pages_by_default_and_never_past_the_most() {
         let anchor = Anchor { route: "#/".into(), path: "body".into(), label: "x".into(), excerpt: "x".into(), ticket: None, version: None };
         store.add_comment(SYS, anchor, format!("note {i}"), None).await.unwrap();
     }
-    let comments = crate::Comments::new(store);
+    let comments = crate::CommentsActivation::new(store);
     let count = |evs: Vec<CommentsEvent>| {
         let n = evs.iter().filter(|e| matches!(e, CommentsEvent::Comment { .. })).count();
         let next = evs.iter().find_map(|e| if let CommentsEvent::Page { next } = e { Some(*next) } else { None });
@@ -1013,7 +1013,7 @@ async fn comments_list_pages_by_default_and_never_past_the_most() {
 async fn await_reply_waits_then_answers_once() {
     use crate::queue::{Reply, Urgency};
     let store = Arc::new(Store::new());
-    let hub = Tickets::new(Arc::clone(&store));
+    let hub = TicketsActivation::new(Arc::clone(&store));
     let decision = "<m-decision data-field=\"decision\" id=\"landing\">\n<m-question data-field=\"question\">A or B?</m-question>\n\
 <m-option data-field=\"option\" name=\"A\" value=\"a\"></m-option>\n<m-option data-field=\"option\" name=\"B\" value=\"b\"></m-option>\n</m-decision>\n";
     store.create(SYS, crate::store::NewTicket { epic: "AW".into(), title: "root".into(), kind: Kind::Scope, severity: None, blocked_by: vec![], parent: None, path: None, body: String::new() }).await.unwrap();

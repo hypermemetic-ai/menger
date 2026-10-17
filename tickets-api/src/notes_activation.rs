@@ -37,14 +37,14 @@ use std::sync::Arc;
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Notes {
+pub struct NotesActivation {
     store: Arc<Store>,
     /// IDENTITY-19: the rule every method asks first ([`crate::access`]).
     access: Access,
 }
 
 #[cfg(feature = "server")]
-impl Notes {
+impl NotesActivation {
     /// No login: every call admitted, as always.
     pub fn new(store: Arc<Store>) -> Self {
         Self::with_access(store, Access::open())
@@ -67,12 +67,8 @@ fn answer(note: Result<crate::notes::Note, StoreError>) -> NotesEvent {
 
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 #[plexus_macros::activation(
-    namespace = "notes",
     description = "Notes: dated, untitled thoughts in one place; add, list, get, upgrade to a ticket",
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     // AUTH-7: a member's notes are any member's to read and write; making
     // one a ticket is an editor's (and needs tickets.create where it lands).
     roles(
@@ -80,7 +76,7 @@ fn answer(note: Result<crate::notes::Note, StoreError>) -> NotesEvent {
         editor = [viewer, "upgrade"],
     )
 )]
-impl Notes {
+impl NotesActivation {
     /// Keeps a note: its `body` as written (not blank, at most 64 KiB) and
     /// its author — `owner` unless `author` is given; a signed-in caller's
     /// note is its identity's name, whatever `author` says, and signed with

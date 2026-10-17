@@ -13,7 +13,7 @@ use super::*;
 /// The inputs child. Server-only: it holds the store.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Inputs {
+pub struct InputsActivation {
     pub(super) store: Arc<Store>,
     pub(super) access: Access,
 }
@@ -35,16 +35,12 @@ pub(super) fn source_of(caller: &VerifiedUser) -> AnswerSource {
 // build too, or there would be no `InputsClient`.
 /// A ticket's inputs: asked of the owner inside a ticket, answered, closed (INPUT-3).
 #[plexus_macros::activation(
-    namespace = "inputs",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     roles(viewer = ["list"], editor = [viewer, "answer", "clear", "close", "reopen"])
 )]
-impl Inputs {
+impl InputsActivation {
     /// Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket.
     ///
     /// INPUT-3: the inputs store. Yields one `Input` per input of `ticket`

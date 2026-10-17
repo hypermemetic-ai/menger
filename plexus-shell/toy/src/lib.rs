@@ -13,7 +13,7 @@ pub static APP: EmbeddedTable = plexus_shell::embedded_app!();
 
 /// One method: say something back.
 #[derive(Clone, Default)]
-pub struct Echo;
+pub struct EchoActivation;
 
 /// What `say` says back (ACCESS-8: a parameter is a type, never a bare
 /// `String`) — any text, as JSON carries it.
@@ -21,8 +21,8 @@ pub struct Echo;
 #[serde(transparent)]
 pub struct Said(String);
 
-#[plexus_macros::activation(namespace = "echo", version = "0.1.0", description = "says it back", typed_params, crate_path = "plexus_core")]
-impl Echo {
+#[plexus_macros::activation(version = "0.1.0", description = "says it back", typed_params)]
+impl EchoActivation {
     /// Answers `text`, prefixed.
     #[plexus_macros::method]
     async fn say(&self, text: Said) -> impl Stream<Item = String> + Send + 'static {
@@ -32,7 +32,7 @@ impl Echo {
 
 /// The toy's hub.
 pub fn hub() -> Arc<DynamicHub> {
-    Arc::new(DynamicHub::new("toy").register(Echo))
+    Arc::new(DynamicHub::new("toy").register(EchoActivation))
 }
 
 /// The toy on free loopback ports: the embedded app, titled `toy`, its

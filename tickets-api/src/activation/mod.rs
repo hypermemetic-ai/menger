@@ -7,8 +7,9 @@
 //! | `server` (default; the menger binary) | the `Activation` impl, dispatch, the schema, these bodies |
 //! | `default-features = false` (the browser app, wasm32) | `TicketsClient<T>` — one typed method per `#[method]`, over the activation's own types |
 //!
-//! `client` asks for the client; `server_cfg` puts the server half of the
-//! expansion — this impl block included — behind the `server` feature, and
+//! The client comes from the plexus-client dependency, and the crate's
+//! `server` feature gates the server half of the expansion (MACRO-13's
+//! defaults; the type is `TicketsActivation`, its stem the namespace) — this impl block included — behind the `server` feature, and
 //! the author's own server-only items (the struct, its store, the imports)
 //! sit behind the same `cfg`. There is no second declaration anywhere: a
 //! changed parameter here fails the browser build.
@@ -77,14 +78,14 @@ use plexus_core::plexus::Grant;
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Tickets {
+pub struct TicketsActivation {
     store: Arc<Store>,
     /// IDENTITY-19: the rule every method asks first ([`crate::access`]).
     access: Access,
 }
 
 #[cfg(feature = "server")]
-impl Tickets {
+impl TicketsActivation {
     /// No login: every call admitted, as always.
     pub fn new(store: Arc<Store>) -> Self {
         Self::with_access(store, Access::open())
@@ -165,35 +166,35 @@ mod tests;
 mod commits;
 pub use commits::CommitsClient;
 #[cfg(feature = "server")]
-pub use commits::Commits;
+pub use commits::CommitsActivation;
 // ACCESS-18: `tickets components`, filled and mounted (`tickets.components.list`).
 // Not gated: its attribute emits `ComponentsClient` in the client build.
 mod components;
 pub use components::ComponentsClient;
 #[cfg(feature = "server")]
-pub use components::Components;
+pub use components::ComponentsActivation;
 // ACCESS-14: inputs, filled and mounted (`tickets.inputs.<method>`). The
 // module is not gated: its attribute emits `InputsClient` in the client build.
 mod inputs;
 pub use inputs::InputsClient;
 #[cfg(feature = "server")]
-pub use inputs::Inputs;
+pub use inputs::InputsActivation;
 // ACCESS-16: mounted — `tickets.nav.<method>`, its client `client.nav()`.
 // Not server-gated: its client half is the app's.
 mod nav;
 pub use nav::NavClient;
 #[cfg(feature = "server")]
-pub use nav::Nav;
+pub use nav::NavActivation;
 // ACCESS-17: `tickets work`, filled and mounted — not `cfg`-gated, since its
 // attribute emits `WorkClient` for the client-only build too.
 mod work;
 #[cfg(feature = "server")]
-pub use work::Work;
+pub use work::WorkActivation;
 pub use work::WorkClient;
 
 // The attribute is NOT `#[cfg]`-gated: it has to run in the client-only
-// build too, or there would be no client. `server_cfg` tells it to put the
-// server half — this impl block included — behind the feature.
+// build too, or there would be no client. The crate's `server` feature
+// gates the server half — this impl block included (MACRO-13's default).
 // AUTH-7: the default roles, explicit lists of grants (AUTH-1) — what
 // IDENTITY-21's three roles meant, method by method: `viewer` reads,
 // `editor` reads and writes; `admin`, built in, holds every grant. An
@@ -204,13 +205,9 @@ pub use work::WorkClient;
 // every description a doc comment.
 /// Plans as data — create, query, and watch the work DAG.
 #[plexus_macros::activation(
-    namespace = "tickets",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     roles(
         viewer = [
             "health", "get", "list", "find", "search", "watch", "history",
@@ -222,7 +219,7 @@ pub use work::WorkClient;
         ],
     )
 )]
-impl Tickets {
+impl TicketsActivation {
     /// Heartbeat — version, unix time, ticket count.
     ///
     /// Returns the binary version, the server's unix time, and
@@ -570,8 +567,8 @@ impl Tickets {
 
     /// The commits that finished a ticket — `tickets.commits.link` / `unlink` (ACCESS-15).
     #[plexus_macros::child]
-    fn commits(&self) -> commits::Commits {
-        commits::Commits { store: Arc::clone(&self.store), access: self.access.clone() }
+    fn commits(&self) -> commits::CommitsActivation {
+        commits::CommitsActivation { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 
     /// Add or remove a ticket's labels (e.g. needs-you), or many tickets' (ids; one write, all or none); yields labels_changed { ticket, added, removed } per ticket.
@@ -948,20 +945,20 @@ impl Tickets {
 
     /// What the nav and the menus ask — `tickets.nav.<method>`: groups, extents, tree, counts, facets, member (ACCESS-16).
     #[plexus_macros::child]
-    fn nav(&self) -> Nav {
-        Nav::new(self.store.clone(), self.access.clone())
+    fn nav(&self) -> NavActivation {
+        NavActivation::new(self.store.clone(), self.access.clone())
     }
 
     /// The component registry — `tickets.components.list` (COMP-3, ACCESS-18), through the caller's reach.
     #[plexus_macros::child]
-    pub fn components(&self) -> Components {
-        Components { store: Arc::clone(&self.store), access: self.access.clone() }
+    pub fn components(&self) -> ComponentsActivation {
+        ComponentsActivation { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 
     /// A ticket's inputs — `tickets.inputs.<method>`: list, answer, clear, close, reopen (INPUT-3, ACCESS-14).
     #[plexus_macros::child]
-    pub fn inputs(&self) -> Inputs {
-        Inputs { store: self.store.clone(), access: self.access.clone() }
+    pub fn inputs(&self) -> InputsActivation {
+        InputsActivation { store: self.store.clone(), access: self.access.clone() }
     }
 
     /// A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then its queue records (MENGER-39), then history_end (when the log began; what a restore would put back; since when it has held its status).
@@ -1208,7 +1205,7 @@ impl Tickets {
 
     /// The order of work — `tickets work ready | waves | waves_under | waves_to | blockers` (ACCESS-17, activation/work.rs).
     #[plexus_macros::child]
-    pub fn work(&self) -> Work {
-        Work { store: Arc::clone(&self.store), access: self.access.clone() }
+    pub fn work(&self) -> WorkActivation {
+        WorkActivation { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 }

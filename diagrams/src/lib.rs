@@ -36,7 +36,7 @@ pub use types::{Markdown, MermaidEvent, MermaidSource, Verdict};
 
 pub mod activation;
 #[cfg(feature = "server")]
-pub use activation::Mermaid;
+pub use activation::MermaidActivation;
 pub use activation::MermaidClient;
 
 /// The mermaid blocks of a markdown body, by the app's rule.
@@ -68,5 +68,5 @@ pub fn no_browser_origins() -> Vec<String> {
 /// the program is started by the first call.
 #[cfg(feature = "server")]
 pub fn build_hub(driver: node::Driver) -> std::sync::Arc<plexus_core::plexus::DynamicHub> {
-    std::sync::Arc::new(plexus_core::plexus::DynamicHub::new(HUB).register(Mermaid::new(driver)))
+    std::sync::Arc::new(plexus_core::plexus::DynamicHub::new(HUB).register(MermaidActivation::new(driver)))
 }

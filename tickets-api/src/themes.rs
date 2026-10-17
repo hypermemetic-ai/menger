@@ -558,3 +558,11 @@ impl fmt::Display for Takeover {
 #[cfg(test)]
 #[path = "themes_tests.rs"]
 mod tests;
+
+/// MACRO-21: the emitted client implements the activation's trait; a client
+/// failure is the in-band error, the last item of its stream.
+impl plexus_client::FromClientError for ThemesEvent {
+    fn from_client_error(error: plexus_client::ClientError) -> Self {
+        ThemesEvent::Error { message: error.to_string() }
+    }
+}

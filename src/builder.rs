@@ -1,5 +1,5 @@
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{Chats, Comments, Deployments, Members, Notes, Orgs, ProviderOffer, Session, Themes, Tickets};
+use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, MembersActivation, NotesActivation, OrgsActivation, ProviderOffer, SessionActivation, ThemesActivation, TicketsActivation};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
@@ -180,23 +180,23 @@ pub async fn build_rpc_login(
     purge_daily(Arc::clone(&store), Arc::clone(&system));
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
-    let tickets = Tickets::with_access(Arc::clone(&store), access.clone());
+    let tickets = TicketsActivation::with_access(Arc::clone(&store), access.clone());
     let mut hub = DynamicHub::new("menger")
         .register(tickets)
-        .register(Comments::with_access(Arc::clone(&store), access.clone()))
+        .register(CommentsActivation::with_access(Arc::clone(&store), access.clone()))
         // CHAT-3: `chats` beside them — conversations inside tickets.
-        .register(Chats::with_access(Arc::clone(&store), access.clone()))
+        .register(ChatsActivation::with_access(Arc::clone(&store), access.clone()))
         // NOTE-2: `notes` beside them, over the same store.
-        .register(Notes::with_access(Arc::clone(&store), access.clone()))
+        .register(NotesActivation::with_access(Arc::clone(&store), access.clone()))
         // THEME-8: `themes` beside them — the themes and what each level adopts.
-        .register(Themes::with_access(Arc::clone(&store), access.clone()))
+        .register(ThemesActivation::with_access(Arc::clone(&store), access.clone()))
         // DEPLOY-11: `deployments` beside them — every deploy, where tickets run.
-        .register(Deployments::with_access(Arc::clone(&store), access.clone()))
+        .register(DeploymentsActivation::with_access(Arc::clone(&store), access.clone()))
         // ORG-4: `orgs` beside `members` — the organizations, and their making.
-        .register(Orgs::with_access(Arc::clone(&store), access.clone()))
-        .register(Members::new(store, access.clone()))
+        .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
+        .register(MembersActivation::new(store, access.clone()))
         // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
-        .register(Session::offering(offers).with_access(access.clone()));
+        .register(SessionActivation::offering(offers).with_access(access.clone()));
     if access.login() {
         // AUTH-7: the gate reads the same book the methods ask; the roles
         // the activations declare are what a role holds until an admin

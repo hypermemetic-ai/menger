@@ -464,8 +464,9 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   params object at once — a script's convenience, never a requirement.
   4455 is inside its `_self scan` range.
 - **The macro-emitted Rust client** — `TicketsClient<T>`, emitted by
-  `#[plexus_macros::activation(client, …)]` from the activation's own
-  `impl` in `tickets-api/` (MFE-11); `CommentsClient<T>` the same way
+  `#[plexus_macros::activation]` from the activation's own
+  `impl TicketsActivation` in `tickets-api/` (MFE-11; the stem names the
+  namespace, the trait `Tickets` and the client, MACRO-13/MACRO-21); `CommentsClient<T>` the same way
   (COMMENT-2). Compile-time and Rust-only: the
   browser app takes the crate with `default-features = false` and a
   renamed field or parameter fails its build. Nothing is generated or
@@ -684,13 +685,15 @@ and `view: mockup` + `widths:` makes a whole body one.
   resolves one of each. The line is unpublished and untagged — MACRO-8 is
   that release — so a clone of menger alone does not build; the sibling
   checkouts must be beside it. Same macro API as before
-  (`#[plexus_macros::activation]` + `#[plexus_macros::method]`,
-  `crate_path = "plexus_core"`).
+  (`#[plexus_macros::activation]` + `#[plexus_macros::method]`); every
+  activation is `impl FooActivation` (MACRO-13's rule, MACRO-21): the stem
+  names the namespace, the trait and the client, so no `namespace`,
+  `client`, `server_cfg` or `crate_path` is written.
 - The `tickets` activation lives ONCE, in `tickets-api/`
   (`menger-tickets-api`, MFE-11): the vocabulary (`Ticket`, `Status`,
   `Kind`, `Severity`, `TicketSummary`, `TicketsEvent`), the store, and
-  `activation.rs`'s `#[activation(client, server_cfg = "feature =
-  \"server\"")]`. The server takes the crate with `server` (default);
+  `activation/mod.rs`'s `#[activation]` on `impl TicketsActivation`
+  (its server half gated on the crate's `server` feature by default). The server takes the crate with `server` (default);
   the browser app takes it with `default-features = false` and gets the
   emitted `TicketsClient<T>` over wasm-safe crates. `menger::store`
   re-exports the store, so `crate::store::Status` still resolves. A

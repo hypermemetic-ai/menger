@@ -18,33 +18,29 @@
 //! Its tests are `activation/tests/work.rs`.
 
 // The attribute runs in the client-only build too (it emits `WorkClient`);
-// `server_cfg` puts the server half — this impl included — behind the
-// feature, as `activation/mod.rs` does.
+// the crate's `server` feature gates the server half — this impl included —
+// as `activation/mod.rs` says.
 use super::*;
 
 /// The order of work: what can start now, the waves, and what a ticket waits on.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Work {
+pub struct WorkActivation {
     pub(super) store: Arc<Store>,
     pub(super) access: Access,
 }
 
 /// The order of work: what can start now, the waves, and what a ticket waits on.
 #[plexus_macros::activation(
-    namespace = "work",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
     roles(
         viewer = ["ready", "waves", "waves_under", "waves_to", "blockers"],
         editor = [viewer],
     )
 )]
-impl Work {
+impl WorkActivation {
     /// Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter.
     ///
     /// The DAG query: which tickets can start now? Yields one row event

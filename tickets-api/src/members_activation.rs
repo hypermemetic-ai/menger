@@ -51,13 +51,13 @@ mod team_streams;
 /// The activation. Server-only: it holds the store and the rule.
 #[cfg(feature = "server")]
 #[derive(Clone)]
-pub struct Members {
+pub struct MembersActivation {
     store: Arc<Store>,
     access: Access,
 }
 
 #[cfg(feature = "server")]
-impl Members {
+impl MembersActivation {
     pub fn new(store: Arc<Store>, access: Access) -> Self {
         Self { store, access }
     }
@@ -66,15 +66,11 @@ impl Members {
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 /// Who holds which role on which shortcode, and the way admins change it.
 #[plexus_macros::activation(
-    namespace = "members",
     auth = "required",
     request = MengerRequest,
-    client,
     typed_params,
-    server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core"
 )]
-impl Members {
+impl MembersActivation {
     /// Who you are, then your teams, then each grant you hold (a team's as team:<name>).
     ///
     /// One `me { principal, name, admin_everywhere }`, then (ACCESS-22) one
@@ -169,7 +165,7 @@ impl Members {
 
     /// Teams — a named set of principals that holds grants (ACCESS-22): `members.teams.*`.
     #[plexus_macros::child]
-    fn teams(&self) -> teams::Teams {
-        teams::Teams { store: Arc::clone(&self.store), access: self.access.clone() }
+    fn teams(&self) -> teams::TeamsActivation {
+        teams::TeamsActivation { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 }

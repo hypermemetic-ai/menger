@@ -2233,9 +2233,8 @@ since ACCESS-19, their logic beside each in `comments_activation/` and
 
 ```rust
 /// Plans as data — create, query, and watch the work DAG.
-#[plexus_macros::activation(namespace = "tickets", auth = "required", request = MengerRequest,
-    client, typed_params, server_cfg = "feature = \"server\"", crate_path = "plexus_core", roles(…))]
-impl Tickets {
+#[plexus_macros::activation(auth = "required", request = MengerRequest, typed_params, roles(…))]
+impl TicketsActivation {
     /// Set a ticket's status (…).
     ///
     /// The long prose: what it yields, what it refuses.
@@ -4367,7 +4366,7 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        read through ought's field set — wasm-safe; the piece
                        COMPILE checks (fields_tests.rs: its tests)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
-  activation.rs        #[plexus_macros::activation(client, server_cfg)]
+  activation.rs        #[plexus_macros::activation] on impl TicketsActivation (MACRO-21)
   tests/sdk_manifest.rs  COMP-10's drift guard: the activation's methods and
                        parameters against frontend/sdk/generated/manifest.json
 scripts/sdk-codegen.sh the frames' typed SDK, generated (COMP-10; Docker)
