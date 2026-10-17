@@ -19,8 +19,8 @@ image:
 
 # Two environments. test runs a release first; prod is promoted to exactly
 # the image (same image id) test ran and passed the health checks on.
-# app.menger.sh is declared here and not deployed until RUN-13 (AuthKit on
-# WorkOS production, RUN-11's `sign-in`; its client id; prod's data moved).
+# app.menger.sh: AuthKit on WorkOS production (RUN-11), prod's data moved
+# there (RUN-13).
 environments:
   prod:
     host: app.menger.sh
@@ -56,8 +56,10 @@ data:
   mount: /data
   per_environment: true
 
+# RUN-13: prod's data (local prod peaks near 600 MB with ~975 tickets) on a
+# 3.9 GB box holding both environments; a limit, not a reservation.
 resources:
-  memory: 512m
+  memory: 1g
 
 # Healthy means all of these, over https through the edge (infra's probe:
 # one GET, redirects not followed, or one WebSocket upgrade).
