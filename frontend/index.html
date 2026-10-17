@@ -716,6 +716,80 @@
     margin: .6rem 0 0; color: var(--muted); font-size: calc(12px * var(--text-scale));
   }
   section.histsec p.restorable { color: inherit; }
+  /* TICKETS-7: revisions in the History — a revision row (tick two to
+     diff, its number opens it), the diff panel (unified or side by side;
+     added on the Complete ground, removed on the failure's, changed words
+     stronger), a version's banner, and Restore…'s preview. */
+  h2 button.histjump {
+    margin-left: auto; font-family: var(--sans); font-size: calc(11px * var(--text-scale)); color: var(--muted); background: var(--card);
+    border: var(--border) solid var(--line); border-radius: var(--radius-pill); padding: 1px 9px; cursor: pointer; align-self: center;
+  }
+  h2 button.histjump:hover { color: var(--accent); border-color: var(--accent); }
+  section.histsec li.tr.rev .pick { margin: 0; align-self: center; }
+  section.histsec li.tr.rev button.revno {
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale)); min-width: 2.6em; color: var(--accent); background: none;
+    border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 5px; cursor: pointer;
+  }
+  section.histsec li.tr.rev.current button.revno { color: var(--ink); cursor: default; }
+  section.histsec li.tr.rev .what { color: var(--ink); }
+  section.histsec li.tr.rev .cur { color: var(--muted); font-size: calc(11px * var(--text-scale)); font-style: italic; }
+  section.histsec p.hint { margin: .4rem 0 0; color: var(--muted); font-size: calc(11.5px * var(--text-scale)); }
+  .diffpanel, .restorepanel {
+    margin: .7rem 0; padding: .6rem .7rem; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card);
+    font-family: var(--sans); font-size: calc(12.5px * var(--text-scale));
+  }
+  .diffpanel .difftools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: .5rem; }
+  .diffpanel .difftools .title { font-weight: var(--weight-medium); margin-right: auto; }
+  .diffpanel .seg { display: inline-flex; border: var(--border) solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .diffpanel .seg button { font: inherit; font-size: calc(11.5px * var(--text-scale)); background: var(--card); color: var(--muted); border: 0; padding: 1px 8px; cursor: pointer; }
+  .diffpanel .seg button + button { border-left: var(--border) solid var(--line); }
+  .diffpanel .seg button[aria-pressed="true"] { background: var(--chip-bg); color: var(--ink); }
+  .diffpanel h5 { margin: .6rem 0 .3rem; font-size: calc(11px * var(--text-scale)); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  table.fields { border-collapse: collapse; margin: .3rem 0; width: 100%; }
+  table.fields caption { text-align: left; font-size: calc(11px * var(--text-scale)); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; padding-bottom: .2rem; }
+  table.fields th { text-align: left; font-weight: var(--weight-medium); padding: 2px 8px 2px 0; white-space: nowrap; vertical-align: top; }
+  table.fields td { padding: 2px 6px; vertical-align: top; white-space: pre-wrap; word-break: break-word; }
+  table.fields td.from { color: var(--err-fg); text-decoration: line-through; text-decoration-color: var(--err-line); }
+  table.fields td.arrow { color: var(--muted); }
+  table.fields td.to { color: var(--st-complete-fg); }
+  table.difflines { border-collapse: collapse; width: 100%; table-layout: fixed; font-family: var(--mono); font-size: calc(11.5px * var(--text-scale)); }
+  table.difflines tr.hh td { color: var(--muted); background: var(--panel); padding: 2px 6px; }
+  table.difflines td { padding: 0 6px; white-space: pre-wrap; word-break: break-word; vertical-align: top; }
+  table.difflines td.sg { width: 1.4em; color: var(--muted); user-select: none; }
+  table.difflines tr.add td, table.difflines td.ln.add { background: var(--st-complete-bg); }
+  table.difflines tr.del td, table.difflines td.ln.del { background: var(--err-bg); }
+  table.difflines td.ln.gap { background: var(--panel); }
+  table.difflines.split td { width: 50%; }
+  table.difflines .w.add { background: var(--st-complete-bg); color: var(--st-complete-fg); font-weight: var(--weight-strong); }
+  table.difflines .w.del { background: var(--err-bg); color: var(--err-fg); font-weight: var(--weight-strong); text-decoration: line-through; }
+  .version .revbanner {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0 0 .8rem; padding: .5rem .75rem;
+    border: var(--border) solid var(--accent); border-radius: var(--radius-lg); background: var(--sel); font-family: var(--sans); font-size: calc(13px * var(--text-scale));
+  }
+  .version .revbanner .of { font-weight: var(--weight-strong); }
+  .version .revbanner .when, .version .revbanner .by, .version .revbanner .defs { color: var(--muted); }
+  .version .revbanner .defs { flex-basis: 100%; font-size: calc(12px * var(--text-scale)); }
+  .version .revbanner .acts { margin-left: auto; display: inline-flex; gap: 6px; }
+  .version .revbanner button, .restorepanel button.primary {
+    font: inherit; font-size: calc(12px * var(--text-scale)); background: var(--card); color: var(--ink);
+    border: var(--border) solid var(--line); border-radius: var(--radius); padding: 2px 9px; cursor: pointer;
+  }
+  .version .revbanner button:hover, .version .revbanner button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .version .revbanner button.back { border-color: var(--accent); color: var(--accent); }
+  #ticket-page .version { display: flex; flex-direction: column; }
+  #ticket-page .version > .revbanner, #ticket-page .version > .diffpanel, #ticket-page .version > .restorepanel { order: 0; }
+  .restorepanel h4 { margin: 0 0 .4rem; font-size: calc(12px * var(--text-scale)); }
+  .restorepanel ul.restorefields { list-style: none; margin: .3rem 0; padding: 0; }
+  .restorepanel ul.restorefields li { padding: 2px 0; }
+  .restorepanel ul.restorefields .f { font-weight: var(--weight-medium); margin: 0 6px; }
+  .restorepanel ul.restorefields .from { color: var(--muted); }
+  .restorepanel ul.restorefields .arrow { color: var(--muted); margin: 0 4px; }
+  .restorepanel .restorewhy { display: flex; gap: 6px; margin: .5rem 0 .2rem; }
+  .restorepanel .restorewhy input { flex: 1; font: inherit; padding: 2px 6px; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--bg); color: var(--ink); }
+  .restorepanel button.primary { border-color: var(--accent); color: var(--accent); }
+  .restorepanel button.primary:disabled { opacity: .5; cursor: default; }
+  .restorepanel p.said { font-weight: var(--weight-medium); }
+  .restorepanel p.none, .diffpanel p.none, .diffpanel p.loading, .restorepanel p.loading { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
   article.ticket > p.none, article.ticket > p.loading,
   .mscope-frame > p.none, .mscope-frame > p.loading { font-family: var(--sans); font-size: calc(13px * var(--text-scale)); }
   /* Relation and child rows: kind glyph · code chip · title · status chip.

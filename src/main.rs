@@ -503,6 +503,7 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             tombstones,
             deployments,
             shortcodes,
+            revisions,
         }) => {
             // SEARCH-2: and the search index, when the file has one.
             let search = match indexed {
@@ -547,6 +548,14 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
                     db_path.display()
                 ),
                 None => println!("{}: no shortcodes table yet (ORG-3) — the next open makes it", db_path.display()),
+            }
+            // TICKETS-7: the revisions, each ticket's latest the ticket as it is.
+            match revisions {
+                Some(n) => println!(
+                    "{}: {n} revision(s), each ticket's numbered from 1 with none missing, its latest the ticket as it is, and every body they name kept under its hash (TICKETS-7)",
+                    db_path.display()
+                ),
+                None => println!("{}: no revisions tables yet (TICKETS-7) — the next open makes them", db_path.display()),
             }
             0
         }

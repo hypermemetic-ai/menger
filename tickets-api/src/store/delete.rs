@@ -796,7 +796,11 @@ impl Store {
         // ACCESS-11: an admin's permit for every ticket that goes.
         let permits = may(&all).map_err(StoreError::Invalid)?;
         writs::covers_exactly(&self.tickets.read().expect("store lock poisoned"), &permits, &all)?;
-        self.in_one_write(serial, move |conn, cache, unders| Self::deleting(conn, cache, unders, p, act)).await
+        self.in_one_write(serial, move |conn, cache, unders| {
+            super::revisions::act(&act);
+            Self::deleting(conn, cache, unders, p, act)
+        })
+        .await
     }
 
     /// The delete's one write — see the module doc.
@@ -887,6 +891,8 @@ impl Store {
                 serde_json::to_string(&whole).expect("serialize a ticket"),
             ])?;
             search::remove(&txn, &t.id)?;
+            // TICKETS-7: its revisions stay with the tombstone, the last saying so.
+            super::revisions::gone(&txn, &t.id)?;
             txn.prepare_cached("DELETE FROM tickets WHERE id = ?1")?.execute([&t.id])?;
             tombstones.push(tomb);
         }
@@ -922,7 +928,7 @@ impl Store {
         for (b, removed) in unlocks {
             out.tickets.push(Change::UnlocksRemoved { ticket: after(&txn, &built, &b)?, removed });
         }
-        txn.commit()?;
+        super::revisions::commit(txn)?;
         let ids: Vec<TicketId> = p.gone.iter().map(|t| t.id.clone()).collect();
         cache.rederive(built, inputs);
         for (t, tomb) in p.gone.iter().zip(&tombstones) {
@@ -1003,7 +1009,11 @@ impl Store {
             unplan(&cache, found)
         };
         let back = back.map_err(|refusals| StoreError::RefusedMany { refusals })?;
-        self.in_one_write(serial, move |conn, cache, unders| Self::undeleting(conn, cache, unders, back)).await
+        self.in_one_write(serial, move |conn, cache, unders| {
+            super::revisions::act(&_act);
+            Self::undeleting(conn, cache, unders, back)
+        })
+        .await
     }
 
     /// The undelete's one write — the delete's, backwards.
@@ -1118,7 +1128,7 @@ impl Store {
         for (b, added) in unlocked.into_iter().filter(|(b, _)| !coming.contains(b.as_str())) {
             out.tickets.push(Change::UnlocksChanged { ticket: after(&txn, &built, &b)?, added: TicketName::from(added) });
         }
-        txn.commit()?;
+        super::revisions::commit(txn)?;
         cache.rederive(built, inputs);
         for id in &ids {
             cache.tombstones.remove(id);

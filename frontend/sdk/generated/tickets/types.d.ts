@@ -219,10 +219,27 @@ key, folded to upper case as the store keeps it. */
 export type Cursor = string;
 /** What becomes of a deleted ticket's children: reparent or delete */
 export type DeleteChildren = "reparent" | "delete";
+/** One line of a hunk. `words`: for a line changed in place (a `del` beside
+the `add` that replaced it), its runs — the `del`'s same and deleted
+text, the `add`'s same and added; empty otherwise. */
+export interface DiffLine {
+    op: DiffOp;
+    text: string;
+    words?: WordRun[];
+}
+/** One line's (or one word run's) part in a diff. */
+export type DiffOp = "same" | "add" | "del";
 /** APP-24: how a ticket ended for an agent waiting on it. */
 export type Ending = "canceled" | "deleted";
 /** FILTER-4: a field `facets` counts by — one of [`FACET_FIELDS`]. */
 export type FacetField = string;
+/** One field that differs between two revisions — its value in each, as
+text (a list as its items joined by `, `; `null`: none). */
+export interface FieldChange {
+    field: string;
+    from?: string | null;
+    to?: string | null;
+}
 /** FILTER-3's language, as text (`ready and kind build and in SCALE`) —
 one the language reads (every bad chunk named), at most
 [`crate::limits::FILTER_MAX`] bytes, kept as written: the server reads it with its
@@ -286,6 +303,15 @@ export interface Group {
     /** ORG-3: the shortcode's identity — what a row of the nav is keyed by. */
     shortcode?: ShortcodeId;
     total: number;
+}
+/** A region that changed, with its context: where it starts in each version
+(1-based lines) and how many lines of each it spans. */
+export interface Hunk {
+    lines: DiffLine[];
+    newLines: number;
+    newStart: number;
+    oldLines: number;
+    oldStart: number;
 }
 /** INPUT-3: one **input** — a component in a ticket's body that asks for an
 answer (INPUT-1), as the store keeps it: the ticket it is in, its `id`
@@ -476,6 +502,52 @@ export type Reason = string;
 /** APP-24: what answered an agent waiting on a ticket (`tickets.await_reply`)
 — the first response on it since the call's `since`. */
 export type Reply = never;
+/** One revision, as `revisions list` answers it: the ticket and its number
+(`rev`, from 1), when, who (`actor`: a principal, `system`, `anonymous`
+with login off; `name`, the caller's display name), from where
+(`source`), why (`message`), what caused it (`cause`: the ticket whose
+change carried this one — a cancel's cascade, the first ticket of a
+write that revised several), the fields it changed against the revision
+before it ([`FIELDS`], or `created` / `deleted` / `undeleted`; empty for
+a `baseline`), and its body: its content's hash (`body_hash`, SHA-256
+hex — equal bodies, equal hashes: a body is stored once however many
+revisions share it), its size in bytes, and the lines it added and
+removed against the revision before. */
+export interface Revision {
+    actor: string;
+    added: number;
+    atUnix: number;
+    bodyBytes: number;
+    bodyHash: string;
+    cause?: string | null;
+    fields: string[];
+    message?: string | null;
+    name?: string | null;
+    removed: number;
+    rev: number;
+    source: RevisionSource;
+    ticket: TicketId;
+}
+/** `revisions diff`'s answer: `from` → `to`, the fields that differ (the
+body's by its line counts), the body's frontmatter key by key, and the
+body's line diff (`null` when the bodies are equal) — of its source, or
+(`view: text`) of the text a reader sees. */
+export interface RevisionDiff {
+    body?: TextDiff | null;
+    fields: FieldChange[];
+    from: number;
+    frontmatter: FieldChange[];
+    ticket: TicketId;
+    to: number;
+}
+/** Where a revision came from. `app`, `api`, `pipeline` and `cascade` as a
+transition's (MENGER-13); `baseline`: the ticket as it stood before the
+first write that kept a revision of it — kept by that write, dated by
+the ticket's last update, by nobody known (a ticket older than TICKETS-7
+has this as its first revision); `backup`: a revision recovered from a
+backup of the database, dated by the backup and by nobody known —
+reserved for an import (TICKETS-7's `backfill`), which nothing writes yet. */
+export type RevisionSource = "app" | "api" | "pipeline" | "cascade" | "baseline" | "backup";
 /** AGS-23: a shortcode root's row as the nav draws it at the top of its
 shortcode — the three fields of the root ticket a row shows beside its
 id ([`Group::root`]). */
@@ -514,6 +586,14 @@ export interface SlotDoc {
 }
 /** A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case */
 export type Status = "Pending" | "Ready" | "Coding" | "In Review" | "Blocked" | "Complete" | "Idea" | "Epic" | "Superseded" | "Canceled" | "Doc";
+/** A text's line diff: lines added and removed, the hunks, and whether the
+hunks stop short of the whole ([`MAX_LINES`]). */
+export interface TextDiff {
+    added: number;
+    hunks: Hunk[];
+    removed: number;
+    truncated?: boolean;
+}
 export interface Ticket {
     /** ORG-3: the ticket's full address, `org:ROOT/…/SC-N`
   (`hypermemetic:MENGER/THEME-3`) — what tells two `THEME-3`s apart,
@@ -1365,7 +1445,54 @@ export interface TicketsEventQueueRecord {
     type: 'queue_record';
     record: QueueRecord;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
+/** TICKETS-7: one revision of a ticket (yielded per revision by
+`revisions list`, newest first). */
+export interface TicketsEventRevision {
+    type: 'revision';
+    revision: Revision;
+}
+/** TICKETS-7: the last event of `revisions list` — how many revisions the
+ticket has (`count`), its latest (`latest`, 0 with none), and the `before`
+that asks the next page (`null`: this page holds the oldest). */
+export interface TicketsEventRevisionsEnd {
+    type: 'revisions_end';
+    count: number;
+    latest: number;
+    next: number | null;
+}
+/** TICKETS-7: `revisions get`'s answer — the revision, and the ticket
+exactly as it was then: every field it keeps from the revision, the
+rest (its id, shortcode, address, children, placement) as it is now. */
+export interface TicketsEventRevisionAt {
+    type: 'revision_at';
+    revision: Revision;
+    ticket: Ticket;
+}
+/** TICKETS-7: `revisions diff`'s answer. */
+export interface TicketsEventRevisionDiff {
+    type: 'revision_diff';
+    diff: RevisionDiff;
+}
+/** TICKETS-7: `revisions restore`'s answer — the ticket as the restore
+left it, the fields it put back from `from_rev` (empty: they already
+matched, and nothing was written), and the revision it made (`rev`,
+`null` with nothing written). */
+export interface TicketsEventRevisionRestored {
+    type: 'revision_restored';
+    changed: string[];
+    fromRev: number;
+    rev: number | null;
+    ticket: Ticket;
+}
+/** TICKETS-7: on `watch`, after a write's other events — a revision the
+write kept: its ticket, its number, and the fields it changed. */
+export interface TicketsEventRevised {
+    type: 'revised';
+    fields: string[];
+    rev: number;
+    ticket: TicketId;
+}
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord | TicketsEventRevision | TicketsEventRevisionsEnd | TicketsEventRevisionAt | TicketsEventRevisionDiff | TicketsEventRevisionRestored | TicketsEventRevised;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -1434,6 +1561,12 @@ export declare function isTicketsEventNotQueued(e: TicketsEvent): e is TicketsEv
 export declare function isTicketsEventQueueRow(e: TicketsEvent): e is TicketsEventQueueRow;
 export declare function isTicketsEventQueueEnd(e: TicketsEvent): e is TicketsEventQueueEnd;
 export declare function isTicketsEventQueueRecord(e: TicketsEvent): e is TicketsEventQueueRecord;
+export declare function isTicketsEventRevision(e: TicketsEvent): e is TicketsEventRevision;
+export declare function isTicketsEventRevisionsEnd(e: TicketsEvent): e is TicketsEventRevisionsEnd;
+export declare function isTicketsEventRevisionAt(e: TicketsEvent): e is TicketsEventRevisionAt;
+export declare function isTicketsEventRevisionDiff(e: TicketsEvent): e is TicketsEventRevisionDiff;
+export declare function isTicketsEventRevisionRestored(e: TicketsEvent): e is TicketsEventRevisionRestored;
+export declare function isTicketsEventRevised(e: TicketsEvent): e is TicketsEventRevised;
 /** ACT-5: what a delete keeps of a ticket — its tombstone. The ticket is
 gone (off every read, its number never reused); this says which it was
 (`id`, `title`), who deleted it (`by`, the caller's principal; `name` their
@@ -1493,6 +1626,12 @@ cancellation carried down a canceled ticket's subtree, or undone). */
 export type TransitionSource = "app" | "api" | "pipeline" | "cascade";
 /** How urgently the owner should look (any case) */
 export type Urgency = "whenever" | "today" | "now" | "blocking";
+/** A run of a changed line's text: in both, only the newer's, or only the
+older's. */
+export interface WordRun {
+    op: DiffOp;
+    text: string;
+}
 /** MENGER-13: the time zone a history filter's days are read in — an
 IANA name (`Europe/Berlin`), `UTC`, or an offset (`+02:00`). Checked
 for its spelling here (wasm-safe); a name the server's tzdb does not

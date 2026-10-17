@@ -22,6 +22,17 @@ pub(super) struct WatchAsk {
     pub(super) filter: Option<FilterText>,
     pub(super) membership: bool,
     pub(super) tz: Option<Zone>,
+    /// TICKETS-7: and the revisions every write keeps (`revised`).
+    pub(super) revisions: bool,
+}
+
+/// TICKETS-7: the next revision a write kept, when the watch asked for them —
+/// never, when it did not.
+async fn revision(rx: &mut Option<tokio::sync::broadcast::Receiver<Change>>) -> Result<Change, tokio::sync::broadcast::error::RecvError> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Why the watch woke.
@@ -34,7 +45,7 @@ enum Woke {
 /// The stream. The caller is verified, and the channel subscribed, at the
 /// call — before the stream is first polled.
 pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser, ask: WatchAsk) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    let WatchAsk { epic, filter: asked, membership, tz } = ask;
+    let WatchAsk { epic, filter: asked, membership, tz, revisions } = ask;
     let (epic, ambiguous) = watched_shortcode(&store, epic.as_deref());
     // IDENTITY-19, IDENTITY-21: who is watching, and through what reach.
     let opened = Sight::open(&store, &access, user).and_then(|sight| {
@@ -57,6 +68,7 @@ pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser
         Err(e) => (Err(e), false),
     };
     let mut rx = if filtered { store.subscribe_filtered() } else { store.subscribe() };
+    let mut revised = (revisions && !membership).then(|| store.subscribe_revisions());
     stream! {
         let (mut sight, clock, watcher) = match opened {
             Ok(o) => o,
@@ -81,6 +93,7 @@ pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser
                 biased;
                 () = sight.changed() => Woke::Access,
                 r = rx.recv() => Woke::Change(r),
+                r = revision(&mut revised) => Woke::Change(r),
                 () = tokio::time::sleep(wait), if relative => Woke::Tick,
             };
             // ACCESS-12: the caller as it stands, before anything is relayed.

@@ -54,14 +54,35 @@ pub(super) fn zoned_lens(store: &Store, caller: &VerifiedUser, filter: Option<&F
 /// (`anonymous` with login off), from `source` (`app`, `api` — the default
 /// —, `pipeline`; ACCESS-8: `cascade`, the store's own, is no
 /// [`CallerSource`]), saying `message` (blank: none).
+/// TICKETS-7: and it is the call's act from here on — what the revisions
+/// its writes keep say.
 pub(super) fn act_of(caller: &VerifiedUser, source: Option<CallerSource>, message: Option<Message>) -> Result<Act, String> {
-    Ok(Act {
+    let act = Act {
         actor: caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string()),
         name: caller.name().map(str::to_string),
         source: TransitionSource::from(source.unwrap_or_default()),
         message: message.and_then(Message::given),
         cause: None,
-    })
+    };
+    crate::store::say_act(&act);
+    Ok(act)
+}
+
+/// TICKETS-7: who a call is when it says nothing of its source — its
+/// principal and name, from where the server reads it (`app` for a person
+/// signed in through a provider, `api` otherwise; ACCESS-14), no message.
+pub(super) fn caller_act(caller: &VerifiedUser) -> Act {
+    let source = match super::inputs::source_of(caller) {
+        AnswerSource::App => TransitionSource::App,
+        _ => TransitionSource::Api,
+    };
+    Act {
+        actor: caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string()),
+        name: caller.name().map(str::to_string),
+        source,
+        message: None,
+        cause: None,
+    }
 }
 
 /// IDENTITY-37: what an open `watch` relays, as the caller's grants stand

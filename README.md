@@ -2809,6 +2809,65 @@ and kind transition ends where the ticket is, each starts where the one
 before ended, each `cause` is an earlier transition, a cascade has one, the
 system's has a message.
 
+### Revisions (TICKETS-7)
+
+Every write that changes a ticket's own fields — `title`, `body`, `status`,
+`kind`, `severity`, `parent`, `blocked_by`, `labels`, `commits` — keeps a
+**revision** in the same transaction: the ticket as the write left it, who
+(the transition's actor when the write made one, else the caller), when,
+from where (`app`, `api`, `pipeline`, `cascade`), why (the message) and
+which fields moved, with the body's `+/−` line counts. A write that changes
+nothing of a ticket's own (an archive's mark, a blocker's `unlocks`, a
+parent's count) keeps none; a write of several steps one per ticket; a
+cancel's cascade or a bulk write (ACT-2) one per ticket, each naming its
+`cause`. A ticket older than revisions keeps two at its first change: the
+version before (`source: baseline`, dated by its last update) and the
+write's. A delete keeps one saying `deleted` (its revisions stay with the
+tombstone); `undelete` one saying `undeleted`; a reshortcode moves them with
+the ticket. Kept forever (owner, TICKETS-7 `retention`).
+
+It is kept by the write itself: `db::upsert`, `update_row`, `set_body` and a
+delete's `DELETE` tell `store/revisions.rs` first, and both write runners
+(`Store::write`, `Store::in_one_write`) flush before they commit — a write
+cannot forget its revision, and one that rolled back keeps none.
+
+**Storage.** `revisions` (a row per revision, the fields and the body's
+SHA-256) and `revision_bodies` (a body once per content: a label change
+costs a row, never another copy of a 4 MB mockup). Not compressed yet, and
+not in the cache: reads go to storage. `--verify-derived` checks each
+ticket's revisions are numbered 1… with none missing, its latest is the
+ticket as it is, and every body named is kept under its hash. A revision's
+`source` may also be `backup` — reserved for an import of revisions from the
+prod backups (TICKETS-7 `backfill`), which nothing writes yet.
+
+**On the wire**, `tickets revisions` (a child: `tickets.restore` is
+ARCHIVE-2's):
+
+```sh
+synapse -P 4455 menger tickets revisions list --id DEPLOY-9                    # newest first: rev, at, who, source, fields, +/−; revisions_end
+synapse -P 4455 menger tickets revisions get  --id DEPLOY-9 --rev 3            # revision_at { revision, ticket } — the ticket as it was
+synapse -P 4455 menger tickets revisions diff --id DEPLOY-9 --from 3 --to 5    # fields, frontmatter keys, the body's line diff (words within)
+synapse -P 4455 menger tickets revisions diff --id DEPLOY-9 --text true        # the last change, of the text a reader sees
+synapse -P 4455 menger tickets revisions restore --id DEPLOY-9 --rev 3 --message "the planned version, for comparison"
+synapse -P 4455 menger tickets revisions restore --id DEPLOY-9 --rev 3 --fields body
+```
+
+`restore` (an editor of the ticket) is an `update` of the chosen fields
+(default all but `commits`, which are linked, never restored) to the
+revision's values, under the update's rules — a cycle, a duplicate input id
+or a component another ticket owns is refused, naming why — and is itself a
+new revision whose message says what it restored from where. A parent is
+moved, never cleared; a deleted ticket is undeleted first. `watch {
+revisions: true }` also carries `revised { ticket, rev, fields }` after each
+write's events (a channel of its own; a plain `watch` is as it was).
+
+**In the app**, a ticket's History lists its revisions beside its
+transitions: click a number to open that version read-only
+(`#/ticket/ID?rev=N` — a banner, Back to now; components and themes render
+with today's definitions), tick two to diff them (unified or side by side,
+the source or the rendered text), and **Restore…** from an open version with
+a preview of what changes, field by field.
+
 ### The archive (ARCHIVE-2)
 
 **Archived** is a mark a ticket carries apart from its status (ARCHIVE-1,

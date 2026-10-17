@@ -576,7 +576,11 @@ impl Store {
         // ACCESS-11: an editor's permit for every ticket the move names.
         let permits = may(&p.asked).map_err(StoreError::Invalid)?;
         writs::covers_exactly(&self.tickets.read().expect("store lock poisoned"), &permits, &p.asked)?;
-        self.in_one_write(serial, move |conn, cache, unders| Self::reshortcoding(conn, cache, unders, p, act)).await
+        self.in_one_write(serial, move |conn, cache, unders| {
+            super::revisions::act(&act);
+            Self::reshortcoding(conn, cache, unders, p, act)
+        })
+        .await
     }
 
     /// The move's one write — see the module doc.
@@ -659,6 +663,8 @@ impl Store {
             txn.prepare_cached("UPDATE tickets SET id = ?2, epic = ?3, seq = ?4 WHERE id = ?1")?
                 .execute(rusqlite::params![s.row.id, s.key, s.shortcode, s.seq])?;
         }
+        // TICKETS-7: the revisions move with their tickets, before any is touched.
+        super::revisions::rekey(&txn, &map)?;
         let mut rows: BTreeMap<String, Row> = BTreeMap::new();
         let stay_under: HashMap<&str, &Option<String>> = p.stays.iter().map(|(c, u)| (c.id.as_str(), u)).collect();
         let mut named: BTreeSet<String> = BTreeSet::new();
@@ -707,7 +713,7 @@ impl Store {
         for (c, _) in p.stays.iter().filter(|(c, under)| c.parent.as_deref() != under.as_deref()) {
             out.tickets.push(Change::ParentChanged { ticket: after(&txn, &built, &c.id)?, previous: c.parent.clone().map(String::from) });
         }
-        txn.commit()?;
+        super::revisions::commit(txn)?;
         // The cache, as an open of the file reads it: every record beside
         // the tickets rekeyed with them. The themes' channel stays (its
         // watchers hold it), and so does the count of writes.

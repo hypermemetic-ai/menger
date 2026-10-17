@@ -1462,6 +1462,9 @@ pub enum Verdict {
         /// ORG-3: the shortcodes the file holds, their namespaces each the
         /// one its root's host gives it — `None` when it has no table yet.
         shortcodes: Option<usize>,
+        /// TICKETS-7: the revisions the file keeps, each ticket's latest the
+        /// ticket as it is — `None` when it has no table yet.
+        revisions: Option<usize>,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -1561,6 +1564,11 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         out.extend(differs);
         n
     });
+    // TICKETS-7: the revisions, against the tickets and their bodies.
+    let revisions = super::revisions::check(&tx)?.map(|(n, differs)| {
+        out.extend(differs);
+        n
+    });
     tx.commit()?;
     if !out.is_empty() {
         return Ok(Verdict::Differs(out));
@@ -1582,6 +1590,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         tombstones,
         deployments,
         shortcodes,
+        revisions,
     })
 }
 

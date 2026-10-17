@@ -234,7 +234,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- watch, subscribed before any mutation ------------------------------
     // The subscribe frame is written by `call`, not by the first poll; the
     // round trip flushes it past the server's dispatcher.
-    let mut watch = client.watch(None, None, None, None);
+    let mut watch = client.watch(None, None, None, None, None);
     let _ = client.health_all().await.expect("round trip");
     tokio::time::sleep(Duration::from_millis(250)).await;
 
@@ -670,7 +670,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
     let port = start_server().await;
     let transport = connect(port).await;
     let client = TicketsClient::new(&transport);
-    let mut watch = client.watch(None, None, None, None);
+    let mut watch = client.watch(None, None, None, None, None);
     let make = |kind: &str, blocked_by: Option<Vec<TicketRef>>, path: Option<&str>| {
         client.create_all(p("PT"), p("t"), Some(p(kind)), None, blocked_by, None, None, path.map(p), None)
     };
@@ -724,7 +724,7 @@ async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
     let port = start_server().await;
     let transport = connect(port).await;
     let client = TicketsClient::new(&transport);
-    let mut watch = client.watch(None, None, None, None);
+    let mut watch = client.watch(None, None, None, None, None);
     let make = |epic: &str, kind: &str, blocked_by: Option<Vec<TicketRef>>, body: Option<&str>| {
         client.create_all(p(epic), p("t"), Some(p(kind)), None, blocked_by, body.map(p), None, None, None)
     };

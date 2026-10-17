@@ -519,6 +519,8 @@ fn parse_ids(idx: usize, s: &str) -> rusqlite::Result<Vec<String>> {
 /// when this returns Ok, the row is durable. SCALE-28: `child_count` with
 /// it — a newborn's is 0 but where a hand edit already named it a parent.
 pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
+    // TICKETS-7: the write's revision of it (before the row moves).
+    super::revisions::touch(conn, &t.id, Some(&t.body))?;
     conn.execute(
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
@@ -727,6 +729,18 @@ pub(super) fn body(conn: &Connection, id: &str) -> rusqlite::Result<Option<Strin
         .optional()
 }
 
+/// TICKETS-7: one ticket's row as stored, without its body — what a
+/// revision compares; `None` when no row has `id`.
+pub(super) fn row(conn: &Connection, id: &str) -> rusqlite::Result<Option<Row>> {
+    conn.prepare_cached(&format!("SELECT {ROW_COLUMNS} FROM tickets WHERE id = ?1"))?.query_row([id], read_row).optional()
+}
+
+/// TICKETS-7: [`row`] for a file that may be from before a column —
+/// what `--verify-derived` reads, which runs no migration.
+pub(super) fn row_unmigrated(conn: &Connection, id: &str) -> rusqlite::Result<Option<Row>> {
+    conn.prepare(&format!("SELECT {} FROM tickets WHERE id = ?1", row_columns(conn)?))?.query_row([id], read_row).optional()
+}
+
 /// SCALE-14: one whole ticket as stored — its row and its body from one
 /// statement, so from one snapshot (SCALE-28: its `child_count` too).
 pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Ticket>> {
@@ -744,6 +758,7 @@ pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Tic
 /// the birth or move that changes it ([`super::stored::Changes`]). WAVE-10:
 /// nor `path`, which is set at birth and that no write moves.
 pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
+    super::revisions::touch(conn, &t.id, None)?;
     let changed = conn.prepare_cached(
         "UPDATE tickets SET
                  epic = ?2, seq = ?3, title = ?4, status = ?5, kind = ?6,
@@ -777,6 +792,7 @@ pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
 /// SCALE-14: replaces one ticket's body — `amend`'s, the one write after
 /// birth that changes it.
 pub(super) fn set_body(conn: &Connection, id: &str, body: &str) -> rusqlite::Result<()> {
+    super::revisions::touch(conn, id, Some(body))?;
     match conn
         .prepare_cached("UPDATE tickets SET body = ?2 WHERE id = ?1")?
         .execute(params![id, body])?

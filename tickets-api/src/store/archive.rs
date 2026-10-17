@@ -290,7 +290,7 @@ impl Store {
                 mark_step(&txn, cache, unders, id, Some(mark.clone()), t, &mut out)?;
                 unqueue_step(&txn, cache, unders, id, &act, now, &mut out)?;
             }
-            txn.commit()?;
+            super::revisions::commit(txn)?;
             let last = Change::Archived { ids: answer.ids.clone(), live: answer.live.clone(), unqueued: answer.unqueued.clone(), mark };
             Ok((answer, out.finish_with(last)))
         })
@@ -392,7 +392,7 @@ impl Store {
                 next += 1;
                 mark_step(&txn, cache, unders, id, None, t, &mut out)?;
             }
-            txn.commit()?;
+            super::revisions::commit(txn)?;
             let last = Change::Restored { ids: answer.ids.clone(), ancestors: answer.ancestors.clone(), still_archived: answer.still_archived.clone(), by: answer.by.clone() };
             Ok((answer, out.finish_with(last)))
         })

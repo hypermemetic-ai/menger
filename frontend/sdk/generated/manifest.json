@@ -412,6 +412,7 @@
         "epic",
         "filter",
         "membership",
+        "revisions",
         "tz"
       ]
     },
@@ -488,6 +489,31 @@
         "parent",
         "tz"
       ]
+    },
+    "tickets.revisions": {
+      "diff": [
+        "from",
+        "id",
+        "text",
+        "to"
+      ],
+      "get": [
+        "id",
+        "rev"
+      ],
+      "list": [
+        "before",
+        "id",
+        "limit"
+      ],
+      "restore": [
+        "fields",
+        "id",
+        "message",
+        "rev",
+        "source"
+      ],
+      "schema": []
     },
     "tickets.work": {
       "blockers": [

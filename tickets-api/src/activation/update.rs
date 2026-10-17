@@ -85,10 +85,14 @@ pub(super) fn cells_stream(
                         return;
                     }
                 };
-                let written = match write {
-                    CellWrite::Labels(add, remove) => store.label_many(on, add, remove).await,
-                    CellWrite::Commits(commits) => store.link_commits_many(on, commits).await,
-                };
+                // TICKETS-7: the revisions it keeps are the caller's.
+                let written = crate::store::acting(caller_act(&caller), async {
+                    match write {
+                        CellWrite::Labels(add, remove) => store.label_many(on, add, remove).await,
+                        CellWrite::Commits(commits) => store.link_commits_many(on, commits).await,
+                    }
+                })
+                .await;
                 match written {
                     Ok(changes) => {
                         for change in changes {
@@ -107,10 +111,13 @@ pub(super) fn cells_stream(
                 return;
             }
         };
-        let written = match write {
-            CellWrite::Labels(add, remove) => store.label(on, add, remove).await,
-            CellWrite::Commits(commits) => store.link_commits(on, commits).await,
-        };
+        let written = crate::store::acting(caller_act(&caller), async {
+            match write {
+                CellWrite::Labels(add, remove) => store.label(on, add, remove).await,
+                CellWrite::Commits(commits) => store.link_commits(on, commits).await,
+            }
+        })
+        .await;
         match written {
             Ok(change) => yield change_event(change),
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },

@@ -199,6 +199,7 @@ impl Store {
             return Ok(Updated { ticket: current, changed: Vec::new() });
         }
         self.in_one_write(serial, move |conn, cache, unders| {
+            super::revisions::act(&act);
             let txn = conn.transaction()?;
             let now = chrono::Utc::now().timestamp();
             let mut out = Gathered::default();
@@ -206,7 +207,7 @@ impl Store {
             apply(&txn, cache, unders, plan, &act, now, &mut out)?;
             let row = cache.get(&id).cloned().ok_or_else(|| StoreError::NotFound(id.clone()))?;
             let body = db::body(&txn, &id)?.ok_or_else(|| missing(&id))?;
-            txn.commit()?;
+            super::revisions::commit(txn)?;
             Ok((Updated { ticket: whole(row, body), changed }, out.finish()))
         })
         .await

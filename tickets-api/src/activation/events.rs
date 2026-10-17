@@ -153,6 +153,8 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         // MENGER-13: its ticket's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the transition.
         Change::Transition { transition, .. } => TicketsEvent::Transition { transition },
+        // TICKETS-7: a revision a write kept.
+        Change::Revised { ticket, rev, fields, .. } => TicketsEvent::Revised { ticket, rev, fields },
         // MENGER-39: its ticket's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the queue write.
         Change::Queue { change, .. } => match change {
@@ -294,7 +296,8 @@ macro_rules! answered {
         let $store = $at;
         let __asked: Option<String> = $asked;
         async_stream::stream! {
-            let __r: Result<TicketsEvent, Failed> = async { $($body)* }.await;
+            // TICKETS-7: every revision the body's writes keep is the caller's.
+            let __r: Result<TicketsEvent, Failed> = crate::store::acting(caller_act(&$user), async { $($body)* }).await;
             yield answer(&$store, &$user, __asked.as_deref(), __r);
         }
     }};
@@ -311,7 +314,7 @@ macro_rules! answered_then {
         let __asked: Option<String> = $asked;
         async_stream::stream! {
             let mut $then: Option<TicketsEvent> = None;
-            let __r: Result<TicketsEvent, Failed> = async { $($body)* }.await;
+            let __r: Result<TicketsEvent, Failed> = crate::store::acting(caller_act(&$user), async { $($body)* }).await;
             yield answer(&$store, &$user, __asked.as_deref(), __r);
             if let Some(ev) = $then {
                 yield ev;

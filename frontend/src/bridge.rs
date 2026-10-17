@@ -560,6 +560,10 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         E::Waiting { ref ticket, .. } | E::Replied { ref ticket, .. } | E::TimedOut { ref ticket } => reach.holds_id(ticket).then_some(ev),
         E::QueueRecord { ref record } => reach.holds_id(&record.ticket).then_some(ev),
         E::QueueEnd { .. } | E::NotQueued { .. } => None,
+        // TICKETS-7: a revision is its ticket's; a frame reads none of
+        // them (its SDK has no `revisions`), only a `revised` it hears.
+        E::Revised { ref ticket, .. } => reach.holds_id(ticket).then_some(ev),
+        E::Revision { .. } | E::RevisionsEnd { .. } | E::RevisionAt { .. } | E::RevisionDiff { .. } | E::RevisionRestored { .. } => None,
         E::Group { group } => inside(group.shortcode.as_str()).then(|| E::Group { group: top(group) }),
         E::GroupChanged { group } => inside(group.shortcode.as_str()).then(|| E::GroupChanged { group: top(group) }),
         E::Extent { ref shortcode, .. }

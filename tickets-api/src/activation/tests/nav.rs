@@ -30,7 +30,7 @@ async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortco
     );
     assert_eq!(serde_json::to_value(&groups[0]).unwrap()["host"], serde_json::Value::Null, "null, not missing");
 
-    let mut plx = Box::pin(hub.watch(anyone(), Some("plx".into()), None, None, None).await);
+    let mut plx = Box::pin(hub.watch(anyone(), Some("plx".into()), None, None, None, None).await);
     one(hub.set_status(anyone(), "SUB-2".into(), "Complete".into(), None, None, None).await).await;
     match plx.next().await.expect("change") {
         TicketsEvent::GroupChanged { group } => {

@@ -716,6 +716,8 @@ pub(super) fn activity(
 
 /// Records `t` inside the caller's transaction.
 pub(crate) fn record(conn: &Connection, t: &Transition) -> rusqlite::Result<()> {
+    // TICKETS-7: who moved the ticket, for the revision the write keeps.
+    super::revisions::said(t);
     conn.prepare_cached(
         "INSERT INTO transitions (id, ticket, field, from_value, to_value, at_unix, actor, name, source, message, cause)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",

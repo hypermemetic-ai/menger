@@ -179,6 +179,9 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
             }
             Change::Transition { shortcode, transition }
         }),
+        // TICKETS-7: a revision is its ticket's; what it changed says nothing
+        // of another.
+        Change::Revised { shortcode, ticket, rev, fields } => sees.id(&ticket).then_some(Change::Revised { shortcode, ticket, rev, fields }),
         // MENGER-39: a queue write is its ticket's; its row redacted.
         Change::Queue { shortcode, change } => {
             let change = match change {

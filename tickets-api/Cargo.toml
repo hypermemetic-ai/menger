@@ -50,6 +50,7 @@ server = [
     "dep:tracing",
     "dep:roaring",
     "dep:jiff",
+    "dep:sha2",
 ]
 # ACCESS-9: the capabilities' test constructors (`VerifiedUser::for_tests`,
 # `System::for_tests`, …) for tests outside this crate's own `cfg(test)`.
@@ -110,6 +111,8 @@ roaring = { version = "0.10", optional = true }
 # system's tzdb, or a fixed offset. Server-only: the app sends its zone's
 # name and never evaluates a window.
 jiff = { version = "0.2", optional = true }
+# TICKETS-7: a revision's body is kept once per content, by its SHA-256.
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 # The wire-casing tests assert what serde writes; the store's tests open
