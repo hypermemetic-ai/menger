@@ -624,6 +624,58 @@ it. Elsewhere ask at `now` or `blocking` only when it is so — a queue that
 is always loud is a queue the owner learns to ignore. menger-skills
 `asking` has the table.
 
+## Mockups — showing a page (APP-29, APP-42, APP-44..46)
+
+A frontend ticket shows the page it is about as a **mockup** in its body: a
+whole page drawn in device frames at its widths, with Light / Dark /
+Reduced motion and size controls. The host draws it in the app, outside the
+body's frame. README "Full screen, mockups and whole pages" has every rule;
+menger-skills `showing` has when to use one.
+
+**The pattern** (owner, 2026-10-16/17):
+
+- **One mockup is one view.** One screen at one state, sized to the
+  device's viewport, never a long page of figures that scrolls through
+  several screens (the bar says "one view per mockup — this page scrolls N
+  screens" past 3). Another view is **another mockup in its own section**
+  of the body.
+- **Interactive.** Its controls work: a menu opens, a sheet slides up, a
+  row collapses, a form submits. The states one view reaches are reached by
+  using it, not drawn again below.
+- **Its description is outside it.** Say what it shows in `title=` /
+  `description=` (drawn above the devices) and in a line of prose above
+  it, never as a heading or intro inside the mocked page.
+- **Built from the app's own tokens and fonts** (`tickets-api/src/tokens.toml`),
+  light and dark, with synthetic data. It is checked in headless Chromium at
+  each width and theme (every control clicked, document height = viewport,
+  no page errors) before it is filed.
+
+````markdown
+The board with the filter panel open: two groups, joined by or.
+
+```mockup widths=390,1440 title="Panel open" description="Two groups joined by or; and inside each."
+<!doctype html>…one screen…
+```
+````
+
+`<m-mockup ref="FILTER-38">` draws another ticket's whole-page body; `<m-mockup
+widths="390" title="…" description="…">…</m-mockup>` is the element form,
+and `view: mockup` + `widths:` makes a whole body one.
+
+**Using them:**
+
+- **Compare** (APP-44): *Compare* on a mockup's bar (`c`) adds it to the
+  page's set; the pill `compare N · open` lays the picked mockups side by
+  side at one device and theme, live; `?compare=T#m1,T#m3` links it.
+- **A decision between looks** (APP-46): put a mockup in each `<m-option>`;
+  the owner picks with *pick this* on its bar (the option's own answer path),
+  or opens *compare these*. menger-skills `asking` has the form.
+- **Feedback on a mockup**: *comment* on its bar (APP-46), or the
+  annotation mode (`a`) on an element inside it (APP-45). The anchor is
+  `mockup:<ticket>#<n>@<width> >> <selector>` and is found again at any width.
+- **Screenshots** of a mockup: `scripts/shot.mjs` can't shoot a whole-page
+  mockup yet (APP-43); use Playwright from `perf/node_modules`.
+
 ## Conventions
 
 - Plexus crates come from the **0.6 line by sibling path** (MFE-10):
