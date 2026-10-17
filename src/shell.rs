@@ -203,7 +203,15 @@ pub fn favicon_routes() -> Router {
 }
 
 pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.port)).await?;
+    serve_at(std::net::Ipv4Addr::LOCALHOST.into(), cfg).await
+}
+
+/// RUN-8: [`serve`] on `bind` (`--bind`) rather than loopback. The names it
+/// answers to are still `cfg.allowed_hosts`' (ACCESS-25).
+pub async fn serve_at(bind: std::net::IpAddr, cfg: ShellConfig) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind((bind, cfg.port))
+        .await
+        .map_err(|e| anyhow::anyhow!("cannot bind the shell to {}: {e}", std::net::SocketAddr::new(bind, cfg.port)))?;
     serve_on(listener, cfg, std::future::pending()).await
 }
 
@@ -214,15 +222,17 @@ pub async fn serve_on(
     cfg: ShellConfig,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let app = router(cfg).await;
+    // RUN-8: the startup log names the address the shell is bound to.
+    let at = listener.local_addr()?;
+    let app = router(cfg, at).await;
     // IDENTITY-38: plexus-shell's `serve_on` hardens every answer.
     plexus_shell::serve_on(listener, app, shutdown).await?;
     Ok(())
 }
 
-async fn router(cfg: ShellConfig) -> Router {
-    tracing::info!("App:       http://127.0.0.1:{}/", cfg.port);
-    tracing::info!("Vanilla:   http://127.0.0.1:{}/vanilla", cfg.port);
+async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
+    tracing::info!("App:       http://{at}/");
+    tracing::info!("Vanilla:   http://{at}/vanilla");
     // ACCESS-33: menger's own pages and the app's build — nothing else. The
     // `/rest/{*}` pass-through to the REST port went: the app has spoken
     // the WebSocket since MFE-9, and nothing else called it. IDENTITY-19:
@@ -254,7 +264,7 @@ async fn router(cfg: ShellConfig) -> Router {
                 // AUTH-22: our own sign-in page's steps, with an identity backend.
                 .merge(login.signin_routes()),
         );
-        tracing::info!("Login:     http://127.0.0.1:{}/login", cfg.port);
+        tracing::info!("Login:     http://{at}/login");
     }
     // DNS rebinding: a page on another name resolving here gets nothing —
     // login or not (ACCESS-25), and before anything routes.

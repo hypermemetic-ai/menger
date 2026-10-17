@@ -52,6 +52,10 @@ pub mod wiring {
 
 pub mod shell;
 
+/// RUN-8: the listeners on `--bind`'s address — the WebSocket served
+/// beside plexus-transport's builder until TRANSPORT-7 gives it one.
+pub mod serve;
+
 /// ACCESS-29: `menger.call` held to the calls one connection may have open,
 /// and a connection idle with none closed.
 pub mod calls;

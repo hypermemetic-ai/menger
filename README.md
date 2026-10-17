@@ -54,6 +54,33 @@ PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462
 curl -si -H 'Host: evil.example' http://127.0.0.1:4462/debug   # 421
 ```
 
+**Bind** (RUN-8). Every listener — the WebSocket, the shell and the REST
+bridge — listens on loopback unless `--bind ADDR` (`MENGER_BIND`) names
+another address: `0.0.0.0` or `::` for every address this machine has, or
+one of them (`192.168.8.117`, `fd00::1`, `[fd00::1]`). The startup log names
+each bound address. Binding changes where menger listens, not what it
+answers to: a specific address adds its own literal to every listener's
+names (`192.168.8.117:4460`) and the shell's origin at it
+(`http://192.168.8.117:4461`) to the origins that may open the socket; an
+unspecified address adds nothing, so each name it is reached by is an
+`--allowed-host` (and the shell's origin there an `--allowed-origin`). With
+an identity backend and the shell off loopback, `--trusted-proxy` (an edge's
+CIDR, or `none`) is required at startup (AUTH-22). `menger::local`,
+`plexus_shell::LocalServer` and menger-desktop stay on loopback; prod's
+units pass no `--bind`.
+
+```sh
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 \
+  --db-path /tmp/menger-dev.db --bind 0.0.0.0 --allowed-host box.lan:4460 --allowed-host box.lan:4461 \
+  --allowed-origin http://box.lan:4461
+synapse -H box.lan -P 4460 menger tickets health
+```
+
+The WebSocket is served through plexus-transport's `serve_websocket_with`
+(`src/serve.rs`) — the same upgrade and checks `TransportServer` applies —
+because the transport's builder binds it to loopback only; TRANSPORT-7 gives
+the builder an address, and the module goes.
+
 ### Synthetic seeding (PERF-2)
 
 For measurement, not for real data: `--seed-synthetic N` (env
@@ -3856,6 +3883,7 @@ ACCESS-25).
 | `--public-url <url>` | where people reach the shell; the redirect URI's base (default `http://127.0.0.1:<shell-port>`) |
 | `--allowed-origin <origin>` | another origin whose pages may open the socket |
 | `--allowed-host <host>` | another `Host` every listener answers to (ACCESS-25, README "Run" → Hosts) |
+| `--bind <addr>` | the address every listener is bound to (RUN-8, README "Run" → Bind; default `127.0.0.1`) |
 | `--session-hours <n>` | how long a sign-in lasts (default 12) |
 
 `GET /login/me` answers who the session is, or 401. Sessions live in memory,
