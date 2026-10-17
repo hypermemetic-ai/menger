@@ -17,7 +17,11 @@
 // PLEXUS_KEY's form, `synapse _key new` makes one — naming the URL dialed
 // as its audience and --agent (default `ci`) as its agent: menger lists that
 // URL as the socket's (`--auth-provider key=<url>` for a tunnel's). The key
-// never rides the command line. --header 'Name: value' (repeatable, or
+// never rides the command line. ACCESS-47: or from a file —
+// $MENGER_DEPLOY_KEY_FILE names one holding the seed (`synapse _key new NAME
+// --store file` writes ~/.plexus/keys/NAME.key), 0600 or it is refused — so a
+// machine's own key never enters any process's environment; the variable
+// wins when both are set. --header 'Name: value' (repeatable, or
 // $MENGER_HEADERS one a line) adds a header to the upgrade — a tunnel's
 // own gate (Cloudflare Access' service token, …).
 // --timeout SECS (default 60): no answer by then fails the call.
@@ -38,6 +42,16 @@ export function seedOf(text) {
   const b = Buffer.from(t.replace(/-/g, "+").replace(/_/g, "/"), "base64");
   if (b.length !== 32) throw new Error(`a key is a 32-byte Ed25519 seed in base64, not ${b.length} bytes`);
   return b;
+}
+/** ACCESS-47: the deploy key's seed text — $MENGER_DEPLOY_KEY, else the file
+ * $MENGER_DEPLOY_KEY_FILE names (the owner's alone) — or null: no key. */
+export function deployKeyText(env = process.env) {
+  if (env.MENGER_DEPLOY_KEY) return env.MENGER_DEPLOY_KEY;
+  const f = env.MENGER_DEPLOY_KEY_FILE;
+  if (!f) return null;
+  let st; try { st = fs.statSync(f); } catch { throw new Error(`MENGER_DEPLOY_KEY_FILE: no ${f}`); }
+  if ((st.mode & 0o077) !== 0) throw new Error(`MENGER_DEPLOY_KEY_FILE: ${f} is readable by others (${(st.mode & 0o777).toString(8)}; 0600)`);
+  return fs.readFileSync(f, "utf8");
 }
 const privateOf = (seed) => crypto.createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, seed]), format: "der", type: "pkcs8" });
 export function publicHex(seed) {
@@ -171,7 +185,9 @@ async function main(argv) {
     else if (a === "--timeout") { timeout = Number(next()); if (!(timeout > 0)) die(1, "--timeout is seconds, > 0"); }
     else if (a === "--header") addHeader(next());
     else if (a === "--principal" || a === "--new-key") {
-      const seed = a === "--new-key" ? crypto.randomBytes(32) : seedOf(process.env.MENGER_DEPLOY_KEY ?? die(1, "--principal reads the key from $MENGER_DEPLOY_KEY"));
+      let text = null;
+      if (a === "--principal") { try { text = deployKeyText(); } catch (e) { die(1, e.message); } }
+      const seed = a === "--new-key" ? crypto.randomBytes(32) : seedOf(text ?? die(1, "--principal reads the key from $MENGER_DEPLOY_KEY or $MENGER_DEPLOY_KEY_FILE"));
       if (a === "--new-key") process.stdout.write(seed.toString("base64") + "\n");
       process.stdout.write(`key:${publicHex(seed)}\n`);
       return 0;
@@ -190,8 +206,9 @@ async function main(argv) {
   const parsed = calls.map((l) => { try { return JSON.parse(l); } catch { die(1, `params are not JSON: ${l.slice(0, 120)}`); } });
 
   const aud = url.replace(/\/+$/, "");
-  if (process.env.MENGER_DEPLOY_KEY) {
-    let seed; try { seed = seedOf(process.env.MENGER_DEPLOY_KEY); } catch (e) { die(1, `MENGER_DEPLOY_KEY: ${e.message}`); }
+  let keyText; try { keyText = deployKeyText(); } catch (e) { die(1, e.message); }
+  if (keyText) {
+    let seed; try { seed = seedOf(keyText); } catch (e) { die(1, `${process.env.MENGER_DEPLOY_KEY ? "MENGER_DEPLOY_KEY" : "MENGER_DEPLOY_KEY_FILE"}: ${e.message}`); }
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(agent)) die(1, `--agent '${agent}': 1–64 of A-Z a-z 0-9 . _ -`);
     headers.Authorization = `Bearer ${keyProof(seed, aud, agent)}`;
   }

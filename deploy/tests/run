@@ -268,6 +268,16 @@ if command -v node >/dev/null; then
   exits "menger-call: not a WebSocket URL" 1 node "$DEPLOY/menger-call.mjs" --url http://h deployments.list --params '{}'
   MENGER_DEPLOY_KEY=short exits "menger-call: a key that is no seed" 1 node "$DEPLOY/menger-call.mjs" --url ws://127.0.0.1:9 deployments.list --params '{}'
   exits "menger-call: nothing listening" 3 node "$DEPLOY/menger-call.mjs" --url ws://127.0.0.1:9 deployments.list --params '{}'
+  # ACCESS-47: the key from a file (synapse's ~/.plexus/keys/NAME.key), the owner's alone
+  KF=$SCRATCH/pipeline.key; node -e 'process.stdout.write(Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1)).toString("base64") + "\n")' >"$KF"
+  chmod 0600 "$KF"
+  MENGER_DEPLOY_KEY= MENGER_DEPLOY_KEY_FILE=$KF exits "menger-call: the key from its file" 0 node "$DEPLOY/menger-call.mjs" --principal
+  has "menger-call: the file's principal" "$out" "key:79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664"
+  chmod 0644 "$KF"
+  MENGER_DEPLOY_KEY= MENGER_DEPLOY_KEY_FILE=$KF exits "menger-call: a key file others can read" 1 node "$DEPLOY/menger-call.mjs" --url ws://127.0.0.1:9 deployments.list --params '{}'
+  has "menger-call: a key file others can read, said" "$err" "is readable by others (644; 0600)"
+  MENGER_DEPLOY_KEY= MENGER_DEPLOY_KEY_FILE=$SCRATCH/none.key exits "menger-call: no key file" 1 node "$DEPLOY/menger-call.mjs" --url ws://127.0.0.1:9 deployments.list --params '{}'
+  MENGER_DEPLOY_KEY_FILE=$KF exits "a key file over REST is refused" 1 "$REC" --project p --env e --state started --revision abcdef1 --send --url https://h
 else
   printf 'skip: no node — deploy/menger-call.mjs untested\n' >&2
 fi
