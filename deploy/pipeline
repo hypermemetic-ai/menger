@@ -103,6 +103,21 @@ check_env() { [[ $1 == prod || $1 == test ]] || die "unknown environment '$1' (p
 envdir() { echo "$HOME_DIR/envs/$1"; }
 running_release() { local l; l=$(envdir "$1")/current; [[ -L $l ]] && basename "$(readlink -f "$l")" || true; }
 previous_release() { local l; l=$(envdir "$1")/previous; [[ -L $l ]] && basename "$(readlink -f "$l")" || true; }
+# DEPLOY-23: the release ENV last ran with its smoke passed — where a record's
+# commits start, so a failed run's commits ride with the next run that passes.
+# Read from deployments.log, the last of: a run that ended ok (deploy, sync,
+# promote: its release; rollback: the release it returned to), or a promote
+# whose automatic rollback passed (the release it returned to). A failed run,
+# a run that died, a rollback whose smoke failed is never the start. ENV with
+# no run in the log yet: what it runs.
+last_good() {
+  local runs='$2 == e && $3 ~ /^(deploy|sync|promote|rollback)$/'
+  if [[ -f $LOG ]] && awk -F'\t' -v e="$1" "$runs {f = 1} END {exit !f}" "$LOG"; then
+    awk -F'\t' -v e="$1" "$runs"' {
+      if ($5 == "ok") g = $4; else if (match($5, /rolled back to [^ ]+$/)) g = substr($5, RSTART + 15) }
+      END { if (g != "") print g }' "$LOG"
+  else running_release "$1"; fi
+}
 resolve_release() { # NAME or empty → a release directory name that exists
   local r=${1:-}
   if [[ -z $r ]]; then
@@ -550,10 +565,10 @@ snapshot_prod_into_test() {
 cmd_deploy() {
   [[ ${1:-} == test ]] || die "only 'deploy test' — production changes through 'promote'"
   local rel; rel=$(resolve_release "${2:-}")
-  local was; was=$(running_release test)
+  local good; good=$(last_good test) # DEPLOY-23: the range starts at the last run that passed
   begin_run deploy
   step "deploy $rel to test"
-  tell test started "$rel" "$was"
+  tell test started "$rel" "$good"
   stop test
   snapshot_prod_into_test
   switch_to test "$rel"
@@ -561,11 +576,11 @@ cmd_deploy() {
   if cmd_smoke test; then
     chmod u+w "$RELEASES/$rel"; date -u +%FT%TZ > "$RELEASES/$rel/TESTED"; chmod a-w "$RELEASES/$rel"
     record test deploy "$rel" ok
-    tell test succeeded "$rel" "$was"
+    tell test succeeded "$rel" "$good"
     say "test runs $rel — smoke passed; the release is TESTED"
   else
     record test deploy "$rel" "smoke failed"
-    tell test failed "$rel" "$was"
+    tell test failed "$rel" "$good"
     die "test runs $rel and its smoke FAILED — prod untouched; see: deploy/pipeline logs test"
   fi
 }
@@ -579,9 +594,12 @@ cmd_sync() {
   [[ ${1:-} == test ]] || die "only 'sync test' — prod's data is never overwritten by a sync"
   local rel; rel=$(running_release test)
   [[ -n $rel ]] || die "test runs no release yet — 'deploy/pipeline deploy test' first"
+  # DEPLOY-23: a sync that passes on a release whose deploy failed is the
+  # first run of it that passed — it carries that deploy's commits.
+  local good; good=$(last_good test)
   begin_run sync
   step "sync test from prod's data (test keeps $rel)"
-  tell test started "$rel" "$rel"
+  tell test started "$rel" "$good"
   stop test
   local backup; backup=$(backup_db test before-sync)
   if [[ -n $backup ]]; then
@@ -593,11 +611,11 @@ cmd_sync() {
   restart test
   if cmd_smoke test; then
     record test sync "$rel" ok
-    tell test succeeded "$rel" "$rel"
+    tell test succeeded "$rel" "$good"
     say "test runs $rel on a fresh snapshot of prod's data — smoke passed"
   else
     record test sync "$rel" "smoke failed"
-    tell test failed "$rel" "$rel"
+    tell test failed "$rel" "$good"
     die "test's smoke FAILED after the sync — prod untouched; previous data: ${backup:-none}; see: deploy/pipeline logs test"
   fi
 }
@@ -636,20 +654,21 @@ cmd_promote() {
   fi
 
   local was; was=$(running_release "$to")
+  local good; good=$(last_good "$to") # DEPLOY-23: the range starts at the last run that passed
   begin_run promote
   step "promote $rel to $to (was: ${was:-none})"
-  tell "$to" started "$rel" "$was"
+  tell "$to" started "$rel" "$good"
   local backup; backup=$(backup_db "$to" "before-$rel")
   [[ -n $backup ]] && say "backup: $backup"
   switch_to "$to" "$rel"
   restart "$to"
   if cmd_smoke "$to"; then
     record "$to" promote "$rel" ok
-    tell "$to" succeeded "$rel" "$was"
+    tell "$to" succeeded "$rel" "$good"
     say "$to runs $rel — smoke passed"
     return 0
   fi
-  tell "$to" failed "$rel" "$was"
+  tell "$to" failed "$rel" "$good"
   say "smoke FAILED on $to — rolling back"
   stop "$to"
   [[ -n $backup ]] && restore_db "$to" "$backup" && say "restored $backup"

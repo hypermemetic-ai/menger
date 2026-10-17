@@ -304,7 +304,7 @@ where its work runs:
 
 | the run | records (environment, revision) |
 |---|---|
-| begins | `started` — the release it moves to (`previous`: what ran) |
+| begins | `started` — the release it moves to (`previous`: the release the environment last ran with its smoke passed) |
 | smoke passed | `succeeded` (a rollback: `rolled_back` to the release it returned to) |
 | smoke failed | `failed` |
 | promote's automatic rollback, smoke passed | `failed`, then `rolled_back` to what ran before |
@@ -314,6 +314,15 @@ where its work runs:
   (`../menger-build`, else the repository), oldest first, when a run moves
   forward; a rollback carries none. Without them menger works from what it
   has seen.
+- **The range starts at the last run that passed** (DEPLOY-23): `previous`
+  of a deploy test, sync or promote is the release `deployments.log` last
+  shows the environment running with its smoke passed — a run that ended
+  `ok`, or the release a promote's automatic rollback returned to — never a
+  failed run, one that died, or a rollback whose smoke failed. So a deploy
+  that fails its smoke does not lose its commits: the next one that passes
+  (a sync on the same release too) carries them. An environment with no run
+  in the log yet starts at what it runs. `backfill` reads the log the same
+  way; a rollback's `previous` stays the release it took out.
 - **One run, one id.** Each run's records carry `source.run` =
   `promote@<when it began>#<pid>`, and so does the end of its line in
   `deployments.log`. `backfill` makes from that line the record the run sent

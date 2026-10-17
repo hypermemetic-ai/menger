@@ -146,7 +146,7 @@ same_json "send: synapse's arguments" "$(head -n -1 "$SYNAPSE_ARGS" | jq -Rsc 's
 has "send prints synapse's answer" "$out" recorded
 : >"$SYNAPSE_ARGS"
 exits "send, one call per record" 0 "$REC" --from pipeline-log "$FX/pipeline.log" --send
-same_json "send, one call per record" "$(grep -c -- '^---$' "$SYNAPSE_ARGS")" 13
+same_json "send, one call per record" "$(grep -c -- '^---$' "$SYNAPSE_ARGS")" 15
 grep -qx -- 4455 "$SYNAPSE_ARGS" && ok || bad "send: default port 4455"
 exits "send: an invalid record is never sent" 2 "$REC" --env prod --state succeeded --revision 235ff62 --send
 SYNAPSE_FAIL=1 exits "send: synapse fails" 3 "$REC" --project p --env e --state started --revision abcdef1 --send
