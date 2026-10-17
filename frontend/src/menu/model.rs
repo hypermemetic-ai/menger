@@ -10,7 +10,7 @@
 //! ```text
 //! the chip's own chooser, flat (a status, kind, severity or label chip)     (ACT-10)
 //! ─────────
-//! Open · Open in new tab · Wave board for P · Waves to X · Wave board · Copy code     (one ticket)
+//! Open · Open in new tab · Chat ▸ · Wave board for P · Waves to X · Wave board · Copy code (one ticket)
 //! Copy codes                                                                         (a selection)
 //! ─────────
 //! Set status ▸ · Set kind ▸ · Set severity ▸ · Labels ▸ · Move under… · Blocked by…
@@ -45,6 +45,14 @@
 //!   global filter. Where they build the global filter already (the ticket
 //!   page), nothing doubles; on a framed chip (whose items build the global
 //!   filter) the Filter items are said **Filter everywhere: …**.
+//! - **CHAT-5: Chat** ([`chat_entry`]): one ticket's, beside Open. The
+//!   reader's own chats there (CHAT-4's copy, participants only) decide what
+//!   it does: none, it opens the ticket with the pane's picker; some, it is
+//!   **Chat ▸** with the reader's unread there, its submenu each open chat
+//!   (who, unread) and **+ new chat**; not held yet, the pane as the ticket
+//!   page's **chat** field opens it. A reader who cannot chat sees it
+//!   disabled, the reason under it ([`chat_refusal`]). Its key in the menu
+//!   is `menu.chat` (src/bindings.rs).
 
 use menger_tickets_api::labels::NEEDS_YOU;
 use menger_tickets_api::{Kind, Severity, Status, TicketSummary};
@@ -84,6 +92,86 @@ pub(crate) struct Facts<'a> {
     pub(crate) global: bool,
     /// FILTER-25: opened on a chip in a framed body (MENGER-34).
     pub(crate) framed: bool,
+    /// CHAT-5: what the reader's chats on the one ticket say — `None` where
+    /// the menu was not told (a selection has no Chat).
+    pub(crate) chat: Option<&'a ChatFacts>,
+}
+
+/// CHAT-5: one of the reader's open chats on the ticket, as Chat ▸ lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChatLine {
+    pub(crate) id: u64,
+    /// Who the reader talks to there (the pane's tab label).
+    pub(crate) label: String,
+    pub(crate) unread: u32,
+}
+
+/// CHAT-5: what the menu knows of the reader's chats on its ticket.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ChatFacts {
+    /// The reader cannot chat here: why, in its words.
+    Refused(String),
+    /// The chats are not held yet: the pane chooses, as the field's does.
+    Unknown,
+    /// The reader's open chats there, oldest first — none: the picker.
+    Held(Vec<ChatLine>),
+}
+
+impl ChatFacts {
+    /// The reader's unread there — the item's count, the field's N.
+    pub(crate) fn unread(&self) -> u32 {
+        match self {
+            ChatFacts::Held(v) => v.iter().map(|c| c.unread).sum(),
+            _ => 0,
+        }
+    }
+}
+
+/// CHAT-5: what choosing Chat does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ChatDoes {
+    /// Disabled; the reason drawn under it.
+    Refused(String),
+    /// The ticket, its pane open as [`crate::chat_pane::View::Auto`] chooses.
+    Pane,
+    /// The ticket, its pane on the picker (no chat there yet).
+    Pick,
+    /// Chat ▸: a chat each, then + new chat.
+    Choose(Vec<ChatLine>),
+}
+
+/// CHAT-5: the Chat item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChatItem {
+    pub(crate) ticket: String,
+    pub(crate) unread: u32,
+    pub(crate) does: ChatDoes,
+}
+
+/// CHAT-5: why the reader cannot chat — the app not knowing them yet, no
+/// grant to read anything, or no connection to the hub — or `None`: it can
+/// (a viewer chats, CHAT-3: every `chats` method is a viewer's).
+pub(crate) fn chat_refusal(known: bool, may_view: bool, connected: bool) -> Option<String> {
+    if !known {
+        Some("signing in: chats open once menger knows you".into())
+    } else if !may_view {
+        Some("you hold no grant here, so you cannot chat".into())
+    } else if !connected {
+        Some("not connected: chats travel over the hub".into())
+    } else {
+        None
+    }
+}
+
+/// CHAT-5: the Chat item for `ticket`, as `facts` say.
+pub(crate) fn chat_entry(ticket: &str, facts: &ChatFacts) -> Entry {
+    let does = match facts {
+        ChatFacts::Refused(why) => ChatDoes::Refused(why.clone()),
+        ChatFacts::Unknown => ChatDoes::Pane,
+        ChatFacts::Held(v) if v.is_empty() => ChatDoes::Pick,
+        ChatFacts::Held(v) => ChatDoes::Choose(v.clone()),
+    };
+    Entry::Chat(ChatItem { ticket: ticket.to_string(), unread: facts.unread(), does })
 }
 
 impl Facts<'_> {
@@ -104,6 +192,8 @@ pub(crate) enum Sub {
     Labels,
     Unblock,
     Nav,
+    /// CHAT-5: the reader's chats on the ticket, and + new chat.
+    Chat,
 }
 
 impl Sub {
@@ -116,11 +206,12 @@ impl Sub {
             Sub::Labels => "labels",
             Sub::Unblock => "unblock",
             Sub::Nav => "nav",
+            Sub::Chat => "chat",
         }
     }
 
     pub(crate) fn of_name(name: &str) -> Option<Sub> {
-        [Sub::Status, Sub::Kind, Sub::Severity, Sub::Labels, Sub::Unblock, Sub::Nav].into_iter().find(|s| s.name() == name)
+        [Sub::Status, Sub::Kind, Sub::Severity, Sub::Labels, Sub::Unblock, Sub::Nav, Sub::Chat].into_iter().find(|s| s.name() == name)
     }
 
     pub(crate) fn words(self) -> &'static str {
@@ -131,6 +222,7 @@ impl Sub {
             Sub::Labels => "Labels",
             Sub::Unblock => "Unblock",
             Sub::Nav => "Nav",
+            Sub::Chat => "Chat",
         }
     }
 }
@@ -199,6 +291,8 @@ pub(crate) enum Entry {
     Filter(tags::Item),
     /// Delete… — how many.
     Delete(usize),
+    /// CHAT-5: Chat (or Chat ▸).
+    Chat(ChatItem),
     Rule,
 }
 
@@ -255,6 +349,9 @@ pub(crate) fn entries(f: &Facts) -> Vec<Entry> {
         Some(id) => {
             acts.push(Entry::Open(id.to_string()));
             acts.push(Entry::OpenNew(id.to_string()));
+            if let Some(c) = f.chat {
+                acts.push(chat_entry(id, c));
+            }
             let (parent, doc) = row.map(|r| (r.parent.as_deref(), r.kind == Kind::Doc)).unwrap_or((None, false));
             acts.extend(wave_items(id, parent).into_iter().filter(|w| !(doc && w.kind == "to")).map(Entry::Wave));
             if let Some(sc) = f.shortcode {
@@ -489,7 +586,8 @@ pub(crate) fn options(sub: Sub, ids: &[String], rows: &[TicketSummary]) -> Vec<O
                 })
                 .collect()
         }
-        Sub::Nav => Vec::new(),
+        // Nav ▸'s are src/shape.rs's; Chat ▸'s are the chats (src/menu/chat.rs).
+        Sub::Nav | Sub::Chat => Vec::new(),
     }
 }
 
@@ -725,7 +823,7 @@ mod tests {
     const ALL: Grants = Grants { write: true, delete: true };
 
     fn facts<'a>(ids: &'a [String], rows: &'a [TicketSummary], grants: Grants) -> Facts<'a> {
-        Facts { ids, rows, shortcode: None, chip: None, grants, nav: false, tree: None, global: true, framed: false }
+        Facts { ids, rows, shortcode: None, chip: None, grants, nav: false, tree: None, global: true, framed: false, chat: None }
     }
 
     /// Each entry as the menu says it.
@@ -742,6 +840,11 @@ mod tests {
                 Entry::Form(f) => f.words().into(),
                 Entry::Filter(i) => i.words.clone(),
                 Entry::Delete(n) => delete_words(*n),
+                Entry::Chat(c) => match &c.does {
+                    ChatDoes::Choose(_) => format!("Chat ▸ {}", c.unread),
+                    ChatDoes::Refused(why) => format!("Chat (off: {why})"),
+                    _ => "Chat".into(),
+                },
                 Entry::Rule => "—".into(),
             })
             .collect()
@@ -1096,6 +1199,49 @@ mod tests {
             ["Filter everywhere: DEMAND", "Filter everywhere: under DEMAND-1", "Add DEMAND to the filter", "Build a filter from DEMAND…"]
         );
         assert_eq!(framed.iter().filter(|w| w.starts_with("Filter everywhere")).count(), 2);
+    }
+
+    fn line(id: u64, label: &str, unread: u32) -> ChatLine {
+        ChatLine { id, label: label.into(), unread }
+    }
+
+    /// CHAT-5: one ticket's menu has Chat beside Open. With chats there it is
+    /// Chat ▸, the reader's unread on it and a submenu of each chat; with none
+    /// it opens the picker; not held yet, the pane; refused, disabled with
+    /// the reason. A selection has none.
+    #[test]
+    fn chat_sits_beside_open_and_says_what_it_opens() {
+        let (i, rows) = (ids(&["KILN-7"]), vec![row("KILN-7", Status::Ready, Kind::Build)]);
+        let held = ChatFacts::Held(vec![line(41, "builder", 2), line(42, "reviewer", 1)]);
+        let es = entries(&Facts { chat: Some(&held), ..facts(&i, &rows, Grants::default()) });
+        assert_eq!(&said(&es)[..4], ["Open", "Open in new tab", "Chat ▸ 3", "Waves to KILN-7"]);
+        assert_eq!(
+            es[2],
+            Entry::Chat(ChatItem { ticket: "KILN-7".into(), unread: 3, does: ChatDoes::Choose(vec![line(41, "builder", 2), line(42, "reviewer", 1)]) })
+        );
+        let none = ChatFacts::Held(Vec::new());
+        assert_eq!(chat_entry("KILN-7", &none), Entry::Chat(ChatItem { ticket: "KILN-7".into(), unread: 0, does: ChatDoes::Pick }));
+        assert_eq!(chat_entry("KILN-7", &ChatFacts::Unknown), Entry::Chat(ChatItem { ticket: "KILN-7".into(), unread: 0, does: ChatDoes::Pane }));
+        let off = ChatFacts::Refused("not connected: chats travel over the hub".into());
+        let es = entries(&Facts { chat: Some(&off), ..facts(&i, &rows, ALL) });
+        assert_eq!(said(&es)[2], "Chat (off: not connected: chats travel over the hub)");
+        // A selection: none — a chat is about one ticket.
+        let many = ids(&["KILN-7", "KILN-8"]);
+        assert!(!entries(&Facts { chat: Some(&held), ..facts(&many, &[], ALL) }).iter().any(|e| matches!(e, Entry::Chat(_))));
+        assert_eq!(Sub::of_name("chat"), Some(Sub::Chat));
+        assert!(options(Sub::Chat, &i, &rows).is_empty());
+    }
+
+    /// CHAT-5: a viewer chats (CHAT-3); the item is disabled only while the
+    /// app does not know the reader, for one who holds nothing, or with no
+    /// connection — each said.
+    #[test]
+    fn chat_is_refused_only_with_a_reason() {
+        assert_eq!(chat_refusal(true, true, true), None);
+        assert!(chat_refusal(false, false, false).unwrap().starts_with("signing in"));
+        assert!(chat_refusal(true, false, true).unwrap().contains("no grant"));
+        assert!(chat_refusal(true, true, false).unwrap().starts_with("not connected"));
+        assert_eq!(ChatFacts::Refused("x".into()).unread(), 0);
     }
 
     /// A picker never offers one of the tickets acted on; commits split as

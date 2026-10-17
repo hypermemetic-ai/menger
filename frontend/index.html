@@ -1099,6 +1099,22 @@
   #tmenu .pick { display: flex; gap: 6px; align-items: baseline; max-width: 22rem; }
   #tmenu .pick .tag { flex: none; font-size: calc(10px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-lg); }
   #tmenu .pick .ptitle { overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  /* CHAT-5: Chat — the reader's unread there (the field's chip) and its key
+     at the end; disabled, the reason under it; Chat ▸'s chats each with
+     theirs. */
+  #tmenu .item.chat { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
+  #tmenu .item.chat .ilabel { overflow: hidden; text-overflow: ellipsis; }
+  #tmenu .item.chat .count {
+    background: var(--accent); color: var(--bg); padding: 0 6px; border-radius: var(--radius-sm);
+    font-weight: var(--weight-strong); font-size: calc(10.5px * var(--text-scale)); font-variant-numeric: tabular-nums;
+  }
+  #tmenu .item .mkey {
+    margin-left: auto; font: inherit; font-size: calc(10.5px * var(--text-scale)); color: var(--muted);
+    border: var(--border) solid var(--line); border-radius: var(--radius-sm); padding: 0 5px;
+  }
+  #tmenu .item.off { color: var(--muted); cursor: default; }
+  #tmenu .item.off .why { flex-basis: 100%; white-space: normal; font-size: calc(11px * var(--text-scale)); }
+  #tmenu .sub .item.chat .count { margin-left: auto; }
   /* ACT-4: Delete…'s confirmation — every ticket, and what moves. */
   #delete { width: 34rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .6rem; }
   #delete h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0; }

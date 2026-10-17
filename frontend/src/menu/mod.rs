@@ -125,6 +125,7 @@ use wasm_bindgen_futures::{spawn_local, JsFuture};
 use std::cell::Cell;
 use std::sync::Arc;
 
+mod chat;
 mod delete;
 mod forms;
 pub(crate) mod model;
