@@ -367,7 +367,7 @@ pinned address, SCAFFOLD-22) over `app.env`.
 | environment | host | settings (copied to the box as `app.env`) | state |
 |---|---|---|---|
 | test | `app-test.menger.sh` | `deploy/env/app-test.env` | live since 2026-10-17, its own empty tracker |
-| prod | `app.menger.sh` | `deploy/env/app-prod.env` | declared, not deployed: AuthKit on WorkOS production (RUN-11's `sign-in`); its client id and the owner's production user (RUN-11 `prod-ids`), then RUN-13 |
+| prod | `app.menger.sh` | `deploy/env/app-prod.env` | live since 2026-10-17, prod's data moved there (RUN-13); AuthKit on WorkOS production |
 
 The settings are menger's own (README "Bind", "Trusted proxies", "Behind
 https", Login): `MENGER_PUBLIC_URL=https://<host>`, `MENGER_BIND=0.0.0.0`,
@@ -392,10 +392,26 @@ ledger-secret run workos-prod WORKOS_API_KEY -- deploy/workos-redirect-uris ensu
 ledger-secret run workos-prod WORKOS_API_KEY -- deploy/workos-redirect-uris user <owner email>
 ```
 
+**The move (RUN-13, 2026-10-17).** Prod's data runs on app.menger.sh:
+local prod stopped (`systemctl --user stop menger@prod`), a `sqlite3
+.backup` into `~/.local/share/menger/backups/tickets.db.<when>-move-RUN-13`,
+seeded by infra (`bin/infra seed.yml -e app_dir=. -e env=prod -e
+seed=<backup> -e '{"seed_verify":["/opt/menger/bin/menger","--verify-derived","--db-path","/data/tickets.db"]}'`
+— the volume's old file moved aside, never deleted), then `deploy/pipeline
+remote prod`. `~/.local/share/menger-deploy/prod.moved` makes `promote` and
+`rollback prod` refuse: local prod is the rollback, and two trackers must
+not run at once. The rollback: `systemctl --user start menger@prod`, remove
+`prod.moved`, agents back to `-P 4455` — what was written on app.menger.sh
+since the move is only there (copy it back the same way first, if it
+matters).
+
 menger has no admin-by-email form: `MENGER_ADMINS` names principals
 (`oidc:workos/user_…`). A person signed in with no grant waits in `members
 requests` (with the name the provider gave), where an admin — the
-`operator` key — grants them.
+`operator` key — grants them. `deploy/grant-first-admin --url
+wss://app.menger.sh/ws --name <email> --name <github name>` does it once,
+for the first such WorkOS sign-in (exactly one match, or nothing), and
+records it on RUN-11.
 
 ```sh
 IMAGE_STORE=ghcr deploy/pipeline image 20261017T081530Z-5773250   # a TESTED release → GHCR

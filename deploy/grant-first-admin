@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""RUN-11's bootstrap: grant admin on `*` to the owner's first sign-in, once.
+
+  deploy/grant-first-admin --url wss://app.menger.sh/ws --name NAME [--name NAME…]
+      [--as operator] [--every 60] [--hours 12] [--allow FILE] [--ticket RUN-11] [--dry-run]
+
+menger has no admin-by-email setting, and a WorkOS environment the owner has
+never signed in to has no user id to name in MENGER_ADMINS. So: every
+--every seconds, as the --as agent (an admin of `*`; synapse renews its
+session from the key), read `members requests` — every sign-in without a
+grant: principal, the name the provider gave, provider, since — and when
+exactly one `oidc:workos/…` principal whose name is one of --name (exactly,
+case-insensitive) has signed in since this started, grant it admin on `*`,
+append it to --allow (0600, created if missing; the chat bridge's list,
+CHAT-11), record it on --ticket, and stop. Two or more such principals:
+grant nothing, record it, stop — that is for a person to sort out. Nothing
+for --hours: stop. menger's waiting list carries the name, not the email:
+WorkOS names a person by first/last name when it has them (GitHub's profile
+name), else by email — so --name is given both ways.
+"""
+import argparse, json, os, subprocess, sys, time
+
+ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+ap.add_argument("--url", required=True)
+ap.add_argument("--name", action="append", required=True)
+ap.add_argument("--as", dest="agent", default="operator")
+ap.add_argument("--every", type=int, default=60)
+ap.add_argument("--hours", type=float, default=12)
+ap.add_argument("--allow", default=os.path.expanduser("~/.config/menger/chat-bridge.allow"))
+ap.add_argument("--ticket", default="RUN-11")
+ap.add_argument("--dry-run", action="store_true")
+a = ap.parse_args()
+names = {n.strip().lower() for n in a.name}
+start = int(time.time())
+syn = ["synapse", "--url", a.url, "--as", a.agent]
+
+
+def log(msg):
+    print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " " + msg, flush=True)
+
+
+def call(*args, inp=None):
+    r = subprocess.run(syn + ["-j", "menger", *args], capture_output=True, text=True, timeout=120, input=inp)
+    out = []
+    for line in r.stdout.splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        out.append(d.get("content", d))
+    return r.returncode, out
+
+
+def record(text):
+    rc, got = call("tickets", "get", "--id", a.ticket)
+    body = next((g["ticket"]["body"] for g in got if isinstance(g, dict) and "ticket" in g), None)
+    if body is None:
+        log(f"could not read {a.ticket} to record: {got[-1:] if got else rc}")
+        return
+    when = time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime())
+    step = f'<m-step date="{when}" status="In Review" by="{a.agent}">{text}</m-step>'
+    i = body.rfind("</m-status>")
+    body = body[:i] + step + "\n\n" + body[i:] if i >= 0 else body + "\n\n" + step + "\n"
+    rc, got = call("tickets", "amend", "--id", a.ticket, "--body", "-", inp=body)
+    log(f"recorded on {a.ticket}: rc={rc}")
+
+
+log(f"watching {a.url} for {sorted(names)} as {a.agent}, every {a.every}s for {a.hours}h")
+while time.time() < start + a.hours * 3600:
+    try:
+        rc, got = call("members", "requests")
+    except subprocess.TimeoutExpired:
+        rc, got = -1, []
+    errs = [g for g in got if isinstance(g, dict) and g.get("type") == "error"]
+    if rc != 0 or errs:
+        log(f"members requests: rc={rc} {errs[:1]}")
+    waiting = [g for g in got if isinstance(g, dict) and g.get("type") == "waiting"]
+    hits = [w for w in waiting
+            if str(w.get("principal", "")).startswith("oidc:workos/")
+            and str(w.get("name", "")).strip().lower() in names
+            and int(w.get("since") or 0) >= start - 60]
+    if len(hits) > 1:
+        who = ", ".join(f"{w['principal']} ({w.get('name')})" for w in hits)
+        log(f"more than one match, granting nothing: {who}")
+        record(f"**Bootstrap stopped, nothing granted:** more than one WorkOS sign-in named {sorted(names)} — {who}. A person picks which is the owner: `members grant --principal … --scope '*' --role admin`.")
+        sys.exit(2)
+    if hits:
+        p = hits[0]["principal"]
+        log(f"match: {p} ({hits[0].get('name')}) since {hits[0].get('since')}")
+        if a.dry_run:
+            sys.exit(0)
+        rc, got = call("members", "grant", "--principal", p, "--scope", "*", "--role", "admin")
+        ok = rc == 0 and not any(isinstance(g, dict) and g.get("type") == "error" for g in got)
+        log(f"grant admin on * → {'ok' if ok else got[-1:]}")
+        if ok:
+            fd = os.open(a.allow, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            with os.fdopen(fd, "a") as f:
+                f.write(p + "\n")
+            os.chmod(a.allow, 0o600)
+            record(f"**The owner's first sign-in on {a.url} is admin.** `{p}` (named `{hits[0].get('name')}` by WorkOS) signed in and was granted `admin` on `*` by the `{a.agent}` key (deploy/grant-first-admin); appended to `{a.allow}`. Add it to `MENGER_ADMINS` in deploy/env/app-prod.env.")
+            sys.exit(0)
+        sys.exit(1)
+    time.sleep(a.every)
+log("no match within the time; nothing granted")
+record(f"**Bootstrap ended after {a.hours}h with no match** for {sorted(names)} on {a.url}; nothing granted.")
+sys.exit(3)
