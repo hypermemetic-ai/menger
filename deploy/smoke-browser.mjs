@@ -11,6 +11,8 @@
 // and nothing on the page or in a frame is refused by a policy.
 // Playwright comes from perf/node_modules beside this file's checkout.
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 const require = createRequire(new URL('../perf/', import.meta.url));
 const { chromium } = require('playwright');
 
@@ -42,8 +44,11 @@ try {
     await page.fill('#password', password);
     await Promise.all([page.waitForURL((u) => u.host === ours && u.pathname !== '/login', { timeout: 15000 }), page.click('form[action="/login"] button.primary[type=submit]')]);
   }
-  await page.getByText('live · WS').first().waitFor({ timeout: 20000 });
-  await page.locator('#nav [data-nav-id], #nav [data-node-key]').first().waitFor({ timeout: 20000 });
+  // RUN-24: the page holds two connection marks since APP-50 — the phone
+  // bar's (first in the document, hidden from 821px) and the header's —
+  // so the check waits for one the reader can see, at the smoke's width.
+  await page.getByText('live · WS').filter({ visible: true }).first().waitFor({ timeout: 20000 });
+  await page.locator('#nav [data-nav-id], #nav [data-node-key]').filter({ visible: true }).first().waitFor({ timeout: 20000 });
   const csp = (doc && (await doc.headerValue('content-security-policy'))) || '';
   const scripts = csp.split(';').map((d) => d.trim()).find((d) => d.startsWith('script-src ')) || '';
   if (!scripts.includes("'sha256-") || scripts.includes("'unsafe-inline'") || !csp.includes("frame-ancestors 'none'")) {
@@ -52,6 +57,9 @@ try {
 } catch (e) {
   ok = false;
   console.error(`browser: ${e.message.split('\n')[0]}`);
+  // RUN-24: what the browser saw when it failed, for the one reading the log.
+  const shot = join(tmpdir(), `menger-smoke-${new URL(url).port || 'app'}.png`);
+  try { await page.screenshot({ path: shot }); console.error(`browser: the page as it stood: ${shot}`); } catch {}
 }
 if (errors.length) {
   ok = false;
