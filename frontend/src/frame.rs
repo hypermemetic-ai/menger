@@ -115,6 +115,15 @@
 //! frame only if its reach admits it ([`broadcast_change`]). A frame with no
 //! scope reads and hears components alone.
 //!
+//! ACCESS-26: **and is handed only the components its ticket could show.**
+//! The registry a frame gets — in its init block, on `menger:ready`, on a
+//! fetch, a component's change — is held per frame (src/held.rs, from the
+//! host's own `data-scope` and `data-names`, what its markup names): the
+//! components defined or used inside its reach, those its markup names,
+//! and what those use, each with only the references inside; a removal
+//! reaches only a frame that had the name (`data-held`). The tooltip's
+//! checks (`menger:inspect`) know only what is inside the reach.
+//!
 //! COMMENT-3: **annotation mode reaches into the body.** The host tells every
 //! frame when the mode turns (`menger:annotate { on }`, and a frame that
 //! loads meanwhile on its `menger:ready`): on, the SDK outlines every element
@@ -153,7 +162,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, inspect, links, md, mermaid, mockup, notes, present, registry, session};
+use crate::{anchor, annotate, board, bridge, cite, dom, gesture, held, highlight, inspect, links, md, mermaid, mockup, notes, present, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
@@ -947,22 +956,73 @@ fn message(kind: &str, channel: &str) -> Object {
     msg
 }
 
-/// COMP-5: the registry as the app holds it, to every open frame — after a
-/// fetch lands (the first, a reconnect's, a `lagged`'s). A frame diffs it
-/// against what it has: a changed source re-renders, a name gone is gone.
+/// ACCESS-26: the reach a frame is held to — its stamped scope's, as last
+/// asked (`None`: it renders no ticket's body).
+fn reach_of_frame(f: &web_sys::Element) -> Option<bridge::Reach> {
+    f.get_attribute("data-scope").map(|scope| bridge::known_reach(&scope))
+}
+
+/// ACCESS-26: the registry as `f` is handed it (src/held.rs: what its
+/// ticket could show — its reach's and what its markup names, `data-names`),
+/// and the names it held before; the names handed are kept as `data-held`.
+/// `None` while the app holds no registry.
+fn handed(f: &web_sys::Element) -> Option<(Vec<Component>, std::collections::HashSet<String>)> {
+    let all = registry::snapshot()?;
+    let names = held::names_from_attr(f.get_attribute("data-names").as_deref());
+    let list = held::held_registry(&all, reach_of_frame(f).as_ref(), &names);
+    let before = held::names_from_attr(f.get_attribute("data-held").as_deref());
+    let _ = f.set_attribute("data-held", &held::names_attr(&held::held_names(&list)));
+    Some((list, before))
+}
+
+/// `menger:components` — the registry as `f` is handed it — to `f`.
+fn post_registry(f: &web_sys::HtmlIFrameElement, channel: &str, list: &[Component]) {
+    let msg = message("menger:components", channel);
+    set(&msg, "components", &to_js(&list));
+    post(f, &msg.into());
+}
+
+/// COMP-5: the registry, to every open frame — after a fetch lands (the
+/// first, a reconnect's, a `lagged`'s), and (ACCESS-26) when a reach is
+/// answered. A frame diffs it against what it has: a changed source
+/// re-renders, a name gone is gone. ACCESS-26: each frame is handed only
+/// what its ticket could show ([`handed`]).
 pub(crate) fn broadcast_registry() {
-    let Some(list) = registry::snapshot() else { return };
-    let all = frames();
-    if all.is_empty() {
-        return;
-    }
-    let components = to_js(&list);
-    for f in all {
-        if let Some(channel) = f.get_attribute("data-channel") {
-            let msg = message("menger:components", &channel);
-            set(&msg, "components", &components);
-            post(&f, &msg.into());
+    for f in frames() {
+        if let (Some(channel), Some((list, _))) = (f.get_attribute("data-channel"), handed(&f)) {
+            post_registry(&f, &channel, &list);
         }
+    }
+}
+
+/// ACCESS-26: a component event, to `f` as it is handed the registry: the
+/// component changed, if `f` is handed it (its references held); a removal
+/// where `f` had it; and the whole registry when what it is handed moved
+/// beyond that one name (a component newly used, or no longer).
+fn component_change(f: &web_sys::HtmlIFrameElement, channel: &str, ev: &TicketsEvent) {
+    let name = match ev {
+        TicketsEvent::ComponentChanged { component } => component.name.as_str(),
+        TicketsEvent::ComponentRemoved { name } => name.as_str(),
+        _ => return,
+    };
+    let Some((list, mut before)) = handed(f) else { return };
+    let now = list.iter().find(|c| c.name == name);
+    let heard = match now {
+        Some(c) => Some(TicketsEvent::ComponentChanged { component: c.clone() }),
+        None if before.contains(name) => Some(TicketsEvent::ComponentRemoved { name: name.to_string() }),
+        None => None,
+    };
+    if let Some(heard) = heard {
+        let msg = message("menger:change", channel);
+        set(&msg, "event", &to_js(&heard));
+        post(f, &msg.into());
+    }
+    match now {
+        Some(_) => before.insert(name.to_string()),
+        None => before.remove(name),
+    };
+    if held::held_names(&list) != before {
+        post_registry(f, channel, &list);
     }
 }
 
@@ -991,10 +1051,12 @@ pub(crate) fn broadcast_change(ev: &TicketsEvent) {
     }
     for f in all {
         let Some(channel) = f.get_attribute("data-channel") else { continue };
-        let reach = match f.get_attribute("data-scope") {
-            Some(scope) => bridge::known_reach(&scope),
-            None => bridge::Reach::none(),
-        };
+        // ACCESS-26: a component event as this frame is handed the registry.
+        if registry::Registry::concerns(ev) {
+            component_change(&f, &channel, ev);
+            continue;
+        }
+        let reach = reach_of_frame(&f).unwrap_or_else(bridge::Reach::none);
         if let Some(heard) = bridge::admit_event(ev.clone(), &reach) {
             let msg = message("menger:change", &channel);
             set(&msg, "event", &to_js(&heard));
@@ -1004,11 +1066,14 @@ pub(crate) fn broadcast_change(ev: &TicketsEvent) {
 }
 
 /// IDENTITY-36: ask the server again how far `scope` reaches (remembered by
-/// the bridge for [`broadcast_change`]).
+/// the bridge for [`broadcast_change`]). ACCESS-26: and hand the frames the
+/// registry again, as the reach now holds it.
 fn refresh_reach(scope: String) {
     spawn_local(async move {
         if let Some(client) = session::client() {
-            let _ = bridge::reach_of(&client, &scope).await;
+            if bridge::reach_of(&client, &scope).await.is_ok() {
+                broadcast_registry();
+            }
         }
     });
 }
@@ -1027,11 +1092,13 @@ fn answer_call(
     params: Result<String, String>,
     scope: Option<String>,
 ) {
+    // ACCESS-26: what the frame's markup names, for `components.list`.
+    let names = held::names_from_attr(frame.get_attribute("data-names").as_deref());
     spawn_local(async move {
         let reply = match params.and_then(|p| bridge::parse_call(&method, &p)) {
             Err(e) => Err(e),
             Ok(call) => match session::client() {
-                Some(client) => bridge::run_scoped(&client, call, scope.as_deref()).await,
+                Some(client) => bridge::run_scoped(&client, call, scope.as_deref(), &names).await,
                 None => Err(format!("{method}: not connected")),
             },
         };
@@ -1239,11 +1306,10 @@ fn on_message(ev: web_sys::MessageEvent) {
                 post(&frame, &annotate_message(&channel, true));
             }
             annotate::frame_changed(&channel);
-            // COMP-5: what moved since the srcdoc was built.
-            if let Some(list) = registry::snapshot() {
-                let msg = message("menger:components", &channel);
-                set(&msg, "components", &to_js(&list));
-                post(&frame, &msg.into());
+            // COMP-5: what moved since the srcdoc was built — ACCESS-26: as
+            // this frame is handed it.
+            if let Some((list, _)) = handed(&frame) {
+                post_registry(&frame, &channel, &list);
             }
         }
         Some(Msg::Call) => {
@@ -1342,8 +1408,11 @@ fn on_message(ev: web_sys::MessageEvent) {
             let id = field("id").filter(|v| v.as_f64().is_some()).unwrap_or(JsValue::NULL);
             let name = field("name").and_then(|v| v.as_string()).unwrap_or_default().to_ascii_lowercase();
             let attrs = field("attrs").map(read_pairs).unwrap_or_default();
-            let component = registry::snapshot().and_then(|list| list.into_iter().find(|c| c.name == name));
-            let inspection = inspect::inspect(&name, component.as_ref(), &attrs, &AppKnows);
+            // ACCESS-26: against the registry as this frame is handed it, and
+            // what exists only inside its reach — no oracle for the rest.
+            let component = handed(&frame).and_then(|(list, _)| list.into_iter().find(|c| c.name == name));
+            let reach = reach_of_frame(&frame);
+            let inspection = inspect::inspect(&name, component.as_ref(), &attrs, &held::bounded_known(&AppKnows, reach.as_ref()));
             let msg = message("menger:inspected", &channel);
             set(&msg, "id", &id);
             set(&msg, "inspection", &to_js(&inspection));
@@ -1828,7 +1897,11 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     let motion = host_motion();
     let typing = host_typing();
     let entered = container.query_selector(":scope > iframe:not([data-state=\"pending\"])").ok().flatten().is_some();
-    let components = registry::snapshot();
+    // ACCESS-26: the registry as this frame is handed it — what its ticket
+    // could show: its reach's, and what its own markup names.
+    let names = held::names_in(body_html);
+    let reach = scope.map(bridge::known_reach);
+    let components = registry::snapshot().map(|all| held::held_registry(&all, reach.as_ref(), &names));
     // MENGER-15: a whole document follows the app's mode unless a mockup
     // says otherwise.
     let page = md::is_page(body_html);
@@ -1868,6 +1941,12 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     let _ = el.set_attribute("data-channel", &channel);
     let _ = el.set_attribute("data-state", "pending");
     let _ = el.set_attribute("data-sdk", SDK_VERSION);
+    // ACCESS-26: what its markup names, and what it was handed — the host's
+    // own record, out of the frame's reach.
+    let _ = el.set_attribute("data-names", &held::names_attr(&names));
+    if let Some(list) = &components {
+        let _ = el.set_attribute("data-held", &held::names_attr(&held::held_names(list)));
+    }
     if let Some(ticket) = data_ticket {
         let _ = el.set_attribute("data-ticket", ticket);
     }

@@ -274,6 +274,7 @@ mod filter;
 mod flat;
 mod frame;
 mod grow;
+mod held;
 mod gesture;
 mod highlight;
 mod history;
