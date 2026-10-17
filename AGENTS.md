@@ -327,6 +327,17 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 -j menger chats await_message --chat 41 --timeout-minutes 240
   ```
 
+  **The chat bridge** (CHAT-11) answers the owner in chats: the user unit
+  `menger-chat-bridge` holds the builder's `chats watch` on `MENGER_URL`
+  (`~/.config/menger/chat-bridge.env`) and, for a message by a principal in
+  `~/.config/menger/chat-bridge.allow`, runs `claude -p` (Opus,
+  `bypassPermissions`, both in the unit) resuming that chat's session and
+  posts its answer. Stop it with `systemctl --user stop
+  menger-chat-bridge` (`disable --now` for good); switch the tracker by
+  editing `MENGER_URL` and `systemctl --user restart menger-chat-bridge`;
+  update it with `scripts/chat-bridge/install.sh --start` from main.
+  README "The chat bridge".
+
   **Notes** (NOTE-2) are the `notes` activation: dated, untitled thoughts
   kept in one place — `add { body }`, `list` (newest first; `state`
   open/upgraded, `author`, `text`; `after` + `limit`), `get { id }`, and

@@ -3220,6 +3220,60 @@ write. Kept in `chats`, `chat_participants` (each one's read mark) and
 `chat_messages` behind the cache, gained empty on open; who is listening is
 the cache's alone, never stored.
 
+#### The chat bridge (CHAT-11)
+
+A perpetual listener on the builder's chats: when the owner writes in a
+chat the builder is in, it spawns a Claude Code agent on this machine and
+posts its answer there. `scripts/chat-bridge/` holds it — `bridge.mjs`
+(Node ≥ 22, the standard library and `deploy/menger-call.mjs`'s socket),
+the unit `menger-chat-bridge.service`, `install.sh`, and its acceptance on
+a throwaway login-on server, `tests/throwaway.mjs WORKDIR [--real]`.
+
+- **It runs** as `systemd --user` unit `menger-chat-bridge` (`Restart=always`,
+  `RestartSec=5`; lingering is on, so it survives logout and reboot), from
+  an installed copy in `~/.local/share/menger-chat-bridge` — never a
+  checkout. `scripts/chat-bridge/install.sh --start` (from main) installs or
+  updates it and (re)starts it.
+- **Stop it:** `systemctl --user stop menger-chat-bridge`; for good,
+  `systemctl --user disable --now menger-chat-bridge`. Its log:
+  `journalctl --user -u menger-chat-bridge -f`, and a JSON line per turn in
+  `~/.local/state/menger/chat-bridge/turns.log`.
+- **Which tracker:** `MENGER_URL` in `~/.config/menger/chat-bridge.env`
+  (`ws://127.0.0.1:4455` today). Switching is that one line, then
+  `systemctl --user restart menger-chat-bridge`. RUN-13 moves prod's data
+  to app.menger.sh; the coordinator switches it to `wss://app.menger.sh/ws`
+  when RUN-13 reports (the builder key granted there first).
+- **Who it signs in as:** the builder's key (`MENGER_KEY_FILE`,
+  `~/.plexus/keys/builder.key`), a key proof at each upgrade. It watches
+  the chats the builder is **in** — a chat for it names the builder.
+- **Who it answers:** the principals in `~/.config/menger/chat-bridge.allow`,
+  one a line (`#` comments), read on every message — an edit needs no
+  restart. RUN-13's admin bootstrap appends the owner's production
+  principal. Never itself, never an `agent:` principal, and never a `key:`
+  one: a bare `key:`/`agent:` line is ignored, and only a line written
+  `+key:…` admits a key — for a test, removed after.
+- **A turn:** it marks the chat read, runs `claude -p --output-format json`
+  in `CHAT_BRIDGE_CWD` (menger's main checkout) — the chat's recent turns
+  and its ticket on the first, the new messages after — resuming the chat's
+  own session (`--resume`; the mapping in `state.json` beside `turns.log`),
+  and posts the final message. A turn still running after 20 s posts
+  "_working…_" once; a failed one posts "couldn't answer: <why>". One turn
+  per chat at a time — what arrives meanwhile is the next turn, together;
+  chats run in parallel, at most `CHAT_BRIDGE_MAX` (3).
+- **The agent's powers** are written in the unit's `ExecStart`, never
+  chosen at runtime: `--model claude-opus-5-5 --permission-mode
+  bypassPermissions` — the mode the owner runs builders in, every tool
+  without asking. Its system prompt says who it is (the owner's builder in
+  chat N on ticket T), the house rules (AGENTS.md, no `rm -r`, prod only
+  through `deploy/pipeline`, questions as inputs), short answers, and
+  worktrees and tickets for real work.
+- **Nothing missed, nothing twice:** per chat the last message handled is
+  kept; every (re)subscription — a dropped socket, a server restart, a
+  stream that ended silently (SYNAPSE-21), a `lagged` watch — pages
+  `chats messages --after` it in every open chat. An answer goes to the
+  outbox before it is posted and the mark moves after, so a restart between
+  the two posts it once. A heartbeat call each minute catches a dead socket.
+
 ### Notes (NOTE-2)
 
 A **note** is a thought written down before it is a ticket: dated, never
