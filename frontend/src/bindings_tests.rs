@@ -266,7 +266,8 @@ fn search_narrows_by_a_key_or_by_words() {
     assert_eq!(ids("⌘K", true), ["palette.toggle"]);
     assert_eq!(ids("Mod+k", false), ["palette.toggle"], "the table's own spelling");
     assert_eq!(ids("alt+click", false), ["chip.filter-everywhere", "mockup.drag-free"]);
-    assert_eq!(ids("esc", false), ["app.escape", "compare.close", "dialog.close", "form.cancel"], "APP-44: the compare closes on Esc");
+    assert_eq!(ids("esc", false), ["chat.leave", "chat.menu-close", "session.leave", "app.escape", "compare.close", "dialog.close", "form.cancel"], "APP-44: the compare closes on Esc; CHAT-7: the composer, its menu and the session");
+    assert_eq!(ids("g c", false), ["chat.full"], "CHAT-7");
     assert!(ids("q", false).is_empty(), "a key nothing answers");
     assert_eq!(ids("global filter", false), ["filter.global", "chip.filter-everywhere"]);
     assert_eq!(ids("SUBTREE", false), ["nav.expand-subtree"]);

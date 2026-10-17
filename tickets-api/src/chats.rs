@@ -154,6 +154,8 @@ pub enum ChatsEvent {
     Closed { chat: ChatId },
     /// `reopen`'s answer, and on `watch`.
     Reopened { chat: ChatId },
+    /// CHAT-7: `rename`'s answer, and on `watch`: the chat with its title now.
+    Renamed { chat: Chat },
     /// On `watch`: `principal` began (`waiting: true`) or stopped waiting on
     /// `await_message` for `chat` — the pane's "waiting for a message".
     Listening { chat: ChatId, principal: String, waiting: bool },

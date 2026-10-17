@@ -81,6 +81,11 @@ export interface ChatsEventReopened {
     type: 'reopened';
     chat: ChatId;
 }
+/** CHAT-7: `rename`'s answer, and on `watch`: the chat with its title now. */
+export interface ChatsEventRenamed {
+    type: 'renamed';
+    chat: Chat;
+}
 /** On `watch`: `principal` began (`waiting: true`) or stopped waiting on
 `await_message` for `chat` — the pane's "waiting for a message". */
 export interface ChatsEventListening {
@@ -157,7 +162,7 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 export declare function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened;
 export declare function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat;
 export declare function isChatsEventCandidate(e: ChatsEvent): e is ChatsEventCandidate;
@@ -167,6 +172,7 @@ export declare function isChatsEventAdded(e: ChatsEvent): e is ChatsEventAdded;
 export declare function isChatsEventRead(e: ChatsEvent): e is ChatsEventRead;
 export declare function isChatsEventClosed(e: ChatsEvent): e is ChatsEventClosed;
 export declare function isChatsEventReopened(e: ChatsEvent): e is ChatsEventReopened;
+export declare function isChatsEventRenamed(e: ChatsEvent): e is ChatsEventRenamed;
 export declare function isChatsEventListening(e: ChatsEvent): e is ChatsEventListening;
 export declare function isChatsEventClaimLine(e: ChatsEvent): e is ChatsEventClaimLine;
 export declare function isChatsEventWaiting(e: ChatsEvent): e is ChatsEventWaiting;

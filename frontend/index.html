@@ -4104,6 +4104,213 @@
   #chatpane li.pclosedrow { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; }
   #chatpane li.pclosedrow .popen { text-align: left; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #chatpane .pclosedlist { margin: 14px; }
+  /* ── CHAT-7: the turns, the composer and the full-screen session — one
+     view in the dock (#chatpane) and full screen (#chatfull). ── */
+  .chatview { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
+  :is(#chatpane, #chatfull) .pmsgs.turns { padding: 14px 14px 8px; gap: 0; }
+  :is(#chatpane, #chatfull) .tcol { display: flex; flex-direction: column; gap: 16px; width: 100%; margin: 0 auto; }
+  #chatfull .tcol { max-width: 780px; padding: 18px 0 6px; gap: 22px; }
+  :is(#chatpane, #chatfull) .turn.theirs { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
+  :is(#chatpane, #chatfull) .turn.mine { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  :is(#chatpane, #chatfull) .turn .bubble {
+    max-width: min(88%, 560px); background: var(--sel); color: var(--ink); border: var(--border) solid var(--line);
+    border-radius: var(--radius-bubble); padding: 9px 14px; font: calc(14px * var(--text-scale))/1.5 var(--sans); overflow-wrap: anywhere;
+  }
+  :is(#chatpane, #chatfull) .turn .bubble > :first-child, :is(#chatpane, #chatfull) .pmb > :first-child { margin-top: 0; }
+  :is(#chatpane, #chatfull) .turn .bubble > :last-child, :is(#chatpane, #chatfull) .pmb > :last-child { margin-bottom: 0; }
+  :is(#chatpane, #chatfull) .tmeta { display: flex; gap: 10px; align-items: baseline; color: var(--muted); font: calc(10.5px * var(--text-scale)) var(--mono); }
+  :is(#chatpane, #chatfull) .tacts { display: inline-flex; gap: 10px; opacity: 0; color: var(--muted); font: calc(10.5px * var(--text-scale)) var(--mono); }
+  :is(#chatpane, #chatfull) .turn:is(:hover, :focus-within) .tacts { opacity: 1; }
+  :is(#chatpane, #chatfull) .tacts button { color: inherit; }
+  :is(#chatpane, #chatfull) .tacts button:hover { color: var(--accent); }
+  :is(#chatpane, #chatfull) .turn.theirs .tacts { margin-top: 6px; }
+  #chatfull .pmb { font: calc(15px * var(--text-scale))/1.6 var(--sans); overflow-wrap: anywhere; margin-top: 4px; }
+  #chatfull .pmh { font: calc(11px * var(--text-scale)) var(--mono); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; color: var(--muted); }
+  #chatfull .pmh b { color: var(--ink); font-weight: var(--weight-strong); }
+  #chatfull .pav {
+    width: 28px; height: 28px; border-radius: var(--radius-pill); display: grid; place-items: center;
+    font: var(--weight-strong) calc(11px * var(--text-scale)) var(--mono); background: var(--sel); color: var(--accent);
+  }
+  #chatfull .pav.agent { background: var(--st-epic-bg); color: var(--st-epic-fg); border-radius: var(--radius); }
+  #chatfull .ag, #chatfull .pmh .ag {
+    font-size: calc(9.5px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--st-epic-fg); background: var(--st-epic-bg); padding: 0 5px; border-radius: var(--radius-sm);
+  }
+  :is(#chatpane, #chatfull) .md code { font-family: var(--mono); font-size: .86em; background: var(--panel); padding: 0 4px; border-radius: var(--radius-sm); border: var(--border) solid var(--line); }
+  :is(#chatpane, #chatfull) .cblock { border: var(--border) solid var(--line); border-radius: var(--radius-lg); overflow: hidden; margin: 10px 0; background: var(--card); }
+  :is(#chatpane, #chatfull) .chead {
+    display: flex; gap: 10px; align-items: baseline; padding: 5px 12px; border-bottom: var(--border) solid var(--line);
+    background: var(--panel); color: var(--muted); font: calc(10.5px * var(--text-scale)) var(--mono);
+  }
+  :is(#chatpane, #chatfull) .chead .cpath { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  :is(#chatpane, #chatfull) .chead .ccopy { margin-left: auto; color: var(--muted); }
+  :is(#chatpane, #chatfull) .chead .ccopy:hover { color: var(--accent); }
+  :is(#chatpane, #chatfull) .cblock pre { margin: 0; padding: 10px 12px; overflow-x: auto; font: calc(12.5px * var(--text-scale))/1.55 var(--mono); }
+  :is(#chatpane, #chatfull) .cblock pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  :is(#chatpane, #chatfull, .ccompose) .tchip {
+    display: inline-block; font: calc(11px * var(--text-scale)) var(--mono); color: var(--accent); border: var(--border) solid var(--accent);
+    border-radius: var(--radius-sm); padding: 0 5px; text-decoration: none; line-height: 1.5; vertical-align: baseline;
+  }
+  :is(#chatpane, #chatfull) .tcard {
+    display: flex; align-items: center; gap: 10px; margin: 8px 0; padding: 8px 12px; border: var(--border) solid var(--line);
+    border-radius: var(--radius-lg); background: var(--card); color: var(--ink); text-decoration: none; font: calc(12px * var(--text-scale)) var(--mono);
+  }
+  :is(#chatpane, #chatfull) .tcard:hover { border-color: var(--accent); }
+  :is(#chatpane, #chatfull) .tcard .tctitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :is(#chatpane, #chatfull) .tcard .tcstatus { padding: 1px 6px; border-radius: var(--radius-sm); font-size: calc(10.5px * var(--text-scale)); background: var(--st-bg); color: var(--st-fg); }
+  :is(#chatpane, #chatfull) .swait { display: flex; gap: 8px; align-items: center; background: none; padding: 0 0 0 38px; font: calc(11.5px * var(--text-scale)) var(--mono); color: var(--live); }
+  #chatfull .dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--tree-line); display: inline-block; flex: none; }
+  #chatfull .dot.on { background: var(--live); }
+  #chatfull .dot.wait {
+    background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent);
+    animation: menger-chat-ping 1.6s ease-in-out infinite;
+  }
+  #chatfull .turn.fresh { animation: menger-chat-arrive .32s ease-out; }
+  #chatfull .pnewline {
+    display: flex; align-items: center; gap: 10px; color: var(--accent); font: calc(10px * var(--text-scale)) var(--mono);
+    letter-spacing: .14em; text-transform: uppercase;
+  }
+  #chatfull .pnewline::before, #chatfull .pnewline::after { content: ""; flex: 1; height: var(--border); background: var(--accent); opacity: .4; }
+  :is(#chatpane, #chatfull) .tjump {
+    position: absolute; right: 18px; bottom: calc(var(--compose-h, 120px) + 14px); z-index: 3; padding: 6px 12px;
+    border-radius: var(--radius-pill); background: var(--ink); color: var(--bg); font: calc(11px * var(--text-scale)) var(--mono); box-shadow: var(--shadow);
+  }
+  /* An empty chat of one (CHAT-6), as an empty agent chat. */
+  :is(#chatpane, #chatfull) .alone { text-align: center; margin: auto; padding: 24px 8px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  :is(#chatpane, #chatfull) .alone .amark { width: 44px; height: 44px; border-radius: var(--radius-lg); display: grid; place-items: center; background: var(--sel); color: var(--accent); font-size: 20px; }
+  :is(#chatpane, #chatfull) .alone h3 { margin: 0; font: var(--weight-strong) calc(20px * var(--text-scale)) var(--font-display); color: var(--ink); }
+  :is(#chatpane, #chatfull) .alone p { margin: 0; max-width: 480px; color: var(--muted); font: calc(13px * var(--text-scale))/1.55 var(--sans); }
+  :is(#chatpane, #chatfull) .asugs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; width: min(100%, 520px); margin-top: 8px; }
+  :is(#chatpane, #chatfull) .asug {
+    display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 10px 12px; border: var(--border) solid var(--line);
+    border-radius: var(--radius-lg); background: var(--card); color: var(--ink); font: calc(12.5px * var(--text-scale)) var(--sans);
+  }
+  :is(#chatpane, #chatfull) .asug:hover { border-color: var(--accent); }
+  :is(#chatpane, #chatfull) .asug small { color: var(--muted); font: calc(10.5px * var(--text-scale)) var(--mono); }
+  :is(#chatpane, #chatfull) .sfoot { margin: 0 0 8px; text-align: center; color: var(--muted); font: calc(10.5px * var(--text-scale)) var(--mono); }
+  #chatpane .pexpand { color: var(--muted); padding: 2px 4px; font-size: calc(13px * var(--text-scale)); line-height: 1; }
+  #chatpane .pexpand:hover { color: var(--accent); }
+  #chatpane .pexpand + .px { margin-left: 0; }
+  #chatpane .plit + .pexpand { margin-left: auto; }
+  /* The composer: manifest's card (vox.css's .vox-input) in menger's tokens. */
+  .ccompose { flex: none; min-width: 0; box-sizing: border-box; padding: 8px 12px 10px; background: var(--panel); border-top: var(--border) solid var(--line); position: relative; font-family: var(--mono); }
+  #chatfull .ccompose { background: var(--bg); border-top: 0; padding: 6px 0 8px; width: min(100% - 32px, 780px); margin: 0 auto; }
+  .ccompose .ccard {
+    border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--bg); padding: 8px 10px 8px;
+    display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  }
+  .ccompose .ccard:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+  .ccompose textarea.cbox {
+    width: 100%; box-sizing: border-box; border: 0; outline: 0; background: transparent; color: var(--ink); resize: vertical;
+    font: calc(var(--chat-px, 14px) * var(--text-scale))/1.45 var(--sans); min-height: calc(2lh + 6px); max-height: 40vh; padding: 2px 2px 4px;
+  }
+  .ccompose .crow { min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
+  .ccompose .chint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ccompose button { font: inherit; cursor: pointer; }
+  :is(#chatpane, #chatfull) .ccompose .cfull { border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); padding: 3px 9px; white-space: nowrap; }
+  :is(#chatpane, #chatfull) .ccompose .cfull:hover { border-color: var(--accent); }
+  :is(#chatpane, #chatfull) .ccompose .csend { background: var(--accent); color: var(--bg); border: 0; border-radius: var(--radius); padding: 4px 12px; font-size: calc(11.5px * var(--text-scale)); }
+  :is(#chatpane, #chatfull) .ccompose .csend[disabled] { background: var(--tree-line); color: var(--muted); cursor: default; }
+  .ccompose .cstrip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: calc(11px * var(--text-scale)); }
+  .ccompose .cstrip.refuse { padding: 6px 10px; border: var(--border) solid var(--err-line); background: var(--err-bg); color: var(--err-fg); border-radius: var(--radius-lg); }
+  .ccompose .cstrip.refuse span { flex: 1; }
+  .ccompose .cstrip .cx { background: none; border: 0; color: inherit; }
+  .ccompose .cstrip.codes .muted { color: var(--muted); }
+  .ccompose .cmenu {
+    display: flex; flex-direction: column; gap: 2px; padding: 6px; margin-bottom: -1px; border: var(--border) solid var(--line);
+    border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--card); max-height: 40vh; overflow-y: auto;
+  }
+  :is(#chatpane, #chatfull) .ccompose .cmrow {
+    display: flex; gap: 14px; align-items: baseline; text-align: left; padding: 5px 9px; border: var(--border) solid transparent;
+    border-radius: var(--radius); background: transparent; color: var(--ink);
+  }
+  .ccompose .cmrow b { font-weight: var(--weight-medium); flex: 0 0 auto; min-width: 9em; }
+  .ccompose .cmrow span { color: var(--muted); font-family: var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :is(#chatpane, #chatfull) .ccompose .cmrow:hover { background: var(--hover); }
+  :is(#chatpane, #chatfull) .ccompose .cmrow.on { border-color: var(--accent); background: var(--sel); }
+  .ccompose .cmrow.no b { color: var(--muted); }
+  /* The session: the rail, the column, the ticket beside it. */
+  #chatfull {
+    position: fixed; inset: 0; z-index: 955; display: grid; grid-template-columns: 264px minmax(0, 1fr); background: var(--bg); color: var(--ink);
+    font: calc(12px * var(--text-scale))/1.5 var(--mono); outline: 0;
+  }
+  #chatfull.aside { grid-template-columns: 264px minmax(0, 1fr) 6px var(--aside-w, 440px); }
+  #chatfull button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+  #chatfull .srail { display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; background: var(--panel); border-right: var(--border) solid var(--line); padding: 12px 8px; }
+  #chatfull .srhead { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 8px; }
+  #chatfull .brand { font: var(--weight-strong) calc(14px * var(--text-scale)) var(--font-display); }
+  #chatfull .kbd { border: var(--border) solid var(--line); border-radius: var(--radius-sm); padding: 0 6px; color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
+  #chatfull .snew { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; margin: 0 4px 8px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); }
+  #chatfull .snew:hover, #chatfull .snew.on { border-color: var(--accent); }
+  #chatfull .sh { margin: 10px 6px 4px; font: var(--weight-medium) calc(10px * var(--text-scale)) var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  #chatfull .srows { display: flex; flex-direction: column; gap: 2px; }
+  #chatfull .srow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; text-align: left; padding: 7px 10px; border-radius: var(--radius-lg); }
+  #chatfull .srow:hover { background: var(--hover); }
+  #chatfull .srow.on { background: var(--sel); }
+  #chatfull .srow.closed { opacity: .6; }
+  #chatfull .srow .sl { display: flex; gap: 6px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #chatfull .srow small { grid-column: 1 / -1; color: var(--muted); font: calc(11px * var(--text-scale)) var(--sans); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #chatfull .count { background: var(--accent); color: var(--bg); padding: 0 6px; border-radius: var(--radius-sm); font-weight: var(--weight-strong); font-size: calc(10.5px * var(--text-scale)); }
+  #chatfull .smain { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+  #chatfull .shead { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: var(--border) solid var(--line); flex: none; position: relative; min-width: 0; }
+  #chatfull .smenu { display: none; font-size: calc(15px * var(--text-scale)); }
+  #chatfull .sback { color: var(--muted); white-space: nowrap; }
+  #chatfull .sback:hover { color: var(--accent); }
+  #chatfull .stitle { margin: 0; font: var(--weight-strong) calc(15px * var(--text-scale)) var(--font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+  #chatfull .stitle-edit { font: var(--weight-strong) calc(14px * var(--text-scale)) var(--sans); border: var(--border) solid var(--accent); border-radius: var(--radius); padding: 2px 6px; background: var(--card); color: var(--ink); min-width: 0; }
+  #chatfull .speople { margin-left: auto; display: flex; gap: 12px; align-items: center; min-width: 0; overflow: hidden; }
+  #chatfull .speople .ag { align-self: center; }
+  #chatfull .sp { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+  #chatfull .sbtn { border: var(--border) solid var(--line); border-radius: var(--radius); padding: 3px 10px; white-space: nowrap; background: var(--card); }
+  #chatfull .sbtn:hover, #chatfull .sbtn[aria-pressed="true"] { border-color: var(--accent); }
+  #chatfull .smenu-pop { position: absolute; right: 16px; top: calc(100% - 4px); z-index: 4; display: flex; flex-direction: column; min-width: 160px; padding: 4px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); box-shadow: var(--shadow); }
+  #chatfull .smenu-pop button { text-align: left; padding: 6px 10px; border-radius: var(--radius); }
+  #chatfull .smenu-pop button:hover { background: var(--hover); }
+  #chatfull .perr { color: var(--err-fg); padding: 6px 16px; margin: 0; }
+  #chatfull :is(.sadd, .spick) { width: min(100% - 32px, 560px); margin: 12px auto; }
+  #chatfull .spick { flex: 1; min-height: 0; overflow-y: auto; }
+  #chatfull .ppicker { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); }
+  #chatfull .ppicker h4 { margin: 0; font: var(--weight-strong) calc(15px * var(--text-scale)) var(--font-display); }
+  #chatfull .pq { border: var(--border) solid var(--accent); border-radius: var(--radius-lg); padding: 6px 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+  #chatfull .pqi { flex: 1; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
+  #chatfull ul.pcands { list-style: none; margin: 0; padding: 0; border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
+  #chatfull li.pcand { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 10px; cursor: pointer; }
+  #chatfull li.pcand + li.pcand { border-top: var(--border) solid var(--line); }
+  #chatfull li.pcand.hi { background: var(--sel); }
+  #chatfull li.pcand small { display: block; color: var(--muted); }
+  #chatfull .prow { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+  #chatfull .psend { margin-left: auto; background: var(--accent); color: var(--bg); border-radius: var(--radius); padding: 4px 12px; }
+  #chatfull .pempty { color: var(--muted); margin: 14px; }
+  #chatfull .pshut { display: flex; gap: 12px; align-items: center; padding: 12px; width: min(100% - 32px, 780px); margin: 0 auto; color: var(--muted); }
+  #chatfull .preopen { color: var(--accent); margin-left: auto; }
+  #chatfull .pmsgs { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px; }
+  #chatfull .sdiv { cursor: col-resize; background: var(--line); touch-action: none; }
+  #chatfull .sdiv:hover { background: var(--accent); }
+  #chatfull .sticket { min-width: 0; min-height: 0; overflow-y: auto; background: var(--panel); padding: 0 20px 24px; }
+  #chatfull .sthead { position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center; padding: 10px 0; background: var(--panel); border-bottom: var(--border) solid var(--line); margin-bottom: 14px; }
+  #chatfull .sthead .muted { color: var(--muted); flex: 1; }
+  #chatfull .sttitle { margin: 0 0 12px; font: var(--weight-strong) calc(19px * var(--text-scale))/1.25 var(--font-display); }
+  #chatfull .stfields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin: 0 0 16px; }
+  #chatfull .stfields dt { color: var(--muted); font-size: calc(9.5px * var(--text-scale)); letter-spacing: .12em; text-transform: uppercase; }
+  #chatfull .stfields dd { margin: 0; }
+  #chatfull .stfields .st { padding: 1px 6px; border-radius: var(--radius-sm); background: var(--st-bg); color: var(--st-fg); }
+  #chatfull .sscrim { display: none; }
+  @media (max-width: 760px) {
+    #chatfull, #chatfull.aside { grid-template-columns: minmax(0, 1fr); }
+    #chatfull .srail { position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); z-index: 6; transform: translateX(-102%); transition: transform .22s var(--ease); }
+    #chatfull.drawer .srail { transform: none; box-shadow: var(--shadow); }
+    #chatfull.drawer .sscrim { display: block; position: fixed; inset: 0; z-index: 5; background: var(--scrim); }
+    #chatfull .smenu { display: inline-block; }
+    #chatfull .shead { padding: 8px 12px; gap: 8px; }
+    #chatfull .sback { font-size: 0; }
+    #chatfull .sback::before { content: "←"; font-size: calc(13px * var(--text-scale)); }
+    #chatfull .spn, #chatfull .speople .ag, #chatfull .shead .sbtn:not(.smore) { display: none; }
+    #chatfull .sdiv, #chatfull .sticket { display: none; }
+    #chatfull .ccompose { width: 100%; margin: 0; padding: 6px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+    #chatfull .tcol { padding-top: 12px; }
+    #chatfull .pmsgs { padding: 0 12px; }
+    #chatfull .asugs { grid-template-columns: 1fr; }
+  }
   /* ── CHAT-10: the chat in the dock (CHAT-9's answer, `dock`). The dock's
      Chats: a row per open chat — who, a dot green and pulsing while
      someone waits on await_message, the unread — then + chat. ── */
@@ -4208,6 +4415,8 @@
   html[data-motion="calm"] #tdock ol.dlist li.i.open.turned .dot { animation: menger-dot-turn .2s cubic-bezier(.2, .8, .2, 1.4); }
   /* CHAT-4: and a participant's waiting dot — held still, its ring kept. */
   html[data-motion="calm"] #chatpane .dot.wait { animation: none; }
+  /* CHAT-7: the full-screen chat's too. */
+  html[data-motion="calm"] #chatfull .dot.wait { animation: none; }
   html[data-motion="calm"] :is(#tdock, #tdock-sheet) .dot.wait { animation: none; }
   /* ── APP-50 (APP-37's direction A): the phone nav as a bar along the
      bottom edge (src/phonebar.rs). Up to 820px — phones, and a tablet held

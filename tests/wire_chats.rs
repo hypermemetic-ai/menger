@@ -196,6 +196,11 @@ async fn open_post_and_await_message_across_two_connections() {
     assert_eq!(opened["chat"]["participants"], json!([principal(&ADA), principal(&BUILDER)]));
     let again = one(&builder, "chats.open", json!({ "ticket": "A-2", "others": [principal(&ADA)] })).await;
     assert_eq!((again["chat"]["id"].as_u64(), again["existing"].as_bool()), (Some(chat), Some(true)));
+    // CHAT-7: `/title` — a participant renames it; the same title again is the chat as it is.
+    let renamed = one(&ada, "chats.rename", json!({ "chat": chat, "title": "The hold at 1240 °C" })).await;
+    assert_eq!((renamed["type"].as_str(), renamed["chat"]["title"].as_str()), (Some("renamed"), Some("The hold at 1240 °C")), "{renamed}");
+    let cleared = one(&builder, "chats.rename", json!({ "chat": chat })).await;
+    assert_eq!((cleared["type"].as_str(), cleared["chat"].get("title")), (Some("renamed"), None), "{cleared}");
 
     // builder waits on its own connection; ada watches who listens.
     let mut watch = subscribe(&ada, "chats.watch", json!({ "ticket": "A-2" })).await;

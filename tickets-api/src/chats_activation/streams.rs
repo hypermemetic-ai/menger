@@ -131,6 +131,18 @@ pub(super) async fn read(store: Arc<Store>, user: VerifiedUser, chat: u64, upto:
     }
 }
 
+/// `chats.rename` (CHAT-7).
+pub(super) async fn rename(store: Arc<Store>, user: VerifiedUser, chat: u64, title: Option<String>) -> ChatsEvent {
+    let s = match store.chat_seen(&user, chat) {
+        Ok((_, s)) => s,
+        Err(e) => return refusal(e),
+    };
+    match store.rename_chat(s.permit, chat, Signer::of(&user), title).await {
+        Ok(_) => store.chat_view(&user, chat).map_or(ChatsEvent::NotFound { chat: ChatId::new(chat) }, |chat| ChatsEvent::Renamed { chat }),
+        Err(e) => refusal(e),
+    }
+}
+
 /// `chats.close` (`open: false`) and `chats.reopen` (`open: true`).
 pub(super) async fn settle(store: Arc<Store>, user: VerifiedUser, chat: u64, open: bool) -> ChatsEvent {
     let s = match store.chat_seen(&user, chat) {
@@ -199,6 +211,7 @@ fn relay(store: &Store, user: &VerifiedUser, ticket: Option<&str>, change: &Chat
         ChatChange::Read { .. } => return None,
         ChatChange::Closed(_) => ChatsEvent::Closed { chat },
         ChatChange::Reopened(_) => ChatsEvent::Reopened { chat },
+        ChatChange::Renamed(_) => ChatsEvent::Renamed { chat: view },
         ChatChange::Listening { principal, waiting, .. } => ChatsEvent::Listening { chat, principal: principal.clone(), waiting: *waiting },
     })
 }

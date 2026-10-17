@@ -934,6 +934,10 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
     if ev.default_prevented() || ev.is_composing() {
         return;
     }
+    // CHAT-7: the full-screen chat owns the page's keys while it is up.
+    if crate::chat_full::is_up() {
+        return;
+    }
     let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
 
     // Escape reaches here only when focus escaped the dialog (a click on
@@ -964,6 +968,8 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
             true
         }
         // MENGER-43: `g n` — the nav under Needs you (again: its default).
+        // CHAT-7: the chat open on this ticket, full screen.
+        Some("chat.full") => crate::chat_full::expand(),
         Some("go.needs") => {
             crate::needs::go();
             true

@@ -14,12 +14,12 @@
 //!   chat in step, mounted once in the app. The participants row: a
 //!   dot each, pulsing while one waits on `await_message` (under the Motion
 //!   setting), agents marked ([`crate::chats::is_agent`]); *add* and *close
-//!   chat*. The messages through `md.rs` (never framed), an agent's `via`
-//!   shown, a *new* line at the reader's read mark when the chat was opened
+//!   chat*. CHAT-7: the turns (src/turns.rs — yours bubbles, theirs
+//!   prose, code heads, ticket cards, manifest's scroll rules), a *new*
+//!   line at the reader's read mark when the chat was opened
 //!   ([`new_from`]), a message that arrives sliding in (DESIGN-39: none
-//!   under Motion none). The composer: markdown, `@` (at a word's start)
-//!   adds a participant ([`wants_add`]), ⌘↵ / Ctrl+Enter sends
-//!   (`comment.save`'s key, src/bindings.rs).
+//!   under Motion none), and manifest's composer (src/composer.rs). ⤢ on
+//!   the head makes it full screen (src/chat_full.rs).
 //! - **The picker** ([`Picker`]): `chats.candidates` — each principal with
 //!   a grant in the ticket's organization, and whether it reads the ticket;
 //!   one that cannot is shown and cannot be picked ([`refusal`]); the same
@@ -46,9 +46,8 @@ use menger_tickets_api::{Chat, ChatState, Message};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::bindings::{self, Context};
 use crate::chats::{self, short, Held};
-use crate::{dom, fmt_unix, md};
+use crate::{dom, fmt_unix, turns};
 
 /// What the pane shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,20 +133,6 @@ pub(crate) fn new_from(thread: &[Message], unread: u32) -> Option<u64> {
     (n > 0).then(|| thread.len().checked_sub(n).and_then(|at| thread.get(at)).map(|m| m.id.get())).flatten()
 }
 
-/// Whether what was typed asks to add a participant: an `@` just typed at
-/// the start of a word.
-pub(crate) fn wants_add(text: &str) -> bool {
-    match text.strip_suffix('@') {
-        Some(before) => before.chars().last().is_none_or(char::is_whitespace),
-        None => false,
-    }
-}
-
-/// The composer's placeholder.
-pub(crate) fn placeholder(label: &str) -> String {
-    format!("Message {label}…")
-}
-
 /// What the picker says of one who cannot be picked.
 pub(crate) fn refusal(ticket: &str) -> String {
     format!("can't read {ticket}, so can't be added")
@@ -185,7 +170,7 @@ thread_local! {
     static SHOWN: ArcRwSignal<Option<Shown>> = ArcRwSignal::new(None);
 }
 
-fn shown() -> ArcRwSignal<Option<Shown>> {
+pub(crate) fn shown() -> ArcRwSignal<Option<Shown>> {
     SHOWN.with(Clone::clone)
 }
 
@@ -213,7 +198,7 @@ pub(crate) fn close() {
     shown().set(None);
 }
 
-fn show(view: View) {
+pub(crate) fn show(view: View) {
     shown().update(|s| {
         if let Some(s) = s.as_mut() {
             s.view = view;
@@ -321,9 +306,11 @@ pub(crate) fn Follow(ticket: Signal<Option<String>>) -> impl IntoView {
 #[component]
 pub(crate) fn Inside(ticket: String, #[prop(into)] lit: Signal<String>, back: Callback<bool>) -> impl IntoView {
     let shown = shown();
+    let full = crate::chat_full::signal();
     move || {
         let s = shown.get()?;
-        s.ticket.eq_ignore_ascii_case(&ticket).then(|| pane_view(s, lit, back))
+        // CHAT-7: while the chat is full screen, the dock holds nothing.
+        (s.ticket.eq_ignore_ascii_case(&ticket) && !full.get()).then(|| pane_view(s, lit, back))
     }
 }
 
@@ -390,6 +377,9 @@ fn pane_view(s: Shown, lit: Signal<String>, back: Callback<bool>) -> impl IntoVi
             <div class="dchead">
                 <button type="button" class="pback" title="back to the sections" on:click=move |_| { close(); back.run(false); }>"← sections"</button>
                 <span class="plit">{move || lit.get()}</span>
+                {matches!(current, View::Chat(_)).then(|| view! {
+                    <button type="button" class="pexpand" aria-label="the chat full screen" title="the chat full screen (g c)" on:click=move |_| crate::chat_full::set_full(true)>"⤢"</button>
+                })}
                 <button type="button" class="px" aria-label="close the chat" title="close the chat" on:click=close_x>"×"</button>
             </div>
             <div class="ptabs" role="tablist">
@@ -455,9 +445,11 @@ pub(crate) fn Grab(target: &'static str, dismiss: Callback<()>) -> impl IntoView
     }
 }
 
-/// One chat: who is in it, its messages, the composer (or, closed, reopen).
+/// One chat: who is in it (the dock's; the session's head says it), its
+/// turns (src/turns.rs), the composer (src/composer.rs) — or, closed,
+/// reopen. CHAT-7: the same view in the dock and full screen (`full`).
 #[component]
-fn ChatView(ticket: String, id: u64) -> impl IntoView {
+pub(crate) fn ChatView(ticket: String, id: u64, #[prop(optional)] full: bool) -> impl IntoView {
     chats::load(id);
     let held = chats::signal();
     let chat = {
@@ -496,26 +488,54 @@ fn ChatView(ticket: String, id: u64) -> impl IntoView {
             }
         });
     });
-    // The newest message in view — and the notes under it (who waits),
-    // once they are drawn.
+    // CHAT-7: manifest's two scroll rules (src/turns.rs's Scroll).
     let list_ref = NodeRef::<leptos::html::Div>::new();
-    Effect::new(move |_| {
-        thread.track();
-        chat.track();
-        if let Some(el) = list_ref.get() {
+    let scroll = StoredValue::new(turns::Scroll::default());
+    let arrow = RwSignal::new(None::<String>);
+    let seen_len = StoredValue::new(0usize);
+    let to_bottom = move || {
+        if let Some(el) = list_ref.get_untracked() {
             el.set_scroll_top(el.scroll_height());
-            spawn_local(async move {
-                dom::sleep_ms(0).await;
-                el.set_scroll_top(el.scroll_height());
-            });
         }
+    };
+    Effect::new(move |_| {
+        let n = thread.with(Vec::len);
+        chat.track();
+        let Some(marked) = mark.get_value() else { return };
+        let before = seen_len.get_value();
+        seen_len.set_value(n);
+        spawn_local(async move {
+            // After the turns are drawn.
+            dom::sleep_ms(0).await;
+            let Some(el) = list_ref.get_untracked() else { return };
+            if let Some(landing) = scroll.try_update_value(|s| s.land(marked.0)).flatten() {
+                land_at(&el, landing);
+                // Once more as code highlights and cards settle — still the landing.
+                dom::sleep_ms(120).await;
+                land_at(&el, landing);
+            } else if n > before && scroll.try_update_value(|s| s.arrived((n - before) as u32)).unwrap_or(false) {
+                el.set_scroll_top(el.scroll_height());
+            }
+            arrow.try_set(scroll.try_with_value(turns::Scroll::arrow).flatten());
+        });
     });
+    let on_scroll = move |_| {
+        let Some(el) = list_ref.get_untracked() else { return };
+        let at = !turns::off_bottom(f64::from(el.scroll_height()), f64::from(el.scroll_top()), f64::from(el.client_height()));
+        scroll.update_value(|s| s.moved(at));
+        arrow.set(scroll.with_value(turns::Scroll::arrow));
+    };
+    let jump = move |_| {
+        to_bottom();
+        scroll.update_value(|s| s.moved(true));
+        arrow.set(None);
+    };
+    let body = RwSignal::new(String::new());
     let adding = RwSignal::new(false);
     let name = names();
     let me = chats::me();
     let who = {
         let name = name.clone();
-        let me = me.clone();
         move || {
             let Some(c) = chat.get() else { return view! { <div class="pwho"></div> }.into_any() };
             let open = c.state == ChatState::Open;
@@ -546,7 +566,6 @@ fn ChatView(ticket: String, id: u64) -> impl IntoView {
                     }
                 });
             };
-            let _ = &me;
             view! {
                 <div class="pwho">
                     {people}
@@ -562,161 +581,231 @@ fn ChatView(ticket: String, id: u64) -> impl IntoView {
             .into_any()
         }
     };
-    let messages = {
+    let alone = Memo::new(move |_| chat.with(|c| c.as_ref().is_some_and(|c| c.participants.len() <= 1)));
+    let empty = {
+        let t = ticket.clone();
+        move || {
+            if !thread.with(Vec::is_empty) || chat.with(|c| c.as_ref().is_some_and(|c| c.last_message.is_some())) {
+                return None;
+            }
+            Some(if alone.get() { alone_view(&t, body).into_any() } else { view! { <p class="pempty">"No messages yet. Say what this chat is about."</p> }.into_any() })
+        }
+    };
+    let rows = {
+        let name = name.clone();
+        let me = me.clone();
+        move |m: Message| {
+            let (new_at, seen) = mark.get_value().unwrap_or((None, u64::MAX));
+            let mid = m.id.get();
+            let line = (new_at == Some(mid)).then(|| view! { <div class="pnewline" role="separator">"new"</div> });
+            let mine = m.author == me;
+            view! { {line}{turn_view(m, mine, mid > seen, &name)} }
+        }
+    };
+    let waits = {
         let name = name.clone();
         let me = me.clone();
         move || {
-            let list = thread.get();
-            let (new_at, seen) = mark.get_value().unwrap_or((None, u64::MAX));
             let waiting: Vec<String> = chat.with(|c| c.as_ref().map(|c| c.waiting.iter().filter(|p| **p != me).cloned().collect()).unwrap_or_default());
-            let empty = list.is_empty();
-            let rows = list
-                .into_iter()
-                .map(|m| {
-                    let id = m.id.get();
-                    let line = (new_at == Some(id)).then(|| view! { <div class="pnewline" role="separator">"new"</div> });
-                    view! { {line}{message_view(m, id > seen, &name)} }
-                })
-                .collect_view();
-            let notes = waiting
+            waiting
                 .into_iter()
                 .map(|p| {
-                    let who = name(&p);
-                    view! { <div class="pnote listen"><span class="dot wait"></span><span>{format!("{who} is waiting for a message")}</span></div> }
+                    let line = turns::waiting_line(&name(&p), turns::claim_left(&p));
+                    view! { <div class="pnote listen swait"><span class="dot wait"></span><span>{line}</span></div> }
                 })
-                .collect_view();
-            view! {
-                {empty.then(|| view! { <p class="pempty">"No messages yet. Say what this chat is about."</p> })}
-                {rows}
-                {notes}
-            }
+                .collect_view()
         }
     };
-    let label = {
+    // copy · quote · link, and a code block's copy — one listener.
+    let acts = {
+        let t = ticket.clone();
+        move |ev: web_sys::MouseEvent| {
+            let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+            let Some(btn) = el.closest("[data-act]").ok().flatten() else { return };
+            let turn = btn.closest("[data-message-id]").ok().flatten();
+            let mid: u64 = turn.as_ref().and_then(|t| t.get_attribute("data-message-id")).and_then(|v| v.parse().ok()).unwrap_or(0);
+            let text_of = |mid: u64| thread.with_untracked(|l| l.iter().find(|m| m.id.get() == mid).map(|m| m.body.clone())).unwrap_or_default();
+            match btn.get_attribute("data-act").as_deref() {
+                Some("copy-code") => {
+                    let code = btn.closest(".cblock").ok().flatten().and_then(|b| b.query_selector("pre").ok().flatten()).and_then(|p| p.text_content()).unwrap_or_default();
+                    copy_text(&code);
+                }
+                Some("copy") => copy_text(&text_of(mid)),
+                Some("quote") => body.update(|b| b.push_str(&turns::quoted(&text_of(mid)))),
+                Some("link") => {
+                    let w = dom::window();
+                    let base = format!("{}{}", w.location().origin().unwrap_or_default(), w.location().pathname().unwrap_or_default());
+                    copy_text(&format!("{base}{}", turns::turn_link(&t, id, mid)));
+                }
+                _ => return,
+            }
+            ev.prevent_default();
+        }
+    };
+    let foot = {
         let name = name.clone();
-        let me_l = me.clone();
-        Memo::new(move |_| chat.with(|c| c.as_ref().map(|c| tab_label(c, &me_l, &name)).unwrap_or_default()))
+        let me = me.clone();
+        move || {
+            if !full {
+                return None;
+            }
+            if alone.get() {
+                return Some("only you can read this chat until you add someone".to_string());
+            }
+            let agent = thread.with(|l| l.iter().rev().find(|m| m.author != me && m.via.is_some()).map(|m| (m.author.clone(), m.via.clone().unwrap_or_default())));
+            agent.map(|(a, via)| format!("{} is an agent held by {}; its messages carry via", name(&a), short(&via)))
+        }
     };
     let is_open = Memo::new(move |_| chat.with(|c| c.as_ref().is_some_and(|c| c.state == ChatState::Open)));
     let found = Memo::new(move |_| chat.with(Option::is_some));
     let participants = Signal::derive(move || chat.with(|c| c.as_ref().map(|c| c.participants.clone()).unwrap_or_default()));
     let held_some = Memo::new(move |_| held.with(Option::is_some));
+    let t_picker = ticket.clone();
+    let t_comp = ticket.clone();
     view! {
-        {move || (held_some.get() && !found.get()).then(|| view! { <p class="pempty">"This chat is not one you are in."</p> })}
-        {who}
-        {move || adding.get().then(|| view! {
-            <Picker ticket=ticket.clone() add_to=Some((id, participants.get_untracked())) on_done=Callback::new(move |_| adding.set(false)) />
-        })}
-        <div class="pmsgs" node_ref=list_ref aria-live="polite">{messages}</div>
-        {move || if is_open.get() {
-            view! { <Composer id label=label.into() adding /> }.into_any()
-        } else if found.get() {
-            view! { <div class="pshut">"closed — read-only"<button type="button" class="preopen" on:click=move |_| spawn_local(async move { let _ = chats::settle_state(id, true).await; })>"reopen"</button></div> }.into_any()
-        } else {
-            ().into_any()
-        }}
+        <div class="chatview" class:full=full>
+            {move || (held_some.get() && !found.get()).then(|| view! { <p class="pempty">"This chat is not one you are in."</p> })}
+            {(!full).then(|| who.clone())}
+            {move || adding.get().then(|| view! {
+                <Picker ticket=t_picker.clone() add_to=Some((id, participants.get_untracked())) on_done=Callback::new(move |_| adding.set(false)) />
+            })}
+            <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=on_scroll on:click=acts>
+                <div class="tcol">
+                    {empty}
+                    <For each=move || thread.get() key=|m| m.id.get() children=rows />
+                    {waits}
+                </div>
+            </div>
+            {move || arrow.get().map(|a| view! { <button type="button" class="tjump" on:click=jump>{a}</button> })}
+            {move || if is_open.get() {
+                view! { <crate::composer::Composer props=crate::composer::Props { id, ticket: t_comp.clone(), body, full } /> }.into_any()
+            } else if found.get() {
+                view! { <div class="pshut">"closed — read-only"<button type="button" class="preopen" on:click=move |_| spawn_local(async move { let _ = chats::settle_state(id, true).await; })>"reopen"</button></div> }.into_any()
+            } else {
+                ().into_any()
+            }}
+            {move || foot().map(|f| view! { <p class="sfoot">{f}</p> })}
+        </div>
     }
 }
 
-/// One message: an avatar, who (an agent marked, its `via`), when, and the
-/// words through `md.rs`.
-fn message_view(m: Message, fresh: bool, name: &impl Fn(&str) -> String) -> impl IntoView {
+/// Opening's landing, at once and without animation.
+fn land_at(el: &web_sys::HtmlDivElement, landing: turns::Landing) {
+    match landing {
+        turns::Landing::Newest => el.set_scroll_top(el.scroll_height()),
+        turns::Landing::At(m) => {
+            let target = el.query_selector(&format!("[data-message-id=\"{m}\"]")).ok().flatten().and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok());
+            match target {
+                // The *new* line sits just above it.
+                Some(t) => el.set_scroll_top((t.offset_top() - el.offset_top() - 40).max(0)),
+                None => el.set_scroll_top(el.scroll_height()),
+            }
+        }
+    }
+}
+
+fn copy_text(text: &str) {
+    let _ = dom::window().navigator().clipboard().write_text(text);
+}
+
+/// CHAT-6 / CHAT-7's view 5: an empty chat of one, as an empty agent chat —
+/// *Just you, on KILN-7*, and four ways to begin, each into the composer.
+fn alone_view(ticket: &str, body: RwSignal<String>) -> impl IntoView {
+    let picks: [(&str, String, &str); 4] = [
+        ("@builder", "@builder ".to_string(), "ask the agent that holds this ticket"),
+        ("/add reviewer", "/add reviewer".to_string(), "a second look from another agent"),
+        ("/ticket CODE", "/ticket ".to_string(), "put a ticket card in a note"),
+        ("just write", String::new(), "it's kept here, read-only once closed"),
+    ];
+    let cards = picks
+        .into_iter()
+        .map(|(k, put, what)| {
+            view! {
+                <button type="button" class="asug" on:click=move |_| {
+                    body.set(put.clone());
+                    if let Some(b) = dom::window().document().and_then(|d| d.query_selector(".ccompose .cbox").ok().flatten()).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
+                        let _ = b.focus();
+                    }
+                }>
+                    <small>{k}</small><span>{what}</span>
+                </button>
+            }
+        })
+        .collect_view();
+    view! {
+        <div class="alone">
+            <span class="amark" aria-hidden="true">"✎"</span>
+            <h3>{format!("Just you, on {ticket}")}</h3>
+            <p>"A chat with no one in it yet. Think out loud, keep notes beside the ticket, or bring someone in with @ or /add."</p>
+            <div class="asugs">{cards}</div>
+        </div>
+    }
+}
+
+/// One turn (CHAT-7): yours a bubble on the right, the time under it;
+/// theirs full-width prose under a mono line — a mark, the name, an agent
+/// tag, `via`, the time. Each shows copy · quote · link on hover.
+fn turn_view(m: Message, mine: bool, fresh: bool, name: &impl Fn(&str) -> String) -> impl IntoView {
     let who = m.name.clone().unwrap_or_else(|| name(&m.author));
     let agent = chats::is_agent(&m.author) || m.via.is_some();
-    let html = md::render_body(&m.body).html;
+    // A ticket card follows its row: drawn once the app holds the ticket,
+    // its status live.
+    let html = {
+        let m = m.clone();
+        Memo::new(move |_| {
+            let card = |code: &str| crate::cache::find(code).map(|r| r.with(|t| (t.title.clone(), t.status.to_string())));
+            turns::body_html(&m, &card)
+        })
+    };
     let node = NodeRef::<leptos::html::Div>::new();
-    node.on_load(|el: web_sys::HtmlDivElement| crate::highlight::mount(&el));
-    view! {
-        <div class="pmsg" class:fresh=fresh data-message-id=m.id.get().to_string()>
-            <span class="pav" class:agent=agent aria-hidden="true">{crate::conversation::initials(&who)}</span>
-            <div class="pmw">
-                <div class="pmh">
-                    <b>{who}</b>
-                    {agent.then(|| view! { <span class="ag">"agent"</span> })}
-                    <span class="t" title=fmt_unix(m.at)>{clock(m.at)}</span>
-                    {m.via.clone().map(|v| view! { <span class="via" title=v.clone()>{format!("via {}", short(&v))}</span> })}
-                </div>
-                <div class="pmb md" data-links="chat" node_ref=node inner_html=html></div>
-            </div>
+    Effect::new(move |_| {
+        html.track();
+        if let Some(el) = node.get() {
+            crate::highlight::mount(&el);
+        }
+    });
+    let acts = view! {
+        <div class="tacts">
+            <button type="button" data-act="copy">"copy"</button>
+            <button type="button" data-act="quote">"quote"</button>
+            <button type="button" data-act="link">"link"</button>
         </div>
+    };
+    let mid = m.id.get().to_string();
+    if mine {
+        view! {
+            <div class="turn mine pmsg" class:fresh=fresh data-message-id=mid>
+                <div class="bubble md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
+                <div class="tmeta"><span title=fmt_unix(m.at)>{format!("{who} · {}", clock(m.at))}</span>{acts}</div>
+            </div>
+        }
+        .into_any()
+    } else {
+        view! {
+            <div class="turn theirs pmsg" class:fresh=fresh data-message-id=mid>
+                <span class="pav" class:agent=agent aria-hidden="true">{crate::conversation::initials(&who)}</span>
+                <div class="pmw">
+                    <div class="pmh">
+                        <b>{who}</b>
+                        {agent.then(|| view! { <span class="ag">"agent"</span> })}
+                        {m.via.clone().map(|v| view! { <span class="via" title=v.clone()>{format!("via {}", short(&v))}</span> })}
+                        <span class="t" title=fmt_unix(m.at)>{clock(m.at)}</span>
+                    </div>
+                    <div class="pmb md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
+                    {acts}
+                </div>
+            </div>
+        }
+        .into_any()
     }
 }
 
-/// The composer: markdown; `@` at a word's start adds a participant;
-/// ⌘↵ / Ctrl+Enter sends.
-#[component]
-fn Composer(id: u64, label: Signal<String>, adding: RwSignal<bool>) -> impl IntoView {
-    let body = RwSignal::new(String::new());
-    let sending = RwSignal::new(false);
-    let error = RwSignal::new(None::<String>);
-    let send = move || {
-        let text = body.get_untracked();
-        if text.trim().is_empty() || sending.get_untracked() {
-            return;
-        }
-        sending.set(true);
-        spawn_local(async move {
-            let r = chats::post(id, &text).await;
-            sending.try_set(false);
-            match r {
-                Ok(()) => {
-                    body.try_set(String::new());
-                    error.try_set(None);
-                }
-                Err(e) => {
-                    error.try_set(Some(e));
-                }
-            }
-        });
-    };
-    let area = NodeRef::<leptos::html::Textarea>::new();
-    crate::grow::follow(area, move || body.track());
-    view! {
-        <div class="pcompose">
-            <textarea
-                node_ref=area
-                class="pbox grow"
-                rows="2"
-                aria-label=move || format!("message {}", label.get())
-                placeholder=move || placeholder(&label.get())
-                prop:value=move || body.get()
-                on:input=move |ev| {
-                    let v = event_target_value(&ev);
-                    if wants_add(&v) {
-                        adding.set(true);
-                    }
-                    body.set(v);
-                }
-                on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
-                    Some("comment.save") => {
-                        ev.prevent_default();
-                        send();
-                    }
-                    Some("form.cancel") => {
-                        ev.prevent_default();
-                        if let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok()) {
-                            let _ = el.blur();
-                        }
-                    }
-                    _ => {}
-                }
-            ></textarea>
-            <div class="prow">
-                <span>{if bindings::is_mac() { "markdown · @ to add · ⌘↵ sends" } else { "markdown · @ to add · Ctrl+Enter sends" }}</span>
-                {move || error.get().map(|e| view! { <span class="perr" role="alert">{e}</span> })}
-                <button type="button" class="psend" disabled=move || sending.get() || body.with(|b| b.trim().is_empty()) on:click=move |_| send()>
-                    {move || if sending.get() { "sending…" } else { "send" }}
-                </button>
-            </div>
-        </div>
-    }
-}
 
 /// The picker: **+ chat** (`add_to` none) — people and agents, who can read
 /// the ticket, the same people's chat opened instead; or *add* to a chat
 /// (`add_to`: it and who is in it) — one picked is added.
 #[component]
-fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done: Callback<()>) -> impl IntoView {
+pub(crate) fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done: Callback<()>) -> impl IntoView {
     let cands = RwSignal::new(None::<Result<Vec<(String, bool)>, String>>);
     {
         let t = ticket.clone();
@@ -960,7 +1049,7 @@ fn closed_view(ticket: String) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bindings::{pick_single, table_with, Press};
+    use crate::bindings::{pick_single, table_with, Context, Press};
     use crate::chats::tests::{chat, msg};
     use menger_tickets_api::ChatsEvent;
 
@@ -1036,17 +1125,16 @@ mod tests {
         assert_eq!(new_from(&t, 9), None, "more unread than held: not fetched yet");
     }
 
-    /// Composer row: `@` at a word's start adds a participant (not inside a
-    /// word, an address); ⌘↵ / Ctrl+Enter sends, a bare Enter is a new line.
+    /// CHAT-7: the composer's keys are its own context's (src/composer.rs
+    /// holds their rows); a comment box's ⌘↵ and a field's Enter are as
+    /// they were.
     #[test]
-    fn the_composer_adds_with_at_and_sends_with_mod_enter() {
-        assert!(wants_add("@") && wants_add("ask @") && wants_add("hi\n@"));
-        assert!(!wants_add("ada@") && !wants_add("ada@x") && !wants_add(""));
-        assert_eq!(placeholder("ada · builder"), "Message ada · builder…");
+    fn the_composer_has_its_own_keys() {
         let t = table_with(&[]);
         let ctrl_enter = Press { key: "Enter".into(), ctrl: true, ..Press::default() };
         assert_eq!(pick_single(&t, &ctrl_enter, Context::Field, false), Some("comment.save"));
         assert_eq!(pick_single(&t, &Press::key("Enter"), Context::Field, false), Some("form.submit"));
+        assert_eq!(pick_single(&t, &Press::key("Enter"), Context::Composer, false), Some("chat.send"));
     }
 
     /// Picker row: everyone but the reader (and, adding, who is in it);

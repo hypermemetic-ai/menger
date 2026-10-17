@@ -257,6 +257,7 @@ mod bridge;
 mod calendar;
 mod cache;
 mod card;
+mod chat_full;
 mod chat_pane;
 mod chats;
 mod carpet;
@@ -264,6 +265,7 @@ mod cite;
 mod compare;
 mod comments;
 mod comments_page;
+mod composer;
 mod conversation;
 mod components;
 mod counts;
@@ -326,6 +328,7 @@ mod theme;
 mod tokens_lint;
 #[cfg(test)]
 mod motion_lint;
+mod turns;
 mod typed;
 mod waves;
 mod when;
@@ -2554,6 +2557,8 @@ fn App() -> impl IntoView {
             // CHAT-4: the route and the chat shown, in step — the chat itself
             // is drawn in the section dock (CHAT-10).
             {move || can_view.get().then(|| view! { <chat_pane::Follow ticket=route_ticket /> })}
+            // CHAT-7: the dock's chat, full screen (⤢, `g c`, `?chat=ID&full`).
+            {move || can_view.get().then(|| view! { <chat_full::Session ticket=route_ticket /> })}
             // AGS-16: mounted once, outside every ticket element, so a
             // right-click inside the menu itself never re-targets it.
             <menu::TicketMenu last_error />
