@@ -68,6 +68,8 @@ deploy/pipeline landing              # main's landing/ → gate → the edge (me
 deploy/pipeline landing --check      # the gate and infra's dry run, nothing written
 deploy/pipeline media                # landing/media regenerated from the release prod runs
 deploy/pipeline image [RELEASE]      # RUN-10: a TESTED release as an image (menger:<release> here; IMAGE_STORE=ghcr pushes)
+deploy/pipeline local --image IMG    # RUN-25: the image here as menger-app-local, 127.0.0.1:4470/4471
+deploy/pipeline remote test|prod     # RUN-25: app-test / app.menger.sh through infra — refused until RUN-11
 ```
 
 1. **Build** (`build [REV]`, default `main`). A commit, never a working
@@ -284,6 +286,70 @@ resident). A box serving people does not need it; if one ever does, it is a
 second image from the same release (`bin/menger-diagrams`,
 `bin/run-diagrams`, `app/vendor/mermaid-*.min.js`, `diagrams-node/`, on a
 Node base), never a second process in this one.
+
+## The menger-app pipeline (RUN-25)
+
+The image built, stored and deployed as a pipeline on hyperforge's `ci`
+(HYPERFORGE-22; hyperforge's README "Pipelines (`ci`)"), declared in
+`.hyperforge/pipelines.toml`. Each stage is a `deploy/pipeline` subcommand,
+so the same step runs from a shell without hyperforge, and each deploy is
+its own trigger, independent of the others:
+
+| stage | trigger | needs | runs | outputs |
+| -- | -- | -- | -- | -- |
+| `build` | auto | — | `deploy/pipeline image` — the newest TESTED release as `menger:<release>` (`IMAGE_STORE`, the pipeline's `env`) | `image`, `release` |
+| `deploy-local` | manual | build | `deploy/pipeline local --image "$IMAGE"` | `url` |
+| `deploy-test` | manual | build | `deploy/pipeline remote test --image "$IMAGE"` | `url` |
+| `deploy-prod` | manual | deploy-test | `deploy/pipeline remote prod` | `url` |
+
+```sh
+synapse -P 44104 lforge-v5 hyperforge ci add --path ~/dev/controlflow/hypermemetic/menger
+synapse -P 44104 lforge-v5 hyperforge ci menger-app start                                 # build → run N
+synapse -P 44104 lforge-v5 hyperforge ci menger-app get --run N                           # each stage's state and outputs
+synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage deploy-local
+synapse -P 44104 lforge-v5 hyperforge ci menger-app log --run N --stage deploy-local
+synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage deploy-test   # once RUN-11
+synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage deploy-prod   # once RUN-11 / RUN-13
+```
+
+- **`local --image IMAGE`** (or `$IMAGE`) runs the image on this machine as
+  the container `menger-app-local`, its database in the volume
+  `menger-app-local-data`, the WebSocket on `127.0.0.1:4470` and the shell
+  on `127.0.0.1:4471` (`MENGER_LOCAL_WS_PORT`, `MENGER_LOCAL_SHELL_PORT`;
+  4450–4462 are refused — prod's, test's and a dev server's). Each port is
+  the same number inside the container and out (`MENGER_WS_PORT` /
+  `MENGER_SHELL_PORT` set in it), because until RUN-9 the page dials the
+  WebSocket on the port it was stamped with. Login is off, as the image's
+  defaults have it; nothing is reachable beyond loopback. It waits (90 s,
+  `MENGER_LOCAL_WAIT`) for `tickets.health` over synapse on 4470 and the
+  page on 4471 stamped with 4470, then answers `url=http://127.0.0.1:4471/`
+  (and appends it to `$HF_OUTPUTS`). Run again, it removes the old
+  container and starts the new one on the same volume, so the local app's
+  tickets survive a new image. A container that does not answer is left
+  running for `docker logs menger-app-local`, and the stage fails. No
+  bind mount is used (SELinux is enforcing here; a volume needs no label).
+  Each run is a line in `deployments.log` (`app-local  run  RELEASE  ok
+  IMAGE`), not a deployment record.
+- **`remote test --image IMAGE`** deploys to `app-test.menger.sh` through
+  hypermemetic-infra's Plexus app role: `bin/infra app.yml -e
+  app_dir=<the main checkout> -e env=test -e sha=<the release's commit>`.
+  **`remote prod`** is `bin/infra promote.yml -e app_dir=…` only: prod takes
+  the image test runs and passed, by infra's rule. Both are driven by
+  menger's own `deploy/app.yml` (SCAFFOLD-12's contract), which RUN-11
+  writes; **until it exists, each refuses before touching anything**:
+  `app-test.menger.sh is not declared yet (RUN-11): menger has no
+  deploy/app.yml for hypermemetic-infra to deploy — nothing was changed`.
+  RUN-11 owns the rest of the contract (the image infra pulls is named by
+  commit, `menger:<release>` here) and may change these two lines.
+- **The stages' environment.** A stage inherits hyperforge's (its unit's
+  `PATH` holds `~/.local/bin`, where `synapse` and `node` are, and
+  `/usr/bin`, where `docker` is); each `run` line also puts
+  `$HOME/.local/bin` and the system's bin first itself, since a pipeline
+  `env` value is taken literally, never expanded. `IMAGE_STORE` is the
+  pipeline's `env`: `ghcr` there makes `build` push and the deploys take the
+  registry's ref — a change to the file, not to hyperforge.
+- None of this touches the 4450–4458 environments: `deploy test` and
+  `promote` are unchanged, and `build` reads the releases they made.
 
 ## Hardening (ACCESS-27)
 
