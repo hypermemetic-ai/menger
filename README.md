@@ -3238,11 +3238,14 @@ a throwaway login-on server, `tests/throwaway.mjs WORKDIR [--real]`.
   `systemctl --user disable --now menger-chat-bridge`. Its log:
   `journalctl --user -u menger-chat-bridge -f`, and a JSON line per turn in
   `~/.local/state/menger/chat-bridge/turns.log`.
-- **Which tracker:** `MENGER_URL` in `~/.config/menger/chat-bridge.env`
-  (`ws://127.0.0.1:4455` today). Switching is that one line, then
-  `systemctl --user restart menger-chat-bridge`. RUN-13 moves prod's data
-  to app.menger.sh; the coordinator switches it to `wss://app.menger.sh/ws`
-  when RUN-13 reports (the builder key granted there first).
+- **Which tracker:** `MENGER_URL` in `~/.config/menger/chat-bridge.env`.
+  RUN-13 moves prod's data to app.menger.sh. On 2026-10-17 the bridge was
+  installed on `wss://app.menger.sh/ws`, because that URL answered 976
+  tickets to the builder key and the local :4455 had been stopped. The
+  coordinator confirms or switches it when RUN-13 reports. Switching
+  (`ws://127.0.0.1:4455` is the local prod) takes two steps: edit that one
+  line, then run `systemctl --user restart menger-chat-bridge`. The builder
+  key must be granted on whichever tracker it names.
 - **Who it signs in as:** the builder's key (`MENGER_KEY_FILE`,
   `~/.plexus/keys/builder.key`), a key proof at each upgrade. It watches
   the chats the builder is **in** — a chat for it names the builder.
