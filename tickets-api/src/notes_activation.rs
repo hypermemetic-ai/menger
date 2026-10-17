@@ -45,9 +45,12 @@ pub struct NotesActivation {
 
 #[cfg(feature = "server")]
 impl NotesActivation {
-    /// No login: every call admitted, as always.
+    /// ACCESS-24: a test's, behind [`Access::for_tests`].
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(store: Arc<Store>) -> Self {
-        Self::with_access(store, Access::open())
+        let access = Access::for_tests();
+        access.attach(Arc::clone(&store));
+        Self::with_access(store, access)
     }
 
     /// IDENTITY-19: behind [`Access`].
@@ -105,7 +108,7 @@ impl NotesActivation {
                 }
             };
             let author = caller.name().map(str::to_string).or(author.map(String::from));
-            yield answer(store.add_note_as(body.into_string(), author, caller.principal_text()).await);
+            yield answer(store.add_note_as(body.into_string(), author, Some(caller.principal_text())).await);
         }
     }
 

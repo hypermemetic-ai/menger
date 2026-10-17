@@ -1,11 +1,20 @@
 //! DIST-3: menger as a library call — the whole server, started from code.
 //!
-//! [`LocalServer::start`] is what the binary does with no `--auth-provider`,
-//! `--no-rest` and no `--stdio`: the store opened (its directory made if
+//! [`LocalServer::start`]: the store opened (its directory made if
 //! missing), every activation on the `menger` hub, the Plexus WebSocket and
 //! the web shell (the app, `/vanilla`) on loopback — and nothing else: no
-//! login, no REST bridge, no registry announcement. A host (DIST-1's
+//! login page, no REST bridge, no registry announcement. A host (DIST-1's
 //! desktop app) runs menger without copying `main.rs`.
+//!
+//! ACCESS-24: **behind the gate, as every menger is** — there is no open
+//! mode. The server has one owner, [`LocalConfig::owner`] (a principal, or
+//! one made for this start), admin on `*` as an operator's `--admin` is;
+//! every other caller reaches the anonymous view and nothing else. The host
+//! signs its own connections in with [`LocalServer::owner_token`] — a
+//! session minted for the owner, sent as `Authorization: Bearer <token>` or
+//! the `access_token` cookie (a webview's: set it for `127.0.0.1` before
+//! opening the shell). The upgrade admits that token and nothing else: no
+//! provider's credential, since nothing here is a provider.
 //!
 //! SCAFFOLD-5: the serving is `plexus-shell`'s [`plexus_shell::LocalServer`]
 //! — any hub, any app — and this module is menger's part of it: the store
@@ -30,7 +39,19 @@
 //! startup log of the activations ([`log_activations`]).
 
 use crate::shell::{self, AppSource};
+use menger_tickets_api::access::Access;
+use plexus_core::plexus::AuthContext;
+use plexus_transport::websocket::UpgradeOptions;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// ACCESS-24: how long the local server's sessions can last at most (its
+/// session table's own lifetime; each token asks for its own, ≤ 24 h).
+const SESSION_SECS: i64 = 24 * 60 * 60;
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 
 /// The origins a Tauri 2 webview loads its page from — plexus-shell's.
 pub use plexus_shell::TAURI_ORIGINS;
@@ -56,6 +77,10 @@ pub struct LocalConfig {
     pub app: AppSource,
     /// Origins beyond the shell's own whose pages may open the socket.
     pub extra_origins: Vec<String>,
+    /// ACCESS-24: the owner — the principal admin on `*` here (`key:<hex>`,
+    /// `idp:<uuid>`, …), whose sessions [`LocalServer::owner_token`] mints.
+    /// `None`: a `key:` principal made for this start, held by no key.
+    pub owner: Option<String>,
 }
 
 impl LocalConfig {
@@ -69,12 +94,18 @@ impl LocalConfig {
             env: None,
             app: shell::preferred_app(),
             extra_origins: Vec::new(),
+            owner: None,
         }
     }
 }
 
-/// A running menger: its WebSocket and its shell, on loopback.
-pub struct LocalServer(plexus_shell::LocalServer);
+/// A running menger: its WebSocket and its shell, on loopback, behind the
+/// gate (ACCESS-24).
+pub struct LocalServer {
+    server: plexus_shell::LocalServer,
+    access: Access,
+    owner: String,
+}
 
 impl LocalServer {
     /// Opens the store and starts the WebSocket and the shell. Needs a
@@ -86,7 +117,16 @@ impl LocalServer {
                 .await
                 .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", dir.display()))?;
         }
-        let hub = crate::build_rpc(&cfg.db_path).await?;
+        // ACCESS-24: the owner is this server's one `--admin`; its sessions
+        // live in a table of the server's own, and the upgrade admits them.
+        let owner = match cfg.owner {
+            Some(p) => p.parse::<menger_tickets_api::vocab::Principal>().map_err(|e| anyhow::anyhow!("owner: {e}"))?.as_str().to_string(),
+            None => format!("key:{}", hex(&rand::random::<[u8; 32]>())),
+        };
+        let sessions = Arc::new(crate::sessions::Sessions::new(SESSION_SECS, &crate::login_names()));
+        let table = crate::session_table(&sessions);
+        let access = Access::with_login(table.clone(), vec![owner.clone()]).minting(table);
+        let hub = crate::build_rpc(&cfg.db_path, access.clone()).await?;
         let mut app = shell::app_shell(cfg.env.as_deref(), cfg.app);
         // ACCESS-28: and the document a ticket body's frame starts as.
         app.routes = shell::favicon_routes().merge(shell::frame_routes());
@@ -96,36 +136,53 @@ impl LocalServer {
             extra_origins: cfg.extra_origins,
             shell: app,
         };
-        // ACCESS-13: menger's own module — its calls' limits, and (login is
-        // off here) the anonymous caller for a call with no identity.
+        // ACCESS-13: menger's own module — its calls' limits.
         let module = crate::calls::rpc_module(hub.clone(), crate::calls::CallLimits::default())?;
-        Ok(LocalServer(plexus_shell::LocalServer::start_module(hub, module, local).await?))
+        let gate: Arc<dyn plexus_core::plexus::SessionValidator> = Arc::new(crate::sessions::Gate::new(sessions, None).noticing(crate::MengerAccess(access.clone())));
+        let options = UpgradeOptions { anonymous_view: true, credential_cookies: vec!["access_token".into()], ..UpgradeOptions::default() };
+        let server = plexus_shell::LocalServer::start_guarded(hub, module, local, Some(gate), options).await?;
+        Ok(LocalServer { server, access, owner })
+    }
+
+    /// ACCESS-24: the owner's principal ([`LocalConfig::owner`]).
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    /// ACCESS-24: a session for the owner, lasting `ttl_secs` (1 s to 24 h)
+    /// — what the host's connections carry, as `Authorization: Bearer
+    /// <token>` or the `access_token` cookie. Mint another before it ends;
+    /// a restart ends them all.
+    pub fn owner_token(&self, ttl_secs: u64) -> anyhow::Result<String> {
+        let meta = serde_json::json!({ "principal": self.owner, "agent": "local", "provider": "local", "name": "owner" });
+        let ctx = AuthContext::new(self.owner.clone(), "local".into(), vec![], meta);
+        Ok(self.access.mint_for(ctx, ttl_secs).map_err(anyhow::Error::msg)?.token)
     }
 
     /// The WebSocket's port.
     pub fn ws_port(&self) -> u16 {
-        self.0.ws_port()
+        self.server.ws_port()
     }
 
     /// The shell's port.
     pub fn shell_port(&self) -> u16 {
-        self.0.shell_port()
+        self.server.shell_port()
     }
 
     /// The app's address, `http://127.0.0.1:<shell>/`.
     pub fn shell_url(&self) -> String {
-        self.0.shell_url()
+        self.server.shell_url()
     }
 
     /// The Plexus WebSocket's address, `ws://127.0.0.1:<ws>`.
     pub fn ws_url(&self) -> String {
-        self.0.ws_url()
+        self.server.ws_url()
     }
 
     /// Stops both servers and waits until their ports are released (the
     /// shell's open connections get five seconds to finish).
     pub async fn shutdown(self) {
-        self.0.shutdown().await
+        self.server.shutdown().await
     }
 }
 

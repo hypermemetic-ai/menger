@@ -29,12 +29,12 @@ fn admin_on(store: &Store, user: &VerifiedUser, scope: &Scope) -> Result<AdminOf
 /// `members.mine`: who the caller is, then each grant it holds.
 pub(super) fn mine_stream(access: Access, user: VerifiedUser) -> impl Stream<Item = MembersEvent> + Send + 'static {
     stream! {
-        yield MembersEvent::Me { principal: user.principal_text(), name: user.name().map(str::to_string), admin_everywhere: user.administers("*") };
+        yield MembersEvent::Me { principal: Some(user.principal_text()), name: user.name().map(str::to_string), admin_everywhere: user.administers("*") };
         // ACCESS-22: the teams it is in, before the grants each holds.
-        for team in user.principal().map(|p| access.teams_of(p.as_str())).unwrap_or_default() {
+        for team in access.teams_of(user.principal().as_str()) {
             yield MembersEvent::Team { team };
         }
-        for g in user.principal().map(|p| access.grants_of(p)).unwrap_or_default() {
+        for g in access.grants_of(user.principal()) {
             yield grant_event(g);
         }
     }
@@ -92,7 +92,7 @@ pub(super) async fn grant(store: Arc<Store>, access: Access, user: VerifiedUser,
         Ok(a) => a,
         Err(refused) => return refused,
     };
-    let granted_by = user.principal().cloned().map_or(GrantedBy::Operator, GrantedBy::Principal);
+    let granted_by = GrantedBy::Principal(user.principal().clone());
     let grant = Grant { principal, scope, role, granted_by, at: chrono::Utc::now().timestamp() };
     match store.grant(admin, grant).await {
         Ok(g) => {

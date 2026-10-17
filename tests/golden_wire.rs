@@ -20,11 +20,13 @@
 //! `member` to `tickets.nav.<method>` — the six `call`s renamed, every item
 //! they answer byte for byte as before.
 
+
+/// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
+mod support;
 use futures::StreamExt;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
-use menger::build_rpc;
 use menger_tickets_api::{CommentsEvent, DeploymentsEvent, MembersEvent, NotesEvent, OrgsEvent, SessionEvent, ThemesEvent, TicketsEvent};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
@@ -37,11 +39,13 @@ async fn start_server() -> u16 {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
     let db_path = dir.path().join("tickets.db");
     let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
-    let hub = build_rpc(&db_path).await.expect("open database");
+    let login = support::Login::new();
+    let hub = support::hub(&db_path, &login).await;
+    let gate = login.gate(port);
     let conv = |arc: Arc<DynamicHub>| menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(hub, conv).with_websocket(port).build().await.expect("build server").serve().await.expect("serve");
+        TransportServer::builder(hub, conv).with_websocket(port).with_session_validator(gate).anonymous_view().credential_cookies(["access_token"]).build().await.expect("build server").serve().await.expect("serve");
     });
     port
 }
@@ -49,7 +53,7 @@ async fn start_server() -> u16 {
 async fn connect(port: u16) -> WsClient {
     let url = format!("ws://127.0.0.1:{port}");
     for _ in 0..50 {
-        if let Ok(c) = WsClientBuilder::default().build(&url).await {
+        if let Ok(c) = WsClientBuilder::default().set_headers(support::admin_headers(port)).build(&url).await {
             return c;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

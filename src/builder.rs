@@ -1,6 +1,6 @@
 use menger_tickets_api::access::Access;
 use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, MembersActivation, NotesActivation, OrgsActivation, ProviderOffer, SessionActivation, ThemesActivation, TicketsActivation};
-use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
+use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
 use crate::auth_backend::MengerAuth;
@@ -44,7 +44,8 @@ fn purge_daily(store: Arc<Store>, system: Arc<System>) {
 }
 
 /// Builds the `menger` hub with every activation registered — `tickets` and
-/// (COMMENT-2) `comments`, over one store, and (IDENTITY-14) `session`.
+/// (COMMENT-2) `comments`, over one store, and (IDENTITY-14) `session` —
+/// behind `access` (ACCESS-24: always the gate; there is no open mode).
 ///
 /// Opens the database at `db_path` (the system of record — a fresh
 /// location is an empty store), loads every ticket into the service-wide
@@ -52,8 +53,8 @@ fn purge_daily(store: Arc<Store>, system: Arc<System>) {
 /// and how long the load took. The cache keeps the only database handle
 /// in the process. SCALE-14: the store does — the writer and its read-only
 /// connections — and the cache holds each ticket's row, not its body.
-pub async fn build_rpc(db_path: &Path) -> anyhow::Result<Arc<DynamicHub>> {
-    build_rpc_with(db_path, None).await
+pub async fn build_rpc(db_path: &Path, access: Access) -> anyhow::Result<Arc<DynamicHub>> {
+    build_rpc_with(db_path, None, access).await
 }
 
 /// [`build_rpc`], optionally seeding synthetic tickets first (PERF-2).
@@ -66,8 +67,9 @@ pub async fn build_rpc(db_path: &Path) -> anyhow::Result<Arc<DynamicHub>> {
 pub async fn build_rpc_with(
     db_path: &Path,
     seed: Option<SeedSpec>,
+    access: Access,
 ) -> anyhow::Result<Arc<DynamicHub>> {
-    build_rpc_seeded(db_path, seed, SeedShape::Flat).await
+    build_rpc_seeded(db_path, seed, SeedShape::Flat, access).await
 }
 
 /// FILTER-13: [`build_rpc_with`], the seed in a given shape ([`SeedShape`]).
@@ -75,19 +77,20 @@ pub async fn build_rpc_seeded(
     db_path: &Path,
     seed: Option<SeedSpec>,
     shape: SeedShape,
+    access: Access,
 ) -> anyhow::Result<Arc<DynamicHub>> {
-    build_rpc_offering(db_path, seed, shape, Vec::new(), Access::open()).await
+    build_rpc_offering(db_path, seed, shape, Vec::new(), access).await
 }
 
 /// IDENTITY-15: [`build_rpc_seeded`], with `session.providers` offering
 /// these providers (main's `--auth-provider`s). IDENTITY-19: and every
 /// `tickets` and `comments` method behind `access`.
 ///
-/// AUTH-7: with login on (`Access::with_login`), the hub carries the
-/// protocol's gate and `auth` activation ([`build_rpc_login`]) over a
-/// backend that mints sessions on a signed-in connection but has no login
-/// page to send a person to (`auth.login {browser}` is refused) — what the
-/// tests that wire their own transport need.
+/// AUTH-7: the hub carries the protocol's gate and `auth` activation
+/// ([`build_rpc_login`]) over a backend that mints sessions on a signed-in
+/// connection but has no login page to send a person to (`auth.login
+/// {browser}` is refused) — what the tests that wire their own transport
+/// need.
 pub async fn build_rpc_offering(
     db_path: &Path,
     seed: Option<SeedSpec>,
@@ -101,12 +104,13 @@ pub async fn build_rpc_offering(
     build_rpc_login(db_path, seed, shape, offers, access, backend, None, menger_tickets_api::store::BODY_MAX_DEFAULT).await
 }
 
-/// AUTH-7: the hub, and — when `access` has login on — the protocol's gate
-/// in front of every call and its `auth` activation, over `backend` and the
-/// store's roles, members and scopes ([`Access::book`]): `with_auth`, the
-/// declared roles seeded, menger's own signed-in methods
-/// ([`SIGNED_IN_GRANTS`]), and `resource_metadata` (RFC 9728's URL) named to
-/// an anonymous `_info`. Without login: the hub as it always was, no gate.
+/// AUTH-7: the hub, the protocol's gate in front of every call and its
+/// `auth` activation, over `backend` and the store's roles, members and
+/// scopes ([`Access::book`]): `with_auth`, the declared roles seeded,
+/// menger's own signed-in methods ([`SIGNED_IN_GRANTS`]), and
+/// `resource_metadata` (RFC 9728's URL) named to an anonymous `_info`.
+/// ACCESS-24: always — there is no hub without the gate — and before it is
+/// built, what open mode planted is purged ([`purge_planted`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn build_rpc_login(
     db_path: &Path,
@@ -178,6 +182,8 @@ pub async fn build_rpc_login(
     // ACT-5: a deleted ticket's body is kept 30 days for its undo — purged
     // past that now, and every day after, inside the server.
     purge_daily(Arc::clone(&store), Arc::clone(&system));
+    // ACCESS-24: grants planted while open, gone before anything is served.
+    purge_planted(&store, &system, &access.admins()).await?;
     // DEPLOY-25: each deploy request POSTed to its environment's webhook.
     crate::webhooks::spawn(Arc::clone(&store), Arc::clone(&system));
     // IDENTITY-21: the members that decide, from the same store.
@@ -198,21 +204,41 @@ pub async fn build_rpc_login(
         .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
         .register(MembersActivation::new(store, access.clone()))
         // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
-        .register(SessionActivation::offering(offers).with_access(access.clone()));
-    if access.login() {
-        // AUTH-7: the gate reads the same book the methods ask; the roles
-        // the activations declare are what a role holds until an admin
-        // edits it.
-        let book = access.book();
-        hub = hub
-            .with_auth(AuthSetup::new(backend, book.clone(), book.clone(), book.clone()))
-            .with_signed_in_grants(SIGNED_IN_GRANTS);
-        if let Some(url) = resource_metadata {
-            hub = hub.with_resource_metadata(url);
-        }
-        // MACRO-20: `declared_roles` holds the children's too, each grant
-        // under its path (`tickets.commits.link`).
-        book.seed(hub.declared_roles());
+        .register(SessionActivation::offering(offers, access.clone()));
+    // AUTH-7: the gate reads the same book the methods ask; the roles the
+    // activations declare are what a role holds until an admin edits it.
+    let book = access.book();
+    hub = hub
+        .with_auth(AuthSetup::new(backend, book.clone(), book.clone(), book.clone()))
+        .with_signed_in_grants(SIGNED_IN_GRANTS);
+    if let Some(url) = resource_metadata {
+        hub = hub.with_resource_metadata(url);
     }
+    // MACRO-20: `declared_roles` holds the children's too, each grant
+    // under its path (`tickets.commits.link`).
+    book.seed(hub.declared_roles());
     Ok(Arc::new(hub))
+}
+
+/// ACCESS-24 (ACCESS-4 C2): the grants open mode planted — every stored
+/// grant and team membership signed `--admin` that none of `admins` (this
+/// start's `--admin`) accounts for — removed, once per database and durably
+/// ([`Store::purge_open_grants`]), each one logged. A purge that fails
+/// stops the start: a planted grant is never served.
+async fn purge_planted(store: &Store, system: &System, admins: &[String]) -> anyhow::Result<()> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    match store.purge_open_grants(system, admins, now).await {
+        Ok(OpenPurge::Done { at }) => tracing::debug!("ACCESS-24: grants planted while open were purged at {at} (unix)"),
+        Ok(OpenPurge::Ran { removed, kept }) => {
+            for r in &removed {
+                tracing::warn!("ACCESS-24: removed, planted while open: {r}");
+            }
+            for k in &kept {
+                tracing::info!("ACCESS-24: kept, an --admin accounts for it: {k}");
+            }
+            tracing::info!("ACCESS-24: grants planted while open purged — {} removed, {} kept (recorded in open_purge)", removed.len(), kept.len());
+        }
+        Err(e) => anyhow::bail!("ACCESS-24: the purge of grants planted while open failed ({e}); refusing to serve them"),
+    }
+    Ok(())
 }

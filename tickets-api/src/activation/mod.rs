@@ -86,9 +86,12 @@ pub struct TicketsActivation {
 
 #[cfg(feature = "server")]
 impl TicketsActivation {
-    /// No login: every call admitted, as always.
+    /// ACCESS-24: a test's, behind [`Access::for_tests`].
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(store: Arc<Store>) -> Self {
-        Self::with_access(store, Access::open())
+        let access = Access::for_tests();
+        access.attach(Arc::clone(&store));
+        Self::with_access(store, access)
     }
 
     /// IDENTITY-19: behind [`Access`].

@@ -1,11 +1,13 @@
 #!/bin/sh
 # DEPLOY-2: start this release's menger with this release's app. Copied into
 # every release's bin/. The environment file supplies the ports and the
-# database (MENGER_DB_PATH, read by menger itself).
+# database (MENGER_DB_PATH, read by menger itself), and the local half its
+# login (MENGER_AUTH_PROVIDERS, MENGER_ADMINS, …): ACCESS-24, menger refuses
+# to start without a provider, and serves no REST bridge (MENGER_REST_PORT
+# stays in the env files, unused, so a rollback to an older release starts).
 set -eu
 here=$(dirname "$(readlink -f "$0")")
 exec "$here/menger" \
   --port "$MENGER_WS_PORT" \
   --shell-port "$MENGER_SHELL_PORT" \
-  --rest-port "$MENGER_REST_PORT" \
   --app-dist "$here/../app"

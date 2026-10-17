@@ -2,10 +2,12 @@
 //! the same envelope web/index.html speaks — `menger.call` subscriptions
 //! carrying `{method, params}`, events arriving as PlexusStreamItems.
 
+
+/// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
+mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
-use menger::build_rpc;
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
 use serde_json::{json, Value};
@@ -40,7 +42,9 @@ async fn free_port() -> u16 {
 /// runtime tears the server task down.
 async fn start_server_at(db_path: std::path::PathBuf, keep: Option<tempfile::TempDir>) -> u16 {
     let port = free_port().await;
-    let hub = build_rpc(&db_path).await.expect("open database");
+    let login = support::Login::new();
+    let hub = support::hub(&db_path, &login).await;
+    let gate = login.gate(port);
     let conv = |arc: Arc<DynamicHub>| {
         menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"))
     };
@@ -48,6 +52,9 @@ async fn start_server_at(db_path: std::path::PathBuf, keep: Option<tempfile::Tem
         let _keep = keep;
         TransportServer::builder(hub, conv)
             .with_websocket(port)
+            .with_session_validator(gate)
+            .anonymous_view()
+            .credential_cookies(["access_token"])
             .build()
             .await
             .expect("build server")
@@ -69,7 +76,7 @@ async fn start_server() -> u16 {
 async fn connect(port: u16) -> WsClient {
     let url = format!("ws://127.0.0.1:{port}");
     for _ in 0..50 {
-        if let Ok(c) = WsClientBuilder::default().build(&url).await {
+        if let Ok(c) = WsClientBuilder::default().set_headers(support::admin_headers(port)).build(&url).await {
             return c;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -176,7 +183,7 @@ async fn health_create_list_watch_over_the_wire() {
         (ev["transition"]["ticket"].as_str(), ev["transition"]["field"].as_str(), ev["transition"]["to"].as_str()),
         (Some("WIRE-1"), Some("status"), Some("Pending"))
     );
-    assert_eq!((ev["transition"]["from"].clone(), ev["transition"]["actor"].as_str(), ev["transition"]["source"].as_str()), (Value::Null, Some("anonymous"), Some("api")));
+    assert_eq!((ev["transition"]["from"].clone(), ev["transition"]["actor"].as_str(), ev["transition"]["source"].as_str()), (Value::Null, Some(support::admin().as_str()), Some("api")));
     // …and, after it, the new shortcode's row (MNG-10)
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
@@ -253,7 +260,7 @@ async fn the_frame_over_the_wire() {
 
     // The dispatch itself, with no identity: refused before the body runs.
     let dir = tempfile::tempdir().unwrap();
-    let hub = build_rpc(&dir.path().join("t.db")).await.expect("open database");
+    let hub = support::hub(&dir.path().join("t.db"), &support::Login::new()).await;
     let refused = match hub.route("tickets.health", json!({}), None).await {
         Err(e) => e.to_string(),
         Ok(mut s) => {
@@ -2915,11 +2922,12 @@ async fn notes_over_the_wire() {
     answer(&client, "tickets.create", json!({"epic": "SR", "title": "the root", "kind": "scope"})).await;
 
     let first = answer(&client, "notes.add", json!({"body": "## watch drops **events**\nseen twice"})).await;
-    assert_eq!((&first["type"], &first["id"], &first["author"]), (&json!("note"), &json!(1), &json!("owner")), "{first}");
+    assert_eq!((&first["type"], &first["id"], &first["author"]), (&json!("note"), &json!(1), &json!("test")), "{first}");
     assert!(first["at"].as_i64().unwrap() > 0 && first["ticket"].is_null() && first["upgraded_at"].is_null(), "{first}");
     assert!(first.get("title").is_none(), "a note has no title: {first}");
     let second = answer(&client, "notes.add", json!({"body": "the palette should remember its query", "author": "ada"})).await;
-    assert_eq!((&second["id"], &second["author"]), (&json!(2), &json!("ada")));
+    // ACCESS-24: signed by the caller (the operator, `test`); the `author` sent is no parameter.
+    assert_eq!((&second["id"], &second["author"]), (&json!(2), &json!("test")));
     let blank = collect(call(&client, "notes.add", json!({"body": "  "})).await).await;
     assert_eq!((blank.len(), &blank[0]["type"]), (1, &json!("error")), "{blank:?}");
 
@@ -2929,7 +2937,7 @@ async fn notes_over_the_wire() {
     assert_eq!(listed[2], json!({"type": "page", "next": null}));
     let paged = collect(call(&client, "notes.list", json!({"limit": 1})).await).await;
     assert_eq!((&paged[0]["id"], &paged[1]), (&json!(2), &json!({"type": "page", "next": 2})));
-    let by_ada = collect(call(&client, "notes.list", json!({"author": "ada", "text": "PALETTE"})).await).await;
+    let by_ada = collect(call(&client, "notes.list", json!({"author": "test", "text": "PALETTE"})).await).await;
     assert_eq!((by_ada.len(), &by_ada[0]["id"]), (2, &json!(2)));
     assert!(invalid(&client, "notes.list", json!({"state": "closed"})).await.contains("state: unknown note state 'closed'"));
     assert_eq!(answer(&client, "notes.get", json!({"id": 1})).await, first);
@@ -3010,7 +3018,7 @@ async fn the_comments_example_over_the_wire() {
     let at = added[0]["at"].as_i64().unwrap();
     assert!(at >= before, "the time it was added");
     let comment = json!({
-        "type": "comment", "id": 1, "state": "open", "author": "owner", "at": at,
+        "type": "comment", "id": 1, "state": "open", "author": "test", "at": at, "principal": support::admin(),
         "anchor": {
             "route": "#/ticket/DEMAND-2", "ticket": "DEMAND-2", "path": "[data-tag=\"ticket DEMAND-1\"]",
             "label": "Parent chip", "excerpt": "DEMAND-1", "version": version
@@ -3092,12 +3100,12 @@ async fn comments_list_filters_and_pages_over_the_wire() {
     assert_eq!(ids(json!({"state": "resolved"})).await, [c2]);
     assert_eq!(ids(json!({"state": "Open"})).await, [c5, c4, c3, c1]);
     assert_eq!(ids(json!({"author": "agent-1"})).await, Vec::<u64>::new(), "no call names its author");
-    assert_eq!(ids(json!({"author": "owner"})).await, [c5, c4, c3, c2, c1]);
+    assert_eq!(ids(json!({"author": "test"})).await, [c5, c4, c3, c2, c1]);
     assert_eq!(ids(json!({"text": "TITLE"})).await, [c4, c1], "the label, the excerpt");
     assert_eq!(ids(json!({"text": "slow"})).await, [c5], "the body");
     assert_eq!(ids(json!({"text": "wave 2"})).await, [c3], "the excerpt");
     assert_eq!(
-        ids(json!({"ticket": "TOP-4", "under": "TOP", "route": "#/ticket/TOP-4", "path": "main", "state": "open", "author": "owner", "text": "rename"})).await,
+        ids(json!({"ticket": "TOP-4", "under": "TOP", "route": "#/ticket/TOP-4", "path": "main", "state": "open", "author": "test", "text": "rename"})).await,
         [c1],
         "every filter at once"
     );
@@ -3279,7 +3287,7 @@ async fn delete_over_the_wire() {
     let heard = watch_until(&mut watch, "deleted").await;
     assert_eq!(heard.last().unwrap()["ids"], json!(["DEL-5"]), "{heard:?}");
     let got = answer(&client, "tickets.get", json!({"id": "DEL-5"})).await;
-    assert_eq!((&got["type"], &got["tombstones"][0]["by"]), (&json!("deleted"), &json!("anonymous")), "{got}");
+    assert_eq!((&got["type"], &got["tombstones"][0]["by"]), (&json!("deleted"), &json!(support::admin())), "{got}");
     let extents = collect(call(&client, "tickets.nav.extents", json!({})).await).await;
     assert_eq!(extents, [json!({"type": "extent", "epic": "DEL", "shortcode": "DEL", "last_seq": 5, "holes": [5]})], "the deleted last is a hole");
 

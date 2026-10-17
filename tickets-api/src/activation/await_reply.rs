@@ -57,7 +57,7 @@ pub(super) fn await_reply_stream(
             ticket,
             since: ask.since.unwrap_or(started),
             input: ask.input.clone().map(|i| i.trim().to_string()).filter(|i| !i.is_empty()),
-            me: caller.principal_text(),
+            me: Some(caller.principal_text()),
         };
         let before: HashSet<String> = match ask.since {
             Some(_) => HashSet::new(),

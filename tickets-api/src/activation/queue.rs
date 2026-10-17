@@ -100,7 +100,7 @@ pub(super) fn request_changes_stream(
                 return;
             }
         };
-        match store.request_changes_by(on, body, caller.name().map(str::to_string), caller.principal_text(), act).await {
+        match store.request_changes_by(on, body, caller.name().map(str::to_string), Some(caller.principal_text()), act).await {
             Ok((comment, QueueChange::Unqueued { id, entry, by, at_unix, .. })) => yield TicketsEvent::ChangesRequested { id, comment, entry, by, at_unix },
             Ok((_, other)) => yield wire(other),
             Err(e) => yield refused(&store, &caller, id, e),

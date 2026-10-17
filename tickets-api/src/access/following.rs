@@ -110,7 +110,7 @@ impl Following {
         let who = user.context().cloned();
         let reach = user.gate_reach().cloned().unwrap_or_else(GateReach::everywhere);
         let expires = who.as_ref().and_then(|c| c.metadata.get("expires_at")).and_then(|v| v.as_i64());
-        let woke = access.login() && store.grants_generation() != user.reach().generation();
+        let woke = store.grants_generation() != user.reach().generation();
         Ok(Self { access: access.clone(), store: Arc::clone(store), who, reach, user, key, grants, ended, expires, woke })
     }
 
@@ -123,9 +123,6 @@ impl Following {
     /// grants generation, a sign-out, the sign-in's expiry. Cancel-safe:
     /// the watch selects on it beside its channel. With login off, never.
     pub async fn changed(&mut self) {
-        if !self.access.login() {
-            return std::future::pending().await;
-        }
         let until = self.expires.map(|at| {
             let secs = at.saturating_sub(chrono::Utc::now().timestamp()).max(0) as u64;
             tokio::time::Instant::now() + std::time::Duration::from_secs(secs)
@@ -138,7 +135,7 @@ impl Following {
         };
         // A session signed out by a path that does not pass through this
         // access layer (the session table's own) is found within this.
-        let session = self.who.as_ref().and_then(|c| Some(c.get_metadata_string(self.access.session_key()?)?)).is_some();
+        let session = self.who.as_ref().and_then(|c| c.get_metadata_string(self.access.session_key())).is_some();
         tokio::select! {
             r = self.grants.changed() => if r.is_err() { std::future::pending::<()>().await },
             r = self.ended.changed() => if r.is_err() { std::future::pending::<()>().await },
@@ -153,9 +150,6 @@ impl Following {
     /// asked (the expiry, the session table), nothing more. `Closed` when it
     /// is refused, or its reach reaches nothing.
     pub fn again(&mut self) -> Result<Followed, Closed> {
-        if !self.access.login() {
-            return Ok(Followed::Same);
-        }
         let ctx = self.who.as_ref().filter(|c| c.is_authenticated()).ok_or_else(|| Closed::of(Refusal::SignIn))?;
         let woke = std::mem::take(&mut self.woke);
         // The sign-in first: signed out or expired is said as such, before

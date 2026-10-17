@@ -7,39 +7,39 @@ use super::*;
 #[tokio::test]
 async fn ready_set_gates_on_blockers() {
     let hub = hub();
-    one(hub.create(anyone(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     one(hub
-        .create(anyone(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
+        .create(operator(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
-    one(hub.set_status(anyone(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
-    one(hub.set_status(anyone(), "DAG-2".into(), "Ready".into(), None, None, None).await).await;
+    one(hub.set_status(operator(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
+    one(hub.set_status(operator(), "DAG-2".into(), "Ready".into(), None, None, None).await).await;
 
-    assert_eq!(ticket_ids(hub.work().ready(anyone(), None, None, None, None, None, None).await).await, vec!["DAG-1"]);
+    assert_eq!(ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await, vec!["DAG-1"]);
 
-    one(hub.set_status(anyone(), "DAG-1".into(), "Complete".into(), None, None, None).await).await;
-    assert_eq!(ticket_ids(hub.work().ready(anyone(), None, None, None, None, None, None).await).await, vec!["DAG-2"]);
+    one(hub.set_status(operator(), "DAG-1".into(), "Complete".into(), None, None, None).await).await;
+    assert_eq!(ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await, vec!["DAG-2"]);
 }
 
 #[tokio::test]
 async fn ready_set_accepts_superseded_blockers_and_filters_by_epic() {
     let hub = hub();
-    one(hub.create(anyone(), "ONE".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "ONE".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     one(hub
-        .create(anyone(), "ONE".into(), "b".into(), None, None, Some(vec!["ONE-1".into()]), None, None, None, None)
+        .create(operator(), "ONE".into(), "b".into(), None, None, Some(vec!["ONE-1".into()]), None, None, None, None)
         .await)
     .await;
-    one(hub.create(anyone(), "TWO".into(), "c".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    one(hub.set_status(anyone(), "ONE-1".into(), "Superseded".into(), None, None, None).await).await;
-    one(hub.set_status(anyone(), "ONE-2".into(), "Ready".into(), None, None, None).await).await;
-    one(hub.set_status(anyone(), "TWO-1".into(), "Ready".into(), None, None, None).await).await;
+    one(hub.create(operator(), "TWO".into(), "c".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.set_status(operator(), "ONE-1".into(), "Superseded".into(), None, None, None).await).await;
+    one(hub.set_status(operator(), "ONE-2".into(), "Ready".into(), None, None, None).await).await;
+    one(hub.set_status(operator(), "TWO-1".into(), "Ready".into(), None, None, None).await).await;
 
     assert_eq!(
-        ticket_ids(hub.work().ready(anyone(), None, None, None, None, None, None).await).await,
+        ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await,
         vec!["ONE-2", "TWO-1"]
     );
     assert_eq!(
-        ticket_ids(hub.work().ready(anyone(), Some("one".into()), None, None, None, None, None).await).await,
+        ticket_ids(hub.work().ready(operator(), Some("one".into()), None, None, None, None, None).await).await,
         vec!["ONE-2"]
     );
 }
@@ -48,14 +48,14 @@ async fn ready_set_accepts_superseded_blockers_and_filters_by_epic() {
 async fn dangling_blocker_excludes_from_ready_set_and_is_marked() {
     let hub = hub();
     one(hub
-        .create(anyone(), "DAG".into(), "c".into(), Some("scope".into()), None, Some(vec!["DAG-99".into()]), None, None, None, None)
+        .create(operator(), "DAG".into(), "c".into(), Some("scope".into()), None, Some(vec!["DAG-99".into()]), None, None, None, None)
         .await)
     .await;
-    one(hub.set_status(anyone(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
+    one(hub.set_status(operator(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
 
-    assert!(ticket_ids(hub.work().ready(anyone(), None, None, None, None, None, None).await).await.is_empty());
+    assert!(ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await.is_empty());
 
-    let evs: Vec<_> = Box::pin(hub.work().blockers(anyone(), "DAG-1".into()).await).collect().await;
+    let evs: Vec<_> = Box::pin(hub.work().blockers(operator(), "DAG-1".into()).await).collect().await;
     assert_eq!(evs.len(), 1);
     match &evs[0] {
         TicketsEvent::DanglingBlocker { id } => assert_eq!(id, "DAG-99"),
@@ -66,10 +66,10 @@ async fn dangling_blocker_excludes_from_ready_set_and_is_marked() {
 #[tokio::test]
 async fn blockers_resolve_to_current_statuses_in_order() {
     let hub = hub();
-    one(hub.create(anyone(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    one(hub.create(anyone(), "DAG".into(), "b".into(), None, None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "DAG".into(), "b".into(), None, None, None, None, None, None, None).await).await;
     one(hub
-        .create(anyone(), 
+        .create(operator(), 
             "DAG".into(),
             "c".into(),
             None,
@@ -80,9 +80,9 @@ async fn blockers_resolve_to_current_statuses_in_order() {
         )
         .await)
     .await;
-    one(hub.set_status(anyone(), "DAG-1".into(), "Complete".into(), None, None, None).await).await;
+    one(hub.set_status(operator(), "DAG-1".into(), "Complete".into(), None, None, None).await).await;
 
-    let evs: Vec<_> = Box::pin(hub.work().blockers(anyone(), "DAG-3".into()).await).collect().await;
+    let evs: Vec<_> = Box::pin(hub.work().blockers(operator(), "DAG-3".into()).await).collect().await;
     assert_eq!(evs.len(), 3);
     match &evs[0] {
         TicketsEvent::Blocker { ticket } => {
@@ -104,7 +104,7 @@ async fn blockers_resolve_to_current_statuses_in_order() {
     }
 
     assert!(matches!(
-        one(hub.work().blockers(anyone(), "DAG-42".into()).await).await,
+        one(hub.work().blockers(operator(), "DAG-42".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -116,14 +116,14 @@ async fn ready_set_takes_the_same_page_params() {
     let hub = hub();
     for i in 0..3 {
         let kind = (i == 0).then_some(crate::types::Kind::Scope); // MNG-12: the root first
-        one(hub.create(anyone(), "RS".into(), "r".into(), kind, None, None, None, None, None, None).await).await;
+        one(hub.create(operator(), "RS".into(), "r".into(), kind, None, None, None, None, None, None).await).await;
     }
-    one(hub.create(anyone(), "RS".into(), "still pending".into(), None, None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "RS".into(), "still pending".into(), None, None, None, None, None, None, None).await).await;
     for id in ["RS-1", "RS-2", "RS-3"] {
-        one(hub.set_status(anyone(), id.into(), "Ready".into(), None, None, None).await).await;
+        one(hub.set_status(operator(), id.into(), "Ready".into(), None, None, None).await).await;
     }
 
-    let (ids, page) = ids_and_page(hub.work().ready(anyone(), None, None, Some(2), Some(true), None, None).await).await;
+    let (ids, page) = ids_and_page(hub.work().ready(operator(), None, None, Some(2), Some(true), None, None).await).await;
     assert_eq!(ids, vec!["RS-1", "RS-2"]);
     assert_eq!(
         page,
@@ -132,7 +132,7 @@ async fn ready_set_takes_the_same_page_params() {
     );
 
     let (ids, page) =
-        ids_and_page(hub.work().ready(anyone(), None, Some("RS-2".into()), Some(2), Some(true), None, None).await).await;
+        ids_and_page(hub.work().ready(operator(), None, Some("RS-2".into()), Some(2), Some(true), None, None).await).await;
     assert_eq!(ids, vec!["RS-3"]);
     assert_eq!(page, Some((None, 0)));
 }
@@ -174,11 +174,11 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
         let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| (*b).into()).collect());
         let (epic, kind) = (epic.into(), kind.map(Into::into));
         let hub = hub.clone();
-        async move { one(hub.create(anyone(), epic, "t".into(), kind, None, blocked_by, None, None, None, None).await).await }
+        async move { one(hub.create(operator(), epic, "t".into(), kind, None, blocked_by, None, None, None, None).await).await }
     };
     let status = |id: &str, s: &str| {
         let (id, s, hub) = (id.into(), s.into(), hub.clone());
-        async move { one(hub.set_status(anyone(), id, s, None, None, None).await).await }
+        async move { one(hub.set_status(operator(), id, s, None, None, None).await).await }
     };
     for epic in ["WA", "WB", "ELSE"] {
         create(epic, Some("scope"), &[]).await; // X-1, each shortcode's root
@@ -200,7 +200,7 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
     create("WB", None, &[]).await; // WB-5: wave 1, Blocked (a marker, not an edge)
     status("WB-5", "Blocked").await;
 
-    let (placed, counts) = placed_and_counts(hub.work().waves(anyone(), vec!["wa".into(), "WB".into()], None).await).await;
+    let (placed, counts) = placed_and_counts(hub.work().waves(operator(), vec!["wa".into(), "WB".into()], None).await).await;
     let want: Vec<(&str, crate::types::Placement, Vec<&str>)> = vec![
         ("WB-3", Wave { n: 1 }, vec![]),
         ("WA-3", Wave { n: 1 }, vec![]),
@@ -221,7 +221,7 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
 
     // `kinds` names what is yielded: the scopes and the execution too.
     let (placed, counts) = placed_and_counts(
-        hub.work().waves(anyone(), vec!["WA".into()], Some(vec!["scope".into(), "Execution".into()])).await,
+        hub.work().waves(operator(), vec!["WA".into()], Some(vec!["scope".into(), "Execution".into()])).await,
     )
     .await;
     let ids: Vec<&str> = placed.iter().map(|(id, _, _)| id.as_str()).collect();
@@ -229,7 +229,7 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
     assert_eq!(counts, (vec![2], 0, 0));
 
     // A shortcode with no tickets: nothing placed, the tally all zero.
-    let (placed, counts) = placed_and_counts(hub.work().waves(anyone(), vec!["NONE".into()], None).await).await;
+    let (placed, counts) = placed_and_counts(hub.work().waves(operator(), vec!["NONE".into()], None).await).await;
     assert!(placed.is_empty());
     assert_eq!(counts, (vec![], 0, 0));
 }
@@ -240,9 +240,9 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
 #[tokio::test]
 async fn waves_errors_are_in_band_and_alone() {
     let hub = hub();
-    one(hub.create(anyone(), "ER".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "ER".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
 
-    let evs: Vec<TicketsEvent> = Box::pin(hub.work().waves(anyone(), vec![], None).await).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(hub.work().waves(operator(), vec![], None).await).collect().await;
     assert_eq!(evs.len(), 1, "{evs:?}");
     match &evs[0] {
         TicketsEvent::Error { message } => assert!(message.contains("epics"), "{message}"),
@@ -267,7 +267,7 @@ async fn waves_to_and_under_answer_as_waves_does() {
     let create = |kind: &str, blocked_by: &[&str], parent: Option<&str>| {
         let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| (*b).into()).collect());
         let (kind, parent, hub) = (kind.into(), parent.map(Into::into), hub.clone());
-        async move { one(hub.create(anyone(), "WT".into(), "t".into(), Some(kind), None, blocked_by, parent, None, None, None).await).await }
+        async move { one(hub.create(operator(), "WT".into(), "t".into(), Some(kind), None, blocked_by, parent, None, None, None).await).await }
     };
     create("scope", &[], None).await; // WT-1
     create("build", &[], Some("WT-1")).await; // WT-2
@@ -276,20 +276,20 @@ async fn waves_to_and_under_answer_as_waves_does() {
     create("build", &["WT-3", "WT-4"], None).await; // WT-5
     create("doc", &[], None).await; // WT-6
 
-    let (placed, counts) = placed_and_counts(hub.work().waves_to(anyone(), "WT-5".into(), None).await).await;
+    let (placed, counts) = placed_and_counts(hub.work().waves_to(operator(), "WT-5".into(), None).await).await;
     let got: Vec<(&str, crate::types::Placement)> = placed.iter().map(|(id, p, _)| (id.as_str(), *p)).collect();
     assert_eq!(got, [("WT-2", Wave { n: 1 }), ("WT-3", Wave { n: 2 }), ("WT-4", Wave { n: 2 }), ("WT-5", Wave { n: 3 })]);
     assert_eq!(counts, (vec![1, 2, 1], 0, 0));
 
-    let (placed, _) = placed_and_counts(hub.work().waves_under(anyone(), "WT-1".into(), None).await).await;
+    let (placed, _) = placed_and_counts(hub.work().waves_under(operator(), "WT-1".into(), None).await).await;
     assert_eq!(placed.iter().map(|(id, ..)| id.as_str()).collect::<Vec<_>>(), ["WT-2", "WT-3", "WT-4", "WT-5"], "a root's subtree is its shortcode's work");
 
     for evs in [
-        Box::pin(hub.work().waves_to(anyone(), "WT-99".into(), None).await).collect::<Vec<_>>().await,
-        Box::pin(hub.work().waves_under(anyone(), "WT-99".into(), None).await).collect::<Vec<_>>().await,
+        Box::pin(hub.work().waves_to(operator(), "WT-99".into(), None).await).collect::<Vec<_>>().await,
+        Box::pin(hub.work().waves_under(operator(), "WT-99".into(), None).await).collect::<Vec<_>>().await,
     ] {
         assert!(matches!(evs.as_slice(), [TicketsEvent::NotFound { id }] if id == "WT-99"), "{evs:?}");
     }
-    let evs = Box::pin(hub.work().waves_to(anyone(), "WT-6".into(), None).await).collect::<Vec<_>>().await;
+    let evs = Box::pin(hub.work().waves_to(operator(), "WT-6".into(), None).await).collect::<Vec<_>>().await;
     assert!(matches!(evs.as_slice(), [TicketsEvent::Error { .. }]), "{evs:?}");
 }

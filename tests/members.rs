@@ -94,7 +94,7 @@ async fn start() -> World {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
     // MACRO-20: minting, so a member can take a ceilinged session (auth.login).
-    let access = Access::with_login(menger::session_table(&sessions), true, vec![format!("idp:{ADA}")]).minting(menger::session_table(&sessions));
+    let access = Access::with_login(menger::session_table(&sessions), vec![format!("idp:{ADA}")]).minting(menger::session_table(&sessions));
     let offers = providers.iter().map(menger::offer).collect();
     let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
     // AUTH-7: as main wires it, the upgrade notices who signs in holding nothing.

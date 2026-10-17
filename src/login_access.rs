@@ -82,7 +82,7 @@ impl LoginAccess for MengerAccess {
     }
 
     fn session_key(&self) -> Option<&str> {
-        self.0.session_key()
+        Some(self.0.session_key())
     }
 }
 

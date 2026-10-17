@@ -2,7 +2,8 @@
 //! ports, over a database in a directory that does not exist yet; the shell
 //! answers `/`, the socket answers `tickets.health` (and admits the shell's
 //! own origin and the extra ones, refusing others), and a shutdown releases
-//! both ports.
+//! both ports. ACCESS-24: behind the gate — the owner's token answers, an
+//! anonymous caller reaches only the auth door.
 
 use jsonrpsee::core::client::SubscriptionClientT;
 use jsonrpsee::core::params::ObjectParams;
@@ -20,21 +21,25 @@ async fn get(port: u16, path: &str) -> String {
     String::from_utf8_lossy(&resp).into_owned()
 }
 
-async fn health(url: &str, origin: Option<&str>) -> Result<Value, String> {
-    let mut b = WsClientBuilder::default();
+async fn health(url: &str, origin: Option<&str>, token: Option<&str>) -> Result<Value, String> {
+    let mut h = jsonrpsee::ws_client::HeaderMap::new();
     if let Some(o) = origin {
-        let mut h = jsonrpsee::ws_client::HeaderMap::new();
         h.insert("origin", o.parse().unwrap());
-        b = b.set_headers(h);
     }
+    if let Some(t) = token {
+        h.insert("authorization", format!("Bearer {t}").parse().unwrap());
+    }
+    let b = WsClientBuilder::default().set_headers(h);
     let client = b.build(url).await.map_err(|e| e.to_string())?;
     let mut p = ObjectParams::new();
     p.insert("method", "tickets.health").unwrap();
     p.insert("params", serde_json::json!({})).unwrap();
     let mut sub = client.subscribe::<Value, _>("menger.call", p, "menger.call_unsub").await.map_err(|e| e.to_string())?;
     let item = sub.next().await.expect("an item").map_err(|e| e.to_string())?;
-    assert_eq!(item["type"], "data", "{item}");
-    Ok(item["content"].clone())
+    match item["type"].as_str() {
+        Some("data") => Ok(item["content"].clone()),
+        _ => Err(item.to_string()),
+    }
 }
 
 #[tokio::test]
@@ -62,14 +67,20 @@ async fn a_local_server_starts_on_free_ports_serves_both_and_releases_them() {
     assert!(page.contains(&format!("<title>menger</title><meta name=ws content=\"{ws}\">")), "{page}");
     assert!(get(shell, "/vanilla").await.contains("menger.call"));
 
-    // The socket answers, with no Origin (a CLI), the shell's and Tauri's.
+    // ACCESS-24: the owner's token answers, with no Origin (a CLI), the
+    // shell's and Tauri's; no token reaches only the auth door.
     let url = server.ws_url();
-    let h = health(&url, None).await.expect("health");
+    assert!(server.owner().starts_with("key:"), "an owner made for this start: {}", server.owner());
+    let token = server.owner_token(600).expect("a session for the owner");
+    let h = health(&url, None, Some(&token)).await.expect("health");
     assert_eq!(h["type"], "health", "{h}");
     for origin in [format!("http://127.0.0.1:{shell}"), format!("http://localhost:{shell}"), "tauri://localhost".into()] {
-        health(&url, Some(&origin)).await.unwrap_or_else(|e| panic!("{origin}: {e}"));
+        health(&url, Some(&origin), Some(&token)).await.unwrap_or_else(|e| panic!("{origin}: {e}"));
     }
-    assert!(health(&url, Some("http://evil.example")).await.is_err(), "another origin is refused");
+    let anonymous = health(&url, None, None).await.expect_err("no open mode");
+    assert!(anonymous.contains("unauthenticated"), "{anonymous}");
+    assert!(health(&url, None, Some("mgs_not-a-session")).await.is_err(), "a token it did not mint is refused");
+    assert!(health(&url, Some("http://evil.example"), Some(&token)).await.is_err(), "another origin is refused");
     assert!(db.is_file(), "the store is on disk");
 
     server.shutdown().await;

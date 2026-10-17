@@ -15,11 +15,9 @@ fn error(message: impl Into<String>) -> MembersEvent {
     MembersEvent::Error { message: message.into() }
 }
 
-/// Who signs a change: the caller's principal. With login off there is no
-/// one to sign, and a team made or changed then would take effect when
-/// login turns on — refused (as a grant is, ACCESS-3 #11).
+/// Who signs a change: the caller's principal (ACCESS-24: always someone).
 fn signer(user: &VerifiedUser) -> Result<GrantedBy, MembersEvent> {
-    user.principal().cloned().map(GrantedBy::Principal).ok_or_else(|| error("login is off: teams are for signed-in admins — sign in to make or change one"))
+    Ok(GrantedBy::Principal(user.principal().clone()))
 }
 
 /// Admin somewhere, as a proof: the first scope the caller holds admin on,

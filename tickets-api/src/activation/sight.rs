@@ -33,7 +33,7 @@ pub(super) fn asked(text: Option<&str>) -> Result<Option<Filter>, String> {
 /// or an offset; none: UTC), now, with `me` the caller's principal
 /// (`anonymous` with login off). A zone the server cannot read is refused.
 pub(super) fn clock_of(caller: &VerifiedUser, tz: Option<&str>) -> Result<Clock, String> {
-    let me = caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
+    let me = caller.principal_text();
     Clock { me, ..Clock::default() }.zoned(tz)
 }
 
@@ -58,7 +58,7 @@ pub(super) fn zoned_lens(store: &Store, caller: &VerifiedUser, filter: Option<&F
 /// its writes keep say.
 pub(super) fn act_of(caller: &VerifiedUser, source: Option<CallerSource>, message: Option<Message>) -> Result<Act, String> {
     let act = Act {
-        actor: caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string()),
+        actor: caller.principal_text(),
         name: caller.name().map(str::to_string),
         source: TransitionSource::from(source.unwrap_or_default()),
         message: message.and_then(Message::given),
@@ -77,7 +77,7 @@ pub(super) fn caller_act(caller: &VerifiedUser) -> Act {
         _ => TransitionSource::Api,
     };
     Act {
-        actor: caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string()),
+        actor: caller.principal_text(),
         name: caller.name().map(str::to_string),
         source,
         message: None,
