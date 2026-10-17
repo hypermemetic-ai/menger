@@ -57,6 +57,14 @@
 //! declared `description:` — read by the host, drawn by the host, never
 //! told to the citing frame (IDENTITY-36), which still hears only a height.
 //!
+//! **Answering on the mock** (APP-46, src/mockpick.rs): a placeholder in an
+//! option of a decision with an id posts that option, and its box's bar
+//! carries *pick this* — the option's answer, recorded through the host's
+//! own button by the frame's answer path — with the option's mark; every
+//! box's bar carries *comment*, the composer anchored to the mockup as
+//! APP-45 anchors inside one (src/mock_anchor.rs). Still nothing inside the mocked page
+//! answers an input.
+//!
 //! **Failure is a named state** ([`state_text`]), in place of the devices:
 //! an unknown or unreadable ticket, a ticket that is no whole page, a
 //! malformed element, one past [`MAX_PER_FRAME`], one inside a mock.
@@ -77,7 +85,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::cite::{self, Fetched, Rect};
 use crate::present::{self, Caption, Decl, Mode};
-use crate::{bridge, dom, frame, md, session};
+use crate::{annotate, bridge, dom, frame, md, mock_anchor, mockpick, session};
 
 /// The most mockups one body draws: each is up to six frames, and a `ref`
 /// a read over the viewer's socket.
@@ -199,6 +207,8 @@ pub(crate) struct Posted {
     /// APP-42: its caption, as written.
     pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
+    /// APP-46: the decision's option it sits in (src/mockpick.rs).
+    pub(crate) option: Option<mockpick::Choice>,
 }
 
 /// `menger:mocked`'s payload past its type and channel — the one thing the
@@ -336,13 +346,16 @@ fn paint(e: &mut Entry) {
     .unwrap_or_default();
     // APP-33: the viewer's sizes are kept per mockup — the body's ticket and
     // the placeholder's number (a draft's preview keeps none).
-    let remember = e.citer.get_attribute("data-ticket").filter(|t| !t.is_empty()).map(|t| format!("{t}#m{}", e.n));
+    let body_ticket = e.citer.get_attribute("data-ticket").filter(|t| !t.is_empty());
+    let remember = body_ticket.as_ref().map(|t| format!("{t}#m{}", e.n));
+    // APP-46: its bar's *pick this* (in a decision) and *comment*.
+    let actions = mockpick::bar(key(&e.channel, e.n), body_ticket, e.posted.option.clone(), e.posted.title.clone());
     let handle = leptos::mount::mount_to(host, move || {
         let html = Signal::derive(move || html.get());
         let decl = Signal::derive(move || decl.get());
         match remember {
-            Some(remember) => view! { <present::Framed html decl ticket=None scope remember /> }.into_any(),
-            None => view! { <present::Framed html decl ticket=None scope /> }.into_any(),
+            Some(remember) => view! { <present::Framed html decl ticket=None scope remember actions /> }.into_any(),
+            None => view! { <present::Framed html decl ticket=None scope actions /> }.into_any(),
         }
     });
     e.mounted = Some(Box::new(handle));
@@ -538,6 +551,29 @@ fn fetch_into(k: String) {
     });
 }
 
+/// APP-46: the body frame the mockup `k` is drawn for.
+pub(crate) fn citer_of(k: &str) -> Option<web_sys::HtmlIFrameElement> {
+    BOXES.with(|b| b.borrow().get(k).map(|e| e.citer.clone()))
+}
+
+/// APP-46: *comment* on the mockup `k`'s bar — the composer for the mockup
+/// as a whole, anchored as APP-45 anchors inside one (src/mock_anchor.rs)
+/// at its page's root, at the first device shown; opened at `at`, `label`
+/// naming it. A draft's preview (no ticket) has nothing to anchor to.
+pub(crate) fn comment_on(k: &str, label: String, at: web_sys::Element) {
+    let Some(overlay) = BOXES.with(|b| b.borrow().get(k).map(|e| e.overlay.clone())) else { return };
+    let width = child(&overlay, ".device:not(.hidden)").and_then(|d| d.get_attribute("data-w")).and_then(|w| w.parse().ok());
+    let m = mock_anchor::MockRef {
+        ticket: overlay.get_attribute(TICKET_ATTR).unwrap_or_default(),
+        mock: overlay.get_attribute("data-mock").and_then(|n| n.parse().ok()),
+        reference: overlay.get_attribute(REF_ATTR),
+        width: width.unwrap_or(present::DEFAULT_WIDTHS[0]),
+    };
+    if let Some(anchor) = mockpick::comment_anchor(&m, label, annotate::route_now()) {
+        annotate::compose(anchor, at);
+    }
+}
+
 /// `menger:unmock`: the placeholder left the body.
 pub(crate) fn dropped(channel: &str, n: u32) {
     if let Some(e) = BOXES.with(|b| b.borrow_mut().remove(&key(channel, n))) {
@@ -589,6 +625,8 @@ pub(crate) fn relayout(channel: &str) {
 /// redraws its mockups; a ticket created under a referenced id that was
 /// none is fetched.
 pub(crate) fn heard(ev: &TicketsEvent) {
+    // APP-46: an option's mark follows its input.
+    mockpick::heard(ev);
     let (ticket, created): (&Ticket, bool) = match ev {
         TicketsEvent::Amended { ticket, .. } => (ticket, false),
         TicketsEvent::Created { ticket } => (ticket, true),

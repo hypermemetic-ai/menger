@@ -266,6 +266,22 @@ pub(crate) async fn settle(frame: &web_sys::HtmlIFrameElement, first: Verdict) -
     settled(first, || on_frame(frame))
 }
 
+/// APP-46: **a gesture on a control the host drew** — *pick this* on a
+/// mockup's bar, in the app's own DOM, where nothing in a frame reaches. The
+/// write waits for what a frame's must show the host, read from the host's
+/// side: the event is the browser's (`isTrusted`: no script dispatched it)
+/// and the app's transient activation is on (a browser that cannot say is
+/// refused, as at [`verdict`]). There is no frame to have focus: the press
+/// is on the host's own button.
+pub(crate) fn host_click(trusted: bool, active: Option<bool>) -> bool {
+    trusted && active == Some(true)
+}
+
+/// [`host_click`], read for `ev` now.
+pub(crate) fn on_host(ev: &web_sys::Event) -> bool {
+    host_click(ev.is_trusted(), host_active())
+}
+
 /// MENGER-34: the weaker reading, for what writes nothing (the ticket menu
 /// a chip asks for): a gesture is live — the frame's own activation reaches
 /// the app as it propagates to ancestors — and focus is in this very frame,
@@ -389,5 +405,16 @@ mod tests {
         // A key in the app after the Tab: the frame no longer holds it.
         let seen = Seen { host: Some(T + 500.0), hovered: None, entered: Some((T + 30.0, true)) };
         assert!(!on_this_frame(&seen, &now(T + 600.0)));
+    }
+
+    /// APP-46: a control the host drew writes only on the browser's own
+    /// event, inside the app's activation — a script's synthetic click, or
+    /// a browser that cannot say, writes nothing.
+    #[test]
+    fn a_host_control_writes_only_on_a_trusted_activated_click() {
+        assert!(host_click(true, Some(true)));
+        assert!(!host_click(false, Some(true)), "dispatched by a script");
+        assert!(!host_click(true, Some(false)), "no activation");
+        assert!(!host_click(true, None), "the browser cannot say: refused");
     }
 }

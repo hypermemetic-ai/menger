@@ -580,6 +580,9 @@ pub(crate) fn Framed(
     #[prop(optional)] scope: Option<String>,
     #[prop(optional)] title: Option<Signal<String>>,
     #[prop(optional)] remember: Option<String>,
+    // APP-46: what the box's owner adds at the head of its bar (a mockup's
+    // *pick this* and *comment*, src/mockpick.rs).
+    #[prop(optional)] actions: Option<ViewFn>,
 ) -> impl IntoView {
     install();
     let id = NEXT.with(|n| {
@@ -713,6 +716,7 @@ pub(crate) fn Framed(
             {move || caption.get().map(caption_view)}
             <div class="framed-bar">
                 {move || if is_full.get() { heading() } else { None }}
+                {actions.map(|a| a.run())}
                 {move || tall_screens.get().map(|n| view! { <span class="framed-note" role="note" title="A mockup is one screen at one state; another view is another mockup">{tall_note(n)}</span> })}
                 <span class="framed-gap"></span>
                 {controls}

@@ -286,6 +286,7 @@ mod links;
 mod md;
 mod menu;
 mod mock_anchor;
+mod mockpick;
 mod mockup;
 mod mocksize;
 mod nav;

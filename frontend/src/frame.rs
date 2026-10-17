@@ -213,8 +213,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// }` scrolls a device's page to the element first, a device's frame says
 /// when its page scrolls in the mode (`menger:scrolled`), and the page shim
 /// takes the whole mode in a whole document (outline, hover, pick, probe,
-/// locate), as the SDK does in a body.
-pub(crate) const SDK_VERSION: &str = "2.3.0";
+/// locate), as the SDK does in a body. APP-46's 2.4 has `<m-mockup>` post
+/// the decision's option it sits in (the bar's *pick this*), and a DECIDED
+/// decision whose options hold mockups draws its chosen option first.
+pub(crate) const SDK_VERSION: &str = "2.4.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -1506,6 +1508,11 @@ fn on_message(ev: web_sys::MessageEvent) {
                 source: text("source"),
                 title: text("title"),
                 description: text("description"),
+                // APP-46: the decision's option it sits in.
+                option: field("option").filter(JsValue::is_object).and_then(|o| {
+                    let get = |k: &str| Reflect::get(&o, &JsValue::from_str(k)).ok().and_then(|v| v.as_string());
+                    crate::mockpick::choice(get("input").as_deref(), get("value").as_deref(), get("name").as_deref())
+                }),
             };
             mockup::asked(frame, channel, n as u32, posted, rect);
         }

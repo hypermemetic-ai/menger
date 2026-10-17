@@ -1332,7 +1332,7 @@ the same box a `view: mockup` body gets — one device frame per width side
 by side, All / per device, Light / Dark, Reduced motion, ⤢ Full screen.
 
 It is drawn as `<m-cite>` is: in the body's frame the element is only a
-placeholder (`menger:mockup { mock, ref, widths, source, title, description, rect }`, an inline
+placeholder (`menger:mockup { mock, ref, widths, source, title, description, rect, option }`, an inline
 page — the element's or a fence's — carried in its `source` attribute); the **host** lays the devices over
 it, outside the frame, and answers only the height (`menger:mocked { mock,
 height }`), so the prose below moves down. A `ref` is read over the
@@ -1378,6 +1378,54 @@ it is not in the mocked page and changes no device's viewport. md.rs moves
 it onto the placeholder (`title`, `description`: SDK 2.2's `menger:mockup`
 carries them — the body's own text); a referenced page's is read and drawn
 by the host and never reaches the citing frame, which hears only a height.
+
+**Answering on the mock** (APP-46; owner, 2026-10-16: *"I want the decision
+to contain mockups maybe, or for feedback to be left directly on the
+mockup."*). A decision between looks puts **a mockup in each option** — an
+`<m-mockup>` or a ` ```mockup ` fence inside each `<m-option>` of an
+`<m-decision id>`:
+
+```markdown
+<m-decision data-field="decision" id="look">
+<m-question data-field="question">Which board ships?</m-question>
+
+<m-option data-field="option" name="Dense" value="dense" recommended cost="more to scan">
+
+<m-mockup widths="390,1440" description="The board at 40 rows.">
+<!doctype html>…
+</m-mockup>
+
+</m-option>
+…
+</m-decision>
+```
+
+The placeholder posts the option it sits in (`option: { input, value, name
+}` on `menger:mockup`, SDK 2.4), and the box's bar carries, at its head,
+the option's name (the store's label for it), its mark and **pick this**.
+*pick this* records the option as the input's answer through the answer
+path a frame's Submit takes (`bridge::admit`, then `bridge::submit`: the
+ticket's inputs read, the value checked, `tickets.inputs.answer`, its source
+the server's from the caller), on the ticket the host stamped on the body's
+frame and never one the frame names; a cited window is display only. Its
+gesture is the host's own: the browser's own click on that button
+(`isTrusted`) inside the app's transient activation — a script's
+`dispatchEvent` records nothing and says so. The mark follows the input
+(read over the viewer's socket the first time a box asks, then
+`input_changed`): the answer's box takes the pass outline and *✓ answer*,
+*✓ decided* once closed, the others *weighed* and quieter; an option the
+store does not hold, a removed, withdrawn or closed input disable *pick
+this* with the reason. A DECIDED decision whose options hold mockups draws
+the chosen option first (the SDK's ordering in the body; the boxes follow
+it). Inside the mocked page nothing answers an input.
+
+Every mockup's bar also carries **comment**: the composer for the mockup
+as a whole, without annotation mode, anchored as APP-45 anchors inside a
+mockup — `mockup:<ticket>#<n>[=<ref>]@<width> >> body`, the page's root at
+the first device shown — labelled with the option (`Mockup of option
+“Dense” (look)`). Its pin sits on the device in annotation mode and
+`#/comments`' link back finds it. *Compare these* (APP-44's view) is
+absent until that view is on main (`mockpick::COMPARE`).
 
 A soft check: the page shim reports its page's height (`menger:extent {
 height }`, a number, nothing of the page), and when the page at the
