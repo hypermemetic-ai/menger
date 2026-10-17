@@ -20,6 +20,15 @@ struct Args {
     #[arg(long, default_value = "4456")]
     shell_port: u16,
 
+    /// RUN-8: the address the WebSocket, the shell and the REST bridge
+    /// listen on — `0.0.0.0` / `::` for every address this machine has, or
+    /// one of them (IPv6 with or without brackets). Default loopback. The
+    /// names they answer to are still ACCESS-25's: a specific address adds
+    /// its own literal (and the shell's origin at it may open the socket);
+    /// any other name is an --allowed-host (and an --allowed-origin).
+    #[arg(long, env = "MENGER_BIND", default_value = "127.0.0.1", value_name = "ADDR", value_parser = menger::serve::parse_bind)]
+    bind: std::net::IpAddr,
+
     /// REST HTTP port (POST /rest/{namespace}/{method}; streaming methods
     /// respond as SSE)
     #[arg(long, default_value = "4457")]
@@ -330,7 +339,10 @@ async fn main() -> anyhow::Result<()> {
         password: args.login_password.clone(),
         forgot: args.login_forgot.clone(),
         public_url: args.public_url.clone(),
-        allowed_origins: args.allowed_origin.clone(),
+        // RUN-8: the shell's pages at a specific bound address may open the socket.
+        allowed_origins: args.allowed_origin.iter().cloned().chain(menger::serve::bind_origin(args.bind, args.shell_port)).collect(),
+        // AUTH-25 N9 / RUN-8: a shell off loopback names its proxy.
+        shell_loopback: args.bind.is_loopback(),
         session_ttl_secs: args.session_hours * 3600,
         session_idle_secs: args.session_idle_minutes * 60,
         require: args.require_login,
@@ -395,86 +407,105 @@ async fn main() -> anyhow::Result<()> {
         per_connection: args.max_calls_per_connection,
         idle: (args.idle_timeout_secs > 0).then(|| std::time::Duration::from_secs(args.idle_timeout_secs)),
     };
-    let mut builder = TransportServer::builder(hub.clone(), move |hub| menger::calls::rpc_module(hub, limits));
     if args.stdio {
-        builder = builder.with_stdio();
         tracing::info!("Starting stdio transport");
         if wired.gate.is_some() {
             tracing::warn!("--auth-provider is ignored over stdio: there is no upgrade to carry a credential");
         }
-    } else {
-        // ACCESS-25: each listener answers only its own names.
-        let hosts = |port| local::listener_hosts(port, args.public_url.as_deref(), &args.allowed_host);
-        builder = builder
-            .with_websocket(args.port)
-            .with_connection_quotas(ConnectionQuotas {
-                max_connections: args.max_connections,
-                max_per_ip: args.max_connections_per_ip,
-                max_per_principal: args.max_connections_per_principal,
-                max_anonymous: args.max_anonymous_connections,
-                max_anonymous_per_ip: args.max_anonymous_connections_per_ip,
-            })
-            .with_allowed_hosts(hosts(args.port));
-        tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
-        // IDENTITY-29: only menger's own pages may open the socket from a
-        // browser, login or not; synapse sends no Origin and is unaffected.
-        // AUTH-6/AUTH-7, with login on: no credential → admitted into the
-        // anonymous view (only the auth door); a credential presented and
-        // refused → 401 with RFC 6750's challenge (plexus-login's `apply`).
-        builder = wired.apply(builder);
-        if wired.login_on() {
-            let names: Vec<&str> = wired.providers.iter().map(|p| p.name()).collect();
-            tracing::info!("Login:     {} — anonymous callers see only the auth door", names.join(", "));
-        }
-        if let Some(spec) = &args.identity {
-            tracing::info!("Sign-in:   our own page over {spec}");
-        }
-        if !args.no_rest {
-            let route_hub = hub.clone();
-            let route_fn: RouteFn = Arc::new(move |method, params| {
-                let hub = route_hub.clone();
-                // ACCESS-13: with login off, the anonymous caller.
-                Box::pin(async move {
-                    let anonymous = plexus_core::plexus::AuthContext::anonymous();
-                    hub.route(&method, params, menger::calls::caller(&hub, None, &anonymous)).await
-                })
-            });
-            builder = builder
-                .with_rest_http_config(
-                    RestHttpConfig::new(args.rest_port)
-                        .with_server_name("menger".into())
-                        .with_server_version(env!("CARGO_PKG_VERSION").into())
-                        .with_allowed_hosts(hosts(args.rest_port)),
-                )
-                // registers /rest/tickets/*; ACCESS-20: and each static
-                // child under its whole path (`/rest/tickets.work/ready`),
-                // which the bridge's `/{namespace}/{method}` reaches no other way.
-                .with_flat_schemas(hub.list_plugin_schemas().into_iter().chain(hub.static_children()).collect())
-                .with_route_fn(route_fn); // dispatches via hub.route()
-            tracing::info!("REST:      http://127.0.0.1:{}/rest", args.rest_port);
-        }
-        if !args.no_shell {
-            let cfg = shell::ShellConfig {
-                port: args.shell_port,
-                ws_port: args.port,
-                // DIST-3: --app-dist given → that directory; else the build
-                // embedded in this binary (`embedded-app`), if any; else the
-                // checkout's frontend/dist.
-                app: args.app_dist.map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
-                env: args.env.clone(),
-                login: wired.login.clone(),
-                allowed_hosts: hosts(args.shell_port),
-            };
-            tokio::spawn(async move {
-                if let Err(e) = shell::serve(cfg).await {
-                    tracing::error!("shell server exited: {e}");
-                }
-            });
-        }
+        return TransportServer::builder(hub.clone(), move |hub| menger::calls::rpc_module(hub, limits))
+            .with_stdio()
+            .build()
+            .await?
+            .serve()
+            .await;
     }
 
-    builder.build().await?.serve().await
+    // ACCESS-25: each listener answers only its own names — RUN-8: and a
+    // specific --bind address by its literal.
+    let hosts = |port| {
+        let mut extra = args.allowed_host.clone();
+        extra.extend(menger::serve::bind_hosts(args.bind, port));
+        local::listener_hosts(port, args.public_url.as_deref(), &extra)
+    };
+    // RUN-8: the WebSocket on --bind, served beside the builder (which binds
+    // loopback only until TRANSPORT-7) with the upgrade the builder applied.
+    // IDENTITY-29: only menger's own pages may open the socket from a
+    // browser, login or not; synapse sends no Origin and is unaffected.
+    // AUTH-6/AUTH-7, with login on: no credential → admitted into the
+    // anonymous view (only the auth door); a credential presented and
+    // refused → 401 with RFC 6750's challenge (plexus-login's `upgrade`).
+    let socket = menger::serve::Socket {
+        addr: std::net::SocketAddr::new(args.bind, args.port),
+        hosts: hosts(args.port),
+        quotas: ConnectionQuotas {
+            max_connections: args.max_connections,
+            max_per_ip: args.max_connections_per_ip,
+            max_per_principal: args.max_connections_per_principal,
+            max_anonymous: args.max_anonymous_connections,
+            max_anonymous_per_ip: args.max_anonymous_connections_per_ip,
+        },
+        upgrade: wired.upgrade(),
+    };
+    let ws = menger::serve::start_socket(menger::calls::rpc_module(hub.clone(), limits)?, socket).await?;
+    tracing::info!("WebSocket: ws://{}", ws.1);
+    if wired.login_on() {
+        let names: Vec<&str> = wired.providers.iter().map(|p| p.name()).collect();
+        tracing::info!("Login:     {} — anonymous callers see only the auth door", names.join(", "));
+    }
+    if let Some(spec) = &args.identity {
+        tracing::info!("Sign-in:   our own page over {spec}");
+    }
+    let rest = if args.no_rest {
+        None
+    } else {
+        let route_hub = hub.clone();
+        let route_fn: RouteFn = Arc::new(move |method, params| {
+            let hub = route_hub.clone();
+            // ACCESS-13: with login off, the anonymous caller.
+            Box::pin(async move {
+                let anonymous = plexus_core::plexus::AuthContext::anonymous();
+                hub.route(&method, params, menger::calls::caller(&hub, None, &anonymous)).await
+            })
+        });
+        let mut config = RestHttpConfig::new(args.rest_port)
+            .with_server_name("menger".into())
+            .with_server_version(env!("CARGO_PKG_VERSION").into())
+            .with_allowed_hosts(hosts(args.rest_port));
+        config.addr = std::net::SocketAddr::new(args.bind, args.rest_port); // RUN-8
+        let at = config.addr;
+        // registers /rest/tickets/*; ACCESS-20: and each static child under
+        // its whole path (`/rest/tickets.work/ready`), which the bridge's
+        // `/{namespace}/{method}` reaches no other way. Dispatches via
+        // hub.route().
+        let schemas = hub.list_plugin_schemas().into_iter().chain(hub.static_children()).collect();
+        let rest = plexus_transport::serve_rest_http(hub.clone(), Some(schemas), Some(route_fn), config, None).await?;
+        tracing::info!("REST:      http://{at}/rest");
+        Some(rest)
+    };
+    if !args.no_shell {
+        let cfg = shell::ShellConfig {
+            port: args.shell_port,
+            ws_port: args.port,
+            // DIST-3: --app-dist given → that directory; else the build
+            // embedded in this binary (`embedded-app`), if any; else the
+            // checkout's frontend/dist.
+            app: args.app_dist.map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
+            env: args.env.clone(),
+            login: wired.login.clone(),
+            allowed_hosts: hosts(args.shell_port),
+        };
+        let bind = args.bind;
+        tokio::spawn(async move {
+            if let Err(e) = shell::serve_at(bind, cfg).await {
+                tracing::error!("shell server exited: {e}");
+            }
+        });
+    }
+
+    let schema = plexus_core::plexus::Activation::plugin_schema(hub.as_ref());
+    menger::serve::run(schema, menger::serve::advertised_host(args.bind), ws, rest).await
 }
+
 
 /// SCALE-28: `--verify-derived` — the verdict on stdout, one difference a
 /// line, and the exit code it means. Run off the async runtime: it reads

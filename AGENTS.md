@@ -21,7 +21,10 @@ Every listener answers only its own names (ACCESS-25): `127.0.0.1:<port>`,
 `localhost:<port>`, `--public-url`'s host, and each `--allowed-host`
 (repeatable; `MENGER_ALLOWED_HOSTS`, `;`-separated); any other `Host` is
 refused 421 before routing — reach a server by those names (synapse, curl
-and the scripts do). README "Run" → Hosts.
+and the scripts do). README "Run" → Hosts. Every listener binds loopback
+unless `--bind ADDR` (`MENGER_BIND`; `0.0.0.0`, `::`, one address) says
+otherwise (RUN-8, README "Run" → Bind); binding adds a specific address's
+literal to the names, never any other.
 
 ## Deploying
 
