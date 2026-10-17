@@ -850,4 +850,15 @@ is always loud is a queue the owner learns to ignore. menger-skills
   (`model: opus`); worktree isolation; one commit per ticket. A worktree
   builds into the shared `CARGO_TARGET_DIR=~/.cache/cargo-target/menger`
   and is removed in the same pass as its merge (MENGER-41, owner
-  2026-10-15) — the building skill says how.
+  2026-10-15) — the building skill says how. **An agent cleans up with
+  `scripts/cleanup-gate.sh`, never a hand-written `rm -r`** (RUN-21, owner
+  2026-10-16: "not hit spooky rms"): `scripts/cleanup-gate.sh NAME` says
+  what the gate NAME left — its worktree and branch (`git worktree remove`,
+  `git branch -d`), `~/.cache/cargo-target/NAME`, `/tmp/menger-NAME.db*`,
+  its session scratch — and `--yes` removes it and logs it to
+  `~/.local/state/menger/cleanup-gate.log`; `--path P` takes one path by
+  its shape, `--list` surveys every leftover and removes nothing. It
+  refuses `/`, `$HOME`, a main checkout, a shared target (`menger`, a
+  repository's name), `~/.local/share/menger`, a dirty worktree, anything
+  in use, and any path with `..` — a refusal is the answer, not a cue for
+  `rm`. Its tests: `scripts/tests/cleanup-gate` (under `cargo test`).
