@@ -3,7 +3,7 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { ChatState, ChatsEvent, MessageId } from './types';
+import type { ChatGrant, ChatState, ChatsEvent, MessageId } from './types';
 import type { ChatId } from '../media/types';
 import type { Body, TicketRef, Title } from '../notes/types';
 import type { Principal } from '../orgs/types';
@@ -17,12 +17,17 @@ By a participant, to an open chat; the one added must be able to read
 the ticket, or it is `refused`. One already in it is the chat as it is.
 CHAT-14: to a group, one holding a grant in its organization, by a
 participant or an admin of the organization; a direct message is
-refused (it stays between two: start a group).
+refused (it stays between two: start a group). CHAT-16: an admin of
+the chat's scope adds anyone, in it or not; one who can't read it is
+added only with `grant` — `ticket` (viewer on the ticket alone) or
+`chat` (this chat only) — the add and the grant one write, answered
+`added { chat, granted }`; without it, `needs_grant { choices }` and
+nothing written.
    * @server-derived auth
    * @requiresAuth — resolver: self.access.verify
    * @requires `chats.add` anywhere it is held
    */
-  add(chat: ChatId, principal: Principal): AsyncGenerator<ChatsEvent>;
+  add(chat: ChatId, principal: Principal, grant?: ChatGrant | null): AsyncGenerator<ChatsEvent>;
   /**
    * Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — and the end; timed_out after timeout_minutes.
 
@@ -134,7 +139,7 @@ the chat's messages at or before `upto`; `unread` counts after it.
    */
   read(chat: ChatId, upto: MessageId): AsyncGenerator<ChatsEvent>;
   /**
-   * Take a participant out of a chat; yields removed { chat, principal } (CHAT-14).
+   * Take a participant out of a chat; yields removed { chat, principal, revoked } (CHAT-14; CHAT-16: revoke takes back the grant their add made).
 
 A group's or a ticket's chat, by a participant (itself too: it
 leaves) or, outside tickets, an admin of the chat's organization; a
@@ -144,7 +149,7 @@ chat as it is. The one removed hears `left` on its `watch`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `chats.remove` anywhere it is held
    */
-  remove(chat: ChatId, principal: Principal): AsyncGenerator<ChatsEvent>;
+  remove(chat: ChatId, principal: Principal, revoke?: boolean | null): AsyncGenerator<ChatsEvent>;
   /**
    * Rename a chat; yields renamed { chat } — the composer's /title (CHAT-7).
 
@@ -191,8 +196,8 @@ class ChatsClientImpl implements ChatsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *add(chat: ChatId, principal: Principal): AsyncGenerator<ChatsEvent> {
-    const stream = this.rpc.call('chats.add', { chat, principal });
+  async *add(chat: ChatId, principal: Principal, grant?: ChatGrant | null): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.add', { chat, grant, principal });
     yield* extractData<ChatsEvent>(stream);
   }
 
@@ -236,8 +241,8 @@ class ChatsClientImpl implements ChatsClient {
     yield* extractData<ChatsEvent>(stream);
   }
 
-  async *remove(chat: ChatId, principal: Principal): AsyncGenerator<ChatsEvent> {
-    const stream = this.rpc.call('chats.remove', { chat, principal });
+  async *remove(chat: ChatId, principal: Principal, revoke?: boolean | null): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.remove', { chat, principal, revoke });
     yield* extractData<ChatsEvent>(stream);
   }
 

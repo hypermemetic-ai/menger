@@ -70,7 +70,7 @@ impl Store {
                     return Ok((c.clone(), true));
                 }
             }
-            let parts = set.iter().map(|p| Part { principal: p.clone(), added_by: by.principal.clone(), added_at: now, read_upto: 0 }).collect();
+            let parts = set.iter().map(|p| Part { principal: p.clone(), added_by: by.principal.clone(), added_at: now, read_upto: 0, granted: None }).collect();
             let title = title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
             ChatRecord { id: cache.chats.next_chat(), ticket: String::new(), title, state: ChatState::Open, opened_by: by.principal.clone(), opened_at: now, parts, kind, org }
         };
@@ -82,17 +82,25 @@ impl Store {
     /// (any one, itself too: it leaves) or, outside tickets, an admin of the
     /// chat's organization. One not in it is the chat as it is.
     pub async fn remove_from_chat(&self, on: impl Into<ChatOn>, chat: u64, by: Signer, principal: String) -> Result<ChatRecord, ChatError> {
+        self.remove_revoking(on, chat, by, principal, None).await.map(|(c, _)| c)
+    }
+
+    /// CHAT-16: [`Store::remove_from_chat`], and — `revoke`, an admin's
+    /// authority on the scope the seat's add granted — that grant revoked
+    /// in the same write. Answers the chat and whether it revoked (a grant
+    /// changed or gone since is left as it is).
+    pub async fn remove_revoking(&self, on: impl Into<ChatOn>, chat: u64, by: Signer, principal: String, revoke: Option<crate::access::AdminOf>) -> Result<(ChatRecord, bool), ChatError> {
         let on: ChatOn = on.into();
         let principal = principal.trim().to_string();
         let serial = self.serial().await;
-        let (record, under) = {
+        let (record, under, grant) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let mut c = self.held(&cache, &on, chat, &by.principal)?;
-            if !c.has(&by.principal) && !matches!(on, ChatOn::Admin(_)) {
+            if !c.has(&by.principal) && !on.administers() {
                 return Err(refused(format!("you are not in chat {chat}: only its participants remove")));
             }
             if !c.has(&principal) {
-                return Ok(c);
+                return Ok((c, false));
             }
             if c.kind == ChatKind::Direct {
                 return Err(refused(format!("chat {chat} is a direct message: it stays between its two — close it instead")));
@@ -100,11 +108,28 @@ impl Store {
             if c.state == ChatState::Closed {
                 return Err(refused(format!("chat {chat} is closed")));
             }
+            let made = c.parts.iter().find(|p| p.principal == principal).and_then(|p| p.granted.clone());
+            let grant = match (revoke, made) {
+                (Some(a), Some(scope)) if a.scope().text() == scope => {
+                    let held = cache.members.of(&principal).into_iter().find(|g| g.scope.text() == scope);
+                    held.map(|g| super::members_change::Grant::Revoke(g.principal, g.scope))
+                }
+                (Some(a), _) => return Err(refused(format!("{principal}'s seat in chat {chat} made no grant on {} to revoke (nothing written)", a.scope()))),
+                (None, _) => None,
+            };
             c.parts.retain(|p| p.principal != principal);
-            (c, on.key().and_then(|k| self.chats_before(&cache, k)))
+            (c, on.key().and_then(|k| self.chats_before(&cache, k)), grant)
         };
+        let revoked = grant.is_some();
         let change = ChatChange::Removed { chat: record.clone(), principal };
-        self.chat_write(serial, record.clone(), None, under, change).await.map(|()| record)
+        self.chat_write_granting(serial, record.clone(), under, change, grant).await.map(|()| (record, revoked))
+    }
+
+    /// CHAT-16: an admin of `on` adds `principal`, granting `grant` (`g`,
+    /// with the authority `a` that may grant on its scope) — the add and
+    /// the grant in one write. One already in it is the chat as it is.
+    pub async fn add_granting(&self, on: impl Into<ChatOn>, chat: u64, by: Signer, principal: String, a: crate::access::AdminOf, g: crate::members::Grant) -> Result<ChatRecord, ChatError> {
+        self.add_inner(on.into(), chat, by, principal, |_| true, Some((a, g))).await
     }
 
     /// CHAT-14: the name `principal` is known by — signed in with, else the
@@ -170,6 +195,6 @@ impl Store {
     pub fn chat_bare(&self, c: &ChatRecord) -> crate::chats::Chat {
         let cache = self.tickets.read().expect("store lock poisoned");
         let key = (!c.kind.outside()).then(|| cache.resolve(&c.ticket).ok()).flatten();
-        cache.chats.view(c, key, "")
+        super::dressed(&cache, c, key, "")
     }
 }

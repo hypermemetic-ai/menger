@@ -123,6 +123,9 @@ pub(crate) fn ChatsPage(#[prop(into)] pick: Signal<Pick>) -> impl IntoView {
     let more = RwSignal::new(false);
     let renaming = RwSignal::new(None::<String>);
     let problem = RwSignal::new(None::<String>);
+    // CHAT-16: taking out a seat that came with a grant asks first.
+    let revoking = RwSignal::new(None::<String>);
+    let admin = crate::signin::account().with_untracked(|a| a.is_admin());
     // Names and agents, from the server, once: every row says them.
     spawn_local(async {
         let _ = chats::candidates(None).await;
@@ -217,17 +220,33 @@ pub(crate) fn ChatsPage(#[prop(into)] pick: Signal<Pick>) -> impl IntoView {
         let (me, name) = (me.clone(), name.clone());
         move || {
             let Some(c) = chat.get() else { return ().into_any() };
+            let removable = may_remove(&c, admin);
+            let id = c.id.get();
             let dots = c
                 .participants
                 .iter()
                 .map(|p| {
                     let waiting = c.waiting.contains(p);
                     let mine = *p == me;
+                    let (who, granted) = (p.clone(), c.granted_to(p));
+                    let out = move |_| {
+                        let who = who.clone();
+                        if granted {
+                            revoking.set(Some(who));
+                            return;
+                        }
+                        spawn_local(async move {
+                            if let Err(e) = chats::remove(id, &who).await {
+                                problem.try_set(Some(e));
+                            }
+                        });
+                    };
                     view! {
                         <span class="sp" data-principal=p.clone() title=if waiting { format!("{} — waiting for your next message", name(p)) } else { format!("{} · {}", name(p), p) }>
                             <span class="dot" class:on=true class:wait=waiting></span>
                             <span class="spn">{if mine { format!("{} (you)", name(p)) } else { name(p) }}</span>
                             {chats::is_agent(p).then(|| view! { <span class="ag">"agent"</span> })}
+                            {(removable && !mine).then(|| view! { <button type="button" class="prm" title="take them out of the chat" aria-label=format!("remove {}", name(p)) on:click=out>"×"</button> })}
                         </span>
                     }
                 })
@@ -317,6 +336,8 @@ pub(crate) fn ChatsPage(#[prop(into)] pick: Signal<Pick>) -> impl IntoView {
             <button type="button" class="sbtn smore" aria-label="more" aria-expanded=move || more.get().to_string() on:click=move |_| more.update(|m| *m = !*m)>"⋯"</button>
             {move || { let (leave, copy_link) = (leave.clone(), copy_link); more.get().then(|| view! {
                 <div class="smenu-pop" role="menu">
+                    // At 390 the head's buttons fold into ⋯: add is here too.
+                    {add_ok.then(|| view! { <button type="button" role="menuitem" class="sadd-item" on:click=move |_| { more.set(false); adding.set(true); }>"add someone"</button> })}
                     {(c.kind != ChatKind::Direct).then(|| view! { <button type="button" role="menuitem" on:click=move |_| { more.set(false); renaming.set(Some(chat.with_untracked(|c| c.as_ref().and_then(|c| c.title.clone())).unwrap_or_default())); }>"rename"</button> })}
                     {if open {
                         view! { <button type="button" role="menuitem" on:click=move |_| settle(false)>"close chat"</button> }.into_any()
@@ -358,6 +379,8 @@ pub(crate) fn ChatsPage(#[prop(into)] pick: Signal<Pick>) -> impl IntoView {
                         None => view! { <h2 class="stitle">{title.clone()}</h2> }.into_any(),
                     }}
                     {move || chat.with(|c| c.as_ref().map(|c| chats::kind_word(c))).map(|k| view! { <span class="kchip">{k}</span> })}
+                    // CHAT-16: a ticket's chat names its ticket's title — all a chat-only seat sees of it.
+                    {move || chat.with(|c| c.as_ref().and_then(|c| c.ticket_title.clone())).map(|t| view! { <span class="stt" title="the chat's ticket">{t}</span> })}
                     <div class="speople">{people}</div>
                     {head_buttons}
                 </header>
@@ -375,7 +398,27 @@ pub(crate) fn ChatsPage(#[prop(into)] pick: Signal<Pick>) -> impl IntoView {
                 }}
             </section>
             <button type="button" class="sscrim" aria-label="close the chats" on:click=move |_| drawer.set(false)></button>
+            {move || revoking.get().zip(chat_id.get()).map(|(p, id)| view! {
+                <crate::chat_grant::RevokeDialog chat=id principal=p
+                    done=Callback::new(move |r: Result<(), String>| {
+                        revoking.set(None);
+                        if let Err(e) = r {
+                            problem.set(Some(e));
+                        }
+                    })
+                    cancel=Callback::new(move |_| revoking.set(None)) />
+            })}
         </div>
+    }
+}
+
+/// CHAT-16: whether the head offers × on its people — a group's members
+/// to each other, and an admin on a ticket's chat or a group.
+pub(crate) fn may_remove(c: &Chat, admin: bool) -> bool {
+    c.state == ChatState::Open && match c.kind {
+        ChatKind::Group => true,
+        ChatKind::Ticket => admin,
+        ChatKind::Direct => false,
     }
 }
 
@@ -408,6 +451,16 @@ mod tests {
     use super::*;
     use crate::chats::tests::{chat, msg};
     use menger_tickets_api::ChatsEvent;
+
+    /// CHAT-16: × on a group's people, and on a ticket's chat's for an admin; never in a DM.
+    #[test]
+    fn who_may_be_taken_out() {
+        let mut g = chat(7, "", &["ada", "rui"]);
+        g.kind = ChatKind::Group;
+        let t = chat(6, "KILN-7", &["ada", "sam"]);
+        let dm = chat(5, "", &["ada", "rui"]);
+        assert!(may_remove(&g, false) && !may_remove(&t, false) && may_remove(&t, true) && !may_remove(&dm, true));
+    }
 
     #[test]
     fn the_route_names_the_list_a_new_message_or_a_chat() {

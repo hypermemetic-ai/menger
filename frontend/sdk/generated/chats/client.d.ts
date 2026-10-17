@@ -1,5 +1,5 @@
 import type { RpcClient } from '../rpc';
-import type { ChatState, ChatsEvent, MessageId } from './types';
+import type { ChatGrant, ChatState, ChatsEvent, MessageId } from './types';
 import type { ChatId } from '../media/types';
 import type { Body, TicketRef, Title } from '../notes/types';
 import type { Principal } from '../orgs/types';
@@ -12,12 +12,17 @@ export interface ChatsClient {
   the ticket, or it is `refused`. One already in it is the chat as it is.
   CHAT-14: to a group, one holding a grant in its organization, by a
   participant or an admin of the organization; a direct message is
-  refused (it stays between two: start a group).
+  refused (it stays between two: start a group). CHAT-16: an admin of
+  the chat's scope adds anyone, in it or not; one who can't read it is
+  added only with `grant` — `ticket` (viewer on the ticket alone) or
+  `chat` (this chat only) — the add and the grant one write, answered
+  `added { chat, granted }`; without it, `needs_grant { choices }` and
+  nothing written.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.add` anywhere it is held
      */
-    add(chat: ChatId, principal: Principal): AsyncGenerator<ChatsEvent>;
+    add(chat: ChatId, principal: Principal, grant?: ChatGrant | null): AsyncGenerator<ChatsEvent>;
     /**
      * Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — and the end; timed_out after timeout_minutes.
   
@@ -129,7 +134,7 @@ export interface ChatsClient {
      */
     read(chat: ChatId, upto: MessageId): AsyncGenerator<ChatsEvent>;
     /**
-     * Take a participant out of a chat; yields removed { chat, principal } (CHAT-14).
+     * Take a participant out of a chat; yields removed { chat, principal, revoked } (CHAT-14; CHAT-16: revoke takes back the grant their add made).
   
   A group's or a ticket's chat, by a participant (itself too: it
   leaves) or, outside tickets, an admin of the chat's organization; a
@@ -139,7 +144,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.remove` anywhere it is held
      */
-    remove(chat: ChatId, principal: Principal): AsyncGenerator<ChatsEvent>;
+    remove(chat: ChatId, principal: Principal, revoke?: boolean | null): AsyncGenerator<ChatsEvent>;
     /**
      * Rename a chat; yields renamed { chat } — the composer's /title (CHAT-7).
   

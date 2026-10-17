@@ -266,6 +266,7 @@ mod compare;
 mod comments;
 mod comments_page;
 mod chats_page;
+mod chat_grant;
 mod composer;
 mod conversation;
 mod components;
@@ -2554,6 +2555,8 @@ fn App() -> impl IntoView {
                         }
                         // MENGER-43: Home is the board — Needs you is a
                         // filter on the nav (`g n`, src/needs.rs).
+                        // CHAT-16: one granted chats only has them, and nothing of the board.
+                        Route::Board if signin::account().with_untracked(|a| a.chat_only()) => view! { <chats_page::ChatsPage pick=chats_page::Pick::List /> }.into_any(),
                         Route::Board => view! { <Board board last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()

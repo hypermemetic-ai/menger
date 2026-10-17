@@ -379,3 +379,48 @@ async fn direct_messages_and_groups_outside_tickets() {
     let refused = one(&ada, "chats.add", json!({ "chat": id, "principal": principal(&RUI) })).await;
     assert_eq!(refused["type"], "refused", "{refused}");
 }
+
+/// CHAT-16: an admin adds anyone to any chat. The boss (admin, in no seat)
+/// adds sam — who reads B, not A — to a chat on A-2: `needs_grant` first,
+/// nothing written; then `grant: chat` adds sam and grants `chatter` on A-2
+/// in one write. sam posts and reads there, `tickets.get A-2` is refused,
+/// another chat on A-2 is not found. Removed with `revoke`, the grant goes.
+/// A non-admin outside the chat cannot add.
+#[tokio::test]
+async fn an_admin_adds_anyone_granting_the_ticket_or_the_chat() {
+    let port = start().await;
+    let boss = as_key(port, &BOSS, "boss").await;
+    kiln(&boss).await;
+    let ada = as_key(port, &ADA, "ada").await;
+    let rui = as_key(port, &RUI, "rui").await;
+    let chat = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [principal(&BUILDER)] })).await["chat"]["id"].as_u64().unwrap();
+    let other = one(&ada, "chats.open", json!({ "ticket": "A-2" })).await["chat"]["id"].as_u64().unwrap();
+    // rui reads A and is not in it: no add.
+    assert_eq!(one(&rui, "chats.add", json!({ "chat": chat, "principal": principal(&RUI) })).await, json!({ "type": "not_found", "chat": chat }));
+    let needs = one(&boss, "chats.add", json!({ "chat": chat, "principal": principal(&SAM) })).await;
+    assert_eq!(needs, json!({ "type": "needs_grant", "chat": chat, "principal": principal(&SAM), "ticket": "A-2", "choices": ["ticket", "chat"] }));
+    // ada, in it but no admin, can't grant.
+    let no = one(&ada, "chats.add", json!({ "chat": chat, "principal": principal(&SAM), "grant": "chat" })).await;
+    assert_eq!(no["type"], "refused", "{no}");
+    let added = one(&boss, "chats.add", json!({ "chat": chat, "principal": principal(&SAM), "grant": "chat" })).await;
+    assert_eq!((added["type"].as_str(), added["granted"].as_str()), (Some("added"), Some("chatter on A-2")), "{added}");
+    assert_eq!(added["chat"]["granted"], json!([principal(&SAM)]));
+    let sam = as_key(port, &SAM, "sam").await;
+    assert_eq!(one(&sam, "chats.post", json!({ "chat": chat, "body": "hello from B" })).await["type"], "posted");
+    let listed = call(&sam, "chats.list", json!({})).await;
+    assert_eq!(listed.iter().filter_map(|e| e["chat"]["id"].as_u64()).collect::<Vec<_>>(), [chat]);
+    assert_eq!(listed[0]["chat"]["ticket_title"], "A work");
+    let get = one(&sam, "tickets.get", json!({ "id": "A-2" })).await;
+    assert_ne!(get["type"], "ticket", "the chat only: the ticket is not read — {get}");
+    assert_eq!(one(&sam, "chats.messages", json!({ "chat": other })).await, json!({ "type": "not_found", "chat": other }));
+    // Removed revoking: out, and the grant gone.
+    let out = one(&boss, "chats.remove", json!({ "chat": chat, "principal": principal(&SAM), "revoke": true })).await;
+    assert_eq!((out["type"].as_str(), out["revoked"].as_bool()), (Some("removed"), Some(true)), "{out}");
+    let grants = call(&boss, "members.list", json!({})).await;
+    assert!(!grants.iter().any(|g| g["grant"]["principal"] == principal(&SAM) && g["grant"]["scope"] == "A-2"), "{grants:?}");
+    // `grant: ticket`: viewer on A-2 alone; sam reads it now.
+    let again = one(&boss, "chats.add", json!({ "chat": chat, "principal": principal(&SAM), "grant": "ticket" })).await;
+    assert_eq!(again["granted"], "viewer on A-2", "{again}");
+    let sam2 = as_key(port, &SAM, "sam").await;
+    assert_eq!(one(&sam2, "tickets.get", json!({ "id": "A-2" })).await["type"], "ticket");
+}

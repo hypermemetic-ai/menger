@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, HashMap};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::vocab::{ChatId, MessageId};
+use menger_tickets_api::chats::ChatGrant;
 use menger_tickets_api::{Chat, ChatKind, ChatState, ChatsEvent, Message};
 use plexus_client::ClientEvent;
 use wasm_bindgen_futures::spawn_local;
@@ -178,7 +179,7 @@ impl Held {
     /// whether the copy moved.
     pub(crate) fn apply(&mut self, ev: &ChatsEvent, me: &str) -> bool {
         match ev {
-            ChatsEvent::Opened { chat, .. } | ChatsEvent::Added { chat } | ChatsEvent::Chat { chat } | ChatsEvent::Renamed { chat } | ChatsEvent::Removed { chat, .. } => {
+            ChatsEvent::Opened { chat, .. } | ChatsEvent::Added { chat, .. } | ChatsEvent::Chat { chat } | ChatsEvent::Renamed { chat } | ChatsEvent::Removed { chat, .. } => {
                 let id = chat.id.get();
                 if self.chats.get(&id) == Some(chat) {
                     return false;
@@ -697,13 +698,41 @@ pub(crate) async fn post(chat: u64, body: &str) -> Result<(), String> {
 
 /// `chats.add { chat, principal }`.
 pub(crate) async fn add(chat: u64, principal: &str) -> Result<(), String> {
-    answer_of("add", client()?.add_all(ChatId::new(chat), crate::typed::typed(principal)?).await).map(|_| ())
+    match add_granting(chat, principal, None).await? {
+        Added::Added(_) => Ok(()),
+        Added::NeedsGrant(_) => Err(format!("{principal} can't read it: an admin adds them with ＋ add, granting access")),
+    }
+}
+
+/// CHAT-16: what an add answered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Added {
+    /// In; `Some` what it granted, in words (`chatter on KILN-7`).
+    Added(Option<String>),
+    /// One who can't read it, and no grant named: the dialog's question.
+    NeedsGrant(crate::chat_grant::Ask),
+}
+
+/// CHAT-16: `chats.add { chat, principal, grant? }` — an admin's add, the
+/// grant it makes named (`None`: ask first).
+pub(crate) async fn add_granting(chat: u64, principal: &str, grant: Option<ChatGrant>) -> Result<Added, String> {
+    match answer_of("add", client()?.add_all(ChatId::new(chat), crate::typed::typed(principal)?, grant).await)? {
+        ChatsEvent::NeedsGrant { chat, principal, ticket, choices } => Ok(Added::NeedsGrant(crate::chat_grant::Ask { chat: chat.get(), principal, ticket, choices })),
+        ChatsEvent::Added { granted, .. } => Ok(Added::Added(granted)),
+        _ => Ok(Added::Added(None)),
+    }
 }
 
 /// CHAT-14: `chats.remove { chat, principal }` — a group's member taken
 /// out (the reader too: it leaves).
 pub(crate) async fn remove(chat: u64, principal: &str) -> Result<(), String> {
-    answer_of("remove", client()?.remove_all(ChatId::new(chat), crate::typed::typed(principal)?).await).map(|_| ())
+    remove_revoking(chat, principal, false).await
+}
+
+/// CHAT-16: `chats.remove { chat, principal, revoke }` — and, `revoke`, the
+/// grant their add made taken back in the same write.
+pub(crate) async fn remove_revoking(chat: u64, principal: &str, revoke: bool) -> Result<(), String> {
+    answer_of("remove", client()?.remove_all(ChatId::new(chat), crate::typed::typed(principal)?, revoke.then_some(true)).await).map(|_| ())
 }
 
 /// `chats.read { chat, upto }`.
@@ -782,6 +811,8 @@ pub(crate) mod tests {
             mark: None,
             waiting: Vec::new(),
             agents: Vec::new(),
+            ticket_title: None,
+            granted: Vec::new(),
         }
     }
 
@@ -928,7 +959,7 @@ pub(crate) mod tests {
         // A member removed: the chat as it is now.
         let mut less = h.get(7).unwrap().clone();
         less.participants.retain(|p| p != "sam");
-        assert!(h.apply(&ChatsEvent::Removed { chat: less, principal: "sam".into() }, "ada"));
+        assert!(h.apply(&ChatsEvent::Removed { chat: less, principal: "sam".into(), revoked: false }, "ada"));
         assert_eq!(h.get(7).unwrap().participants, ["ada", "rui"]);
     }
 

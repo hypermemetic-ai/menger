@@ -35,6 +35,7 @@
     "chats": {
       "add": [
         "chat",
+        "grant",
         "principal"
       ],
       "await_message": [
@@ -79,7 +80,8 @@
       ],
       "remove": [
         "chat",
-        "principal"
+        "principal",
+        "revoke"
       ],
       "rename": [
         "chat",

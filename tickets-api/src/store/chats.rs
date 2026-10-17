@@ -87,6 +87,7 @@ pub(super) const TABLES: &str = "
             added_by  TEXT NOT NULL,
             added_at  INTEGER NOT NULL,
             read_upto INTEGER NOT NULL DEFAULT 0,
+            granted   TEXT,
             PRIMARY KEY (chat, principal)
         );
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -128,6 +129,12 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
         tracing::warn!("CHAT-14: the chats gained their kind and organization (every chat kept is a ticket's)");
     }
     conn.execute_batch(NAMES)?;
+    // CHAT-16: the grant an admin's add made, beside a seat.
+    let cols: Vec<String> = conn.prepare("SELECT name FROM pragma_table_info('chat_participants')")?.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+    if !cols.iter().any(|c| c == "granted") {
+        conn.execute_batch("ALTER TABLE chat_participants ADD COLUMN granted TEXT;")?;
+        tracing::warn!("CHAT-16: chat_participants gained `granted` (no seat kept made a grant)");
+    }
     Ok(!had)
 }
 
@@ -139,6 +146,10 @@ pub struct Part {
     pub added_at: i64,
     /// The last message it has read (0: none).
     pub read_upto: u64,
+    /// CHAT-16: the scope of the grant an admin's add made with this seat
+    /// (its stored text, `KILN-7` or `hypermemetic:`) — what removing it
+    /// offers to revoke.
+    pub granted: Option<String>,
 }
 
 /// One chat as kept: its participants in the order they joined.
@@ -266,6 +277,9 @@ pub enum ChatOn {
     /// CHAT-14: an admin of the organization of a chat outside tickets — it
     /// adds and removes members, and reads nothing.
     Admin(crate::access::AdminOf),
+    /// CHAT-16: an admin of a ticket's chat's ticket — it adds anyone and
+    /// removes, without being in it.
+    TicketAdmin(Permit<crate::access::Admin>),
 }
 
 /// CHAT-14: the proof of a seat — made here alone.
@@ -283,8 +297,14 @@ impl ChatOn {
     fn key(&self) -> Option<&str> {
         match self {
             ChatOn::Ticket(p) => Some(p.id().as_str()),
+            ChatOn::TicketAdmin(p) => Some(p.id().as_str()),
             _ => None,
         }
+    }
+
+    /// CHAT-16: whether it adds and removes without a seat.
+    fn administers(&self) -> bool {
+        matches!(self, ChatOn::Admin(_) | ChatOn::TicketAdmin(_))
     }
 }
 
@@ -412,9 +432,25 @@ impl Chats {
             count: self.ids(c.id).len() as u64,
             mark: c.part(me).map(|p| p.read_upto).filter(|m| *m > 0).map(MessageId::new),
             waiting: self.listening.get(&c.id).map(|w| w.keys().cloned().collect()).unwrap_or_default(),
+            ticket_title: None,
+            granted: Vec::new(),
             agents: c.parts.iter().filter(|p| self.members.contains(&p.principal)).map(|p| p.principal.clone()).collect(),
         }
     }
+}
+
+/// `c` as `me` sees it, dressed from the rest of the cache (CHAT-16): its
+/// ticket's title, and who holds a grant its add made.
+pub(super) fn dressed(cache: &Cache, c: &ChatRecord, key: Option<String>, me: &str) -> Chat {
+    let mut v = cache.chats.view(c, key, me);
+    v.ticket_title = v.ticket.as_deref().and_then(|k| cache.get(k)).map(|r| r.title.clone());
+    v.granted = c
+        .parts
+        .iter()
+        .filter(|p| p.granted.as_ref().is_some_and(|s| cache.members.of(&p.principal).iter().any(|g| g.scope.text() == *s)))
+        .map(|p| p.principal.clone())
+        .collect();
+    v
 }
 
 /// CHAT-3's cells, for `me`: the tickets where it is in an open chat
@@ -451,8 +487,13 @@ impl Store {
         }
         let key = self.ticket_id(&c.ticket)?;
         let id = TicketId::new(&key);
-        let permit = user.permit::<Viewer>(&id, self).ok()?;
         let participant = c.has(&Signer::of(user).principal);
+        let Ok(permit) = user.permit::<Viewer>(&id, self) else {
+            // CHAT-16: one who holds the chat only (`chatter` on the ticket)
+            // reads the chats it is in there, and nothing of the ticket.
+            let seated = participant && user.permit::<crate::access::Chatter>(&id, self).is_ok();
+            return seated.then_some(Standing { key: Some(key), on: ChatOn::Seat(Seat(())), participant: true, admin: false });
+        };
         let admin = user.permit::<Admin>(&id, self).is_ok();
         (participant || admin).then_some(Standing { key: Some(key), on: ChatOn::Ticket(permit), participant, admin })
     }
@@ -468,7 +509,7 @@ impl Store {
     /// when it does not.
     pub fn chat_view(&self, user: &VerifiedUser, id: u64) -> Option<Chat> {
         let (c, s) = self.chat_seen(user, id).ok()?;
-        Some(self.tickets.read().expect("store lock poisoned").chats.view(&c, s.key, &Signer::of(user).principal))
+        Some(dressed(&self.tickets.read().expect("store lock poisoned"), &c, s.key, &Signer::of(user).principal))
     }
 
     /// CHAT-3: one page of the chats `q` admits that `user` sees — its own
@@ -501,7 +542,7 @@ impl Store {
             })
             .collect();
         let cache = self.tickets.read().expect("store lock poisoned");
-        let mut rows: Vec<Chat> = seen.into_iter().map(|(c, key)| cache.chats.view(&c, key, &me)).filter(|v| q.unread.is_none_or(|u| u == (v.unread > 0))).collect();
+        let mut rows: Vec<Chat> = seen.into_iter().map(|(c, key)| dressed(&cache, &c, key, &me)).filter(|v| q.unread.is_none_or(|u| u == (v.unread > 0))).collect();
         rows.sort_by_key(|r| std::cmp::Reverse((r.last_at, r.id)));
         if let Some(a) = after {
             let at = rows.iter().position(|r| r.id.get() == a).ok_or_else(|| refused(format!("no chat {a} to page after")))?;
@@ -659,7 +700,7 @@ impl Store {
             if let Some(c) = same {
                 return Ok((c.clone(), true));
             }
-            let parts = set.iter().map(|p| Part { principal: p.clone(), added_by: by.principal.clone(), added_at: now, read_upto: 0 }).collect();
+            let parts = set.iter().map(|p| Part { principal: p.clone(), added_by: by.principal.clone(), added_at: now, read_upto: 0, granted: None }).collect();
             let title = title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
             let record = ChatRecord { id: cache.chats.next_chat(), ticket: key.clone(), title, state: ChatState::Open, opened_by: by.principal.clone(), opened_at: now, parts, kind: ChatKind::Ticket, org: String::new() };
             (record, self.chats_before(&cache, &key))
@@ -710,7 +751,7 @@ impl Store {
                     if !c.kind.outside() && !reads(m, &key) {
                         tracing::warn!("CHAT-13: standing chat member {m} can't read {key}; added to chat {chat} anyway");
                     }
-                    c.parts.push(Part { principal: m.clone(), added_by: "system".into(), added_at: now, read_upto: 0 });
+                    c.parts.push(Part { principal: m.clone(), added_by: "system".into(), added_at: now, read_upto: 0, granted: None });
                     added = true;
                 }
                 if !added {
@@ -751,18 +792,29 @@ impl Store {
     /// CHAT-3: `by` adds `principal` to chat `chat` — one `reads` says can
     /// read the ticket. One already in it is the chat as it is.
     pub async fn add_to_chat(&self, on: impl Into<ChatOn>, chat: u64, by: Signer, principal: String, reads: impl Fn(&str) -> bool) -> Result<ChatRecord, ChatError> {
-        let on: ChatOn = on.into();
+        self.add_inner(on.into(), chat, by, principal, reads, None).await
+    }
+
+    /// CHAT-3, CHAT-16: the add, and — `grant`, an admin's (its authority
+    /// and the grant) — the grant it makes for one who can't read the
+    /// chat's ticket, in the same write.
+    pub(super) async fn add_inner(&self, on: ChatOn, chat: u64, by: Signer, principal: String, reads: impl Fn(&str) -> bool, grant: Option<(crate::access::AdminOf, crate::members::Grant)>) -> Result<ChatRecord, ChatError> {
         let principal = principal.trim().to_string();
         let serial = self.serial().await;
         let now = chrono::Utc::now().timestamp();
         let (record, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let mut c = self.held(&cache, &on, chat, &by.principal)?;
-            if !c.has(&by.principal) && !matches!(on, ChatOn::Admin(_)) {
+            if !c.has(&by.principal) && !on.administers() {
                 return Err(refused(format!("you are not in chat {chat}: only its participants add")));
             }
             if c.has(&principal) {
                 return Ok(c);
+            }
+            if let Some((a, g)) = &grant {
+                if a.scope() != &g.scope || g.principal.to_string() != principal {
+                    return Err(refused(format!("the grant is not {principal}'s on this chat's scope (nothing written)")));
+                }
             }
             let mut reasons = Vec::new();
             if c.kind == ChatKind::Direct {
@@ -771,7 +823,7 @@ impl Store {
             if c.state == ChatState::Closed {
                 reasons.push(format!("chat {chat} is closed"));
             }
-            if !reads(&principal) {
+            if grant.is_none() && !reads(&principal) {
                 reasons.push(match on.key() {
                     Some(k) => format!("{principal} can't read {k}"),
                     None => format!("{principal} holds no grant in {}", c.org),
@@ -783,10 +835,12 @@ impl Store {
             if !reasons.is_empty() {
                 return Err(ChatError::Refused(reasons));
             }
-            c.parts.push(Part { principal, added_by: by.principal.clone(), added_at: now, read_upto: 0 });
+            let granted = grant.as_ref().map(|(_, g)| g.scope.text());
+            c.parts.push(Part { principal, added_by: by.principal.clone(), added_at: now, read_upto: 0, granted });
             (c, on.key().and_then(|k| self.chats_before(&cache, k)))
         };
-        self.chat_write(serial, record.clone(), None, under, ChatChange::Added(record.clone())).await.map(|()| record)
+        let grant = grant.map(|(_, g)| members_change::Grant::Keep(g));
+        self.chat_write_granting(serial, record.clone(), under, ChatChange::Added(record.clone()), grant).await.map(|()| record)
     }
 
     /// CHAT-3: `by`'s mark in chat `chat` moved forward to `upto` (the
@@ -867,7 +921,9 @@ impl Store {
         let c = cache.chats.by_id.get(&chat).ok_or(ChatError::NotFound(chat))?;
         let fits = match on {
             ChatOn::Ticket(p) => !c.kind.outside() && cache.resolve(&c.ticket).ok().as_deref() == Some(p.id().as_str()),
-            ChatOn::Seat(_) => c.kind.outside() && c.has(by),
+            ChatOn::TicketAdmin(p) => !c.kind.outside() && cache.resolve(&c.ticket).ok().as_deref() == Some(p.id().as_str()),
+            // CHAT-16: a seat in a ticket's chat too — one who holds the chat only.
+            ChatOn::Seat(_) => c.has(by),
             ChatOn::Admin(a) => c.kind.outside() && admin_covers(a.scope(), &c.org),
         };
         match fits {
@@ -917,6 +973,60 @@ fn admin_covers(scope: &crate::members::Scope, org: &str) -> bool {
     }
 }
 
+/// CHAT-16: the grant a chat write makes or takes back with it.
+pub(super) mod members_change {
+    pub enum Grant {
+        Keep(crate::members::Grant),
+        Revoke(crate::vocab::Grantee, crate::members::Scope),
+    }
+}
+
+impl Store {
+    /// CHAT-16: [`Store::chat_write`]'s, with a grant kept or revoked in the
+    /// same transaction — the add that grants, the remove that revokes.
+    pub(super) async fn chat_write_granting(&self, serial: tokio::sync::OwnedMutexGuard<()>, record: ChatRecord, under: Option<UnderBefore>, change: ChatChange, grant: Option<members_change::Grant>) -> Result<(), ChatError> {
+        let Some(grant) = grant else {
+            return self.chat_write(serial, record, None, under, change).await;
+        };
+        let tickets = Arc::clone(&self.tickets);
+        let (stored, kept) = (record.clone(), record);
+        let (g_db, g_cache) = match &grant {
+            members_change::Grant::Keep(g) => (members_change::Grant::Keep(g.clone()), grant),
+            members_change::Grant::Revoke(p, s) => (members_change::Grant::Revoke(p.clone(), s.clone()), grant),
+        };
+        self.write(
+            serial,
+            move |tx| {
+                store_chat(tx, &stored)?;
+                match &g_db {
+                    members_change::Grant::Keep(g) => super::members::store(tx, g)?,
+                    members_change::Grant::Revoke(p, s) => {
+                        super::members::delete(tx, p, s)?;
+                    }
+                }
+                Ok(())
+            },
+            move |cache, _| {
+                cache.chats.put_chat(kept);
+                match g_cache {
+                    members_change::Grant::Keep(g) => cache.members.put(g),
+                    members_change::Grant::Revoke(p, s) => {
+                        cache.members.remove(&p, &s);
+                    }
+                }
+            },
+            move |(), (), tx| {
+                tx.chat(change);
+                if let Some(c) = under.and_then(|u| u.after(&tickets)) {
+                    tx.send(c);
+                }
+            },
+        )
+        .await
+        .map_err(ChatError::from)
+    }
+}
+
 /// Writes `c` whole — the chat, each participant and its mark. CHAT-14: a
 /// participant no longer in it is taken out.
 fn store_chat(conn: &Connection, c: &ChatRecord) -> rusqlite::Result<()> {
@@ -930,11 +1040,11 @@ fn store_chat(conn: &Connection, c: &ChatRecord) -> rusqlite::Result<()> {
         conn.prepare_cached("DELETE FROM chat_participants WHERE chat = ?1 AND principal = ?2")?.execute(params![c.id as i64, gone])?;
     }
     let mut part = conn.prepare_cached(
-        "INSERT INTO chat_participants (chat, principal, added_by, added_at, read_upto) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT (chat, principal) DO UPDATE SET read_upto = excluded.read_upto",
+        "INSERT INTO chat_participants (chat, principal, added_by, added_at, read_upto, granted) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (chat, principal) DO UPDATE SET read_upto = excluded.read_upto, granted = excluded.granted",
     )?;
     for p in &c.parts {
-        part.execute(params![c.id as i64, p.principal, p.added_by, p.added_at, p.read_upto as i64])?;
+        part.execute(params![c.id as i64, p.principal, p.added_by, p.added_at, p.read_upto as i64, p.granted])?;
     }
     Ok(())
 }
@@ -957,11 +1067,11 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Chats> {
         let kind = r.get_ref(6)?.as_str()?.parse::<ChatKind>().map_err(|e| bad(6, e))?;
         records.insert(id, ChatRecord { id, ticket: r.get(1)?, title: r.get(2)?, state, opened_by: r.get(4)?, opened_at: r.get(5)?, parts: Vec::new(), kind, org: r.get(7)? });
     }
-    let mut stmt = conn.prepare("SELECT chat, principal, added_by, added_at, read_upto FROM chat_participants ORDER BY chat, added_at, rowid")?;
+    let mut stmt = conn.prepare("SELECT chat, principal, added_by, added_at, read_upto, granted FROM chat_participants ORDER BY chat, added_at, rowid")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         if let Some(c) = records.get_mut(&(r.get::<_, i64>(0)? as u64)) {
-            c.parts.push(Part { principal: r.get(1)?, added_by: r.get(2)?, added_at: r.get(3)?, read_upto: r.get::<_, i64>(4)? as u64 });
+            c.parts.push(Part { principal: r.get(1)?, added_by: r.get(2)?, added_at: r.get(3)?, read_upto: r.get::<_, i64>(4)? as u64, granted: r.get(5)? });
         }
     }
     let mut chats = Chats::default();
@@ -1086,7 +1196,7 @@ impl Store {
                 })
                 .collect();
             let last = first + count as u64 - 1;
-            let parts = [reader, "agent:builder"].map(|p| Part { principal: p.to_string(), added_by: reader.to_string(), added_at: now, read_upto: if p == reader { last } else { 0 } }).into_iter().collect();
+            let parts = [reader, "agent:builder"].map(|p| Part { principal: p.to_string(), added_by: reader.to_string(), added_at: now, read_upto: if p == reader { last } else { 0 }, granted: None }).into_iter().collect();
             let record = ChatRecord { id: chat, ticket: t.id.to_string(), title: Some(title), state: ChatState::Open, opened_by: reader.to_string(), opened_at: now - count as i64 - 1, parts, kind: ChatKind::Ticket, org: String::new() };
             {
                 let mut conn = self.db.lock().expect("db lock poisoned");

@@ -66,7 +66,7 @@ pub mod request;
 pub use request::MengerRequest;
 pub use crate::store::System;
 pub use reach::{Held, Reach, ReachKey};
-pub use user::{Admin, AdminOf, Deployer, DeployerOf, Editor, EditorOf, Forward, Hidden, On, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
+pub use user::{Admin, AdminOf, Chatter, Deployer, DeployerOf, Editor, EditorOf, Forward, Hidden, On, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
 
 /// The gate's reach for one call (plexus-core's): the grant a method was
 /// admitted for, and where.

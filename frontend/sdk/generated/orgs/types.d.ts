@@ -91,6 +91,6 @@ layer's grammar, wasm-safe. On the server it converts to and from
 `plexus_auth_core::identity::Principal` (`TryFrom` both ways). */
 export type Principal = string;
 /** A role a grant gives (any case) */
-export type Role = "viewer" | "deployer" | "editor" | "admin";
+export type Role = "chatter" | "viewer" | "deployer" | "editor" | "admin";
 /** A grant's scope as kept: *, an organization (acme:), a shortcode in one by its identity (acme:MENGER), under a ticket's key (under MENGER-12: it and its subtree), or a ticket's key (MENGER-12: it alone) */
 export type Scope = string;

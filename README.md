@@ -3341,6 +3341,44 @@ leaves for the board; at ≤ 760 the rail is the page until a chat is
 chosen. `#/members` names each person (an agent marked) and gives each
 **chat**: the direct message with them.
 
+#### An admin adds anyone (CHAT-16)
+
+Owner, 2026-10-17: *"I would like to be able to add anyone to any chat as
+admin. that would give them access to that ticket only. it could also
+optionally restrict ticket view. open a dialog when that user is being
+granted a scope to confirm."* An **admin of a chat's scope** — of its
+ticket (on `*`, its organization, its shortcode, `under` it or it), or
+outside tickets of its organization — adds anyone to it, in the chat or
+not (`chats.add` as before; the picker and **＋ add** list those waiting
+for a role too). One who can read it is simply added. One who can't is
+added only with a **grant the call names**, the add and the grant one
+write (both kept: the grant with who granted it, the seat with the scope
+its add granted):
+
+| `chats.add … --grant` | grants | they see |
+|---|---|---|
+| `ticket` | `viewer` on the ticket alone (ACCESS-21) | the ticket as a viewer of it alone, and the chat |
+| `chat` | `chatter` on the ticket alone (outside tickets: on the organization) | the chats they are in there; of the ticket its id and title (`Chat.ticket_title`), never its body — `tickets.get` is refused, as is every other ticket read, and another chat on it is `not_found` |
+| none | nothing: `needs_grant { chat, principal, ticket, choices }`, nothing written | — |
+
+A grant names only the chat's own scope, and only an admin of it grants (a
+participant who is not is `refused`). The answer is `added { chat,
+granted: "chatter on KILN-7" }`, and `Chat.granted` lists the seats whose
+add granted, while the grant stands. `chats.remove … --revoke true` takes
+the grant back in the same write as the seat (`removed { …, revoked:
+true }`); without it the grant stays. **In the app**: picking someone
+who can't read the chat (an admin's picker marks them *adding grants
+access*) opens a dialog — who is given what, where; **Ticket** or **Chat
+only** (chosen first: the narrower) — then Confirm or Cancel; × on a
+seat that came with a grant opens *Take X out of this chat* with **Also
+revoke that access** checked. One who holds chats only opens the app on
+`#/chats`.
+
+```sh
+synapse -P 4455 menger chats add --chat 41 --principal key:5a… --grant chat
+synapse -P 4455 menger chats remove --chat 41 --principal key:5a… --revoke true
+```
+
 #### The chat bridge (CHAT-11)
 
 A perpetual listener on the builder's chats: when the owner writes in a
@@ -4474,6 +4512,7 @@ its subtree, as before.
 | `editor` | also create and change tickets, and answer inputs |
 | `admin` | also grant and revoke roles on the scope |
 | `deployer` | (DEPLOY-14) read under the scope and record its deployments — a CI's key; beside the line above, not on it |
+| `chatter` | (CHAT-16) the chats it is in on the scope — read, post, mark read, close, rename, its images — and nothing of the tickets (no `tickets.*`; a viewer's permit is never minted from it). Made by an admin's `chats.add --grant chat`, on the ticket alone (or, outside tickets, the organization); beside the line, not on it |
 
 Every read is answered under the caller's filter **and** their viewer
 scopes. `list --filter 'status Ready'` from someone with IDENTITY and OUGHT

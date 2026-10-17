@@ -9,6 +9,9 @@ export interface Chat {
     /** CHAT-8: how many messages it holds — the app's spacer for what it
   has not fetched. */
     count?: number;
+    /** CHAT-16: the participants whose seat came with a grant an admin's
+  add made, still held — removing one offers to revoke it. */
+    granted?: string[];
     /** Its id: 1, 2, … in the order chats were opened, never reused. */
     id: ChatId;
     /** CHAT-14: a ticket's chat, a direct message or a group. */
@@ -31,6 +34,9 @@ export interface Chat {
     /** The ticket it was opened on, by its key as it stands now — none for a
   direct message or a group (CHAT-14). */
     ticket?: string | null;
+    /** CHAT-16: its ticket's title — what one who holds this chat only
+  sees of the ticket, beside its id. */
+    ticketTitle?: string | null;
     title?: string | null;
     /** The caller's unread messages in it. */
     unread: number;
@@ -38,6 +44,8 @@ export interface Chat {
   "waiting for a message"): who is listening, as the pane shows it. */
     waiting?: string[];
 }
+/** CHAT-16: what an admin's add grants one who can't read the chat's ticket: ticket (view it) or chat (this chat only) (any case) */
+export type ChatGrant = "ticket" | "chat";
 /** CHAT-14: what a chat is — on a ticket (CHAT-1), or outside tickets: a
 direct message between two, or a group. */
 export type ChatKind = "ticket" | "direct" | "group";
@@ -81,17 +89,33 @@ export interface ChatsEventMessage {
     type: 'message';
     message: Message;
 }
-/** `add`'s answer, and on `watch`: the chat with its participants now. */
+/** `add`'s answer, and on `watch`: the chat with its participants now.
+CHAT-16: `granted` — what the add granted, in words (`viewer on
+KILN-7`, `chatter on KILN-7`), when it granted. */
 export interface ChatsEventAdded {
     type: 'added';
     chat: Chat;
+    granted: string | null;
+}
+/** CHAT-16: `add`'s answer when the one named can't read the chat's
+ticket (or, outside tickets, holds no grant in its organization) and
+the call named no `grant`: nothing written; an admin adds again
+with one of `choices` (`ticket`, `chat`). The app's dialog. */
+export interface ChatsEventNeedsGrant {
+    type: 'needs_grant';
+    chat: ChatId;
+    choices: ChatGrant[];
+    principal: string;
+    ticket: string | null;
 }
 /** CHAT-14: `remove`'s answer, and on `watch` to those still in it: the
-chat with its participants now. The one removed hears `left`. */
+chat with its participants now. The one removed hears `left`.
+CHAT-16: `revoked` — the grant the add made was revoked with it. */
 export interface ChatsEventRemoved {
     type: 'removed';
     chat: Chat;
     principal: string;
+    revoked: boolean;
 }
 /** `read`'s answer, and on the reader's own other `watch`es: its mark
 in `chat` is `upto`, and `unread` are after it. */
@@ -192,13 +216,14 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 export declare function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened;
 export declare function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat;
 export declare function isChatsEventCandidate(e: ChatsEvent): e is ChatsEventCandidate;
 export declare function isChatsEventPosted(e: ChatsEvent): e is ChatsEventPosted;
 export declare function isChatsEventMessage(e: ChatsEvent): e is ChatsEventMessage;
 export declare function isChatsEventAdded(e: ChatsEvent): e is ChatsEventAdded;
+export declare function isChatsEventNeedsGrant(e: ChatsEvent): e is ChatsEventNeedsGrant;
 export declare function isChatsEventRemoved(e: ChatsEvent): e is ChatsEventRemoved;
 export declare function isChatsEventRead(e: ChatsEvent): e is ChatsEventRead;
 export declare function isChatsEventClosed(e: ChatsEvent): e is ChatsEventClosed;

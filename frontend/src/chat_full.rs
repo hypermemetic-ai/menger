@@ -179,6 +179,11 @@ pub(crate) fn signal() -> ArcRwSignal<bool> {
     FULL.with(Clone::clone)
 }
 
+/// CHAT-14: whether `#/chats` is up — where a chat has no dock to go back to.
+pub(crate) fn in_inbox() -> bool {
+    INBOX.with(std::cell::Cell::get) > 0
+}
+
 /// The keys stand down while the session is up (src/keys.rs).
 pub(crate) fn is_up() -> bool {
     signal().get_untracked() || INBOX.with(std::cell::Cell::get) > 0
