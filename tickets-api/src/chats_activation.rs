@@ -71,7 +71,9 @@ impl ChatsActivation {
     /// Open a chat on a ticket with the principals named; yields opened { chat } — the open chat they already have there, when they do (existing: true).
     ///
     /// The caller and `others` are the participants (CHAT-1's `with`, which
-    /// TypeScript does not take as a parameter's name); every one of them must be
+    /// TypeScript does not take as a parameter's name) — `others` empty or
+    /// absent is a chat of one, the caller's alone, to add to later (CHAT-6);
+    /// every one of them must be
     /// able to read the ticket, or the call is `refused { reasons }`, naming
     /// each who cannot, and nothing is made. A ticket the caller cannot read
     /// is refused as one that is none. `watch` carries `opened` to each
@@ -85,13 +87,13 @@ impl ChatsActivation {
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// The ticket the chat is about, e.g. KILN-7 (required: there is no chat without a ticket).
         ticket: TicketRef,
-        /// Who else is in it: principals, each able to read the ticket.
-        others: Vec<Principal>,
+        /// Who else is in it: principals, each able to read the ticket (none, or absent: a chat of one).
+        others: Option<Vec<Principal>>,
         /// A title for it (optional).
         title: Option<Title>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let (store, access) = (self.store.clone(), self.access.clone());
-        let others = others.into_iter().map(Principal::into_string).collect();
+        let others = others.unwrap_or_default().into_iter().map(Principal::into_string).collect();
         futures::stream::once(async move { open(store, access, user, ticket.into_string(), others, title.map(Title::into_string)).await })
     }
 

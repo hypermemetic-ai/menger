@@ -24,7 +24,8 @@
 //!   a grant in the ticket's organization, and whether it reads the ticket;
 //!   one that cannot is shown and cannot be picked ([`refusal`]); the same
 //!   people's open chat opens instead of a new one
-//!   ([`crate::chats::Held::existing`]).
+//!   ([`crate::chats::Held::existing`]); nobody picked is "just me", a
+//!   chat of one (CHAT-6, [`start_of`]).
 //! - **Reading**: what the pane shows is read — `chats.read` up to its last
 //!   message, whenever it has unread — and the counts follow in every open
 //!   app (the server says `read` to the reader's other watches).
@@ -743,7 +744,7 @@ fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done: Callback<
         let (t, me) = (ticket.clone(), me.clone());
         Memo::new(move |_| {
             let p = picked.get();
-            if p.is_empty() || chat_id.is_some() {
+            if chat_id.is_some() {
                 return None;
             }
             held.with(|h| h.as_ref().and_then(|h| h.existing(&t, &me, &p)))
@@ -756,8 +757,21 @@ fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done: Callback<
             Some(Err(e)) => view! { <p class="perr" role="alert">{e}</p> }.into_any(),
             Some(Ok(all)) => {
                 let shown = rows(&all, &me, &already, &query.get(), &name);
+                // CHAT-6: the picker's first row, "just me" — nobody picked is a chat of one.
+                let alone = (chat_id.is_none()).then(|| {
+                    let who = name(&me);
+                    view! {
+                        <ul class="pcands pjust">
+                            <li class="pcand pme" class:hi=move || picked.with(Vec::is_empty) data-principal="" on:click=move |_| picked.set(Vec::new())>
+                                <span class="pav" aria-hidden="true">{crate::conversation::initials(&who)}</span>
+                                <div>"Just me"<small>"a chat of one — add people and agents later"</small></div>
+                                <span class="dot"></span>
+                            </li>
+                        </ul>
+                    }
+                });
                 if shown.is_empty() {
-                    return view! { <p class="pempty">"Nobody else holds a grant here."</p> }.into_any();
+                    return view! { {alone}<p class="pempty">"Nobody else holds a grant here."</p> }.into_any();
                 }
                 let waiting = waiting.get();
                 let items = shown
@@ -811,7 +825,7 @@ fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done: Callback<
                         }
                     })
                     .collect_view();
-                view! { <ul class="pcands">{items}</ul> }.into_any()
+                view! { {alone}<ul class="pcands">{items}</ul> }.into_any()
             }
         }
     };
@@ -832,12 +846,9 @@ fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done: Callback<
     let start = {
         let t = ticket.clone();
         move |_| {
-            if let Some(c) = existing.get_untracked() {
-                show(View::Chat(c));
-                return;
-            }
             let others = picked.get_untracked();
-            if others.is_empty() {
+            if let Start::Open(c) = start_of(&others, existing.get_untracked()) {
+                show(View::Chat(c));
                 return;
             }
             let t = t.clone();
@@ -868,14 +879,49 @@ fn Picker(ticket: String, add_to: Option<(u64, Vec<String>)>, on_done: Callback<
             {move || error.get().map(|e| view! { <p class="perr" role="alert">{e}</p> })}
             {(!adding).then(|| view! {
                 <div class="prow">
-                    <span>{move || if existing.get().is_some() { "a chat with them is open already: it opens instead" } else { "people and agents who can read the ticket" }}</span>
-                    <button type="button" class="psend" disabled=move || picked.with(Vec::is_empty) on:click=start>
-                        {move || if existing.get().is_some() { "open" } else { "start" }}
+                    <span>{move || start_of(&picked.get(), existing.get()).hint()}</span>
+                    <button type="button" class="psend" on:click=start>
+                        {move || start_of(&picked.get(), existing.get()).label()}
                     </button>
                 </div>
             })}
             {adding.then(|| view! { <div class="prow"><button type="button" class="pcancel" on:click=move |_| on_done.run(())>"cancel"</button></div> })}
         </div>
+    }
+}
+
+/// What the picker's start button does (CHAT-6): open the chat the same
+/// people have, or start one — with nobody picked, a chat of one. It is
+/// never disabled: nobody picked is "just me".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Start {
+    /// The open chat these people (or you alone) already have.
+    Open(u64),
+    /// A new chat; `alone`: nobody picked, a chat of one.
+    New { alone: bool },
+}
+
+pub(crate) fn start_of(picked: &[String], existing: Option<u64>) -> Start {
+    match existing {
+        Some(c) => Start::Open(c),
+        None => Start::New { alone: picked.is_empty() },
+    }
+}
+
+impl Start {
+    fn label(self) -> &'static str {
+        match self {
+            Start::Open(_) => "open",
+            Start::New { .. } => "start",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            Start::Open(_) => "a chat with them is open already: it opens instead",
+            Start::New { alone: true } => "just you: a chat of one, to add people and agents to later",
+            Start::New { alone: false } => "people and agents who can read the ticket",
+        }
     }
 }
 
@@ -917,6 +963,23 @@ mod tests {
     use crate::bindings::{pick_single, table_with, Press};
     use crate::chats::tests::{chat, msg};
     use menger_tickets_api::ChatsEvent;
+
+    /// CHAT-6: the picker's start button with nobody picked starts a chat
+    /// of one (never disabled); your open chat of one opens instead; with
+    /// someone picked it is the chat with them, as before.
+    #[test]
+    fn start_with_nobody_picked_is_a_chat_of_one() {
+        assert_eq!(start_of(&[], None), Start::New { alone: true });
+        assert_eq!(start_of(&[], None).label(), "start");
+        assert!(start_of(&[], None).hint().starts_with("just you"));
+        assert_eq!(start_of(&[], Some(7)), Start::Open(7), "your chat of one, already open");
+        assert_eq!(start_of(&["builder".into()], None), Start::New { alone: false });
+        assert_eq!(start_of(&["builder".into()], Some(41)).label(), "open");
+        // The held chats answer the empty set with the chat of one.
+        let h = crate::chats::Held::from_events([ChatsEvent::Chat { chat: chat(7, "KILN-7", &["ada"]) }, ChatsEvent::Chat { chat: chat(41, "KILN-7", &["ada", "builder"]) }]);
+        assert_eq!(h.existing("KILN-7", "ada", &[]), Some(7));
+        assert_eq!(h.existing("KILN-7", "rui", &[]), None);
+    }
 
     /// URL row: `?chat=ID` opens the pane on that chat, and the pane keeps
     /// the query to the chat it shows, the rest of the query as it was.

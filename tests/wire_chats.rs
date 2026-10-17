@@ -182,6 +182,13 @@ async fn open_post_and_await_message_across_two_connections() {
     let sam = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [principal(&SAM)] })).await;
     assert_eq!(sam, json!({ "type": "refused", "reasons": [format!("{} can't read A-2", principal(&SAM))] }));
 
+    // CHAT-6: no `others` at all is a chat of one; `others: []` is the same chat.
+    let alone = one(&ada, "chats.open", json!({ "ticket": "A-2" })).await;
+    assert_eq!(alone["type"], "opened", "{alone}");
+    assert_eq!(alone["chat"]["participants"], json!([principal(&ADA)]));
+    let empty = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [] })).await;
+    assert_eq!((empty["chat"]["id"].as_u64(), empty["existing"].as_bool()), (alone["chat"]["id"].as_u64(), Some(true)));
+
     let opened = one(&ada, "chats.open", json!({ "ticket": "a-2", "others": [principal(&BUILDER)] })).await;
     assert_eq!(opened["type"], "opened", "{opened}");
     let chat = opened["chat"]["id"].as_u64().unwrap();

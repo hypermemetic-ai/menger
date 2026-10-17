@@ -479,7 +479,8 @@ impl Store {
     }
 
     /// CHAT-3: opens a chat on the ticket `on` names among `by` and `with` (the call's `others`)
-    /// — each of `with` one `reads` says can read the ticket — or answers
+    /// — each of `with` one `reads` says can read the ticket; CHAT-6: `with`
+    /// may name no one, and the chat is `by`'s alone — or answers
     /// the open chat those participants already have there (`true`), and
     /// writes nothing.
     pub async fn open_chat(&self, on: Permit<Viewer>, by: Signer, with: Vec<String>, title: Option<String>, reads: impl Fn(&str) -> bool) -> Result<(ChatRecord, bool), ChatError> {
@@ -491,9 +492,6 @@ impl Store {
             }
         }
         let mut reasons = Vec::new();
-        if set.len() < 2 {
-            reasons.push("a chat is with someone: `others` names no one but you".to_string());
-        }
         if set.len() > PARTICIPANTS_MAX {
             reasons.push(format!("a chat holds at most {PARTICIPANTS_MAX} participants; this one would hold {}", set.len()));
         }

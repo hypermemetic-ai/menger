@@ -87,9 +87,46 @@ async fn a_chat_is_opened_on_its_ticket_and_the_same_chat_again_is_that_chat() {
     let (rows, next) = store.chats(&reader(ADA), &ChatQuery { ticket: Some("kiln-7".into()), ..Default::default() }, None, 50).unwrap();
     assert_eq!(rows.iter().map(|c| c.id.get()).collect::<Vec<_>>(), [2, 1]);
     assert_eq!((next, rows[0].ticket.as_str(), rows[0].unread), (None, "KILN-7", 0));
-    // Alone is no chat.
-    let alone = open(&store, ADA, "KILN-7", &[ADA]).await.unwrap_err();
-    assert_eq!(alone, ChatError::Refused(vec!["a chat is with someone: `others` names no one but you".into()]));
+}
+
+/// CHAT-6: a chat may have only you in it — `others` empty, or naming only
+/// the caller, is a chat of one; the same again is that chat; someone added
+/// later must read the ticket; and waiting in it waits for whoever is added
+/// (your own posts are no answer).
+#[tokio::test]
+async fn a_chat_of_one_is_opened_and_others_join_it_later() {
+    let store = kiln().await;
+    let mut rx = store.subscribe_chats();
+    let (c, existing) = open(&store, ADA, "KILN-7", &[]).await.unwrap();
+    assert!(!existing);
+    assert_eq!(c.parts.iter().map(|p| p.principal.as_str()).collect::<Vec<_>>(), [ADA], "the caller alone");
+    assert_eq!(rx.try_recv().unwrap(), ChatChange::Opened(c.clone()));
+    // Naming only yourself, or no one again: the same chat, nothing made.
+    for with in [&[][..], &[ADA][..], &["  "][..]] {
+        let (again, existing) = open(&store, ADA, "KILN-7", with).await.unwrap();
+        assert_eq!((again.id, existing), (c.id, true), "{with:?}");
+    }
+    assert!(rx.try_recv().is_err(), "nothing written, nothing said");
+    // Another person's chat of one on the same ticket is theirs.
+    assert_ne!(open(&store, RUI, "KILN-7", &[]).await.unwrap().0.id, c.id);
+    // A chat of one is listed on its ticket like any other, and holds the cell.
+    let (rows, _) = store.chats(&reader(ADA), &ChatQuery { ticket: Some("KILN-7".into()), ..Default::default() }, None, 50).unwrap();
+    assert_eq!(rows.iter().map(|r| r.id.get()).collect::<Vec<_>>(), [c.id]);
+    assert_eq!(admitted(&store, ADA, "chatting"), ["KILN-7"]);
+    // ada waits in it: her own post is no answer.
+    let mine = post(&store, ADA, c.id, "notes to self: the kiln log first").await.unwrap();
+    let wait = MessageWait { chat: Some(c.id), after: mine.id.get() - 1, ..Default::default() };
+    assert_eq!(store.message_for(&reader(ADA), &wait), None, "your own posts don't count");
+    // Adding: as ever, the one added must read the ticket.
+    let e = store.add_to_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), SAM.into(), reads).await.unwrap_err();
+    assert_eq!(e, ChatError::Refused(vec![format!("{SAM} can't read KILN-7")]));
+    let added = store.add_to_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), BUILDER.into(), reads).await.unwrap();
+    assert_eq!(added.parts.len(), 2);
+    let answer = post(&store, BUILDER, c.id, "reading it now").await.unwrap();
+    assert_eq!(store.message_for(&reader(ADA), &wait), Some(answer), "whoever is added and posts");
+    // Now a chat of two: ada's chat of one on KILN-7 is a new one.
+    let (fresh, existing) = open(&store, ADA, "KILN-7", &[]).await.unwrap();
+    assert!(!existing && fresh.id != c.id);
 }
 
 #[tokio::test]

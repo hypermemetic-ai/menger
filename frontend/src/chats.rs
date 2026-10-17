@@ -444,7 +444,7 @@ fn client() -> Result<menger_tickets_api::ChatsClient<std::rc::Rc<plexus_client:
 /// among the same people, when there is one).
 pub(crate) async fn open(ticket: &str, others: &[String]) -> Result<u64, String> {
     let c = client()?;
-    let ev = answer_of("open", c.open_all(crate::typed::typed(ticket)?, crate::typed::many(others)?, None).await)?;
+    let ev = answer_of("open", c.open_all(crate::typed::typed(ticket)?, Some(crate::typed::many(others)?), None).await)?;
     match ev {
         ChatsEvent::Opened { chat, .. } => Ok(chat.id.get()),
         _ => Err("open: no chat".into()),
