@@ -40,8 +40,8 @@
 #                                           for health; prints url=… (and to $HF_OUTPUTS)
 #   deploy/pipeline remote test --image IMAGE
 #   deploy/pipeline remote prod             RUN-25: app-test.menger.sh / app.menger.sh through
-#                                           hypermemetic-infra (app.yml; promote.yml for prod) —
-#                                           refused, changing nothing, until deploy/app.yml (RUN-11)
+#                                           hypermemetic-infra (app.yml; promote.yml for prod),
+#                                           driven by deploy/app.yml (RUN-11)
 #
 # DEPLOY-12: deploy test, sync, promote and rollback each tell menger what they
 # did — a deployment record (deploy/record → deployments.record): `started`
@@ -950,10 +950,13 @@ cmd_local() {
 
 # `remote test|prod` — app-test.menger.sh and app.menger.sh, through
 # hypermemetic-infra's Plexus app role, driven by menger's own deploy/app.yml
-# (SCAFFOLD-12's contract; RUN-11 writes it). test: `bin/infra app.yml -e
-# env=test -e sha=<the image's commit>`; prod: `bin/infra promote.yml` only —
-# the image test runs and passed (infra's rule). Until deploy/app.yml exists
-# each refuses, naming RUN-11, before it touches anything.
+# (SCAFFOLD-12's contract; RUN-11). test: `bin/infra app.yml -e env=test -e
+# sha=<the image's release>` — app.yml's image is
+# ghcr.io/hypermemetic-ai/menger tagged by the release's name (RUN-10's
+# IMAGE_STORE=ghcr), so a local menger:<release> is tagged that way first for
+# infra to ship; prod: `bin/infra promote.yml` only — the image test runs and
+# passed (infra's rule). Without deploy/app.yml each refuses, naming RUN-11,
+# before it touches anything.
 APP_YML=${MENGER_APP_YML:-$REPO/deploy/app.yml}
 cmd_remote() {
   local env=${1:-}; shift || true
@@ -971,10 +974,14 @@ cmd_remote() {
   local src; src=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")
   if [[ $env == test ]]; then
     [[ -n $img ]] || die "remote test needs an image: deploy/pipeline remote test --image menger:<release>"
-    local sha; sha=$(sha_of "${img##*:}")
-    [[ -n $sha ]] || die "'$img' names no release (menger:<release>, the release ending in its commit)"
-    step "remote test: $img → $host (bin/infra app.yml -e env=test -e sha=$sha)"
-    "$INFRA/bin/infra" app.yml -e "app_dir=$src" -e env=test -e "sha=$sha" >&2 \
+    local rel=${img##*:}
+    [[ -n $(sha_of "$rel") ]] || die "'$img' names no release (menger:<release>, the release ending in its commit)"
+    local ref=$IMAGE_GHCR:$rel
+    if [[ $img != "$ref" ]] && ! docker image inspect "$ref" >/dev/null 2>&1; then
+      docker tag "$img" "$ref" || die "could not tag $img as $ref (is $img in this machine's Docker?)"
+    fi
+    step "remote test: $ref → $host (bin/infra app.yml -e env=test -e sha=$rel)"
+    "$INFRA/bin/infra" app.yml -e "app_dir=$src" -e env=test -e "sha=$rel" >&2 \
       || { record app-test run "${img##*:}" "infra failed"; die "infra did not deploy $img to $host"; }
     record app-test run "${img##*:}" "ok $img"
   else
