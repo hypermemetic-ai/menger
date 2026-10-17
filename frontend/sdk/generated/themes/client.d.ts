@@ -118,8 +118,3 @@ export declare const requires: {
         readonly target: null;
     };
 };
-/** The themes activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export declare const defaultRoles: {
-    readonly editor: readonly ["themes.list", "themes.get", "themes.theme_for", "themes.watch", "themes.define", "themes.set"];
-    readonly viewer: readonly ["themes.list", "themes.get", "themes.theme_for", "themes.watch"];
-};

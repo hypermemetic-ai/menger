@@ -7,10 +7,15 @@
 #   scripts/landing-media.sh capture    only capture + encode (on a server `seed` just made: the clips write)
 #   scripts/landing-media.sh encode     only encode what capture left in $WORK/raw
 #
-# It runs a THROWAWAY menger — its own ports (4470–4472) and a scratch
+# It runs a THROWAWAY menger — its own ports (4470–4471) and a scratch
 # database under $WORK — seeded with a sample project (a small product team
 # shipping offline mode for a mobile app) through synapse, the same calls
-# anyone makes. Never prod's or test's ports (4450–4458), never
+# anyone makes. ACCESS-52: menger has no open mode (ACCESS-24), so the server
+# runs `--auth-provider key` with a key of its own ($WORK/operator.key, never
+# ~/.plexus) as `--admin`, and every client signs in with it
+# (scripts/throwaway-login.mjs): synapse with `--token-file`, the browser
+# with the shell's session cookie — as `owner`, and the sample's comments
+# and notes as the people who wrote them (a session named priya, sam). Never prod's or test's ports (4450–4458), never
 # ~/.local/share/menger/tickets.db, never the house tracker's tickets (its
 # one read is the UI components' source, for KIT-1: see below).
 #
@@ -31,30 +36,49 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${WORK:-$HOME/.cache/menger-landing-media}
 PORT=${PORT:-4470}          # WebSocket (synapse -P)
 SHELL_PORT=${SHELL_PORT:-4471}  # the app
-REST_PORT=${REST_PORT:-4472}
 MENGER_BIN=${MENGER_BIN:-$here/target/release/menger}
 OUT=$here/landing/media
 
-for p in "$PORT" "$SHELL_PORT" "$REST_PORT"; do
+for p in "$PORT" "$SHELL_PORT"; do
   if (( p >= 4450 && p <= 4458 )); then echo "landing-media: port $p is prod's or test's — refused" >&2; exit 2; fi
 done
 
 mkdir -p "$WORK"
-syn() { synapse -P "$PORT" menger "$@" >/dev/null; }
-# A release whose comments and notes take the author from the caller's
-# identity (no --author) gets the sample's lines without their names
-# (DESIGN-55 found it on 20261015T213139Z-af90d92).
-author() { synapse -P "$PORT" menger "$1" add --help 2>/dev/null | grep -q -- '--author' && printf '%s\n' --author "$2"; }
 say() { printf 'landing-media: %s\n' "$*" >&2; }
+# ACCESS-52: the throwaway server's operator — its key, and a session minted
+# with it per name (owner: the seed and the browser; priya, sam: their
+# comments and notes, which are signed with the caller's name), each token in
+# $WORK/session.NAME (0600).
+KEY=$WORK/operator.key
+session() {
+  local f=$WORK/session.$1
+  [[ -s $f ]] || node "$here/scripts/throwaway-login.mjs" session --url "ws://127.0.0.1:$PORT" \
+    --key "$KEY" --out "$f" --agent "$1" >/dev/null || { say "could not sign in to :$PORT as $1"; exit 1; }
+  printf '%s\n' "$f"
+}
+syn() { synapse --token-file "$(session owner)" -P "$PORT" menger "$@" >/dev/null; }
+# syn_by NAME …: the call signed as NAME.
+syn_by() { local who=$1; shift; synapse --token-file "$(session "$who")" -P "$PORT" menger "$@" >/dev/null; }
+# A release from before ACCESS-19 takes the author as --author; since, the
+# caller's name is the author (syn_by), and the flag is gone.
+author() { synapse --token-file "$(session owner)" -P "$PORT" menger "$1" add --help 2>/dev/null | grep -q -- '--author' && printf '%s\n' --author "$2"; }
 
 start_server() {
   [[ -x $MENGER_BIN ]] || { say "no binary at $MENGER_BIN (cargo build --release --features embedded-app, or set MENGER_BIN)"; exit 1; }
-  rm -f "$WORK"/demo.db*
-  PLEXUS_NO_REGISTRY=1 "$MENGER_BIN" --port "$PORT" --shell-port "$SHELL_PORT" --rest-port "$REST_PORT" \
+  rm -f "$WORK"/demo.db* "$WORK"/session.*
+  local op; op=$(node "$here/scripts/throwaway-login.mjs" key "$KEY")
+  # --no-rest: a release from before ACCESS-24 would otherwise open its REST
+  # bridge on prod's port; since, it is accepted and changes nothing.
+  PLEXUS_NO_REGISTRY=1 "$MENGER_BIN" --port "$PORT" --shell-port "$SHELL_PORT" --no-rest \
+    --auth-provider key --admin "$op" \
     --db-path "$WORK/demo.db" > "$WORK/server.log" 2>&1 &
   echo $! > "$WORK/server.pid"
   for _ in $(seq 1 100); do
-    if synapse -P "$PORT" menger tickets health >/dev/null 2>&1; then say "server up (pid $(cat "$WORK/server.pid"))"; return; fi
+    if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null \
+      && synapse --token-file "$(session owner 2>/dev/null)" -P "$PORT" menger tickets health >/dev/null 2>&1; then
+      say "server up (pid $(cat "$WORK/server.pid"), --admin $op)"; return
+    fi
+    rm -f "$WORK/session.owner"
     sleep 0.2
   done
   say "the server did not come up — $WORK/server.log"; exit 1
@@ -94,7 +118,7 @@ seed() {
   kit_body | python3 -c '
 import json, sys
 print(json.dumps({"epic": "KIT", "kind": "doc", "title": "Ticket components: decisions, inputs, checklists", "body": sys.stdin.read()}))
-' | node "$here/deploy/menger-call.mjs" --url "ws://127.0.0.1:$PORT" tickets.create > /dev/null
+' | MENGER_DEPLOY_KEY_FILE=$KEY node "$here/deploy/menger-call.mjs" --url "ws://127.0.0.1:$PORT" --agent owner tickets.create > /dev/null
   syn $T create --epic OFFLINE --kind scope --title 'Offline mode for the Fieldnote mobile app' --body "$(cat <<'EOF'
 Field crews lose signal in basements, tunnels and on site. Today the app shows a spinner and their notes are gone.
 
@@ -489,30 +513,30 @@ EOF
     --commits 3f9c2a1,8b41d07,c2e9f55,51aa0e3,9d7e214 --previous c2e9f55 --release 4.2-beta.3 --at 2026-10-14T09:05:00Z
 
   # a reader's comments on the app, and notes not yet tickets
-  syn comments add --anchor.route '#/ticket/OFFLINE-10' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
+  syn_by priya comments add --anchor.route '#/ticket/OFFLINE-10' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
     --anchor.excerpt 'Photos attached offline are lost' --anchor.ticket OFFLINE-10 $(author comments priya) \
     --body 'Seen twice on the Galaxy A12 too. Raising to the 4.2 blockers.'
-  syn comments add --anchor.route '#/ticket/OFFLINE-2' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
+  syn_by sam comments add --anchor.route '#/ticket/OFFLINE-2' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
     --anchor.excerpt 'Beta rollout' --anchor.ticket OFFLINE-2 $(author comments sam) \
     --body 'Can we start with 1% on iOS? TestFlight users are our most active.'
   # DESIGN-48: the team on the agent's plan — two notes on OFFLINE-15, both
   # pinned at its title (an anchor inside the framed body is placed only once
   # the frame has answered the probe, too late for a still)
-  syn comments add --anchor.route '#/ticket/OFFLINE-15' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
+  syn_by sam comments add --anchor.route '#/ticket/OFFLINE-15' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
     --anchor.excerpt 'Help site for offline mode' --anchor.ticket OFFLINE-15 $(author comments sam) \
     --body 'One page — but crews read this underground on a 5-inch phone: put the collide part first?'
-  syn comments add --anchor.route '#/ticket/OFFLINE-15' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
+  syn_by priya comments add --anchor.route '#/ticket/OFFLINE-15' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
     --anchor.excerpt 'Help site for offline mode' --anchor.ticket OFFLINE-15 $(author comments priya) \
     --body 'Agent: the banner copy should count photos too — see OFFLINE-10.'
-  syn notes add $(author notes priya) --body 'Offline search across the team: worth a spike after 4.2?'
-  syn notes add $(author notes sam) --body 'Show the outbox depth in the debug menu so support can ask for it.'
+  syn_by priya notes add $(author notes priya) --body 'Offline search across the team: worth a spike after 4.2?'
+  syn_by sam notes add $(author notes sam) --body 'Show the outbox depth in the debug menu so support can ask for it.'
   say "seeded: KIT-1, OFFLINE-1…17, SYNC-1…5, 2 deploys, 4 comments, 2 notes"
 }
 
 capture() {
-  node "$here/scripts/landing-media.mjs" --port "$SHELL_PORT" --ws-port "$PORT" --raw "$WORK/raw"
+  node "$here/scripts/landing-media.mjs" --port "$SHELL_PORT" --ws-port "$PORT" --session "$(session owner)" --raw "$WORK/raw"
   # DESIGN-55: the ask on two screens — the agent's terminal beside the app
-  node "$here/scripts/ask-recorded.mjs" --port "$SHELL_PORT" --ws-port "$PORT" --raw "$WORK/raw"
+  node "$here/scripts/ask-recorded.mjs" --port "$SHELL_PORT" --ws-port "$PORT" --session "$(session owner)" --raw "$WORK/raw"
 }
 
 # ── encode ───────────────────────────────────────────────────────────────

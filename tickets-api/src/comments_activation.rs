@@ -79,7 +79,8 @@ impl CommentsActivation {
     /// and is kept with that ticket's `updated_unix` as `version` (set by
     /// the server). ACCESS-19: the comment is signed by the caller — its
     /// principal kept, its name the author (the principal when it has no
-    /// name; `owner` with login off); no call names its author. Yields
+    /// name; `owner` on one kept before ACCESS-24, when login could be off);
+    /// no call names its author. Yields
     /// exactly one event: `comment` — the comment as kept: its id, state
     /// `open`, the time (`at`, unix seconds), the author, its anchor and
     /// body — or an in-band `error` naming the problem (an empty body, a

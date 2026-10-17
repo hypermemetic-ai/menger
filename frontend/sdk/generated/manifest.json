@@ -1,6 +1,37 @@
 {
   "comment": "COMP-10: written by scripts/sdk-codegen.sh from the IR hub-codegen generated this client from — each activation on the hub (COMMENT-2: comments beside tickets), its methods and their parameter names. tickets-api/tests/sdk_manifest.rs holds the activations to it. Do not edit: run the script.",
   "activations": {
+    "auth": {
+      "grant": [
+        "principal",
+        "role",
+        "scope"
+      ],
+      "login": [
+        "flow"
+      ],
+      "logout": [],
+      "providers": [],
+      "requires": [
+        "method"
+      ],
+      "revoke": [
+        "principal",
+        "role",
+        "scope"
+      ],
+      "role_set": [
+        "grants",
+        "role"
+      ],
+      "roles": [],
+      "schema": [],
+      "signup": [
+        "via"
+      ],
+      "waiting": [],
+      "whoami": []
+    },
     "chats": {
       "add": [
         "chat",

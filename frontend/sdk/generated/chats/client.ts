@@ -40,8 +40,9 @@ in is `not_found`.
 CHAT-4's picker: `reads` says whether the principal can read the
 ticket now (`open` and `add` refuse one that cannot). The caller is
 not among them. A ticket the caller cannot read is `refused` as one
-that is none. With login off, nobody holds a grant: the list is the
-chats' participants.
+that is none. A participant who holds no grant there now (one kept
+before ACCESS-24, when login could be off) is listed all the same, as
+one of the chats' participants.
    * @server-derived auth
    * @requiresAuth — resolver: self.access.verify
    * @requires `chats.candidates` anywhere it is held
@@ -250,10 +251,4 @@ export const requires = {
   "chats.reopen": { grant: "chats.reopen", target: null },
   "chats.schema": { grant: "chats.schema", target: null },
   "chats.watch": { grant: "chats.watch", target: null },
-} as const;
-
-/** The chats activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export const defaultRoles = {
-  "editor": ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.rename", "chats.watch", "chats.await_message", "chats.candidates"],
-  "viewer": ["chats.open", "chats.post", "chats.add", "chats.list", "chats.messages", "chats.read", "chats.close", "chats.reopen", "chats.rename", "chats.watch", "chats.await_message", "chats.candidates"],
 } as const;

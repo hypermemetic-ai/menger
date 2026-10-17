@@ -90,7 +90,8 @@ impl From<crate::types::TransitionSource> for RevisionSource {
 
 /// One revision, as `revisions list` answers it: the ticket and its number
 /// (`rev`, from 1), when, who (`actor`: a principal, `system`, `anonymous`
-/// with login off; `name`, the caller's display name), from where
+/// on one kept before ACCESS-24, when login could be off; `name`, the
+/// caller's display name), from where
 /// (`source`), why (`message`), what caused it (`cause`: the ticket whose
 /// change carried this one — a cancel's cascade, the first ticket of a
 /// write that revised several), the fields it changed against the revision

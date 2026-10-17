@@ -2,7 +2,12 @@
 // MENGER-10: captures the landing page's stills and clips from a throwaway
 // menger seeded by scripts/landing-media.sh (which runs this, then encodes).
 //
-//   node scripts/landing-media.mjs --port 4471 --ws-port 4470 --raw DIR [--only NAME,...]
+//   node scripts/landing-media.mjs --port 4471 --ws-port 4470 --session FILE --raw DIR [--only NAME,...]
+//
+// --session FILE: a session token on that server (ACCESS-52: menger has no
+// open mode; scripts/landing-media.sh mints one with its throwaway key —
+// scripts/throwaway-login.mjs). synapse carries it as --token-file, every
+// browser context as the shell's session cookie.
 //
 // Stills: DIR/stills/<name>.<light|dark>.png at 1440×900, 2× — they look
 // only (nothing is saved). Clips: DIR/clips/<name>.mp4, near-lossless, from
@@ -12,6 +17,7 @@
 // A pointer and key caps are drawn over the page in the clips so a viewer
 // can follow what is clicked and typed; everything under them is the app.
 import { createRequire } from 'node:module';
+import { readToken, signInContext } from './throwaway-login.mjs';
 import { parseArgs } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -22,10 +28,13 @@ const { values: opt } = parseArgs({
     port: { type: 'string', default: '4471' },
     'ws-port': { type: 'string', default: '4470' },
     raw: { type: 'string' },
+    session: { type: 'string' },
     only: { type: 'string' },
   },
 });
 if (!opt.raw) throw new Error('--raw DIR is required');
+if (!opt.session) throw new Error('--session FILE is required (a session token on the throwaway server: scripts/throwaway-login.mjs)');
+const TOKEN = readToken(opt.session);
 for (const p of [opt.port, opt['ws-port']]) if (+p >= 4450 && +p <= 4458) throw new Error(`port ${p} is prod's or test's`);
 const base = `http://127.0.0.1:${opt.port}/`;
 const only = opt.only ? new Set(opt.only.split(',')) : null;
@@ -40,7 +49,7 @@ const CLIPS = join(opt.raw, 'clips');
 mkdirSync(STILLS, { recursive: true });
 mkdirSync(CLIPS, { recursive: true });
 
-const synapse = (...args) => execFileSync('synapse', ['-P', opt['ws-port'], 'menger', 'tickets', ...args], { stdio: 'ignore' });
+const synapse = (...args) => execFileSync('synapse', ['--token-file', opt.session, '-P', opt['ws-port'], 'menger', 'tickets', ...args], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // The app as a first-time visitor on this server sees it, minus the header's
@@ -75,6 +84,7 @@ async function ready(page, quiet = 900) {
 
 async function open(browser, { route, theme = 'light', width = 1440, height = 900, scale = 2, navHidden = false }) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale, colorScheme: theme });
+  await signInContext(context, base, TOKEN);
   await context.addInitScript(prime);
   if (navHidden) await context.addInitScript(() => { try { localStorage.setItem('menger.nav.hidden', '1'); } catch {} });
   const page = await context.newPage();

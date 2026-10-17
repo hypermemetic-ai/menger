@@ -7,8 +7,14 @@
 #
 #  1. Builds menger and starts a throwaway server on its own ports over a
 #     temporary database — SDK_CODEGEN_PORT (default 4466) for the
-#     WebSocket, +1 the app, +2 REST; never 4450–4462 (the deployed
-#     environments and the demo server) — stopped and deleted when done.
+#     WebSocket, +1 the app; never 4450–4462 (the deployed environments and
+#     the demo server) — stopped and deleted when done. ACCESS-52: menger
+#     has no open mode (ACCESS-24), and an anonymous schema read sees only
+#     the anonymous view (auth.*), so the server runs `--auth-provider key`
+#     with a key made for this run in the temporary directory as its
+#     `--admin`, and the generator reads the schema signed in as that
+#     operator (scripts/throwaway-login.mjs: a session minted with the key,
+#     handed to synapse-cc as --token-file).
 #  2. In the image: `synapse-cc build` reads the schema and hub-codegen
 #     writes the TypeScript client, installs its dependencies, compiles it
 #     and smoke-tests it against that server; tsc emits the client's
@@ -49,15 +55,16 @@ die() { say "$*"; exit 1; }
 
 # --- the ports -----------------------------------------------------------
 case "$port" in ''|*[!0-9]*) die "SDK_CODEGEN_PORT must be a port number, not '$port'" ;; esac
-if [ "$port" -le 4462 ] && [ $((port + 2)) -ge 4450 ]; then
-  die "ports $port–$((port + 2)) overlap 4450–4462 (menger's deployed environments and the demo server) — pick others with SDK_CODEGEN_PORT"
+if [ "$port" -le 4462 ] && [ $((port + 1)) -ge 4450 ]; then
+  die "ports $port–$((port + 1)) overlap 4450–4462 (menger's deployed environments and the demo server) — pick others with SDK_CODEGEN_PORT"
 fi
 answers() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-for p in "$port" $((port + 1)) $((port + 2)); do
+for p in "$port" $((port + 1)); do
   answers "$p" && die "something already listens on :$p — this script starts its own server; pick other ports with SDK_CODEGEN_PORT"
 done
 
 # --- the image -----------------------------------------------------------
+command -v node >/dev/null || die "node is not installed — the throwaway server's sign-in is scripts/throwaway-login.mjs"
 command -v docker >/dev/null || die "docker is not installed — codegen runs in a container"
 docker image inspect "$image" >/dev/null 2>&1 || die "image $image not found. Build it from the hypermemetic checkouts:
     $root/../dockerfiles/plexus-codegen/build.sh
@@ -71,13 +78,18 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-mkdir -p "$work/db" "$work/gen"
+mkdir -p "$work/db" "$work/gen" "$work/cred"
+chmod 700 "$work/cred"
 
 say "building menger"
 cargo build --quiet --manifest-path "$root/Cargo.toml" --bin menger
 bin="${CARGO_TARGET_DIR:-$root/target}/debug/menger"
-say "starting a throwaway menger on :$port (database in $work/db)"
-PLEXUS_NO_REGISTRY=1 "$bin" --port "$port" --shell-port $((port + 1)) --rest-port $((port + 2)) \
+# ACCESS-52: the run's own operator — a key in the temporary directory,
+# never ~/.plexus — is the server's --admin.
+operator="$(node "$root/scripts/throwaway-login.mjs" key "$work/cred/operator.key")"
+say "starting a throwaway menger on :$port (database in $work/db, --admin $operator)"
+PLEXUS_NO_REGISTRY=1 "$bin" --port "$port" --shell-port $((port + 1)) --no-rest \
+  --auth-provider key --admin "$operator" \
   --db-path "$work/db/menger.db" --app-dist "$work/no-dist" >"$work/server.log" 2>&1 &
 pid=$!
 for _ in $(seq 1 100); do
@@ -86,6 +98,11 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 answers "$port" || { cat "$work/server.log" >&2; die "the server did not listen on :$port"; }
+# Signed in as the operator: the session's token, for synapse-cc's
+# --token-file (it rides the upgrade as the access_token cookie).
+node "$root/scripts/throwaway-login.mjs" session --url "ws://127.0.0.1:$port" \
+  --key "$work/cred/operator.key" --out "$work/cred/session" --agent sdk-codegen >/dev/null \
+  || { cat "$work/server.log" >&2; die "could not sign in to the throwaway server"; }
 
 # --- what the container works on -----------------------------------------
 gen="$work/gen"
@@ -209,13 +226,14 @@ docker run --rm --network host \
   --security-opt label=disable \
   --user "$(id -u):$(id -g)" \
   -v "$gen:/work" -w /work \
+  -v "$work/cred/session:/run/menger-session:ro" \
   "$image" sh -euc '
     # SYNAPSE-CC-2: an older hub-codegen writes the server-injected params
     # (auth, user) into every generated method as optional `unknown`s, and
     # a #[child] mount as one `name(): Promise<unknown>` method.
     set -- $(hub-codegen --version)
     case "$2" in 0.[0-4].*) echo "sdk-codegen: hub-codegen $2 in the image predates 0.5.0 — rebuild it (../dockerfiles/plexus-codegen/build.sh)" >&2; exit 1 ;; esac
-    synapse-cc build >&2
+    synapse-cc build --token-file /run/menger-session >&2
     tsc=/work/generated/node_modules/.bin/tsc
     (cd generated && "$tsc" -p tsconfig.json --noEmit false --declaration --emitDeclarationOnly --outDir ../decl)
     "$tsc" -p tsconfig.check.json

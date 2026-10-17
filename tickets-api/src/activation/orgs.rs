@@ -5,8 +5,8 @@
 use super::*;
 
 /// ORG-4: an `ambiguous` answer as `caller` may hear it — only the
-/// candidates in the organizations it holds a role in (every one for `*`,
-/// and with login off); none left, `not_found`: another organization's
+/// candidates in the organizations it holds a role in (every one for `*`);
+/// none left, `not_found`: another organization's
 /// tickets and shortcodes are not a stranger's to learn. Every other
 /// refusal as [`refusal`] says it.
 pub(super) fn veiled(caller: &VerifiedUser, e: StoreError) -> TicketsEvent {

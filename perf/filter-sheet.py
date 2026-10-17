@@ -10,14 +10,24 @@ AFTER_DB, back to back on ephemeral ports (never 4450-4462): the time from
 spawn to `health`, the store's own "read the derived state" time, and the
 RSS once it serves. Then both serve at once — perf/filter-probe.mjs runs
 against each, and perf/filter-identical.mjs compares them — and the load
-average is printed beside every number."""
-import json, os, re, socket, statistics, subprocess, sys, time, urllib.request
+average is printed beside every number.
+
+ACCESS-52: every server runs `--auth-provider key` with a key of the
+sheet's own (sheet-logs/operator.key) as --admin (perf/menger_ws.py);
+"serving" is now spawn to the socket's first answer (`auth.providers`, the
+anonymous view's — `health` over REST before ACCESS-24), and each probe
+signs in with that server's session ($MENGER_SESSION_FILE; the byte
+comparison $MENGER_SESSION_FILES, one per port). A BEFORE binary must take
+`--auth-provider key` (IDENTITY-42 and after)."""
+import json, os, re, socket, statistics, subprocess, sys, time
+from menger_ws import Throwaway, signed_in, wait_ready
 
 BEFORE, AFTER, BDB, ADB = sys.argv[1:5]
 ROUNDS = int(sys.argv[5]) if len(sys.argv) > 5 else 3
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOGS = os.path.join(os.path.dirname(os.path.abspath(ADB)), "sheet-logs")
 os.makedirs(LOGS, exist_ok=True)
+WHO = Throwaway(LOGS)
 
 def load():
     return open("/proc/loadavg").read().split()[:3]
@@ -31,21 +41,14 @@ def free(n):
     return ports
 
 def start(binary, db, tag):
-    ws, rest = free(2)
+    ws, = free(1)
     log = os.path.join(LOGS, f"{tag}.log")
     t = time.perf_counter()
-    p = subprocess.Popen([binary, "--db-path", db, "--port", str(ws), "--rest-port", str(rest), "--no-shell"],
+    p = subprocess.Popen([binary, "--db-path", db, "--port", str(ws), "--no-shell", *WHO.args()],
                          stdout=open(log, "w"), stderr=subprocess.STDOUT, env={**os.environ, "PLEXUS_NO_REGISTRY": "1", "NO_COLOR": "1"})
-    while True:
-        if p.poll() is not None:
-            raise SystemExit(f"{tag} exited; see {log}")
-        try:
-            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{rest}/rest/tickets/health", data=b"{}",
-                                   headers={"content-type": "application/json"}), timeout=5).read()
-            break
-        except Exception:
-            time.sleep(0.05)
+    wait_ready(p, ws, deadline_s=3600, log=log)
     serving = time.perf_counter() - t
+    signed_in(WHO, ws)
     rss = int(open(f"/proc/{p.pid}/status").read().split("VmRSS:")[1].split()[0]) / 1024
     text = re.sub(r"\x1b\[[0-9;]*m", "", open(log).read())
     m = re.search(r"read the derived state from the database in ([0-9.]+) ms", text)
@@ -79,7 +82,8 @@ pa, wa, _ = start(AFTER, ADB, "after-probe")
 try:
     for tag, port in (("before", wb), ("after", wa)):
         la = load()
-        out = subprocess.run(["node", os.path.join(HERE, "filter-probe.mjs"), tag, str(port), "21"], capture_output=True, text=True)
+        out = subprocess.run(["node", os.path.join(HERE, "filter-probe.mjs"), tag, str(port), "21"], capture_output=True, text=True,
+                             env={**os.environ, "MENGER_SESSION_FILE": WHO.session_file(port)})
         print(json.dumps({"probe": tag, "loadavg": la}))
         print(out.stdout, end="")
         if out.returncode:
@@ -87,7 +91,8 @@ try:
     rss = {t: int(open(f"/proc/{p.pid}/status").read().split("VmRSS:")[1].split()[0]) / 1024 for t, p in (("before", pb), ("after", pa))}
     print(json.dumps({"rss_mib_after_probes": rss}))
     la = load()
-    out = subprocess.run(["node", os.path.join(HERE, "filter-identical.mjs"), str(wb), str(wa), "33"], capture_output=True, text=True)
+    out = subprocess.run(["node", os.path.join(HERE, "filter-identical.mjs"), str(wb), str(wa), "33"], capture_output=True, text=True,
+                         env={**os.environ, "MENGER_SESSION_FILES": f"{WHO.session_file(wb)},{WHO.session_file(wa)}"})
     print(json.dumps({"identical": "perf/filter-identical.mjs", "loadavg": la}))
     print(out.stdout, end="")
     if out.returncode:

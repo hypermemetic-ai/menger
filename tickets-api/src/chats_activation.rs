@@ -267,8 +267,9 @@ impl ChatsActivation {
     /// CHAT-4's picker: `reads` says whether the principal can read the
     /// ticket now (`open` and `add` refuse one that cannot). The caller is
     /// not among them. A ticket the caller cannot read is `refused` as one
-    /// that is none. With login off, nobody holds a grant: the list is the
-    /// chats' participants.
+    /// that is none. A participant who holds no grant there now (one kept
+    /// before ACCESS-24, when login could be off) is listed all the same, as
+    /// one of the chats' participants.
     #[plexus_macros::method(group = "read")]
     pub async fn candidates(
         &self,

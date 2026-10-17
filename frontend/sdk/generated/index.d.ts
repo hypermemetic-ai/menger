@@ -1,6 +1,7 @@
 export * from './types';
 export * from './rpc';
 export * from './transport';
+export * as Auth from './auth';
 export * as Chats from './chats';
 export * as Comments from './comments';
 export * as Deployments from './deployments';

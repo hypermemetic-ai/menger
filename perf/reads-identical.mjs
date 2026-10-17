@@ -9,6 +9,15 @@
 //
 // Prints the number of calls and items compared, and every difference;
 // exits 1 on one.
+// ACCESS-52: menger has no open mode (ACCESS-24), so every socket here
+// signs in: it carries `Authorization: Bearer <token>` from the file
+// $MENGER_SESSION_FILES names, BEFORE's then AFTER's, comma-separated (a
+// session belongs to the server that minted it; one $MENGER_SESSION_FILE
+// serves both when they share it) — an mgs_ token each, for a throwaway
+// server started `--auth-provider key --admin <its key>`:
+//   node scripts/throwaway-login.mjs session --url ws://127.0.0.1:PORT --key KEY --out FILE
+//   MENGER_SESSION_FILES=BEFORE_FILE,AFTER_FILE node perf/<probe>.mjs BEFORE_PORT AFTER_PORT …
+import { bearer } from "../scripts/throwaway-login.mjs";
 const [before, after, seedArg] = process.argv.slice(2);
 if (!before || !after) {
   console.error("usage: reads-identical.mjs BEFORE_PORT AFTER_PORT [SEED]");
@@ -22,7 +31,9 @@ const rand = (n) => {
   z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & 0xffffffffffffffffn;
   return Number((z ^ (z >> 31n)) % BigInt(n));
 };
-const open = (port) => new Promise((ok, no) => { const ws = new WebSocket(`ws://127.0.0.1:${port}`); ws.onopen = () => ok(ws); ws.onerror = no; });
+const sessions = (process.env.MENGER_SESSION_FILES || "").split(",").filter(Boolean);
+const sessionFor = (port) => sessions[port === before ? 0 : 1] ?? process.env.MENGER_SESSION_FILE;
+const open = (port) => new Promise((ok, no) => { const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: bearer(sessionFor(port)) }); ws.onopen = () => ok(ws); ws.onerror = no; });
 
 function caller(ws) {
   let pending = null, id = 0;

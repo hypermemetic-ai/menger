@@ -17,9 +17,19 @@ printed beside every number.
    `create` under the largest root, under one of its executions and under a
    build of it (three deep); `set_status` -> Complete of each; `set_parent`
    of a build from one execution to another and back, and of an execution
-   with children under another execution and back — medians, over REST.
-4. Reads: both serving at once, perf/tree-probe.mjs against each."""
-import json, os, shutil, socket, statistics, subprocess, sys, time, urllib.request
+   with children under another execution and back — medians, over the
+   WebSocket (send to `done`, one signed-in connection per server; over
+   REST before ACCESS-24).
+4. Reads: both serving at once, perf/tree-probe.mjs against each.
+
+ACCESS-52: every server runs `--auth-provider key` with a key of the
+sheet's own (WORK_DIR/logs/operator.key) as --admin (perf/menger_ws.py);
+"serving" is spawn to the socket's first answer (`auth.providers`, the
+anonymous view's — `health` over REST before), and the probe signs in with
+that server's session ($MENGER_SESSION_FILE). A BEFORE binary must take
+`--auth-provider key` (IDENTITY-42 and after)."""
+import json, os, shutil, socket, statistics, subprocess, sys, time
+from menger_ws import Socket, Throwaway, signed_in, wait_ready
 
 BEFORE, AFTER, SRC, WORK = sys.argv[1:5]
 ROUNDS = int(sys.argv[5]) if len(sys.argv) > 5 else 3
@@ -27,6 +37,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(WORK, exist_ok=True)
 LOGS = os.path.join(WORK, "logs")
 os.makedirs(LOGS, exist_ok=True)
+WHO = Throwaway(LOGS)
 
 def load():
     return open("/proc/loadavg").read().split()[:3]
@@ -45,30 +56,21 @@ def copy(src, dst):
         except FileNotFoundError: pass
     shutil.copyfile(src, dst)
 
-def rest(port, method, params, timeout=600):
-    req = urllib.request.Request(f"http://127.0.0.1:{port}/rest/tickets/{method}", data=json.dumps(params).encode(),
-                                 headers={"content-type": "application/json"})
-    t = time.perf_counter()
-    raw = urllib.request.urlopen(req, timeout=timeout).read()
-    return (time.perf_counter() - t) * 1000, json.loads(raw)["data"]
+def rest(conn, method, params):
+    """`tickets.<method>` on a signed-in socket: (ms, the data items)."""
+    return conn.timed(f"tickets.{method}", params)
 
 def start(binary, db, tag):
-    ws, rp = free(2)
+    ws, = free(1)
     log = os.path.join(LOGS, f"{tag}.log")
     t = time.perf_counter()
-    p = subprocess.Popen([binary, "--db-path", db, "--port", str(ws), "--rest-port", str(rp), "--no-shell"],
+    p = subprocess.Popen([binary, "--db-path", db, "--port", str(ws), "--no-shell", *WHO.args()],
                          stdout=open(log, "w"), stderr=subprocess.STDOUT, env={**os.environ, "PLEXUS_NO_REGISTRY": "1", "NO_COLOR": "1"})
-    while True:
-        if p.poll() is not None:
-            raise SystemExit(f"{tag} exited; see {log}")
-        try:
-            rest(rp, "health", {}, timeout=5)
-            break
-        except Exception:
-            time.sleep(0.05)
+    wait_ready(p, ws, deadline_s=3600, log=log)
     serving = time.perf_counter() - t
     rss = int(open(f"/proc/{p.pid}/status").read().split("VmRSS:")[1].split()[0]) / 1024
-    return p, ws, rp, {"serving_s": round(serving, 2), "rss_mib": round(rss, 1), "log": log}
+    token = signed_in(WHO, ws)
+    return p, ws, token, {"serving_s": round(serving, 2), "rss_mib": round(rss, 1), "log": log}
 
 def stop(p):
     p.terminate()
@@ -109,7 +111,8 @@ for tag in loads:
 def writes(binary, src, tag):
     db = os.path.join(WORK, f"{tag}-writes.db")
     copy(src, db)
-    p, _, rp, _ = start(binary, db, tag)
+    p, ws, token, _ = start(binary, db, tag)
+    rp = Socket(ws, token)
     try:
         _, kids = rest(rp, "list", {"parent": "MAP-1", "summary": True, "limit": 2000})
         execs = [e["summary"] for e in kids if e.get("type") == "summary" and e["summary"]["kind"] == "execution" and e["summary"]["child_count"] > 2]
@@ -154,6 +157,7 @@ def writes(binary, src, tag):
         out["rss_mib_after"] = round(int(open(f"/proc/{p.pid}/status").read().split("VmRSS:")[1].split()[0]) / 1024, 1)
         return out
     finally:
+        rp.close()
         stop(p)
 
 for r in range(ROUNDS):
@@ -166,7 +170,8 @@ pa, wa, _, _ = start(AFTER, ADB, "after-probe")
 try:
     for tag, port in (("before", wb), ("after", wa)):
         la = load()
-        out = subprocess.run(["node", os.path.join(HERE, "tree-probe.mjs"), tag, str(port), "21"], capture_output=True, text=True)
+        out = subprocess.run(["node", os.path.join(HERE, "tree-probe.mjs"), tag, str(port), "21"], capture_output=True, text=True,
+                             env={**os.environ, "MENGER_SESSION_FILE": WHO.session_file(port)})
         print(json.dumps({"probe": tag, "loadavg": la}))
         print(out.stdout, end="")
         if out.returncode:

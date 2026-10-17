@@ -10,7 +10,7 @@ export interface Chat {
     openedAt: number;
     /** Who opened it, and when (unix seconds). */
     openedBy: string;
-    /** Every participant, by principal (`anonymous` with login off), in
+    /** Every participant, by principal (`anonymous` on one kept before ACCESS-24, when login could be off), in
   the order they joined — the opener first. */
     participants: string[];
     state: ChatState;
@@ -188,7 +188,7 @@ export declare function isChatsEventError(e: ChatsEvent): e is ChatsEventError;
 export interface Message {
     /** When, unix seconds. */
     at: number;
-    /** Who wrote it: the caller's principal (`anonymous` with login off). */
+    /** Who wrote it: the caller's principal (`anonymous` on one kept before ACCESS-24, when login could be off). */
     author: string;
     /** What it says: markdown, rendered by the app's `md.rs`, never framed. */
     body: string;

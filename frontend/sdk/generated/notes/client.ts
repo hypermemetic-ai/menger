@@ -112,9 +112,3 @@ export const requires = {
   "notes.schema": { grant: "notes.schema", target: null },
   "notes.upgrade": { grant: "notes.upgrade", target: null },
 } as const;
-
-/** The notes activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export const defaultRoles = {
-  "editor": ["notes.add", "notes.list", "notes.get", "notes.upgrade"],
-  "viewer": ["notes.add", "notes.list", "notes.get"],
-} as const;

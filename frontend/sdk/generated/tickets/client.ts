@@ -174,8 +174,8 @@ how many tickets the store holds.
 MENGER-13: a ticket's history — every change of its status and its
 kind since the log began, as the store keeps them. Yields one
 `Transition` per transition of the ticket's, oldest first — `from` →
-`to`, when, who (`actor`: a principal, `system`, or `anonymous` with
-login off; `name`), from where (`source`: app, api, pipeline,
+`to`, when, who (`actor`: a principal, `system`, or `anonymous` on one
+kept before ACCESS-24, when login could be off; `name`), from where (`source`: app, api, pipeline,
 cascade), why (`message`) and what caused it (`cause`, a transition
 id) — then one per transition those caused in other tickets (a
 cancel's cascade, a restore's), in the order written, then exactly one
@@ -381,8 +381,8 @@ lifecycle — `set_status` on one is an in-band `Error`, whatever the
 status — and `Doc` is a doc's own: setting it on any other kind is an
 in-band `Error` too. Neither writes anything.
 
-MENGER-13: the change is a transition — the caller's (`anonymous`
-with login off), from `source` (`api` unless the call says `app` or
+MENGER-13: the change is a transition — the caller's (always
+someone, ACCESS-24), from `source` (`api` unless the call says `app` or
 `pipeline`), with its `message` — kept in the log and said on `watch`
 right after the `StatusChanged`. Into `Canceled`, the ticket's open
 inputs are withdrawn and every descendant still open work is
@@ -728,10 +728,4 @@ export const requires = {
   "tickets.update": { grant: "tickets.update", target: "id" },
   "tickets.update_many": { grant: "tickets.update_many", target: "ids" },
   "tickets.watch": { grant: "tickets.watch", target: null },
-} as const;
-
-/** The tickets activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
-export const defaultRoles = {
-  "editor": ["tickets.health", "tickets.get", "tickets.list", "tickets.find", "tickets.search", "tickets.watch", "tickets.history", "tickets.queued", "tickets.await_reply", "tickets.create", "tickets.set_status", "tickets.set_kind", "tickets.set_parent", "tickets.amend", "tickets.label", "tickets.update", "tickets.update_many", "tickets.queue", "tickets.unqueue", "tickets.snooze", "tickets.request_changes", "tickets.reshortcode", "tickets.archive", "tickets.restore"],
-  "viewer": ["tickets.health", "tickets.get", "tickets.list", "tickets.find", "tickets.search", "tickets.watch", "tickets.history", "tickets.queued", "tickets.await_reply"],
 } as const;

@@ -62,7 +62,7 @@ export interface Deployment {
     project: string;
     /** When menger kept it, unix seconds. */
     recordedAt: number;
-    /** Who sent it: a principal, `anonymous` with login off. */
+    /** Who sent it: a principal, `anonymous` on one kept before ACCESS-24, when login could be off. */
     recordedBy: string;
     release?: string | null;
     /** DEPLOY-25: the request a CI's record answers. */
