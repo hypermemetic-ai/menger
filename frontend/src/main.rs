@@ -313,6 +313,7 @@ mod phonebar;
 mod registry;
 mod rowclick;
 mod saved;
+mod scale;
 mod scopes;
 mod sections;
 mod selection;

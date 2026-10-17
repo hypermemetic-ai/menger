@@ -230,9 +230,16 @@ fn card_html(code: &str, held: Option<(String, String)>) -> String {
 }
 
 /// A message's body as a turn draws it: rendered, code heads, chips.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn body_html(m: &Message, card: &dyn Fn(&str) -> Option<(String, String)>) -> String {
-    let html = crate::md::render_body(&m.body).html;
-    chip_codes(&code_heads(&html, &fence_infos(&m.body)), card)
+    source_html(&m.body, card)
+}
+
+/// Markdown as a turn draws it — a whole body, or a long one's head or a
+/// chunk of it (CHAT-8).
+pub(crate) fn source_html(src: &str, card: &dyn Fn(&str) -> Option<(String, String)>) -> String {
+    let html = crate::md::render_body(src).html;
+    chip_codes(&code_heads(&html, &fence_infos(src)), card)
 }
 
 /// The text a turn's *quote* puts in the composer.

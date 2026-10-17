@@ -75,6 +75,14 @@ struct Args {
     #[arg(long, env = "MENGER_SEED_SYNTHETIC", value_name = "N")]
     seed_synthetic: Option<usize>,
 
+    /// CHAT-8: seed synthetic chats before serving, for its perf probe —
+    /// a comma list, each a count of messages (`10000`) or one message's
+    /// lines (`L5000`): a scope CHATS-1 and a ticket per chat, each chat
+    /// between the first --admin (its reader, who has read it all) and
+    /// `agent:builder`. Into a fresh database (it files tickets).
+    #[arg(long, env = "MENGER_SEED_SYNTHETIC_CHAT", value_name = "SPEC", value_delimiter = ',')]
+    seed_synthetic_chat: Vec<menger_tickets_api::store::ChatSeed>,
+
     /// RNG seed for --seed-synthetic: the same value reproduces the same
     /// tickets.
     #[arg(long, env = "MENGER_SEED_VALUE", default_value = "1", value_name = "U64")]
@@ -314,6 +322,11 @@ async fn main() -> anyhow::Result<()> {
     // cannot carry a credential (stdio) is served.
     if let Some(refusal) = refusal(&args.auth_provider, args.identity.is_some(), args.stdio) {
         anyhow::bail!(refusal);
+    }
+    // CHAT-8: the probe's chats, read by the first --admin (who signs in).
+    if !args.seed_synthetic_chat.is_empty() {
+        let reader = args.admin.first().cloned().ok_or_else(|| anyhow::anyhow!("--seed-synthetic-chat needs an --admin: the chats' reader"))?;
+        seed_chats(&db_path, &args.seed_synthetic_chat, &reader).await?;
     }
     let seed = args.seed_synthetic.map(|count| SeedSpec {
         count,
@@ -634,4 +647,19 @@ mod tests {
             assert!(!super::dev_login_allowed(env), "{env:?}");
         }
     }
+}
+
+/// CHAT-8: `--seed-synthetic-chat` — the chats seeded through the store,
+/// which is closed again before the server opens it.
+async fn seed_chats(db_path: &std::path::Path, seeds: &[menger_tickets_api::store::ChatSeed], reader: &str) -> anyhow::Result<()> {
+    let path = db_path.to_path_buf();
+    let started = std::time::Instant::now();
+    let store = tokio::task::spawn_blocking(move || menger_tickets_api::store::Store::open(&path)).await??;
+    let system = store.system().expect("a store just opened holds its System");
+    let made = store.seed_synthetic_chats(&system, seeds, reader).await.map_err(|e| anyhow::anyhow!("seeding chats failed: {e:?}"))?;
+    for (ticket, chat, n) in &made {
+        tracing::info!("seeded chat {chat} on {ticket}: {n} message(s)");
+    }
+    tracing::info!("seeded {} synthetic chat(s) in {:.1} ms", made.len(), started.elapsed().as_secs_f64() * 1000.0);
+    Ok(())
 }

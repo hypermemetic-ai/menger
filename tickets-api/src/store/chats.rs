@@ -41,6 +41,17 @@ use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
+/// CHAT-8: which way a page of messages runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Paging {
+    /// The messages after this id (0: from the first).
+    After(u64),
+    /// The messages before this id, the nearest last.
+    Before(u64),
+    /// The newest messages.
+    Newest,
+}
+
 /// The tables.
 pub(super) const TABLES: &str = "
         CREATE TABLE IF NOT EXISTS chats (
@@ -294,6 +305,8 @@ impl Chats {
             last_at: last.map_or(c.opened_at, |m| m.at),
             last_message: last.map(|m| m.id),
             unread: self.unread(c, me),
+            count: self.ids(c.id).len() as u64,
+            mark: c.part(me).map(|p| p.read_upto).filter(|m| *m > 0).map(MessageId::new),
             waiting: self.listening.get(&c.id).map(|w| w.keys().cloned().collect()).unwrap_or_default(),
         }
     }
@@ -394,13 +407,35 @@ impl Store {
     /// CHAT-3: one page of the messages of chat `id`, oldest first, strictly
     /// after the message `after`, at most `limit` — when `user` sees it.
     pub fn chat_messages(&self, user: &VerifiedUser, id: u64, after: Option<u64>, limit: u32) -> Result<(Vec<Message>, Option<u64>), ChatError> {
+        self.chat_page(user, id, Paging::After(after.unwrap_or(0)), limit)
+    }
+
+    /// CHAT-8: a page of chat `id`'s messages, oldest first within it —
+    /// after a message (`next` the page's last, while newer remain), or
+    /// back from one, or from the newest end (`next` the page's first,
+    /// while older remain: what `before` takes to go on back).
+    pub fn chat_page(&self, user: &VerifiedUser, id: u64, paging: Paging, limit: u32) -> Result<(Vec<Message>, Option<u64>), ChatError> {
         self.chat_seen(user, id)?;
         let cache = self.tickets.read().expect("store lock poisoned");
         let ids = cache.chats.ids(id);
-        let from = ids.partition_point(|&i| i <= after.unwrap_or(0));
-        let page: Vec<Message> = ids[from..].iter().take(limit as usize).filter_map(|i| cache.chats.messages.get(i).cloned()).collect();
-        let more = ids.len() - from > limit as usize;
-        Ok((page.clone(), more.then(|| page.last().map(|m| m.id.get())).flatten()))
+        let n = limit as usize;
+        let (from, to, more_back) = match paging {
+            Paging::After(after) => {
+                let from = ids.partition_point(|&i| i <= after);
+                let to = (from + n).min(ids.len());
+                let page: Vec<Message> = ids[from..to].iter().filter_map(|i| cache.chats.messages.get(i).cloned()).collect();
+                let next = (to < ids.len()).then(|| page.last().map(|m| m.id.get())).flatten();
+                return Ok((page, next));
+            }
+            Paging::Before(before) => {
+                let to = ids.partition_point(|&i| i < before);
+                (to.saturating_sub(n), to, true)
+            }
+            Paging::Newest => (ids.len().saturating_sub(n), ids.len(), true),
+        };
+        let page: Vec<Message> = ids[from..to].iter().filter_map(|i| cache.chats.messages.get(i).cloned()).collect();
+        let next = (more_back && from > 0).then(|| page.first().map(|m| m.id.get())).flatten();
+        Ok((page, next))
     }
 
     /// CHAT-3 (`await_message`): the first message `w` asks for, by someone
@@ -740,4 +775,126 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Chats> {
         });
     }
     Ok(chats)
+}
+
+/// CHAT-8: one synthetic chat for the perf probe — so many messages of
+/// mixed length (1–40 lines, some code), or one message so many lines long.
+/// Spelled `1000` or `L5000` (`--seed-synthetic-chat 10,1000,L5000`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatSeed {
+    Messages(usize),
+    Lines(usize),
+}
+
+impl std::str::FromStr for ChatSeed {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        let s = s.trim();
+        let (lines, n) = match s.strip_prefix(['L', 'l']) {
+            Some(n) => (true, n),
+            None => (false, s),
+        };
+        let n: usize = n.replace('_', "").parse().map_err(|_| format!("{s}: a count of messages (1000) or of one message's lines (L5000)"))?;
+        if n == 0 {
+            return Err(format!("{s}: at least one"));
+        }
+        Ok(if lines { ChatSeed::Lines(n) } else { ChatSeed::Messages(n) })
+    }
+}
+
+/// The `i`th synthetic message: 1–40 lines, every ninth a code block.
+pub fn synthetic_message(i: usize) -> String {
+    let lines = 1 + (i.wrapping_mul(7919).wrapping_add(13)) % 40;
+    if i % 9 == 4 {
+        let code: Vec<String> = (0..lines).map(|k| format!("    reading[{k}] = Reading {{ at: {}, celsius: {} }};", 1_000 + k, 1_000 + (i + k) % 300)).collect();
+        return format!("The schedule at step {i}:\n\n```rust kiln/src/schedule.rs\nfn step_{i}() {{\n{}\n}}\n```", code.join("\n"));
+    }
+    (0..lines).map(|k| format!("Line {} of message {i}: the kiln read {} °C, cone {} bending on shelf {}.", k + 1, 1_000 + (i + k) % 300, 5 + (i + k) % 3, ["A", "B", "C"][k % 3])).collect::<Vec<_>>().join("\n")
+}
+
+/// One synthetic message `n` lines long: paragraphs, a fence every 50 lines.
+pub fn synthetic_lines(n: usize) -> String {
+    let mut out = Vec::with_capacity(n + n / 10);
+    let mut k = 0;
+    while k < n {
+        if k % 50 == 40 && k + 6 <= n {
+            out.push("```text".to_string());
+            for j in 0..4 {
+                out.push(format!("{:>6}  {:>4} °C", k + j, 1_000 + (k + j) % 300));
+            }
+            out.push("```".to_string());
+            k += 6;
+            continue;
+        }
+        out.push(format!("Line {}: the firing log reads {} °C at minute {}.", k + 1, 1_000 + k % 300, k));
+        k += 1;
+        if k % 10 == 0 {
+            out.push(String::new());
+        }
+    }
+    out.join("\n")
+}
+
+impl Store {
+    /// CHAT-8: seed `seeds` as chats before serving (`--seed-synthetic-chat`)
+    /// — a scope CHATS-1, a ticket per chat under it, each chat between
+    /// `reader` (who has read it all) and `agent:builder`, its messages
+    /// written in bulk transactions and put in the cache. Answers each
+    /// chat's ticket, id and messages.
+    pub async fn seed_synthetic_chats(&self, sys: &super::System, seeds: &[ChatSeed], reader: &str) -> Result<Vec<(String, u64, usize)>, StoreError> {
+        let new = |title: String, kind, parent: Option<String>| super::NewTicket { epic: "CHATS".into(), title, kind, severity: None, blocked_by: Vec::new(), parent, path: None, body: String::new() };
+        let root = self.create(sys, new("Synthetic chats (CHAT-8's probe)".into(), crate::types::Kind::Scope, None)).await?;
+        let mut out = Vec::new();
+        for seed in seeds {
+            let title = match seed {
+                ChatSeed::Messages(n) => format!("a chat of {n} messages"),
+                ChatSeed::Lines(n) => format!("one message of {n} lines"),
+            };
+            let t = self.create(sys, new(title.clone(), crate::types::Kind::Build, Some(root.id.to_string()))).await?;
+            let bodies: Vec<String> = match *seed {
+                ChatSeed::Messages(n) => (0..n).map(synthetic_message).collect(),
+                ChatSeed::Lines(n) => vec![synthetic_lines(n)],
+            };
+            let _serial = self.write_serial.lock().await;
+            let now = chrono::Utc::now().timestamp();
+            let (chat, first) = {
+                let cache = self.tickets.read().expect("store lock poisoned");
+                (cache.chats.next_chat(), cache.chats.next_message())
+            };
+            let count = bodies.len();
+            let messages: Vec<Message> = bodies
+                .into_iter()
+                .enumerate()
+                .map(|(i, body)| {
+                    let author = if i % 2 == 0 { reader.to_string() } else { "agent:builder".to_string() };
+                    Message { id: MessageId::new(first + i as u64), chat: ChatId::new(chat), author, name: None, via: None, at: now - (count - i) as i64, body }
+                })
+                .collect();
+            let last = first + count as u64 - 1;
+            let parts = [reader, "agent:builder"].map(|p| Part { principal: p.to_string(), added_by: reader.to_string(), added_at: now, read_upto: if p == reader { last } else { 0 } }).into_iter().collect();
+            let record = ChatRecord { id: chat, ticket: t.id.to_string(), title: Some(title), state: ChatState::Open, opened_by: reader.to_string(), opened_at: now - count as i64 - 1, parts };
+            {
+                let mut conn = self.db.lock().expect("db lock poisoned");
+                for (i, chunk) in messages.chunks(50_000).enumerate() {
+                    let tx = conn.transaction().map_err(|e| StoreError::Db(e.to_string()))?;
+                    if i == 0 {
+                        store_chat(&tx, &record).map_err(|e| StoreError::Db(e.to_string()))?;
+                    }
+                    for m in chunk {
+                        store_message(&tx, m).map_err(|e| StoreError::Db(e.to_string()))?;
+                    }
+                    tx.commit().map_err(|e| StoreError::Db(e.to_string()))?;
+                }
+            }
+            {
+                let mut cache = self.tickets.write().expect("store lock poisoned");
+                for m in messages {
+                    cache.chats.put_message(m);
+                }
+                cache.chats.put_chat(record);
+            }
+            out.push((t.id.to_string(), chat, count));
+        }
+        Ok(out)
+    }
 }

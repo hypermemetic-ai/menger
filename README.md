@@ -190,6 +190,13 @@ already holds tickets **refuses** the seed and the server exits; pass
 with ids continuing after the existing ones. No new RPC method: the wire
 surface is unchanged.
 
+CHAT-8: `--seed-synthetic-chat SPEC` (`MENGER_SEED_SYNTHETIC_CHAT`) seeds
+chats the same way, for `perf/chat-probe.mjs` — a comma list, each a chat
+of that many messages (`100000`; 1–40 lines each, some code) or one
+message of so many lines (`L50000`): a scope CHATS-1 and a ticket per chat,
+each chat between the first `--admin` (its reader, who has read it all)
+and `agent:builder`. Into a fresh database.
+
 ```sh
 cargo run --release -- --db-path /tmp/scratch.db --seed-synthetic 100000 \
     --port 4470 --shell-port 4471 --auth-provider key --admin "$(synapse _key show builder)"
@@ -3144,7 +3151,7 @@ its name); `via` is kept for AGENT-3 and never set by a call.
 | `chats.post { chat, body }` | `posted { message { id, chat, author, name?, via?, at, body } }` — a participant's, in an open chat; markdown, not blank, at most the ticket body cap; the poster's mark moves to it. `refused`: `chat N is closed`, not a participant |
 | `chats.add { chat, principal }` | `added { chat }` — by a participant, to an open chat; the one added must read the ticket |
 | `chats.list { ticket?, unread?, state?, after?, limit? }` | `chat { chat }` each — by last activity, newest first — then `page { next }`. The caller's chats; with `ticket`, those on it (every one, for an admin of it). Each `chat`'s `unread` is the caller's, `waiting` who is on `await_message` for it now. 50 a page, at most 500 |
-| `chats.messages { chat, after?, limit? }` | `message { message }` each, oldest first, then `page { next }`; 100 a page, at most 1,000 |
+| `chats.messages { chat, after?, before?, newest?, limit? }` | a page of `message { message }`, oldest first within it, then `page { next }`; 100 a page, at most 1,000. `after` (a message id) pages forward, `next` the page's last while newer remain; CHAT-8: `newest: true` is the newest page and `before` (an id) pages back from one, `next` the page's first while older remain — what `before` takes to go on. A `Chat` says its `count` of messages and the caller's `mark` (its read mark) |
 | `chats.read { chat, upto }` | `read { chat, upto, unread }` — the caller's mark moved forward (never back) to its latest message at or before `upto` |
 | `chats.close { chat }` · `chats.reopen { chat }` | `closed { chat }` · `reopened { chat }` — by any participant; a closed chat is read-only, kept on its ticket |
 | `chats.rename { chat, title? }` | `renamed { chat }` (CHAT-7: the composer's `/title`) — by any participant; no title, or a blank one, clears it; the same title writes nothing. On watch too |
@@ -3185,7 +3192,18 @@ screen**: ⤢ on the dock's chat head, *full ↗* in its composer, `g c`, or
 the ticket's chats (and your other chats with unread), the chat in one
 780 px column, **ticket ⟩** bringing the ticket back beside it (its width
 dragged and kept, `menger.chat.split`); `c` starts a new chat, **Esc** or
-**← KILN-7** goes back to the dock.
+**← KILN-7** goes back to the dock. CHAT-8: **at scale** a chat
+holds a window, not the chat — a page sized to the viewport (`ceil(h / 24
+px) × 2`, 20 to 200) from the newest end (or around your read mark when
+more than a page is unread, or `?at=MSG`), older pages fetched as you near
+the top (inserted without moving what you read: the first visible turn is
+the anchor), only the turns within two viewports of the visible mounted
+(the rest spacers of their measured heights), at most six pages held (the
+far end dropped, fetched again on return); a message past 200 lines shows
+its head and **show all N lines**, rendered a chunk of blocks a task. A
+message arriving joins the window only when it reaches the newest; *jump to
+latest* fetches the newest again. `perf/chat-probe.mjs` holds it to its
+budgets.
 At ≥ 1760 the dock's column widens from 248 to 400; from 821 to 1759 the
 rail carries a chat mark per chat and an open chat pins the dock open as a
 400 px column; at ≤ 820 the phone bar's sections place counts the chats'

@@ -59,8 +59,10 @@
       ],
       "messages": [
         "after",
+        "before",
         "chat",
-        "limit"
+        "limit",
+        "newest"
       ],
       "open": [
         "others",

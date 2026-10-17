@@ -242,6 +242,16 @@ async fn open_post_and_await_message_across_two_connections() {
     let msgs = call(&ada, "chats.messages", json!({ "chat": chat })).await;
     assert_eq!(msgs.len(), 4, "three messages and the page: {msgs:?}");
     assert_eq!(msgs[3], json!({ "type": "page", "next": null }));
+    // CHAT-8: the newest page first, then back from it — oldest first within each.
+    let newest = call(&ada, "chats.messages", json!({ "chat": chat, "newest": true, "limit": 2 })).await;
+    let ids = |v: &[Value]| v.iter().filter_map(|e| e["message"]["id"].as_u64()).collect::<Vec<_>>();
+    let all = ids(&msgs);
+    assert_eq!(ids(&newest), all[1..], "{newest:?}");
+    assert_eq!(newest[2], json!({ "type": "page", "next": all[1] }));
+    let back = call(&ada, "chats.messages", json!({ "chat": chat, "before": all[1], "limit": 2 })).await;
+    assert_eq!((ids(&back), back[1].clone()), (all[..1].to_vec(), json!({ "type": "page", "next": null })));
+    let listed = call(&ada, "chats.list", json!({ "ticket": "A-2" })).await;
+    assert!(listed.iter().any(|e| e["chat"]["id"].as_u64() == Some(chat) && e["chat"]["count"] == 3), "{listed:?}");
 }
 
 #[tokio::test]

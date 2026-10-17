@@ -161,10 +161,13 @@ impl ChatsActivation {
         list_stream(self.store.clone(), user, q, after.map(ChatId::get), limit)
     }
 
-    /// A chat's messages, oldest first; a message { message } each, then page { next }.
+    /// A page of a chat's messages, oldest first within it; a message { message } each, then page { next }.
     ///
     /// For a participant (or an admin of its ticket); anyone else is
-    /// answered `not_found`. `after` (a message id) continues a page;
+    /// answered `not_found`. `after` (a message id) pages forward, `next`
+    /// the page's last while newer remain. CHAT-8: `newest: true` is the
+    /// newest page, and `before` (a message id) pages back from one — `next`
+    /// the page's first while older remain, what `before` takes to go on.
     /// `limit` is 100 unless given, at most 1,000.
     #[plexus_macros::method(group = "read")]
     pub async fn messages(
@@ -174,10 +177,14 @@ impl ChatsActivation {
         chat: ChatId,
         /// Cursor: the messages after this one (optional).
         after: Option<MessageId>,
+        /// Cursor: the messages before this one, the nearest last (optional; CHAT-8).
+        before: Option<MessageId>,
+        /// The newest page (optional; CHAT-8).
+        newest: Option<bool>,
         /// At most this many messages (default 100, at most 1000) (optional).
         limit: Option<u32>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
-        messages_stream(self.store.clone(), user, chat.get(), after.map(MessageId::get), limit)
+        messages_stream(self.store.clone(), user, chat.get(), paging(after, before, newest), limit)
     }
 
     /// Mark a chat read up to a message; yields read { chat, upto, unread }.

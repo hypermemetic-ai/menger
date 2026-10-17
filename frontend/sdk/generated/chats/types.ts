@@ -4,12 +4,19 @@
 /** One chat, as one caller sees it: `unread` is the caller's own count —
 the messages after its read mark (zero for an admin who is not in it). */
 export interface Chat {
+  /** CHAT-8: how many messages it holds — the app's spacer for what it
+has not fetched. */
+  count?: number;
   /** Its id: 1, 2, … in the order chats were opened, never reused. */
   id: ChatId;
   /** The time of its last message — its opening, until one is posted. */
   lastAt: number;
   /** Its last message's id, when it has one. */
   lastMessage?: MessageId | null;
+  /** CHAT-8: the caller's read mark — the last message it has read
+(none: nothing read, or not a participant). The app opens a chat
+with more unread than a page around it. */
+  mark?: MessageId | null;
   openedAt: number;
   /** Who opened it, and when (unix seconds). */
   openedBy: string;

@@ -65,16 +65,19 @@ export interface ChatsClient {
      */
     list(after?: ChatId | null, limit?: number | null, state?: ChatState | null, ticket?: TicketRef | null, unread?: boolean | null): AsyncGenerator<ChatsEvent>;
     /**
-     * A chat's messages, oldest first; a message { message } each, then page { next }.
+     * A page of a chat's messages, oldest first within it; a message { message } each, then page { next }.
   
   For a participant (or an admin of its ticket); anyone else is
-  answered `not_found`. `after` (a message id) continues a page;
+  answered `not_found`. `after` (a message id) pages forward, `next`
+  the page's last while newer remain. CHAT-8: `newest: true` is the
+  newest page, and `before` (a message id) pages back from one — `next`
+  the page's first while older remain, what `before` takes to go on.
   `limit` is 100 unless given, at most 1,000.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.messages` anywhere it is held
      */
-    messages(chat: ChatId, after?: MessageId | null, limit?: number | null): AsyncGenerator<ChatsEvent>;
+    messages(chat: ChatId, after?: MessageId | null, before?: MessageId | null, limit?: number | null, newest?: boolean | null): AsyncGenerator<ChatsEvent>;
     /**
      * Open a chat on a ticket with the principals named; yields opened { chat } — the open chat they already have there, when they do (existing: true).
   
