@@ -357,7 +357,7 @@ host-layer contract (SCAFFOLD-12/-19): the image
 deploy/pipeline image [RELEASE]`), two hosts, the WebSocket (8080) and the
 shell (8081) inside the container, the standard routes (`/ws` and any
 upgrade → the WebSocket, the rest → the shell, so RUN-9's metadata needs no
-route), a `/data` volume per environment (each its own tracker), 512 MB,
+route), a `/data` volume per environment (each its own tracker), 1 GB,
 and the health checks below. infra makes `/opt/apps/menger-test` (test)
 and `/opt/apps/menger` (prod) on the box, the edge's site per host (Caddy:
 Let's Encrypt over HTTP-01, http → https 308), the A record (DNS-only →
