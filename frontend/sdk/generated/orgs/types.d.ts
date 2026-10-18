@@ -18,7 +18,7 @@ export interface Grant {
 }
 /** Who gave a grant: a Plexus principal, --admin (the operator), dev-login or auth.grant */
 export type GrantedBy = string;
-/** Who a grant is to: a Plexus principal, or team:<name> */
+/** Who a grant is to: a Plexus principal, team:<name>, or everyone (every signed-in principal) */
 export type Grantee = string;
 /** One organization, as a reader of it sees it. */
 export interface Org {

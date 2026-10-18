@@ -67,19 +67,23 @@ pub(super) fn list_stream(store: Arc<Store>, access: Access, user: VerifiedUser,
 }
 
 /// ACCESS-22: who a grant or a revoke names — a principal or a team,
-/// exactly one.
-fn grantee(named: (Option<Principal>, Option<TeamName>)) -> Result<Grantee, MembersEvent> {
+/// exactly one. ACCESS-57: or everyone signed in (`everyone: true`).
+pub(super) type Named = (Option<Principal>, Option<TeamName>, Option<bool>);
+
+fn grantee(named: Named) -> Result<Grantee, MembersEvent> {
     match named {
-        (Some(p), None) => Ok(Grantee::Principal(p)),
-        (None, Some(t)) => Ok(Grantee::Team(t)),
-        _ => Err(MembersEvent::Error { message: "name a principal or a team (--principal or --team), one of the two".into() }),
+        (Some(p), None, None | Some(false)) => Ok(Grantee::Principal(p)),
+        (None, Some(t), None | Some(false)) => Ok(Grantee::Team(t)),
+        (None, None, Some(true)) => Ok(Grantee::Everyone),
+        _ => Err(MembersEvent::Error { message: "name a principal, a team or everyone (--principal, --team or --everyone true), one of the three".into() }),
     }
 }
 
 /// `members.grant`: ACCESS-11 — admin on the scope as it stands (ACCESS-3
 /// #2, #11), the grant signed by the caller. ACCESS-22: to a principal or
-/// a team, as the same rule.
-pub(super) async fn grant(store: Arc<Store>, access: Access, user: VerifiedUser, named: (Option<Principal>, Option<TeamName>), scope: String, role: Role) -> MembersEvent {
+/// a team, as the same rule. ACCESS-57: or to everyone signed in (the
+/// store refuses everyone admin).
+pub(super) async fn grant(store: Arc<Store>, access: Access, user: VerifiedUser, named: Named, scope: String, role: Role) -> MembersEvent {
     let principal = match grantee(named) {
         Ok(g) => g,
         Err(refused) => return refused,
@@ -104,7 +108,7 @@ pub(super) async fn grant(store: Arc<Store>, access: Access, user: VerifiedUser,
 }
 
 /// `members.revoke`: ACCESS-11 — admin on the scope as it stands.
-pub(super) async fn revoke(store: Arc<Store>, user: VerifiedUser, named: (Option<Principal>, Option<TeamName>), scope: String) -> MembersEvent {
+pub(super) async fn revoke(store: Arc<Store>, user: VerifiedUser, named: Named, scope: String) -> MembersEvent {
     let principal = match grantee(named) {
         Ok(g) => g,
         Err(refused) => return refused,

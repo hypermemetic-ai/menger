@@ -70,7 +70,7 @@ fn outcome(evs: Result<Vec<MembersEvent>, plexus_client::ClientError>) -> Result
 async fn grant(client: MembersClient<std::rc::Rc<plexus_client::WsTransport>>, principal: String, scope: String, role: String) -> Result<(), String> {
     let typed = || -> Result<_, String> { Ok((crate::typed::typed(&principal)?, crate::typed::typed(&scope)?, crate::typed::typed(&role)?)) };
     let (principal, scope, role) = typed()?;
-    outcome(client.grant_all(Some(principal), None, scope, role).await)
+    outcome(client.grant_all(Some(principal), None, None, scope, role).await)
 }
 
 #[component]
@@ -154,12 +154,14 @@ pub(crate) fn MembersPage() -> impl IntoView {
                             let Some(client) = session::members_client() else { return };
                             act(format!("revoked {p} on {s}"), Box::pin(async move {
                                 // ACCESS-22: a grant is to a principal or a team.
-                                let (principal, team) = match p {
-                                    menger_tickets_api::vocab::Grantee::Principal(p) => (Some(p), None),
-                                    menger_tickets_api::vocab::Grantee::Team(t) => (None, Some(t)),
+                                // ACCESS-57: or to everyone signed in.
+                                let (principal, team, everyone) = match p {
+                                    menger_tickets_api::vocab::Grantee::Principal(p) => (Some(p), None, None),
+                                    menger_tickets_api::vocab::Grantee::Team(t) => (None, Some(t), None),
+                                    menger_tickets_api::vocab::Grantee::Everyone => (None, None, Some(true)),
                                 };
                                 let scope = crate::typed::typed(&s.to_string())?;
-                                outcome(client.revoke_all(principal, team, scope).await)
+                                outcome(client.revoke_all(principal, team, everyone, scope).await)
                             }));
                         };
                         // CHAT-14: a person (not a team, not the reader) has Chat.

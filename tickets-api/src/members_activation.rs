@@ -71,12 +71,12 @@ impl MembersActivation {
     typed_params,
 )]
 impl MembersActivation {
-    /// Who you are, then your teams, then each grant you hold (a team's as team:<name>).
+    /// Who you are, then your teams, then each grant you hold (a team's as team:<name>, everyone's as everyone).
     ///
     /// One `me { principal, name, admin_everywhere }`, then (ACCESS-22) one
     /// `team` per team the caller is in, then one `grant` per grant the
-    /// caller holds — its own, and each team's (`principal: team:<name>`).
-    /// Someone signed in without a grant gets `me` and nothing else.
+    /// caller holds — its own, each team's (`principal: team:<name>`) and
+    /// (ACCESS-57) everyone's (`principal: everyone`).
     #[plexus_macros::method(group = "read")]
     pub async fn mine(&self, #[from_auth(self.access.verify)] user: VerifiedUser) -> impl Stream<Item = MembersEvent> + Send + 'static {
         mine_stream(self.access.clone(), user)
@@ -97,13 +97,14 @@ impl MembersActivation {
         list_stream(self.store.clone(), self.access.clone(), user, scope.map(String::from))
     }
 
-    /// Give a principal or a team a role (viewer, editor, admin; deployer for a CI's key) on an organization, a shortcode in one, a ticket, a ticket's subtree, or *.
+    /// Give a principal, a team or everyone signed in a role (viewer, editor, admin; deployer for a CI's key) on an organization, a shortcode in one, a ticket, a ticket's subtree, or *.
     ///
     /// Gives `principal` `role` on `scope` (a shortcode, `*`; ACCESS-21: a
     /// ticket alone, `MENGER-12`, or a ticket and everything under it,
     /// `under MENGER-12`, kept by the ticket's key so the grant follows it),
     /// replacing any role they held there. ACCESS-22: to `team` instead of
-    /// `principal` (exactly one of the two), its members hold it. Needs
+    /// `principal` (exactly one), its members hold it; ACCESS-57: to
+    /// `everyone`, every signed-in principal holds it (never admin). Needs
     /// admin on the scope, as the tree stands (ACCESS-11's `AdminOf`: for a
     /// ticket's scope, admin on a scope that covers it). Yields the grant as
     /// kept, or an in-band `error`.
@@ -121,18 +122,21 @@ impl MembersActivation {
         principal: Option<Principal>,
         /// ACCESS-22: a team instead of a principal, e.g. release-crew.
         team: Option<TeamName>,
+        /// ACCESS-57: true — every signed-in principal instead (kept as `everyone`).
+        everyone: Option<bool>,
         /// An organization (acme:), a shortcode in one (hypermemetic:IDENTITY, or IDENTITY — covers the shortcodes hosted under it), a ticket alone (IDENTITY-12), a ticket and its subtree (under IDENTITY-12), or *.
         scope: ScopeRef,
         /// viewer | editor | admin | deployer (a CI's key: the reads and deployments.record, DEPLOY-14).
         role: Role,
     ) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let (store, access) = (self.store.clone(), self.access.clone());
-        futures::stream::once(async move { grant(store, access, user, (principal, team), scope.into(), role).await })
+        futures::stream::once(async move { grant(store, access, user, (principal, team, everyone), scope.into(), role).await })
     }
 
     /// Take a principal's or a team's role on a scope (an organization, a shortcode, a ticket, a subtree, or *) away.
     ///
-    /// Takes `principal`'s (ACCESS-22: or `team`'s) role on `scope` away.
+    /// Takes `principal`'s (ACCESS-22: or `team`'s; ACCESS-57: or
+    /// `everyone`'s) role on `scope` away.
     /// Needs admin on the scope, as the tree stands. Yields `revoked {
     /// principal, scope, existed }`.
     #[plexus_macros::method(group = "admin", target = "scope")]
@@ -143,11 +147,13 @@ impl MembersActivation {
         principal: Option<Principal>,
         /// ACCESS-22: a team instead of a principal.
         team: Option<TeamName>,
+        /// ACCESS-57: true — everyone's grant instead.
+        everyone: Option<bool>,
         /// An organization (acme:), a shortcode in one, a ticket (IDENTITY-12), a subtree (under IDENTITY-12), or *.
         scope: ScopeRef,
     ) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let store = self.store.clone();
-        futures::stream::once(async move { revoke(store, user, (principal, team), scope.into()).await })
+        futures::stream::once(async move { revoke(store, user, (principal, team, everyone), scope.into()).await })
     }
 
     /// Who signed in without a grant, waiting for an admin.
