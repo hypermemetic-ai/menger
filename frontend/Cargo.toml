@@ -142,6 +142,8 @@ web-sys = { version = "0.3", features = [
   # animationend) and the counters' clock.
   "DomTokenList",
   "Event",
+  # APP-63: a restored field's `input` bubbles to the app's handler.
+  "EventInit",
   "AddEventListenerOptions",
   "Performance",
   # APP-44: the mockup compare reads a body's mockups from an inert
