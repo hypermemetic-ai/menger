@@ -334,7 +334,7 @@ fn on_touchmove(ev: web_sys::TouchEvent) {
 }
 
 fn on_pointerdown(ev: web_sys::PointerEvent) {
-    if ev.pointer_type() == "touch" || ev.button() != 0 {
+    if ev.pointer_type() == "touch" || !crate::bindings::is_main(&ev) {
         return;
     }
     let target: Option<web_sys::Element> = ev.target().and_then(|t| t.dyn_into().ok());

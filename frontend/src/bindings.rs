@@ -872,6 +872,12 @@ pub(crate) fn is_middle(ev: &web_sys::MouseEvent) -> bool {
     mouse_press(ev).button == Some(Button::MiddleClick)
 }
 
+/// Whether a mouse (or pointer) event is the main button's — CHAT-31's
+/// sheet drag starts only on it.
+pub(crate) fn is_main(ev: &web_sys::MouseEvent) -> bool {
+    mouse_press(ev).button == Some(Button::Click)
+}
+
 /// What this click (mousedown, right-click…) is in `ctx`.
 pub(crate) fn hit_mouse(ev: &web_sys::MouseEvent, ctx: Context) -> Option<&'static str> {
     let p = mouse_press(ev);
