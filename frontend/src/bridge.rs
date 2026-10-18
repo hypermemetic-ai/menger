@@ -740,7 +740,7 @@ pub(crate) struct Submit {
 /// or why not.
 pub(crate) fn admit(sdk: &str, ticket: Option<&str>, gesture: bool) -> Result<String, String> {
     if !gesture {
-        return Err(format!("{sdk}: only inside a viewer's click — the app saw no click or key in this frame just now (nothing sent)"));
+        return Err(format!("{sdk}: only inside a viewer's click — the app saw no click, tap or key in this frame just now (nothing sent)"));
     }
     match ticket.map(str::trim).filter(|t| !t.is_empty()) {
         Some(t) => Ok(t.to_string()),
@@ -1221,7 +1221,7 @@ mod tests {
         let err = admit(CLEAR, Some("DEMO-1"), false).unwrap_err();
         assert_eq!(
             err,
-            "menger.input.clear: only inside a viewer's click — the app saw no click or key in this frame just now (nothing sent)"
+            "menger.input.clear: only inside a viewer's click — the app saw no click, tap or key in this frame just now (nothing sent)"
         );
         let err = admit(CLEAR, None, true).unwrap_err();
         assert!(err.starts_with("menger.input.clear: this frame shows no ticket's stored body"), "{err}");

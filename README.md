@@ -2130,7 +2130,13 @@ for await (const ev of this.menger.tickets.inputs.list(undefined, undefined, und
   without the API is refused); the app's focused element is that `<iframe>`;
   since the app's own last click or key, the pointer came onto that frame
   or a Tab carried focus into it; and, while that click or key of the app's
-  is younger than 5 s, focus entered the frame after it. Any click or key
+  is younger than 5 s, focus entered the frame after it. On a touch screen
+  (APP-55) a tap in a frame gives the app no pointer at all, so where the
+  pointer the app last heard does not hover (a touch or pen; none heard
+  yet, `(hover: none)`), the pointer is not asked: while the app's own
+  touch is younger than 5 s the write is read again once that has run out
+  (APP-35's wait), and the tap's activation, with focus still on the frame,
+  is the gesture. Any click, tap or key
   elsewhere in the app is no gesture on the frame; **the frame renders a
   ticket** (its `data-ticket`); the params are exactly `{ input, value,
   rationale? }` (a `ticket` among them is refused); then, against that
