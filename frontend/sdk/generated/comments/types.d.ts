@@ -55,6 +55,16 @@ export interface CommentsEventWatchClosed {
     message: string;
     reason: WatchEnd;
 }
+/** COMMENT-9: `report`'s answer — the failure as the server keeps it. */
+export interface CommentsEventReported {
+    type: 'reported';
+    failure: Failure;
+}
+/** COMMENT-9: one of `failures`' rows, newest first. */
+export interface CommentsEventFailure {
+    type: 'failure';
+    failure: Failure;
+}
 /** A refusal, naming the problem; nothing was kept or changed. */
 export interface CommentsEventError {
     type: 'error';
@@ -62,7 +72,7 @@ export interface CommentsEventError {
 }
 /** What the `comments` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's. */
-export type CommentsEvent = CommentsEventComment | CommentsEventPage | CommentsEventAdded | CommentsEventResolved | CommentsEventReopened | CommentsEventLagged | CommentsEventWatchClosed | CommentsEventError;
+export type CommentsEvent = CommentsEventComment | CommentsEventPage | CommentsEventAdded | CommentsEventResolved | CommentsEventReopened | CommentsEventLagged | CommentsEventWatchClosed | CommentsEventReported | CommentsEventFailure | CommentsEventError;
 export declare function isCommentsEventComment(e: CommentsEvent): e is CommentsEventComment;
 export declare function isCommentsEventPage(e: CommentsEvent): e is CommentsEventPage;
 export declare function isCommentsEventAdded(e: CommentsEvent): e is CommentsEventAdded;
@@ -70,7 +80,35 @@ export declare function isCommentsEventResolved(e: CommentsEvent): e is Comments
 export declare function isCommentsEventReopened(e: CommentsEvent): e is CommentsEventReopened;
 export declare function isCommentsEventLagged(e: CommentsEvent): e is CommentsEventLagged;
 export declare function isCommentsEventWatchClosed(e: CommentsEvent): e is CommentsEventWatchClosed;
+export declare function isCommentsEventReported(e: CommentsEvent): e is CommentsEventReported;
+export declare function isCommentsEventFailure(e: CommentsEvent): e is CommentsEventFailure;
 export declare function isCommentsEventError(e: CommentsEvent): e is CommentsEventError;
+/** COMMENT-9: a comment the app could not keep, as it reported it — who,
+when, where, what it said and why it was not kept — so "can you see the
+failed submission?" has an answer. Kept in memory (the newest
+[`FAILURES_KEPT`]; a restart forgets them) and logged; read with
+`comments failures`. */
+export interface Failure {
+    /** The browser, as it names itself. */
+    agent?: string | null;
+    /** Where the comment was being left. */
+    anchor: Anchor;
+    /** When the server heard the report, unix seconds. */
+    at: number;
+    /** What it said (cut to [`BODY_MAX`]). */
+    body: string;
+    /** The reporter's principal. */
+    by: string;
+    /** When the app failed to keep it, unix seconds, as the app says (a
+  report waits in the browser while the socket is down). */
+    failedAt: number;
+    /** The reporter's name, when it has one. */
+    name?: string | null;
+    /** Why it was not kept, in the app's words. */
+    reason: string;
+    /** 1, 2, … in the order reports arrived since the server started. */
+    seq: number;
+}
 /** COMMENT-2: an app page, as its route — `#/ticket/DEMAND-2`, `#/` (the
 board) — always beginning `#/`. */
 export type Route = string;

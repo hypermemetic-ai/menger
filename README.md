@@ -2851,6 +2851,27 @@ synapse -P 4455 menger comments add --anchor.route '#/ticket/APP-22' --anchor.pa
   --anchor.label Conversation --anchor.ticket APP-22 --body "not what I meant: do X instead"
 ```
 
+**A comment is never lost on its way** (COMMENT-9). Every comment box — the
+Conversation and annotation mode's — keeps its draft in the browser
+(`localStorage` `menger.comment.drafts`, by the anchor's route and path)
+from the first keystroke until the server answers `comment`, and a box
+opened at the same place again starts from it (after a reload, or a trip to
+another page). `comments.add` has 15 s to answer: a socket that is down, or
+open and dead (a phone's backgrounded tab), shows *Not kept: <why> — your
+draft is still here.* with a **Retry**; a comment that lands after all (the
+watch's `added`, same place, same text) lets the draft go, so a Retry does
+not post it twice. Each failure is reported to the server —
+`comments.report { anchor, body, reason, failed_at?, agent? }`, from an
+outbox in the browser (`menger.comment.failures`) sent on this connection
+or the next — kept in memory (the newest 200; a restart forgets them) and
+logged (`WARN … COMMENT-9: a comment the app could not keep`, without the
+body). An agent reads them, newest first — its own and those whose comment
+it would have seen:
+
+```sh
+synapse -P 4455 menger comments failures --limit 20
+```
+
 ### Images in comments (COMMENT-5)
 
 A comment can show **images**: pasted (a screenshot from the clipboard),

@@ -23,7 +23,9 @@ const BUDGETS: &[(&str, usize)] = &[
     ("tickets-api/src/activation/mod.rs", 1750),
     // ACCESS-19: comments, members and session on the frame — their logic
     // beside each, in comments_activation/ and members_activation/.
-    ("tickets-api/src/comments_activation.rs", 250),
+    // COMMENT-9: report and failures — two methods' docs; their logic is in
+    // comments_activation/failures.rs and streams.rs.
+    ("tickets-api/src/comments_activation.rs", 270),
     ("tickets-api/src/notes_activation.rs", 330),
     ("tickets-api/src/members_activation.rs", 180),
     ("tickets-api/src/orgs_activation.rs", 240),

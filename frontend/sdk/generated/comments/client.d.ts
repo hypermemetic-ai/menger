@@ -1,7 +1,7 @@
 import type { RpcClient } from '../rpc';
 import type { AnchorPath, CommentsEvent, Route, Under } from './types';
 import type { Author, Body, Query, TicketRef } from '../notes/types';
-import type { Anchor, CommentId, CommentIntent, CommentState } from '../tickets/types';
+import type { Anchor, CommentId, CommentIntent, CommentState, Message, Reason } from '../tickets/types';
 /** Typed client interface for comments plugin */
 export interface CommentsClient {
     /**
@@ -32,6 +32,16 @@ export interface CommentsClient {
      * @requires `comments.add` anywhere it is held
      */
     add(anchor: Anchor, body: Body): AsyncGenerator<CommentsEvent>;
+    /**
+     * COMMENT-9: the comments the app could not keep, newest first — `failure { failure }` each.
+  
+  The caller's own reports and those whose comment it would see had it
+  been kept; at most `limit` (default 50, at most 200).
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `comments.failures` anywhere it is held
+     */
+    failures(limit?: number | null): AsyncGenerator<CommentsEvent>;
     /**
      * List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.
   
@@ -68,6 +78,18 @@ export interface CommentsClient {
      * @requires `comments.reopen` anywhere it is held
      */
     reopen(id: CommentId): AsyncGenerator<CommentsEvent>;
+    /**
+     * COMMENT-9: report a comment the app could not keep; yields `reported { failure }`.
+  
+  The app's word that a comment was not kept — the socket down, no
+  answer, a refusal — with the draft, so whoever can see where it was
+  being left reads it with `failures`. Kept in memory (the newest 200;
+  a restart forgets them) and logged; never a comment.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `comments.report` anywhere it is held
+     */
+    report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): AsyncGenerator<CommentsEvent>;
     /**
      * Resolve a comment; yields the comment, resolved.
   
@@ -110,12 +132,20 @@ export declare const requires: {
         readonly grant: "comments.add";
         readonly target: null;
     };
+    readonly "comments.failures": {
+        readonly grant: "comments.failures";
+        readonly target: null;
+    };
     readonly "comments.list": {
         readonly grant: "comments.list";
         readonly target: null;
     };
     readonly "comments.reopen": {
         readonly grant: "comments.reopen";
+        readonly target: null;
+    };
+    readonly "comments.report": {
+        readonly grant: "comments.report";
         readonly target: null;
     };
     readonly "comments.resolve": {

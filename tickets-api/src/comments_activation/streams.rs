@@ -141,3 +141,24 @@ pub(super) fn watch_stream(access: Access, store: Arc<Store>, user: VerifiedUser
         }
     }
 }
+
+/// COMMENT-9: `comments.report` — any signed-in reader's; kept and logged.
+pub(super) fn report_stream(failures: super::failures::Failures, user: VerifiedUser, r: super::failures::Report) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    let answer = match user.read_filter() {
+        Ok(_) => CommentsEvent::Reported { failure: failures.report(&user, r) },
+        Err(message) => CommentsEvent::Error { message },
+    };
+    futures::stream::once(async move { answer })
+}
+
+/// COMMENT-9: `comments.failures` — the reports the caller sees.
+pub(super) fn failures_stream(failures: super::failures::Failures, store: Arc<Store>, user: VerifiedUser, limit: Option<u32>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    let rows: Vec<CommentsEvent> = match user.read_filter() {
+        Ok(_) => {
+            let limit = limit.map_or(50, |l| l.clamp(1, crate::comments::FAILURES_KEPT as u32)) as usize;
+            failures.seen(&store, &user, limit).into_iter().map(|failure| CommentsEvent::Failure { failure }).collect()
+        }
+        Err(message) => vec![CommentsEvent::Error { message }],
+    };
+    futures::stream::iter(rows)
+}
