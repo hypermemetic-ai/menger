@@ -467,6 +467,18 @@ and the tickets that wait on it (unblocked) — and then offers **Undo**
 (`undelete`) in its toast. A shortcode's row is its root's menu with the
 shortcode's Wave board. A tag outside any ticket keeps FILTER-22's menu.
 
+**Held on a touch screen** (APP-57, `src/menu/hold.rs`): a touch that rests
+500 ms on a ticket (within 10 px) opens the same menu — a board row, a nav
+row, a card, a chat's or a comment's ticket chip (any link to
+`#/ticket/<ID>`), a chip in a framed body — and its lift is not followed; a
+touch that moves (a scroll) or lifts first is a tap or a scroll, as before.
+A chip shows no iOS callout or link preview, and on a touch screen selects no
+text (a conversation keeps its text). At ≤ 820 px the menu is a sheet from
+the bottom, above the bar. In a framed body the chip is marked held at
+500 ms and the menu opens on the lift: the app opens a frame's menu only on
+a live gesture with focus in that frame (MENGER-34), and a touch still down
+is neither. Android's own long press (`contextmenu`) is the same hold.
+
 **The status chooser, three ways** (ACT-10). A status, kind, severity or
 label chip — on a row, a card, a nav row, the ticket page's Status / Kind /
 Severity — puts its own chooser first, flat: the same options, marks and
