@@ -447,9 +447,9 @@ pub(crate) fn key(k: Key) -> bool {
 // ---------------------------------------------------------------------
 // The DOM half
 
-/// The scrolling column the page lives in.
-fn scroller() -> Option<web_sys::Element> {
-    dom::window().document()?.query_selector("#app .content").ok().flatten()
+/// What the page scrolls in (APP-53: the document on a phone).
+fn scroller() -> Option<dom::Scroller> {
+    dom::Scroller::page()
 }
 
 fn conversation() -> Option<web_sys::Element> {
@@ -481,18 +481,19 @@ fn go(ticket: &str, at: Spot, centre: bool) {
     let Some(content) = scroller() else { return };
     let items = current_items(ticket);
     let Some((y, h)) = rect_of(ticket, at, &items) else { return };
-    let view = content.get_bounding_client_rect();
+    let (vt, vh) = content.view();
     // A section's top lands just above the spy's line, so it is the one lit.
-    let delta = if centre { y + h / 2.0 - (view.top() + view.height() / 2.0) } else { y - spy_line(view.top(), view.height()) + 8.0 };
-    let top = (content.scroll_top() as f64 + delta).max(0.0);
+    let delta = if centre { y + h / 2.0 - (vt + vh / 2.0) } else { y - spy_line(vt, vh) + 8.0 };
+    let top = (content.top() + delta).max(0.0);
     let smooth = motion::current() != motion::Motion::None;
     let opts = js_sys::Object::new();
     let _ = js_sys::Reflect::set(&opts, &"top".into(), &JsValue::from_f64(top));
     let _ = js_sys::Reflect::set(&opts, &"behavior".into(), &JsValue::from_str(if smooth { "smooth" } else { "auto" }));
-    if let Ok(f) = js_sys::Reflect::get(&content, &"scrollTo".into()).and_then(|f| f.dyn_into::<js_sys::Function>()) {
-        let _ = f.call1(&content, &opts);
+    let el = content.element();
+    if let Ok(f) = js_sys::Reflect::get(el, &"scrollTo".into()).and_then(|f| f.dyn_into::<js_sys::Function>()) {
+        let _ = f.call1(el, &opts);
     } else {
-        content.set_scroll_top(top as i32);
+        content.set_top(top);
     }
     match at {
         Spot::Item(n) => {
@@ -513,8 +514,8 @@ fn next_input(ticket: &str, sections: &[Section]) {
     let items = current_items(ticket);
     let tops: Vec<f64> = open.iter().map(|at| rect_of(ticket, *at, &items).map_or(f64::MAX, |r| r.0)).collect();
     let mid = scroller().map_or(0.0, |c| {
-        let r = c.get_bounding_client_rect();
-        r.top() + r.height() / 2.0
+        let (top, height) = c.view();
+        top + height / 2.0
     });
     if let Some(k) = next_open(&tops, mid) {
         go(ticket, open[k], true);
@@ -609,11 +610,11 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
         let Some(secs) = sections.try_get_untracked() else { return };
         let id = tid.get_value();
         let items = current_items(&id);
-        let view = content.get_bounding_client_rect();
+        let (vt, vh) = content.view();
         let tops: Vec<f64> = secs.iter().map(|s| rect_of(&id, s.at, &items).map_or(f64::MAX, |r| r.0)).collect();
-        let y = content.scroll_top() as f64;
-        let at_end = y + content.client_height() as f64 >= content.scroll_height() as f64 - 4.0;
-        let n = self::lit(&tops, spy_line(view.top(), view.height()), at_end);
+        let y = content.top();
+        let at_end = y + content.client_height() >= content.scroll_height() - 4.0;
+        let n = self::lit(&tops, spy_line(vt, vh), at_end);
         if lit.try_get_untracked() != Some(n) {
             lit.try_set(n);
         }
@@ -643,11 +644,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
         tick();
     });
     let on_scroll = Closure::<dyn Fn()>::new(tick);
-    if let Some(c) = scroller() {
-        let opts = web_sys::AddEventListenerOptions::new();
-        opts.set_passive(true);
-        let _ = c.add_event_listener_with_callback_and_add_event_listener_options("scroll", on_scroll.as_ref().unchecked_ref(), &opts);
-    }
+    dom::listen_page_scroll(on_scroll.as_ref().unchecked_ref());
     let _ = dom::window().add_event_listener_with_callback("resize", on_scroll.as_ref().unchecked_ref());
     // A tap outside the opened rail closes it; Esc closes it and the sheet.
     let on_click = Closure::<dyn Fn(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
@@ -682,9 +679,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
             }
         });
         if let Some(Some((s, c, k))) = held.try_update_value(Option::take) {
-            if let Some(el) = scroller() {
-                let _ = el.remove_event_listener_with_callback("scroll", s.as_ref().unchecked_ref());
-            }
+            dom::unlisten_page_scroll(s.as_ref().unchecked_ref());
             let _ = dom::window().remove_event_listener_with_callback("resize", s.as_ref().unchecked_ref());
             if let Some(d) = dom::window().document() {
                 let _ = d.remove_event_listener_with_callback("click", c.as_ref().unchecked_ref());

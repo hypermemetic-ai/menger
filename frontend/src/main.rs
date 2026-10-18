@@ -767,11 +767,11 @@ fn measured_pitch(body: &web_sys::Element) -> Option<f64> {
 /// The board's geometry off the DOM, given the pitch to assume when no
 /// row is mounted to measure.
 fn measure_board(body: &web_sys::Element, pitch: f64) -> Option<Geom> {
-    let scroller = body.closest(".content").ok().flatten()?;
-    let (s, b) = (scroller.get_bounding_client_rect(), body.get_bounding_client_rect());
+    let scroller = dom::Scroller::around(body)?;
+    let (top, height) = scroller.view();
     Some(Geom {
-        above: s.top() - b.top(),
-        viewport: f64::from(scroller.client_height()),
+        above: top - body.get_bounding_client_rect().top(),
+        viewport: height,
         pitch: measured_pitch(body).unwrap_or(pitch),
     })
 }
@@ -790,7 +790,7 @@ pub(crate) fn scroll_board_to(index: usize, n: usize, pitch: f64) {
     let Some(body) = dom::window().document().and_then(|d| d.get_element_by_id("board")) else {
         return;
     };
-    let Some(scroller) = body.closest(".content").ok().flatten() else { return };
+    let Some(scroller) = dom::Scroller::around(&body) else { return };
     let Some(g) = measure_board(&body, pitch) else { return };
     let top = g.row_at(n, g.above);
     let fits = g.viewport / g.pitch();
@@ -803,7 +803,7 @@ pub(crate) fn scroll_board_to(index: usize, n: usize, pitch: f64) {
         return;
     };
     let delta = g.offset_of(n, want) - g.above;
-    scroller.set_scroll_top(scroller.scroll_top() + delta.round() as i32);
+    scroller.by(delta.round());
 }
 
 // ---------------------------------------------------------------------
@@ -857,8 +857,8 @@ fn Board(
         if prev.is_some_and(|p| p != now) {
             if let Some(Some(tb)) = body.try_get_untracked() {
                 let tb: &web_sys::Element = tb.as_ref();
-                if let Ok(Some(scroller)) = tb.closest(".content") {
-                    scroller.set_scroll_top(0);
+                if let Some(scroller) = dom::Scroller::around(tb) {
+                    scroller.set_top(0.0);
                 }
             }
         }
@@ -2304,11 +2304,14 @@ fn App() -> impl IntoView {
     let overlay = RwSignal::new(keys::Overlay::None);
     keys::install(overlay, board);
 
-    // MFE-12: the content column is the board's viewport. Its scroll and
+    // MFE-12: the content column is the board's viewport (APP-53: the
+    // document, on a phone). Its scroll and
     // the window's resize are the two things that move which rows are on
     // screen; the board measures itself when this fires.
     let viewport = Trigger::new();
     window_event_listener(leptos::ev::resize, move |_| viewport.notify());
+    // APP-53: on a phone the document scrolls, not the column.
+    window_event_listener(leptos::ev::scroll, move |_| viewport.notify());
 
     // MFE-22: where the header's `test ↗` goes — the settings page moves it.
     let test_link = RwSignal::new(settings::load().test_link());
