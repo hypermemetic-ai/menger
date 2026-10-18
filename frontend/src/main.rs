@@ -287,6 +287,7 @@ mod revisions;
 mod inputs;
 mod inputs_page;
 mod inspect;
+mod keyboard;
 mod keys;
 mod kids;
 mod labels;
@@ -2190,6 +2191,8 @@ fn App() -> impl IntoView {
     frame::know(board);
     // MENGER-14: a click on a link people wrote, in the app's own page.
     links::install();
+    // APP-56: a phone's keyboard, followed — the docked composers sit on it.
+    keyboard::install();
     board.drive();
     let dock = RwSignal::new(None::<Dock>);
     let conn = RwSignal::new(Conn::Connecting);

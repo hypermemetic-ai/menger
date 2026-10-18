@@ -4873,7 +4873,27 @@
     #qtray .qgrab { display: block; flex: none; width: 36px; height: 4px; border-radius: var(--radius-xs); background: var(--tree-line); margin: 8px auto 0; }
     #qtray .qarrived { position: fixed; right: 12px; bottom: calc(var(--pbar-h) + 8px); }
     #qtray .qedge { position: fixed; bottom: var(--pbar-h); }
+    /* APP-56: the keyboard up (src/keyboard.rs stamps data-kb and the
+       --kb-* lengths off the visual viewport): the nav is hidden, and
+       --pbar-h becomes the keyboard's top, so every sheet placed above the
+       bar sits right on the keyboard and iOS has nothing to centre. A sheet
+       is held inside the visible area; the chat's fills it. */
+    html[data-kb] { --pbar-h: var(--kb-inset, 0px); }
+    html[data-kb] #pbar { display: none; }
+    html[data-kb] :is(#tdock-sheet, #lens-top) { max-height: min(calc(88dvh - var(--pbar-h)), calc(var(--kb-h) - 8px)); }
+    html[data-kb] #tdock-sheet.chatting { height: calc(var(--kb-h) - 8px); max-height: calc(var(--kb-h) - 8px); }
+    /* While typing, the dock's chat is its head, the messages and the
+       composer: the handle, the chips and who's in it come back with the
+       keyboard's going. */
+    html[data-kb] #tdock-sheet.chatting :is(.pgrab, .ptabs, .pwho) { display: none; }
+    html[data-kb] #nav { height: min(calc(86dvh - var(--pbar-h)), calc(var(--kb-h) - 8px)); }
+    html[data-kb] .overlay > #palette { max-height: min(calc(80dvh - var(--pbar-h)), calc(var(--kb-h) - 8px)); }
+    html[data-kb] #qtray .qclip { top: max(12vh, calc(var(--kb-top) + 8px)); }
+    html[data-kb] #chatfull .ccompose { padding-bottom: 8px; }
   }
+  /* APP-56: the full-screen chat (and #/chats) is the visible area while
+     the keyboard is up, its composer on the keyboard's top. */
+  html[data-kb] #chatfull { top: var(--kb-top); bottom: auto; height: var(--kb-h); }
   @media (min-width: 641px) and (max-width: 820px) {
     :root { --pbar-h: calc(58px + env(safe-area-inset-bottom, 0px)); }
     #pbar { padding: 0 max(4px, calc(50% - 300px)) env(safe-area-inset-bottom, 0px); }
