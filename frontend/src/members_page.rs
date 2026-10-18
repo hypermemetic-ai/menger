@@ -167,7 +167,7 @@ pub(crate) fn MembersPage() -> impl IntoView {
                         // CHAT-14: a person (not a team, not the reader) has Chat.
                         let person = match &g.principal {
                             menger_tickets_api::vocab::Grantee::Principal(p) => Some(p.to_string()),
-                            menger_tickets_api::vocab::Grantee::Team(_) => None,
+                            menger_tickets_api::vocab::Grantee::Team(_) | menger_tickets_api::vocab::Grantee::Everyone => None,
                         };
                         let chat = person.clone().filter(|p| *p != me).map(|p| {
                             let go = move |_| crate::chats_page::message(p.clone(), move |e| note.set(Some(Err(e))));
