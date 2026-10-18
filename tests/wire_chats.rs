@@ -424,3 +424,55 @@ async fn an_admin_adds_anyone_granting_the_ticket_or_the_chat() {
     let sam2 = as_key(port, &SAM, "sam").await;
     assert_eq!(one(&sam2, "tickets.get", json!({ "id": "A-2" })).await["type"], "ticket");
 }
+
+/// CHAT-18: live work over the wire — a participant's `activity` reaches
+/// every participant's watch, an outsider hears nothing and finds no chat
+/// there, nothing lands in `messages`, and `activity_log` answers what the
+/// memory keeps.
+#[tokio::test]
+async fn activity_reaches_participants_alone_and_the_memory_log_answers() {
+    let port = start().await;
+    let boss = as_key(port, &BOSS, "boss").await;
+    kiln(&boss).await;
+    let ada = as_key(port, &ADA, "ada").await;
+    let builder = as_key(port, &BUILDER, "builder").await;
+    let rui = as_key(port, &RUI, "rui").await;
+    let opened = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [principal(&BUILDER)] })).await;
+    let chat = opened["chat"]["id"].as_u64().unwrap();
+    let mut ada_watch = subscribe(&ada, "chats.watch", json!({})).await;
+    let mut rui_watch = subscribe(&rui, "chats.watch", json!({ "ticket": "A-2" })).await;
+
+    let started = one(&builder, "chats.activity", json!({ "chat": chat, "state": "started" })).await;
+    assert_eq!((started["type"].as_str(), started["activity"]["state"].as_str()), (Some("activity"), Some("started")), "{started}");
+    assert_eq!(started["activity"]["by"], principal(&BUILDER));
+    let heard = next(&mut ada_watch).await;
+    assert_eq!(heard, started, "ada hears it as builder said it");
+    for line in ["Read frontend/src/queue.rs", "Bash: cargo test"] {
+        let said = one(&builder, "chats.activity", json!({ "chat": chat, "line": line })).await;
+        assert_eq!((said["activity"]["state"].as_str(), said["activity"]["line"].as_str()), (Some("working"), Some(line)));
+        assert_eq!(next(&mut ada_watch).await["activity"]["line"], line);
+    }
+    one(&builder, "chats.activity", json!({ "chat": chat, "state": "ended" })).await;
+    assert_eq!(next(&mut ada_watch).await["activity"]["state"], "ended");
+
+    // rui reads A-2 but is not in the chat: not found, and its watch heard none of it.
+    for method in ["chats.activity", "chats.activity_log"] {
+        assert_eq!(one(&rui, method, json!({ "chat": chat })).await, json!({ "type": "not_found", "chat": chat }), "{method}");
+    }
+    let posted = one(&ada, "chats.post", json!({ "chat": chat, "body": "thanks" })).await;
+    assert_eq!(posted["type"], "posted");
+    assert_eq!(next(&mut ada_watch).await["type"], "posted");
+    // rui's watch on the ticket: nothing of the chat it is not in (the post neither), so nothing yet.
+    assert!(tokio::time::timeout(Duration::from_millis(300), rui_watch.next()).await.is_err(), "rui heard nothing");
+
+    // Nothing in messages but ada's post.
+    let msgs = call(&ada, "chats.messages", json!({ "chat": chat })).await;
+    assert_eq!(msgs.iter().filter(|e| e["type"] == "message").count(), 1, "{msgs:?}");
+    // The memory log, oldest first.
+    let log = call(&ada, "chats.activity_log", json!({ "chat": chat })).await;
+    let states: Vec<&str> = log.iter().map(|e| e["activity"]["state"].as_str().unwrap()).collect();
+    assert_eq!(states, ["started", "working", "working", "ended"], "{log:?}");
+    // A bad state is refused before the method runs.
+    let bad = call(&builder, "chats.activity", json!({ "chat": chat, "state": "thinking" })).await;
+    assert_eq!(bad[0]["type"], "error", "{bad:?}");
+}

@@ -57,6 +57,8 @@ use std::sync::Arc;
 
 // CHAT-14: chats outside tickets — opening, removing, names.
 mod outside;
+// CHAT-18: a participant's live work — in memory, never stored.
+mod activity;
 
 /// CHAT-8: which way a page of messages runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,6 +203,8 @@ pub enum ChatChange {
     Listening { chat: u64, principal: String, waiting: bool },
     /// CHAT-14: `principal` was taken out of the chat (as it is now).
     Removed { chat: ChatRecord, principal: String },
+    /// CHAT-18: a participant's live work — heard by participants alone.
+    Activity(crate::chats::Activity),
 }
 
 impl ChatChange {
@@ -211,6 +215,7 @@ impl ChatChange {
             ChatChange::Posted(m) => m.chat.get(),
             ChatChange::Read { chat, .. } | ChatChange::Listening { chat, .. } => *chat,
             ChatChange::Removed { chat, .. } => chat.id,
+            ChatChange::Activity(a) => a.chat.get(),
         }
     }
 }
@@ -356,6 +361,11 @@ pub(crate) struct Chats {
     /// The principals whose name came from a sign-in: a message's name
     /// never overrides it.
     signed: BTreeSet<String>,
+    /// CHAT-18: each chat's newest activity, at most
+    /// [`crate::chats::ACTIVITY_KEPT`] — in memory only.
+    activity: HashMap<u64, std::collections::VecDeque<crate::chats::Activity>>,
+    /// CHAT-18: the last activity's `seq`.
+    activity_seq: u64,
 }
 
 impl Chats {

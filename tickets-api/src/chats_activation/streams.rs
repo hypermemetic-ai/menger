@@ -232,6 +232,22 @@ pub(super) async fn settle(store: Arc<Store>, user: VerifiedUser, chat: u64, ope
     }
 }
 
+/// `chats.activity` (CHAT-18).
+pub(super) fn activity(store: &Store, user: &VerifiedUser, chat: u64, state: crate::chats::ActivityState, line: Option<&str>) -> ChatsEvent {
+    match store.chat_activity(user, chat, state, line) {
+        Ok(activity) => ChatsEvent::Activity { activity },
+        Err(e) => refusal(e),
+    }
+}
+
+/// `chats.activity_log` (CHAT-18): the kept items, oldest first, then the end.
+pub(super) fn activity_log(store: &Store, user: &VerifiedUser, chat: u64) -> Vec<ChatsEvent> {
+    match store.chat_activity_log(user, chat) {
+        Ok(items) => items.into_iter().map(|activity| ChatsEvent::Activity { activity }).collect(),
+        Err(e) => vec![refusal(e)],
+    }
+}
+
 /// `chats.list`.
 pub(super) fn list_stream(store: Arc<Store>, user: VerifiedUser, q: ChatQuery, after: Option<u64>, limit: Option<u32>) -> impl Stream<Item = ChatsEvent> + Send + 'static {
     let limit = crate::limits::page(limit, CHATS_PAGE_DEFAULT, CHATS_PAGE_MAX);
@@ -287,6 +303,11 @@ fn relay(store: &Store, user: &VerifiedUser, ticket: Option<&str>, change: &Chat
         }
     }
     let view = store.chat_view(user, change.chat())?;
+    // CHAT-18: live work is for the participants alone (an admin of the
+    // ticket watching it hears none).
+    if matches!(change, ChatChange::Activity(_)) && !view.participants.contains(&me) {
+        return None;
+    }
     match ticket {
         Some(t) if view.ticket.as_deref() != Some(t) => return None,
         None if !view.participants.contains(&me) => return None,
@@ -304,6 +325,7 @@ fn relay(store: &Store, user: &VerifiedUser, ticket: Option<&str>, change: &Chat
         ChatChange::Renamed(_) => ChatsEvent::Renamed { chat: view },
         ChatChange::Listening { principal, waiting, .. } => ChatsEvent::Listening { chat, principal: principal.clone(), waiting: *waiting },
         ChatChange::Removed { principal, .. } => ChatsEvent::Removed { chat: view, principal: principal.clone(), revoked: false },
+        ChatChange::Activity(a) => ChatsEvent::Activity { activity: a.clone() },
     })
 }
 

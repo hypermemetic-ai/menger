@@ -4,7 +4,12 @@
 // same session; a principal not on the list gets nothing; a server restart
 // mid-wait, and a bridge restart, lose nothing and answer nothing twice.
 // CHAT-14: a direct message and a group, on no ticket, answered too; an
-// image passed to the agent as a note.
+// image passed to the agent as a note. CHAT-18: the owner's watch hears
+// `activity started` before the agent's first output, its tool calls as
+// lines (a secret masked), `ended` after the answer, posted once; no
+// "working…" post where activity is taken. The server must have
+// `chats.activity` (CHAT-18): MENGER_BIN names a build that has it until
+// prod runs one.
 //
 //   node scripts/chat-bridge/tests/throwaway.mjs WORKDIR [--real] [--port 6150]
 //
@@ -74,11 +79,26 @@ let bridge = null;
 const bridgeLog = path.join(work, "bridge.log");
 const allowFile = path.join(work, "allow");
 const stateDir = path.join(work, "state");
+const markFile = path.join(work, "fake-claude.marks");
+
+// CHAT-18: the owner's watch, held on its own socket — every activity and
+// post with the moment it arrived.
+const heard = [];
+let watchSock = null;
+async function holdOwnerWatch() {
+  const seed = seedOf(fs.readFileSync(owner.file, "utf8"));
+  watchSock = await connect(url, { Authorization: `Bearer ${keyProof(seed, url, owner.agent)}` });
+  call(watchSock, 1, "chats.watch", {}, (item) => {
+    if (item?.type === "data" && ["activity", "posted"].includes(item.content?.type)) heard.push({ at: Date.now(), ...item.content });
+  }).catch(() => {});
+  await sleep(300);
+}
 function startBridge(extra = {}) {
   const out = fs.openSync(bridgeLog, "a");
   const env = {
     ...process.env, MENGER_URL: url, MENGER_KEY_FILE: builder.file, MENGER_AGENT: "builder",
     CHAT_BRIDGE_ALLOW: allowFile, CHAT_BRIDGE_STATE: stateDir, CHAT_BRIDGE_CWD: work, CHAT_BRIDGE_WORKING_AFTER: "0",
+    FAKE_CLAUDE_MARK: markFile,
     ...extra,
     CLAUDE_BIN: real ? (process.env.CLAUDE_BIN || path.join(os.homedir(), ".local/bin/claude")) : path.join(here, "fake-claude.mjs"),
   };
@@ -118,9 +138,31 @@ try {
   check(await waitLog(/watch held/, 30), "the bridge holds the watch");
 
   // 1. an allowed principal posts and gets a reply from a spawned agent
+  await holdOwnerWatch();
   const m1 = await post(owner, chat, "Reply with one short sentence: what ticket is this chat on?");
   let r = await waitReplies(chat, 1, waitReply);
   check(r.length === 1 && r[0].id > m1.id, `a reply to the owner's first message (${r[0]?.body?.slice(0, 120) ?? "none"})`);
+
+  // 1b. CHAT-18: the live line on the owner's watch
+  {
+    for (let i = 0; i < 20 && !heard.some((h) => h.type === "activity" && h.activity.state === "ended"); i++) await sleep(250);
+    const acts = heard.filter((h) => h.type === "activity" && h.activity.chat === chat);
+    const started = acts.find((a) => a.activity.state === "started");
+    const firstOut = Number((fs.existsSync(markFile) ? fs.readFileSync(markFile, "utf8") : "").split("\n")[0]) || Infinity;
+    check(!!started && started.at - 0 <= firstOut + 50 && started.activity.by === builder.principal, `activity started reached the owner before the agent's first output (${started ? started.at - firstOut : "none"} ms)`);
+    const lines = acts.map((a) => a.activity.line).filter(Boolean);
+    log(`  lines: ${JSON.stringify(lines)}`);
+    if (!real) {
+      check(lines.some((l) => l.includes("Bash: List the files")) && lines.some((l) => l.includes("Read README.md")) && lines.some((l) => l.includes("Looking at it now.")), "the tool calls and the interim text arrived as lines");
+      check(lines.some((l) => l.includes("MENGER_TOKEN=•••")) && !lines.some((l) => l.includes("supersecret")), "the secret was masked");
+    } else check(lines.length > 0, "lines arrived");
+    const ended = acts.filter((a) => a.activity.state === "ended");
+    const answer = heard.find((h) => h.type === "posted" && h.message.id === r[0]?.id);
+    check(ended.length === 1 && !!answer && ended[0].activity.seq > Math.max(...acts.filter((a) => a.activity.state !== "ended").map((a) => a.activity.seq)) && ended[0].at >= answer.at, "activity ended once, after the answer was posted");
+    check(heard.filter((h) => h.type === "posted" && h.message.author === builder.principal).length === 1, "the answer was posted exactly once");
+    const kept = (await rpc(owner, "chats.activity_log", { chat })).filter((i) => i.type === "activity");
+    check(kept.length === acts.length, `activity_log keeps what the watch heard (${kept.length}/${acts.length})`);
+  }
   const s1 = turns()[0]?.session;
   check(!!s1, `the turn is logged with its session (${s1})`);
 
@@ -180,7 +222,9 @@ try {
     const t = turns().slice(-2).map((x) => x.messages);
     check(JSON.stringify(t) === JSON.stringify([[m6.id], [m7.id, m8.id]]), `the messages posted during a turn are the next turn, together (${JSON.stringify(t)})`);
     const working = (await messages(chat)).filter((m) => m.author === builder.principal && m.body === "_working…_");
-    check(working.length === 2, `"working…" posted once per slow turn (${working.length})`);
+    check(working.length === 0, `no "working…" post: the live line says it (${working.length})`);
+    const beats = heard.filter((h) => h.type === "activity" && /^working · \d+s$/.test(h.activity.line ?? ""));
+    log(`  (heartbeats heard: ${beats.length})`);
   }
 
   // 8. CHAT-14: a direct message (no ticket) with an image — answered, the image passed as a note; a group too
@@ -201,6 +245,7 @@ try {
 } catch (e) {
   log(`FAIL ${e.stack || e.message}`); failures++;
 } finally {
+  try { watchSock?.close(); } catch {}
   if (bridge) await stopBridge();
   if (server) await stopServer();
 }
