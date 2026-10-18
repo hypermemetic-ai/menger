@@ -30,6 +30,14 @@
 //!   it was when the keyboard goes;
 //! - a drag outside anything that scrolls moves nothing ([`guard_drag`]),
 //!   so the pinned view cannot be dragged off the visible area.
+//!
+//! APP-61: but a touch in a field is the field's when it is editing text:
+//! one that lands on (or within a handle's reach of) the focused field's
+//! selection drags a handle, one that rests before it moves is iOS's caret
+//! loupe or a held selection, and one still within [`SLOP`] of where it
+//! landed has not chosen yet ([`owner`]). Cancelling those moves is what
+//! froze a selection's handles in the composer. A swipe across the field,
+//! or a drag on the header, is still held.
 
 use std::cell::Cell;
 
@@ -140,7 +148,57 @@ pub(crate) fn hold(was: bool, now: bool, y: f64, locked: Option<f64>) -> Hold {
     }
 }
 
+/// How far (CSS px) a touch in a field may drift before it has chosen:
+/// within it, it may still become the field's.
+const SLOP: f64 = 10.0;
+
+/// How long (ms) a touch in a field rests before a move is the field's —
+/// under iOS's own long press (the loupe, a held selection), so its first
+/// move is never cancelled.
+const REST_MS: f64 = 300.0;
+
+/// How far (CSS px) outside the focused field a selection's handle reaches:
+/// its knob hangs past the text line, over the field's edge.
+const HANDLE_PX: f64 = 32.0;
+
+/// Whose a touch's move is while the keyboard is up over a pinned view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Owner {
+    /// The field's: a handle, the loupe, a held selection — never cancelled.
+    Field,
+    /// Not chosen yet: let through, asked again on the next move.
+    Open,
+    /// The page's: held unless it is in something that scrolls.
+    Page,
+}
+
+/// What a touch is, from how it began (`in_field`: on a field that takes
+/// typing; `handles`: within reach of the focused field's selection) and
+/// where it is now — `rested` ms after it landed, `moved` px from there.
+pub(crate) fn owner(in_field: bool, handles: bool, rested: f64, moved: f64) -> Owner {
+    if handles || (in_field && rested >= REST_MS) {
+        Owner::Field
+    } else if in_field && moved <= SLOP {
+        Owner::Open
+    } else {
+        Owner::Page
+    }
+}
+
+/// The touch in progress (APP-61): where and when it landed, what it landed
+/// on, and its owner once chosen — a choice holds for the rest of the touch.
+#[derive(Clone, Copy)]
+struct Press {
+    at: f64,
+    x: f64,
+    y: f64,
+    in_field: bool,
+    handles: bool,
+    chosen: Option<Owner>,
+}
+
 thread_local! {
+    static PRESS: Cell<Option<Press>> = const { Cell::new(None) };
     static TALLEST: Cell<(f64, f64)> = const { Cell::new((0.0, 0.0)) };
     static SHOWN: Cell<Option<Keyboard>> = const { Cell::new(None) };
     /// APP-58: the document's scroll when the keyboard came up over a
@@ -285,11 +343,68 @@ fn scrolls(mut el: Option<web_sys::Element>) -> bool {
     false
 }
 
+/// The field `el` is in, if it takes typing.
+fn field_of(el: &web_sys::Element) -> Option<web_sys::Element> {
+    el.closest("textarea, input, [contenteditable]:not([contenteditable='false'])").ok().flatten().filter(takes_typing)
+}
+
+/// Whether the focused field holds a selection (not a caret) and `(x, y)`
+/// is within a handle's reach of it.
+fn near_selection(doc: &web_sys::Document, x: f64, y: f64) -> bool {
+    let Some(field) = doc.active_element().filter(takes_typing) else { return false };
+    let selected = if let Some(t) = field.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+        t.selection_start().ok().flatten() != t.selection_end().ok().flatten()
+    } else if let Some(i) = field.dyn_ref::<web_sys::HtmlInputElement>() {
+        i.selection_start().ok().flatten() != i.selection_end().ok().flatten()
+    } else {
+        dom::window().get_selection().ok().flatten().is_some_and(|s| !s.is_collapsed() && field.contains(s.anchor_node().as_ref()))
+    };
+    let r = field.get_bounding_client_rect();
+    selected && x >= r.left() - HANDLE_PX && x <= r.right() + HANDLE_PX && y >= r.top() - HANDLE_PX && y <= r.bottom() + HANDLE_PX
+}
+
+fn point(ev: &web_sys::TouchEvent) -> Option<(f64, f64)> {
+    let t = ev.touches().get(0)?;
+    Some((f64::from(t.client_x()), f64::from(t.client_y())))
+}
+
+/// APP-61: a touch lands — what it landed on is kept for its moves.
+fn press(ev: web_sys::TouchEvent) {
+    let (Some((x, y)), Some(doc)) = (point(&ev), dom::window().document()) else {
+        PRESS.with(|p| p.set(None));
+        return;
+    };
+    let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+    let in_field = target.as_ref().and_then(field_of).is_some();
+    let handles = ev.touches().length() == 1 && near_selection(&doc, x, y);
+    PRESS.with(|p| p.set(Some(Press { at: js_sys::Date::now(), x, y, in_field, handles, chosen: None })));
+}
+
+/// Whose this move is, chosen once per touch (a touch whose landing went
+/// unheard is the page's).
+fn owner_now(ev: &web_sys::TouchEvent) -> Owner {
+    let Some(mut p) = PRESS.with(Cell::get) else { return Owner::Page };
+    if let Some(o) = p.chosen {
+        return o;
+    }
+    let (x, y) = point(ev).unwrap_or((p.x, p.y));
+    let o = owner(p.in_field, p.handles, js_sys::Date::now() - p.at, (x - p.x).hypot(y - p.y));
+    if o != Owner::Open {
+        p.chosen = Some(o);
+        PRESS.with(|c| c.set(Some(p)));
+    }
+    o
+}
+
 /// APP-58: while the keyboard is up over a pinned view, a drag on what does
 /// not scroll (the header, the composer's edge) would pan the visual
-/// viewport and take the view with it: it moves nothing.
-fn guard_drag(ev: web_sys::Event) {
+/// viewport and take the view with it: it moves nothing. APP-61: unless it
+/// is the field's ([`owner`]).
+fn guard_drag(ev: web_sys::TouchEvent) {
     if LOCKED.with(Cell::get).is_none() {
+        return;
+    }
+    if owner_now(&ev) != Owner::Page {
         return;
     }
     let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
@@ -344,13 +459,20 @@ pub(crate) fn install() {
     let held = Closure::<dyn FnMut()>::new(hold_scroll);
     let _ = w.add_event_listener_with_callback("scroll", held.as_ref().unchecked_ref());
     held.forget();
-    let drag = Closure::<dyn FnMut(web_sys::Event)>::new(guard_drag);
+    let drag = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(guard_drag);
     let opts = web_sys::AddEventListenerOptions::new();
     opts.set_passive(false);
+    // APP-61: where each touch landed, read before anything else hears it.
+    let landed = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(press);
+    let first = web_sys::AddEventListenerOptions::new();
+    first.set_passive(true);
+    first.set_capture(true);
     if let Some(doc) = w.document() {
         let _ = doc.add_event_listener_with_callback_and_add_event_listener_options("touchmove", drag.as_ref().unchecked_ref(), &opts);
+        let _ = doc.add_event_listener_with_callback_and_add_event_listener_options("touchstart", landed.as_ref().unchecked_ref(), &first);
     }
     drag.forget();
+    landed.forget();
     apply();
 }
 
@@ -421,6 +543,28 @@ mod tests {
         assert_eq!(hold(true, false, 420.0, Some(420.0)), Hold::Keep);
         // No keyboard over a pinned view (a field in the page): left alone.
         assert_eq!(hold(false, false, 560.0, None), Hold::Keep);
+    }
+
+    /// APP-61: a selection's handle, the loupe and a held selection are the
+    /// field's; a swipe across it, or a drag outside it, is the page's.
+    #[test]
+    fn a_touch_in_a_field_is_the_fields_when_it_edits_text() {
+        // A handle: dragged at once, however far.
+        assert_eq!(owner(true, true, 0.0, 0.0), Owner::Field);
+        assert_eq!(owner(true, true, 20.0, 80.0), Owner::Field);
+        // Its knob hangs past the field: still the handle's.
+        assert_eq!(owner(false, true, 20.0, 40.0), Owner::Field);
+        // Rested, then moved: the caret's loupe or a held selection.
+        assert_eq!(owner(true, false, REST_MS, 0.0), Owner::Field);
+        assert_eq!(owner(true, false, 600.0, 60.0), Owner::Field);
+        // In the field, not chosen yet: a jitter is let through.
+        assert_eq!(owner(true, false, 40.0, 3.0), Owner::Open);
+        assert_eq!(owner(true, false, 120.0, SLOP), Owner::Open);
+        // A swipe across the field before it rested: held, as APP-58.
+        assert_eq!(owner(true, false, 80.0, SLOP + 1.0), Owner::Page);
+        // Outside any field, with no selection: the page's, at once.
+        assert_eq!(owner(false, false, 0.0, 0.0), Owner::Page);
+        assert_eq!(owner(false, false, 900.0, 0.0), Owner::Page);
     }
 
     #[test]

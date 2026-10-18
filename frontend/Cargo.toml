@@ -108,6 +108,7 @@ web-sys = { version = "0.3", features = [
   "UiEvent",
   "KeyboardEvent",
   "DomRect",
+  "Selection",
   "Navigator",
   "HtmlTextAreaElement",
   "HtmlInputElement",
