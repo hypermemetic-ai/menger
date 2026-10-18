@@ -14,13 +14,16 @@ export interface MediaClient {
 Yields exactly one event: `media` — the image as kept, its bytes in
 standard base64 — or `not_found { hash }` for a hash that names no
 image, and alike for one put only for tickets the caller cannot see
-(ACCESS-10: not found ≡ not yours). The bytes are read from the
-database, never the cache.
+(ACCESS-10: not found ≡ not yours). COMMENT-10: with `ticket`, held
+to that ticket's body — the image only when it was put for that
+ticket (one kept for another ticket, a chat or the app is
+`not_found` there). The bytes are read from the database, never the
+cache.
    * @server-derived auth
    * @requiresAuth — resolver: self.access.verify
    * @requires `media.get` anywhere it is held
    */
-  get(hash: MediaHash): AsyncGenerator<MediaEvent>;
+  get(hash: MediaHash, ticket?: TicketRef | null): AsyncGenerator<MediaEvent>;
   /**
    * Keep an image for a ticket (PNG, JPEG, GIF or WebP, at most 7 MiB, base64); yields stored { hash, mime, bytes, width, height, duplicate }.
 
@@ -61,8 +64,8 @@ class MediaClientImpl implements MediaClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *get(hash: MediaHash): AsyncGenerator<MediaEvent> {
-    const stream = this.rpc.call('media.get', { hash });
+  async *get(hash: MediaHash, ticket?: TicketRef | null): AsyncGenerator<MediaEvent> {
+    const stream = this.rpc.call('media.get', { hash, ticket });
     yield* extractData<MediaEvent>(stream);
   }
 

@@ -591,6 +591,8 @@ pub(crate) fn Framed(
     #[prop(optional)] actions: Option<ViewFn>,
     // APP-60: what it adds after them that a phone folds into ⋯ (*comment*).
     #[prop(optional)] more: Option<ViewFn>,
+    // COMMENT-10: a draft's ticket, whose images its frame draws.
+    #[prop(optional)] media: Option<String>,
 ) -> impl IntoView {
     install();
     let id = NEXT.with(|n| {
@@ -713,10 +715,11 @@ pub(crate) fn Framed(
     let body = move || {
         let ticket = ticket.clone();
         let scope = scope.clone().unwrap_or_default();
+        let media = media.clone().unwrap_or_default();
         if mockup.get() {
             sizer.devices(html, ticket, scope, emulate, size, is_full).into_any()
         } else {
-            view! { <Frame html ticket scope /> }.into_any()
+            view! { <Frame html ticket scope media /> }.into_any()
         }
     };
     let looks = move || {

@@ -2560,6 +2560,19 @@
   }
   img.cimg:not([src]) { display: inline-block; min-width: 4rem; min-height: 2rem; cursor: default; background: var(--panel); }
   img.cimg[data-state="missing"] { border-style: dashed; }
+  /* COMMENT-10: a ticket body's image (src/media.rs) — at the column's
+     width, a tap opens it full screen; one not the ticket's is its alt,
+     marked "not available". A framed body's are the SDK's, alike. */
+  img.bimg {
+    display: block; max-width: 100%; height: auto; margin: .5rem 0; cursor: zoom-in;
+    border: var(--border) solid var(--line); border-radius: var(--radius);
+  }
+  img.bimg:not([src]) { display: inline-block; min-width: 4rem; min-height: 2rem; cursor: default; background: var(--panel); }
+  .bimg-missing {
+    display: inline-flex; align-items: baseline; gap: .4rem; padding: .1rem .45rem; color: var(--muted);
+    border: var(--border) dashed var(--line); border-radius: var(--radius);
+  }
+  .bimg-missing small { font-size: .75em; text-transform: uppercase; letter-spacing: .04em; }
   .lightbox {
     position: fixed; inset: 0; z-index: 2100; display: grid; place-items: center; padding: 2rem;
     background: var(--scrim); cursor: zoom-out;

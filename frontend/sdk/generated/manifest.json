@@ -212,7 +212,8 @@
     },
     "media": {
       "get": [
-        "hash"
+        "hash",
+        "ticket"
       ],
       "put": [
         "chat",

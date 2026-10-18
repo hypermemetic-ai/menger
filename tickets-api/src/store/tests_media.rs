@@ -107,6 +107,32 @@ async fn an_image_is_seen_through_its_tickets_reach() {
     assert!(matches!(gone, StoreError::NotFound(_)), "{gone:?}");
 }
 
+/// COMMENT-10: a body draws only its own ticket's images — one kept for
+/// another ticket (even one the reader sees), the app or a ticket out of
+/// reach is not found there, as one there is none of.
+#[tokio::test]
+async fn a_body_reaches_only_its_own_tickets_images() {
+    let s = tracker().await;
+    let mine = s.put_media(on("OPEN-2"), "image/png", b64(&png(5, 5, 0)), None).await.unwrap().info.hash;
+    let other = s.put_media(on("OPEN-3"), "image/png", b64(&png(5, 5, 1)), None).await.unwrap().info.hash;
+    let secret = s.put_media(on("SECRET-2"), "image/png", b64(&png(5, 5, 2)), None).await.unwrap().info.hash;
+    let app = s.put_media(OnMedia::app(), "image/png", b64(&png(5, 5, 3)), Some("idp:00000000-0000-4000-8000-00000000000a".into())).await.unwrap().info.hash;
+    let reader = viewer_of(&["OPEN"]);
+    let (info, bytes) = s.media_for(&reader, &mine, "OPEN-2").await.unwrap();
+    assert_eq!((info.hash.as_str(), bytes, info.width), (mine.as_str(), png(5, 5, 0), 5));
+    assert!(s.media_for(&reader, &mine, "open-2").await.is_ok(), "any spelling of the ticket");
+    for (hash, ticket, why) in [(&other, "OPEN-2", "another ticket's, seen elsewhere"), (&app, "OPEN-2", "the app's"), (&secret, "SECRET-2", "a ticket out of reach"), (&mine, "OPEN-99", "a ticket that is none")] {
+        match s.media_for(&reader, hash, ticket).await {
+            Err(StoreError::MediaNotFound(h)) => assert_eq!(&h, hash, "{why}"),
+            got => panic!("{why}: {got:?}"),
+        }
+    }
+    assert!(s.media(&reader, &other).await.is_ok(), "unheld, OPEN-3's is still the reader's");
+    // The same bytes put for this ticket too: its own now.
+    s.put_media(on("OPEN-2"), "image/png", b64(&png(5, 5, 1)), None).await.unwrap();
+    assert!(s.media_info_for(&reader, &other, "OPEN-2").is_ok());
+}
+
 #[tokio::test]
 async fn an_image_on_the_app_is_its_putters() {
     let s = tracker().await;

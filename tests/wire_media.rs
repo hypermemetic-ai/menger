@@ -141,6 +141,11 @@ async fn an_image_is_put_for_a_ticket_and_read_back_by_its_hash() {
     let c = one(&client, "comments.add", json!({"anchor": {"route": "#/ticket/KILN-1", "path": "body", "label": "Body", "excerpt": "", "ticket": "KILN-1"}, "body": body})).await;
     assert_eq!((c["type"].as_str(), c["body"].as_str()), (Some("comment"), Some(body.as_str())));
 
+    // COMMENT-10: held to a ticket's body — its own image, and not another's.
+    assert_eq!(one(&client, "media.get", json!({"hash": hash, "ticket": "kiln-1"})).await["data"].as_str(), Some(PNG_2X1));
+    assert_eq!(one(&client, "tickets.create", json!({"epic": "KILN", "title": "glaze", "parent": "KILN-1"})).await["type"], "created");
+    assert_eq!(one(&client, "media.get", json!({"hash": hash, "ticket": "KILN-2"})).await, json!({"type": "not_found", "hash": hash}), "KILN-1's image is none in KILN-2's body");
+
     // Not there: not_found, naming the hash.
     let none = "0".repeat(64);
     assert_eq!(one(&client, "media.get", json!({"hash": none})).await, json!({"type": "not_found", "hash": none}));

@@ -499,6 +499,8 @@ fn page(t: Ticket) -> impl IntoView {
     let empty = body.trim().is_empty();
     let title_sig = Signal::derive(move || title.clone());
     let body_sig = Signal::derive(move || body.clone());
+    // COMMENT-10: an old body draws its ticket's images.
+    let media_of = t.id.to_string();
     view! {
         <article class="ticket asof">
             <h2>
@@ -509,7 +511,7 @@ fn page(t: Ticket) -> impl IntoView {
                 {if empty {
                     view! { <p class="none">"(no body)"</p> }.into_any()
                 } else {
-                    view! { <crate::notes::BodyView body=body_sig refs=None ticket=None title=title_sig /> }.into_any()
+                    view! { <crate::notes::BodyView body=body_sig refs=None ticket=None title=title_sig media=media_of.clone() /> }.into_any()
                 }}
             </div>
         </article>

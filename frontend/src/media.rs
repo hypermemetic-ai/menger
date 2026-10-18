@@ -18,6 +18,16 @@
 //! the reader may not see is `not_found` and stays its alt. A click opens it
 //! full size ([`open_full`]); a click or Esc closes it.
 //!
+//! COMMENT-10: **a ticket body's images** ([`hydrate_body`], [`held`]) are
+//! `img.bimg`s, asked for held to the body's ticket (`media.get { hash,
+//! ticket }`: only an image kept for that ticket — one kept for another, a
+//! chat or the app is `not_found` there, whoever reads). The page fills an
+//! unframed body's itself; a framed body's SDK asks the host
+//! (`menger:media`, src/frame.rs), which answers with the bytes from the
+//! same copy, held to the ticket stamped on the frame. One not found is
+//! its alt and a "not available" mark ([`missing`]). A tap or click opens
+//! one full screen (a frame's through `menger:zoom`, [`zoom`]).
+//!
 //! What decides — the segments of a comment, the draft's images, where an
 //! image's markdown goes, the name it takes, which ticket an image is for —
 //! is pure and pinned by native tests; the rest is the DOM.
@@ -285,7 +295,7 @@ fn fetch(hash: String) {
         let got = async {
             let client = crate::session::media_client().ok_or_else(|| "not connected".to_string())?;
             let h: menger_tickets_api::vocab::MediaHash = crate::typed::typed(&hash)?;
-            let events = client.get_all(h).await.map_err(|e| crate::session::describe(&e))?;
+            let events = client.get_all(h, None).await.map_err(|e| crate::session::describe(&e))?;
             for ev in events {
                 if let MediaEvent::Media { mime, data, .. } = ev {
                     use base64::Engine;
@@ -339,7 +349,7 @@ fn listen() {
         if ev.default_prevented() || !click || crate::bindings::is_middle(&ev) {
             return;
         }
-        let Some(img) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).filter(|el| el.matches("img.cimg, .cthumb img").unwrap_or(false)) else {
+        let Some(img) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).filter(|el| el.matches("img.cimg, img.bimg, .cthumb img").unwrap_or(false)) else {
             return;
         };
         let Some(src) = img.get_attribute("src").filter(|s| !s.is_empty()) else { return };
@@ -349,6 +359,59 @@ fn listen() {
     });
     let _ = doc.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
     cb.forget();
+    // COMMENT-10: a tap on a touch screen gives an image no click (WebKit
+    // synthesizes none for an element that is not a control), so the tap is
+    // read here: one finger, lifted where it landed and soon ([`is_tap`]).
+    // The lift is prevented, so no click follows to open it again.
+    let opts = web_sys::AddEventListenerOptions::new();
+    opts.set_capture(true);
+    opts.set_passive(true);
+    let start = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |ev: web_sys::TouchEvent| {
+        let img = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).filter(|el| el.matches("img.cimg[src], img.bimg[src], .cthumb img[src]").unwrap_or(false));
+        let at = ev.touches().get(0).map(|t| (f64::from(t.client_x()), f64::from(t.client_y())));
+        TAP.with(|t| *t.borrow_mut() = img.zip(at).filter(|_| ev.touches().length() == 1).map(|(el, (x, y))| (el, x, y, js_sys::Date::now())));
+    });
+    let _ = doc.add_event_listener_with_callback_and_add_event_listener_options("touchstart", start.as_ref().unchecked_ref(), &opts);
+    start.forget();
+    let moved = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |ev: web_sys::TouchEvent| {
+        let here = ev.touches().get(0).filter(|_| ev.touches().length() == 1).map(|t| (f64::from(t.client_x()), f64::from(t.client_y())));
+        TAP.with(|t| {
+            let mut t = t.borrow_mut();
+            if t.as_ref().is_some_and(|(_, x0, y0, at)| here.is_none_or(|(x, y)| !is_tap(*x0, *y0, *at, x, y, *at))) {
+                *t = None;
+            }
+        });
+    });
+    let _ = doc.add_event_listener_with_callback_and_add_event_listener_options("touchmove", moved.as_ref().unchecked_ref(), &opts);
+    moved.forget();
+    let end = Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |ev: web_sys::TouchEvent| {
+        let Some((img, x0, y0, at)) = TAP.with(|t| t.borrow_mut().take()) else { return };
+        let lift = ev.changed_touches().get(0).map(|t| (f64::from(t.client_x()), f64::from(t.client_y())));
+        let Some((x, y)) = lift else { return };
+        if ev.default_prevented() || !is_tap(x0, y0, at, x, y, js_sys::Date::now()) {
+            return;
+        }
+        let Some(src) = img.get_attribute("src").filter(|s| !s.is_empty()) else { return };
+        ev.prevent_default();
+        open_full(&src, &img.get_attribute("alt").unwrap_or_default());
+    });
+    let end_opts = web_sys::AddEventListenerOptions::new();
+    end_opts.set_capture(true);
+    end_opts.set_passive(false);
+    let _ = doc.add_event_listener_with_callback_and_add_event_listener_options("touchend", end.as_ref().unchecked_ref(), &end_opts);
+    end.forget();
+}
+
+thread_local! {
+    /// The touch on a drawn image under way: the image, where and when it
+    /// landed.
+    static TAP: RefCell<Option<(web_sys::Element, f64, f64, f64)>> = const { RefCell::new(None) };
+}
+
+/// Whether a touch that landed at `(x0, y0)` at `at0` and lifted at `(x,
+/// y)` at `at` is a tap: within 10px and 500ms (a hold or a scroll is not).
+pub(crate) fn is_tap(x0: f64, y0: f64, at0: f64, x: f64, y: f64, at: f64) -> bool {
+    (x - x0).hypot(y - y0) <= 10.0 && at - at0 <= 500.0
 }
 
 /// The image at `src`, full size, over the page: a click or Esc closes it.
@@ -383,6 +446,161 @@ pub(crate) fn open_full(src: &str, alt: &str) {
     close.forget();
     if let Ok(h) = wrap.dyn_into::<web_sys::HtmlElement>() {
         let _ = h.focus();
+    }
+}
+
+// ── COMMENT-10: a ticket body's images, held to its ticket ─────────────
+
+/// An image as a body's ticket holds it: its type and bytes (base64, as a
+/// frame is handed them), and its `blob:` URL once the page drew it.
+pub(crate) struct Got {
+    pub(crate) mime: String,
+    pub(crate) data: String,
+    url: std::cell::OnceCell<Option<String>>,
+}
+
+impl Got {
+    /// Its `blob:` URL, made the first time it is asked for.
+    fn url(&self) -> Option<String> {
+        self.url
+            .get_or_init(|| {
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD.decode(self.data.as_bytes()).ok()?;
+                blob_url(&bytes, &self.mime)
+            })
+            .clone()
+    }
+}
+
+/// What the page knows of an image in a ticket's body.
+enum Held {
+    /// Asked for: what to do when it comes.
+    Asked(Vec<Box<dyn FnOnce(Option<std::rc::Rc<Got>>)>>),
+    Got(Option<std::rc::Rc<Got>>),
+}
+
+thread_local! {
+    /// Each (ticket, hash) a body has asked for.
+    static HELD: RefCell<HashMap<(String, String), Held>> = RefCell::new(HashMap::new());
+}
+
+/// Whether `h` is a hash as a frame asks for one: 64 lower-case hex digits.
+pub(crate) fn is_hash(h: &str) -> bool {
+    h.len() == 64 && h.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The key an image of `ticket`'s body is held under.
+fn held_key(ticket: &str, hash: &str) -> (String, String) {
+    (ticket.trim().to_ascii_uppercase(), hash.trim().to_ascii_lowercase())
+}
+
+/// The image `hash` as `ticket`'s body shows it — `media.get { hash, ticket
+/// }`, once per page load — handed to `then` (`None`: not found there, or
+/// not the reader's).
+pub(crate) fn held(ticket: &str, hash: &str, then: impl FnOnce(Option<std::rc::Rc<Got>>) + 'static) {
+    let key = held_key(ticket, hash);
+    if let Some(g) = held_now(ticket, hash) {
+        return then(g);
+    }
+    let first = HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        let first = !h.contains_key(&key);
+        if let Held::Asked(waiting) = h.entry(key.clone()).or_insert_with(|| Held::Asked(Vec::new())) {
+            waiting.push(Box::new(then));
+        }
+        first
+    });
+    if first {
+        fetch_held(key);
+    }
+}
+
+/// [`held`]'s answer when it is already in hand: `Some(got)`.
+pub(crate) fn held_now(ticket: &str, hash: &str) -> Option<Option<std::rc::Rc<Got>>> {
+    HELD.with(|h| match h.borrow().get(&held_key(ticket, hash)) {
+        Some(Held::Got(g)) => Some(g.clone()),
+        _ => None,
+    })
+}
+
+fn fetch_held(key: (String, String)) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let got = async {
+            let client = crate::session::media_client()?;
+            let h: menger_tickets_api::vocab::MediaHash = crate::typed::typed(&key.1).ok()?;
+            let t = crate::typed::typed(&key.0).ok()?;
+            let events = client.get_all(h, Some(t)).await.ok()?;
+            events.into_iter().find_map(|ev| match ev {
+                MediaEvent::Media { mime, data, .. } => Some(std::rc::Rc::new(Got { mime, data, url: std::cell::OnceCell::new() })),
+                _ => None,
+            })
+        }
+        .await;
+        let waiting = HELD.with(|h| match h.borrow_mut().insert(key, Held::Got(got.clone())) {
+            Some(Held::Asked(w)) => w,
+            _ => Vec::new(),
+        });
+        for then in waiting {
+            then(got.clone());
+        }
+    });
+}
+
+/// COMMENT-10: every `img.bimg` under `root` — an unframed body of
+/// `ticket` — drawn from `media.get` held to that ticket, or, not found
+/// there (or no ticket: a body that is no ticket's yet), [`missing`].
+pub(crate) fn hydrate_body(root: &web_sys::Element, ticket: Option<&str>) {
+    listen();
+    let Ok(nodes) = root.query_selector_all("img.bimg[data-media]:not([src])") else { return };
+    for i in 0..nodes.length() {
+        let Some(el) = nodes.get(i).and_then(|n| wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(n).ok()) else { continue };
+        let Some(hash) = el.get_attribute("data-media") else { continue };
+        let Some(ticket) = ticket else {
+            missing(&el);
+            continue;
+        };
+        let _ = el.set_attribute("data-state", "pending");
+        let fill = move |g: Option<std::rc::Rc<Got>>| match g.and_then(|g| g.url()) {
+            Some(u) => {
+                let _ = el.set_attribute("src", &u);
+                let _ = el.set_attribute("data-state", "drawn");
+            }
+            None => missing(&el),
+        };
+        match held_now(ticket, &hash) {
+            Some(g) => fill(g),
+            None => held(ticket, &hash, fill),
+        }
+    }
+}
+
+/// What a body's image not found there says beside its alt.
+pub(crate) const NOT_AVAILABLE: &str = "not available";
+
+/// COMMENT-10: a body's image that is not its ticket's (or is gone) — its
+/// alt, and a mark that says so, in its place.
+fn missing(el: &web_sys::Element) {
+    let Some(doc) = el.owner_document() else { return };
+    let alt = el.get_attribute("alt").unwrap_or_default();
+    let (Ok(span), Ok(mark)) = (doc.create_element("span"), doc.create_element("small")) else { return };
+    let _ = span.set_attribute("class", "bimg-missing");
+    let _ = span.set_attribute("title", "This image is not available here: it is kept for another ticket, or it is gone");
+    if let Some(h) = el.get_attribute("data-media") {
+        let _ = span.set_attribute("data-media", &h);
+    }
+    span.set_text_content(Some(alt.trim()));
+    mark.set_text_content(Some(NOT_AVAILABLE));
+    let _ = span.append_child(&mark);
+    let _ = el.replace_with_with_node_1(&span);
+}
+
+/// COMMENT-10: a frame's image, tapped — full screen over the app, when
+/// the host holds it for `ticket` (the frame's own stamp).
+pub(crate) fn zoom(ticket: &str, hash: &str, alt: &str) {
+    if let Some(Some(g)) = held_now(ticket, hash) {
+        if let Some(u) = g.url() {
+            open_full(&u, alt);
+        }
     }
 }
 
@@ -646,6 +864,22 @@ mod tests {
         assert_eq!(insert("line\n", 5, "IMG"), ("line\nIMG ".to_string(), 9));
         // "é" is one unit, "😀" two: the offset after them is 3.
         assert_eq!(insert("é😀x", 3, "I"), ("é😀 I x".to_string(), 6));
+    }
+
+    /// COMMENT-10: a frame names an image by its hash alone; the ticket an
+    /// image is held to is folded as the store spells it.
+    #[test]
+    fn a_tap_lifts_where_it_landed_and_soon() {
+        assert!(is_tap(100.0, 200.0, 0.0, 106.0, 207.0, 300.0));
+        assert!(!is_tap(100.0, 200.0, 0.0, 100.0, 230.0, 100.0), "a scroll");
+        assert!(!is_tap(100.0, 200.0, 0.0, 100.0, 200.0, 650.0), "a hold");
+    }
+
+    #[test]
+    fn a_frame_asks_by_a_hash_and_its_ticket_is_folded() {
+        assert!(is_hash(&h('a')) && is_hash(&"0f".repeat(32)));
+        assert!(!is_hash(&h('A')) && !is_hash(&h('g')) && !is_hash("ab") && !is_hash(&format!("media:{}", h('a'))));
+        assert_eq!(held_key(" kiln-4 ", &h('B')), ("KILN-4".to_string(), h('b')));
     }
 
     #[test]
