@@ -54,6 +54,15 @@
 //! on the way out — the re-walk upserts over them, so unchanged rows keep
 //! their DOM identity across a reconnect (AGS-20's discipline).
 //!
+//! APP-63: **a reconnect reloads the page** (src/resume.rs). The re-ask
+//! below still runs on a page's first connection, on a `lagged`, and on a
+//! reconnect past the reload budget; but a page whose socket came back
+//! reloads as soon as the server answers, keeping its route, scroll and
+//! drafts — so no view that fetched for itself is left holding what it had
+//! before the gap (an open chat's messages were). The retry backs off
+//! while the server is down (1 s to 15 s), and nothing reloads until it
+//! answers.
+//!
 //! SCALE-5: `watch` can also say that *it* fell behind — the server's
 //! broadcast is bounded, and a subscriber more than it holds behind loses
 //! the oldest changes, which used to vanish while the dock read `live`.
@@ -153,7 +162,7 @@
 //! ask its counts.
 
 use crate::kids::Kids;
-use crate::{board, cache, comments, dom, frame, inputs, nav, registry, scopes, settings, signin, Conn, Dock};
+use crate::{board, cache, comments, dom, frame, inputs, nav, registry, resume, scopes, settings, signin, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{CommentsClient, Marked, SearchWord, TicketsClient, Status, Ticket, TicketSummary, TicketsEvent, Tombstone};
@@ -168,9 +177,6 @@ use wasm_bindgen_futures::spawn_local;
 /// constructor argument and not part of a `MethodRef`.
 pub(crate) const HUB: &str = "menger";
 
-/// The retry gap after a session ends. A server restart costs a few
-/// seconds of `reconnecting…`, never a reload.
-const RETRY_MS: i32 = 1000;
 
 /// The typed client, over the app's one shared connection.
 pub(crate) type Client = TicketsClient<Rc<WsTransport>>;
@@ -857,7 +863,11 @@ pub(crate) fn drive(
     tree: nav::Tree,
 ) {
     spawn_local(async move {
+        // APP-63: sessions in a row that never connected — the retry backs
+        // off while the server is down (resume::backoff_ms).
+        let mut failures = 0u32;
         loop {
+            let before = resume::connects();
             let err = session(board, dock, conn, socket, last_error, tree)
                 .await
                 .expect_err("a session only returns on error");
@@ -869,7 +879,8 @@ pub(crate) fn drive(
                 signin::problem().set(Some(err.clone()));
             }
             conn.set(Conn::Reconnecting);
-            dom::sleep_ms(RETRY_MS).await;
+            failures = if resume::connects() != before { 0 } else { failures + 1 };
+            dom::sleep_ms(resume::backoff_ms(failures)).await;
         }
     });
 }
@@ -894,6 +905,14 @@ async fn session(
             .await
             .map_err(|e| format!("connect {url}: {e}"))?,
     );
+    // APP-63: a reconnect reloads the page — the server answers again (the
+    // sign-in checked, a socket open), and a reload asks for everything this
+    // page shows, nothing missed. The page goes; this session waits for it.
+    if resume::reconnected() {
+        drop(transport);
+        return std::future::pending().await;
+    }
+    resume::connected();
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport.clone()));
     LINK.with(|l| l.set(true));
     // IDENTITY-22: the person's grants, for the header and the views. With

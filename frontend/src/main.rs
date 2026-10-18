@@ -321,6 +321,7 @@ mod needs;
 mod orgs;
 mod phonebar;
 mod registry;
+mod resume;
 mod rowclick;
 mod saved;
 mod scale;
@@ -2182,7 +2183,11 @@ fn App() -> impl IntoView {
     // DESIGN-39: the Motion setting on <html> first, then the boot's sheet
     // over the app until the first `health`.
     motion::install();
-    motion::boot_begin(&settings::effective_ws_url());
+    // APP-63: a page reloaded for a reconnect puts back its scroll and its
+    // typed fields — and skips the boot, which it has seen.
+    if !resume::install() {
+        motion::boot_begin(&settings::effective_ws_url());
+    }
     // SCALE-26: the board's model of the store — the extents, the window's
     // rows it holds — asked for by the session and kept by its own effect.
     let board = board::Board::new();
@@ -2233,7 +2238,8 @@ fn App() -> impl IntoView {
     // MFE-9: the whole data plane is one task holding one WebSocket
     // (session.rs) — `watch` first, then MNG-9's summary pages walked with
     // `after = next`, then live. ~1s retry keeps a server restart to a few
-    // seconds of "reconnecting…" (MFE-2 criterion 3). It runs regardless of
+    // seconds of "reconnecting…" (MFE-2 criterion 3); APP-63: backing off
+    // while it stays down, and the reconnect reloads the page (resume.rs). It runs regardless of
     // route: the ticket page's liveness is this same stream. SCALE-26: no
     // walk — `extents` and the board's one window, then live.
     session::drive(board, dock, conn, socket, last_error, tree);
