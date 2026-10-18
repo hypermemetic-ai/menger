@@ -827,9 +827,15 @@ menger-skills `showing` has when to use one.
 - **Interactive.** Its controls work: a menu opens, a sheet slides up, a
   row collapses, a form submits. The states one view reaches are reached by
   using it, not drawn again below.
-- **Its description is outside it.** Say what it shows in `title=` /
-  `description=` (drawn above the devices) and in a line of prose above
-  it, never as a heading or intro inside the mocked page.
+- **Its description is outside it, said once.** Say what it shows in
+  `title=` / `description=` (drawn above the devices) and why it is there
+  in a line of prose above it, never as a heading or intro inside the
+  mocked page. The prose and `description=` never repeat each other
+  (APP-60: on a phone the reader got the same sentence twice) — the prose
+  says why, the description what; or leave `description=` out.
+- **On a phone** (≤ 820, APP-60) it opens on its narrowest device at
+  about 100%, the other widths a tap away, the bar one row (the rest
+  under ⋯), Full screen at 100%; above 820 nothing changes.
 - **Built from the app's own tokens and fonts** (`tickets-api/src/tokens.toml`),
   light and dark, with synthetic data. It is checked in headless Chromium at
   each width and theme (every control clicked, document height = viewport,

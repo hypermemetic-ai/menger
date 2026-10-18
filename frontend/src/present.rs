@@ -53,6 +53,12 @@
 //! `menger:extent` — the bar says so, quietly ([`tall_note`]): a hint to the
 //! author that another view is another mockup, never a refusal.
 //!
+//! APP-60: **on a phone** (≤ [`crate::phonebar::PHONE_MAX`]) a mockup's
+//! bar is one row — its option's *pick this* (in a decision), the device
+//! picker, ⋯ and Full screen; the rest (*comment*, Size, Reset, Light /
+//! Dark, Reduced motion, Compare, the tall note) folds into the ⋯ menu —
+//! and it opens on one device at the column's width (src/mocksize.rs).
+//!
 //! What decides — the declaration, the devices, the scale, the route's
 //! query, the caption, the tall check — is pure and pinned by native tests;
 //! the rest is DOM.
@@ -583,6 +589,8 @@ pub(crate) fn Framed(
     // APP-46: what the box's owner adds at the head of its bar (a mockup's
     // *pick this* and *comment*, src/mockpick.rs).
     #[prop(optional)] actions: Option<ViewFn>,
+    // APP-60: what it adds after them that a phone folds into ⋯ (*comment*).
+    #[prop(optional)] more: Option<ViewFn>,
 ) -> impl IntoView {
     install();
     let id = NEXT.with(|n| {
@@ -671,9 +679,18 @@ pub(crate) fn Framed(
     // APP-44: a mockup's name — the same as its sizes' — is what the page's
     // comparison holds it by.
     let compare_key = remember.or_else(|| ticket.clone());
-    let sizer = crate::mocksize::Sizer::new(declared_devices.into(), compare_key.clone());
+    // APP-60: whether the viewport is a phone's, as it turns.
+    let phone = RwSignal::new(phone_now());
+    let turned = window_event_listener(leptos::ev::resize, move |_| {
+        let now = phone_now();
+        if phone.try_get_untracked().is_some_and(|was| was != now) {
+            phone.set(now);
+        }
+    });
+    on_cleanup(move || turned.remove());
+    let sizer = crate::mocksize::Sizer::new(declared_devices.into(), compare_key.clone(), phone.into());
     let compare_attr = compare_key.clone();
-    let compare_button = compare_key.map(|k| crate::compare::toggle_button(k, mockup));
+    let compare_button = move || compare_key.clone().map(|k| crate::compare::toggle_button(k, mockup));
     // APP-42: what the mockup shows, said above it; and the note when its
     // page at the narrowest device shown scrolls several screens.
     let caption = Memo::new(move |_| decl.with(|d| if d.mode == Mode::Mockup && !d.caption.is_empty() { Some(d.caption.clone()) } else { None }));
@@ -702,31 +719,78 @@ pub(crate) fn Framed(
             view! { <Frame html ticket scope /> }.into_any()
         }
     };
-    let controls = move || {
-        mockup.get().then(|| {
-            view! {
-                {sizer.controls()}
-                <span class="framed-group" role="group" aria-label="colour scheme">
-                    <button class="framed-btn" aria-pressed=move || (scheme.get() == Scheme::Light).to_string() on:click=move |_| scheme.set(Scheme::Light)>"Light"</button>
-                    <button class="framed-btn" aria-pressed=move || (scheme.get() == Scheme::Dark).to_string() on:click=move |_| scheme.set(Scheme::Dark)>"Dark"</button>
-                </span>
-                <button class="framed-btn framed-motion" title="prefers-reduced-motion, as the page sees it" aria-pressed=move || reduce.get().to_string() on:click=move |_| reduce.update(|r| *r = !*r)>
-                    "Reduced motion"
-                </button>
+    let looks = move || {
+        view! {
+            <span class="framed-group" role="group" aria-label="colour scheme">
+                <button class="framed-btn" aria-pressed=move || (scheme.get() == Scheme::Light).to_string() on:click=move |_| scheme.set(Scheme::Light)>"Light"</button>
+                <button class="framed-btn" aria-pressed=move || (scheme.get() == Scheme::Dark).to_string() on:click=move |_| scheme.set(Scheme::Dark)>"Dark"</button>
+            </span>
+            <button class="framed-btn framed-motion" title="prefers-reduced-motion, as the page sees it" aria-pressed=move || reduce.get().to_string() on:click=move |_| reduce.update(|r| *r = !*r)>
+                "Reduced motion"
+            </button>
+        }
+    };
+    let note = move || {
+        tall_screens.get().map(|n| view! { <span class="framed-note" role="note" title="A mockup is one screen at one state; another view is another mockup">{tall_note(n)}</span> })
+    };
+    // APP-60: a mockup on a phone folds its bar into one row.
+    let folded = Memo::new(move |_| mockup.get() && phone.get());
+    let more_open = RwSignal::new(false);
+    let more_shown = Memo::new(move |_| folded.get() && (more_open.get() || sizer.field_open()));
+    let close_more = move || {
+        more_open.set(false);
+        sizer.close_field();
+    };
+    let head_more = more.clone();
+    let controls = {
+        let compare_button = compare_button.clone();
+        move || {
+            if !mockup.get() {
+                return None;
             }
-        })
+            let compare_button = compare_button.clone();
+            Some(if folded.get() {
+                let more = more.clone();
+                view! {
+                    {sizer.picker()}
+                    <span class="framed-fold">
+                        <button class="framed-btn framed-more" title="More: comment, size, colour scheme, motion, compare" aria-label="More mockup controls"
+                            aria-haspopup="true" aria-expanded=move || more_shown.get().to_string()
+                            on:click=move |_| if more_shown.get_untracked() { close_more() } else { more_open.set(true) }>
+                            "⋯"
+                        </button>
+                        <span class="framed-scrim" hidden=move || !more_shown.get() on:click=move |_| close_more()></span>
+                        <span class="framed-panel" role="group" aria-label="More mockup controls" hidden=move || !more_shown.get()>
+                            {more.map(|m| m.run())}
+                            {sizer.tools()}
+                            {looks()}
+                            {compare_button()}
+                            {note}
+                        </span>
+                    </span>
+                }
+                .into_any()
+            } else {
+                view! {
+                    {sizer.picker()}
+                    {sizer.tools()}
+                    {looks()}
+                    {compare_button()}
+                }
+                .into_any()
+            })
+        }
     };
     let data_compare = move || if mockup.get() { compare_attr.clone() } else { None };
     view! {
         <div class="framed" class:is-full=move || is_full.get() data-framed=id.to_string() data-view=mode data-compare=data_compare node_ref=root>
             {move || caption.get().map(caption_view)}
-            <div class="framed-bar">
+            <div class="framed-bar" data-folded=move || folded.get().then_some("")>
                 {move || if is_full.get() { heading() } else { None }}
                 {actions.map(|a| a.run())}
-                {move || tall_screens.get().map(|n| view! { <span class="framed-note" role="note" title="A mockup is one screen at one state; another view is another mockup">{tall_note(n)}</span> })}
+                {move || (!folded.get()).then(|| view! { {head_more.clone().map(|m| m.run())} {note} })}
                 <span class="framed-gap"></span>
                 {controls}
-                {compare_button}
                 <button class="framed-btn framed-full" title="Full screen (z) — Esc leaves it" aria-pressed=move || is_full.get().to_string() on:click=toggle>
                     {label}
                 </button>
@@ -734,6 +798,11 @@ pub(crate) fn Framed(
             <div class="framed-stage" node_ref=stage>{body}</div>
         </div>
     }
+}
+
+/// APP-60: whether the viewport is a phone's (APP-50's shape).
+fn phone_now() -> bool {
+    crate::phonebar::is_phone(dom::window().inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1440.0))
 }
 
 /// APP-42: a mockup's caption, in the app's DOM and type — the title a line,
