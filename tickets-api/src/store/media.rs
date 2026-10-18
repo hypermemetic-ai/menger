@@ -284,6 +284,35 @@ impl Store {
         }
     }
 
+    /// COMMENT-10: [`Store::media`] held to one ticket's body — the image
+    /// only when it was put for `ticket` and `who` sees that ticket. One
+    /// kept for another ticket, a chat or the app is
+    /// [`StoreError::MediaNotFound`], as one there is none of: a body
+    /// reaches no image but its own ticket's.
+    pub async fn media_for(&self, who: &(impl Reader + ?Sized), hash: &str, ticket: &str) -> Result<(MediaInfo, Vec<u8>), StoreError> {
+        let info = self.media_info_for(who, hash, ticket)?;
+        let h = info.hash.clone();
+        let data = self
+            .readers
+            .read(move |conn| Ok(conn.query_row("SELECT data FROM media WHERE hash = ?1", [&h], |r| r.get::<_, Vec<u8>>(0))?))
+            .await?;
+        Ok((info, data))
+    }
+
+    /// COMMENT-10: [`Store::media_for`]'s rule, without the bytes. From the
+    /// cache alone.
+    pub fn media_info_for(&self, who: &(impl Reader + ?Sized), hash: &str, ticket: &str) -> Result<MediaInfo, StoreError> {
+        let seen = Seen::of(who)?;
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let sees = seen.sees(&cache);
+        let key = sees.resolve(ticket).ok().filter(|k| sees.id(k));
+        let its = |o: &Owner| matches!(o, Owner::Ticket(t) if key.as_ref().is_some_and(|k| cache.resolve(t).is_ok_and(|r| r == *k)));
+        match cache.media.get(hash) {
+            Some(k) if k.owners.iter().any(its) => Ok(k.info.clone()),
+            _ => Err(StoreError::MediaNotFound(hash.to_string())),
+        }
+    }
+
     /// COMMENT-5: how many images the store keeps — for a log line.
     pub fn media_count(&self, _: &super::System) -> usize {
         self.tickets.read().expect("store lock poisoned").media.len()

@@ -123,8 +123,11 @@ impl MediaActivation {
     /// Yields exactly one event: `media` — the image as kept, its bytes in
     /// standard base64 — or `not_found { hash }` for a hash that names no
     /// image, and alike for one put only for tickets the caller cannot see
-    /// (ACCESS-10: not found ≡ not yours). The bytes are read from the
-    /// database, never the cache.
+    /// (ACCESS-10: not found ≡ not yours). COMMENT-10: with `ticket`, held
+    /// to that ticket's body — the image only when it was put for that
+    /// ticket (one kept for another ticket, a chat or the app is
+    /// `not_found` there). The bytes are read from the database, never the
+    /// cache.
     #[plexus_macros::method(
         group = "read",
         example(note = "an image a comment shows", params = r#"{"hash": "9f2c6ae2b4d1e1a8f7c3b0d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718"}"#)
@@ -134,8 +137,10 @@ impl MediaActivation {
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// The image's hash, as `put` answered it (a `media:` before it is read past).
         hash: MediaHash,
+        /// COMMENT-10: the ticket whose body shows it, e.g. KILN-4 (optional: then only an image kept for that ticket).
+        ticket: Option<TicketRef>,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
         let store = self.store.clone();
-        futures::stream::once(async move { streams::get(store, user, hash).await })
+        futures::stream::once(async move { streams::get(store, user, hash, ticket).await })
     }
 }

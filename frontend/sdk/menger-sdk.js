@@ -118,6 +118,17 @@
  *     page answers an input. A decision
  *     whose options hold mockups draws its chosen option first once it
  *     is DECIDED.
+ *   - **a body's images** (COMMENT-10, 2.5): a body's `![alt](media:<hash>)`
+ *     is an `img.bimg[data-media]` with no `src` (md.rs). The frame has no
+ *     connection of its own, so it asks the host (`menger:media { hash }`),
+ *     which reads `media.get` held to the ticket it stamped on this frame
+ *     (`data-media` — the frame cannot name one: only an image kept for
+ *     that ticket) and answers `menger:media { hash, mime, data }` (base64)
+ *     or `{ hash, missing: true }`. A drawn image is a `blob:` URL of this
+ *     frame's own; one not found is its alt and a "not available" mark. A
+ *     click or tap on one asks the host to show it full screen over the
+ *     app (`menger:zoom { hash, alt }`; only inside a viewer's gesture on
+ *     this frame). The frame settles once every image is answered.
  *   - **a cited window's frame** (init `cite`: `{ field }` or `{ anchor }`)
  *     shows that one section of its body: everything but the element and
  *     its ancestors is hidden (the ancestors' own boxes invisible), and
@@ -348,7 +359,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.4.0";
+  var VERSION = "2.5.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -1243,8 +1254,8 @@
   // the selectors, so nothing waits for the body to parse. Not affected by
   // either: the document (html, body), the frame's ground; the box-sizing
   // reset; the SDK's own blocks — a mermaid placeholder, a docs card's chrome
-  // (src/card.rs; never its preview, examples or help, which are the body's)
-  // — styled by their classes.
+  // (src/card.rs; never its preview, examples or help, which are the body's),
+  // a body's `media:` image (COMMENT-10) — styled by their classes.
 
   // A selector's prefix for the default reach: no opt-out in the document.
   var EVERY = ":root:not(:has(meta[name=menger-base][content=markdown i])) ";
@@ -1275,6 +1286,14 @@
     ":where(" + EVERY + "table,table[data-md]," + CARD_TABLE + "){border-collapse:collapse}",
     ":where(" + EVERY + ":is(th,td),:is(th,td)[data-md]," + CARD_TABLE + " :is(th,td)){border:var(--border) solid var(--line);padding:.25rem .5rem;text-align:left}",
     ":where(" + EVERY + ":is(img,video),img[data-md]){max-width:100%}",
+    // COMMENT-10: a body's image at the column's width; one not available
+    // its alt, marked.
+    ":where(img.bimg){display:block;max-width:100%;height:auto;margin:.5rem 0;cursor:zoom-in;" +
+      "border:var(--border) solid var(--line);border-radius:var(--radius)}",
+    ":where(img.bimg:not([src])){display:inline-block;min-width:4rem;min-height:2rem;cursor:default;background:var(--panel)}",
+    ":where(.bimg-missing){display:inline-flex;align-items:baseline;gap:.4rem;padding:.1rem .45rem;color:var(--muted);" +
+      "border:var(--border) dashed var(--line);border-radius:var(--radius)}",
+    ":where(.bimg-missing small){font-size:.75em;text-transform:uppercase;letter-spacing:.04em}",
     ":where(" + EVERY + "details>summary,.menger-card .mc-source>summary){cursor:pointer}",
     ":where(.mermaid){background:var(--panel);border:var(--border) solid var(--line);border-radius:var(--radius);" +
       "padding:.6rem .8rem;margin:.5rem 0;overflow-x:auto}",
@@ -1478,6 +1497,8 @@
       locate(m);
     } else if (m.type === "menger:walk") {
       walk(m.step);
+    } else if (m.type === "menger:media") {
+      mediaAnswered(m);
     }
   });
 
@@ -2844,6 +2865,132 @@
   doc.addEventListener("click", takeLink);
   doc.addEventListener("auxclick", takeLink);
 
+  // -- a body's images (COMMENT-10, 2.5) --------------------------------------
+  // See the header: asked of the host by hash, answered held to this
+  // frame's ticket; drawn from a blob: URL of the frame's own.
+
+  var MEDIA_HASH = /^[0-9a-f]{64}$/;
+  var MEDIA_TYPE = /^image\/(png|jpeg|gif|webp)$/;
+  var mediaUrls = Object.create(null); // hash -> blob: URL, or null (not found)
+  var mediaWaiting = Object.create(null); // hash -> the images waiting for it
+  var mediaDrawn = [];
+  var mediaDone = null;
+
+  function mediaMissing(img) {
+    var span = doc.createElement("span");
+    span.className = "bimg-missing";
+    span.setAttribute("title", "This image is not available here: it is kept for another ticket, or it is gone");
+    span.setAttribute("data-media", img.getAttribute("data-media") || "");
+    span.textContent = (img.getAttribute("alt") || "").trim();
+    var mark = doc.createElement("small");
+    mark.textContent = "not available";
+    span.appendChild(mark);
+    if (img.parentNode) img.parentNode.replaceChild(span, img);
+  }
+
+  function mediaFill(img, url) {
+    if (!url) return mediaMissing(img);
+    img.setAttribute("src", url);
+    img.setAttribute("data-state", "drawn");
+    if (img.decode) mediaDrawn.push(img.decode().catch(function () {}));
+  }
+
+  function mediaSettled() {
+    for (var k in mediaWaiting) return;
+    if (!mediaDone) return;
+    var done = mediaDone;
+    mediaDone = null;
+    Promise.all(mediaDrawn).then(done, done);
+  }
+
+  function mountMedia() {
+    var imgs = doc.querySelectorAll("img.bimg[data-media]:not([src])");
+    if (!imgs.length) return Promise.resolve();
+    return new Promise(function (resolve) {
+      mediaDone = resolve;
+      for (var i = 0; i < imgs.length; i++) {
+        var img = imgs[i];
+        var hash = (img.getAttribute("data-media") || "").toLowerCase();
+        if (!MEDIA_HASH.test(hash)) {
+          mediaMissing(img);
+        } else if (hash in mediaUrls) {
+          mediaFill(img, mediaUrls[hash]);
+        } else if (mediaWaiting[hash]) {
+          mediaWaiting[hash].push(img);
+        } else {
+          img.setAttribute("data-state", "pending");
+          mediaWaiting[hash] = [img];
+          post("menger:media", { hash: hash });
+        }
+      }
+      mediaSettled();
+    });
+  }
+
+  function mediaAnswered(m) {
+    var hash = m.hash;
+    if (typeof hash !== "string" || !mediaWaiting[hash]) return;
+    var url = null;
+    if (typeof m.data === "string" && typeof m.mime === "string" && MEDIA_TYPE.test(m.mime)) {
+      try {
+        var bin = atob(m.data);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        url = URL.createObjectURL(new Blob([bytes], { type: m.mime }));
+      } catch (e) {
+        url = null;
+      }
+    }
+    mediaUrls[hash] = url;
+    var imgs = mediaWaiting[hash];
+    delete mediaWaiting[hash];
+    for (var j = 0; j < imgs.length; j++) mediaFill(imgs[j], url);
+    mediaSettled();
+  }
+
+  // A drawn image, clicked or tapped (not one inside a link: the link is
+  // followed): the host shows it full screen.
+  doc.addEventListener("click", function (ev) {
+    if (ev.defaultPrevented || ev.button !== 0) return;
+    var img = ev.target && ev.target.closest ? ev.target.closest("img.bimg[src]") : null;
+    if (!img || img.closest("a")) return;
+    ev.preventDefault();
+    zoomImage(img);
+  });
+  function zoomImage(img) {
+    post("menger:zoom", { hash: img.getAttribute("data-media") || "", alt: img.getAttribute("alt") || "" });
+  }
+  // A tap on a touch screen: WebKit gives an image in a frame no click for
+  // it, so the tap is read here — one finger, lifted within 10px and 500ms
+  // of where it landed (a scroll or a second finger is none). Its touchend
+  // is the gesture the host asks for; the frame takes focus first, and the
+  // lift is prevented, so no click follows to ask again.
+  var tapped = null;
+  window.addEventListener("touchstart", function (ev) {
+    tapped = null;
+    if (annotating || ev.touches.length !== 1) return;
+    var img = ev.target && ev.target.closest ? ev.target.closest("img.bimg[src]") : null;
+    if (!img || img.closest("a")) return;
+    var t = ev.touches[0];
+    tapped = { img: img, x: t.clientX, y: t.clientY, at: Date.now() };
+  }, { capture: true, passive: true });
+  window.addEventListener("touchmove", function (ev) {
+    var t = ev.touches[0];
+    if (tapped && (ev.touches.length !== 1 || !t || Math.hypot(t.clientX - tapped.x, t.clientY - tapped.y) > 10)) tapped = null;
+  }, { capture: true, passive: true });
+  window.addEventListener("touchend", function (ev) {
+    var tap = tapped;
+    tapped = null;
+    if (!tap || ev.defaultPrevented || Date.now() - tap.at > 500) return;
+    ev.preventDefault();
+    try {
+      window.focus();
+    } catch (e) {}
+    zoomImage(tap.img);
+  }, { capture: true, passive: false });
+  window.addEventListener("touchcancel", function () { tapped = null; }, true);
+  window.addEventListener("scroll", function () { tapped = null; }, true);
+
   // -- the ticket menu (MENGER-34, 1.12) --------------------------------------
   // A ticket chip — the nearest `[data-ticket-id]`, or an `<m-ticket ref>`,
   // shadow roots included — right-clicked (or Menu / Shift+F10 on a focused
@@ -3236,7 +3383,7 @@
     report(true);
     // Settled: diagrams drawn, code highlighted (MENGER-22), the registry
     // in hand, and what the components asked for meanwhile answered.
-    Promise.all([mountDiagrams(), mountCode(), whenKnown()]).then(whenIdle).then(settle, settle);
+    Promise.all([mountDiagrams(), mountCode(), mountMedia(), whenKnown()]).then(whenIdle).then(settle, settle);
     setTimeout(settle, SETTLE_MS);
   }
 

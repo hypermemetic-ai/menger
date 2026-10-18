@@ -57,10 +57,15 @@ pub(super) async fn put(store: Arc<Store>, user: VerifiedUser, ticket: Option<Ti
 }
 
 /// `media.get`: ACCESS-10 — the image, to a reader who sees a ticket it is
-/// for; `not_found` alike for none and for one out of reach.
-pub(super) async fn get(store: Arc<Store>, user: VerifiedUser, hash: MediaHash) -> MediaEvent {
+/// for; `not_found` alike for none and for one out of reach. COMMENT-10:
+/// with `ticket`, only one put for that ticket ([`Store::media_for`]).
+pub(super) async fn get(store: Arc<Store>, user: VerifiedUser, hash: MediaHash, ticket: Option<TicketRef>) -> MediaEvent {
     use base64::Engine;
-    match store.media(&user, hash.as_str()).await {
+    let got = match &ticket {
+        Some(t) => store.media_for(&user, hash.as_str(), t.as_str()).await,
+        None => store.media(&user, hash.as_str()).await,
+    };
+    match got {
         Ok((info, bytes)) => {
             let data = base64::engine::general_purpose::STANDARD.encode(bytes);
             let crate::media::MediaInfo { hash, mime, bytes, width, height } = info;

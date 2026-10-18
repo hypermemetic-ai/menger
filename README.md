@@ -2960,7 +2960,7 @@ drawn as a link to it.
 | method | yields |
 |---|---|
 | `media.put { ticket?, mime, data }` | `stored { hash, mime, bytes, width, height, duplicate }` — the image kept, named by its SHA-256 (64 hex digits); `data` is standard base64 (a `data:…;base64,` before it is read past). Its type is read from its magic bytes — PNG, JPEG, GIF or WebP, **never SVG** — and must be the `mime` given; width and height from its header. At most **7 MiB**. A refusal is `refused { reason, message, bytes?, max? }` (`too_large`, `not_an_image`, `type_mismatch`, `truncated`, `bad_data`), naming the limit, and nothing is kept; a ticket that is none, or out of the caller's reach, is `not_found { ticket }`. The same bytes again are one row (`duplicate: true`); put for a second ticket, the one image is that ticket's too. Without `ticket` (a comment on the app) the image is the putter's and the admins' of `*` |
-| `media.get { hash }` | `media { hash, mime, bytes, width, height, data }` (data base64) — or `not_found { hash }`, alike for a hash that names nothing and for an image put only for tickets the caller cannot see (ACCESS-10) |
+| `media.get { hash, ticket? }` | `media { hash, mime, bytes, width, height, data }` (data base64) — or `not_found { hash }`, alike for a hash that names nothing and for an image put only for tickets the caller cannot see (ACCESS-10). COMMENT-10: with `ticket`, held to that ticket's body — only an image put for that ticket; one kept for another ticket (even one the caller sees), a chat or the app is `not_found` there |
 
 **Reach.** An image belongs to the ticket it was put for: `get` answers it to
 a reader who sees that ticket (by its id through the resolver, so a
@@ -2990,6 +2990,40 @@ synapse -P 4455 menger comments add --anchor.route '#/ticket/KILN-4' --anchor.pa
   --anchor.label Conversation --anchor.ticket KILN-4 --body 'the hold drifts here ![the curve](media:<hash>)'
 synapse -P 4455 -j menger media get --hash <hash> | jq -r 'select(.content.data) | .content.data' | base64 -d > back.png
 ```
+
+### Images in ticket bodies (COMMENT-10)
+
+A ticket's body draws its `![alt](media:<hash>)` images too, as a comment
+does: at the column's width, a tap or click opens one full screen (a tap or
+Esc closes it). An agent files a screenshot into a body by putting it for
+that ticket first — `media put --ticket X`, then the markdown in X's body.
+
+**Held to the ticket.** A body's images are read with `media.get { hash,
+ticket }`, the body's own ticket — so a body reaches no image but its own
+ticket's: one kept for another ticket (even one the reader may see), a
+chat or the app is not found there, and is drawn as its alt with a **not
+available** mark (dashed). A reader who cannot see the ticket sees no body
+at all. The editor's preview draws the edited ticket's images (a first
+draft, of no ticket yet, marks each not available); a past revision of
+a ticket draws that ticket's.
+
+**Unframed and framed alike.** md.rs writes each as an `img.bimg
+data-media=<hash>` with no `src`; an unframed body is filled by the page
+(`media::hydrate_body`), a `blob:` URL from the bytes. A framed body's frame
+has no connection of its own (IDENTITY-28), so its SDK (2.5) asks the host
+— `menger:media { hash }` — and the host answers held to the ticket it
+stamped on the frame (`<iframe data-media>`: the stored body's ticket, or
+the ticket a draft edits; the frame cannot name one): `menger:media { hash,
+mime, data }` or `{ hash, missing: true }`. The frame draws a `blob:` URL of
+its own (no other origin, under ACCESS-28's policies) and settles once every
+image is answered. A tap asks the host (`menger:zoom { hash, alt }`, only
+inside a viewer's gesture on that frame) to show it full screen over the
+app. A touch screen gives an image no click (WebKit synthesizes none for
+an element that is not a control), so the SDK and the page both read the
+tap itself: one finger, lifted within 10 px and 500 ms of where it landed,
+its lift prevented so no click follows (a scroll or a hold is no tap). The
+page asks `media.get` once per (ticket, image) per load, however often the
+body re-renders.
 
 ### History and cancellation (MENGER-13)
 
