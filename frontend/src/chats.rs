@@ -159,6 +159,8 @@ pub(crate) struct Held {
     threads: HashMap<u64, Thread>,
     /// The name each author went by, from the messages heard.
     names: BTreeMap<String, String>,
+    /// CHAT-18: each chat's live work heard and fetched, by `seq` (src/live.rs).
+    activity: HashMap<u64, Vec<menger_tickets_api::chats::Activity>>,
 }
 
 impl Held {
@@ -205,8 +207,15 @@ impl Held {
                 }
                 true
             }),
+            ChatsEvent::Activity { activity } => {
+                if let Some(n) = &activity.name {
+                    self.names.entry(activity.by.clone()).or_insert_with(|| n.clone());
+                }
+                crate::live::keep(self.activity.entry(activity.chat.get()).or_default(), activity)
+            }
             ChatsEvent::Left { chat } => {
                 self.threads.remove(&chat.get());
+                self.activity.remove(&chat.get());
                 self.chats.remove(&chat.get()).is_some()
             }
             _ => false,
@@ -276,6 +285,11 @@ impl Held {
 
     pub(crate) fn thread(&self, id: u64) -> Option<&Thread> {
         self.threads.get(&id)
+    }
+
+    /// CHAT-18: `chat`'s live work, oldest first.
+    pub(crate) fn activity(&self, id: u64) -> &[menger_tickets_api::chats::Activity] {
+        self.activity.get(&id).map_or(&[], Vec::as_slice)
     }
 
     /// The chats on `ticket` (its key, any case) in `state`, oldest first —
@@ -389,6 +403,7 @@ pub(crate) fn settle(answer: Vec<ChatsEvent>, heard: &[ChatsEvent], me: &str, ke
     if let Some(k) = kept {
         held.threads = k.threads.clone();
         held.names = k.names.clone();
+        held.activity = k.activity.clone();
     }
     for ev in heard {
         held.apply(ev, me);
@@ -432,6 +447,8 @@ thread_local! {
     static PUMP: RefCell<Option<futures::future::AbortHandle>> = const { RefCell::new(None) };
     /// The threads asked for on this connection.
     static ASKED: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    /// CHAT-18: the activity logs asked for on this connection.
+    static ASKED_LIVE: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The chats, as a signal — `None` until the first fetch lands.
@@ -462,6 +479,7 @@ pub(crate) fn want() {
 pub(crate) fn refresh() {
     if WANTED.with(Cell::get) {
         ASKED.with(|a| a.borrow_mut().clear());
+        ASKED_LIVE.with(|a| a.borrow_mut().clear());
         start();
     }
 }
@@ -573,6 +591,30 @@ pub(crate) fn load(chat: u64, size: u32, at: Option<u64>) {
             return;
         };
         HELD.with(|s| s.update(|h| h.get_or_insert_with(Held::default).with_thread(chat, |t| if at.is_some() { t.around(back, older, ahead, newer) } else { t.at_newest(back, older) })));
+    });
+}
+
+/// CHAT-18: `chat`'s live work the server keeps (`activity_log`), once per
+/// connection — what was done before the chat opened, joined to what the
+/// watch hears by `seq`.
+pub(crate) fn load_activity(chat: u64) {
+    if ASKED_LIVE.with(|a| a.borrow().contains(&chat)) {
+        return;
+    }
+    let Some(client) = session::chats_client() else { return };
+    ASKED_LIVE.with(|a| a.borrow_mut().push(chat));
+    spawn_local(async move {
+        let Ok(events) = client.activity_log_all(ChatId::new(chat)).await else {
+            ASKED_LIVE.with(|a| a.borrow_mut().retain(|c| *c != chat));
+            return;
+        };
+        let me = me();
+        HELD.with(|s| {
+            s.maybe_update(|h| {
+                let h = h.get_or_insert_with(Held::default);
+                events.iter().fold(false, |moved, ev| h.apply(ev, &me) | moved)
+            })
+        });
     });
 }
 
@@ -860,6 +902,22 @@ pub(crate) mod tests {
         assert_eq!(ids(h.on("KILN-7", ChatState::Open)), [41, 42]);
         h.apply(&ChatsEvent::Left { chat: ChatId::new(42) }, "ada");
         assert_eq!(ids(h.on("KILN-7", ChatState::Open)), [41]);
+    }
+
+    /// CHAT-18: activity heard twice (the log and the watch) is kept once,
+    /// by seq; a chat left forgets it.
+    #[test]
+    fn activity_is_kept_once_and_forgotten_with_the_chat() {
+        use menger_tickets_api::chats::{Activity, ActivityState};
+        let mut h = Held::default();
+        let a = Activity { seq: 7, chat: ChatId::new(41), by: "key:b".into(), name: Some("builder".into()), at: 5, state: ActivityState::Started, line: None };
+        let ev = ChatsEvent::Activity { activity: a };
+        assert!(h.apply(&ev, "idp:me"));
+        assert!(!h.apply(&ev, "idp:me"), "once");
+        assert_eq!(h.activity(41).len(), 1);
+        assert_eq!(h.name_of("key:b"), Some("builder"));
+        h.apply(&ChatsEvent::Left { chat: ChatId::new(41) }, "idp:me");
+        assert!(h.activity(41).is_empty());
     }
 
     /// The presence dots: `listening` adds and takes away who waits.

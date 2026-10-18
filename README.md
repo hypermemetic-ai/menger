@@ -3215,8 +3215,10 @@ its name); `via` is kept for AGENT-3 and never set by a call.
 | `chats.read { chat, upto }` | `read { chat, upto, unread }` — the caller's mark moved forward (never back) to its latest message at or before `upto` |
 | `chats.close { chat }` · `chats.reopen { chat }` | `closed { chat }` · `reopened { chat }` — by any participant; a closed chat is read-only, kept on its ticket |
 | `chats.rename { chat, title? }` | `renamed { chat }` (CHAT-7: the composer's `/title`) — by any participant; no title, or a blank one, clears it; the same title writes nothing. On watch too |
-| `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `renamed`, `listening { chat, principal, waiting }`, `left`, `lagged`, `watch_closed`. `claim_line` is declared for AGENT-3 and not emitted |
+| `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `renamed`, `listening { chat, principal, waiting }`, `activity { activity }` (CHAT-18, to participants), `left`, `lagged`, `watch_closed`. `claim_line` is declared for AGENT-3 and not emitted |
 | `chats.await_message { chat?, ticket?, since?, after?, timeout_minutes? }` | `waiting { chat?, ticket?, since }` at once, then one `message { message }` by someone else — in the chat, or any of the caller's chats (on `ticket`) — and the end; `timed_out` after the timeout. Without `since` or `after`, only what comes after the call; `since` (seconds) is at or after it, at least once; `after` (a message id) is exact. While it waits its chats show the caller in `waiting` (`listening` on watch) |
+| `chats.activity { chat, state?, line? }` | CHAT-18: `activity { activity { seq, chat, by, name?, at, state, line? } }` — a participant's live work: `started` (it has the message), `working` (the default: a line of what it does now, or a heartbeat), `ended`; heard on every participant's `watch` (not an admin's who is not in it), **never a message** and never stored. The server keeps each chat's newest 200 in memory (lost on a restart); a line is cut at 500 characters. Anyone not in the chat: `not_found` |
+| `chats.activity_log { chat }` | CHAT-18: the chat's kept `activity { activity }` items, oldest first, then the end — what a viewer opening mid-turn has missed. Participants only (`not_found` else); empty after a restart |
 | `chats.remove { chat, principal }` | CHAT-14: `removed { chat, principal }` — a group's or a ticket's chat, by a participant (itself: it leaves) or, outside tickets, an admin of its organization; a direct message is refused. The one removed hears `left` |
 | `chats.candidates { ticket? }` | CHAT-4's picker: `candidate { principal, reads, name?, agent? }` each (CHAT-14: without a ticket, who may be in a direct message or a group), by principal — every principal holding a grant in the ticket's organization (on `*`, the org, a shortcode in it, a ticket or a subtree there; a team's members by name; the operator's `--admin`s) and every participant of the caller's chats there, but the caller; `reads` whether it can read the ticket now (`open` and `add` refuse one that cannot). A ticket the caller cannot read is `refused` (`no ticket X`). With login off nobody holds a grant: the list is the chats' participants |
 
@@ -3232,7 +3234,15 @@ cannot be picked; the same people's open chat opens instead), the closed
 list, who is in it, the turns, a *new* line at your read mark, and the
 composer. CHAT-7: **the turns** are a traditional agent chat's — yours
 bubbles on the right, theirs full-width prose under a mono line (a mark,
-the name, an agent tag, `via`, the time); a fence's code gets a head (its
+the name, an agent tag, `via`, the time); CHAT-18: **live work** — under
+the last turn, the moment a participant says `activity started`, a block
+*builder is on it* with a pulsing dot, then each step it says (the newest
+eight in view, the box scrolling to all) and its heartbeat; past a minute
+with no word it reads *no word for N min* (stale: the worker may be gone);
+on `ended`, or its answer arriving, it folds into **show work (N steps)**
+after that answer — for the session, and from the server's memory log
+(`activity_log`, fetched as a chat opens) while it runs — in the dock,
+full screen and `#/chats` alike; a fence's code gets a head (its
 language, the path the fence names after it, *copy*), a ticket code in
 the text is a chip and one alone on its line a card with the ticket's
 title and status; copy · quote · link on hover; manifest's two scroll
@@ -3385,8 +3395,11 @@ A perpetual listener on the builder's chats: when the owner writes in a
 chat the builder is in, it spawns a Claude Code agent on this machine and
 posts its answer there. `scripts/chat-bridge/` holds it — `bridge.mjs`
 (Node ≥ 22, the standard library and `deploy/menger-call.mjs`'s socket),
-the unit `menger-chat-bridge.service`, `install.sh`, and its acceptance on
-a throwaway login-on server, `tests/throwaway.mjs WORKDIR [--real]`.
+`live.mjs` (CHAT-18's live line), the unit `menger-chat-bridge.service`,
+`install.sh`, and its acceptance on a throwaway login-on server,
+`tests/throwaway.mjs WORKDIR [--real]` (`MENGER_BIN` a server with
+`chats.activity` until prod runs one), beside `node --test
+scripts/chat-bridge/tests/live.test.mjs` (the live line's rules).
 
 - **It runs** as `systemd --user` unit `menger-chat-bridge` (`Restart=always`,
   `RestartSec=5`; lingering is on, so it survives logout and reboot), from
@@ -3421,14 +3434,30 @@ a throwaway login-on server, `tests/throwaway.mjs WORKDIR [--real]`.
   principal. Never itself, never an `agent:` principal, and never a `key:`
   one: a bare `key:`/`agent:` line is ignored, and only a line written
   `+key:…` admits a key — for a test, removed after.
-- **A turn:** it marks the chat read, runs `claude -p --output-format json`
-  in `CHAT_BRIDGE_CWD` (menger's main checkout) — the chat's recent turns
-  and its ticket on the first, the new messages after — resuming the chat's
-  own session (`--resume`; the mapping in `state.json` beside `turns.log`),
-  and posts the final message. A turn still running after 20 s posts
-  "_working…_" once; a failed one posts "couldn't answer: <why>". One turn
+- **A turn:** it says `chats.activity started` at once (CHAT-18: the app
+  shows *builder is on it* before the agent is spawned), marks the chat
+  read, runs `claude -p --output-format stream-json --verbose` in
+  `CHAT_BRIDGE_CWD` (menger's main checkout) — the chat's recent turns and
+  its ticket on the first, the new messages after — resuming the chat's
+  own session (`--resume`; the session any stream event names, the mapping
+  in `state.json` beside `turns.log`), posts the final message (the
+  stream's `result`), then says `activity ended`; a failed turn posts
+  "couldn't answer: <why>" and ends the same way. Only on a server that
+  takes no `chats.activity` does a turn still running after
+  `CHAT_BRIDGE_WORKING_AFTER` (20 s) post "_working…_" once. One turn
   per chat at a time — what arrives meanwhile is the next turn, together;
   chats run in parallel, at most `CHAT_BRIDGE_MAX` (3).
+- **The live line** (CHAT-18, `live.mjs`): as the stream comes, each
+  assistant tool call is one line — `Bash: <its description, or the
+  command's first 120 characters>`, `Read <path>`, `Edit <path>`, `Grep
+  <pattern>`, `Agent: <description>`, … — and its interim text the first
+  200 characters; at least 300 ms between two sends (what comes meanwhile
+  is one line, ` · `-joined), and `working · Ns` after 15 s of quiet. Nothing
+  that looks like a secret is sent: `NAME=value` where the name says key,
+  token, secret, password, auth, cookie or seed, a bearer, `mgs_…`, a
+  provider-shaped key, a run of 32+ hex or base64 characters — each `•••`.
+  An activity call is never retried and never fails a turn; `turns.log`
+  counts the lines sent (`steps`).
 - **The agent's powers** are written in the unit's `ExecStart`, never
   chosen at runtime: `--model claude-opus-5-5 --permission-mode
   bypassPermissions` — the mode the owner runs builders in, every tool

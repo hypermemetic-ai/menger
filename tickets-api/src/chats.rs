@@ -159,6 +159,93 @@ impl FromStr for ChatGrant {
     }
 }
 
+/// CHAT-18: where a participant's live work stands — `started` (it has the
+/// message), `working` (a line of what it does now; a heartbeat with none),
+/// `ended` (the turn is over: answered, or given up).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityState {
+    Started,
+    #[default]
+    Working,
+    Ended,
+}
+
+impl ActivityState {
+    pub const ALL: [ActivityState; 3] = [ActivityState::Started, ActivityState::Working, ActivityState::Ended];
+
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ActivityState::Started => "started",
+            ActivityState::Working => "working",
+            ActivityState::Ended => "ended",
+        }
+    }
+}
+
+impl fmt::Display for ActivityState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ActivityState {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ActivityState::ALL
+            .into_iter()
+            .find(|c| c.as_str().eq_ignore_ascii_case(s.trim()))
+            .ok_or_else(|| format!("unknown activity state '{}' (expected started, working or ended)", s.trim()))
+    }
+}
+
+/// CHAT-18: the longest activity line kept, in characters — a longer one
+/// is cut, `…` at its end.
+pub const ACTIVITY_LINE_MAX: usize = 500;
+
+/// CHAT-18: how many activity items a chat keeps in memory — the newest.
+pub const ACTIVITY_KEPT: usize = 200;
+
+/// CHAT-18: one item of a participant's live work in a chat — never a
+/// message, never stored: the server keeps a chat's last
+/// [`ACTIVITY_KEPT`] in memory (`activity_log`), lost on a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Activity {
+    /// Its place among every chat's activity since the server started:
+    /// a later item has a greater `seq` (the app's join of the log and the
+    /// watch).
+    pub seq: u64,
+    pub chat: ChatId,
+    /// Who works: the caller's principal.
+    pub by: String,
+    /// The name it goes by, when signed in with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// When, unix seconds.
+    pub at: i64,
+    pub state: ActivityState,
+    /// What it does — a tool call, a line of its text, a heartbeat — at most
+    /// [`ACTIVITY_LINE_MAX`] characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+}
+
+/// CHAT-18: `line` as an activity keeps it — trimmed, blank none, at most
+/// [`ACTIVITY_LINE_MAX`] characters (cut, `…` last).
+pub fn activity_line(line: Option<&str>) -> Option<String> {
+    let t = line?.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if t.chars().count() <= ACTIVITY_LINE_MAX {
+        return Some(t.to_string());
+    }
+    let mut cut: String = t.chars().take(ACTIVITY_LINE_MAX - 1).collect();
+    cut.push('…');
+    Some(cut)
+}
+
 /// CHAT-14: whether `principal` is drawn as an agent — an `agent:` (AGENT-1)
 /// or a `key:` principal (a key is how an agent signs in: synapse's
 /// `--as builder`). The standing chat members (CHAT-13) are named as agents
@@ -324,6 +411,10 @@ pub enum ChatsEvent {
     /// On `watch`: `principal` began (`waiting: true`) or stopped waiting on
     /// `await_message` for `chat` — the pane's "waiting for a message".
     Listening { chat: ChatId, principal: String, waiting: bool },
+    /// CHAT-18: `activity`'s answer, one of `activity_log`'s rows (oldest
+    /// first), and on every participant's `watch`: `by`'s live work in
+    /// `chat` — started, a line, ended. Never a message.
+    Activity { activity: Activity },
     /// AGENT-3: a participating agent's claim began or ended — a line in the
     /// chat. Declared for AGENT-3's claims; nothing emits it yet.
     ClaimLine { chat: ChatId, agent: String, holder: String, began: bool, at: i64 },
@@ -392,6 +483,23 @@ mod tests {
         assert_eq!(back, ChatsEvent::Message { message: m });
         assert_eq!("Closed".parse::<ChatState>(), Ok(ChatState::Closed));
         assert!("resolved".parse::<ChatState>().unwrap_err().contains("open or closed"));
+    }
+
+    #[test]
+    fn an_activity_line_is_trimmed_and_cut() {
+        assert_eq!(activity_line(None), None);
+        assert_eq!(activity_line(Some("  ")), None);
+        assert_eq!(activity_line(Some(" Read a.rs ")).as_deref(), Some("Read a.rs"));
+        let long = "é".repeat(ACTIVITY_LINE_MAX + 20);
+        let cut = activity_line(Some(&long)).unwrap();
+        assert_eq!(cut.chars().count(), ACTIVITY_LINE_MAX);
+        assert!(cut.ends_with('…'));
+        let a = Activity { seq: 1, chat: ChatId::new(4), by: "key:b".into(), name: None, at: 9, state: ActivityState::Started, line: None };
+        assert_eq!(
+            serde_json::to_value(ChatsEvent::Activity { activity: a }).unwrap(),
+            json!({ "type": "activity", "activity": { "seq": 1, "chat": 4, "by": "key:b", "at": 9, "state": "started" } })
+        );
+        assert_eq!("ENDED".parse::<ActivityState>(), Ok(ActivityState::Ended));
     }
 
     #[test]

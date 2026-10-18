@@ -13,9 +13,9 @@
 //! beside it, in `chats_activation/` (MENGER-29): each body here is its
 //! attribute, the caller and one call.
 
-use crate::chats::{ChatGrant, ChatState, ChatsEvent};
+use crate::chats::{ActivityState, ChatGrant, ChatState, ChatsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
-use crate::vocab::{Body, ChatId, MessageId, Principal, TicketRef, Title};
+use crate::vocab::{ActivityLine, Body, ChatId, MessageId, Principal, TicketRef, Title};
 #[cfg(feature = "server")]
 use crate::access::{Access, MengerRequest, VerifiedUser};
 #[cfg(feature = "server")]
@@ -62,16 +62,16 @@ impl ChatsActivation {
 // A viewer chats, as a viewer comments: every method is a viewer's — what
 // a call may do in a chat is the chat's to say (its participants), not a
 // role's.
-/// Chats among participants, on a ticket or outside tickets (direct messages and groups) — open, post, add, remove, list, messages, read, close, reopen, watch, await_message.
+/// Chats among participants, on a ticket or outside tickets (direct messages and groups) — open, post, add, remove, list, messages, read, close, reopen, watch, await_message, activity, activity_log.
 #[plexus_macros::activation(
     auth = "required",
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["open", "post", "add", "remove", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "candidates"],
+        viewer = ["open", "post", "add", "remove", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "candidates", "activity", "activity_log"],
         editor = [viewer],
         // CHAT-16: one granted a chat only — the chats it is in, nothing of the tickets.
-        chatter = ["post", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message"],
+        chatter = ["post", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "activity", "activity_log"],
     )
 )]
 impl ChatsActivation {
@@ -124,6 +124,43 @@ impl ChatsActivation {
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let store = self.store.clone();
         futures::stream::once(async move { post(store, user, chat.get(), body.into_string()).await })
+    }
+
+    /// Say what the caller is doing in a chat, live; yields activity { activity } — never a message (CHAT-18).
+    ///
+    /// By a participant: `started` (it has the message), `working` (the
+    /// default: a line of what it does now, or a heartbeat with none),
+    /// `ended` (the turn is over). Every participant's `watch` hears
+    /// `activity`; nothing is stored — the server keeps each chat's last
+    /// 200 in memory for `activity_log`, lost on a restart. A line is cut
+    /// at 500 characters. A chat the caller is not in is `not_found`.
+    #[plexus_macros::method(group = "write", values(state = ["started", "working", "ended"]))]
+    pub async fn activity(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 41.
+        chat: ChatId,
+        /// started | working | ended (optional; default working).
+        state: Option<ActivityState>,
+        /// What it does now, e.g. `Read src/queue.rs` (optional).
+        line: Option<ActivityLine>,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        let ev = activity(&self.store, &user, chat.get(), state.unwrap_or_default(), line.as_deref());
+        futures::stream::once(async move { ev })
+    }
+
+    /// A chat's live work kept in memory — its last 200 activity items, oldest first; an activity { activity } each, then the end (CHAT-18).
+    ///
+    /// For a participant, so a viewer opening a chat mid-turn sees what has
+    /// been done; anyone else is answered `not_found`. Empty after a restart.
+    #[plexus_macros::method(group = "read")]
+    pub async fn activity_log(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 41.
+        chat: ChatId,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        futures::stream::iter(activity_log(&self.store, &user, chat.get()))
     }
 
     /// Add a participant to a chat; yields added { chat }.

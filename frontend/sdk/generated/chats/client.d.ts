@@ -1,10 +1,34 @@
 import type { RpcClient } from '../rpc';
-import type { ChatGrant, ChatState, ChatsEvent, MessageId } from './types';
+import type { ActivityLine, ActivityState, ChatGrant, ChatState, ChatsEvent, MessageId } from './types';
 import type { ChatId } from '../media/types';
 import type { Body, TicketRef, Title } from '../notes/types';
 import type { Principal } from '../orgs/types';
 /** Typed client interface for chats plugin */
 export interface ChatsClient {
+    /**
+     * Say what the caller is doing in a chat, live; yields activity { activity } — never a message (CHAT-18).
+  
+  By a participant: `started` (it has the message), `working` (the
+  default: a line of what it does now, or a heartbeat with none),
+  `ended` (the turn is over). Every participant's `watch` hears
+  `activity`; nothing is stored — the server keeps each chat's last
+  200 in memory for `activity_log`, lost on a restart. A line is cut
+  at 500 characters. A chat the caller is not in is `not_found`.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `chats.activity` anywhere it is held
+     */
+    activity(chat: ChatId, line?: ActivityLine | null, state?: ActivityState | null): AsyncGenerator<ChatsEvent>;
+    /**
+     * A chat's live work kept in memory — its last 200 activity items, oldest first; an activity { activity } each, then the end (CHAT-18).
+  
+  For a participant, so a viewer opening a chat mid-turn sees what has
+  been done; anyone else is answered `not_found`. Empty after a restart.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `chats.activity_log` anywhere it is held
+     */
+    activityLog(chat: ChatId): AsyncGenerator<ChatsEvent>;
     /**
      * Add a participant to a chat; yields added { chat }.
   
@@ -189,6 +213,14 @@ export interface ChatsClient {
 export declare function createChatsClient(rpc: RpcClient): ChatsClient;
 /** What each chats method needs (AUTH-9): its grant, and the param that locates what it acts on (`null`: allowed wherever the grant is held). The gate decides, server-side. */
 export declare const requires: {
+    readonly "chats.activity": {
+        readonly grant: "chats.activity";
+        readonly target: null;
+    };
+    readonly "chats.activity_log": {
+        readonly grant: "chats.activity_log";
+        readonly target: null;
+    };
     readonly "chats.add": {
         readonly grant: "chats.add";
         readonly target: null;

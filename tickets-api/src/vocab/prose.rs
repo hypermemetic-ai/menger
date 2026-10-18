@@ -89,6 +89,22 @@ text_type!(
     reason
 );
 
+fn activity_line(text: &str) -> Result<String, String> {
+    match text.len() <= MESSAGE_MAX {
+        true => Ok(text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().trim().to_string()),
+        false => Err(too_long("an activity line", text.len(), MESSAGE_MAX)),
+    }
+}
+
+text_type!(
+    /// CHAT-18: one line of a participant's live work — what a tool call
+    /// does, a line of its text — at most [`MESSAGE_MAX`] bytes on the wire,
+    /// its control characters spaces, trimmed; the store keeps at most
+    /// [`crate::chats::ACTIVITY_LINE_MAX`] characters of it.
+    ActivityLine,
+    activity_line
+);
+
 fn query(text: &str) -> Result<String, String> {
     match text.len() <= QUERY_MAX && !text.chars().any(char::is_control) {
         true => Ok(text.to_string()),

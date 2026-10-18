@@ -47,7 +47,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::chats::{self, short, Held};
-use crate::{dom, fmt_unix, scale, turns};
+use crate::{dom, fmt_unix, live, scale, turns};
 
 /// What the pane shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -485,6 +485,8 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         started.set_value(true);
         let around = at_url.or_else(|| (c.unread > size).then_some(c.mark.map(|m| m.get())).flatten());
         chats::load(id, size, around);
+        // CHAT-18: what has been done before the chat opened, mid-turn.
+        chats::load_activity(id);
     });
     // The read mark as the chat opened: the *new* line (the first message
     // after the mark), what arrives after it, and where opening lands.
@@ -703,6 +705,59 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         scroll.update_value(|s| s.moved(true));
         arrow.set(None);
     };
+    // CHAT-18: the live work — the turns still running under the last
+    // turn, the folded ones after their answers (src/live.rs) — and a clock
+    // for staleness, ticking while a turn is live.
+    let shape = {
+        let held = held.clone();
+        Memo::new(move |_| {
+            let items = held.with(|h| h.as_ref().map(|h| h.activity(id).to_vec()).unwrap_or_default());
+            thread.with(|t| live::shape(&items, t))
+        })
+    };
+    let now = RwSignal::new((js_sys::Date::now() / 1000.0) as i64);
+    let ticking = StoredValue::new(false);
+    Effect::new(move |_| {
+        if shape.with(|s| s.live.is_empty()) || ticking.get_value() {
+            return;
+        }
+        ticking.set_value(true);
+        spawn_local(async move {
+            loop {
+                if now.try_set((js_sys::Date::now() / 1000.0) as i64).is_some() {
+                    return; // the view is gone
+                }
+                if shape.try_with_untracked(|s| s.live.is_empty()).unwrap_or(true) {
+                    ticking.try_set_value(false);
+                    return;
+                }
+                dom::sleep_ms(5_000).await;
+            }
+        });
+    });
+    // A live block growing keeps the reader at the bottom, as a turn does.
+    Effect::new(move |_| {
+        shape.track();
+        spawn_local(async move {
+            dom::sleep_ms(0).await;
+            if stick.try_get_value() == Some(true) {
+                if let Some(el) = list_ref.get_untracked() {
+                    ours.set_value(js_sys::Date::now());
+                    el.set_scroll_top(el.scroll_height());
+                }
+            }
+            // The live box shows its newest step.
+            if let Some(el) = list_ref.get_untracked() {
+                if let Ok(boxes) = el.query_selector_all(".tlive .tlsteps") {
+                    for i in 0..boxes.length() {
+                        if let Some(b) = boxes.item(i).and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok()) {
+                            b.set_scroll_top(b.scroll_height());
+                        }
+                    }
+                }
+            }
+        });
+    });
     let loading_earlier = Memo::new(move |_| window_t.with(|t| t.older) && thread.with(|t| !t.is_empty()));
     let body = RwSignal::new(String::new());
     let adding = RwSignal::new(false);
@@ -794,7 +849,9 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             let mid = m.id.get();
             let line = (new_at == Some(mid)).then(|| view! { <div class="pnewline" role="separator">"new"</div> });
             let mine = m.author == me;
-            view! { <div class="trow" data-mid=mid.to_string()>{line}{turn_view(m, mine, mid > seen, &name)}</div> }
+            // CHAT-18: the work that answered it, folded after it.
+            let fold = move || shape.with(|s| s.fold_after(mid).cloned()).map(fold_view);
+            view! { <div class="trow" data-mid=mid.to_string()>{line}{turn_view(m, mine, mid > seen, &name)}{fold}</div> }
         }
     };
     let waits = {
@@ -810,6 +867,10 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                 })
                 .collect_view()
         }
+    };
+    let live = {
+        let name = name.clone();
+        move || shape.with(|s| s.live.clone()).into_iter().map(|w| live_view(w, &name, now)).collect_view()
     };
     // copy · quote · link, and a code block's copy — one listener.
     let acts = {
@@ -887,6 +948,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                         <For each=move || mounted.get() key=|m| m.id.get() children=rows />
                         <div class="tspace" style=move || format!("height:{:.0}px", space_below.get())></div>
                     </div>
+                    {live}
                     {waits}
                 </div>
             </div>
@@ -900,6 +962,43 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             }}
             {move || foot().map(|f| view! { <p class="sfoot">{f}</p> })}
         </div>
+    }
+}
+
+/// CHAT-18: a live turn under the last — `builder is on it`, a pulsing dot,
+/// its steps in a box that shows the newest eight and scrolls to the rest;
+/// its pulse (`working · 42s`), or, past a minute with no word, stale.
+fn live_view(mut w: live::Work, name: &impl Fn(&str) -> String, now: RwSignal<i64>) -> impl IntoView {
+    let who = name(&w.by);
+    let steps = std::mem::take(&mut w.steps);
+    let n = steps.len();
+    let more = live::earlier(n);
+    let beat = w.beat.clone();
+    let quiet = Memo::new(move |_| live::stale(&w, now.get()));
+    let steps = steps.into_iter().map(|l| view! { <li>{l}</li> }).collect_view();
+    view! {
+        <div class="tlive" class:stale=move || quiet.with(Option::is_some) role="status" aria-live="polite">
+            <div class="tlhead">
+                <span class="dot" class:wait=move || quiet.with(Option::is_none)></span>
+                <b>{live::on_it(&who)}</b>
+                <span class="tlbeat">{move || quiet.get().or_else(|| beat.clone()).unwrap_or_default()}</span>
+            </div>
+            {(more > 0).then(|| view! { <div class="tlmore">{format!("+{more} earlier — scroll up")}</div> })}
+            {(n > 0).then(|| view! { <ol class="tlsteps">{steps}</ol> })}
+        </div>
+    }
+}
+
+/// CHAT-18: a finished turn's work, folded after its answer — **show work
+/// (N steps)**, every step inside.
+fn fold_view(w: live::Work) -> impl IntoView {
+    let label = live::fold_label(w.steps.len());
+    let steps = w.steps.into_iter().map(|l| view! { <li>{l}</li> }).collect_view();
+    view! {
+        <details class="tfold">
+            <summary>{label}</summary>
+            <ol class="tlsteps">{steps}</ol>
+        </details>
     }
 }
 

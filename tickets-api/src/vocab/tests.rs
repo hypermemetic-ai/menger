@@ -210,6 +210,8 @@ fn a_kept_scope_reads_back_from_its_text() {
 fn prose_has_a_name_and_one_rule_each() {
     holds::<Title>(&["Wrap long titles", " padded "], &["", "   ", &"a".repeat(crate::limits::TITLE_MAX + 1)]);
     assert_eq!(" padded ".parse::<Title>().unwrap().as_str(), " padded ", "a title is kept as written");
+    holds::<ActivityLine>(&["Read a.rs", ""], &[&"a".repeat(MESSAGE_MAX + 1)]);
+    assert_eq!("Bash:\tls\n".parse::<ActivityLine>().unwrap().as_str(), "Bash: ls", "control characters are spaces, trimmed");
     holds::<Body>(&["", "# a body\n\nwith $ and `code`"], &[]);
     // COMMENT-5: an image's hash, type and data.
     let (hash, named, bad) = ("9f".repeat(32), format!("media:{}", "AB".repeat(32)), "g".repeat(64));
@@ -286,6 +288,7 @@ fn every_enum_a_method_takes_is_a_closed_enum_in_the_schema() {
     assert_eq!(closed::<crate::types::InputState>().len(), 5);
     assert_eq!(closed::<crate::members::Role>(), ["chatter", "viewer", "deployer", "editor", "admin"]);
     assert_eq!(closed::<crate::chats::ChatGrant>(), ["ticket", "chat"]);
+    assert_eq!(closed::<crate::chats::ActivityState>(), ["started", "working", "ended"]);
     assert_eq!(closed::<crate::comments::CommentState>(), ["open", "resolved"]);
     assert_eq!(closed::<crate::notes::NoteState>(), ["open", "upgraded"]);
     assert_eq!(closed::<crate::deployments::DeployState>(), ["started", "succeeded", "failed", "rolled_back", "requested"]);

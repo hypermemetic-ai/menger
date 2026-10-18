@@ -258,6 +258,43 @@ async fn who_is_listening_is_shown_until_the_wait_ends() {
     assert!(store.chat_view(&reader(ADA), c.id).unwrap().waiting.is_empty());
 }
 
+/// CHAT-18: live work is said to the chat and kept in memory, never a
+/// message; only a participant says it or reads it back.
+#[tokio::test]
+async fn activity_is_live_and_kept_in_memory_never_a_message() {
+    use crate::chats::{ActivityState, ACTIVITY_KEPT, ACTIVITY_LINE_MAX};
+    let store = kiln().await;
+    let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    let mut rx = store.subscribe_chats();
+    let b = reader(BUILDER);
+    let started = store.chat_activity(&b, c.id, ActivityState::Started, None).unwrap();
+    assert_eq!((started.state, started.by.as_str(), started.line.as_deref()), (ActivityState::Started, BUILDER, None));
+    assert_eq!(rx.try_recv().unwrap(), ChatChange::Activity(started.clone()));
+    let long = "x".repeat(ACTIVITY_LINE_MAX * 2);
+    let line = store.chat_activity(&b, c.id, ActivityState::Working, Some(&long)).unwrap();
+    assert!(line.seq > started.seq);
+    assert_eq!(line.line.unwrap().chars().count(), ACTIVITY_LINE_MAX, "a line is cut");
+    // Nothing is a message, and no one's unread moved.
+    assert!(store.chat_messages(&reader(ADA), c.id, None, 100).unwrap().0.is_empty());
+    assert_eq!(store.chat_view(&reader(ADA), c.id).unwrap().unread, 0);
+    // The log: oldest first, for participants.
+    let log = store.chat_activity_log(&reader(ADA), c.id).unwrap();
+    assert_eq!(log.iter().map(|a| a.state).collect::<Vec<_>>(), [ActivityState::Started, ActivityState::Working]);
+    // Not in it — a reader of KILN, the ticket's admin, one of elsewhere: not found.
+    for who in [reader(RUI), boss(), outsider(SAM)] {
+        assert_eq!(store.chat_activity(&who, c.id, ActivityState::Working, Some("hi")), Err(ChatError::NotFound(c.id)));
+        assert_eq!(store.chat_activity_log(&who, c.id), Err(ChatError::NotFound(c.id)));
+    }
+    // The ring keeps the newest.
+    for i in 0..ACTIVITY_KEPT + 5 {
+        store.chat_activity(&b, c.id, ActivityState::Working, Some(&format!("step {i}"))).unwrap();
+    }
+    let log = store.chat_activity_log(&b, c.id).unwrap();
+    assert_eq!(log.len(), ACTIVITY_KEPT);
+    assert_eq!(log.last().unwrap().line.as_deref(), Some(format!("step {}", ACTIVITY_KEPT + 4).as_str()));
+    assert!(log.windows(2).all(|w| w[0].seq < w[1].seq));
+}
+
 #[tokio::test]
 async fn unread_is_kept_per_participant() {
     let store = kiln().await;

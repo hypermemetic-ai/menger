@@ -3,7 +3,7 @@
 //! that the vocabulary did not have: where a call comes from, what a
 //! severity change is, what becomes of a deleted ticket's children.
 
-use crate::chats::{ChatGrant, ChatState};
+use crate::chats::{ActivityState, ChatGrant, ChatState};
 use crate::comments::{CommentIntent, CommentState};
 use crate::deployments::DeployState;
 use crate::members::Role;
@@ -34,7 +34,7 @@ use std::fmt;
 use std::str::FromStr;
 
 lenient!(Status, Kind, Severity, InputState, AnswerSource, TransitionSource, Role, CommentState, NoteState, DeployState, Urgency, ThemeReach, Takeover);
-lenient!(CallerSource, InputSource, DeleteChildren, AmendedField, CommentIntent, ChatState, ChatGrant, RevisionField);
+lenient!(CallerSource, InputSource, DeleteChildren, AmendedField, CommentIntent, ChatState, ChatGrant, RevisionField, ActivityState);
 
 closed_schema!(Status, "A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case", [
     Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Complete,
@@ -52,6 +52,7 @@ closed_schema!(ChatGrant, "CHAT-16: what an admin's add grants one who can't rea
 closed_schema!(CommentIntent, "What a comment is: a comment, or a change request (any case)", [CommentIntent::Comment, CommentIntent::Changes]);
 closed_schema!(CommentState, "Where a comment stands (any case)", [CommentState::Open, CommentState::Resolved]);
 closed_schema!(ChatState, "Where a chat stands: open, or closed (read-only) (any case)", [ChatState::Open, ChatState::Closed]);
+closed_schema!(ActivityState, "CHAT-18: where a participant's live work stands: started, working, or ended (any case)", [ActivityState::Started, ActivityState::Working, ActivityState::Ended]);
 closed_schema!(NoteState, "Where a note stands: still a note, or made a ticket (any case)", [NoteState::Open, NoteState::Upgraded]);
 closed_schema!(DeployState, "What a deployment did, or (DEPLOY-25) requested: asked for, not yet done (any case; rolled-back too)", [
     DeployState::Started, DeployState::Succeeded, DeployState::Failed, DeployState::RolledBack, DeployState::Requested,

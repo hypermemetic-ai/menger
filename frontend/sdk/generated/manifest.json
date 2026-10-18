@@ -33,6 +33,14 @@
       "whoami": []
     },
     "chats": {
+      "activity": [
+        "chat",
+        "line",
+        "state"
+      ],
+      "activity_log": [
+        "chat"
+      ],
       "add": [
         "chat",
         "grant",

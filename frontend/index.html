@@ -4316,6 +4316,28 @@
   :is(#chatpane, #chatfull) .tcard .tctitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :is(#chatpane, #chatfull) .tcard .tcstatus { padding: 1px 6px; border-radius: var(--radius-sm); font-size: calc(10.5px * var(--text-scale)); background: var(--st-bg); color: var(--st-fg); }
   :is(#chatpane, #chatfull) .swait { display: flex; gap: 8px; align-items: center; background: none; padding: 0 0 0 38px; font: calc(11.5px * var(--text-scale)) var(--mono); color: var(--live); }
+  /* CHAT-18: the live work under the last turn — "builder is on it", a
+     pulsing dot, the newest steps in a box that scrolls to the rest; stale
+     past a minute with no word. A finished turn's work folds after its answer. */
+  :is(#chatpane, #chatfull) .tlive {
+    margin: 4px 0 8px 38px; padding: 8px 10px; border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--live) 8%, var(--card)); border: var(--border) solid color-mix(in srgb, var(--live) 30%, transparent);
+    font: calc(11.5px * var(--text-scale)) var(--mono); color: var(--ink); min-width: 0;
+  }
+  :is(#chatpane, #chatfull) .tlive.stale { background: var(--card); border-color: var(--tree-line); color: var(--muted); }
+  :is(#chatpane, #chatfull) .tlhead { display: flex; gap: 8px; align-items: center; color: var(--live); }
+  :is(#chatpane, #chatfull) .tlive.stale .tlhead { color: var(--muted); }
+  :is(#chatpane, #chatfull) .tlbeat { margin-left: auto; color: var(--muted); white-space: nowrap; }
+  :is(#chatpane, #chatfull) .tlmore { margin-top: 4px; color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
+  :is(#chatpane, #chatfull) .tlsteps {
+    margin: 6px 0 0; padding: 0 0 0 18px; max-height: calc(8 * 1.55em); overflow-y: auto; overscroll-behavior: contain;
+    line-height: 1.55; color: var(--ink);
+  }
+  :is(#chatpane, #chatfull) .tlsteps li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :is(#chatpane, #chatfull) .tfold { margin: 2px 0 6px 38px; font: calc(11px * var(--text-scale)) var(--mono); color: var(--muted); }
+  :is(#chatpane, #chatfull) .tfold summary { cursor: pointer; width: max-content; padding: 2px 0; }
+  :is(#chatpane, #chatfull) .tfold summary:hover { color: var(--accent); }
+  :is(#chatpane, #chatfull) .tfold .tlsteps { max-height: none; color: var(--ink); }
   #chatfull .dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--tree-line); display: inline-block; flex: none; }
   #chatfull .dot.on { background: var(--live); }
   #chatfull .dot.wait {

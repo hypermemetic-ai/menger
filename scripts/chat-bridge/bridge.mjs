@@ -6,13 +6,20 @@
 // key (a key proof at the upgrade, deploy/menger-call.mjs's wire), and for
 // each message by a principal on the allow list it
 //
-//   1. marks the chat read up to it;
-//   2. runs `claude -p` in CHAT_BRIDGE_CWD, resuming the chat's own session
-//      (one per chat, kept in $STATE/state.json), with the chat's recent
-//      turns and its ticket on the first turn and the new messages after;
-//   3. posts the agent's final message with `chats.post` — or, on a failed
-//      turn, "couldn't answer: <why>", never silence. A turn still running
-//      after CHAT_BRIDGE_WORKING_AFTER seconds posts "working…" once.
+//   1. says `chats.activity started` at once (CHAT-18: the app shows "on
+//      it"), and marks the chat read up to it;
+//   2. runs `claude -p --output-format stream-json --verbose` in
+//      CHAT_BRIDGE_CWD, resuming the chat's own session (one per chat, kept
+//      in $STATE/state.json), with the chat's recent turns and its ticket on
+//      the first turn and the new messages after — and, as it streams, says
+//      each tool call and its interim text as `chats.activity` lines
+//      (live.mjs: throttled ≥ 300 ms, batched, secrets masked, a heartbeat
+//      after 15 s of quiet);
+//   3. posts the agent's final message (the stream's `result`) with
+//      `chats.post` — or, on a failed turn, "couldn't answer: <why>", never
+//      silence — then says `activity ended`. Only where the server takes no
+//      activity (an older menger) does a turn still running after
+//      CHAT_BRIDGE_WORKING_AFTER seconds post "working…" once.
 //
 // One agent per chat at a time — messages that arrive while it works are
 // the next turn's, together; chats run in parallel up to CHAT_BRIDGE_MAX.
@@ -46,7 +53,8 @@
 //   CHAT_BRIDGE_CWD            where the agent runs (~/dev/controlflow/hypermemetic/menger)
 //   CHAT_BRIDGE_MAX            chats answered at once (3)
 //   CHAT_BRIDGE_TURN_MINUTES   a turn's limit before it is stopped (60)
-//   CHAT_BRIDGE_WORKING_AFTER  seconds before "working…" is posted (20; 0 = never)
+//   CHAT_BRIDGE_WORKING_AFTER  seconds before "working…" is posted, only where the
+//                              server takes no chats.activity (20; 0 = never)
 //   CLAUDE_BIN                 the claude binary (~/.local/bin/claude)
 //
 // Logs: one line per event to stdout (journald), and one JSON line per turn
@@ -57,6 +65,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { connect, keyProof, publicHex, seedOf } from "../../deploy/menger-call.mjs";
+import { jsonLines, linesOf, liveLine } from "./live.mjs";
 
 const HOME = os.homedir();
 const env = process.env;
@@ -316,31 +325,47 @@ async function turn(chatId) {
   // CHAT-14: a direct message or a group has no ticket.
   const ticket = chat ? (chat.ticket ?? null) : (s.ticket ?? null);
 
+  // CHAT-18: "on it", before anything else.
+  const activityOk = await activity(chatId, "started");
   await rpc("chats.read", { chat: chatId, upto }).catch((e) => log(`chat ${chatId}: read: ${e.message}`));
 
   let working = null;
-  if (cfg.workingAfter > 0) working = setTimeout(() => {
+  if (!activityOk && cfg.workingAfter > 0) working = setTimeout(() => {
     rpc("chats.post", { chat: chatId, body: "_working…_" }, { retry: false }).catch(() => {});
   }, cfg.workingAfter * 1000);
+  const live = activityOk ? liveLine((st, line) => activity(chatId, st, line)) : null;
 
   let answer, exit = 0, session = s.session, why = null;
   try {
-    const r = await runAgent(chatId, chat, ticket, batch, s.session);
+    const r = await runAgent(chatId, chat, ticket, batch, s.session, (line) => live?.line(line));
     session = r.session ?? session;
     exit = r.exit;
     if (r.ok) answer = r.text;
     else why = r.why;
   } catch (e) { exit = -1; why = e.message; }
   clearTimeout(working);
+  const steps = live?.stop() ?? 0;
   if (!answer) answer = `couldn't answer: ${String(why || "the agent gave no final message").slice(0, 500)}`;
   if (session && session !== s.session) { s.session = session; }
   state.outbox.push({ chat: chatId, upto, body: answer.slice(0, 60_000), at: Math.floor(Date.now() / 1000) });
   delete s.inflight;
   save();
-  await flushOutbox();
-  const line = { at: new Date().toISOString(), chat: chatId, ticket, messages: batch.map((m) => m.id), session, duration_ms: Date.now() - started, exit, ok: !why };
+  await flushOutbox().finally(() => (activityOk ? activity(chatId, "ended") : null));
+  const line = { at: new Date().toISOString(), chat: chatId, ticket, messages: batch.map((m) => m.id), session, duration_ms: Date.now() - started, exit, ok: !why, steps };
   fs.appendFileSync(TURNS_LOG, JSON.stringify(line) + "\n");
   log(`chat ${chatId}: answered ${batch.map((m) => m.id).join(",")} in ${Math.round(line.duration_ms / 1000)}s (session ${session ?? "-"}, exit ${exit}${why ? `, ${why}` : ""})`);
+}
+
+/** CHAT-18: say `state` (and `line`) in `chat`'s live line — never retried
+ *  (it is the present), never failing a turn; whether the server took it. */
+async function activity(chat, state, line) {
+  try {
+    await rpc("chats.activity", { chat, state, ...(line ? { line } : {}) }, { retry: false });
+    return true;
+  } catch (e) {
+    log(`chat ${chat}: activity ${state}: ${e.message}`);
+    return false;
+  }
 }
 
 /** Post what the outbox holds, oldest first; each answer once. */
@@ -415,7 +440,7 @@ function systemPrompt(chatId, ticket, title, chat) {
   ].join("\n");
 }
 
-async function runAgent(chatId, chat, ticket, batch, session) {
+async function runAgent(chatId, chat, ticket, batch, session, onLine) {
   let title = null;
   let prompt;
   const fresh = await withNotes(batch);
@@ -436,30 +461,41 @@ async function runAgent(chatId, chat, ticket, batch, session) {
       `New — answer this:\n\n${fresh.map(fmt).join("\n\n")}`,
     ].join("\n\n---\n\n");
   }
-  let r = await claude(prompt, session, systemPrompt(chatId, ticket, title, chat));
+  let r = await claude(prompt, session, systemPrompt(chatId, ticket, title, chat), onLine);
   if (!r.ok && session && /No conversation found|session/i.test(r.why ?? "")) {
     log(`chat ${chatId}: session ${session} could not be resumed (${r.why}); a new one`);
-    r = await claude(prompt, null, systemPrompt(chatId, ticket, title, chat));
+    r = await claude(prompt, null, systemPrompt(chatId, ticket, title, chat), onLine);
   }
   return r;
 }
 
-function claude(prompt, session, sys) {
+/** The agent's directory by its name and its real path: a tool names either. */
+const CWDS = (() => { try { return [cfg.cwd, fs.realpathSync(cfg.cwd)]; } catch { return [cfg.cwd]; } })();
+
+/** One `claude -p` run, streamed (CHAT-18): each event's lines to `onLine`;
+ *  the answer is the stream's `result` event, its session the one any event
+ *  names (as `--output-format json`'s result named it before). */
+function claude(prompt, session, sys, onLine = () => {}) {
   return new Promise((resolve) => {
-    const argv = ["-p", "--output-format", "json", "--model", opt.model, "--permission-mode", opt.permissionMode, "--append-system-prompt", sys];
+    const argv = ["-p", "--output-format", "stream-json", "--verbose", "--model", opt.model, "--permission-mode", opt.permissionMode, "--append-system-prompt", sys];
     if (session) argv.push("--resume", session);
     const child = spawn(cfg.claude, argv, { cwd: cfg.cwd, env: { ...env, MENGER_URL: cfg.url }, stdio: ["pipe", "pipe", "pipe"] });
-    let out = "", err = "";
-    child.stdout.on("data", (d) => { out += d; });
+    let err = "", tail = "", sessionId = null, result = null;
+    const lines = jsonLines((ev) => {
+      if (ev?.session_id) sessionId = ev.session_id;
+      if (ev?.type === "result") result = ev;
+      for (const l of linesOf(ev, CWDS)) onLine(l);
+    });
+    child.stdout.on("data", (d) => { const t = String(d); lines.push(t); tail = (tail + t).slice(-2000); });
     child.stderr.on("data", (d) => { err += d; if (err.length > 20_000) err = err.slice(-10_000); });
     const timer = setTimeout(() => { child.kill("SIGTERM"); }, cfg.turnMinutes * 60_000);
     child.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, exit: -1, why: `claude did not start: ${e.message}` }); });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
-      let j = null; try { j = JSON.parse(out.trim().split("\n").pop()); } catch {}
-      const sessionId = j?.session_id ?? null;
+      lines.push("\n");
+      const j = result;
       if (signal) return resolve({ ok: false, exit: -1, session: sessionId, why: `the agent was stopped (${signal}${signal === "SIGTERM" ? `, past ${cfg.turnMinutes} min?` : ""})` });
-      if (!j) return resolve({ ok: false, exit: code, why: `claude exited ${code}: ${(err || out).trim().split("\n").pop()?.slice(0, 300) || "no output"}` });
+      if (!j) return resolve({ ok: false, exit: code, session: sessionId, why: `claude exited ${code}: ${(err || tail).trim().split("\n").pop()?.slice(0, 300) || "no output"}` });
       if (j.is_error || code !== 0) return resolve({ ok: false, exit: code, session: sessionId, why: `${j.subtype ?? "error"}: ${String(j.result ?? err).slice(0, 300)}` });
       const text = String(j.result ?? "").trim();
       resolve(text ? { ok: true, exit: code, session: sessionId, text } : { ok: false, exit: code, session: sessionId, why: "the agent gave no final message" });

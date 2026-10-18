@@ -1,4 +1,31 @@
 import type { ChatId } from '../media/types';
+/** CHAT-18: one item of a participant's live work in a chat — never a
+message, never stored: the server keeps a chat's last
+[`ACTIVITY_KEPT`] in memory (`activity_log`), lost on a restart. */
+export interface Activity {
+    /** When, unix seconds. */
+    at: number;
+    /** Who works: the caller's principal. */
+    by: string;
+    chat: ChatId;
+    /** What it does — a tool call, a line of its text, a heartbeat — at most
+  [`ACTIVITY_LINE_MAX`] characters. */
+    line?: string | null;
+    /** The name it goes by, when signed in with one. */
+    name?: string | null;
+    /** Its place among every chat's activity since the server started:
+  a later item has a greater `seq` (the app's join of the log and the
+  watch). */
+    seq: number;
+    state: ActivityState;
+}
+/** CHAT-18: one line of a participant's live work — what a tool call
+does, a line of its text — at most [`MESSAGE_MAX`] bytes on the wire,
+its control characters spaces, trimmed; the store keeps at most
+[`crate::chats::ACTIVITY_LINE_MAX`] characters of it. */
+export type ActivityLine = string;
+/** CHAT-18: where a participant's live work stands: started, working, or ended (any case) */
+export type ActivityState = "started" | "working" | "ended";
 /** One chat, as one caller sees it: `unread` is the caller's own count —
 the messages after its read mark (zero for an admin who is not in it). */
 export interface Chat {
@@ -148,6 +175,13 @@ export interface ChatsEventListening {
     principal: string;
     waiting: boolean;
 }
+/** CHAT-18: `activity`'s answer, one of `activity_log`'s rows (oldest
+first), and on every participant's `watch`: `by`'s live work in
+`chat` — started, a line, ended. Never a message. */
+export interface ChatsEventActivity {
+    type: 'activity';
+    activity: Activity;
+}
 /** AGENT-3: a participating agent's claim began or ended — a line in the
 chat. Declared for AGENT-3's claims; nothing emits it yet. */
 export interface ChatsEventClaimLine {
@@ -216,7 +250,7 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventActivity | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 export declare function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened;
 export declare function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat;
 export declare function isChatsEventCandidate(e: ChatsEvent): e is ChatsEventCandidate;
@@ -230,6 +264,7 @@ export declare function isChatsEventClosed(e: ChatsEvent): e is ChatsEventClosed
 export declare function isChatsEventReopened(e: ChatsEvent): e is ChatsEventReopened;
 export declare function isChatsEventRenamed(e: ChatsEvent): e is ChatsEventRenamed;
 export declare function isChatsEventListening(e: ChatsEvent): e is ChatsEventListening;
+export declare function isChatsEventActivity(e: ChatsEvent): e is ChatsEventActivity;
 export declare function isChatsEventClaimLine(e: ChatsEvent): e is ChatsEventClaimLine;
 export declare function isChatsEventWaiting(e: ChatsEvent): e is ChatsEventWaiting;
 export declare function isChatsEventTimedOut(e: ChatsEvent): e is ChatsEventTimedOut;

@@ -3,6 +3,36 @@
 
 import type { ChatId } from '../media/types';
 
+/** CHAT-18: one item of a participant's live work in a chat — never a
+message, never stored: the server keeps a chat's last
+[`ACTIVITY_KEPT`] in memory (`activity_log`), lost on a restart. */
+export interface Activity {
+  /** When, unix seconds. */
+  at: number;
+  /** Who works: the caller's principal. */
+  by: string;
+  chat: ChatId;
+  /** What it does — a tool call, a line of its text, a heartbeat — at most
+[`ACTIVITY_LINE_MAX`] characters. */
+  line?: string | null;
+  /** The name it goes by, when signed in with one. */
+  name?: string | null;
+  /** Its place among every chat's activity since the server started:
+a later item has a greater `seq` (the app's join of the log and the
+watch). */
+  seq: number;
+  state: ActivityState;
+}
+
+/** CHAT-18: one line of a participant's live work — what a tool call
+does, a line of its text — at most [`MESSAGE_MAX`] bytes on the wire,
+its control characters spaces, trimmed; the store keeps at most
+[`crate::chats::ACTIVITY_LINE_MAX`] characters of it. */
+export type ActivityLine = string;
+
+/** CHAT-18: where a participant's live work stands: started, working, or ended (any case) */
+export type ActivityState = "started" | "working" | "ended";
+
 /** One chat, as one caller sees it: `unread` is the caller's own count —
 the messages after its read mark (zero for an admin who is not in it). */
 export interface Chat {
@@ -169,6 +199,14 @@ export interface ChatsEventListening {
   waiting: boolean;
 }
 
+/** CHAT-18: `activity`'s answer, one of `activity_log`'s rows (oldest
+first), and on every participant's `watch`: `by`'s live work in
+`chat` — started, a line, ended. Never a message. */
+export interface ChatsEventActivity {
+  type: 'activity';
+  activity: Activity;
+}
+
 /** AGENT-3: a participating agent's claim began or ended — a line in the
 chat. Declared for AGENT-3's claims; nothing emits it yet. */
 export interface ChatsEventClaimLine {
@@ -247,7 +285,7 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventActivity | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 
 export function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened { return e.type === 'opened'; }
 export function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat { return e.type === 'chat'; }
@@ -262,6 +300,7 @@ export function isChatsEventClosed(e: ChatsEvent): e is ChatsEventClosed { retur
 export function isChatsEventReopened(e: ChatsEvent): e is ChatsEventReopened { return e.type === 'reopened'; }
 export function isChatsEventRenamed(e: ChatsEvent): e is ChatsEventRenamed { return e.type === 'renamed'; }
 export function isChatsEventListening(e: ChatsEvent): e is ChatsEventListening { return e.type === 'listening'; }
+export function isChatsEventActivity(e: ChatsEvent): e is ChatsEventActivity { return e.type === 'activity'; }
 export function isChatsEventClaimLine(e: ChatsEvent): e is ChatsEventClaimLine { return e.type === 'claim_line'; }
 export function isChatsEventWaiting(e: ChatsEvent): e is ChatsEventWaiting { return e.type === 'waiting'; }
 export function isChatsEventTimedOut(e: ChatsEvent): e is ChatsEventTimedOut { return e.type === 'timed_out'; }
