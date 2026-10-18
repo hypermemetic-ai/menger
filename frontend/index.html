@@ -1199,6 +1199,9 @@
   :is([data-ticket-id], a[href^="#/ticket/"]) { -webkit-touch-callout: none; }
   @media (pointer: coarse) {
     :is([data-ticket-id]:not(section), a[href^="#/ticket/"]) { -webkit-user-select: none; user-select: none; }
+    /* APP-61: a field keeps its selection, its handles and its edit menu
+       wherever it sits. */
+    :is(textarea, input, [contenteditable]:not([contenteditable="false"])) { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
   }
   @media (max-width: 820px) {
     :is(#tmenu, #tagmenu)[data-sheet] {
