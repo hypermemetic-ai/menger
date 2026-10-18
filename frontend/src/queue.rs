@@ -1541,7 +1541,7 @@ pub(crate) fn Tray() -> impl IntoView {
                     inert=move || !open.get()
                     aria-live="polite"
                 >
-                    <div class="qgrab" aria-hidden="true"></div>
+                    <crate::sheet::Grip target="qsheet" head=".qh" class="qgrab" open=open dismiss=Callback::new(move |_| close_sheet(false)) />
                     <div class="qh">
                         // CHAT-17: two tabs — the queue, and the open chats.
                         <span class="qtabs" role="tablist" aria-label="the queue and the chats">

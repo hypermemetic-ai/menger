@@ -9,8 +9,8 @@
 //!   conversation in place — its head (*← sections*, the lit section, ×),
 //!   a chip per open chat on the ticket (its participants, its unread),
 //!   **+ chat**, the closed list. At ≤ 820 it is the phone bar's sections
-//!   sheet that turns into it, its handle dragged down to dismiss it
-//!   ([`Grab`], [`dismisses`]). [`Follow`] keeps the route and the shown
+//!   sheet that turns into it, its handle and head dragged down to dismiss
+//!   it (CHAT-31: every sheet's gesture, src/sheet.rs). [`Follow`] keeps the route and the shown
 //!   chat in step, mounted once in the app. The participants row: a
 //!   dot each, pulsing while one waits on `await_message` (under the Motion
 //!   setting), agents marked ([`crate::chats::is_agent`]); *add* and *close
@@ -68,9 +68,6 @@ pub(crate) struct Shown {
     pub(crate) ticket: String,
     pub(crate) view: View,
 }
-
-/// The sheet's handle dragged down this far (px) dismisses it.
-pub(crate) const DISMISS_PX: f64 = 80.0;
 
 /// `chat=<id>` in a route's query.
 /// CHAT-8: `?at=MSG` — open the chat at that message.
@@ -161,11 +158,6 @@ pub(crate) fn rows(cands: &[(String, bool)], me: &str, already: &[String], query
         .collect();
     v.sort_by_key(|(p, reads)| (!reads, name(p)));
     v
-}
-
-/// Whether the sheet, dragged down `dy` px, is dismissed.
-pub(crate) fn dismisses(dy: f64) -> bool {
-    dy >= DISMISS_PX
 }
 
 /// A message's time, `HH:MM` where the reader is.
@@ -406,52 +398,6 @@ fn pane_view(s: Shown, lit: Signal<String>, back: Callback<bool>) -> impl IntoVi
             </div>
             {body}
         </div>
-    }
-}
-
-/// A sheet's handle (≤ 820, the dock's sheet): dragged down past
-/// [`DISMISS_PX`], the sheet `target` (an element id) goes and `dismiss`
-/// runs; less, it springs back.
-#[component]
-pub(crate) fn Grab(target: &'static str, dismiss: Callback<()>) -> impl IntoView {
-    let start = StoredValue::new(None::<f64>);
-    let pane = move || dom::window().document().and_then(|d| d.get_element_by_id(target)).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok());
-    let place = move |dy: f64| {
-        if let Some(p) = pane() {
-            let _ = p.style().set_property("translate", &format!("0 {}px", dy.max(0.0)));
-        }
-    };
-    let end = move |ev: web_sys::PointerEvent| {
-        let Some(y0) = start.get_value() else { return };
-        start.set_value(None);
-        place(0.0);
-        if dismisses(f64::from(ev.client_y()) - y0) {
-            dismiss.run(());
-        }
-    };
-    view! {
-        <div
-            class="grab pgrab"
-            aria-hidden="true"
-            on:pointerdown=move |ev: web_sys::PointerEvent| {
-                // No text selection or native drag to cancel the pointer.
-                ev.prevent_default();
-                if let Some(t) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) {
-                    let _ = t.set_pointer_capture(ev.pointer_id());
-                }
-                start.set_value(Some(f64::from(ev.client_y())));
-            }
-            on:pointermove=move |ev: web_sys::PointerEvent| {
-                if let Some(y0) = start.get_value() {
-                    place(f64::from(ev.client_y()) - y0);
-                }
-            }
-            on:pointerup=end
-            on:pointercancel=move |_| {
-                start.set_value(None);
-                place(0.0);
-            }
-        ></div>
     }
 }
 
@@ -1562,12 +1508,5 @@ mod tests {
         assert_eq!(rows(&cands, "idp:ada", &["idp:rui".into()], "", name).len(), 2, "adding: not who is in it");
         assert_eq!(rows(&cands, "idp:ada", &[], "rev", name), [("agent:reviewer".to_string(), true)]);
         assert_eq!(refusal("KILN-7"), "can't read KILN-7, so can't be added");
-    }
-
-    /// 390 row: the sheet's handle dragged down far enough dismisses it.
-    #[test]
-    fn the_sheet_drags_away() {
-        assert!(!dismisses(10.0) && !dismisses(79.0));
-        assert!(dismisses(80.0) && dismisses(300.0));
     }
 }
