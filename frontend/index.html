@@ -4954,7 +4954,10 @@
     html[data-kb] { --pbar-h: var(--kb-inset, 0px); }
     html[data-kb] #pbar { display: none; }
     html[data-kb] :is(#tdock-sheet, #lens-top) { max-height: min(calc(88dvh - var(--pbar-h)), calc(var(--kb-h) - 8px)); }
-    html[data-kb] #tdock-sheet.chatting { height: calc(var(--kb-h) - 8px); max-height: calc(var(--kb-h) - 8px); }
+    /* APP-62: the dock's chat is pinned by its top, as #chatfull is — the
+       visible area's own rect, never placed off the layout viewport's
+       bottom (whose height iOS does not report as a fixed view sees it). */
+    html[data-kb] #tdock-sheet.chatting { top: calc(var(--kb-top) + 8px); bottom: auto; height: calc(var(--kb-h) - 8px); max-height: calc(var(--kb-h) - 8px); }
     /* While typing, the dock's chat is its head, the messages and the
        composer: the handle, the chips and who's in it come back with the
        keyboard's going. */
@@ -4967,6 +4970,10 @@
   /* APP-56: the full-screen chat (and #/chats) is the visible area while
      the keyboard is up, its composer on the keyboard's top. */
   html[data-kb] #chatfull { top: var(--kb-top); bottom: auto; height: var(--kb-h); }
+  /* APP-62: the layout viewport as a fixed view is laid out in it —
+     src/keyboard.rs reads its height here (iOS's innerHeight is the
+     visual viewport's). */
+  #kbprobe { position: fixed; top: 0; bottom: 0; left: 0; width: 0; visibility: hidden; pointer-events: none; }
   /* APP-58: the keyboard slides over the view, not the view up — the
      pinned views follow the visual viewport (src/keyboard.rs reads it each
      frame while it moves and holds the document still); a list scrolled to

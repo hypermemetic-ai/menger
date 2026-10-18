@@ -38,6 +38,17 @@
 //! landed has not chosen yet ([`owner`]). Cancelling those moves is what
 //! froze a selection's handles in the composer. A swipe across the field,
 //! or a drag on the header, is still held.
+//!
+//! APP-62: and the layout viewport is measured, never read off
+//! `innerHeight`. WebKit on iOS reports `window.innerHeight` as the
+//! *visual* viewport's height, so with the keyboard up it shrinks with
+//! it; sizing the view `min(vv.height, innerHeight − offsetTop)` then
+//! took the pan off twice (`vv.height − offsetTop`: an iPhone's 460 px
+//! visible area panned 276 down left a 184 px chat, its header and
+//! composer, and the page showing below). What a `position: fixed` view
+//! is laid out in is read off a fixed probe (`#kbprobe`, `inset-block: 0`),
+//! and the visible area is the visual viewport's own rect — top
+//! `offsetTop`, height `vv.height` — whatever `innerHeight` says.
 
 use std::cell::Cell;
 
@@ -50,16 +61,21 @@ use crate::dom;
 /// browser's own bars moving, not a keyboard.
 const KEYBOARD_MIN_PX: f64 = 120.0;
 
+/// Never a visible area shorter than this: the chat's head and composer.
+const MIN_VIEW_PX: f64 = 160.0;
+
 /// What the viewport says, at one moment.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Viewport {
-    /// `window.innerHeight`: the layout viewport.
-    pub inner_h: f64,
+    /// The layout viewport's height as a `position: fixed` view sees it
+    /// (`#kbprobe`; `innerHeight` only where there is no probe — on iOS
+    /// `innerHeight` is the visual viewport's, APP-62).
+    pub layout_h: f64,
     /// `visualViewport.height`, `.offsetTop`, `.scale`.
     pub vv_h: f64,
     pub vv_top: f64,
     pub scale: f64,
-    /// The tallest `inner_h` seen at this width: the height with no
+    /// The tallest `layout_h` seen at this width: the height with no
     /// keyboard, for a browser that resizes the layout viewport.
     pub tallest: f64,
     /// A field that takes typing has focus.
@@ -80,19 +96,25 @@ pub(crate) struct Keyboard {
 /// well short of the page's height. A pinch-zoomed page is left alone (its
 /// visual viewport is small because it is zoomed).
 pub(crate) fn keyboard(v: Viewport) -> Option<Keyboard> {
-    if !v.editing || v.inner_h <= 0.0 || v.vv_h <= 0.0 || v.scale > 1.01 {
+    if !v.editing || v.layout_h <= 0.0 || v.vv_h <= 0.0 || v.scale > 1.01 {
         return None;
     }
     // Overlaid (iOS): the layout viewport keeps its height, the visual one
     // shrinks. Resized (Android): the layout viewport itself shrank.
-    let overlaid = v.inner_h - v.vv_h >= KEYBOARD_MIN_PX;
-    let resized = v.tallest - v.inner_h >= KEYBOARD_MIN_PX;
+    let overlaid = v.layout_h - v.vv_h >= KEYBOARD_MIN_PX;
+    let resized = v.tallest - v.layout_h >= KEYBOARD_MIN_PX;
     if !overlaid && !resized {
         return None;
     }
-    let top = v.vv_top.clamp(0.0, v.inner_h);
-    let height = v.vv_h.min(v.inner_h - top);
-    Some(Keyboard { inset: (v.inner_h - top - height).max(0.0).round(), top: top.round(), height: height.round() })
+    // APP-62: the visible area is the visual viewport's own rect, in the
+    // layout viewport's coordinates (where a fixed view is placed): its
+    // top is the pan, its height the visual height — never the layout
+    // height less the pan, which takes the pan off twice where the layout
+    // height reads short (iOS's innerHeight). Below the visible area's
+    // bottom to the layout viewport's is the keyboard's inset.
+    let top = v.vv_top.max(0.0);
+    let height = v.vv_h.max(MIN_VIEW_PX);
+    Some(Keyboard { inset: (v.layout_h - top - v.vv_h).max(0.0).round(), top: top.round(), height: height.round() })
 }
 
 /// Whether `el` takes typing (and so opens a keyboard): a textarea, a text
@@ -218,22 +240,46 @@ fn in_pinned(doc: &web_sys::Document) -> bool {
     doc.active_element().and_then(|el| el.closest(PINNED).ok().flatten()).is_some()
 }
 
+/// APP-62: the probe's id — a `position: fixed` box from the layout
+/// viewport's top to its bottom (`index.html`), invisible and inert.
+const PROBE: &str = "kbprobe";
+
+/// The layout viewport's height as a fixed view is laid out in it: the
+/// probe's. `innerHeight` is not it on iOS (it follows the visual
+/// viewport there).
+fn layout_height(doc: &web_sys::Document) -> Option<f64> {
+    let h = doc.get_element_by_id(PROBE)?.get_bounding_client_rect().height();
+    (h > 0.0).then_some(h)
+}
+
+/// Once: the probe, at the end of `<body>`.
+fn mount_probe(doc: &web_sys::Document) {
+    if doc.get_element_by_id(PROBE).is_some() {
+        return;
+    }
+    let (Ok(el), Some(body)) = (doc.create_element("div"), doc.body()) else { return };
+    el.set_id(PROBE);
+    let _ = el.set_attribute("aria-hidden", "true");
+    let _ = body.append_child(&el);
+}
+
 /// Reads the viewport now and stamps (or clears) `<html>`; whether it
 /// changed anything.
 fn apply() -> bool {
     let w = dom::window();
     let Some(vv) = w.visual_viewport() else { return false };
     let Some(doc) = w.document() else { return false };
-    let (inner_w, inner_h) = (num(w.inner_width()), num(w.inner_height()));
+    let inner_w = num(w.inner_width());
+    let layout_h = layout_height(&doc).unwrap_or_else(|| num(w.inner_height()));
     // The tallest height is per width: a rotation starts it again.
     let tallest = TALLEST.with(|c| {
         let (width, tallest) = c.get();
-        let t = if width == inner_w { tallest.max(inner_h) } else { inner_h };
+        let t = if width == inner_w { tallest.max(layout_h) } else { layout_h };
         c.set((inner_w, t));
         t
     });
     let editing = doc.active_element().is_some_and(|el| takes_typing(&el));
-    let kb = keyboard(Viewport { inner_h, vv_h: vv.height(), vv_top: vv.offset_top(), scale: vv.scale(), tallest, editing });
+    let kb = keyboard(Viewport { layout_h, vv_h: vv.height(), vv_top: vv.offset_top(), scale: vv.scale(), tallest, editing });
     // APP-58: a keyboard over a pinned view holds the document still.
     let pinned = kb.is_some() && in_pinned(&doc);
     let locked = LOCKED.with(Cell::get);
@@ -427,6 +473,9 @@ fn at_end(doc: &web_sys::Document) -> Vec<web_sys::Element> {
 pub(crate) fn install() {
     let w = dom::window();
     let Some(vv) = w.visual_viewport() else { return };
+    if let Some(doc) = w.document() {
+        mount_probe(&doc);
+    }
     let tick = Closure::<dyn FnMut()>::new(frame);
     FRAME.with(|f| *f.borrow_mut() = Some(tick.as_ref().unchecked_ref::<js_sys::Function>().clone()));
     tick.forget(); // lives as long as the app
@@ -482,7 +531,7 @@ mod tests {
 
     /// An iPhone 13's Safari: 664 tall with its bars, a 336 keyboard.
     fn phone(vv_h: f64, vv_top: f64, editing: bool) -> Viewport {
-        Viewport { inner_h: 664.0, vv_h, vv_top, scale: 1.0, tallest: 664.0, editing }
+        Viewport { layout_h: 664.0, vv_h, vv_top, scale: 1.0, tallest: 664.0, editing }
     }
 
     #[test]
@@ -500,14 +549,34 @@ mod tests {
         // iOS scrolled it down 200 to centre the field: the keyboard's top
         // is still the visible area's bottom.
         assert_eq!(keyboard(phone(328.0, 200.0, true)), Some(Keyboard { inset: 136.0, top: 200.0, height: 328.0 }));
-        // Past the layout viewport's bottom (iOS overscroll): no negative inset.
-        assert_eq!(keyboard(phone(328.0, 400.0, true)), Some(Keyboard { inset: 0.0, top: 400.0, height: 264.0 }));
+        // Past the layout viewport's bottom (iOS overscroll): no negative
+        // inset, and still the whole visible area (APP-62).
+        assert_eq!(keyboard(phone(328.0, 400.0, true)), Some(Keyboard { inset: 0.0, top: 400.0, height: 328.0 }));
+    }
+
+    #[test]
+    fn the_visible_area_is_the_visual_viewport_whatever_inner_height_says() {
+        // APP-62, the owner's iPhone (440 × 956, Safari's bar at the top):
+        // the layout viewport 834, the keyboard and its accessory bar 374,
+        // the visible area 460, panned 276 down. WebKit's innerHeight was
+        // the visual viewport's 460, and the old sizing made the chat
+        // 460 − 276 = 184. The layout height is the fixed probe's: 834.
+        let v = Viewport { layout_h: 834.0, vv_h: 460.0, vv_top: 276.0, scale: 1.0, tallest: 834.0, editing: true };
+        assert_eq!(keyboard(v), Some(Keyboard { inset: 98.0, top: 276.0, height: 460.0 }));
+        // No probe and innerHeight the visual one: still a keyboard (the
+        // layout height fell from its tallest) and still the visible area.
+        let v = Viewport { layout_h: 460.0, ..v };
+        assert_eq!(keyboard(v).map(|k| (k.top, k.height)), Some((276.0, 460.0)));
+        // A visible area shorter than the head and composer: never shorter
+        // than them.
+        let v = Viewport { layout_h: 390.0, vv_h: 120.0, vv_top: 0.0, scale: 1.0, tallest: 390.0, editing: true };
+        assert_eq!(keyboard(v).map(|k| k.height), Some(MIN_VIEW_PX));
     }
 
     #[test]
     fn a_resized_layout_is_a_keyboard_at_the_bottom() {
         // Android: the layout viewport itself shrank to the visible area.
-        let v = Viewport { inner_h: 380.0, vv_h: 380.0, vv_top: 0.0, scale: 1.0, tallest: 720.0, editing: true };
+        let v = Viewport { layout_h: 380.0, vv_h: 380.0, vv_top: 0.0, scale: 1.0, tallest: 720.0, editing: true };
         assert_eq!(keyboard(v), Some(Keyboard { inset: 0.0, top: 0.0, height: 380.0 }));
     }
 
