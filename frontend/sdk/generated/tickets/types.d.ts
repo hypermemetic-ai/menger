@@ -153,6 +153,9 @@ export interface Comment {
     /** IDENTITY-21: the Plexus principal of who left it, when they were
   signed in — `author` is only the name they go by. */
     principal?: string | null;
+    /** COMMENT-8: the comment this answers — always a thread's root (a
+  reply to a reply is a reply to its root); omitted for a root. */
+    replyTo?: CommentId | null;
     state: CommentState;
 }
 /** COMMENT-2: a comment's number, from 1 in the order kept. */

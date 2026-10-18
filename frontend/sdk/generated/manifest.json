@@ -106,7 +106,8 @@
     "comments": {
       "add": [
         "anchor",
-        "body"
+        "body",
+        "reply_to"
       ],
       "failures": [
         "limit"
@@ -120,6 +121,7 @@
         "route",
         "state",
         "text",
+        "thread",
         "ticket",
         "under"
       ],

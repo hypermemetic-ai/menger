@@ -801,7 +801,7 @@ async fn the_comments_through_the_generated_client() {
         other => panic!("expected `ticket`, got {other:?}"),
     };
     let mut watch = comments.watch();
-    let _ = comments.list_all(None, None, None, None, None, None, None, None, None, Some(1)).await.expect("round trip");
+    let _ = comments.list_all(None, None, None, None, None, None, None, None, None, None, Some(1)).await.expect("round trip");
     tokio::time::sleep(Duration::from_millis(250)).await;
 
     let anchor = Anchor {
@@ -812,7 +812,7 @@ async fn the_comments_through_the_generated_client() {
         ticket: Some(p("DEMAND-2")),
         version: None,
     };
-    let added = one(comments.add_all(anchor.clone(), p("show the parent's title too")).await.expect("add"))
+    let added = one(comments.add_all(Some(anchor.clone()), p("show the parent's title too"), None).await.expect("add"))
         .into_comment()
         .expect("a comment");
     assert_eq!(
@@ -826,20 +826,21 @@ async fn the_comments_through_the_generated_client() {
             body: p("show the parent's title too"),
             principal: Some(support::admin()),
             intent: menger_tickets_api::CommentIntent::Comment,
+            reply_to: None,
         }
     );
-    let second = one(comments.add_all(Anchor { ticket: None, ..anchor.clone() }, p("on no ticket")).await.expect("add"))
+    let second = one(comments.add_all(Some(Anchor { ticket: None, ..anchor.clone() }), p("on no ticket"), None).await.expect("add"))
         .into_comment()
         .expect("a comment");
 
     let listed = comments
-        .list_all(Some(p("DEMAND-2")), None, None, None, Some(p("open")), None, None, None, None, None)
+        .list_all(Some(p("DEMAND-2")), None, None, None, Some(p("open")), None, None, None, None, None, None)
         .await
         .expect("list");
     assert_eq!(listed, [CommentsEvent::from(added.clone()), CommentsEvent::Page { next: None }]);
-    let page = comments.list_all(None, None, None, None, None, None, None, None, None, Some(1)).await.expect("list");
+    let page = comments.list_all(None, None, None, None, None, None, None, None, None, None, Some(1)).await.expect("list");
     assert_eq!(page, [CommentsEvent::from(second.clone()), CommentsEvent::Page { next: Some(2) }]);
-    let rest = comments.list_all(None, Some(p("DEMAND")), None, None, None, None, None, None, Some(CommentId::new(2)), Some(1)).await.expect("list");
+    let rest = comments.list_all(None, Some(p("DEMAND")), None, None, None, None, None, None, None, Some(CommentId::new(2)), Some(1)).await.expect("list");
     assert_eq!(rest, [CommentsEvent::from(added.clone()), CommentsEvent::Page { next: None }]);
 
     let resolved = one(comments.resolve_all(CommentId::new(1)).await.expect("resolve")).into_comment().expect("a comment");
@@ -869,6 +870,67 @@ async fn the_comments_through_the_generated_client() {
             CommentsEvent::Added { comment: second },
             CommentsEvent::Resolved { comment: resolved },
             CommentsEvent::Reopened { comment: added },
+        ]
+    );
+}
+
+/// COMMENT-8: replies through the generated client — `add { reply_to }`
+/// takes the root's anchor and names it (a reply to a reply, the same
+/// root), an anchor beside `reply_to` or neither is refused in band, a
+/// reply to a resolved root reopens it (`added` then `reopened` heard),
+/// `resolve` on a reply settles its root, and `list { thread }` is the root
+/// and its replies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replies_through_the_generated_client() {
+    let port = start_server().await;
+    let transport = connect(port).await;
+    let tickets = TicketsClient::new(&transport);
+    let comments = CommentsClient::new(&transport);
+    tickets.create_all(p("LINKED"), p("links"), Some(p("scope")), None, None, None, None, None, None).await.expect("create");
+    tickets.create_all(p("LINKED"), p("the page"), None, None, None, None, None, None, None).await.expect("create");
+    let mut watch = comments.watch();
+    let _ = comments.list_all(None, None, None, None, None, None, None, None, None, None, Some(1)).await.expect("round trip");
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let anchor = Anchor { route: p("#/ticket/LINKED-2"), path: p("conversation"), label: p("Conversation"), excerpt: p(""), ticket: Some(p("LINKED-2")), version: None };
+    let root = one(comments.add_all(Some(anchor.clone()), p("is this linked?"), None).await.expect("add")).into_comment().expect("a comment");
+    let resolved = one(comments.resolve_all(root.id).await.expect("resolve")).into_comment().expect("a comment");
+    let reply = one(comments.add_all(None, p("not yet — on its way"), Some(root.id)).await.expect("reply")).into_comment().expect("a comment");
+    assert_eq!((reply.reply_to, &reply.anchor), (Some(root.id), &root.anchor));
+    let again = one(comments.add_all(None, p("and now it is"), Some(reply.id)).await.expect("reply")).into_comment().expect("a comment");
+    assert_eq!(again.reply_to, Some(root.id), "a reply to a reply answers the root");
+    for (anchor, to) in [(Some(anchor.clone()), Some(root.id)), (None, None)] {
+        match one(comments.add_all(anchor, p("refused"), to).await.expect("add")) {
+            CommentsEvent::Error { message } => assert!(message.contains("reply_to"), "{message}"),
+            other => panic!("expected `error`, got {other:?}"),
+        }
+    }
+    let thread = comments.list_all(None, None, None, None, None, None, None, None, Some(reply.id), None, None).await.expect("list");
+    let ids: Vec<u64> = thread.iter().filter_map(|e| e.clone().into_comment()).map(|c| c.id.get()).collect();
+    assert_eq!(ids, [again.id.get(), reply.id.get(), root.id.get()]);
+    let settled = one(comments.resolve_all(again.id).await.expect("resolve")).into_comment().expect("a comment");
+    assert_eq!((settled.id, settled.state), (root.id, CommentState::Resolved), "a reply's resolve is its root's");
+
+    let mut heard = Vec::new();
+    while heard.len() < 6 {
+        let ev = tokio::time::timeout(Duration::from_secs(20), watch.next())
+            .await
+            .expect("an event in time")
+            .expect("the watch goes on")
+            .expect("no transport error");
+        if let ClientEvent::Data(ev) = ev {
+            heard.push(ev);
+        }
+    }
+    assert_eq!(
+        heard,
+        [
+            CommentsEvent::Added { comment: root.clone() },
+            CommentsEvent::Resolved { comment: resolved },
+            CommentsEvent::Added { comment: reply },
+            CommentsEvent::Reopened { comment: root },
+            CommentsEvent::Added { comment: again },
+            CommentsEvent::Resolved { comment: settled },
         ]
     );
 }

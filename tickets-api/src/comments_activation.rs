@@ -95,7 +95,12 @@ impl CommentsActivation {
     /// is listed and watched only by those who can view both. The anchor is
     /// kept as given (`ticket` stays what the element belonged to).
     /// ACCESS-19: a comment on the app (naming no ticket) is seen only by
-    /// its author and the admins of `*`.
+    /// its author and the admins of `*`. COMMENT-8: with `reply_to`, a reply
+    /// to that comment — no anchor (one given is refused): it takes its
+    /// thread's root's, and so its ticket and who sees it; a reply to a
+    /// reply answers the same root; a resolved root is reopened in the same
+    /// write (`watch` carries `added`, then `reopened`). The answer carries
+    /// `reply_to`, the root's id.
     #[plexus_macros::method(
         group = "write",
         example(note = "a note on a ticket's parent chip", params = r##"{"anchor": {"route": "#/ticket/DEMAND-2", "path": "[data-tag=\"ticket DEMAND-1\"]", "label": "Parent chip", "excerpt": "DEMAND-1", "ticket": "DEMAND-2"}, "body": "Show the parent's title here"}"##)
@@ -103,13 +108,15 @@ impl CommentsActivation {
     pub async fn add(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Where: {route: '#/ticket/DEMAND-2', path: '[data-tag="ticket DEMAND-1"]', label: 'Parent chip', excerpt: 'DEMAND-1', ticket: 'DEMAND-2' (optional)}; version is set by the server.
-        anchor: Anchor,
+        /// Where: {route: '#/ticket/DEMAND-2', path: '[data-tag="ticket DEMAND-1"]', label: 'Parent chip', excerpt: 'DEMAND-1', ticket: 'DEMAND-2' (optional)}; version is set by the server. Required unless reply_to is given.
+        anchor: Option<Anchor>,
         /// What it says (markdown; not empty, at most 64 KiB).
         body: Body,
+        /// COMMENT-8: the comment this answers, e.g. 29 — the reply takes its thread's anchor (optional).
+        reply_to: Option<CommentId>,
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
-        futures::stream::once(async move { add(store, user, anchor, body.into_string()).await })
+        futures::stream::once(async move { add(store, user, anchor, body.into_string(), reply_to.map(CommentId::get)).await })
     }
 
     /// List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.
@@ -154,6 +161,8 @@ impl CommentsActivation {
         text: Option<Query>,
         /// Only comments of this intent: comment | changes (APP-23: a change request) (optional).
         intent: Option<CommentIntent>,
+        /// COMMENT-8: only this comment's thread — its root and the root's replies, oldest last as every page (optional).
+        thread: Option<CommentId>,
         /// Cursor: start strictly after (older than) this comment id (optional).
         after: Option<CommentId>,
         /// At most this many comments (default 500, at most 1000); the page event carries the next cursor (optional).
@@ -161,7 +170,7 @@ impl CommentsActivation {
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let (ticket, under, route, path, author) = (ticket.map(String::from), under.map(String::from), route.map(String::from), path.map(String::from), author.map(String::from));
         let text = text.map(String::from).filter(|v| !v.trim().is_empty());
-        let q = CommentQuery { ticket, under, route, path, state, author, text, intent };
+        let q = CommentQuery { ticket, under, route, path, state, author, text, intent, thread: thread.map(CommentId::get) };
         list_stream(self.store.clone(), user, q, after.map(CommentId::get), limit)
     }
 

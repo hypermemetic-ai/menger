@@ -108,8 +108,11 @@ impl Pin {
 pub(crate) fn pins(route: &str, comments: &[Comment], mut spot: impl FnMut(&Anchor) -> Spot) -> Vec<Pin> {
     let mut groups: Vec<(PinAt, Vec<u64>)> = Vec::new();
     // APP-22: a comment on the ticket as a whole is drawn in its Conversation,
-    // not pinned to anything.
-    for c in comments.iter().filter(|c| c.state == CommentState::Open && c.anchor.route == route && !crate::conversation::is_whole(c)) {
+    // not pinned to anything. COMMENT-8: a reply is drawn under its root.
+    for c in comments
+        .iter()
+        .filter(|c| c.state == CommentState::Open && comments::is_root(c) && c.anchor.route == route && !crate::conversation::is_whole(c))
+    {
         let at = match spot(&c.anchor) {
             Spot::Found => PinAt::Element(c.anchor.path.clone()),
             Spot::Missing => PinAt::Heading(c.anchor.ticket.clone()),
@@ -1081,6 +1084,7 @@ fn list_view(a: Annot, key: String, ids: Vec<u64>, moved: bool) -> AnyView {
                                             "Resolve"
                                         </button>
                                     </div>
+                                    <crate::thread::Replies root=c.clone() />
                                 </li>
                             }
                         })
@@ -1175,6 +1179,8 @@ mod tests {
             "#pending" => Spot::Pending,
             _ => Spot::Found,
         };
+        let mut all = all;
+        all.push(crate::comments::tests::reply(10, &all[1]));
         let got = pins(page, &all, spot);
         assert_eq!(
             got,

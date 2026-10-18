@@ -72,6 +72,16 @@ pub(crate) fn key(a: &Anchor) -> String {
     format!("{}|{}", a.route.trim(), a.path.trim())
 }
 
+/// COMMENT-8: where a reply's draft is kept — its thread's root.
+pub(crate) fn reply_key(root: u64) -> String {
+    format!("reply|{root}")
+}
+
+/// Where the draft `c` would have been is kept: its thread's, for a reply.
+pub(crate) fn key_of(c: &Comment) -> String {
+    c.reply_to.map_or_else(|| key(&c.anchor), |r| reply_key(r.get()))
+}
+
 /// The stored map, read — anything unreadable is none, and a draft past
 /// [`DRAFT_TTL`] is gone.
 pub(crate) fn read_map(text: Option<&str>, now: i64) -> BTreeMap<String, Draft> {
@@ -93,7 +103,7 @@ pub(crate) fn put(mut map: BTreeMap<String, Draft>, key: &str, body: &str, now: 
 /// Whether `c` is the draft `body`, kept at `key` — its place and its text
 /// (trimmed): the comment landed after all.
 pub(crate) fn is_landing(key_: &str, body: &str, c: &Comment) -> bool {
-    !body.trim().is_empty() && key(&c.anchor) == key_ && c.body.trim() == body.trim()
+    !body.trim().is_empty() && key_of(c) == key_ && c.body.trim() == body.trim()
 }
 
 /// The outbox, read.
@@ -166,7 +176,7 @@ pub(crate) fn landed_signal() -> ArcRwSignal<Option<(String, String)>> {
 /// A comment the watch (or a write) carried: if it is a kept draft
 /// landing, the draft is let go and an open box there told.
 pub(crate) fn landed(c: &Comment) {
-    let k = key(&c.anchor);
+    let k = key_of(c);
     let mut map = load_map();
     if map.get(&k).is_some_and(|d| is_landing(&k, &d.body, c)) {
         map.remove(&k);
@@ -190,14 +200,28 @@ async fn in_time<T>(fut: impl std::future::Future<Output = Result<T, String>>) -
 /// let go), or the reason — the draft kept and the failure reported.
 pub(crate) async fn send(anchor: Anchor, body: String) -> Result<Comment, String> {
     let k = key(&anchor);
+    kept(k, anchor.clone(), body.clone(), comments::add(anchor, body), None).await
+}
+
+/// COMMENT-8: [`send`] for a reply to `root` — kept by its thread, and
+/// reported on the root's anchor, saying which comment it answered.
+pub(crate) async fn send_reply(root: &Comment, body: String) -> Result<Comment, String> {
+    let to = root.id.get();
+    kept(reply_key(to), root.anchor.clone(), body.clone(), comments::reply(to, body), Some(to)).await
+}
+
+/// The draft at `k` kept while `write` goes out, let go when it answers in
+/// time; else the failure reported (on `anchor`; a reply's, naming its root).
+async fn kept(k: String, anchor: Anchor, body: String, write: impl std::future::Future<Output = Result<Comment, String>>, reply_to: Option<u64>) -> Result<Comment, String> {
     save(&k, &body);
-    match in_time(comments::add(anchor.clone(), body.clone())).await {
+    match in_time(write).await {
         Ok(c) => {
             save(&k, "");
             Ok(c)
         }
         Err(reason) => {
-            report(anchor, body, reason.clone());
+            let said = reply_to.map_or_else(|| reason.clone(), |to| format!("a reply to comment {to}: {reason}"));
+            report(anchor, body, said);
             Err(reason)
         }
     }
@@ -298,6 +322,12 @@ mod tests {
         assert!(!is_landing(&k, "the kiln is hot", &c));
         assert!(!is_landing(&key(&conv("KILN-3")), "the kiln is cold", &c));
         assert!(!is_landing(&k, "", &c), "no draft, nothing lands");
+        // COMMENT-8: a reply lands in its thread's box, not the place's.
+        c.reply_to = Some(menger_tickets_api::vocab::CommentId::new(3));
+        assert!(!is_landing(&k, "the kiln is cold", &c));
+        assert_eq!(key_of(&c), reply_key(3));
+        assert!(is_landing(&reply_key(3), "the kiln is cold", &c));
+        assert_ne!(reply_key(3), reply_key(4));
     }
 
     /// The outbox keeps the newest failures in order, at most OUTBOX_MAX.

@@ -18,6 +18,8 @@ export interface CommentsEventComment {
     intent: CommentIntent;
     /** IDENTITY-21: the signer's principal, when signed in. */
     principal: string | null;
+    /** COMMENT-8: the thread's root this answers; omitted for a root. */
+    replyTo: number | null;
     state: CommentState;
 }
 /** Where a `list` stands, once, after its rows: `next` is the cursor to

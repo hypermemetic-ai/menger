@@ -76,6 +76,7 @@ impl Store {
                 body,
                 principal,
                 intent: CommentIntent::Changes,
+                reply_to: None,
             };
             let mut record = record_of(cache.queue.next_id(), &entry, QueueAction::ChangesRequested, &act, now);
             record.comment = Some(comment.id.get());

@@ -333,7 +333,11 @@ impl<'c> Sees<'c> {
     /// on — its anchor's, and the one whose page it was left on. ACCESS-19:
     /// a comment on the app alone (naming no ticket), only its author and
     /// the admins of `*` ([`AppSight`]) — no longer any reach at all.
+    ///
+    /// COMMENT-8: a reply is judged by its thread's root — seen by exactly
+    /// who sees the comment it answers.
     pub(super) fn comment(&self, c: &crate::comments::Comment) -> bool {
+        let c = c.reply_to.and_then(|r| self.cache.comments.get(r.get())).unwrap_or(c);
         let route = c.anchor.route.trim().strip_prefix("#/ticket/").map(|r| r.split(['?', '#']).next().unwrap_or(r).trim()).filter(|r| !r.is_empty());
         let mut on = c.anchor.ticket.iter().map(String::as_str).chain(route).peekable();
         if on.peek().is_none() {
