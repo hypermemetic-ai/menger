@@ -3450,6 +3450,55 @@
     transition: color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease);
   }
   #qtray .qx:hover { color: var(--ink); border-color: var(--ink); }
+  /* CHAT-17: the head's two tabs — queue N and chats N (its N green while a
+     chat holds unread, CHAT-10's) — and the control for chats alone. */
+  #qtray .qtabs { display: inline-flex; gap: 4px; margin-right: 4px; }
+  #qtray .qtb {
+    display: inline-flex; align-items: baseline; gap: 7px; cursor: pointer; background: none; color: var(--muted);
+    padding: 2px 10px 3px; border: var(--border) solid transparent; border-radius: var(--radius-pill); font-family: var(--mono);
+    transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease);
+  }
+  #qtray .qtb:hover { border-color: var(--line); }
+  #qtray .qtb:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #qtray .qtb[aria-selected="true"] { background: var(--sel); border-color: var(--tree-line); }
+  #qtray .qtb[aria-selected="true"] .qt { color: var(--ink); }
+  #qtray .qtb .qn { margin-right: 0; color: var(--muted); }
+  #qtray .qtb[aria-selected="true"] .qn { color: var(--ink); }
+  #qtray .qtb .qn.chat.un {
+    color: var(--bg); background: var(--live); border-radius: var(--radius-pill); padding: 0 6px;
+    font-size: calc(11px * var(--text-scale)); line-height: 17px; align-self: center;
+  }
+  #qtray .qempty { margin: 0; padding: 18px 16px; color: var(--muted); font-family: var(--sans); }
+  #qtray .qc.chats { --u: var(--live); --ub: var(--card); --flash: var(--live); }
+  #qtray .qc .qcchat { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--live); font-size: calc(10.5px * var(--text-scale)); }
+  #qtray .qc .qcchat::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--live); }
+  /* The Chats tab: #/chats' rows — its ticket's chip or direct / group, who
+     or its title, its unread, its last line; one with unread ruled green. */
+  #qtray .qs.chats { height: auto; max-height: min(74vh, 640px); }
+  #qtray .qs.chats .qb { display: block; overflow: auto; overscroll-behavior: contain; }
+  #qtray .qcl { padding-bottom: 12px; }
+  #qtray .qcr {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center;
+    padding: 8px 14px 9px 12px; border-left: 3px solid transparent; border-bottom: var(--border) solid var(--line);
+    color: var(--ink); text-decoration: none; font-family: var(--mono); transition: background-color .12s ease-out;
+  }
+  #qtray .qcr.un { border-left-color: var(--live); }
+  #qtray .qcr:hover { background: var(--hover); }
+  #qtray .qcr.sel { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
+  #qtray .qcr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #qtray .qcr .qcm { display: flex; gap: 8px; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; }
+  #qtray .qcr .tchip {
+    flex: none; font: calc(11px * var(--text-scale)) var(--mono); color: var(--accent); border: var(--border) solid var(--accent);
+    border-radius: var(--radius-sm); padding: 0 5px; line-height: 1.5;
+  }
+  #qtray .qcr .kchip { flex: none; padding: 0 6px; border-radius: var(--radius-sm); border: var(--border) solid var(--line); color: var(--muted); font: calc(10px * var(--text-scale)) var(--mono); line-height: 1.6; }
+  #qtray .qcr .qcl-t { font-family: var(--sans); font-size: calc(13px * var(--text-scale)); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #qtray .qcr.un .qcl-t { font-weight: var(--weight-strong); }
+  #qtray .qcr .count {
+    background: var(--live); color: var(--bg); padding: 0 6px; border-radius: var(--radius-pill); font-weight: var(--weight-strong);
+    font-size: calc(10.5px * var(--text-scale)); font-variant-numeric: tabular-nums; line-height: 17px;
+  }
+  #qtray .qcr small { grid-column: 1 / -1; color: var(--muted); font: calc(11.5px * var(--text-scale)) var(--sans); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   #qtray .qb { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(300px, 42%) minmax(0, 1fr); }
   #qtray .qs.one .qb { display: block; overflow: auto; }
   #qtray .ql { overflow: auto; min-height: 0; padding-bottom: 12px; border-right: var(--border) solid var(--line); overscroll-behavior: contain; }
@@ -3588,6 +3637,8 @@
     #qtray .qb { display: block; overflow: auto; overscroll-behavior: contain; }
     #qtray .ql { border-right: 0; overflow: visible; }
     #qtray .qr { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; row-gap: 1px; padding: 9px 14px 10px 12px; min-height: 52px; }
+    #qtray .qcr { min-height: 52px; padding: 9px 14px 10px 12px; }
+    #qtray .qtabs { margin-right: 0; }
     #qtray .qr .t {
       grid-column: 1 / -1; grid-row: 2; white-space: normal; font-size: calc(14px * var(--text-scale));
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
@@ -4662,6 +4713,9 @@
     #pbar .pq.fresh:not(.on) { animation: var(--arr); }
     #pbar .pq.fresh.nudge:not(.on) { animation: var(--arr), menger-nudge 4s ease-in-out 2.4s infinite; }
     #pbar .pq.fresh .bdg { animation: menger-qcount .5s cubic-bezier(.2, .8, .2, 1) .1s; }
+    /* CHAT-17: the chats' unread on the queue's place, green; alone, the place is theirs. */
+    #pbar .pq.chats { color: var(--live); }
+    #pbar .pq .bdg.chat { background: var(--live); color: var(--bg); }
     /* A sheet's head and foot, as the mockup draws them. */
     .psheet-head { display: block; flex: none; }
     .psheet-head .grab { width: 36px; height: 4px; border-radius: var(--radius-xs); background: var(--tree-line); margin: 8px auto 2px; }
