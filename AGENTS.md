@@ -1111,6 +1111,17 @@ and `view: mockup` + `widths:` makes a whole body one.
   in use (a cargo holding its lock too), and any path with `..` — a refusal
   is the answer, not a cue for `rm`. Its tests: `scripts/tests/cleanup-gate`
   (under `cargo test`).
+- **Tests per ticket are a selection; the suite runs per batch** (CI-3,
+  owner 2026-10-18: "when performing updates I only want you running the
+  new tests … the deployment should handle running all tests prior to
+  deployment"). A ticket's gate is the tests it adds and the nearest ones
+  it touches (`cargo test -p <crate> <filter>`, the one wire test, the
+  frontend file) — never `cargo test --workspace` per ticket; its step on
+  the ticket shows that selection. Merges queue up on main, and the full
+  suite runs once against the batch, in `deploy/pipeline build`'s gate
+  (whole workspace + frontend tests) before `deploy test`. A red there is
+  the batch's: find the commit (the failing test's area, else bisect the
+  batch), file a gap that blocks its ticket, fix or revert, build again.
 - **Builds clean up after themselves** (CI-2, owner 2026-10-18: "our test
   runner automatically cleans up their builds"): the `systemd --user` timer
   `menger-sweep.timer` (hourly; `scripts/sweep/install.sh --start` installs
