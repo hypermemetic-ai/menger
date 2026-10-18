@@ -82,6 +82,11 @@ web-sys = { version = "0.3", features = [
   "Window",
   # APP-56: the keyboard's top, read off the visual viewport (src/keyboard.rs).
   "VisualViewport",
+  # APP-57: a held ticket opens the menu (src/menu/hold.rs) — the touch's
+  # point, and touchend's preventDefault, which keeps the lift from clicking.
+  "TouchEvent",
+  "TouchList",
+  "Touch",
   "HtmlSelectElement",
   # MFE-9: the WS port menger's shell stamps into the app's index.html.
   "HtmlMetaElement",

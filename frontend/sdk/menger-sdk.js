@@ -237,7 +237,8 @@
  *   frame → host  menger:link { href }                    a link clicked
  *                 (1.8): its href as written — the host classifies it
  *   frame → host  menger:ticket-menu { id, x, y, keyboard }  a ticket
- *                 chip right-clicked (1.12, MENGER-34) — or Menu /
+ *                 chip right-clicked (1.12, MENGER-34) — or held on a
+ *                 touch screen (APP-57), or Menu /
  *                 Shift+F10 on a focused one (`keyboard`, the point its
  *                 rect's bottom-left); `x`, `y` in this frame's viewport
  *   frame → host  menger:filter-everywhere { id }         a ticket chip
@@ -370,7 +371,11 @@
       sheet = new CSSStyleSheet();
       sheet.replaceSync(
         'input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="button"]):not([type="submit"]),' +
-          'textarea, select, [contenteditable]:not([contenteditable="false"]) { font-size: max(16px, 1em) !important; }'
+          'textarea, select, [contenteditable]:not([contenteditable="false"]) { font-size: max(16px, 1em) !important; }' +
+          // APP-57: a held chip opens the app's ticket menu (below) — no iOS
+          // callout, link preview or text selection on it.
+          '[data-ticket-id], m-ticket { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }' +
+          '[data-menger-held] { outline: 2px solid var(--accent); outline-offset: 2px; }'
       );
     } catch (e) {
       return;
@@ -2870,8 +2875,78 @@
     var chip = chipOf(ev.composedPath ? ev.composedPath() : [ev.target]);
     if (!chip) return;
     ev.preventDefault();
+    // APP-57: Android's own long press — the hold under way is this one.
+    if (held) {
+      held.fired = true;
+      clearTimeout(held.timer);
+      held.chip.el.setAttribute("data-menger-held", "");
+    }
     post("menger:ticket-menu", { id: chip.id, x: ev.clientX, y: ev.clientY, keyboard: false });
   });
+  // APP-57: a touch held on a chip — within 10px of where it landed for
+  // 500ms — asks for the same menu, as the app's own chips do
+  // (src/menu/hold.rs), and is not followed. The host opens a frame's menu
+  // only on a live gesture with focus in this frame (MENGER-34), and a touch
+  // still down is neither: the chip is marked held (data-menger-held) at
+  // 500ms and the menu asked for on the lift — its touchend is the gesture,
+  // and the frame takes focus first. A touch that moves, a second finger, a
+  // scroll or a lift first is no hold: a scroll scrolls and a tap opens the
+  // ticket.
+  var held = null;
+  var swallowUntil = 0;
+  function holdOff() {
+    if (held && !held.fired) {
+      clearTimeout(held.timer);
+      held = null;
+    }
+  }
+  window.addEventListener("touchstart", function (ev) {
+    if (held) clearTimeout(held.timer);
+    held = null;
+    if (annotating || ev.touches.length !== 1) return;
+    var chip = chipOf(ev.composedPath ? ev.composedPath() : [ev.target]);
+    if (!chip) return;
+    var t = ev.touches[0];
+    var h = { x: t.clientX, y: t.clientY, fired: false, timer: 0, chip: chip };
+    h.timer = setTimeout(function () {
+      if (held !== h) return;
+      h.fired = true;
+      chip.el.setAttribute("data-menger-held", "");
+    }, 500);
+    held = h;
+  }, { capture: true, passive: true });
+  window.addEventListener("touchmove", function (ev) {
+    if (!held || held.fired) return;
+    var t = ev.touches[0];
+    if (ev.touches.length !== 1 || !t || Math.hypot(t.clientX - held.x, t.clientY - held.y) > 10) holdOff();
+  }, { capture: true, passive: true });
+  function holdLift(ev) {
+    var h = held;
+    if (h) clearTimeout(h.timer);
+    held = null;
+    if (!h || !h.fired) return;
+    ev.preventDefault();
+    swallowUntil = Date.now() + 800;
+    h.chip.el.removeAttribute("data-menger-held");
+    // Android's contextmenu asked already (and is refused without a gesture):
+    // the lift asks again, with one.
+    if (ev.type === "touchend") {
+      try {
+        window.focus();
+      } catch (e) {}
+      post("menger:ticket-menu", { id: h.chip.id, x: h.x, y: h.y, keyboard: false });
+    }
+  }
+  window.addEventListener("touchend", holdLift, { capture: true, passive: false });
+  window.addEventListener("touchcancel", holdLift, { capture: true, passive: false });
+  window.addEventListener("scroll", holdOff, true);
+  window.addEventListener("click", function (ev) {
+    if (Date.now() < swallowUntil) {
+      swallowUntil = 0;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }
+  }, true);
   doc.addEventListener("keydown", function (ev) {
     if (annotating || ev.defaultPrevented || !(ev.key === "ContextMenu" || (ev.key === "F10" && ev.shiftKey))) return;
     var el = doc.activeElement;

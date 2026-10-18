@@ -1189,6 +1189,27 @@
   #tmenu .item.off { color: var(--muted); cursor: default; }
   #tmenu .item.off .why { flex-basis: 100%; white-space: normal; font-size: calc(11px * var(--text-scale)); }
   #tmenu .sub .item.chat .count { margin-left: auto; }
+  /* APP-57: a ticket held on a touch screen opens this menu
+     (src/menu/hold.rs) — so a chip shows no iOS callout or link preview,
+     and on a touch screen a long press on one selects no text (a
+     conversation, which stands for its ticket, keeps its text). At ≤ 820
+     the menu (and the tag menu) is a sheet from the bottom, above the bar
+     (on the keyboard's top while it is up, APP-56), its rows thumb-high;
+     menu::place marks it [data-sheet] instead of placing it at the point. */
+  :is([data-ticket-id], a[href^="#/ticket/"]) { -webkit-touch-callout: none; }
+  @media (pointer: coarse) {
+    :is([data-ticket-id]:not(section), a[href^="#/ticket/"]) { -webkit-user-select: none; user-select: none; }
+  }
+  @media (max-width: 820px) {
+    :is(#tmenu, #tagmenu)[data-sheet] {
+      left: 0; right: 0; top: auto; bottom: var(--pbar-h, 0px); min-width: 0; max-width: none;
+      max-height: calc(78dvh - var(--pbar-h, 0px)); overscroll-behavior: contain;
+      padding: 6px 8px 10px; border-width: var(--border) 0 0; border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+      font-size: calc(14px * var(--text-scale)); animation: menger-sheet-up .24s cubic-bezier(.2, .8, .2, 1) both;
+    }
+    :is(#tmenu, #tagmenu)[data-sheet] :is(.item, .h) { padding: 10px 12px; }
+    :is(#tmenu, #tagmenu)[data-sheet] .sub .item { padding-left: 22px; }
+  }
   /* ACT-4: Delete…'s confirmation — every ticket, and what moves. */
   #delete { width: 34rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .6rem; }
   #delete h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0; }
