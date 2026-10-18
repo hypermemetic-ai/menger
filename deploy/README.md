@@ -76,7 +76,9 @@ deploy/pipeline remote-secret test|prod   # IDENTITY-45: the WorkOS API key on t
 1. **Build** (`build [REV]`, default `main`). A commit, never a working
    tree: `../menger-build` — a sibling checkout, so menger's relative plexus
    dependencies resolve — is moved to the commit and cleaned, keeping only
-   build outputs.
+   build outputs. A low disk refuses it before anything runs (CI-2:
+   `scripts/disk-check.sh` — under 50 GB free or 90% used, `DISK_MIN_FREE_GB`
+   / `DISK_MAX_USED_PCT`); `status` says the disk on its last line.
 2. **Gate.** `cargo test --workspace` and the frontend's native tests at that
    commit. Red: no release.
 3. **Release.** `cargo build --release` (menger, menger-diagrams), `trunk
@@ -1057,6 +1059,10 @@ record names it; its delivery then stops.
   (refused: `outbox/refused/`); the last sent per env: `…/menger-deploy/sent/`
 - logs: `deploy/pipeline logs prod` (`journalctl --user -u menger@prod -u menger-diagrams@prod`)
 - prod backups: `~/.local/share/menger/backups/`
+- the build-output sweep (CI-2): `menger-sweep.timer`, hourly, from
+  `~/.local/share/menger-sweep` (`scripts/sweep/install.sh --start`); what it
+  removed in `~/.local/state/menger/cleanup-gate.log`, the run in
+  `journalctl --user -u menger-sweep`
 
 ## Rules
 

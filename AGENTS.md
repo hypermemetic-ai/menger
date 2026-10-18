@@ -1101,11 +1101,24 @@ and `view: mockup` + `widths:` makes a whole body one.
   `scripts/cleanup-gate.sh`, never a hand-written `rm -r`** (RUN-21, owner
   2026-10-16: "not hit spooky rms"): `scripts/cleanup-gate.sh NAME` says
   what the gate NAME left — its worktree and branch (`git worktree remove`,
-  `git branch -d`), `~/.cache/cargo-target/NAME`, `/tmp/menger-NAME.db*`,
-  its session scratch — and `--yes` removes it and logs it to
-  `~/.local/state/menger/cleanup-gate.log`; `--path P` takes one path by
-  its shape, `--list` surveys every leftover and removes nothing. It
+  `git branch -d`), the worktree's cargo build-dirs
+  (`~/.cache/cargo-build/XX/HASH`, CI-2), `~/.cache/cargo-target/NAME`,
+  `/tmp/menger-NAME.db*`, its session scratch — and `--yes` removes it and
+  logs it to `~/.local/state/menger/cleanup-gate.log`; `--path P` takes one
+  path by its shape, `--list` surveys every leftover and removes nothing. It
   refuses `/`, `$HOME`, a main checkout, a shared target (`menger`, a
   repository's name), `~/.local/share/menger`, a dirty worktree, anything
-  in use, and any path with `..` — a refusal is the answer, not a cue for
-  `rm`. Its tests: `scripts/tests/cleanup-gate` (under `cargo test`).
+  in use (a cargo holding its lock too), and any path with `..` — a refusal
+  is the answer, not a cue for `rm`. Its tests: `scripts/tests/cleanup-gate`
+  (under `cargo test`).
+- **Builds clean up after themselves** (CI-2, owner 2026-10-18: "our test
+  runner automatically cleans up their builds"): the `systemd --user` timer
+  `menger-sweep.timer` (hourly; `scripts/sweep/install.sh --start` installs
+  it from main) runs `cleanup-gate.sh --sweep --yes` — every build-dir, every
+  non-shared cargo target and a shared target's stale `deps` / `incremental`
+  / `build` / `.fingerprint`, each when nothing in it changed for 6 h (1 h at
+  75% used, 15 min at 90%) and nothing holds it — then `scripts/disk-check.sh
+  --alert`, which files a gap under CI-1 and queues it `now` when `/var/home`
+  is still at 90% (once, until that ticket is done). `deploy/pipeline build`
+  refuses up front under 50 GB free or at 90% used; `status` says the disk.
+  Before a long gate of your own, `scripts/disk-check.sh` (exit 3: low).

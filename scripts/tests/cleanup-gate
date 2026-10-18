@@ -31,7 +31,18 @@ cg() { local name=$1 want=$2; shift 2
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
   GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-unset CLEANUP_GATE_LOG
+unset CLEANUP_GATE_LOG CLEANUP_GATE_IDLE_HOURS
+# CI-2: the disk's use is said, never measured, and cargo is a stand-in that
+# answers `metadata` from a map (manifest<TAB>build_directory) — no real cargo runs
+export CLEANUP_GATE_USED_PCT=30 CLEANUP_GATE_CARGO=$T/bin/cargo STUB_CARGO_MAP=$T/cargo-map
+mkdir -p "$T/bin"; : >"$STUB_CARGO_MAP"
+cat >"$T/bin/cargo" <<'STUB'
+#!/usr/bin/env bash
+m=${*: -1}
+while IFS=$'\t' read -r k v; do [[ $k == "$m" ]] && { printf '{"build_directory":"%s"}\n' "$v"; exit 0; }; done <"$STUB_CARGO_MAP"
+exit 101
+STUB
+chmod +x "$T/bin/cargo"
 
 # ── the throwaway machine ───────────────────────────────────────────────────
 H=$T/home WS=$T/home/dev/controlflow/hypermemetic CT=$T/home/.cache/cargo-target
@@ -163,6 +174,87 @@ cg "let go, it goes" 0 --yes --path "$SCR/sess2"; gone "let go" "$SCR/sess2"
 out=$(cd "$SCR/sess3" && CLEANUP_GATE_ROOT=$T "$CG" --yes --path "$SCR/sess3" 2>&1); [[ $? == 2 ]] && ok || bad "inside: $out"
 has "the caller's own directory" "$out" "you are inside it"; there "inside" "$SCR/sess3/f"
 hasnt "no hand-written rm -r in this test" "$(grep -v '^#' "$SELF" | grep -v hasnt)" "rm -r"
+
+# ── CI-2: build-dirs, and the sweep ────────────────────────────────────────
+CB=$H/.cache/cargo-build
+aged() { local when=$1; shift; find "$@" -depth -exec touch -h -d "$when" {} +; }   # PATH… modified WHEN, all through
+bd() { mkdir -p "$CB/$1/debug/deps" && echo o >"$CB/$1/debug/deps/x.rlib" && : >"$CB/$1/debug/.cargo-build-lock"; }
+bd ab/1111111111111111; bd cd/2222222222222222; bd ce/3333333333333333; bd cf/4444444444444444; bd d0/5555555555555555
+bd ef/6666666666666666; bd f0/7777777777777777
+mkdir -p "$CB/zz/not-a-hash" "$CT/menger/debug/incremental/m-1" "$CT/menger/debug/deps" \
+  "$CT/menger/wasm32-unknown-unknown/release/deps" "$CT/old-gate/debug" "$CT/new-gate/debug"
+echo o >"$CT/menger/debug/deps/a.rlib"; echo o >"$CT/menger/debug/incremental/m-1/q"
+echo o >"$CT/menger/wasm32-unknown-unknown/release/deps/b.rlib"; echo bin >"$CT/menger/debug/menger"
+echo o >"$CT/old-gate/debug/x"; echo o >"$CT/new-gate/debug/x"
+aged '8 hours ago' "$CB"/ab "$CB"/d0 "$CT/menger/debug/deps" "$CT/menger/debug/incremental" \
+  "$CT/menger/wasm32-unknown-unknown/release/deps" "$CT/old-gate"
+aged '2 hours ago' "$CB/ce"
+aged '30 minutes ago' "$CB/cf"
+# a worktree with two workspaces (its root and frontend/), each with its build-dir
+git -C "$M" worktree add -q -b gate-c "$WS/.gate-c"
+mkdir -p "$WS/.gate-c/frontend"; : >"$WS/.gate-c/Cargo.toml"; : >"$WS/.gate-c/frontend/Cargo.toml"
+printf '%s\n' Cargo.toml >"$WS/.gate-c/.git-keep"; git -C "$WS/.gate-c" add -A; git -C "$WS/.gate-c" commit -qm c
+git -C "$M" merge -q --ff-only gate-c
+printf '%s\t%s\n' "$WS/.gate-c/Cargo.toml" "$CB/ef/6666666666666666" "$WS/.gate-c/frontend/Cargo.toml" "$CB/f0/7777777777777777" \
+  >>"$STUB_CARGO_MAP"
+
+cg "--sweep takes no names" 1 --sweep gate-a
+cg "--idle-hours must be a number" 1 --sweep --idle-hours soon
+cg "sweep, dry run" 0 --sweep
+has "sweep: the use and threshold" "$out" "30% used — build output idle 6h goes"
+has "sweep: an idle build-dir" "$out" "would remove  cargo-build $CB/ab/1111111111111111"
+has "sweep: a fresh build-dir kept" "$out" "kept     cargo-build $CB/cd/2222222222222222 — modified within 6h"
+has "sweep: 2 h idle is not 6" "$out" "kept     cargo-build $CB/ce/3333333333333333"
+has "sweep: a shared target's stale deps" "$out" "would remove  target-part $CT/menger/debug/deps"
+has "sweep: … its stale incremental" "$out" "target-part $CT/menger/debug/incremental"
+has "sweep: … under a triple" "$out" "target-part $CT/menger/wasm32-unknown-unknown/release/deps"
+hasnt "sweep: never a shared target's final artifacts" "$out" "$CT/menger/debug/menger"
+hasnt "sweep: never a shared target whole" "$out" "  $CT/menger "
+has "sweep: an idle non-shared target" "$out" "would remove  target     $CT/old-gate"
+has "sweep: a fresh one kept" "$out" "kept     target      $CT/new-gate"
+hasnt "sweep: no worktrees" "$out" "worktree"
+hasnt "sweep: no sessions" "$out" "session"
+hasnt "sweep: not a hash, not a candidate" "$out" "not-a-hash"
+there "the dry sweep keeps" "$CB/ab/1111111111111111"; there "the dry sweep keeps" "$CT/old-gate"
+
+sleep 60 <"$CB/d0/5555555555555555/debug/deps/x.rlib" & held=$!
+sleep 0.3
+cg "sweep" 0 --yes --sweep
+has "sweep: held, kept" "$out" "kept     cargo-build $CB/d0/5555555555555555 — in use by pid $held"
+has "sweep: freed" "$out" "freed"
+gone "swept" "$CB/ab/1111111111111111"; gone "its hash's parent, empty, too" "$CB/ab"
+gone "swept" "$CT/menger/debug/deps"; gone "swept" "$CT/menger/debug/incremental"; gone "swept" "$CT/old-gate"
+gone "swept" "$CT/menger/wasm32-unknown-unknown/release/deps"
+there "kept: the held one" "$CB/d0/5555555555555555"
+there "kept: fresh" "$CB/cd/2222222222222222"; there "kept: 2 h" "$CB/ce/3333333333333333"; there "kept" "$CT/new-gate"
+there "kept: the shared target's binary" "$CT/menger/debug/menger"; there "kept: the shared target" "$CT/menger/debug/obj"
+there "kept: a worktree's fresh build-dir" "$CB/ef/6666666666666666"
+has "sweep: logged" "$(<"$LOG")" "removed cargo-build $CB/ab/1111111111111111"
+has "sweep: its summary logged" "$(<"$LOG")" "sweep 30% used, idle 6h: freed"
+kill "$held" 2>/dev/null; wait "$held" 2>/dev/null
+
+CLEANUP_GATE_USED_PCT=80 cg "sweep at 80%: idle 1 h" 0 --yes --sweep
+has "80%: the threshold drops" "$out" "80% used — build output idle 1h goes"
+gone "80%: 2 h idle goes" "$CB/ce/3333333333333333"; there "80%: 30 min stays" "$CB/cf/4444444444444444"
+CLEANUP_GATE_USED_PCT=95 cg "sweep at 95%: idle 15 min" 0 --yes --sweep
+has "95%: the threshold drops again" "$out" "95% used — build output idle 15m goes"
+gone "95%: 30 min idle goes" "$CB/cf/4444444444444444"; there "95%: fresh stays" "$CB/cd/2222222222222222"
+cg "--idle-hours 0 takes what is idle at all" 0 --sweep --idle-hours 0
+has "--idle-hours 0" "$out" "idle 0m goes"
+
+# a worktree takes its build-dirs with it
+cg "gate-c, dry run" 0 gate-c
+has "gate-c: its build-dir" "$out" "would remove  cargo-build $CB/ef/6666666666666666"
+has "gate-c: its frontend's" "$out" "cargo-build $CB/f0/7777777777777777"
+cg "gate-c" 0 --yes gate-c
+gone "gate-c" "$WS/.gate-c"; gone "gate-c's build-dir" "$CB/ef/6666666666666666"; gone "gate-c's frontend's" "$CB/f0/7777777777777777"
+has "gate-c: logged" "$(<"$LOG")" "removed cargo-build $CB/ef/6666666666666666"
+cg "a build-dir by path" 0 --yes --path "$CB/cd/2222222222222222"; gone "by path" "$CB/cd/2222222222222222"
+cg "a shared target's part by path" 0 --yes --path "$CT/menger/debug/build" ; has "absent is fine" "$out" "absent"
+refused "the build-dir root" "a root" --path "$CB"
+refused "a hash's parent" "not a leftover shape" --path "$CB/zz"
+refused "not a hash" "not a leftover shape" --path "$CB/zz/not-a-hash"
+refused "a shared target's final artifact" "not a leftover shape" --path "$CT/menger/debug/menger"
 
 # ── done: the root goes through the script itself (a session's scratch) ───
 printf 'cleanup-gate: %d passed, %d failed\n' "$pass" "$fail"

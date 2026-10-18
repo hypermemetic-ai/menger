@@ -8,7 +8,9 @@
 #                                           <env>.local.env and <env>.smoke.env
 #                                           are made once, from the old file, and
 #                                           never rewritten)
-#   deploy/pipeline build [REV]             gate + release (default REV: main)
+#   deploy/pipeline build [REV]             gate + release (default REV: main); refused up
+#                                           front on a low disk (CI-2: scripts/disk-check.sh —
+#                                           under 50 GB free or 90% used)
 #   deploy/pipeline deploy test [RELEASE]   prod data → test; switch; restart; smoke
 #   deploy/pipeline sync test               prod data → test, same release; restart; smoke
 #   deploy/pipeline promote [RELEASE] [--adopt]
@@ -17,7 +19,8 @@
 #   deploy/pipeline rollback ENV [--restore BACKUP]
 #   deploy/pipeline smoke ENV               the smoke checks, on their own
 #   deploy/pipeline status                  what each env runs, and how it is;
-#                                           the last deployment record of each
+#                                           the last deployment record of each;
+#                                           how full the disk is (CI-2)
 #   deploy/pipeline releases                every release: tested? where?
 #   deploy/pipeline logs ENV [journalctl args…]
 #   deploy/pipeline backfill                deployments.log → menger's deployments
@@ -377,7 +380,10 @@ cmd_install() {
 # ── build: commit → gate → release ──────────────────────────────────────────
 cmd_build() {
   need cargo; need trunk; need npm
-  local rev=${1:-main} sha short id stage
+  local rev=${1:-main} sha short id stage disk
+  # CI-2: a low disk refuses up front, not half-way through the gate
+  disk=$("$REPO/scripts/disk-check.sh" --path "$HOME") || die "refused — $disk"
+  say "$disk"
   sha=$(git -C "$REPO" rev-parse --verify "$rev^{commit}") || die "no commit '$rev'"
   short=${sha:0:7}
   step "build $short — $(git -C "$REPO" log -1 --format=%s "$sha")"
@@ -1209,6 +1215,9 @@ cmd_status() {
     record_status "$env"
   done
   edge_status
+  # CI-2: how full the disk is; a low one is said, the build would refuse it
+  local disk; disk=$("$REPO/scripts/disk-check.sh" --path "$HOME" 2>&1) || disk="$disk — deploy/pipeline build refuses until there is room"
+  printf '%s\n' "$disk"
 }
 # ACCESS-47: tickets.health on PORT — its ticket count, or why not (a gate's
 # refusal, the key not granted there); signed in as the pipeline's key where

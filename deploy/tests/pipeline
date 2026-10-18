@@ -189,6 +189,19 @@ out=$(<"$SCRATCH/out")
 has "status: prod's last record" "$out" "record    rolled_back $S0 ($R0) at "
 has "status: test's last record" "$out" "record    failed $S2 ($R2) at "
 
+# ── CI-2: the disk — status says it, build refuses a low one up front ──────
+has "status: the disk" "$out" "disk: "
+DISK_CHECK_AVAIL_GB=3 run status
+has "status: a low disk is said" "$(<"$SCRATCH/out")" "low (under 50 GB free)"
+has "status: … and that build refuses" "$(<"$SCRATCH/out")" "deploy/pipeline build refuses until there is room"
+mkdir -p "$SCRATCH/bin-build"
+for t in cargo trunk npm; do printf '#!/usr/bin/env bash\necho "%s ran" >>"%s"; exit 99\n' "$t" "$SCRATCH/built" >"$SCRATCH/bin-build/$t"; chmod +x "$SCRATCH/bin-build/$t"; done
+PATH=$SCRATCH/bin-build:$PATH DISK_CHECK_USED_PCT=93 DISK_CHECK_AVAIL_GB=120 run build
+same "build, a full disk: refused" "$code" 1
+has "build, a full disk: why" "$err" "refused — disk: "
+has "build, a full disk: the percent" "$err" "90% used or more"
+[[ ! -e $SCRATCH/built ]] && ok || bad "build on a full disk ran nothing: $(cat "$SCRATCH/built")"
+
 # ── backfill: the log replayed; a run's own line is the record it sent ─────
 legacy=$(printf '2026-09-30T10:00:00Z\ttest\tdeploy\t%s\tok\n2026-09-30T10:01:00Z\tprod\tpromote\t%s\tok\n' "$R0" "$R0")
 { echo "$legacy"; cat "$D/deployments.log"; } >"$SCRATCH/log" && cp "$SCRATCH/log" "$D/deployments.log"
