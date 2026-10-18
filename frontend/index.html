@@ -4906,6 +4906,11 @@
   /* APP-56: the full-screen chat (and #/chats) is the visible area while
      the keyboard is up, its composer on the keyboard's top. */
   html[data-kb] #chatfull { top: var(--kb-top); bottom: auto; height: var(--kb-h); }
+  /* APP-58: the keyboard slides over the view, not the view up — the
+     pinned views follow the visual viewport (src/keyboard.rs reads it each
+     frame while it moves and holds the document still); a list scrolled to
+     its end does not hand the drag on to the page. */
+  html[data-kb] :is(#chatfull, #tdock-sheet) .pmsgs { overscroll-behavior: contain; }
   @media (min-width: 641px) and (max-width: 820px) {
     :root { --pbar-h: calc(58px + env(safe-area-inset-bottom, 0px)); }
     #pbar { padding: 0 max(4px, calc(50% - 300px)) env(safe-area-inset-bottom, 0px); }

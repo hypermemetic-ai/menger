@@ -15,6 +15,21 @@
 //! sheet placed above the bar sits on the keyboard instead — and fits the
 //! full-screen chat to the visible area. Without the keyboard all of it
 //! comes off and the layout is as before.
+//!
+//! APP-58: and the keyboard slides *over* the view. iOS pans the visual
+//! viewport down to bring the field into view (and, where the document
+//! scrolls, may scroll it too), so anything left at the layout viewport's
+//! top slides up and away with the pan. While a field inside a pinned view
+//! — the full-screen chat, or a sheet above the bar — is typed in:
+//!
+//! - the views are pinned to the visual viewport (`--kb-top`, `--kb-h`),
+//!   read again every frame while it moves ([`follow`]), so the header holds
+//!   still at the visible area's top as the pan runs, not after it;
+//! - the document stays where it was ([`hold_scroll`]): a scroll iOS makes
+//!   to centre the field is put back, and the page under the view is where
+//!   it was when the keyboard goes;
+//! - a drag outside anything that scrolls moves nothing ([`guard_drag`]),
+//!   so the pinned view cannot be dragged off the visible area.
 
 use std::cell::Cell;
 
@@ -90,20 +105,67 @@ fn typed_input(ty: &str) -> bool {
     matches!(ty, "" | "text" | "search" | "email" | "url" | "tel" | "password" | "number")
 }
 
+/// The views pinned to the visual viewport while their field is typed in
+/// (APP-58): the full-screen chat and every sheet placed above the bar.
+const PINNED: &str = "#chatfull, #tdock-sheet, #lens-top, #nav, #palette, #qtray";
+
+/// Frames to keep reading the viewport after something moved it (about
+/// half a second: the keyboard's and the pan's animations).
+const FOLLOW_FRAMES: u32 = 30;
+
+/// How many more frames to follow: a change starts the count again, a
+/// still frame takes one off.
+pub(crate) fn frames_left(left: u32, changed: bool) -> u32 {
+    if changed { left.max(FOLLOW_FRAMES) } else { left.saturating_sub(1) }
+}
+
+/// What to do with the document's scroll as the keyboard comes and goes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Hold {
+    /// Nothing to do.
+    Keep,
+    /// The keyboard came up over a pinned view: remember where the page is.
+    Lock(f64),
+    /// It went: put the page back where it was.
+    Restore(f64),
+}
+
+/// `was` / `now`: a keyboard over a pinned view, before and after; `y` the
+/// document's scroll now, `locked` the one remembered.
+pub(crate) fn hold(was: bool, now: bool, y: f64, locked: Option<f64>) -> Hold {
+    match (was, now, locked) {
+        (false, true, _) => Hold::Lock(y),
+        (true, false, Some(at)) | (true, true, Some(at)) if (y - at).abs() > 0.5 => Hold::Restore(at),
+        _ => Hold::Keep,
+    }
+}
+
 thread_local! {
     static TALLEST: Cell<(f64, f64)> = const { Cell::new((0.0, 0.0)) };
     static SHOWN: Cell<Option<Keyboard>> = const { Cell::new(None) };
+    /// APP-58: the document's scroll when the keyboard came up over a
+    /// pinned view; `None` while no such keyboard is up.
+    static LOCKED: Cell<Option<f64>> = const { Cell::new(None) };
+    /// Frames left to follow, and the frame callback.
+    static FOLLOW: Cell<u32> = const { Cell::new(0) };
+    static FRAME: std::cell::RefCell<Option<js_sys::Function>> = const { std::cell::RefCell::new(None) };
 }
 
 fn num(r: Result<JsValue, JsValue>) -> f64 {
     r.ok().and_then(|v| v.as_f64()).unwrap_or(0.0)
 }
 
-/// Reads the viewport now and stamps (or clears) `<html>`.
-fn apply() {
+/// Whether the focused field is inside a view pinned to the keyboard.
+fn in_pinned(doc: &web_sys::Document) -> bool {
+    doc.active_element().and_then(|el| el.closest(PINNED).ok().flatten()).is_some()
+}
+
+/// Reads the viewport now and stamps (or clears) `<html>`; whether it
+/// changed anything.
+fn apply() -> bool {
     let w = dom::window();
-    let Some(vv) = w.visual_viewport() else { return };
-    let Some(doc) = w.document() else { return };
+    let Some(vv) = w.visual_viewport() else { return false };
+    let Some(doc) = w.document() else { return false };
     let (inner_w, inner_h) = (num(w.inner_width()), num(w.inner_height()));
     // The tallest height is per width: a rotation starts it again.
     let tallest = TALLEST.with(|c| {
@@ -114,11 +176,25 @@ fn apply() {
     });
     let editing = doc.active_element().is_some_and(|el| takes_typing(&el));
     let kb = keyboard(Viewport { inner_h, vv_h: vv.height(), vv_top: vv.offset_top(), scale: vv.scale(), tallest, editing });
+    // APP-58: a keyboard over a pinned view holds the document still.
+    let pinned = kb.is_some() && in_pinned(&doc);
+    let locked = LOCKED.with(Cell::get);
+    match hold(locked.is_some(), pinned, w.scroll_y().unwrap_or(0.0), locked) {
+        Hold::Lock(y) => LOCKED.with(|c| c.set(Some(y))),
+        Hold::Restore(y) => {
+            w.scroll_to_with_x_and_y(w.scroll_x().unwrap_or(0.0), y);
+            if !pinned {
+                LOCKED.with(|c| c.set(None));
+            }
+        }
+        Hold::Keep if !pinned => LOCKED.with(|c| c.set(None)),
+        Hold::Keep => {}
+    }
     if SHOWN.with(Cell::get) == kb {
-        return;
+        return false;
     }
     SHOWN.with(|c| c.set(kb));
-    let Some(html) = doc.document_element().and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) else { return };
+    let Some(html) = doc.document_element().and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) else { return true };
     // A chat's messages read at their end stay there as the keyboard moves
     // the composer: the newest line sits right above it.
     let held = at_end(&doc);
@@ -140,6 +216,86 @@ fn apply() {
     for el in held {
         el.set_scroll_top(el.scroll_height());
     }
+    true
+}
+
+/// APP-58: something moved the viewport (focus, the keyboard, a pan):
+/// read it every frame until it has been still for [`FOLLOW_FRAMES`], so a
+/// pinned view tracks iOS's pan as it runs. It places; it animates nothing.
+fn follow() {
+    let idle = FOLLOW.with(|c| {
+        let idle = c.get() == 0;
+        c.set(c.get().max(FOLLOW_FRAMES));
+        idle
+    });
+    if idle {
+        next_frame();
+    }
+}
+
+fn next_frame() {
+    FRAME.with(|f| {
+        if let Some(cb) = f.borrow().as_ref() {
+            let _ = dom::window().request_animation_frame(cb);
+        }
+    });
+}
+
+fn frame() {
+    let changed = apply();
+    let left = FOLLOW.with(|c| {
+        let n = frames_left(c.get(), changed);
+        c.set(n);
+        n
+    });
+    if left > 0 {
+        next_frame();
+    }
+}
+
+/// APP-58: a scroll of the document while the keyboard is up over a pinned
+/// view is put back — iOS scrolls it to centre the field, which the pinned
+/// view already shows.
+fn hold_scroll() {
+    if LOCKED.with(Cell::get).is_some() {
+        apply();
+        follow();
+    }
+}
+
+/// Whether `el` or an ancestor below the pinned view scrolls vertically
+/// (and has somewhere to go): a drag there is the list's, not the page's.
+fn scrolls(mut el: Option<web_sys::Element>) -> bool {
+    let w = dom::window();
+    while let Some(e) = el {
+        if e.matches(PINNED).unwrap_or(false) {
+            return false;
+        }
+        if e.scroll_height() > e.client_height() + 1 {
+            if e.tag_name().eq_ignore_ascii_case("textarea") {
+                return true;
+            }
+            let oy = w.get_computed_style(&e).ok().flatten().and_then(|s| s.get_property_value("overflow-y").ok()).unwrap_or_default();
+            if oy == "auto" || oy == "scroll" {
+                return true;
+            }
+        }
+        el = e.parent_element();
+    }
+    false
+}
+
+/// APP-58: while the keyboard is up over a pinned view, a drag on what does
+/// not scroll (the header, the composer's edge) would pan the visual
+/// viewport and take the view with it: it moves nothing.
+fn guard_drag(ev: web_sys::Event) {
+    if LOCKED.with(Cell::get).is_none() {
+        return;
+    }
+    let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+    if !scrolls(target) {
+        ev.prevent_default();
+    }
 }
 
 /// The chats' message lists scrolled to (within a line of) their end.
@@ -156,7 +312,13 @@ fn at_end(doc: &web_sys::Document) -> Vec<web_sys::Element> {
 pub(crate) fn install() {
     let w = dom::window();
     let Some(vv) = w.visual_viewport() else { return };
-    let cb = Closure::<dyn FnMut()>::new(apply);
+    let tick = Closure::<dyn FnMut()>::new(frame);
+    FRAME.with(|f| *f.borrow_mut() = Some(tick.as_ref().unchecked_ref::<js_sys::Function>().clone()));
+    tick.forget(); // lives as long as the app
+    let cb = Closure::<dyn FnMut()>::new(|| {
+        apply();
+        follow();
+    });
     let f: &js_sys::Function = cb.as_ref().unchecked_ref();
     let _ = vv.add_event_listener_with_callback("resize", f);
     let _ = vv.add_event_listener_with_callback("scroll", f);
@@ -167,12 +329,28 @@ pub(crate) fn install() {
     cb.forget(); // lives as long as the app
     let out = Closure::<dyn FnMut()>::new(|| {
         let _ = dom::window().set_timeout_with_callback_and_timeout_and_arguments_0(
-            Closure::once_into_js(apply).unchecked_ref(),
+            Closure::once_into_js(|| {
+                apply();
+                follow();
+            })
+            .unchecked_ref(),
             0,
         );
     });
     let _ = w.add_event_listener_with_callback("focusout", out.as_ref().unchecked_ref());
     out.forget();
+    // APP-58: the document held still, and a drag on what does not scroll
+    // held too, while the keyboard is up over a pinned view.
+    let held = Closure::<dyn FnMut()>::new(hold_scroll);
+    let _ = w.add_event_listener_with_callback("scroll", held.as_ref().unchecked_ref());
+    held.forget();
+    let drag = Closure::<dyn FnMut(web_sys::Event)>::new(guard_drag);
+    let opts = web_sys::AddEventListenerOptions::new();
+    opts.set_passive(false);
+    if let Some(doc) = w.document() {
+        let _ = doc.add_event_listener_with_callback_and_add_event_listener_options("touchmove", drag.as_ref().unchecked_ref(), &opts);
+    }
+    drag.forget();
     apply();
 }
 
@@ -215,6 +393,34 @@ mod tests {
     fn a_zoomed_page_is_left_alone() {
         let v = Viewport { scale: 2.0, ..phone(332.0, 100.0, true) };
         assert_eq!(keyboard(v), None);
+    }
+
+    #[test]
+    fn following_lasts_while_the_viewport_moves_then_stops() {
+        // A move starts the count; still frames run it down to nothing.
+        let mut left = frames_left(0, true);
+        assert_eq!(left, FOLLOW_FRAMES);
+        for _ in 0..FOLLOW_FRAMES - 1 {
+            left = frames_left(left, false);
+        }
+        assert_eq!(left, 1);
+        // Another move mid-way starts it again.
+        assert_eq!(frames_left(left, true), FOLLOW_FRAMES);
+        assert_eq!(frames_left(frames_left(left, false), false), 0);
+    }
+
+    #[test]
+    fn the_document_is_held_while_the_keyboard_is_over_a_pinned_view() {
+        // The keyboard comes up: where the page is, remembered.
+        assert_eq!(hold(false, true, 420.0, None), Hold::Lock(420.0));
+        // iOS scrolls the document to centre the field: put back.
+        assert_eq!(hold(true, true, 560.0, Some(420.0)), Hold::Restore(420.0));
+        assert_eq!(hold(true, true, 420.0, Some(420.0)), Hold::Keep);
+        // The keyboard goes: the page is where it was.
+        assert_eq!(hold(true, false, 300.0, Some(420.0)), Hold::Restore(420.0));
+        assert_eq!(hold(true, false, 420.0, Some(420.0)), Hold::Keep);
+        // No keyboard over a pinned view (a field in the page): left alone.
+        assert_eq!(hold(false, false, 560.0, None), Hold::Keep);
     }
 
     #[test]
