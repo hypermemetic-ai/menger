@@ -30,6 +30,39 @@ pub const ANCHOR_FIELD_MAX: usize = 4_096;
 /// The longest author a comment keeps, in bytes.
 pub const AUTHOR_MAX: usize = 256;
 
+/// COMMENT-9: how many failure reports the server keeps (the newest).
+pub const FAILURES_KEPT: usize = 200;
+
+/// COMMENT-9: a comment the app could not keep, as it reported it — who,
+/// when, where, what it said and why it was not kept — so "can you see the
+/// failed submission?" has an answer. Kept in memory (the newest
+/// [`FAILURES_KEPT`]; a restart forgets them) and logged; read with
+/// `comments failures`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Failure {
+    /// 1, 2, … in the order reports arrived since the server started.
+    pub seq: u64,
+    /// When the server heard the report, unix seconds.
+    pub at: i64,
+    /// When the app failed to keep it, unix seconds, as the app says (a
+    /// report waits in the browser while the socket is down).
+    pub failed_at: i64,
+    /// The reporter's principal.
+    pub by: String,
+    /// The reporter's name, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Where the comment was being left.
+    pub anchor: Anchor,
+    /// What it said (cut to [`BODY_MAX`]).
+    pub body: String,
+    /// Why it was not kept, in the app's words.
+    pub reason: String,
+    /// The browser, as it names itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+}
+
 /// Where a comment was left: the app page, the place on it, what was there
 /// in words, and the ticket the element belongs to (when it belongs to one).
 ///
@@ -203,6 +236,10 @@ pub enum CommentsEvent {
     /// ACCESS-12 (`watch`): the watch ended — its caller, verified again
     /// when the grants moved or its sign-in ended, was refused. Last.
     WatchClosed { reason: crate::types::WatchEnd, message: String },
+    /// COMMENT-9: `report`'s answer — the failure as the server keeps it.
+    Reported { failure: Failure },
+    /// COMMENT-9: one of `failures`' rows, newest first.
+    Failure { failure: Failure },
     /// A refusal, naming the problem; nothing was kept or changed.
     Error { message: String },
 }
@@ -225,7 +262,12 @@ impl CommentsEvent {
             CommentsEvent::Added { comment } | CommentsEvent::Resolved { comment } | CommentsEvent::Reopened { comment } => {
                 Some(comment)
             }
-            CommentsEvent::Page { .. } | CommentsEvent::Lagged { .. } | CommentsEvent::WatchClosed { .. } | CommentsEvent::Error { .. } => None,
+            CommentsEvent::Page { .. }
+            | CommentsEvent::Lagged { .. }
+            | CommentsEvent::WatchClosed { .. }
+            | CommentsEvent::Reported { .. }
+            | CommentsEvent::Failure { .. }
+            | CommentsEvent::Error { .. } => None,
         }
     }
 }

@@ -24,6 +24,10 @@
 //! src/comments.rs's, which `comments.watch` keeps: a comment sent from any
 //! page, or by an agent, shows on every open page.
 //!
+//! **Nothing is lost** (COMMENT-9, src/drafts.rs): the draft is kept in
+//! the browser until the server answers, and comes back when the page
+//! does; a comment not kept says why under the box, with a Retry.
+//!
 //! **A change request** (APP-23: the tray's Request changes,
 //! `tickets.request_changes`) is a comment here like any other, with intent
 //! `changes`: its row is marked "changes requested" ([`mark`]).
@@ -37,7 +41,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::bindings::{self, Context};
-use crate::{comments, comments_page, dom, fmt_relative, fmt_unix, md, now_unix};
+use crate::{comments, comments_page, dom, drafts, fmt_relative, fmt_unix, md, now_unix};
 
 /// The anchor path of a comment on the ticket as a whole.
 pub(crate) const PATH: &str = "conversation";
@@ -131,9 +135,28 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
             first_seen.set_value(Some(r.last().map_or(0, |c| c.id.get())));
         }
     });
-    let body = RwSignal::new(String::new());
+    // COMMENT-9: the draft kept here, back when the page is.
+    let kept = drafts::key(&anchor(&ticket));
+    let body = RwSignal::new(drafts::load(&kept).unwrap_or_default());
     let sending = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
+    let landed = drafts::landed_signal();
+    {
+        // Every change kept — typed, an image's link, sent and emptied.
+        let kept = kept.clone();
+        Effect::new(move |_| body.with(|b| drafts::save(&kept, b)));
+    }
+    {
+        let kept = kept.clone();
+        Effect::new(move |_| {
+            if let Some((k, b)) = landed.get() {
+                if k == kept && body.with_untracked(|t| t.trim() == b.trim()) {
+                    body.set(String::new());
+                    error.set(None);
+                }
+            }
+        });
+    }
     let me = ticket.clone();
     let send = move || {
         let text = body.get_untracked();
@@ -143,7 +166,7 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
         sending.set(true);
         let a = anchor(&me);
         spawn_local(async move {
-            let r = comments::add(a, text).await;
+            let r = drafts::send(a, text).await;
             sending.try_set(false);
             match r {
                 Ok(_) => {
@@ -157,6 +180,7 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
         });
     };
     let send_key = send.clone();
+    let retry = send.clone();
     let area = NodeRef::<leptos::html::Textarea>::new();
     crate::grow::follow(area, move || body.track());
     // COMMENT-5: images pasted, dropped or picked — for this ticket.
@@ -206,7 +230,13 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                 ></textarea>
                 <div class="cnewacts">
                     <crate::media::Attachments a=attach />
-                    {move || error.get().map(|e| view! { <span class="cerr" role="alert">{e}</span> })}
+                    {move || error.get().map(|e| {
+                        let retry = retry.clone();
+                        view! {
+                            <span class="cerr" role="alert">{drafts::words(&e)}</span>
+                            <button class="cretry" disabled=move || sending.get() on:click=move |_| retry()>"Retry"</button>
+                        }
+                    })}
                     <button
                         class="csend"
                         disabled=move || sending.get() || attach.busy() || body.with(|b| b.trim().is_empty())

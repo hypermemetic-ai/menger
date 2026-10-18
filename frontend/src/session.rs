@@ -934,6 +934,8 @@ async fn session(
     // COMMENT-3: the comments — `comments.watch`, then the list — only once
     // a view has asked (annotation mode, #/comments, a ticket page's count).
     comments::refresh();
+    // COMMENT-9: the comments the app could not keep, reported now.
+    crate::drafts::flush();
     // CHAT-4: the reader's chats — `chats.watch`, then the list — only once
     // a ticket page has asked.
     crate::chats::refresh();

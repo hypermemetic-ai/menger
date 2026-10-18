@@ -292,6 +292,10 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("comments.add", Today::Viewer, None),
     ("comments.list", Today::Viewer, None),
     ("comments.watch", Today::Viewer, None),
+    // COMMENT-9: the app reports a comment it could not keep; a reader reads
+    // the reports it would see.
+    ("comments.report", Today::Viewer, None),
+    ("comments.failures", Today::Viewer, None),
     ("comments.resolve", Today::Editor, None),
     ("comments.reopen", Today::Editor, None),
     // NOTE-2: a note is on no shortcode — any member's; an upgrade an editor's.
@@ -480,7 +484,7 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
     let v = view(&agent).await;
     assert!(v["tickets"].contains("list") && v["tickets"].contains("watch") && !v["tickets"].contains("set_status"), "{v:?}");
-    assert_eq!(v["comments"], names(&["add", "list", "watch"]));
+    assert_eq!(v["comments"], names(&["add", "failures", "list", "report", "watch"]));
     assert_eq!(v["members"], names(&["mine"]), "no admin method");
     let schema = one(&agent, "tickets.schema", json!({})).await;
     let get = schema["methods"].as_array().unwrap().iter().find(|m| m["name"] == "list").unwrap();

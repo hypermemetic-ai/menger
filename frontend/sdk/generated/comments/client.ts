@@ -5,7 +5,7 @@ import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
 import type { AnchorPath, CommentsEvent, Route, Under } from './types';
 import type { Author, Body, Query, TicketRef } from '../notes/types';
-import type { Anchor, CommentId, CommentIntent, CommentState } from '../tickets/types';
+import type { Anchor, CommentId, CommentIntent, CommentState, Message, Reason } from '../tickets/types';
 
 /** Typed client interface for comments plugin */
 export interface CommentsClient {
@@ -37,6 +37,16 @@ its author and the admins of `*`.
    * @requires `comments.add` anywhere it is held
    */
   add(anchor: Anchor, body: Body): AsyncGenerator<CommentsEvent>;
+  /**
+   * COMMENT-9: the comments the app could not keep, newest first — `failure { failure }` each.
+
+The caller's own reports and those whose comment it would see had it
+been kept; at most `limit` (default 50, at most 200).
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `comments.failures` anywhere it is held
+   */
+  failures(limit?: number | null): AsyncGenerator<CommentsEvent>;
   /**
    * List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.
 
@@ -73,6 +83,18 @@ there, naming nothing (ACCESS-3 #7). `watch` carries `reopened`.
    * @requires `comments.reopen` anywhere it is held
    */
   reopen(id: CommentId): AsyncGenerator<CommentsEvent>;
+  /**
+   * COMMENT-9: report a comment the app could not keep; yields `reported { failure }`.
+
+The app's word that a comment was not kept — the socket down, no
+answer, a refusal — with the draft, so whoever can see where it was
+being left reads it with `failures`. Kept in memory (the newest 200;
+a restart forgets them) and logged; never a comment.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `comments.report` anywhere it is held
+   */
+  report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): AsyncGenerator<CommentsEvent>;
   /**
    * Resolve a comment; yields the comment, resolved.
 
@@ -118,6 +140,11 @@ class CommentsClientImpl implements CommentsClient {
     yield* extractData<CommentsEvent>(stream);
   }
 
+  async *failures(limit?: number | null): AsyncGenerator<CommentsEvent> {
+    const stream = this.rpc.call('comments.failures', { limit });
+    yield* extractData<CommentsEvent>(stream);
+  }
+
   async *list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent> {
     const stream = this.rpc.call('comments.list', { after, author, intent, limit, path, route, state, text, ticket, under });
     yield* extractData<CommentsEvent>(stream);
@@ -125,6 +152,11 @@ class CommentsClientImpl implements CommentsClient {
 
   async *reopen(id: CommentId): AsyncGenerator<CommentsEvent> {
     const stream = this.rpc.call('comments.reopen', { id });
+    yield* extractData<CommentsEvent>(stream);
+  }
+
+  async *report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): AsyncGenerator<CommentsEvent> {
+    const stream = this.rpc.call('comments.report', { agent, anchor, body, failed_at: failedAt, reason });
     yield* extractData<CommentsEvent>(stream);
   }
 
@@ -152,8 +184,10 @@ export function createCommentsClient(rpc: RpcClient): CommentsClient {
 /** What each comments method needs (AUTH-9): its grant, and the param that locates what it acts on (`null`: allowed wherever the grant is held). The gate decides, server-side. */
 export const requires = {
   "comments.add": { grant: "comments.add", target: null },
+  "comments.failures": { grant: "comments.failures", target: null },
   "comments.list": { grant: "comments.list", target: null },
   "comments.reopen": { grant: "comments.reopen", target: null },
+  "comments.report": { grant: "comments.report", target: null },
   "comments.resolve": { grant: "comments.resolve", target: null },
   "comments.schema": { grant: "comments.schema", target: null },
   "comments.watch": { grant: "comments.watch", target: null },

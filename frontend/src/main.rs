@@ -272,6 +272,7 @@ mod conversation;
 mod components;
 mod counts;
 mod deploys;
+mod drafts;
 mod deploys_page;
 mod dom;
 mod filter;

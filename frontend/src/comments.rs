@@ -197,6 +197,10 @@ fn start() {
 /// A `watch` event: the copy takes it (and keeps it for replay while a
 /// fetch is out).
 fn heard(ev: &CommentsEvent) {
+    // COMMENT-9: a kept draft that landed is let go.
+    if let CommentsEvent::Added { comment } = ev {
+        crate::drafts::landed(comment);
+    }
     HEARD.with(|h| {
         if let Some(buf) = h.borrow_mut().as_mut() {
             buf.push(ev.clone());
