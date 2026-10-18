@@ -1578,6 +1578,14 @@ it onto the placeholder (`title`, `description`: SDK 2.2's `menger:mockup`
 carries them — the body's own text); a referenced page's is read and drawn
 by the host and never reaches the citing frame, which hears only a height.
 
+**Said once** (APP-60; owner, 2026-10-18: *"the mockup renders poorly"* —
+on a phone the same sentence read twice, prose then caption). The line of
+prose above a mockup and its `description=` never repeat each other: the
+prose says why the view is here (what to look at, what it decides), the
+caption what the view shows (its state, its data) — or one of them says
+it and the other is left out (a `title=` and the prose, with no
+`description=`, is enough).
+
 **Answering on the mock** (APP-46; owner, 2026-10-16: *"I want the decision
 to contain mockups maybe, or for feedback to be left directly on the
 mockup."*). A decision between looks puts **a mockup in each option** — an
@@ -1665,6 +1673,21 @@ narrowest device shown is more than **3** of that device's screens tall,
 the bar says so quietly — *one view per mockup — this page scrolls N
 screens* — after a resize too (APP-33), and only as a hint to the author,
 never a refusal.
+
+**On a phone** (APP-60; a viewport ≤ 820 px, APP-50's shape). A mockup
+opens on **one** device — the narrowest it declares (Reset returns there)
+— drawn as wide as the screen allows: its box reaches past the body's
+padding to the screen's edges less 4 px (`mockup::bleed`, the host's
+choice; only its width moves), the bezels thin, so a 390 device is drawn
+at about 96% and a wider one is scaled to the column, never off its edge.
+The other widths are one tap away on the bar; **All** stacks the devices
+one under another at the scale that fits the widest. The bar is **one
+row**: the option's *pick this* (in a decision), the device picker, **⋯**
+and Full screen; *comment*, Size, Reset, Light / Dark, Reduced motion,
+Compare and the tall note fold into the ⋯ panel (a tap outside closes
+it; the Custom field opens it). **Full screen** draws the device at 100%,
+bezel-less, and its stage scrolls to the rest (a desktop pans). Above
+820 nothing changes (`mocksize::scale_for`, `mocksize::opening`).
 
 **What makes `prefers-color-scheme` follow inside the frame.** An iframe's
 `prefers-color-scheme` is the *embedder's* in Chromium, whatever the
