@@ -4667,16 +4667,16 @@ what is in reach. A write needs the role on every ticket it touches — AUTH-7:
 refused by the gate, typed (`forbidden { grant: tickets.amend, scope: OUGHT,
 roles, held_on }`). A comment is signed with the
 caller's principal (`principal` beside `author`); no call names its author.
-Someone signed in with no grant reaches nothing and waits in
-`members.requests` for an admin. ACCESS-24: there is no login off; a grant
+Someone signed in with no grant reaches nothing (but what `everyone`
+holds, ACCESS-57, below) and waits in `members.requests` for an admin. ACCESS-24: there is no login off; a grant
 planted while there was is purged ("Login" → The purge).
 
 | method | yields |
 |---|---|
 | `members.mine {}` | `me { principal, name, admin_everywhere }`, then `grant { grant }` each |
 | `members.list { scope? }` | the grants on the scopes the caller administers |
-| `members.grant { principal, scope, role }` | the grant as kept; needs admin on the scope (`scope`: `*`, `acme:`, a shortcode, a ticket, `under` a ticket) |
-| `members.revoke { principal, scope }` | `revoked { principal, scope, existed }` |
+| `members.grant { principal \| team \| everyone: true, scope, role }` | the grant as kept; needs admin on the scope (`scope`: `*`, `acme:`, a shortcode, a ticket, `under` a ticket) |
+| `members.revoke { principal \| team \| everyone: true, scope }` | `revoked { principal, scope, existed }` |
 | `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant — an admin of `*` only (ACCESS-19: the list is every sign-in) |
 | `members.teams.list { org? }` | ACCESS-22: `team { name, org, created_by, at, members }` per team in the caller's organizations |
 | `members.teams.show { team }` | the `team`, a `team_member { member }` per principal in it, then a `grant` per grant it holds on a scope the caller administers |
@@ -4708,6 +4708,29 @@ synapse -P 4450 -t "$ADA" menger members teams create --name release-crew
 synapse -P 4450 -t "$ADA" menger members grant --team release-crew --scope 'under MENGER-5' --role editor
 synapse -P 4450 -t "$ADA" menger members teams add --team release-crew --principal idp:c952acd3-…
 synapse -P 4450 -t "$ADA" menger members teams show --team release-crew
+```
+
+**Everyone** (ACCESS-57) is the grantee every signed-in principal is — a
+person or a key — so a shortcode can be open to all users, someone still
+waiting for access included: `members grant --everyone true --scope DOCS
+--role viewer` keeps the grant to `principal: everyone` (a row of the
+`members` table like any other; no principal is one word, so none is
+`everyone`). Each signed-in caller holds it beside its own grants and its
+teams' — the higher role on a scope wins — within its session's ceiling;
+the anonymous caller holds nothing of it (the gate asks grants only of a
+principal). It is never `admin` (refused, nothing written), it takes admin
+on the scope as any grant, and a grant or revoke moves the generation, so
+open sockets follow. `members.mine` and `auth.whoami` list it (`grant {
+principal: everyone }`), so the app draws the nav for someone holding only
+it. Waiting is about one's own grants: someone holding none of their own
+stays in `members.requests` until an admin grants them something. (AUTH-7's
+`auth.waiting` asks the gate's memberships, which hold everyone's grant, so
+it lists only those who hold nothing at all.) An older build reads the row
+as no grant it knows and holds it nowhere.
+
+```sh
+synapse -P 4450 -t "$ADA" menger members grant --everyone true --scope DOCS --role viewer
+synapse -P 4450 -t "$ADA" menger members revoke --everyone true --scope DOCS
 ```
 
 The first admin is the operator's: `--admin <principal>` (repeatable,

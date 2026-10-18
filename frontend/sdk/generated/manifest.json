@@ -225,6 +225,7 @@
     },
     "members": {
       "grant": [
+        "everyone",
         "principal",
         "role",
         "scope",
@@ -236,6 +237,7 @@
       "mine": [],
       "requests": [],
       "revoke": [
+        "everyone",
         "principal",
         "scope",
         "team"

@@ -592,6 +592,12 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger members teams add --team release-crew --principal key:4b…
   ```
 
+  **Everyone** (ACCESS-57): `members grant --everyone true --scope DOCS
+  --role viewer` (`revoke --everyone true --scope DOCS`) grants every
+  signed-in principal — people and keys, one still waiting for access too,
+  never the anonymous socket — beside their own grants, within any ceiling;
+  never `admin`. README "Members and roles".
+
   **Limits** (ACCESS-29): connections in all, per IP, per principal and
   anonymous (`--max-connections` 1,024, `--max-connections-per-ip` 256,
   `--max-connections-per-principal` 64, `--max-anonymous-connections` 128,

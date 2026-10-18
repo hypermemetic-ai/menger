@@ -178,8 +178,13 @@ fn who_granted_and_who_holds_read_as_their_text() {
     let p = "idp:6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b";
     holds::<GrantedBy>(&[p, OPERATOR], &["", "nobody"]);
     assert_eq!(OPERATOR.parse::<GrantedBy>(), Ok(GrantedBy::Operator));
-    holds::<Grantee>(&[p, "team:release-crew"], &["", "team:", "team:Release", "nobody"]);
+    holds::<Grantee>(&[p, "team:release-crew", "everyone"], &["", "team:", "team:Release", "nobody", "Everyone", "team:everyone-"]);
     assert!(matches!("team:release-crew".parse::<Grantee>(), Ok(Grantee::Team(_))));
+    // ACCESS-57: `everyone` is no principal, and no principal is it.
+    assert_eq!("everyone".parse::<Grantee>(), Ok(Grantee::Everyone));
+    assert_eq!(Grantee::Everyone.to_string(), EVERYONE);
+    assert!(EVERYONE.parse::<Principal>().is_err());
+    assert!(matches!("team:everyone".parse::<Grantee>(), Ok(Grantee::Team(_))), "a team named everyone is a team");
     holds::<TeamName>(&["release-crew", "a1"], &["", "1a", "a-", "A", &"a".repeat(33)]);
 }
 

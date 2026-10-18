@@ -4810,11 +4810,14 @@ impl Store {
     pub async fn grant(&self, by: impl Into<Authority>, g: crate::members::Grant) -> Result<crate::members::Grant, StoreError> {
         by.into().grants_on(&g.scope)?;
         let serial = self.serial().await;
-        // ACCESS-22: a grant to a team is to one there is.
-        if let crate::vocab::Grantee::Team(t) = &g.principal {
-            if !self.has_team(t) {
-                return Err(StoreError::Invalid(format!("no team {t} (nothing written)")));
+        // ACCESS-22: a grant to a team is to one there is. ACCESS-57:
+        // everyone signed in is never admin — an admin is named.
+        match &g.principal {
+            crate::vocab::Grantee::Team(t) if !self.has_team(t) => return Err(StoreError::Invalid(format!("no team {t} (nothing written)"))),
+            crate::vocab::Grantee::Everyone if g.role == crate::members::Role::Admin => {
+                return Err(StoreError::Invalid("everyone is never admin: give everyone viewer, editor or deployer (nothing written)".into()));
             }
+            _ => {}
         }
         let (stored, kept) = (g.clone(), g.clone());
         self.write(

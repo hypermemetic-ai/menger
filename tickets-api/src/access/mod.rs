@@ -258,10 +258,24 @@ impl Book {
         }
     }
 
-    /// A principal's grants: the stored ones, ACCESS-9: its teams' (each
-    /// a grant to `team:<name>`; the store says which teams it is in), and
-    /// admin on `*` for an operator's `--admin`.
+    /// A principal's grants: its own ([`Book::own_grants_of`]) and,
+    /// ACCESS-57, every grant to `everyone` — what each signed-in principal
+    /// holds beside its own. Only ever asked for a principal: the anonymous
+    /// caller names none, so it holds nothing of them (the gate asks
+    /// [`Memberships::held`] only of a principal, and [`Access::verify_now`]
+    /// refuses anyone else).
     pub fn grants_of(&self, principal: &str) -> Vec<Grant> {
+        let mut grants = self.own_grants_of(principal);
+        grants.extend(self.stored_grants(crate::vocab::EVERYONE));
+        grants
+    }
+
+    /// ACCESS-57: a principal's own grants — the stored ones, ACCESS-9: its
+    /// teams' (each a grant to `team:<name>`; the store says which teams it
+    /// is in), and admin on `*` for an operator's `--admin` — and not
+    /// `everyone`'s: holding none of these, a principal is waiting for an
+    /// admin, whatever `everyone` lets it read meanwhile.
+    pub fn own_grants_of(&self, principal: &str) -> Vec<Grant> {
         let mut grants = self.stored_grants(principal);
         if let Some(store) = self.store() {
             for team in store.teams_of(principal) {
@@ -513,6 +527,8 @@ impl Access {
                     who.insert(p.to_string());
                 }
                 crate::vocab::Grantee::Team(t) => who.extend(self.team(&t).into_iter().flat_map(|(_, members, _)| members).map(|m| m.principal.to_string())),
+                // ACCESS-57: everyone names no one to offer.
+                crate::vocab::Grantee::Everyone => {}
             }
         }
         who
@@ -546,10 +562,16 @@ impl Access {
         &self.gate
     }
 
-    /// A principal's grants: the stored ones, and admin on `*` for an
-    /// operator's `--admin`.
+    /// A principal's grants: the stored ones, its teams', admin on `*` for
+    /// an operator's `--admin`, and (ACCESS-57) `everyone`'s.
     pub fn grants_of(&self, principal: &str) -> Vec<Grant> {
         self.book.grants_of(principal)
+    }
+
+    /// ACCESS-57: a principal's grants without `everyone`'s — what decides
+    /// whether it waits for an admin.
+    pub fn own_grants_of(&self, principal: &str) -> Vec<Grant> {
+        self.book.own_grants_of(principal)
     }
 
     /// ACCESS-10: every stored grant, by principal then scope — read as the
@@ -646,7 +668,7 @@ impl Access {
             return;
         }
         let Some(principal) = ctx.principal().map(|p| p.to_string()) else { return };
-        if self.book.grants_of(&principal).is_empty() {
+        if self.book.own_grants_of(&principal).is_empty() {
             self.book.wait(&principal, ctx.get_metadata_string("name"), ctx.get_metadata_string("provider"));
         }
     }
@@ -676,8 +698,9 @@ impl Access {
     /// signed in, its sign-in alive and unexpired, its principal parsed by
     /// the identity layer (`vocab::Principal`'s grammar; never its
     /// `user_id` instead), its ceiling readable; its grants resolved —
-    /// direct ∪ its teams' ∪ the operator's — at the grants generation of
-    /// now. A signed-in user holding nothing joins the waiting list (and
+    /// direct ∪ its teams' ∪ the operator's ∪ (ACCESS-57) `everyone`'s — at
+    /// the grants generation of now. A signed-in user holding nothing of
+    /// its own joins the waiting list (and
     /// is still verified: a read then says it holds nothing). ACCESS-24:
     /// never anyone — an identity that proves no one is refused.
     /// Synchronous: it reads the cache and nothing else, so a method
@@ -692,7 +715,7 @@ impl Access {
         let reach = Reach::resolve(&self.book, &self.gate, principal.as_str(), ctx)?;
         let name = ctx.get_metadata_string("name");
         self.note_name(principal.as_str(), name.as_deref());
-        if self.book.grants_of(principal.as_str()).is_empty() {
+        if self.book.own_grants_of(principal.as_str()).is_empty() {
             self.book.wait(principal.as_str(), name.clone(), ctx.get_metadata_string("provider"));
         } else {
             self.book.granted(principal.as_str());
