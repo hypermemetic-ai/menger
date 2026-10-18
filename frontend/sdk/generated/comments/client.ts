@@ -31,12 +31,17 @@ caller needs the role on `X` as well as on the anchor's ticket, and it
 is listed and watched only by those who can view both. The anchor is
 kept as given (`ticket` stays what the element belonged to).
 ACCESS-19: a comment on the app (naming no ticket) is seen only by
-its author and the admins of `*`.
+its author and the admins of `*`. COMMENT-8: with `reply_to`, a reply
+to that comment — no anchor (one given is refused): it takes its
+thread's root's, and so its ticket and who sees it; a reply to a
+reply answers the same root; a resolved root is reopened in the same
+write (`watch` carries `added`, then `reopened`). The answer carries
+`reply_to`, the root's id.
    * @server-derived auth
    * @requiresAuth — resolver: self.access.verify
    * @requires `comments.add` anywhere it is held
    */
-  add(anchor: Anchor, body: Body): AsyncGenerator<CommentsEvent>;
+  add(body: Body, anchor?: Anchor | null, replyTo?: CommentId | null): AsyncGenerator<CommentsEvent>;
   /**
    * COMMENT-9: the comments the app could not keep, newest first — `failure { failure }` each.
 
@@ -70,7 +75,7 @@ app, its author's and the admins' of `*`). From the cache.
    * @requiresAuth — resolver: self.access.verify
    * @requires `comments.list` anywhere it is held
    */
-  list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent>;
+  list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, thread?: CommentId | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent>;
   /**
    * Reopen a resolved comment; yields the comment, open.
 
@@ -135,8 +140,8 @@ class CommentsClientImpl implements CommentsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *add(anchor: Anchor, body: Body): AsyncGenerator<CommentsEvent> {
-    const stream = this.rpc.call('comments.add', { anchor, body });
+  async *add(body: Body, anchor?: Anchor | null, replyTo?: CommentId | null): AsyncGenerator<CommentsEvent> {
+    const stream = this.rpc.call('comments.add', { anchor, body, reply_to: replyTo });
     yield* extractData<CommentsEvent>(stream);
   }
 
@@ -145,8 +150,8 @@ class CommentsClientImpl implements CommentsClient {
     yield* extractData<CommentsEvent>(stream);
   }
 
-  async *list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent> {
-    const stream = this.rpc.call('comments.list', { after, author, intent, limit, path, route, state, text, ticket, under });
+  async *list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, thread?: CommentId | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent> {
+    const stream = this.rpc.call('comments.list', { after, author, intent, limit, path, route, state, text, thread, ticket, under });
     yield* extractData<CommentsEvent>(stream);
   }
 

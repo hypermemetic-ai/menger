@@ -96,18 +96,37 @@ impl Held {
         self.list.iter().find(|c| c.id == id)
     }
 
-    /// How many are open — the header's badge.
+    /// COMMENT-8: the replies to `root`, oldest first.
+    pub(crate) fn replies(&self, root: CommentId) -> Vec<Comment> {
+        replies(&self.list, root)
+    }
+
+    /// How many are open — the header's badge. COMMENT-8: threads, not
+    /// replies (a thread is open or resolved by its root).
     pub(crate) fn open_count(&self) -> usize {
-        self.list.iter().filter(|c| c.state == CommentState::Open).count()
+        self.list.iter().filter(|c| c.state == CommentState::Open && c.reply_to.is_none()).count()
     }
 
     /// How many open ones are on `ticket` — the ticket page's side panel.
     pub(crate) fn open_on(&self, ticket: &str) -> usize {
         self.list
             .iter()
-            .filter(|c| c.state == CommentState::Open && c.anchor.ticket.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticket)))
+            .filter(|c| c.state == CommentState::Open && c.reply_to.is_none() && c.anchor.ticket.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticket)))
             .count()
     }
+}
+
+/// COMMENT-8: of `all`, the replies to `root`, oldest first.
+pub(crate) fn replies(all: &[Comment], root: CommentId) -> Vec<Comment> {
+    let mut out: Vec<Comment> = all.iter().filter(|c| c.reply_to == Some(root)).cloned().collect();
+    out.sort_by_key(|c| c.id);
+    out
+}
+
+/// COMMENT-8: whether `c` roots a thread (is no reply) — what is pinned,
+/// listed and counted.
+pub(crate) fn is_root(c: &Comment) -> bool {
+    c.reply_to.is_none()
 }
 
 /// The fetch's rule: `answer`, then every event heard while it was out, in
@@ -228,7 +247,7 @@ fn fetch() {
         let mut answer = Vec::new();
         let mut after = None;
         loop {
-            match client.list_all(None, None, None, None, None, None, None, None, after, Some(PAGE)).await {
+            match client.list_all(None, None, None, None, None, None, None, None, None, after, Some(PAGE)).await {
                 Ok(events) => {
                     let mut next = None;
                     for ev in events {
@@ -278,7 +297,13 @@ fn answer_of(what: &str, events: Result<Vec<CommentsEvent>, plexus_client::Clien
 /// `comments.add { anchor, body }` — the comment as kept.
 pub(crate) async fn add(anchor: Anchor, body: String) -> Result<Comment, String> {
     let client = session::comments_client().ok_or_else(|| "not connected — nothing was kept".to_string())?;
-    answer_of("add", client.add_all(anchor, crate::typed::typed(&body)?).await)
+    answer_of("add", client.add_all(Some(anchor), crate::typed::typed(&body)?, None).await)
+}
+
+/// COMMENT-8: `comments.add { reply_to, body }` — the reply as kept.
+pub(crate) async fn reply(to: u64, body: String) -> Result<Comment, String> {
+    let client = session::comments_client().ok_or_else(|| "not connected — nothing was kept".to_string())?;
+    answer_of("reply", client.add_all(None, crate::typed::typed(&body)?, Some(CommentId::new(to))).await)
 }
 
 /// `comments.resolve { id }`.
@@ -302,7 +327,7 @@ pub(crate) async fn ids_under(under: String) -> Result<std::collections::HashSet
     let under: menger_tickets_api::vocab::Under = crate::typed::typed(&under)?;
     loop {
         let events = client
-            .list_all(None, Some(under.clone()), None, None, None, None, None, None, after, Some(PAGE))
+            .list_all(None, Some(under.clone()), None, None, None, None, None, None, None, after, Some(PAGE))
             .await
             .map_err(|e| session::describe(&e))?;
         let mut next = None;
@@ -345,7 +370,13 @@ pub(crate) mod tests {
             body: format!("body {id}"),
             principal: None,
             intent: menger_tickets_api::CommentIntent::Comment,
+            reply_to: None,
         }
+    }
+
+    /// A reply `id` to `root`, on `root`'s anchor.
+    pub(crate) fn reply(id: u64, root: &Comment) -> Comment {
+        Comment { reply_to: Some(root.id), ..comment(id, &root.anchor.route, &root.anchor.path, root.anchor.ticket.as_deref()) }
     }
 
     pub(crate) fn resolved(mut c: Comment) -> Comment {
@@ -385,6 +416,20 @@ pub(crate) mod tests {
         assert_eq!(count_words(0), "none open");
         assert_eq!(count_words(1), "1 open");
         assert_eq!(count_words(4), "4 open");
+    }
+
+    /// COMMENT-8: a thread's replies, oldest first; a reply is counted in
+    /// neither badge — its thread is open or resolved by its root.
+    #[test]
+    fn replies_are_their_threads_and_count_as_none() {
+        let a = comment(1, "#/ticket/D-2", "conversation", Some("D-2"));
+        let b = comment(2, "#/ticket/D-2", "#t-status", Some("D-2"));
+        let h = Held::from_events([&a, &b, &reply(5, &a), &reply(3, &a), &reply(4, &b)].map(|c| CommentsEvent::from(c.clone())));
+        let ids = |v: Vec<Comment>| v.iter().map(|c| c.id.get()).collect::<Vec<_>>();
+        assert_eq!(ids(h.replies(a.id)), [3, 5]);
+        assert_eq!(ids(h.replies(b.id)), [4]);
+        assert_eq!((h.open_count(), h.open_on("D-2")), (2, 2));
+        assert!(is_root(&a) && !is_root(&reply(3, &a)));
     }
 
     /// What is heard while a fetch is out is replayed onto its answer: a

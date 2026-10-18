@@ -4704,6 +4704,7 @@ impl Store {
                 body,
                 principal,
                 intent: crate::comments::CommentIntent::Comment,
+                reply_to: None,
             }
         };
         // FILTER-30: a comment on a ticket touches it.
@@ -5517,6 +5518,7 @@ pub use queue::QueueChange;
 /// TICKETS-9: the assignees and their history.
 mod assignees;
 /// APP-23: a change request — a comment and an unqueue, one write.
+mod threads;
 mod changes;
 pub use changes::{conversation_anchor, CONVERSATION_PATH};
 /// APP-24: what answers an agent waiting on a ticket.
@@ -5829,6 +5831,11 @@ mod tests_kinds;
 /// anchor kept through its ticket's writes, and the form 6 → 7 upgrade.
 #[cfg(test)]
 mod tests_comments;
+
+/// COMMENT-8: replies — the root's anchor, one level deep, a resolved root
+/// reopened, `list { thread }`, a reply seen as its root, refusals.
+#[cfg(test)]
+mod tests_threads;
 
 /// MENGER-13: the transition log (every write's transition, who, where
 /// from, why, caused by what; durable; `history`), cancellation cascades and

@@ -28,6 +28,9 @@
 //! the browser until the server answers, and comes back when the page
 //! does; a comment not kept says why under the box, with a Retry.
 //!
+//! **Replies** (COMMENT-8, src/thread.rs): the thread lists roots; each
+//! root's replies are drawn under it, oldest first, with its Reply box.
+//!
 //! **A change request** (APP-23: the tray's Request changes,
 //! `tickets.request_changes`) is a comment here like any other, with intent
 //! `changes`: its row is marked "changes requested" ([`mark`]).
@@ -67,10 +70,14 @@ pub(crate) fn is_whole(c: &Comment) -> bool {
 }
 
 /// The thread on `ticket`: every comment whose anchor names it (any case),
-/// whole-ticket and pinned alike, oldest first.
+/// whole-ticket and pinned alike, oldest first — roots only (COMMENT-8: a
+/// reply is drawn under its root).
 pub(crate) fn thread(all: &[Comment], ticket: &str) -> Vec<Comment> {
-    let mut out: Vec<Comment> =
-        all.iter().filter(|c| c.anchor.ticket.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticket))).cloned().collect();
+    let mut out: Vec<Comment> = all
+        .iter()
+        .filter(|c| comments::is_root(c) && c.anchor.ticket.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticket)))
+        .cloned()
+        .collect();
     out.sort_by_key(|c| c.id);
     out
 }
@@ -294,6 +301,7 @@ fn row(c: Comment, fresh: bool) -> impl IntoView {
             </div>
             <div class="cbody md" data-links="comment" data-ticket=c.anchor.ticket.clone() node_ref=node inner_html=html></div>
             {move || err.get().map(|e| view! { <span class="cerr">{e}</span> })}
+            <crate::thread::Replies root=c.clone() />
         </li>
     }
 }
@@ -322,7 +330,7 @@ mod tests {
         assert_eq!(initials("key:4b19"), "K4");
         assert_eq!(initials(""), "?");
     }
-    use crate::comments::tests::{comment, resolved};
+    use crate::comments::tests::{comment, reply, resolved};
 
     /// The thread is the ticket's comments — its anchor's ticket, any case —
     /// whole-ticket and pinned alike, resolved too, oldest first; another
@@ -342,8 +350,10 @@ mod tests {
             resolved(whole(1)),
             comment(7, "#/board", "#board", Some("d-2")),
         ];
+        let mut all = all;
+        all.push(reply(11, &all[0]));
         let ids: Vec<u64> = thread(&all, "D-2").iter().map(|c| c.id.get()).collect();
-        assert_eq!(ids, [1, 3, 7, 9]);
+        assert_eq!(ids, [1, 3, 7, 9], "a reply is under its root, not in the thread");
         assert_eq!(thread(&all, "d-2").len(), 4, "a ticket id, whatever its case");
         assert!(thread(&all, "D-9").is_empty());
     }

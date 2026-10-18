@@ -2775,9 +2775,9 @@ ticket's write does touches a comment.
 
 | method | yields |
 |---|---|
-| `comments.add { anchor, body }` | `comment { id, state, author, at, anchor, body }` — the comment as kept: the next id, `open`, the time (unix seconds), signed by the caller (ACCESS-19: its name, its principal when it has none, `owner` with login off — no call names its author). A comment on the app (no ticket) is seen, listed, watched and resolved only by its author and the admins of `*`. An empty body, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept |
-| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, intent?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `intent` `comment` / `changes` (APP-23: a change request — a comment carries `intent: changes`, a plain one carries no `intent`); `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case). Blank is none. A page is 500 unless `limit` says, never more than 1,000 (ACCESS-29). An unknown state, or an `after` naming no comment, is one in-band `error` |
-| `comments.resolve { id }` · `comments.reopen { id }` | `comment` — the state flipped; already there, the comment as it is (nothing written or broadcast); an id naming no comment is an in-band `error` |
+| `comments.add { anchor, body }` · `{ reply_to, body }` | `comment { id, state, author, at, anchor, body, reply_to? }` — the comment as kept: the next id, `open`, the time (unix seconds), signed by the caller (ACCESS-19: its name, its principal when it has none, `owner` with login off — no call names its author). A comment on the app (no ticket) is seen, listed, watched and resolved only by its author and the admins of `*`. An empty body, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept. COMMENT-8: with `reply_to` (and no `anchor` — both, or neither, is refused) a **reply**: on its thread's root's anchor, carrying `reply_to` (the root's id; a reply to a reply answers the same root), and a resolved root is reopened in the same write |
+| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, intent?, thread?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `intent` `comment` / `changes` (APP-23: a change request — a comment carries `intent: changes`, a plain one carries no `intent`); `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case); `thread` (COMMENT-8) the comment's thread — the root and its replies, named by either. Replies are listed inline with the rest, each carrying `reply_to`. Blank is none. A page is 500 unless `limit` says, never more than 1,000 (ACCESS-29). An unknown state, or an `after` naming no comment, is one in-band `error` |
+| `comments.resolve { id }` · `comments.reopen { id }` | `comment` — the state flipped (a reply's id settles its thread's root, which is answered); already there, the comment as it is (nothing written or broadcast); an id naming no comment is an in-band `error` |
 | `comments.watch {}` | open-ended stream of `added { comment }`, `resolved { comment }`, `reopened { comment }`; `lagged { missed }` as `tickets.watch` |
 
 Kept in the `comments` table behind the service-wide cache: read whole at
@@ -2870,6 +2870,25 @@ it would have seen:
 
 ```sh
 synapse -P 4455 menger comments failures --limit 20
+```
+
+**Replies** (COMMENT-8). A comment answers another with `reply_to`: it is
+a comment of its own, on its thread's root's anchor — so on the same ticket
+and page, seen by exactly who sees the root (a reply on the app, too: the
+root's author and the admins) — and threads are one level deep (a reply to
+a reply answers the root). A thread is open or resolved by its root:
+resolving or reopening a reply settles the root, and a reply to a resolved
+root reopens it, in the same write (`watch` says `added`, then
+`reopened`). In the app a reply is drawn under its root, oldest first, with
+**Reply** under the thread — in a ticket's Conversation, on `#/comments`
+(a row is a thread, found by its root or any reply; the count is threads)
+and in the annotation popover; no reply is pinned or counted apart. The
+Reply box keeps its draft as every box does (by its thread,
+`reply|<root>`), says *Not kept* with a Retry, and Ctrl+Enter sends:
+
+```sh
+synapse -P 4455 menger comments add --reply-to 29 --body @answer.md
+synapse -P 4455 menger comments list --thread 29
 ```
 
 ### Images in comments (COMMENT-5)

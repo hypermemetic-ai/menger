@@ -2438,6 +2438,43 @@
     border: var(--border) solid var(--err-fg); border-radius: var(--radius); padding: .15rem .9rem; }
   section.convsec .cretry:disabled { opacity: .5; cursor: default; }
   @media (pointer: coarse) { section.convsec textarea.cbox, #annot-layer .annot-box textarea { scroll-margin-bottom: 9rem; } }
+  /* COMMENT-8: a comment's thread — its replies under it, a rule down their
+     left, oldest first; then Reply, or the reply box. The same in the
+     Conversation, on #/comments and in the annotation popover. */
+  .creplies { display: flex; flex-direction: column; align-items: stretch; gap: .4rem; margin-top: .4rem; min-width: 0; }
+  .creplies ol.crlist { list-style: none; margin: 0; padding: 0 0 0 .7rem; border-left: 2px solid var(--line);
+    display: flex; flex-direction: column; gap: .5rem; }
+  .creplies li.creply-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 8px; align-items: start;
+    border: 0; padding: 0; background: transparent; }
+  .creplies li.creply-row > :not(.crav) { grid-column: 2; }
+  .creplies .crav { grid-column: 1; grid-row: 1 / span 2; width: 22px; height: 22px; border-radius: var(--radius-pill);
+    display: grid; place-items: center; background: var(--panel); border: var(--border) solid var(--tree-line);
+    font: var(--weight-strong) calc(9px * var(--text-scale))/1 var(--mono); color: var(--muted); }
+  .creplies .chead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; color: var(--muted);
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale)); }
+  .creplies .cwho { font-weight: var(--weight-medium); }
+  .creplies .cbody { margin: .1rem 0 0; overflow-wrap: anywhere; }
+  .creplies .cbody > :first-child { margin-top: 0; }
+  .creplies .cbody > :last-child { margin-bottom: 0; }
+  .creplies :is(button.creply, .crcancel, .crsend, .cretry) {
+    font: inherit; font-size: calc(.75rem * var(--text-scale)); cursor: pointer; background: transparent; color: var(--muted);
+    border: var(--border) solid var(--line); border-radius: var(--radius); padding: .2rem .8rem; }
+  .creplies button.creply { align-self: flex-start; }
+  .creplies :is(button.creply, .crcancel, .crsend):hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .creplies .crsend { color: var(--ink); border-color: var(--ink); }
+  .creplies .cretry { color: var(--err-fg); border-color: var(--err-fg); }
+  .creplies button:disabled { opacity: .5; cursor: default; }
+  .creplies .crnew { display: flex; flex-direction: column; gap: .35rem; }
+  .creplies textarea.crbox { font: inherit; color: var(--ink); background: var(--bg); resize: vertical;
+    min-height: calc(2lh + .8rem + 2 * var(--border)); border: var(--border) solid var(--line); border-radius: var(--radius); padding: .4rem .55rem; }
+  .creplies textarea.crbox:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .creplies .cnewacts { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .5rem; }
+  .creplies .cnewacts .cerr { flex: 1 0 100%; text-align: right; overflow-wrap: anywhere; color: var(--err-fg); font-size: calc(.75rem * var(--text-scale)); }
+  #annot-layer .annot-list li.creply-row { border-top: 0; padding: 0; }
+  @media (pointer: coarse) {
+    .creplies :is(button.creply, .crcancel, .crsend, .cretry) { min-height: 36px; padding: .3rem 1rem; }
+    .creplies textarea.crbox { scroll-margin-bottom: 9rem; }
+  }
   /* COMMENT-5: images in comments. A box's images — its draft's thumbnails,
      the Image button and what it says — sit at the start of its actions; a
      comment's image is drawn at most the column's width and opens full size

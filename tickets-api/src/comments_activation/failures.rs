@@ -87,6 +87,7 @@ fn as_comment(f: &Failure) -> Comment {
         body: String::new(),
         principal: Some(f.by.clone()),
         intent: CommentIntent::Comment,
+        reply_to: None,
     }
 }
 

@@ -48,7 +48,8 @@ pub(super) const TABLE: &str = "
             version INTEGER,
             body    TEXT NOT NULL,
             principal TEXT,
-            intent  TEXT
+            intent  TEXT,
+            reply_to INTEGER
         );
     ";
 
@@ -62,6 +63,12 @@ pub(crate) fn migrate(conn: &Connection) -> anyhow::Result<()> {
     if table > 0 && !super::db::has_column(conn, "comments", "intent")? {
         conn.execute("ALTER TABLE comments ADD COLUMN intent TEXT", [])?;
         tracing::warn!("APP-23: the comments table gained its intent column, durably");
+    }
+    // COMMENT-8: and `reply_to` — NULL is a thread's root, as every comment
+    // kept before it is.
+    if table > 0 && !super::db::has_column(conn, "comments", "reply_to")? {
+        conn.execute("ALTER TABLE comments ADD COLUMN reply_to INTEGER", [])?;
+        tracing::warn!("COMMENT-8: the comments table gained its reply_to column, durably");
     }
     Ok(())
 }
@@ -95,6 +102,9 @@ pub struct CommentQuery {
     pub text: Option<String>,
     /// APP-23: a comment or a change request.
     pub intent: Option<CommentIntent>,
+    /// COMMENT-8: only the thread rooted at this comment — the root and its
+    /// replies (a reply's id names its root's thread).
+    pub thread: Option<u64>,
 }
 
 /// One page of `list`: the comments, newest first, and the cursor to pass
@@ -213,10 +223,15 @@ pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: O
     let under_name = under_id.as_deref();
     let (route, path, author) = (given(&q.route), given(&q.path), given(&q.author));
     let needle = q.text.as_deref().and_then(Needle::of);
+    // COMMENT-8: a reply's id names its root's thread.
+    let thread = q.thread.map(|t| comments.get(t).and_then(|c| c.reply_to).map_or(t, |r| r.get()));
     // `under`, judged once per ticket a comment names.
     let mut lineage_holds: HashMap<String, bool> = HashMap::new();
     let mut admits = |c: &Comment| -> bool {
         if !seen(c) {
+            return false;
+        }
+        if thread.is_some_and(|t| c.id.get() != t && c.reply_to.map(|r| r.get()) != Some(t)) {
             return false;
         }
         if q.state.is_some_and(|s| c.state != s)
@@ -265,8 +280,8 @@ pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: O
 /// caller's transaction.
 pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO comments (id, state, author, at, route, path, label, excerpt, ticket, version, body, principal, intent)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        "INSERT INTO comments (id, state, author, at, route, path, label, excerpt, ticket, version, body, principal, intent, reply_to)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT (id) DO UPDATE SET state = excluded.state",
     )?
     .execute(params![
@@ -283,6 +298,7 @@ pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
         c.body,
         c.principal,
         (!c.intent.is_comment()).then_some(c.intent.as_str()),
+        c.reply_to.map(|r| r.get() as i64),
     ])?;
     Ok(())
 }
@@ -290,7 +306,7 @@ pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
 /// Every comment as stored — what a start reads.
 pub(super) fn load(conn: &Connection) -> rusqlite::Result<Comments> {
     let mut stmt = conn.prepare(
-        "SELECT id, state, author, at, route, path, label, excerpt, ticket, version, body, principal, intent FROM comments ORDER BY id",
+        "SELECT id, state, author, at, route, path, label, excerpt, ticket, version, body, principal, intent, reply_to FROM comments ORDER BY id",
     )?;
     let mut rows = stmt.query([])?;
     let mut comments = Comments::default();
@@ -317,6 +333,7 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Comments> {
                 None => CommentIntent::Comment,
                 Some(i) => i.parse().map_err(|e: String| rusqlite::Error::FromSqlConversionFailure(12, rusqlite::types::Type::Text, e.into()))?,
             },
+            reply_to: r.get::<_, Option<i64>>(13)?.map(|r| crate::vocab::CommentId::new(r as u64)),
         });
     }
     Ok(comments)
