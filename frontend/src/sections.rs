@@ -832,7 +832,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
             </button>
             <div id="tdock-scrim" class:on=move || sheet.get() on:click=move |_| sheet.set(false)></div>
             <div id="tdock-sheet" role="dialog" aria-label=sheet_label.clone() class:on=move || sheet.get() class:chatting=move || chatting.get() && phone.get()>
-                <chat_pane::Grab target="tdock-sheet" dismiss=Callback::new(move |_| sheet.set(false)) />
+                <crate::sheet::Grip target="tdock-sheet" head=".shead, #chatpane .dchead" class="grab pgrab" open=sheet dismiss=Callback::new(move |_| sheet.set(false)) />
                 <div class="shead"><h2>"On this ticket"</h2><span class="id">{tid.get_value()}</span><button type="button" on:click=move |_| sheet.set(false)>"Close"</button></div>
                 <div class="sscroll">
                     {move || sections.with(|secs| {

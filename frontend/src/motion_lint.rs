@@ -35,6 +35,7 @@ const NOT_MOTION: &[(&str, usize, &str)] = &[
     ("grow", 1, "fits a textarea to its text"),
     ("keyboard", 1, "reads the visual viewport each frame while it moves, to pin the chat to it (APP-58)"),
     ("phonebar", 1, "the tree measures the sheet it now fills"),
+    ("sheet", 1, "a dragged sheet follows the finger: its transition taken off, which moves nothing (CHAT-31)"),
     ("waves", 2, "measures the lanes; scrolls a card into view at once"),
     ("when_view", 1, "focuses the picker after it opens"),
 ];

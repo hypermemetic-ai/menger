@@ -435,6 +435,7 @@ pub(crate) fn Bar(route: RwSignal<Route>, overlay: RwSignal<Overlay>, tree: nav:
 #[component]
 pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
     let last = LAST.with(Clone::clone);
+    let own = RwSignal::from(OWN.with(Clone::clone));
     let title = move || {
         let ticket = match route.get() { Route::Ticket(id) => Some(id), _ => None };
         let code = tree_label(ticket.as_deref(), last.get().as_deref());
@@ -452,7 +453,8 @@ pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
     let cur = move |want: fn(&Route) -> bool| move || want(&route.get()).then_some("page");
     view! {
         <div class="psheet-head">
-            <div class="grab" aria-hidden="true"></div>
+            // CHAT-31: the handle and the head drag the sheet (src/sheet.rs).
+            <crate::sheet::Grip target="nav" head=".psheet-head" class="grab" open=Signal::derive(move || own.get() == Some(Place::Tree)) dismiss=Callback::new(move |_| open(None)) />
             <div class="sh">
                 <h3>{title}</h3>
                 <span class="m">"the tree"</span>
@@ -495,6 +497,7 @@ pub(crate) fn TreeFoot() -> impl IntoView {
 #[component]
 pub(crate) fn FilterHead() -> impl IntoView {
     let lens = lens::use_lens();
+    let own = RwSignal::from(OWN.with(Clone::clone));
     // FILTER-40: the level the panel's tab edits.
     let which = move || match lens.open_level() {
         None | Some(Level::Global) => "every view",
@@ -502,7 +505,7 @@ pub(crate) fn FilterHead() -> impl IntoView {
     };
     view! {
         <div class="psheet-head pfilter-head">
-            <div class="grab" aria-hidden="true"></div>
+            <crate::sheet::Grip target="lens-top" head=".pfilter-head" class="grab" open=Signal::derive(move || own.get() == Some(Place::Filter)) dismiss=Callback::new(move |_| open(None)) />
             <div class="sh">
                 <h3>"Filter"</h3>
                 <span class="m">{which}</span>

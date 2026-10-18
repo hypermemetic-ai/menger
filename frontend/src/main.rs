@@ -329,6 +329,7 @@ mod scopes;
 mod sections;
 mod selection;
 mod shape;
+mod sheet;
 mod swatches;
 mod session;
 mod settings;
@@ -2200,6 +2201,8 @@ fn App() -> impl IntoView {
     links::install();
     // APP-56: a phone's keyboard, followed — the docked composers sit on it.
     keyboard::install();
+    // CHAT-31: every phone sheet's drag, and the page held still under it.
+    sheet::install();
     board.drive();
     let dock = RwSignal::new(None::<Dock>);
     let conn = RwSignal::new(Conn::Connecting);

@@ -4792,6 +4792,15 @@
     #app:has(#qtray:not(.empty)) .content { padding-bottom: var(--pbar-h); }
     /* A full-screen layer over the page keeps the page still under it. */
     html:has(#chatfull, .framed.is-full, .cmp-view, .lightbox, #app[data-sheet], #tdock-sheet.on) { overflow: hidden; }
+    /* CHAT-31: a sheet up holds the document (src/sheet.rs stamps
+       data-sheet-lock and holds its scroll): its handle and head are the
+       sheet's to drag (a row of pills in them still pans sideways), and its
+       scrollers keep their overscroll, never chaining it to the page. */
+    html[data-sheet-lock] { overflow: hidden; overscroll-behavior: none; }
+    [data-grip], .psheet-head, #qtray .qh, #tdock-sheet .shead, #tdock-sheet #chatpane .dchead { touch-action: none; }
+    .psheet-head .pviews, #qtray .qjs, #tdock-sheet #chatpane .ptabs { touch-action: pan-x; }
+    :is(#nav, #lens-top, #tdock-sheet, #qtray .qs),
+    :is(#nav .tree-scroll, #lens-top > .ftop, #tdock-sheet .sscroll, #qtray .qb, #tdock-sheet .pmsgs) { overscroll-behavior: contain; }
     #app:has(#pbar) .cmp-pill { bottom: calc(14px + var(--pbar-h)); }
     main { padding: calc(14px * var(--space)) calc(16px * var(--space)) calc(32px * var(--space)); }
     /* The top: one line — the wordmark, the shortcode › the page, live. */
