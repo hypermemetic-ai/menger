@@ -126,11 +126,14 @@ pub(crate) enum Context {
     ComposerMenu,
     /// CHAT-7: the full-screen chat session (it owns the page's keys while it is up).
     Session,
+    /// APP-70: focus on a box's drawing pad (its surface, its tools, a
+    /// text being written on it).
+    Draw,
 }
 
 impl Context {
     #[cfg(test)]
-    pub(crate) const ALL: [Context; 22] = [
+    pub(crate) const ALL: [Context; 23] = [
         Context::Anywhere,
         Context::Global,
         Context::Nav,
@@ -153,6 +156,7 @@ impl Context {
         Context::Composer,
         Context::ComposerMenu,
         Context::Session,
+        Context::Draw,
     ];
 
     /// Where, in the reader's words — the tables' last column.
@@ -180,6 +184,7 @@ impl Context {
             Context::Composer => "in a chat's composer",
             Context::ComposerMenu => "in the composer's @ or / menu",
             Context::Session => "in a full-screen chat",
+            Context::Draw => "on a drawing pad"
         }
     }
 
@@ -189,7 +194,7 @@ impl Context {
     fn modal(self) -> bool {
         matches!(
             self,
-            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field | Context::Mockup | Context::Compare | Context::Composer | Context::ComposerMenu | Context::Session
+            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field | Context::Mockup | Context::Compare | Context::Composer | Context::ComposerMenu | Context::Session | Context::Draw
         )
     }
 
@@ -355,6 +360,10 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("chat.full", &[C::Global], &["g c"], G::View, "with a chat open on the ticket: the chat full screen, as an agent session"),
     b("session.new", &[C::Session], &["c"], G::View, "in the full-screen chat: a new chat on its ticket"),
     b("session.leave", &[C::Session], &["Escape"], G::View, "leave the full-screen chat: back to the ticket, the chat in its dock"),
+    b("draw.undo", &[C::Draw], &["Mod+z"], G::Forms, "on a drawing pad: undo the last stroke"),
+    b("draw.redo", &[C::Draw], &["Shift+Mod+z", "Mod+y"], G::Forms, "on a drawing pad: redo what was undone"),
+    b("draw.text-done", &[C::Draw], &["Enter"], G::Forms, "writing on a drawing: put the words on it"),
+    b("draw.text-cancel", &[C::Draw], &["Escape"], G::Forms, "writing on a drawing: drop the words"),
     // APP-22: the ticket page's Conversation box.
     b("comment.focus", &[C::TicketPage], &["c"], G::Annotate, "comment on the ticket as a whole: its Conversation box, focused"),
     // -- View

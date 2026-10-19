@@ -279,6 +279,9 @@ fn fill(el: &web_sys::Element, k: &Known) {
         Known::Url(u) => {
             let _ = el.set_attribute("src", u);
             let _ = el.set_attribute("data-state", "drawn");
+            if el.get_attribute("data-media").is_some_and(|h| crate::draw::is_drawing(&h)) {
+                let _ = el.set_attribute("data-drawing", "");
+            }
         }
         Known::Missing => {
             let _ = el.set_attribute("data-state", "missing");
@@ -286,6 +289,30 @@ fn fill(el: &web_sys::Element, k: &Known) {
         Known::Pending => {
             let _ = el.set_attribute("data-state", "pending");
         }
+    }
+}
+
+/// APP-70: the drawing `hash` painted again (the theme moved): the page's
+/// copy is `url`, and every comment image of it shows it.
+pub(crate) fn redraw(hash: &str, url: String) {
+    let old = known().with_untracked(|m| match m.get(hash) {
+        Some(Known::Url(u)) => Some(u.clone()),
+        _ => None,
+    });
+    known().update(|m| {
+        m.insert(hash.to_string(), Known::Url(url.clone()));
+    });
+    if let Some(doc) = crate::dom::window().document() {
+        if let Ok(nodes) = doc.query_selector_all(&format!("img[data-media=\"{hash}\"]")) {
+            for i in 0..nodes.length() {
+                if let Some(el) = nodes.get(i).and_then(|n| wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(n).ok()) {
+                    fill(&el, &Known::Url(url.clone()));
+                }
+            }
+        }
+    }
+    if let Some(u) = old.filter(|u| u.starts_with("blob:")) {
+        let _ = web_sys::Url::revoke_object_url(&u);
     }
 }
 
@@ -306,7 +333,9 @@ fn fetch(hash: String) {
                 if let MediaEvent::Media { mime, data, .. } = ev {
                     use base64::Engine;
                     let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|e| e.to_string())?;
-                    return blob_url(&bytes, &mime).ok_or_else(|| "no blob".to_string());
+                    // APP-70: a drawing is painted in the reader's theme.
+                    let themed = crate::draw::learn(&hash, &bytes).then(|| crate::draw::themed_url(&hash)).flatten();
+                    return themed.or_else(|| blob_url(&bytes, &mime)).ok_or_else(|| "no blob".to_string());
                 }
             }
             Err("not found".to_string())
@@ -361,7 +390,7 @@ fn listen() {
         let Some(src) = img.get_attribute("src").filter(|s| !s.is_empty()) else { return };
         ev.prevent_default();
         ev.stop_propagation();
-        open_full(&src, &img.get_attribute("alt").unwrap_or_default());
+        open_full_with(&src, &img.get_attribute("alt").unwrap_or_default(), edit_of(&img));
     });
     let _ = doc.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref());
     cb.forget();
@@ -399,13 +428,20 @@ fn listen() {
         }
         let Some(src) = img.get_attribute("src").filter(|s| !s.is_empty()) else { return };
         ev.prevent_default();
-        open_full(&src, &img.get_attribute("alt").unwrap_or_default());
+        open_full_with(&src, &img.get_attribute("alt").unwrap_or_default(), edit_of(&img));
     });
     let end_opts = web_sys::AddEventListenerOptions::new();
     end_opts.set_capture(true);
     end_opts.set_passive(false);
     let _ = doc.add_event_listener_with_callback_and_add_event_listener_options("touchend", end.as_ref().unchecked_ref(), &end_opts);
     end.forget();
+}
+
+/// APP-70: *edit drawing* for an image that is one — a comment's or a
+/// turn's (`data-media`), or a box's thumbnail (`data-media-hash`).
+fn edit_of(img: &web_sys::Element) -> Option<std::rc::Rc<dyn Fn()>> {
+    let hash = img.get_attribute("data-media").or_else(|| img.closest(".cthumb").ok().flatten().and_then(|t| t.get_attribute("data-media-hash")))?;
+    crate::draw::editor(&hash, img)
 }
 
 thread_local! {
@@ -490,6 +526,12 @@ struct View {
 /// the backdrop closes it (a tap on the image never does — it is touched to
 /// pan).
 pub(crate) fn open_full(src: &str, alt: &str) {
+    open_full_with(src, alt, None);
+}
+
+/// [`open_full`], with APP-70's *edit drawing* on its bar when the image is
+/// a drawing a box can open again.
+pub(crate) fn open_full_with(src: &str, alt: &str, edit: Option<std::rc::Rc<dyn Fn()>>) {
     use std::rc::Rc;
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
@@ -501,6 +543,16 @@ pub(crate) fn open_full(src: &str, alt: &str) {
     let _ = wrap.set_attribute("aria-label", if alt.is_empty() { "image" } else { alt });
     let _ = wrap.set_attribute("tabindex", "-1");
     let _ = bar.set_attribute("class", "lb-bar");
+    if edit.is_some() {
+        if let Some(b) = mk("button") {
+            let _ = b.set_attribute("type", "button");
+            let _ = b.set_attribute("data-z", "edit");
+            let _ = b.set_attribute("class", "lb-edit");
+            let _ = b.set_attribute("title", "open the drawing on the pad to change it — it sends as a new image");
+            b.set_text_content(Some("edit drawing"));
+            let _ = bar.append_child(&b);
+        }
+    }
     for (z, label, text) in [("out", "zoom out", "−"), ("fit", "fit to the screen", "fit"), ("in", "zoom in", "+"), ("close", "close", "×")] {
         let Some(b) = mk("button") else { return };
         let _ = b.set_attribute("type", "button");
@@ -595,6 +647,12 @@ pub(crate) fn open_full(src: &str, alt: &str) {
                 Some("out") => zoom(z / ZOOM_STEP, mx, my),
                 Some("fit") => zoom(1.0, mx, my),
                 Some("close") => close(),
+                Some("edit") => {
+                    close();
+                    if let Some(edit) = &edit {
+                        edit();
+                    }
+                }
                 _ if t.tag_name().eq_ignore_ascii_case("img") => {}
                 _ if t.class_list().contains("lb-bar") => {}
                 _ => close(),
@@ -930,6 +988,10 @@ pub(crate) struct Attach {
     ups: RwSignal<Vec<Up>>,
     files: StoredValue<HashMap<u32, web_sys::File>, LocalStorage>,
     next: StoredValue<u32>,
+    /// APP-70: the box's drawing pad.
+    pad: crate::draw::Pad,
+    /// APP-70: a send held until the drawing it sends is stored.
+    after: StoredValue<Option<std::rc::Rc<dyn Fn()>>, LocalStorage>,
 }
 
 impl Attach {
@@ -942,7 +1004,56 @@ impl Attach {
             ups: RwSignal::new(Vec::new()),
             files: StoredValue::new_local(HashMap::new()),
             next: StoredValue::new(0),
+            pad: crate::draw::Pad::new(),
+            after: StoredValue::new_local(None),
         }
+    }
+
+    /// APP-70: the box's drawing pad.
+    pub(crate) fn pad(self) -> crate::draw::Pad {
+        self.pad
+    }
+
+    /// APP-70: whether the pad holds a drawing that goes with the next send
+    /// (tracked) — a send with no words is a send.
+    pub(crate) fn drawn(self) -> bool {
+        self.pad.drawn()
+    }
+
+    /// APP-70: the pad's drawing, if it holds one, made a PNG (its strokes
+    /// inside) and put like a pasted image — at once a thumbnail with a
+    /// spinner, then its markdown in the text. Whether it did.
+    pub(crate) fn flush(self) -> bool {
+        let Some(bytes) = self.pad.take_png() else { return false };
+        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(&bytes[..]));
+        let opts = web_sys::FilePropertyBag::new();
+        opts.set_type("image/png");
+        let Ok(file) = web_sys::File::new_with_u8_array_sequence_and_options(&parts, "drawing.png", &opts) else { return false };
+        self.one(file);
+        true
+    }
+
+    /// APP-70: `send`, behind the pad — a drawing on it is put first, and
+    /// the send goes once it is stored (with its markdown in the text);
+    /// with none, the send goes at once. A drawing that fails waits for
+    /// *retry*; one removed takes the held send with it.
+    pub(crate) fn then<F: Fn() + Clone + 'static>(self, send: F) -> impl Fn() + Clone + 'static {
+        move || {
+            if self.flush() {
+                self.after.set_value(Some(std::rc::Rc::new(send.clone())));
+            } else {
+                send();
+            }
+        }
+    }
+
+    /// APP-70: a drawing opened again on this box's pad — taken out of the
+    /// draft if it is there (it comes back edited, a new image).
+    pub(crate) fn edit_drawing(self, hash: &str, strokes: Vec<crate::draw::Stroke>) {
+        if self.body.try_with_untracked(|b| refs(b).iter().any(|(_, h)| h == hash)) == Some(true) {
+            self.take_out(hash);
+        }
+        self.pad.open_with(strokes);
     }
 
     /// CHAT-14: a chat composer's attaching — images put for `chat`.
@@ -1038,6 +1149,13 @@ impl Attach {
                     });
                     self.ups.update(|u| u.retain(|u| u.key != key));
                     self.put_markdown(&alt, &hash);
+                    // APP-70: a send held for a drawing goes once every
+                    // image is up.
+                    if self.ups.with_untracked(Vec::is_empty) {
+                        if let Some(send) = self.after.try_update_value(Option::take).flatten() {
+                            send();
+                        }
+                    }
                 }
                 Err((why, retry)) => self.set_state(key, UpState::Failed { why, retry }),
             }
@@ -1056,6 +1174,7 @@ impl Attach {
     fn drop_up(self, key: u32) {
         let url = self.ups.with_untracked(|u| u.iter().find(|u| u.key == key).and_then(|u| u.url.clone()));
         self.ups.update(|u| u.retain(|u| u.key != key));
+        self.after.set_value(None);
         self.files.update_value(|f| {
             f.remove(&key);
         });
@@ -1086,7 +1205,11 @@ impl Attach {
         let events = client.put_all(ticket, chat, mime, data).await.map_err(|e| (format!("{name}: {}", crate::session::describe(&e)), true))?;
         for ev in events {
             match ev {
-                MediaEvent::Stored { hash, .. } => return Ok((alt_of(name), hash)),
+                MediaEvent::Stored { hash, .. } => {
+                    // APP-70: a drawing's strokes are known by its hash.
+                    crate::draw::learn(&hash, &bytes);
+                    return Ok((alt_of(name), hash));
+                }
                 MediaEvent::Refused { message, .. } => return Err(fixed(format!("{name}: {message}"))),
                 MediaEvent::Error { message } => return Err((format!("{name}: {message}"), true)),
                 MediaEvent::NotFound { ticket, .. } => {
@@ -1134,6 +1257,9 @@ fn files_of(list: Option<web_sys::FileList>) -> Vec<web_sys::File> {
 #[component]
 pub(crate) fn Attachments(a: Attach) -> impl IntoView {
     let picker = NodeRef::<leptos::html::Input>::new();
+    // APP-70: the box is one an edit of a drawing can open in.
+    let me = NodeRef::<leptos::html::Span>::new();
+    me.on_load(move |el| crate::draw::register(el.into(), a));
     let going = move || {
         a.ups
             .get()
@@ -1186,8 +1312,9 @@ pub(crate) fn Attachments(a: Attach) -> impl IntoView {
             })
             .collect_view()
     };
+    let pad = a.pad;
     view! {
-        <span class="cattach">
+        <span class="cattach" node_ref=me>
             <span class="cthumbs">{thumbs}{going}</span>
             <button
                 type="button"
@@ -1208,6 +1335,26 @@ pub(crate) fn Attachments(a: Attach) -> impl IntoView {
                     <path d="M3 15l4.5-4.5 3 3 2.5-2.5 4.5 4.5"></path>
                 </svg>
                 <span class="cpick-l">"Image"</span>
+            </button>
+            // APP-70: draw — the pad opens inside the box, above the text.
+            <button
+                type="button"
+                class="cpick cdraw"
+                title="Draw — pen, highlighter, arrow, box, text; it goes with the message"
+                aria-label="Draw"
+                aria-pressed=move || pad.open.get().to_string()
+                on:click=move |_| {
+                    if pad.open.get_untracked() {
+                        if pad.board.with_untracked(|b| b.strokes.is_empty()) {
+                            pad.discard();
+                        }
+                    } else {
+                        pad.open.set(true);
+                    }
+                }
+            >
+                <svg class="cpick-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" inner_html=crate::draw::PENCIL></svg>
+                <span class="cpick-l">"Draw"</span>
             </button>
             <input
                 type="file"

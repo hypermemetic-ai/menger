@@ -162,6 +162,12 @@ web-sys = { version = "0.3", features = [
   "BlobPropertyBag",
   "Url",
   "ClipboardEvent",
+  # APP-70: the drawing pad — a canvas drawn on with pointer events (a
+  # pencil's pressure), and the PNG it sends made a File to put.
+  "HtmlCanvasElement",
+  "CanvasRenderingContext2d",
+  "PointerEvent",
+  "FilePropertyBag",
 ] }
 
 console_error_panic_hook = "0.1"
