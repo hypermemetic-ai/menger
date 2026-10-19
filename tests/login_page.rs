@@ -828,14 +828,17 @@ async fn each_shell_s_session_is_its_own_cookie() {
 }
 
 /// IDENTITY-38: a frame's opaque origin sends no session cookie; the
-/// vendored libraries it loads (mermaid) answer without one. Nothing else
-/// under /app does.
+/// vendored libraries it loads (mermaid) answer without one. APP-92: so
+/// does every file of the app's code, which downloads behind the sign-in
+/// page, and its service worker. No page under /app does.
 #[tokio::test]
 async fn a_frame_loads_the_vendored_libraries_without_a_session() {
     let m = start().await;
-    let lib = m.http.get(m.url("/app/vendor/mermaid/mermaid.min.js")).header("origin", "null").send().await.unwrap();
-    assert_ne!(lib.status(), 303, "no detour to the login page");
-    for path in ["/app/", "/app/index.html", "/app/vendorx/a.js", "/app/sdk/menger-sdk.js"] {
+    for code in ["/app/vendor/mermaid/mermaid.min.js", "/app/sdk/menger-sdk.js", "/app/menger-app-0123456789abcdef_bg.wasm", "/sw.js"] {
+        let r = m.http.get(m.url(code)).header("origin", "null").send().await.unwrap();
+        assert_ne!(r.status(), 303, "{code}: no detour to the login page");
+    }
+    for path in ["/", "/app/", "/app", "/app/index.html", "/app/sdk/x.html"] {
         let r = m.http.get(m.url(path)).send().await.unwrap();
         assert_eq!(r.status(), 303, "{path} still needs a session");
     }

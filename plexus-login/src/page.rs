@@ -29,6 +29,9 @@ pub struct Chrome {
     pub dev_cookie: String,
     /// The dev sign-in's toggle, already HTML.
     pub dev_toggle: String,
+    /// APP-92: the app's service worker (a path at the page's origin), which
+    /// the page registers so the app downloads behind it; none, nothing.
+    pub service_worker: Option<String>,
 }
 
 /// The parts of the page's main column, each already HTML (escaped by its
@@ -117,6 +120,7 @@ pub fn render(chrome: &Chrome, body: Body) -> Page {
     let app = esc(chrome.branding.app);
     let dev_cookie = esc(&chrome.dev_cookie);
     let (mark, title, version) = (esc(chrome.branding.mark), esc(&chrome.title), esc(chrome.branding.version));
+    let sw = chrome.service_worker.as_deref().map(|p| format!(r#"<meta name="service-worker" content="{}">"#, esc(p))).unwrap_or_default();
     let error = body.error.map(|e| format!(r#"<p class="error" role="alert">{}</p>"#, esc(&e))).unwrap_or_default();
     let or = if !body.main.is_empty() && alts { r#"<div class="or">or</div>"# } else { "" };
     let mut html = String::with_capacity(TEMPLATE.len() + body.main.len() + body.alts.len() + 1024);
@@ -133,6 +137,7 @@ pub fn render(chrome: &Chrome, body: Body) -> Page {
                 "FACTS" => &facts,
                 "TITLE" => &title,
                 "VERSION" => &version,
+                "SW" => &sw,
                 "ERROR" => &error,
                 "OR" => or,
                 "PASSWORD" => &body.main,
@@ -159,13 +164,14 @@ pub fn heading(title: &str, sub: &str) -> String {
 /// A Content-Security-Policy admitting these script and style blocks and
 /// nothing else of the kind: images its own or `data:` (the TOTP QR code),
 /// the host's web app manifest (APP-64),
-/// `fetch` to its own origin only. `form-action` is left out on purpose: a
+/// `fetch` to its own origin only, and a service worker from it (APP-92:
+/// the app's, registered by the page). `form-action` is left out on purpose: a
 /// sign-in form's answer is a redirect to the identity backend and on to
 /// the person's IdP, which `form-action` would block in browsers that apply
 /// it to redirects.
 fn csp_of(scripts: &[String], styles: &[String]) -> String {
     format!(
-        "default-src 'none'; script-src {}; style-src {}; img-src 'self' data:; manifest-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
+        "default-src 'none'; script-src {}; style-src {}; img-src 'self' data:; manifest-src 'self'; connect-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
         or_none(&hash_all(scripts)),
         or_none(&hash_all(styles))
     )
@@ -244,6 +250,7 @@ mod tests {
             facts: vec![("instance".into(), "a&b".into())],
             dev_cookie: "toy_dev".into(),
             dev_toggle: String::new(),
+            service_worker: None,
         }
     }
 

@@ -875,7 +875,8 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             let has = held.with(Option::is_none) || chat.with(|c| c.as_ref().is_some_and(|c| c.last_message.is_some()));
             (has && !window_t.with(|t| t.fetched)).then(|| {
                 let words = if link.get() { "loading messages…" } else { "reconnecting…" };
-                view! { <div class="tearlier tpending" role="status">{words}</div> }
+                // APP-92: the boot sheet waits on a `data-pending` (src/motion.rs).
+                view! { <div class="tearlier tpending" role="status" data-pending="">{words}</div> }
             })
         }
     };

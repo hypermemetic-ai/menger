@@ -249,19 +249,43 @@ pub async fn harden(req: Request, next: axum::middleware::Next) -> Response {
     r
 }
 
-/// A file of the build as served — a page (an HTML file) under its policy.
-fn asset_response(st: &ShellState, asset: &Asset, headers: &HeaderMap) -> Response {
-    let r = ([(header::CONTENT_TYPE, asset.mime)], asset.bytes.clone()).into_response();
+/// A file of the build as served — a page (an HTML file) under its policy,
+/// and each with how long it may be kept ([`cache_control`]).
+fn asset_response(st: &ShellState, asset: &Asset, headers: &HeaderMap, key: &str) -> Response {
+    let mut r = ([(header::CONTENT_TYPE, asset.mime)], asset.bytes.clone()).into_response();
+    if let Some(keep) = cache_control(key) {
+        r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(keep));
+    }
     match &asset.scripts {
         Some(scripts) => st.policy.apply(r, scripts, headers),
         None => r,
     }
 }
 
+/// menger's APP-92: how long a file of the build may be kept. A file whose
+/// name carries the build's content hash (`menger-app-6ba34624f6d33bb3.js`,
+/// `…_bg.wasm`, `app-0123456789abcdef.css`: 16 hex digits after the last
+/// `-`) never changes under that name — a year, immutable, so a reload
+/// asks for none of it. A page and a service worker are asked again each
+/// time (`no-cache`); anything else is left to the browser, as before.
+pub fn cache_control(key: &str) -> Option<&'static str> {
+    let name = key.rsplit('/').next().unwrap_or(key);
+    let stem = name.split('.').next().unwrap_or(name);
+    let stem = stem.strip_suffix("_bg").unwrap_or(stem);
+    let hashed = stem.rsplit_once('-').is_some_and(|(_, h)| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+    if hashed {
+        Some("public, max-age=31536000, immutable")
+    } else if name.ends_with(".html") || name == "sw.js" {
+        Some("no-cache")
+    } else {
+        None
+    }
+}
+
 /// The root is the app; with no build, the fallback page (or "not built").
 async fn root_index(State(st): State<Arc<ShellState>>, headers: HeaderMap) -> Response {
     match st.app.current().await.get("index.html") {
-        Some(index) => asset_response(&st, index, &headers),
+        Some(index) => asset_response(&st, index, &headers, "index.html"),
         None => {
             tracing::debug!("no app build at {:?}: / serves the fallback", st.app.source);
             st.policy.page(st.root_fallback.as_ref().unwrap_or(&st.not_built), &headers)
@@ -271,7 +295,7 @@ async fn root_index(State(st): State<Arc<ShellState>>, headers: HeaderMap) -> Re
 
 async fn app_index(State(st): State<Arc<ShellState>>, headers: HeaderMap) -> Response {
     match st.app.current().await.get("index.html") {
-        Some(index) => asset_response(&st, index, &headers),
+        Some(index) => asset_response(&st, index, &headers, "index.html"),
         None => st.policy.page(&st.not_built, &headers),
     }
 }
@@ -292,7 +316,7 @@ async fn asset_by_key(State(st): State<Arc<ShellState>>, headers: HeaderMap, key
     match table.get(&key) {
         Some(asset) => {
             tracing::debug!("app asset served: {}/{key} ({} bytes)", st.mount, asset.bytes.len());
-            asset_response(&st, asset, &headers)
+            asset_response(&st, asset, &headers, &key)
         }
         // The entrypoint missing means "not built"; a missing asset next
         // to a present index.html is an ordinary 404 (stale link, typo).
@@ -303,6 +327,21 @@ async fn asset_by_key(State(st): State<Arc<ShellState>>, headers: HeaderMap, key
 
 #[cfg(test)]
 mod tests {
+    /// APP-92: a hashed file of the build is kept a year; anything else is
+    /// asked again.
+    #[test]
+    fn a_hashed_file_is_immutable_and_nothing_else_is() {
+        for key in ["menger-app-6ba34624f6d33bb3.js", "menger-app-6ba34624f6d33bb3_bg.wasm", "app-0123456789abcdef.css", "sub/x-0123456789abcdef.js"] {
+            assert_eq!(super::cache_control(key), Some("public, max-age=31536000, immutable"), "{key}");
+        }
+        for key in ["index.html", "sw.js", "sdk/page.html"] {
+            assert_eq!(super::cache_control(key), Some("no-cache"), "{key}");
+        }
+        for key in ["vendor/mermaid/mermaid-11.17.2.min.js", "fonts/geist-latin.woff2", "x-0123456789abcdeg.js", "x-0123456789abcde.js", "manifest.webmanifest"] {
+            assert_eq!(super::cache_control(key), None, "{key}");
+        }
+    }
+
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

@@ -358,6 +358,49 @@
     --diagram-text: auto; /* labels (mermaid primaryTextColor) */
   }
   /* tokens:end */
+  /* APP-92: the first paint — the page's ground and the boot sheet, all a
+     load draws before the app's stylesheet is in. The build cuts every rule
+     after the split marker below into a file of its own
+     (frontend/boot/split.mjs), which the boot script at the end of <body>
+     loads; the sheet (in <body>, static) stays until it is in and the
+     route's first view is drawn (src/motion.rs). Under full motion the
+     carpet's cells light in the lifecycle's colours while the count runs
+     to the store's total, then the sheet wipes upward; calm and none keep a
+     still sheet, lit, and fade it or drop it. Never in the way of a click. */
+  html { background: var(--bg); color: var(--ink); }
+  #boot {
+    position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center;
+    background: var(--bg); pointer-events: none;
+  }
+  #boot .boot-in { display: grid; justify-items: center; gap: 18px; }
+  #boot .carpet.boot-mark { display: block; width: 54px; height: 54px; }
+  #boot .boot-mark rect { fill: var(--line); transition: fill .18s var(--ease); }
+  #boot .boot-mark .c1 { --lit: var(--st-epic-fg); }
+  #boot .boot-mark .c2 { --lit: var(--st-pending-fg); }
+  #boot .boot-mark :is(.c3, .c8) { --lit: var(--st-ready-fg); }
+  #boot .boot-mark .c4 { --lit: var(--st-coding-fg); }
+  #boot .boot-mark .c6 { --lit: var(--st-in-review-fg); }
+  #boot .boot-mark .c7 { --lit: var(--st-complete-fg); }
+  #boot .boot-mark .c9 { --lit: var(--accent); }
+  #boot .boot-mark rect.on, html:is([data-motion="calm"], [data-motion="none"]) #boot .boot-mark rect { fill: var(--lit); }
+  #boot .boot-count {
+    margin: 0; font-family: var(--mono); font-size: calc(12px * var(--text-scale, 1));
+    letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  }
+  #boot .boot-count b { color: var(--ink); font-weight: var(--weight-medium); font-variant-numeric: tabular-nums; }
+  #boot .boot-count b:empty { display: none; }
+  #boot .boot-bar { width: 96px; height: 2px; overflow: hidden; background: var(--line); }
+  #boot .boot-bar i { display: block; width: 40%; height: 100%; background: var(--accent); animation: menger-boot-bar 1.2s var(--ease) infinite; }
+  @keyframes menger-boot-bar { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+  html[data-motion="calm"] #boot .boot-bar i, html[data-motion="none"] #boot .boot-bar i { animation: none; width: 100%; opacity: .5; }
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion]) #boot .boot-bar i { animation: none; width: 100%; opacity: .5; }
+    html:not([data-motion]) #boot .boot-mark rect { fill: var(--lit); }
+  }
+  #boot.done { animation: menger-wipe .6s cubic-bezier(.7, 0, .2, 1) forwards; }
+  @keyframes menger-wipe { to { clip-path: inset(0 0 100% 0); } }
+  #boot.fade { opacity: 0; transition: opacity .12s var(--ease); }
+  /* APP-92: split */
   /* APP-65: the screen's safe area. `viewport-fit=cover` (the viewport
      meta) lets the page run under an iPhone's rounded corners, island and
      home indicator, and makes iOS report how far; everything that sits on
@@ -3503,15 +3546,11 @@
      first screen plays them; src/motion.rs). How much moves is the Motion
      setting, stamped on <html> as data-motion="full|calm|none" (absent:
      full) — the contract the house components key on too. ── */
-  /* The boot: a sheet over the app as the socket connects — the carpet's
-     cells light in the lifecycle's colours while the count runs up, then the
-     sheet wipes upward and is removed. Never in the way of a click. */
-  #boot {
-    position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center;
-    background: var(--bg); pointer-events: none;
-  }
+  /* The boot: its sheet's rules are at the top of the stylesheet (APP-92,
+     the first paint). */
   /* APP-67: a reconnect's reload skips the sheet but never draws nothing:
      a quiet line at the top until its first health (src/motion.rs). */
+  #boot ~ #resumeveil { display: none; }
   #resumeveil {
     position: fixed; z-index: 2000; left: 50%; transform: translateX(-50%);
     top: calc(max(env(safe-area-inset-top, 0px), var(--sai-top, 0px)) + 10px);
@@ -3519,17 +3558,6 @@
     background: var(--panel); color: var(--muted); border: 1px solid var(--line);
     font: calc(11px * var(--text-scale, 1)) var(--mono);
   }
-  #boot .boot-in { display: grid; justify-items: center; gap: 18px; }
-  #boot .carpet.boot-mark { width: 54px; height: 54px; }
-  #boot .boot-mark rect { transition: fill .18s var(--ease); }
-  #boot .boot-mark rect:not(.on) { fill: var(--line); }
-  #boot .boot-count {
-    margin: 0; font-family: var(--mono); font-size: calc(12px * var(--text-scale));
-    letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
-  }
-  #boot .boot-count b { color: var(--ink); font-weight: var(--weight-medium); font-variant-numeric: tabular-nums; }
-  #boot.done { animation: menger-wipe .6s cubic-bezier(.7, 0, .2, 1) forwards; }
-  @keyframes menger-wipe { to { clip-path: inset(0 0 100% 0); } }
   /* Counters keep their width while they run. */
   .count-up { font-variant-numeric: tabular-nums; }
   /* A change: the status cell sweeps (a translucent bar of its own colour
@@ -4038,7 +4066,6 @@
   html[data-motion="none"] *, html[data-motion="none"] *::before, html[data-motion="none"] *::after {
     animation: none !important; transition: none !important;
   }
-  html[data-motion="none"] #boot { display: none; }
   html[data-motion="calm"] :is(#conn.live .cell, #nav .carpet.pip) { animation: none; }
   /* Before the script has stamped the setting, the system's preference. */
   @media (prefers-reduced-motion: reduce) {
@@ -5789,5 +5816,17 @@
   }
 </style>
 </head>
-<body></body>
+<body>
+<!-- APP-92: the boot sheet, painted with the page — the first thing a load
+     draws, before a byte of the app (src/motion.rs adopts it and takes it
+     down; its rules are the stylesheet's first). -->
+<div id="boot" aria-hidden="true"><div class="boot-in"><svg class="carpet boot-mark" viewBox="0 0 27 27"><rect class="c1" x="0" y="0" width="9" height="9"/><rect class="c2" x="9" y="0" width="9" height="9"/><rect class="c3" x="18" y="0" width="9" height="9"/><rect class="c4" x="0" y="9" width="9" height="9"/><rect class="c6" x="18" y="9" width="9" height="9"/><rect class="c7" x="0" y="18" width="9" height="9"/><rect class="c8" x="9" y="18" width="9" height="9"/><rect class="c9" x="18" y="18" width="9" height="9"/></svg><p class="boot-count"><b></b><span> loading</span></p><div class="boot-bar"><i></i></div></div></div>
+<!-- APP-92: the count the last visit saw; the app's stylesheet (the build
+     names it in <meta name="menger-app-css">), loaded without holding the
+     paint — <html data-css> once it is in, which the sheet waits for; the
+     service worker, which keeps this page and the app's files for the next
+     load (and reloads this page when it says the session is gone or the
+     page's build is); and a word when the network is slow. -->
+<script>(function(){var d=document,h=d.documentElement,b=d.querySelector("#boot b"),w=d.querySelector("#boot .boot-count span");try{var n=localStorage.getItem("menger.boot.total");if(n&&/^[0-9]+$/.test(n)){b.textContent=n;w.textContent=" tickets · loading"}}catch(e){}var m=d.querySelector('meta[name="menger-app-css"]');if(m){var l=d.createElement("link");l.rel="stylesheet";l.href=m.content;l.onload=l.onerror=function(){h.setAttribute("data-css","")};d.head.appendChild(l)}else h.setAttribute("data-css","");if("serviceWorker"in navigator){navigator.serviceWorker.register("/sw.js").catch(function(){});navigator.serviceWorker.addEventListener("message",function(e){if(e.data==="menger:signed-out")location.reload();else if(e.data==="menger:stale"){try{var t=+sessionStorage.getItem("menger.stale")||0;if(Date.now()-t<60000)return;sessionStorage.setItem("menger.stale",Date.now())}catch(x){}location.reload()}})}setTimeout(function(){if(d.getElementById("boot"))w.textContent+=" · slow connection"},12000)})()</script>
+</body>
 </html>

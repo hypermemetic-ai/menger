@@ -123,8 +123,15 @@ const VANILLA: &str = include_str!("../web/index.html");
 /// no SVG icon; frontend/icons/, scripts/icons.sh). No data in any of them,
 /// and a manifest is fetched without credentials, so none is behind a
 /// session.
-pub const ROOT_FILES: [&str; 5] =
-    ["apple-touch-icon.png", "icon-192.png", "icon-512.png", "icon-512-maskable.png", "manifest.webmanifest"];
+///
+/// APP-92: and the service worker (`sw.js`, written by the app's build,
+/// frontend/boot/split.mjs) — at the root, so its scope is the whole
+/// origin, and public: the sign-in page registers it.
+pub const ROOT_FILES: [&str; 6] =
+    ["apple-touch-icon.png", "icon-192.png", "icon-512.png", "icon-512-maskable.png", "manifest.webmanifest", "sw.js"];
+
+/// APP-92: where the app's service worker is served ([`ROOT_FILES`]).
+pub const SERVICE_WORKER: &str = "/sw.js";
 
 /// ACCESS-28: the app's pages' Content-Security-Policy (plexus-shell fills
 /// `{{SCRIPTS}}` with the page's inline-script hashes and `{{HUB}}` with the
@@ -337,12 +344,24 @@ async fn require_session(
 
 /// IDENTITY-38 / DESIGN-40: the app's files a ticket body's frame loads
 /// from its opaque origin — public code and faces, no data. APP-64: and the
-/// home-screen icons and manifest, at the root and under `/app/`.
+/// home-screen icons and manifest, at the root and under `/app/`. APP-92:
+/// and the app's code itself — its script, wasm and stylesheet, every file
+/// of the build but a page — so it downloads behind the sign-in page; the
+/// entrypoint stays behind the session.
 fn is_public_asset(path: &str) -> bool {
     let root_file = |p: &str| ROOT_FILES.contains(&p);
     path.starts_with("/app/vendor/")
         || is_font(path)
         || path.strip_prefix("/app/").or(path.strip_prefix('/')).is_some_and(root_file)
+        || is_app_code(path)
+}
+
+/// APP-92: a file of the app's build that is code, not a page — under
+/// `/app/`, named with an extension, and not HTML.
+fn is_app_code(path: &str) -> bool {
+    let Some(file) = path.strip_prefix("/app/") else { return false };
+    let name = file.rsplit('/').next().unwrap_or("");
+    !file.contains("..") && name.contains('.') && !name.ends_with(".html") && !name.ends_with(".htm")
 }
 
 /// DESIGN-40: the house faces, served from the app's build.
@@ -446,10 +465,17 @@ mod tests {
     }
 
     /// DESIGN-40: the faces and the vendored code are the public assets a
-    /// frame loads; APP-64: and the home-screen files. Nothing else of the
-    /// app is.
+    /// frame loads; APP-64: and the home-screen files; APP-92: and the app's
+    /// code and its service worker, which download behind the sign-in page.
+    /// No page of the app is.
     #[test]
     fn only_the_faces_and_the_vendored_code_are_public_assets() {
+        for code in ["/app/menger-app-6ba34624f6d33bb3.js", "/app/menger-app-6ba34624f6d33bb3_bg.wasm", "/app/app-0123456789abcdef.css", "/sw.js", "/app/sdk/menger-sdk.js"] {
+            assert!(is_public_asset(code), "{code}");
+        }
+        for page in ["/app/", "/app", "/app/index.html", "/app/sdk/x.html", "/app/../index.html", "/index.html", "/login/me"] {
+            assert!(!is_public_asset(page), "{page}");
+        }
         assert!(is_public_asset("/app/fonts/geist-latin.woff2"));
         assert!(is_public_asset("/app/vendor/mermaid.min.js"));
         assert!(!is_public_asset("/app/index.html"));

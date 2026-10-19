@@ -397,7 +397,7 @@ pub(crate) fn ChatsPage(#[prop(into)] pick: Signal<Pick>) -> impl IntoView {
                 {move || {
                     match shown.get() {
                         (Pick::Chat(_), false, true) => view! { <p class="pempty">"This chat is not one you are in."</p> }.into_any(),
-                        (Pick::Chat(_), false, false) => view! { <p class="pempty">"loading…"</p> }.into_any(),
+                        (Pick::Chat(_), false, false) => view! { <p class="pempty" data-pending="">"loading…"</p> }.into_any(),
                         _ => main().into_any(),
                     }
                 }}

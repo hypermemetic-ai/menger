@@ -11,6 +11,9 @@
      where the host serves none — harmless). -->
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
+<!-- APP-92: the app's service worker, when it has one: registered below,
+     so the app downloads while the person signs in. -->
+{{SW}}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="{{TITLE}}">
@@ -128,6 +131,21 @@
   button.alt { background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
   button.alt:hover { background: var(--hover); }
   button:disabled { opacity: .55; cursor: default; }
+  /* APP-92: a way in once pressed — a spinner, and no second press (a
+     second form POST or code flow made the first one's answer an error). */
+  :is(button, a.alt)[aria-busy="true"] { cursor: progress; pointer-events: none; }
+  button[aria-busy="true"]:disabled { opacity: .8; }
+  a.alt[aria-busy="true"] { opacity: .8; }
+  :is(button, a.alt)[aria-busy="true"] > svg { display: none; }
+  :is(button, a.alt)[aria-busy="true"]::before {
+    content: ""; flex: none; width: 15px; height: 15px; box-sizing: border-box;
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+    animation: busy .7s linear infinite;
+  }
+  @keyframes busy { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    :is(button, a.alt)[aria-busy="true"]::before { animation-duration: 2.4s; }
+  }
   .or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; }
   .or::before, .or::after { content: ""; height: 1px; background: var(--line); flex: 1; }
   .caption { color: var(--muted); font-size: 12.5px; margin: 0; }
@@ -212,6 +230,46 @@
     </main>
   </div>
   <script>
+    // APP-92: every way in shows a spinner once pressed and can't be pressed
+    // again until its step answers — a form's buttons all locked once it is
+    // sent (after the submit, so the pressed button's value still goes), a
+    // link once followed. The answer is a new page (a failure comes back
+    // with its reason, every button live); one the back button restores
+    // from the cache is unlocked.
+    const busy = (el) => {
+      el.setAttribute("aria-busy", "true");
+      if (el.tagName === "A") el.setAttribute("aria-disabled", "true");
+    };
+    for (const f of document.querySelectorAll("form")) {
+      f.addEventListener("submit", (e) => {
+        if (f.dataset.sent) { e.preventDefault(); return; }
+        f.dataset.sent = "1";
+        const pressed = e.submitter || f.querySelector("button:not([type=button])");
+        setTimeout(() => {
+          for (const b of f.querySelectorAll("button")) b.disabled = true;
+          if (pressed) busy(pressed);
+        }, 0);
+      });
+    }
+    for (const a of document.querySelectorAll("a.alt")) {
+      a.addEventListener("click", (e) => {
+        if (a.dataset.sent) { e.preventDefault(); return; }
+        a.dataset.sent = "1";
+        busy(a);
+      });
+    }
+    addEventListener("pageshow", (e) => {
+      if (!e.persisted) return;
+      for (const el of document.querySelectorAll("[data-sent], [aria-busy]")) {
+        delete el.dataset.sent;
+        el.removeAttribute("aria-busy");
+        el.removeAttribute("aria-disabled");
+      }
+      for (const b of document.querySelectorAll("form button")) b.disabled = false;
+    });
+    // APP-92: the app's service worker downloads the app behind this page.
+    const sw = document.querySelector('meta[name="service-worker"]');
+    if (sw && "serviceWorker" in navigator) navigator.serviceWorker.register(sw.content).catch(() => {});
     // IDENTITY-35: the dev sign-in's checkbox — this browser's sign-in to
     // plexus-idp, or back to the ordinary page.
     const dev = document.getElementById("dev-login");
@@ -252,6 +310,7 @@
         if (!window.nostr) { say("No nostr extension (NIP-07) answers in this browser.", true); trace("no extension"); return; }
         const url = location.origin + "/login/nostr";
         n.disabled = true;
+        busy(n);
         say("Waiting for your nostr extension to sign…");
         trace("asked the extension to sign");
         const t0 = Date.now();
@@ -261,13 +320,13 @@
           ev = await window.nostr.signEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000),
             content: "", tags: [["u", url], ["method", "POST"]] });
         } catch (e) {
-          clearTimeout(slow); n.disabled = false;
+          clearTimeout(slow); n.disabled = false; n.removeAttribute("aria-busy");
           say("Your nostr extension did not sign" + (e && e.message ? ": " + e.message : "."), true);
           trace("the extension refused", (e && e.message) || String(e));
           return;
         }
         clearTimeout(slow);
-        if (!ev || !ev.sig) { n.disabled = false; say("Your nostr extension answered without a signature.", true); trace("answered without a signature", typeof ev + " " + JSON.stringify(ev).slice(0, 120)); return; }
+        if (!ev || !ev.sig) { n.disabled = false; n.removeAttribute("aria-busy"); say("Your nostr extension answered without a signature.", true); trace("answered without a signature", typeof ev + " " + JSON.stringify(ev).slice(0, 120)); return; }
         trace("the extension signed", Math.round((Date.now() - t0) / 1000) + " s");
         say("Signed. Signing in…");
         try {
@@ -275,10 +334,10 @@
             method: "POST", headers: { authorization: "Nostr " + btoa(JSON.stringify(ev)), accept: "application/json" } });
           const body = await r.json().catch(() => ({}));
           if (r.ok && body.next) { location.href = body.next; return; }
-          n.disabled = false;
+          n.disabled = false; n.removeAttribute("aria-busy");
           say(body.error || "{{APP}} did not accept the signature (" + r.status + ").", true);
         } catch (e) {
-          n.disabled = false;
+          n.disabled = false; n.removeAttribute("aria-busy");
           say("{{APP}} could not be reached: " + (e && e.message ? e.message : e), true);
         }
       });

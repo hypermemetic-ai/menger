@@ -4,3 +4,11 @@
 target = "index.html"
 dist = "dist"
 public_url = "/app/"
+
+# APP-92: the first paint — index.html keeps the tokens and the boot sheet,
+# the rest of its stylesheet becomes a file of its own, and the service
+# worker learns the build's files (boot/split.mjs).
+[[hooks]]
+stage = "post_build"
+command = "node"
+command_arguments = ["boot/split.mjs"]

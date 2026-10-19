@@ -9,13 +9,16 @@
 //!   DESIGN-40's house components key on (absent reads as `full`). `none`
 //!   stops every animation and transition the app adds (one rule block in
 //!   index.html, plus the script-side checks here); `calm` keeps the state
-//!   changes (sweeps, flashes, ticks, a ticket opening) and drops the boot,
+//!   changes (sweeps, flashes, ticks, a ticket opening) and stills the boot,
 //!   the pip's breathe, the live mark's pulse and the counters.
-//! - **The boot** ([`boot_begin`], [`boot_live`]): a sheet over the app, the
-//!   carpet's eight cells lighting one by one while the count runs to the
-//!   store's total from the first `health`, then a wipe — never again on a
-//!   reconnect, ≤ 1.3 s from `health`, `pointer-events: none`, removed by
-//!   its own timer (and by a fallback when no `health` comes).
+//! - **The boot** ([`boot_begin`], [`boot_live`]): APP-92 — the sheet
+//!   index.html paints before a byte of the app (the carpet, the last
+//!   load's count, a bar), adopted here; on the first `health` the
+//!   carpet's eight cells light one by one while the count runs to the
+//!   store's total, and once the app's stylesheet is in and the route's
+//!   first view is drawn, a wipe (calm: a fade; none: gone, and a still
+//!   sheet throughout) — never again on a reconnect, `pointer-events:
+//!   none`, and gone by a fallback when no `health` comes.
 //! - **A change** ([`changed`], [`replay`]): a status `watch` moved — its
 //!   board cell sweeps, its row flashes, on the DOM nodes that already
 //!   draw it; a header count that moved ticks ([`tick_on_change`]).
@@ -132,9 +135,6 @@ fn root() -> Option<web_sys::Element> {
 fn apply() {
     if let Some(r) = root() {
         let _ = r.set_attribute("data-motion", current().as_str());
-    }
-    if current() != Motion::Full {
-        boot_end();
     }
 }
 
@@ -458,9 +458,9 @@ enum Boot {
     Done,
 }
 
-/// The carpet's cells in the order they light — the lifecycle, the
-/// accent last (src/carpet.rs's).
-fn boot_sheet(words: &str) -> Option<web_sys::Element> {
+/// The sheet as index.html paints it (APP-92), for a page that came
+/// without one: the carpet, the count and the bar.
+fn boot_sheet() -> Option<web_sys::Element> {
     let doc = dom::window().document()?;
     let sheet = doc.create_element("div").ok()?;
     sheet.set_id("boot");
@@ -482,14 +482,17 @@ fn boot_sheet(words: &str) -> Option<web_sys::Element> {
     }
     let p = doc.create_element("p").ok()?;
     p.set_class_name("boot-count");
-    let b = doc.create_element("b").ok()?;
-    b.set_text_content(Some("0"));
-    let _ = p.append_child(&b);
-    let rest = doc.create_element("span").ok()?;
-    rest.set_text_content(Some(&format!(" tickets · {words}")));
-    let _ = p.append_child(&rest);
+    let b_el = doc.create_element("b").ok()?;
+    let _ = p.append_child(&b_el);
+    let span_el = doc.create_element("span").ok()?;
+    let _ = p.append_child(&span_el);
+    let bar = doc.create_element("div").ok()?;
+    bar.set_class_name("boot-bar");
+    let bar_in = doc.create_element("i").ok()?;
+    let _ = bar.append_child(&bar_in);
     let _ = inner.append_child(&svg);
     let _ = inner.append_child(&p);
+    let _ = inner.append_child(&bar);
     let _ = sheet.append_child(&inner);
     Some(sheet)
 }
@@ -498,69 +501,137 @@ fn sheet() -> Option<web_sys::Element> {
     dom::window().document()?.get_element_by_id("boot")
 }
 
-/// How long the sheet waits for a first `health` before it wipes anyway.
-const BOOT_WAIT_MS: i32 = 2_500;
+/// How long the sheet waits for a first `health` before it goes anyway
+/// (the app then says what its connection is doing).
+const BOOT_WAIT_MS: i32 = 6_000;
 
-/// The app's start: the sheet up (under `full`), the cells dark and the
-/// words "connecting …", until [`boot_live`].
-pub(crate) fn boot_begin(url: &str) {
+/// How long, at most, the sheet waits for the app's stylesheet and the
+/// route's first view once it may go.
+const VIEW_WAIT_MS: f64 = 8_000.0;
+
+/// APP-92: the store's total the last load saw — the boot script in
+/// index.html shows it before the app has a byte, and the count starts
+/// from it.
+const TOTAL_KEY: &str = "menger.boot.total";
+
+/// The sheet's words after its count: "<n> tickets · <words>", or the
+/// words alone while there is no count yet.
+fn say(s: &web_sys::Element, words: &str) {
+    let counted = s.query_selector(".boot-count b").ok().flatten().and_then(|b| b.text_content()).is_some_and(|t| !t.is_empty());
+    if let Ok(Some(w)) = s.query_selector(".boot-count span") {
+        w.set_text_content(Some(&if counted { format!(" tickets · {words}") } else { words.to_string() }));
+    }
+}
+
+/// The app's start (a load, or APP-63's reconnect reload): the sheet
+/// index.html painted is adopted — or put up, for a page without one —
+/// and says `words`, until [`boot_live`]. Under `full` its cells are dark
+/// until then; calm and none show them lit and still (the stylesheet).
+pub(crate) fn boot_begin(words: &str) {
     if BOOT.with(Cell::get) != Boot::Never {
         return;
     }
-    BOOT.with(|b| b.set(Boot::Done));
-    if current() != Motion::Full {
+    let s = sheet().or_else(|| {
+        let s = boot_sheet()?;
+        let _ = dom::window().document()?.body()?.append_child(&s).ok()?;
+        Some(s)
+    });
+    let Some(s) = s else {
+        BOOT.with(|b| b.set(Boot::Done));
         return;
-    }
-    let Some(body) = dom::window().document().and_then(|d| d.body()) else { return };
-    let Some(s) = boot_sheet(&format!("connecting {url}")) else { return };
-    let _ = body.append_child(&s);
+    };
+    say(&s, words);
     BOOT.with(|b| b.set(Boot::Up));
     spawn_local(async move {
         dom::sleep_ms(BOOT_WAIT_MS).await;
         if BOOT.with(Cell::get) == Boot::Up {
-            wipe().await;
+            BOOT.with(|b| b.set(Boot::Playing));
+            leave(false).await;
         }
     });
 }
 
-/// The first `health`: the cells light one by one (in the lifecycle's
-/// colours) while the count runs to `total`, then the sheet wipes away —
-/// 1.3 s in all. Once: a reconnect's `health` finds the boot done.
+/// The first `health`: under `full` the cells light one by one (in the
+/// lifecycle's colours) while the count runs to `total` — from the last
+/// load's total when there was one — then, once the route's first view is
+/// drawn, the sheet wipes away; calm fades it, none drops it. Once: a
+/// reconnect's `health` finds the boot done.
 pub(crate) fn boot_live(total: u64) {
     resume_end();
+    if let Ok(Some(st)) = dom::window().local_storage() {
+        let _ = st.set_item(TOTAL_KEY, &total.to_string());
+    }
     if BOOT.with(Cell::get) != Boot::Up {
         return;
     }
     BOOT.with(|b| b.set(Boot::Playing));
     let Some(s) = sheet() else { return };
-    if let Ok(cells) = s.query_selector_all("rect") {
-        for i in 0..cells.length() {
-            let Some(r) = cells.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
-            spawn_local(async move {
-                dom::sleep_ms(40 + i as i32 * 70).await;
-                let _ = r.class_list().add_1("on");
-            });
+    let full = current() == Motion::Full;
+    if full {
+        if let Ok(cells) = s.query_selector_all("rect") {
+            for i in 0..cells.length() {
+                let Some(r) = cells.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
+                spawn_local(async move {
+                    dom::sleep_ms(40 + i as i32 * 70).await;
+                    let _ = r.class_list().add_1("on");
+                });
+            }
         }
     }
     if let Ok(Some(b)) = s.query_selector(".boot-count b") {
-        count_text(b, total.to_string(), 640.0);
+        let cached = b.text_content().filter(|t| !t.is_empty());
+        if cached.is_none() {
+            count_text(b, total.to_string(), 640.0);
+        } else {
+            b.set_text_content(Some(&total.to_string()));
+        }
     }
-    if let Ok(Some(w)) = s.query_selector(".boot-count span") {
-        spawn_local(async move {
-            dom::sleep_ms(560).await;
-            w.set_text_content(Some(" tickets · live"));
-        });
-    }
+    say(&s, "connected");
+    let s2 = s.clone();
     spawn_local(async move {
-        dom::sleep_ms(700).await;
-        wipe().await;
+        dom::sleep_ms(if full { 560 } else { 0 }).await;
+        say(&s2, "live");
+        dom::sleep_ms(if full { 140 } else { 0 }).await;
+        leave(true).await;
     });
 }
 
-/// APP-67: a page reloaded for a reconnect skips the sheet (it has seen
-/// it), but never shows nothing while it waits: until the first `health`
-/// a quiet *reconnecting…* sits at the top — and stays, if the socket the
-/// reload counted on does not come back. Every motion setting.
+/// APP-92 (APP-75): what the sheet waits on before it goes — the app's
+/// stylesheet in (index.html's boot script marks `<html data-css>`) and,
+/// when `view`, the route's first view: nothing marked `data-pending`
+/// ("loading…" in place of a list, a thread not yet held) and no "Checking
+/// your access…". At most [`VIEW_WAIT_MS`].
+async fn leave(view: bool) {
+    let t0 = now_ms();
+    while now_ms() - t0 < VIEW_WAIT_MS && !drawn(view) {
+        dom::sleep_ms(50).await;
+    }
+    BOOT.with(|b| b.set(Boot::Done));
+    let Some(s) = sheet() else { return };
+    match current() {
+        Motion::Full => {
+            let _ = s.class_list().add_1("done");
+            dom::sleep_ms(600).await;
+        }
+        Motion::Calm => {
+            let _ = s.class_list().add_1("fade");
+            dom::sleep_ms(140).await;
+        }
+        Motion::None => {}
+    }
+    s.remove();
+}
+
+fn drawn(view: bool) -> bool {
+    let Some(doc) = dom::window().document() else { return true };
+    let css = doc.document_element().is_some_and(|h| h.has_attribute("data-css"));
+    css && (!view || doc.query_selector("[data-pending], #checking").ok().flatten().is_none())
+}
+
+/// APP-67: a page reloaded for a reconnect never shows nothing while it
+/// waits: until the first `health` a quiet *reconnecting…* sits at the top
+/// — under the boot sheet while that is up (APP-92), and after it, if the
+/// socket the reload counted on does not come back. Every motion setting.
 pub(crate) fn resume_begin() {
     let Some(doc) = dom::window().document() else { return };
     let Some(body) = doc.body() else { return };
@@ -575,25 +646,6 @@ pub(crate) fn resume_begin() {
 fn resume_end() {
     if let Some(v) = dom::window().document().and_then(|d| d.get_element_by_id("resumeveil")) {
         v.remove();
-    }
-}
-
-/// The wipe (.6 s), then the sheet is gone.
-async fn wipe() {
-    BOOT.with(|b| b.set(Boot::Done));
-    let Some(s) = sheet() else { return };
-    let _ = s.class_list().add_1("done");
-    dom::sleep_ms(600).await;
-    s.remove();
-}
-
-/// The setting moved off `full` mid-boot: the sheet goes at once.
-fn boot_end() {
-    if matches!(BOOT.with(Cell::get), Boot::Up | Boot::Playing) {
-        BOOT.with(|b| b.set(Boot::Done));
-    }
-    if let Some(s) = sheet() {
-        s.remove();
     }
 }
 

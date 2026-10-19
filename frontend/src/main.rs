@@ -1485,7 +1485,9 @@ fn ticket_view(
                 (true, false) => "None",
                 (true, true) => "None in the filter",
             };
-            view! { <p class="none">{word}</p> }.into_any()
+            // APP-92: the boot sheet waits on a `data-pending` (src/motion.rs).
+            let pending = (word == "loading…").then_some("");
+            view! { <p class="none" data-pending=pending>{word}</p> }.into_any()
         } else {
             view! {
                 <ul id="children">
@@ -2202,12 +2204,15 @@ fn App() -> impl IntoView {
     // over the app until the first `health`.
     motion::install();
     // APP-63: a page reloaded for a reconnect puts back its scroll and its
-    // typed fields — and skips the boot, which it has seen.
+    // typed fields.
     // APP-67: the reload says *reconnecting…* until its first `health`.
+    // APP-92: under the boot sheet, as a load (APP-75): the words show
+    // once the sheet is gone, if the socket is not back by then.
     if resume::install() {
         motion::resume_begin();
+        motion::boot_begin("reconnecting");
     } else {
-        motion::boot_begin(&settings::effective_ws_url());
+        motion::boot_begin(&format!("connecting {}", settings::effective_ws_url()));
     }
     // SCALE-26: the board's model of the store — the extents, the window's
     // rows it holds — asked for by the session and kept by its own effect.
