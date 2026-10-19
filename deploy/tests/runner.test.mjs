@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PLANS, Runner, signed, tail } from "../runner.mjs";
+import { GUARDS, PLANS, Runner, shaOf, signed, tail, unowned } from "../runner.mjs";
 
 const SECRET = "runner-test-secret-0123456789";
 const sign = (body) => "sha256=" + crypto.createHmac("sha256", SECRET).update(body).digest("hex");
@@ -37,8 +37,8 @@ test("a log's tail: its last lines, at most the bytes asked", () => {
   assert.ok(Buffer.byteLength(tail("x".repeat(9000) + "\nend", 30, 4000)) <= 4000);
 });
 
-test("only test has a plan: build the tip, then deploy test naming the request", () => {
-  assert.deepEqual(Object.keys(PLANS), ["test"]);
+test("test's plan: build the tip, then deploy test naming the request", () => {
+  assert.deepEqual(Object.keys(PLANS), ["test", "app-prod"]);
   assert.deepEqual(PLANS.test.map((s) => [s.name, s.argv({ sha: "abc1234" })]), [["build", ["build", "abc1234"]], ["deploy", ["deploy", "test"]]]);
   assert.ok(PLANS.test[0].interruptible && !PLANS.test[1].interruptible && PLANS.test[1].records);
 });
@@ -50,7 +50,7 @@ test("what it takes: its project's requests to a planned environment, once each"
   assert.equal(r.take({ request: 4, project: "menger", environment: "test", revision: "", branch: "main" }), null);
   assert.equal(r.take({ request: 4, project: "menger", environment: "test" }), null, "a retry is answered, not queued again");
   assert.equal(r.queue.length, 1);
-  assert.deepEqual(r.queue[0], { request: 4, project: "MENGER", environment: "test", revision: "", branch: "main" });
+  assert.deepEqual(r.queue[0], { request: 4, project: "MENGER", environment: "test", revision: "", branch: "main", release: "", requestedBy: "" });
   const again = new Runner(r.o, () => {});
   assert.ok(again.taken.has(4), "what was taken is kept across a restart");
 });
@@ -77,4 +77,92 @@ test("the webhook: 401 unsigned, 422 unplanned, 202 queued; logs served; nothing
   assert.equal((await fetch(base + "/runs/9/../../taken.json")).status, 404);
   assert.equal((await fetch(base + "/health")).status, 200);
   server.close();
+});
+
+// ── DEPLOY-40: → prod, app-prod's plan ─────────────────────────────────────
+const REL = "20261019T192902Z-8cb79df";
+const OWNER = "workos:user_01OWNER";
+
+test("app-prod's plan: the image of the release test passed, app-test, then app-prod naming the request", () => {
+  const job = { release: REL };
+  assert.deepEqual(PLANS["app-prod"].map((s) => [s.name, s.argv(job), s.env ?? null, !!s.records]), [
+    ["image", ["image", REL], { IMAGE_STORE: "ghcr" }, false],
+    ["app-test", ["remote", "test", "--image", `ghcr.io/hypermemetic-ai/menger:${REL}`], null, false],
+    ["app-prod", ["remote", "prod"], null, true],
+  ]);
+  assert.deepEqual(GUARDS["app-prod"], { owner: true, tested: "test" });
+  assert.equal(shaOf(REL), "8cb79df");
+});
+
+test("who may ask for app-prod: an owner the config names, never a key or an agent", () => {
+  const job = (requestedBy, release = REL) => ({ environment: "app-prod", requestedBy, release });
+  assert.equal(unowned(job(OWNER), [OWNER]), null);
+  assert.match(unowned(job("key:54a9677a"), [OWNER, "key:54a9677a"]), /is a key — .* never an agent's/);
+  assert.match(unowned(job("agent:builder"), ["agent:builder"]), /is a key/);
+  assert.match(unowned(job("workos:user_someone"), [OWNER]), /is not the owner/);
+  assert.match(unowned(job(OWNER), []), /no owner \(MENGER_RUNNER_OWNERS\)/);
+  assert.match(unowned(job(""), [OWNER]), /names its requester/);
+  assert.match(unowned(job(OWNER, ""), [OWNER]), /names the release/);
+  assert.equal(unowned({ environment: "test", requestedBy: "key:x" }, []), null, "test is anyone's who may ask");
+});
+
+/** A runner over deploy/tests/fake-pipeline, its menger calls answered here: test passed `passed`. */
+function prodRunner({ passed = [REL], fail = "" } = {}) {
+  const r = runner({ fake: false, pipeline: path.join(import.meta.dirname, "fake-pipeline"), owners: [OWNER] });
+  const log = path.join(r.o.stateDir, "pipeline.log");
+  process.env.FAKE_PIPELINE_LOG = log;
+  process.env.FAKE_PIPELINE_FAIL = fail;
+  r.calls = [];
+  r.menger = async (method, params) => {
+    r.calls.push([method, params]);
+    if (method === "deployments.list" && params.state === "succeeded") return passed.map((release) => ({ type: "deployment", deployment: { release } }));
+    if (method === "deployments.list") return [];
+    if (method === "deployments.step") return [{ type: "request", deployment: { requested: { state: "started", steps: [] } } }];
+    return [{ type: "deployment", deployment: {} }];
+  };
+  r.ran = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : []);
+  r.steps = () => r.calls.filter(([m]) => m === "deployments.step").map(([, p]) => `${p.name}:${p.state}`);
+  r.records = () => r.calls.filter(([m]) => m === "deployments.record").map(([, p]) => `${p.environment}:${p.state}`);
+  return r;
+}
+const job = (over = {}) => ({ request: 21, project: "MENGER", environment: "app-prod", revision: "8cb79df", branch: "main", release: REL, requestedBy: OWNER, ...over });
+
+test("the owner's request runs the three steps in order; only app-prod's records name the request", async () => {
+  const r = prodRunner();
+  await r.run(job());
+  assert.deepEqual(r.ran(), [`ghcr||image ${REL}`, `||remote test --image ghcr.io/hypermemetic-ai/menger:${REL}`, "|21|remote prod"]);
+  assert.deepEqual(r.steps(), ["image:started", "image:succeeded", "app-test:started", "app-test:succeeded", "app-prod:started", "app-prod:succeeded"]);
+  assert.match(r.calls.find(([m, p]) => m === "deployments.step" && p.name === "image").at(1).detail, /^IMAGE_STORE=ghcr deploy\/pipeline image /);
+});
+
+test("a failing step stops the plan: the rest skipped, app-prod never runs, the request failed", async () => {
+  const r = prodRunner({ fail: "remote test" });
+  await r.run(job());
+  assert.deepEqual(r.ran().map((l) => l.split("|")[2].split(" ").slice(0, 2).join(" ")), ["image " + REL, "remote test"]);
+  assert.deepEqual(r.steps(), ["image:started", "image:succeeded", "app-test:started", "app-test:failed", "app-prod:skipped"]);
+  assert.match(r.calls.find(([m, p]) => m === "deployments.step" && p.state === "failed").at(1).detail, /remote test .*FAILED: the fake's failure/);
+  assert.deepEqual(r.records(), ["app-prod:failed"]);
+});
+
+test("an agent's request is refused in its first step, and nothing runs", async () => {
+  const r = prodRunner();
+  await r.run(job({ requestedBy: "key:54a9677a3b0d28" }));
+  assert.deepEqual(r.ran(), []);
+  assert.deepEqual(r.steps(), ["image:failed", "app-test:skipped", "app-prod:skipped"]);
+  assert.match(r.calls.find(([m]) => m === "deployments.step").at(1).detail, /^refused: key:54a9677a3b0d28 is a key/);
+  assert.deepEqual(r.records(), ["app-prod:failed"]);
+});
+
+test("a release test never passed is refused, and nothing runs", async () => {
+  const r = prodRunner({ passed: ["20261018T000000Z-1234567"] });
+  await r.run(job());
+  assert.deepEqual(r.ran(), []);
+  assert.match(r.calls.find(([m]) => m === "deployments.step").at(1).detail, new RegExp(`^refused: ${REL} never passed test`));
+  assert.ok(r.calls.some(([m, p]) => m === "deployments.list" && p.environment === "test" && p.state === "succeeded"));
+});
+
+test("a watched request to app-prod carries its release and its requester", () => {
+  const r = runner({ owners: [OWNER] });
+  r.consider({ id: 30, project: "MENGER", environment: "app-prod", revision: "8cb79df", release: REL, recorded_by: OWNER, requested: { state: "pending", steps: [] } });
+  assert.deepEqual(r.queue[0], { request: 30, project: "MENGER", environment: "app-prod", revision: "8cb79df", branch: "main", release: REL, requestedBy: OWNER });
 });
