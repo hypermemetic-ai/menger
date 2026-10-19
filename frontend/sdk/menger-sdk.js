@@ -772,6 +772,10 @@
       const stream = this.rpc.call("tickets.inputs.answer", { input, rationale, ticket, value });
       yield* extractData(stream);
     }
+    async* ask(question, ticket) {
+      const stream = this.rpc.call("tickets.inputs.ask", { question, ticket });
+      yield* extractData(stream);
+    }
     async* clear(input, ticket) {
       const stream = this.rpc.call("tickets.inputs.clear", { input, ticket });
       yield* extractData(stream);

@@ -354,6 +354,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     Binding { id: "chat.newline", contexts: &[C::Composer], chords: &["Shift+Enter"], group: G::Forms, does: "a new line in the message", native: true },
     b("chat.leave", &[C::Composer], &["Escape"], G::Forms, "leave the composer (an agent mid-turn: stop it — AGENT-3)"),
     b("chat.recall", &[C::Composer], &["ArrowUp"], G::Forms, "in an empty composer: your last message, to edit and send as new"),
+    b("chat.untoken", &[C::Composer], &["Backspace"], G::Forms, "in an empty composer: take the command token off, its word back as text (APP-90)"),
     b("chat.menu-up", &[C::ComposerMenu], &["ArrowUp"], G::Forms, "the @ or / menu: the row above"),
     b("chat.menu-down", &[C::ComposerMenu], &["ArrowDown"], G::Forms, "the row below"),
     b("chat.menu-pick", &[C::ComposerMenu], &["Tab", "Enter"], G::Forms, "pick it: complete the command, add the one named"),

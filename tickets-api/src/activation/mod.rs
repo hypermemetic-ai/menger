@@ -39,7 +39,7 @@ use crate::types::InputState;
 use crate::queue::Urgency;
 use crate::vocab::{
     Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, MockupRef, Message, Principal,
-    Query, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
+    Query, Question, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
 // ACCESS-48: what `not_found` / `ambiguous` echo.

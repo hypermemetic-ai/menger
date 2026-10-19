@@ -4333,12 +4333,14 @@ impl Store {
     /// changed is written.
     ///
     /// ACCESS-11: of the ticket `on` is for.
-    pub async fn amend(
-        &self,
-        on: Permit<Editor>,
-        title: Option<String>,
-        body: Option<String>,
-    ) -> Result<Change, StoreError> {
+    pub async fn amend(&self, on: Permit<Editor>, title: Option<String>, body: Option<String>) -> Result<Change, StoreError> {
+        let serial = self.serial().await;
+        self.amend_under(serial, on, title, body).await
+    }
+
+    /// [`Store::amend`] with the write-serial lock already held — APP-90's
+    /// `ask` reads the body it appends to under it.
+    pub(super) async fn amend_under(&self, serial: OwnedMutexGuard<()>, on: Permit<Editor>, title: Option<String>, body: Option<String>) -> Result<Change, StoreError> {
         // ORG-3: as the store spells it — `get` below resolves it.
         let id = crate::address::folded(on.id());
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
@@ -4356,7 +4358,6 @@ impl Store {
         let uses = body.as_deref().map(components::read);
         // INPUT-3: and the inputs it declares, the same way.
         let declares = body.as_deref().map(crate::inputs::read);
-        let serial = self.serial().await;
         let mut ticket = self.get_unscoped(&id).await?;
         let mut changed = Vec::new();
         if let Some(title) = title.filter(|t| *t != ticket.title) {
@@ -5443,6 +5444,8 @@ mod components;
 /// INPUT-3: the inputs store — each ticket's inputs as its body declares
 /// them, their answers and state changes, the tables and the migration.
 mod inputs;
+/// APP-90: `ask` — a text input appended to a ticket's body.
+mod ask;
 /// COMMENT-2: the comments store — a reader's comments on the app, kept
 /// beside the tickets, behind the cache.
 mod comments;
@@ -5797,6 +5800,8 @@ mod tests_parts;
 /// the tables added to an old file.
 #[cfg(test)]
 mod tests_inputs;
+#[cfg(test)]
+mod tests_ask;
 
 /// FILTER-4: the cells — every ticket's cell and every bitmap held to a scan
 /// after every write, in the cache and the file; each write's announced

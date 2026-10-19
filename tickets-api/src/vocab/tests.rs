@@ -257,6 +257,9 @@ fn prose_has_a_name_and_one_rule_each() {
     assert_eq!("  why  ".parse::<Message>().unwrap().given().as_deref(), Some("why"));
     assert_eq!("".parse::<Message>().unwrap().given(), None);
     holds::<Reason>(&["the import waits on this"], &["", "  "]);
+    // APP-90: one line, not blank, no control characters.
+    holds::<Question>(&["Hold at cone 6 or 5?", "<b>&amp;</b> `x`"], &["", "  \n ", "a\u{7}b", &"x".repeat(QUESTION_MAX + 1)]);
+    assert_eq!(" Hold at\n cone 6? ".parse::<Question>().unwrap().as_str(), "Hold at cone 6?");
     holds::<Query>(&["watch", "", "plcement wave"], &["a\u{0}b", &"a".repeat(QUERY_MAX + 1)]);
     holds::<Author>(&["owner", " Ada "], &["", "  ", &"a".repeat(257)]);
 }

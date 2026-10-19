@@ -275,6 +275,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.undelete", Today::Admin, Some("ids")),
     // ACCESS-14: tickets' inputs child, gated by its whole path.
     ("tickets.inputs.list", Today::Viewer, None),
+    // APP-90: a question filed as a text input — an editor's, on the ticket.
+    ("tickets.inputs.ask", Today::Editor, Some("ticket")),
     ("tickets.inputs.answer", Today::Editor, Some("ticket")),
     ("tickets.inputs.clear", Today::Editor, Some("ticket")),
     ("tickets.inputs.close", Today::Editor, Some("ticket")),

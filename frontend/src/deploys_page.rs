@@ -807,8 +807,9 @@ fn source_of(project: &str, name: &str) -> Option<(String, Option<String>, Optio
     })
 }
 
-/// DEPLOY-25: `deployments.request` — the request as kept, or why not.
-async fn queue(project: String, name: String, revision: String, note: String) -> Result<Deployment, String> {
+/// DEPLOY-25: `deployments.request` — the request as kept, or why not
+/// (APP-90: the composer's `/deploy` too).
+pub(crate) async fn queue(project: String, name: String, revision: String, note: String) -> Result<Deployment, String> {
     let client = session::deployments_client().ok_or_else(|| "not connected".to_string())?;
     let (p, e) = (crate::typed::typed(&project)?, crate::typed::typed(&name)?);
     let (rev, note) = (crate::typed::opt(Some(revision))?, crate::typed::opt(Some(note))?);

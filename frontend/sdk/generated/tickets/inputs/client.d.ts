@@ -1,4 +1,5 @@
 import type { RpcClient } from '../../rpc';
+import type { Question } from './types';
 import type { ShortcodeRef, TicketRef } from '../../notes/types';
 import type { FilterText, InputId, InputState, InputValue, Message, TicketsEvent, Zone } from '../../tickets/types';
 /** Typed client interface for tickets.inputs plugin */
@@ -26,6 +27,23 @@ export interface TicketsInputsClient {
      * @requires `inputs.answer` on the scope of `ticket`
      */
     answer(input: InputId, ticket: TicketRef, value: InputValue, rationale?: Message | null): AsyncGenerator<TicketsEvent>;
+    /**
+     * File a question for the owner on a ticket: a new text input appended to its body (one write, one revision); yields input_changed with the input.
+  
+  APP-90: the chat composer's `/ask`. Appends `<m-input id="ask-N"
+  kind="text"><m-question>…</m-question></m-input>` to `ticket`'s
+  body — `N` the lowest no input of the ticket has had, so the id is
+  unique in it; the question escaped, so it is text and never markup —
+  through `amend`'s write (its revision, `asking` moved in it,
+  `amended` and `input_changed` broadcast). Yields exactly one event:
+  `InputChanged` (the new input, `open`), `NotFound`, or an in-band
+  `Error` — the body would pass `--max-body-bytes`, or its markup
+  elsewhere is malformed — and nothing is written.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `inputs.ask` on the scope of `ticket`
+     */
+    ask(question: Question, ticket: TicketRef): AsyncGenerator<TicketsEvent>;
     /**
      * Clear an input's answer (open again; kept in its history, with where it came from, said by the server); yields input_changed.
   
@@ -105,6 +123,10 @@ export declare const requires: {
         readonly grant: "inputs.answer";
         readonly target: "ticket";
     };
+    readonly "inputs.ask": {
+        readonly grant: "inputs.ask";
+        readonly target: "ticket";
+    };
     readonly "inputs.clear": {
         readonly grant: "inputs.clear";
         readonly target: "ticket";
@@ -128,6 +150,6 @@ export declare const requires: {
 };
 /** The tickets.inputs activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
 export declare const defaultRoles: {
-    readonly editor: readonly ["inputs.list", "inputs.answer", "inputs.clear", "inputs.close", "inputs.reopen"];
+    readonly editor: readonly ["inputs.list", "inputs.ask", "inputs.answer", "inputs.clear", "inputs.close", "inputs.reopen"];
     readonly viewer: readonly ["inputs.list"];
 };

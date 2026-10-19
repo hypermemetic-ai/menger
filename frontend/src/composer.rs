@@ -21,9 +21,18 @@
 //!   `/stop`, `/status`, `/help`, sent as the message for the chat bridge
 //!   to answer (CHAT-40); a command that takes nothing acts when picked;
 //!   manifest's `slash.ts` shape): `/add NAME`, `/ticket CODE`, `/title
-//!   TEXT`, `/close`. A command runs, never goes as prose ([`act_of`]); one
-//!   that cannot run is refused in a strip over the card — *not sent ·
-//!   reason ×* — and the text stays.
+//!   TEXT`, `/close`; APP-90, in a chat on a ticket: `/assign WHO`
+//!   (`tickets.assign`) and `/ask QUESTION` (`tickets.inputs.ask`, a text
+//!   input on the ticket). A command runs, never goes as prose
+//!   ([`act_of`]); one that cannot run is refused in a strip over the card
+//!   — *not sent · reason ×* — and the text stays; one that ran says what
+//!   it did in a strip of its own ([`Done`]).
+//! - **The token** (APP-90, APP-83's mockup 4): a command that takes an
+//!   argument, picked (or typed with its space), becomes a token in the
+//!   card — `.ctok`, *`/assign` ×* — that waits for its argument; the box
+//!   then holds only the argument ([`token_of`], [`line_of`]). Enter runs
+//!   it; Backspace in an empty box takes it off, its word back as text
+//!   ([`takes_token_off`]); × takes it off too.
 //! - **Ticket codes** in the text show as chips in a strip over the card
 //!   ([`codes_in`]).
 //! - **Images** (CHAT-14, owner 2026-10-17: *"allow pasting images into
@@ -67,26 +76,58 @@ pub(crate) struct Spec {
     /// APP-83: the agent's own — sent as the message, and the chat bridge
     /// answers it itself (CHAT-40); offered only in a chat with an agent.
     pub(crate) agent: bool,
+    /// APP-90: the ticket's — offered only in a chat on a ticket.
+    pub(crate) ticket: bool,
+    /// APP-90: the owner's (`/deploy`, owner 2026-10-19: deployments are
+    /// triggered only by the owner) — offered only to an admin on `*`
+    /// (`members.me`'s `admin_everywhere`), an admin of every project.
+    pub(crate) admin: bool,
+}
+
+/// APP-90: where the composer is — which commands it offers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Here {
+    /// An agent is in the chat.
+    pub(crate) agent: bool,
+    /// The chat is on a ticket.
+    pub(crate) ticket: bool,
+    /// The reader is an admin on `*`.
+    pub(crate) admin: bool,
+}
+
+impl Here {
+    fn offers(self, c: &Spec) -> bool {
+        (self.agent || !c.agent) && (self.ticket || !c.ticket) && (self.admin || !c.admin)
+    }
 }
 
 /// The commands, in the menu's order: the agent's first (APP-83) — the
 /// harmless first, since a bare `/` and Enter runs the top row — then the
 /// chat's.
-pub(crate) const COMMANDS: [Spec; 8] = [
-    Spec { name: "status", arg: None, spaced_arg: false, hint: "what the agent is doing, and since when", agent: true },
-    Spec { name: "help", arg: None, spaced_arg: false, hint: "the agent's commands", agent: true },
-    Spec { name: "stop", arg: None, spaced_arg: false, hint: "stop the agent's running turn", agent: true },
-    Spec { name: "clear", arg: None, spaced_arg: false, hint: "the agent starts a fresh session — its context forgotten", agent: true },
-    Spec { name: "add", arg: Some("NAME"), spaced_arg: false, hint: "bring a person or an agent into this chat", agent: false },
-    Spec { name: "ticket", arg: Some("CODE"), spaced_arg: false, hint: "put a ticket card in the message", agent: false },
-    Spec { name: "title", arg: Some("TEXT"), spaced_arg: true, hint: "rename this chat", agent: false },
-    Spec { name: "close", arg: None, spaced_arg: false, hint: "close it — read-only, kept on its ticket", agent: false },
+pub(crate) const COMMANDS: [Spec; 11] = [
+    Spec { name: "status", arg: None, spaced_arg: false, hint: "what the agent is doing, and since when", agent: true, ticket: false, admin: false },
+    Spec { name: "help", arg: None, spaced_arg: false, hint: "the agent's commands", agent: true, ticket: false, admin: false },
+    Spec { name: "stop", arg: None, spaced_arg: false, hint: "stop the agent's running turn", agent: true, ticket: false, admin: false },
+    Spec { name: "clear", arg: None, spaced_arg: false, hint: "the agent starts a fresh session — its context forgotten", agent: true, ticket: false, admin: false },
+    Spec { name: "add", arg: Some("NAME"), spaced_arg: false, hint: "bring a person or an agent into this chat", agent: false, ticket: false, admin: false },
+    Spec { name: "assign", arg: Some("WHO"), spaced_arg: false, hint: "assign the ticket to someone who can read it", agent: false, ticket: true, admin: false },
+    Spec { name: "ask", arg: Some("QUESTION"), spaced_arg: true, hint: "file a question for the owner on the ticket, as an input", agent: false, ticket: true, admin: false },
+    Spec { name: "deploy", arg: Some("ENV"), spaced_arg: false, hint: "queue a deploy of the ticket's project — test or prod", agent: false, ticket: true, admin: true },
+    Spec { name: "ticket", arg: Some("CODE"), spaced_arg: false, hint: "put a ticket card in the message", agent: false, ticket: false, admin: false },
+    Spec { name: "title", arg: Some("TEXT"), spaced_arg: true, hint: "rename this chat", agent: false, ticket: false, admin: false },
+    Spec { name: "close", arg: None, spaced_arg: false, hint: "close it — read-only, kept on its ticket", agent: false, ticket: false, admin: false },
 ];
 
 /// A command, read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
     Add(String),
+    /// APP-90: `tickets.assign` the chat's ticket to WHO.
+    Assign(String),
+    /// APP-90: `tickets.inputs.ask` on the chat's ticket.
+    Ask(String),
+    /// APP-90: `deployments.request` for the ticket's project.
+    Deploy(String),
     Ticket(String),
     Title(String),
     Close,
@@ -125,22 +166,23 @@ fn spec_for(word: &str) -> Option<&'static Spec> {
 }
 
 /// The menu for what is typed: every command the word begins, or — once a
-/// space follows it — that command alone. The agent's commands only where
-/// an agent is in the chat (`agent`).
-pub(crate) fn menu_for(s: &Slash, agent: bool) -> Vec<&'static Spec> {
+/// space follows it — that command alone. Only what is offered `here`: the
+/// agent's commands where an agent is in the chat; APP-90: the ticket's in
+/// a chat on a ticket, the owner's to an admin on `*`.
+pub(crate) fn menu_for(s: &Slash, here: Here) -> Vec<&'static Spec> {
     if s.spaced {
-        return spec_for(&s.word).filter(|c| !c.agent).into_iter().collect();
+        return spec_for(&s.word).filter(|c| !c.agent && here.offers(c)).into_iter().collect();
     }
-    COMMANDS.iter().filter(|c| (agent || !c.agent) && c.name.starts_with(s.word.as_str())).collect()
+    COMMANDS.iter().filter(|c| here.offers(c) && c.name.starts_with(s.word.as_str())).collect()
 }
 
-fn offered() -> String {
-    COMMANDS.iter().filter(|c| !c.agent).map(|c| format!("/{}", c.name)).collect::<Vec<_>>().join(", ")
+fn offered(here: Here) -> String {
+    COMMANDS.iter().filter(|c| !c.agent && here.offers(c)).map(|c| format!("/{}", c.name)).collect::<Vec<_>>().join(", ")
 }
 
 /// The command a `/` line asks for, or why it can't be run; `None` when the
 /// text is no command at all (prose).
-pub(crate) fn read_slash(text: &str) -> Option<Result<Command, String>> {
+pub(crate) fn read_slash(text: &str, here: Here) -> Option<Result<Command, String>> {
     let s = slash_of(text.trim())?;
     // APP-83: the agent's commands go as the message; the bridge answers.
     if !s.spaced && spec_for(&s.word).is_some_and(|c| c.agent) {
@@ -148,15 +190,28 @@ pub(crate) fn read_slash(text: &str) -> Option<Result<Command, String>> {
     }
     let Some(spec) = spec_for(&s.word) else {
         let typed = if s.word.is_empty() { "/".to_string() } else { format!("/{}", s.word) };
-        return Some(Err(format!("{typed} is not a command — the commands are {}", offered())));
+        return Some(Err(format!("{typed} is not a command — the commands are {}", offered(here))));
     };
+    if spec.ticket && !here.ticket {
+        return Some(Err(format!("/{} works only in a chat on a ticket", spec.name)));
+    }
+    if spec.admin && !here.admin {
+        return Some(Err(format!("/{} is the owner's: only an admin of every project queues a deploy", spec.name)));
+    }
     let arg = s.rest.as_str();
     Some(match (spec.arg, arg.is_empty()) {
-        (Some(what), true) => Err(format!("/{} needs a {} — e.g. /{} {}", spec.name, what.to_lowercase(), spec.name, example(spec.name))),
+        (Some(what), true) => {
+            let what = what.to_lowercase();
+            let a = if what.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+            Err(format!("/{} needs {a} {what} — e.g. /{} {}", spec.name, spec.name, example(spec.name)))
+        }
         (None, false) => Err(format!("/{} takes nothing after it", spec.name)),
         (Some(what), false) if !spec.spaced_arg && arg.contains(char::is_whitespace) => Err(format!("/{} takes one {}, not “{arg}”", spec.name, what.to_lowercase())),
         _ => match spec.name {
             "add" => Ok(Command::Add(arg.trim_start_matches('@').to_string())),
+            "assign" => Ok(Command::Assign(arg.trim_start_matches('@').to_string())),
+            "ask" => Ok(Command::Ask(arg.to_string())),
+            "deploy" => Ok(Command::Deploy(arg.to_ascii_lowercase())),
             "ticket" if is_code(&arg.to_ascii_uppercase()) => Ok(Command::Ticket(arg.to_ascii_uppercase())),
             "ticket" => Err(format!("/ticket takes a ticket's code — {arg} is not one (e.g. KILN-3)")),
             "title" => Ok(Command::Title(arg.to_string())),
@@ -168,6 +223,9 @@ pub(crate) fn read_slash(text: &str) -> Option<Result<Command, String>> {
 fn example(name: &str) -> &'static str {
     match name {
         "add" => "reviewer",
+        "assign" => "sam",
+        "ask" => "Hold at cone 6 or 5?",
+        "deploy" => "test",
         "ticket" => "KILN-3",
         _ => "The hold at 1240 °C",
     }
@@ -181,11 +239,56 @@ pub(crate) enum Act {
     Refuse(String),
 }
 
-pub(crate) fn act_of(text: &str) -> Act {
-    match read_slash(text) {
+pub(crate) fn act_of(text: &str, here: Here) -> Act {
+    match read_slash(text, here) {
         None => Act::Say,
         Some(Ok(c)) => Act::Run(c),
         Some(Err(why)) => Act::Refuse(why),
+    }
+}
+
+// -- the token (APP-90) ------------------------------------------------------------
+
+/// A command typed with its space and nothing after it (`/assign `), that
+/// takes an argument and is offered here: the token it becomes.
+pub(crate) fn token_of(text: &str, here: Here) -> Option<&'static Spec> {
+    let s = slash_of(text)?;
+    if !s.spaced || !s.rest.is_empty() {
+        return None;
+    }
+    spec_for(&s.word).filter(|c| c.arg.is_some() && !c.agent && here.offers(c))
+}
+
+/// APP-90: the project a ticket's `/deploy` queues — its shortcode's root,
+/// the outermost of its address (`hypermemetic:MENGER/APP/APP-90` is
+/// MENGER; a project is a shortcode, DEPLOY-11); `None` for no address.
+pub(crate) fn project_of(address: &str) -> Option<String> {
+    let a = menger_tickets_api::Address::parse(address).ok()?;
+    Some(a.hosts.first().unwrap_or(&a.code).as_str().to_string())
+}
+
+/// The line a send runs: the token's command and the box's text as its
+/// argument, or the text alone.
+pub(crate) fn line_of(token: Option<&Spec>, text: &str) -> String {
+    match token {
+        Some(c) => format!("/{} {}", c.name, text.trim()),
+        None => text.to_string(),
+    }
+}
+
+/// Backspace (`chat.untoken`, from `bindings::hit` in [`Context::Composer`])
+/// in an empty box with a token takes the token off.
+pub(crate) fn takes_token_off(id: Option<&str>, empty: bool, token: bool) -> bool {
+    id == Some("chat.untoken") && empty && token
+}
+
+/// The box's placeholder while a token waits: what it takes, and an
+/// example (a phone's: the example alone).
+pub(crate) fn token_placeholder(c: &Spec, touch: bool) -> String {
+    let what = c.arg.unwrap_or("text").to_lowercase();
+    match touch {
+        true => format!("e.g. {}", example(c.name)),
+        false => format!("{what} — e.g. {} · Enter runs /{} · ⌫ takes it off", example(c.name), c.name),
     }
 }
 
@@ -267,6 +370,16 @@ pub(crate) fn mention_rows(cands: &[(String, bool)], already: &[String], query: 
 /// `/add NAME`: the one principal `name` means among the candidates — by
 /// its name, its principal, or an agent's bare name — or why not.
 pub(crate) fn resolve_add(name: &str, cands: &[(String, bool)], already: &[String], ticket: &str, namer: impl Fn(&str) -> String) -> Result<String, String> {
+    resolve_as("add", name, cands, already, ticket, namer)
+}
+
+/// APP-90: `/assign WHO` — the one principal `name` means, as `/add`
+/// resolves it, who can read the ticket.
+pub(crate) fn resolve_assign(name: &str, cands: &[(String, bool)], ticket: &str, namer: impl Fn(&str) -> String) -> Result<String, String> {
+    resolve_as("assign", name, cands, &[], ticket, namer)
+}
+
+fn resolve_as(verb: &str, name: &str, cands: &[(String, bool)], already: &[String], ticket: &str, namer: impl Fn(&str) -> String) -> Result<String, String> {
     let n = name.trim().trim_start_matches('@').to_lowercase();
     let hits: Vec<&(String, bool)> = cands
         .iter()
@@ -276,12 +389,12 @@ pub(crate) fn resolve_add(name: &str, cands: &[(String, bool)], already: &[Strin
         })
         .collect();
     match hits.as_slice() {
-        [] => Err(format!("/add {name} — no one called {name} holds a grant here")),
-        [(p, _)] if already.contains(p) => Err(format!("/add {name} — {name} is in this chat already")),
-        [(_, false)] if ticket.is_empty() => Err(format!("/add {name} — {name} holds no grant here")),
-        [(_, false)] => Err(format!("/add {name} — {name} can't read {ticket}")),
+        [] => Err(format!("/{verb} {name} — no one called {name} holds a grant here")),
+        [(p, _)] if already.contains(p) => Err(format!("/{verb} {name} — {name} is in this chat already")),
+        [(_, false)] if ticket.is_empty() => Err(format!("/{verb} {name} — {name} holds no grant here")),
+        [(_, false)] => Err(format!("/{verb} {name} — {name} can't read {ticket}")),
         [(p, true)] => Ok(p.clone()),
-        _ => Err(format!("/add {name} — more than one goes by {name}: pick from @'s menu")),
+        _ => Err(format!("/{verb} {name} — more than one goes by {name}: pick from @'s menu")),
     }
 }
 
@@ -480,6 +593,16 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
     // CHAT-30: a send asked for while an image was on its way.
     let queued = RwSignal::new(false);
     let refusal = RwSignal::new(None::<String>);
+    // APP-90: what a command that ran did, and the token waiting for its
+    // argument.
+    let done = RwSignal::new(None::<String>);
+    let tok = RwSignal::new(None::<&'static Spec>);
+    let ticketed = ticket.is_some();
+    let account = crate::signin::account();
+    let here_of = {
+        let account = account.clone();
+        move |agent: bool| Here { agent, ticket: ticketed, admin: account.with_untracked(|a| a.admin_everywhere) }
+    };
     let caret = RwSignal::new(0usize);
     let hi = RwSignal::new(0usize);
     let menu_shut = RwSignal::new(false);
@@ -529,14 +652,16 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
     let rows = {
         let name = name.clone();
         let ask_cands = ask_cands.clone();
+        let (here_of, account) = (here_of.clone(), account.clone());
         Memo::new(move |_| {
-            if menu_shut.get() {
+            if menu_shut.get() || tok.get().is_some() {
                 return Vec::new();
             }
             let text = body.get();
             if let Some(s) = slash_of(&text) {
                 let agent = participants.with(|p| p.iter().any(|p| chats::is_agent(p)));
-                return menu_for(&s, agent).into_iter().map(Row::Cmd).collect();
+                account.track();
+                return menu_for(&s, here_of(agent)).into_iter().map(Row::Cmd).collect();
             }
             let Some((_, q)) = mention_at(&text, caret.get()) else { return Vec::new() };
             ask_cands();
@@ -569,12 +694,14 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
         }
     };
     let send = {
+        let here_of = here_of.clone();
         let me = me.clone();
         let t = ticket.clone();
         let name = name.clone();
         let add_one = add_one.clone();
         move || {
-            let text = body.get_untracked();
+            // APP-90: a token's command runs with the box's text as its argument.
+            let text = line_of(tok.get_untracked(), &body.get_untracked());
             if sending.get_untracked() {
                 return;
             }
@@ -589,7 +716,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
             if text.trim().is_empty() {
                 return;
             }
-            match act_of(&text) {
+            done.set(None);
+            match act_of(&text, here_of(false)) {
                 Act::Refuse(why) => refusal.set(Some(why)),
                 Act::Say => {
                     sending.set(true);
@@ -614,10 +742,12 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                         let r = run(cmd, id, t.as_deref(), &me, &participants.get_untracked(), &name, add_one).await;
                         sending.try_set(false);
                         match r {
-                            Ok(()) => {
+                            Ok(note) => {
                                 body.try_set(String::new());
+                                tok.try_set(None);
                                 Drafts::clear(&mut Local, id);
                                 refusal.try_set(None);
+                                done.try_set(note);
                             }
                             Err(e) => {
                                 refusal.try_set(Some(e));
@@ -633,6 +763,12 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
         let add_one = add_one.clone();
         let send = send.clone();
         move |row: Row| match row {
+            // APP-90: one that takes an argument becomes the token that waits
+            // for it; the box holds only the argument.
+            Row::Cmd(spec) if spec.arg.is_some() => {
+                tok.set(Some(spec));
+                set_text(String::new(), Some(0));
+            }
             Row::Cmd(spec) => {
                 let text = format!("/{}{}", spec.name, if spec.arg.is_some() { " " } else { "" });
                 let n = text.chars().count();
@@ -700,7 +836,19 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                 }
             }
             let empty = body.with_untracked(|b| b.is_empty());
-            match key_act(bindings::hit(&ev, Context::Composer), empty, false) {
+            let hit = bindings::hit(&ev, Context::Composer);
+            if takes_token_off(hit, empty, tok.get_untracked().is_some()) {
+                ev.prevent_default();
+                if let Some(c) = tok.get_untracked() {
+                    tok.set(None);
+                    menu_shut.set(true);
+                    let word = format!("/{}", c.name);
+                    let n = word.chars().count();
+                    set_text(word, Some(n));
+                }
+                return;
+            }
+            match key_act(hit, empty, false) {
                 KeyAct::Send => {
                     ev.prevent_default();
                     send();
@@ -731,12 +879,14 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
     let t_ph = ticket.clone();
     let touch = touch_phone();
     let hint = move || {
-        if rows.with(|r| !r.is_empty()) {
-            "↑↓ moves · Tab completes · Enter runs it · Esc closes · nothing here is sent as prose"
+        if let Some(c) = tok.get() {
+            format!("Enter runs /{} · it never goes as prose · ⌫ in the empty box takes it off", c.name)
+        } else if rows.with(|r| !r.is_empty()) {
+            "↑↓ moves · Tab completes · Enter runs it · Esc closes · nothing here is sent as prose".to_string()
         } else if alone.get() {
-            "Enter sends · Shift+Enter newline · / commands · @ brings someone in"
+            "Enter sends · Shift+Enter newline · / commands · @ brings someone in".to_string()
         } else {
-            "Enter sends · Shift+Enter newline · / commands · @ adds"
+            "Enter sends · Shift+Enter newline · / commands · @ adds".to_string()
         }
     };
     let menu = {
@@ -777,6 +927,10 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                 <div class="cstrip refuse" role="alert"><span>{if r.starts_with("not ") { r.clone() } else { format!("not sent · {r}") }}</span>
                     <button type="button" class="cx" aria-label="dismiss" on:click=move |_| refusal.set(None)>"×"</button></div>
             })}
+            {move || done.get().map(|d| view! {
+                <div class="cstrip done" role="status"><span>{d}</span>
+                    <button type="button" class="cx" aria-label="dismiss" on:click=move |_| done.set(None)>"×"</button></div>
+            })}
             {move || {
                 let c = codes.get();
                 (!c.is_empty()).then(|| view! {
@@ -788,19 +942,36 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
             {menu}
             <div class="ccard">
                 <crate::draw::PadView a=attach />
+                {move || tok.get().map(|c| view! {
+                    <span class="ctok"><span class="tn">{format!("/{}", c.name)}</span>
+                        <button type="button" class="x" aria-label="take the command off" title="take the command off"
+                            on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
+                            on:click=move |_| tok.set(None)>"×"</button></span>
+                })}
                 <textarea
                     node_ref=area
                     class="cbox grow"
                     rows=if touch { "1" } else { "2" }
                     aria-label=match &ticket { Some(t) => format!("message the chat on {t}"), None => "message the chat".to_string() }
-                    placeholder=move || placeholder(t_ph.as_deref(), alone.get(), touch)
+                    placeholder=move || match tok.get() {
+                        Some(c) => token_placeholder(c, touch),
+                        None => placeholder(t_ph.as_deref(), alone.get(), touch),
+                    }
                     prop:value=move || body.get()
                     on:input=move |ev| {
                         menu_shut.set(false);
                         if let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok()) {
                             caret.set(el.selection_start().ok().flatten().unwrap_or(0) as usize);
                         }
-                        body.set(event_target_value(&ev));
+                        let text = event_target_value(&ev);
+                        // APP-90: `/assign ` typed by hand becomes its token too.
+                        match token_of(&text, here_of(false)).filter(|_| tok.get_untracked().is_none()) {
+                            Some(c) => {
+                                tok.set(Some(c));
+                                body.set(String::new());
+                            }
+                            None => body.set(text),
+                        }
                     }
                     on:click=move |ev| {
                         if let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok()) {
@@ -900,17 +1071,45 @@ pub(crate) fn tap_sends(from: (f64, f64, f64), to: (f64, f64, f64), rect: (f64, 
     crate::media::is_tap(from.0, from.1, from.2, to.0, to.1, to.2) && (l..=r).contains(&to.0) && (t..=b).contains(&to.1)
 }
 
-/// A command, run.
-async fn run(cmd: Command, id: u64, ticket: Option<&str>, _me: &str, already: &[String], name: &impl Fn(&str) -> String, add_one: impl Fn(String)) -> Result<(), String> {
+/// A command, run — and what it did, said in the strip over the card
+/// (APP-90), when it says more than the chat itself shows.
+async fn run(cmd: Command, id: u64, ticket: Option<&str>, _me: &str, already: &[String], name: &impl Fn(&str) -> String, add_one: impl Fn(String)) -> Result<Option<String>, String> {
+    let on = || ticket.ok_or_else(|| "this works only in a chat on a ticket".to_string());
     match cmd {
-        Command::Close => chats::settle_state(id, false).await.map_err(|e| format!("/close — {e}")),
-        Command::Title(t) => chats::rename(id, Some(&t)).await.map_err(|e| format!("/title — {e}")),
-        Command::Ticket(code) => chats::post(id, &format!("{code}\n")).await,
+        Command::Close => chats::settle_state(id, false).await.map(|_| None).map_err(|e| format!("/close — {e}")),
+        Command::Title(t) => chats::rename(id, Some(&t)).await.map(|_| None).map_err(|e| format!("/title — {e}")),
+        Command::Ticket(code) => chats::post(id, &format!("{code}\n")).await.map(|_| None),
         Command::Add(who) => {
             let cands = chats::candidates(ticket).await?;
             let p = resolve_add(&who, &cands, already, ticket.unwrap_or(""), name)?;
             add_one(p);
-            Ok(())
+            Ok(None)
+        }
+        // APP-90: resolved as /add resolves, then `tickets.assign`.
+        Command::Assign(who) => {
+            let t = on()?;
+            let cands = chats::candidates(Some(t)).await?;
+            let p = resolve_assign(&who, &cands, t, name)?;
+            crate::assignees::assign(t.to_string(), vec![p.clone()], Vec::new()).await.map_err(|e| format!("/assign {who} — {e}"))?;
+            Ok(Some(format!("assigned {t} to {}", name(&p))))
+        }
+        // APP-90: `deployments.request` for the ticket's project — offered
+        // to an admin on `*` alone; the server's gate is the deployer's.
+        Command::Deploy(env) => {
+            let t = on()?;
+            let address = match crate::cache::get(t).map(|r| r.with_untracked(|r| r.address.clone())).filter(|a| !a.is_empty()) {
+                Some(a) => a,
+                None => crate::saved::get_doc(t).await?.map(|d| d.address).unwrap_or_default(),
+            };
+            let project = project_of(&address).ok_or_else(|| format!("/deploy {env} — {t}'s project is not known"))?;
+            let d = crate::deploys_page::queue(project.clone(), env.clone(), String::new(), format!("/deploy from the chat on {t}")).await.map_err(|e| format!("/deploy {env} — {e}"))?;
+            Ok(Some(format!("deploy of {project} to {env} queued — request {} on #/deployments", d.id)))
+        }
+        // APP-90: `tickets.inputs.ask` — a text input on the ticket.
+        Command::Ask(q) => {
+            let t = on()?;
+            let input = crate::inputs::ask(t, &q).await.map_err(|e| format!("/ask — {e}"))?;
+            Ok(Some(format!("asked on {t} · input {input}, under Needs you")))
         }
     }
 }
@@ -962,30 +1161,42 @@ mod tests {
 
     /// The command rows: `/` opens the menu, a word narrows it, a space
     /// settles it; each command runs, or is refused with why.
+    const ON: Here = Here { agent: false, ticket: true, admin: false };
+    const OFF: Here = Here { agent: false, ticket: false, admin: false };
+    const OWNER: Here = Here { agent: false, ticket: true, admin: true };
+
+    fn act_of_t(text: &str) -> Act {
+        act_of(text, ON)
+    }
+
     #[test]
     fn every_command_row() {
         let s = slash_of("/").unwrap();
-        assert_eq!(menu_for(&s, false).len(), 4, "a bare / offers them all");
-        assert_eq!(menu_for(&s, true).len(), 8, "with an agent in the chat, its commands too (APP-83)");
-        assert_eq!(menu_for(&slash_of("/t").unwrap(), false).iter().map(|c| c.name).collect::<Vec<_>>(), ["ticket", "title"]);
-        assert_eq!(menu_for(&slash_of("/s").unwrap(), true).iter().map(|c| c.name).collect::<Vec<_>>(), ["status", "stop"]);
-        assert_eq!(menu_for(&slash_of("/s").unwrap(), false).len(), 0);
-        assert_eq!(menu_for(&slash_of("/title x").unwrap(), false).len(), 1);
+        assert_eq!(menu_for(&s, Here { agent: false, ticket: false, admin: false }).len(), 4, "a bare / offers them all");
+        assert_eq!(menu_for(&s, Here { agent: false, ticket: true, admin: false }).len(), 6, "APP-90: on a ticket, /assign and /ask too");
+        assert_eq!(menu_for(&s, Here { agent: true, ticket: true, admin: false }).len(), 10, "with an agent in the chat, its commands too (APP-83)");
+        assert_eq!(menu_for(&slash_of("/t").unwrap(), Here { agent: false, ticket: true, admin: false }).iter().map(|c| c.name).collect::<Vec<_>>(), ["ticket", "title"]);
+        assert_eq!(menu_for(&slash_of("/a").unwrap(), Here { agent: false, ticket: true, admin: false }).iter().map(|c| c.name).collect::<Vec<_>>(), ["add", "assign", "ask"]);
+        assert_eq!(menu_for(&slash_of("/a").unwrap(), Here { agent: false, ticket: false, admin: false }).iter().map(|c| c.name).collect::<Vec<_>>(), ["add"], "outside a ticket, /add alone");
+        assert_eq!(menu_for(&slash_of("/s").unwrap(), Here { agent: true, ticket: true, admin: false }).iter().map(|c| c.name).collect::<Vec<_>>(), ["status", "stop"]);
+        assert_eq!(menu_for(&slash_of("/s").unwrap(), Here { agent: false, ticket: true, admin: false }).len(), 0);
+        assert_eq!(menu_for(&slash_of("/title x").unwrap(), Here { agent: false, ticket: true, admin: false }).len(), 1);
+        assert_eq!(menu_for(&slash_of("/ask x").unwrap(), Here { agent: false, ticket: false, admin: false }).len(), 0, "the ticket's command outside a ticket");
         assert!(slash_of("/a\nb").is_none(), "two lines are prose");
         assert!(!menu_settled("/ad"), "the word being typed: the menu's keys");
         assert!(menu_settled("/add sam"), "its argument being typed: Enter runs it");
         assert!(slash_of("not / a command").is_none());
-        assert_eq!(act_of("hello"), Act::Say);
-        assert_eq!(act_of("/add reviewer"), Act::Run(Command::Add("reviewer".into())));
-        assert_eq!(act_of("/add @rui"), Act::Run(Command::Add("rui".into())));
-        assert_eq!(act_of("/close"), Act::Run(Command::Close));
-        assert_eq!(act_of("/title The hold at 1240 °C"), Act::Run(Command::Title("The hold at 1240 °C".into())));
-        assert_eq!(act_of("/ticket kiln-3"), Act::Run(Command::Ticket("KILN-3".into())));
+        assert_eq!(act_of_t("hello"), Act::Say);
+        assert_eq!(act_of_t("/add reviewer"), Act::Run(Command::Add("reviewer".into())));
+        assert_eq!(act_of_t("/add @rui"), Act::Run(Command::Add("rui".into())));
+        assert_eq!(act_of_t("/close"), Act::Run(Command::Close));
+        assert_eq!(act_of_t("/title The hold at 1240 °C"), Act::Run(Command::Title("The hold at 1240 °C".into())));
+        assert_eq!(act_of_t("/ticket kiln-3"), Act::Run(Command::Ticket("KILN-3".into())));
         // APP-83: the agent's commands are the message — the bridge answers.
         for c in ["/clear", "/stop", "/status", "/help", " /clear "] {
-            assert_eq!(act_of(c), Act::Say, "{c}");
+            assert_eq!(act_of(c, ON), Act::Say, "{c}");
         }
-        let refused = |t: &str| match act_of(t) {
+        let refused = |t: &str| match act_of(t, ON) {
             Act::Refuse(r) => r,
             other => panic!("{t}: {other:?}"),
         };
@@ -993,7 +1204,20 @@ mod tests {
         assert!(refused("/add sam rui").contains("takes one name"));
         assert!(refused("/close now").contains("takes nothing"));
         assert!(refused("/ticket shelf").contains("is not one"));
-        assert!(refused("/frobnicate").starts_with("/frobnicate is not a command — the commands are /add, /ticket, /title, /close"));
+        assert!(refused("/frobnicate").starts_with("/frobnicate is not a command — the commands are /add, /assign, /ask, /ticket, /title, /close"));
+        // APP-90: /assign takes one name; /ask a question, spaces and all.
+        assert_eq!(act_of_t("/assign @sam"), Act::Run(Command::Assign("sam".into())));
+        assert_eq!(act_of_t("/ask Hold at cone 6 or 5?"), Act::Run(Command::Ask("Hold at cone 6 or 5?".into())));
+        assert!(refused("/assign").starts_with("/assign needs a who"));
+        assert!(refused("/assign sam rui").contains("takes one who"));
+        assert!(refused("/ask").starts_with("/ask needs a question — e.g. /ask Hold at cone 6 or 5?"));
+        // Outside a ticket they are not offered, and not run.
+        assert_eq!(act_of("/assign sam", OFF), Act::Refuse("/assign works only in a chat on a ticket".into()));
+        assert_eq!(act_of("/ask why?", OFF), Act::Refuse("/ask works only in a chat on a ticket".into()));
+        match act_of("/nope", OFF) {
+            Act::Refuse(r) => assert!(r.ends_with("the commands are /add, /ticket, /title, /close"), "{r}"),
+            other => panic!("{other:?}"),
+        }
         assert!(refused("/").starts_with("/ is not a command"));
     }
 
@@ -1007,6 +1231,71 @@ mod tests {
         assert_eq!(resolve_add("sam", &cands, &[], "KILN-7", namer), Err("/add sam — sam can't read KILN-7".into()));
         assert_eq!(resolve_add("rui", &cands, &["idp:rui".into()], "KILN-7", namer), Err("/add rui — rui is in this chat already".into()));
         assert!(resolve_add("zed", &cands, &[], "KILN-7", namer).unwrap_err().contains("no one called zed"));
+    }
+
+    /// APP-90: `/deploy ENV` is the owner's — offered, and run, only for an
+    /// admin on `*` in a chat on a ticket; it queues the ticket's root
+    /// project.
+    #[test]
+    fn deploy_is_offered_to_the_owner_alone() {
+        let names = |here| menu_for(&slash_of("/d").unwrap(), here).iter().map(|c| c.name).collect::<Vec<_>>();
+        assert_eq!(names(OWNER), ["deploy"]);
+        assert!(names(ON).is_empty(), "an editor is not offered it");
+        assert!(names(Here { admin: true, ..OFF }).is_empty(), "outside a ticket, not even the owner");
+        assert_eq!(menu_for(&slash_of("/").unwrap(), OWNER).len(), 7);
+        assert_eq!(act_of("/deploy TEST", OWNER), Act::Run(Command::Deploy("test".into())));
+        assert_eq!(act_of("/deploy test", ON), Act::Refuse("/deploy is the owner's: only an admin of every project queues a deploy".into()));
+        assert!(matches!(act_of("/deploy test prod", OWNER), Act::Refuse(r) if r.contains("takes one env")));
+        assert!(matches!(act_of("/deploy", OWNER), Act::Refuse(r) if r.starts_with("/deploy needs an env — e.g. /deploy test")));
+        assert_eq!(token_of("/deploy ", OWNER).map(|c| c.name), Some("deploy"));
+        assert_eq!(token_of("/deploy ", ON), None);
+        assert_eq!(project_of("hypermemetic:MENGER/APP/APP-90").as_deref(), Some("MENGER"), "the root of its shortcode");
+        assert_eq!(project_of("hypermemetic:MENGER-5").as_deref(), Some("MENGER"), "a root's own ticket");
+        assert_eq!(project_of(""), None);
+    }
+
+    /// APP-90: `/assign WHO` resolves as `/add` does, saying `/assign`.
+    #[test]
+    fn assign_resolves_a_name_as_add_does() {
+        let cands = vec![("agent:reviewer".to_string(), true), ("idp:sam".to_string(), false), ("idp:rui".to_string(), true)];
+        let namer = |p: &str| p.rsplit(':').next().unwrap().to_string();
+        assert_eq!(resolve_assign("@rui", &cands, "KILN-7", namer), Ok("idp:rui".into()));
+        assert_eq!(resolve_assign("reviewer", &cands, "KILN-7", namer), Ok("agent:reviewer".into()));
+        assert_eq!(resolve_assign("sam", &cands, "KILN-7", namer), Err("/assign sam — sam can't read KILN-7".into()));
+        assert!(resolve_assign("zed", &cands, "KILN-7", namer).unwrap_err().starts_with("/assign zed — no one called zed"));
+    }
+
+    /// APP-90 (APP-83's mockup 4): a command that takes an argument becomes
+    /// a token that waits for it — typed with its space, or picked; the
+    /// send runs the token's command with the box's text; Backspace in an
+    /// empty box takes it off.
+    #[test]
+    fn a_command_with_an_argument_becomes_a_token() {
+        let name = |t: &str, on: bool| token_of(t, if on { ON } else { OFF }).map(|c| c.name);
+        assert_eq!(name("/assign ", true), Some("assign"));
+        assert_eq!(name("/ask ", true), Some("ask"));
+        assert_eq!(name("/add ", false), Some("add"));
+        assert_eq!(name("/title ", false), Some("title"));
+        assert_eq!(name("/ask ", false), None, "the ticket's command outside a ticket");
+        assert_eq!(name("/assign", true), None, "the word still being typed");
+        assert_eq!(name("/assign sam", true), None, "its argument typed already");
+        assert_eq!(name("/close ", true), None, "takes nothing: no token");
+        assert_eq!(name("/clear ", true), None, "the agent's: no token");
+        assert_eq!(name("/nope ", true), None);
+        let assign = spec_for("assign").unwrap();
+        assert_eq!(line_of(Some(assign), " sam "), "/assign sam");
+        assert_eq!(line_of(None, "hello"), "hello");
+        assert_eq!(act_of(&line_of(Some(spec_for("ask").unwrap()), "Hold at 6?"), ON), Act::Run(Command::Ask("Hold at 6?".into())));
+        assert!(matches!(act_of(&line_of(Some(assign), ""), ON), Act::Refuse(r) if r.starts_with("/assign needs a who")), "Enter with no argument: refused, saying what it needs");
+        let t = table_with(&[]);
+        let backspace = pick_single(&t, &press("Backspace"), Context::Composer, false);
+        assert!(takes_token_off(backspace, true, true));
+        assert!(!takes_token_off(backspace, false, true), "text in the box: Backspace deletes it");
+        assert!(!takes_token_off(backspace, true, false), "no token");
+        assert!(!takes_token_off(pick_single(&t, &press("Delete"), Context::Composer, false), true, true));
+        assert_eq!(key_act(backspace, false, false), KeyAct::Type, "otherwise Backspace is the browser's");
+        assert_eq!(token_placeholder(assign, false), "who — e.g. sam · Enter runs /assign · ⌫ takes it off");
+        assert_eq!(token_placeholder(spec_for("ask").unwrap(), true), "e.g. Hold at cone 6 or 5?");
     }
 
     /// `@` at a word's start opens the menu; inside a word it is text.
