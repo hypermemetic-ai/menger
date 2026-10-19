@@ -6,7 +6,8 @@
 //! heading saying where its work lands; a band per area (a shortcode), its
 //! tickets as nodes in their lane's column, wrapped in a hull, its summary
 //! above it; blockers as arrows. Drag pans, the wheel scrolls (with Ctrl or
-//! a pinch it zooms), `+` / `−` / `⤢` zoom and fit; the legend lights one
+//! a trackpad's pinch it zooms), two fingers pinch and pan, a double-tap
+//! zooms in (DEPLOY-38), `+` / `−` / `⤢` zoom and fit; the legend lights one
 //! state. A node opens its summary at the side — where it runs in each
 //! environment, its commits, its blockers — then *open ticket*; an area's
 //! label opens the area: one line per ticket, the ticket cited at its end.
@@ -355,11 +356,46 @@ fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String
     let on_resize = window_event_listener(leptos::ev::resize, move |_| fit());
     on_cleanup(move || on_resize.remove());
 
-    // Drag pans; a press that does not move opens what it pressed.
+    // Drag pans; a press that does not move opens what it pressed. Two
+    // fingers pinch (DEPLOY-38): the zoom about their midpoint, the pan
+    // with it (`flight::pinch`); a double-tap off a node zooms in. Points
+    // are the canvas's own (its top-left is 0, 0).
     let drag = StoredValue::new(None::<(f64, f64, f64, f64, bool, Option<Open>)>);
+    let fingers = StoredValue::new(Vec::<(i32, f64, f64)>::new());
+    let pinch_from = StoredValue::new(None::<((f64, f64, f64), (f64, f64), (f64, f64))>);
+    let last_tap = StoredValue::new(None::<(f64, f64, f64)>);
+    // What a press that did not move opens, at its click: on a phone the
+    // tap's click comes after the pointerup and lands on whatever is there
+    // then — opened at the pointerup, the sheet's scrim took it and shut it.
+    let tapped = StoredValue::new(None::<Open>);
+    let local = move |ev: &leptos::ev::PointerEvent| {
+        let (l, t) = cv.get_untracked().map_or((0.0, 0.0), |el| {
+            let r = el.get_bounding_client_rect();
+            (r.left(), r.top())
+        });
+        (ev.client_x() as f64 - l, ev.client_y() as f64 - t)
+    };
+    let two = move || {
+        let f = fingers.get_value();
+        (f.len() == 2).then(|| ((f[0].1, f[0].2), (f[1].1, f[1].2)))
+    };
     let down = move |ev: leptos::ev::PointerEvent| {
         let Some(t) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
         if t.closest(".zoom").ok().flatten().is_some() {
+            return;
+        }
+        let p = local(&ev);
+        fingers.update_value(|f| {
+            f.retain(|(id, _, _)| *id != ev.pointer_id());
+            f.push((ev.pointer_id(), p.0, p.1));
+        });
+        if let Some(el) = cv.get_untracked() {
+            let _ = el.set_pointer_capture(ev.pointer_id());
+        }
+        if let Some((a, b)) = two() {
+            // A second finger: the drag becomes a pinch, and opens nothing.
+            pinch_from.set_value(Some((view_at.get_untracked(), a, b)));
+            drag.set_value(None);
             return;
         }
         let what = t
@@ -370,14 +406,22 @@ fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String
             .map(Open::Ticket)
             .or_else(|| t.closest("[data-open-area]").ok().flatten().and_then(|n| n.get_attribute("data-open-area")).map(Open::Area));
         let (_, tx, ty) = view_at.get_untracked();
-        drag.set_value(Some((ev.client_x() as f64, ev.client_y() as f64, tx, ty, false, what)));
-        if let Some(el) = cv.get_untracked() {
-            let _ = el.set_pointer_capture(ev.pointer_id());
-        }
+        drag.set_value(Some((p.0, p.1, tx, ty, false, what)));
     };
     let moved = move |ev: leptos::ev::PointerEvent| {
+        let p = local(&ev);
+        fingers.update_value(|f| {
+            if let Some(e) = f.iter_mut().find(|(id, _, _)| *id == ev.pointer_id()) {
+                (e.1, e.2) = p;
+            }
+        });
+        if let (Some((v0, a0, b0)), Some((a1, b1))) = (pinch_from.get_value(), two()) {
+            ev.prevent_default();
+            view_at.set(flight::pinch(v0, a0, b0, a1, b1));
+            return;
+        }
         let Some((x, y, tx, ty, was, what)) = drag.get_value() else { return };
-        let (dx, dy) = (ev.client_x() as f64 - x, ev.client_y() as f64 - y);
+        let (dx, dy) = (p.0 - x, p.1 - y);
         let now = was || dx.hypot(dy) > 4.0;
         if now {
             view_at.update(|v| {
@@ -387,13 +431,49 @@ fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String
         }
         drag.set_value(Some((x, y, tx, ty, now, what)));
     };
-    let up = move |_: leptos::ev::PointerEvent| {
-        if let Some((_, _, _, _, false, Some(what))) = drag.get_value() {
-            open.set(Some(what));
+    // A finger lifted: the last of a pinch goes on as a drag that opens
+    // nothing; a press that did not move opens, or is half a double-tap.
+    let lift = move |ev: &leptos::ev::PointerEvent| {
+        fingers.update_value(|f| f.retain(|(id, _, _)| *id != ev.pointer_id()));
+        if pinch_from.get_value().is_some() {
+            pinch_from.set_value(None);
+            let (_, tx, ty) = view_at.get_untracked();
+            drag.set_value(fingers.get_value().first().map(|&(_, x, y)| (x, y, tx, ty, true, None)));
+            last_tap.set_value(None);
+            return false;
+        }
+        true
+    };
+    let up = move |ev: leptos::ev::PointerEvent| {
+        if !lift(&ev) {
+            return;
+        }
+        match drag.get_value() {
+            Some((_, _, _, _, false, Some(what))) => tapped.set_value(Some(what)),
+            Some((x, y, _, _, false, None)) => {
+                let at = ev.time_stamp();
+                if flight::double_tap(last_tap.get_value(), at, (x, y)) {
+                    view_at.update(|v| *v = flight::zoom_at(*v, 1.6, x, y));
+                    last_tap.set_value(None);
+                } else {
+                    last_tap.set_value(Some((at, x, y)));
+                }
+            }
+            _ => {}
         }
         drag.set_value(None);
     };
-    let cancel = move |_: leptos::ev::PointerEvent| drag.set_value(None);
+    let cancel = move |ev: leptos::ev::PointerEvent| {
+        lift(&ev);
+        drag.set_value(None);
+        tapped.set_value(None);
+    };
+    let click = move |_: leptos::ev::MouseEvent| {
+        if let Some(what) = tapped.get_value() {
+            tapped.set_value(None);
+            open.set(Some(what));
+        }
+    };
     let wheel = move |ev: leptos::ev::WheelEvent| {
         ev.prevent_default();
         // A trackpad's pinch arrives as a wheel with ctrlKey set; Ctrl or ⌘ with a wheel zooms too.
@@ -433,7 +513,7 @@ fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String
     };
 
     view! {
-        <div class="canvas" node_ref=cv on:pointerdown=down on:pointermove=moved on:pointerup=up on:pointercancel=cancel on:wheel=wheel>
+        <div class="canvas" node_ref=cv on:pointerdown=down on:pointermove=moved on:pointerup=up on:pointercancel=cancel on:wheel=wheel on:click=click>
             <svg role="img" aria-label="the work in flight by area, where each lands, blockers as arrows">
                 <defs>
                     <marker id="fah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -550,7 +630,7 @@ fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String
                 <button class="cbtn" type="button" aria-label="fit" on:click=fit_all>"⤢"</button>
                 <span class="zpct">{move || format!("{:.0}%", view_at.get().0 * 100.0)}</span>
             </div>
-            <div class="hint">"drag to pan · wheel to scroll, ctrl+wheel to zoom · a node opens its summary"</div>
+            <div class="hint">"drag to pan · wheel to scroll, ctrl+wheel or pinch to zoom · double-tap zooms in · a node opens its summary"</div>
         </div>
     }
 }

@@ -522,6 +522,27 @@ pub(crate) fn zoom_at((k, tx, ty): (f64, f64, f64), f: f64, cx: f64, cy: f64) ->
     (nk, cx - (cx - tx) * nk / k, cy - (cy - ty) * nk / k)
 }
 
+/// DEPLOY-38: a pinch from `v0` (the view when the two fingers came down
+/// at `a0` and `b0`) to the fingers now at `a1` and `b1`: the zoom is the
+/// spread's ratio, about the fingers' midpoint, and the midpoint's move
+/// pans — what was under the fingers stays under them. Held as `zoom_at`
+/// holds it.
+pub(crate) fn pinch(v0: (f64, f64, f64), a0: (f64, f64), b0: (f64, f64), a1: (f64, f64), b1: (f64, f64)) -> (f64, f64, f64) {
+    let (k, tx, ty) = v0;
+    let d0 = (a0.0 - b0.0).hypot(a0.1 - b0.1).max(1.0);
+    let d1 = (a1.0 - b1.0).hypot(a1.1 - b1.1).max(1.0);
+    let nk = (k * d1 / d0).clamp(0.1, 3.0);
+    let (m0, m1) = (((a0.0 + b0.0) / 2.0, (a0.1 + b0.1) / 2.0), ((a1.0 + b1.0) / 2.0, (a1.1 + b1.1) / 2.0));
+    let (wx, wy) = ((m0.0 - tx) / k, (m0.1 - ty) / k);
+    (nk, m1.0 - wx * nk, m1.1 - wy * nk)
+}
+
+/// DEPLOY-38: whether a tap at `at` (ms) and `p` is the second of a
+/// double-tap after one at `prev` — within 300 ms and 30 px.
+pub(crate) fn double_tap(prev: Option<(f64, f64, f64)>, at: f64, p: (f64, f64)) -> bool {
+    prev.is_some_and(|(t, x, y)| at - t <= 300.0 && (p.0 - x).hypot(p.1 - y) <= 30.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,5 +772,29 @@ mod tests {
         assert_eq!(k, 0.5);
         let (k, tx, ty) = zoom_at((1.0, 0.0, 0.0), 2.0, 100.0, 50.0);
         assert_eq!((k, tx, ty), (2.0, -100.0, -50.0));
+    }
+
+    #[test]
+    fn a_pinch_zooms_about_the_fingers_and_pans_with_them() {
+        let v0 = (1.0, 10.0, 20.0);
+        // Spread from 100 px to 200 px about (100, 100): twice, the midpoint held.
+        let v = pinch(v0, (50.0, 100.0), (150.0, 100.0), (0.0, 100.0), (200.0, 100.0));
+        assert!((v.0 - 2.0).abs() < 1e-9);
+        let world = ((100.0 - v0.1) / v0.0, (100.0 - v0.2) / v0.0);
+        assert!((world.0 * v.0 + v.1 - 100.0).abs() < 1e-9 && (world.1 * v.0 + v.2 - 100.0).abs() < 1e-9);
+        // Two fingers moved together, apart the same: a pan, no zoom.
+        let p = pinch(v0, (50.0, 100.0), (150.0, 100.0), (80.0, 140.0), (180.0, 140.0));
+        assert_eq!(p, (1.0, 40.0, 60.0));
+        // Held between 10% and 300%; fingers on one point do not divide by zero.
+        assert_eq!(pinch(v0, (0.0, 0.0), (10.0, 0.0), (0.0, 0.0), (1000.0, 0.0)).0, 3.0);
+        assert!(pinch(v0, (0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)).0.is_finite());
+    }
+
+    #[test]
+    fn a_double_tap_is_two_taps_close_in_time_and_place() {
+        assert!(double_tap(Some((1000.0, 50.0, 50.0)), 1200.0, (60.0, 55.0)));
+        assert!(!double_tap(Some((1000.0, 50.0, 50.0)), 1400.0, (50.0, 50.0)));
+        assert!(!double_tap(Some((1000.0, 50.0, 50.0)), 1100.0, (150.0, 50.0)));
+        assert!(!double_tap(None, 1100.0, (50.0, 50.0)));
     }
 }
