@@ -95,6 +95,22 @@ By any participant. Closing a closed chat changes nothing.
    */
   close(chat: ChatId): AsyncGenerator<ChatsEvent>;
   /**
+   * Delete messages in a chat — kept and marked deleted { at, by }, never gone; yields messages_deleted { chat, ids, by, at, unread } (CHAT-44).
+
+A message's author deletes it, and an admin of the chat's ticket
+(outside tickets, of its organization) deletes any. Name them by
+`ids`, or every message of the chat from `from` to `to`. All or
+none: one the caller may not delete, or not the chat's, is
+`refused`, naming each; one already deleted is not named again.
+`messages` still answers a deleted message, marked; it is no one's
+unread and no `await_message` reply. `watch` carries
+`messages_deleted` to every participant.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `chats.delete` anywhere it is held
+   */
+  delete(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent>;
+  /**
    * The caller's chats, by last activity, newest first — on a ticket, with or without unread, open or closed; a chat { chat } each, then page { next }.
 
 Without `ticket`, the chats the caller is in; with it, those on that
@@ -194,12 +210,24 @@ By any participant. Reopening an open chat changes nothing.
    */
   reopen(chat: ChatId): AsyncGenerator<ChatsEvent>;
   /**
+   * Put deleted messages back in a chat; yields messages_restored { chat, ids, by, at, unread } (CHAT-44).
+
+`delete`'s rule: a message's author, or an admin of the chat's
+ticket (outside tickets, its organization); by `ids`, or `from` …
+`to`; all or none. One not deleted is not named again. `watch`
+carries `messages_restored` to every participant.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `chats.restore` anywhere it is held
+   */
+  restore(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent>;
+  /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `chats.schema` anywhere it is held
    */
   schema(): Promise<unknown>;
   /**
-   * Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, listening, left — until disconnect.
+   * Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, messages_deleted, messages_restored, listening, left — until disconnect.
 
 The chats the caller is in (with `ticket`, those on it — every one
 there for an admin of it), each change as the caller sees it: its own
@@ -250,6 +278,11 @@ class ChatsClientImpl implements ChatsClient {
     yield* extractData<ChatsEvent>(stream);
   }
 
+  async *delete(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.delete', { chat, from, ids, to });
+    yield* extractData<ChatsEvent>(stream);
+  }
+
   async *list(after?: ChatId | null, limit?: number | null, state?: ChatState | null, ticket?: TicketRef | null, unread?: boolean | null): AsyncGenerator<ChatsEvent> {
     const stream = this.rpc.call('chats.list', { after, limit, state, ticket, unread });
     yield* extractData<ChatsEvent>(stream);
@@ -290,6 +323,11 @@ class ChatsClientImpl implements ChatsClient {
     yield* extractData<ChatsEvent>(stream);
   }
 
+  async *restore(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.restore', { chat, from, ids, to });
+    yield* extractData<ChatsEvent>(stream);
+  }
+
   async schema(): Promise<unknown> {
     const stream = this.rpc.call('chats.schema', {});
     return collectOne<unknown>(stream);
@@ -314,6 +352,7 @@ export const requires = {
   "chats.await_message": { grant: "chats.await_message", target: null },
   "chats.candidates": { grant: "chats.candidates", target: null },
   "chats.close": { grant: "chats.close", target: null },
+  "chats.delete": { grant: "chats.delete", target: null },
   "chats.list": { grant: "chats.list", target: null },
   "chats.messages": { grant: "chats.messages", target: null },
   "chats.open": { grant: "chats.open", target: null },
@@ -322,6 +361,7 @@ export const requires = {
   "chats.remove": { grant: "chats.remove", target: null },
   "chats.rename": { grant: "chats.rename", target: null },
   "chats.reopen": { grant: "chats.reopen", target: null },
+  "chats.restore": { grant: "chats.restore", target: null },
   "chats.schema": { grant: "chats.schema", target: null },
   "chats.watch": { grant: "chats.watch", target: null },
 } as const;

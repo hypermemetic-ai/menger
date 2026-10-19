@@ -81,7 +81,8 @@ fn last_line(held: &Held, c: &Chat, me: &str, name: &impl Fn(&str) -> String) ->
     if c.state == ChatState::Closed {
         return "closed, read-only".to_string();
     }
-    if let Some(m) = held.thread(c.id.get()).and_then(|t| t.list.last()) {
+    // CHAT-44: a deleted message is no one's last line.
+    if let Some(m) = held.thread(c.id.get()).and_then(|t| t.list.iter().rev().find(|m| m.deleted.is_none())) {
         let line = m.body.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
         let line = if line.starts_with("![") { "an image" } else { line };
         let who = if m.author == me { "you".to_string() } else { name(&m.author) };
@@ -171,7 +172,9 @@ pub(crate) fn ChatsPage(#[prop(into)] pick: Signal<Pick>) -> impl IntoView {
             Some("session.leave") => {
                 ev.prevent_default();
                 ev.stop_propagation();
-                if more.get_untracked() || adding.get_untracked() || drawer.get_untracked() {
+                if chat_pane::leave_selection() {
+                    // CHAT-44: Esc ends selection mode, and stays.
+                } else if more.get_untracked() || adding.get_untracked() || drawer.get_untracked() {
                     more.set(false);
                     adding.set(false);
                     drawer.set(false);

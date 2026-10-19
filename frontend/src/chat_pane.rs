@@ -46,6 +46,7 @@ use menger_tickets_api::{Chat, ChatState, Message};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::chat_deleted::{self, Folds, Role};
 use crate::chats::{self, short, Held};
 use crate::{dom, fmt_unix, live, scale, turns};
 
@@ -170,6 +171,22 @@ fn clock(at: i64) -> String {
 
 thread_local! {
     static SHOWN: ArcRwSignal<Option<Shown>> = ArcRwSignal::new(None);
+}
+
+thread_local! {
+    /// CHAT-44: the chat in selection mode, if one is.
+    static SELECTING: std::cell::Cell<Option<RwSignal<Option<std::collections::BTreeSet<u64>>>>> = const { std::cell::Cell::new(None) };
+}
+
+/// CHAT-44: Esc in a chat in selection mode leaves it — and nothing else:
+/// whether it did.
+pub(crate) fn leave_selection() -> bool {
+    let Some(s) = SELECTING.with(std::cell::Cell::take) else { return false };
+    if s.try_with_untracked(Option::is_some) != Some(true) {
+        return false;
+    }
+    s.set(None);
+    true
 }
 
 pub(crate) fn shown() -> ArcRwSignal<Option<Shown>> {
@@ -464,7 +481,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         if !fetched && c.last_message.is_some() {
             return; // not fetched yet
         }
-        let (new_at, last) = window_t.with(|t| (c.mark.map(|m| m.get()).and_then(|m| t.list.iter().find(|x| x.id.get() > m)).filter(|_| c.unread > 0).map(|x| x.id.get()), t.last().unwrap_or(0)));
+        let (new_at, last) = window_t.with(|t| (c.mark.map(|m| m.get()).and_then(|m| t.list.iter().find(|x| x.id.get() > m && x.deleted.is_none())).filter(|_| c.unread > 0).map(|x| x.id.get()), t.last().unwrap_or(0)));
         mark.set_value(Some((new_at, last)));
         landing.set_value(Some(match at_url.or(new_at) {
             Some(m) => turns::Landing::At(m),
@@ -645,6 +662,9 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         // CHAT-14: an image drawn changes its row's height with no mutation:
         // its `load` (which does not bubble) heard on the way down.
         let _ = el.add_event_listener_with_callback_and_bool("load", cb.as_ref().unchecked_ref(), true);
+        // CHAT-44: a turn collapsing, a run's box opening — measured as
+        // they end.
+        let _ = el.add_event_listener_with_callback("transitionend", cb.as_ref().unchecked_ref());
         cb.forget();
     });
     let on_scroll = move || {
@@ -859,6 +879,16 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             })
         }
     };
+    // CHAT-44: the runs of deleted messages, each one line in its first
+    // row; who may delete or restore (a message's author, an admin); the
+    // messages picked in selection mode.
+    let folds = Memo::new(move |_| thread.with(|t| Folds::of(t)));
+    let admin = crate::signin::account().with_untracked(|a| a.is_admin());
+    let may = {
+        let me = me.clone();
+        Callback::new(move |author: String| admin || author == me)
+    };
+    let selecting = RwSignal::new(None::<std::collections::BTreeSet<u64>>);
     let rows = {
         let name = name.clone();
         let me = me.clone();
@@ -867,9 +897,51 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             let mid = m.id.get();
             let line = (new_at == Some(mid)).then(|| view! { <div class="pnewline" role="separator">"new"</div> });
             let mine = m.author == me;
+            let can = may.run(m.author.clone());
             // CHAT-18: the work that answered it, folded after it.
             let fold = move || shape.with(|s| s.fold_after(mid).cloned()).map(fold_view);
-            view! { <div class="trow" data-mid=mid.to_string()>{line}{turn_view(m, mine, mid > seen, &name)}{fold}</div> }
+            // CHAT-44: the turn while its message is kept; deleted live, it
+            // collapses (`.tkeep.gone`) and then goes; put back, it opens.
+            let role = Memo::new(move |_| folds.with(|f| f.role(mid)));
+            let first = role.get_untracked();
+            let gone = RwSignal::new(first != Role::Kept);
+            let shown = RwSignal::new(first == Role::Kept);
+            Effect::new(move |prev: Option<Role>| {
+                let r = role.get();
+                if prev.is_some_and(|p| (p == Role::Kept) != (r == Role::Kept)) {
+                    let keep = r == Role::Kept;
+                    if keep {
+                        shown.set(true);
+                    } else {
+                        gone.set(true);
+                    }
+                    spawn_local(async move {
+                        dom::sleep_ms(if keep { 20 } else { chat_deleted::MOTION_MS }).await;
+                        if keep {
+                            gone.try_set(false);
+                        } else if role.try_get_untracked() != Some(Role::Kept) {
+                            shown.try_set(false);
+                        }
+                    });
+                }
+                r
+            });
+            let kept = {
+                let name = name.clone();
+                move || shown.get().then(|| turn_view(m.clone(), mine, mid > seen, can, &name))
+            };
+            let run = move || {
+                (role.get() == Role::Head).then(|| view! { <chat_deleted::Run head=mid folds=folds chat=id fresh=first != Role::Head may=may clock=clock /> })
+            };
+            let picked = move || selecting.with(|s| s.as_ref().is_some_and(|s| s.contains(&mid)));
+            view! {
+                <div class="trow" class:tgone=move || role.get() == Role::Member class:kept=move || role.get() == Role::Kept class:can=can class:picked=picked data-mid=mid.to_string()>
+                    {line}
+                    <div class="tkeep" class:gone=move || gone.get()><div class="tkclip">{kept}</div></div>
+                    {run}
+                    {fold}
+                </div>
+            }
         }
     };
     let waits = {
@@ -895,6 +967,23 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         let t = ticket.clone();
         move |ev: web_sys::MouseEvent| {
             let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+            // CHAT-44: selecting, a tap on a message you may delete picks it.
+            if selecting.with_untracked(Option::is_some) {
+                let row = el.closest(".trow.can.kept").ok().flatten();
+                if let Some(mid) = row.and_then(|r| r.get_attribute("data-mid")).and_then(|v| v.parse::<u64>().ok()) {
+                    if folds.with_untracked(|f| f.role(mid)) == Role::Kept {
+                        selecting.update(|s| {
+                            if let Some(s) = s {
+                                if !s.remove(&mid) {
+                                    s.insert(mid);
+                                }
+                            }
+                        });
+                    }
+                    ev.prevent_default();
+                    return;
+                }
+            }
             let Some(btn) = el.closest("[data-act]").ok().flatten() else { return };
             let turn = btn.closest("[data-message-id]").ok().flatten();
             let mid: u64 = turn.as_ref().and_then(|t| t.get_attribute("data-message-id")).and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -905,6 +994,12 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                     copy_text(&code);
                 }
                 Some("copy") => copy_text(&text_of(mid)),
+                Some("delete") => spawn_local(async move {
+                    if let Err(e) = chats::delete(id, &[mid], false).await {
+                        leptos::logging::log!("chats.delete: {e}");
+                    }
+                }),
+                Some("select") => selecting.set(Some([mid].into())),
                 Some("quote") => body.update(|b| b.push_str(&turns::quoted(&text_of(mid)))),
                 Some("link") => {
                     let w = dom::window();
@@ -918,6 +1013,78 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                 _ => return,
             }
             ev.prevent_default();
+        }
+    };
+    // CHAT-44: on a phone a turn's menu is a long press — the turn held
+    // (`.turn.held`) shows its copy · quote · link · delete · select.
+    let press = StoredValue::new(0u32);
+    let unhold = move || {
+        if let Some(el) = list_ref.get_untracked() {
+            if let Ok(all) = el.query_selector_all(".turn.held") {
+                for i in 0..all.length() {
+                    if let Some(e) = all.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) {
+                        let _ = e.class_list().remove_1("held");
+                    }
+                }
+            }
+        }
+    };
+    let pressed = move |ev: web_sys::PointerEvent| {
+        let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        if el.closest(".tacts").ok().flatten().is_none() {
+            unhold();
+        }
+        if ev.pointer_type() != "touch" || selecting.with_untracked(Option::is_some) {
+            return;
+        }
+        let Some(turn) = el.closest(".turn").ok().flatten() else { return };
+        press.update_value(|p| *p += 1);
+        let mine = press.get_value();
+        spawn_local(async move {
+            dom::sleep_ms(500).await;
+            if press.try_get_value() == Some(mine) {
+                let _ = turn.class_list().add_1("held");
+            }
+        });
+    };
+    let released = move |_| press.update_value(|p| *p += 1);
+    // Esc leaves selection mode: the full chat's own Esc asks first
+    // ([`leave_selection`]), the dock's is heard here.
+    Effect::new(move |_| {
+        if selecting.with(Option::is_some) {
+            SELECTING.with(|s| s.set(Some(selecting)));
+        }
+    });
+    let esc = window_event_listener(leptos::ev::keydown, move |ev| {
+        if ev.key() == "Escape" && !ev.default_prevented() && selecting.try_with_untracked(Option::is_some) == Some(true) {
+            selecting.set(None);
+        }
+    });
+    on_cleanup(move || esc.remove());
+    let sel_err = RwSignal::new(None::<String>);
+    let selbar = move || {
+        let n = selecting.with(|s| s.as_ref().map_or(0, |s| s.len()));
+        let go = move |_| {
+            let ids: Vec<u64> = selecting.with_untracked(|s| s.iter().flatten().copied().collect());
+            spawn_local(async move {
+                match chats::delete(id, &ids, false).await {
+                    Ok(_) => {
+                        selecting.try_set(None);
+                        sel_err.try_set(None);
+                    }
+                    Err(e) => {
+                        sel_err.try_set(Some(e));
+                    }
+                }
+            });
+        };
+        view! {
+            <div class="tselbar" role="toolbar" aria-label="selected messages">
+                <span>{if n == 1 { "1 selected".to_string() } else { format!("{n} selected") }}</span>
+                {move || sel_err.get().map(|e| view! { <span class="perr" role="alert">{e}</span> })}
+                <button type="button" class="tseldel" disabled=n == 0 on:click=go>"delete"</button>
+                <button type="button" on:click=move |_| { selecting.set(None); sel_err.set(None); }>"cancel"</button>
+            </div>
         }
     };
     let foot = {
@@ -941,7 +1108,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     let t_picker = ticket.clone();
     let t_comp = ticket.clone();
     view! {
-        <div class="chatview" class:full=full>
+        <div class="chatview" class:full=full class:selecting=move || selecting.with(Option::is_some)>
             {move || (held_some.get() && !found.get()).then(|| view! { <p class="pempty">"This chat is not one you are in."</p> })}
             {(!full).then(|| who.clone())}
             {move || revoking.get().map(|p| view! {
@@ -957,7 +1124,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             {move || adding.get().then(|| view! {
                 <Picker ticket=t_picker.clone() add_to=Some((id, participants.get_untracked())) on_done=Callback::new(move |_| adding.set(false)) />
             })}
-            <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=move |_| if !doc_scroll.get_value() { on_scroll() } on:click=acts>
+            <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=move |_| if !doc_scroll.get_value() { on_scroll() } on:click=acts on:pointerdown=pressed on:pointerup=released on:pointercancel=released on:pointermove=released>
                 <div class="tcol">
                     {move || loading_earlier.get().then(|| view! { <div class="tearlier" role="status">"loading earlier…"</div> })}
                     {empty}
@@ -972,7 +1139,9 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                 </div>
             </div>
             {move || arrow.get().map(|a| view! { <button type="button" class="tjump" on:click=jump>{a}</button> })}
-            {move || if is_open.get() {
+            {move || if selecting.with(Option::is_some) {
+                selbar().into_any()
+            } else if is_open.get() {
                 view! { <crate::composer::Composer props=crate::composer::Props { id, ticket: t_comp.clone(), body, full } /> }.into_any()
             } else if found.get() {
                 view! { <div class="pshut">"closed — read-only"<button type="button" class="preopen" on:click=move |_| spawn_local(async move { let _ = chats::settle_state(id, true).await; })>"reopen"</button></div> }.into_any()
@@ -1061,8 +1230,10 @@ fn alone_view(ticket: &str, body: RwSignal<String>) -> impl IntoView {
 
 /// One turn (CHAT-7): yours a bubble on the right, the time under it;
 /// theirs full-width prose under a mono line — a mark, the name, an agent
-/// tag, `via`, the time. Each shows copy · quote · link on hover.
-fn turn_view(m: Message, mine: bool, fresh: bool, name: &impl Fn(&str) -> String) -> impl IntoView {
+/// tag, `via`, the time. Each shows copy · quote · link on hover (and,
+/// CHAT-44, delete · select to its author or an admin; a long press on a
+/// phone).
+fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str) -> String) -> impl IntoView {
     let who = m.name.clone().unwrap_or_else(|| name(&m.author));
     let agent = chats::is_agent(&m.author) || m.via.is_some();
     // A ticket card follows its row: drawn once the app holds the ticket,
@@ -1142,6 +1313,10 @@ fn turn_view(m: Message, mine: bool, fresh: bool, name: &impl Fn(&str) -> String
             <button type="button" data-act="copy">"copy"</button>
             <button type="button" data-act="quote">"quote"</button>
             <button type="button" data-act="link">"link"</button>
+            {del.then(|| view! {
+                <button type="button" data-act="delete">"delete"</button>
+                <button type="button" data-act="select">"select"</button>
+            })}
         </div>
     };
     let mid = m.id.get().to_string();

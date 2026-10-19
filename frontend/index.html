@@ -4049,6 +4049,8 @@
     html:not([data-motion]) #qtray :is(.qedge, .qarrived) { display: none; }
     html:not([data-motion]) #qtray .qcard { animation: none; }
     html:not([data-motion]) :is(#tmenu, #tmenu .sub) { animation: none; }
+    html:not([data-motion]) :is(#chatpane, #chatfull) :is(.trow, .tkeep, .tdbox, .tdcaret) { transition: none; }
+    html:not([data-motion]) :is(#chatpane, #chatfull) .tdel.fresh { animation: none; }
   }
   /* ── LOOK-4: every other view in ARCHIVE-5's hand — the pages the mockup
      does not draw (comments, inputs, deployments, the waves, components,
@@ -4702,6 +4704,63 @@
     line-height: 1.55; color: var(--ink);
   }
   :is(#chatpane, #chatfull) .tlsteps li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* CHAT-44: deleted messages. A run of them is one muted line in its
+     first row (the rest rows of no height); the line opens an inline box of
+     the run, dimmed, by its rows' height and opacity, and closes it again; a
+     message deleted live collapses its turn the same way (.tkeep.gone).
+     Motion none (and reduced motion, below) makes each instant. */
+  :is(#chatpane, #chatfull) .trow { transition: padding-bottom .26s var(--ease); }
+  :is(#chatpane, #chatfull) .trow.tgone { padding-bottom: 0; }
+  :is(#chatpane, #chatfull) .tkeep { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .26s var(--ease), opacity .26s var(--ease); }
+  :is(#chatpane, #chatfull) .tkeep > .tkclip { min-height: 0; }
+  :is(#chatpane, #chatfull) .tkeep.gone { grid-template-rows: 0fr; opacity: 0; }
+  :is(#chatpane, #chatfull) .tkeep.gone > .tkclip { overflow: hidden; }
+  :is(#chatpane, #chatfull) .tdel { color: var(--muted); font: calc(11px * var(--text-scale)) var(--mono); }
+  :is(#chatpane, #chatfull) .tdel.fresh { animation: tdel-in .26s var(--ease); }
+  @keyframes tdel-in { from { opacity: 0; max-height: 0; } to { opacity: 1; max-height: 3em; } }
+  :is(#chatpane, #chatfull) .tdline { display: inline-flex; gap: 6px; align-items: baseline; padding: 3px 8px 3px 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+  :is(#chatpane, #chatfull) .tdline:hover { color: var(--accent); }
+  :is(#chatpane, #chatfull) .tdcaret { display: inline-block; transition: transform .26s var(--ease); }
+  :is(#chatpane, #chatfull) .tdel.open .tdcaret { transform: rotate(90deg); }
+  :is(#chatpane, #chatfull) .tdbox { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .26s var(--ease), opacity .26s var(--ease); }
+  :is(#chatpane, #chatfull) .tdel.open .tdbox { grid-template-rows: 1fr; opacity: 1; }
+  :is(#chatpane, #chatfull) .tdclip { min-height: 0; overflow: hidden; }
+  :is(#chatpane, #chatfull) .tdlist {
+    list-style: none; margin: 4px 0 2px; padding: 4px 12px; max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain;
+    border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--panel);
+  }
+  :is(#chatpane, #chatfull) .tditem { padding: 7px 0; opacity: .62; }
+  :is(#chatpane, #chatfull) .tditem + .tditem { border-top: var(--border) solid var(--line); }
+  :is(#chatpane, #chatfull) .tdmeta { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  :is(#chatpane, #chatfull) .tdmeta b { color: var(--ink); font-weight: var(--weight-strong); }
+  :is(#chatpane, #chatfull) .tdrest { margin-left: auto; color: var(--muted); font: inherit; cursor: pointer; }
+  :is(#chatpane, #chatfull) .tdrest:hover { color: var(--accent); }
+  :is(#chatpane, #chatfull) .tdbody {
+    margin-top: 3px; color: var(--ink); font: calc(12.5px * var(--text-scale))/1.45 var(--sans); white-space: pre-wrap; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
+  }
+  /* A turn's menu on a phone: a long press holds it. */
+  :is(#chatpane, #chatfull) .turn.held .tacts { opacity: 1; }
+  :is(#chatpane, #chatfull) .turn.held { background: var(--sel); border-radius: var(--radius); }
+  /* Selection mode: a tap picks a message you may delete; the bar below
+     takes the composer's place. */
+  :is(#chatpane, #chatfull) .chatview.selecting .trow.can.kept { position: relative; padding-left: 30px; cursor: pointer; }
+  :is(#chatpane, #chatfull) .chatview.selecting .trow.can.kept::before {
+    content: ""; position: absolute; left: 4px; top: 4px; width: 16px; height: 16px; box-sizing: border-box;
+    border: 1.5px solid var(--muted); border-radius: var(--radius); background: var(--card);
+  }
+  :is(#chatpane, #chatfull) .chatview.selecting .trow.can.kept.picked::before { content: "✓"; display: grid; place-items: center; color: var(--urgent-ink); background: var(--accent); border-color: var(--accent); font: var(--weight-strong) 11px/1 var(--mono); }
+  :is(#chatpane, #chatfull) .chatview.selecting .trow.kept:not(.can) { opacity: .5; }
+  :is(#chatpane, #chatfull) .chatview.selecting .tacts { display: none; }
+  :is(#chatpane, #chatfull) .tselbar {
+    flex: none; display: flex; gap: 12px; align-items: center; padding: 10px 14px; box-sizing: border-box;
+    padding-bottom: max(10px, env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px));
+    background: var(--panel); border-top: var(--border) solid var(--line); font: calc(12px * var(--text-scale)) var(--mono); color: var(--ink);
+  }
+  :is(#chatpane, #chatfull) .tselbar > span:first-child { margin-right: auto; }
+  :is(#chatpane, #chatfull) .tselbar button { padding: 6px 12px; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); font: inherit; cursor: pointer; }
+  :is(#chatpane, #chatfull) .tselbar .tseldel { border-color: var(--err-line); color: var(--err-fg); background: var(--err-bg); }
+  :is(#chatpane, #chatfull) .tselbar .tseldel[disabled] { opacity: .5; cursor: default; }
   :is(#chatpane, #chatfull) .tfold { margin: 2px 0 6px 38px; font: calc(11px * var(--text-scale)) var(--mono); color: var(--muted); }
   :is(#chatpane, #chatfull) .tfold summary { cursor: pointer; width: max-content; padding: 2px 0; }
   :is(#chatpane, #chatfull) .tfold summary:hover { color: var(--accent); }

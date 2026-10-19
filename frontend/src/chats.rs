@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, HashMap};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::vocab::{ChatId, MessageId};
-use menger_tickets_api::chats::ChatGrant;
+use menger_tickets_api::chats::{ChatGrant, Deleted};
 use menger_tickets_api::{Chat, ChatKind, ChatState, ChatsEvent, Message};
 use plexus_client::ClientEvent;
 use wasm_bindgen_futures::spawn_local;
@@ -213,6 +213,9 @@ impl Held {
                 }
                 crate::live::keep(self.activity.entry(activity.chat.get()).or_default(), activity)
             }
+            // CHAT-44: kept and marked in the thread; the reader's unread as the server says.
+            ChatsEvent::MessagesDeleted { chat, ids, by, at, unread } => self.marked(chat.get(), ids, Some(Deleted { at: *at, by: by.clone() }), *unread),
+            ChatsEvent::MessagesRestored { chat, ids, unread, .. } => self.marked(chat.get(), ids, None, *unread),
             ChatsEvent::Left { chat } => {
                 self.threads.remove(&chat.get());
                 self.activity.remove(&chat.get());
@@ -220,6 +223,22 @@ impl Held {
             }
             _ => false,
         }
+    }
+
+    /// CHAT-44: `ids` of `chat` marked deleted (`mark`) or put back, where
+    /// the thread holds them; the reader's unread set. Heard twice (a
+    /// write's answer, then its echo), it moves once.
+    fn marked(&mut self, chat: u64, ids: &[MessageId], mark: Option<Deleted>, unread: u32) -> bool {
+        let mut moved = false;
+        if let Some(t) = self.threads.get_mut(&chat) {
+            for m in t.list.iter_mut().filter(|m| ids.contains(&m.id)) {
+                if m.deleted.is_some() != mark.is_some() {
+                    m.deleted = mark.clone();
+                    moved = true;
+                }
+            }
+        }
+        self.with_chat(chat, |c| std::mem::replace(&mut c.unread, unread) != unread) || moved
     }
 
     fn with_chat(&mut self, id: u64, f: impl FnOnce(&mut Chat) -> bool) -> bool {
@@ -817,6 +836,18 @@ pub(crate) async fn remove_revoking(chat: u64, principal: &str, revoke: bool) ->
     answer_of("remove", client()?.remove_all(ChatId::new(chat), crate::typed::typed(principal)?, revoke.then_some(true)).await).map(|_| ())
 }
 
+/// CHAT-44: `chats.delete { chat, ids }` (`restore`: `chats.restore`) —
+/// how many it changed.
+pub(crate) async fn delete(chat: u64, ids: &[u64], restore: bool) -> Result<usize, String> {
+    let c = client()?;
+    let ids: Vec<MessageId> = ids.iter().copied().map(MessageId::new).collect();
+    let events = if restore { c.restore_all(ChatId::new(chat), Some(ids), None, None).await } else { c.delete_all(ChatId::new(chat), Some(ids), None, None).await };
+    match answer_of(if restore { "restore" } else { "delete" }, events)? {
+        ChatsEvent::MessagesDeleted { ids, .. } | ChatsEvent::MessagesRestored { ids, .. } => Ok(ids.len()),
+        _ => Ok(0),
+    }
+}
+
 /// `chats.read { chat, upto }`.
 pub(crate) async fn read(chat: u64, upto: u64) -> Result<(), String> {
     answer_of("read", client()?.read_all(ChatId::new(chat), MessageId::new(upto)).await).map(|_| ())
@@ -899,7 +930,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn msg(id: u64, chat: u64, author: &str, body: &str) -> Message {
-        Message { id: MessageId::new(id), chat: ChatId::new(chat), author: author.into(), name: None, via: None, at: 100 + id as i64, body: body.into() }
+        Message { id: MessageId::new(id), chat: ChatId::new(chat), author: author.into(), name: None, via: None, at: 100 + id as i64, body: body.into(), deleted: None }
     }
 
     /// Reading row: a message by another adds one to the reader's unread,
