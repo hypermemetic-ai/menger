@@ -324,27 +324,20 @@ async fn the_acceptance_filters_on_a_file_from_before_the_log() {
 #[tokio::test]
 async fn crossing_a_length_moves_a_watch_with_no_write() {
     let store = Store::new();
-    let n = NewTicket {
-        epic: "W".into(),
-        title: "waits".into(),
-        kind: Kind::Build,
-        severity: None,
-        blocked_by: Vec::new(),
-        parent: None,
-        path: None,
-        body: String::new(),
-    };
+    // CI-5: one ticket, the root, so the clock is read once for every
+    // birth: a second ticket born the second after would leave the root
+    // the first `Pending` past the hour and the first birth in it, and the
+    // boundaries the root's, one second short of the ticket's.
     store.create(SYS, scope("W")).await.unwrap();
-    store.create(SYS, n).await.unwrap();
-    let born = store.row("W-2").unwrap().0.created_unix;
-    let since = store.history(SYS, "W-2").unwrap().since.unwrap().0;
-    let over = Lens::parse("kind build and status Pending for over 1h").unwrap().with_clock(at(born));
+    let born = store.row("W-1").unwrap().0.created_unix;
+    let since = store.history(SYS, "W-1").unwrap().since.unwrap().0;
+    let over = Lens::parse("kind scope and status Pending for over 1h").unwrap().with_clock(at(born));
     assert_eq!(store.next_boundary(&over), Some(since + 3_600 + 1));
     assert!(store.aged(&over, born, since + 3_600, None).is_empty(), "not yet over the hour");
-    assert_eq!(store.aged(&over, born, since + 3_601, None), [Membership::Entered { id: "W-2".into(), shortcode: ShortcodeId::from("W"), seq: 2 }]);
-    let fresh = Lens::parse("kind build and status Pending and created within 1h").unwrap().with_clock(at(born));
+    assert_eq!(store.aged(&over, born, since + 3_601, None), [Membership::Entered { id: "W-1".into(), shortcode: ShortcodeId::from("W"), seq: 1 }]);
+    let fresh = Lens::parse("kind scope and status Pending and created within 1h").unwrap().with_clock(at(born));
     assert_eq!(store.next_boundary(&fresh), Some(born + 3_600 + 1));
-    assert_eq!(store.aged(&fresh, born, born + 2 * 3_600, None), [Membership::Left { id: "W-2".into(), shortcode: ShortcodeId::from("W"), seq: 2 }]);
+    assert_eq!(store.aged(&fresh, born, born + 2 * 3_600, None), [Membership::Left { id: "W-1".into(), shortcode: ShortcodeId::from("W"), seq: 1 }]);
     // A watch sleeps until the boundary (at most its cap).
     let watcher = store.watcher(over.clone());
     let wait = watcher.wait(&store, std::time::Duration::from_secs(7_200));
@@ -353,7 +346,9 @@ async fn crossing_a_length_moves_a_watch_with_no_write() {
     let day = Lens::parse("created today").unwrap().with_clock(at(born));
     assert!(store.next_boundary(&day).is_some_and(|t| t > born && t <= born + DAY), "tomorrow's start");
     // A status write moves `since`: the boundary follows it.
-    store.set_status(SYS.permit("W-2"), Status::Ready).await.unwrap();
-    let moved = store.history(SYS, "W-2").unwrap().since.unwrap().0;
-    assert_eq!(store.next_boundary(&over), Some(moved + 3_600 + 1));
+    store.set_status(SYS.permit("W-1"), Status::Ready).await.unwrap();
+    let moved = store.history(SYS, "W-1").unwrap().since.unwrap().0;
+    assert_eq!(store.next_boundary(&over), None, "nothing Pending is left to cross the hour");
+    let ready = Lens::parse("kind scope and status Ready for over 1h").unwrap().with_clock(at(born));
+    assert_eq!(store.next_boundary(&ready), Some(moved + 3_600 + 1));
 }
