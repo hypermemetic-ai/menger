@@ -302,6 +302,7 @@ mod ors;
 mod present;
 mod promote;
 mod queue;
+mod queue_views;
 
 mod mermaid;
 mod motion;

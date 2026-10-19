@@ -3479,6 +3479,46 @@ async fn several_questions_in_one_queue_entry() {
     assert_eq!((records[1]["inputs"].clone(), records[1]["blocking"].as_str()), (json!(["format", "fields", "naming"]), Some("fields")));
 }
 
+/// APP-85: an entry carries views of mockups over the real protocol —
+/// `mockup` a list of `T#mN` / `mockup:T#N@W`, kept canonical on the entry
+/// (`queued`, `watch`'s `queued`, `history`'s record); a view the body does
+/// not hold refused in band naming it, a malformed one at dispatch.
+#[tokio::test]
+async fn views_of_mockups_in_a_queue_entry() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    collect(call(&client, "tickets.create", json!({"epic": "KLN", "title": "root", "kind": "scope"})).await).await;
+    let page = "<!doctype html>\n<html><body><main>a look</main></body></html>\n";
+    let opt = |name: &str| format!("<m-option data-field=\"option\" name=\"{name}\" value=\"{}\">\n\n```mockup widths=390,1440 title=\"{name}\"\n{page}```\n\n</m-option>\n", name.to_lowercase());
+    let body = format!(
+        "<m-decision data-field=\"decision\" id=\"layout\">\n<m-question data-field=\"question\">Which layout?</m-question>\n\n{}{}{}</m-decision>\n",
+        opt("Grid"),
+        opt("Ring"),
+        opt("List")
+    );
+    collect(call(&client, "tickets.create", json!({"epic": "KLN", "title": "cone pack", "body": body})).await).await;
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let ev = answer(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "pick a look", "input": "layout", "mockup": ["KLN-2#m1", "mockup:kln-2#2@390", "KLN-2#m3"]})).await;
+    let views = json!([{"ticket": "KLN-2", "mock": 1}, {"ticket": "KLN-2", "mock": 2, "width": 390}, {"ticket": "KLN-2", "mock": 3}]);
+    assert_eq!((ev["type"].as_str(), &ev["entry"]["mockups"]), (Some("queued"), &views), "{ev}");
+    assert_eq!(watch_until(&mut watch, "queued").await.last().unwrap()["entry"]["mockups"], views, "watch's queued carries them");
+    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
+    assert_eq!(rows[0]["entry"]["mockups"], views);
+    let evs = collect(call(&client, "tickets.history", json!({"id": "KLN-2"})).await).await;
+    assert_eq!(evs.iter().find(|e| e["type"] == "queue_record").unwrap()["record"]["mockups"], views, "history's record carries them");
+
+    let ev = answer(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "x", "mockup": ["KLN-2#m4"]})).await;
+    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("mockup `KLN-2#m4`: KLN-2 holds 3 — no mockup 4"), "{ev}");
+    let ev = answer(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "x", "mockup": ["KLN-9#m1"]})).await;
+    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("no ticket KLN-9 you can read"), "{ev}");
+    assert!(invalid(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "x", "mockup": ["KLN-2#mx"]})).await.contains("mockup"));
+    // Nothing written by the refusals.
+    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
+    assert_eq!(rows[0]["entry"]["mockups"], views);
+}
+
 /// APP-24: `await_reply` over the real protocol — an agent queues a ticket
 /// and awaits; `waiting` comes at once; the owner answers from a second
 /// connection; the agent's stream yields one `replied` (kind `answered`)

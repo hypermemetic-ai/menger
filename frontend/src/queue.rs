@@ -40,6 +40,11 @@
 //!   the next open ([`steps`], [`after`]); the last one's Submit takes the
 //!   entry out, as one input's does. A step clicked goes back to it, and an
 //!   answer still open to a change is changed there.
+//! - **Views of mockups** (APP-85, src/queue_views.rs): an entry queued
+//!   with `--mockup` says `▣ N views` on its row and shows them as
+//!   thumbnails above its question; a thumbnail opens the viewer (390 /
+//!   1440, ‹ ›, compare), and *pick this* picks the option the mockup sits
+//!   in — Submit records it. Esc closes the viewer before the sheet.
 //! - **Chosen, then submitted** (APP-25): an option clicked is selected
 //!   ([`Pick`]), nothing sent; ticks and a reply are held the same way, and
 //!   one **submit** sends whichever it is. The sheet comes down once that
@@ -1027,6 +1032,10 @@ struct Sheet {
     step: RwSignal<Option<(String, String)>>,
     /// APP-86: *change it* pressed on the step shown — its answer's controls.
     editing: RwSignal<bool>,
+    /// APP-85: the entry's views of mockups — the viewer, and *pick this*.
+    views: crate::queue_views::Views,
+    /// A phone's width (the thumbnails scroll sideways).
+    phone: RwSignal<bool>,
 }
 
 /// One ticket's answer — today's sheet: who and when, the reason, the
@@ -1057,6 +1066,7 @@ fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
             <div class="qhd">{hd}</div>
             <h4><a class="code" href=format!("#/ticket/{id}")>{id.clone()}</a>" · "{row.ticket.title.clone()}</h4>
             <p class="qwhy">{e.reason.clone()}</p>
+            {(!e.mockups.is_empty()).then(|| crate::queue_views::strip(&e, s.views, s.phone.get_untracked()))}
             {match e.named().len() > 1 {
                 true => steps_view(e.clone(), s).into_any(),
                 false => input_view(id.clone(), e.input.clone(), input, s).into_any(),
@@ -1170,7 +1180,24 @@ pub(crate) fn Tray() -> impl IntoView {
     let picked_row = Memo::new(move |_| picked.with(|p| p.as_ref().and_then(|id| rows.with(|r| r.iter().find(|x| &x.entry.ticket == id).cloned()))));
     let step = RwSignal::new(None::<(String, String)>);
     let editing = RwSignal::new(false);
-    let sheet = Sheet { open, picked, order, clock, problem, busy, draft, pick, step, editing };
+    // APP-85: the viewer, and *pick this* — the option chosen for the input
+    // it sits in (the step moved to it, for an entry of several); the
+    // viewer closes on it.
+    let viewing = RwSignal::new(None::<crate::queue_views::Viewing>);
+    let view_width = RwSignal::new(if phone.get_untracked() { 390 } else { 1440 });
+    let picked_view = Callback::new(move |o: crate::queue_views::Opt| {
+        if let Some(t) = picked.get_untracked() {
+            let several = rows.with_untracked(|r| r.iter().find(|x| x.entry.ticket == t).is_some_and(|x| x.entry.named().len() > 1));
+            if several {
+                editing.set(false);
+                step.set(Some((t, o.input.clone())));
+            }
+        }
+        pick.update(|p| p.choose(&o.value));
+        viewing.set(None);
+    });
+    let views = crate::queue_views::Views { open: viewing, width: view_width, picked: picked_view };
+    let sheet = Sheet { open, picked, order, clock, problem, busy, draft, pick, step, editing, views, phone };
     // A row picked: its answer starts clean, it is opened (no nudge, no dot).
     let pick_row = move |id: String| {
         if picked.with_untracked(|p| p.as_deref() != Some(id.as_str())) {
@@ -1179,6 +1206,7 @@ pub(crate) fn Tray() -> impl IntoView {
             pick.set(Pick::default());
             step.set(None);
             editing.set(false);
+            viewing.set(None);
             picked.set(Some(id.clone()));
         }
         if seen.with_untracked(|s| !s.contains(&id)) {
@@ -1483,6 +1511,7 @@ pub(crate) fn Tray() -> impl IntoView {
                         });
                         words.map(|w| view! { " · "<span class="ask">{w}</span> })
                     }}
+                    {move || now_row.with(|r| r.as_ref().and_then(|r| crate::queue_views::label(r.entry.mockups.len()))).map(|w| view! { " · "<span class="views">{w}</span> })}
                 </span>
             </button>
             {move || here().then(|| picked_row.get().map(|r| view! { <div class="qd-ph">{answer_view(r, sheet, true)}</div> }))}
@@ -1544,6 +1573,11 @@ pub(crate) fn Tray() -> impl IntoView {
                     .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
                     .is_some_and(|el| matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT"));
                 match crate::bindings::hit(&ev, crate::bindings::Context::Dialog) {
+                    // APP-85: the viewer first, then the sheet.
+                    Some("dialog.close") if viewing.get_untracked().is_some() => {
+                        ev.stop_propagation();
+                        viewing.set(None);
+                    }
                     Some("dialog.close") => {
                         ev.stop_propagation();
                         close_sheet(true);
@@ -1594,6 +1628,9 @@ pub(crate) fn Tray() -> impl IntoView {
                 <div class=format!("qarrived u-{}", a.urgency.as_str()) role="status" aria-label=a.label()>"queued · "<b>{a.urgency.as_str()}</b>" · "{a.who.clone()}</div>
             })}
             {card_view}
+            // APP-85: the picked entry's viewer, over the app (outside the
+            // sliding sheet, whose transform would hold a fixed box).
+            {move || picked_row.get().filter(|r| !r.entry.mockups.is_empty() && open.get()).map(|r| crate::queue_views::viewer(r.entry, views))}
             <button
                 type="button"
                 id="qcontrol"
@@ -1977,6 +2014,7 @@ mod tests {
             input: None,
             inputs: Vec::new(),
             blocking: None,
+            mockups: Vec::new(),
             by: "idp:agent".into(),
             name: None,
             source: TransitionSource::Api,

@@ -378,6 +378,7 @@
         "blocking",
         "id",
         "input",
+        "mockup",
         "reason",
         "source",
         "urgency"

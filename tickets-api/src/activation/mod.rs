@@ -38,7 +38,7 @@ use crate::types::{InputValue, Kind, Severity, Status, TicketsEvent};
 use crate::types::InputState;
 use crate::queue::Urgency;
 use crate::vocab::{
-    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, Message,
+    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, MockupRef, Message,
     Query, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
@@ -998,7 +998,7 @@ impl TicketsActivation {
         history_stream(self.store.clone(), user, id.into_string())
     }
 
-    /// Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why, with the inputs it asks (repeat --input; --blocking the one you are idle on); queued again it is raised, never lowered, and its inputs added; yields queued { entry, ticket, action }.
+    /// Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why, with the inputs it asks (repeat --input; --blocking the one you are idle on) and views of mockups to look at (repeat --mockup); queued again it is raised, never lowered, and its inputs and views added; yields queued { entry, ticket, action }.
     ///
     /// MENGER-39: puts a ticket in front of the owner — at an urgency, for a
     /// reason; `blocking` names the input that answers it. Queued again: the
@@ -1023,11 +1023,14 @@ impl TicketsActivation {
         input: Option<InputIds>,
         /// The one input the caller is idle on — among them; required with urgency blocking when there are several (optional).
         blocking: Option<InputId>,
+        /// Views of mockups the owner answers looking at — repeat the flag: T#mN, T (a whole-page body), or mockup:T#N@W (optional).
+        mockup: Option<Vec<MockupRef>>,
         /// app | api | pipeline (optional, default api).
         source: Option<CallerSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let (inputs, blocking) = (input.map(InputIds::into_strings).unwrap_or_default(), blocking.map(InputId::into_string));
-        queue_stream(self.store.clone(), user, id.into_string(), Ask::Queue { urgency, reason, inputs, blocking }, source)
+        let ask = Ask::Queue { urgency, reason, inputs, blocking, mockups: mockup.unwrap_or_default() };
+        queue_stream(self.store.clone(), user, id.into_string(), ask, source)
     }
 
     /// Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued.

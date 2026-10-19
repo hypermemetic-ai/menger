@@ -24,6 +24,11 @@
 //! ([`Closing`]). `input` keeps the one an older reader reads: the
 //! blocking one, else the first.
 //!
+//! **Views of mockups** (APP-85): an entry carries the views it was queued
+//! with (`mockups`), each checked before the write — a ticket the caller
+//! reads, a mockup its body holds ([`Store::mockup_views`]); queueing again
+//! adds the call's.
+//!
 //! **Its history is a log of its own** (`queue_log`), not the transition
 //! log: a transition is a status's or a kind's, which `changed`, `by` and
 //! `--verify-derived` read as such — and an older release reading a
@@ -41,7 +46,7 @@ use super::history::Act;
 use super::lineage::{self, UnderBefore};
 use super::{Cache, Change, OrderKey, Row, Store, StoreError};
 use crate::access::{Editor, Permit};
-use crate::queue::{order, QueueAction, QueueEntry, QueueRecord, Urgency, INPUTS_MAX, REASON_MAX, SNOOZE_MAX_MINUTES};
+use crate::queue::{order, MockupView, QueueAction, QueueEntry, QueueRecord, Urgency, INPUTS_MAX, REASON_MAX, SNOOZE_MAX_MINUTES, VIEWS_MAX};
 use crate::types::{InputState, TicketSummary, TransitionSource};
 use roaring::RoaringBitmap;
 use rusqlite::{params, Connection};
@@ -58,6 +63,7 @@ pub(super) const TABLES: &str = "
             input         TEXT,
             inputs        TEXT,
             blocking      TEXT,
+            mockups       TEXT,
             actor         TEXT NOT NULL,
             name          TEXT,
             source        TEXT NOT NULL,
@@ -74,6 +80,7 @@ pub(super) const TABLES: &str = "
             input      TEXT,
             inputs     TEXT,
             blocking   TEXT,
+            mockups    TEXT,
             at_unix    INTEGER NOT NULL,
             actor      TEXT NOT NULL,
             name       TEXT,
@@ -114,12 +121,12 @@ pub(crate) fn migrate_comment(conn: &Connection) -> anyhow::Result<()> {
 }
 
 /// APP-86: a file whose queue has no `inputs` / `blocking` gains them here,
-/// in place, on both tables — on every open a no-op once they are there. An
-/// older build reads its columns by name and never these: `input` still
-/// holds the one it understands.
+/// in place, on both tables — and APP-85's `mockups` — on every open a no-op
+/// once they are there. An older build reads its columns by name and never
+/// these: `input` still holds the one it understands.
 pub(crate) fn migrate_inputs(conn: &Connection) -> anyhow::Result<()> {
     for table in ["queue", "queue_log"] {
-        for column in ["inputs", "blocking"] {
+        for column in ["inputs", "blocking", "mockups"] {
             if !super::db::has_column(conn, table, column)? {
                 conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} TEXT"), [])?;
                 tracing::warn!("APP-86: the {table} table gained its {column} column, durably");
@@ -137,6 +144,16 @@ fn list_text(names: &[String]) -> Option<String> {
 /// …and read back; `NULL` (one input or none, and every row before APP-86)
 /// is empty — [`QueueEntry::named`] then reads `input`.
 fn list_of(text: Option<String>) -> Vec<String> {
+    text.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+/// APP-85: an entry's views as kept — JSON, `NULL` when none.
+fn views_text(views: &[MockupView]) -> Option<String> {
+    (!views.is_empty()).then(|| serde_json::to_string(views).unwrap_or_default())
+}
+
+/// …and read back.
+fn views_of(text: Option<String>) -> Vec<MockupView> {
     text.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
@@ -200,7 +217,7 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Queue> {
     let bad = |at: usize, e: String| rusqlite::Error::FromSqlConversionFailure(at, rusqlite::types::Type::Text, e.into());
     let mut q = Queue::default();
     let mut stmt = conn.prepare(
-        "SELECT ticket, urgency, reason, input, actor, name, source, queued_unix, asked_unix, snoozed_until, inputs, blocking FROM queue",
+        "SELECT ticket, urgency, reason, input, actor, name, source, queued_unix, asked_unix, snoozed_until, inputs, blocking, mockups FROM queue",
     )?;
     let entries = stmt.query_map([], |r| {
         let input: Option<String> = r.get(3)?;
@@ -210,6 +227,7 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Queue> {
             reason: r.get(2)?,
             inputs: list_of(r.get(10)?),
             blocking: r.get(11)?,
+            mockups: views_of(r.get(12)?),
             input,
             by: r.get(4)?,
             name: r.get(5)?,
@@ -224,7 +242,7 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Queue> {
         q.entries.insert(e.ticket.clone(), e);
     }
     let mut stmt = conn.prepare(
-        "SELECT id, ticket, action, urgency, reason, input, at_unix, actor, name, source, until_unix, comment, inputs, blocking FROM queue_log ORDER BY id",
+        "SELECT id, ticket, action, urgency, reason, input, at_unix, actor, name, source, until_unix, comment, inputs, blocking, mockups FROM queue_log ORDER BY id",
     )?;
     let records = stmt.query_map([], |r| {
         let input: Option<String> = r.get(5)?;
@@ -236,6 +254,7 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Queue> {
             reason: r.get(4)?,
             inputs: list_of(r.get(12)?),
             blocking: r.get(13)?,
+            mockups: views_of(r.get(14)?),
             input,
             at_unix: r.get(6)?,
             actor: r.get(7)?,
@@ -259,8 +278,8 @@ pub(super) fn store(tx: &Connection, ticket: &str, entry: Option<&QueueEntry>, r
     match entry {
         Some(e) => {
             tx.prepare_cached(
-                "INSERT OR REPLACE INTO queue (ticket, urgency, reason, input, actor, name, source, queued_unix, asked_unix, snoozed_until, inputs, blocking)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT OR REPLACE INTO queue (ticket, urgency, reason, input, actor, name, source, queued_unix, asked_unix, snoozed_until, inputs, blocking, mockups)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             )?
             .execute(params![
                 e.ticket,
@@ -274,7 +293,8 @@ pub(super) fn store(tx: &Connection, ticket: &str, entry: Option<&QueueEntry>, r
                 e.asked_unix,
                 e.snoozed_until_unix,
                 list_text(&e.inputs),
-                e.blocking
+                e.blocking,
+                views_text(&e.mockups)
             ])?;
         }
         None => {
@@ -282,8 +302,8 @@ pub(super) fn store(tx: &Connection, ticket: &str, entry: Option<&QueueEntry>, r
         }
     }
     tx.prepare_cached(
-        "INSERT INTO queue_log (id, ticket, action, urgency, reason, input, at_unix, actor, name, source, until_unix, comment, inputs, blocking)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        "INSERT INTO queue_log (id, ticket, action, urgency, reason, input, at_unix, actor, name, source, until_unix, comment, inputs, blocking, mockups)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
     )?
     .execute(params![
         record.id as i64,
@@ -299,7 +319,8 @@ pub(super) fn store(tx: &Connection, ticket: &str, entry: Option<&QueueEntry>, r
         record.until_unix,
         record.comment.map(|c| c as i64),
         list_text(&record.inputs),
-        record.blocking
+        record.blocking,
+        views_text(&record.mockups)
     ])?;
     Ok(())
 }
@@ -330,6 +351,7 @@ pub(super) fn record_of(id: u64, entry: &QueueEntry, action: QueueAction, act: &
         input: entry.input.clone(),
         inputs: entry.inputs.clone(),
         blocking: entry.blocking.clone(),
+        mockups: entry.mockups.clone(),
         at_unix: at,
         actor: act.actor.clone(),
         name: act.name.clone(),
@@ -417,11 +439,14 @@ pub struct QueueAsk {
     pub inputs: Vec<String>,
     /// The one the caller is idle on — among them (APP-86).
     pub blocking: Option<String>,
+    /// The views of mockups it carries (APP-85), checked by
+    /// [`Store::mockup_views`].
+    pub mockups: Vec<MockupView>,
 }
 
 impl Default for QueueAsk {
     fn default() -> Self {
-        Self { urgency: Urgency::Whenever, reason: String::new(), inputs: Vec::new(), blocking: None }
+        Self { urgency: Urgency::Whenever, reason: String::new(), inputs: Vec::new(), blocking: None, mockups: Vec::new() }
     }
 }
 
@@ -450,7 +475,7 @@ impl Store {
     pub async fn queue_with(&self, on: Permit<Editor>, ask: QueueAsk, act: Act) -> Result<QueueChange, StoreError> {
         // ORG-3: the ticket by any short form of its address.
         let id = self.resolve(on.id())?;
-        let QueueAsk { urgency, reason, inputs, blocking } = ask;
+        let QueueAsk { urgency, reason, inputs, blocking, mockups } = ask;
         let reason = reason.trim().to_string();
         if reason.is_empty() {
             return Err(StoreError::Invalid("a queue entry says why: `reason` is blank".into()));
@@ -485,6 +510,16 @@ impl Store {
                 if !named.contains(i) {
                     named.push(i.clone());
                 }
+            }
+            // APP-85: the entry's views, then the call's new ones.
+            let mut views: Vec<MockupView> = held.map(|h| h.mockups.clone()).unwrap_or_default();
+            for v in &mockups {
+                if !views.contains(v) {
+                    views.push(v.clone());
+                }
+            }
+            if views.len() > VIEWS_MAX {
+                return Err(StoreError::Invalid(format!("an entry carries at most {VIEWS_MAX} views of mockups — this one would carry {}", views.len())));
             }
             if named.len() > INPUTS_MAX {
                 return Err(StoreError::Invalid(format!("an entry names at most {INPUTS_MAX} inputs — this one would name {}", named.len())));
@@ -524,6 +559,7 @@ impl Store {
                 input: None,
                 inputs: named,
                 blocking,
+                mockups: views,
                 by: act.actor.clone(),
                 name: act.name.clone(),
                 source: act.source,
@@ -541,6 +577,43 @@ impl Store {
         };
         let change = QueueChange::Queued { entry: entry.clone(), ticket: row.clone(), action };
         self.queue_write(serial, row, Some(entry), record, change, under).await
+    }
+
+    /// APP-85: the views of mockups `refs` name, as `who` may queue them —
+    /// each a ticket `who` reads and a mockup its body holds (`T#mN`: its
+    /// body has at least N; `T`: its body is a whole page), the ticket by
+    /// its id. Refused, naming the view and why: `who` reading no such
+    /// ticket, a number past the body's, a body that is no page.
+    pub async fn mockup_views(&self, who: &(impl super::Reader + ?Sized), refs: &[crate::vocab::MockupRef]) -> Result<Vec<MockupView>, StoreError> {
+        let mut out = Vec::with_capacity(refs.len());
+        for r in refs {
+            let mut v = r.view();
+            let t = match self.get(who, &v.ticket).await {
+                Ok(t) => t,
+                Err(StoreError::NotFound(_)) => return Err(StoreError::Invalid(format!("mockup `{r}`: no ticket {} you can read", v.ticket))),
+                Err(e) => return Err(e),
+            };
+            v.ticket = t.id.to_string();
+            match v.mock {
+                Some(n) => {
+                    let have = crate::mockups::count(&t.body);
+                    if n as usize > have {
+                        let holds = match have {
+                            0 => "none".to_string(),
+                            1 => "one".to_string(),
+                            k => k.to_string(),
+                        };
+                        return Err(StoreError::Invalid(format!("mockup `{r}`: {} holds {holds} — no mockup {n}", v.ticket)));
+                    }
+                }
+                None if !crate::mockups::whole_page(&t.body) => {
+                    return Err(StoreError::Invalid(format!("mockup `{r}`: {} is no whole page — name one of its mockups, `{}#mN`", v.ticket, v.ticket)));
+                }
+                None => {}
+            }
+            out.push(v);
+        }
+        Ok(out)
     }
 
     /// MENGER-39: takes `id` out of the queue — the owner done with it, or

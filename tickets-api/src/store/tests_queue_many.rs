@@ -33,7 +33,7 @@ async fn store() -> Store {
 }
 
 fn ask(urgency: Urgency, inputs: &[&str], blocking: Option<&str>) -> QueueAsk {
-    QueueAsk { urgency, reason: "the import is idle".into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), blocking: blocking.map(str::to_string) }
+    QueueAsk { urgency, reason: "the import is idle".into(), inputs: inputs.iter().map(|s| s.to_string()).collect(), blocking: blocking.map(str::to_string), ..QueueAsk::default() }
 }
 
 fn queued(c: QueueChange) -> (QueueEntry, QueueAction) {

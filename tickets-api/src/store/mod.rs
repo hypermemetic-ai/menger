@@ -5627,6 +5627,8 @@ mod tests_themes;
 mod tests_queue;
 #[cfg(test)]
 mod tests_queue_many;
+#[cfg(test)]
+mod tests_queue_views;
 /// APP-23: a change request.
 #[cfg(test)]
 mod tests_changes;

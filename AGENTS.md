@@ -686,6 +686,7 @@ close, as always). Queue the question first — the input — then the ticket:
 ```sh
 synapse -P 4455 menger tickets queue --id RETURNS-13 --urgency blocking --input landing --reason "the import is idle until this is decided"
 synapse -P 4455 menger tickets queue --id GLAZE-11 --urgency blocking --input format --input fields --input naming --blocking naming --reason "the import is idle"
+synapse -P 4455 menger tickets queue --id KILN-7 --urgency now --input layout --mockup KILN-7#m1 --mockup KILN-7#m2 --reason "pick a layout"
 synapse -P 4455 menger tickets queue --id MENGER-41 --urgency now --reason "the promote rolled back"
 synapse -P 4455 menger tickets queued                       # most urgent first, then oldest
 synapse -P 4455 menger tickets snooze --id MENGER-41 --minutes 30
@@ -717,6 +718,13 @@ progress. Queueing again adds inputs and never lowers the urgency.
 `await_reply` without `--input` replies on each answer: call it again with
 `--since` for the next. The tray steps the owner through them (`1 of 3
 answered`).
+
+**Views of mockups in an entry** (APP-85): `--mockup T#mN` (repeat it; `T`
+for a whole-page body, or APP-45's `mockup:T#N@W`) queues what the owner
+answers looking at — checked against the body (a mockup it holds, else
+refused naming it). The tray shows them as thumbnails above the question
+(`▣ 3 views` on the row): a viewer at 390 / 1440, compare, and *pick this*
+for a mockup inside an option of the entry's decision (APP-46).
 
 `watch` carries `queued` / `unqueued` / `snoozed`; `history --id X` ends with
 the ticket's `queue_record`s (who queued it, why, at what urgency). `queued`

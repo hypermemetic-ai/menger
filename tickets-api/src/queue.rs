@@ -12,6 +12,9 @@
 //!   idle on ([`QueueEntry::blocking`]); it leaves the queue when every one
 //!   it names is closed. `input` stays, for every reader before APP-86: the
 //!   blocking one, else the first.
+//! - **Views of mockups** (APP-85): an entry may carry views of mockups
+//!   ([`QueueEntry::mockups`], each a [`MockupView`]) — what the owner
+//!   answers looking at.
 //! - **The order** ([`order`]): most urgent first, then the oldest.
 //! - **Its history** ([`QueueRecord`]): every queueing, raise, snooze and
 //!   unqueue — who, from where, why — kept in a log of its own beside the
@@ -81,6 +84,45 @@ pub const REASON_MAX: usize = 2_000;
 /// APP-86: the most inputs one entry names.
 pub const INPUTS_MAX: usize = 16;
 
+/// APP-85: the most views of mockups one entry carries (APP-44's compare
+/// holds as many).
+pub const VIEWS_MAX: usize = 8;
+
+/// APP-85: a view of a mockup a queue entry carries — ticket `ticket`'s
+/// `mock`th mockup (`T#mN`, numbered as the app numbers a body's mockups:
+/// fences, elements and refs in document order), or (`mock: None`) the
+/// ticket's body itself, a whole page; at `width` when one is named (APP-45's
+/// `mockup:T#N@W`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MockupView {
+    pub ticket: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mock: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+}
+
+impl MockupView {
+    /// As APP-44's compare names it: `T#mN`, or `T`.
+    pub fn key(&self) -> String {
+        match self.mock {
+            Some(n) => format!("{}#m{n}", self.ticket),
+            None => self.ticket.clone(),
+        }
+    }
+}
+
+impl fmt::Display for MockupView {
+    /// `T#mN@W` — the key, then the width when named.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.key())?;
+        match self.width {
+            Some(w) => write!(f, "@{w}"),
+            None => Ok(()),
+        }
+    }
+}
+
 /// The longest snooze, in minutes: a week.
 pub const SNOOZE_MAX_MINUTES: u32 = 7 * 24 * 60;
 
@@ -107,6 +149,10 @@ pub struct QueueEntry {
     /// ([`QueueEntry::blocking_input`] reads both).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocking: Option<String>,
+    /// APP-85: the views of mockups it carries, in the order given — shown
+    /// above its question. Empty: none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mockups: Vec<MockupView>,
     /// Who queued it last: a principal (`anonymous` on one kept before ACCESS-24, when login could be off).
     pub by: String,
     /// Their display name, when they have one.
@@ -247,6 +293,9 @@ pub struct QueueRecord {
     /// APP-86: the one the caller was idle on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocking: Option<String>,
+    /// APP-85: the views of mockups the entry carried after the write.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mockups: Vec<MockupView>,
     pub at_unix: i64,
     pub actor: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,6 +370,7 @@ mod tests {
             input: None,
             inputs: Vec::new(),
             blocking: None,
+            mockups: Vec::new(),
             by: "a".into(),
             name: None,
             source: TransitionSource::Api,
@@ -371,6 +421,16 @@ mod tests {
         let e = Reply::Ended { how: Ending::Canceled, by: "idp:ada".into(), at_unix: 9 };
         assert_eq!(serde_json::to_value(&e).unwrap(), serde_json::json!({"kind": "ended", "how": "canceled", "by": "idp:ada", "at_unix": 9}));
         assert_eq!((r.at_unix(), e.at_unix()), (7, 9));
+    }
+
+    /// APP-85: a view's names.
+    #[test]
+    fn a_mockup_view_is_named_as_compare_names_it() {
+        let v = MockupView { ticket: "KILN-7".into(), mock: Some(2), width: Some(390) };
+        assert_eq!((v.key(), v.to_string()), ("KILN-7#m2".to_string(), "KILN-7#m2@390".to_string()));
+        let whole = MockupView { ticket: "DESIGN-49".into(), mock: None, width: None };
+        assert_eq!(whole.to_string(), "DESIGN-49");
+        assert_eq!(serde_json::to_value(&v).unwrap(), serde_json::json!({"ticket": "KILN-7", "mock": 2, "width": 390}));
     }
 
     #[test]
