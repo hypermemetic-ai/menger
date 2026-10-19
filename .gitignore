@@ -6,6 +6,7 @@
 # The Leptos app (frontend/) is its own cargo unit; build products only —
 # its Cargo.lock IS committed (it's an application, not a library).
 /frontend/target
+/tether/target
 /frontend/dist
 # The magnitude ladder (perf/, PERF-3) is a Node package: dependencies and
 # scratch output stay out; its lockfile IS committed.

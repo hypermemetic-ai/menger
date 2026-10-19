@@ -28,6 +28,13 @@ accepted and changes nothing) and no `--stdio`. The tests run the same way:
 on a database purges the grants planted while it ran open (README "Login"
 → The purge).
 
+**tether** (`tether/`, TETHER-7) is menger's local side as a Plexus RPC
+tool of its own (`synapse tether sessions …`), with substrate imported as
+a crate and called in memory (plexus-core's `HubTransport`, LOCAL-6). It is
+its **own cargo workspace** — substrate's sqlx and menger's rusqlite link
+two `libsqlite3-sys` — so `cargo test` here does not cover it: `cd tether
+&& cargo test`. Its README has how to run and reach it.
+
 Bare `cargo run` takes prod's ports (4455–4456) **and prod's database**
 (the default `--db-path` is `~/.local/share/menger/tickets.db`) — never run
 it that way while prod is installed.
