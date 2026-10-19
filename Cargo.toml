@@ -28,7 +28,7 @@ name = "menger"
 # SCAFFOLD-9: 0.6 — the login moved to plexus-login; `menger::sessions`,
 # `menger::login`, … are its re-exports, and their signatures changed
 # (`Sessions::new(ttl, &names)`, `LoginAuth::new(…, app)`).
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "MIT"
 description = "A plan is a program whose leaves are prose — ticketing on Plexus RPC"
@@ -72,12 +72,12 @@ path = "src/main.rs"
 # and its generated client, from one declaration — shared with the browser
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
-menger-tickets-api = { path = "tickets-api", version = "0.6.0" }
+menger-tickets-api = { path = "tickets-api", version = "0.6.1" }
 
 # SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
 # the local server (`menger::local`'s serving) — lifted out of menger into
 # plexus-shell, which menger consumes: one copy.
-plexus-shell = { path = "plexus-shell", version = "0.1" }
+plexus-shell = { path = "plexus-shell", version = "0.1.2" }
 
 # MFE-10: the plexus 0.6 line — plexus-core 0.6.0, plexus-macros 0.6.0
 # (the `client` / `server_cfg` activation flags, MACRO-4) and
@@ -86,19 +86,19 @@ plexus-shell = { path = "plexus-shell", version = "0.1" }
 # `main`, which reference each other the same way, so the graph resolves
 # exactly one of each. DIST-3: each carries its version too, which is what
 # the published crate takes from crates.io.
-plexus-core = { path = "../plexus-core", version = "0.6" }
+plexus-core = { path = "../plexus-core", version = "0.6.1" }
 # Slim: default features off keeps the rmcp/MCP stack out (default-off as
 # of 0.5.0 anyway); http-gateway enables the REST + SSE bridge (MNG-8).
-plexus-transport = { path = "../plexus-transport", version = "0.5", default-features = false, features = ["http-gateway"] }
+plexus-transport = { path = "../plexus-transport", version = "0.5.1", default-features = false, features = ["http-gateway"] }
 # IDENTITY-14: login at the boundary — the provider adapters (IDENTITY-13)
 # turn each provider's credential into Plexus types at the WebSocket upgrade.
 # Used only when an --auth-provider is given.
-plexus-auth-core = { path = "../plexus-auth-core", version = "0.2", features = ["adapters"] }
+plexus-auth-core = { path = "../plexus-auth-core", version = "0.2.1", features = ["adapters"] }
 # SCAFFOLD-3/SCAFFOLD-9: the login — providers, the page, sessions, the
 # gate, the auth backend, the wiring — its own crate (a workspace member,
 # published before menger); menger implements its `LoginAccess` over
 # `Access` (src/login_access.rs) and `main` runs on its `Wiring`.
-plexus-login = { path = "plexus-login", version = "0.2" }
+plexus-login = { path = "plexus-login", version = "0.2.1" }
 # IDENTITY-19: the login page — the shell asks the provider itself (discovery,
 # token endpoint), keeps sessions keyed by a random id (hashed), and runs the
 # code flow with PKCE. All already in the lock through plexus-auth-core.
@@ -137,7 +137,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [build-dependencies]
 # SCAFFOLD-5: build.rs embeds frontend/dist through plexus-shell's build
 # half — no dependencies of its own.
-plexus-shell = { path = "plexus-shell", version = "0.1", default-features = false, features = ["build"] }
+plexus-shell = { path = "plexus-shell", version = "0.1.2", default-features = false, features = ["build"] }
 
 [dev-dependencies]
 # Wire-level tests speak the same protocol as web/index.html.

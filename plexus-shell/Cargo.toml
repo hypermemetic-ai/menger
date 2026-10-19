@@ -13,7 +13,7 @@
 #           loopback, started from code
 [package]
 name = "plexus-shell"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "Serve a Plexus RPC app's frontend build (from disk or embedded in the binary) beside its hub, and start the whole server as a library call"
@@ -43,8 +43,8 @@ base64 = { version = "0.22", optional = true }
 anyhow = { version = "1", optional = true }
 # The plexus 0.6 line, by sibling path in a checkout (as menger takes it) and
 # by version from crates.io once published.
-plexus-core = { path = "../../plexus-core", version = "0.6", optional = true }
-plexus-transport = { path = "../../plexus-transport", version = "0.5", default-features = false, optional = true }
+plexus-core = { path = "../../plexus-core", version = "0.6.1", optional = true }
+plexus-transport = { path = "../../plexus-transport", version = "0.5.1", default-features = false, optional = true }
 jsonrpsee = { version = "0.26", features = ["server"], optional = true }
 
 [dev-dependencies]

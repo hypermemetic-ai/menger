@@ -19,7 +19,7 @@
 name = "menger-tickets-api"
 # SCAFFOLD-9: 0.6 — `SessionCheck::key` (the session table names its own
 # metadata key) replaced `access::SESSION_KEY`.
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "MIT"
 description = "menger's ticket vocabulary, activation and Plexus RPC client — one declaration, shared by the server and the browser"
@@ -78,8 +78,8 @@ futures = "0.3"
 # published crate takes the line from crates.io. `plexus-client` is
 # `default-features = false` here — the browser app adds the `ws-web`
 # backend itself, the server's tests `ws-native`.
-plexus-macros = { path = "../../plexus-macros", version = "0.6.0" }
-plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.6.0", default-features = false }
+plexus-macros = { path = "../../plexus-macros", version = "0.6.1" }
+plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.6.1", default-features = false }
 # COMP-3: the component registry reads a body as the app renders it — the
 # app's own markdown parser (frontend/src/md.rs, MFE-7), so a fence, a code
 # span and raw HTML are what the renderer will say they are. Already in the
@@ -90,10 +90,10 @@ plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.6.0",
 pulldown-cmark = { version = "0.13", default-features = false }
 
 # Server-only. None of these builds for wasm32-unknown-unknown.
-plexus-core = { path = "../../plexus-core", version = "0.6", optional = true }
+plexus-core = { path = "../../plexus-core", version = "0.6.1", optional = true }
 # IDENTITY-21: a grant names a Plexus principal, checked as the identity
 # layer parses one. Server-only, like plexus-core.
-plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", optional = true }
+plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2.1", optional = true }
 async-trait = { version = "0.1", optional = true }
 jsonrpsee = { version = "0.26", features = ["server", "macros"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
