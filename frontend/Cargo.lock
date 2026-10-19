@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "menger-tickets-api"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "futures",
  "plexus-client",
@@ -1084,7 +1084,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "plexus-client"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -1099,7 +1099,7 @@ dependencies = [
 
 [[package]]
 name = "plexus-macros"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
