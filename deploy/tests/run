@@ -175,6 +175,14 @@ case $method in
     printf '%s\n' "$params" >>"$CAPTURE"
     [[ ${CALL_FAIL:-} == 1 ]] && { echo '{"type":"error","message":"needs deployments.record on SHOP"}'; exit 3; }
     echo '{"type":"deployed","deployment":{"id":7,"project":"SHOP","environment":"staging","state":"succeeded","revision":"0123456789ab"},"carried":["SHOP-3"],"duplicate":false}' ;;
+  # DEPLOY-28: SHOP-3 is In Review there unless STUB_INREVIEW says otherwise; the key file each call signs with
+  tickets.nav.member)
+    printf 'keyfile=%s key=%s\n' "${MENGER_DEPLOY_KEY_FILE:-}" "${MENGER_DEPLOY_KEY:-}" >>"$CALL_LOG"
+    jq -c --arg in " ${STUB_INREVIEW-SHOP-3} " '.ids[] | . as $id | {type: "member", id: $id, matched: ($in | contains(" " + $id + " "))}' <<<"$params" ;;
+  tickets.update_many)
+    printf 'keyfile=%s key=%s\n' "${MENGER_DEPLOY_KEY_FILE:-}" "${MENGER_DEPLOY_KEY:-}" >>"$CALL_LOG"
+    [[ ${CALL_FAIL:-} == update ]] && { echo '{"type":"error","error_kind":"forbidden","message":"needs tickets.update_many on SHOP-3"}'; exit 3; }
+    echo '{"type":"updated_many"}' ;;
 esac
 EOF
 chmod +x "$SCRATCH/menger-call"
@@ -191,6 +199,25 @@ has "--url ws: the answer printed" "$out" '"deployed"'
 CALL_FAIL=1 exits "--url ws: a refusal fails" 3 "$REC" --project shop --env staging --state started --revision abcdef1 --send --url ws://h:1
 exits "--url ws --dry-run sends nothing" 0 "$REC" --project shop --env staging --state started --revision abcdef1 --send --url ws://h:1 --dry-run
 has "--url ws --dry-run sends nothing" "$err" "would send"
+# DEPLOY-28: --complete — a succeeded record's carried tickets In Review there → Complete
+: >"$CALL_LOG"
+MENGER_DEPLOY_KEY=AAAA MENGER_DEPLOY_COMPLETE_KEY_FILE=$SCRATCH/editor.key exits "--complete: exits 0" 0 \
+  "$REC" --project shop --env staging --state succeeded --revision abcdef1 --release r-abcdef1 --send --url wss://h/ws --complete
+has "--complete: asks which are In Review and current there" "$(<"$CALL_LOG")" \
+  'wss://h/ws tickets.nav.member {"ids":["SHOP-3"],"filter":"status \"In Review\" and deployed shop/staging and not behind shop/staging"}'
+has "--complete: one update_many, Complete, the deploy named" "$(<"$CALL_LOG")" \
+  'wss://h/ws tickets.update_many {"ids":["SHOP-3"],"status":"Complete","message":"deploy shop/staging r-abcdef1 carries its work (DEPLOY-22)"}'
+has "--complete: as the editor's key file, its name the agent" "$(<"$CALL_LOG")" $'--agent editor\nwss://h/ws tickets.update_many'
+has "--complete: the file read, the deploy key not passed" "$(<"$CALL_LOG")" "keyfile=$SCRATCH/editor.key key="$'\n'
+has "--complete: said" "$err" "record: complete: SHOP-3 → Complete"
+has "--complete: the answer printed" "$out" '{"type":"completed","tickets":["SHOP-3"]}'
+: >"$CALL_LOG"; exits "--complete, started: nothing moves" 0 "$REC" --project shop --env staging --state started --revision abcdef1 --send --url wss://h/ws --complete
+[[ $(<"$CALL_LOG") != *tickets.* ]] && ok || bad "--complete moved a started record's tickets"
+: >"$CALL_LOG"; STUB_INREVIEW="" exits "--complete, none In Review: exits 0" 0 "$REC" --project shop --env staging --state succeeded --revision abcdef1 --send --url wss://h/ws --complete
+[[ $(<"$CALL_LOG") != *tickets.update_many* ]] && ok || bad "--complete wrote with none In Review"
+CALL_FAIL=update exits "--complete refused: the record stands (exit 0)" 0 "$REC" --project shop --env staging --state succeeded --revision abcdef1 --send --url wss://h/ws --complete
+has "--complete refused: said" "$err" "record: complete: menger refused SHOP-3 → Complete: needs tickets.update_many on SHOP-3"
+exits "--complete needs the WebSocket" 1 "$REC" --project shop --env staging --state succeeded --revision abcdef1 --send --complete
 MENGER_DEPLOY_KEY=AAAA exits "a key over REST is refused" 1 "$REC" --project p --env e --state started --revision abcdef1 --send --url https://h
 has "a key over REST is refused" "$err" "carries no identity"
 exits "a URL of no known scheme" 1 "$REC" --project p --env e --state started --revision abcdef1 --send --url ftp://h

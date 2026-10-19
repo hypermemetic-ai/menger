@@ -644,17 +644,41 @@ where its work runs:
   wait for the next run, which sends them before its own. One menger refuses
   moves to `outbox/refused/` and is said, never retried. A record never
   fails a run.
-- **Where.** `MENGER_DEPLOY_TRACKER_PORT` (4455, prod's tracker — test's
-  deploys are recorded there too), `MENGER_DEPLOY_TRACKER_HOST`,
+- **Where** (DEPLOY-28). `MENGER_DEPLOY_TRACKER_URL`, default
+  `wss://app.menger.sh/ws` — the tracker since RUN-13 — always signed in as
+  the pipeline's key (below; with no key file the records wait, said).
+  `MENGER_DEPLOY_TRACKER_URL=local` is this machine's tracker, as before
+  RUN-13: `MENGER_DEPLOY_TRACKER_PORT` (4455), `MENGER_DEPLOY_TRACKER_HOST`,
   `MENGER_DEPLOY_TRACKER_TOKEN` (a token, through synapse — argv; prefer the key).
+- **Complete on test** (DEPLOY-28, DEPLOY-22's rule: Complete means running
+  on the lowest environment). A `succeeded` record to `test` — a deploy test,
+  or a sync that first passes a release — once menger keeps it (or kept it
+  already, so a drained outbox completes too), sets **Complete** on each
+  ticket it `carried` that is In Review and runs its current version there:
+  `deploy/record --complete` asks `tickets.nav.member` with `status "In
+  Review" and deployed menger/test and not behind menger/test`, then one
+  `tickets.update_many --status Complete`, its message `deploy menger/test
+  <release> carries its work (DEPLOY-22)`. The pipeline's key is viewer +
+  deployer, so that write signs in with `MENGER_DEPLOY_COMPLETE_KEY_FILE`
+  (default `~/.plexus/keys/builder.key`, an editor's; its agent the file's
+  name; `none`: records only). A refused completion is said, and the record
+  stands; nothing else (prod, a failure, a rollback) moves a status.
+- **app.menger.sh** (DEPLOY-28): `remote test` records `app-test` (from
+  `test`: the image of the release test passed) and `remote prod` records
+  `app-prod` (from `app-test`), each `started` then `succeeded` / `failed`,
+  so a ticket's Running and `#/deployments` show where app.menger.sh runs
+  it. `remote prod` ships the image app-test runs: its release is the one
+  `deployments.log` last shows app-test running `ok`, and its log line names
+  it (it was `-`).
 - **Signed in as the pipeline's key** (ACCESS-47; prod requires login).
   Where `MENGER_DEPLOY_KEY_FILE` (default `~/.plexus/keys/pipeline.key`,
   `synapse _key new pipeline --store file`; `none`: no key) is a file, every
   record goes over the socket — `deploy/record --url
-  ws://127.0.0.1:$MENGER_DEPLOY_TRACKER_PORT --agent pipeline`, whose
+  $MENGER_DEPLOY_TRACKER_URL --agent pipeline` (`local`: `ws://127.0.0.1:$MENGER_DEPLOY_TRACKER_PORT`), whose
   `deploy/menger-call.mjs` reads the seed from the file (0600, or it is
   refused) and signs a key proof; the seed is in no environment and no argv.
-  The key holds `viewer` on `*` and `deployer` on `MENGER` on prod (the
+  The key holds `viewer` on `*` and `deployer` on `MENGER` on prod and on
+  app.menger.sh (the
   operator granted them at the switch; test's database is prod's copy, so
   test has them from its next `deploy test` / `sync test`). A gate's refusal
   (the key not granted, or not admitted) is the tracker's setup, not the

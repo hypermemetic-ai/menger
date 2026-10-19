@@ -59,12 +59,18 @@
 # goes through the outbox, oldest first; one the tracker does not take waits
 # there for the next run. A record never fails a deploy, nor holds one up
 # longer than a bounded send. Where:
+#   MENGER_DEPLOY_TRACKER_URL (wss://app.menger.sh/ws) — DEPLOY-28: the tracker since RUN-13,
+#   reached as the pipeline's key; `local`: this machine's tracker, as before RUN-13 —
 #   MENGER_DEPLOY_TRACKER_PORT (4455) · MENGER_DEPLOY_TRACKER_HOST · MENGER_DEPLOY_TRACKER_TOKEN
 #   MENGER_DEPLOY_OUTBOX (~/.local/share/menger-deploy/outbox) · MENGER_DEPLOY_RECORD_TIMEOUT (10 s a send)
 #   MENGER_DEPLOY_KEY_FILE (~/.plexus/keys/pipeline.key; `none`: no key) — ACCESS-47:
 #   the pipeline's own key; where the file is, records go over the socket
 #   signed in as it (deploy/menger-call.mjs reads the file — the seed is never
 #   in an environment or an argv) and `status` reads health as it
+#   MENGER_DEPLOY_COMPLETE_KEY_FILE (~/.plexus/keys/builder.key; `none`: no completion) —
+#   DEPLOY-28: a succeeded record to test, once kept, sets Complete on the In Review
+#   tickets it carried that now run their current version there (DEPLOY-22), as this
+#   key (an editor's: the pipeline's own key is viewer + deployer)
 set -euo pipefail
 
 # ── where things are ────────────────────────────────────────────────────────
@@ -83,9 +89,17 @@ RECORD=$REPO/deploy/record
 TRACKER_PORT=${MENGER_DEPLOY_TRACKER_PORT:-4455}
 TRACKER_HOST=${MENGER_DEPLOY_TRACKER_HOST:-}
 TRACKER_TOKEN=${MENGER_DEPLOY_TRACKER_TOKEN:-}
+# DEPLOY-28: the tracker moved to app.menger.sh (RUN-13); `local` is :TRACKER_PORT here.
+TRACKER_URL=${MENGER_DEPLOY_TRACKER_URL:-wss://app.menger.sh/ws}
+[[ $TRACKER_URL == local ]] && TRACKER_URL=""
+case $TRACKER_URL in ""|ws://*|wss://*) ;; *) printf 'pipeline: MENGER_DEPLOY_TRACKER_URL=%s: ws:// or wss:// (or local)\n' "$TRACKER_URL" >&2; exit 1 ;; esac
+if [[ -n $TRACKER_URL ]]; then TRACKER_NAME=$(sed -E 's|^wss?://||; s|/.*$||' <<<"$TRACKER_URL"); else TRACKER_NAME=:$TRACKER_PORT; fi
 # ACCESS-47: prod behind login — the pipeline signs in with its key, a file.
 DEPLOY_KEY_FILE=${MENGER_DEPLOY_KEY_FILE:-$HOME/.plexus/keys/pipeline.key}
 [[ $DEPLOY_KEY_FILE == none || ! -f $DEPLOY_KEY_FILE ]] && DEPLOY_KEY_FILE=""
+# DEPLOY-28: who sets Complete after a deploy to test — an editor's key, a file.
+COMPLETE_KEY_FILE=${MENGER_DEPLOY_COMPLETE_KEY_FILE:-$HOME/.plexus/keys/builder.key}
+[[ $COMPLETE_KEY_FILE == none || ! -f $COMPLETE_KEY_FILE ]] && COMPLETE_KEY_FILE=""
 CALL_JS=$REPO/deploy/menger-call.mjs
 OUTBOX=${MENGER_DEPLOY_OUTBOX:-$HOME_DIR/outbox}
 SENT=$HOME_DIR/sent
@@ -143,10 +157,11 @@ previous_release() { local l; l=$(envdir "$1")/previous; [[ -L $l ]] && basename
 # a run that died, a rollback whose smoke failed is never the start. ENV with
 # no run in the log yet: what it runs.
 last_good() {
-  local runs='$2 == e && $3 ~ /^(deploy|sync|promote|rollback)$/'
+  local runs='$2 == e && $3 ~ /^(deploy|sync|promote|rollback|run)$/'
   if [[ -f $LOG ]] && awk -F'\t' -v e="$1" "$runs {f = 1} END {exit !f}" "$LOG"; then
     awk -F'\t' -v e="$1" "$runs"' {
-      if ($5 == "ok") g = $4; else if (match($5, /rolled back to [^ ]+$/)) g = substr($5, RSTART + 15) }
+      if ($4 == "-") next
+      if ($5 == "ok" || ($3 == "run" && $5 ~ /^ok /)) g = $4; else if (match($5, /rolled back to [^ ]+$/)) g = substr($5, RSTART + 15) }
       END { if (g != "") print g }' "$LOG"
   else running_release "$1"; fi
 }
@@ -186,8 +201,9 @@ tell() {
   ( set +e; tell_ "$@" ) || true
 }
 # DEPLOY-21: the environment ENV promotes from — prod from test; test and the
-# landing page's edge from none (each its own track).
-promotes_from() { case $1 in prod) echo test ;; esac; }
+# landing page's edge from none (each its own track). DEPLOY-28: app-test
+# runs the image of the release test passed, app-prod what app-test runs.
+promotes_from() { case $1 in prod|app-test) echo test ;; app-prod) echo app-test ;; esac; }
 tell_() {
   local env=$1 state=$2 rel=$3 prev=${4:-} rev p at rec="" from
   rev=$(sha_of "$rel"); p=$(sha_of "$prev")
@@ -231,15 +247,27 @@ flush_outbox() {
   [[ -n $TRACKER_TOKEN ]] && sargs+=(--token "$TRACKER_TOKEN")
   # ACCESS-47: with the pipeline's key (and no token given), over the socket
   # signed in as it; the seed stays in its file, read by menger-call.
-  if [[ -n $DEPLOY_KEY_FILE && -z $TRACKER_TOKEN ]]; then
+  # DEPLOY-28: app.menger.sh (MENGER_DEPLOY_TRACKER_URL) is under login: always the key.
+  if [[ -n $TRACKER_URL ]]; then
+    via=key sargs=(--send --url "$TRACKER_URL" --agent pipeline)
+    kenv=(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE")
+  elif [[ -n $DEPLOY_KEY_FILE && -z $TRACKER_TOKEN ]]; then
     via=key sargs=(--send --url "ws://${TRACKER_HOST:-127.0.0.1}:$TRACKER_PORT" --agent pipeline)
     kenv=(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE")
   fi
+  [[ $via == key && -z $DEPLOY_KEY_FILE ]] && { say "record: no key for $TRACKER_NAME (MENGER_DEPLOY_KEY_FILE: $HOME/.plexus/keys/pipeline.key) — the records wait in $OUTBOX"; exec {lock}>&-; return 0; }
   # A run's flush stops after a few sends' worth of time; backfill's does not.
   local until=$((SECONDS + 3 * SEND_TIMEOUT))
   for f in $(queued); do
     [[ ${QUIET:-} == 1 || $SECONDS -lt $until ]] || break
-    rc=0; out=$("${kenv[@]}" timeout "$SEND_TIMEOUT" "$RECORD" --from json "$OUTBOX/$f" "${sargs[@]}" 2>&1) || rc=$?
+    # DEPLOY-28 (DEPLOY-22): a succeeded record to test, the lowest environment, completes its work
+    # (three calls, three sends' time; the key's file named to deploy/record, never read here)
+    local cargs=() cenv=() tmo=$SEND_TIMEOUT
+    if [[ $via == key && -n $COMPLETE_KEY_FILE ]] && jq -e '.environment == "test" and .state == "succeeded"' "$OUTBOX/$f" >/dev/null 2>&1; then
+      cargs=(--complete) cenv=(MENGER_DEPLOY_COMPLETE_KEY_FILE="$COMPLETE_KEY_FILE") tmo=$((3 * SEND_TIMEOUT))
+    fi
+    rc=0; out=$("${kenv[@]}" "${cenv[@]}" timeout "$tmo" "$RECORD" --from json "$OUTBOX/$f" "${sargs[@]}" "${cargs[@]}" 2>&1) || rc=$?
+    grep '^record: complete: ' <<<"$out" >&2 || true
     # menger-call answers JSON lines, synapse its text: one reading of both
     if [[ $via == key ]]; then
       out=$(jq -Rr 'fromjson? // {line: .} | if .type == "deployed" then "type: deployed", "duplicate: \(.duplicate)"
@@ -250,7 +278,7 @@ flush_outbox() {
     if [[ $rc == 0 ]] && grep -q '^type: deployed' <<<"$out"; then
       local env how=sent; env=$(jq -r .environment "$OUTBOX/$f")
       if grep -q '^duplicate: true' <<<"$out"; then dup=$((dup + 1)); how="already kept"; else sent=$((sent + 1)); fi
-      [[ ${QUIET:-} == 1 ]] || say "record: $(what "$OUTBOX/$f") → menger :$TRACKER_PORT ($how)"
+      [[ ${QUIET:-} == 1 ]] || say "record: $(what "$OUTBOX/$f") → menger $TRACKER_NAME ($how)"
       mkdir -p "$SENT"
       jq -c --arg t "$(date -u +%FT%TZ)" --arg how "$how" '. + {sent_at: $t, sent: $how}' "$OUTBOX/$f" > "$SENT/${env//\//_}.json"
       rm -f "$OUTBOX/$f"
@@ -261,12 +289,12 @@ flush_outbox() {
     else
       # a gate's refusal (the key not signed in, or not granted) is the
       # tracker's setup, not the record's: it waits, and is said once
-      grep -q '^gate: ' <<<"$out" && say "record: menger :$TRACKER_PORT refused the pipeline's key ($(sed -n 's/^gate: //p' <<<"$out" | head -n 1)) — grant it deployer on MENGER (deploy/README.md \"Recording deployments\")"
+      grep -q '^gate: ' <<<"$out" && say "record: menger $TRACKER_NAME refused the pipeline's key ($(sed -n 's/^gate: //p' <<<"$out" | head -n 1)) — grant it deployer on MENGER (deploy/README.md \"Recording deployments\")"
       break
     fi
   done
   left=$(queued | wc -l)
-  [[ $left -gt 0 ]] && say "record: $left record(s) wait in $OUTBOX for the next run (menger :$TRACKER_PORT did not take them in time)"
+  [[ $left -gt 0 ]] && say "record: $left record(s) wait in $OUTBOX for the next run (menger $TRACKER_NAME did not take them in time)"
   [[ ${QUIET:-} == 1 ]] && say "record: $sent sent, $dup already kept, $refused refused, $left waiting"
   exec {lock}>&-
   return 0
@@ -802,7 +830,7 @@ cmd_backfill() {
     filled=$("$RECORD" --from json --commits-from-git --repo "$repo" -c <<<"$r" 2>/dev/null) || filled=$r
     enqueue "$filled" || die "cannot write $OUTBOX"; n=$((n + 1))
   done <<<"$recs"
-  say "backfill: $n records from $LOG → menger :$TRACKER_PORT"
+  say "backfill: $n records from $LOG → menger $TRACKER_NAME"
   QUIET=1 flush_outbox
 }
 
@@ -1004,15 +1032,25 @@ cmd_remote() {
     if [[ $img != "$ref" ]] && ! docker image inspect "$ref" >/dev/null 2>&1; then
       docker tag "$img" "$ref" || die "could not tag $img as $ref (is $img in this machine's Docker?)"
     fi
+    local good; good=$(last_good app-test)
+    begin_run remote-test
     step "remote test: $ref → $host (bin/infra app.yml -e env=test -e sha=$rel)"
+    tell app-test started "$rel" "$good"
     "$INFRA/bin/infra" app.yml -e "app_dir=$src" -e env=test -e "sha=$rel" >&2 \
-      || { record app-test run "${img##*:}" "infra failed"; die "infra did not deploy $img to $host"; }
-    record app-test run "${img##*:}" "ok $img"
+      || { record app-test run "$rel" "infra failed"; tell app-test failed "$rel" "$good"; die "infra did not deploy $img to $host"; }
+    record app-test run "$rel" "ok $img"
+    tell app-test succeeded "$rel" "$good"
   else
-    step "remote prod: test's image → $host (bin/infra promote.yml)"
+    # DEPLOY-28: promote.yml ships the image app-test runs — the release app-test last ran ok
+    local rel good; rel=$(last_good app-test); good=$(last_good app-prod)
+    begin_run remote-prod
+    step "remote prod: test's image${rel:+ ($rel)} → $host (bin/infra promote.yml)"
+    [[ -n $rel ]] && tell app-prod started "$rel" "$good"
     "$INFRA/bin/infra" promote.yml -e "app_dir=$src" >&2 \
-      || { record app-prod run - "infra failed"; die "infra did not promote to $host (it rolls prod back by itself)"; }
-    record app-prod run - ok
+      || { record app-prod run "${rel:--}" "infra failed"; [[ -n $rel ]] && tell app-prod failed "$rel" "$good"; die "infra did not promote to $host (it rolls prod back by itself)"; }
+    record app-prod run "${rel:--}" ok
+    if [[ -n $rel ]]; then tell app-prod succeeded "$rel" "$good"
+    else say "record: app-test has no release in $LOG — app-prod not recorded"; fi
   fi
   hf_output "url=$url"
 }
@@ -1239,7 +1277,7 @@ record_status() { # ENV → its last deployment record sent (DEPLOY-12), and wha
     printf '  record    none sent yet\n'
   fi
   for q in $(queued); do [[ $(jq -r .environment "$OUTBOX/$q" 2>/dev/null) == "$1" ]] && n=$((n + 1)); done
-  [[ $n -gt 0 ]] && printf '  outbox    %s record(s) waiting for menger on :%s\n' "$n" "$TRACKER_PORT"
+  [[ $n -gt 0 ]] && printf '  outbox    %s record(s) waiting for menger on %s\n' "$n" "$TRACKER_NAME"
   n=$(ls -1 "$OUTBOX/refused" 2>/dev/null | grep -c '\.json$' || true)
   [[ $n -gt 0 ]] && printf '  refused   %s record(s) menger refused, in %s/refused\n' "$n" "$OUTBOX"
   return 0
