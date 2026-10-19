@@ -357,6 +357,11 @@ fn on_pointermove(ev: web_sys::PointerEvent) {
 /// while a sheet is up (iOS's own, past the lock) is put back.
 fn hold() {
     let Some(y) = HELD.with(Cell::get) else { return };
+    // CHAT-29: the full-screen chat over the page is the page on a phone —
+    // it scrolls the document; a dock's sheet left up under it holds nothing.
+    if crate::chat_full::is_up() {
+        return;
+    }
     let w = dom::window();
     if (w.scroll_y().unwrap_or(y) - y).abs() > 0.5 {
         w.scroll_to_with_x_and_y(w.scroll_x().unwrap_or(0.0), y);

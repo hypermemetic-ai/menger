@@ -1193,13 +1193,21 @@ pub(crate) fn Attachments(a: Attach) -> impl IntoView {
                 type="button"
                 class="cpick"
                 title="Add an image — or paste a screenshot, or drop a file on the box"
+                aria-label="Add an image"
                 on:click=move |_| {
                     if let Some(i) = picker.get() {
                         i.click();
                     }
                 }
             >
-                "Image"
+                // CHAT-29: on a phone's composer the icon stands alone beside
+                // send; elsewhere the word shows and the icon does not.
+                <svg class="cpick-ico" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+                    <rect x="2.5" y="3.5" width="15" height="13" rx="2"></rect>
+                    <circle cx="7.5" cy="8" r="1.6"></circle>
+                    <path d="M3 15l4.5-4.5 3 3 2.5-2.5 4.5 4.5"></path>
+                </svg>
+                <span class="cpick-l">"Image"</span>
             </button>
             <input
                 type="file"

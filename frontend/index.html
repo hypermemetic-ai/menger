@@ -2649,6 +2649,7 @@
     border: var(--border) solid var(--line); border-radius: var(--radius); padding: .1rem .55rem;
   }
   .cpick:hover { border-color: var(--accent); color: var(--accent); }
+  .cpick-ico { display: none; }
   .cnote { font-size: calc(.75rem * var(--text-scale)); color: var(--muted); overflow-wrap: anywhere; }
   .cnote.bad { color: var(--err-fg); }
   img.cimg {
@@ -4761,6 +4762,69 @@
     #chatfull.inbox.list .smain { display: none; }
     #chatfull.inbox .shead .sbtn:is(.smore) { display: inline-block; }
   }
+  /* ── CHAT-29: the chat on a phone. At ≤ 760 (the session's phone shape)
+     the full-screen chat — a ticket's, and #/chats — is the page: the
+     document scrolls it, so a phone's browser slides its bars away as on
+     the ticket pages (APP-53), and the rest of the app is put away under
+     it. Its head is sticky and slides up on a scroll down, back on a scroll
+     up (src/chat_full.rs's follow_head stamps data-head="off"); the
+     composer is sticky at the bottom. src/dom.rs's Scroller reads .pmsgs's
+     overflow to know the document scrolls the turns, and CHAT-7's rules
+     run on it (src/chat_pane.rs). With the keyboard up the chat is pinned
+     to the visible area again, its turns scrolling inside (APP-56/58's
+     rules place it), and the document holds still. ── */
+  @media (min-width: 761px) and (max-width: 820px) {
+    html:has(#chatfull) { overflow: hidden; }
+  }
+  @media (max-width: 760px) {
+    #app:has(> #chatfull) > .content,
+    #app:has(#chatfull) > :is(#nav, #qtray, #pbar),
+    #app .content:has(#chatfull) > :not(main),
+    #app main:has(> #chatfull) > :not(#chatfull) { display: none; }
+    #app main:has(> #chatfull) { padding: 0; }
+    #app:has(#chatfull) .content:has(#chatfull) { padding-bottom: 0; }
+    /* The page under it is put away, and so are its holds on the document
+       (a dock's sheet left up, CHAT-31); a lightbox over the chat still
+       holds it. */
+    :root:has(#chatfull):not(:has(.lightbox, .framed.is-full, .cmp-view)) { overflow: visible; overscroll-behavior: auto; }
+    #chatfull { position: relative; inset: auto; z-index: 1; display: block; min-height: 100dvh; padding: 0 var(--safe-right) 0 var(--safe-left); }
+    #chatfull .smain { min-height: 100dvh; }
+    #chatfull .shead { position: sticky; top: 0; z-index: 4; background: var(--bg); padding-top: calc(8px + var(--safe-top)); transition: transform .2s var(--ease); }
+    #chatfull[data-head="off"] .shead { transform: translateY(calc(var(--safe-top) - 100%)); }
+    #chatfull[data-head="off"] .smenu-pop { display: none; }
+    #chatfull .chatview { flex: 1 0 auto; padding-bottom: 0; }
+    #chatfull .pmsgs { flex: 1 0 auto; min-height: 0; overflow: visible; }
+    #chatfull :is(.ccompose, .pshut) { position: sticky; bottom: 0; z-index: 3; background: var(--bg); padding-bottom: calc(5px + var(--safe-bottom)); }
+    #chatfull :is(.ccompose, .pshut) { order: 2; }
+    #chatfull .sfoot { order: 1; margin: 0; padding: 4px 0 8px; }
+    #chatfull .tjump { position: fixed; bottom: calc(64px + var(--safe-bottom)); }
+    #chatfull .ccompose .cfull { display: none; }
+    html[data-kb] #chatfull { position: fixed; inset: 0; display: grid; min-height: 0; }
+    html[data-kb] #chatfull .smain { min-height: 0; }
+    html[data-kb] #chatfull .shead { position: relative; transform: none; }
+    html[data-kb] #chatfull .chatview { flex: 1; min-height: 0; }
+    html[data-kb] #chatfull .pmsgs { flex: 1; min-height: 0; overflow-y: auto; }
+    html[data-kb] #chatfull :is(.ccompose, .pshut) { position: relative; padding-bottom: 5px; }
+    html[data-kb] #chatfull .tjump { position: absolute; bottom: calc(var(--compose-h, 120px) + 14px); }
+  }
+  /* CHAT-29: on a phone's touch screen the composer is one line at rest —
+     the box, then Image as an icon beside send — and grows as you type. No
+     hint row (its hints are a keyboard's) and a one-word placeholder
+     (src/composer.rs, TOUCH_PHONE is this query); an image on its way sits
+     on a line above. */
+  @media (max-width: 820px) and (pointer: coarse) {
+    .ccompose, #chatfull .ccompose { padding-top: 5px; padding-bottom: 5px; }
+    .ccompose .ccard { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 4px; padding: 3px 3px 3px 10px; }
+    .ccompose textarea.cbox { flex: 1 1 0; width: auto; min-width: 0; min-height: calc(1lh + 10px); padding: 5px 2px; resize: none; line-height: 1.35; }
+    .ccompose .crow, .ccompose .cattach { display: contents; }
+    .ccompose .chint { display: none; }
+    .ccompose .cthumbs { order: -1; flex: 1 0 100%; padding: 4px 0 2px; }
+    .ccompose .cpick { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; background: none; color: var(--muted); }
+    .ccompose .cpick-ico { display: block; }
+    .ccompose .cpick-l { display: none; }
+    :is(#chatpane, #chatfull) .ccompose .cfull { align-self: center; }
+    :is(#chatpane, #chatfull) .ccompose .csend { flex: none; height: 32px; padding: 0 14px; }
+  }
   /* ── CHAT-16: an admin's add that grants, and the remove that revokes —
      a dialog over the chat (above the full-screen session). ── */
   .overlay.gdlg { z-index: 1500; }
@@ -4918,8 +4982,10 @@
     #app, #app.nonav, #app.chatting, #app.chatting.nonav { grid-template-columns: minmax(0, 1fr); height: auto; min-height: 100dvh; }
     #app .content { height: auto; overflow: visible; padding-bottom: var(--pbar-h); }
     #app:has(#qtray:not(.empty)) .content { padding-bottom: var(--pbar-h); }
-    /* A full-screen layer over the page keeps the page still under it. */
-    html:has(#chatfull, .framed.is-full, .cmp-view, .lightbox, #app[data-sheet], #tdock-sheet.on) { overflow: hidden; }
+    /* A full-screen layer over the page keeps the page still under it.
+       CHAT-29: the full-screen chat is the page itself at ≤ 760 (its own
+       phone shape), so only from 761 does it hold the document. */
+    html:has(.framed.is-full, .cmp-view, .lightbox, #app[data-sheet], #tdock-sheet.on) { overflow: hidden; }
     /* CHAT-31: a sheet up holds the document (src/sheet.rs stamps
        data-sheet-lock and holds its scroll): its handle and head are the
        sheet's to drag (a row of pills in them still pans sideways), and its

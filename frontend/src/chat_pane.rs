@@ -401,6 +401,19 @@ fn pane_view(s: Shown, lit: Signal<String>, back: Callback<bool>) -> impl IntoVi
     }
 }
 
+/// CHAT-29: how much of the top of the view a sticky head covers, where
+/// the document scrolls the list (the full chat's head on a phone).
+fn covered(sc: &dom::Scroller) -> f64 {
+    if !sc.is_doc() {
+        return 0.0;
+    }
+    dom::window()
+        .document()
+        .and_then(|d| d.query_selector("#chatfull .shead").ok().flatten())
+        .and_then(|h| h.dyn_into::<web_sys::HtmlElement>().ok())
+        .map_or(0.0, |h| f64::from(h.offset_height()))
+}
+
 /// One chat: who is in it (the dock's; the session's head says it), its
 /// turns (src/turns.rs), the composer (src/composer.rs) — or, closed,
 /// reopen. CHAT-7: the same view in the dock and full screen (`full`).
@@ -501,17 +514,23 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     // When the view last set the scroll itself: the scroll events that
     // follow are its own, not the reader's.
     let ours = StoredValue::new(0.0f64);
+    // CHAT-29: whether the document scrolls the list (the full chat on a
+    // phone) — its scroll is then heard on the window.
+    let doc_scroll = StoredValue::new(false);
+    // CHAT-29: what scrolls the list — the list itself, or (the full
+    // chat on a phone) the document; the stylesheet decides.
+    let scroller = move || list_ref.get_untracked().and_then(|el| dom::Scroller::list(&el));
     // Where the list begins inside the scroller's content.
-    let list_offset = move || -> Option<(web_sys::HtmlDivElement, f64)> {
-        let el = list_ref.get_untracked()?;
+    let list_offset = move || -> Option<(dom::Scroller, f64)> {
+        let sc = scroller()?;
         let rows = rows_ref.get_untracked()?;
-        let off = rows.get_bounding_client_rect().top() - el.get_bounding_client_rect().top() + f64::from(el.scroll_top());
-        Some((el, off))
+        let off = rows.get_bounding_client_rect().top() - sc.view().0 + sc.top();
+        Some((sc, off))
     };
     let read_scroll = move || {
-        let Some((el, off)) = list_offset() else { return };
-        view_h.set(f64::from(el.client_height()));
-        rel_top.set(f64::from(el.scroll_top()) - off);
+        let Some((sc, off)) = list_offset() else { return };
+        view_h.set(sc.client_height());
+        rel_top.set(sc.top() - off);
     };
     // Measure what is mounted: each row's height, once it differs.
     let measure = move || {
@@ -534,6 +553,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     // the bottom, else put the anchor back.
     let settle_scroll = move || {
         let Some((el, off)) = list_offset() else { return };
+        doc_scroll.set_value(el.is_doc());
         let total = layout.with_untracked(scale::Layout::total);
         if !landed.get_value() {
             let Some(l) = landing.get_value() else { return };
@@ -548,16 +568,16 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                 turns::Landing::Newest => stick.set_value(true),
                 turns::Landing::At(m) => {
                     stick.set_value(false);
-                    anchor.set_value(Some((m, -40.0)));
+                    anchor.set_value(Some((m, -40.0 - covered(&el))));
                 }
             }
         }
         if stick.get_value() {
             ours.set_value(js_sys::Date::now());
-            el.set_scroll_top(el.scroll_height());
+            el.set_top(el.scroll_height());
         } else if let Some(y) = anchor.get_value().and_then(|a| layout.with_untracked(|l| l.restore(a))) {
             ours.set_value(js_sys::Date::now());
-            el.set_scroll_top((off + y).round() as i32);
+            el.set_top(off + y);
         }
         let _ = total;
         read_scroll();
@@ -627,30 +647,62 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         let _ = el.add_event_listener_with_callback_and_bool("load", cb.as_ref().unchecked_ref(), true);
         cb.forget();
     });
-    let on_scroll = move |_| {
-        let Some(el) = list_ref.get_untracked() else { return };
+    let on_scroll = move || {
+        let Some(el) = scroller() else { return };
         read_scroll();
         if js_sys::Date::now() - ours.get_value() < 80.0 {
             // The view's own move: what is mounted follows, nothing else.
             near_edges();
             return;
         }
-        let at = !turns::off_bottom(f64::from(el.scroll_height()), f64::from(el.scroll_top()), f64::from(el.client_height()));
+        let at = !turns::off_bottom(el.scroll_height(), el.top(), el.client_height());
         stick.set_value(at && !window_t.with_untracked(|t| t.newer));
         anchor.set_value(layout.with_untracked(|l| l.anchor(rel_top.get_untracked())));
         scroll.update_value(|s| s.moved(at));
         arrow.set(scroll.with_value(turns::Scroll::arrow));
         near_edges();
     };
+    // CHAT-29: the document's scroll, where it is the list's; and a switch
+    // between the two (the keyboard pins the chat to the visible area, a
+    // rotation, its going) settles the scroll again in the other.
+    let doc_listen = window_event_listener(leptos::ev::scroll, move |_| {
+        if doc_scroll.try_get_value() == Some(true) {
+            on_scroll();
+        }
+    });
+    let switched = move || {
+        if scroller().is_some_and(|sc| sc.is_doc() != doc_scroll.get_value()) {
+            spawn_local(async move {
+                dom::sleep_ms(0).await;
+                settle_scroll();
+            });
+        }
+    };
+    let resized = window_event_listener(leptos::ev::resize, move |_| switched());
+    let kb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(switched);
+    let kb_watch = web_sys::MutationObserver::new(kb.as_ref().unchecked_ref()).ok();
+    kb.forget();
+    if let (Some(obs), Some(html)) = (&kb_watch, dom::window().document().and_then(|d| d.document_element())) {
+        let init = web_sys::MutationObserverInit::new();
+        init.set_attribute_filter(&js_sys::Array::of1(&"data-kb".into()));
+        let _ = obs.observe_with_options(&html, &init);
+    }
+    on_cleanup(move || {
+        doc_listen.remove();
+        resized.remove();
+        if let Some(obs) = kb_watch {
+            obs.disconnect();
+        }
+    });
     let jump = move |_| {
         if window_t.with_untracked(|t| t.newer) {
             // The window stops short of the newest: fetch the newest again.
             chats::jump_newest(id, size);
         }
         stick.set_value(true);
-        if let Some(el) = list_ref.get_untracked() {
+        if let Some(el) = scroller() {
             ours.set_value(js_sys::Date::now());
-            el.set_scroll_top(el.scroll_height());
+            el.set_top(el.scroll_height());
         }
         scroll.update_value(|s| s.moved(true));
         arrow.set(None);
@@ -691,9 +743,9 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         spawn_local(async move {
             dom::sleep_ms(0).await;
             if stick.try_get_value() == Some(true) {
-                if let Some(el) = list_ref.get_untracked() {
+                if let Some(el) = scroller() {
                     ours.set_value(js_sys::Date::now());
-                    el.set_scroll_top(el.scroll_height());
+                    el.set_top(el.scroll_height());
                 }
             }
             // The live box shows its newest step.
@@ -903,7 +955,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             {move || adding.get().then(|| view! {
                 <Picker ticket=t_picker.clone() add_to=Some((id, participants.get_untracked())) on_done=Callback::new(move |_| adding.set(false)) />
             })}
-            <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=on_scroll on:click=acts>
+            <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=move |_| if !doc_scroll.get_value() { on_scroll() } on:click=acts>
                 <div class="tcol">
                     {move || loading_earlier.get().then(|| view! { <div class="tearlier" role="status">"loading earlier…"</div> })}
                     {empty}

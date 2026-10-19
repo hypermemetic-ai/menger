@@ -147,6 +147,8 @@ pub(crate) fn ChatsPage(#[prop(into)] pick: Signal<Pick>) -> impl IntoView {
         Memo::new(move |_| chat_id.get().and_then(|id| held.with(|h| h.as_ref().and_then(|h| h.get(id).cloned()))))
     };
     let root = NodeRef::<leptos::html::Div>::new();
+    // CHAT-29: the head hides on a scroll down, on a phone.
+    crate::chat_full::follow_head(root);
     root.on_load(|el| {
         spawn_local(async move {
             dom::sleep_ms(0).await;
