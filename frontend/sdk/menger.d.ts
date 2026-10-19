@@ -152,7 +152,7 @@ export interface MengerTheme {
 }
 
 export interface Menger {
-  /** "2.5.0". */
+  /** "2.6.0". */
   readonly version: string;
 
   /**

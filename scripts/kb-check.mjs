@@ -113,7 +113,7 @@ async function focus(page, sel) {
   await page.waitForTimeout(1200);
 }
 async function blur(page) {
-  await page.evaluate(() => { let a = document.activeElement; while (a && a.tagName === "IFRAME") a = a.contentDocument.activeElement; a?.blur(); document.activeElement?.blur(); });
+  await page.evaluate(() => { let a = document.activeElement; while (a && a.tagName === "IFRAME" && !(a.hasAttribute("sandbox") && !/\ballow-same-origin\b/.test(a.getAttribute("sandbox"))) && a.contentDocument) a = a.contentDocument.activeElement; a?.blur(); document.activeElement?.blur(); });
   await page.waitForTimeout(1200);
 }
 
@@ -230,13 +230,23 @@ for (const k of [336, 374]) {
     if (field) {
       await field.scrollIntoViewIfNeeded();
       await field.tap();
+      // APP-83: the frame is sandboxed — the shim cannot see its field, iOS
+      // can: tell it, as the keyboard would come.
+      await page.evaluate((r) => window.__kb.frameField(r), await field.boundingBox());
       await page.waitForTimeout(1200);
       const fr = await field.boundingBox();
-      const s = (await look(page, [])).kb;
+      const v = await look(page, ["#pbar"]);
+      const s = v.kb;
       ok(fr && fr.y >= s.top - 1 && fr.y + Math.min(fr.height, 40) <= s.bottom + 1, `${tag5}: the field is on screen (${f0(fr?.y)} in ${f0(s.top)}–${f0(s.bottom)})`);
+      ok(v.dataKb && !v["#pbar"], `${tag5}: the app knows the keyboard is up, the nav hidden (data-kb ${v.dataKb}, nav ${!!v["#pbar"]}) — APP-83`);
       await shot(page, `${kt}-5-body-input`);
+      await field.evaluate((el) => el.blur());
+      await page.evaluate(() => window.__kb.frameField(null));
       await blur(page);
-    } else console.log(`skip ${tag5}: no field in the body's frame`);
+      await page.waitForTimeout(900);
+      const w = await look(page, ["#pbar"]);
+      ok(!w.dataKb && w["#pbar"], `${tag5}: the field left, the nav back (data-kb ${w.dataKb}, nav ${!!w["#pbar"]})`);
+    } else ok(false, `${tag5}: no field in the body's frame (seed the house components: m-house, m-input)`);
     ok(errs.length === 0, `${kt} ticket page: no page errors ${errs.join(" | ")}`);
     await ctx.close();
   }

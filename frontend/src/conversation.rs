@@ -211,7 +211,7 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                     .into_any()
                 }
             }}
-            <div class="cnew">
+            <div class="cnew wbox">
                 <crate::draw::PadView a=attach />
                 <textarea
                     node_ref=area

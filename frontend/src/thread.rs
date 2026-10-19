@@ -113,7 +113,7 @@ pub(crate) fn Replies(root: Comment) -> impl IntoView {
                 let send = send.clone();
                 let send_key = send_key.clone();
                 view! {
-                    <div class="crnew">
+                    <div class="crnew wbox">
                         <crate::draw::PadView a=attach />
                         <textarea
                             node_ref=area

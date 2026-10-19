@@ -16,7 +16,10 @@
 //!   over the card: ↑↓ move, Tab or Enter picks — the one picked is added
 //!   to the chat and named in the text — Esc closes it
 //!   ([`Context::ComposerMenu`]).
-//! - **`/`** on a one-line text opens the command menu ([`COMMANDS`],
+//! - **`/`** on a one-line text opens the command menu ([`COMMANDS`];
+//!   APP-83: in a chat with an agent, the agent's own first — `/clear`,
+//!   `/stop`, `/status`, `/help`, sent as the message for the chat bridge
+//!   to answer (CHAT-40); a command that takes nothing acts when picked;
 //!   manifest's `slash.ts` shape): `/add NAME`, `/ticket CODE`, `/title
 //!   TEXT`, `/close`. A command runs, never goes as prose ([`act_of`]); one
 //!   that cannot run is refused in a strip over the card — *not sent ·
@@ -61,14 +64,23 @@ pub(crate) struct Spec {
     /// Whether the argument may hold spaces (`/title`'s text).
     pub(crate) spaced_arg: bool,
     pub(crate) hint: &'static str,
+    /// APP-83: the agent's own — sent as the message, and the chat bridge
+    /// answers it itself (CHAT-40); offered only in a chat with an agent.
+    pub(crate) agent: bool,
 }
 
-/// The commands, in the menu's order.
-pub(crate) const COMMANDS: [Spec; 4] = [
-    Spec { name: "add", arg: Some("NAME"), spaced_arg: false, hint: "bring a person or an agent into this chat" },
-    Spec { name: "ticket", arg: Some("CODE"), spaced_arg: false, hint: "put a ticket card in the message" },
-    Spec { name: "title", arg: Some("TEXT"), spaced_arg: true, hint: "rename this chat" },
-    Spec { name: "close", arg: None, spaced_arg: false, hint: "close it — read-only, kept on its ticket" },
+/// The commands, in the menu's order: the agent's first (APP-83) — the
+/// harmless first, since a bare `/` and Enter runs the top row — then the
+/// chat's.
+pub(crate) const COMMANDS: [Spec; 8] = [
+    Spec { name: "status", arg: None, spaced_arg: false, hint: "what the agent is doing, and since when", agent: true },
+    Spec { name: "help", arg: None, spaced_arg: false, hint: "the agent's commands", agent: true },
+    Spec { name: "stop", arg: None, spaced_arg: false, hint: "stop the agent's running turn", agent: true },
+    Spec { name: "clear", arg: None, spaced_arg: false, hint: "the agent starts a fresh session — its context forgotten", agent: true },
+    Spec { name: "add", arg: Some("NAME"), spaced_arg: false, hint: "bring a person or an agent into this chat", agent: false },
+    Spec { name: "ticket", arg: Some("CODE"), spaced_arg: false, hint: "put a ticket card in the message", agent: false },
+    Spec { name: "title", arg: Some("TEXT"), spaced_arg: true, hint: "rename this chat", agent: false },
+    Spec { name: "close", arg: None, spaced_arg: false, hint: "close it — read-only, kept on its ticket", agent: false },
 ];
 
 /// A command, read.
@@ -113,22 +125,27 @@ fn spec_for(word: &str) -> Option<&'static Spec> {
 }
 
 /// The menu for what is typed: every command the word begins, or — once a
-/// space follows it — that command alone.
-pub(crate) fn menu_for(s: &Slash) -> Vec<&'static Spec> {
+/// space follows it — that command alone. The agent's commands only where
+/// an agent is in the chat (`agent`).
+pub(crate) fn menu_for(s: &Slash, agent: bool) -> Vec<&'static Spec> {
     if s.spaced {
-        return spec_for(&s.word).into_iter().collect();
+        return spec_for(&s.word).filter(|c| !c.agent).into_iter().collect();
     }
-    COMMANDS.iter().filter(|c| c.name.starts_with(s.word.as_str())).collect()
+    COMMANDS.iter().filter(|c| (agent || !c.agent) && c.name.starts_with(s.word.as_str())).collect()
 }
 
 fn offered() -> String {
-    COMMANDS.iter().map(|c| format!("/{}", c.name)).collect::<Vec<_>>().join(", ")
+    COMMANDS.iter().filter(|c| !c.agent).map(|c| format!("/{}", c.name)).collect::<Vec<_>>().join(", ")
 }
 
 /// The command a `/` line asks for, or why it can't be run; `None` when the
 /// text is no command at all (prose).
 pub(crate) fn read_slash(text: &str) -> Option<Result<Command, String>> {
     let s = slash_of(text.trim())?;
+    // APP-83: the agent's commands go as the message; the bridge answers.
+    if !s.spaced && spec_for(&s.word).is_some_and(|c| c.agent) {
+        return None;
+    }
     let Some(spec) = spec_for(&s.word) else {
         let typed = if s.word.is_empty() { "/".to_string() } else { format!("/{}", s.word) };
         return Some(Err(format!("{typed} is not a command — the commands are {}", offered())));
@@ -518,7 +535,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
             }
             let text = body.get();
             if let Some(s) = slash_of(&text) {
-                return menu_for(&s).into_iter().map(Row::Cmd).collect();
+                let agent = participants.with(|p| p.iter().any(|p| chats::is_agent(p)));
+                return menu_for(&s, agent).into_iter().map(Row::Cmd).collect();
             }
             let Some((_, q)) = mention_at(&text, caret.get()) else { return Vec::new() };
             ask_cands();
@@ -548,28 +566,6 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                 }
                 let _ = t;
             });
-        }
-    };
-    let pick = {
-        let name = name.clone();
-        let add_one = add_one.clone();
-        move |row: Row| match row {
-            Row::Cmd(spec) => {
-                let text = format!("/{}{}", spec.name, if spec.arg.is_some() { " " } else { "" });
-                let n = text.chars().count();
-                set_text(text, Some(n));
-            }
-            Row::Who(p, reads) => {
-                let text = body.get_untracked();
-                let Some((start, _)) = mention_at(&text, caret.get_untracked()) else { return };
-                if !reads {
-                    refusal.set(Some(format!("not added · {} can't read the ticket", name(&p))));
-                    return;
-                }
-                let (next, at) = complete_mention(&text, start, caret.get_untracked(), &name(&p));
-                set_text(next, Some(at));
-                add_one(p);
-            }
         }
     };
     let send = {
@@ -629,6 +625,35 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                         }
                     });
                 }
+            }
+        }
+    };
+    let pick = {
+        let name = name.clone();
+        let add_one = add_one.clone();
+        let send = send.clone();
+        move |row: Row| match row {
+            Row::Cmd(spec) => {
+                let text = format!("/{}{}", spec.name, if spec.arg.is_some() { " " } else { "" });
+                let n = text.chars().count();
+                set_text(text, Some(n));
+                // APP-83: a command that takes nothing acts the moment it is
+                // picked (/clear, /stop, /status, /help go to the agent).
+                if spec.arg.is_none() {
+                    menu_shut.set(true);
+                    send();
+                }
+            }
+            Row::Who(p, reads) => {
+                let text = body.get_untracked();
+                let Some((start, _)) = mention_at(&text, caret.get_untracked()) else { return };
+                if !reads {
+                    refusal.set(Some(format!("not added · {} can't read the ticket", name(&p))));
+                    return;
+                }
+                let (next, at) = complete_mention(&text, start, caret.get_untracked(), &name(&p));
+                set_text(next, Some(at));
+                add_one(p);
             }
         }
     };
@@ -940,9 +965,12 @@ mod tests {
     #[test]
     fn every_command_row() {
         let s = slash_of("/").unwrap();
-        assert_eq!(menu_for(&s).len(), 4, "a bare / offers them all");
-        assert_eq!(menu_for(&slash_of("/t").unwrap()).iter().map(|c| c.name).collect::<Vec<_>>(), ["ticket", "title"]);
-        assert_eq!(menu_for(&slash_of("/title x").unwrap()).len(), 1);
+        assert_eq!(menu_for(&s, false).len(), 4, "a bare / offers them all");
+        assert_eq!(menu_for(&s, true).len(), 8, "with an agent in the chat, its commands too (APP-83)");
+        assert_eq!(menu_for(&slash_of("/t").unwrap(), false).iter().map(|c| c.name).collect::<Vec<_>>(), ["ticket", "title"]);
+        assert_eq!(menu_for(&slash_of("/s").unwrap(), true).iter().map(|c| c.name).collect::<Vec<_>>(), ["status", "stop"]);
+        assert_eq!(menu_for(&slash_of("/s").unwrap(), false).len(), 0);
+        assert_eq!(menu_for(&slash_of("/title x").unwrap(), false).len(), 1);
         assert!(slash_of("/a\nb").is_none(), "two lines are prose");
         assert!(!menu_settled("/ad"), "the word being typed: the menu's keys");
         assert!(menu_settled("/add sam"), "its argument being typed: Enter runs it");
@@ -953,6 +981,10 @@ mod tests {
         assert_eq!(act_of("/close"), Act::Run(Command::Close));
         assert_eq!(act_of("/title The hold at 1240 °C"), Act::Run(Command::Title("The hold at 1240 °C".into())));
         assert_eq!(act_of("/ticket kiln-3"), Act::Run(Command::Ticket("KILN-3".into())));
+        // APP-83: the agent's commands are the message — the bridge answers.
+        for c in ["/clear", "/stop", "/status", "/help", " /clear "] {
+            assert_eq!(act_of(c), Act::Say, "{c}");
+        }
         let refused = |t: &str| match act_of(t) {
             Act::Refuse(r) => r,
             other => panic!("{t}: {other:?}"),

@@ -105,13 +105,25 @@
     lastL = realY();
   }, true);
 
+  // A sandboxed frame without allow-same-origin is an opaque origin: never
+  // touched (WebKit reports each try as a page error, caught or not).
+  const opaque = (f) => f.hasAttribute("sandbox") && !/\ballow-same-origin\b/.test(f.getAttribute("sandbox"));
   function deepActive() {
     let a = document.activeElement;
-    while (a && a.tagName === "IFRAME") {
+    while (a && a.tagName === "IFRAME" && !opaque(a)) {
       try { a = a.contentDocument.activeElement; } catch { break; }
     }
     return a;
   }
+  // APP-83: a body's frame is sandboxed (an opaque origin): its focused
+  // field is out of this script's reach, as it is out of the app's. iOS
+  // knows; here the check says so — __kb.frameField(rect) after tapping a
+  // field in the frame (its rect in the top layout viewport), null after.
+  let ext = null;
+  const opaqueFocused = () => {
+    const a = document.activeElement;
+    return !!a && a.tagName === "IFRAME" && opaque(a);
+  };
   function typing(el) {
     if (!el) return false;
     const t = el.tagName;
@@ -137,7 +149,7 @@
     const from = pageTop;
     let to = from;
     if (show && el) {
-      const r = rectOf(el);
+      const r = ext && el.tagName === "IFRAME" ? ext : rectOf(el);
       const L = realY();
       const vis = layoutH() - K;
       const top = L + r.top, bottom = L + r.bottom;
@@ -167,6 +179,7 @@
   function watchFrames() {
     for (const f of document.querySelectorAll("iframe")) {
       if (frames.has(f)) continue;
+      if (opaque(f)) { frames.add(f); continue; }
       try {
         const w = f.contentWindow;
         if (!w || !w.document || w.document.readyState === "loading") continue;
@@ -178,7 +191,7 @@
 
   function frame() {
     watchFrames();
-    const focused = typing(deepActive());
+    const focused = typing(deepActive()) || (!!ext && opaqueFocused());
     const want = focused && (up || performance.now() - tapAt < TAP_MS);
     if (want !== up) {
       up = want;
@@ -216,5 +229,7 @@
     // A finger's drag on the page with the keyboard down (the reader
     // scrolling the thread): the real document moves.
     drag: (dy) => { realTo(0, realY() + dy); pageTop = realY(); },
+    // APP-83: a field inside an opaque frame took focus (its rect), or left.
+    frameField: (r) => { ext = r ? { top: r.y, bottom: r.y + r.height } : null; if (r) tapAt = performance.now(); },
   };
 })();

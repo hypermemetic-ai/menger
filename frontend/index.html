@@ -4683,18 +4683,47 @@
   .ccompose .cstrip .cx { background: none; border: 0; color: inherit; }
   .ccompose .cstrip.codes .muted { color: var(--muted); }
   .ccompose .cmenu {
-    display: flex; flex-direction: column; gap: 2px; padding: 6px; margin-bottom: -1px; border: var(--border) solid var(--line);
-    border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--card); max-height: 40vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 2px; padding: 6px; border: var(--border) solid var(--line);
+    border-radius: calc(var(--radius-phone) * .6); background: var(--card); max-height: min(46vh, 340px); overflow-y: auto;
+    position: absolute; left: 12px; right: 12px; bottom: calc(100% - 2px); z-index: 40; box-shadow: 0 8px 24px var(--shadow);
   }
+  #chatfull .ccompose .cmenu { left: 0; right: 0; }
   :is(#chatpane, #chatfull) .ccompose .cmrow {
-    display: flex; gap: 14px; align-items: baseline; text-align: left; padding: 5px 9px; border: var(--border) solid transparent;
-    border-radius: var(--radius); background: transparent; color: var(--ink);
+    display: flex; flex: none; gap: 14px; align-items: baseline; text-align: left; padding: 6px 9px; border: var(--border) solid transparent;
+    border-radius: var(--radius-2xl); background: transparent; color: var(--ink); min-width: 0;
   }
   .ccompose .cmrow b { font-weight: var(--weight-medium); flex: 0 0 auto; min-width: 9em; }
   .ccompose .cmrow span { color: var(--muted); font-family: var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :is(#chatpane, #chatfull) .ccompose .cmrow:hover { background: var(--hover); }
   :is(#chatpane, #chatfull) .ccompose .cmrow.on { border-color: var(--accent); background: var(--sel); }
   .ccompose .cmrow.no b { color: var(--muted); }
+  /* APP-83: every writing surface is the composer — one rounded box, its
+     tools (image, draw, send) inside it: the chat's card, a comment and a
+     reply, the annotation box, Request changes and the tray's text reply
+     (each carries .wbox beside its own class). The box is the card; the
+     field in it has no frame of its own; its row is the box's foot. */
+  .ccompose .ccard, .wbox { border-radius: calc(var(--radius-phone) * .7); background: var(--card); box-shadow: 0 1px 2px var(--shadow); }
+  .wbox {
+    display: flex; flex-direction: column; gap: 4px; min-width: 0; box-sizing: border-box; padding: 8px 8px 8px 14px;
+    border: var(--border) solid var(--line); transition: border-color .12s ease-out, box-shadow .12s ease-out;
+  }
+  .wbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+  .wbox > textarea, .wbox > textarea:focus {
+    border: 0 !important; outline: 0 !important; background: transparent !important; border-radius: 0 !important;
+    width: 100%; box-sizing: border-box; resize: none; padding: 2px 0 4px !important; color: var(--ink); flex: 1 1 auto;
+  }
+  .wbox > :is(.cnewacts, .annot-acts, .qchange-acts) { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin: 0; }
+  .wbox > :is(.cnewacts, .annot-acts, .qchange-acts) > .cattach:first-child { margin-right: auto; }
+  .wbox :is(.csend, .annot-save, .qbtn.fill) {
+    border-radius: var(--radius-pill) !important; background: var(--accent) !important; border-color: var(--accent) !important; color: var(--bg) !important;
+    min-height: 32px; padding: 0 14px !important;
+  }
+  .wbox :is(.csend, .annot-save, .qbtn.fill):disabled { background: var(--tree-line) !important; border-color: var(--tree-line) !important; color: var(--muted) !important; }
+  .wbox :is(.annot-cancel, .qbtn) { border-radius: var(--radius-pill) !important; min-height: 32px; }
+  #qtray .qopts.text.wbox { flex-wrap: nowrap; align-items: stretch; }
+  #qtray .qopts.text.wbox > textarea { flex: 1 1 auto; }
+  .ccompose .csend, .ccompose .cfull { border-radius: var(--radius-pill) !important; }
+  .ccompose .csend { min-height: 32px; padding: 0 14px !important; }
   /* The session: the rail, the column, the ticket beside it. */
   #chatfull {
     position: fixed; inset: 0; z-index: 955; display: grid; grid-template-columns: 264px minmax(0, 1fr); background: var(--bg); color: var(--ink);
@@ -4868,6 +4897,9 @@
     .ccompose .cpick-l { display: none; }
     :is(#chatpane, #chatfull) .ccompose .cfull { align-self: center; }
     :is(#chatpane, #chatfull) .ccompose .csend { flex: none; height: 32px; padding: 0 14px; }
+    /* APP-83: on a phone the one-row card is a rounded pill, inset. */
+    .ccompose .ccard { border-radius: calc(var(--radius-phone) * .85); padding: 4px 4px 4px 12px; }
+    .wbox { border-radius: calc(var(--radius-phone) * .85); }
   }
   /* ── CHAT-16: an admin's add that grants, and the remove that revokes —
      a dialog over the chat (above the full-screen session). ── */
@@ -5017,7 +5049,10 @@
      place's nudge; none moves nothing (the global rule). Tokens only. ── */
   #phead, #pbar, #pscrim, .pscrim-in, .psheet-head, .psheet-foot { display: none; }
   @media (max-width: 820px) {
-    :root { --pbar-h: calc(62px + var(--safe-bottom)); }
+    /* APP-83: the nav floats, rounded, inset from the screen's edges and
+       corners (--nav-b clears the home indicator); --pbar-h stays what it
+       holds free at the bottom, its height and the gap under it. */
+    :root { --nav-h: 58px; --nav-b: max(var(--safe-bottom), 10px); --pbar-h: calc(var(--nav-h) + var(--nav-b) + 6px); }
     /* APP-53: the document scrolls, not the column — a phone's browser
        hides its own bars only when the document does. #phead stays at the
        top (sticky), #pbar at the bottom (fixed); the column leaves the
@@ -5057,14 +5092,16 @@
     #phead .pconn .cell { width: 7px; height: 7px; border-radius: var(--radius-xs); background: currentColor; }
     /* The bar. */
     #pbar {
-      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); position: fixed; left: 0; right: 0; bottom: 0; z-index: 940;
-      height: var(--pbar-h); box-sizing: border-box; padding: 0 calc(4px + var(--safe-right)) var(--safe-bottom) calc(4px + var(--safe-left));
-      background: var(--panel); border-top: var(--border) solid var(--tree-line);
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); position: fixed; z-index: 940;
+      left: calc(10px + var(--safe-left)); right: calc(10px + var(--safe-right)); bottom: var(--nav-b);
+      height: var(--nav-h); box-sizing: border-box; padding: 5px; border-radius: var(--radius-phone);
+      background: color-mix(in srgb, var(--panel) 92%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+      border: var(--border) solid var(--tree-line); box-shadow: 0 6px 22px var(--shadow);
     }
     #pbar .pl {
       position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-      min-width: 0; min-height: 44px; margin: 5px 3px 6px; padding: 0 2px; cursor: pointer;
-      background: none; border: var(--border) solid transparent; border-radius: var(--radius-lg); color: var(--muted);
+      min-width: 0; min-height: 44px; margin: 0 1px; padding: 0 2px; cursor: pointer;
+      background: none; border: var(--border) solid transparent; border-radius: calc(var(--radius-phone) * .7); color: var(--muted);
       font-family: var(--mono); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: .06em;
       transition: background-color .12s ease-out, color .12s ease-out, border-color .12s ease-out;
     }
@@ -5276,8 +5313,8 @@
      its end does not hand the drag on to the page. */
   html[data-kb] :is(#chatfull, #tdock-sheet) .pmsgs { overscroll-behavior: contain; }
   @media (min-width: 641px) and (max-width: 820px) {
-    :root { --pbar-h: calc(58px + var(--safe-bottom)); }
-    #pbar { padding: 0 max(calc(4px + var(--safe-right)), calc(50% - 300px)) var(--safe-bottom) max(calc(4px + var(--safe-left)), calc(50% - 300px)); }
+    :root { --nav-h: 54px; }
+    #pbar { left: max(calc(10px + var(--safe-left)), calc(50% - 300px)); right: max(calc(10px + var(--safe-right)), calc(50% - 300px)); }
     #pbar .pl { flex-direction: row; gap: 8px; font-size: calc(11px * var(--text-scale)); }
     #pbar .bdg { position: static; }
     #pbar .sub { padding: 0; }

@@ -228,7 +228,7 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, held, highlight
 /// COMMENT-10's 2.5 draws a body's `media:` images: `menger:media { hash }`
 /// asked of the host, answered held to the frame's `data-media` ticket;
 /// `menger:zoom` shows one full screen.
-pub(crate) const SDK_VERSION: &str = "2.5.0";
+pub(crate) const SDK_VERSION: &str = "2.6.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -740,6 +740,9 @@ pub(crate) enum Msg {
     Media,
     /// COMMENT-10: a body's image, tapped — full screen over the app.
     Zoom,
+    /// APP-83: a field that takes typing gained (`on`) or lost focus in the
+    /// body — the keyboard's to know, since the app sees only the iframe.
+    Field,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -769,6 +772,7 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:scrolled" => Some(Msg::Scrolled),
         "menger:media" => Some(Msg::Media),
         "menger:zoom" => Some(Msg::Zoom),
+        "menger:field" => Some(Msg::Field),
         "menger:extent" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Extent { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32 })
@@ -1678,6 +1682,7 @@ fn on_message(ev: web_sys::MessageEvent) {
             }
         }
         Some(Msg::Scrolled) => annotate::frame_changed(&channel),
+        Some(Msg::Field) => crate::keyboard::frame_field(&frame, field("on").and_then(|v| v.as_bool()).unwrap_or(false)),
         Some(Msg::Unmock) => {
             if let Some(n) = field("mock").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) {
                 mockup::dropped(&channel, n as u32);
@@ -2465,6 +2470,7 @@ mod tests {
     fn the_host_reads_ready_and_size_and_nothing_else() {
         assert_eq!(parse_msg("menger:boot", None, None), Some(Msg::Boot));
         assert_eq!(parse_msg("menger:ready", None, None), Some(Msg::Ready));
+        assert_eq!(parse_msg("menger:field", None, None), Some(Msg::Field), "APP-83: a field in the body took or left focus");
         assert_eq!(parse_msg("menger:size", Some(312.2), Some(true)), Some(Msg::Size { height: 313, settled: true }));
         assert_eq!(parse_msg("menger:size", Some(40.0), None), Some(Msg::Size { height: 40, settled: false }));
         assert_eq!(parse_msg("menger:size", Some(-5.0), Some(false)), Some(Msg::Size { height: 0, settled: false }));
