@@ -64,9 +64,9 @@ other peer is ignored (README "Run" → Trusted proxies).
 > `synapse --url wss://app.menger.sh/ws _login menger --key <agent> --as
 > <agent>`; `builder`, `pipeline`, `operator` keep their grants). Read every
 > `synapse -P 4455 menger …` below as that. People sign in at
-> https://app.menger.sh/ through WorkOS production. Deployment records wait
-> in the outbox (`deploy/record` still dials :4455). The rollback is on
-> RUN-13.
+> https://app.menger.sh/ through WorkOS production. Deployment records go
+> to app.menger.sh as the `pipeline` key (DEPLOY-28,
+> `MENGER_DEPLOY_TRACKER_URL`). The rollback is on RUN-13.
 
 ## Deploying
 
@@ -97,7 +97,8 @@ deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
 
 - **Every deploy test, sync, promote and rollback records itself in menger**
   (DEPLOY-12): `started`, then `succeeded` / `failed` / `rolled_back`, sent
-  to the tracker (`MENGER_DEPLOY_TRACKER_PORT`, 4455) through
+  to the tracker (`MENGER_DEPLOY_TRACKER_URL`, `wss://app.menger.sh/ws`, as the
+  `pipeline` key; DEPLOY-28) through
   `deploy/record`. A record the tracker does not take waits in
   `~/.local/share/menger-deploy/outbox/` for the next run; it never fails a
   deploy. A test of the pipeline runs it on a throwaway root
@@ -113,7 +114,8 @@ deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
 - Merging to main is not deploying, and **Complete means deployed to the
   lowest environment** (owner, 2026-10-17; DEPLOY-22): the merge links its
   commit and leaves the ticket In Review; the `deploy test` that carries it
-  sets Complete; it reaches users when its release is promoted — say which
+  sets Complete by itself (DEPLOY-28: `deploy/record --complete`, as the
+  builder's key); it reaches users when its release is promoted — say which
   release in the ticket when it matters. Work in a repository with no
   environment (`repo@hash` outside menger) is Complete at its merge.
 - Check work on the test environment (http://127.0.0.1:4451/) or a throwaway

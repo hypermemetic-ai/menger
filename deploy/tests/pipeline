@@ -29,6 +29,10 @@ has()  { [[ $2 == *"$3"* ]] && ok || bad "$1: wanted '$3' in: $2"; }
 export HOME=$SCRATCH/home
 unset MENGER_DEPLOY_HOME MENGER_DEPLOY_OUTBOX MENGER_DEPLOY_TRACKER_HOST MENGER_DEPLOY_TRACKER_TOKEN DEPLOY_SMOKE_FAIL SMOKE_DRILLED MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE MENGER_CALL
 export MENGER_DEPLOY_TRACKER_PORT=4769
+# DEPLOY-28: the tracker is app.menger.sh by default; `local` is :4769, the stand-ins
+# below (DEPLOY-28's own checks unset it, and dial app.menger.sh's stand-in)
+export MENGER_DEPLOY_TRACKER_URL=local
+unset MENGER_DEPLOY_COMPLETE_KEY_FILE
 # Belt and braces: even a real systemctl --user would find no bus.
 export XDG_RUNTIME_DIR=$SCRATCH/no-runtime DBUS_SESSION_BUS_ADDRESS=unix:path=$SCRATCH/no-bus
 D=$HOME/.local/share/menger-deploy
@@ -58,14 +62,23 @@ case " $* " in
   *smoke-health.mjs*" - "*) read -r t; [[ -n $t ]] && echo "ticket_count: 3" ;;
   *menger-call.mjs*)
     echo "keyfile=${MENGER_DEPLOY_KEY_FILE:-} key=${MENGER_DEPLOY_KEY:-}" >>"$STUB_ARGV"
+    all=" $* "
     while [[ $# -gt 0 ]]; do [[ $1 == --params ]] && rec=$2; shift; done
     [[ ${STUB_TRACKER:-up} == gate ]] && { echo "{\"code\":\"-32003\",\"error_kind\":\"forbidden\",\"message\":\"needs deployments.record\",\"type\":\"error\"}"; exit 3; }
     case " $* " in *" tickets.health "*) ;; esac
+    # DEPLOY-28: which carried tickets are In Review there (STUB_INREVIEW), and the completion
+    case $all in
+      *" tickets.nav.member "*) echo "member $rec" >>"$STUB_ARGV"
+        jq -c --arg in " ${STUB_INREVIEW:-} " ".ids[] | {type: \"member\", id: ., matched: (. as \$id | \$in | contains(\" \" + \$id + \" \"))}" <<<"$rec"; exit 0 ;;
+      *" tickets.update_many "*) echo "$rec" >>"$STUB_COMPLETED"
+        [[ ${STUB_COMPLETE:-} == refuse ]] && { echo "{\"code\":\"-32003\",\"error_kind\":\"forbidden\",\"message\":\"needs tickets.update_many on MENGER-7\",\"type\":\"error\"}"; exit 3; }
+        echo "{\"type\":\"updated_many\"}"; exit 0 ;;
+    esac
     if [[ $rec == "{}" ]]; then echo "{\"ticket_count\":3,\"type\":\"health\"}"; exit 0; fi
     [[ ${STUB_TRACKER:-up} == refuse ]] && { echo "{\"message\":\"no shortcode MENGER\",\"type\":\"error\"}"; exit 3; }
     key=$(jq -c "[.project, .environment, .state, .revision, (.source.run // .at)]" <<<"$rec")
     grep -qxF -- "$key" "$STUB_KEYS" 2>/dev/null && dup=true || { dup=false; echo "$key" >>"$STUB_KEYS"; echo "$rec" >>"$STUB_SENT"; }
-    echo "{\"type\":\"deployed\",\"deployment\":{\"id\":1},\"duplicate\":$dup}" ;;
+    echo "{\"type\":\"deployed\",\"deployment\":{\"id\":1},\"carried\":${STUB_CARRIED:-[]},\"duplicate\":$dup}" ;;
 esac; exit 0'
 stub curl '[[ " $* " == *"Host: evil.example"* ]] && { printf %s "${STUB_HOST_CODE:-421}"; exit 0; }
 echo "curl $*" >>"$STUB_ARGV"
@@ -90,7 +103,7 @@ while [[ $# -gt 0 ]]; do [[ $1 == -p ]] && rec=$2; shift; done
 key=$(jq -c "[.project, .environment, .state, .revision, (.source.run // .at)]" <<<"$rec")
 grep -qxF -- "$key" "$STUB_KEYS" 2>/dev/null && dup=true || { dup=false; echo "$key" >>"$STUB_KEYS"; echo "$rec" >>"$STUB_SENT"; }
 printf "deployment: \n  id: 1\nduplicate: %s\ntype: deployed\n" "$dup"'
-export PATH=$SCRATCH/bin:$PATH STUB_SENT=$SCRATCH/sent.ndjson STUB_KEYS=$SCRATCH/keys \
+export PATH=$SCRATCH/bin:$PATH STUB_SENT=$SCRATCH/sent.ndjson STUB_KEYS=$SCRATCH/keys STUB_COMPLETED=$SCRATCH/completed \
   STUB_ARGV=$SCRATCH/argv STUB_STDIN=$SCRATCH/stdin STUB_SECRET=s3cret-Pw-7f3a
 [[ $(command -v systemctl) == "$SCRATCH/bin/systemctl" && $(command -v synapse) == "$SCRATCH/bin/synapse" ]] \
   || { echo "the stand-ins are not first on PATH — refusing to run the pipeline" >&2; exit 1; }
@@ -349,6 +362,54 @@ has "in band refused under the key: said" "$err" "menger refused test started $S
 : >"$STUB_ARGV"; m=$(mark); MENGER_DEPLOY_KEY_FILE=none run sync test
 same "no key (none): synapse, as before" "$(since "$m" .state)" '"started" "succeeded"'
 [[ $(<"$STUB_ARGV") != *menger-call.mjs* ]] && ok || bad "MENGER_DEPLOY_KEY_FILE=none still used the key"
+
+# ── DEPLOY-28: app.menger.sh as the pipeline key; deploy test sets Complete ──
+CK=$HOME/.plexus/keys/builder.key; ( umask 077; echo "seed-b-$STUB_SECRET" >"$CK" )
+apprun() { MENGER_DEPLOY_TRACKER_URL= run "$@"; } # unset: the default, app.menger.sh
+: >"$STUB_ARGV"; : >"$STUB_COMPLETED"; m=$(mark)
+STUB_CARRIED='["MENGER-7","MENGER-8"]' STUB_INREVIEW="MENGER-7" apprun deploy test "$R1"
+same "app.menger.sh: deploy test exits 0" "$code" 0
+same "app.menger.sh: started, succeeded sent" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
+has "app.menger.sh: by default, over wss as the pipeline" "$(<"$STUB_ARGV")" "--url wss://app.menger.sh/ws --agent pipeline deployments.record"
+has "app.menger.sh: said as sent there" "$err" "record: test succeeded $S1 → menger app.menger.sh (sent)"
+has "complete: which carried tickets are In Review and run their current version on test" "$(<"$STUB_ARGV")" \
+  'member {"ids":["MENGER-7","MENGER-8"],"filter":"status \"In Review\" and deployed menger/test and not behind menger/test"}'
+same "complete: once, the In Review one, Complete, saying the deploy" "$(jq -c '[.ids, .status, (.message | test("^deploy menger/test '"$R1"' carries its work"))]' "$STUB_COMPLETED")" \
+  '[["MENGER-7"],"Complete",true]'
+has "complete: as the builder's key, an editor's" "$(<"$STUB_ARGV")" "--url wss://app.menger.sh/ws --agent builder tickets.update_many"
+has "complete: the builder's key from its file" "$(<"$STUB_ARGV")" "keyfile=$CK key="$'\n'
+[[ $(<"$STUB_ARGV") != *"seed-b-$STUB_SECRET"* ]] && ok || bad "the builder's key rode in argv"
+has "complete: said" "$err" "record: complete: MENGER-7 → Complete (deploy menger/test $R1 carries its work (DEPLOY-22))"
+# a promote to prod, and a sync none carried, complete nothing
+: >"$STUB_COMPLETED"; STUB_CARRIED='["MENGER-7"]' STUB_INREVIEW="MENGER-7" apprun promote "$R1"
+same "complete: a promote to prod moves nothing" "$(wc -l <"$STUB_COMPLETED")" 0
+: >"$STUB_COMPLETED"; STUB_INREVIEW="MENGER-7" apprun sync test
+same "complete: a deploy that carried none moves nothing" "$(wc -l <"$STUB_COMPLETED")" 0
+# none In Review there: nothing written
+: >"$STUB_COMPLETED"; STUB_CARRIED='["MENGER-8"]' STUB_INREVIEW="" apprun sync test
+same "complete: none In Review, nothing written" "$(wc -l <"$STUB_COMPLETED")" 0
+has "complete: none In Review, said" "$err" "none of MENGER-8 is In Review"
+# refused (the key no editor): the deploy unharmed, the record kept, said
+: >"$STUB_COMPLETED"; STUB_COMPLETE=refuse STUB_CARRIED='["MENGER-7"]' STUB_INREVIEW="MENGER-7" apprun sync test
+same "complete refused: sync exits 0" "$code" 0
+same "complete refused: the record left the outbox" "$(ls "$OUT" | grep -c '\.json$')" 0
+has "complete refused: said" "$err" "record: complete: menger refused MENGER-7 → Complete: needs tickets.update_many on MENGER-7"
+# MENGER_DEPLOY_COMPLETE_KEY_FILE=none: records only
+: >"$STUB_COMPLETED"; MENGER_DEPLOY_COMPLETE_KEY_FILE=none STUB_CARRIED='["MENGER-7"]' STUB_INREVIEW="MENGER-7" apprun sync test
+same "no completer (none): nothing written" "$(wc -l <"$STUB_COMPLETED")" 0
+# no pipeline key: app.menger.sh needs one — the records wait, said; the next run sends them
+m=$(mark); MENGER_DEPLOY_KEY_FILE=none apprun sync test
+same "app.menger.sh, no key: sync exits 0" "$code" 0
+same "app.menger.sh, no key: nothing sent" "$(mark)" "$m"
+has "app.menger.sh, no key: said" "$err" "record: no key for app.menger.sh"
+same "app.menger.sh, no key: two wait" "$(ls "$OUT" | grep -c '\.json$')" 2
+apprun status
+has "status: the outbox waits for app.menger.sh" "$(<"$SCRATCH/out")" "outbox    2 record(s) waiting for menger on app.menger.sh"
+m=$(mark); apprun sync test
+same "app.menger.sh, the key back: the outbox first" "$(since "$m" .state)" '"started" "succeeded" "started" "succeeded"'
+MENGER_DEPLOY_TRACKER_URL=https://app.menger.sh run status
+same "a tracker URL that is no WebSocket: refused" "$code" 1
+rm -f "$CK"
 mv "$K" "$K.off"
 
 # ── ACCESS-25: the smoke asks every port for evil.example ──────────────────
@@ -642,6 +703,20 @@ MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
 same "remote prod: exits 0" "$code" 0
 has "remote prod: promote.yml only" "$(<"$SCRATCH/infra.argv")" "infra promote.yml -e app_dir="
 same "remote prod: url" "$(<"$HF")" "url=https://app.menger.sh/"
+# DEPLOY-28: each tells menger, as env app-test / app-prod — app-test promotes from test,
+# app-prod from app-test, and app-prod runs the release app-test last ran
+ISHA=$(sed -E 's/.*-//' <<<"$I1")
+m=$(mark); MENGER_APP_YML=$SCRATCH/app.yml rrun remote test --image "$LI"
+same "remote test: recorded as app-test" "$(since "$m" '[.environment, .state, .revision, .release, .from]')" \
+  "[\"app-test\",\"started\",\"$ISHA\",\"$I1\",\"test\"] [\"app-test\",\"succeeded\",\"$ISHA\",\"$I1\",\"test\"]"
+m=$(mark); MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
+same "remote prod: recorded as app-prod, app-test's release" "$(since "$m" '[.environment, .state, .revision, .release, .from]')" \
+  "[\"app-prod\",\"started\",\"$ISHA\",\"$I1\",\"app-test\"] [\"app-prod\",\"succeeded\",\"$ISHA\",\"$I1\",\"app-test\"]"
+same "remote prod: the log names the release" "$(tail -n 1 "$D3/deployments.log" | cut -f2-5)" $'app-prod\trun\t'"$I1"$'\tok'
+INF2=$SCRATCH/infra-fails; mkdir -p "$INF2/bin"; printf '#!/usr/bin/env bash\nexit 2\n' >"$INF2/bin/infra"; chmod +x "$INF2/bin/infra"
+m=$(mark); HOME=$H3 MENGER_INFRA_DIR=$INF2 MENGER_APP_YML=$SCRATCH/app.yml run remote test --image "$LI"
+same "remote test, infra fails: exits 1" "$code" 1
+same "remote test, infra fails: started, failed" "$(since "$m" '[.environment, .state]')" '["app-test","started"] ["app-test","failed"]'
 
 # ── IDENTITY-45: remote-secret — the WorkOS key through infra's secret.yml, on a pipe ──
 INS=$SCRATCH/infra-secret; mkdir -p "$INS/bin"; : >"$INS/secret.yml"
