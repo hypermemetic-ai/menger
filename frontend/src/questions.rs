@@ -39,7 +39,8 @@
 use std::collections::HashSet;
 
 use leptos::prelude::*;
-use menger_tickets_api::{Input, InputKind, InputState, QueueEntry, TicketsEvent};
+use menger_tickets_api::vocab::CallerSource;
+use menger_tickets_api::{Input, InputKind, InputState, QueueEntry, TicketsEvent, Urgency};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
@@ -131,6 +132,66 @@ pub(crate) fn queued_for<'a>(rows: &'a [queue::Row], input: &Input) -> Option<&'
     rows.iter()
         .map(|r| &r.entry)
         .find(|e| e.ticket == input.ticket.as_str() && e.input.as_deref().is_none_or(|i| i == input.id.as_str()))
+}
+
+/// APP-87: what a row's pin control is — the owner moving a question from
+/// *all* to *important* by queueing its ticket for it, as themself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PinState {
+    /// Not in the tray: **↑ important** pins it.
+    Pin,
+    /// Queued for it by the reader: *★ pinned by you*, **unpin**.
+    Pinned,
+    /// Queued for it by someone else (an agent): *queued by …*.
+    Queued,
+    /// Its ticket is queued for another of its questions: a ticket is
+    /// queued once, for one input, so pinning this one would take the
+    /// other's place — not offered; the row says which.
+    Elsewhere(String),
+}
+
+/// The pin control for `input`, `rows` the tray's, `me` the reader's
+/// principal.
+pub(crate) fn pin_state(rows: &[queue::Row], input: &Input, me: Option<&str>) -> PinState {
+    if let Some(e) = queued_for(rows, input) {
+        return if queue::pinned_by(e, me) { PinState::Pinned } else { PinState::Queued };
+    }
+    match rows.iter().map(|r| &r.entry).find(|e| e.ticket == input.ticket.as_str()) {
+        Some(e) => PinState::Elsewhere(e.input.clone().unwrap_or_default()),
+        None => PinState::Pin,
+    }
+}
+
+/// APP-87: the urgencies a pin offers, quietest first — `blocking` is an
+/// agent's word (it is idle), never the owner's.
+pub(crate) const PIN_URGENCIES: [Urgency; 3] = [Urgency::Whenever, Urgency::Today, Urgency::Now];
+
+/// The urgency a pin starts at (Fig 4).
+pub(crate) const PIN_DEFAULT: Urgency = Urgency::Now;
+
+/// The queue's reason for a pin: the note, or what a pin is.
+pub(crate) fn pin_reason(note: &str) -> String {
+    match note.trim() {
+        "" => "Pinned from all questions.".to_string(),
+        n => n.to_string(),
+    }
+}
+
+/// The words after a pin: `KILN-4 · unit pinned: important, now`.
+pub(crate) fn pinned_words(ticket: &str, input: &str, u: Urgency) -> String {
+    format!("{ticket} · {input} pinned: important, {}", u.as_str())
+}
+
+/// Keys of `list`'s open inputs the tray holds an entry for.
+pub(crate) fn queued_keys(list: &[Input], rows: &[queue::Row]) -> HashSet<String> {
+    list.iter().filter(|i| i.state == InputState::Open && queued_for(rows, i).is_some()).map(key).collect()
+}
+
+/// Those of `now` that `before` did not hold — rows just queued, to flash.
+pub(crate) fn arrived(before: &HashSet<String>, now: &HashSet<String>) -> Vec<String> {
+    let mut v: Vec<String> = now.difference(before).cloned().collect();
+    v.sort();
+    v
 }
 
 /// How many open questions there are.
@@ -311,9 +372,227 @@ fn change(a: Answering, ticket: String, input: String) {
     });
 }
 
+/// APP-87: a pin being asked — which question, where its popover hangs.
+#[derive(Clone, Debug, PartialEq)]
+struct PinAsk {
+    ticket: String,
+    input: String,
+    top: f64,
+    left: f64,
+    /// The list's scroll when it opened: a scroll that moves it away closes it.
+    scrolled: f64,
+}
+
+/// What pinning reads and writes.
+#[derive(Clone, Copy)]
+struct Pinning {
+    ask: RwSignal<Option<PinAsk>>,
+    urgency: RwSignal<Urgency>,
+    note: RwSignal<String>,
+    /// The last pin, for *undo*: its ticket and the words.
+    undo: RwSignal<Option<(String, String)>>,
+    flash: RwSignal<HashSet<String>>,
+    me: Memo<Option<String>>,
+    busy: RwSignal<bool>,
+    problem: RwSignal<Option<String>>,
+}
+
+/// The popover's place: under `el`, its right edge at the button's (a
+/// phone's: CSS sets the sides), above it when there is no room below.
+fn pin_place(el: &web_sys::Element) -> (f64, f64) {
+    let r = el.get_bounding_client_rect();
+    let w = dom::window().inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let h = dom::window().inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let top = if r.bottom() + 6.0 + 230.0 > h { (r.top() - 236.0).max(8.0) } else { r.bottom() + 6.0 };
+    (top, (r.right() - 290.0).min(w - 300.0).max(8.0))
+}
+
+/// How far the panel's list is scrolled.
+fn list_scroll() -> f64 {
+    dom::window()
+        .document()
+        .and_then(|d| d.get_element_by_id("HPL"))
+        .map_or(0.0, |el| f64::from(el.scroll_top()))
+}
+
+/// **↑ important** pressed: the popover asks an urgency and a note.
+fn ask_pin(p: Pinning, ticket: String, input: String, el: Option<web_sys::Element>) {
+    let (top, left) = el.as_ref().map_or((80.0, 16.0), pin_place);
+    p.urgency.set(PIN_DEFAULT);
+    p.note.set(String::new());
+    p.problem.set(None);
+    p.ask.set(Some(PinAsk { ticket, input, top, left, scrolled: list_scroll() }));
+}
+
+/// The queue's write's answer: its refusal, if any; otherwise each event
+/// to the tray's copy at once (the watch's copy moves nothing more).
+async fn queue_write(ev: Result<Vec<TicketsEvent>, plexus_client::ClientError>) -> Option<String> {
+    match ev {
+        Ok(events) => {
+            let refused = events.iter().find_map(|e| match e {
+                TicketsEvent::Error { message } => Some(message.clone()),
+                _ => None,
+            });
+            if refused.is_none() {
+                events.iter().for_each(queue::heard);
+            }
+            refused
+        }
+        Err(e) => Some(session::describe(&e)),
+    }
+}
+
+/// **pin**: the ticket queued for the input, as the reader (`tickets.queue`,
+/// source `app`) — the urgency asked, the note its reason.
+fn pin(p: Pinning) {
+    let Some(ask) = p.ask.get_untracked() else { return };
+    let Some(client) = session::client() else { return };
+    let (u, reason) = (p.urgency.get_untracked(), pin_reason(&p.note.get_untracked()));
+    let (Ok(id), Ok(input), Ok(reason)) =
+        (crate::typed::typed(&ask.ticket), crate::typed::typed(&ask.input), crate::typed::typed(&reason))
+    else {
+        p.problem.set(Some("the pin could not be read".into()));
+        return;
+    };
+    p.busy.set(true);
+    spawn_local(async move {
+        let refused = queue_write(client.queue_all(id, u, reason, Some(input), Some(CallerSource::App)).await).await;
+        match refused {
+            Some(why) => {
+                p.problem.try_set(Some(why));
+            }
+            None => {
+                p.ask.try_set(None);
+                let words = Some((ask.ticket.clone(), pinned_words(&ask.ticket, &ask.input, u)));
+                p.undo.try_set(words.clone());
+                // The undo bar goes after a while, unless another pin replaced it.
+                spawn_local(async move {
+                    dom::sleep_ms(6000).await;
+                    if p.undo.try_get_untracked().flatten() == words {
+                        p.undo.try_set(None);
+                    }
+                });
+            }
+        }
+        p.busy.try_set(false);
+    });
+}
+
+/// **unpin** / **undo**: the ticket out of the queue.
+fn unpin(p: Pinning, ticket: String) {
+    let Some(client) = session::client() else { return };
+    let Ok(id) = crate::typed::typed(&ticket) else { return };
+    p.undo.set(None);
+    spawn_local(async move {
+        if let Some(why) = queue_write(client.unqueue_all(id, Some(CallerSource::App)).await).await {
+            p.problem.try_set(Some(why));
+        }
+    });
+}
+
+/// The pin control beside a row (or in its answer): **↑ important**,
+/// **unpin**, or nothing.
+fn pin_button(p: Pinning, state: &PinState, ticket: String, input: String, class: &'static str) -> Option<AnyView> {
+    match state {
+        PinState::Pin => Some(
+            view! {
+                <button
+                    type="button"
+                    class=class
+                    data-act="pin"
+                    title="bring it into the tray — important"
+                    on:click=move |ev| {
+                        ev.stop_propagation();
+                        let el = ev.current_target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+                        ask_pin(p, ticket.clone(), input.clone(), el);
+                    }
+                >
+                    "↑ important"
+                </button>
+            }
+            .into_any(),
+        ),
+        PinState::Pinned => Some(
+            view! {
+                <button
+                    type="button"
+                    class=format!("{class} on")
+                    data-act="unpin"
+                    title="take it out of the tray — it stays under all"
+                    on:click=move |ev| {
+                        ev.stop_propagation();
+                        unpin(p, ticket.clone());
+                    }
+                >
+                    "unpin"
+                </button>
+            }
+            .into_any(),
+        ),
+        PinState::Queued | PinState::Elsewhere(_) => None,
+    }
+}
+
+/// The popover: an urgency and a note, then **pin**.
+fn pin_popover(p: Pinning) -> impl IntoView {
+    move || {
+        let ask = p.ask.get()?;
+        let urgs = PIN_URGENCIES
+            .iter()
+            .map(|&u| {
+                view! {
+                    <button
+                        type="button"
+                        class=format!("u-{}", u.as_str())
+                        class:on=move || p.urgency.get() == u
+                        aria-pressed=move || (p.urgency.get() == u).to_string()
+                        data-u=u.as_str()
+                        on:click=move |_| p.urgency.set(u)
+                    >
+                        {u.as_str()}
+                    </button>
+                }
+            })
+            .collect_view();
+        Some(view! {
+            <div
+                id="qpin"
+                class="pop"
+                role="dialog"
+                aria-label="bring it into the tray"
+                style=format!("top: {}px; left: {}px", ask.top, ask.left)
+                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                    if crate::bindings::is(&ev, crate::bindings::Context::Dialog, "dialog.close") {
+                        ev.stop_propagation();
+                        p.ask.set(None);
+                    }
+                }
+            >
+                <h5>"Bring it into the tray"</h5>
+                <p>{ask.ticket.clone()}" · "<code>{ask.input.clone()}</code>" joins the important tier; it stays under all too."</p>
+                <div class="urgs">{urgs}</div>
+                <textarea
+                    rows="2"
+                    aria-label="a note to yourself"
+                    placeholder="a note to yourself (optional)"
+                    prop:value=move || p.note.get()
+                    on:input=move |ev| p.note.set(event_target_value(&ev))
+                ></textarea>
+                {move || p.problem.get().map(|why| view! { <p class="qproblem" role="alert">{why}</p> })}
+                <div class="row">
+                    <button type="button" class="qbtn" data-act="pin-cancel" on:click=move |_| p.ask.set(None)>"cancel"</button>
+                    <button type="button" class="qbtn fill" data-act="pin-go" disabled=move || p.busy.get() on:click=move |_| pin(p)>
+                        {move || if p.busy.get() { "pinning…" } else { "pin" }}
+                    </button>
+                </div>
+            </div>
+        })
+    }
+}
+
 /// One row: its kind, its question, its age, whether it is queued — and,
 /// picked, its answer in place.
-fn row_view(input: Input, a: Answering, now: i64, queued: Option<QueueEntry>) -> impl IntoView {
+fn row_view(input: Input, a: Answering, p: Pinning, now: i64, queued: Option<QueueEntry>, state: PinState) -> impl IntoView {
     let k = key(&input);
     let (ticket, id) = (input.ticket.to_string(), input.id.to_string());
     let done = input.state == InputState::Answered;
@@ -331,10 +610,22 @@ fn row_view(input: Input, a: Answering, now: i64, queued: Option<QueueEntry>) ->
     };
     let age = since(&input).map(|t| queue::age(now, t)).unwrap_or_default();
     let said = input.answer.as_ref().map(|ans| queue::said(&input, &ans.value));
+    let mine = state == PinState::Pinned;
     let st = queued.as_ref().map(|e| {
         let u = e.urgency.as_str();
-        view! { <span class=format!("chip-u u-{u}")>{u}</span><span>{format!("queued by {}", queue::who(e))}</span> }
+        let by = if mine {
+            view! { <span class="pinned">"★ pinned by you"</span> }.into_any()
+        } else {
+            view! { <span>{format!("queued by {}", queue::who(e))}</span> }.into_any()
+        };
+        view! { <span class=format!("chip-u u-{u}")>{u}</span>{by} }
     });
+    let elsewhere = match &state {
+        PinState::Elsewhere(other) => Some(view! { <span class="also">{format!("its ticket is queued for #{other}")}</span> }),
+        _ => None,
+    };
+    let side_pin = (!done).then(|| pin_button(p, &state, ticket.clone(), id.clone(), "pin")).flatten();
+    let pane_state = state.clone();
     let ok = said.clone().filter(|_| done).map(|s| view! { <span class="ok">{format!("✓ {s}")}</span> });
     let question = input.question.clone().unwrap_or_else(|| format!("#{id}"));
     let href = crate::needs::answer_href(&ticket, &id);
@@ -367,6 +658,7 @@ fn row_view(input: Input, a: Answering, now: i64, queued: Option<QueueEntry>) ->
                 );
             }
             let kind = input.kind;
+            let pane_pin = pin_button(p, &pane_state, ticket.clone(), id.clone(), "qbtn");
             let (t, i) = (ticket.clone(), id.clone());
             let send = move |_| {
                 if a.busy.get_untracked() {
@@ -392,6 +684,7 @@ fn row_view(input: Input, a: Answering, now: i64, queued: Option<QueueEntry>) ->
                                 >
                                     {move || if a.busy.get() { "submitting…" } else { "submit" }}
                                 </button>
+                                {pane_pin}
                                 {open_link}
                             </div>
                             {problem}
@@ -402,21 +695,30 @@ fn row_view(input: Input, a: Answering, now: i64, queued: Option<QueueEntry>) ->
             )
         }
     };
+    let has_pin = side_pin.is_some();
+    let fk = k.clone();
+    let flashing = Memo::new(move |_| p.flash.with(|f| f.contains(&fk)));
+    // A button cannot hold a button: the pin control sits over the row's
+    // right edge, beside its age.
     view! {
-        <button
-            type="button"
-            class="ar"
-            class:sel=move || picked.get()
-            class:done=done
-            data-key=k.clone()
-            aria-expanded=move || picked.get().to_string()
-            on:click=move |_| flip()
-        >
-            <span class="kind">{kind_word(input.kind)}</span>
-            <span class="q">{question}</span>
-            <span class="side">{age}</span>
-            <span class="st">{st}{ok}</span>
-        </button>
+        <div class="arw" class:pinnable=has_pin class:sel=move || picked.get()>
+            <button
+                type="button"
+                class="ar"
+                class:sel=move || picked.get()
+                class:done=done
+                class:flash=move || flashing.get()
+                data-key=k.clone()
+                aria-expanded=move || picked.get().to_string()
+                on:click=move |_| flip()
+            >
+                <span class="kind">{kind_word(input.kind)}</span>
+                <span class="q">{question}</span>
+                <span class="side">{age}</span>
+                <span class="st">{st}{ok}{elsewhere}</span>
+            </button>
+            {side_pin}
+        </div>
         {pane}
     }
 }
@@ -436,6 +738,20 @@ pub(crate) fn Panel() -> impl IntoView {
         kept: RwSignal::new(HashSet::new()),
         open,
     };
+    let me = {
+        let account = crate::signin::account();
+        Memo::new(move |_| account.with(|acc| acc.me.as_ref().map(|m| m.principal.clone())))
+    };
+    let p = Pinning {
+        ask: RwSignal::new(None),
+        urgency: RwSignal::new(PIN_DEFAULT),
+        note: RwSignal::new(String::new()),
+        undo: RwSignal::new(None),
+        flash: RwSignal::new(HashSet::new()),
+        me,
+        busy: RwSignal::new(false),
+        problem: RwSignal::new(None),
+    };
     let at = RwSignal::new(None::<(f64, f64)>);
     // Opening: hung under the count; closing forgets what was picked and
     // what was answered here.
@@ -446,6 +762,8 @@ pub(crate) fn Panel() -> impl IntoView {
             a.sel.set(None);
             a.kept.set(HashSet::new());
             a.problem.set(None);
+            p.ask.set(None);
+            p.undo.set(None);
         }
     });
     let all = Memo::new(move |_| {
@@ -454,10 +772,29 @@ pub(crate) fn Panel() -> impl IntoView {
     });
     let n = count();
     let important = Memo::new(move |_| qheld.with(|q| q.as_ref().map_or(0, |q| q.showing(queue::now()).len())));
+    // APP-87: the important count ticks when it moves (an agent's queue, a pin).
+    crate::motion::tick_on_change("#qpanel .qimp", move || Some(important.get()));
+    // A question queued while the panel is up (an agent's call, heard live)
+    // flashes its row once.
+    let tray = Memo::new(move |_| qheld.with(|q| q.as_ref().map(|q| q.showing(queue::now())).unwrap_or_default()));
+    Effect::new(move |prev: Option<HashSet<String>>| {
+        let now = held.with(|h| h.as_ref().map(|h| queued_keys(h.list(), &tray.get())).unwrap_or_default());
+        if let Some(before) = prev.filter(|_| open.get_untracked()) {
+            let fresh = arrived(&before, &now);
+            if !fresh.is_empty() {
+                p.flash.update(|f| f.extend(fresh.iter().cloned()));
+                spawn_local(async move {
+                    dom::sleep_ms(1700).await;
+                    p.flash.try_update(|f| fresh.iter().for_each(|k| { f.remove(k); }));
+                });
+            }
+        }
+        now
+    });
     // A press outside the panel and its counts lowers it (APP-26's rule, a
     // frame's press included).
     let lower_outside = move |target: Option<web_sys::Element>| {
-        let inside = target.is_some_and(|el| el.closest("#qpanel, .hq").ok().flatten().is_some());
+        let inside = target.is_some_and(|el| el.closest("#qpanel, #qpin, .hq").ok().flatten().is_some());
         if !inside && open.try_get_untracked() == Some(true) && a.busy.try_get_untracked() == Some(false) {
             open.set(false);
         }
@@ -499,7 +836,8 @@ pub(crate) fn Panel() -> impl IntoView {
             if gs.is_empty() {
                 return view! { <p class="empty">"Nothing is waiting on you. A question asked in any ticket shows here."</p> }.into_any();
             }
-            let rows = qheld.with(|q| q.as_ref().map(|q| q.showing(queue::now())).unwrap_or_default());
+            let rows = tray.get();
+            let me = p.me.get();
             gs.into_iter()
                 .map(|g| {
                     let id = g.ticket.clone();
@@ -513,7 +851,8 @@ pub(crate) fn Panel() -> impl IntoView {
                         .into_iter()
                         .map(|i| {
                             let q = queued_for(&rows, &i).cloned();
-                            row_view(i, a, now, q)
+                            let state = pin_state(&rows, &i, me.as_deref());
+                            row_view(i, a, p, now, q, state)
                         })
                         .collect_view();
                     view! {
@@ -561,12 +900,23 @@ pub(crate) fn Panel() -> impl IntoView {
                                     queue::want(true);
                                 }
                             >
-                                {format!("{k} important ↓")}
+                                <span class="qimp">{k}</span>" important ↓"
                             </button>
                         })
                     }}
                 </div>
-                <div class="scroll" id="HPL">{list}</div>
+                <div class="scroll" id="HPL" on:scroll=move |_| {
+                    if p.ask.with_untracked(|a| a.as_ref().is_some_and(|a| (list_scroll() - a.scrolled).abs() > 24.0)) {
+                        p.ask.set(None);
+                    }
+                }>{list}</div>
+                {move || p.undo.get().map(|(ticket, words)| view! {
+                    <div class="qundo" role="status">
+                        <span>{words}</span>
+                        <span class="sp"></span>
+                        <button type="button" data-act="undo" on:click=move |_| unpin(p, ticket.clone())>"undo"</button>
+                    </div>
+                })}
                 <div class="foot">
                     <span>"newest first · answer in place"</span>
                     <span class="sp"></span>
@@ -574,6 +924,7 @@ pub(crate) fn Panel() -> impl IntoView {
                     <kbd>"esc"</kbd>
                 </div>
             </section>
+            {pin_popover(p)}
         })
     };
     let place = move || at.get().map(|(top, right)| format!("--hp-top: {top}px; --hp-right: {right}px"));
@@ -590,7 +941,7 @@ fn titled(gs: &[Group]) -> Vec<(String, Vec<String>)> {
 mod tests {
     use super::*;
     use crate::inputs::tests::{answered, input};
-    use menger_tickets_api::{InputAction, InputHistoryEntry, AnswerSource, Urgency};
+    use menger_tickets_api::{InputAction, InputHistoryEntry, AnswerSource};
 
     fn at(mut i: Input, t: i64) -> Input {
         i.asked_unix = Some(t);
@@ -666,5 +1017,43 @@ mod tests {
         assert!(queued_for(&rows, &input("A-1", "y")).is_none(), "another input of a queued ticket");
         assert!(queued_for(&rows, &input("B-2", "z")).is_some(), "the ticket as a whole");
         assert!(queued_for(&rows, &input("C-3", "x")).is_none());
+    }
+
+    /// APP-87: a row's pin control — pin it; pinned by the reader (unpin);
+    /// queued by an agent (its mark, no pin); its ticket queued for another
+    /// question (no pin: a ticket is queued for one input).
+    #[test]
+    fn a_rows_pin_follows_who_queued_it() {
+        let mut mine = entry("A-1", Some("x"));
+        mine.entry.by = "key:me".into();
+        let agent = entry("B-2", Some("y"));
+        let rows = [mine, agent];
+        assert_eq!(pin_state(&rows, &input("A-1", "x"), Some("key:me")), PinState::Pinned);
+        assert_eq!(pin_state(&rows, &input("A-1", "x"), Some("key:other")), PinState::Queued, "someone else's pin is a queue");
+        assert_eq!(pin_state(&rows, &input("A-1", "x"), None), PinState::Queued, "not known yet: never claimed");
+        assert_eq!(pin_state(&rows, &input("B-2", "y"), Some("key:me")), PinState::Queued);
+        assert_eq!(pin_state(&rows, &input("B-2", "z"), Some("key:me")), PinState::Elsewhere("y".into()));
+        assert_eq!(pin_state(&rows, &input("C-3", "q"), Some("key:me")), PinState::Pin);
+    }
+
+    #[test]
+    fn a_pin_asks_an_urgency_and_a_note() {
+        assert_eq!(PIN_URGENCIES, [Urgency::Whenever, Urgency::Today, Urgency::Now], "never blocking");
+        assert_eq!(PIN_DEFAULT, Urgency::Now);
+        assert_eq!(pin_reason("  "), "Pinned from all questions.");
+        assert_eq!(pin_reason(" look before the firing "), "look before the firing");
+        assert_eq!(pinned_words("KILN-4", "unit", Urgency::Today), "KILN-4 · unit pinned: important, today");
+    }
+
+    /// An agent's queue heard while the panel is up: its row is new among
+    /// the queued, and flashes; one that was queued already does not.
+    #[test]
+    fn a_question_queued_live_is_the_one_that_flashes() {
+        let list = [input("A-1", "x"), input("B-2", "y"), answered(input("C-3", "z"), "archive", 1)];
+        let before = queued_keys(&list, &[entry("A-1", Some("x"))]);
+        let after = queued_keys(&list, &[entry("A-1", Some("x")), entry("B-2", None), entry("C-3", None)]);
+        assert_eq!(before, HashSet::from(["A-1#x".to_string()]));
+        assert_eq!(arrived(&before, &after), ["B-2#y"], "an answered one is no question");
+        assert!(arrived(&after, &after).is_empty());
     }
 }

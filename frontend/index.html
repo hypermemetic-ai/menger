@@ -3435,17 +3435,17 @@
   :is(#qtray, #qpanel) .qtick { display: inline-flex; align-items: center; gap: 6px; }
   
   :is(#qtray, #qpanel) .qacts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  :is(#qtray, #qpanel) .qbtn {
+  :is(#qtray, #qpanel, #qpin) .qbtn {
     font-family: var(--mono); font-size: calc(11px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap;
     padding: 7px 12px; border: var(--border) solid var(--ink); border-radius: var(--radius);
     background: transparent; color: var(--ink); cursor: pointer; text-decoration: none;
     transition: transform var(--motion-fast) var(--ease);
   }
-  :is(#qtray, #qpanel) .qbtn:hover { transform: translateY(-1px); }
-  :is(#qtray, #qpanel) .qbtn.fill { background: var(--ink); color: var(--bg); }
+  :is(#qtray, #qpanel, #qpin) .qbtn:hover { transform: translateY(-1px); }
+  :is(#qtray, #qpanel, #qpin) .qbtn.fill { background: var(--ink); color: var(--bg); }
   /* APP-48: open is the row's last move, at its far right. */
   :is(#qtray, #qpanel) .qacts .qopen { margin-left: auto; }
-  :is(#qtray, #qpanel) .qbtn:disabled { opacity: .5; cursor: default; }
+  :is(#qtray, #qpanel, #qpin) .qbtn:disabled { opacity: .5; cursor: default; }
   /* APP-23: Request changes — the button beside the answer, then its box. */
   #qtray .qchange { margin: 0 0 14px; }
   #qtray .qchange.open { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
@@ -3870,7 +3870,7 @@
   #qtray .qd h4 { font-family: var(--font-display); letter-spacing: -.015em; }
   #qtray .qd h4 a.code, #qtray .qd h4 .code { text-decoration: none; }
   #qtray .qd h4 a.code:hover { text-decoration: underline; }
-  :is(#qtray, #qpanel) .qbtn:disabled { background: transparent; color: var(--muted); border-color: var(--tree-line); }
+  :is(#qtray, #qpanel, #qpin) .qbtn:disabled { background: transparent; color: var(--muted); border-color: var(--tree-line); }
 
   /* At a phone's width: the head a size down, the gutters the shell's. */
   @container (max-width: 40rem) {
@@ -4772,6 +4772,64 @@
     #qpanel .inrow .qacts .qbtn { text-align: center; padding: 10px 8px; }
     #qpanel .inrow .qacts .qbtn.fill { grid-column: 1 / -1; }
     #qpanel .inrow .qacts .qopen { margin-left: 0; }
+  }
+  /* ── APP-87: pinning a question from all to important (APP-51 Fig 4).
+     **↑ important** beside a row's age (soft on a desk until the row is
+     hovered or picked), a popover asking an urgency and a note, *★ pinned by
+     you* and **unpin**; a row an agent queues while the panel is up flashes
+     once, and the important count ticks. ── */
+  #qpanel .arw { position: relative; }
+  #qpanel .arw.pinnable > .ar { padding-right: 112px; }
+  #qpanel .arw > .pin { position: absolute; top: 6px; right: 14px; }
+  #qpanel .pin {
+    font-family: var(--mono); font-weight: var(--weight-medium); font-size: calc(10.5px * var(--text-scale)); line-height: 18px;
+    color: var(--muted); background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius);
+    padding: 0 6px; white-space: nowrap; cursor: pointer;
+  }
+  #qpanel .pin:hover, #qpanel .pin:focus-visible { color: var(--accent); border-color: var(--accent); }
+  #qpanel .pin.on { color: var(--accent); border-color: var(--accent); }
+  #qpanel .arw:not(:hover):not(.sel):not(:focus-within) > .pin:not(.on) { opacity: 0; }
+  #qpanel .pinned { font-weight: var(--weight-medium); font-size: calc(10px * var(--text-scale)); letter-spacing: .06em; color: var(--accent); }
+  #qpanel .ar .also { color: var(--muted); }
+  #qpanel .ar.flash { animation: menger-q-flash 1.6s var(--ease); }
+  @keyframes menger-q-flash { 0%, 30% { background: color-mix(in srgb, var(--urgent) 20%, var(--card)); } }
+  #qpanel .qimp { display: inline-block; }
+  #qpanel .qimp.tick { animation: menger-tick .5s cubic-bezier(.2, .8, .2, 1); }
+  #qpanel .qundo {
+    flex: none; display: flex; align-items: center; gap: 10px; padding: 7px 14px;
+    background: var(--ink); color: var(--bg); font-size: calc(11.5px * var(--text-scale));
+  }
+  #qpanel .qundo button { background: none; border: 0; padding: 0; color: var(--bg); font: inherit; text-decoration: underline; cursor: pointer; }
+  #qpin {
+    position: fixed; z-index: 970; width: 290px; padding: 12px;
+    background: var(--card); color: var(--ink); font-family: var(--sans);
+    border: var(--border) solid var(--tree-line); border-radius: var(--radius-lg); box-shadow: 0 12px 32px var(--shadow);
+    animation: menger-hp-drop .14s var(--ease);
+  }
+  #qpin h5 { margin: 0 0 4px; font-size: calc(13.5px * var(--text-scale)); font-weight: var(--weight-strong); }
+  #qpin p { margin: 0 0 10px; color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+  #qpin .urgs { display: flex; gap: 6px; margin: 0 0 10px; flex-wrap: wrap; }
+  #qpin .u-whenever { --u: var(--st-doc-fg); --ub: var(--st-doc-bg); }
+  #qpin .u-today { --u: var(--st-coding-fg); --ub: var(--st-coding-bg); }
+  #qpin .u-now { --u: var(--urgent); --ub: var(--urgent-bg); }
+  #qpin .urgs button {
+    font-family: var(--mono); font-weight: var(--weight-medium); font-size: calc(11px * var(--text-scale)); padding: 3px 9px; cursor: pointer;
+    border-radius: var(--radius-pill); border: var(--border) solid var(--line); color: var(--u); background: var(--ub);
+  }
+  #qpin .urgs button.on { border-color: var(--u); box-shadow: 0 0 0 1px var(--u); }
+  #qpin textarea {
+    display: block; width: 100%; box-sizing: border-box; min-height: 40px; resize: none; margin: 0 0 10px; padding: 6px 8px;
+    border: var(--border) solid var(--tree-line); border-radius: var(--radius); background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: calc(13px * var(--text-scale));
+  }
+  #qpin .row { display: flex; gap: 8px; justify-content: flex-end; }
+  #qpin .qproblem { color: var(--err-fg); }
+  #qtray .pinned { color: var(--accent); }
+  @media (max-width: 820px) {
+    #qpanel .arw.pinnable > .ar { padding-right: 14px; }
+    #qpanel .arw > .pin { top: 8px; right: 52px; }
+    #qpanel .arw > .pin:not(.on) { opacity: 1 !important; }
+    #qpin { left: 12px !important; right: 12px; width: auto; }
   }
 </style>
 </head>

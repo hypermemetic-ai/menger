@@ -307,6 +307,18 @@ pub(crate) fn who(e: &QueueEntry) -> &str {
     e.name.as_deref().unwrap_or(&e.by)
 }
 
+/// APP-87: whether `me` (the reader's principal) queued it — a pin from the
+/// header's panel: the tray says *★ pinned by you*, and *done with it* is
+/// *unpin*.
+pub(crate) fn pinned_by(e: &QueueEntry, me: Option<&str>) -> bool {
+    me.is_some_and(|m| e.by == m)
+}
+
+/// The reader's principal, once the app knows it.
+fn me() -> Option<String> {
+    crate::signin::account().with(|a| a.me.as_ref().map(|m| m.principal.clone()))
+}
+
 /// APP-38: the urgencies, loudest first — the sheet's groups, in order, and
 /// its head's chips.
 pub(crate) const LOUDEST_FIRST: [Urgency; 4] = [Urgency::Blocking, Urgency::Now, Urgency::Today, Urgency::Whenever];
@@ -937,8 +949,12 @@ fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
     let hd = {
         let e = e.clone();
         let clock = s.clock;
-        move || format!("{} · queued by {} · {}", e.urgency.as_str(), who(&e), ago(clock.get(), e.asked_unix))
+        move || {
+            let by = if pinned_by(&e, me().as_deref()) { "pinned by you".to_string() } else { format!("queued by {}", who(&e)) };
+            format!("{} · {by} · {}", e.urgency.as_str(), ago(clock.get(), e.asked_unix))
+        }
     };
+    let mine = pinned_by(&e, me().as_deref());
     let (snooze_id, done_id) = (id.clone(), id.clone());
     let (problem, open) = (s.problem, s.open);
     let place = move || {
@@ -958,7 +974,7 @@ fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
             <div class="qacts">
                 // APP-48 (owner): done with it is the filled one; open sits at the far right.
                 <button type="button" class="qbtn" on:click=move |_| snooze(snooze_id.clone(), problem)>{format!("snooze {SNOOZE_MINUTES}m")}</button>
-                <button type="button" class="qbtn fill" data-act="done" on:click=move |_| done(done_id.clone(), problem)>"done with it"</button>
+                <button type="button" class="qbtn fill" data-act="done" on:click=move |_| done(done_id.clone(), problem)>{if mine { "unpin" } else { "done with it" }}</button>
                 {place}
                 <a class="qbtn qopen" href=open_href(&e) on:click=move |_| open.set(false)>"open ↗"</a>
             </div>
@@ -1362,6 +1378,8 @@ pub(crate) fn Tray() -> impl IntoView {
                 <span class="m">
                     {move || now_row.with(|r| r.as_ref().map(|r| age(clock.get(), r.entry.asked_unix)).unwrap_or_default())}
                     {move || now_row.with(|r| r.as_ref().is_some_and(|r| r.entry.input.is_some())).then(|| view! { " · "<span class="ask">"asks"</span> })}
+                    // APP-87: the reader's own pin.
+                    {move || now_row.with(|r| r.as_ref().is_some_and(|r| pinned_by(&r.entry, me().as_deref()))).then(|| view! { " · "<span class="pinned">"★ pinned"</span> })}
                 </span>
             </button>
             {move || here().then(|| picked_row.get().map(|r| view! { <div class="qd-ph">{answer_view(r, sheet, true)}</div> }))}
@@ -2020,6 +2038,10 @@ pub(crate) mod tests {
         assert_eq!(who(&e), "idp:agent");
         e.name = Some("Ada".into());
         assert_eq!(who(&e), "Ada");
+        // APP-87: the reader's own pin is told by its principal, not its name.
+        assert!(pinned_by(&e, Some("idp:agent")));
+        assert!(!pinned_by(&e, Some("Ada")));
+        assert!(!pinned_by(&e, None));
         assert_eq!(open_href(&e), "#/ticket/A-1");
         e.input = Some("landing".into());
         assert_eq!(open_href(&e), "#/ticket/A-1?anchor=landing");
