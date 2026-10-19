@@ -3114,6 +3114,8 @@ impl Store {
         // the `inputs` and `answers` tables here, once, durably, with every
         // body's inputs read in; after it, every open reads them.
         inputs::migrate(&mut conn)?;
+        // APP-84: and when each input was asked.
+        inputs::migrate_asked(&mut conn)?;
         // SEARCH-2: a database written before SEARCH-2 — or a new one — gains
         // the search index here, once, durably, every ticket's title and text
         // indexed; after it, every write that changes either keeps it.

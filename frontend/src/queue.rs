@@ -1620,7 +1620,39 @@ fn input_view(
         return Some(view! { <div class="qinput"><p class="qq"><b>{question}</b></p><p class="qdone">{words}</p></div> }.into_any());
     }
     // APP-25: every control only picks; the one submit sends.
-    let controls = match input.kind {
+    let controls = controls_of(&input, busy, pick);
+    let kind = input.kind;
+    let send = move |_| {
+        if busy.get_untracked() {
+            return;
+        }
+        if let Some(value) = pick.with_untracked(|p| p.value(kind)) {
+            submit(id.clone(), named.clone(), value, problem, busy, pick);
+        }
+    };
+    let controls = view! {
+        {controls}
+        <div class="qsubmit">
+            <button
+                type="button"
+                class="qbtn fill"
+                data-act="submit"
+                disabled=move || busy.get() || pick.with(|p| p.value(kind).is_none())
+                on:click=send
+            >
+                {move || if busy.get() { "submitting…" } else { "submit" }}
+            </button>
+        </div>
+    };
+    Some(view! { <div class="qinput"><p class="qq"><b>{question}</b></p>{controls}</div> }.into_any())
+}
+
+
+/// APP-84: an open input's controls — a choice's options, a multi's boxes, a
+/// text's reply — each only picking into `pick` (APP-25); the tray's sheet
+/// and the header's panel both answer with them.
+pub(crate) fn controls_of(input: &Input, busy: RwSignal<bool>, pick: RwSignal<Pick>) -> AnyView {
+    match input.kind {
         InputKind::Choice => {
             let opts = input
                 .options
@@ -1692,39 +1724,15 @@ fn input_view(
             }
             .into_any()
         }
-    };
-    let kind = input.kind;
-    let send = move |_| {
-        if busy.get_untracked() {
-            return;
-        }
-        if let Some(value) = pick.with_untracked(|p| p.value(kind)) {
-            submit(id.clone(), named.clone(), value, problem, busy, pick);
-        }
-    };
-    let controls = view! {
-        {controls}
-        <div class="qsubmit">
-            <button
-                type="button"
-                class="qbtn fill"
-                data-act="submit"
-                disabled=move || busy.get() || pick.with(|p| p.value(kind).is_none())
-                on:click=send
-            >
-                {move || if busy.get() { "submitting…" } else { "submit" }}
-            </button>
-        </div>
-    };
-    Some(view! { <div class="qinput"><p class="qq"><b>{question}</b></p>{controls}</div> }.into_any())
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use menger_tickets_api::{Kind, QueueAction, Status, TransitionSource, Urgency};
 
-    fn summary(id: &str, title: &str) -> TicketSummary {
+    pub(crate) fn summary(id: &str, title: &str) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
             hidden_blocked_by: 0,
@@ -1751,7 +1759,7 @@ mod tests {
         }
     }
 
-    fn entry(id: &str, u: Urgency, at: i64) -> QueueEntry {
+    pub(crate) fn entry(id: &str, u: Urgency, at: i64) -> QueueEntry {
         QueueEntry {
             ticket: id.into(),
             urgency: u,

@@ -307,6 +307,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("palette.toggle", &[C::Anywhere, C::Frame], &["Mod+k"], G::Open, "the jump palette from anywhere — a text field, a dialog, a framed body; again, it closes"),
     b("go.board", &[C::Global], &["g h"], G::Open, "go to the board"),
     b("go.needs", &[C::Global], &["g n"], G::Open, "the nav under the Needs you filter — what waits on you, within the header's Filter; again, the nav's default"),
+    b("go.questions", &[C::Global], &["g q"], G::Open, "every open question, in the header's panel — grouped by ticket, answered in place; again, it closes"),
     b("link.follow", &[C::Link], &["Click", "Mod+Click", "Shift+Click", "MiddleClick"], G::Open, "inside menger, go there; anywhere else, a dialog names the destination first"),
     b("menu.open", &[C::Ticket, C::Chip], &["RightClick", "ContextMenu", "Shift+F10"], G::Open, "the menu of what is under the pointer, or of the focused ticket: a ticket's actions, a chip's filters — a status, kind, severity or label chip's own values first"),
     // -- Status (ACT-10)

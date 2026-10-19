@@ -512,6 +512,67 @@ async fn a_database_without_the_tables_gains_them_read_from_the_bodies() {
     assert_eq!(one(&store, "Q-2", "d").state, InputState::Answered);
 }
 
+/// APP-84: when an input was asked — the write that first declared it;
+/// declared again it keeps that time, through an answer and a reopen of the
+/// store; removed and declared again, it is asked anew. On the wire too.
+#[tokio::test]
+async fn an_input_knows_when_it_was_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    let store = Store::open(&path).unwrap();
+    store.create(SYS, ticket("Q", Kind::Scope, "root")).await.unwrap();
+    let before = chrono::Utc::now().timestamp();
+    let id = born(&store, &decision("a", &["X", "Y"])).await;
+    let asked = one(&store, &id, "a").asked_unix.expect("asked when born");
+    assert!(asked >= before && asked <= chrono::Utc::now().timestamp());
+    amend(&store, &id, &format!("{}{}", decision("a", &["X", "Y", "Z"]), text("b"))).await;
+    assert_eq!(one(&store, &id, "a").asked_unix, Some(asked), "declared again: the same question");
+    assert!(one(&store, &id, "b").asked_unix.is_some());
+    changed(store.answer(SYS.permit(&id), "a", choice("x"), None, AnswerSource::Api).await.unwrap());
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(one(&store, &id, "a").asked_unix, Some(asked), "kept by the file");
+    let json = serde_json::to_value(one(&store, &id, "a")).unwrap();
+    assert_eq!(json["asked_unix"], serde_json::json!(asked));
+
+    // Removed, then declared again: the plan stamps it at the write's time.
+    let mut held = inputs::Inputs::default();
+    held.take(&id, store.inputs(SYS, Some(&id), None, None).unwrap());
+    let gone = held.plan_at(&id, Vec::new(), asked + 10);
+    held.take(&id, gone.list.unwrap());
+    let back = held.plan_at(&id, crate::inputs::read(&decision("a", &["X"])).0, asked + 20);
+    assert_eq!(back.changed.iter().find(|i| i.id == "a").unwrap().asked_unix, Some(asked + 20));
+}
+
+/// APP-84: a file from before the column gains it, and each input held
+/// there is dated by its ticket's creation; the next open dates nothing.
+#[tokio::test]
+async fn a_file_before_asked_dates_its_inputs_by_their_tickets() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.create(SYS, ticket("Q", Kind::Scope, "root")).await.unwrap();
+        born(&store, &decision("d", &["A", "B"])).await;
+    }
+    {
+        // As a binary before APP-84 left it: no column.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE old AS SELECT ticket, id, position, kind, question, options, recommendation, state FROM inputs;
+             DROP TABLE inputs; ALTER TABLE old RENAME TO inputs;
+             UPDATE tickets SET created_unix = 1000 WHERE id = 'Q-2';",
+        )
+        .unwrap();
+        assert!(inputs::load_if_any(&conn).unwrap().of("Q-2")[0].asked_unix.is_none(), "read without the column");
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(one(&store, "Q-2", "d").asked_unix, Some(1000));
+    drop(store);
+    let mut conn = Connection::open(&path).unwrap();
+    assert_eq!(inputs::migrate_asked(&mut conn).unwrap(), 0, "once");
+}
+
 /// What must not change: a seed writes no inputs — synthetic bodies hold
 /// none, held to every body a seed generates.
 #[test]

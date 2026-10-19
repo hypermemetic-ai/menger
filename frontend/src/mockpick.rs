@@ -378,6 +378,7 @@ mod tests {
             state,
             answer: answer.map(|o| Answer { value: InputValue::Choice { option: o.into() }, rationale: None, source: AnswerSource::App, at_unix: 1 }),
             history: Vec::new(),
+            asked_unix: None,
         }
     }
 

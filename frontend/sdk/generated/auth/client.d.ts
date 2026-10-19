@@ -71,15 +71,16 @@ export interface AuthClient {
      * Create an account, or ask for access
      *
      * a signed-in caller holding no
-     * membership joins the waiting list for an admin.
+     * membership of its own ([`Memberships::own_held`]) joins the waiting
+     * list for an admin.
      * @requires `auth.signup` anywhere it is held
      */
     signup(via?: ProviderName | null): AsyncGenerator<AuthEvent>;
     /**
      * Who asked for access and holds nothing yet (admin on *)
      *
-     * Who signed up or asked for access and holds nothing yet (admin on
-     * `*`).
+     * Who signed up or asked for access and holds nothing of its own yet
+     * ([`Memberships::own_held`]; admin on `*`).
      * @requires `auth.waiting` anywhere it is held
      */
     waiting(): AsyncGenerator<AuthEvent>;

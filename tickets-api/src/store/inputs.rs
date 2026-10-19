@@ -50,6 +50,7 @@ const TABLES: &str = "
             options        TEXT NOT NULL,
             recommendation TEXT,
             state          TEXT NOT NULL,
+            asked_unix     INTEGER,
             PRIMARY KEY (ticket, id)
         ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS answers (
@@ -328,8 +329,15 @@ impl Inputs {
     }
 
     /// What a write of `ticket`'s body declaring `declared` does to its
-    /// inputs — see the module doc. Nothing changes here.
+    /// inputs, now — see the module doc. Nothing changes here.
     pub(crate) fn plan(&self, ticket: &str, declared: Vec<Declared>) -> Plan {
+        self.plan_at(ticket, declared, chrono::Utc::now().timestamp())
+    }
+
+    /// [`Inputs::plan`] at `now`: APP-84 — an input declared for the first
+    /// time, or again after it was removed, is asked at `now`; one declared
+    /// again keeps when it was asked.
+    pub(crate) fn plan_at(&self, ticket: &str, declared: Vec<Declared>, now: i64) -> Plan {
         let before = self.of(ticket);
         if before.is_empty() && declared.is_empty() {
             return Plan::default();
@@ -362,6 +370,7 @@ impl Inputs {
                 options: d.options,
                 recommendation: d.recommendation,
                 history,
+                asked_unix: prev.filter(|p| p.state != InputState::Removed).and_then(|p| p.asked_unix).or(Some(now)),
             };
             if prev != Some(&input) {
                 changed.push(input.clone());
@@ -452,8 +461,8 @@ fn to_json<T: serde::Serialize>(v: &T) -> String {
 pub(crate) fn store(conn: &Connection, ticket: &str, list: &[Input]) -> rusqlite::Result<()> {
     conn.prepare_cached("DELETE FROM inputs WHERE ticket = ?1")?.execute([ticket])?;
     let mut insert = conn.prepare_cached(
-        "INSERT INTO inputs (ticket, id, position, kind, question, options, recommendation, state)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO inputs (ticket, id, position, kind, question, options, recommendation, state, asked_unix)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )?;
     for (position, i) in list.iter().enumerate() {
         insert.execute(params![
@@ -465,6 +474,7 @@ pub(crate) fn store(conn: &Connection, ticket: &str, list: &[Input]) -> rusqlite
             to_json(&i.options),
             i.recommendation,
             i.state.as_str(),
+            i.asked_unix,
         ])?;
     }
     Ok(())
@@ -507,9 +517,12 @@ fn json<T: serde::de::DeserializeOwned>(s: &str) -> Result<T, String> {
 /// input is removed.
 pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Inputs> {
     let mut inputs = Inputs::default();
-    let mut stmt = conn.prepare(
-        "SELECT ticket, id, kind, question, options, recommendation, state FROM inputs ORDER BY ticket, position",
-    )?;
+    // APP-84: a file before the column (what `--verify-derived` reads, which
+    // runs no migration) reads none.
+    let asked = if has_asked(conn)? { "asked_unix" } else { "NULL" };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT ticket, id, kind, question, options, recommendation, state, {asked} FROM inputs ORDER BY ticket, position"
+    ))?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let ticket: String = r.get(0)?;
@@ -523,6 +536,7 @@ pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Inputs> {
             state: column(r, 6, |s| s.parse::<InputState>())?,
             answer: None,
             history: Vec::new(),
+            asked_unix: r.get(7)?,
         };
         inputs.by_ticket.entry(ticket).or_default().push(input);
     }
@@ -570,6 +584,34 @@ fn has_tables(conn: &Connection) -> rusqlite::Result<bool> {
         [],
         |r| r.get::<_, i64>(0).map(|n| n == 2),
     )
+}
+
+/// APP-84: whether `inputs` has the `asked_unix` column.
+fn has_asked(conn: &Connection) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT count(*) FROM pragma_table_info('inputs') WHERE name = 'asked_unix'", [], |r| {
+        r.get::<_, i64>(0).map(|n| n == 1)
+    })
+}
+
+/// APP-84: a file whose `inputs` lacks `asked_unix` gains it, and an input
+/// without one — older than the record — takes its ticket's creation, in
+/// one transaction. Every write from then on sets it. Returns how many
+/// inputs it dated.
+pub(crate) fn migrate_asked(conn: &mut Connection) -> anyhow::Result<usize> {
+    let tx = conn.transaction()?;
+    if !has_asked(&tx)? {
+        tx.execute("ALTER TABLE inputs ADD COLUMN asked_unix INTEGER", [])?;
+    }
+    let dated = tx.execute(
+        "UPDATE inputs SET asked_unix = (SELECT created_unix FROM tickets WHERE tickets.id = inputs.ticket)
+             WHERE asked_unix IS NULL",
+        [],
+    )?;
+    tx.commit()?;
+    if dated > 0 {
+        tracing::info!("APP-84: dated {dated} input(s) asked before the record by their ticket's creation");
+    }
+    Ok(dated)
 }
 
 /// One-shot, durable migration of a database written before INPUT-3 — and a

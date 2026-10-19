@@ -1057,6 +1057,7 @@ mod tests {
             state,
             answer: None,
             history: Vec::<InputHistoryEntry>::new(),
+            asked_unix: None,
         }
     }
 
