@@ -147,6 +147,11 @@
     --weight-bold: 700; /* numbers that lead */
     /* space */
     --space: 1; /* density: the page's gutters, multiplied */
+    /* space.safe */
+    --safe-top: max(env(safe-area-inset-top, 0px), var(--sai-top, 0px)); /* the top inset: the status bar, the notch or island */
+    --safe-right: max(env(safe-area-inset-right, 0px), var(--sai-right, 0px)); /* the right inset: a corner, the island in landscape */
+    --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px)); /* the bottom inset: the home indicator */
+    --safe-left: max(env(safe-area-inset-left, 0px), var(--sai-left, 0px)); /* the left inset: a corner, the island in landscape */
     /* shape.radius */
     --radius-xs: 2px; /* hairline marks */
     --radius-sm: 3px; /* inline code, small chips */
@@ -336,12 +341,9 @@
   /* APP-65: the screen's safe area. `viewport-fit=cover` (the viewport
      meta) lets the page run under an iPhone's rounded corners, island and
      home indicator, and makes iOS report how far; everything that sits on
-     an edge pads by these — the phone bar, the tray, the composer, the
-     full-screen views, the column's sides in landscape. 0 everywhere else. */
-  :root {
-    --safe-top: env(safe-area-inset-top, 0px); --safe-right: env(safe-area-inset-right, 0px);
-    --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-left: env(safe-area-inset-left, 0px);
-  }
+     an edge pads by the contract's --safe-* (APP-66: env(), or a check's
+     --sai-*) — the phone bar, the tray, the composer, the full-screen
+     views, the column's sides in landscape. 0 everywhere else. */
   #app { padding-left: var(--safe-left); padding-right: var(--safe-right); }
   /* DESIGN-38: the faces the contract's defaults name (--mono, --font-text:
      Geist Mono; --sans, --font-display: Geist), served beside the app. One
@@ -1567,6 +1569,24 @@
   .device[data-kind="phone"] .device-screen { border-width: 8px; border-radius: var(--radius-phone); }
   .device[data-kind="desktop"] .device-screen { border-width: 18px 2px 2px; border-color: var(--line); border-radius: var(--radius-xl) var(--radius-xl) var(--radius) var(--radius); }
   .device-inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  /* APP-66: a phone drawn with its screen's shape (src/present.rs screen,
+     on by default; the bar's Screen shape turns it off): the display's
+     corners clip the page, the notch or island and the home indicator are
+     drawn over it in the bezel's ink, and the page is told the insets
+     (src/frame.rs Insets: env(safe-area-inset-*) and --sai-*), so a page
+     that pads by them shows it and one that doesn't is visibly clipped.
+     Sizes in the device's own px (the inner box is scaled). */
+  .device[data-shape] .device-screen { background: var(--ink); border-radius: max(var(--radius-phone), var(--shape-rs)); }
+  .device[data-shape] .device-inner { border-radius: var(--shape-r); overflow: hidden; }
+  .device-cutout, .device-home { position: absolute; z-index: 3; pointer-events: none; background: var(--ink); }
+  .device[data-shape="island"] .device-cutout { top: 11px; left: 50%; width: 126px; height: 37px; margin-left: -63px; border-radius: var(--radius-pill); }
+  .device[data-shape="notch"] .device-cutout { top: 0; left: 50%; width: 162px; height: 32px; margin-left: -81px;
+    border-radius: 0 0 calc(var(--radius-2xl) * 2) calc(var(--radius-2xl) * 2); }
+  .device-home { bottom: 8px; left: 50%; width: 134px; height: 5px; margin-left: -67px; border-radius: var(--radius-pill); opacity: .6; }
+  .device[data-landscape][data-shape="island"] .device-cutout { top: 50%; left: 11px; width: 37px; height: 126px; margin: -63px 0 0; }
+  .device[data-landscape][data-shape="notch"] .device-cutout { top: 50%; left: 0; width: 32px; height: 162px; margin: -81px 0 0;
+    border-radius: 0 calc(var(--radius-2xl) * 2) calc(var(--radius-2xl) * 2) 0; }
+  .device[data-landscape] .device-home { width: 200px; margin-left: -100px; }
   /* APP-33: a mockup at any size (src/mocksize.rs) — the Size menu of
      standard devices, the Custom field, a device's readout, Rotate, and the
      grips on its right edge and corner (the edge a focusable handle). At a

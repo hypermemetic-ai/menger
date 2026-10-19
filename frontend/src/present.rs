@@ -59,6 +59,14 @@
 //! Dark, Reduced motion, Compare, the tall note) folds into the ⋯ menu —
 //! and it opens on one device at the column's width (src/mocksize.rs).
 //!
+//! APP-66: **a phone is drawn as an iPhone's screen** ([`screen`]): the
+//! display's rounded corners clip the page, the notch or the Dynamic Island
+//! and the home indicator are drawn over it, and the page is told the
+//! safe-area insets (the frame's [`Emulate`]`::safe`; the page shim answers
+//! `env(safe-area-inset-*)` with them and sets `--sai-*`), so a page that
+//! pads by them shows it and one that doesn't is clipped as on the phone.
+//! On by default; the bar's *Screen shape* turns it off for the mockup.
+//!
 //! What decides — the declaration, the devices, the scale, the route's
 //! query, the caption, the tall check — is pure and pinned by native tests;
 //! the rest is DOM.
@@ -133,6 +141,66 @@ impl Device {
             "desktop"
         }
     }
+}
+
+/// APP-66: an iPhone's screen as a mockup's phone draws it — the display's
+/// rounded corners, the notch or the Dynamic Island, the home indicator, and
+/// the safe-area insets iOS reports for them, in CSS px (pt).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Screen {
+    /// The display's corner radius.
+    pub(crate) radius: u32,
+    pub(crate) cutout: Cutout,
+    /// Whether the device is on its side (the cutout on the left, the
+    /// insets on both sides).
+    pub(crate) landscape: bool,
+    pub(crate) insets: crate::frame::Insets,
+}
+
+/// APP-66: what cuts into the top of an iPhone's screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cutout {
+    Notch,
+    Island,
+}
+
+impl Cutout {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Cutout::Notch => "notch",
+            Cutout::Island => "island",
+        }
+    }
+}
+
+/// APP-66: the screen a phone-sized device has — an iPhone with a notch or
+/// an island, by its short side (375 the X–13 mini class, 390 the 12–14,
+/// 393 the 14 Pro–16, 402 the 16 Pro, 428 the Pro Max with a notch, 430
+/// the Plus and Pro Max with an island, 440 the 16 Pro Max), when it is as
+/// tall as one (2 : 1 or more); none for a tablet, a desktop, or a phone
+/// with a home button (375 × 667). Portrait: the top inset, 34 at the
+/// bottom; on its side: the top inset on both sides, 21 at the bottom.
+pub(crate) fn screen(d: Device) -> Option<Screen> {
+    let (short, long) = (d.w.min(d.h), d.w.max(d.h));
+    if short >= 600 || f64::from(long) < 2.0 * f64::from(short) {
+        return None;
+    }
+    let (radius, cutout, top) = match short {
+        0..=389 => (44, Cutout::Notch, 50),
+        390..=392 => (47, Cutout::Notch, 47),
+        393..=401 => (55, Cutout::Island, 59),
+        402..=427 => (62, Cutout::Island, 62),
+        428..=429 => (53, Cutout::Notch, 47),
+        430..=439 => (55, Cutout::Island, 59),
+        _ => (62, Cutout::Island, 62),
+    };
+    let landscape = d.w > d.h;
+    let insets = if landscape {
+        crate::frame::Insets { top: 0, right: top, bottom: 21, left: top }
+    } else {
+        crate::frame::Insets { top, right: 0, bottom: 34, left: 0 }
+    };
+    Some(Screen { radius, cutout, landscape, insets })
 }
 
 /// The widths a mockup shows when the body names none: a phone, a tablet,
@@ -697,6 +765,8 @@ pub(crate) fn Framed(
     // page at the narrowest device shown scrolls several screens.
     let caption = Memo::new(move |_| decl.with(|d| if d.mode == Mode::Mockup && !d.caption.is_empty() { Some(d.caption.clone()) } else { None }));
     let tall_screens = Memo::new(move |_| if mockup.get() { tall(&sizer.shown(), &seen.get()) } else { None });
+    // APP-66: the Screen shape toggle, where a device shown is a phone with one.
+    let has_screen = Memo::new(move |_| mockup.get() && sizer.shown().iter().any(|(_, d)| screen(*d).is_some()));
     let ticket_id = ticket.clone();
     let heading = move || {
         let t = title?;
@@ -709,15 +779,17 @@ pub(crate) fn Framed(
     let app_scheme = crate::frame::painted_scheme();
     let scheme = RwSignal::new(app_scheme);
     let reduce = RwSignal::new(prefers_reduced_motion());
+    // APP-66: a phone drawn with its screen's shape — on until turned off.
+    let shaped = RwSignal::new(true);
     let size = RwSignal::new((0.0f64, 0.0f64));
     stage.on_load(move |el: web_sys::HtmlDivElement| observe(el, size));
-    let emulate = Signal::derive(move || Emulate { scheme: Some(scheme.get()), reduce: Some(reduce.get()) });
+    let emulate = Signal::derive(move || Emulate { scheme: Some(scheme.get()), reduce: Some(reduce.get()), safe: None });
     let body = move || {
         let ticket = ticket.clone();
         let scope = scope.clone().unwrap_or_default();
         let media = media.clone().unwrap_or_default();
         if mockup.get() {
-            sizer.devices(html, ticket, scope, emulate, size, is_full).into_any()
+            sizer.devices(html, ticket, scope, emulate, shaped.into(), size, is_full).into_any()
         } else {
             view! { <Frame html ticket scope media /> }.into_any()
         }
@@ -731,6 +803,12 @@ pub(crate) fn Framed(
             <button class="framed-btn framed-motion" title="prefers-reduced-motion, as the page sees it" aria-pressed=move || reduce.get().to_string() on:click=move |_| reduce.update(|r| *r = !*r)>
                 "Reduced motion"
             </button>
+            {move || has_screen.get().then(|| view! {
+                <button class="framed-btn framed-shape" title="An iPhone's corners, island and home indicator, and the safe-area insets the page sees"
+                    aria-pressed=move || shaped.get().to_string() on:click=move |_| shaped.update(|v| *v = !*v)>
+                    "Screen shape"
+                </button>
+            })}
         }
     };
     let note = move || {
@@ -870,6 +948,33 @@ pub(crate) fn observe(el: web_sys::HtmlDivElement, size: RwSignal<(f64, f64)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::Insets;
+
+    /// APP-66: a phone-sized device is drawn as the iPhone of its width —
+    /// corners, cutout and insets — portrait or on its side; a tablet, a
+    /// desktop and a home-button phone have none.
+    #[test]
+    fn a_phone_has_its_iphones_screen() {
+        let s = screen(Device { w: 390, h: 844 }).unwrap();
+        assert_eq!((s.radius, s.cutout, s.landscape), (47, Cutout::Notch, false));
+        assert_eq!(s.insets, Insets { top: 47, right: 0, bottom: 34, left: 0 });
+        let s = screen(Device { w: 393, h: 852 }).unwrap();
+        assert_eq!((s.radius, s.cutout), (55, Cutout::Island));
+        assert_eq!(s.insets, Insets { top: 59, right: 0, bottom: 34, left: 0 });
+        assert_eq!(screen(Device { w: 430, h: 932 }).map(|s| (s.radius, s.cutout)), Some((55, Cutout::Island)));
+        assert_eq!(screen(Device { w: 428, h: 926 }).map(|s| s.cutout), Some(Cutout::Notch));
+        assert_eq!(screen(Device { w: 375, h: 812 }).map(|s| s.insets.top), Some(50));
+        // On its side: the cutout's inset on both sides, 21 at the bottom.
+        let s = screen(Device { w: 844, h: 390 }).unwrap();
+        assert!(s.landscape);
+        assert_eq!(s.insets, Insets { top: 0, right: 47, bottom: 21, left: 47 });
+        // No shape: a home-button phone, a tablet, a desktop, a square.
+        for d in [(375, 667), (768, 1024), (1440, 900), (390, 390)] {
+            assert_eq!(screen(Device { w: d.0, h: d.1 }), None, "{d:?}");
+        }
+        // The default phone (390) and every phone preset with the ratio have one.
+        assert!(screen(Device::of_width(DEFAULT_WIDTHS[0])).is_some());
+    }
 
     #[test]
     fn a_body_declares_its_view_in_its_frontmatter() {

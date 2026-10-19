@@ -660,6 +660,7 @@ impl Sizer {
         ticket: Option<String>,
         scope: String,
         emulate: Signal<Emulate>,
+        shaped: Signal<bool>,
         size: RwSignal<(f64, f64)>,
         is_full: Memo<bool>,
     ) -> impl IntoView {
@@ -677,12 +678,13 @@ impl Sizer {
         });
         view! {
             <For each=move || s.slots.get() key=|slot| slot.key children=move |slot: Slot| {
-                s.device(slot, html, ticket.clone(), scope.clone(), emulate, scale)
+                s.device(slot, html, ticket.clone(), scope.clone(), emulate, shaped, scale)
             } />
         }
     }
 
-    fn device(self, slot: Slot, html: Signal<String>, ticket: Option<String>, scope: String, emulate: Signal<Emulate>, scale: Memo<f64>) -> impl IntoView {
+    #[allow(clippy::too_many_arguments)]
+    fn device(self, slot: Slot, html: Signal<String>, ticket: Option<String>, scope: String, emulate: Signal<Emulate>, shaped: Signal<bool>, scale: Memo<f64>) -> impl IntoView {
         let s = self;
         let key = slot.key;
         let dev = slot.dev;
@@ -704,6 +706,17 @@ impl Sizer {
                 let d = d();
                 format!("width:{}px;height:{}px;transform:scale({:.4})", d.w, d.h, scale.get())
             }
+        };
+        // APP-66: an iPhone's screen, while the box's Screen shape is on —
+        // its corners clip the page, its cutout and home indicator are drawn
+        // over it, and the page is told its insets (the frame's emulation).
+        let shape = Memo::new({
+            let d = d.clone();
+            move |_| if shaped.get() { crate::present::screen(d()) } else { None }
+        });
+        let emulate = Signal::derive(move || Emulate { safe: shape.get().map(|x| x.insets), ..emulate.get() });
+        let corner = move || {
+            shape.get().map(|x| format!("--shape-r:{}px;--shape-rs:{:.1}px", x.radius, f64::from(x.radius) * scale.get()))
         };
         let dragging = move || s.grab.get().is_some_and(|g| g.key == key);
         // Pointer: the edge drags the width, the corner both.
@@ -788,7 +801,8 @@ impl Sizer {
         let readout2 = readout.clone();
         let data_kind = kind.clone();
         view! {
-            <figure class="device" data-slot=key.to_string() data-kind=data_kind data-w=data_w class:hidden=move || !shown() class:is-dragging=dragging>
+            <figure class="device" data-slot=key.to_string() data-kind=data_kind data-w=data_w class:hidden=move || !shown() class:is-dragging=dragging
+                data-shape=move || shape.get().map(|x| x.cutout.as_str()) data-landscape=move || shape.get().is_some_and(|x| x.landscape).then_some("") style=corner>
                 <figcaption class="device-label">
                     <span>{kind}</span>
                     <button class="device-size code" title="Type a size for this device" on:click=move |_| s.open_field(Target::Slot(key))>{readout}</button>
@@ -800,6 +814,10 @@ impl Sizer {
                     <div class="device-screen" style=screen>
                         <div class="device-inner" style=inner>
                             <Frame html ticket scope emulate fixed=true />
+                            {move || shape.get().map(|_| view! {
+                                <span class="device-cutout" aria-hidden="true"></span>
+                                <span class="device-home" aria-hidden="true"></span>
+                            })}
                         </div>
                     </div>
                     <span class="device-grip device-grip-e" tabindex="0" role="slider" aria-label=handle_label

@@ -842,6 +842,15 @@ menger-skills `showing` has when to use one.
 - **On a phone** (≤ 820, APP-60) it opens on its narrowest device at
   about 100%, the other widths a tap away, the bar one row (the rest
   under ⋯), Full screen at 100%; above 820 nothing changes.
+- **A phone is an iPhone's screen** (APP-66): its rounded corners clip
+  the page, the notch or island and the home indicator are drawn over it,
+  and the page gets the safe-area insets (`env(safe-area-inset-*)` and
+  `--sai-*`, top 47/59, bottom 34). Anything on an edge pads by them —
+  `max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))`, the
+  app's `--safe-*` — or the mockup shows it clipped, as the phone would
+  (APP-65). *Screen shape* in the bar turns it off. A Playwright check of
+  the app sets `--sai-*` on its root and asserts nothing interactive sits
+  under a corner or the home indicator.
 - **Built from the app's own tokens and fonts** (`tickets-api/src/tokens.toml`),
   light and dark, with synthetic data. It is checked in headless Chromium at
   each width and theme (every control clicked, document height = viewport,
