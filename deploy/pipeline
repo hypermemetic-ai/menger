@@ -1130,7 +1130,8 @@ landing_gate() { # DIR (landing/ at the commit) — dies at the first failure
     # every file a page names on its own origin is in the commit
     while read -r ref; do
       [[ -z $ref || $ref =~ ^(https?:|data:|mailto:|#|\.\./#|\./$) ]] && continue
-      f=$dir/$(dirname "$page")/${ref%%[?#]*}; f=${f%/}
+      # a root-relative ref (/icons/…) is from landing/'s root, wherever the page is
+      if [[ $ref == /* ]]; then f=$dir${ref%%[?#]*}; else f=$dir/$(dirname "$page")/${ref%%[?#]*}; fi; f=${f%/}
       [[ -e $f ]] || die "gate: $page refers to $ref, which the commit does not hold"
     done < <(grep -o '\(src\|srcset\|href\)="[^"]*"' "$dir/$page" | sed 's/^[a-z]*="//; s/"$//' | tr ',' '\n' | awk '{print $1}' | sort -u)
   done
