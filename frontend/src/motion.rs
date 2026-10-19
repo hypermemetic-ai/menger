@@ -527,6 +527,7 @@ pub(crate) fn boot_begin(url: &str) {
 /// colours) while the count runs to `total`, then the sheet wipes away —
 /// 1.3 s in all. Once: a reconnect's `health` finds the boot done.
 pub(crate) fn boot_live(total: u64) {
+    resume_end();
     if BOOT.with(Cell::get) != Boot::Up {
         return;
     }
@@ -554,6 +555,27 @@ pub(crate) fn boot_live(total: u64) {
         dom::sleep_ms(700).await;
         wipe().await;
     });
+}
+
+/// APP-67: a page reloaded for a reconnect skips the sheet (it has seen
+/// it), but never shows nothing while it waits: until the first `health`
+/// a quiet *reconnecting…* sits at the top — and stays, if the socket the
+/// reload counted on does not come back. Every motion setting.
+pub(crate) fn resume_begin() {
+    let Some(doc) = dom::window().document() else { return };
+    let Some(body) = doc.body() else { return };
+    let Ok(v) = doc.create_element("div") else { return };
+    v.set_id("resumeveil");
+    let _ = v.set_attribute("role", "status");
+    v.set_text_content(Some("reconnecting…"));
+    let _ = body.append_child(&v);
+}
+
+/// The first `health` of a reloaded page: the words go.
+fn resume_end() {
+    if let Some(v) = dom::window().document().and_then(|d| d.get_element_by_id("resumeveil")) {
+        v.remove();
+    }
 }
 
 /// The wipe (.6 s), then the sheet is gone.
