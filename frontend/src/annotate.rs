@@ -983,6 +983,7 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
                 <span class="annot-what">{anchor.label.clone()}</span>
                 <span class="annot-where" title=anchor.path.clone()>{where_}</span>
             </div>
+            <div class="wbox">
             <crate::draw::PadView a=attach />
             <textarea
                 node_ref=area
@@ -1010,6 +1011,7 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
                 <button class="annot-save" disabled=move || saving() || attach.busy() on:click=move |_| save_now()>
                     {move || if saving() { "Saving…" } else { "Save" }}
                 </button>
+            </div>
             </div>
         </div>
     }

@@ -307,6 +307,10 @@
  *                 keyboard path in the mode: `start`, `next`, `prev`, `in`,
  *                 `out` (answered as menger:hover) or `pick` (as
  *                 menger:pick)
+ *   frame → host  menger:field { on }                     (2.6, APP-83) a
+ *                 field that takes typing gained (`on: true`) or lost focus
+ *                 in this document, shadow roots included — the host sees
+ *                 only the iframe, and a phone's nav hides for the keyboard
  *   frame → host  menger:scrolled {}                      (2.3) in the mode,
  *                 a device's page scrolled (posted by the page shim)
  *   frame → host  menger:key { key }                      `a`, `A`, `z`
@@ -359,7 +363,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.5.0";
+  var VERSION = "2.6.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -2369,6 +2373,36 @@
     ev.preventDefault();
     post("menger:key", { key: "palette" });
   }, true);
+
+  // APP-83 (2.6): the host's keyboard follows a field typed in here — it
+  // sees only this frame as focused, and a phone's nav rides up over the
+  // keyboard unless it knows. Read through open shadow roots (m-input's).
+  function deepActive() {
+    var a = doc.activeElement;
+    while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+    return a;
+  }
+  function takesTyping(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var tag = el.tagName.toLowerCase();
+    if (tag === "textarea") return !el.readOnly;
+    if (tag === "input") return /^(|text|search|email|url|tel|password|number)$/i.test(el.getAttribute("type") || "") && !el.readOnly;
+    return !!el.isContentEditable;
+  }
+  var fieldOn = false;
+  function field() {
+    var on = doc.hasFocus() && takesTyping(deepActive());
+    if (on === fieldOn) return;
+    fieldOn = on;
+    post("menger:field", { on: on });
+  }
+  doc.addEventListener("focusin", field, true);
+  doc.addEventListener("focusout", function () {
+    setTimeout(field, 0);
+  }, true);
+  window.addEventListener("blur", function () {
+    setTimeout(field, 0);
+  });
 
   // `a`/`A` turn the host's mode, and Esc leaves it — the app's keys, from
   // a body that has focus; never from a field. MENGER-15 (1.9): `z` turns

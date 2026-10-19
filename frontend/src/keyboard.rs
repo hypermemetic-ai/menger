@@ -147,6 +147,32 @@ fn takes_typing(el: &web_sys::Element) -> bool {
     }
 }
 
+thread_local! {
+    /// APP-83: the body's frame whose own field takes typing has focus, as
+    /// its SDK says (`menger:field`) — the app sees only the iframe focused.
+    static FRAME_FIELD: std::cell::RefCell<Option<web_sys::Element>> = const { std::cell::RefCell::new(None) };
+}
+
+/// APP-83: whether `el` is the frame that said one of its fields has focus.
+fn typing_in_frame(el: &web_sys::Element) -> bool {
+    el.tag_name().eq_ignore_ascii_case("iframe") && FRAME_FIELD.with(|f| f.borrow().as_ref().is_some_and(|f| f == el))
+}
+
+/// APP-83: a body's frame says a field in it gained (`on`) or lost focus —
+/// read the viewport again, as a focus in the app's own document is.
+pub(crate) fn frame_field(frame: &web_sys::Element, on: bool) {
+    FRAME_FIELD.with(|f| {
+        let mut f = f.borrow_mut();
+        if on {
+            *f = Some(frame.clone());
+        } else if f.as_ref().is_some_and(|x| x == frame) {
+            *f = None;
+        }
+    });
+    apply();
+    follow();
+}
+
 /// An `<input type>` that opens a keyboard.
 fn typed_input(ty: &str) -> bool {
     matches!(ty, "" | "text" | "search" | "email" | "url" | "tel" | "password" | "number")
@@ -295,7 +321,7 @@ fn apply() -> bool {
         c.set((inner_w, t));
         t
     });
-    let editing = doc.active_element().is_some_and(|el| takes_typing(&el));
+    let editing = doc.active_element().is_some_and(|el| takes_typing(&el) || typing_in_frame(&el));
     let kb = keyboard(Viewport { layout_h, vv_h: vv.height(), vv_top: vv.offset_top(), scale: vv.scale(), tallest, editing });
     // APP-58: a keyboard over a pinned view holds the document still.
     let pinned = kb.is_some() && in_pinned(&doc);

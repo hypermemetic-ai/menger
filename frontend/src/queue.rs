@@ -1883,7 +1883,7 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
         let send = attach.then(send);
         let send_key = send.clone();
         view! {
-            <div class="qchange open">
+            <div class="qchange open wbox">
                 <crate::draw::PadView a=attach />
                 <textarea
                     node_ref=area
@@ -2176,7 +2176,7 @@ pub(crate) fn controls_of(input: &Input, busy: RwSignal<bool>, pick: RwSignal<Pi
             let (text, area, attach) = reply.expect("a text input's box");
             crate::grow::follow(area, move || text.track());
             view! {
-                <div class="qopts text">
+                <div class="qopts text wbox">
                     <crate::draw::PadView a=attach />
                     <textarea
                         node_ref=area
