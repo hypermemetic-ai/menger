@@ -870,8 +870,10 @@ and `view: mockup` + `widths:` makes a whole body one.
 - **Feedback on a mockup**: *comment* on its bar (APP-46), or the
   annotation mode (`a`) on an element inside it (APP-45). The anchor is
   `mockup:<ticket>#<n>@<width> >> <selector>` and is found again at any width.
-- **Screenshots** of a mockup: `scripts/shot.mjs` can't shoot a whole-page
-  mockup yet (APP-43); use Playwright from `perf/node_modules`.
+- **Screenshots** of a ticket, mockups and all: `scripts/shot.mjs
+  '#/ticket/X' --origin https://app.menger.sh --key ~/.plexus/keys/builder.key
+  --width 390` (APP-76; `--chat N` puts the shots in a chat). README
+  "Screenshots".
 
 ## Conventions
 
