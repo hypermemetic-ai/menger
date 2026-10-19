@@ -6,7 +6,9 @@
 // `result` naming the session it resumed (or a new one) and the last line of
 // the prompt. FAKE_CLAUDE_STEP (ms, 300) spaces the events; FAKE_CLAUDE_SLEEP
 // (s) holds the result, as a slow turn would; FAKE_CLAUDE_MARK (a file)
-// gets one line per run, the unix ms of its first output.
+// gets one line per run, the unix ms of its first output. CHAT-40: a prompt
+// whose last line holds `[slow]` holds its result FAKE_CLAUDE_SLOW (s, 60)
+// — a long turn for `/stop` to end.
 import crypto from "node:crypto";
 import fs from "node:fs";
 const argv = process.argv.slice(2);
@@ -35,4 +37,5 @@ tool("Read", { file_path: `${process.cwd()}/README.md` });
 await sleep(step);
 tool("Bash", { command: "MENGER_TOKEN=supersecret-value cargo test" });
 await sleep(Number(process.env.FAKE_CLAUDE_SLEEP || 0) * 1000);
+if (last.includes("[slow]")) await sleep(Number(process.env.FAKE_CLAUDE_SLOW || 60) * 1000);
 say({ type: "result", subtype: "success", is_error: false, result: `fake reply (${r >= 0 ? "resumed" : "new"} ${session}) to: ${last}` });

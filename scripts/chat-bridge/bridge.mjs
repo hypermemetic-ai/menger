@@ -24,6 +24,15 @@
 // One agent per chat at a time — messages that arrive while it works are
 // the next turn's, together; chats run in parallel up to CHAT_BRIDGE_MAX.
 //
+// CHAT-40: a message that is exactly `/clear`, `/stop`, `/status` or `/help`
+// is answered by the bridge itself, at once — no agent turn, and around the
+// per-chat queue, so a `/stop` reaches the turn it stops: `/clear` forgets
+// the chat's session (the next message starts a new one, with the chat
+// after the `/clear` as its context), `/stop` ends the running turn
+// (SIGTERM; the session kept; the turn's answer says the owner stopped it),
+// `/status` says what runs and the session's age, `/help` lists them. Any
+// other `/x` goes to the agent as before.
+//
 // Nothing is missed or answered twice: the bridge keeps, per chat, the last
 // message it has handled, and every time the watch is (re)subscribed — the
 // socket dropped, the server restarted, a stream ended silently
@@ -65,7 +74,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { connect, keyProof, publicHex, seedOf } from "../../deploy/menger-call.mjs";
-import { jsonLines, linesOf, liveLine } from "./live.mjs";
+import { clip, jsonLines, linesOf, liveLine } from "./live.mjs";
 
 const HOME = os.homedir();
 const env = process.env;
@@ -226,6 +235,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const chats = new Map();      // id → Chat (from list / watch)
 const pending = new Map();    // id → Message[] waiting for the next turn
 const busy = new Set();       // chats with a turn running
+const turning = new Map();    // id → the running turn: { started, lastLine, child, stopped } (CHAT-40)
+const answering = new Set();  // "chat:message" commands being answered now
 let running = 0;
 const queue = [];             // chats waiting for a slot
 
@@ -244,12 +255,20 @@ function onMessage(m, source) {
   const pend = pending.get(m.chat) ?? [];
   if (s.handled !== null && m.id <= s.handled) return;
   if (pend.some((p) => p.id === m.id) || s.inflight?.includes(m.id)) return;
+  if (s.commands?.includes(m.id) || answering.has(`${m.chat}:${m.id}`)) return;
   if (state.outbox.some((o) => o.chat === m.chat && o.upto >= m.id)) return;
   if (s.handled === null && m.at < state.born) return; // older than the bridge: not its to answer
   if (!allowed(m.author)) {
     if (m.author !== SELF) log(`chat ${m.chat}: message ${m.id} by ${m.author} — not on the allow list, ignored`);
     // nothing waiting before it: the mark moves past it
     if (!pend.length && !busy.has(m.chat)) { s.handled = Math.max(s.handled ?? 0, m.id); save(); }
+    return;
+  }
+  const cmd = commandOf(m.body);
+  if (cmd) {
+    log(`chat ${m.chat}: message ${m.id} by ${m.author} (${source}) — /${cmd}, answered by the bridge`);
+    answering.add(`${m.chat}:${m.id}`);
+    command(cmd, m).catch((e) => log(`chat ${m.chat}: /${cmd}: ${e.stack || e.message}`)).finally(() => answering.delete(`${m.chat}:${m.id}`));
     return;
   }
   log(`chat ${m.chat}: message ${m.id} by ${m.author} (${source})`);
@@ -311,6 +330,89 @@ async function catchUp(why) {
   log(`caught up (${why}): ${list.length} open chats, ${n} messages after their marks`);
 }
 
+// ── commands: answered by the bridge, no agent turn (CHAT-40) ─────────────
+const COMMANDS = {
+  clear: "forget this chat's agent session: the next message starts a new one (the chat itself stays)",
+  stop: "end this chat's running turn; its session is kept",
+  status: "what is running for this chat: the turn, since when, its last step; the session's age",
+  help: "this list",
+};
+/** The command a body is, when the whole of it (trimmed) is one; else null. */
+function commandOf(body) {
+  const m = /^\/([a-z]+)$/i.exec(String(body ?? "").trim());
+  const c = m?.[1].toLowerCase();
+  return c && Object.hasOwn(COMMANDS, c) ? c : null;
+}
+const ago = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 90) return `${s}s`;
+  if (s < 5400) return `${Math.round(s / 60)} min`;
+  if (s < 172800) return `${(s / 3600).toFixed(1)} h`;
+  return `${Math.round(s / 86400)} days`;
+};
+const hhmm = (ms) => `${new Date(ms).toISOString().slice(11, 16)}Z`;
+
+/** What a command says (and does) in a chat. */
+function commandAnswer(cmd, chatId) {
+  const s = chatState(chatId);
+  const t = turning.get(chatId);
+  const waiting = pending.get(chatId)?.length ?? 0;
+  switch (cmd) {
+    case "help":
+      return ["**Commands** — answered by the bridge at once, no agent turn:", "",
+        ...Object.entries(COMMANDS).map(([c, d]) => `- \`/${c}\` — ${d}`), "",
+        "Anything else, `/x` included, goes to the agent."].join("\n");
+    case "clear": {
+      const had = s.session;
+      s.session = null; s.sessionAt = null; s.cleared = (s.cleared ?? 0) + 1;
+      return had
+        ? `Session forgotten (${had.slice(0, 8)}…). The next message starts a new one${t ? "; the turn running now finishes in the old one" : ""}.`
+        : `No session to forget — the next message starts a new one${t ? "; the turn running now finishes as it began" : ""}.`;
+    }
+    case "stop": {
+      if (!t) return `Nothing is running in this chat${waiting ? ` (${waiting} message${waiting > 1 ? "s" : ""} waiting for a turn)` : ""}.`;
+      if (t.stopped) return "Already stopping the running turn.";
+      t.stopped = true;
+      if (t.child) {
+        try { t.child.kill("SIGTERM"); } catch {}
+        const child = t.child;
+        setTimeout(() => { if (child.exitCode === null && child.signalCode === null) try { child.kill("SIGKILL"); } catch {} }, 5000).unref();
+      }
+      return `Stopping the turn that began ${hhmm(t.started)} (${ago(Date.now() - t.started)} ago). The session is kept: the next message resumes it.`;
+    }
+    case "status": {
+      const lines = [];
+      if (t) {
+        lines.push(`**Running** since ${hhmm(t.started)} (${ago(Date.now() - t.started)})${t.stopped ? ", stopping" : ""}.`);
+        lines.push(t.lastLine ? `Last step: ${clip(t.lastLine, 200)}` : "No step yet.");
+      } else lines.push("**Idle** — no turn running.");
+      if (waiting) lines.push(`${waiting} message${waiting > 1 ? "s" : ""} waiting for the next turn.`);
+      lines.push(s.session
+        ? `Session ${s.session.slice(0, 8)}…, ${s.sessionAt ? `begun ${ago(Date.now() - s.sessionAt)} ago` : "its age unknown (begun before CHAT-40)"}.`
+        : t?.session && (s.cleared ?? 0) === t.cleared ? `Session ${t.session.slice(0, 8)}…, begun by this turn.`
+        : "No session: the next message starts a new one.");
+      return lines.join("\n");
+    }
+  }
+}
+
+/** A command: done, answered as the builder, its message marked handled. */
+async function command(cmd, m) {
+  const s = chatState(m.chat);
+  const body = commandAnswer(cmd, m.chat);
+  if (cmd === "clear") s.clearedAt = m.id;
+  save();
+  await rpc("chats.read", { chat: m.chat, upto: m.id }).catch((e) => log(`chat ${m.chat}: read: ${e.message}`));
+  await rpc("chats.post", { chat: m.chat, body }, { retry: false });
+  // nothing waiting before it: the mark moves past it; else it is kept apart
+  if (!(pending.get(m.chat)?.length) && !busy.has(m.chat)) s.handled = Math.max(s.handled ?? 0, m.id);
+  else (s.commands ??= []).push(m.id);
+  if (s.commands) { s.commands = s.commands.filter((id) => id > (s.handled ?? 0)); if (!s.commands.length) delete s.commands; }
+  save();
+  fs.appendFileSync(TURNS_LOG, JSON.stringify({ at: new Date().toISOString(), chat: m.chat, command: cmd, message: m.id }) + "\n");
+  log(`chat ${m.chat}: /${cmd} answered`);
+}
+
 // ── a turn ─────────────────────────────────────────────────────────────────
 async function turn(chatId) {
   const batch = pending.get(chatId) ?? [];
@@ -320,6 +422,13 @@ async function turn(chatId) {
   s.inflight = batch.map((m) => m.id);
   const upto = batch[batch.length - 1].id;
   const started = Date.now();
+  const cleared = s.cleared ?? 0;
+  const t = { started, lastLine: null, child: null, stopped: false, session: null, cleared };
+  turning.set(chatId, t);
+  try { await turnBody(chatId, batch, s, t, cleared, upto, started); } finally { turning.delete(chatId); }
+}
+
+async function turnBody(chatId, batch, s, t, cleared, upto, started) {
   let chat = chats.get(chatId);
   if (!chat) { await listChats().catch(() => {}); chat = chats.get(chatId); }
   // CHAT-14: a direct message or a group has no ticket.
@@ -337,7 +446,7 @@ async function turn(chatId) {
 
   let answer, exit = 0, session = s.session, why = null;
   try {
-    const r = await runAgent(chatId, chat, ticket, batch, s.session, (line) => live?.line(line));
+    const r = await runAgent(chatId, chat, ticket, batch, s.session, (line) => { t.lastLine = line; live?.line(line); }, t);
     session = r.session ?? session;
     exit = r.exit;
     if (r.ok) answer = r.text;
@@ -345,13 +454,15 @@ async function turn(chatId) {
   } catch (e) { exit = -1; why = e.message; }
   clearTimeout(working);
   const steps = live?.stop() ?? 0;
+  if (!answer && t.stopped) answer = "_Stopped by the owner (`/stop`)._ The session is kept: the next message resumes it.";
   if (!answer) answer = `couldn't answer: ${String(why || "the agent gave no final message").slice(0, 500)}`;
-  if (session && session !== s.session) { s.session = session; }
+  // a /clear during the turn wins: the next message starts fresh
+  if (session && session !== s.session && (s.cleared ?? 0) === cleared) { s.session = session; s.sessionAt = Date.now(); }
   state.outbox.push({ chat: chatId, upto, body: answer.slice(0, 60_000), at: Math.floor(Date.now() / 1000) });
   delete s.inflight;
   save();
   await flushOutbox().finally(() => (activityOk ? activity(chatId, "ended") : null));
-  const line = { at: new Date().toISOString(), chat: chatId, ticket, messages: batch.map((m) => m.id), session, duration_ms: Date.now() - started, exit, ok: !why, steps };
+  const line = { at: new Date().toISOString(), chat: chatId, ticket, messages: batch.map((m) => m.id), session, duration_ms: Date.now() - started, exit, ok: !why, steps, ...(t.stopped ? { stopped: true } : {}) };
   fs.appendFileSync(TURNS_LOG, JSON.stringify(line) + "\n");
   log(`chat ${chatId}: answered ${batch.map((m) => m.id).join(",")} in ${Math.round(line.duration_ms / 1000)}s (session ${session ?? "-"}, exit ${exit}${why ? `, ${why}` : ""})`);
 }
@@ -440,7 +551,7 @@ function systemPrompt(chatId, ticket, title, chat) {
   ].join("\n");
 }
 
-async function runAgent(chatId, chat, ticket, batch, session, onLine) {
+async function runAgent(chatId, chat, ticket, batch, session, onLine, t = {}) {
   let title = null;
   let prompt;
   const fresh = await withNotes(batch);
@@ -454,17 +565,19 @@ async function runAgent(chatId, chat, ticket, batch, session, onLine) {
       } catch {}
     }
     const recent = await withNotes((await rpc("chats.messages", { chat: chatId, newest: true, limit: 30 }).catch(() => []))
-      .filter((i) => i.type === "message").map((i) => i.message).filter((m) => m.id < batch[0].id));
+      .filter((i) => i.type === "message").map((i) => i.message)
+      // CHAT-40: after a /clear, the chat before it is not the new session's; nor is any command
+      .filter((m) => m.id < batch[0].id && m.id > (chatState(chatId).clearedAt ?? 0) && !(m.author !== SELF && commandOf(m.body))));
     prompt = [
       `Chat ${chatId}, ${where(chat, ticket)}${title ? ` — ${title}` : ""}${chat?.title ? `, titled "${chat.title}"` : ""}. Participants: ${(chat?.participants ?? []).join(", ") || "?"}; you are ${SELF}.`,
       recent.length ? `Earlier in the chat:\n\n${recent.map(fmt).join("\n\n")}` : `Nothing earlier in the chat.`,
       `New — answer this:\n\n${fresh.map(fmt).join("\n\n")}`,
     ].join("\n\n---\n\n");
   }
-  let r = await claude(prompt, session, systemPrompt(chatId, ticket, title, chat), onLine);
-  if (!r.ok && session && /No conversation found|session/i.test(r.why ?? "")) {
+  let r = await claude(prompt, session, systemPrompt(chatId, ticket, title, chat), onLine, t);
+  if (!r.ok && !t.stopped && session && /No conversation found|session/i.test(r.why ?? "")) {
     log(`chat ${chatId}: session ${session} could not be resumed (${r.why}); a new one`);
-    r = await claude(prompt, null, systemPrompt(chatId, ticket, title, chat), onLine);
+    r = await claude(prompt, null, systemPrompt(chatId, ticket, title, chat), onLine, t);
   }
   return r;
 }
@@ -475,14 +588,16 @@ const CWDS = (() => { try { return [cfg.cwd, fs.realpathSync(cfg.cwd)]; } catch 
 /** One `claude -p` run, streamed (CHAT-18): each event's lines to `onLine`;
  *  the answer is the stream's `result` event, its session the one any event
  *  names (as `--output-format json`'s result named it before). */
-function claude(prompt, session, sys, onLine = () => {}) {
+function claude(prompt, session, sys, onLine = () => {}, t = {}) {
   return new Promise((resolve) => {
     const argv = ["-p", "--output-format", "stream-json", "--verbose", "--model", opt.model, "--permission-mode", opt.permissionMode, "--append-system-prompt", sys];
     if (session) argv.push("--resume", session);
+    if (t.stopped) return resolve({ ok: false, exit: -1, why: "stopped by the owner (/stop)" });
     const child = spawn(cfg.claude, argv, { cwd: cfg.cwd, env: { ...env, MENGER_URL: cfg.url }, stdio: ["pipe", "pipe", "pipe"] });
+    t.child = child;
     let err = "", tail = "", sessionId = null, result = null;
     const lines = jsonLines((ev) => {
-      if (ev?.session_id) sessionId = ev.session_id;
+      if (ev?.session_id) sessionId = t.session = ev.session_id;
       if (ev?.type === "result") result = ev;
       for (const l of linesOf(ev, CWDS)) onLine(l);
     });
@@ -494,13 +609,16 @@ function claude(prompt, session, sys, onLine = () => {}) {
     child.on("close", (code, signal) => {
       clearTimeout(timer);
       lines.push("\n");
+      t.child = null;
       const j = result;
+      if (t.stopped) return resolve({ ok: false, exit: code ?? -1, session: sessionId, why: "stopped by the owner (/stop)" });
       if (signal) return resolve({ ok: false, exit: -1, session: sessionId, why: `the agent was stopped (${signal}${signal === "SIGTERM" && cfg.turnMinutes > 0 ? `, past ${cfg.turnMinutes} min?` : ""})` });
       if (!j) return resolve({ ok: false, exit: code, session: sessionId, why: `claude exited ${code}: ${(err || tail).trim().split("\n").pop()?.slice(0, 300) || "no output"}` });
       if (j.is_error || code !== 0) return resolve({ ok: false, exit: code, session: sessionId, why: `${j.subtype ?? "error"}: ${String(j.result ?? err).slice(0, 300)}` });
       const text = String(j.result ?? "").trim();
       resolve(text ? { ok: true, exit: code, session: sessionId, text } : { ok: false, exit: code, session: sessionId, why: "the agent gave no final message" });
     });
+    child.stdin.on("error", () => {}); // a child stopped before it read the prompt
     child.stdin.end(prompt);
   });
 }
