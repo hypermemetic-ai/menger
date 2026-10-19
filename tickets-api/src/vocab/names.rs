@@ -224,6 +224,142 @@ text_type!(
     input_id
 );
 
+/// APP-86: the inputs a queue entry names — `--input a --input b` (or
+/// `a,b`), in the order asked. A list on the wire (its schema `InputId`'s
+/// array, so synapse repeats the flag), and — for every caller before
+/// APP-86 — a bare string reads as the list of that one. Each is an
+/// [`InputId`]; an empty list is none.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub struct InputIds(Vec<InputId>);
+
+impl InputIds {
+    /// Each, in order.
+    pub fn as_slice(&self) -> &[InputId] {
+        &self.0
+    }
+
+    /// Each as text, in order.
+    pub fn into_strings(self) -> Vec<String> {
+        self.0.into_iter().map(InputId::into_string).collect()
+    }
+
+    /// Whether it names none.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<Vec<InputId>> for InputIds {
+    fn from(ids: Vec<InputId>) -> Self {
+        Self(ids)
+    }
+}
+
+impl From<InputId> for InputIds {
+    fn from(id: InputId) -> Self {
+        Self(vec![id])
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for InputIds {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum OneOrMany {
+            One(String),
+            Many(Vec<String>),
+        }
+        let texts = match OneOrMany::deserialize(d).map_err(|_| serde::de::Error::custom("an input's id, or a list of them (`--input a --input b`)"))? {
+            OneOrMany::One(t) => vec![t],
+            OneOrMany::Many(v) => v,
+        };
+        texts.into_iter().map(InputId::try_from).collect::<Result<Vec<_>, _>>().map(Self).map_err(serde::de::Error::custom)
+    }
+}
+
+impl schemars::JsonSchema for InputIds {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "InputIds".into()
+    }
+    /// Inlined where it is used, as `Vec<InputId>` is: the generators read
+    /// `InputId[]`.
+    fn inline_schema() -> bool {
+        true
+    }
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let item = g.subschema_for::<InputId>();
+        schemars::json_schema!({
+            "type": "array",
+            "description": "Inputs on the ticket, by id, in order (a bare id reads as one)",
+            "items": item
+        })
+    }
+}
+
+/// APP-85: a view of a mockup as a call names it — APP-44's `T#mN` (`T`:
+/// a whole-page body), or APP-45's anchor `mockup:T#N[=REF]@W`, the width
+/// optional. Kept canonical: `T#mN`, `T#mN@W`, `T`, `T@W` (the ticket as
+/// [`TicketRef`] keeps it; a `=REF` is what the placeholder shows, and the
+/// number names it already).
+fn mockup_ref(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    let shape = "T#mN (its Nth mockup), T (a whole-page body), or mockup:T#N@W (APP-45's anchor)";
+    let bad = || not_a(t, "a view of a mockup", shape);
+    let rest = t.strip_prefix("mockup:").unwrap_or(t);
+    let (rest, width) = match rest.rsplit_once('@') {
+        Some((r, w)) => match w.parse::<u32>() {
+            Ok(w) if (1..=10_000).contains(&w) => (r, Some(w)),
+            _ => return Err(bad()),
+        },
+        None => (rest, None),
+    };
+    let (ticket, mock) = match rest.split_once('#') {
+        Some((tk, m)) => {
+            let m = m.split_once('=').map_or(m, |(n, _)| n);
+            let n = m.strip_prefix(['m', 'M']).unwrap_or(m).parse::<u32>().map_err(|_| bad())?;
+            if !(1..=999).contains(&n) {
+                return Err(bad());
+            }
+            (tk, Some(n))
+        }
+        None => (rest, None),
+    };
+    let ticket = ticket_ref(ticket).map_err(|_| bad())?;
+    let mut out = ticket;
+    if let Some(n) = mock {
+        out.push_str(&format!("#m{n}"));
+    }
+    if let Some(w) = width {
+        out.push_str(&format!("@{w}"));
+    }
+    Ok(out)
+}
+
+text_type!(
+    /// APP-85: a view of a mockup — `KILN-7#m2`, `DESIGN-49`, or APP-45's
+    /// anchor `mockup:KILN-7#2@390` — kept as `T#mN[@W]` / `T[@W]`
+    /// ([`MockupRef::view`] its parts).
+    MockupRef,
+    mockup_ref
+);
+
+impl MockupRef {
+    /// Its parts: the ticket as written, the mockup's number (none: the
+    /// body itself), the width.
+    pub fn view(&self) -> crate::queue::MockupView {
+        let (rest, width) = match self.0.rsplit_once('@') {
+            Some((r, w)) => (r, w.parse().ok()),
+            None => (self.0.as_str(), None),
+        };
+        let (ticket, mock) = match rest.split_once("#m") {
+            Some((t, n)) => (t, n.parse().ok()),
+            None => (rest, None),
+        };
+        crate::queue::MockupView { ticket: ticket.to_string(), mock, width }
+    }
+}
+
 fn component_name(text: &str) -> Result<String, String> {
     let t = text.trim();
     match crate::component_docs::is_component_name(t) {

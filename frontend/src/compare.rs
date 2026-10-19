@@ -587,13 +587,13 @@ fn placeholders(ticket: &menger_tickets_api::Ticket) -> Rc<Vec<Posted>> {
 
 /// What a column draws.
 #[derive(Clone, Debug, PartialEq)]
-enum Col {
+pub(crate) enum Col {
     Loading,
     Shown { page: String, caption: Caption, scope: String },
     Failed(Why),
 }
 
-fn read_ticket(id: &str) -> Result<Option<Box<menger_tickets_api::Ticket>>, Why> {
+pub(crate) fn read_ticket(id: &str) -> Result<Option<Box<menger_tickets_api::Ticket>>, Why> {
     match fetched(id) {
         None => Ok(None),
         Some(Fetched::Ticket(t)) => Ok(Some(t)),
@@ -618,7 +618,7 @@ fn whole(id: &str, own: Caption) -> Col {
 
 /// What `item` draws now — tracked: a read landing or a body amended
 /// re-resolves it.
-fn resolve(item: &Item) -> Col {
+pub(crate) fn resolve(item: &Item) -> Col {
     let Some(n) = item.mock else { return whole(&item.ticket, Caption::default()) };
     let t = match read_ticket(&item.ticket) {
         Ok(None) => return Col::Loading,

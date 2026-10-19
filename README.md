@@ -3737,8 +3737,60 @@ setting: the sheet comes in in .32 s and goes in .2 s; `calm` keeps the
 slide and the blinks and drops the nudge and the sweep, `none` moves
 nothing (an arrival waiting is outlined in its colour).
 
+**Several questions in one entry** (APP-86; owner: *"and multiple
+questions"*): `--input` repeats (`--input a --input b`, or `a,b`), each an
+input the ticket declares and has not closed, kept in the order asked;
+`--blocking` names the one the caller is idle on — one of them, and
+required at urgency `blocking` when there are several (with one input it
+is that one). The entry leaves the queue when **every** input it names is
+closed: one closed is progress — nothing is written, and no `unqueued` is
+heard — and closing the last is the one `unqueued` (`action: closed`).
+Queueing it again adds the call's inputs to the entry's, raises the
+urgency, never lowers it, and a `--blocking` given moves the blocking one.
+In the tray its row says `1 of 3 answered`; its answer shows the questions
+as steps — `2 of 3 questions`, a bar, a step each (✓ and the answer once
+answered, *blocking* marked) — and *submit · next ›* records the current one
+and moves to the next open; the last one's *submit* takes the entry out, as
+one input's does. A step clicked goes back to it: its answer, *change it*
+while the input is still open, *next open →*. On the wire `entry.inputs`
+lists them and `entry.blocking` names the one (`entry.input` is the
+blocking one, else the first, for every reader before); an entry naming
+one input is MENGER-39's entry byte for byte (`input` alone). A pin from the header's questions panel (APP-87)
+on a ticket already queued for another question adds its question to that
+entry (raising it, never lowering it): the row says so before (`its ticket
+is queued for #bin — a pin adds it`) and after (`★ in an entry of 2 · you
+pinned last`), with no unpin or undo there — either would take the other
+questions out with it. The file
+gains the `inputs` and `blocking` columns in place on its first open; an
+older release reads `input` and never them.
+
+**Views of mockups in an entry** (APP-85; owner: *"you should be able to
+queue a view of the mockup"*): `--mockup` repeats — APP-44's `T#mN` (ticket
+T's Nth mockup, numbered as the app numbers a body's: fences, elements and
+refs in document order), `T` (a body that is itself a whole page), or
+APP-45's anchor `mockup:T#N@W` (a view at a width; a `=REF` is dropped, the
+number names it) — kept canonical on the entry as `mockups: [{ticket,
+mock?, width?}]` (at most 8; a requeue adds the call's). Each is checked
+before the write: a ticket the caller reads, a mockup its body holds — else
+one `error` naming it (`mockup `KILN-7#m4`: KILN-7 holds 3 — no mockup 4`,
+`no ticket X you can read`, `X is no whole page`); a malformed one is
+`invalid_params` at dispatch. `queued`, `watch`'s `queued` and `history`'s
+`queue_record` carry them. In the tray the row says `▣ 3 views`; the
+answer shows them as thumbnails above the question — the mocked page, live
+and untouched, at its width (1440 unless named), labelled by the option it
+sits in, else its title, with *pick this* when that option is the entry's
+input's. A thumbnail opens the viewer: full size at 390 or 1440, `‹ ›`
+between them, *compare* (with more than one) side by side; at a phone's
+width it is the whole screen, the thumbnails scrolling sideways. *pick
+this* — on a thumbnail, in the viewer or in compare — picks that option
+(APP-46's look, the same pick as the option card) and closes the viewer;
+Submit records it. Esc closes the viewer before the sheet. The file gains
+the `mockups` column in place on open.
+
 ```sh
 synapse -P 4455 menger tickets queue --id RETURNS-13 --urgency blocking --input landing --reason "idle until decided"
+synapse -P 4455 menger tickets queue --id KILN-7 --urgency now --input layout --mockup KILN-7#m1 --mockup KILN-7#m2 --mockup mockup:KILN-7#3@390 --reason "pick a layout"
+synapse -P 4455 menger tickets queue --id GLAZE-11 --urgency blocking --input format --input fields --input naming --blocking naming --reason "the import is idle"
 synapse -P 4455 menger tickets queue --id MENGER-41 --urgency today --reason "the promote rolled back" --source pipeline
 synapse -P 4455 menger tickets queued --snoozed false
 synapse -P 4455 menger tickets snooze --id MENGER-41 --minutes 10
@@ -3747,22 +3799,23 @@ synapse -P 4455 menger tickets unqueue --id MENGER-41
 
 | method | yields |
 | -- | -- |
-| `tickets.queue { id, urgency, reason, input?, source? }` | `queued { entry, ticket, action }` — the entry as the write leaves it (`ticket`, `urgency`, `reason`, `input`, `by`, `name`, `source`, `queued_unix` — when first queued —, `asked_unix`, `snoozed_until_unix`), its ticket's row, and `action`: `queued`, `raised` (a higher urgency) or `requeued` (the urgency kept: never lowered; the reason and an input given are the new ones; a snooze ends). `blocking` requires `input`, an input the ticket declares and has not closed. A blank reason, an unknown urgency, an input the ticket does not hold or has closed is one `error`; a ticket that is none `not_found` |
+| `tickets.queue { id, urgency, reason, input?, blocking?, mockup?, source? }` | `queued { entry, ticket, action }` — the entry as the write leaves it (`ticket`, `urgency`, `reason`, `input`, `inputs` and `blocking` with several (APP-86), `mockups` when it carries views (APP-85), `by`, `name`, `source`, `queued_unix` — when first queued —, `asked_unix`, `snoozed_until_unix`), its ticket's row, and `action`: `queued`, `raised` (a higher urgency) or `requeued` (the urgency kept: never lowered; the reason is the new one, the inputs given are added; a snooze ends). `input` is a list (a bare string is one); `blocking` requires an input, one the ticket declares and has not closed, and with several names which (`blocking`, among them). A blank reason, an unknown urgency, an input the ticket does not hold or has closed, a `blocking` not among the inputs, more than 16 inputs is one `error`; a ticket that is none `not_found` |
 | `tickets.unqueue { id, source? }` | `unqueued { id, entry, action: unqueued, by, at_unix }`, or `not_queued { id }` (nothing written) |
 | `tickets.snooze { id, minutes, source? }` | `snoozed { entry, ticket }` — off the tray until `snoozed_until_unix` (1 minute to a week), still queued (`queued` holds). Not queued: one `error` |
 | `tickets.request_changes { id, body, source? }` | APP-23: `changes_requested { id, comment, entry, by, at_unix }` — one write: `body` kept as a comment on the ticket's conversation (APP-22's anchor, `path: conversation`) with `intent: changes`, signed as `comments.add` signs, and the entry taken out with `action: changes_requested`, its queue record naming the comment (`comment`). The named input stays open: a change request is not an answer. `watch` hears `unqueued` (that action), `comments.watch` the comment's `added`. A ticket not queued, a blank body: one `error`, nothing written |
 | `tickets.await_reply { id, since?, input?, timeout_minutes? }` | APP-24: `waiting { ticket, queued? }`, then one `replied { ticket, reply }` (`reply.kind`: `answered`, `changes_requested`, `commented`, `unqueued`, `ended`) or `timed_out { ticket }`, then the end; a ticket that is none `not_found`. Below |
 | `tickets.queued { snoozed? }` | a `queue_row { entry, ticket }` per entry in the caller's reach, most urgent first, then the oldest — without the snoozed ones when `snoozed: false` — then `queue_end { count, snoozed, now_unix }` |
 
-An `inputs close` of the input an entry names takes it out in the same write:
-`watch` hears `input_changed`, then `unqueued` with `action: closed` and `by:
-system`. `watch` carries `queued`, `unqueued` and `snoozed` as they happen.
+An `inputs close` of the input an entry names takes it out in the same write
+(APP-86: of the last open one it names): `watch` hears `input_changed`, then
+`unqueued` with `action: closed` and `by: system`. `watch` carries `queued`, `unqueued` and `snoozed` as they happen.
 `queued` and `queued <urgency>` are filter cells (FILTER-3's language),
 answered from the queue's kept entries — a snoozed ticket is still queued —
 on every filtered read and watch; the Needs you filter (`g n`, on the nav)
 is `queued or asking or label needs-you`. `history { id }` yields the ticket's **queue records**
 after its transitions — `queue_record { record }`: `action` (queued,
-raised, requeued, snoozed, unqueued, closed, changes_requested), `urgency`, `reason`, `input`,
+raised, requeued, snoozed, unqueued, closed, changes_requested), `urgency`, `reason`, `input`
+(and `inputs`, `blocking` with several; `mockups`),
 `actor`, `name`, `source`, `at_unix`, `until_unix` for a snooze, `comment`
 for a change request. They are a
 log of their own (`queue_log`), not transitions: `changed` and `by` do not
@@ -3797,7 +3850,9 @@ one `replied { ticket, reply }`, and ends. A response, at or after `since`
 (default: the call's own time, what was already there set aside), is the
 first of: an input on the ticket answered (`kind: answered` — `input`,
 `value`, `rationale`, `source`, `at_unix`; with `input` given, only that
-one), a change request (`kind: changes_requested`, the `comment`), a comment
+one — APP-86: without it, each answer to an entry's several questions is a
+reply, so the agent calls again with `since` for the next; one input closed
+of several is no `unqueued`, the last is), a change request (`kind: changes_requested`, the `comment`), a comment
 on the ticket by someone other than the caller (`kind: commented`), the
 ticket unqueued by someone other than the caller (`kind: unqueued` —
 `action`, `by`, `at_unix`), the ticket canceled or deleted (`kind: ended` —

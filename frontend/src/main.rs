@@ -313,6 +313,7 @@ mod present;
 mod promote;
 mod queue;
 mod queue_tabs;
+mod queue_views;
 mod questions;
 
 mod mermaid;

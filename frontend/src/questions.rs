@@ -128,11 +128,13 @@ pub(crate) fn count_title(n: Option<usize>) -> String {
 }
 
 /// The queue's entry for `input`, when its ticket is queued for it: the
-/// entry names this input, or names none (the ticket as a whole).
+/// entry names this input (APP-86: among its several), or names none (the
+/// ticket as a whole).
 pub(crate) fn queued_for<'a>(rows: &'a [queue::Row], input: &Input) -> Option<&'a QueueEntry> {
-    rows.iter()
-        .map(|r| &r.entry)
-        .find(|e| e.ticket == input.ticket.as_str() && e.input.as_deref().is_none_or(|i| i == input.id.as_str()))
+    rows.iter().map(|r| &r.entry).find(|e| {
+        let named = e.named();
+        e.ticket == input.ticket.as_str() && (named.is_empty() || named.contains(&input.id.as_str()))
+    })
 }
 
 /// APP-87: what a row's pin control is — the owner moving a question from
@@ -143,22 +145,32 @@ pub(crate) enum PinState {
     Pin,
     /// Queued for it by the reader: *★ pinned by you*, **unpin**.
     Pinned,
+    /// APP-86: queued last by the reader, in an entry naming several
+    /// questions (its pin joined another's entry, or others joined its):
+    /// *★ in an entry of N · you pinned last* (the entry keeps who queued it
+    /// last, not who asked each question) — no unpin, which would take the others
+    /// out with it.
+    PinnedWithin(usize),
     /// Queued for it by someone else (an agent): *queued by …*.
     Queued,
-    /// Its ticket is queued for another of its questions: a ticket is
-    /// queued once, for one input, so pinning this one would take the
-    /// other's place — not offered; the row says which.
-    Elsewhere(String),
+    /// APP-86: its ticket is queued for another of its questions — pinning
+    /// this one adds it to that entry (the urgency raised, never lowered);
+    /// the row says which it joins.
+    Joins(String),
 }
 
 /// The pin control for `input`, `rows` the tray's, `me` the reader's
 /// principal.
 pub(crate) fn pin_state(rows: &[queue::Row], input: &Input, me: Option<&str>) -> PinState {
     if let Some(e) = queued_for(rows, input) {
-        return if queue::pinned_by(e, me) { PinState::Pinned } else { PinState::Queued };
+        return match (queue::pinned_by(e, me), e.named().len()) {
+            (false, _) => PinState::Queued,
+            (true, 0 | 1) => PinState::Pinned,
+            (true, n) => PinState::PinnedWithin(n),
+        };
     }
     match rows.iter().map(|r| &r.entry).find(|e| e.ticket == input.ticket.as_str()) {
-        Some(e) => PinState::Elsewhere(e.input.clone().unwrap_or_default()),
+        Some(e) => PinState::Joins(e.named().join(", #")),
         None => PinState::Pin,
     }
 }
@@ -450,14 +462,18 @@ fn pin(p: Pinning) {
     let Some(client) = session::client() else { return };
     let (u, reason) = (p.urgency.get_untracked(), pin_reason(&p.note.get_untracked()));
     let (Ok(id), Ok(input), Ok(reason)) =
-        (crate::typed::typed(&ask.ticket), crate::typed::typed(&ask.input), crate::typed::typed(&reason))
+        (crate::typed::typed(&ask.ticket), crate::typed::typed::<menger_tickets_api::vocab::InputId>(&ask.input), crate::typed::typed(&reason))
     else {
         p.problem.set(Some("the pin could not be read".into()));
         return;
     };
     p.busy.set(true);
     spawn_local(async move {
-        let refused = queue_write(client.queue_all(id, u, reason, Some(input), Some(CallerSource::App)).await).await;
+        // APP-86: `input` is a list; on a ticket already queued, the pin adds
+        // this one to its entry (the urgency raised, never lowered).
+        let joins = queue::signal().with_untracked(|q| q.as_ref().is_some_and(|q| q.get(&ask.ticket).is_some()));
+        let asked = menger_tickets_api::vocab::InputIds::from(input);
+        let refused = queue_write(client.queue_all(id, u, reason, Some(asked), None, None, Some(CallerSource::App)).await).await;
         match refused {
             Some(why) => {
                 p.problem.try_set(Some(why));
@@ -465,14 +481,18 @@ fn pin(p: Pinning) {
             None => {
                 p.ask.try_set(None);
                 let words = Some((ask.ticket.clone(), pinned_words(&ask.ticket, &ask.input, u)));
-                p.undo.try_set(words.clone());
-                // The undo bar goes after a while, unless another pin replaced it.
-                spawn_local(async move {
-                    dom::sleep_ms(6000).await;
-                    if p.undo.try_get_untracked().flatten() == words {
-                        p.undo.try_set(None);
-                    }
-                });
+                // Undo unqueues; a pin that joined another's entry has none —
+                // it would take that entry's questions out too.
+                if !joins {
+                    p.undo.try_set(words.clone());
+                    // The undo bar goes after a while, unless another pin replaced it.
+                    spawn_local(async move {
+                        dom::sleep_ms(6000).await;
+                        if p.undo.try_get_untracked().flatten() == words {
+                            p.undo.try_set(None);
+                        }
+                    });
+                }
             }
         }
         p.busy.try_set(false);
@@ -495,7 +515,7 @@ fn unpin(p: Pinning, ticket: String) {
 /// **unpin**, or nothing.
 fn pin_button(p: Pinning, state: &PinState, ticket: String, input: String, class: &'static str) -> Option<AnyView> {
     match state {
-        PinState::Pin => Some(
+        PinState::Pin | PinState::Joins(_) => Some(
             view! {
                 <button
                     type="button"
@@ -530,7 +550,7 @@ fn pin_button(p: Pinning, state: &PinState, ticket: String, input: String, class
             }
             .into_any(),
         ),
-        PinState::Queued | PinState::Elsewhere(_) => None,
+        PinState::Queued | PinState::PinnedWithin(_) => None,
     }
 }
 
@@ -611,18 +631,23 @@ fn row_view(input: Input, a: Answering, p: Pinning, now: i64, queued: Option<Que
     };
     let age = since(&input).map(|t| queue::age(now, t)).unwrap_or_default();
     let said = input.answer.as_ref().map(|ans| queue::said(&input, &ans.value));
-    let mine = state == PinState::Pinned;
+    let mine = matches!(state, PinState::Pinned | PinState::PinnedWithin(_));
+    let within = match state {
+        PinState::PinnedWithin(n) => format!("★ in an entry of {n} · you pinned last"),
+        _ => String::new(),
+    };
     let st = queued.as_ref().map(|e| {
         let u = e.urgency.as_str();
         let by = if mine {
-            view! { <span class="pinned">"★ pinned by you"</span> }.into_any()
+            let words = if within.is_empty() { "★ pinned by you".to_string() } else { within.clone() };
+            view! { <span class="pinned">{words}</span> }.into_any()
         } else {
             view! { <span>{format!("queued by {}", queue::who(e))}</span> }.into_any()
         };
         view! { <span class=format!("chip-u u-{u}")>{u}</span>{by} }
     });
     let elsewhere = match &state {
-        PinState::Elsewhere(other) => Some(view! { <span class="also">{format!("its ticket is queued for #{other}")}</span> }),
+        PinState::Joins(other) => Some(view! { <span class="also">{format!("its ticket is queued for #{other} — a pin adds it")}</span> }),
         _ => None,
     };
     let side_pin = (!done).then(|| pin_button(p, &state, ticket.clone(), id.clone(), "pin")).flatten();
@@ -1039,8 +1064,9 @@ mod tests {
     }
 
     /// APP-87: a row's pin control — pin it; pinned by the reader (unpin);
-    /// queued by an agent (its mark, no pin); its ticket queued for another
-    /// question (no pin: a ticket is queued for one input).
+    /// queued by an agent (its mark, no pin); APP-86: its ticket queued for
+    /// another question (a pin joins that entry), and pinned within an entry
+    /// of several (no unpin).
     #[test]
     fn a_rows_pin_follows_who_queued_it() {
         let mut mine = entry("A-1", Some("x"));
@@ -1051,8 +1077,16 @@ mod tests {
         assert_eq!(pin_state(&rows, &input("A-1", "x"), Some("key:other")), PinState::Queued, "someone else's pin is a queue");
         assert_eq!(pin_state(&rows, &input("A-1", "x"), None), PinState::Queued, "not known yet: never claimed");
         assert_eq!(pin_state(&rows, &input("B-2", "y"), Some("key:me")), PinState::Queued);
-        assert_eq!(pin_state(&rows, &input("B-2", "z"), Some("key:me")), PinState::Elsewhere("y".into()));
+        assert_eq!(pin_state(&rows, &input("B-2", "z"), Some("key:me")), PinState::Joins("y".into()));
         assert_eq!(pin_state(&rows, &input("C-3", "q"), Some("key:me")), PinState::Pin);
+        // The pin joined B-2's entry: it names both, queued last by the reader.
+        let mut joined = entry("B-2", Some("y"));
+        joined.entry.inputs = vec!["y".into(), "z".into()];
+        joined.entry.by = "key:me".into();
+        let rows = [joined];
+        assert!(queued_for(&rows, &input("B-2", "z")).is_some(), "the entry names it now");
+        assert_eq!(pin_state(&rows, &input("B-2", "z"), Some("key:me")), PinState::PinnedWithin(2));
+        assert_eq!(pin_state(&rows, &input("B-2", "x"), Some("key:me")), PinState::Joins("y, #z".into()));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import type { RpcClient } from '../rpc';
-import type { CallerSource, Cursor, DeleteChildren, FilterText, InputId, Label, MengerPath, Message, Reason, Severity, SeverityChange, Status, TicketsEvent, Urgency, Zone } from './types';
+import type { CallerSource, Cursor, DeleteChildren, FilterText, InputId, Label, MengerPath, Message, MockupRef, Reason, Severity, SeverityChange, Status, TicketsEvent, Urgency, Zone } from './types';
 import type { Body, Kind, Query, ShortcodeRef, TicketRef, Title } from '../notes/types';
 import type { OrgId, Principal } from '../orgs/types';
 import type { TicketsCommitsClient } from '../tickets/commits/client';
@@ -260,16 +260,17 @@ export interface TicketsClient {
      */
     list(after?: Cursor | null, at?: number | null, epic?: ShortcodeRef | null, filter?: FilterText | null, keep?: TicketRef | null, limit?: number | null, parent?: TicketRef | null, status?: Status | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
     /**
-     * Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why; queued again it is raised, never lowered; yields queued { entry, ticket, action }.
+     * Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why, with the inputs it asks (repeat --input; --blocking the one you are idle on) and views of mockups to look at (repeat --mockup); queued again it is raised, never lowered, and its inputs and views added; yields queued { entry, ticket, action }.
   
   MENGER-39: puts a ticket in front of the owner — at an urgency, for a
   reason; `blocking` names the input that answers it. Queued again: the
-  urgency raised, never lowered. Yields one `queued`, or an `error`.
+  urgency raised, never lowered. APP-86: several inputs, in order, and
+  the one the caller is idle on. Yields one `queued`, or an `error`.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.queue` on the scope of `id`
      */
-    queue(id: TicketRef, reason: Reason, urgency: Urgency, input?: InputId | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+    queue(id: TicketRef, reason: Reason, urgency: Urgency, blocking?: InputId | null, input?: InputId[] | null, mockup?: MockupRef[] | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
     /**
      * The owner's queue, most urgent first, then oldest: a queue_row { entry, ticket } each, then queue_end { count, snoozed, now_unix }.
   

@@ -85,7 +85,7 @@ pub mod queue;
 /// assignment history's records. Wasm-safe: the app draws them.
 pub mod assignees;
 pub use assignees::{AssignAction, AssignRecord};
-pub use queue::{Ending, QueueAction, QueueEntry, QueueRecord, Reply, Urgency};
+pub use queue::{Ending, MockupView, QueueAction, QueueEntry, QueueRecord, Reply, Urgency};
 pub use types::{
     is_menger_doc, is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
     InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, PartDoc, SlotDoc, Kind, Marked, Placement,

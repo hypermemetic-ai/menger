@@ -3175,6 +3175,8 @@ impl Store {
         // the comment that answered them, gain the columns.
         comments::migrate(&conn)?;
         queue::migrate_comment(&conn)?;
+        // APP-86: and queue entries naming one input gain the list.
+        queue::migrate_inputs(&conn)?;
         let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -5519,7 +5521,7 @@ mod versions;
 pub(crate) mod revisions;
 pub use revisions::{acting, say_act, DiffView, RevisionPage, Restoring};
 mod queue;
-pub use queue::QueueChange;
+pub use queue::{QueueAsk, QueueChange};
 /// TICKETS-9: the assignees and their history.
 mod assignees;
 /// APP-23: a change request — a comment and an unqueue, one write.
@@ -5675,6 +5677,10 @@ mod tests_themes;
 /// MENGER-39: the queue.
 #[cfg(test)]
 mod tests_queue;
+#[cfg(test)]
+mod tests_queue_many;
+#[cfg(test)]
+mod tests_queue_views;
 #[cfg(test)]
 mod tests_assignees;
 /// APP-23: a change request.

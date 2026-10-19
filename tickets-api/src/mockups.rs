@@ -331,6 +331,62 @@ pub fn blank(src: &str) -> Cow<'_, str> {
     Cow::Owned(String::from_utf8(out).expect("ASCII spaces over whole characters"))
 }
 
+/// APP-85: how many mockups `body` (whole, frontmatter included) holds, as
+/// the app numbers them for `T#mN` (APP-44): every `<m-mockup>` its frame
+/// draws — a ` ```mockup ` fence, an element holding its page, an
+/// `<m-mockup ref>` — counted in the markdown the way the app reads it: a
+/// fence as a fence, an element only where the parser reads HTML (never in
+/// code, a comment or a script).
+pub fn count(body: &str) -> usize {
+    let rest = crate::fields::split_frontmatter(body).1;
+    let blanked = blank(rest);
+    let mut fences = 0;
+    let mut html = String::new();
+    for ev in Parser::new_ext(&blanked, options()) {
+        match ev {
+            Event::Start(Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(info))) if info.split_whitespace().next() == Some("mockup") => fences += 1,
+            Event::Html(h) | Event::InlineHtml(h) => {
+                html.push_str(&h);
+                html.push('\n');
+            }
+            _ => {}
+        }
+    }
+    fences + elements(&html)
+}
+
+/// The `<m-mockup` open tags in `html`, outside comments and raw text.
+fn elements(html: &str) -> usize {
+    let lower = html.to_ascii_lowercase();
+    let (b, mut at, mut n) = (lower.as_bytes(), 0, 0);
+    while let Some(i) = lower[at..].find('<') {
+        let p = at + i;
+        let tail = &lower[p..];
+        if tail.starts_with("<!--") {
+            at = tail.find("-->").map_or(lower.len(), |j| p + j + 3);
+            continue;
+        }
+        let raw = ["script", "style", "textarea", "template"].into_iter().find(|t| tail[1..].starts_with(t) && tail.as_bytes().get(1 + t.len()).is_some_and(|c| !c.is_ascii_alphanumeric() && *c != b'-'));
+        if let Some(t) = raw {
+            let close = format!("</{t}");
+            at = tail.find(&close).map_or(lower.len(), |j| p + j + close.len());
+            continue;
+        }
+        if tail.starts_with("<m-mockup") && b.get(p + 9).is_some_and(|c| c.is_ascii_whitespace() || *c == b'>' || *c == b'/') {
+            n += 1;
+        }
+        at = p + 1;
+    }
+    n
+}
+
+/// APP-85: whether `body` is itself a mockup — a whole HTML page after its
+/// frontmatter (`<!doctype html` or `<html`), as `view: mockup` draws one.
+pub fn whole_page(body: &str) -> bool {
+    let rest = crate::fields::split_frontmatter(body).1.trim_start().to_ascii_lowercase();
+    rest.starts_with("<!doctype html") || rest.starts_with("<html")
+}
+
 /// What a write refuses in `body` (whole, frontmatter included): each
 /// element with both content and a `ref`, as `line N: …`.
 pub fn problems(body: &str) -> Vec<String> {

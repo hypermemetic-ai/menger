@@ -3430,6 +3430,100 @@ async fn the_queue_over_the_wire() {
     assert_eq!(evs.last().unwrap()["type"], "history_end");
 }
 
+/// APP-86: an entry with several questions over the real protocol —
+/// `input` a list (a bare string is still one), `blocking` among them and
+/// required at urgency `blocking` with several; a requeue adds; `queued`
+/// and `history` carry them; closing two of three is progress, the third
+/// unqueues; `await_reply` without `input` hears each answer.
+#[tokio::test]
+async fn several_questions_in_one_queue_entry() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    collect(call(&client, "tickets.create", json!({"epic": "GLZ", "title": "root", "kind": "scope"})).await).await;
+    let body = "<m-decision data-field=\"decision\" id=\"format\">\n<m-question data-field=\"question\">Which format?</m-question>\n\
+                <m-option data-field=\"option\" name=\"Card\" value=\"card\"></m-option>\n<m-option data-field=\"option\" name=\"Sheet\" value=\"sheet\"></m-option>\n</m-decision>\n\n\
+                <m-input id=\"fields\" kind=\"multi\"><m-question data-field=\"question\">Which fields?</m-question>\n<m-choice value=\"cone\">Cone</m-choice><m-choice value=\"photos\">Photos</m-choice></m-input>\n\n\
+                <m-input id=\"naming\" kind=\"text\"><m-question data-field=\"question\">What is it called?</m-question></m-input>\n";
+    collect(call(&client, "tickets.create", json!({"epic": "GLZ", "title": "a template", "body": body})).await).await;
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Several at blocking, none named: refused, nothing written.
+    let ev = answer(&client, "tickets.queue", json!({"id": "GLZ-2", "urgency": "blocking", "reason": "idle", "input": ["format", "naming"]})).await;
+    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("names the one the caller is idle on"), "{ev}");
+    let ev = answer(&client, "tickets.queue", json!({"id": "GLZ-2", "urgency": "now", "reason": "idle", "input": ["format"], "blocking": "naming"})).await;
+    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("not among the entry's inputs"), "{ev}");
+
+    let ev = answer(&client, "tickets.queue", json!({"id": "GLZ-2", "urgency": "blocking", "reason": "the import is idle", "input": ["format", "fields"], "blocking": "fields"})).await;
+    assert_eq!((ev["type"].as_str(), ev["entry"]["inputs"].clone(), ev["entry"]["blocking"].as_str(), ev["entry"]["input"].as_str()), (Some("queued"), json!(["format", "fields"]), Some("fields"), Some("fields")), "{ev}");
+    // Again, a bare string: added, the blocking one kept.
+    let ev = answer(&client, "tickets.queue", json!({"id": "GLZ-2", "urgency": "now", "reason": "and its name", "input": "naming"})).await;
+    assert_eq!((ev["action"].as_str(), ev["entry"]["inputs"].clone(), ev["entry"]["urgency"].as_str()), (Some("requeued"), json!(["format", "fields", "naming"]), Some("blocking")), "{ev}");
+    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
+    assert_eq!(rows[0]["entry"]["inputs"], json!(["format", "fields", "naming"]), "{rows:?}");
+
+    // An agent waits on any answer; the owner answers one.
+    let agent = connect(port).await;
+    let mut wait = call(&agent, "tickets.await_reply", json!({"id": "GLZ-2", "timeout_minutes": 1})).await;
+    assert_eq!(next_events(&mut wait, 1).await[0]["queued"]["inputs"], json!(["format", "fields", "naming"]));
+    answer(&client, "tickets.inputs.answer", json!({"ticket": "GLZ-2", "input": "naming", "value": {"type": "text", "text": "firing card"}})).await;
+    let replied = next_events(&mut wait, 1).await;
+    assert_eq!((replied[0]["reply"]["kind"].as_str(), replied[0]["reply"]["input"].as_str()), (Some("answered"), Some("naming")), "{replied:?}");
+
+    // Two of three closed: still queued. The third: out, one `unqueued`.
+    answer(&client, "tickets.inputs.close", json!({"ticket": "GLZ-2", "input": "naming"})).await;
+    answer(&client, "tickets.inputs.close", json!({"ticket": "GLZ-2", "input": "format"})).await;
+    assert_eq!(collect(call(&client, "tickets.queued", json!({})).await).await.len(), 2, "progress, not done");
+    answer(&client, "tickets.inputs.close", json!({"ticket": "GLZ-2", "input": "fields"})).await;
+    let heard = watch_until(&mut watch, "unqueued").await;
+    assert_eq!(heard.iter().filter(|e| e["type"] == "unqueued").count(), 1, "{heard:?}");
+    assert_eq!(heard.last().unwrap()["action"], "closed");
+    let evs = collect(call(&client, "tickets.history", json!({"id": "GLZ-2"})).await).await;
+    let records: Vec<&serde_json::Value> = evs.iter().filter(|e| e["type"] == "queue_record").map(|e| &e["record"]).collect();
+    assert_eq!(records.iter().map(|r| r["action"].as_str().unwrap()).collect::<Vec<_>>(), ["queued", "requeued", "closed"]);
+    assert_eq!((records[1]["inputs"].clone(), records[1]["blocking"].as_str()), (json!(["format", "fields", "naming"]), Some("fields")));
+}
+
+/// APP-85: an entry carries views of mockups over the real protocol —
+/// `mockup` a list of `T#mN` / `mockup:T#N@W`, kept canonical on the entry
+/// (`queued`, `watch`'s `queued`, `history`'s record); a view the body does
+/// not hold refused in band naming it, a malformed one at dispatch.
+#[tokio::test]
+async fn views_of_mockups_in_a_queue_entry() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    collect(call(&client, "tickets.create", json!({"epic": "KLN", "title": "root", "kind": "scope"})).await).await;
+    let page = "<!doctype html>\n<html><body><main>a look</main></body></html>\n";
+    let opt = |name: &str| format!("<m-option data-field=\"option\" name=\"{name}\" value=\"{}\">\n\n```mockup widths=390,1440 title=\"{name}\"\n{page}```\n\n</m-option>\n", name.to_lowercase());
+    let body = format!(
+        "<m-decision data-field=\"decision\" id=\"layout\">\n<m-question data-field=\"question\">Which layout?</m-question>\n\n{}{}{}</m-decision>\n",
+        opt("Grid"),
+        opt("Ring"),
+        opt("List")
+    );
+    collect(call(&client, "tickets.create", json!({"epic": "KLN", "title": "cone pack", "body": body})).await).await;
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let ev = answer(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "pick a look", "input": "layout", "mockup": ["KLN-2#m1", "mockup:kln-2#2@390", "KLN-2#m3"]})).await;
+    let views = json!([{"ticket": "KLN-2", "mock": 1}, {"ticket": "KLN-2", "mock": 2, "width": 390}, {"ticket": "KLN-2", "mock": 3}]);
+    assert_eq!((ev["type"].as_str(), &ev["entry"]["mockups"]), (Some("queued"), &views), "{ev}");
+    assert_eq!(watch_until(&mut watch, "queued").await.last().unwrap()["entry"]["mockups"], views, "watch's queued carries them");
+    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
+    assert_eq!(rows[0]["entry"]["mockups"], views);
+    let evs = collect(call(&client, "tickets.history", json!({"id": "KLN-2"})).await).await;
+    assert_eq!(evs.iter().find(|e| e["type"] == "queue_record").unwrap()["record"]["mockups"], views, "history's record carries them");
+
+    let ev = answer(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "x", "mockup": ["KLN-2#m4"]})).await;
+    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("mockup `KLN-2#m4`: KLN-2 holds 3 — no mockup 4"), "{ev}");
+    let ev = answer(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "x", "mockup": ["KLN-9#m1"]})).await;
+    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("no ticket KLN-9 you can read"), "{ev}");
+    assert!(invalid(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "x", "mockup": ["KLN-2#mx"]})).await.contains("mockup"));
+    // Nothing written by the refusals.
+    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
+    assert_eq!(rows[0]["entry"]["mockups"], views);
+}
+
 /// APP-24: `await_reply` over the real protocol — an agent queues a ticket
 /// and awaits; `waiting` comes at once; the owner answers from a second
 /// connection; the agent's stream yields one `replied` (kind `answered`)

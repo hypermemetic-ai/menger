@@ -7,6 +7,14 @@
 //!   where, when it was first queued and last asked, and until when it is
 //!   snoozed. A ticket is in the queue at most once; queueing it again
 //!   raises the urgency and never lowers it.
+//! - **Several questions** (APP-86): an entry may name several inputs
+//!   ([`QueueEntry::inputs`], in the order asked) and the one the caller is
+//!   idle on ([`QueueEntry::blocking`]); it leaves the queue when every one
+//!   it names is closed. `input` stays, for every reader before APP-86: the
+//!   blocking one, else the first.
+//! - **Views of mockups** (APP-85): an entry may carry views of mockups
+//!   ([`QueueEntry::mockups`], each a [`MockupView`]) — what the owner
+//!   answers looking at.
 //! - **The order** ([`order`]): most urgent first, then the oldest.
 //! - **Its history** ([`QueueRecord`]): every queueing, raise, snooze and
 //!   unqueue — who, from where, why — kept in a log of its own beside the
@@ -73,6 +81,48 @@ impl FromStr for Urgency {
 /// The longest reason the queue keeps, in bytes.
 pub const REASON_MAX: usize = 2_000;
 
+/// APP-86: the most inputs one entry names.
+pub const INPUTS_MAX: usize = 16;
+
+/// APP-85: the most views of mockups one entry carries (APP-44's compare
+/// holds as many).
+pub const VIEWS_MAX: usize = 8;
+
+/// APP-85: a view of a mockup a queue entry carries — ticket `ticket`'s
+/// `mock`th mockup (`T#mN`, numbered as the app numbers a body's mockups:
+/// fences, elements and refs in document order), or (`mock: None`) the
+/// ticket's body itself, a whole page; at `width` when one is named (APP-45's
+/// `mockup:T#N@W`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MockupView {
+    pub ticket: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mock: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+}
+
+impl MockupView {
+    /// As APP-44's compare names it: `T#mN`, or `T`.
+    pub fn key(&self) -> String {
+        match self.mock {
+            Some(n) => format!("{}#m{n}", self.ticket),
+            None => self.ticket.clone(),
+        }
+    }
+}
+
+impl fmt::Display for MockupView {
+    /// `T#mN@W` — the key, then the width when named.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.key())?;
+        match self.width {
+            Some(w) => write!(f, "@{w}"),
+            None => Ok(()),
+        }
+    }
+}
+
 /// The longest snooze, in minutes: a week.
 pub const SNOOZE_MAX_MINUTES: u32 = 7 * 24 * 60;
 
@@ -84,9 +134,25 @@ pub struct QueueEntry {
     /// Why the owner should look.
     pub reason: String,
     /// The input on the ticket whose answer is what is asked — required at
-    /// `blocking`; closing it takes the ticket out of the queue.
+    /// `blocking`. APP-86: with several named, the blocking one, else the
+    /// first ([`QueueEntry::inputs`] holds them all).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
+    /// APP-86: every input the entry names, in the order asked — the
+    /// questions the owner answers in turn. It leaves the queue when every
+    /// one is closed (one closed is progress). Written only with two or
+    /// more; [`QueueEntry::named`] reads both forms.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+    /// APP-86: the input the caller is idle on — one of the named; at
+    /// urgency `blocking` with one input it is implied, and not written
+    /// ([`QueueEntry::blocking_input`] reads both).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<String>,
+    /// APP-85: the views of mockups it carries, in the order given — shown
+    /// above its question. Empty: none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mockups: Vec<MockupView>,
     /// Who queued it last: a principal (`anonymous` on one kept before ACCESS-24, when login could be off).
     pub by: String,
     /// Their display name, when they have one.
@@ -106,6 +172,39 @@ impl QueueEntry {
     /// Whether it is snoozed at `now`.
     pub fn snoozed_at(&self, now: i64) -> bool {
         self.snoozed_until_unix.is_some_and(|u| u > now)
+    }
+
+    /// APP-86: the inputs it names, in order — `inputs`, or (an entry kept
+    /// before APP-86) its one `input`.
+    pub fn named(&self) -> Vec<&str> {
+        match self.inputs.is_empty() {
+            true => self.input.iter().map(String::as_str).collect(),
+            false => self.inputs.iter().map(String::as_str).collect(),
+        }
+    }
+
+    /// APP-86: the input the caller is idle on — `blocking`, or an entry at
+    /// urgency `blocking` naming one input: that one.
+    pub fn blocking_input(&self) -> Option<&str> {
+        self.blocking.as_deref().or_else(|| (self.urgency == Urgency::Blocking && self.named().len() == 1).then_some(self.input.as_deref()).flatten())
+    }
+
+    /// APP-86: as the wire and the file keep it — an entry naming at most one
+    /// input is MENGER-39's, byte for byte (`input` alone; `blocking` only
+    /// where the urgency does not already say it); with several, `inputs`
+    /// lists them and `input` is the blocking one, else the first.
+    pub fn compact(mut self) -> Self {
+        let named: Vec<String> = self.named().into_iter().map(str::to_string).collect();
+        self.input = self.blocking.clone().filter(|b| named.contains(b)).or_else(|| named.first().cloned());
+        if named.len() <= 1 {
+            self.inputs = Vec::new();
+            if self.urgency == Urgency::Blocking && self.blocking == self.input {
+                self.blocking = None;
+            }
+        } else {
+            self.inputs = named;
+        }
+        self
     }
 }
 
@@ -188,6 +287,15 @@ pub struct QueueRecord {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
+    /// APP-86: every input the entry named after the write.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+    /// APP-86: the one the caller was idle on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<String>,
+    /// APP-85: the views of mockups the entry carried after the write.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mockups: Vec<MockupView>,
     pub at_unix: i64,
     pub actor: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -260,6 +368,9 @@ mod tests {
             urgency: u,
             reason: "r".into(),
             input: None,
+            inputs: Vec::new(),
+            blocking: None,
+            mockups: Vec::new(),
             by: "a".into(),
             name: None,
             source: TransitionSource::Api,
@@ -310,6 +421,16 @@ mod tests {
         let e = Reply::Ended { how: Ending::Canceled, by: "idp:ada".into(), at_unix: 9 };
         assert_eq!(serde_json::to_value(&e).unwrap(), serde_json::json!({"kind": "ended", "how": "canceled", "by": "idp:ada", "at_unix": 9}));
         assert_eq!((r.at_unix(), e.at_unix()), (7, 9));
+    }
+
+    /// APP-85: a view's names.
+    #[test]
+    fn a_mockup_view_is_named_as_compare_names_it() {
+        let v = MockupView { ticket: "KILN-7".into(), mock: Some(2), width: Some(390) };
+        assert_eq!((v.key(), v.to_string()), ("KILN-7#m2".to_string(), "KILN-7#m2@390".to_string()));
+        let whole = MockupView { ticket: "DESIGN-49".into(), mock: None, width: None };
+        assert_eq!(whole.to_string(), "DESIGN-49");
+        assert_eq!(serde_json::to_value(&v).unwrap(), serde_json::json!({"ticket": "KILN-7", "mock": 2, "width": 390}));
     }
 
     #[test]

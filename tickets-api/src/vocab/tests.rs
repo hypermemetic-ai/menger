@@ -107,6 +107,35 @@ fn a_label_is_the_label_rule() {
     assert_eq!("Needs-You".parse::<Label>().unwrap().as_str(), "needs-you");
 }
 
+/// APP-85: a view of a mockup — compare's name or APP-45's anchor, kept canonical.
+#[test]
+fn a_mockup_ref_is_a_name_or_an_anchor() {
+    holds::<MockupRef>(
+        &["KILN-7#m1", "kiln-7#M2", "KILN-7#m3@390", "mockup:KILN-7#2@1440", "mockup:APP-45#3=DESIGN-49@390", "DESIGN-49", "mockup:DESIGN-49@768"],
+        &["", "KILN-7#", "KILN-7#mx", "KILN-7#m0", "KILN-7@", "KILN-7@0", "KILN-7@wide", "#m1", "mockup:", "KILN"],
+    );
+    assert_eq!("mockup:kiln-7#2@390".parse::<MockupRef>().unwrap().as_str(), "KILN-7#m2@390");
+    assert_eq!("mockup:APP-45#3=DESIGN-49@390".parse::<MockupRef>().unwrap().as_str(), "APP-45#m3@390");
+    let v = "KILN-7#m2@390".parse::<MockupRef>().unwrap().view();
+    assert_eq!((v.ticket.as_str(), v.mock, v.width), ("KILN-7", Some(2), Some(390)));
+    let v = "DESIGN-49".parse::<MockupRef>().unwrap().view();
+    assert_eq!((v.ticket.as_str(), v.mock, v.width), ("DESIGN-49", None, None));
+}
+
+/// APP-86: a queue's inputs — a list, or (every caller before) one bare id.
+#[test]
+fn input_ids_are_a_list_or_one() {
+    let read = |v: serde_json::Value| serde_json::from_value::<InputIds>(v).map(InputIds::into_strings).map_err(|e| e.to_string());
+    assert_eq!(read(json!("landing")), Ok(vec!["landing".to_string()]));
+    assert_eq!(read(json!([" format ", "naming"])), Ok(vec!["format".to_string(), "naming".to_string()]));
+    assert_eq!(read(json!([])), Ok(vec![]));
+    assert!(read(json!(["a", ""])).is_err() && read(json!("")).is_err() && read(json!(7)).is_err());
+    let ids: InputIds = serde_json::from_value(json!(["a", "b"])).unwrap();
+    assert_eq!(serde_json::to_value(&ids).unwrap(), json!(["a", "b"]), "a list on the wire");
+    let schema = serde_json::to_value(schemars::schema_for!(InputIds)).unwrap();
+    assert_eq!(schema["type"], json!("array"), "synapse repeats the flag: {schema}");
+}
+
 #[test]
 fn the_small_names_hold_their_rules() {
     holds::<InputId>(&["landing", " landing ", "a b"], &["", " "]);

@@ -3856,6 +3856,88 @@
   :is(#qtray, #qpanel) .qopts.multi, :is(#qtray, #qpanel) .qopts.text { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
   :is(#qtray, #qpanel) .qopts.text textarea { flex: 1 1 320px; min-height: 3em; min-height: calc(2lh + 4px + 2 * var(--border)); font-family: var(--sans); }
   :is(#qtray, #qpanel) .qtick { display: inline-flex; align-items: center; gap: 6px; }
+  /* APP-86: an entry of several questions — where it stands, a step each
+     (✓ and its answer once answered; the blocking one marked), the
+     current one ringed; a step goes back to it. */
+  #qtray .qprog { display: flex; align-items: center; gap: 10px; margin: 4px 0 6px; font-family: var(--mono); font-size: calc(11px * var(--text-scale)); color: var(--muted); }
+  #qtray .qprog b { color: var(--ink); font-weight: var(--weight-medium); }
+  #qtray .qprog .bar2 { flex: 1; max-width: 220px; height: 4px; background: var(--line); border-radius: var(--radius-pill); overflow: hidden; }
+  #qtray .qprog .bar2 i { display: block; height: 100%; background: var(--accent); transition: width .3s var(--ease); }
+  #qtray .steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
+  #qtray .stp {
+    display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 4px 10px 4px 6px; cursor: pointer;
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale)); font-weight: var(--weight-medium);
+    border: var(--border) solid var(--tree-line); border-radius: var(--radius-pill); color: var(--muted); background: var(--card);
+    transition: border-color var(--motion-fast) var(--ease);
+  }
+  #qtray .stp:hover { border-color: var(--ink); }
+  #qtray .stp .nb { width: 18px; height: 18px; flex: none; display: grid; place-items: center; font-size: calc(10px * var(--text-scale)); border: var(--border) solid var(--tree-line); border-radius: var(--radius-pill); }
+  #qtray .stp.done { color: var(--live); border-color: color-mix(in srgb, var(--live) 40%, var(--tree-line)); }
+  #qtray .stp.done .nb { background: var(--live); color: var(--card); border-color: var(--live); }
+  #qtray .stp.cur { color: var(--ink); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  #qtray .stp.cur .nb { background: var(--accent); color: var(--card); border-color: var(--accent); }
+  #qtray .stp[aria-current="step"].done { box-shadow: 0 0 0 1px var(--live); }
+  #qtray .stp .v { font-weight: var(--weight-normal); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+  #qtray .stp .blk { color: var(--urgent); font-size: calc(9.5px * var(--text-scale)); letter-spacing: .1em; text-transform: uppercase; }
+  #qtray .qstep-hint { margin: -6px 0 14px; display: block; }
+  /* APP-85: an entry's views of mockups — thumbnails above the question
+     (each the page, live and untouched, its label and pick this), compare
+     all N; a phone scrolls them sideways. The viewer: one view full size
+     (390 | 1440, ‹ ›) or all side by side, over the app. */
+  #qtray .qr .views { color: var(--accent); }
+  #qtray .mv-strip { margin: 2px 0 16px; }
+  #qtray .mv-head {
+    display: flex; align-items: center; gap: 10px; margin: 0 0 8px;
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+  }
+  #qtray .mv-cmp { margin-left: auto; background: none; border: 0; cursor: pointer; color: var(--accent); font: inherit; letter-spacing: .06em; text-transform: none; }
+  #qtray .mv-cmp:hover { text-decoration: underline; }
+  #qtray .mv-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+  #qtray .mv-thumb { display: flex; flex-direction: column; min-width: 0; border: var(--border) solid var(--tree-line); border-radius: var(--radius-lg); background: var(--card); overflow: hidden; }
+  #qtray .mv-open { position: relative; display: grid; place-items: center; padding: 6px; border: 0; background: var(--bg); cursor: zoom-in; }
+  #qtray .mv-open:hover { background: var(--hover); }
+  #qtray .mv-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #qtray .mv-w {
+    position: absolute; top: 8px; right: 8px; padding: 1px 6px; border-radius: var(--radius); background: var(--card); border: var(--border) solid var(--tree-line);
+    font-family: var(--mono); font-size: calc(10px * var(--text-scale)); color: var(--muted);
+  }
+  #qtray .mv-foot { display: flex; align-items: center; gap: 8px; padding: 8px 10px; min-height: 40px; }
+  #qtray .mv-l { flex: 1; min-width: 0; font-weight: var(--weight-strong); font-size: calc(13px * var(--text-scale)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #qtray .qbtn.mv-pick { padding: 3px 8px; font-size: calc(10.5px * var(--text-scale)); color: var(--accent); border-color: var(--accent); text-transform: none; letter-spacing: .04em; }
+  #qtray :is(.mvs, .mvs-state) { position: relative; overflow: hidden; border-radius: var(--radius); background: var(--card); box-shadow: 0 0 0 var(--border) var(--line); }
+  #qtray .mvs:not(.live) { pointer-events: none; }
+  #qtray .mvs-in { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  #qtray .mvs-state { display: grid; place-items: center; padding: 8px; color: var(--muted); font-family: var(--mono); font-size: calc(11px * var(--text-scale)); text-align: center; }
+  #qtray .mvs-state.failed { color: var(--err-fg); }
+  #qtray .mvx { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; pointer-events: auto; }
+  #qtray .mvx-scrim { position: absolute; inset: 0; background: var(--scrim); }
+  #qtray .mvx-box {
+    position: relative; display: flex; flex-direction: column; width: min(92vw, 1600px); max-height: 94vh;
+    background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-lg); box-shadow: 0 20px 60px var(--shadow);
+    animation: menger-fade-in .16s ease-out;
+  }
+  #qtray .mvx-bar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; border-bottom: var(--border) solid var(--line);
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale));
+  }
+  #qtray .mvx-bar .code { color: var(--accent); }
+  #qtray .mvx-t { font-family: var(--sans); font-size: calc(13.5px * var(--text-scale)); }
+  #qtray .mvx-of { color: var(--muted); }
+  #qtray .mvx-bar .sp { flex: 1; }
+  #qtray .mvx-nav { width: 26px; height: 24px; border: var(--border) solid var(--tree-line); border-radius: var(--radius); background: var(--card); color: var(--ink); cursor: pointer; }
+  #qtray .mvx-nav:hover { border-color: var(--ink); }
+  #qtray .mvx-seg { display: inline-flex; border: var(--border) solid var(--tree-line); border-radius: var(--radius); overflow: hidden; }
+  #qtray .mvx-seg button { border: 0; padding: 3px 9px; background: var(--card); color: var(--muted); font: inherit; cursor: pointer; }
+  #qtray .mvx-seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+  #qtray .mvx-stage { display: flex; justify-content: center; align-items: flex-start; gap: 16px; padding: 14px; overflow: auto; min-height: 0; }
+  #qtray .mvc-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  #qtray .mvc-head { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: calc(11px * var(--text-scale)); }
+  #qtray .mvc-head .code { color: var(--accent); }
+  #qtray .mvx.phone .mvx-box { width: 100vw; max-height: 100vh; height: 100vh; border-radius: 0; }
+  #qtray .mvx.phone .mvx-stage { flex: 1; padding: 10px; }
+  #qtray .mvx.phone .mvx-stage.cmp { justify-content: flex-start; overflow-x: auto; scroll-snap-type: x mandatory; }
+  #qtray .mvx.phone .mvx-stage.cmp .mvc-col { scroll-snap-align: center; flex: none; }
+  #qtray .qsteps-acts { display: flex; gap: 8px; margin-top: 4px; }
   
   :is(#qtray, #qpanel) .qacts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   :is(#qtray, #qpanel, #qpin) .qbtn {
@@ -3933,6 +4015,8 @@
       padding: 2px 14px 16px 15px; animation: menger-drop-in .2s cubic-bezier(.2, .8, .2, 1);
     }
     #qtray .qd-ph .qopts { grid-template-columns: 1fr; gap: 8px; }
+    #qtray .mv-row { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
+    #qtray .mv-thumb { flex: 0 0 auto; width: 254px; scroll-snap-align: start; }
     #qtray .qd-ph .qacts { display: grid; grid-template-columns: 1fr 1fr; }
     #qtray .qd-ph .qacts .qbtn { text-align: center; padding: 10px 8px; }
     #qtray .qd-ph .qacts .qopen { margin-left: 0; }

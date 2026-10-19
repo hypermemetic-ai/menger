@@ -505,6 +505,22 @@ tombstone's reason — trimmed, at most [`MESSAGE_MAX`] bytes. Blank is
 no message. */
 export type Message = string;
 
+/** APP-85: a view of a mockup — `KILN-7#m2`, `DESIGN-49`, or APP-45's
+anchor `mockup:KILN-7#2@390` — kept as `T#mN[@W]` / `T[@W]`
+([`MockupRef::view`] its parts). */
+export type MockupRef = string;
+
+/** APP-85: a view of a mockup a queue entry carries — ticket `ticket`'s
+`mock`th mockup (`T#mN`, numbered as the app numbers a body's mockups:
+fences, elements and refs in document order), or (`mock: None`) the
+ticket's body itself, a whole page; at `width` when one is named (APP-45's
+`mockup:T#N@W`). */
+export interface MockupView {
+  mock?: number | null;
+  ticket: string;
+  width?: number | null;
+}
+
 /** THEME-5: one declared part — `<part name="label">The field's
 label.</part>` — a piece of the component's shadow tree that a theme may
 skin with `m-name::part(label)` (looks only, THEME-1's `skins`).
@@ -553,11 +569,24 @@ export type QueueAction = "queued" | "raised" | "requeued" | "snoozed" | "unqueu
 export interface QueueEntry {
   /** When it was last queued (a requeue moves it; a snooze does not). */
   askedUnix: number;
+  /** APP-86: the input the caller is idle on — one of the named; at
+urgency `blocking` with one input it is implied, and not written
+([`QueueEntry::blocking_input`] reads both). */
+  blocking?: string | null;
   /** Who queued it last: a principal (`anonymous` on one kept before ACCESS-24, when login could be off). */
   by: string;
   /** The input on the ticket whose answer is what is asked — required at
-`blocking`; closing it takes the ticket out of the queue. */
+`blocking`. APP-86: with several named, the blocking one, else the
+first ([`QueueEntry::inputs`] holds them all). */
   input?: string | null;
+  /** APP-86: every input the entry names, in the order asked — the
+questions the owner answers in turn. It leaves the queue when every
+one is closed (one closed is progress). Written only with two or
+more; [`QueueEntry::named`] reads both forms. */
+  inputs?: string[];
+  /** APP-85: the views of mockups it carries, in the order given — shown
+above its question. Empty: none. */
+  mockups?: MockupView[];
   /** Their display name, when they have one. */
   name?: string | null;
   /** When it was first queued — "oldest" in the queue's order. */
@@ -578,11 +607,17 @@ export interface QueueRecord {
   action: QueueAction;
   actor: string;
   atUnix: number;
+  /** APP-86: the one the caller was idle on. */
+  blocking?: string | null;
   /** APP-23: a change request's comment (its id). */
   comment?: number | null;
   /** The queue log's order (its own, not the transitions'). */
   id: number;
   input?: string | null;
+  /** APP-86: every input the entry named after the write. */
+  inputs?: string[];
+  /** APP-85: the views of mockups the entry carried after the write. */
+  mockups?: MockupView[];
   name?: string | null;
   reason?: string | null;
   source: TransitionSource;
