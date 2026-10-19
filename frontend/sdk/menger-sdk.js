@@ -1277,11 +1277,11 @@
     ":where(" + EVERY + "h3,h3[data-md]){font-size:calc(1.1rem * var(--text-scale))}",
     ":where(" + EVERY + "h4,h4[data-md]){font-size:calc(1rem * var(--text-scale))}",
     ":where(" + EVERY + "code,code[data-md]," + CARD_CODE + "){font-family:var(--mono);font-size:calc(.92em * var(--text-scale));background:var(--panel);" +
-      "border:var(--border) solid var(--line);border-radius:var(--radius-sm);padding:0 .25rem}",
+      "border:var(--border) solid var(--line);border-radius:var(--radius-sm);padding:0 .25rem;overflow-wrap:anywhere}",
     ":where(" + EVERY + "pre,pre[data-md]," + CARD_PRE + "){font-family:var(--mono);background:var(--panel);border:var(--border) solid var(--line);" +
       "border-radius:var(--radius);padding:.6rem .8rem;overflow-x:auto}",
-    ":where(" + EVERY + "pre code,pre[data-md]>code[data-md]," + CARD_PRE + ">code){font-family:var(--mono);border:0;padding:0;background:none;font-size:inherit}",
-    ":where(" + EVERY + "a,a[data-md],.menger-card .mc-refs){color:var(--accent)}",
+    ":where(" + EVERY + "pre code,pre[data-md]>code[data-md]," + CARD_PRE + ">code){font-family:var(--mono);border:0;padding:0;background:none;font-size:inherit;overflow-wrap:normal}",
+    ":where(" + EVERY + "a,a[data-md],.menger-card .mc-refs){color:var(--accent);overflow-wrap:anywhere}",
     ":where(" + EVERY + "blockquote,blockquote[data-md]){border-left:3px solid var(--line);margin:.5rem 0;padding:0 .8rem;color:var(--muted)}",
     ":where(" + EVERY + "table,table[data-md]," + CARD_TABLE + "){border-collapse:collapse}",
     ":where(" + EVERY + ":is(th,td),:is(th,td)[data-md]," + CARD_TABLE + " :is(th,td)){border:var(--border) solid var(--line);padding:.25rem .5rem;text-align:left}",

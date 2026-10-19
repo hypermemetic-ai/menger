@@ -1493,6 +1493,22 @@ in this browser's localStorage per mockup (`menger.mockup-sizes:<ticket>`,
 or `<ticket>#m<n>` for a body's n-th `<m-mockup>`), never in the body;
 Reset clears them. At the app's phone width the grips give way to the field.
 
+**A phone is drawn as an iPhone's screen** (APP-66; `screen` in
+`frontend/src/present.rs`). A phone-sized device as tall as one (2 : 1 or
+more; not 375 × 667) gets its iPhone's display: rounded corners that clip
+the page (44–62 px by its width), the notch or the Dynamic Island, the home
+indicator, and the safe-area insets iOS reports for them — portrait top 47
+(390, notch) or 59 (393/430, island), bottom 34; on its side, the top inset
+on both sides and 21 at the bottom. The page is told the insets: the page
+shim sets `--sai-top` … `--sai-left` on its root and rewrites every
+`env(safe-area-inset-*)` its rules read to `var(--sai-*)` (a frame's
+`env()` is 0), and the contract's `--safe-*` tokens read them too. So a
+page that pads by the insets shows it, and one that doesn't is clipped by
+the corners and sits under the home indicator, as on the phone. On by
+default; **Screen shape** in the bar (in ⋯ on a phone) turns it off for the
+mockup. A Playwright check gets the same insets by setting `--sai-*` on the
+app's root (APP-65: the app's edges pad by `--safe-*`).
+
 **A body that is a whole HTML document** — `<!doctype html` (then an
 element) or `<html` first, past comments — renders as itself: its own head,
 styles and scripts, inline media included, never markdown and never under
@@ -4362,7 +4378,7 @@ it paints:
 | `colour.kind`, `colour.code` | `--kind-*` (AGS-13's glyphs), `--code-*` (MENGER-22's highlighting) |
 | `colour.diagram` | `--diagram-node --diagram-border --diagram-line --diagram-text` — `auto` (mermaid's own palette for the mode) unless a theme names a colour, which the app and every frame set into mermaid's `themeVariables` |
 | `type.face`, `.scale`, `.weight` | `--mono --sans --font-text` (the app's text) `--font-display` (a ticket's title); `--text-size --text-leading --text-scale` (every other size is `calc(N * var(--text-scale))`); `--weight-normal/-medium/-strong/-bold` |
-| `space` | `--space` — density, multiplying the page's gutters |
+| `space`, `.safe` | `--space` — density, multiplying the page's gutters; `--safe-top --safe-right --safe-bottom --safe-left` — the screen's safe area (APP-65: `env(safe-area-inset-*)`, or `--sai-*` from a mockup's phone, APP-66) |
 | `shape.radius`, `.border` | `--radius-xs … --radius-2xl`, `--radius-bubble --radius-device --radius-phone --radius-pill`; `--border` (every hairline's width) |
 | `motion` | `--motion-fast --motion-flash --ease` |
 

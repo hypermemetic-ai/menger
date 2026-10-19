@@ -735,7 +735,7 @@ fn CompareView(ticket: String) -> impl IntoView {
     let device = RwSignal::new(load_device());
     let scheme = RwSignal::new(crate::frame::painted_scheme());
     let reduce = RwSignal::new(present::prefers_reduced_motion());
-    let emulate = Signal::derive(move || Emulate { scheme: Some(scheme.get()), reduce: Some(reduce.get()) });
+    let emulate = Signal::derive(move || Emulate { scheme: Some(scheme.get()), reduce: Some(reduce.get()), safe: None });
     let size = RwSignal::new((0.0f64, 0.0f64));
     let stage = NodeRef::<leptos::html::Div>::new();
     stage.on_load(move |el: web_sys::HtmlDivElement| present::observe(el, size));

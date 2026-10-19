@@ -264,11 +264,38 @@ const PAGE_JS: &str = include_str!("../sdk/menger-page.js");
 pub(crate) struct Emulate {
     pub(crate) scheme: Option<Scheme>,
     pub(crate) reduce: Option<bool>,
+    /// APP-66: the screen's safe-area insets — a mockup's phone drawn with
+    /// its screen's shape (src/present.rs [`crate::present::screen`]); the
+    /// page sees them as `env(safe-area-inset-*)` and `--sai-*`. `None`: 0.
+    pub(crate) safe: Option<Insets>,
+}
+
+/// APP-66: a screen's safe-area insets, in CSS px.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct Insets {
+    pub(crate) top: u32,
+    pub(crate) right: u32,
+    pub(crate) bottom: u32,
+    pub(crate) left: u32,
+}
+
+impl Insets {
+    fn json(self) -> serde_json::Value {
+        serde_json::json!({ "top": self.top, "right": self.right, "bottom": self.bottom, "left": self.left })
+    }
+
+    fn js(self) -> JsValue {
+        let o = Object::new();
+        for (k, v) in [("top", self.top), ("right", self.right), ("bottom", self.bottom), ("left", self.left)] {
+            set(&o, k, &JsValue::from(v));
+        }
+        o.into()
+    }
 }
 
 impl Emulate {
     fn json(self) -> serde_json::Value {
-        serde_json::json!({ "scheme": self.scheme.map(Scheme::as_str), "reduce": self.reduce })
+        serde_json::json!({ "scheme": self.scheme.map(Scheme::as_str), "reduce": self.reduce, "safe": self.safe.map(Insets::json) })
     }
 }
 
@@ -1227,7 +1254,7 @@ pub(crate) fn retheme_all() {
             // MENGER-15: a whole document following the app is told its
             // `prefers-color-scheme` moved; a mockup's keeps its toggles.
             if f.has_attribute("data-follow") {
-                emulate(&f, Emulate { scheme: Some(scheme), reduce: None });
+                emulate(&f, Emulate { scheme: Some(scheme), reduce: None, safe: None });
             } else if !f.has_attribute("data-page") {
                 post(&f, &theme_message(&f, &channel));
             }
@@ -1253,6 +1280,7 @@ pub(crate) fn emulate(frame: &web_sys::HtmlIFrameElement, e: Emulate) {
     let msg = message("menger:emulate", &channel);
     set(&msg, "scheme", &e.scheme.map_or(JsValue::NULL, |s| s.as_str().into()));
     set(&msg, "reduce", &e.reduce.map_or(JsValue::NULL, JsValue::from_bool));
+    set(&msg, "safe", &e.safe.map_or(JsValue::NULL, Insets::js));
     post(frame, &msg.into());
 }
 
@@ -1967,7 +1995,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     // says otherwise.
     let page = md::is_page(body_html);
     let follow = page && look.emulate.is_none();
-    let emulate = if follow { Some(Emulate { scheme: Some(scheme), reduce: None }) } else { look.emulate };
+    let emulate = if follow { Some(Emulate { scheme: Some(scheme), reduce: None, safe: None }) } else { look.emulate };
     let html = srcdoc(
         body_html,
         &Shell {
@@ -2690,7 +2718,7 @@ mod tests {
     fn a_whole_document_is_its_own_page_with_the_csp_first_in_its_head() {
         let tokens = shell_tokens();
         let page = "<!doctype html>\n<!-- a comment naming <head> -->\n<html lang=\"en\" data-x='a>b'>\n<head>\n<meta charset=\"utf-8\"><style>@media (prefers-color-scheme: dark){body{background:#000}}</style><script>window.x=1</script></head><body><h1>Hi</h1></body></html>";
-        let doc = srcdoc(page, &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Dark), reduce: None })));
+        let doc = srcdoc(page, &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Dark), reduce: None, safe: None })));
         let csp = format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\">");
         let head = "<!doctype html>\n<!-- a comment naming <head> -->\n<html lang=\"en\" data-x='a>b'>\n<head>";
         assert!(doc.starts_with(&format!("{head}{csp}<script type=\"application/json\" id=\"menger-init\">")), "{}", &doc[..300]);
@@ -2704,7 +2732,7 @@ mod tests {
         }
         let init = &doc[at("id=\"menger-init\">") + "id=\"menger-init\">".len()..];
         let init: serde_json::Value = serde_json::from_str(&init[..init.find("</script>").unwrap()]).unwrap();
-        assert_eq!(init, serde_json::json!({ "channel": "f5", "page": true, "ticket": "MENGER-16", "emulate": { "scheme": "dark", "reduce": null } }));
+        assert_eq!(init, serde_json::json!({ "channel": "f5", "page": true, "ticket": "MENGER-16", "emulate": { "scheme": "dark", "reduce": null, "safe": null } }));
         // The sandbox and the CSP are every frame's.
         assert_eq!(SANDBOX, "allow-scripts allow-popups allow-popups-to-escape-sandbox");
         assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
@@ -2733,10 +2761,14 @@ mod tests {
         let tokens = shell_tokens();
         let plain = srcdoc("<b>x</b>", &page_shell(&tokens, None));
         assert!(!plain.contains("id=\"menger-page\""));
-        let mock = srcdoc("<b>x</b>", &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Light), reduce: Some(true) })));
+        let mock = srcdoc("<b>x</b>", &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Light), reduce: Some(true), safe: None })));
         let at = |needle: &str| mock.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
         assert!(at("id=\"menger-sdk\"") < at("id=\"menger-page\"") && at("id=\"menger-page\"") < at("<body>"));
-        assert!(mock.contains("\"emulate\":{\"reduce\":true,\"scheme\":\"light\"}"), "{}", &mock[..600]);
+        assert!(mock.contains("\"emulate\":{\"reduce\":true,\"safe\":null,\"scheme\":\"light\"}"), "{}", &mock[..600]);
+        // APP-66: a phone with its screen's shape tells the page its insets.
+        let safe = Insets { top: 47, right: 0, bottom: 34, left: 0 };
+        let phone = srcdoc("<b>x</b>", &page_shell(&tokens, Some(Emulate { scheme: None, reduce: None, safe: Some(safe) })));
+        assert!(phone.contains("\"safe\":{\"bottom\":34,\"left\":0,\"right\":0,\"top\":47}"), "{}", &phone[..600]);
     }
 
     /// MENGER-15: the page shim answers both features, listens only to its
@@ -2755,6 +2787,9 @@ mod tests {
             "post(\"menger:link\", { href: href })",
             "post(\"menger:navigate\"",
             "data-menger-scheme",
+            // APP-66: the safe area — env() answered as the device's insets.
+            "safe-area-inset-(top|right|bottom|left)",
+            "\"--sai-\" + k",
         ] {
             assert!(PAGE_JS.contains(needle), "{needle}");
         }
