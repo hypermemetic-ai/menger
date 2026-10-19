@@ -229,6 +229,8 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
         }
     };
     ask_revs();
+    // APP-94: both asked again after a reconnect, each answer in place.
+    crate::data::again(ask_revs.clone());
     {
         let me = ticket.clone();
         let again = ask_revs.clone();
@@ -254,6 +256,7 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
         });
     };
     ask();
+    crate::data::again(ask.clone());
     let me = ticket.clone();
     let again = ask.clone();
     session::listen(move |ev| {

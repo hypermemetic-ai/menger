@@ -277,6 +277,7 @@ mod drafts;
 mod thread;
 mod deploy_view;
 mod deploys_page;
+mod data;
 mod dom;
 mod draw;
 mod filter;
@@ -1903,18 +1904,27 @@ impl MembersEpoch {
 /// filter moves; with the global filter empty, nothing is asked.
 fn ask_members(epoch: MembersEpoch, gtext: Memo<Option<String>>, members: RwSignal<kids::Members>, want: Memo<Vec<String>>) {
     let inflight = StoredValue::new(HashSet::<String>::new());
+    // APP-94: the same filter on a new connection — the verdicts held stay
+    // drawn, and every one is asked again; the answers overwrite them.
+    let reask = StoredValue::new(false);
     Effect::new(move |seen: Option<(u32, Option<String>)>| {
         let key = (epoch.n.get(), gtext.get());
-        if seen.as_ref().is_some_and(|s| *s != key) {
-            members.set(kids::Members::default());
+        if let Some(s) = seen.as_ref().filter(|s| **s != key) {
+            if s.1 == key.1 {
+                reask.set_value(true);
+            } else {
+                members.set(kids::Members::default());
+            }
             inflight.set_value(HashSet::new());
         }
         let Some(filter) = key.1.clone() else { return key };
         if epoch.open_for.get().as_deref() != Some(filter.as_str()) {
             return key; // its watch is not open yet: asked when it is
         }
-        let ask: Vec<String> =
-            members.with_untracked(|m| m.unknown(&want.get())).into_iter().filter(|i| inflight.with_value(|f| !f.contains(i))).collect();
+        let want = want.get();
+        let ask: Vec<String> = if reask.get_value() { want } else { members.with_untracked(|m| m.unknown(&want)) };
+        let ask: Vec<String> = ask.into_iter().filter(|i| inflight.with_value(|f| !f.contains(i))).collect();
+        reask.set_value(false);
         if ask.is_empty() {
             return key;
         }
@@ -1929,7 +1939,7 @@ fn ask_members(epoch: MembersEpoch, gtext: Memo<Option<String>>, members: RwSign
                 return; // asked again since, or under another filter
             }
             if let Ok(answer) = answer {
-                members.try_update(|m| m.answered(answer));
+                members.try_maybe_update(|m| (m.answered(answer), ()));
             }
         });
         key

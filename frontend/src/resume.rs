@@ -1,5 +1,11 @@
 //! APP-63: after a reconnect the app reloads, and comes back where it was.
 //!
+//! **APP-94: now only when a new build is served.** A reconnect refills the
+//! page in place (src/data.rs: the session re-asks its reads, and
+//! `data::resync` every view's own); [`reconnected`] runs only when the
+//! shell serves another build than the page's (`data::new_release`). What
+//! follows is why it was the path, and what it keeps when it still runs.
+//!
 //! Owner, 2026-10-18 (chat 6): *"when reconnecting we need to refetch what
 //! we may have missed. likely that means just reloading the page,
 //! unfortunately"*.
