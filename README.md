@@ -3598,6 +3598,18 @@ scripts/chat-bridge/tests/live.test.mjs` (the live line's rules).
   `CHAT_BRIDGE_WORKING_AFTER` (20 s) post "_working…_" once. One turn
   per chat at a time — what arrives meanwhile is the next turn, together;
   chats run in parallel, at most `CHAT_BRIDGE_MAX` (3).
+- **Commands** (CHAT-40): a message that is exactly `/clear`, `/stop`,
+  `/status` or `/help` (trimmed, any case) is answered by the bridge itself,
+  at once, as the builder — no agent spawned, and around the one-turn-per-chat
+  queue, so a `/stop` reaches the turn it stops. `/clear` forgets the chat's
+  session (the next message starts a new one, its context the chat after the
+  `/clear`; a turn running then finishes in the old one); `/stop` sends the
+  running `claude` SIGTERM (SIGKILL 5 s later if it lingers), keeps its
+  session, and the turn's answer says the owner stopped it; `/status` says
+  whether a turn runs, since when, its last live line, what waits, and the
+  session's age; `/help` lists them. Any other `/x` goes to the agent. Each
+  is one `{command, message}` line in `turns.log`, and is answered once
+  across a restart.
 - **The live line** (CHAT-18, `live.mjs`): as the stream comes, each
   assistant tool call is one line — `Bash: <its description, or the
   command's first 120 characters>`, `Read <path>`, `Edit <path>`, `Grep

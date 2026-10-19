@@ -9,7 +9,9 @@
 // lines (a secret masked), `ended` after the answer, posted once; no
 // "working…" post where activity is taken. The server must have
 // `chats.activity` (CHAT-18): MENGER_BIN names a build that has it until
-// prod runs one.
+// prod runs one. CHAT-40: `/help` and `/status` answered by the bridge with
+// no agent spawned; `/stop` ends a long turn within 5 s, its session kept
+// and resumed; `/clear` then a message starts a new session.
 //
 //   node scripts/chat-bridge/tests/throwaway.mjs WORKDIR [--real] [--port 6150]
 //
@@ -241,6 +243,75 @@ try {
     await post(owner, g.id, "a group question");
     const gr = await waitReplies(g.id, 1, waitReply);
     check(g.kind === "group" && gr.length === 1, `a reply in the group (${gr[0]?.body?.slice(0, 120) ?? "none"})`);
+  }
+
+  // 9. CHAT-40: the commands, answered by the bridge itself (the fake agent only: it holds a long turn)
+  if (!real) {
+    const spawned = () => (fs.existsSync(markFile) ? fs.readFileSync(markFile, "utf8").trim().split("\n").filter(Boolean).length : 0);
+    const c = (await rpc(owner, "chats.open", { others: [builder.principal, stranger.principal], title: "commands" })).find((i) => i.type === "opened").chat.id;
+    const replyTo = async (m, secs = 10) => {
+      for (let i = 0; i < secs * 4; i++) { const r = (await replies(c)).find((x) => x.id > m.id); if (r) return r; await sleep(250); }
+      return null;
+    };
+    let n0 = spawned();
+    const help = await post(owner, c, "  /help ");
+    const hr = await replyTo(help);
+    check(!!hr && ["/clear", "/stop", "/status", "/help"].every((x) => hr.body.includes(x)), `/help lists the commands (${hr?.body?.slice(0, 80) ?? "none"})`);
+    const st0 = await post(owner, c, "/status");
+    const sr0 = await replyTo(st0);
+    check(!!sr0 && /Idle/.test(sr0.body) && /No session/.test(sr0.body), `/status, idle: no turn, no session (${sr0?.body?.replace(/\n/g, " ") ?? "none"})`);
+    await sleep(1000);
+    check(spawned() === n0 && !turns().some((x) => x.chat === c && x.messages), `/help and /status spawned no agent (${spawned() - n0})`);
+
+    // a long turn: /status says it runs; /stop ends it within 5 s
+    const slow = await post(owner, c, "a long one [slow]");
+    for (let i = 0; i < 40 && spawned() === n0; i++) await sleep(250);
+    await sleep(1500); // its first steps
+    n0 = spawned();
+    const st1 = await post(owner, c, "/status");
+    const sr1 = await replyTo(st1, 5);
+    check(!!sr1 && /Running\*\* since/.test(sr1.body) && /Last step: /.test(sr1.body) && /Session [0-9a-f]{8}…, begun by this turn/.test(sr1.body), `/status during a turn: running, its last step (${sr1?.body?.replace(/\n/g, " ") ?? "none"})`);
+    const stop = await post(owner, c, "/stop");
+    const t0 = Date.now();
+    let stopped = null;
+    while (Date.now() - t0 < 5000 && !stopped) { stopped = (await replies(c)).find((x) => x.id > stop.id && /Stopped by the owner/.test(x.body)); if (!stopped) await sleep(200); }
+    const took = Date.now() - t0;
+    check(!!stopped, `/stop ended the long turn within 5 s, its answer says the owner stopped it (${took} ms)`);
+    check((await replies(c)).some((x) => x.id > stop.id && /^Stopping the turn/.test(x.body)), "/stop answered at once");
+    await sleep(500);
+    const ts = turns().filter((x) => x.chat === c && x.messages);
+    check(ts.length === 1 && ts[0].stopped === true && JSON.stringify(ts[0].messages) === JSON.stringify([slow.id]), `the stopped turn is logged stopped (${JSON.stringify(ts.map((x) => ({ m: x.messages, stopped: x.stopped })))})`);
+    const kept = ts[0]?.session;
+    check(spawned() === n0, `/status and /stop spawned no agent (${spawned() - n0})`);
+
+    // the next message resumes the kept session
+    const after = await post(owner, c, "after the stop");
+    const ar = await replyTo(after, 15);
+    check(!!ar && kept && ar.body.includes(`resumed ${kept}`), `the message after /stop resumed session ${kept} (${ar?.body?.slice(0, 80) ?? "none"})`);
+
+    // /clear, then a message: a new session
+    const clr = await post(owner, c, "/clear");
+    const cr = await replyTo(clr);
+    check(!!cr && /Session forgotten/.test(cr.body), `/clear forgets the session (${cr?.body ?? "none"})`);
+    const fresh = await post(owner, c, "fresh after clear");
+    const fr = await replyTo(fresh, 15);
+    const newSession = /\(new ([0-9a-f-]{36})\)/.exec(fr?.body ?? "")?.[1];
+    check(!!newSession && newSession !== kept, `the message after /clear started a new session (${newSession} ≠ ${kept})`);
+    const stc = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8")).chats[c];
+    check(stc?.session === newSession && stc?.handled >= fresh.id, "state.json holds the new session and the handled mark");
+    const st2 = await post(owner, c, "/status");
+    const sr2 = await replyTo(st2);
+    check(!!sr2 && /Idle/.test(sr2.body) && new RegExp(`Session ${newSession.slice(0, 8)}…, begun \\d+s ago`).test(sr2.body), `/status: idle, the session's age (${sr2?.body?.replace(/\n/g, " ") ?? "none"})`);
+    // a command is answered once: a bridge restart's catch-up answers none again
+    const before = (await replies(c)).length;
+    await stopBridge(); startBridge();
+    await waitLog(/caught up \(start\)/, 15);
+    await sleep(2000);
+    check((await replies(c)).length === before, `after a restart no command is answered twice (${(await replies(c)).length - before} more)`);
+    // an unknown /x is the agent's
+    const unk = await post(owner, c, "/frobnicate");
+    const ur = await replyTo(unk, 15);
+    check(!!ur && /fake reply/.test(ur.body), `an unknown /x goes to the agent (${ur?.body?.slice(0, 60) ?? "none"})`);
   }
 } catch (e) {
   log(`FAIL ${e.stack || e.message}`); failures++;
