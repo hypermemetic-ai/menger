@@ -5082,7 +5082,16 @@
      (src/composer.rs, TOUCH_PHONE is this query); an image on its way sits
      on a line above. */
   @media (max-width: 820px) and (pointer: coarse) {
+    /* CHAT-52: the full chat's foot keeps its bottom inset — a 5px here,
+       later and as specific, took it away and the home indicator and the
+       screen's corners cut the card; with the keyboard up html[data-kb]'s
+       rule sets 5px (no inset over the keyboard). Above 760 the chatview
+       pads the inset itself. */
     .ccompose, #chatfull .ccompose { padding-top: 5px; padding-bottom: 5px; }
+    @media (max-width: 760px) {
+      #chatfull .ccompose { padding-bottom: calc(5px + var(--safe-bottom)); }
+      html[data-kb] #chatfull .ccompose { padding-bottom: 5px; }
+    }
     .ccompose .ccard { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 4px; padding: 3px 3px 3px 10px; }
     .ccompose textarea.cbox { flex: 1 1 0; width: auto; min-width: 0; min-height: calc(1lh + 10px); padding: 5px 2px; resize: none; line-height: 1.35; }
     .ccompose .crow, .ccompose .cattach { display: contents; }
