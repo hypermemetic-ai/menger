@@ -666,7 +666,9 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     // between the two (the keyboard pins the chat to the visible area, a
     // rotation, its going) settles the scroll again in the other.
     let doc_listen = window_event_listener(leptos::ev::scroll, move |_| {
-        if doc_scroll.try_get_value() == Some(true) {
+        // CHAT-42: not while a keyboard rises — that scroll is iOS's, to
+        // bring the composer above it, and the reader is where they were.
+        if doc_scroll.try_get_value() == Some(true) && !crate::keyboard::short() {
             on_scroll();
         }
     });

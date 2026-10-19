@@ -5260,6 +5260,12 @@
   /* APP-56: the full-screen chat (and #/chats) is the visible area while
      the keyboard is up, its composer on the keyboard's top. */
   html[data-kb] #chatfull { top: var(--kb-top); bottom: auto; height: var(--kb-h); }
+  /* CHAT-42: the document keeps the height it had when the keyboard came
+     (src/keyboard.rs stamps --kb-doc-h): pinning the phone's full chat
+     takes it out of the flow, and a document fallen to one screen strands
+     iOS's scroll for the field past its end — only the keyboard showing.
+     Let go a moment after the keyboard, as the chat's rows come back. */
+  html { min-height: var(--kb-doc-h, 0px); }
   /* APP-62: the layout viewport as a fixed view is laid out in it —
      src/keyboard.rs reads its height here (iOS's innerHeight is the
      visual viewport's). */

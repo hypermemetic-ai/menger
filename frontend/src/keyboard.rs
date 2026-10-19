@@ -49,6 +49,23 @@
 //! is laid out in is read off a fixed probe (`#kbprobe`, `inset-block: 0`),
 //! and the visible area is the visual viewport's own rect — top
 //! `offsetTop`, height `vv.height` — whatever `innerHeight` says.
+//!
+//! CHAT-42: and the document keeps its height while a view is pinned. On a
+//! phone the full chat is the page (CHAT-29): the document scrolls the
+//! thread, far down. Pinning the chat took it out of the flow, so the
+//! document fell to one screen under the scroll iOS had just sent to bring
+//! the composer above the keyboard — a scroll iOS does not take back, so
+//! the visible area was left past the page's end: the background and the
+//! keyboard, and the chat out of sight. Now `--kb-doc-h` holds the
+//! document at the height it had when the keyboard came, so that scroll
+//! lands inside the page and the pinned view is where the reader looks.
+//! (Where the reader is in the thread crosses between the document and the
+//! pinned list by the chat's own anchor, CHAT-29's `switched`.)
+//!
+//! A change here, to `#chatfull`'s rules or to the composer's CSS runs
+//! `scripts/kb-check.mjs` in its selection: WebKit at 390 with an iPhone's
+//! keyboard (`scripts/kb-shim.js` — headless WebKit has none, and every
+//! case above was first found on the owner's phone).
 
 use std::cell::Cell;
 
@@ -294,7 +311,8 @@ fn apply() -> bool {
         Hold::Keep if !pinned => LOCKED.with(|c| c.set(None)),
         Hold::Keep => {}
     }
-    if SHOWN.with(Cell::get) == kb {
+    let was = SHOWN.with(Cell::get);
+    if was == kb {
         return false;
     }
     SHOWN.with(|c| c.set(kb));
@@ -305,6 +323,12 @@ fn apply() -> bool {
     let style = html.style();
     match kb {
         Some(k) => {
+            if was.is_none() {
+                // CHAT-42: the document keeps its height under the pinned
+                // view, so iOS's scroll for the field stays inside it.
+                let h = doc.document_element().map_or(0, |e| e.scroll_height());
+                let _ = style.set_property("--kb-doc-h", &format!("{h}px"));
+            }
             let _ = style.set_property("--kb-inset", &format!("{}px", k.inset));
             let _ = style.set_property("--kb-top", &format!("{}px", k.top));
             let _ = style.set_property("--kb-h", &format!("{}px", k.height));
@@ -315,6 +339,20 @@ fn apply() -> bool {
             for p in ["--kb-inset", "--kb-top", "--kb-h"] {
                 let _ = style.remove_property(p);
             }
+            // CHAT-42: the height is let go a moment after: the chat puts
+            // its rows back in the document first, and a document short
+            // for a frame meanwhile would clamp the reader to its top.
+            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                Closure::once_into_js(|| {
+                    if SHOWN.with(Cell::get).is_none() {
+                        if let Some(h) = dom::window().document().and_then(|d| d.document_element()).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
+                            let _ = h.style().remove_property("--kb-doc-h");
+                        }
+                    }
+                })
+                .unchecked_ref(),
+                RELEASE_MS,
+            );
         }
     }
     for el in held {
@@ -322,6 +360,9 @@ fn apply() -> bool {
     }
     true
 }
+
+/// CHAT-42: how long the document keeps its height after the keyboard.
+const RELEASE_MS: i32 = 600;
 
 /// APP-58: something moved the viewport (focus, the keyboard, a pan):
 /// read it every frame until it has been still for [`FOLLOW_FRAMES`], so a
@@ -464,8 +505,22 @@ fn at_end(doc: &web_sys::Document) -> Vec<web_sys::Element> {
     let Ok(list) = doc.query_selector_all(".pmsgs") else { return Vec::new() };
     (0..list.length())
         .filter_map(|i| list.item(i)?.dyn_into::<web_sys::Element>().ok())
+        // CHAT-42: a list the document scrolls (the phone's full chat) is
+        // not its own scroller — it reads as at its end whatever is read;
+        // the chat carries its place across the pin itself.
+        .filter(|el| dom::Scroller::list(el).is_some_and(|s| !s.is_doc()))
         .filter(|el| el.client_height() > 0 && el.scroll_height() - el.scroll_top() - el.client_height() <= 24)
         .collect()
+}
+
+/// CHAT-42: the visual viewport is short of the layout one — a keyboard up
+/// or on its way. A scroll of the document then is iOS's for the field,
+/// not the reader's.
+pub(crate) fn short() -> bool {
+    let w = dom::window();
+    let (Some(vv), Some(doc)) = (w.visual_viewport(), w.document()) else { return false };
+    let layout_h = layout_height(&doc).unwrap_or_else(|| num(w.inner_height()));
+    vv.scale() <= 1.01 && vv.height() < layout_h - 1.0
 }
 
 /// Once, at the app's start: follows the visual viewport and focus for as
