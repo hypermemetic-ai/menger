@@ -42,17 +42,32 @@ use crate::{session, st_class};
 /// How many tickets the page asks for at most.
 const LIMIT: u32 = 1000;
 
-/// `?to=<env>` of a hash.
-fn to_of(hash: &str) -> Option<String> {
+/// `?<key>=<value>` of a hash.
+fn param_of(hash: &str, key: &str) -> Option<String> {
     let (_, q) = hash.split_once('?')?;
-    q.split('&').find_map(|p| p.strip_prefix("to=")).filter(|v| !v.is_empty()).map(str::to_string)
+    q.split('&').find_map(|p| p.strip_prefix(key)?.strip_prefix('=')).filter(|v| !v.is_empty()).map(str::to_string)
 }
 
-/// The page's own hash: `#/deploy/MENGER?to=app-prod`.
-fn href(project: &str, to: Option<&str>) -> String {
-    match to {
-        Some(t) => format!("#/deploy/{project}?to={t}"),
-        None => format!("#/deploy/{project}"),
+/// `?to=<env>` of a hash.
+fn to_of(hash: &str) -> Option<String> {
+    param_of(hash, "to")
+}
+
+/// DEPLOY-39: `?stage=<state>` of a hash — the stage pill that is on.
+fn stage_of(hash: &str) -> Option<State> {
+    State::of_class(&param_of(hash, "stage")?)
+}
+
+/// The page's own hash: `#/deploy/MENGER?to=app-prod&stage=ready`.
+fn href(project: &str, to: Option<&str>, stage: Option<State>) -> String {
+    let q: Vec<String> = to.map(|t| format!("to={t}")).into_iter().chain(stage.map(|s| format!("stage={}", s.class()))).collect();
+    if q.is_empty() { format!("#/deploy/{project}") } else { format!("#/deploy/{project}?{}", q.join("&")) }
+}
+
+/// Put the page's own hash in the address bar, no history entry.
+fn keep_hash(url: &str) {
+    if let Ok(h) = crate::dom::window().history() {
+        let _ = h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(url));
     }
 }
 
@@ -108,7 +123,9 @@ enum Open {
 pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
     deploys::want();
     let held = deploys::held();
-    let asked_to = to_of(&crate::dom::window().location().hash().unwrap_or_default());
+    let hash0 = crate::dom::window().location().hash().unwrap_or_default();
+    let asked_to = to_of(&hash0);
+    let asked_stage = stage_of(&hash0);
     let project = {
         let held = held.clone();
         Memo::new(move |_| project.clone().or_else(|| held.with(|h| h.as_ref().and_then(default_project))))
@@ -205,10 +222,13 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
             })
         })
     };
-    let clusters = Memo::new(move |_| flight::clusters(nodes.get()));
+    // DEPLOY-39: a stage pill filters — only its tickets are drawn, an area
+    // with none is gone, every count is of the matches.
+    let hi = RwSignal::new(asked_stage);
+    let shown = Memo::new(move |_| flight::only(nodes.get(), hi.get()));
+    let clusters = Memo::new(move |_| flight::clusters(shown.get()));
     let lanes = Memo::new(move |_| flight::lanes(&track.get()));
     let laid = Memo::new(move |_| clusters.with(|cs| flight::lay_out(cs, &lanes.get())));
-    let hi = RwSignal::new(None::<State>);
     let open = RwSignal::new(None::<Open>);
     let graph = RwSignal::new(false);
 
@@ -252,11 +272,20 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
     let pick_dest = move |ev: leptos::ev::Event| {
         let Some(sel) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok()) else { return };
         let v = sel.value();
-        if let (Some(p), Ok(h)) = (project.get_untracked(), crate::dom::window().history()) {
-            let _ = h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&href(&p, Some(&v))));
+        if let Some(p) = project.get_untracked() {
+            keep_hash(&href(&p, Some(&v), hi.get_untracked()));
         }
         to.set(Some(v));
     };
+    // The pill that is on lives in the address (`?stage=ready`).
+    Effect::new(move |prev: Option<()>| {
+        let s = hi.get();
+        if prev.is_some() {
+            if let Some(p) = project.get_untracked() {
+                keep_hash(&href(&p, to.get_untracked().as_deref(), s));
+            }
+        }
+    });
 
     view! {
         <div id="deploy-page" class:graph=move || graph.get()>
@@ -267,7 +296,7 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
             </div>
             <ToTest project />
             <div class="tools">
-                <div class="legend" role="group" aria-label="highlight by state">
+                <div class="legend" role="group" aria-label="filter by stage">
                     {State::ALL.into_iter().map(|s| {
                         let n = move || nodes.with(|ns| ns.iter().filter(|x| x.state == s).count());
                         view! {
@@ -279,6 +308,7 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
                                 on:click=move |_| hi.update(|h| *h = if *h == Some(s) { None } else { Some(s) })
                             >
                                 <span class="n">{n}</span>" "{s.words()}
+                                {move || (hi.get() == Some(s)).then(|| view! { <span class="x" aria-label="clear the filter">" ✕"</span> })}
                             </button>
                         }
                     }).collect_view()}
@@ -305,8 +335,8 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
                 Some(Ok(_)) if nodes.with(Vec::is_empty) => view! { <p class="none">"Nothing in flight: everything finished runs on " {dest.get()} "."</p> }.into_any(),
                 Some(Ok(_)) => view! {
                     <div class="stage">
-                        <Canvas laid clusters track hi open graph />
-                        <List clusters hi open />
+                        <Canvas laid clusters track open graph />
+                        <List clusters open />
                     </div>
                 }.into_any(),
             }}
@@ -324,7 +354,7 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
 /// The canvas: lanes as columns, areas as hulls, tickets as nodes, blockers
 /// as arrows; pan and zoom.
 #[component]
-fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String>>, hi: RwSignal<Option<State>>, open: RwSignal<Option<Open>>, graph: RwSignal<bool>) -> impl IntoView {
+fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String>>, open: RwSignal<Option<Open>>, graph: RwSignal<bool>) -> impl IntoView {
     let cv = NodeRef::<leptos::html::Div>::new();
     // (k, tx, ty): the zoom and the pan.
     let view_at = RwSignal::new((1.0_f64, 12.0_f64, 0.0_f64));
@@ -568,7 +598,6 @@ fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String
                                 Some(view! {
                                     <g
                                         class=format!("fnode {}", s.class())
-                                        class:dim=move || hi.get().is_some_and(|h| h != s)
                                         class:picked=move || picked().as_deref() == Some(pid.as_str())
                                         transform=format!("translate({x} {y})")
                                         data-open-id=id.clone()
@@ -639,7 +668,7 @@ fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String
 
 /// The phone's clusters: each area, a row per ticket.
 #[component]
-fn List(clusters: Memo<Vec<Cluster>>, hi: RwSignal<Option<State>>, open: RwSignal<Option<Open>>) -> impl IntoView {
+fn List(clusters: Memo<Vec<Cluster>>, open: RwSignal<Option<Open>>) -> impl IntoView {
     view! {
         <div class="list">
             {move || clusters.get().into_iter().map(|c| {
@@ -652,7 +681,7 @@ fn List(clusters: Memo<Vec<Cluster>>, hi: RwSignal<Option<State>>, open: RwSigna
                             <span class="n">{c.nodes.len()}</span>
                             <span class=format!("ns {}", loud.class())>{words}</span>
                         </button>
-                        {c.nodes.into_iter().map(|n| row(n, hi, open)).collect_view()}
+                        {c.nodes.into_iter().map(|n| row(n, open)).collect_view()}
                     </section>
                 }
             }).collect_view()}
@@ -661,14 +690,13 @@ fn List(clusters: Memo<Vec<Cluster>>, hi: RwSignal<Option<State>>, open: RwSigna
 }
 
 /// One ticket's row in the clusters list.
-fn row(n: Node, hi: RwSignal<Option<State>>, open: RwSignal<Option<Open>>) -> impl IntoView {
+fn row(n: Node, open: RwSignal<Option<Open>>) -> impl IntoView {
     let s = n.state;
     let id = n.id.clone();
     view! {
         <button
             type="button"
             class="row"
-            class:dim=move || hi.get().is_some_and(|h| h != s)
             data-ticket-id=n.id.clone()
             on:click=move |_| open.set(Some(Open::Ticket(id.clone())))
         >
@@ -843,7 +871,12 @@ mod tests {
         assert_eq!(to_of("#/deploy/MENGER?g=x&to=prod"), Some("prod".into()));
         assert_eq!(to_of("#/deploy?to="), None);
         assert_eq!(to_of("#/deploy"), None);
-        assert_eq!(href("MENGER", Some("prod")), "#/deploy/MENGER?to=prod");
-        assert_eq!(href("MENGER", None), "#/deploy/MENGER");
+        assert_eq!(href("MENGER", Some("prod"), None), "#/deploy/MENGER?to=prod");
+        assert_eq!(href("MENGER", None, None), "#/deploy/MENGER");
+        assert_eq!(href("MENGER", Some("prod"), Some(State::Ready)), "#/deploy/MENGER?to=prod&stage=ready");
+        assert_eq!(href("MENGER", None, Some(State::Failed)), "#/deploy/MENGER?stage=failed");
+        assert_eq!(stage_of("#/deploy?to=prod&stage=ready"), Some(State::Ready));
+        assert_eq!(stage_of("#/deploy?stage=nope"), None);
+        assert_eq!(stage_of("#/deploy"), None);
     }
 }
