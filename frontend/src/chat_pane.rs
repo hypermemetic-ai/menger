@@ -459,8 +459,17 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     Effect::new(move |_| {
         let Some(c) = chat.get() else { return };
         let r = round.get();
-        if !chats::asks(asked.get_value(), r, window_t.with_untracked(|t| t.fetched)) {
-            return;
+        match chats::asks(asked.get_value(), r, window_t.with_untracked(|t| t.fetched)) {
+            chats::Ask::No => return,
+            chats::Ask::Load => {}
+            // APP-94: held already — what was missed merges in place, and
+            // the rows, the scroll and the composer stay as they are.
+            chats::Ask::CatchUp => {
+                asked.set_value(Some(r));
+                chats::catch_up(id, size);
+                chats::load_activity(id);
+                return;
+            }
         }
         asked.set_value(Some(r));
         let around = at_url.or_else(|| (c.unread > size).then_some(c.mark.map(|m| m.get())).flatten());

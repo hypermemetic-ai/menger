@@ -134,18 +134,32 @@ impl Kids {
 
     /// A page of children answered. The first page (no cursor asked for)
     /// replaces what was held — a reconnect re-asks from the top — and a
-    /// later one extends it.
+    /// later one extends it. APP-94: what was held past the first page is
+    /// kept behind it, with its cursor (or, if it was whole, one after its
+    /// last: a child born past it meanwhile is the next page's), so a
+    /// reconnect does not shorten the list under the reader.
     pub(crate) fn page(&mut self, first: bool, ids: Vec<String>, next: Option<String>) {
         if first {
+            let mut ids = ids;
+            let mut next = next;
+            let edge = ids.last().and_then(|l| key(l)).map(|(e, n)| (e.to_string(), n));
+            if let (true, Some(_), Some(edge)) = (self.loaded, next.as_ref(), edge) {
+                let tail: Vec<String> = self.ids.iter().filter(|i| key(i).is_some_and(|(e, n)| (e, n) > (edge.0.as_str(), edge.1)) && !ids.contains(i)).cloned().collect();
+                if let Some(last) = tail.last().cloned() {
+                    ids.extend(tail);
+                    next = Some(self.next.clone().unwrap_or(last));
+                }
+            }
             self.ids = ids;
+            self.next = next;
         } else {
             for id in ids {
                 if !self.ids.contains(&id) {
                     self.ids.push(id);
                 }
             }
+            self.next = next;
         }
-        self.next = next;
         self.loaded = true;
     }
 
@@ -320,8 +334,10 @@ impl Members {
     }
 
     /// `member`'s answer.
-    pub(crate) fn answered(&mut self, answer: impl IntoIterator<Item = (String, bool)>) {
-        self.known.extend(answer);
+    /// Verdicts answered; whether any moved (APP-94: a re-ask that moves
+    /// nothing redraws nothing).
+    pub(crate) fn answered(&mut self, answer: impl IntoIterator<Item = (String, bool)>) -> bool {
+        answer.into_iter().fold(false, |moved, (id, inside)| self.known.insert(id, inside) != Some(inside) || moved)
     }
 
     /// `entered` (`true`) or `left` (`false`) for `id`, if it is one the
@@ -348,6 +364,24 @@ mod tests {
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// APP-94: a reconnect re-asks the first page; what was held past it
+    /// stays, with its cursor.
+    #[test]
+    fn a_reconnect_keeps_what_was_held_past_the_first_page() {
+        let mut k = Kids::default();
+        k.page(true, ids(&["MAP-2", "MAP-3"]), Some("MAP-3".into()));
+        k.page(false, ids(&["MAP-5", "MAP-8"]), Some("MAP-8".into()));
+        // The first page again, after a reconnect: a child born meanwhile
+        // in it, and the second page held behind it with its cursor.
+        k.page(true, ids(&["MAP-2", "MAP-3", "MAP-4"]), Some("MAP-4".into()));
+        assert_eq!(k.ids, ids(&["MAP-2", "MAP-3", "MAP-4", "MAP-5", "MAP-8"]));
+        assert_eq!(k.next.as_deref(), Some("MAP-8"));
+        // A first page that is the whole list is the whole list.
+        k.page(true, ids(&["MAP-2", "MAP-3"]), None);
+        assert_eq!(k.ids, ids(&["MAP-2", "MAP-3"]));
+        assert_eq!(k.next, None);
     }
 
     /// A delta waits for the first page: until it answers, the page itself
@@ -407,9 +441,12 @@ mod tests {
         k.page(false, ids(&["MAP-6", "MAP-11"]), None);
         assert_eq!(k.ids, ids(&["MAP-2", "MAP-3", "MAP-4", "MAP-5", "MAP-6", "MAP-11"]));
         assert_eq!(k.unshown(11), 0, "whole");
-        // A reconnect re-asks from the top and replaces what was held.
+        // A reconnect re-asks from the top; APP-94: what was held past it
+        // stays, and the list is no longer known whole — a child born
+        // past it while the socket was down is the next page's.
         k.page(true, ids(&["MAP-2"]), Some("MAP-2".into()));
-        assert_eq!(k.ids, ids(&["MAP-2"]));
+        assert_eq!(k.ids, ids(&["MAP-2", "MAP-3", "MAP-4", "MAP-5", "MAP-6", "MAP-11"]));
+        assert_eq!(k.next.as_deref(), Some("MAP-11"));
     }
 
     /// FILTER-16: under the global filter the list is the matches, and the

@@ -574,20 +574,33 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
     }
 
     // The server's inputs for this ticket, then each `input_changed`.
+    // APP-94: asked again after a reconnect; an answer that moves nothing
+    // touches nothing.
     {
         let id = ticket.clone();
-        spawn_local(async move {
-            let Some(client) = session::client() else { return };
-            let Ok(t) = crate::typed::typed(&id) else { return };
-            let Ok(events) = client.inputs().list_all(Some(t), None, None, None, session::zone()).await else { return };
-            let mut map = States::new();
-            for ev in events {
-                if let TicketsEvent::Input { input } = ev {
-                    map.insert(input.id.to_string(), Ask::of(input.state).map(|a| (a, input.question.clone())));
+        let ask = move || {
+            let id = id.clone();
+            spawn_local(async move {
+                let Some(client) = session::client() else { return };
+                let Ok(t) = crate::typed::typed(&id) else { return };
+                let Ok(events) = client.inputs().list_all(Some(t), None, None, None, session::zone()).await else { return };
+                let mut map = States::new();
+                for ev in events {
+                    if let TicketsEvent::Input { input } = ev {
+                        map.insert(input.id.to_string(), Ask::of(input.state).map(|a| (a, input.question.clone())));
+                    }
                 }
-            }
-            states.try_set(Some(map));
-        });
+                states.try_maybe_update(|s| {
+                    let moved = s.as_ref() != Some(&map);
+                    if moved {
+                        *s = Some(map);
+                    }
+                    (moved, ())
+                });
+            });
+        };
+        ask();
+        crate::data::again(ask);
     }
     {
         let id = ticket.clone();

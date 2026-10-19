@@ -141,6 +141,32 @@ impl Thread {
         }
     }
 
+    /// APP-94: a reconnect's catch-up, merged in place. `over` is what the
+    /// server now has across the held window (a message deleted while the
+    /// socket was down takes its mark there), `after` the page past the
+    /// last held and `newer` whether more lie past it. Nothing held is
+    /// dropped or replaced unless it differs, so the rows keep their nodes;
+    /// whether anything moved.
+    pub(crate) fn caught_up(&mut self, over: Vec<Message>, after: Vec<Message>, newer: bool) -> bool {
+        let mut moved = false;
+        for m in over {
+            if let Ok(at) = self.list.binary_search_by(|x| x.id.get().cmp(&m.id.get())) {
+                if self.list[at] != m {
+                    self.list[at] = m;
+                    moved = true;
+                }
+            }
+        }
+        if !self.newer {
+            for m in &after {
+                moved |= self.take(m);
+            }
+            moved |= self.newer != newer;
+            self.newer = newer;
+        }
+        moved
+    }
+
     /// A message heard: it joins a window that reaches the newest (or is
     /// kept for a fetch to merge); one that does not reach it never
     /// fetches the history.
@@ -494,15 +520,30 @@ pub(crate) fn round() -> ArcRwSignal<u32> {
     ROUND.with(Clone::clone)
 }
 
-/// APP-67: whether a pane asks [`load`] for its thread, now on connection
-/// `round`, having last asked on `asked` (none: not yet). Its first ask is
-/// always made; on a later connection only for a thread never fetched — an
-/// ask lost with its socket (cut in flight, or made before one was up),
-/// which nothing asked again, left the chat drawn with no messages.
-pub(crate) fn asks(asked: Option<u32>, round: u32, fetched: bool) -> bool {
+/// What a pane does for its thread on a connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ask {
+    /// Nothing: asked on this connection already.
+    No,
+    /// [`load`] the first window.
+    Load,
+    /// APP-94: [`catch_up`] the window it holds — what was missed while
+    /// the socket was down, merged in place.
+    CatchUp,
+}
+
+/// APP-67: what a pane asks for its thread, now on connection `round`,
+/// having last asked on `asked` (none: not yet). Its first ask is always a
+/// load; on a later connection a thread never fetched is loaded (an ask
+/// lost with its socket left the chat drawn with no messages), and one
+/// held is caught up (APP-94: the reconnect no longer reloads the page, so
+/// what was posted meanwhile comes this way).
+pub(crate) fn asks(asked: Option<u32>, round: u32, fetched: bool) -> Ask {
     match asked {
-        None => true,
-        Some(a) => a != round && !fetched,
+        None => Ask::Load,
+        Some(a) if a == round => Ask::No,
+        Some(_) if fetched => Ask::CatchUp,
+        Some(_) => Ask::Load,
     }
 }
 
@@ -633,6 +674,36 @@ pub(crate) fn load(chat: u64, size: u32, at: Option<u64>) {
             return;
         };
         HELD.with(|s| s.update(|h| h.get_or_insert_with(Held::default).with_thread(chat, |t| if at.is_some() { t.around(back, older, ahead, newer) } else { t.at_newest(back, older) })));
+    });
+}
+
+/// APP-94: after a reconnect, `chat`'s held window brought up to date in
+/// place — the server's copy of what it holds (deletions made meanwhile)
+/// and the page past its last message (what was posted meanwhile). Once
+/// per connection; a failure is asked again on the next.
+pub(crate) fn catch_up(chat: u64, size: u32) {
+    if ASKED.with(|a| a.borrow().contains(&chat)) {
+        return;
+    }
+    let Some(client) = session::chats_client() else { return };
+    let edge = HELD.with(|s| s.with_untracked(|h| h.as_ref().and_then(|h| h.thread(chat)).map(|t| (t.last(), t.list.len(), t.newer))));
+    let Some((Some(last), held, newer)) = edge else { return };
+    ASKED.with(|a| a.borrow_mut().push(chat));
+    spawn_local(async move {
+        let over = page(&client, chat, Paging::Before(last + 1), (held as u32).clamp(1, 1_000)).await;
+        let after = if newer { Ok((Vec::new(), None)) } else { page(&client, chat, Paging::After(last), size).await };
+        let (Ok((over, _)), Ok((after, next))) = (over, after) else {
+            ASKED.with(|a| a.borrow_mut().retain(|c| *c != chat));
+            return;
+        };
+        HELD.with(|s| {
+            s.maybe_update(|h| {
+                let h = h.get_or_insert_with(Held::default);
+                let mut moved = false;
+                h.with_thread(chat, |t| moved = t.caught_up(over, after, next.is_some()));
+                moved
+            })
+        });
     });
 }
 
@@ -1109,14 +1180,39 @@ pub(crate) mod tests {
     }
 
     /// APP-67: a thread whose ask was lost with its socket is asked again
-    /// on the next connection; one held is not.
+    /// on the next connection. APP-94: one held is caught up, in place.
     #[test]
     fn a_pane_asks_again_for_a_thread_it_never_got() {
-        assert!(asks(None, 0, false), "mounting asks");
-        assert!(asks(None, 3, true), "mounting asks, held or not (the newest page)");
-        assert!(!asks(Some(3), 3, false), "once per connection");
-        assert!(asks(Some(3), 4, false), "a new connection, nothing held: ask again");
-        assert!(!asks(Some(3), 4, true), "a new connection, the thread held: the watch keeps it");
+        assert_eq!(asks(None, 0, false), Ask::Load, "mounting asks");
+        assert_eq!(asks(None, 3, true), Ask::Load, "mounting asks, held or not (the newest page)");
+        assert_eq!(asks(Some(3), 3, false), Ask::No, "once per connection");
+        assert_eq!(asks(Some(3), 3, true), Ask::No, "once per connection, held");
+        assert_eq!(asks(Some(3), 4, false), Ask::Load, "a new connection, nothing held: ask again");
+        assert_eq!(asks(Some(3), 4, true), Ask::CatchUp, "a new connection, the thread held: what was missed, merged");
+    }
+
+    /// APP-94: a reconnect's catch-up merges in place — the held rows stay
+    /// (the same values, so a keyed list keeps their nodes), a deletion
+    /// made while away takes its mark, what was posted is appended, and a
+    /// window short of the newest takes nothing past its end.
+    #[test]
+    fn a_catch_up_merges_in_place() {
+        let mut t = Thread::default();
+        t.at_newest((1..=5).map(|i| msg(i, 1, "idp:ada", "hi")).collect(), true);
+        let before = t.list.clone();
+        assert!(!t.caught_up(before.clone(), Vec::new(), false), "nothing missed: nothing moves");
+        assert_eq!(t.list, before);
+        let mut over: Vec<Message> = before.clone();
+        over[2].deleted = Some(Deleted { at: 200, by: "idp:ada".into() });
+        assert!(t.caught_up(over, vec![msg(6, 1, "idp:bo", "back"), msg(7, 1, "idp:ada", "again")], true));
+        assert_eq!(t.list.iter().map(|m| m.id.get()).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 6, 7]);
+        assert!(t.list[2].deleted.is_some(), "the deletion took");
+        assert_eq!(t.list[0], before[0], "the rest untouched");
+        assert!(t.newer && t.older, "more lies past the page; the older side as it was");
+        // Short of the newest: the held part is refreshed, nothing appended.
+        assert!(!t.caught_up(Vec::new(), vec![msg(9, 1, "idp:ada", "far")], false));
+        assert_eq!(t.last(), Some(7));
+        assert!(t.newer);
     }
 
     /// APP-67: an answer is whole only with its `page`; one cut short is

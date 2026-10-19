@@ -558,8 +558,13 @@ fn TicketBeside(ticket: String, split: RwSignal<Split>) -> impl IntoView {
     let not_found = RwSignal::new(false);
     let blockers = RwSignal::new(false);
     let last_error = RwSignal::new(None::<String>);
-    let holder = crate::cache::Holder::new();
-    crate::session::load_ticket(ticket.clone(), holder, body, not_found, blockers, last_error);
+    let holder = StoredValue::new(crate::cache::Holder::new());
+    crate::session::load_ticket(ticket.clone(), holder.get_value(), body, not_found, blockers, last_error);
+    // APP-94: asked again after a reconnect, filled in place.
+    {
+        let t = ticket.clone();
+        crate::data::again(move || crate::session::load_ticket(t.clone(), holder.get_value(), body, not_found, blockers, last_error));
+    }
     let t = ticket.clone();
     let row = Memo::new(move |_| crate::cache::find(&t).map(|r| r.get()));
     let drag = move |ev: web_sys::PointerEvent| {

@@ -905,10 +905,13 @@ async fn session(
             .await
             .map_err(|e| format!("connect {url}: {e}"))?,
     );
-    // APP-63: a reconnect reloads the page — the server answers again (the
-    // sign-in checked, a socket open), and a reload asks for everything this
-    // page shows, nothing missed. The page goes; this session waits for it.
-    if resume::reconnected() {
+    // APP-94: a reconnect goes on with this page — the session re-asks what
+    // it asks on every connection, and `data::resync` (below, once the
+    // module refreshes are out) every view's own read, merged in place. The
+    // page reloads (APP-63's path, its snapshot and budget) only when the
+    // server now serves another build: this page's wire may not be its.
+    let again = resume::connects() > 0;
+    if again && crate::data::new_release().await && resume::reconnected() {
         drop(transport);
         return std::future::pending().await;
     }
@@ -968,6 +971,10 @@ async fn session(
     // ORG-4: the organizations the reader holds a role in — the header's
     // switcher, on every connection.
     crate::orgs::refresh();
+    // APP-94: on a reconnect, every view's own read asked again, in place.
+    if again {
+        crate::data::resync();
+    }
 
     // 2. The dock.
     for ev in client.health_all().await.map_err(|e| describe(&e))? {
@@ -1146,6 +1153,7 @@ async fn session(
                 crate::queue::refresh();
                 crate::deploys::refresh();
                 STALE.with(|s| s.update(|n| *n = n.wrapping_add(1)));
+                crate::data::resync();
             }
             // Future event kinds: ignore, stay live.
             _ => {}
