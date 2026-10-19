@@ -91,6 +91,10 @@ pub(crate) enum Cat {
     /// ticket), `unread` (unread there): pills of When's kind
     /// (src/when.rs), built from this category's own pane; uncounted.
     Chats,
+    /// TICKETS-9: who holds it — `assigned me`, `assigned`, `unassigned`,
+    /// `assigned "<principal>"`: pills of When's kind (src/when.rs), built
+    /// from this category's own pane; uncounted.
+    People,
     Wave,
     Readiness,
     OffBoard,
@@ -136,7 +140,7 @@ pub(crate) const INPUT_STATES: [&str; 3] = ["open", "answered", "closed"];
 pub(crate) const ALL: &str = "all";
 
 impl Cat {
-    pub(crate) const ALL: [Cat; 19] = [
+    pub(crate) const ALL: [Cat; 20] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -150,6 +154,7 @@ impl Cat {
         Cat::When,
         Cat::Deployed,
         Cat::Chats,
+        Cat::People,
         Cat::Wave,
         Cat::Readiness,
         Cat::OffBoard,
@@ -176,7 +181,7 @@ impl Cat {
 
     /// The server-backed categories, offered at every level, in the menu's
     /// order.
-    pub(crate) const SERVER: [Cat; 13] = [
+    pub(crate) const SERVER: [Cat; 14] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -190,6 +195,7 @@ impl Cat {
         Cat::When,
         Cat::Deployed,
         Cat::Chats,
+        Cat::People,
     ];
 
     /// The wave board's categories, in its menu's order: WAVE-12's, with the
@@ -215,7 +221,7 @@ impl Cat {
     /// FILTER-16: the inputs page's categories, in its menu's order — its
     /// own (State, Removed) first, then the server-backed ones, which filter
     /// the inputs' tickets.
-    pub(crate) const INPUTS: [Cat; 15] = [
+    pub(crate) const INPUTS: [Cat; 16] = [
         Cat::State,
         Cat::Removed,
         Cat::Shortcode,
@@ -231,6 +237,7 @@ impl Cat {
         Cat::When,
         Cat::Deployed,
         Cat::Chats,
+        Cat::People,
     ];
 
     /// A surface's own category — evaluated by the surface, kept beside the
@@ -262,6 +269,7 @@ impl Cat {
             Cat::When => "when",
             Cat::Deployed => "deployed",
             Cat::Chats => "chats",
+            Cat::People => "people",
             Cat::Wave => "wave",
             Cat::Readiness => "ready",
             Cat::OffBoard => "off",
@@ -291,6 +299,7 @@ impl Cat {
             Cat::When => "When",
             Cat::Deployed => "Deployed",
             Cat::Chats => "Chats",
+            Cat::People => "People",
             Cat::Wave => "Wave",
             Cat::Readiness => "Readiness",
             Cat::OffBoard => "Off-board blockers",
@@ -307,6 +316,7 @@ impl Cat {
             Cat::When => "created moved changed recently in status for since before between today",
             Cat::Deployed => "deploy deployment environment running released prod test staging waiting",
             Cat::Chats => "chat chatting unread messages conversation",
+            Cat::People => "people person assigned assignee assignees unassigned me who agent",
             _ => "",
         }
     }
@@ -331,7 +341,7 @@ impl Cat {
             Cat::Readiness => &["workable", "waiting", "missing"],
             Cat::State => &INPUT_STATES,
             Cat::OffBoard => &["some", "none"],
-            Cat::Shortcode | Cat::Wave | Cat::Title | Cat::Label | Cat::When | Cat::Deployed | Cat::Chats => &[],
+            Cat::Shortcode | Cat::Wave | Cat::Title | Cat::Label | Cat::When | Cat::Deployed | Cat::Chats | Cat::People => &[],
         }
     }
 
@@ -444,6 +454,8 @@ pub(crate) fn op_label(c: Cat, op: Op, n: usize) -> &'static str {
 pub(crate) fn time_cat(t: &crate::when::Timed) -> Cat {
     if crate::when::is_chats(t) {
         Cat::Chats
+    } else if crate::when::is_people(t) {
+        Cat::People
     } else if crate::when::env_of(t).is_some() {
         Cat::Deployed
     } else {
@@ -456,7 +468,7 @@ pub(crate) fn time_cat(t: &crate::when::Timed) -> Cat {
 /// pill's, for one value); a flag has none: its `yes` / `no` is already the
 /// negation (nor When and Deployed: a time pill's parts are its own).
 pub(crate) fn switch_words(c: Cat) -> Option<(&'static str, &'static str)> {
-    (!c.is_flag() && !matches!(c, Cat::When | Cat::Deployed | Cat::Chats)).then(|| (op_label(c, Op::Is, 1), op_label(c, Op::Not, 1)))
+    (!c.is_flag() && !matches!(c, Cat::When | Cat::Deployed | Cat::Chats | Cat::People)).then(|| (op_label(c, Op::Is, 1), op_label(c, Op::Not, 1)))
 }
 
 /// One category's clause: its operator and its values — canonical, in the
@@ -1371,7 +1383,7 @@ fn edit_chips(lens: Lens, level: Level) -> AnyView {
                     let saved = matches!(p.field, menger_tickets_api::filter::Field::Saved(_));
                     let open = move |_| {
                         pop.sel.set(gi);
-                        if let Some(c) = cat.filter(|c| matches!(c, Cat::When | Cat::Deployed | Cat::Chats)) {
+                        if let Some(c) = cat.filter(|c| matches!(c, Cat::When | Cat::Deployed | Cat::Chats | Cat::People)) {
                             pop.when.set((c, crate::when_view::Step::Edit { at: slot, only: None }));
                         }
                         lens.open_panel(level, cat);
@@ -2052,7 +2064,7 @@ pub(crate) fn sections(level: Level, cats: &[Cat]) -> Vec<Section> {
     }
     for &c in cats {
         let s = match c {
-            Cat::When | Cat::Deployed | Cat::Chats => Section::Time(c),
+            Cat::When | Cat::Deployed | Cat::Chats | Cat::People => Section::Time(c),
             Cat::Title => Section::Title,
             c if c.is_flag() && !c.is_local() => Section::Flags,
             c => Section::Values(c),
@@ -2455,7 +2467,7 @@ fn groups_view(lens: Lens, pop: Pop) -> impl IntoView {
                     .enumerate()
                     .map(|(ii, p)| {
                         let words = crate::ors::words(&p);
-                        let time = crate::ors::cat_of(&p).filter(|c| matches!(c, Cat::When | Cat::Deployed | Cat::Chats));
+                        let time = crate::ors::cat_of(&p).filter(|c| matches!(c, Cat::When | Cat::Deployed | Cat::Chats | Cat::People));
                         let slot = crate::ors::Slot { group: gi, item: ii };
                         let saved = matches!(p.field, menger_tickets_api::filter::Field::Saved(_));
                         let remove = move |ev: web_sys::MouseEvent| {
@@ -3137,7 +3149,7 @@ pub(crate) mod tests {
                 .iter()
                 .copied()
                 .filter(|c| match c {
-                    Cat::When | Cat::Deployed | Cat::Chats => q.trim().is_empty() || palette_match(c.menu_label(), c.keywords(), q),
+                    Cat::When | Cat::Deployed | Cat::Chats | Cat::People => q.trim().is_empty() || palette_match(c.menu_label(), c.keywords(), q),
                     Cat::Title => q.trim().is_empty() || palette_match("title", "contains text", q),
                     c if c.is_flag() && !c.is_local() => flag_rows(&[*c], q).contains(c) || palette_match(c.label(), "", q),
                     c => section_rows(*c, k, q).iter().any(|r| matches!(r, PanelRow::Value { .. })),
@@ -3190,7 +3202,14 @@ pub(crate) mod tests {
 
         // The global menu: the server's categories, no Title to offer.
         let g = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        assert_eq!(found("", &g).len(), 13, "FILTER-27: When among them; DEPLOY-13: Deployed; CHAT-4: Chats");
+        assert_eq!(found("", &g).len(), 14, "FILTER-27: When among them; DEPLOY-13: Deployed; CHAT-4: Chats; TICKETS-9: People");
+        // TICKETS-9: People — its own pane of three cells, found by them.
+        assert!(offered(Cat::People, &g).is_empty());
+        assert!(found("assigned", &g).contains(&Cat::People) && found("people", &g).contains(&Cat::People));
+        assert_eq!(switch_words(Cat::People), None);
+        assert_eq!(time_cat(&crate::when::new_people(None, true)), Cat::People);
+        assert_eq!(crate::when::group(&crate::when::new_people(Some(menger_tickets_api::filter::Who::Me), false)).format(), "assigned me");
+        assert_eq!(crate::when::group(&crate::when::new_people(None, true)).format(), "unassigned");
         // CHAT-4: Chats — its own pane of two cells, found by them, and the
         // pills it builds drawn under it.
         assert!(offered(Cat::Chats, &g).is_empty());
@@ -3370,6 +3389,7 @@ pub(crate) mod tests {
                 Section::Time(Cat::When),
                 Section::Time(Cat::Deployed),
                 Section::Time(Cat::Chats),
+                Section::Time(Cat::People),
             ]
         );
         for c in Cat::SERVER {

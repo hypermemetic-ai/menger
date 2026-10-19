@@ -63,7 +63,8 @@ pub(crate) fn with_full(hash: &str, on: bool) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RailRow {
     pub(crate) id: u64,
-    pub(crate) ticket: String,
+    /// CHAT-14: none for a direct message or a group.
+    pub(crate) ticket: Option<String>,
     pub(crate) label: String,
     pub(crate) last: String,
     pub(crate) unread: u32,
@@ -87,7 +88,7 @@ pub(crate) fn rail(held: &Held, ticket: &str, me: &str, name: &impl Fn(&str) -> 
     by_last(&mut open);
     by_last(&mut closed);
     let here = open.iter().chain(closed.iter()).map(row).collect();
-    let mut others: Vec<Chat> = held.with_unread().into_iter().filter(|c| !c.ticket.eq_ignore_ascii_case(ticket)).cloned().collect();
+    let mut others: Vec<Chat> = held.with_unread().into_iter().filter(|c| !chats::on_ticket(c, ticket)).cloned().collect();
     by_last(&mut others);
     (here, others.iter().map(row).collect())
 }
@@ -163,6 +164,14 @@ fn keep_split(s: Split) {
 
 thread_local! {
     static FULL: ArcRwSignal<bool> = ArcRwSignal::new(false);
+    /// CHAT-14: `#/chats` is up — the same full-screen session, outside a
+    /// ticket (counted: a page drawn again mounts before the old one goes).
+    static INBOX: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// CHAT-14: `#/chats` mounted (`true`) or gone.
+pub(crate) fn set_inbox(on: bool) {
+    INBOX.with(|i| i.set(if on { i.get() + 1 } else { i.get().saturating_sub(1) }));
 }
 
 /// Whether the chat is full screen.
@@ -170,9 +179,14 @@ pub(crate) fn signal() -> ArcRwSignal<bool> {
     FULL.with(Clone::clone)
 }
 
+/// CHAT-14: whether `#/chats` is up — where a chat has no dock to go back to.
+pub(crate) fn in_inbox() -> bool {
+    INBOX.with(std::cell::Cell::get) > 0
+}
+
 /// The keys stand down while the session is up (src/keys.rs).
 pub(crate) fn is_up() -> bool {
-    signal().get_untracked()
+    signal().get_untracked() || INBOX.with(std::cell::Cell::get) > 0
 }
 
 /// Full screen on or off — the URL follows (no history entry).
@@ -205,6 +219,48 @@ pub(crate) fn expand() -> bool {
 }
 
 // -- the views ----------------------------------------------------------------
+
+/// CHAT-29: on a phone the session scrolls the document (so the browser's
+/// bars can slide away), and its head hides on a scroll down and comes back
+/// on a scroll up ([`crate::turns::head_shown`]) — `data-head="off"` on
+/// `#chatfull`, which the stylesheet slides up. Where the session is pinned
+/// (a wide window, the keyboard up) the document does not move and the head
+/// stays.
+pub(crate) fn follow_head(root: NodeRef<leptos::html::Div>) {
+    let state = StoredValue::new((true, 0.0f64));
+    // When the reader last touched, wheeled or keyed: a scroll within
+    // READER_MS of it is theirs (an iPhone's momentum included).
+    let touched = StoredValue::new(f64::NEG_INFINITY);
+    let mark = move |_: web_sys::Event| touched.set_value(js_sys::Date::now());
+    let hands = [
+        window_event_listener_untyped("touchmove", mark),
+        window_event_listener_untyped("touchend", mark),
+        window_event_listener_untyped("wheel", mark),
+        window_event_listener_untyped("keydown", mark),
+    ];
+    let listen = window_event_listener(leptos::ev::scroll, move |_| {
+        let Some(el) = root.get_untracked() else { return };
+        let y = dom::window().scroll_y().unwrap_or(0.0);
+        let head_h = el.query_selector(".shead").ok().flatten().and_then(|h| h.dyn_into::<web_sys::HtmlElement>().ok()).map_or(0.0, |h| f64::from(h.offset_height()));
+        let Some((shown, was)) = state.try_get_value() else { return };
+        let by_reader = js_sys::Date::now() - touched.get_value() < READER_MS;
+        let (now, at) = crate::turns::head_shown(shown, was, y, head_h, by_reader);
+        state.set_value((now, at));
+        if now != shown {
+            let _ = if now { el.remove_attribute("data-head") } else { el.set_attribute("data-head", "off") };
+        }
+    });
+    on_cleanup(move || {
+        listen.remove();
+        for h in hands {
+            h.remove();
+        }
+    });
+}
+
+/// CHAT-29: how long after a touch, a wheel or a key a scroll is still the
+/// reader's — an iPhone's fling runs on after the finger lifts.
+const READER_MS: f64 = 1500.0;
 
 /// The session, mounted once in the app: drawn while the chat is full
 /// screen on the route's ticket.
@@ -263,6 +319,7 @@ fn SessionView(s: Shown) -> impl IntoView {
     let renaming = RwSignal::new(None::<String>);
     let problem = RwSignal::new(None::<String>);
     let root = NodeRef::<leptos::html::Div>::new();
+    follow_head(root);
     root.on_load(|el| {
         // The composer takes focus when it mounts; else the session has it.
         spawn_local(async move {
@@ -315,7 +372,12 @@ fn SessionView(s: Shown) -> impl IntoView {
                 let open = move |_| {
                     drawer.set(false);
                     if other {
-                        let _ = dom::window().location().set_hash(&format!("/ticket/{tk}?chat={id}&full"));
+                        // CHAT-14: a direct message or a group opens in #/chats.
+                        let to = match &tk {
+                            Some(tk) => format!("/ticket/{tk}?chat={id}&full"),
+                            None => format!("/chats/{id}"),
+                        };
+                        let _ = dom::window().location().set_hash(&to);
                     } else {
                         chat_pane::show(View::Chat(id));
                     }
@@ -323,7 +385,10 @@ fn SessionView(s: Shown) -> impl IntoView {
                 view! {
                     <button type="button" class="srow" class:on=on class:closed=r.closed data-chat=r.id.to_string() on:click=open>
                         <span class="sl">
-                            {other.then(|| view! { <span class="tchip">{r.ticket.clone()}</span> })}
+                            {other.then(|| match r.ticket.clone() {
+                                Some(t) => view! { <span class="tchip">{t}</span> }.into_any(),
+                                None => view! { <span class="kchip">"direct"</span> }.into_any(),
+                            })}
                             {r.label.clone()}
                         </span>
                         {(r.unread > 0).then(|| view! { <span class="count">{r.unread}</span> })}
@@ -399,8 +464,8 @@ fn SessionView(s: Shown) -> impl IntoView {
     let main = {
         let t = ticket.clone();
         match current.clone() {
-            View::Chat(id) => view! { <chat_pane::ChatView ticket=t id full=true /> }.into_any(),
-            View::Pick => view! { <div class="spick"><chat_pane::Picker ticket=t add_to=None on_done=Callback::new(|_| ()) /></div> }.into_any(),
+            View::Chat(id) => view! { <chat_pane::ChatView ticket=Some(t) id full=true /> }.into_any(),
+            View::Pick => view! { <div class="spick"><chat_pane::Picker ticket=Some(t) add_to=None on_done=Callback::new(|_| ()) /></div> }.into_any(),
             View::Closed | View::Auto => view! { <p class="pempty">"Pick a chat in the rail, or start one."</p> }.into_any(),
         }
     };
@@ -464,7 +529,7 @@ fn SessionView(s: Shown) -> impl IntoView {
                 {move || (adding.get() && chat_id.is_some()).then(|| {
                     let id = chat_id.unwrap_or_default();
                     let ps = chat.with(|c| c.as_ref().map(|c| c.participants.clone()).unwrap_or_default());
-                    view! { <div class="sadd"><chat_pane::Picker ticket=t_add.clone() add_to=Some((id, ps)) on_done=Callback::new(move |_| adding.set(false)) /></div> }
+                    view! { <div class="sadd"><chat_pane::Picker ticket=Some(t_add.clone()) add_to=Some((id, ps)) on_done=Callback::new(move |_| adding.set(false)) /></div> }
                 })}
                 {main}
             </section>
@@ -588,7 +653,7 @@ mod tests {
         assert_eq!(here[1].last, "builder: Fixed in 9a0d3e1, in review.");
         assert_eq!((here[2].label.as_str(), here[2].last.as_str()), ("my notes", "just you"));
         assert!(here[3].closed && here[3].last == "kept, read-only");
-        assert_eq!(others.iter().map(|r| (r.id, r.ticket.as_str(), r.unread)).collect::<Vec<_>>(), [(45, "KILN-3", 5)], "only the others with unread");
+        assert_eq!(others.iter().map(|r| (r.id, r.ticket.as_deref(), r.unread)).collect::<Vec<_>>(), [(45, Some("KILN-3"), 5)], "only the others with unread");
     }
 
     /// The ticket beside the chat: 440 unless dragged, kept; a drag keeps

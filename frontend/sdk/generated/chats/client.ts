@@ -3,22 +3,55 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { ChatId, ChatState, ChatsEvent, MessageId } from './types';
+import type { ActivityLine, ActivityState, ChatGrant, ChatState, ChatsEvent, MessageId } from './types';
+import type { ChatId } from '../media/types';
 import type { Body, TicketRef, Title } from '../notes/types';
 import type { Principal } from '../orgs/types';
 
 /** Typed client interface for chats plugin */
 export interface ChatsClient {
   /**
+   * Say what the caller is doing in a chat, live; yields activity { activity } — never a message (CHAT-18).
+
+By a participant: `started` (it has the message), `working` (the
+default: a line of what it does now, or a heartbeat with none),
+`ended` (the turn is over). Every participant's `watch` hears
+`activity`; nothing is stored — the server keeps each chat's last
+200 in memory for `activity_log`, lost on a restart. A line is cut
+at 500 characters. A chat the caller is not in is `not_found`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `chats.activity` anywhere it is held
+   */
+  activity(chat: ChatId, line?: ActivityLine | null, state?: ActivityState | null): AsyncGenerator<ChatsEvent>;
+  /**
+   * A chat's live work kept in memory — its last 200 activity items, oldest first; an activity { activity } each, then the end (CHAT-18).
+
+For a participant, so a viewer opening a chat mid-turn sees what has
+been done; anyone else is answered `not_found`. Empty after a restart.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `chats.activity_log` anywhere it is held
+   */
+  activityLog(chat: ChatId): AsyncGenerator<ChatsEvent>;
+  /**
    * Add a participant to a chat; yields added { chat }.
 
 By a participant, to an open chat; the one added must be able to read
 the ticket, or it is `refused`. One already in it is the chat as it is.
+CHAT-14: to a group, one holding a grant in its organization, by a
+participant or an admin of the organization; a direct message is
+refused (it stays between two: start a group). CHAT-16: an admin of
+the chat's scope adds anyone, in it or not; one who can't read it is
+added only with `grant` — `ticket` (viewer on the ticket alone) or
+`chat` (this chat only) — the add and the grant one write, answered
+`added { chat, granted }`; without it, `needs_grant { choices }` and
+nothing written.
    * @server-derived auth
    * @requiresAuth — resolver: self.access.verify
    * @requires `chats.add` anywhere it is held
    */
-  add(chat: ChatId, principal: Principal): AsyncGenerator<ChatsEvent>;
+  add(chat: ChatId, principal: Principal, grant?: ChatGrant | null): AsyncGenerator<ChatsEvent>;
   /**
    * Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — and the end; timed_out after timeout_minutes.
 
@@ -35,19 +68,23 @@ in is `not_found`.
    */
   awaitMessage(after?: MessageId | null, chat?: ChatId | null, since?: number | null, ticket?: TicketRef | null, timeoutMinutes?: number | null): AsyncGenerator<ChatsEvent>;
   /**
-   * Who could be in a chat on a ticket: a candidate { principal, reads } each — every principal holding a grant in the ticket's organization (a team's members by name), and those in the caller's chats there — then the end.
+   * Who could be in a chat — on a ticket, or (without one) outside tickets: a candidate { principal, reads, name?, agent } each — every principal holding a grant in the organization (a team's members by name), and those in the caller's chats there — then the end.
 
 CHAT-4's picker: `reads` says whether the principal can read the
 ticket now (`open` and `add` refuse one that cannot). The caller is
 not among them. A ticket the caller cannot read is `refused` as one
 that is none. A participant who holds no grant there now (one kept
 before ACCESS-24, when login could be off) is listed all the same, as
-one of the chats' participants.
+one of the chats' participants. CHAT-14: without a ticket, those
+holding a grant in the caller's organizations (`reads`: may be in a
+direct message or a group); each by the `name` the server knows it
+by (signed in with — a synapse key's name too), and `agent` for an
+agent (an `agent:` or `key:` principal, or a standing chat member).
    * @server-derived auth
    * @requiresAuth — resolver: self.access.verify
    * @requires `chats.candidates` anywhere it is held
    */
-  candidates(ticket: TicketRef): AsyncGenerator<ChatsEvent>;
+  candidates(ticket?: TicketRef | null): AsyncGenerator<ChatsEvent>;
   /**
    * Close a chat; yields closed { chat }. A closed chat is read-only, kept on its ticket.
 
@@ -84,21 +121,24 @@ the page's first while older remain, what `before` takes to go on.
    */
   messages(chat: ChatId, after?: MessageId | null, before?: MessageId | null, limit?: number | null, newest?: boolean | null): AsyncGenerator<ChatsEvent>;
   /**
-   * Open a chat on a ticket with the principals named; yields opened { chat } — the open chat they already have there, when they do (existing: true).
+   * Open a chat on a ticket, or outside tickets — a direct message or a group — with the principals named; yields opened { chat } — the open chat they already have, when they do (existing: true).
 
 The caller and `others` are the participants (CHAT-1's `with`, which
-TypeScript does not take as a parameter's name) — `others` empty or
-absent is a chat of one, the caller's alone, to add to later (CHAT-6);
-every one of them must be
-able to read the ticket, or the call is `refused { reasons }`, naming
-each who cannot, and nothing is made. A ticket the caller cannot read
-is refused as one that is none. `watch` carries `opened` to each
-participant.
+TypeScript does not take as a parameter's name). On a ticket,
+`others` empty or absent is a chat of one, the caller's alone, to
+add to later (CHAT-6); every one of them must be able to read the
+ticket, or the call is `refused { reasons }`, naming each who cannot,
+and nothing is made. A ticket the caller cannot read is refused as
+one that is none. CHAT-14: without a ticket, one other is a direct
+message (the one the two have, when they have one) and several a
+group (`title` names it); each must hold a grant in the caller's
+organization, and only its participants read it. `watch` carries
+`opened` to each participant.
    * @server-derived auth
    * @requiresAuth — resolver: self.access.verify
    * @requires `chats.open` anywhere it is held
    */
-  open(ticket: TicketRef, others?: Principal[] | null, title?: Title | null): AsyncGenerator<ChatsEvent>;
+  open(others?: Principal[] | null, ticket?: TicketRef | null, title?: Title | null): AsyncGenerator<ChatsEvent>;
   /**
    * Post a message in a chat; yields posted { message }, signed by the caller.
 
@@ -122,6 +162,18 @@ the chat's messages at or before `upto`; `unread` counts after it.
    * @requires `chats.read` anywhere it is held
    */
   read(chat: ChatId, upto: MessageId): AsyncGenerator<ChatsEvent>;
+  /**
+   * Take a participant out of a chat; yields removed { chat, principal, revoked } (CHAT-14; CHAT-16: revoke takes back the grant their add made).
+
+A group's or a ticket's chat, by a participant (itself too: it
+leaves) or, outside tickets, an admin of the chat's organization; a
+direct message is refused (close it instead). One not in it is the
+chat as it is. The one removed hears `left` on its `watch`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `chats.remove` anywhere it is held
+   */
+  remove(chat: ChatId, principal: Principal, revoke?: boolean | null): AsyncGenerator<ChatsEvent>;
   /**
    * Rename a chat; yields renamed { chat } — the composer's /title (CHAT-7).
 
@@ -168,8 +220,18 @@ class ChatsClientImpl implements ChatsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *add(chat: ChatId, principal: Principal): AsyncGenerator<ChatsEvent> {
-    const stream = this.rpc.call('chats.add', { chat, principal });
+  async *activity(chat: ChatId, line?: ActivityLine | null, state?: ActivityState | null): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.activity', { chat, line, state });
+    yield* extractData<ChatsEvent>(stream);
+  }
+
+  async *activityLog(chat: ChatId): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.activity_log', { chat });
+    yield* extractData<ChatsEvent>(stream);
+  }
+
+  async *add(chat: ChatId, principal: Principal, grant?: ChatGrant | null): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.add', { chat, grant, principal });
     yield* extractData<ChatsEvent>(stream);
   }
 
@@ -178,7 +240,7 @@ class ChatsClientImpl implements ChatsClient {
     yield* extractData<ChatsEvent>(stream);
   }
 
-  async *candidates(ticket: TicketRef): AsyncGenerator<ChatsEvent> {
+  async *candidates(ticket?: TicketRef | null): AsyncGenerator<ChatsEvent> {
     const stream = this.rpc.call('chats.candidates', { ticket });
     yield* extractData<ChatsEvent>(stream);
   }
@@ -198,7 +260,7 @@ class ChatsClientImpl implements ChatsClient {
     yield* extractData<ChatsEvent>(stream);
   }
 
-  async *open(ticket: TicketRef, others?: Principal[] | null, title?: Title | null): AsyncGenerator<ChatsEvent> {
+  async *open(others?: Principal[] | null, ticket?: TicketRef | null, title?: Title | null): AsyncGenerator<ChatsEvent> {
     const stream = this.rpc.call('chats.open', { others, ticket, title });
     yield* extractData<ChatsEvent>(stream);
   }
@@ -210,6 +272,11 @@ class ChatsClientImpl implements ChatsClient {
 
   async *read(chat: ChatId, upto: MessageId): AsyncGenerator<ChatsEvent> {
     const stream = this.rpc.call('chats.read', { chat, upto });
+    yield* extractData<ChatsEvent>(stream);
+  }
+
+  async *remove(chat: ChatId, principal: Principal, revoke?: boolean | null): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.remove', { chat, principal, revoke });
     yield* extractData<ChatsEvent>(stream);
   }
 
@@ -241,6 +308,8 @@ export function createChatsClient(rpc: RpcClient): ChatsClient {
 
 /** What each chats method needs (AUTH-9): its grant, and the param that locates what it acts on (`null`: allowed wherever the grant is held). The gate decides, server-side. */
 export const requires = {
+  "chats.activity": { grant: "chats.activity", target: null },
+  "chats.activity_log": { grant: "chats.activity_log", target: null },
   "chats.add": { grant: "chats.add", target: null },
   "chats.await_message": { grant: "chats.await_message", target: null },
   "chats.candidates": { grant: "chats.candidates", target: null },
@@ -250,6 +319,7 @@ export const requires = {
   "chats.open": { grant: "chats.open", target: null },
   "chats.post": { grant: "chats.post", target: null },
   "chats.read": { grant: "chats.read", target: null },
+  "chats.remove": { grant: "chats.remove", target: null },
   "chats.rename": { grant: "chats.rename", target: null },
   "chats.reopen": { grant: "chats.reopen", target: null },
   "chats.schema": { grant: "chats.schema", target: null },

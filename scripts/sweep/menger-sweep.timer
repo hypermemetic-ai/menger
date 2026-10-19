@@ -1,0 +1,12 @@
+# CI-2: hourly, and once 10 minutes after boot; a missed run is caught up.
+[Unit]
+Description=menger: the hourly build-output sweep (CI-2)
+
+[Timer]
+OnBootSec=10min
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

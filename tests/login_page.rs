@@ -371,7 +371,7 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
     let offers = wired.offered().map(menger::offer).collect();
     // AUTH-7: the protocol's auth over menger's backend, whose loopback
     // sign-in goes through this shell's login page.
-    let hub = build_rpc_login(&dir.path().join("t.db"), None, Default::default(), offers, access, wired.backend.clone(), None, menger_tickets_api::store::BODY_MAX_DEFAULT).await.unwrap();
+    let hub = build_rpc_login(&dir.path().join("t.db"), None, Default::default(), offers, access, wired.backend.clone(), None, menger_tickets_api::store::BODY_MAX_DEFAULT, Vec::new()).await.unwrap();
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     // AUTH-6/AUTH-7: the gate (it notices who signs in holding nothing); no
     // credential is the anonymous view; only a bearer or the access_token
@@ -839,6 +839,19 @@ async fn a_frame_loads_the_vendored_libraries_without_a_session() {
         let r = m.http.get(m.url(path)).send().await.unwrap();
         assert_eq!(r.status(), 303, "{path} still needs a session");
     }
+}
+
+/// APP-64: Add to Home Screen asks for the icon, and a manifest is fetched
+/// without credentials — neither is sent to the login page (here no build:
+/// a 404, not a 303); the app beside them still is.
+#[tokio::test]
+async fn the_home_screen_files_need_no_session() {
+    let m = start().await;
+    for path in ["/apple-touch-icon.png", "/manifest.webmanifest", "/icon-512.png", "/app/icon-192.png"] {
+        let r = m.http.get(m.url(path)).send().await.unwrap();
+        assert_ne!(r.status(), 303, "{path}: no detour to the login page");
+    }
+    assert_eq!(m.http.get(m.url("/app/index.html")).send().await.unwrap().status(), 303);
 }
 
 #[tokio::test]

@@ -8,7 +8,9 @@
 #                                           <env>.local.env and <env>.smoke.env
 #                                           are made once, from the old file, and
 #                                           never rewritten)
-#   deploy/pipeline build [REV]             gate + release (default REV: main)
+#   deploy/pipeline build [REV]             gate + release (default REV: main); refused up
+#                                           front on a low disk (CI-2: scripts/disk-check.sh —
+#                                           under 50 GB free or 90% used)
 #   deploy/pipeline deploy test [RELEASE]   prod data → test; switch; restart; smoke
 #   deploy/pipeline sync test               prod data → test, same release; restart; smoke
 #   deploy/pipeline promote [RELEASE] [--adopt]
@@ -17,7 +19,8 @@
 #   deploy/pipeline rollback ENV [--restore BACKUP]
 #   deploy/pipeline smoke ENV               the smoke checks, on their own
 #   deploy/pipeline status                  what each env runs, and how it is;
-#                                           the last deployment record of each
+#                                           the last deployment record of each;
+#                                           how full the disk is (CI-2)
 #   deploy/pipeline releases                every release: tested? where?
 #   deploy/pipeline logs ENV [journalctl args…]
 #   deploy/pipeline backfill                deployments.log → menger's deployments
@@ -42,6 +45,13 @@
 #   deploy/pipeline remote prod             RUN-25: app-test.menger.sh / app.menger.sh through
 #                                           hypermemetic-infra (app.yml; promote.yml for prod),
 #                                           driven by deploy/app.yml (RUN-11)
+#   deploy/pipeline remote-secret test|prod [--check] [--from FILE]
+#                                           IDENTITY-45: the WorkOS API key on app-test / app.menger.sh
+#                                           (infra's secret.yml: a 0400 file the container reads, then
+#                                           health; the old key back if unhealthy). The value from
+#                                           $WORKOS_API_KEY (ledger-secret run workos-prod WORKOS_API_KEY
+#                                           -- deploy/pipeline remote-secret prod), --from FILE, or stdin;
+#                                           never an argument, never printed
 #
 # DEPLOY-12: deploy test, sync, promote and rollback each tell menger what they
 # did — a deployment record (deploy/record → deployments.record): `started`
@@ -49,12 +59,18 @@
 # goes through the outbox, oldest first; one the tracker does not take waits
 # there for the next run. A record never fails a deploy, nor holds one up
 # longer than a bounded send. Where:
+#   MENGER_DEPLOY_TRACKER_URL (wss://app.menger.sh/ws) — DEPLOY-28: the tracker since RUN-13,
+#   reached as the pipeline's key; `local`: this machine's tracker, as before RUN-13 —
 #   MENGER_DEPLOY_TRACKER_PORT (4455) · MENGER_DEPLOY_TRACKER_HOST · MENGER_DEPLOY_TRACKER_TOKEN
 #   MENGER_DEPLOY_OUTBOX (~/.local/share/menger-deploy/outbox) · MENGER_DEPLOY_RECORD_TIMEOUT (10 s a send)
 #   MENGER_DEPLOY_KEY_FILE (~/.plexus/keys/pipeline.key; `none`: no key) — ACCESS-47:
 #   the pipeline's own key; where the file is, records go over the socket
 #   signed in as it (deploy/menger-call.mjs reads the file — the seed is never
 #   in an environment or an argv) and `status` reads health as it
+#   MENGER_DEPLOY_COMPLETE_KEY_FILE (~/.plexus/keys/builder.key; `none`: no completion) —
+#   DEPLOY-28: a succeeded record to test, once kept, sets Complete on the In Review
+#   tickets it carried that now run their current version there (DEPLOY-22), as this
+#   key (an editor's: the pipeline's own key is viewer + deployer)
 set -euo pipefail
 
 # ── where things are ────────────────────────────────────────────────────────
@@ -73,9 +89,17 @@ RECORD=$REPO/deploy/record
 TRACKER_PORT=${MENGER_DEPLOY_TRACKER_PORT:-4455}
 TRACKER_HOST=${MENGER_DEPLOY_TRACKER_HOST:-}
 TRACKER_TOKEN=${MENGER_DEPLOY_TRACKER_TOKEN:-}
+# DEPLOY-28: the tracker moved to app.menger.sh (RUN-13); `local` is :TRACKER_PORT here.
+TRACKER_URL=${MENGER_DEPLOY_TRACKER_URL:-wss://app.menger.sh/ws}
+[[ $TRACKER_URL == local ]] && TRACKER_URL=""
+case $TRACKER_URL in ""|ws://*|wss://*) ;; *) printf 'pipeline: MENGER_DEPLOY_TRACKER_URL=%s: ws:// or wss:// (or local)\n' "$TRACKER_URL" >&2; exit 1 ;; esac
+if [[ -n $TRACKER_URL ]]; then TRACKER_NAME=$(sed -E 's|^wss?://||; s|/.*$||' <<<"$TRACKER_URL"); else TRACKER_NAME=:$TRACKER_PORT; fi
 # ACCESS-47: prod behind login — the pipeline signs in with its key, a file.
 DEPLOY_KEY_FILE=${MENGER_DEPLOY_KEY_FILE:-$HOME/.plexus/keys/pipeline.key}
 [[ $DEPLOY_KEY_FILE == none || ! -f $DEPLOY_KEY_FILE ]] && DEPLOY_KEY_FILE=""
+# DEPLOY-28: who sets Complete after a deploy to test — an editor's key, a file.
+COMPLETE_KEY_FILE=${MENGER_DEPLOY_COMPLETE_KEY_FILE:-$HOME/.plexus/keys/builder.key}
+[[ $COMPLETE_KEY_FILE == none || ! -f $COMPLETE_KEY_FILE ]] && COMPLETE_KEY_FILE=""
 CALL_JS=$REPO/deploy/menger-call.mjs
 OUTBOX=${MENGER_DEPLOY_OUTBOX:-$HOME_DIR/outbox}
 SENT=$HOME_DIR/sent
@@ -133,10 +157,11 @@ previous_release() { local l; l=$(envdir "$1")/previous; [[ -L $l ]] && basename
 # a run that died, a rollback whose smoke failed is never the start. ENV with
 # no run in the log yet: what it runs.
 last_good() {
-  local runs='$2 == e && $3 ~ /^(deploy|sync|promote|rollback)$/'
+  local runs='$2 == e && $3 ~ /^(deploy|sync|promote|rollback|run)$/'
   if [[ -f $LOG ]] && awk -F'\t' -v e="$1" "$runs {f = 1} END {exit !f}" "$LOG"; then
     awk -F'\t' -v e="$1" "$runs"' {
-      if ($5 == "ok") g = $4; else if (match($5, /rolled back to [^ ]+$/)) g = substr($5, RSTART + 15) }
+      if ($4 == "-") next
+      if ($5 == "ok" || ($3 == "run" && $5 ~ /^ok /)) g = $4; else if (match($5, /rolled back to [^ ]+$/)) g = substr($5, RSTART + 15) }
       END { if (g != "") print g }' "$LOG"
   else running_release "$1"; fi
 }
@@ -176,8 +201,9 @@ tell() {
   ( set +e; tell_ "$@" ) || true
 }
 # DEPLOY-21: the environment ENV promotes from — prod from test; test and the
-# landing page's edge from none (each its own track).
-promotes_from() { case $1 in prod) echo test ;; esac; }
+# landing page's edge from none (each its own track). DEPLOY-28: app-test
+# runs the image of the release test passed, app-prod what app-test runs.
+promotes_from() { case $1 in prod|app-test) echo test ;; app-prod) echo app-test ;; esac; }
 tell_() {
   local env=$1 state=$2 rel=$3 prev=${4:-} rev p at rec="" from
   rev=$(sha_of "$rel"); p=$(sha_of "$prev")
@@ -221,15 +247,27 @@ flush_outbox() {
   [[ -n $TRACKER_TOKEN ]] && sargs+=(--token "$TRACKER_TOKEN")
   # ACCESS-47: with the pipeline's key (and no token given), over the socket
   # signed in as it; the seed stays in its file, read by menger-call.
-  if [[ -n $DEPLOY_KEY_FILE && -z $TRACKER_TOKEN ]]; then
+  # DEPLOY-28: app.menger.sh (MENGER_DEPLOY_TRACKER_URL) is under login: always the key.
+  if [[ -n $TRACKER_URL ]]; then
+    via=key sargs=(--send --url "$TRACKER_URL" --agent pipeline)
+    kenv=(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE")
+  elif [[ -n $DEPLOY_KEY_FILE && -z $TRACKER_TOKEN ]]; then
     via=key sargs=(--send --url "ws://${TRACKER_HOST:-127.0.0.1}:$TRACKER_PORT" --agent pipeline)
     kenv=(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE")
   fi
+  [[ $via == key && -z $DEPLOY_KEY_FILE ]] && { say "record: no key for $TRACKER_NAME (MENGER_DEPLOY_KEY_FILE: $HOME/.plexus/keys/pipeline.key) — the records wait in $OUTBOX"; exec {lock}>&-; return 0; }
   # A run's flush stops after a few sends' worth of time; backfill's does not.
   local until=$((SECONDS + 3 * SEND_TIMEOUT))
   for f in $(queued); do
     [[ ${QUIET:-} == 1 || $SECONDS -lt $until ]] || break
-    rc=0; out=$("${kenv[@]}" timeout "$SEND_TIMEOUT" "$RECORD" --from json "$OUTBOX/$f" "${sargs[@]}" 2>&1) || rc=$?
+    # DEPLOY-28 (DEPLOY-22): a succeeded record to test, the lowest environment, completes its work
+    # (three calls, three sends' time; the key's file named to deploy/record, never read here)
+    local cargs=() cenv=() tmo=$SEND_TIMEOUT
+    if [[ $via == key && -n $COMPLETE_KEY_FILE ]] && jq -e '.environment == "test" and .state == "succeeded"' "$OUTBOX/$f" >/dev/null 2>&1; then
+      cargs=(--complete) cenv=(MENGER_DEPLOY_COMPLETE_KEY_FILE="$COMPLETE_KEY_FILE") tmo=$((3 * SEND_TIMEOUT))
+    fi
+    rc=0; out=$("${kenv[@]}" "${cenv[@]}" timeout "$tmo" "$RECORD" --from json "$OUTBOX/$f" "${sargs[@]}" "${cargs[@]}" 2>&1) || rc=$?
+    grep '^record: complete: ' <<<"$out" >&2 || true
     # menger-call answers JSON lines, synapse its text: one reading of both
     if [[ $via == key ]]; then
       out=$(jq -Rr 'fromjson? // {line: .} | if .type == "deployed" then "type: deployed", "duplicate: \(.duplicate)"
@@ -240,7 +278,7 @@ flush_outbox() {
     if [[ $rc == 0 ]] && grep -q '^type: deployed' <<<"$out"; then
       local env how=sent; env=$(jq -r .environment "$OUTBOX/$f")
       if grep -q '^duplicate: true' <<<"$out"; then dup=$((dup + 1)); how="already kept"; else sent=$((sent + 1)); fi
-      [[ ${QUIET:-} == 1 ]] || say "record: $(what "$OUTBOX/$f") → menger :$TRACKER_PORT ($how)"
+      [[ ${QUIET:-} == 1 ]] || say "record: $(what "$OUTBOX/$f") → menger $TRACKER_NAME ($how)"
       mkdir -p "$SENT"
       jq -c --arg t "$(date -u +%FT%TZ)" --arg how "$how" '. + {sent_at: $t, sent: $how}' "$OUTBOX/$f" > "$SENT/${env//\//_}.json"
       rm -f "$OUTBOX/$f"
@@ -251,12 +289,12 @@ flush_outbox() {
     else
       # a gate's refusal (the key not signed in, or not granted) is the
       # tracker's setup, not the record's: it waits, and is said once
-      grep -q '^gate: ' <<<"$out" && say "record: menger :$TRACKER_PORT refused the pipeline's key ($(sed -n 's/^gate: //p' <<<"$out" | head -n 1)) — grant it deployer on MENGER (deploy/README.md \"Recording deployments\")"
+      grep -q '^gate: ' <<<"$out" && say "record: menger $TRACKER_NAME refused the pipeline's key ($(sed -n 's/^gate: //p' <<<"$out" | head -n 1)) — grant it deployer on MENGER (deploy/README.md \"Recording deployments\")"
       break
     fi
   done
   left=$(queued | wc -l)
-  [[ $left -gt 0 ]] && say "record: $left record(s) wait in $OUTBOX for the next run (menger :$TRACKER_PORT did not take them in time)"
+  [[ $left -gt 0 ]] && say "record: $left record(s) wait in $OUTBOX for the next run (menger $TRACKER_NAME did not take them in time)"
   [[ ${QUIET:-} == 1 ]] && say "record: $sent sent, $dup already kept, $refused refused, $left waiting"
   exec {lock}>&-
   return 0
@@ -370,7 +408,10 @@ cmd_install() {
 # ── build: commit → gate → release ──────────────────────────────────────────
 cmd_build() {
   need cargo; need trunk; need npm
-  local rev=${1:-main} sha short id stage
+  local rev=${1:-main} sha short id stage disk
+  # CI-2: a low disk refuses up front, not half-way through the gate
+  disk=$("$REPO/scripts/disk-check.sh" --path "$HOME") || die "refused — $disk"
+  say "$disk"
   sha=$(git -C "$REPO" rev-parse --verify "$rev^{commit}") || die "no commit '$rev'"
   short=${sha:0:7}
   step "build $short — $(git -C "$REPO" log -1 --format=%s "$sha")"
@@ -667,6 +708,15 @@ cmd_sync() {
 # ── promote ─────────────────────────────────────────────────────────────────
 # Moves an environment (prod; `--to test` exists for the rollback drill) to a
 # tested release, rolling back by itself if the smoke checks fail.
+# RUN-13: prod's data moved to app.menger.sh. While $HOME_DIR/prod.moved
+# exists, this machine's prod is the move's rollback, stopped with its
+# database untouched: promote and rollback would start it beside the live
+# tracker, so they refuse. The rollback itself (RUN-13) removes the mark.
+moved_guard() {
+  [[ $1 == prod && -f $HOME_DIR/prod.moved ]] || return 0
+  die "prod moved to app.menger.sh ($(head -n1 "$HOME_DIR/prod.moved")); this machine's prod is the rollback, kept stopped — see RUN-13"
+}
+
 cmd_promote() {
   local rel="" adopt=0 to=prod
   while [[ $# -gt 0 ]]; do
@@ -678,6 +728,7 @@ cmd_promote() {
     esac; shift
   done
   check_env "$to"
+  moved_guard "$to"
   [[ -n $rel ]] || rel=$(running_release test)
   rel=$(resolve_release "$rel")
   [[ -f $RELEASES/$rel/TESTED ]] || die "$rel has not passed the test environment — run: deploy/pipeline deploy test $rel"
@@ -748,6 +799,7 @@ foreign_holders() { # ENV → pids listening on the env's ports that are not its
 # ── rollback ────────────────────────────────────────────────────────────────
 cmd_rollback() {
   local env=${1:-}; shift || true; check_env "$env"
+  moved_guard "$env"
   local restore=""
   [[ ${1:-} == --restore ]] && { restore=${2:-}; [[ -f $restore ]] || die "no backup '$restore'"; }
   local prev; prev=$(previous_release "$env"); [[ -n $prev ]] || die "$env has no previous release"
@@ -778,7 +830,7 @@ cmd_backfill() {
     filled=$("$RECORD" --from json --commits-from-git --repo "$repo" -c <<<"$r" 2>/dev/null) || filled=$r
     enqueue "$filled" || die "cannot write $OUTBOX"; n=$((n + 1))
   done <<<"$recs"
-  say "backfill: $n records from $LOG → menger :$TRACKER_PORT"
+  say "backfill: $n records from $LOG → menger $TRACKER_NAME"
   QUIET=1 flush_outbox
 }
 
@@ -980,17 +1032,80 @@ cmd_remote() {
     if [[ $img != "$ref" ]] && ! docker image inspect "$ref" >/dev/null 2>&1; then
       docker tag "$img" "$ref" || die "could not tag $img as $ref (is $img in this machine's Docker?)"
     fi
+    local good; good=$(last_good app-test)
+    begin_run remote-test
     step "remote test: $ref → $host (bin/infra app.yml -e env=test -e sha=$rel)"
+    tell app-test started "$rel" "$good"
     "$INFRA/bin/infra" app.yml -e "app_dir=$src" -e env=test -e "sha=$rel" >&2 \
-      || { record app-test run "${img##*:}" "infra failed"; die "infra did not deploy $img to $host"; }
-    record app-test run "${img##*:}" "ok $img"
+      || { record app-test run "$rel" "infra failed"; tell app-test failed "$rel" "$good"; die "infra did not deploy $img to $host"; }
+    record app-test run "$rel" "ok $img"
+    tell app-test succeeded "$rel" "$good"
   else
-    step "remote prod: test's image → $host (bin/infra promote.yml)"
+    # DEPLOY-28: promote.yml ships the image app-test runs — the release app-test last ran ok
+    local rel good; rel=$(last_good app-test); good=$(last_good app-prod)
+    begin_run remote-prod
+    step "remote prod: test's image${rel:+ ($rel)} → $host (bin/infra promote.yml)"
+    [[ -n $rel ]] && tell app-prod started "$rel" "$good"
     "$INFRA/bin/infra" promote.yml -e "app_dir=$src" >&2 \
-      || { record app-prod run - "infra failed"; die "infra did not promote to $host (it rolls prod back by itself)"; }
-    record app-prod run - ok
+      || { record app-prod run "${rel:--}" "infra failed"; [[ -n $rel ]] && tell app-prod failed "$rel" "$good"; die "infra did not promote to $host (it rolls prod back by itself)"; }
+    record app-prod run "${rel:--}" ok
+    if [[ -n $rel ]]; then tell app-prod succeeded "$rel" "$good"
+    else say "record: app-test has no release in $LOG — app-prod not recorded"; fi
   fi
   hf_output "url=$url"
+}
+
+# `remote-secret test|prod` (IDENTITY-45) — the WorkOS environment's API key
+# on the box, through hypermemetic-infra's secret.yml: deploy/app.yml declares
+# the file (`secrets`), infra writes it 0400 for the container's user, names
+# it to menger as MENGER_WORKOS_API_KEY_FILE, restarts and checks health (the
+# old value back if unhealthy). The value: $WORKOS_API_KEY (what `ledger-secret
+# run workos-prod WORKOS_API_KEY -- …` sets), else --from FILE, else stdin. It
+# reaches infra on a pipe (printf is a builtin: no argv), and is never printed.
+REMOTE_SECRET=workos-api-key
+cmd_remote_secret() {
+  local env=${1:-}; shift || true
+  case $env in
+    test) local host=app-test.menger.sh ;;
+    prod) local host=app.menger.sh ;;
+    *) die "usage: deploy/pipeline remote-secret test|prod [--check] [--from FILE]  (the value: \$WORKOS_API_KEY, --from FILE, or stdin)" ;;
+  esac
+  local check=() from=""
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --check) check=(--check --diff); shift ;;
+      --from) [[ $# -ge 2 ]] || die "--from FILE"; from=$2; shift 2 ;;
+      *) die "remote-secret: unknown argument '$1'" ;;
+    esac
+  done
+  [[ -f $APP_YML ]] && grep -q "name: $REMOTE_SECRET" "$APP_YML" || die "deploy/app.yml declares no secret $REMOTE_SECRET — nothing was changed"
+  [[ -x $INFRA/bin/infra && -f $INFRA/secret.yml ]] || die "no infra with secret.yml at $INFRA — MENGER_INFRA_DIR names a hypermemetic-infra checkout"
+  local src; src=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")
+  local value source
+  if [[ -n ${WORKOS_API_KEY:-} ]]; then
+    value=$WORKOS_API_KEY; source='$WORKOS_API_KEY'
+  elif [[ -n $from ]]; then
+    [[ -f $from && -r $from ]] || die "--from: no readable file $from"
+    value=$(<"$from"); source="the file $from"
+  elif [[ ! -t 0 ]]; then
+    value=$(cat); source=stdin
+  else
+    die "remote-secret: no value — set WORKOS_API_KEY (ledger-secret run workos-prod WORKOS_API_KEY -- deploy/pipeline remote-secret $env), --from FILE, or pipe it"
+  fi
+  value=${value//[$'\r\n']/}
+  [[ $value == sk_* && ${#value} -ge 16 && $value != *[[:space:]]* ]] \
+    || die "remote-secret: that is not a WorkOS API key (sk_…, one line) — nothing was sent"
+  step "remote-secret $env: the WorkOS API key from $source → $host (bin/infra secret.yml -e secret=$REMOTE_SECRET${check:+ --check})"
+  if printf '%s' "$value" | "$INFRA/bin/infra" secret.yml -e "app_dir=$src" -e "env=$env" -e "secret=$REMOTE_SECRET" "${check[@]}" >&2; then
+    unset value
+    [[ ${#check[@]} -gt 0 ]] && { say "ok   dry run: nothing written"; return 0; }
+    record "app-$env" secret "$REMOTE_SECRET" ok
+    say "ok   $host holds its WorkOS key: the GitHub button completes through WorkOS's API (email verification on menger's page)"
+  else
+    unset value
+    [[ ${#check[@]} -gt 0 ]] || record "app-$env" secret "$REMOTE_SECRET" "infra failed"
+    die "infra did not place the key on $host (an unhealthy box gets its old key back by itself)"
+  fi
 }
 
 # ── status, releases, logs ──────────────────────────────────────────────────
@@ -1015,7 +1130,8 @@ landing_gate() { # DIR (landing/ at the commit) — dies at the first failure
     # every file a page names on its own origin is in the commit
     while read -r ref; do
       [[ -z $ref || $ref =~ ^(https?:|data:|mailto:|#|\.\./#|\./$) ]] && continue
-      f=$dir/$(dirname "$page")/${ref%%[?#]*}; f=${f%/}
+      # a root-relative ref (/icons/…) is from landing/'s root, wherever the page is
+      if [[ $ref == /* ]]; then f=$dir${ref%%[?#]*}; else f=$dir/$(dirname "$page")/${ref%%[?#]*}; fi; f=${f%/}
       [[ -e $f ]] || die "gate: $page refers to $ref, which the commit does not hold"
     done < <(grep -o '\(src\|srcset\|href\)="[^"]*"' "$dir/$page" | sed 's/^[a-z]*="//; s/"$//' | tr ',' '\n' | awk '{print $1}' | sort -u)
   done
@@ -1138,6 +1254,9 @@ cmd_status() {
     record_status "$env"
   done
   edge_status
+  # CI-2: how full the disk is; a low one is said, the build would refuse it
+  local disk; disk=$("$REPO/scripts/disk-check.sh" --path "$HOME" 2>&1) || disk="$disk — deploy/pipeline build refuses until there is room"
+  printf '%s\n' "$disk"
 }
 # ACCESS-47: tickets.health on PORT — its ticket count, or why not (a gate's
 # refusal, the key not granted there); signed in as the pipeline's key where
@@ -1159,7 +1278,7 @@ record_status() { # ENV → its last deployment record sent (DEPLOY-12), and wha
     printf '  record    none sent yet\n'
   fi
   for q in $(queued); do [[ $(jq -r .environment "$OUTBOX/$q" 2>/dev/null) == "$1" ]] && n=$((n + 1)); done
-  [[ $n -gt 0 ]] && printf '  outbox    %s record(s) waiting for menger on :%s\n' "$n" "$TRACKER_PORT"
+  [[ $n -gt 0 ]] && printf '  outbox    %s record(s) waiting for menger on %s\n' "$n" "$TRACKER_NAME"
   n=$(ls -1 "$OUTBOX/refused" 2>/dev/null | grep -c '\.json$' || true)
   [[ $n -gt 0 ]] && printf '  refused   %s record(s) menger refused, in %s/refused\n' "$n" "$OUTBOX"
   return 0
@@ -1193,5 +1312,6 @@ case $cmd in
   image)    cmd_image "$@" ;;
   local)    cmd_local "$@" ;;
   remote)   cmd_remote "$@" ;;
+  remote-secret) cmd_remote_secret "$@" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac

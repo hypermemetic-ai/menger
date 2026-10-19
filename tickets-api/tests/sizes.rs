@@ -23,7 +23,9 @@ const BUDGETS: &[(&str, usize)] = &[
     ("tickets-api/src/activation/mod.rs", 1750),
     // ACCESS-19: comments, members and session on the frame — their logic
     // beside each, in comments_activation/ and members_activation/.
-    ("tickets-api/src/comments_activation.rs", 250),
+    // COMMENT-9: report and failures — two methods' docs; their logic is in
+    // comments_activation/failures.rs and streams.rs.
+    ("tickets-api/src/comments_activation.rs", 270),
     ("tickets-api/src/notes_activation.rs", 330),
     ("tickets-api/src/members_activation.rs", 180),
     ("tickets-api/src/orgs_activation.rs", 240),
@@ -173,8 +175,8 @@ fn the_tickets_activation_is_declarations() {
 /// ACCESS-19: `comments`, `members` and `session` take the same frame.
 #[test]
 fn comments_members_and_session_are_declarations() {
-    // CHAT-3: and chats.
-    for file in ["tickets-api/src/comments_activation.rs", "tickets-api/src/chats_activation.rs", "tickets-api/src/members_activation.rs", "tickets-api/src/session_activation.rs"] {
+    // CHAT-3: and chats. COMMENT-5: and `media`, born on it.
+    for file in ["tickets-api/src/comments_activation.rs", "tickets-api/src/chats_activation.rs", "tickets-api/src/members_activation.rs", "tickets-api/src/session_activation.rs", "tickets-api/src/media_activation.rs"] {
         let text = std::fs::read_to_string(root().join(file)).unwrap();
         let found = off_the_frame(&text);
         assert!(found.is_empty(), "{file} is off the frame (ACCESS-19): {}\n{}", advice(file), found.join("\n"));

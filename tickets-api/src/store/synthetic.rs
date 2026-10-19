@@ -343,6 +343,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
         index.insert(id.clone(), i);
         out.push(Ticket {
             labels: Vec::new(),
+            assignees: Vec::new(),
             id: crate::address::TicketId::new(id),
             // ORG-3: a seed's codes are shortcodes of their own, each its
             // code's first — its id is its code; the store registers them

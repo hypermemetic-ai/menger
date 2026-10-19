@@ -107,6 +107,12 @@ impl Account {
     }
 
     /// Whether the person administers anything (`#/members`).
+    /// CHAT-16: whether every grant held is a chat only (`chatter`) — the
+    /// app opens on `#/chats`, the one place such a reader has.
+    pub(crate) fn chat_only(&self) -> bool {
+        !self.admin_everywhere && self.grants.as_ref().is_some_and(|g| !g.is_empty() && g.iter().all(|g| g.role == Role::Chatter))
+    }
+
     pub(crate) fn is_admin(&self) -> bool {
         self.admin_everywhere || self.grants.as_ref().is_some_and(|g| g.iter().any(|g| g.role == Role::Admin))
     }

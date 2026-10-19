@@ -454,6 +454,15 @@ pub struct Ticket {
     /// server from before MENGER-12 sends none.
     #[serde(default)]
     pub labels: Vec<Label>,
+    /// TICKETS-9: the ticket's assignees — principals, people or agents,
+    /// sorted, each once, at most 16 ([`crate::assignees`]); `[]` when none.
+    /// Moved by `tickets.assign` (and `update_many { assign, unassign }`)
+    /// alone, and asked by the filter cells `assigned <who>` and
+    /// `unassigned`. `default`: a server from before TICKETS-9 sends none;
+    /// omitted on the wire when there is none, so a ticket nobody holds is
+    /// the JSON it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<String>,
     /// ARCHIVE-2: the archive's mark — when, by whom, why, and the write
     /// that set it — or none: a live ticket. A mark apart from the status
     /// (ARCHIVE-1): an archived ticket keeps its status, kind, place and
@@ -569,6 +578,11 @@ pub struct TicketSummary {
     /// Home's "Needs you" draw a ticket's label chips without a `get`.
     #[serde(default)]
     pub labels: Vec<Label>,
+    /// TICKETS-9: as on [`Ticket`] — on the row, so the board's column and
+    /// a person's card draw who holds it without a `get`. Omitted when
+    /// there is none, as on [`Ticket`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<String>,
     /// ARCHIVE-2: as on [`Ticket`] — on the row, so a chip to an archived
     /// ticket is drawn struck through without a `get`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -600,6 +614,7 @@ impl From<Ticket> for TicketSummary {
             path: t.path,
             placement: t.placement,
             labels: t.labels,
+            assignees: t.assignees,
             archived: t.archived,
             created_unix: t.created_unix,
             updated_unix: t.updated_unix,
@@ -1335,6 +1350,11 @@ pub struct InputHistoryEntry {
 /// The declaration follows the body: every write of the body re-reads it.
 /// An answer stays what was recorded when a later body changes the options
 /// it named — the history is a record, never rewritten.
+///
+/// APP-84: `asked_unix` is when it was asked — the write whose body first
+/// declared it (or declared it again after it was removed); an input older
+/// than the record carries its ticket's creation. `null` only from a server
+/// before APP-84.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Input {
     pub ticket: TicketId,
@@ -1346,6 +1366,8 @@ pub struct Input {
     pub state: InputState,
     pub answer: Option<Answer>,
     pub history: Vec<InputHistoryEntry>,
+    #[serde(default)]
+    pub asked_unix: Option<i64>,
 }
 
 /// MENGER-13: which of a ticket's fields a transition moved — its status, or
@@ -1620,6 +1642,13 @@ pub enum TicketsEvent {
     /// never carries. The whole ticket rides along, its `labels` as the
     /// write left them.
     LabelsChanged { ticket: Ticket, added: Vec<Label>, removed: Vec<Label> },
+    /// TICKETS-9: a ticket's assignees moved (yielded by `assign`, and by
+    /// `watch` for every `assign` that changed something). `added` and
+    /// `removed` are the principals that moved — both empty is `assign`'s
+    /// own answer to a call that moved nothing, which `watch` never
+    /// carries. The whole ticket rides along, its `assignees` as the write
+    /// left them; `history` keeps each move as an `assign_record`.
+    AssigneesChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
     /// An existing ticket's `unlocks` gained `added`: a newly created
     /// ticket named it in `blocked_by` (yielded by `watch`). Carries the
     /// full updated ticket so a watch-only client stays coherent.
@@ -2025,6 +2054,10 @@ pub enum TicketsEvent {
     /// after its transitions, oldest first): who queued it, why and at what
     /// urgency; who snoozed it until when; who took it out.
     QueueRecord { record: crate::queue::QueueRecord },
+    /// TICKETS-9: a line of the ticket's assignment history (yielded by
+    /// `history` after its queue records, oldest first): who was assigned
+    /// or unassigned, when, by whom.
+    AssignRecord { record: crate::assignees::AssignRecord },
     /// TICKETS-7: one revision of a ticket (yielded per revision by
     /// `revisions list`, newest first).
     Revision { revision: crate::revisions::Revision },
@@ -2273,6 +2306,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             id: "W-2".into(),
             epic: "W".into(),
             shortcode: "W".into(),
@@ -2365,6 +2399,7 @@ mod tests {
             path: Some("_MENGER/board".into()),
             placement: Some(Placement::MissingBlocker),
             labels: vec!["needs-you".into()],
+            assignees: Vec::new(),
             body: "## Problem\n\nthe weight of a list".into(),
             created_unix: 1,
             updated_unix: 2,

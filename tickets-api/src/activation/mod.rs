@@ -38,7 +38,7 @@ use crate::types::{InputValue, Kind, Severity, Status, TicketsEvent};
 use crate::types::InputState;
 use crate::queue::Urgency;
 use crate::vocab::{
-    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, MockupRef, Message,
+    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, MockupRef, Message, Principal,
     Query, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
@@ -111,6 +111,11 @@ mod events;
 mod sight;
 #[cfg(feature = "server")]
 mod update;
+// TICKETS-9: `assign`, and what `update_many { assign }` asks of it.
+#[cfg(feature = "server")]
+mod assign;
+#[cfg(feature = "server")]
+use assign::*;
 #[cfg(feature = "server")]
 use events::*;
 #[cfg(feature = "server")]
@@ -223,7 +228,7 @@ pub use revisions::RevisionsClient;
             "queued", "await_reply"
         ],
         editor = [
-            viewer, "create", "set_status", "set_kind", "set_parent", "amend", "label", "update", "update_many",
+            viewer, "create", "set_status", "set_kind", "set_parent", "amend", "label", "assign", "update", "update_many",
             "queue", "unqueue", "snooze", "request_changes", "reshortcode", "archive", "restore"
         ],
     )
@@ -619,6 +624,45 @@ impl TicketsActivation {
         cells_stream(self.store.clone(), user, id, ids, write)
     }
 
+    /// Assign or unassign a ticket's people and agents — principals that read it — or many tickets' (ids; one write, all or none); yields assignees_changed { ticket, added, removed } per ticket.
+    ///
+    /// TICKETS-9: moves a ticket's assignees — `add` assigned, `remove`
+    /// unassigned ([`crate::assignees::apply`]: sorted, each once, a
+    /// principal in both added, at most 16). Every principal added must read
+    /// the ticket: one that cannot is refused in band, naming why, and
+    /// nothing is written. Each one moved is a line of `history`
+    /// (`assign_record`: who, when, by whom); `watch` carries every
+    /// `assignees_changed` that moved something; the filter cells are
+    /// `assigned <who>`, `assigned me`, `assigned` and `unassigned`. Both
+    /// lists empty in the answer: nothing moved, nothing written.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        values(source = ["app", "api", "pipeline"]),
+        example(note = "assign an agent", params = r#"{"id": "TICKETS-9", "add": ["key:4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a"]}"#),
+        example(note = "hand it over", params = r#"{"ids": ["THEME-9", "THEME-10"], "add": ["idp:0f8fad5b-d9cb-469f-a165-70867728950e"], "remove": ["key:4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a"]}"#)
+    )]
+    pub async fn assign(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Ticket id, e.g. TICKETS-9 (or ids).
+        id: Option<TicketRef>,
+        /// Ticket ids, instead of id: every one's assignees move, in one write, all or none.
+        ids: Option<Vec<TicketRef>>,
+        /// Principals to assign — people or agents who read the ticket, e.g. ["key:4b…"] (optional).
+        add: Option<Vec<Principal>>,
+        /// Principals to unassign (optional).
+        remove: Option<Vec<Principal>>,
+        /// app | api | pipeline (optional, default api) — kept in its history.
+        source: Option<CallerSource>,
+        /// Why, kept in its history (optional).
+        message: Option<Message>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
+        let (add, remove) = (add.unwrap_or_default(), remove.unwrap_or_default());
+        assign_stream(self.store.clone(), self.access.clone(), user, id, ids, add, remove, source, message)
+    }
+
     /// Change any part of a ticket in one write — title, body, kind, status, parent, severity, blockers (block / unblock); all lands or none does; yields updated { ticket, changed }.
     ///
     /// MENGER-30: any part of a ticket in one write, all of it or none — the
@@ -714,6 +758,10 @@ impl TicketsActivation {
         label: Option<Vec<Label>>,
         /// Labels to take off every one (optional).
         unlabel: Option<Vec<Label>>,
+        /// Principals to assign to every one — each must read every one (optional; assign's rules).
+        assign: Option<Vec<Principal>>,
+        /// Principals to unassign from every one (optional).
+        unassign: Option<Vec<Principal>>,
         /// app | api | pipeline (optional, default api) — kept in its transitions.
         source: Option<CallerSource>,
         /// Why, kept in every transition the write makes (optional).
@@ -723,7 +771,8 @@ impl TicketsActivation {
         // tickets, and a parent or blocker beyond them, are asked there.
         let mut ask = update_of(None, None, kind, status, parent, severity, block, unblock);
         (ask.label, ask.unlabel) = (label.unwrap_or_default(), unlabel.unwrap_or_default());
-        update_many_stream(self.store.clone(), user, ids, filter, max, tz, ask, source, message)
+        (ask.assign, ask.unassign) = (assign.unwrap_or_default(), unassign.unwrap_or_default());
+        update_many_stream(self.store.clone(), self.access.clone(), user, ids, filter, max, tz, ask, source, message)
     }
 
     /// Delete tickets for good (admin): refused while children, blockers, a shortcode, a component, a theme or a live input point at one, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones }.
@@ -1117,7 +1166,7 @@ impl TicketsActivation {
         queued_stream(self.store.clone(), user, snoozed.unwrap_or(true))
     }
 
-    /// Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.
+    /// Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / AssigneesChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.
     ///
     /// The reactive primitive: an open-ended stream of every mutation, as
     /// `Created` / `StatusChanged` / `UnlocksChanged` / `ChildrenChanged`

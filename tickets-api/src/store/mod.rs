@@ -212,6 +212,7 @@ fn whole(row: Row, body: String) -> Ticket {
         path,
         placement,
         labels,
+        assignees,
         archived,
         created_unix,
         updated_unix,
@@ -237,6 +238,7 @@ fn whole(row: Row, body: String) -> Ticket {
         path,
         placement,
         labels,
+        assignees,
         archived,
         body,
         created_unix,
@@ -779,6 +781,9 @@ pub enum Change {
     /// are what moved, in the order given. Only broadcast when something
     /// did. Carries the full ticket.
     LabelsChanged { ticket: Ticket, added: Vec<Label>, removed: Vec<Label> },
+    /// TICKETS-9: a ticket's assignees moved (`assign`); `added` and
+    /// `removed` are the principals that moved. Carries the full ticket.
+    AssigneesChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
     /// An existing ticket's `unlocks` gained `added` because a newly
     /// created ticket named it in `blocked_by`. Carries the full updated
     /// ticket so watch-only clients stay coherent.
@@ -908,6 +913,7 @@ impl Change {
             | Self::CommitsLinked { ticket, .. }
             | Self::CommitsUnlinked { ticket, .. }
             | Self::LabelsChanged { ticket, .. }
+            | Self::AssigneesChanged { ticket, .. }
             | Self::UnlocksChanged { ticket, .. }
             | Self::UnlocksRemoved { ticket, .. }
             | Self::BlockersChanged { ticket, .. }
@@ -1257,6 +1263,12 @@ pub enum StoreError {
     NoteUpgraded { id: u64, ticket: String },
     /// NOTE-2: `list`'s `after` names no note.
     NoteCursor(u64),
+    /// COMMENT-5: `media.put` refused the image — too large, not a kept
+    /// type by its bytes, not the type declared ([`crate::media::Problem`],
+    /// which names it). Nothing was kept.
+    MediaRefused(crate::media::Problem),
+    /// COMMENT-5: no image by this hash — or one the reader may not see.
+    MediaNotFound(String),
     /// MENGER-30: an `update`'s `block` / `unblock` named a blank id, or one
     /// id in both — `why` says which. Nothing was written.
     Blockers { id: String, why: String },
@@ -1573,6 +1585,8 @@ impl std::fmt::Display for StoreError {
             Self::NoteNotFound { id, newest: Some(n) } => write!(f, "no note {id}: note ids run from 1 to {n} (nothing changed)"),
             Self::NoteUpgraded { id, ticket } => write!(f, "note {id} is already a ticket: {ticket} (nothing changed)"),
             Self::NoteCursor(id) => write!(f, "after: no note {id} to resume after"),
+            Self::MediaRefused(problem) => write!(f, "{problem} (nothing was kept)"),
+            Self::MediaNotFound(hash) => write!(f, "no image {hash}"),
             Self::Ambiguous { text, candidates } => write!(
                 f,
                 "'{text}' names more than one: {} — name one in full, or by a short form only it has (nothing was read \
@@ -1852,6 +1866,9 @@ struct Cache {
     /// NOTE-2: every note ([`notes::Notes`]) — read at open, moved by `add`
     /// and by the birth of the ticket a note becomes.
     notes: notes::Notes,
+    /// COMMENT-5: every kept image, without its bytes ([`media::Media`]) —
+    /// read at open, moved by `put` alone.
+    media: media::Media,
     /// IDENTITY-21: every grant ([`members::Members`]) — read at open, moved
     /// by `grant` and `revoke` alone.
     members: members::Members,
@@ -1877,6 +1894,8 @@ struct Cache {
     shortcodes: shortcodes::Registry,
     /// MENGER-39: the queue and its history ([`queue::Queue`]).
     queue: queue::Queue,
+    /// TICKETS-9: who holds each ticket, and the assignment history.
+    assignments: assignees::Assignments,
     /// FILTER-36: every saved filter's text, by its doc's id
     /// ([`saved::SavedFilters`]) — read from the bodies at open, moved by a
     /// body's write with the component registry.
@@ -2238,6 +2257,8 @@ impl Cache {
             comments: comments::Comments::default(),
             // NOTE-2: and the notes.
             notes: notes::Notes::default(),
+            // COMMENT-5: and the images.
+            media: media::Media::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
@@ -2250,6 +2271,7 @@ impl Cache {
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
             queue: Default::default(),
+            assignments: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
             chats: Default::default(),
@@ -2324,6 +2346,8 @@ impl Cache {
             comments: comments::Comments::default(),
             // NOTE-2: and the notes.
             notes: notes::Notes::default(),
+            // COMMENT-5: and the images.
+            media: media::Media::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
@@ -2336,6 +2360,7 @@ impl Cache {
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
             queue: Default::default(),
+            assignments: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
             chats: Default::default(),
@@ -3106,6 +3131,8 @@ impl Store {
         db::migrate_add_labels(&mut conn)?;
         // ARCHIVE-2: and `archived` — every ticket live. No row is rewritten.
         db::migrate_add_archived(&mut conn)?;
+        // TICKETS-9: and the assignees beside them, `[]` for every ticket.
+        db::migrate_add_assignees(&mut conn)?;
         // COMP-3: a database written before COMP-3 — or a new one — gains the
         // `components` table here, once, durably, with the registry built
         // from every body; after it, every open reads the table.
@@ -3114,12 +3141,16 @@ impl Store {
         // the `inputs` and `answers` tables here, once, durably, with every
         // body's inputs read in; after it, every open reads them.
         inputs::migrate(&mut conn)?;
+        // APP-84: and when each input was asked.
+        inputs::migrate_asked(&mut conn)?;
         // SEARCH-2: a database written before SEARCH-2 — or a new one — gains
         // the search index here, once, durably, every ticket's title and text
         // indexed; after it, every write that changes either keeps it.
         search::migrate(&mut conn)?;
         // NOTE-2: a file without the notes table gains it, empty, here.
         notes::migrate(&mut conn)?;
+        // COMMENT-5: and one without the media tables gains them, empty.
+        media::migrate(&mut conn)?;
         // MENGER-13: and one without the transition log gains it, empty,
         // with the moment it began — no ticket gets a history it never had.
         history::migrate(&mut conn)?;
@@ -3137,6 +3168,7 @@ impl Store {
         revisions::migrate(&mut conn)?;
         // MENGER-39: and one without the queue's tables gains them, empty.
         queue::migrate(&mut conn)?;
+        assignees::migrate(&mut conn)?;
         // CHAT-3: and one without the chats' tables gains them, empty.
         chats::migrate(&mut conn)?;
         // APP-23: and comments without an intent, and queue records without
@@ -3237,6 +3269,8 @@ impl Store {
         cache.comments = comments::load(conn)?;
         // NOTE-2: the notes, as stored.
         cache.notes = notes::load(conn)?;
+        // COMMENT-5: what each image is, as stored (its bytes stay there).
+        cache.media = media::load(conn)?;
         // IDENTITY-21: the members, as stored — ACCESS-48: their rows, read
         // as grants once ORG-4 has settled them (below).
         let grant_rows = members::rows(conn)?;
@@ -3261,6 +3295,8 @@ impl Store {
         teams::load(conn, &mut cache.members)?;
         // MENGER-39: the queue, as stored.
         cache.queue = queue::load(conn)?;
+        // TICKETS-9: the assignment log, and the index from the rows.
+        cache.assignments = assignees::load(conn, cache.order.values())?;
         // FILTER-36: the saved filters, from their docs' bodies.
         cache.saved = saved::load(conn)?;
         // CHAT-3: the chats, as stored.
@@ -4672,6 +4708,7 @@ impl Store {
                 body,
                 principal,
                 intent: crate::comments::CommentIntent::Comment,
+                reply_to: None,
             }
         };
         // FILTER-30: a comment on a ticket touches it.
@@ -4777,11 +4814,14 @@ impl Store {
     pub async fn grant(&self, by: impl Into<Authority>, g: crate::members::Grant) -> Result<crate::members::Grant, StoreError> {
         by.into().grants_on(&g.scope)?;
         let serial = self.serial().await;
-        // ACCESS-22: a grant to a team is to one there is.
-        if let crate::vocab::Grantee::Team(t) = &g.principal {
-            if !self.has_team(t) {
-                return Err(StoreError::Invalid(format!("no team {t} (nothing written)")));
+        // ACCESS-22: a grant to a team is to one there is. ACCESS-57:
+        // everyone signed in is never admin — an admin is named.
+        match &g.principal {
+            crate::vocab::Grantee::Team(t) if !self.has_team(t) => return Err(StoreError::Invalid(format!("no team {t} (nothing written)"))),
+            crate::vocab::Grantee::Everyone if g.role == crate::members::Role::Admin => {
+                return Err(StoreError::Invalid("everyone is never admin: give everyone viewer, editor or deployer (nothing written)".into()));
             }
+            _ => {}
         }
         let (stored, kept) = (g.clone(), g.clone());
         self.write(
@@ -5410,6 +5450,11 @@ pub use comments::{CommentChange, CommentPage, CommentQuery};
 /// NOTE-2: the notes store — every note, kept beside the tickets; a note
 /// made a ticket in the ticket's own write.
 mod notes;
+
+/// COMMENT-5: the images comments show — content-addressed, the bytes in
+/// the file, read through the reach of the ticket each was put for.
+mod media;
+pub use media::Put;
 pub use notes::{NotePage, NoteQuery};
 /// IDENTITY-21: the members store — every grant of a role on a scope, kept
 /// beside the tickets, behind the cache.
@@ -5427,7 +5472,7 @@ mod system;
 pub use system::System;
 // ACCESS-11: what a write takes.
 mod writs;
-pub use writs::{Authority, Blocker, Filing, Move, OnComment, Parenting, Rehost, Under, Updating};
+pub use writs::{Authority, Blocker, Filing, Move, OnComment, OnMedia, Parenting, Rehost, Under, Updating};
 #[cfg(test)]
 pub(crate) use system::SYS;
 pub use members::Members;
@@ -5477,7 +5522,10 @@ pub(crate) mod revisions;
 pub use revisions::{acting, say_act, DiffView, RevisionPage, Restoring};
 mod queue;
 pub use queue::{QueueAsk, QueueChange};
+/// TICKETS-9: the assignees and their history.
+mod assignees;
 /// APP-23: a change request — a comment and an unqueue, one write.
+mod threads;
 mod changes;
 pub use changes::{conversation_anchor, CONVERSATION_PATH};
 /// APP-24: what answers an agent waiting on a ticket.
@@ -5485,7 +5533,7 @@ mod replies;
 pub use replies::{comment_on, reply_key, Awaiting};
 /// CHAT-3: chats on a ticket among participants — opened, posted, read.
 mod chats;
-pub use chats::{ChatChange, ChatError, ChatQuery, ChatRecord, ChatSeed, MessageWait, Paging, Signer, Standing};
+pub use chats::{ChatChange, ChatError, ChatOn, ChatQuery, ChatRecord, ChatSeed, MessageWait, Paging, Seat, Signer, Standing};
 pub use deployments::{DeployPage, DeployQuery, Due, RequestAsk};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
@@ -5607,6 +5655,10 @@ mod tests_search;
 /// one write and its refusals; across a reopen.
 #[cfg(test)]
 mod tests_notes;
+/// COMMENT-5: images — kept by hash, one row twice, read through a reach,
+/// refused naming why, across a reopen.
+#[cfg(test)]
+mod tests_media;
 /// DEPLOY-11: deployments — the fold, rollbacks, the kept join, the cells.
 #[cfg(test)]
 mod tests_deployments;
@@ -5629,6 +5681,8 @@ mod tests_queue;
 mod tests_queue_many;
 #[cfg(test)]
 mod tests_queue_views;
+#[cfg(test)]
+mod tests_assignees;
 /// APP-23: a change request.
 #[cfg(test)]
 mod tests_changes;
@@ -5638,6 +5692,10 @@ mod tests_replies;
 /// CHAT-3: CHAT-1's scenarios.
 #[cfg(test)]
 mod tests_chats;
+#[cfg(test)]
+mod tests_chats_outside;
+#[cfg(test)]
+mod tests_chats_grants;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).
@@ -5784,6 +5842,11 @@ mod tests_kinds;
 /// anchor kept through its ticket's writes, and the form 6 → 7 upgrade.
 #[cfg(test)]
 mod tests_comments;
+
+/// COMMENT-8: replies — the root's anchor, one level deep, a resolved root
+/// reopened, `list { thread }`, a reply seen as its root, refusals.
+#[cfg(test)]
+mod tests_threads;
 
 /// MENGER-13: the transition log (every write's transition, who, where
 /// from, why, caused by what; durable; `history`), cancellation cascades and

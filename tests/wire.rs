@@ -1849,7 +1849,7 @@ async fn inputs_over_the_wire() {
                 </m-decision>\n";
     let evs = collect(call(&client, "tickets.create", json!({"epic": "ASK", "title": "asks", "body": body})).await).await;
     assert_eq!((evs[0]["type"].as_str(), evs[0]["ticket"]["id"].as_str()), (Some("created"), Some("ASK-2")));
-    let declared = json!({
+    let mut declared = json!({
         "ticket": "ASK-2", "id": "landing", "kind": "choice", "question": "Archive or delete?",
         "options": [
             {"value": "archive", "label": "Archive", "recommended": true},
@@ -1859,6 +1859,11 @@ async fn inputs_over_the_wire() {
     });
     let heard = watch_until(&mut watch, "input_changed").await;
     assert_eq!(heard[0]["type"], "created", "{heard:?}");
+    // APP-84: when it was asked — the create's own time.
+    let asked = heard.last().unwrap()["input"]["asked_unix"].as_i64().expect("asked_unix on the wire");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    assert!((now - asked).abs() < 60, "asked now: {asked}");
+    declared["asked_unix"] = json!(asked);
     assert_eq!(heard.last(), Some(&json!({"type": "input_changed", "input": declared})), "after the write's other events");
     assert_eq!(inputs(json!({})).await, vec![json!({"type": "input", "input": declared})]);
 

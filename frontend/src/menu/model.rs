@@ -13,7 +13,7 @@
 //! Open · Open in new tab · Chat ▸ · Wave board for P · Waves to X · Wave board · Copy code (one ticket)
 //! Copy codes                                                                         (a selection)
 //! ─────────
-//! Set status ▸ · Set kind ▸ · Set severity ▸ · Labels ▸ · Move under… · Blocked by…
+//! Set status ▸ · Set kind ▸ · Set severity ▸ · Labels ▸ · Assign to… · Move under… · Blocked by…
 //! Unblock ▸ (when one waits on something) · Rename… · Link commits…                   (one ticket)
 //! ─────────
 //! the chip's filter items (a status, kind, severity or label chip) · the ticket's
@@ -241,6 +241,8 @@ pub(crate) enum Form {
     Commits,
     /// A label to add (from Labels ▸).
     AddLabel,
+    /// TICKETS-9: a person or agent to assign — the person picker.
+    Assign,
 }
 
 impl Form {
@@ -252,6 +254,7 @@ impl Form {
             Form::Rename => "rename",
             Form::Commits => "commits",
             Form::AddLabel => "add-label",
+            Form::Assign => "assign",
         }
     }
 
@@ -262,6 +265,7 @@ impl Form {
             Form::Rename => "Rename…",
             Form::Commits => "Link commits…",
             Form::AddLabel => "Add a label…",
+            Form::Assign => "Assign to…",
         }
     }
 
@@ -370,7 +374,7 @@ pub(crate) fn entries(f: &Facts) -> Vec<Entry> {
         if f.rows.iter().any(|r| r.kind.has_lifecycle()) {
             updates.push(Entry::Sub(Sub::Status));
         }
-        updates.extend([Entry::Sub(Sub::Kind), Entry::Sub(Sub::Severity), Entry::Sub(Sub::Labels)]);
+        updates.extend([Entry::Sub(Sub::Kind), Entry::Sub(Sub::Severity), Entry::Sub(Sub::Labels), Entry::Form(Form::Assign)]);
         updates.extend([Entry::Form(Form::MoveUnder), Entry::Form(Form::BlockedBy)]);
         if f.rows.iter().any(|r| !r.blocked_by.is_empty()) {
             updates.push(Entry::Sub(Sub::Unblock));
@@ -489,6 +493,8 @@ pub(crate) enum Change {
     Title(String),
     /// One ticket's.
     Commits(Vec<String>),
+    /// TICKETS-9: a principal assigned to every one.
+    Assign(String),
 }
 
 impl Change {
@@ -506,6 +512,7 @@ impl Change {
             Change::Unlabel(l) => format!("unlabel {l}"),
             Change::Title(_) => "rename".into(),
             Change::Commits(_) => "link commits".into(),
+            Change::Assign(p) => format!("assign {}", crate::chats::short(p)),
         }
     }
 }
@@ -620,6 +627,8 @@ pub(crate) enum Call {
     Label { id: String, add: Vec<String>, remove: Vec<String> },
     /// One ticket's commits: `commits.link { id, commits }` (ACCESS-15).
     Commits(String, Vec<String>),
+    /// TICKETS-9: `assign { id | ids, add }`.
+    Assign { ids: Vec<String>, add: Vec<String> },
 }
 
 /// `change` to every one of `ids` as one write — `None` for what a
@@ -631,6 +640,10 @@ pub(crate) fn call(ids: &[String], change: &Change) -> Option<Call> {
         _ => None,
     };
     let mut a = Args::default();
+    // TICKETS-9: one ticket or many, the same call.
+    if let Change::Assign(p) = change {
+        return Some(Call::Assign { ids: ids.to_vec(), add: vec![p.clone()] });
+    }
     match (change, &one) {
         (Change::Status(s), Some(id)) => return Some(Call::SetStatus(id.clone(), *s)),
         (Change::Label(l), Some(id)) => return Some(Call::Label { id: id.clone(), add: vec![l.clone()], remove: Vec::new() }),
@@ -646,6 +659,7 @@ pub(crate) fn call(ids: &[String], change: &Change) -> Option<Call> {
         (Change::Parent(p), _) => a.parent = Some(p.clone()),
         (Change::Block(b), _) => a.block = Some(vec![b.clone()]),
         (Change::Unblock(b), _) => a.unblock = Some(vec![b.clone()]),
+        (Change::Assign(_), _) => unreachable!("answered above"),
     }
     Some(match one {
         Some(id) => Call::Update(id, a),
@@ -807,6 +821,7 @@ mod tests {
             path: None,
             placement: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             created_unix: 0,
             updated_unix: 0,
         }
@@ -862,7 +877,7 @@ mod tests {
             said(&entries(&facts(&i, &rows, ALL))),
             [
                 "Open", "Open in new tab", "Wave board for DEMAND-1", "Waves to DEMAND-4", "Copy code", "—",
-                "Set status ▸", "Set kind ▸", "Set severity ▸", "Labels ▸", "Move under…", "Blocked by…", "Unblock ▸", "Rename…", "Link commits…", "—",
+                "Set status ▸", "Set kind ▸", "Set severity ▸", "Labels ▸", "Assign to…", "Move under…", "Blocked by…", "Unblock ▸", "Rename…", "Link commits…", "—",
                 "Filter DEMAND", "Filter under DEMAND-4", "Add DEMAND to the filter", "Build a filter from DEMAND…", "—",
                 "Delete…",
             ]
@@ -882,7 +897,7 @@ mod tests {
             said(&es),
             [
                 "Copy codes", "—",
-                "Set status ▸", "Set kind ▸", "Set severity ▸", "Labels ▸", "Move under…", "Blocked by…", "—",
+                "Set status ▸", "Set kind ▸", "Set severity ▸", "Labels ▸", "Assign to…", "Move under…", "Blocked by…", "—",
                 "Filter DEMAND, MNG", "Filter under each of 3", "Add DEMAND, MNG to the filter", "Build a filter from DEMAND, MNG…", "—",
                 "Delete 3…",
             ]

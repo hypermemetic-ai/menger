@@ -21,6 +21,11 @@
 //! it (the server moves the poster's mark), and `read` — the reader's,
 //! from this app or any other open one — sets it as the server says.
 //!
+//! CHAT-14: the copy holds every chat the reader is in — on tickets, and
+//! outside them (direct messages and groups, which name no ticket) — and
+//! the names the server knows principals by (`candidates`' `name`), so an
+//! agent's key reads `builder`, not `key:54a9…`.
+//!
 //! What decides — applying an event, the replay, the counts, a chat's
 //! words — is pure and pinned by native tests; the rest is the socket.
 
@@ -30,7 +35,8 @@ use std::collections::{BTreeMap, HashMap};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::vocab::{ChatId, MessageId};
-use menger_tickets_api::{Chat, ChatState, ChatsEvent, Message};
+use menger_tickets_api::chats::ChatGrant;
+use menger_tickets_api::{Chat, ChatKind, ChatState, ChatsEvent, Message};
 use plexus_client::ClientEvent;
 use wasm_bindgen_futures::spawn_local;
 
@@ -153,6 +159,8 @@ pub(crate) struct Held {
     threads: HashMap<u64, Thread>,
     /// The name each author went by, from the messages heard.
     names: BTreeMap<String, String>,
+    /// CHAT-18: each chat's live work heard and fetched, by `seq` (src/live.rs).
+    activity: HashMap<u64, Vec<menger_tickets_api::chats::Activity>>,
 }
 
 impl Held {
@@ -162,6 +170,7 @@ impl Held {
         let mut held = Held::default();
         for ev in events {
             if let ChatsEvent::Chat { chat } = ev {
+                note_agents(&chat);
                 held.chats.insert(chat.id.get(), chat);
             }
         }
@@ -172,11 +181,12 @@ impl Held {
     /// whether the copy moved.
     pub(crate) fn apply(&mut self, ev: &ChatsEvent, me: &str) -> bool {
         match ev {
-            ChatsEvent::Opened { chat, .. } | ChatsEvent::Added { chat } | ChatsEvent::Chat { chat } | ChatsEvent::Renamed { chat } => {
+            ChatsEvent::Opened { chat, .. } | ChatsEvent::Added { chat, .. } | ChatsEvent::Chat { chat } | ChatsEvent::Renamed { chat } | ChatsEvent::Removed { chat, .. } => {
                 let id = chat.id.get();
                 if self.chats.get(&id) == Some(chat) {
                     return false;
                 }
+                note_agents(chat);
                 self.chats.insert(id, chat.clone());
                 true
             }
@@ -197,8 +207,15 @@ impl Held {
                 }
                 true
             }),
+            ChatsEvent::Activity { activity } => {
+                if let Some(n) = &activity.name {
+                    self.names.entry(activity.by.clone()).or_insert_with(|| n.clone());
+                }
+                crate::live::keep(self.activity.entry(activity.chat.get()).or_default(), activity)
+            }
             ChatsEvent::Left { chat } => {
                 self.threads.remove(&chat.get());
+                self.activity.remove(&chat.get());
                 self.chats.remove(&chat.get()).is_some()
             }
             _ => false,
@@ -270,15 +287,20 @@ impl Held {
         self.threads.get(&id)
     }
 
+    /// CHAT-18: `chat`'s live work, oldest first.
+    pub(crate) fn activity(&self, id: u64) -> &[menger_tickets_api::chats::Activity] {
+        self.activity.get(&id).map_or(&[], Vec::as_slice)
+    }
+
     /// The chats on `ticket` (its key, any case) in `state`, oldest first —
     /// the pane's tabs (open) and its closed list.
     pub(crate) fn on(&self, ticket: &str, state: ChatState) -> Vec<Chat> {
-        self.chats.values().filter(|c| c.state == state && c.ticket.eq_ignore_ascii_case(ticket)).cloned().collect()
+        self.chats.values().filter(|c| c.state == state && on_ticket(c, ticket)).cloned().collect()
     }
 
     /// The reader's unread on `ticket` — the field's N.
     pub(crate) fn unread_on(&self, ticket: &str) -> u32 {
-        self.chats.values().filter(|c| c.ticket.eq_ignore_ascii_case(ticket)).map(|c| c.unread).sum()
+        self.chats.values().filter(|c| on_ticket(c, ticket)).map(|c| c.unread).sum()
     }
 
     /// Fig 5's seam (the header's **chats N**, on CHAT-1's `inbox`
@@ -309,7 +331,7 @@ impl Held {
                 let mut have: Vec<&str> = c.participants.iter().map(String::as_str).collect();
                 have.sort_unstable();
                 have.dedup();
-                c.state == ChatState::Open && c.ticket.eq_ignore_ascii_case(ticket) && have == want
+                c.state == ChatState::Open && on_ticket(c, ticket) && have == want
             })
             .map(|c| c.id.get())
     }
@@ -317,7 +339,7 @@ impl Held {
     /// Who is waiting on `await_message` in any of the reader's chats on
     /// `ticket` — the picker's pulsing dots.
     pub(crate) fn waiting_on(&self, ticket: &str) -> Vec<String> {
-        let mut v: Vec<String> = self.chats.values().filter(|c| c.ticket.eq_ignore_ascii_case(ticket)).flat_map(|c| c.waiting.clone()).collect();
+        let mut v: Vec<String> = self.chats.values().filter(|c| on_ticket(c, ticket)).flat_map(|c| c.waiting.clone()).collect();
         v.sort();
         v.dedup();
         v
@@ -326,6 +348,51 @@ impl Held {
     /// The name `principal` went by, when a message said.
     pub(crate) fn name_of(&self, principal: &str) -> Option<&str> {
         self.names.get(principal).map(String::as_str)
+    }
+
+    /// CHAT-14: the names the server knows principals by (`candidates`),
+    /// over what the messages said; whether any moved.
+    pub(crate) fn learn(&mut self, named: impl IntoIterator<Item = (String, String)>) -> bool {
+        let mut moved = false;
+        for (p, n) in named {
+            if self.names.get(&p) != Some(&n) {
+                self.names.insert(p, n);
+                moved = true;
+            }
+        }
+        moved
+    }
+
+    /// CHAT-14: `#/chats` — every chat the reader is in, on tickets and
+    /// outside them: those with unread first, then by last activity, newest
+    /// first; the open before the closed.
+    pub(crate) fn inbox(&self) -> Vec<Chat> {
+        let mut v: Vec<Chat> = self.chats.values().cloned().collect();
+        v.sort_by_key(|c| (c.state == ChatState::Closed, c.unread == 0, std::cmp::Reverse((c.last_at, c.id.get()))));
+        v
+    }
+}
+
+/// Whether `c` is on `ticket` (any case) — never a chat outside tickets.
+pub(crate) fn on_ticket(c: &Chat, ticket: &str) -> bool {
+    c.ticket.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticket))
+}
+
+/// CHAT-14: a chat's place, as a link: its ticket's page with the chat in
+/// its dock, or — outside tickets — `#/chats/ID`.
+pub(crate) fn href(c: &Chat) -> String {
+    match &c.ticket {
+        Some(t) => format!("#/ticket/{t}?chat={}", c.id.get()),
+        None => format!("#/chats/{}", c.id.get()),
+    }
+}
+
+/// CHAT-14: what a chat is, in a word — the inbox's mark.
+pub(crate) fn kind_word(c: &Chat) -> &'static str {
+    match c.kind {
+        ChatKind::Ticket => "ticket",
+        ChatKind::Direct => "direct",
+        ChatKind::Group => "group",
     }
 }
 
@@ -336,6 +403,7 @@ pub(crate) fn settle(answer: Vec<ChatsEvent>, heard: &[ChatsEvent], me: &str, ke
     if let Some(k) = kept {
         held.threads = k.threads.clone();
         held.names = k.names.clone();
+        held.activity = k.activity.clone();
     }
     for ev in heard {
         held.apply(ev, me);
@@ -352,20 +420,37 @@ pub(crate) fn short(principal: &str) -> String {
     }
 }
 
-/// Whether `principal` is an agent (AGENT-1's `agent:<name>`): marked in
-/// the participants row and on its messages.
+/// Whether `principal` is an agent (AGENT-1's `agent:<name>`; CHAT-14: a
+/// `key:` principal, which is how an agent signs in; or CHAT-13's standing
+/// chat member, which a chat names in its `agents`, or a candidate the
+/// server marked): marked in the participants row, the picker and on its
+/// messages.
 pub(crate) fn is_agent(principal: &str) -> bool {
-    principal.starts_with("agent:")
+    menger_tickets_api::chats::is_agent_principal(principal) || AGENTS.with(|a| a.borrow().contains(principal))
+}
+
+/// CHAT-13: the standing members `chat` names, kept as agents for the
+/// session — a principal the server seats in every chat is one everywhere.
+fn note_agents(chat: &Chat) {
+    if !chat.agents.is_empty() {
+        AGENTS.with(|a| a.borrow_mut().extend(chat.agents.iter().cloned()));
+    }
 }
 
 thread_local! {
+    /// CHAT-13: the standing chat members heard of ([`note_agents`]).
+    static AGENTS: RefCell<std::collections::BTreeSet<String>> = const { RefCell::new(std::collections::BTreeSet::new()) };
     static HELD: ArcRwSignal<Option<Held>> = ArcRwSignal::new(None);
+    /// APP-67: the connections the chats were asked again on ([`refresh`]).
+    static ROUND: ArcRwSignal<u32> = ArcRwSignal::new(0);
     static WANTED: Cell<bool> = const { Cell::new(false) };
     static FETCH: Cell<u32> = const { Cell::new(0) };
     static HEARD: RefCell<Option<Vec<ChatsEvent>>> = const { RefCell::new(None) };
     static PUMP: RefCell<Option<futures::future::AbortHandle>> = const { RefCell::new(None) };
     /// The threads asked for on this connection.
     static ASKED: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    /// CHAT-18: the activity logs asked for on this connection.
+    static ASKED_LIVE: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The chats, as a signal — `None` until the first fetch lands.
@@ -384,6 +469,24 @@ pub(crate) fn my_name() -> Option<String> {
     crate::signin::account().with_untracked(|a| a.me.as_ref().map(|m| m.name.clone())).filter(|n| !n.is_empty())
 }
 
+/// APP-67: which connection the chats were last asked on — moved by every
+/// [`refresh`], so an open pane asks again for a thread it does not hold.
+pub(crate) fn round() -> ArcRwSignal<u32> {
+    ROUND.with(Clone::clone)
+}
+
+/// APP-67: whether a pane asks [`load`] for its thread, now on connection
+/// `round`, having last asked on `asked` (none: not yet). Its first ask is
+/// always made; on a later connection only for a thread never fetched — an
+/// ask lost with its socket (cut in flight, or made before one was up),
+/// which nothing asked again, left the chat drawn with no messages.
+pub(crate) fn asks(asked: Option<u32>, round: u32, fetched: bool) -> bool {
+    match asked {
+        None => true,
+        Some(a) => a != round && !fetched,
+    }
+}
+
 /// A view needs the chats: watch and fetch them now if this is the first ask.
 pub(crate) fn want() {
     if !WANTED.with(|w| w.replace(true)) {
@@ -396,7 +499,9 @@ pub(crate) fn want() {
 pub(crate) fn refresh() {
     if WANTED.with(Cell::get) {
         ASKED.with(|a| a.borrow_mut().clear());
+        ASKED_LIVE.with(|a| a.borrow_mut().clear());
         start();
+        ROUND.with(|r| r.update(|n| *n = n.wrapping_add(1)));
     }
 }
 
@@ -453,10 +558,12 @@ fn fetch() {
         loop {
             match client.list_all(None, None, None, after, Some(PAGE)).await {
                 Ok(events) => {
-                    let mut next = None;
+                    let Some((events, next)) = paged(events) else {
+                        leptos::logging::log!("chats: the list was cut short; asked again on the next connection");
+                        return;
+                    };
                     for ev in events {
                         match ev {
-                            ChatsEvent::Page { next: n } => next = n,
                             ChatsEvent::Error { message } => leptos::logging::log!("chats: {message}"),
                             ev => answer.push(ev),
                         }
@@ -507,6 +614,30 @@ pub(crate) fn load(chat: u64, size: u32, at: Option<u64>) {
             return;
         };
         HELD.with(|s| s.update(|h| h.get_or_insert_with(Held::default).with_thread(chat, |t| if at.is_some() { t.around(back, older, ahead, newer) } else { t.at_newest(back, older) })));
+    });
+}
+
+/// CHAT-18: `chat`'s live work the server keeps (`activity_log`), once per
+/// connection — what was done before the chat opened, joined to what the
+/// watch hears by `seq`.
+pub(crate) fn load_activity(chat: u64) {
+    if ASKED_LIVE.with(|a| a.borrow().contains(&chat)) {
+        return;
+    }
+    let Some(client) = session::chats_client() else { return };
+    ASKED_LIVE.with(|a| a.borrow_mut().push(chat));
+    spawn_local(async move {
+        let Ok(events) = client.activity_log_all(ChatId::new(chat)).await else {
+            ASKED_LIVE.with(|a| a.borrow_mut().retain(|c| *c != chat));
+            return;
+        };
+        let me = me();
+        HELD.with(|s| {
+            s.maybe_update(|h| {
+                let h = h.get_or_insert_with(Held::default);
+                events.iter().fold(false, |moved, ev| h.apply(ev, &me) | moved)
+            })
+        });
     });
 }
 
@@ -571,16 +702,33 @@ async fn page(client: &menger_tickets_api::ChatsClient<std::rc::Rc<plexus_client
         Paging::After(a) => (Some(MessageId::new(a)), None, None),
     };
     let events = client.messages_all(ChatId::new(chat), after, before, newest, Some(size)).await.map_err(|_| ())?;
-    let mut out = Vec::new();
+    let (events, next) = paged(events).ok_or(())?;
+    let out = events
+        .into_iter()
+        .filter_map(|ev| match ev {
+            ChatsEvent::Message { message } => Some(message),
+            _ => None,
+        })
+        .collect();
+    Ok((out, next))
+}
+
+/// APP-67: a page's items and its `next` — or none when its `page` never
+/// came. A page the server answers always ends with one; a socket cut in
+/// flight ends the stream without it, and those few (often no) items were
+/// taken as the whole answer: a thread held empty, a chat list without
+/// the chat open ("not one you are in"), and nothing asked again.
+pub(crate) fn paged(events: Vec<ChatsEvent>) -> Option<(Vec<ChatsEvent>, Option<u64>)> {
     let mut next = None;
+    let mut ended = false;
+    let mut out = Vec::new();
     for ev in events {
         match ev {
-            ChatsEvent::Message { message } => out.push(message),
-            ChatsEvent::Page { next: n } => next = n,
-            _ => {}
+            ChatsEvent::Page { next: n } => (next, ended) = (n, true),
+            ev => out.push(ev),
         }
     }
-    Ok((out, next))
+    ended.then_some((out, next))
 }
 
 /// The one answer a write gives, applied at once — or what the server said
@@ -606,10 +754,19 @@ fn client() -> Result<menger_tickets_api::ChatsClient<std::rc::Rc<plexus_client:
 }
 
 /// `chats.open { ticket, others }` — the chat's id (the one already open
-/// among the same people, when there is one).
-pub(crate) async fn open(ticket: &str, others: &[String]) -> Result<u64, String> {
+/// among the same people, when there is one). CHAT-14: no ticket — a
+/// direct message (one other) or a group (several, `title`).
+pub(crate) async fn open(ticket: Option<&str>, others: &[String], title: Option<&str>) -> Result<u64, String> {
     let c = client()?;
-    let ev = answer_of("open", c.open_all(crate::typed::typed(ticket)?, Some(crate::typed::many(others)?), None).await)?;
+    let ticket = match ticket {
+        Some(t) => Some(crate::typed::typed(t)?),
+        None => None,
+    };
+    let title = match title.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => Some(crate::typed::typed(t)?),
+        None => None,
+    };
+    let ev = answer_of("open", c.open_all(ticket, Some(crate::typed::many(others)?), title).await)?;
     match ev {
         ChatsEvent::Opened { chat, .. } => Ok(chat.id.get()),
         _ => Err("open: no chat".into()),
@@ -623,7 +780,41 @@ pub(crate) async fn post(chat: u64, body: &str) -> Result<(), String> {
 
 /// `chats.add { chat, principal }`.
 pub(crate) async fn add(chat: u64, principal: &str) -> Result<(), String> {
-    answer_of("add", client()?.add_all(ChatId::new(chat), crate::typed::typed(principal)?).await).map(|_| ())
+    match add_granting(chat, principal, None).await? {
+        Added::Added(_) => Ok(()),
+        Added::NeedsGrant(_) => Err(format!("{principal} can't read it: an admin adds them with ＋ add, granting access")),
+    }
+}
+
+/// CHAT-16: what an add answered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Added {
+    /// In; `Some` what it granted, in words (`chatter on KILN-7`).
+    Added(Option<String>),
+    /// One who can't read it, and no grant named: the dialog's question.
+    NeedsGrant(crate::chat_grant::Ask),
+}
+
+/// CHAT-16: `chats.add { chat, principal, grant? }` — an admin's add, the
+/// grant it makes named (`None`: ask first).
+pub(crate) async fn add_granting(chat: u64, principal: &str, grant: Option<ChatGrant>) -> Result<Added, String> {
+    match answer_of("add", client()?.add_all(ChatId::new(chat), crate::typed::typed(principal)?, grant).await)? {
+        ChatsEvent::NeedsGrant { chat, principal, ticket, choices } => Ok(Added::NeedsGrant(crate::chat_grant::Ask { chat: chat.get(), principal, ticket, choices })),
+        ChatsEvent::Added { granted, .. } => Ok(Added::Added(granted)),
+        _ => Ok(Added::Added(None)),
+    }
+}
+
+/// CHAT-14: `chats.remove { chat, principal }` — a group's member taken
+/// out (the reader too: it leaves).
+pub(crate) async fn remove(chat: u64, principal: &str) -> Result<(), String> {
+    remove_revoking(chat, principal, false).await
+}
+
+/// CHAT-16: `chats.remove { chat, principal, revoke }` — and, `revoke`, the
+/// grant their add made taken back in the same write.
+pub(crate) async fn remove_revoking(chat: u64, principal: &str, revoke: bool) -> Result<(), String> {
+    answer_of("remove", client()?.remove_all(ChatId::new(chat), crate::typed::typed(principal)?, revoke.then_some(true)).await).map(|_| ())
 }
 
 /// `chats.read { chat, upto }`.
@@ -649,17 +840,34 @@ pub(crate) async fn rename(chat: u64, title: Option<&str>) -> Result<(), String>
 }
 
 /// `chats.candidates { ticket }` — each principal and whether it reads the
-/// ticket.
-pub(crate) async fn candidates(ticket: &str) -> Result<Vec<(String, bool)>, String> {
-    let events = client()?.candidates_all(crate::typed::typed(ticket)?).await.map_err(|e| session::describe(&e))?;
+/// ticket; CHAT-14: without one, whether it may be in a direct message or
+/// a group. The names and agents it says are kept for every view.
+pub(crate) async fn candidates(ticket: Option<&str>) -> Result<Vec<(String, bool)>, String> {
+    let ticket = match ticket {
+        Some(t) => Some(crate::typed::typed(t)?),
+        None => None,
+    };
+    let events = client()?.candidates_all(ticket).await.map_err(|e| session::describe(&e))?;
     let mut out = Vec::new();
+    let mut named = Vec::new();
     for ev in events {
         match ev {
-            ChatsEvent::Candidate { principal, reads } => out.push((principal, reads)),
+            ChatsEvent::Candidate { principal, reads, name, agent } => {
+                if agent {
+                    AGENTS.with(|a| a.borrow_mut().insert(principal.clone()));
+                }
+                if let Some(n) = name {
+                    named.push((principal.clone(), n));
+                }
+                out.push((principal, reads));
+            }
             ChatsEvent::Refused { reasons } => return Err(reasons.join("; ")),
             ChatsEvent::Error { message } => return Err(message),
             _ => {}
         }
+    }
+    if !named.is_empty() {
+        HELD.with(|s| s.maybe_update(|h| h.get_or_insert_with(Held::default).learn(named)));
     }
     Ok(out)
 }
@@ -671,7 +879,8 @@ pub(crate) mod tests {
     pub(crate) fn chat(id: u64, ticket: &str, who: &[&str]) -> Chat {
         Chat {
             id: ChatId::new(id),
-            ticket: ticket.into(),
+            kind: if ticket.is_empty() { ChatKind::Direct } else { ChatKind::Ticket },
+            ticket: (!ticket.is_empty()).then(|| ticket.to_string()),
             title: None,
             participants: who.iter().map(|w| w.to_string()).collect(),
             state: ChatState::Open,
@@ -683,6 +892,9 @@ pub(crate) mod tests {
             count: 0,
             mark: None,
             waiting: Vec::new(),
+            agents: Vec::new(),
+            ticket_title: None,
+            granted: Vec::new(),
         }
     }
 
@@ -730,6 +942,22 @@ pub(crate) mod tests {
         assert_eq!(ids(h.on("KILN-7", ChatState::Open)), [41, 42]);
         h.apply(&ChatsEvent::Left { chat: ChatId::new(42) }, "ada");
         assert_eq!(ids(h.on("KILN-7", ChatState::Open)), [41]);
+    }
+
+    /// CHAT-18: activity heard twice (the log and the watch) is kept once,
+    /// by seq; a chat left forgets it.
+    #[test]
+    fn activity_is_kept_once_and_forgotten_with_the_chat() {
+        use menger_tickets_api::chats::{Activity, ActivityState};
+        let mut h = Held::default();
+        let a = Activity { seq: 7, chat: ChatId::new(41), by: "key:b".into(), name: Some("builder".into()), at: 5, state: ActivityState::Started, line: None };
+        let ev = ChatsEvent::Activity { activity: a };
+        assert!(h.apply(&ev, "idp:me"));
+        assert!(!h.apply(&ev, "idp:me"), "once");
+        assert_eq!(h.activity(41).len(), 1);
+        assert_eq!(h.name_of("key:b"), Some("builder"));
+        h.apply(&ChatsEvent::Left { chat: ChatId::new(41) }, "idp:me");
+        assert!(h.activity(41).is_empty());
     }
 
     /// The presence dots: `listening` adds and takes away who waits.
@@ -801,11 +1029,73 @@ pub(crate) mod tests {
         assert_eq!((ids(&a), a.older, a.newer), ((48..=53).collect::<Vec<_>>(), true, true));
     }
 
+    /// CHAT-14: `#/chats` — every chat, unread first, then the newest; the
+    /// closed last. A direct message names no ticket and is on none; its
+    /// link is `#/chats/ID`. Names the server knows are learned.
+    #[test]
+    fn the_inbox_holds_every_chat_unread_first() {
+        let mut dm = chat(5, "", &["ada", "rui"]);
+        dm.last_at = 500;
+        let mut t = chat(6, "KILN-7", &["ada", "builder"]);
+        t.last_at = 900;
+        let mut g = chat(7, "", &["ada", "rui", "sam"]);
+        g.kind = ChatKind::Group;
+        g.unread = 2;
+        g.last_at = 100;
+        let mut old = chat(8, "", &["ada", "sam"]);
+        old.state = ChatState::Closed;
+        old.last_at = 999;
+        let mut h = Held::from_events([dm, t, g, old].map(|chat| ChatsEvent::Chat { chat }));
+        assert_eq!(h.inbox().iter().map(|c| c.id.get()).collect::<Vec<_>>(), [7, 6, 5, 8]);
+        assert_eq!(h.unread_on("KILN-7"), 0);
+        assert!(h.on("", ChatState::Open).is_empty(), "a direct message is on no ticket");
+        assert_eq!((href(h.get(5).unwrap()), href(h.get(6).unwrap())), ("#/chats/5".to_string(), "#/ticket/KILN-7?chat=6".to_string()));
+        assert_eq!((kind_word(h.get(5).unwrap()), kind_word(h.get(7).unwrap())), ("direct", "group"));
+        assert!(h.learn([("key:54a9".to_string(), "builder".to_string())]));
+        assert!(!h.learn([("key:54a9".to_string(), "builder".to_string())]));
+        assert_eq!(h.name_of("key:54a9"), Some("builder"));
+        // A member removed: the chat as it is now.
+        let mut less = h.get(7).unwrap().clone();
+        less.participants.retain(|p| p != "sam");
+        assert!(h.apply(&ChatsEvent::Removed { chat: less, principal: "sam".into(), revoked: false }, "ada"));
+        assert_eq!(h.get(7).unwrap().participants, ["ada", "rui"]);
+    }
+
     #[test]
     fn a_principal_in_few_characters() {
         assert_eq!(short("key:4b2e0000000000aa"), "key:4b2e…");
         assert_eq!(short("anonymous"), "anonymous");
         assert_eq!(short("agent:builder"), "agent:builder");
         assert!(is_agent("agent:builder") && !is_agent("idp:ada"));
+        // CHAT-13: a standing member a chat names is an agent from then on.
+        assert!(!is_agent("idp:5eed"));
+        let mut seated = chat(9, "KILN-7", &["idp:ada", "idp:5eed"]);
+        seated.agents = vec!["idp:5eed".into()];
+        Held::from_events([ChatsEvent::Chat { chat: seated }]);
+        assert!(is_agent("idp:5eed") && !is_agent("idp:ada"));
+        // CHAT-14: a key is how an agent signs in.
+        assert!(is_agent("key:54a9"));
+    }
+
+    /// APP-67: a thread whose ask was lost with its socket is asked again
+    /// on the next connection; one held is not.
+    #[test]
+    fn a_pane_asks_again_for_a_thread_it_never_got() {
+        assert!(asks(None, 0, false), "mounting asks");
+        assert!(asks(None, 3, true), "mounting asks, held or not (the newest page)");
+        assert!(!asks(Some(3), 3, false), "once per connection");
+        assert!(asks(Some(3), 4, false), "a new connection, nothing held: ask again");
+        assert!(!asks(Some(3), 4, true), "a new connection, the thread held: the watch keeps it");
+    }
+
+    /// APP-67: an answer is whole only with its `page`; one cut short is
+    /// no answer, never an empty one.
+    #[test]
+    fn a_page_cut_short_is_no_answer() {
+        assert_eq!(paged(Vec::new()), None, "the socket went before anything came");
+        let m = ChatsEvent::Left { chat: ChatId::new(1) };
+        assert_eq!(paged(vec![m.clone()]), None, "items but no end");
+        assert_eq!(paged(vec![ChatsEvent::Page { next: None }]), Some((Vec::new(), None)), "an empty chat, answered");
+        assert_eq!(paged(vec![m.clone(), ChatsEvent::Page { next: Some(7) }]), Some((vec![m], Some(7))));
     }
 }

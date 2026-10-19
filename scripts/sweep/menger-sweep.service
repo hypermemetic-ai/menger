@@ -1,0 +1,11 @@
+# CI-2: the build-output sweep (scripts/sweep/install.sh installs it).
+[Unit]
+Description=menger: sweep idle cargo build output; tell the owner when the disk is full (CI-2)
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/share/menger-sweep/run
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=30min

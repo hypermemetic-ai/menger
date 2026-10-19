@@ -207,8 +207,13 @@ fn who_granted_and_who_holds_read_as_their_text() {
     let p = "idp:6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b";
     holds::<GrantedBy>(&[p, OPERATOR], &["", "nobody"]);
     assert_eq!(OPERATOR.parse::<GrantedBy>(), Ok(GrantedBy::Operator));
-    holds::<Grantee>(&[p, "team:release-crew"], &["", "team:", "team:Release", "nobody"]);
+    holds::<Grantee>(&[p, "team:release-crew", "everyone"], &["", "team:", "team:Release", "nobody", "Everyone", "team:everyone-"]);
     assert!(matches!("team:release-crew".parse::<Grantee>(), Ok(Grantee::Team(_))));
+    // ACCESS-57: `everyone` is no principal, and no principal is it.
+    assert_eq!("everyone".parse::<Grantee>(), Ok(Grantee::Everyone));
+    assert_eq!(Grantee::Everyone.to_string(), EVERYONE);
+    assert!(EVERYONE.parse::<Principal>().is_err());
+    assert!(matches!("team:everyone".parse::<Grantee>(), Ok(Grantee::Team(_))), "a team named everyone is a team");
     holds::<TeamName>(&["release-crew", "a1"], &["", "1a", "a-", "A", &"a".repeat(33)]);
 }
 
@@ -239,7 +244,15 @@ fn a_kept_scope_reads_back_from_its_text() {
 fn prose_has_a_name_and_one_rule_each() {
     holds::<Title>(&["Wrap long titles", " padded "], &["", "   ", &"a".repeat(crate::limits::TITLE_MAX + 1)]);
     assert_eq!(" padded ".parse::<Title>().unwrap().as_str(), " padded ", "a title is kept as written");
+    holds::<ActivityLine>(&["Read a.rs", ""], &[&"a".repeat(MESSAGE_MAX + 1)]);
+    assert_eq!("Bash:\tls\n".parse::<ActivityLine>().unwrap().as_str(), "Bash: ls", "control characters are spaces, trimmed");
     holds::<Body>(&["", "# a body\n\nwith $ and `code`"], &[]);
+    // COMMENT-5: an image's hash, type and data.
+    let (hash, named, bad) = ("9f".repeat(32), format!("media:{}", "AB".repeat(32)), "g".repeat(64));
+    holds::<MediaHash>(&[hash.as_str(), named.as_str()], &["", "abc", bad.as_str()]);
+    assert_eq!(named.parse::<MediaHash>().unwrap().as_str(), "ab".repeat(32));
+    holds::<MediaType>(&["image/png", "IMAGE/JPEG", "image/svg+xml", "text/plain; charset=utf-8"], &["", "png", "image/", "/png", "image png"]);
+    holds::<MediaData>(&["", "iVBORw0KGgo="], &[]);
     holds::<Message>(&["folded into MNG-9", "", "  why  "], &["a\u{7}b"]);
     assert_eq!("  why  ".parse::<Message>().unwrap().given().as_deref(), Some("why"));
     assert_eq!("".parse::<Message>().unwrap().given(), None);
@@ -307,7 +320,9 @@ fn every_enum_a_method_takes_is_a_closed_enum_in_the_schema() {
     assert_eq!(closed::<Kind>(), Kind::ALL.map(|k| k.as_str().to_string()));
     assert_eq!(closed::<Severity>(), ["Critical", "High", "Medium", "Low"]);
     assert_eq!(closed::<crate::types::InputState>().len(), 5);
-    assert_eq!(closed::<crate::members::Role>(), ["viewer", "deployer", "editor", "admin"]);
+    assert_eq!(closed::<crate::members::Role>(), ["chatter", "viewer", "deployer", "editor", "admin"]);
+    assert_eq!(closed::<crate::chats::ChatGrant>(), ["ticket", "chat"]);
+    assert_eq!(closed::<crate::chats::ActivityState>(), ["started", "working", "ended"]);
     assert_eq!(closed::<crate::comments::CommentState>(), ["open", "resolved"]);
     assert_eq!(closed::<crate::notes::NoteState>(), ["open", "upgraded"]);
     assert_eq!(closed::<crate::deployments::DeployState>(), ["started", "succeeded", "failed", "rolled_back", "requested"]);

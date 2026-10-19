@@ -128,6 +128,7 @@ mod sealed {
     impl Sealed for super::Viewer {}
     impl Sealed for super::Editor {}
     impl Sealed for super::Admin {}
+    impl Sealed for super::Chatter {}
 }
 
 /// A role a [`Permit`] is for — [`Viewer`], [`Editor`], [`Admin`]; sealed:
@@ -153,6 +154,21 @@ pub enum Admin {}
 
 impl RoleMark for Viewer {
     const ROLE: Role = Role::Viewer;
+    /// Every role reads — but CHAT-16's `chatter`, which reads its chats
+    /// and nothing of the tickets.
+    fn admits(held: Role) -> bool {
+        held != Role::Chatter
+    }
+}
+
+/// CHAT-16: the mark of a seat in a ticket's chat — any role on the ticket,
+/// `chatter` included (the chat is the participant's to read; the store
+/// checks it is in it).
+#[derive(Debug)]
+pub enum Chatter {}
+
+impl RoleMark for Chatter {
+    const ROLE: Role = Role::Chatter;
     fn admits(_: Role) -> bool {
         true
     }

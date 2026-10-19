@@ -152,17 +152,27 @@ text_type!(
 /// issuer is `team`, so the two never collide.
 pub const TEAM_PREFIX: &str = "team:";
 
+/// ACCESS-57: the grantee every signed-in principal is: no principal is
+/// one word (a principal is `issuer:subject`), so the two never collide.
+pub const EVERYONE: &str = "everyone";
+
 /// ACCESS-9: who a grant is to — a principal, or a team (`team:<name>`,
-/// whose members hold it; ACCESS-22 keeps the teams).
+/// whose members hold it; ACCESS-22 keeps the teams). ACCESS-57: or
+/// `everyone` — every signed-in principal (a person or a key) holds it,
+/// beside its own; the anonymous caller never does.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Grantee {
     Principal(Principal),
     Team(TeamName),
+    Everyone,
 }
 
 impl TryFrom<&str> for Grantee {
     type Error = String;
     fn try_from(text: &str) -> Result<Self, String> {
+        if text.trim() == EVERYONE {
+            return Ok(Self::Everyone);
+        }
         match text.trim().strip_prefix(TEAM_PREFIX) {
             Some(team) => team.parse().map(Self::Team),
             None => text.parse().map(Self::Principal),
@@ -175,11 +185,12 @@ impl fmt::Display for Grantee {
         match self {
             Self::Principal(p) => f.write_str(p.as_str()),
             Self::Team(t) => write!(f, "{TEAM_PREFIX}{t}"),
+            Self::Everyone => f.write_str(EVERYONE),
         }
     }
 }
 
-as_text!(Grantee, "Who a grant is to: a Plexus principal, or team:<name>");
+as_text!(Grantee, "Who a grant is to: a Plexus principal, team:<name>, or everyone (every signed-in principal)");
 
 text_type!(
     /// ORG-4: a scope as a call writes it (ACCESS-37's grammar) — `*`, an

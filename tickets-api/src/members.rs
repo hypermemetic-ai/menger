@@ -26,12 +26,16 @@ use std::str::FromStr;
 /// before it. DEPLOY-14: `deployer` stands beside that line — a viewer's
 /// reads and `deployments.record`, nothing an editor may do — so a CI's key
 /// can be granted exactly what recording a deployment needs; its place in
-/// the order is only for sorting. (What each role may is the gate's,
+/// the order is only for sorting. CHAT-16: `chatter` stands apart too — the
+/// chats it is in on the scope (read and post), nothing of the tickets: a
+/// chat-only grant, made by an admin's add (`chats.add --grant chat`). (What each role may is the gate's,
 /// declared on each activation with `roles(...)`; this names the role a
 /// membership holds.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
+    /// CHAT-16: chat only.
+    Chatter,
     Viewer,
     Deployer,
     Editor,
@@ -41,6 +45,7 @@ pub enum Role {
 impl Role {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Role::Chatter => "chatter",
             Role::Viewer => "viewer",
             Role::Deployer => "deployer",
             Role::Editor => "editor",
@@ -59,11 +64,12 @@ impl FromStr for Role {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().as_str() {
+            "chatter" => Ok(Role::Chatter),
             "viewer" => Ok(Role::Viewer),
             "deployer" => Ok(Role::Deployer),
             "editor" => Ok(Role::Editor),
             "admin" => Ok(Role::Admin),
-            other => Err(format!("unknown role `{other}` — the roles are viewer, editor, admin, deployer")),
+            other => Err(format!("unknown role `{other}` — the roles are viewer, editor, admin, deployer, chatter")),
         }
     }
 }

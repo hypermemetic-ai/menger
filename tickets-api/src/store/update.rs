@@ -59,6 +59,11 @@ pub struct Update {
     /// ([`crate::labels::apply`]; one in both is added).
     pub label: Vec<Label>,
     pub unlabel: Vec<Label>,
+    /// TICKETS-9: principals to assign, and to unassign — `assign`'s rules
+    /// ([`crate::assignees::apply`]); who may be assigned is the caller's
+    /// to have asked.
+    pub assign: Vec<crate::vocab::Principal>,
+    pub unassign: Vec<crate::vocab::Principal>,
     /// What the caller refused already — an unknown kind, status or
     /// severity — named with the store's own refusals, so one answer names
     /// every one ([`StoreError::Invalid`]).
@@ -93,6 +98,8 @@ pub(super) struct Plan {
     blockers_first: bool,
     /// ACT-2: the labels after, and what moved — `None`: none did.
     labels: Option<Vec<Label>>,
+    /// TICKETS-9: the assignees after — `None`: none moved.
+    assignees: Option<Vec<String>>,
     pub(super) changed: Vec<String>,
 }
 
@@ -228,7 +235,7 @@ pub(super) fn apply(
     now: i64,
     out: &mut Gathered,
 ) -> Result<(), StoreError> {
-    let Plan { id, title, body, registered, asked, kind, status, parent, severity, added, removed, blockers_first, labels, changed: _ } = plan;
+    let Plan { id, title, body, registered, asked, kind, status, parent, severity, added, removed, blockers_first, labels, assignees, changed: _ } = plan;
     let blockers = !added.is_empty() || !removed.is_empty();
     if title.is_some() || body.is_some() {
         amend_step(txn, cache, unders, &id, title, body, registered, asked, now, out)?;
@@ -260,6 +267,9 @@ pub(super) fn apply(
     }
     if let Some(labels) = labels {
         labels_step(txn, cache, unders, &id, labels, now, out)?;
+    }
+    if let Some(after) = assignees {
+        super::assignees::step(txn, cache, unders, &id, after, act, now, out)?;
     }
     Ok(())
 }
@@ -400,6 +410,18 @@ pub(super) fn plan(
             Ok(_) => {}
         }
     }
+    // TICKETS-9: assign's.
+    let mut assignees = None;
+    if !u.assign.is_empty() || !u.unassign.is_empty() {
+        match super::assignees::planned(&row, &u.assign, &u.unassign) {
+            Err(e) => refusals.push(e),
+            Ok(Some(after)) => {
+                changed.push("assignees".into());
+                assignees = Some(after);
+            }
+            Ok(None) => {}
+        }
+    }
     Plan {
         id: String::from(id),
         title,
@@ -414,6 +436,7 @@ pub(super) fn plan(
         removed,
         blockers_first: !final_kind.has_lifecycle(),
         labels,
+        assignees,
         changed,
     }
 }

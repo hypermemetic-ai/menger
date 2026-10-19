@@ -24,6 +24,13 @@
 //! src/comments.rs's, which `comments.watch` keeps: a comment sent from any
 //! page, or by an agent, shows on every open page.
 //!
+//! **Nothing is lost** (COMMENT-9, src/drafts.rs): the draft is kept in
+//! the browser until the server answers, and comes back when the page
+//! does; a comment not kept says why under the box, with a Retry.
+//!
+//! **Replies** (COMMENT-8, src/thread.rs): the thread lists roots; each
+//! root's replies are drawn under it, oldest first, with its Reply box.
+//!
 //! **A change request** (APP-23: the tray's Request changes,
 //! `tickets.request_changes`) is a comment here like any other, with intent
 //! `changes`: its row is marked "changes requested" ([`mark`]).
@@ -37,7 +44,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::bindings::{self, Context};
-use crate::{comments, comments_page, dom, fmt_relative, fmt_unix, md, now_unix};
+use crate::{comments, comments_page, dom, drafts, fmt_relative, fmt_unix, md, now_unix};
 
 /// The anchor path of a comment on the ticket as a whole.
 pub(crate) const PATH: &str = "conversation";
@@ -63,10 +70,14 @@ pub(crate) fn is_whole(c: &Comment) -> bool {
 }
 
 /// The thread on `ticket`: every comment whose anchor names it (any case),
-/// whole-ticket and pinned alike, oldest first.
+/// whole-ticket and pinned alike, oldest first — roots only (COMMENT-8: a
+/// reply is drawn under its root).
 pub(crate) fn thread(all: &[Comment], ticket: &str) -> Vec<Comment> {
-    let mut out: Vec<Comment> =
-        all.iter().filter(|c| c.anchor.ticket.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticket))).cloned().collect();
+    let mut out: Vec<Comment> = all
+        .iter()
+        .filter(|c| comments::is_root(c) && c.anchor.ticket.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(ticket)))
+        .cloned()
+        .collect();
     out.sort_by_key(|c| c.id);
     out
 }
@@ -131,9 +142,28 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
             first_seen.set_value(Some(r.last().map_or(0, |c| c.id.get())));
         }
     });
-    let body = RwSignal::new(String::new());
+    // COMMENT-9: the draft kept here, back when the page is.
+    let kept = drafts::key(&anchor(&ticket));
+    let body = RwSignal::new(drafts::load(&kept).unwrap_or_default());
     let sending = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
+    let landed = drafts::landed_signal();
+    {
+        // Every change kept — typed, an image's link, sent and emptied.
+        let kept = kept.clone();
+        Effect::new(move |_| body.with(|b| drafts::save(&kept, b)));
+    }
+    {
+        let kept = kept.clone();
+        Effect::new(move |_| {
+            if let Some((k, b)) = landed.get() {
+                if k == kept && body.with_untracked(|t| t.trim() == b.trim()) {
+                    body.set(String::new());
+                    error.set(None);
+                }
+            }
+        });
+    }
     let me = ticket.clone();
     let send = move || {
         let text = body.get_untracked();
@@ -143,7 +173,7 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
         sending.set(true);
         let a = anchor(&me);
         spawn_local(async move {
-            let r = comments::add(a, text).await;
+            let r = drafts::send(a, text).await;
             sending.try_set(false);
             match r {
                 Ok(_) => {
@@ -156,9 +186,14 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
             }
         });
     };
-    let send_key = send.clone();
     let area = NodeRef::<leptos::html::Textarea>::new();
     crate::grow::follow(area, move || body.track());
+    // COMMENT-5: images pasted, dropped or picked — for this ticket.
+    let attach = crate::media::Attach::new(body, area, Some(ticket.clone()));
+    // APP-70: a drawing on the pad goes first.
+    let send = attach.then(send);
+    let send_key = send.clone();
+    let retry = send.clone();
     let count = move || rows.with(|r| r.as_ref().map(|r| r.len()));
     view! {
         <section class="convsec" id="conversation" data-ticket-id=ticket.clone()>
@@ -177,6 +212,7 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                 }
             }}
             <div class="cnew">
+                <crate::draw::PadView a=attach />
                 <textarea
                     node_ref=area
                     class="cbox grow"
@@ -185,6 +221,9 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                     placeholder=placeholder(&ticket)
                     prop:value=move || body.get()
                     on:input=move |ev| body.set(event_target_value(&ev))
+                    on:paste=move |ev| attach.paste(ev)
+                    on:dragover=move |ev| attach.dragover(ev)
+                    on:drop=move |ev| attach.dropped(ev)
                     on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
                         Some("comment.save") => {
                             ev.prevent_default();
@@ -200,10 +239,17 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                     }
                 ></textarea>
                 <div class="cnewacts">
-                    {move || error.get().map(|e| view! { <span class="cerr" role="alert">{e}</span> })}
+                    <crate::media::Attachments a=attach />
+                    {move || error.get().map(|e| {
+                        let retry = retry.clone();
+                        view! {
+                            <span class="cerr" role="alert">{drafts::words(&e)}</span>
+                            <button class="cretry" disabled=move || sending.get() on:click=move |_| retry()>"Retry"</button>
+                        }
+                    })}
                     <button
                         class="csend"
-                        disabled=move || sending.get() || body.with(|b| b.trim().is_empty())
+                        disabled=move || sending.get() || attach.busy() || (!attach.drawn() && body.with(|b| b.trim().is_empty()))
                         on:click=move |_| send()
                     >
                         {move || if sending.get() { "Sending…" } else { "Send" }}
@@ -228,9 +274,13 @@ fn row(c: Comment, fresh: bool) -> impl IntoView {
             err.try_set(r.err());
         });
     };
-    let html = md::render_body(&c.body).html;
+    // COMMENT-5: a comment's images — `media:` drawn, another origin's not.
+    let html = md::render_comment(&c.body).html;
     let node = NodeRef::<leptos::html::Div>::new();
-    node.on_load(|el: web_sys::HtmlDivElement| crate::highlight::mount(&el));
+    node.on_load(|el: web_sys::HtmlDivElement| {
+        crate::highlight::mount(&el);
+        crate::media::hydrate(&el);
+    });
     let place = match place(&c) {
         Place::Whole => None,
         Place::Pinned { label, href } => {
@@ -254,6 +304,7 @@ fn row(c: Comment, fresh: bool) -> impl IntoView {
             </div>
             <div class="cbody md" data-links="comment" data-ticket=c.anchor.ticket.clone() node_ref=node inner_html=html></div>
             {move || err.get().map(|e| view! { <span class="cerr">{e}</span> })}
+            <crate::thread::Replies root=c.clone() />
         </li>
     }
 }
@@ -282,7 +333,7 @@ mod tests {
         assert_eq!(initials("key:4b19"), "K4");
         assert_eq!(initials(""), "?");
     }
-    use crate::comments::tests::{comment, resolved};
+    use crate::comments::tests::{comment, reply, resolved};
 
     /// The thread is the ticket's comments — its anchor's ticket, any case —
     /// whole-ticket and pinned alike, resolved too, oldest first; another
@@ -302,8 +353,10 @@ mod tests {
             resolved(whole(1)),
             comment(7, "#/board", "#board", Some("d-2")),
         ];
+        let mut all = all;
+        all.push(reply(11, &all[0]));
         let ids: Vec<u64> = thread(&all, "D-2").iter().map(|c| c.id.get()).collect();
-        assert_eq!(ids, [1, 3, 7, 9]);
+        assert_eq!(ids, [1, 3, 7, 9], "a reply is under its root, not in the thread");
         assert_eq!(thread(&all, "d-2").len(), 4, "a ticket id, whatever its case");
         assert!(thread(&all, "D-9").is_empty());
     }

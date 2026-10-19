@@ -47,6 +47,15 @@
 #                                   http(s)://HOST[:PORT] — the REST bridge, through curl: a
 #                                   menger without login only (REST carries no identity)
 #                                   --header: for a tunnel's own gate, on either
+# --complete [--complete-agent ID]  DEPLOY-28 (DEPLOY-22): with --url ws(s)://, a `succeeded`
+#                                   record kept (or kept already) to the project's lowest
+#                                   environment — the caller says it is — sets Complete on each
+#                                   ticket it carried that is In Review and runs its current
+#                                   version there (`tickets.nav.member`, then one
+#                                   `tickets.update_many`). That write needs editor: it signs in
+#                                   with the key in the 0600 file $MENGER_DEPLOY_COMPLETE_KEY_FILE
+#                                   (agent: the file's name less .key), else the deploy key.
+#                                   A completion that fails is said, and the record still stands
 # --previous-from-menger            no previous given: ask menger what the environment
 #                                   runs now (deployments.environments, over --url or
 #                                   synapse) — what this deployment replaces; then
@@ -67,7 +76,7 @@ command -v jq >/dev/null || die "needs jq on PATH"
 
 # ── flags ───────────────────────────────────────────────────────────────────
 from=flags input="" validate=0 compact=0 from_git=0 repo=. send=0 port=4455 host="" token="" dry=0
-url="" agent=${MENGER_AGENT:-ci} prev_from_menger=0 headers=()
+url="" agent=${MENGER_AGENT:-ci} prev_from_menger=0 headers=() complete=0 complete_agent=
 maps=()
 over=() # jq --arg pairs: name value
 commits=() tickets=()
@@ -104,6 +113,8 @@ while [[ $# -gt 0 ]]; do
     --agent) arg "$@"; agent=$2; shift ;;
     --header) arg "$@"; [[ $2 == *:* ]] || die "--header wants 'Name: value', got '$2'"; headers+=("$2"); shift ;;
     --previous-from-menger) prev_from_menger=1 ;;
+    --complete) complete=1 ;;
+    --complete-agent) arg "$@"; complete_agent=$2; shift ;;
     --compact|-c) compact=1 ;;
     --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}"; continue ;;
     *) die "unknown argument '$1' (deploy/record --help)" ;;
@@ -116,6 +127,7 @@ case $url in
     [[ -z ${MENGER_DEPLOY_KEY:-}${MENGER_DEPLOY_KEY_FILE:-} ]] || die "--url $url is the REST bridge, which carries no identity: a deploy key signs in over the WebSocket — --url ws(s)://…" ;;
   *) die "--url $url: ws:// or wss:// (the WebSocket), http:// or https:// (the REST bridge)" ;;
 esac
+[[ $complete == 0 || $url == ws://* || $url == wss://* ]] || die "--complete reads what a record carried: it needs --url ws(s)://"
 read_input() { if [[ -n $input ]]; then [[ -r $input ]] || die "cannot read $input"; cat -- "$input"; else cat; fi; }
 
 # ── the schema, checked by jq ───────────────────────────────────────────────
@@ -426,6 +438,33 @@ fi
 [[ -n ${records//[$'\n ']/} ]] || { say "record: the input holds no deployment"; exit 0; }
 records=$(check <<<"$records")
 
+# ── DEPLOY-28: Complete on the lowest environment (DEPLOY-22) ──────────────
+# complete_carried RECORD ANSWER — of the tickets ANSWER says the record
+# carried, those In Review that now run their current version in its
+# environment move to Complete, in one update_many; signed in with
+# $MENGER_DEPLOY_COMPLETE_KEY_FILE where it is set (an editor's key). Never
+# fails the send: a refusal is said and the record stands.
+complete_carried() {
+  local r=$1 answer=$2 ids env member moved ckey=${MENGER_DEPLOY_COMPLETE_KEY_FILE:-} cagent=$complete_agent
+  [[ $(jq -r .state <<<"$r") == succeeded ]] || return 0
+  ids=$(jq -sc '[.[] | select(.type == "deployed") | .carried // [] | .[]] | unique' <<<"$answer" 2>/dev/null) || return 0
+  [[ $ids != "[]" && -n $ids ]] || { say "record: complete: it carried no ticket"; return 0; }
+  env=$(jq -r '"\(.project)/\(.environment)" | ascii_downcase' <<<"$r")
+  local filter="status \"In Review\" and deployed $env and not behind $env"
+  if [[ -n $ckey ]]; then [[ -n $cagent ]] || cagent=$(basename "$ckey" .key); else cagent=${cagent:-$agent}; fi
+  # the editor's key for both calls; MENGER_DEPLOY_KEY emptied so the file is read
+  csay() { if [[ -n $ckey ]]; then MENGER_DEPLOY_KEY="" MENGER_DEPLOY_KEY_FILE=$ckey agent=$cagent menger_call "$@"; else agent=$cagent menger_call "$@"; fi; }
+  member=$(csay tickets.nav.member "$(jq -nc --argjson ids "$ids" --arg f "$filter" '{ids: $ids, filter: $f}')") \
+    || { say "record: complete: menger did not say which of $(jq -r 'join(", ")' <<<"$ids") are In Review on $env: $(head -c 300 <<<"$member")"; return 0; }
+  moved=$(jq -sc '[.[] | select(.type == "member" and .matched) | .id]' <<<"$member")
+  [[ $moved != "[]" ]] || { say "record: complete: none of $(jq -r 'join(", ")' <<<"$ids") is In Review and running its current version on $env"; return 0; }
+  local why; why="$(jq -r '"deploy \(.project)/\(.environment) \(.release // .revision)"' <<<"$r") carries its work (DEPLOY-22)"
+  local done_; done_=$(csay tickets.update_many "$(jq -nc --argjson ids "$moved" --arg m "$why" '{ids: $ids, status: "Complete", message: $m}')") \
+    || { say "record: complete: menger refused $(jq -r 'join(", ")' <<<"$moved") → Complete: $(jq -r 'select(.type == "error") | .message' <<<"$done_" 2>/dev/null | head -n 2 | paste -sd' ')"; return 0; }
+  printf '%s\n' "$(jq -c '{type: "completed", tickets: .}' <<<"$moved")"
+  say "record: complete: $(jq -r 'join(", ")' <<<"$moved") → Complete ($why)"
+}
+
 # ── print, or send ──────────────────────────────────────────────────────────
 if [[ $send == 0 ]]; then
   if [[ $compact == 1 || $(wc -l <<<"$records") -gt 1 ]]; then printf '%s\n' "$records"
@@ -436,8 +475,10 @@ if [[ -n $url ]]; then
   # DEPLOY-14: straight to menger, no synapse — the answer (`deployed`) printed.
   while IFS= read -r r; do
     if [[ $dry == 1 ]]; then say "record: would send to $url deployments.record:"; printf '%s\n' "$r"; continue; fi
-    menger_call deployments.record "$r" \
-      || { say "record: $url refused $(jq -r '"\(.environment) \(.state) \(.revision)"' <<<"$r")"; exit 3; }
+    out=$(menger_call deployments.record "$r") \
+      || { [[ -n $out ]] && printf '%s\n' "$out"; say "record: $url refused $(jq -r '"\(.environment) \(.state) \(.revision)"' <<<"$r")"; exit 3; }
+    printf '%s\n' "$out"
+    [[ $complete == 1 ]] && complete_carried "$r" "$out"
   done <<<"$records"
   exit 0
 fi

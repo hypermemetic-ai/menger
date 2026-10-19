@@ -6,6 +6,7 @@ export * as Chats from './chats';
 export * as Comments from './comments';
 export * as Deployments from './deployments';
 export * as DeploymentsWebhook from './deployments/webhook';
+export * as Media from './media';
 export * as Members from './members';
 export * as MembersTeams from './members/teams';
 export * as Notes from './notes';

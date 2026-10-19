@@ -119,6 +119,7 @@ pub(crate) fn page_words(r: &Route) -> String {
         Route::Settings => "settings".into(),
         Route::Comments => "comments".into(),
         Route::Members => "members".into(),
+        Route::Chats(_) => "chats".into(),
         Route::Deployments(_) => "deployments".into(),
     }
 }
@@ -129,20 +130,28 @@ pub(crate) fn page_words(r: &Route) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct QueueFace {
     pub(crate) badge: Option<usize>,
+    /// CHAT-17: the open chats with unread, a green badge; none at 0.
+    pub(crate) chats: Option<usize>,
     pub(crate) label: String,
     pub(crate) class: String,
     pub(crate) words: String,
 }
 
 /// The queue place for the tray's control `ctl` (None: nothing queued),
-/// `open` its sheet, `fresh` the arrival it blinks for.
-pub(crate) fn queue_face(ctl: Option<&Control>, open: bool, fresh: Option<Urgency>) -> QueueFace {
+/// `open` its sheet, `fresh` the arrival it blinks for, `unread` the open
+/// chats with unread (CHAT-17: the place shows for them alone, `chats`).
+pub(crate) fn queue_face(ctl: Option<&Control>, open: bool, fresh: Option<Urgency>, unread: usize) -> QueueFace {
+    let chats = (unread > 0).then_some(unread);
     let Some(c) = ctl else {
-        let mut class = "pl pq empty".to_string();
+        let mut class = if chats.is_some() { "pl pq chats" } else { "pl pq empty" }.to_string();
         if open {
             class.push_str(" on");
         }
-        return QueueFace { badge: None, label: "queue".into(), class, words: "the queue: nothing queued".into() };
+        let (label, words) = match chats {
+            Some(n) => ("chats".into(), format!("the queue: nothing queued, {}", crate::queue_tabs::words(n))),
+            None => ("queue".into(), "the queue: nothing queued".into()),
+        };
+        return QueueFace { badge: None, chats, label, class, words };
     };
     let mut class = format!("pl pq u-{}", c.loudest.as_str());
     for (on, word) in [(c.loudest.loud(), "loud"), (c.nudge, "nudge"), (open, "on"), (c.new > 0, "has-new")] {
@@ -155,7 +164,11 @@ pub(crate) fn queue_face(ctl: Option<&Control>, open: bool, fresh: Option<Urgenc
         class.push_str(" fresh f-");
         class.push_str(u.as_str());
     }
-    QueueFace { badge: Some(c.count), label: c.chip(), class, words: format!("the queue: {}", c.words()) }
+    let mut words = format!("the queue: {}", c.words());
+    if let Some(n) = chats {
+        words.push_str(&format!(", {}", crate::queue_tabs::words(n)));
+    }
+    QueueFace { badge: Some(c.count), chats, label: c.chip(), class, words }
 }
 
 /// The sections place's label and badge (the inputs waiting), or none
@@ -290,6 +303,8 @@ pub(crate) fn Head(route: RwSignal<Route>, #[prop(into)] conn_class: Signal<Stri
                 }}
             </span>
             <span class=move || format!("pconn {}", conn_class.get())><i class="cell" aria-hidden="true"></i>{move || conn_words.get()}</span>
+            // APP-84: every open question — the bar has no fifth place.
+            <crate::questions::PhoneCount />
         </div>
     }
 }
@@ -390,7 +405,7 @@ pub(crate) fn Bar(route: RwSignal<Route>, overlay: RwSignal<Overlay>, tree: nav:
             </button>
         }
     };
-    let qview = Memo::new(move |_| qface.with(|f| queue_face(f.ctl.as_ref(), f.open, f.fresh)));
+    let qview = Memo::new(move |_| qface.with(|f| queue_face(f.ctl.as_ref(), f.open, f.fresh, f.chats)));
     view! {
         <nav id="pbar" aria-label="the phone nav">
             {tree_place}
@@ -402,13 +417,14 @@ pub(crate) fn Bar(route: RwSignal<Route>, overlay: RwSignal<Overlay>, tree: nav:
                 <span class="sub">"find"</span>
             </button>
             <button type="button" class=move || qview.with(|q| q.class.clone()) data-place="queue"
-                disabled=move || qface.with(|f| f.ctl.is_none() && !f.open)
+                disabled=move || qface.with(|f| f.ctl.is_none() && !f.open && f.chats == 0)
                 aria-expanded=move || lit(Place::Queue).to_string()
                 aria-controls="qsheet"
                 aria-label=move || qview.with(|q| q.words.clone())
                 on:click=move |_| tap(Place::Queue)>
                 {icon(Place::Queue)}
                 {move || qview.with(|q| q.badge).map(|n| view! { <span class="bdg">{n}</span> })}
+                {move || qview.with(|q| q.chats).map(|n| view! { <span class="bdg chat" title="open chats with unread">{n}</span> })}
                 <span class="sub">{move || qview.with(|q| q.label.clone())}</span>
             </button>
         </nav>
@@ -421,6 +437,7 @@ pub(crate) fn Bar(route: RwSignal<Route>, overlay: RwSignal<Overlay>, tree: nav:
 #[component]
 pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
     let last = LAST.with(Clone::clone);
+    let own = RwSignal::from(OWN.with(Clone::clone));
     let title = move || {
         let ticket = match route.get() { Route::Ticket(id) => Some(id), _ => None };
         let code = tree_label(ticket.as_deref(), last.get().as_deref());
@@ -438,7 +455,8 @@ pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
     let cur = move |want: fn(&Route) -> bool| move || want(&route.get()).then_some("page");
     view! {
         <div class="psheet-head">
-            <div class="grab" aria-hidden="true"></div>
+            // CHAT-31: the handle and the head drag the sheet (src/sheet.rs).
+            <crate::sheet::Grip target="nav" head=".psheet-head" class="grab" open=Signal::derive(move || own.get() == Some(Place::Tree)) dismiss=Callback::new(move |_| open(None)) />
             <div class="sh">
                 <h3>{title}</h3>
                 <span class="m">"the tree"</span>
@@ -454,6 +472,7 @@ pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
                     "needs you"{move || needs.count.n().filter(|n| *n > 0).map(|n| view! { <b>{n}</b> })}
                 </button>
                 <a href="#/comments" aria-current=cur(|r| matches!(r, Route::Comments))>"comments"</a>
+                <a href="#/chats" aria-current=cur(|r| matches!(r, Route::Chats(_)))>"chats"</a>
                 <a href="#/deployments" aria-current=cur(|r| matches!(r, Route::Deployments(_)))>"deployments"</a>
                 <a href="#/components" aria-current=cur(|r| matches!(r, Route::Components(_)))>"components"</a>
                 {move || admin.get().then(|| view! { <a href="#/members" aria-current=cur(|r| matches!(r, Route::Members))>"members"</a> })}
@@ -480,6 +499,7 @@ pub(crate) fn TreeFoot() -> impl IntoView {
 #[component]
 pub(crate) fn FilterHead() -> impl IntoView {
     let lens = lens::use_lens();
+    let own = RwSignal::from(OWN.with(Clone::clone));
     // FILTER-40: the level the panel's tab edits.
     let which = move || match lens.open_level() {
         None | Some(Level::Global) => "every view",
@@ -487,7 +507,7 @@ pub(crate) fn FilterHead() -> impl IntoView {
     };
     view! {
         <div class="psheet-head pfilter-head">
-            <div class="grab" aria-hidden="true"></div>
+            <crate::sheet::Grip target="lens-top" head=".pfilter-head" class="grab" open=Signal::derive(move || own.get() == Some(Place::Filter)) dismiss=Callback::new(move |_| open(None)) />
             <div class="sh">
                 <h3>"Filter"</h3>
                 <span class="m">{which}</span>
@@ -562,22 +582,31 @@ mod tests {
     #[test]
     fn the_queue_place_is_the_control() {
         let c = ctl(40, Urgency::Blocking, 3, 0, true);
-        let f = queue_face(Some(&c), false, None);
+        let f = queue_face(Some(&c), false, None, 0);
         assert_eq!(f.badge, Some(40));
         assert_eq!(f.label, "3 blocking");
         assert_eq!(f.class, "pl pq u-blocking loud nudge");
         assert_eq!(f.words, "the queue: 40 queued, 3 blocking");
         // Open: lit, and no flash while the sheet is up.
-        assert_eq!(queue_face(Some(&c), true, Some(Urgency::Now)).class, "pl pq u-blocking loud nudge on");
+        assert_eq!(queue_face(Some(&c), true, Some(Urgency::Now), 0).class, "pl pq u-blocking loud nudge on");
         // An arrival while down: the flash, in the arrival's colour.
-        let f = queue_face(Some(&ctl(9, Urgency::Today, 3, 1, false)), false, Some(Urgency::Today));
+        let f = queue_face(Some(&ctl(9, Urgency::Today, 3, 1, false)), false, Some(Urgency::Today), 0);
         assert_eq!(f.class, "pl pq u-today has-new fresh f-today");
         assert_eq!(f.words, "the queue: 9 queued, 3 today, 1 new");
         // One ticket: its urgency alone.
-        assert_eq!(queue_face(Some(&ctl(1, Urgency::Whenever, 1, 0, false)), false, None).label, "whenever");
+        assert_eq!(queue_face(Some(&ctl(1, Urgency::Whenever, 1, 0, false)), false, None, 0).label, "whenever");
         // Nothing queued: a quiet place.
-        let none = queue_face(None, false, None);
-        assert_eq!((none.badge, none.label.as_str(), none.class.as_str()), (None, "queue", "pl pq empty"));
+        let none = queue_face(None, false, None, 0);
+        assert_eq!((none.badge, none.chats, none.label.as_str(), none.class.as_str()), (None, None, "queue", "pl pq empty"));
+        // CHAT-17: nothing queued, two chats with unread — the place shows,
+        // green, `chats`; with a queue, the chats' badge beside its count.
+        let only = queue_face(None, false, None, 2);
+        assert_eq!((only.badge, only.chats, only.label.as_str(), only.class.as_str()), (None, Some(2), "chats", "pl pq chats"));
+        assert_eq!(only.words, "the queue: nothing queued, 2 chats unread");
+        assert_eq!(queue_face(None, true, None, 1).class, "pl pq chats on");
+        let both = queue_face(Some(&c), false, None, 1);
+        assert_eq!((both.badge, both.chats), (Some(40), Some(1)));
+        assert_eq!(both.words, "the queue: 40 queued, 3 blocking, 1 chat unread");
         // The same model the tray's control is drawn from.
         let rows: Vec<queue::Row> = Vec::new();
         assert_eq!(queue::control(&rows, &HashSet::new(), &HashSet::new()), None);

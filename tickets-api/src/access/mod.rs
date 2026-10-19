@@ -66,7 +66,7 @@ pub mod request;
 pub use request::MengerRequest;
 pub use crate::store::System;
 pub use reach::{Held, Reach, ReachKey};
-pub use user::{Admin, AdminOf, Deployer, DeployerOf, Editor, EditorOf, Forward, Hidden, On, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
+pub use user::{Admin, AdminOf, Chatter, Deployer, DeployerOf, Editor, EditorOf, Forward, Hidden, On, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
 
 /// The gate's reach for one call (plexus-core's): the grant a method was
 /// admitted for, and where.
@@ -152,6 +152,16 @@ fn under_name(scope: &str) -> String {
         Some((org, "")) => format!("{}:", org.to_ascii_lowercase()),
         Some((_, id)) => id.to_ascii_uppercase(),
         None => scope.trim().to_ascii_uppercase(),
+    }
+}
+
+/// CHAT-14: whether `scope` is in the organization `org`.
+fn in_org(scope: &crate::members::Scope, org: &crate::address::OrgId, store: &Store) -> bool {
+    match (scope, scope.org(), scope.ticket()) {
+        (crate::members::Scope::Everywhere, ..) => true,
+        (_, Some(o), _) => o == org,
+        (_, None, Some(t)) => store.org_of(t.as_str()).as_ref() == Some(org),
+        _ => false,
     }
 }
 
@@ -248,10 +258,24 @@ impl Book {
         }
     }
 
-    /// A principal's grants: the stored ones, ACCESS-9: its teams' (each
-    /// a grant to `team:<name>`; the store says which teams it is in), and
-    /// admin on `*` for an operator's `--admin`.
+    /// A principal's grants: its own ([`Book::own_grants_of`]) and,
+    /// ACCESS-57, every grant to `everyone` — what each signed-in principal
+    /// holds beside its own. Only ever asked for a principal: the anonymous
+    /// caller names none, so it holds nothing of them (the gate asks
+    /// [`Memberships::held`] only of a principal, and [`Access::verify_now`]
+    /// refuses anyone else).
     pub fn grants_of(&self, principal: &str) -> Vec<Grant> {
+        let mut grants = self.own_grants_of(principal);
+        grants.extend(self.stored_grants(crate::vocab::EVERYONE));
+        grants
+    }
+
+    /// ACCESS-57: a principal's own grants — the stored ones, ACCESS-9: its
+    /// teams' (each a grant to `team:<name>`; the store says which teams it
+    /// is in), and admin on `*` for an operator's `--admin` — and not
+    /// `everyone`'s: holding none of these, a principal is waiting for an
+    /// admin, whatever `everyone` lets it read meanwhile.
+    pub fn own_grants_of(&self, principal: &str) -> Vec<Grant> {
         let mut grants = self.stored_grants(principal);
         if let Some(store) = self.store() {
             for team in store.teams_of(principal) {
@@ -326,11 +350,21 @@ impl RoleStore for Book {
 
 impl Memberships for Book {
     fn held(&self, who: &Principal) -> Vec<Membership> {
-        self.grants_of(&who.to_string())
-            .into_iter()
-            .map(|g| Membership { principal: who.clone(), role: RoleName::new(g.role.as_str()), scope: ScopeRef::parse(&g.scope.text()) })
-            .collect()
+        memberships(who, self.grants_of(&who.to_string()))
     }
+
+    /// ACCESS-58: without `everyone`'s, so `auth.waiting` and `auth.signup`
+    /// decide waiting as `members.requests` does.
+    fn own_held(&self, who: &Principal) -> Vec<Membership> {
+        memberships(who, self.own_grants_of(&who.to_string()))
+    }
+}
+
+fn memberships(who: &Principal, grants: Vec<Grant>) -> Vec<Membership> {
+    grants
+        .into_iter()
+        .map(|g| Membership { principal: who.clone(), role: RoleName::new(g.role.as_str()), scope: ScopeRef::parse(&g.scope.text()) })
+        .collect()
 }
 
 #[async_trait]
@@ -481,6 +515,52 @@ impl Access {
         Reach::of_grants(&self.book, &self.gate, principal).covers::<Viewer>(key, &chain)
     }
 
+    /// CHAT-14: whether `principal` holds a grant in the organization `org`
+    /// — on `*`, on the org or a shortcode in it, on a ticket or a subtree
+    /// there (a team's grant by each of its members; the operator's
+    /// `--admin`s): who may be in a chat outside tickets there.
+    pub fn member_of(&self, principal: &str, org: &crate::address::OrgId, store: &Store) -> bool {
+        self.book.grants_of(principal).iter().any(|g| in_org(&g.scope, org, store))
+    }
+
+    /// CHAT-14: every principal holding a grant in `org` (`None`: in any) —
+    /// each team's members by name, the operator's `--admin`s.
+    pub fn members_in(&self, org: Option<&crate::address::OrgId>, store: &Store) -> std::collections::BTreeSet<String> {
+        let mut grants = self.stored();
+        for admin in self.admins() {
+            grants.extend(self.grants_of(&admin));
+        }
+        let mut who = std::collections::BTreeSet::new();
+        for g in grants.into_iter().filter(|g| org.is_none_or(|o| in_org(&g.scope, o, store))) {
+            match g.principal {
+                crate::vocab::Grantee::Principal(p) => {
+                    who.insert(p.to_string());
+                }
+                crate::vocab::Grantee::Team(t) => who.extend(self.team(&t).into_iter().flat_map(|(_, members, _)| members).map(|m| m.principal.to_string())),
+                // ACCESS-57: everyone names no one to offer.
+                crate::vocab::Grantee::Everyone => {}
+            }
+        }
+        who
+    }
+
+    /// CHAT-14: the name `ctx` signs in with, kept by the store when it is
+    /// new — so a key's name (`--as builder`) finds it in the picker after
+    /// it has gone. Off the call: a write spawned when one is due.
+    fn note_name(&self, principal: &str, name: Option<&str>) {
+        let (Some(name), Some(store), Some(system)) = (name, self.book.store.get(), self.book.system.get()) else { return };
+        if store.knows_name(principal, name) {
+            return;
+        }
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+        let (store, system, principal, name) = (Arc::clone(store), Arc::clone(system), principal.to_string(), name.to_string());
+        rt.spawn(async move {
+            if let Err(e) = store.note_name(&system, &principal, &name).await {
+                tracing::warn!("CHAT-14: the name of {principal} was not kept: {e:?}");
+            }
+        });
+    }
+
     /// AUTH-7: the roles, memberships and scopes the gate reads.
     pub fn book(&self) -> Arc<Book> {
         self.book.clone()
@@ -492,10 +572,16 @@ impl Access {
         &self.gate
     }
 
-    /// A principal's grants: the stored ones, and admin on `*` for an
-    /// operator's `--admin`.
+    /// A principal's grants: the stored ones, its teams', admin on `*` for
+    /// an operator's `--admin`, and (ACCESS-57) `everyone`'s.
     pub fn grants_of(&self, principal: &str) -> Vec<Grant> {
         self.book.grants_of(principal)
+    }
+
+    /// ACCESS-57: a principal's grants without `everyone`'s — what decides
+    /// whether it waits for an admin.
+    pub fn own_grants_of(&self, principal: &str) -> Vec<Grant> {
+        self.book.own_grants_of(principal)
     }
 
     /// ACCESS-10: every stored grant, by principal then scope — read as the
@@ -592,7 +678,7 @@ impl Access {
             return;
         }
         let Some(principal) = ctx.principal().map(|p| p.to_string()) else { return };
-        if self.book.grants_of(&principal).is_empty() {
+        if self.book.own_grants_of(&principal).is_empty() {
             self.book.wait(&principal, ctx.get_metadata_string("name"), ctx.get_metadata_string("provider"));
         }
     }
@@ -622,8 +708,9 @@ impl Access {
     /// signed in, its sign-in alive and unexpired, its principal parsed by
     /// the identity layer (`vocab::Principal`'s grammar; never its
     /// `user_id` instead), its ceiling readable; its grants resolved —
-    /// direct ∪ its teams' ∪ the operator's — at the grants generation of
-    /// now. A signed-in user holding nothing joins the waiting list (and
+    /// direct ∪ its teams' ∪ the operator's ∪ (ACCESS-57) `everyone`'s — at
+    /// the grants generation of now. A signed-in user holding nothing of
+    /// its own joins the waiting list (and
     /// is still verified: a read then says it holds nothing). ACCESS-24:
     /// never anyone — an identity that proves no one is refused.
     /// Synchronous: it reads the cache and nothing else, so a method
@@ -637,7 +724,8 @@ impl Access {
         let principal: crate::vocab::Principal = p.to_string().parse().map_err(|_| Refusal::NoPrincipal)?;
         let reach = Reach::resolve(&self.book, &self.gate, principal.as_str(), ctx)?;
         let name = ctx.get_metadata_string("name");
-        if self.book.grants_of(principal.as_str()).is_empty() {
+        self.note_name(principal.as_str(), name.as_deref());
+        if self.book.own_grants_of(principal.as_str()).is_empty() {
             self.book.wait(principal.as_str(), name.clone(), ctx.get_metadata_string("provider"));
         } else {
             self.book.granted(principal.as_str());

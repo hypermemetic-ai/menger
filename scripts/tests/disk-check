@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2015  # `check && ok || bad` is the house assertion (deploy/tests)
+# CI-2: scripts/disk-check.sh — the line, the floor (free GB, used %), and the
+# alert: filed and queued once at 90%, not again while that ticket is open,
+# again once it is done, nothing filed when the tracker does not answer. The
+# disk is said (DISK_CHECK_*), synapse is a stand-in that keeps its argv, and
+# the state lives in a scratch XDG_STATE_HOME. `cargo test` runs it
+# (tests/deploy_record.rs).
+set -uo pipefail
+SELF=$(readlink -f "$0"); DC=$(dirname "$(dirname "$SELF")")/disk-check.sh
+PARENT=/tmp/claude-$(id -u)/ci2-disk; mkdir -p "$PARENT"
+T=$(mktemp -d "$PARENT/t.XXXXXX")
+pass=0 fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); printf 'FAIL %s\n' "$*" >&2; }
+has() { [[ $2 == *"$3"* ]] && ok || bad "$1: wanted '$3' in: $2"; }
+hasnt() { [[ $2 != *"$3"* ]] && ok || bad "$1: did not want '$3' in: $2"; }
+dc() { local name=$1 want=$2; shift 2
+  out=$("$DC" --path "$T" "$@" 2>&1); local got=$?
+  [[ $got == "$want" ]] && ok || bad "$name: exit $got, wanted $want — $out"; }
+
+export XDG_STATE_HOME=$T/state DISK_ALERT_SYNAPSE=$T/synapse STUB_LOG=$T/synapse.log STUB_STATUS=Coding STUB_DOWN=""
+cat >"$T/synapse" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_LOG"
+[[ -n $STUB_DOWN ]] && exit 69
+case " $* " in
+  *" tickets get "*) printf '{"type":"ticket","content":{"ticket":{"id":"CI-9","status":"%s"}}}\n' "$STUB_STATUS" ;;
+  *" tickets create "*) printf '{"type":"created","content":{"ticket":{"id":"CI-9","status":"Pending"}}}\n' ;;
+  *" tickets queue "*) printf '{"type":"queued","content":{}}\n' ;;
+esac
+STUB
+chmod +x "$T/synapse"; : >"$STUB_LOG"
+
+DISK_CHECK_USED_PCT=40 DISK_CHECK_AVAIL_GB=900 dc "room" 0
+has "room: the line" "$out" "40% used, 900 GB free — ok"
+DISK_CHECK_USED_PCT=40 DISK_CHECK_AVAIL_GB=20 dc "under 50 GB" 3
+has "under 50 GB: said" "$out" "low (under 50 GB free)"
+DISK_CHECK_USED_PCT=40 DISK_CHECK_AVAIL_GB=20 dc "--min-free-gb 10" 0 --min-free-gb 10
+DISK_CHECK_USED_PCT=92 DISK_CHECK_AVAIL_GB=150 dc "92% used" 3
+has "92%: said" "$out" "90% used or more"
+DISK_CHECK_USED_PCT=92 DISK_CHECK_AVAIL_GB=150 DISK_MAX_USED_PCT=95 dc "DISK_MAX_USED_PCT" 0
+dc "a bad number" 1 --min-free-gb lots
+dc "an unknown flag" 1 --force
+[[ ! -s $STUB_LOG ]] && ok || bad "no --alert, no tracker: $(<"$STUB_LOG")"
+
+DISK_CHECK_USED_PCT=80 DISK_CHECK_AVAIL_GB=300 dc "alert under 90%: nothing" 0 --alert
+[[ ! -s $STUB_LOG ]] && ok || bad "under 90% the tracker is not asked"
+
+DISK_CHECK_USED_PCT=91 DISK_CHECK_AVAIL_GB=150 dc "alert at 91%" 3 --alert
+has "alert: filed and queued" "$out" "alert: filed and queued CI-9"
+log=$(<"$STUB_LOG")
+has "alert: created under CI-1" "$log" "tickets create --epic CI --parent CI-1 --kind gap --severity High"
+has "alert: the title" "$log" "The disk is 91% full"
+has "alert: queued now" "$log" "tickets queue --id CI-9 --urgency now"
+has "alert: as builder, on the tracker" "$log" "--url wss://app.menger.sh/ws --as builder -j menger"
+has "alert: the id kept" "$(<"$T/state/menger/disk-alert")" "CI-9"
+[[ -z $(ls -A "$T" | grep -v '^\(state\|synapse\|synapse.log\)$') ]] && ok || bad "the body's scratch is gone: $(ls -A "$T")"
+
+: >"$STUB_LOG"
+DISK_CHECK_USED_PCT=93 DISK_CHECK_AVAIL_GB=120 dc "again, the ticket open" 3 --alert
+has "open: nothing more" "$out" "CI-9 is open (Coding); nothing more filed"
+hasnt "open: no create" "$(<"$STUB_LOG")" "tickets create"
+
+: >"$STUB_LOG"
+STUB_STATUS=Complete DISK_CHECK_USED_PCT=93 DISK_CHECK_AVAIL_GB=120 dc "again, the ticket done" 3 --alert
+has "done: filed again" "$out" "filed and queued CI-9"
+has "done: created" "$(<"$STUB_LOG")" "tickets create"
+
+: >"$STUB_LOG"
+STUB_DOWN=1 DISK_CHECK_USED_PCT=95 DISK_CHECK_AVAIL_GB=90 dc "the tracker down" 3 --alert
+has "down: said" "$out" "did not say how CI-9 is; nothing filed"
+hasnt "down: no create" "$(<"$STUB_LOG")" "tickets create"
+
+printf 'disk-check: %d passed, %d failed\n' "$pass" "$fail"
+CLEANUP_GATE_LOG=/dev/null "$(dirname "$DC")/cleanup-gate.sh" --yes --path "$T" >/dev/null \
+  || printf 'disk-check: the test root %s was not removed\n' "$T" >&2
+[[ $fail == 0 ]]

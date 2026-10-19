@@ -19,8 +19,8 @@ image:
 
 # Two environments. test runs a release first; prod is promoted to exactly
 # the image (same image id) test ran and passed the health checks on.
-# app.menger.sh is declared here and not deployed until RUN-13 (the owner's
-# `sign-in` answer on RUN-11, the WorkOS production client, prod's data moved).
+# app.menger.sh: AuthKit on WorkOS production (RUN-11), prod's data moved
+# there (RUN-13).
 environments:
   prod:
     host: app.menger.sh
@@ -32,6 +32,20 @@ environments:
 # file kept on the box only, read after env_file. AuthKit (RUN-11's
 # `sign-in`, recommended) needs none.
 secret_env_file: secret.env
+
+# IDENTITY-45: secret files the box holds, placed by infra's secret.yml from a
+# pipe (`deploy/pipeline remote-secret test|prod`), never from here. infra
+# mounts /opt/apps/<project>/secrets read-only at `mount` (0500, owned by
+# `owner`, the image's uid) and, for each file the box holds, sets `env` to
+# its path inside. The WorkOS key makes the GitHub button complete through
+# WorkOS's API on menger's own page (email verification, Radar); a box
+# without it runs the PKCE path, unchanged.
+secrets:
+  mount: /run/secrets
+  owner: 10001
+  files:
+    - name: workos-api-key
+      env: MENGER_WORKOS_API_KEY_FILE
 
 # Inside the container (published on no host port; the edge reaches it as
 # menger-<env> on its `edge` network). The image sets MENGER_BIND=0.0.0.0,
@@ -56,8 +70,10 @@ data:
   mount: /data
   per_environment: true
 
+# RUN-13: prod's data (local prod peaks near 600 MB with ~975 tickets) on a
+# 3.9 GB box holding both environments; a limit, not a reservation.
 resources:
-  memory: 512m
+  memory: 1g
 
 # Healthy means all of these, over https through the edge (infra's probe:
 # one GET, redirects not followed, or one WebSocket upgrade).

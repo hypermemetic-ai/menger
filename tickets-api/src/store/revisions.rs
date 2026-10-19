@@ -893,6 +893,7 @@ fn as_it_was(cache: &Cache, key: &str, kept: &Kept_, body: String) -> Ticket {
                 path: None,
                 placement: None,
                 labels: Vec::new(),
+                assignees: Vec::new(),
                 body: String::new(),
                 created_unix: kept.revision.at_unix,
                 updated_unix: kept.revision.at_unix,

@@ -55,6 +55,19 @@ edge: only its `X-Forwarded-For` is believed, by the login throttles and by
 the WebSocket's per-IP and anonymous quotas, and a forwarded header from any
 other peer is ignored (README "Run" → Trusted proxies).
 
+> **2026-10-17 (RUN-13): the tracker moved to https://app.menger.sh.** Prod's
+> data moved there (ACCESS-47 `move`); this machine's prod (`:4455`–`:4458`)
+> is stopped, its database untouched — it is the move's rollback, and
+> `deploy/pipeline promote` / `rollback prod` refuse while
+> `~/.local/share/menger-deploy/prod.moved` exists. Agents reach the tracker
+> as `synapse --url wss://app.menger.sh/ws --as <agent> menger …` (once:
+> `synapse --url wss://app.menger.sh/ws _login menger --key <agent> --as
+> <agent>`; `builder`, `pipeline`, `operator` keep their grants). Read every
+> `synapse -P 4455 menger …` below as that. People sign in at
+> https://app.menger.sh/ through WorkOS production. Deployment records go
+> to app.menger.sh as the `pipeline` key (DEPLOY-28,
+> `MENGER_DEPLOY_TRACKER_URL`). The rollback is on RUN-13.
+
 ## Deploying
 
 menger runs in two environments on this machine, **prod** (4455–4458) and
@@ -84,7 +97,8 @@ deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
 
 - **Every deploy test, sync, promote and rollback records itself in menger**
   (DEPLOY-12): `started`, then `succeeded` / `failed` / `rolled_back`, sent
-  to the tracker (`MENGER_DEPLOY_TRACKER_PORT`, 4455) through
+  to the tracker (`MENGER_DEPLOY_TRACKER_URL`, `wss://app.menger.sh/ws`, as the
+  `pipeline` key; DEPLOY-28) through
   `deploy/record`. A record the tracker does not take waits in
   `~/.local/share/menger-deploy/outbox/` for the next run; it never fails a
   deploy. A test of the pipeline runs it on a throwaway root
@@ -100,7 +114,8 @@ deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
 - Merging to main is not deploying, and **Complete means deployed to the
   lowest environment** (owner, 2026-10-17; DEPLOY-22): the merge links its
   commit and leaves the ticket In Review; the `deploy test` that carries it
-  sets Complete; it reaches users when its release is promoted — say which
+  sets Complete by itself (DEPLOY-28: `deploy/record --complete`, as the
+  builder's key); it reaches users when its release is promoted — say which
   release in the ticket when it matters. Work in a repository with no
   environment (`repo@hash` outside menger) is Complete at its merge.
 - Check work on the test environment (http://127.0.0.1:4451/) or a throwaway
@@ -249,6 +264,19 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets revisions restore --id DEPLOY-9 --rev 3 --fields body --message "why"
   ```
 
+  **Assignees** (TICKETS-9): a ticket's people and agents — principals
+  that read it — moved by `tickets assign --id X --add P --remove P` (or
+  `--ids`; `update_many --assign / --unassign`); one who cannot read the
+  ticket is refused, naming why. Each move is an `assign_record` in
+  `history`; `watch` carries `assignees_changed`. Cells: `assigned
+  "<principal>"`, `assigned me`, `assigned`, `unassigned`. README
+  "Assignees":
+
+  ```sh
+  synapse -P 4455 menger tickets assign --id TICKETS-9 --add key:4b…
+  synapse -P 4455 menger tickets list --filter 'assigned me and not category done' --summary true
+  ```
+
   **Search inside tickets** (SEARCH-2) is `search` — titles and bodies,
   every word required, prefixes and typos too, best first; each `hit`
   carries the passage that matched (`find` stays the jump by id or title).
@@ -312,6 +340,64 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger chats open --ticket KILN-7 --others key:4b…
   synapse -P 4455 menger chats open --ticket KILN-7            # a chat of one (CHAT-6); add to it later
   synapse -P 4455 -j menger chats await_message --chat 41 --timeout-minutes 240
+  ```
+
+  **Outside tickets** (CHAT-14): `open` with no `--ticket` is a direct
+  message (one other — the one the two have, when they have one) or a
+  group (several, `--title`); each must hold a grant in the caller's
+  organization, and only its participants read it (no ticket's reach, no
+  admin's). `remove` takes a group's member out (itself: it leaves); an
+  admin of the organization adds and removes without reading it.
+  `candidates` (no `--ticket`: who may be in one) names each principal as
+  the server knows it — the name it last signed in with, a synapse key's
+  name too (`--as builder`), kept in `principal_names` — with `agent: true`
+  for an `agent:` or `key:` principal or a standing chat member. The app's
+  `#/chats` lists every chat, unread first. A chat's images are `media.put
+  { chat, … }`, seen by its participants alone:
+
+  ```sh
+  synapse -P 4455 menger chats open --others key:54a9…                 # a direct message
+  synapse -P 4455 menger chats open --others idp:…,key:54a9… --title "the kiln crew"
+  synapse -P 4455 menger chats remove --chat 52 --principal key:54a9…
+  synapse -P 4455 menger chats candidates                                 # names, agents
+  ```
+
+  **An admin adds anyone** (CHAT-16): an admin of a chat's ticket (or,
+  outside tickets, its organization) adds anyone, in the chat or not; one
+  who can't read it needs `--grant ticket` (viewer on that ticket alone)
+  or `--grant chat` (the `chatter` role: their chats there, nothing of the
+  ticket) — the add and the grant one write; without it the answer is
+  `needs_grant { choices }` and nothing is written, so nothing grants by
+  accident. `remove … --revoke true` takes the grant back with the seat.
+  README "An admin adds anyone":
+
+  ```sh
+  synapse -P 4455 menger chats add --chat 41 --principal key:5a… --grant chat
+  ```
+
+  **The chat bridge** (CHAT-11) answers the owner in chats: the user unit
+  `menger-chat-bridge` holds the builder's `chats watch` on `MENGER_URL`
+  (`~/.config/menger/chat-bridge.env`) and, for a message by a principal in
+  `~/.config/menger/chat-bridge.allow`, runs `claude -p` (Opus,
+  `bypassPermissions`, both in the unit) resuming that chat's session and
+  posts its answer. Stop it with `systemctl --user stop
+  menger-chat-bridge` (`disable --now` for good); switch the tracker by
+  editing `MENGER_URL` and `systemctl --user restart menger-chat-bridge`;
+  update it with `scripts/chat-bridge/install.sh --start` from main.
+  README "The chat bridge".
+
+  A comment shows **images** (COMMENT-5) as `![alt](media:<hash>)`: the
+  `media` activation keeps one for a ticket — `put { ticket, mime, data }`
+  (base64; PNG, JPEG, GIF or WebP by its bytes, never SVG, at most 7 MiB;
+  refused in band naming why) answers `stored { hash, … }`, `get { hash }`
+  its bytes, `not_found` to a reader who cannot see the ticket. The app
+  pastes, drops and picks them in every comment box. The data goes as a
+  file (`--data @shot.b64`) or stdin, never `"$(base64 …)"`. README
+  "Images in comments":
+
+  ```sh
+  base64 -w0 shot.png > shot.b64
+  synapse -P 4455 menger media put --ticket KILN-4 --mime image/png --data @shot.b64
   ```
 
   **Notes** (NOTE-2) are the `notes` activation: dated, untitled thoughts
@@ -507,6 +593,12 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger members grant --team release-crew --scope 'under MENGER-5' --role editor
   synapse -P 4455 menger members teams add --team release-crew --principal key:4b…
   ```
+
+  **Everyone** (ACCESS-57): `members grant --everyone true --scope DOCS
+  --role viewer` (`revoke --everyone true --scope DOCS`) grants every
+  signed-in principal — people and keys, one still waiting for access too,
+  never the anonymous socket — beside their own grants, within any ceiling;
+  never `admin`. README "Members and roles".
 
   **Limits** (ACCESS-29): connections in all, per IP, per principal and
   anonymous (`--max-connections` 1,024, `--max-connections-per-ip` 256,
@@ -761,9 +853,24 @@ menger-skills `showing` has when to use one.
 - **Interactive.** Its controls work: a menu opens, a sheet slides up, a
   row collapses, a form submits. The states one view reaches are reached by
   using it, not drawn again below.
-- **Its description is outside it.** Say what it shows in `title=` /
-  `description=` (drawn above the devices) and in a line of prose above
-  it, never as a heading or intro inside the mocked page.
+- **Its description is outside it, said once.** Say what it shows in
+  `title=` / `description=` (drawn above the devices) and why it is there
+  in a line of prose above it, never as a heading or intro inside the
+  mocked page. The prose and `description=` never repeat each other
+  (APP-60: on a phone the reader got the same sentence twice) — the prose
+  says why, the description what; or leave `description=` out.
+- **On a phone** (≤ 820, APP-60) it opens on its narrowest device at
+  about 100%, the other widths a tap away, the bar one row (the rest
+  under ⋯), Full screen at 100%; above 820 nothing changes.
+- **A phone is an iPhone's screen** (APP-66): its rounded corners clip
+  the page, the notch or island and the home indicator are drawn over it,
+  and the page gets the safe-area insets (`env(safe-area-inset-*)` and
+  `--sai-*`, top 47/59, bottom 34). Anything on an edge pads by them —
+  `max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))`, the
+  app's `--safe-*` — or the mockup shows it clipped, as the phone would
+  (APP-65). *Screen shape* in the bar turns it off. A Playwright check of
+  the app sets `--sai-*` on its root and asserts nothing interactive sits
+  under a corner or the home indicator.
 - **Built from the app's own tokens and fonts** (`tickets-api/src/tokens.toml`),
   light and dark, with synthetic data. It is checked in headless Chromium at
   each width and theme (every control clicked, document height = viewport,
@@ -792,8 +899,10 @@ and `view: mockup` + `widths:` makes a whole body one.
 - **Feedback on a mockup**: *comment* on its bar (APP-46), or the
   annotation mode (`a`) on an element inside it (APP-45). The anchor is
   `mockup:<ticket>#<n>@<width> >> <selector>` and is found again at any width.
-- **Screenshots** of a mockup: `scripts/shot.mjs` can't shoot a whole-page
-  mockup yet (APP-43); use Playwright from `perf/node_modules`.
+- **Screenshots** of a ticket, mockups and all: `scripts/shot.mjs
+  '#/ticket/X' --origin https://app.menger.sh --key ~/.plexus/keys/builder.key
+  --width 390` (APP-76; `--chat N` puts the shots in a chat). README
+  "Screenshots".
 
 ## Conventions
 
@@ -1029,11 +1138,35 @@ and `view: mockup` + `widths:` makes a whole body one.
   `scripts/cleanup-gate.sh`, never a hand-written `rm -r`** (RUN-21, owner
   2026-10-16: "not hit spooky rms"): `scripts/cleanup-gate.sh NAME` says
   what the gate NAME left — its worktree and branch (`git worktree remove`,
-  `git branch -d`), `~/.cache/cargo-target/NAME`, `/tmp/menger-NAME.db*`,
-  its session scratch — and `--yes` removes it and logs it to
-  `~/.local/state/menger/cleanup-gate.log`; `--path P` takes one path by
-  its shape, `--list` surveys every leftover and removes nothing. It
+  `git branch -d`), the worktree's cargo build-dirs
+  (`~/.cache/cargo-build/XX/HASH`, CI-2), `~/.cache/cargo-target/NAME`,
+  `/tmp/menger-NAME.db*`, its session scratch — and `--yes` removes it and
+  logs it to `~/.local/state/menger/cleanup-gate.log`; `--path P` takes one
+  path by its shape, `--list` surveys every leftover and removes nothing. It
   refuses `/`, `$HOME`, a main checkout, a shared target (`menger`, a
   repository's name), `~/.local/share/menger`, a dirty worktree, anything
-  in use, and any path with `..` — a refusal is the answer, not a cue for
-  `rm`. Its tests: `scripts/tests/cleanup-gate` (under `cargo test`).
+  in use (a cargo holding its lock too), and any path with `..` — a refusal
+  is the answer, not a cue for `rm`. Its tests: `scripts/tests/cleanup-gate`
+  (under `cargo test`).
+- **Tests per ticket are a selection; the suite runs per batch** (CI-3,
+  owner 2026-10-18: "when performing updates I only want you running the
+  new tests … the deployment should handle running all tests prior to
+  deployment"). A ticket's gate is the tests it adds and the nearest ones
+  it touches (`cargo test -p <crate> <filter>`, the one wire test, the
+  frontend file) — never `cargo test --workspace` per ticket; its step on
+  the ticket shows that selection. Merges queue up on main, and the full
+  suite runs once against the batch, in `deploy/pipeline build`'s gate
+  (whole workspace + frontend tests) before `deploy test`. A red there is
+  the batch's: find the commit (the failing test's area, else bisect the
+  batch), file a gap that blocks its ticket, fix or revert, build again.
+- **Builds clean up after themselves** (CI-2, owner 2026-10-18: "our test
+  runner automatically cleans up their builds"): the `systemd --user` timer
+  `menger-sweep.timer` (hourly; `scripts/sweep/install.sh --start` installs
+  it from main) runs `cleanup-gate.sh --sweep --yes` — every build-dir, every
+  non-shared cargo target and a shared target's stale `deps` / `incremental`
+  / `build` / `.fingerprint`, each when nothing in it changed for 6 h (1 h at
+  75% used, 15 min at 90%) and nothing holds it — then `scripts/disk-check.sh
+  --alert`, which files a gap under CI-1 and queues it `now` when `/var/home`
+  is still at 90% (once, until that ticket is done). `deploy/pipeline build`
+  refuses up front under 50 GB free or at 90% used; `status` says the disk.
+  Before a long gate of your own, `scripts/disk-check.sh` (exit 3: low).

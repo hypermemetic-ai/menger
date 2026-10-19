@@ -115,6 +115,12 @@
 //! Review → Complete) through the menu's own write ([`step_focused`]), a
 //! toast saying why when nothing is written ([`toast`]); and `s` opens this
 //! menu on it with Set status already expanded, focus on the current status.
+//!
+//! APP-57: **held on a touch screen** — a touch resting on what a right-click
+//! opens the menu on opens it too (src/menu/hold.rs), its lift not followed;
+//! a link to a ticket no ticket element holds (a chat's or a comment's chip)
+//! is a ticket element ([`host_of`]); at a phone's width the menu is a sheet
+//! from the bottom ([`place`]).
 
 use js_sys::Reflect;
 use leptos::prelude::*;
@@ -128,6 +134,7 @@ use std::sync::Arc;
 mod chat;
 mod delete;
 mod forms;
+mod hold;
 pub(crate) mod model;
 mod view;
 mod write;
@@ -188,8 +195,35 @@ pub(crate) fn open_from_frame(id: String, x: f64, y: f64, keyboard: bool) {
 
 /// ACT-4: the ticket element `el` is (or sits in) — what the one menu opens
 /// on. FILTER-22's tag menu stands down inside one.
+///
+/// APP-57: a link to a ticket that no ticket element holds — a chat's chip
+/// or card, a comment's ticket — is one too (its ticket read off its href,
+/// [`ticket_in_href`]); a section that stands for a ticket (the
+/// conversation) is the host only where neither is nearer.
 pub(crate) fn host_of(el: &web_sys::Element) -> Option<web_sys::Element> {
-    el.closest("[data-ticket-id]").ok().flatten()
+    let near = |sel: &str| el.closest(sel).ok().flatten();
+    near("[data-ticket-id]:not(section)")
+        .or_else(|| {
+            near("a[href^='#/ticket/']")
+                .filter(|a| ticket_of(a).is_some() && a.closest("#tmenu, #tagmenu").ok().flatten().is_none())
+        })
+        .or_else(|| near("section[data-ticket-id]"))
+}
+
+/// The ticket a host stands for: its `data-ticket-id` (or `data-nav-id`),
+/// else the ticket its link opens.
+fn ticket_of(host: &web_sys::Element) -> Option<String> {
+    host.get_attribute("data-ticket-id")
+        .or_else(|| host.get_attribute("data-nav-id"))
+        .or_else(|| host.get_attribute("href").as_deref().and_then(ticket_in_href))
+}
+
+/// APP-57: the ticket a link inside the app opens — `#/ticket/<ID>`, with
+/// or without a query (`?chat=41`, `?comment=7`) — if it is one.
+pub(crate) fn ticket_in_href(href: &str) -> Option<String> {
+    let rest = href.strip_prefix("#/ticket/")?;
+    let end = rest.find(['?', '/', '#']).unwrap_or(rest.len());
+    frame_ticket(&rest[..end])
 }
 
 /// ACT-4: whose filter the menu's filter items build, for a right-click on
@@ -207,7 +241,7 @@ fn level_at(host: &web_sys::Element) -> Level {
 /// ACT-4: the menu's target on `host`, opened at `(x, y)` — the selection
 /// when the host is in it and it holds more than one.
 fn target_on(host: &web_sys::Element, el: &web_sys::Element, x: f64, y: f64, nav: Option<nav::At>) -> Option<Target> {
-    let id = host.get_attribute("data-ticket-id").or_else(|| host.get_attribute("data-nav-id"))?;
+    let id = ticket_of(host)?;
     let (chip, level) = match tags::tag_at(el) {
         Some((tag, level)) => (Some(tag), level),
         None => (None, level_at(host)),
@@ -370,12 +404,22 @@ fn focus(el: &web_sys::HtmlElement) {
 /// by its shrunken size; and its `transform-origin` is set to the corner it
 /// grows from ([`origin`]).
 pub(crate) fn place(el: &web_sys::HtmlElement, x: f64, y: f64) {
-    let (w, h) = (f64::from(el.offset_width()), f64::from(el.offset_height()));
     let win = dom::window();
     let dim = |v: Result<JsValue, JsValue>| v.ok().and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY);
     let (vw, vh) = (dim(win.inner_width()), dim(win.inner_height()));
-    let (left, top) = clamp(x, y, w, h, vw, vh);
     let style = el.style();
+    // APP-57: on a phone's width the menu is a sheet from the bottom, placed
+    // for a thumb by the stylesheet (`[data-sheet]`), not at the point.
+    if crate::phonebar::is_phone(vw) {
+        let _ = el.set_attribute("data-sheet", "");
+        let _ = style.remove_property("left");
+        let _ = style.remove_property("top");
+        let _ = style.set_property("transform-origin", "center bottom");
+        return;
+    }
+    let _ = el.remove_attribute("data-sheet");
+    let (w, h) = (f64::from(el.offset_width()), f64::from(el.offset_height()));
+    let (left, top) = clamp(x, y, w, h, vw, vh);
     let _ = style.set_property("left", &format!("{left}px"));
     let _ = style.set_property("top", &format!("{top}px"));
     let (ox, oy) = origin(x, y, left, top, w, h);
@@ -489,6 +533,31 @@ fn step_focused(ids: &[String], up: bool, last_error: RwSignal<Option<String>>) 
 /// (the component is mounted once): open on a right-click over a ticket
 /// element — or on Menu / Shift+F10 over the focused one — and close on
 /// Escape / outside mousedown / scroll / route change.
+/// What a right-click on `el` at `(x, y)` opens — `None`: the browser's own
+/// menu (or, a tag outside any ticket, FILTER-22's). APP-57: `held`, a touch
+/// held there — a section that stands for a ticket (the conversation) is not
+/// held: a long press there selects its text.
+fn at(el: &web_sys::Element, x: f64, y: f64, held: bool) -> Option<Target> {
+    // ACT-7: in the nav, the menu carries Nav ▸ — and its empty space,
+    // its header and a row that stands for no ticket open the nav's
+    // items alone.
+    let nav = nav::at(el).filter(offers);
+    // ACT-4: anywhere on a ticket element — its chips too — this menu.
+    if let Some(host) = host_of(el) {
+        if held && host.local_name() == "section" {
+            return None;
+        }
+        if let Some(t) = target_on(&host, el, x, y, nav.clone()) {
+            return Some(t);
+        }
+    }
+    if tags::tag_at(el).is_some() {
+        // FILTER-22: a tag outside any ticket is the tag menu's.
+        return None;
+    }
+    nav.is_some().then(|| Target { ids: Vec::new(), shortcode: None, x, y, nav, chip: None, level: Level::Nav, framed: false, open: None })
+}
+
 fn install_listeners(target: RwSignal<Option<Target>>, last_error: RwSignal<Option<String>>) {
     let doc = document();
     let win = dom::window();
@@ -498,25 +567,28 @@ fn install_listeners(target: RwSignal<Option<Target>>, last_error: RwSignal<Opti
             return;
         }
         let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
-        // ACT-7: in the nav, the menu carries Nav ▸ — and its empty space,
-        // its header and a row that stands for no ticket open the nav's
-        // items alone.
-        let nav = nav::at(&el).filter(offers);
         let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
-        // ACT-4: anywhere on a ticket element — its chips too — this menu.
-        if let Some(t) = host_of(&el).and_then(|host| target_on(&host, &el, x, y, nav.clone())) {
-            // Only here: a right-click anywhere else keeps the native menu.
+        // Only here: a right-click anywhere else keeps the native menu.
+        // APP-57: Android's long press is this event; the hold under way is
+        // it, and opens nothing again.
+        if let Some(t) = at(&el, x, y, hold::during()) {
             ev.prevent_default();
+            hold::claim();
             target.set(Some(t));
-        } else if tags::tag_at(&el).is_some() {
-            // FILTER-22: a tag outside any ticket is the tag menu's.
-        } else if nav.is_some() {
-            ev.prevent_default();
-            target.set(Some(Target { ids: Vec::new(), shortcode: None, x, y, nav, chip: None, level: Level::Nav, framed: false, open: None }));
         }
     });
     let _ = doc.add_event_listener_with_callback("contextmenu", on_context.as_ref().unchecked_ref());
     on_context.forget();
+
+    // APP-57: a touch held on the same elements opens the same menu.
+    hold::install(
+        |el, x, y| at(el, x, y, true).is_some(),
+        move |el, x, y| {
+            if let Some(t) = at(el, x, y, true) {
+                target.set(Some(t));
+            }
+        },
+    );
 
     let on_down = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
         if target.with_untracked(Option::is_none) {
@@ -587,8 +659,16 @@ fn install_listeners(target: RwSignal<Option<Target>>, last_error: RwSignal<Opti
     on_key.forget();
 
     // `scroll` does not bubble; capturing on the document sees every
-    // scrolling box (the content column, the nav's tree) at once.
-    let on_scroll = Closure::<dyn FnMut()>::new(move || close_menu(target));
+    // scrolling box (the content column, the nav's tree) at once. APP-57:
+    // but the menu's own — a sheet longer than a phone's screen scrolls.
+    let on_scroll = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        let own = menu_element().is_some_and(|m| {
+            ev.target().and_then(|t| t.dyn_into::<web_sys::Node>().ok()).is_some_and(|n| m.contains(Some(&n)))
+        });
+        if !own {
+            close_menu(target);
+        }
+    });
     let _ = doc.add_event_listener_with_callback_and_bool(
         "scroll",
         on_scroll.as_ref().unchecked_ref(),
@@ -833,7 +913,21 @@ fn toast_view(t: Toast, toaster: Toaster, last_error: RwSignal<Option<String>>) 
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp, frame_point, frame_ticket, origin, step, wave_items, WaveItem, EDGE};
+    use super::{clamp, frame_point, frame_ticket, origin, step, ticket_in_href, wave_items, WaveItem, EDGE};
+
+    /// APP-57: a chat's or a comment's link to a ticket is that ticket, its
+    /// query aside; any other link is none.
+    #[test]
+    fn a_link_to_a_ticket_is_its_ticket() {
+        assert_eq!(ticket_in_href("#/ticket/KILN-7").as_deref(), Some("KILN-7"));
+        assert_eq!(ticket_in_href("#/ticket/KILN-7?chat=41&full").as_deref(), Some("KILN-7"));
+        assert_eq!(ticket_in_href("#/ticket/DEMAND-2?comment=7").as_deref(), Some("DEMAND-2"));
+        assert_eq!(ticket_in_href("#/ticket/kiln-7").as_deref(), Some("KILN-7"));
+        assert_eq!(ticket_in_href("#/ticket/"), None);
+        assert_eq!(ticket_in_href("#/ticket/not a ticket"), None);
+        assert_eq!(ticket_in_href("#/board"), None);
+        assert_eq!(ticket_in_href("https://example.com/#/ticket/KILN-7"), None);
+    }
 
     /// MENGER-34: what a frame says is a ticket only when it has a ticket's
     /// form, read as the server reads it.
@@ -934,8 +1028,12 @@ mod tests {
         assert!(none.contains("animation: none !important"), "none stops every animation, the menu's with it");
         let tm = rule("html[data-motion=\"none\"] :is(#tmenu, #tmenu .sub)");
         assert!(tm.contains("animation: none"), "and names the menu");
-        let reduce = &css[css.find("@media (prefers-reduced-motion: reduce)").unwrap()..];
-        assert!(reduce[..reduce.find("\n  }").unwrap()].contains("html:not([data-motion]) :is(#tmenu, #tmenu .sub) { animation: none; }"));
+        // CHAT-38: in any of the reduced-motion blocks, not only the first.
+        let reduced = css.match_indices("@media (prefers-reduced-motion: reduce)").any(|(at, _)| {
+            let block = &css[at..];
+            block[..block.find("\n  }").unwrap()].contains("html:not([data-motion]) :is(#tmenu, #tmenu .sub) { animation: none; }")
+        });
+        assert!(reduced, "the system's reduced motion stops the menu's");
         // No rule keyed on calm takes it away: calm keeps a state change.
         assert!(!css.contains("html[data-motion=\"calm\"] :is(#tmenu"), "calm keeps it");
     }

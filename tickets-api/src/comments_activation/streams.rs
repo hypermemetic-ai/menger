@@ -37,7 +37,20 @@ fn answer(written: Result<Comment, StoreError>) -> CommentsEvent {
 /// held anywhere. ACCESS-19 (ACCESS-3 #9): signed by the caller — its
 /// principal kept, its name the author (its principal when it has no name;
 /// with login off, the store's `owner`) — never named by the call.
-pub(super) async fn add(store: Arc<Store>, user: VerifiedUser, anchor: Anchor, body: String) -> CommentsEvent {
+///
+/// COMMENT-8: with `reply_to`, a reply — on the tickets its thread's root
+/// is on, which the caller must see (else answered as no comment), never
+/// with an anchor of its own.
+pub(super) async fn add(store: Arc<Store>, user: VerifiedUser, anchor: Option<Anchor>, body: String, reply_to: Option<u64>) -> CommentsEvent {
+    let anchor = match (anchor, reply_to) {
+        (Some(_), Some(_)) => return CommentsEvent::Error { message: "a reply takes its thread's anchor: give reply_to or anchor, not both (nothing was kept)".into() },
+        (None, None) => return CommentsEvent::Error { message: "a comment needs an anchor, or reply_to naming the comment it answers (nothing was kept)".into() },
+        (None, Some(to)) => match store.comment(&user, to) {
+            Ok(c) => c.anchor,
+            Err(e) => return CommentsEvent::Error { message: e.to_string() },
+        },
+        (Some(a), None) => a,
+    };
     let on = named(&anchor);
     let on: Vec<&str> = on.iter().map(String::as_str).collect();
     let allowed = match on.is_empty() {
@@ -50,7 +63,11 @@ pub(super) async fn add(store: Arc<Store>, user: VerifiedUser, anchor: Anchor, b
     let author = user.name().map(str::to_string).or_else(|| Some(user.principal_text()));
     // ACCESS-11: a viewer's permit on each ticket it is on.
     let permits = OnComment::new(crate::activation::comment_permits::<Viewer>(&store, &user, &on));
-    answer(store.add_comment_as(permits, anchor, body, author, Some(user.principal_text())).await)
+    let principal = Some(user.principal_text());
+    answer(match reply_to {
+        Some(to) => store.reply_comment_as(permits, to, body, author, principal).await,
+        None => store.add_comment_as(permits, anchor, body, author, principal).await,
+    })
 }
 
 /// IDENTITY-21 / ACCESS-11: what resolving or reopening the comment `id`
@@ -59,20 +76,25 @@ pub(super) async fn add(store: Arc<Store>, user: VerifiedUser, anchor: Anchor, b
 /// (ACCESS-3 #7): a comment out of reach — on a hidden ticket, or another's
 /// comment on the app to anyone but an admin of `*` — is answered as one
 /// that is not there, naming nothing.
-fn editors_of(store: &Store, user: &VerifiedUser, id: u64) -> Result<OnComment<Editor>, String> {
-    let on = store.comment(user, id).map(|c| named(&c.anchor)).map_err(|e| e.to_string())?;
+///
+/// COMMENT-8: a reply's thread is settled by its root — answered as the
+/// root's id beside the permits.
+fn editors_of(store: &Store, user: &VerifiedUser, id: u64) -> Result<(u64, OnComment<Editor>), String> {
+    let c = store.comment(user, id).map_err(|e| e.to_string())?;
+    let root = c.reply_to.map_or(id, |r| r.get());
+    let on = named(&c.anchor);
     let on: Vec<&str> = on.iter().map(String::as_str).collect();
     match on.is_empty() {
         true => user.reach_filter().map(|_| ())?,
         false => user.require(&on, store)?,
     }
-    Ok(OnComment::new(crate::activation::comment_permits(store, user, &on)))
+    Ok((root, OnComment::new(crate::activation::comment_permits(store, user, &on))))
 }
 
 /// `comments.resolve` (`open: false`) and `comments.reopen` (`open: true`).
 pub(super) async fn settle(store: Arc<Store>, user: VerifiedUser, id: u64, open: bool) -> CommentsEvent {
-    let on = match editors_of(&store, &user, id) {
-        Ok(on) => on,
+    let (id, on) = match editors_of(&store, &user, id) {
+        Ok(found) => found,
         Err(message) => return CommentsEvent::Error { message },
     };
     answer(match open {
@@ -140,4 +162,25 @@ pub(super) fn watch_stream(access: Access, store: Arc<Store>, user: VerifiedUser
             }
         }
     }
+}
+
+/// COMMENT-9: `comments.report` — any signed-in reader's; kept and logged.
+pub(super) fn report_stream(failures: super::failures::Failures, user: VerifiedUser, r: super::failures::Report) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    let answer = match user.read_filter() {
+        Ok(_) => CommentsEvent::Reported { failure: failures.report(&user, r) },
+        Err(message) => CommentsEvent::Error { message },
+    };
+    futures::stream::once(async move { answer })
+}
+
+/// COMMENT-9: `comments.failures` — the reports the caller sees.
+pub(super) fn failures_stream(failures: super::failures::Failures, store: Arc<Store>, user: VerifiedUser, limit: Option<u32>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    let rows: Vec<CommentsEvent> = match user.read_filter() {
+        Ok(_) => {
+            let limit = limit.map_or(50, |l| l.clamp(1, crate::comments::FAILURES_KEPT as u32)) as usize;
+            failures.seen(&store, &user, limit).into_iter().map(|failure| CommentsEvent::Failure { failure }).collect()
+        }
+        Err(message) => vec![CommentsEvent::Error { message }],
+    };
+    futures::stream::iter(rows)
 }

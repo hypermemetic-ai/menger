@@ -23,7 +23,7 @@ it is ever one of these (`store::members::Row`). */
 /** Who gave a grant: a Plexus principal, --admin (the operator), dev-login or auth.grant */
 export type GrantedBy = string;
 
-/** Who a grant is to: a Plexus principal, or team:<name> */
+/** Who a grant is to: a Plexus principal, team:<name>, or everyone (every signed-in principal) */
 export type Grantee = string;
 
 /** One organization, as a reader of it sees it. */
@@ -108,7 +108,7 @@ layer's grammar, wasm-safe. On the server it converts to and from
 export type Principal = string;
 
 /** A role a grant gives (any case) */
-export type Role = "viewer" | "deployer" | "editor" | "admin";
+export type Role = "chatter" | "viewer" | "deployer" | "editor" | "admin";
 
 /** A grant's scope as kept: *, an organization (acme:), a shortcode in one by its identity (acme:MENGER), under a ticket's key (under MENGER-12: it and its subtree), or a ticket's key (MENGER-12: it alone) */
 export type Scope = string;

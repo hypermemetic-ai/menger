@@ -13,9 +13,9 @@
 //! beside it, in `chats_activation/` (MENGER-29): each body here is its
 //! attribute, the caller and one call.
 
-use crate::chats::{ChatState, ChatsEvent};
+use crate::chats::{ActivityState, ChatGrant, ChatState, ChatsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
-use crate::vocab::{Body, ChatId, MessageId, Principal, TicketRef, Title};
+use crate::vocab::{ActivityLine, Body, ChatId, MessageId, Principal, TicketRef, Title};
 #[cfg(feature = "server")]
 use crate::access::{Access, MengerRequest, VerifiedUser};
 #[cfg(feature = "server")]
@@ -31,6 +31,8 @@ mod streams;
 use streams::*;
 #[cfg(feature = "server")]
 mod await_message;
+#[cfg(feature = "server")]
+mod grants;
 
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
@@ -60,27 +62,32 @@ impl ChatsActivation {
 // A viewer chats, as a viewer comments: every method is a viewer's — what
 // a call may do in a chat is the chat's to say (its participants), not a
 // role's.
-/// Chats on a ticket among participants — open, post, add, list, messages, read, close, reopen, watch, await_message.
+/// Chats among participants, on a ticket or outside tickets (direct messages and groups) — open, post, add, remove, list, messages, read, close, reopen, watch, await_message, activity, activity_log.
 #[plexus_macros::activation(
     auth = "required",
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["open", "post", "add", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "candidates"],
+        viewer = ["open", "post", "add", "remove", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "candidates", "activity", "activity_log"],
         editor = [viewer],
+        // CHAT-16: one granted a chat only — the chats it is in, nothing of the tickets.
+        chatter = ["post", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "activity", "activity_log"],
     )
 )]
 impl ChatsActivation {
-    /// Open a chat on a ticket with the principals named; yields opened { chat } — the open chat they already have there, when they do (existing: true).
+    /// Open a chat on a ticket, or outside tickets — a direct message or a group — with the principals named; yields opened { chat } — the open chat they already have, when they do (existing: true).
     ///
     /// The caller and `others` are the participants (CHAT-1's `with`, which
-    /// TypeScript does not take as a parameter's name) — `others` empty or
-    /// absent is a chat of one, the caller's alone, to add to later (CHAT-6);
-    /// every one of them must be
-    /// able to read the ticket, or the call is `refused { reasons }`, naming
-    /// each who cannot, and nothing is made. A ticket the caller cannot read
-    /// is refused as one that is none. `watch` carries `opened` to each
-    /// participant.
+    /// TypeScript does not take as a parameter's name). On a ticket,
+    /// `others` empty or absent is a chat of one, the caller's alone, to
+    /// add to later (CHAT-6); every one of them must be able to read the
+    /// ticket, or the call is `refused { reasons }`, naming each who cannot,
+    /// and nothing is made. A ticket the caller cannot read is refused as
+    /// one that is none. CHAT-14: without a ticket, one other is a direct
+    /// message (the one the two have, when they have one) and several a
+    /// group (`title` names it); each must hold a grant in the caller's
+    /// organization, and only its participants read it. `watch` carries
+    /// `opened` to each participant.
     #[plexus_macros::method(
         group = "write",
         example(note = "ada asks builder about KILN-7", params = r#"{"ticket": "KILN-7", "others": ["key:4b2e0000000000000000000000000000000000000000000000000000000000aa"]}"#)
@@ -88,16 +95,16 @@ impl ChatsActivation {
     pub async fn open(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// The ticket the chat is about, e.g. KILN-7 (required: there is no chat without a ticket).
-        ticket: TicketRef,
-        /// Who else is in it: principals, each able to read the ticket (none, or absent: a chat of one).
+        /// The ticket the chat is about, e.g. KILN-7 (optional: none for a direct message or a group).
+        ticket: Option<TicketRef>,
+        /// Who else is in it: principals, each able to read the ticket (on a ticket, none or absent: a chat of one; without one: one for a direct message, several for a group).
         others: Option<Vec<Principal>>,
         /// A title for it (optional).
         title: Option<Title>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let (store, access) = (self.store.clone(), self.access.clone());
         let others = others.unwrap_or_default().into_iter().map(Principal::into_string).collect();
-        futures::stream::once(async move { open(store, access, user, ticket.into_string(), others, title.map(Title::into_string)).await })
+        futures::stream::once(async move { open(store, access, user, ticket.map(TicketRef::into_string), others, title.map(Title::into_string)).await })
     }
 
     /// Post a message in a chat; yields posted { message }, signed by the caller.
@@ -119,11 +126,56 @@ impl ChatsActivation {
         futures::stream::once(async move { post(store, user, chat.get(), body.into_string()).await })
     }
 
+    /// Say what the caller is doing in a chat, live; yields activity { activity } — never a message (CHAT-18).
+    ///
+    /// By a participant: `started` (it has the message), `working` (the
+    /// default: a line of what it does now, or a heartbeat with none),
+    /// `ended` (the turn is over). Every participant's `watch` hears
+    /// `activity`; nothing is stored — the server keeps each chat's last
+    /// 200 in memory for `activity_log`, lost on a restart. A line is cut
+    /// at 500 characters. A chat the caller is not in is `not_found`.
+    #[plexus_macros::method(group = "write", values(state = ["started", "working", "ended"]))]
+    pub async fn activity(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 41.
+        chat: ChatId,
+        /// started | working | ended (optional; default working).
+        state: Option<ActivityState>,
+        /// What it does now, e.g. `Read src/queue.rs` (optional).
+        line: Option<ActivityLine>,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        let ev = activity(&self.store, &user, chat.get(), state.unwrap_or_default(), line.as_deref());
+        futures::stream::once(async move { ev })
+    }
+
+    /// A chat's live work kept in memory — its last 200 activity items, oldest first; an activity { activity } each, then the end (CHAT-18).
+    ///
+    /// For a participant, so a viewer opening a chat mid-turn sees what has
+    /// been done; anyone else is answered `not_found`. Empty after a restart.
+    #[plexus_macros::method(group = "read")]
+    pub async fn activity_log(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 41.
+        chat: ChatId,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        futures::stream::iter(activity_log(&self.store, &user, chat.get()))
+    }
+
     /// Add a participant to a chat; yields added { chat }.
     ///
     /// By a participant, to an open chat; the one added must be able to read
     /// the ticket, or it is `refused`. One already in it is the chat as it is.
-    #[plexus_macros::method(group = "write")]
+    /// CHAT-14: to a group, one holding a grant in its organization, by a
+    /// participant or an admin of the organization; a direct message is
+    /// refused (it stays between two: start a group). CHAT-16: an admin of
+    /// the chat's scope adds anyone, in it or not; one who can't read it is
+    /// added only with `grant` — `ticket` (viewer on the ticket alone) or
+    /// `chat` (this chat only) — the add and the grant one write, answered
+    /// `added { chat, granted }`; without it, `needs_grant { choices }` and
+    /// nothing written.
+    #[plexus_macros::method(group = "write", values(grant = ["ticket", "chat"]))]
     pub async fn add(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
@@ -131,9 +183,11 @@ impl ChatsActivation {
         chat: ChatId,
         /// Who to add: a principal.
         principal: Principal,
+        /// What an admin grants one who can't read the chat's ticket: ticket | chat (optional; CHAT-16).
+        grant: Option<ChatGrant>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let (store, access) = (self.store.clone(), self.access.clone());
-        futures::stream::once(async move { add(store, access, user, chat.get(), principal.into_string()).await })
+        futures::stream::once(async move { grants::add(store, access, user, chat.get(), principal.into_string(), grant).await })
     }
 
     /// The caller's chats, by last activity, newest first — on a ticket, with or without unread, open or closed; a chat { chat } each, then page { next }.
@@ -157,7 +211,7 @@ impl ChatsActivation {
         /// At most this many chats (default 50, at most 500) (optional).
         limit: Option<u32>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
-        let q = ChatQuery { ticket: ticket.map(TicketRef::into_string), unread, state };
+        let q = ChatQuery { ticket: ticket.map(TicketRef::into_string), unread, state, kind: None };
         list_stream(self.store.clone(), user, q, after.map(ChatId::get), limit)
     }
 
@@ -185,6 +239,27 @@ impl ChatsActivation {
         limit: Option<u32>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         messages_stream(self.store.clone(), user, chat.get(), paging(after, before, newest), limit)
+    }
+
+    /// Take a participant out of a chat; yields removed { chat, principal, revoked } (CHAT-14; CHAT-16: revoke takes back the grant their add made).
+    ///
+    /// A group's or a ticket's chat, by a participant (itself too: it
+    /// leaves) or, outside tickets, an admin of the chat's organization; a
+    /// direct message is refused (close it instead). One not in it is the
+    /// chat as it is. The one removed hears `left` on its `watch`.
+    #[plexus_macros::method(group = "write")]
+    pub async fn remove(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 41.
+        chat: ChatId,
+        /// Who to take out: a principal.
+        principal: Principal,
+        /// Also revoke the grant their add made (an admin's; optional; CHAT-16).
+        revoke: Option<bool>,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        let store = self.store.clone();
+        futures::stream::once(async move { grants::remove(store, user, chat.get(), principal.into_string(), revoke.unwrap_or(false)).await })
     }
 
     /// Mark a chat read up to a message; yields read { chat, upto, unread }.
@@ -269,23 +344,27 @@ impl ChatsActivation {
         watch_stream(self.access.clone(), self.store.clone(), user, ticket.map(TicketRef::into_string))
     }
 
-    /// Who could be in a chat on a ticket: a candidate { principal, reads } each — every principal holding a grant in the ticket's organization (a team's members by name), and those in the caller's chats there — then the end.
+    /// Who could be in a chat — on a ticket, or (without one) outside tickets: a candidate { principal, reads, name?, agent } each — every principal holding a grant in the organization (a team's members by name), and those in the caller's chats there — then the end.
     ///
     /// CHAT-4's picker: `reads` says whether the principal can read the
     /// ticket now (`open` and `add` refuse one that cannot). The caller is
     /// not among them. A ticket the caller cannot read is `refused` as one
     /// that is none. A participant who holds no grant there now (one kept
     /// before ACCESS-24, when login could be off) is listed all the same, as
-    /// one of the chats' participants.
+    /// one of the chats' participants. CHAT-14: without a ticket, those
+    /// holding a grant in the caller's organizations (`reads`: may be in a
+    /// direct message or a group); each by the `name` the server knows it
+    /// by (signed in with — a synapse key's name too), and `agent` for an
+    /// agent (an `agent:` or `key:` principal, or a standing chat member).
     #[plexus_macros::method(group = "read")]
     pub async fn candidates(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// The ticket, e.g. KILN-7.
-        ticket: TicketRef,
+        /// The ticket, e.g. KILN-7 (optional: none for who may be in a direct message or a group).
+        ticket: Option<TicketRef>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let (store, access) = (self.store.clone(), self.access.clone());
-        futures::stream::iter(candidates(&store, &access, &user, &ticket.into_string()))
+        futures::stream::iter(candidates(&store, &access, &user, ticket.map(TicketRef::into_string).as_deref()))
     }
 
     /// Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — and the end; timed_out after timeout_minutes.

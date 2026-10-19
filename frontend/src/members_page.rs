@@ -7,6 +7,10 @@
 //! each with revoke; and a form to grant a role to any principal. Every
 //! change asks the server, which checks it (IDENTITY-21), then the page
 //! reads again.
+//!
+//! CHAT-14: each person is named as the server knows them — an agent's key
+//! by the name it signs in with (`builder`), marked *agent* — and has
+//! **Chat**: the direct message with them, opened in `#/chats`.
 
 use leptos::prelude::*;
 use menger_tickets_api::{Grant, MembersClient, MembersEvent};
@@ -66,7 +70,7 @@ fn outcome(evs: Result<Vec<MembersEvent>, plexus_client::ClientError>) -> Result
 async fn grant(client: MembersClient<std::rc::Rc<plexus_client::WsTransport>>, principal: String, scope: String, role: String) -> Result<(), String> {
     let typed = || -> Result<_, String> { Ok((crate::typed::typed(&principal)?, crate::typed::typed(&scope)?, crate::typed::typed(&role)?)) };
     let (principal, scope, role) = typed()?;
-    outcome(client.grant_all(Some(principal), None, scope, role).await)
+    outcome(client.grant_all(Some(principal), None, None, scope, role).await)
 }
 
 #[component]
@@ -92,6 +96,12 @@ pub(crate) fn MembersPage() -> impl IntoView {
     let r_text = RwSignal::new("viewer".to_string());
 
     let admin = signin::account();
+    // CHAT-14: the names (and agents) the server knows.
+    spawn_local(async {
+        let _ = crate::chats::candidates(None).await;
+    });
+    let name = crate::chat_pane::names();
+    let me = crate::chats::me();
     view! {
         <section id="members">
             <h2>"Members"</h2>
@@ -144,21 +154,40 @@ pub(crate) fn MembersPage() -> impl IntoView {
                             let Some(client) = session::members_client() else { return };
                             act(format!("revoked {p} on {s}"), Box::pin(async move {
                                 // ACCESS-22: a grant is to a principal or a team.
-                                let (principal, team) = match p {
-                                    menger_tickets_api::vocab::Grantee::Principal(p) => (Some(p), None),
-                                    menger_tickets_api::vocab::Grantee::Team(t) => (None, Some(t)),
+                                // ACCESS-57: or to everyone signed in.
+                                let (principal, team, everyone) = match p {
+                                    menger_tickets_api::vocab::Grantee::Principal(p) => (Some(p), None, None),
+                                    menger_tickets_api::vocab::Grantee::Team(t) => (None, Some(t), None),
+                                    menger_tickets_api::vocab::Grantee::Everyone => (None, None, Some(true)),
                                 };
                                 let scope = crate::typed::typed(&s.to_string())?;
-                                outcome(client.revoke_all(principal, team, scope).await)
+                                outcome(client.revoke_all(principal, team, everyone, scope).await)
                             }));
                         };
+                        // CHAT-14: a person (not a team, not the reader) has Chat.
+                        let person = match &g.principal {
+                            menger_tickets_api::vocab::Grantee::Principal(p) => Some(p.to_string()),
+                            menger_tickets_api::vocab::Grantee::Team(_) | menger_tickets_api::vocab::Grantee::Everyone => None,
+                        };
+                        let chat = person.clone().filter(|p| *p != me).map(|p| {
+                            let go = move |_| crate::chats_page::message(p.clone(), move |e| note.set(Some(Err(e))));
+                            view! { <button class="link chatwith" title="a direct message, in #/chats" on:click=go>"chat"</button> }
+                        });
+                        let named = person.as_deref().map(|p| (name(p), crate::chats::is_agent(p)));
+                        // TICKETS-9: a person's tickets — the board under `assigned "<principal>"`.
+                        let assigned = person.clone().map(|p| {
+                            view! { <a class="assigned-link" href=crate::assignees::board_link(&p) title=format!("the board: tickets assigned to {p}")>"assigned"</a> }
+                        });
                         view! {
                             <tr>
-                                <td><code>{g.principal.to_string()}</code></td>
+                                <td>
+                                    {named.map(|(n, agent)| view! { <strong class="mname">{n}</strong>{agent.then(|| view! { <span class="ag">"agent"</span> })}" " })}
+                                    <code>{g.principal.to_string()}</code>
+                                </td>
                                 <td><code>{g.scope.to_string()}</code></td>
                                 <td>{g.role.to_string()}</td>
                                 <td class="lbl">{g.granted_by.to_string()}</td>
-                                <td>{(!operator).then(|| view! { <button class="link revoke" on:click=revoke>"revoke"</button> })}</td>
+                                <td>{chat}" "{assigned}" "{(!operator).then(|| view! { <button class="link revoke" on:click=revoke>"revoke"</button> })}</td>
                             </tr>
                         }
                     }).collect_view())}

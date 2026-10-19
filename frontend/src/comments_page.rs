@@ -18,7 +18,10 @@
 //! **A row** links back to its place: its page, with `?comment=<id>`, where
 //! the app scrolls to the element and flashes it (src/annotate.rs); its
 //! ticket; its state, author and time; its body; what was there (the label
-//! and the excerpt); and Resolve, or Reopen.
+//! and the excerpt); and Resolve, or Reopen. COMMENT-8: a row is a
+//! thread — its root, its replies under it with a Reply box
+//! (src/thread.rs); the filters admit a thread when its root or a reply
+//! matches (a reply judged at its root's state), and the count is threads.
 //!
 //! What decides — reading and writing the query, the filters, the rows'
 //! order, a row's link — is pure and pinned by native tests.
@@ -114,7 +117,15 @@ impl Filter {
 
 /// The rows: the comments `f` admits, newest first.
 pub(crate) fn rows(all: &[Comment], f: &Filter, under_ids: Option<&HashSet<u64>>) -> Vec<Comment> {
-    let mut out: Vec<Comment> = all.iter().filter(|c| f.admits(c, under_ids)).cloned().collect();
+    let mut out: Vec<Comment> = all
+        .iter()
+        .filter(|c| comments::is_root(c))
+        .filter(|root| {
+            f.admits(root, under_ids)
+                || all.iter().any(|r| r.reply_to == Some(root.id) && f.admits(&Comment { state: root.state, ..r.clone() }, under_ids))
+        })
+        .cloned()
+        .collect();
     out.sort_by(|a, b| b.id.cmp(&a.id));
     out
 }
@@ -196,7 +207,7 @@ pub(crate) fn CommentsPage() -> impl IntoView {
         let held = held.clone();
         Memo::new(move |_| {
             let ids = under_ids();
-            held.with(|h| h.as_ref().map(|h| (rows(h.list(), &filter.get(), ids.as_ref()), h.list().len())))
+            held.with(|h| h.as_ref().map(|h| (rows(h.list(), &filter.get(), ids.as_ref()), h.list().iter().filter(|c| comments::is_root(c)).count())))
         })
     };
 
@@ -329,6 +340,7 @@ fn row(c: Comment) -> impl IntoView {
                 </button>
                 {move || err.get().map(|e| view! { <span class="cerr">{e}</span> })}
             </div>
+            <crate::thread::Replies root=c.clone() />
         </li>
     }
 }
@@ -397,6 +409,22 @@ mod tests {
         let all_of = Filter { under: Some("RETURNS".into()), state: Some(CommentState::Open), text: Some("parent".into()), ..Filter::default() };
         assert_eq!(ids(&all_of, Some(&said)), [1]);
         assert_eq!(ids(&Filter { state: Some(CommentState::Resolved), ..all_of }, Some(&said)), Vec::<u64>::new());
+    }
+
+    /// COMMENT-8: a row is a thread — a reply is no row of its own; its
+    /// root is admitted when the reply matches, judged at the root's state.
+    #[test]
+    fn a_thread_is_one_row_found_by_its_replies() {
+        let root = resolved(comment(1, "#/ticket/LINKED-2", "conversation", Some("LINKED-2")));
+        let mut answer = crate::comments::tests::reply(2, &root);
+        answer.author = "builder".into();
+        answer.body = "the link is in".into();
+        let all = vec![root.clone(), answer];
+        let ids = |f: &Filter| rows(&all, f, None).iter().map(|c| c.id.get()).collect::<Vec<_>>();
+        assert_eq!(ids(&Filter::default()), [1]);
+        assert_eq!(ids(&Filter { author: Some("builder".into()), ..Filter::default() }), [1], "found by its reply's author");
+        assert_eq!(ids(&Filter { text: Some("LINK IS".into()), ..Filter::default() }), [1], "and its text");
+        assert_eq!(ids(&Filter { author: Some("builder".into()), state: Some(CommentState::Open), ..Filter::default() }), Vec::<u64>::new(), "at its root's state");
     }
 
     /// A row links back to its page and names itself; the count line says

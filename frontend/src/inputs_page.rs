@@ -411,15 +411,6 @@ pub(crate) fn history_label(n: usize) -> String {
     format!("history · {n} change{}", if n == 1 { "" } else { "s" })
 }
 
-/// The header badge's tooltip.
-pub(crate) fn badge_title(open: usize) -> String {
-    match open {
-        0 => "no input is waiting for an answer".into(),
-        1 => "1 open input — waiting for an answer".into(),
-        n => format!("{n} open inputs — waiting for an answer"),
-    }
-}
-
 // ---------------------------------------------------------------------
 // The view
 
@@ -982,9 +973,6 @@ mod tests {
     fn the_labels() {
         assert_eq!(history_label(1), "history · 1 change");
         assert_eq!(history_label(3), "history · 3 changes");
-        assert_eq!(badge_title(0), "no input is waiting for an answer");
-        assert_eq!(badge_title(1), "1 open input — waiting for an answer");
-        assert_eq!(badge_title(4), "4 open inputs — waiting for an answer");
         assert_eq!(shortcode_of("INPUT-9"), "INPUT");
         assert_eq!(group_title(InputState::Open), "open");
     }

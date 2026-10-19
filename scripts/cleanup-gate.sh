@@ -7,7 +7,9 @@
 #   scripts/cleanup-gate.sh NAME...            what the gate NAME left (dry run)
 #   scripts/cleanup-gate.sh --path PATH...     these paths, each by its shape (dry run)
 #   scripts/cleanup-gate.sh --list             every leftover it recognises (never removes)
+#   scripts/cleanup-gate.sh --sweep            CI-2: build output nothing has touched for a while (dry run)
 #   … --yes                                    remove for real, and log it
+#   … --idle-hours N                           the sweep's idle threshold (default 6; CLEANUP_GATE_IDLE_HOURS)
 #
 # A dry run is the default: it says what it would remove and the space it
 # would free. With --yes it removes, prints and appends each removal to
@@ -24,6 +26,13 @@
 #               holds no .git anywhere (a gate's logs and scratch files)
 #   target      ~/.cache/cargo-target/NAME — a direct child, never a shared
 #               target (`menger`, or any NAME that is a repository beside menger)
+#   target-part a shared target's intermediate output — ~/.cache/cargo-target/
+#               SHARED/[TRIPLE/]PROFILE/{deps,incremental,build,.fingerprint}
+#               (since the build-dir moved, CI-2, only stale copies live there)
+#   cargo-build ~/.cache/cargo-build/XX/HASH — one workspace's build-dir
+#               (~/.cargo/config.toml's `build-dir = …/{workspace-path-hash}`);
+#               a worktree removed takes its own with it (`cargo metadata`'s
+#               build_directory, read from each workspace in it before it goes)
 #   scratch-db  /tmp/menger-*.db, .db-shm, .db-wal, .log — a throwaway
 #               server's database and log
 #   session     anything below /tmp/claude-UID/ (a session's scratch)
@@ -31,24 +40,37 @@
 #
 # — and it is refused if it is /, $HOME, any of those roots itself, under
 # ~/.local/share/menger, a repository's main checkout, publish.sh's stage
-# (.menger-publish), in use by a process (its cwd or an open file), the
-# directory you are in, or named with a `..`. A refusal is said and the rest
-# go on; the exit is 2 if anything was refused, 1 on a usage error.
+# (.menger-publish), in use by a process (its cwd or an open file) or by a
+# cargo holding its lock, the directory you are in, or named with a `..`. A
+# refusal is said and the rest go on; the exit is 2 if anything was refused,
+# 1 on a usage error.
+#
+# CI-2 — the sweep (`--sweep`; the hourly timer runs `--sweep --yes`, see
+# scripts/sweep/install.sh) takes only build output: every cargo-build dir,
+# every non-shared target and every target-part, each only when nothing in it
+# was modified for the idle threshold and nothing holds it. The threshold
+# drops as the disk fills: 6 h (--idle-hours), 1 h at 75% used, 15 min at
+# 90%. What it keeps is said (`kept`), never refused: a sweep exits 0.
 #
 # CLEANUP_GATE_ROOT=DIR (tests only; DIR must lie below /tmp/) moves every
 # root into DIR — DIR/home is $HOME, DIR/tmp is /tmp — so the tests run on a
-# throwaway tree (scripts/tests/cleanup-gate).
+# throwaway tree (scripts/tests/cleanup-gate). CLEANUP_GATE_USED_PCT fakes the
+# disk's use and CLEANUP_GATE_CARGO names the cargo that reads a workspace's
+# build_directory (both for the tests).
 set -uo pipefail
 
 usage() { sed -n '/^#   scripts/p' "$0" | sed 's/^# *//' >&2; exit 1; }
 
-yes=0 list=0 mode=name
+yes=0 list=0 sweep=0 mode=name idle_hours=${CLEANUP_GATE_IDLE_HOURS:-6}
 args=()
 while [[ $# -gt 0 ]]; do
   case $1 in
     --yes) yes=1 ;;
     --dry-run) yes=0 ;;
     --list) list=1 ;;
+    --sweep) sweep=1 ;;
+    --idle-hours) shift; idle_hours=${1:-} ;;
+    --idle-hours=*) idle_hours=${1#*=} ;;
     --path) mode=path ;;
     -h|--help) usage ;;
     --) shift; args+=("$@"); break ;;
@@ -57,7 +79,10 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-if [[ $list == 1 ]]; then
+[[ $idle_hours =~ ^[0-9]+$ ]] || { echo 'cleanup-gate: --idle-hours takes a whole number of hours' >&2; exit 1; }
+if [[ $sweep == 1 ]]; then
+  [[ $list == 1 || ${#args[@]} -gt 0 || $mode == path ]] && { echo 'cleanup-gate: --sweep takes no names, paths or --list' >&2; exit 1; }
+elif [[ $list == 1 ]]; then
   [[ $yes == 1 ]] && { echo 'cleanup-gate: --list never removes; name what to remove (NAME or --path)' >&2; exit 1; }
   [[ ${#args[@]} -gt 0 ]] && { echo 'cleanup-gate: --list takes no arguments' >&2; exit 1; }
 elif [[ ${#args[@]} -eq 0 ]]; then usage; fi
@@ -73,13 +98,14 @@ else
 fi
 WS=$H/dev/controlflow/hypermemetic
 CT=$H/.cache/cargo-target
+CB=$H/.cache/cargo-build
 SCR=$TMPR/claude-$(id -u)
 DATA=$H/.local/share/menger
 LOG=${CLEANUP_GATE_LOG:-$H/.local/state/menger/cleanup-gate.log}
 HERE_PWD=$(readlink -f -- "$PWD" 2>/dev/null || echo "$PWD")
 # a root that does not exist resolves to itself; one that does, to its real path
 real() { readlink -f -- "$1" 2>/dev/null || echo "$1"; }
-WS=$(real "$WS") CT=$(real "$CT") SCR=$(real "$SCR") DATA=$(real "$DATA")
+WS=$(real "$WS") CT=$(real "$CT") CB=$(real "$CB") SCR=$(real "$SCR") DATA=$(real "$DATA")
 
 refused=0 total=0
 human() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "${1}B"; }
@@ -102,6 +128,39 @@ git_q() { GIT_CEILING_DIRECTORIES=$(dirname "$1") git -C "$1" "${@:2}" 2>/dev/nu
 # CARGO_TARGET_DIR=~/.cache/cargo-target/<repo>), or menger's own.
 shared_target() { [[ $1 == menger ]] || [[ -d $WS/$1 && ! $1 == .* ]]; }
 
+# CI-2: a workspace's build-dir is $CB/XX/HASH (cargo's {workspace-path-hash},
+# 16 hex digits split 2/14); a shared target's intermediate output is
+# SHARED/[TRIPLE/]PROFILE/PART.
+cargo_build_shape() { [[ $(dirname "$(dirname "$1")") == "$CB" && $(basename "$(dirname "$1")") =~ ^[0-9a-f]{2}$ && $(basename "$1") =~ ^[0-9a-f]{6,}$ ]]; }
+target_part_shape() {
+  local rel=${1#"$CT"/} s
+  [[ $1 == "$CT"/* ]] || return 1
+  s=${rel%%/*}; shared_target "$s" || return 1
+  [[ $rel =~ ^[^/]+/([^/]+/)?[^/]+/(deps|incremental|build|\.fingerprint)$ ]]
+}
+# cargo holds a lock file in each profile while it builds: a lock we cannot
+# share is a build under way, whatever /proc says
+lock_held() { local f
+  while IFS= read -r f; do flock -n -s "$f" true 2>/dev/null || { printf '%s\n' "$f"; return 0; }
+  done < <(find "$1" -maxdepth 3 -name '.cargo*lock' -type f 2>/dev/null)
+  return 1
+}
+# the first thing in PATH (itself included) modified within MINUTES: empty when idle that long
+busy_since() { find "$1" -mmin "-$2" -print -quit 2>/dev/null; }
+
+# A worktree's build-dirs: each workspace in it, asked of cargo (it hashes the
+# canonical path), kept only when they have the cargo-build shape.
+CARGO=${CLEANUP_GATE_CARGO:-cargo}
+build_dirs_of() { local m d
+  command -v "$CARGO" >/dev/null 2>&1 || return 0
+  while IFS= read -r m; do
+    d=$(cd "$(dirname "$m")" && env -u CARGO_TARGET_DIR -u CARGO_BUILD_BUILD_DIR timeout 30 "$CARGO" metadata --offline --no-deps \
+          --format-version 1 --manifest-path "$m" 2>/dev/null | jq -r '.build_directory // empty' 2>/dev/null)
+    [[ -n $d ]] || continue
+    d=$(real "$d"); cargo_build_shape "$d" && [[ -d $d ]] && printf '%s\n' "$d"
+  done < <(find "$1" -maxdepth 3 -name Cargo.toml -not -path '*/target/*' -not -path '*/node_modules/*' 2>/dev/null) | sort -u
+}
+
 # ── one path: classify, refuse or remove ───────────────────────────────────
 remove_path() {
   local p=$1 r shape="" pid gd cd top main br sz extra=""
@@ -113,7 +172,7 @@ remove_path() {
 
   # the never-list, before any shape
   case $r in
-    /|"$H"|"$WS"|"$CT"|"$SCR"|"$TMPR"|"$H/.cache"|"$H/dev"|"$H/dev/controlflow") refuse "$shown" 'a root, never removed'; return ;;
+    /|"$H"|"$WS"|"$CT"|"$CB"|"$SCR"|"$TMPR"|"$H/.cache"|"$H/dev"|"$H/dev/controlflow") refuse "$shown" 'a root, never removed'; return ;;
   esac
   if [[ $r == "$DATA" ]] || under "$r" "$DATA"; then refuse "$shown" "menger's data (~/.local/share/menger)"; return; fi
   if [[ $r == "$WS/.menger-publish" ]]; then refuse "$shown" "scripts/publish.sh's stage"; return; fi
@@ -127,6 +186,10 @@ remove_path() {
   elif [[ -d $r && $(dirname "$r") == "$WS" && $(basename "$r") == .?* ]]; then
     if [[ -n $(find "$r" -name .git -print -quit 2>/dev/null) ]]; then refuse "$shown" 'holds a git checkout'; return; fi
     shape=ws-scratch
+  elif [[ -d $r ]] && cargo_build_shape "$r"; then
+    shape=cargo-build
+  elif [[ -d $r ]] && target_part_shape "$r"; then
+    shape=target-part
   elif [[ $(dirname "$r") == "$CT" ]]; then
     if shared_target "$(basename "$r")"; then refuse "$shown" 'a shared cargo target'; return; fi
     shape=target
@@ -137,10 +200,21 @@ remove_path() {
   elif [[ -d $r && $r == "$TMPR/theme-sweep" ]]; then
     shape=sweep
   else
-    refuse "$shown" 'not a leftover shape (worktree, ws-scratch, target, scratch-db, session, sweep)'; return
+    refuse "$shown" 'not a leftover shape (worktree, ws-scratch, target, target-part, cargo-build, scratch-db, session, sweep)'; return
+  fi
+  local busy=""
+  if [[ $sweep == 1 ]] && busy=$(busy_since "$r" "$idle_min") && [[ -n $busy ]]; then
+    [[ $busy == "$r" ]] && busy=itself || busy=${busy#"$r"/}
+    say "kept     $(printf '%-11s' "$shape") $shown — modified within $(mins "$idle_min") ($busy)"; return
   fi
   if pid=$(in_use "$r") && [[ -n $pid ]]; then
-    refuse "$shown" "in use by pid $pid ($({ tr '\0\n' '  ' </proc/"$pid"/cmdline; } 2>/dev/null | cut -c1-60))"; return
+    busy="in use by pid $pid ($({ tr '\0\n' '  ' </proc/"$pid"/cmdline; } 2>/dev/null | cut -c1-60))"
+  elif [[ $shape == cargo-build || $shape == target || $shape == target-part ]] && [[ -d $r ]] && pid=$(lock_held "$r"); then
+    busy="in use: cargo holds ${pid#"$r"/}"
+  fi
+  if [[ -n $busy ]]; then
+    if [[ $sweep == 1 ]]; then say "kept     $(printf '%-11s' "$shape") $shown — $busy"; else refuse "$shown" "$busy"; fi
+    return
   fi
 
   sz=$(size_of "$r")
@@ -153,10 +227,11 @@ remove_path() {
       else extra=", branch $br kept (not merged into $(git_q "$main" symbolic-ref --short HEAD))"; fi
     fi
   fi
+  local bds=""; [[ $shape == worktree ]] && bds=$(build_dirs_of "$r")
 
   if [[ $yes == 0 ]]; then
     say "would remove  $(printf '%-10s' "$shape") $shown  $(human "$sz")$extra"
-    total=$((total + sz)); return
+    total=$((total + sz)); after_worktree "$bds"; return
   fi
   local out rc
   case $shape in
@@ -167,17 +242,26 @@ remove_path() {
         if out=$(git -C "$main" branch -d -- "$br" 2>&1); then extra=", branch $br deleted"
         else extra=", branch $br kept (${out//$'\n'/ })"; fi
       fi ;;
-    target|session|ws-scratch|sweep)
+    target|target-part|cargo-build|session|ws-scratch|sweep)
       if [[ -d $r ]]; then out=$(rm -r --one-file-system -- "$r" 2>&1); rc=$?
       else out=$(rm -f -- "$r" 2>&1); rc=$?; fi
       [[ $rc == 0 ]] || { refuse "$shown" "rm: ${out//$'\n'/ }"; return; } ;;
     scratch-db)
       out=$(rm -f -- "$r" 2>&1) || { refuse "$shown" "rm: $out"; return; } ;;
   esac
+  # a hash's XX/ parent goes when its last build-dir does (rmdir: only if empty)
+  [[ $shape == cargo-build ]] && rmdir -- "$(dirname "$r")" 2>/dev/null
   say "removed  $(printf '%-10s' "$shape") $shown  $(human "$sz")$extra"
   logline "removed $shape $shown $sz bytes$extra"
   total=$((total + sz))
+  after_worktree "$bds"
 }
+# CI-2: a worktree's build-dirs go with it (each judged as its own path)
+after_worktree() { local d
+  [[ -n $1 ]] || return 0
+  while IFS= read -r d; do [[ -n ${seen[$d]:-} ]] && continue; seen[$d]=1; remove_path "$d"; done <<<"$1"
+}
+mins() { if (( $1 > 0 && $1 % 60 == 0 )); then echo "$(( $1 / 60 ))h"; else echo "${1}m"; fi; }
 
 # ── NAME → its leftovers ───────────────────────────────────────────────────
 paths_for_name() {
@@ -205,11 +289,37 @@ candidates() {
       printf '%s\n' "$(real "${wt#worktree }")"
     done < <(git_q "${repo%/}" worktree list --porcelain | grep '^worktree ' | tail -n +2)
   done
-  for f in "$WS"/.[!.]* "$CT"/* "$TMPR"/menger-*.db "$TMPR"/menger-*.db-shm "$TMPR"/menger-*.db-wal \
+  for f in "$WS"/.[!.]* "$CT"/* "$CB"/*/* "$TMPR"/menger-*.db "$TMPR"/menger-*.db-shm "$TMPR"/menger-*.db-wal \
            "$TMPR"/menger-*.log "$SCR"/* "$TMPR/theme-sweep"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
 }
+
+# ── --sweep: build output, each part judged by its idleness ───────────────
+sweep_candidates() {
+  local d s
+  for d in "$CB"/*/*; do [[ -d $d ]] && cargo_build_shape "$d" && printf '%s\n' "$d"; done
+  for d in "$CT"/*; do
+    [[ -e $d || -L $d ]] || continue
+    s=$(basename "$d")
+    if shared_target "$s"; then
+      find "$d" -mindepth 2 -maxdepth 3 -type d \( -name deps -o -name incremental -o -name build -o -name .fingerprint \) \
+        -prune -print 2>/dev/null
+    else printf '%s\n' "$d"; fi
+  done
+}
+# the disk's use, in percent, where the build output lives
+used_pct() {
+  if [[ -n ${CLEANUP_GATE_USED_PCT:-} ]]; then echo "$CLEANUP_GATE_USED_PCT"; return; fi
+  df --output=pcent -- "$H" 2>/dev/null | tail -n 1 | tr -dc '0-9'
+}
+idle_min=$((idle_hours * 60))
+if [[ $sweep == 1 ]]; then
+  used=$(used_pct); used=${used:-0}
+  if (( used >= 90 )); then (( idle_min > 15 )) && idle_min=15
+  elif (( used >= 75 )); then (( idle_min > 60 )) && idle_min=60; fi
+  say "sweep: $H ${used}% used — build output idle $(mins "$idle_min") goes"
+fi
 
 declare -A seen=()
 run_all() {
@@ -219,7 +329,9 @@ run_all() {
     seen[$p]=1; remove_path "$p"
   done
 }
-if [[ $list == 1 ]]; then
+if [[ $sweep == 1 ]]; then
+  run_all < <(sweep_candidates | sort -u)
+elif [[ $list == 1 ]]; then
   run_all < <(candidates | sort -u)
 elif [[ $mode == path ]]; then
   run_all < <(printf '%s\n' "${args[@]}")
@@ -232,6 +344,8 @@ else
   done
 fi
 
-if [[ $yes == 1 ]]; then say "freed $(human "$total")"
+if [[ $yes == 1 ]]; then
+  say "freed $(human "$total")"
+  [[ $sweep == 1 ]] && logline "sweep ${used}% used, idle $(mins "$idle_min"): freed $total bytes"
 else say "would free $(human "$total") — a dry run; --yes removes"; fi
 [[ $refused == 0 ]] || exit 2

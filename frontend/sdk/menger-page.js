@@ -28,7 +28,15 @@
  *     `color-scheme` when the page declared both (`light dark`), so its form
  *     controls and canvas follow. Style sheets added later are taken as they
  *     arrive. A cross-origin style sheet cannot be read, and is left alone.
- *   - **Listens** for `menger:emulate { channel, scheme, reduce }` from the
+ *   - **Emulates the screen's safe area** (APP-66): a mockup's phone drawn
+ *     with its screen's shape sends `safe { top, right, bottom, left }` (px;
+ *     `null` for none). The root carries them as `--sai-top` … `--sai-left`
+ *     (0px without), and every rule that reads `env(safe-area-inset-*)` is
+ *     rewritten once to read `var(--sai-*)` (its fallback kept) — an
+ *     iframe's `env()` is 0 — so a page that pads by the insets shows it in
+ *     the device, and one that doesn't is clipped by its corners. The
+ *     app's tokens (`--safe-*`) read `--sai-*` too.
+ *   - **Listens** for `menger:emulate { channel, scheme, reduce, safe }` from the
  *     host (its own parent, on its own channel) — a mockup's toggles, or the
  *     app's theme flipped — and applies it live, no reload.
  *   - In a page (not under the SDK): **says it is ready** (`menger:ready`,
@@ -71,11 +79,20 @@
   var channel = init.channel || "";
   var page = !!init.page;
   var host = window.parent;
-  var em = { scheme: null, reduce: null };
+  var em = { scheme: null, reduce: null, safe: null };
+  var SIDES = ["top", "right", "bottom", "left"];
   function take(e) {
     if (!e || typeof e !== "object") return;
     em.scheme = e.scheme === "light" || e.scheme === "dark" ? e.scheme : null;
     em.reduce = typeof e.reduce === "boolean" ? e.reduce : null;
+    em.safe = null;
+    if (e.safe && typeof e.safe === "object") {
+      em.safe = {};
+      SIDES.forEach(function (k) {
+        var v = Number(e.safe[k]);
+        em.safe[k] = isFinite(v) && v > 0 ? Math.min(v, 200) : 0;
+      });
+    }
   }
   take(init.emulate);
 
@@ -133,10 +150,28 @@
       }
     }
   }
+  // APP-66: a rule's `env(safe-area-inset-X` reads `var(--sai-X` — the
+  // rest of the call (its fallback, its `)`) unchanged.
+  var ENV = /env\(\s*safe-area-inset-(top|right|bottom|left)\b/gi;
+  function rewriteEnv(r) {
+    var st = r.style;
+    var t = st && st.cssText;
+    if (!t || !/safe-area-inset/i.test(t)) return;
+    var now = t.replace(ENV, function (_, side) {
+      return "var(--sai-" + side.toLowerCase();
+    });
+    if (now === t) return;
+    try {
+      st.cssText = now;
+    } catch (e) {
+      /* a rule that will not take it keeps its own */
+    }
+  }
   function walkRules(rules) {
     if (!rules) return;
     for (var i = 0; i < rules.length; i++) {
       var r = rules[i];
+      if (r.type === 1) rewriteEnv(r); // a style rule
       if (r.media && (r.type === 4 || r.type === 3)) rewriteList(r, r.media); // @media, @import
       if (r.type === 3 && r.styleSheet) walkSheet(r.styleSheet);
       if (r.cssRules) walkRules(r.cssRules);
@@ -172,6 +207,10 @@
     else r.removeAttribute("data-menger-scheme");
     if (em.reduce !== null) r.setAttribute("data-menger-motion", em.reduce ? "reduce" : "no-preference");
     else r.removeAttribute("data-menger-motion");
+    // APP-66: the insets, 0px without (a rewritten `env()` reads them).
+    SIDES.forEach(function (k) {
+      r.style.setProperty("--sai-" + k, (em.safe ? em.safe[k] : 0) + "px");
+    });
     // The page's own `color-scheme`, read with ours taken off.
     r.style.removeProperty("color-scheme");
     if (em.scheme) {

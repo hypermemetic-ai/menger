@@ -13,13 +13,14 @@ export interface MembersClient {
   /** Teams — a named set of principals that holds grants (ACCESS-22): `members.teams.*`. */
   readonly teams: MembersTeamsClient;
   /**
-   * Give a principal or a team a role (viewer, editor, admin; deployer for a CI's key) on an organization, a shortcode in one, a ticket, a ticket's subtree, or *.
+   * Give a principal, a team or everyone signed in a role (viewer, editor, admin; deployer for a CI's key) on an organization, a shortcode in one, a ticket, a ticket's subtree, or *.
 
 Gives `principal` `role` on `scope` (a shortcode, `*`; ACCESS-21: a
 ticket alone, `MENGER-12`, or a ticket and everything under it,
 `under MENGER-12`, kept by the ticket's key so the grant follows it),
 replacing any role they held there. ACCESS-22: to `team` instead of
-`principal` (exactly one of the two), its members hold it. Needs
+`principal` (exactly one), its members hold it; ACCESS-57: to
+`everyone`, every signed-in principal holds it (never admin). Needs
 admin on the scope, as the tree stands (ACCESS-11's `AdminOf`: for a
 ticket's scope, admin on a scope that covers it). Yields the grant as
 kept, or an in-band `error`.
@@ -27,7 +28,7 @@ kept, or an in-band `error`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `members.grant` on the scope of `scope`
    */
-  grant(role: Role, scope: ScopeRef, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent>;
+  grant(role: Role, scope: ScopeRef, everyone?: boolean | null, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent>;
   /**
    * The grants on the scopes you administer, by principal then scope.
 
@@ -40,12 +41,12 @@ somewhere.
    */
   list(scope?: ScopeRef | null): AsyncGenerator<MembersEvent>;
   /**
-   * Who you are, then your teams, then each grant you hold (a team's as team:<name>).
+   * Who you are, then your teams, then each grant you hold (a team's as team:<name>, everyone's as everyone).
 
 One `me { principal, name, admin_everywhere }`, then (ACCESS-22) one
 `team` per team the caller is in, then one `grant` per grant the
-caller holds — its own, and each team's (`principal: team:<name>`).
-Someone signed in without a grant gets `me` and nothing else.
+caller holds — its own, each team's (`principal: team:<name>`) and
+(ACCESS-57) everyone's (`principal: everyone`).
    * @requires `members.mine` anywhere it is held
    */
   mine(): AsyncGenerator<MembersEvent>;
@@ -64,14 +65,15 @@ come back.
   /**
    * Take a principal's or a team's role on a scope (an organization, a shortcode, a ticket, a subtree, or *) away.
 
-Takes `principal`'s (ACCESS-22: or `team`'s) role on `scope` away.
+Takes `principal`'s (ACCESS-22: or `team`'s; ACCESS-57: or
+`everyone`'s) role on `scope` away.
 Needs admin on the scope, as the tree stands. Yields `revoked {
 principal, scope, existed }`.
    * @server-derived auth
    * @requiresAuth — resolver: self.access.verify
    * @requires `members.revoke` on the scope of `scope`
    */
-  revoke(scope: ScopeRef, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent>;
+  revoke(scope: ScopeRef, everyone?: boolean | null, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `members.schema` anywhere it is held
@@ -88,8 +90,8 @@ class MembersClientImpl implements MembersClient {
     this.teams = createMembersTeamsClient(rpc);
   }
 
-  async *grant(role: Role, scope: ScopeRef, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent> {
-    const stream = this.rpc.call('members.grant', { principal, role, scope, team });
+  async *grant(role: Role, scope: ScopeRef, everyone?: boolean | null, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent> {
+    const stream = this.rpc.call('members.grant', { everyone, principal, role, scope, team });
     yield* extractData<MembersEvent>(stream);
   }
 
@@ -108,8 +110,8 @@ class MembersClientImpl implements MembersClient {
     yield* extractData<MembersEvent>(stream);
   }
 
-  async *revoke(scope: ScopeRef, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent> {
-    const stream = this.rpc.call('members.revoke', { principal, scope, team });
+  async *revoke(scope: ScopeRef, everyone?: boolean | null, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent> {
+    const stream = this.rpc.call('members.revoke', { everyone, principal, scope, team });
     yield* extractData<MembersEvent>(stream);
   }
 

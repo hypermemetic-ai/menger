@@ -960,7 +960,7 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         // COMMENT-3: Esc closes what annotation mode has open, then leaves
         // it; MENGER-15: then full screen (the overlay; the browser's own
         // full screen takes its Esc itself); ACT-3: then the selection.
-        Some("app.escape") => annotate::escape() || present::escape() || selection::clear(),
+        Some("app.escape") => crate::questions::escape() || annotate::escape() || present::escape() || selection::clear(),
         // The first key of a `g …` sequence: swallowed, the table armed.
         Some(bindings::PREFIX) => true,
         Some("go.board") => {
@@ -972,6 +972,11 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         Some("chat.full") => crate::chat_full::expand(),
         Some("go.needs") => {
             crate::needs::go();
+            true
+        }
+        // APP-84: `g q` — every open question, in the header's panel.
+        Some("go.questions") => {
+            crate::questions::toggle();
             true
         }
         // Prevented: Firefox's quick-find would eat the `/`.
@@ -1265,11 +1270,7 @@ pub(crate) fn ensure_board_tab_stop() {
     }
     let remembered = BOARD_FOCUS.with(|c| c.borrow().clone());
     let on_screen = || {
-        let top = all[0]
-            .closest(".content")
-            .ok()
-            .flatten()
-            .map_or(0.0, |s| s.get_bounding_client_rect().top());
+        let top = dom::Scroller::around(&all[0]).map_or(0.0, |s| s.view().0);
         all.iter().find(|el| el.get_bounding_client_rect().bottom() > top + 1.0)
     };
     let pick = remembered
@@ -2005,6 +2006,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),

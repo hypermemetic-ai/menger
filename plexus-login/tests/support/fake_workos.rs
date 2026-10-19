@@ -60,6 +60,11 @@ pub struct FakeState {
     oauth: HashMap<String, (String, String, String)>,
     refresh: HashMap<String, (String, String)>,
     pub revoked: HashSet<String>,
+    /// IDENTITY-45: who a social provider signs in, over the defaults
+    /// (`MicrosoftOAuth` → `radar@example.test`, …).
+    pub social_as: HashMap<String, String>,
+    /// IDENTITY-45: users another email-verification code was sent to.
+    pub verification_sends: Vec<String>,
     pub authorizes: Vec<HashMap<String, String>>,
     /// Every secret the fake issued: codes, tokens, pending tokens, TOTP
     /// secrets.
@@ -104,6 +109,8 @@ impl FakeWorkOs {
             .route("/auth/challenges/{id}/verify", post(verify))
             .route("/auth/factors/{id}", delete(delete_factor))
             .route("/user_management/sessions/revoke", post(revoke))
+            .route("/user_management/email_verification/{id}", get(get_verification))
+            .route("/user_management/users/{id}/email_verification/send", post(send_verification))
             .with_state(w.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         w
@@ -349,7 +356,9 @@ async fn authenticate(State(w): State<FakeWorkOs>, Json(b): Json<Value>) -> Resp
 async fn authorize(State(w): State<FakeWorkOs>, Query(q): Query<HashMap<String, String>>) -> Response {
     let mut st = w.state.lock().unwrap();
     st.authorizes.push(q.clone());
+    let chosen = q.get("provider").and_then(|p| st.social_as.get(p)).cloned();
     let email = match (q.get("provider").map(String::as_str), q.get("organization_id"), q.get("connection_id")) {
+        _ if chosen.is_some() => chosen.unwrap(),
         (Some("GoogleOAuth"), _, _) => "google-user@example.test".to_string(),
         (Some("GitHubOAuth"), _, _) => "verify@example.test".to_string(),
         (Some("AppleOAuth"), _, _) => "orgs@example.test".to_string(),
@@ -471,4 +480,29 @@ async fn revoke(State(w): State<FakeWorkOs>, h: HeaderMap, Json(b): Json<Value>)
     st.calls.push("revoke".into());
     st.revoked.insert(b["session_id"].as_str().unwrap_or_default().to_string());
     StatusCode::ACCEPTED.into_response()
+}
+
+/// IDENTITY-45: an email verification, by the id an
+/// `email_verification_required` answer named (its code is in the answer,
+/// as WorkOS's is).
+async fn get_verification(State(w): State<FakeWorkOs>, h: HeaderMap, Path(id): Path<String>) -> Response {
+    if !bearer_ok(&h) {
+        return unauthorized();
+    }
+    let mut st = w.state.lock().unwrap();
+    if id != "email_verification_1" {
+        return (StatusCode::NOT_FOUND, Json(json!({ "message": "not found" }))).into_response();
+    }
+    let user = user_id(&mut st, "verify@example.test");
+    Json(json!({ "object": "email_verification", "id": id, "user_id": user, "email": "verify@example.test", "expires_at": "2099-01-01T00:00:00.000Z", "code": "424242" })).into_response()
+}
+
+async fn send_verification(State(w): State<FakeWorkOs>, h: HeaderMap, Path(user): Path<String>) -> Response {
+    if !bearer_ok(&h) {
+        return unauthorized();
+    }
+    let mut st = w.state.lock().unwrap();
+    st.calls.push("email_verification_send".into());
+    st.verification_sends.push(user.clone());
+    Json(json!({ "user": { "object": "user", "id": user, "email": "verify@example.test", "email_verified": false } })).into_response()
 }

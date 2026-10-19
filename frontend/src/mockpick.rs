@@ -257,7 +257,10 @@ fn pick(ev: &web_sys::MouseEvent, key: &str, c: &Choice, busy: ArcRwSignal<bool>
 /// What the mockup `key`'s bar adds at its head: in a decision, the option's
 /// name, its mark and *pick this*; on every mockup, *comment*. `ticket` is
 /// the body frame's (none: a preview or a help card — nothing to answer).
-pub(crate) fn bar(key: String, ticket: Option<String>, c: Option<Choice>, title: Option<String>) -> ViewFn {
+/// APP-60: in two parts — the option (with what a pick says back), which
+/// stays in the bar's row on a phone, and the rest (*compare these*,
+/// *comment*), which folds into its ⋯ menu there.
+pub(crate) fn bar(key: String, ticket: Option<String>, c: Option<Choice>, title: Option<String>) -> (ViewFn, ViewFn) {
     bar_with(key, ticket, c, title, COMPARE)
 }
 
@@ -265,15 +268,17 @@ pub(crate) fn bar(key: String, ticket: Option<String>, c: Option<Choice>, title:
 /// this* and *comment* for the page's box `key`, without *compare these*
 /// (the view is open already).
 pub(crate) fn column_bar(key: String, ticket: Option<String>, c: Option<Choice>, title: Option<String>) -> ViewFn {
-    bar_with(key, ticket, c, title, false)
+    let (head, more) = bar_with(key, ticket, c, title, false);
+    ViewFn::from(move || view! { {head.run()} {more.run()} })
 }
 
-fn bar_with(key: String, ticket: Option<String>, c: Option<Choice>, title: Option<String>, compare_these: bool) -> ViewFn {
+fn bar_with(key: String, ticket: Option<String>, c: Option<Choice>, title: Option<String>, compare_these: bool) -> (ViewFn, ViewFn) {
     let inputs = match (&c, &ticket) {
         (Some(_), Some(t)) => Some(held(t)),
         _ => None,
     };
-    ViewFn::from(move || {
+    let more = more_of(key.clone(), ticket.clone(), c.clone(), title, compare_these);
+    let head = ViewFn::from(move || {
         let key = key.clone();
         let busy = ArcRwSignal::new(false);
         let problem = ArcRwSignal::new(None::<String>);
@@ -326,6 +331,18 @@ fn bar_with(key: String, ticket: Option<String>, c: Option<Choice>, title: Optio
                 </span>
             }
         });
+        view! {
+            {option}
+            {move || problem.get().map(|p| view! { <span class="mpick-err" role="alert">{p}</span> })}
+        }
+        .into_any()
+    });
+    (head, more)
+}
+
+/// [`bar`]'s second part: *compare these* (an option's look) and *comment*.
+fn more_of(key: String, ticket: Option<String>, c: Option<Choice>, title: Option<String>, compare_these: bool) -> ViewFn {
+    ViewFn::from(move || {
         let comment_label = comment_label(c.as_ref().map(|c| (c.input.as_str(), c.name.as_deref().unwrap_or(c.value.as_str()))), title.as_deref());
         let comment_key = key.clone();
         let comment = ticket.is_some().then(|| view! {
@@ -353,10 +370,8 @@ fn bar_with(key: String, ticket: Option<String>, c: Option<Choice>, title: Optio
             }
         });
         view! {
-            {option}
             {compare}
             {comment}
-            {move || problem.get().map(|p| view! { <span class="mpick-err" role="alert">{p}</span> })}
         }
         .into_any()
     })
@@ -378,6 +393,7 @@ mod tests {
             state,
             answer: answer.map(|o| Answer { value: InputValue::Choice { option: o.into() }, rationale: None, source: AnswerSource::App, at_unix: 1 }),
             history: Vec::new(),
+            asked_unix: None,
         }
     }
 

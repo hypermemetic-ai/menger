@@ -166,7 +166,7 @@ pub(crate) struct Views {
 pub(crate) fn strip(e: &QueueEntry, v: Views, phone: bool) -> impl IntoView {
     let n = e.mockups.len();
     let named: Vec<String> = e.named().into_iter().map(str::to_string).collect();
-    let emulate = Signal::derive(|| Emulate { scheme: Some(crate::frame::painted_scheme()), reduce: Some(true) });
+    let emulate = Signal::derive(|| Emulate { scheme: Some(crate::frame::painted_scheme()), reduce: Some(true), safe: None });
     let (tw, th) = if phone { (240.0, 150.0) } else { (156.0, 98.0) };
     let thumbs = e
         .mockups
@@ -220,7 +220,7 @@ pub(crate) fn viewer(e: QueueEntry, v: Views) -> impl IntoView {
     let views = e.mockups.clone();
     let n = views.len();
     let named: Vec<String> = e.named().into_iter().map(str::to_string).collect();
-    let emulate = Signal::derive(|| Emulate { scheme: Some(crate::frame::painted_scheme()), reduce: Some(false) });
+    let emulate = Signal::derive(|| Emulate { scheme: Some(crate::frame::painted_scheme()), reduce: Some(false), safe: None });
     move || {
         let viewing = v.open.get()?;
         let at = viewing.at.min(n.saturating_sub(1));
