@@ -628,6 +628,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
         });
     });
     crate::grow::follow(area, move || body.track());
+    // APP-93: the box takes the card's whole row once its text wraps.
+    crate::grow::wrap(area, move || (body.track(), tok.track()));
     let chat = {
         let held = held.clone();
         Memo::new(move |_| held.with(|h| h.as_ref().and_then(|h| h.get(id).cloned())))

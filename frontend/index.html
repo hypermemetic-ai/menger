@@ -5055,6 +5055,11 @@
     :is(#chatpane, #chatfull) .ccompose .csend { flex: none; height: 32px; padding: 0 14px; }
     /* APP-83: on a phone the one-row card is a rounded pill, inset. */
     .ccompose .ccard { border-radius: calc(var(--radius-phone) * .85); padding: 4px 4px 4px 12px; }
+    /* APP-93: once the text would wrap beside the buttons it takes the
+       card's whole width, and the buttons drop to a row under it, at the
+       right (src/grow.rs's wrap sets the class). */
+    .ccompose .ccard.wrap textarea.cbox { flex: 1 0 100%; }
+    .ccompose .ccard.wrap .cpick:not(.cdraw) { margin-left: auto; }
     .wbox { border-radius: calc(var(--radius-phone) * .85); }
   }
   /* ── CHAT-16: an admin's add that grants, and the remove that revokes —

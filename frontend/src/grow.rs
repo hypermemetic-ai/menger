@@ -69,3 +69,50 @@ pub(crate) fn follow<T: 'static>(area: NodeRef<Textarea>, value: impl Fn() -> T 
         }
     });
 }
+
+/// APP-93: whether a box's text runs past one line at its present width.
+/// One line is the box's line height and its vertical padding; the box is
+/// measured at its resting height so a height set by [`fit`] does not read
+/// as text.
+fn over_one_line(el: &web_sys::HtmlTextAreaElement) -> bool {
+    let style = web_sys::HtmlElement::style(el);
+    let _ = style.set_property("height", "auto");
+    let Some(cs) = web_sys::window().and_then(|w| w.get_computed_style(el).ok().flatten()) else { return false };
+    let px = |p: &str| cs.get_property_value(p).ok().and_then(|v| v.trim_end_matches("px").parse::<f64>().ok());
+    let line = px("line-height").unwrap_or_else(|| px("font-size").unwrap_or(16.0) * 1.35);
+    let pad = px("padding-top").unwrap_or(0.0) + px("padding-bottom").unwrap_or(0.0);
+    f64::from(el.scroll_height()) > line * 1.5 + pad
+}
+
+/// APP-93: the phone's one-row composer card (`.ccard`, the box beside its
+/// buttons) gives the box the whole row once its text would wrap beside
+/// them — the card's `wrap` class, which the stylesheet reads to drop the
+/// buttons to a row under it. The box is measured at the narrow width (the
+/// class off) and the class set in the same task, so no frame is painted
+/// in between and a text that fits one line beside the buttons goes back
+/// beside them. A no-op where the card is laid out as a column (a desk):
+/// the class changes nothing there.
+pub(crate) fn wrap<T: 'static>(area: NodeRef<Textarea>, value: impl Fn() -> T + 'static) {
+    let lay = move |el: &web_sys::HtmlTextAreaElement| {
+        let Some(card) = el.parent_element() else { return };
+        let list = card.class_list();
+        let _ = list.remove_1("wrap");
+        if !el.is_connected() || el.offset_height() == 0 {
+            fit(el);
+            return;
+        }
+        let wraps = el.value().contains('\n') || over_one_line(el);
+        let _ = list.toggle_with_force("wrap", wraps);
+        fit(el);
+        if NATIVE.with(|n| *n) {
+            let _ = web_sys::HtmlElement::style(el).remove_property("height");
+        }
+    };
+    Effect::new(move |_| {
+        value();
+        if let Some(el) = area.get() {
+            lay(&el);
+            request_animation_frame(move || lay(&el));
+        }
+    });
+}
