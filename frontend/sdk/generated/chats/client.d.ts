@@ -90,6 +90,22 @@ export interface ChatsClient {
      */
     close(chat: ChatId): AsyncGenerator<ChatsEvent>;
     /**
+     * Delete messages in a chat — kept and marked deleted { at, by }, never gone; yields messages_deleted { chat, ids, by, at, unread } (CHAT-44).
+  
+  A message's author deletes it, and an admin of the chat's ticket
+  (outside tickets, of its organization) deletes any. Name them by
+  `ids`, or every message of the chat from `from` to `to`. All or
+  none: one the caller may not delete, or not the chat's, is
+  `refused`, naming each; one already deleted is not named again.
+  `messages` still answers a deleted message, marked; it is no one's
+  unread and no `await_message` reply. `watch` carries
+  `messages_deleted` to every participant.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `chats.delete` anywhere it is held
+     */
+    delete(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent>;
+    /**
      * The caller's chats, by last activity, newest first — on a ticket, with or without unread, open or closed; a chat { chat } each, then page { next }.
   
   Without `ticket`, the chats the caller is in; with it, those on that
@@ -189,12 +205,24 @@ export interface ChatsClient {
      */
     reopen(chat: ChatId): AsyncGenerator<ChatsEvent>;
     /**
+     * Put deleted messages back in a chat; yields messages_restored { chat, ids, by, at, unread } (CHAT-44).
+  
+  `delete`'s rule: a message's author, or an admin of the chat's
+  ticket (outside tickets, its organization); by `ids`, or `from` …
+  `to`; all or none. One not deleted is not named again. `watch`
+  carries `messages_restored` to every participant.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `chats.restore` anywhere it is held
+     */
+    restore(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent>;
+    /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `chats.schema` anywhere it is held
      */
     schema(): Promise<unknown>;
     /**
-     * Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, listening, left — until disconnect.
+     * Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, messages_deleted, messages_restored, listening, left — until disconnect.
   
   The chats the caller is in (with `ticket`, those on it — every one
   there for an admin of it), each change as the caller sees it: its own
@@ -237,6 +265,10 @@ export declare const requires: {
         readonly grant: "chats.close";
         readonly target: null;
     };
+    readonly "chats.delete": {
+        readonly grant: "chats.delete";
+        readonly target: null;
+    };
     readonly "chats.list": {
         readonly grant: "chats.list";
         readonly target: null;
@@ -267,6 +299,10 @@ export declare const requires: {
     };
     readonly "chats.reopen": {
         readonly grant: "chats.reopen";
+        readonly target: null;
+    };
+    readonly "chats.restore": {
+        readonly grant: "chats.restore";
         readonly target: null;
     };
     readonly "chats.schema": {

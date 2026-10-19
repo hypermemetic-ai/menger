@@ -339,7 +339,24 @@ pub struct Message {
     pub at: i64,
     /// What it says: markdown, rendered by the app's `md.rs`, never framed.
     pub body: String,
+    /// CHAT-44: when and by whom it was deleted — kept and marked, never
+    /// gone: `messages` still answers it, and the app folds a run of them
+    /// into one line. A deleted message is no one's unread and no
+    /// `await_message` reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<Deleted>,
 }
+
+/// CHAT-44: a message's deletion — when (unix seconds) and by whom (its
+/// author, or an admin of the chat's ticket or organization).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Deleted {
+    pub at: i64,
+    pub by: String,
+}
+
+/// CHAT-44: the most messages one `delete` or `restore` takes.
+pub const DELETE_MAX: usize = 1_000;
 
 /// What the `chats` activation's methods yield. In-band errors are
 /// `Error { message }`, as every menger method's; a chat the caller does
@@ -408,6 +425,13 @@ pub enum ChatsEvent {
     Reopened { chat: ChatId },
     /// CHAT-7: `rename`'s answer, and on `watch`: the chat with its title now.
     Renamed { chat: Chat },
+    /// CHAT-44: `delete`'s answer, and on `watch`: `ids` of `chat` deleted
+    /// by `by` at `at` (only those it deleted now — one already deleted is
+    /// not named again); `unread` is the caller's in the chat now.
+    MessagesDeleted { chat: ChatId, ids: Vec<MessageId>, by: String, at: i64, unread: u32 },
+    /// CHAT-44: `restore`'s answer, and on `watch`: `ids` of `chat` put back
+    /// by `by`; `unread` is the caller's in the chat now.
+    MessagesRestored { chat: ChatId, ids: Vec<MessageId>, by: String, at: i64, unread: u32 },
     /// On `watch`: `principal` began (`waiting: true`) or stopped waiting on
     /// `await_message` for `chat` — the pane's "waiting for a message".
     Listening { chat: ChatId, principal: String, waiting: bool },
@@ -471,7 +495,7 @@ mod tests {
 
     #[test]
     fn the_wire_shapes_are_the_spec_s() {
-        let m = Message { id: MessageId::new(3), chat: ChatId::new(41), author: "idp:ada".into(), name: None, via: None, at: 10, body: "1240 is allowed.".into() };
+        let m = Message { id: MessageId::new(3), chat: ChatId::new(41), author: "idp:ada".into(), name: None, via: None, at: 10, body: "1240 is allowed.".into(), deleted: None };
         assert_eq!(
             serde_json::to_value(ChatsEvent::Posted { message: m.clone() }).unwrap(),
             json!({ "type": "posted", "message": { "id": 3, "chat": 41, "author": "idp:ada", "at": 10, "body": "1240 is allowed." } })

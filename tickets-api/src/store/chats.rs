@@ -59,6 +59,9 @@ use std::sync::Arc;
 mod outside;
 // CHAT-18: a participant's live work — in memory, never stored.
 mod activity;
+// CHAT-44: deleting and restoring messages — kept and marked.
+mod deletes;
+pub use deletes::{MessageDeletion, Pick};
 
 /// CHAT-8: which way a page of messages runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +102,9 @@ pub(super) const TABLES: &str = "
             name   TEXT,
             via    TEXT,
             at     INTEGER NOT NULL,
-            body   TEXT NOT NULL
+            body   TEXT NOT NULL,
+            deleted_at INTEGER,
+            deleted_by TEXT
         );
         CREATE INDEX IF NOT EXISTS chat_messages_by_chat ON chat_messages (chat, id);
     ";
@@ -136,6 +141,12 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
     if !cols.iter().any(|c| c == "granted") {
         conn.execute_batch("ALTER TABLE chat_participants ADD COLUMN granted TEXT;")?;
         tracing::warn!("CHAT-16: chat_participants gained `granted` (no seat kept made a grant)");
+    }
+    // CHAT-44: a message's deletion, kept beside it.
+    let cols: Vec<String> = conn.prepare("SELECT name FROM pragma_table_info('chat_messages')")?.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+    if !cols.iter().any(|c| c == "deleted_at") {
+        conn.execute_batch("ALTER TABLE chat_messages ADD COLUMN deleted_at INTEGER; ALTER TABLE chat_messages ADD COLUMN deleted_by TEXT;")?;
+        tracing::warn!("CHAT-44: chat_messages gained `deleted_at` / `deleted_by` (no message kept is deleted)");
     }
     Ok(!had)
 }
@@ -203,6 +214,9 @@ pub enum ChatChange {
     Listening { chat: u64, principal: String, waiting: bool },
     /// CHAT-14: `principal` was taken out of the chat (as it is now).
     Removed { chat: ChatRecord, principal: String },
+    /// CHAT-44: `ids` of `chat` deleted (`restored: false`) or put back by
+    /// `by` at `at`.
+    Deleted { chat: u64, ids: Vec<u64>, by: String, at: i64, restored: bool },
     /// CHAT-18: a participant's live work — heard by participants alone.
     Activity(crate::chats::Activity),
 }
@@ -213,7 +227,7 @@ impl ChatChange {
         match self {
             ChatChange::Opened(c) | ChatChange::Added(c) | ChatChange::Closed(c) | ChatChange::Reopened(c) | ChatChange::Renamed(c) => c.id,
             ChatChange::Posted(m) => m.chat.get(),
-            ChatChange::Read { chat, .. } | ChatChange::Listening { chat, .. } => *chat,
+            ChatChange::Read { chat, .. } | ChatChange::Listening { chat, .. } | ChatChange::Deleted { chat, .. } => *chat,
             ChatChange::Removed { chat, .. } => chat.id,
             ChatChange::Activity(a) => a.chat.get(),
         }
@@ -347,6 +361,8 @@ pub(crate) struct Chats {
     messages: BTreeMap<u64, Message>,
     /// Each chat's message ids, ascending.
     by_chat: HashMap<u64, Vec<u64>>,
+    /// CHAT-44: each chat's deleted message ids — no one's unread.
+    deleted: HashMap<u64, BTreeSet<u64>>,
     /// The chats each principal is in.
     by_principal: HashMap<String, BTreeSet<u64>>,
     /// Who waits on each chat now, and how many waits each holds.
@@ -404,6 +420,9 @@ impl Chats {
             }
         }
         self.by_chat.entry(m.chat.get()).or_default().push(m.id.get());
+        if m.deleted.is_some() {
+            self.deleted.entry(m.chat.get()).or_default().insert(m.id.get());
+        }
         self.messages.insert(m.id.get(), m);
     }
 
@@ -415,7 +434,16 @@ impl Chats {
     fn unread(&self, c: &ChatRecord, principal: &str) -> u32 {
         let Some(p) = c.part(principal) else { return 0 };
         let ids = self.ids(c.id);
-        (ids.len() - ids.partition_point(|&i| i <= p.read_upto)) as u32
+        let after = ids.len() - ids.partition_point(|&i| i <= p.read_upto);
+        // CHAT-44: a deleted message is no one's unread.
+        let gone = self.deleted.get(&c.id).map_or(0, |d| d.range(p.read_upto + 1..).count());
+        after.saturating_sub(gone) as u32
+    }
+
+    /// CHAT-44: the chat's newest message not deleted.
+    fn last_kept(&self, chat: u64) -> Option<&Message> {
+        let gone = self.deleted.get(&chat);
+        self.ids(chat).iter().rev().find(|i| gone.is_none_or(|d| !d.contains(i))).and_then(|i| self.messages.get(i))
     }
 
     /// The latest message of `chat` at or before `upto`.
@@ -426,7 +454,7 @@ impl Chats {
 
     /// `c` as `me` sees it, its ticket named by `key` (none outside tickets).
     fn view(&self, c: &ChatRecord, key: Option<String>, me: &str) -> Chat {
-        let last = self.ids(c.id).last().and_then(|i| self.messages.get(i));
+        let last = self.last_kept(c.id);
         Chat {
             id: ChatId::new(c.id),
             kind: c.kind,
@@ -625,7 +653,7 @@ impl Store {
                 let ids = chats.ids(*chat);
                 ids[ids.partition_point(|&i| i <= w.after)..].iter().filter_map(|i| chats.messages.get(i))
             })
-            .filter(|m| w.since.is_none_or(|s| m.at >= s) && m.author != signer.principal)
+            .filter(|m| w.since.is_none_or(|s| m.at >= s) && m.author != signer.principal && m.deleted.is_none())
             .min_by_key(|m| m.id)
             .cloned()
     }
@@ -790,7 +818,7 @@ impl Store {
             if c.state == ChatState::Closed {
                 return Err(refused(format!("chat {chat} is closed")));
             }
-            let message = Message { id: MessageId::new(cache.chats.next_message()), chat: ChatId::new(chat), author: by.principal.clone(), name: by.name.clone(), via: None, at: now, body };
+            let message = Message { id: MessageId::new(cache.chats.next_message()), chat: ChatId::new(chat), author: by.principal.clone(), name: by.name.clone(), via: None, at: now, body, deleted: None };
             if let Some(p) = c.parts.iter_mut().find(|p| p.principal == by.principal) {
                 p.read_upto = message.id.get();
             }
@@ -1088,7 +1116,7 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Chats> {
     for c in records.into_values() {
         chats.put_chat(c);
     }
-    let mut stmt = conn.prepare("SELECT id, chat, author, name, via, at, body FROM chat_messages ORDER BY id")?;
+    let mut stmt = conn.prepare("SELECT id, chat, author, name, via, at, body, deleted_at, deleted_by FROM chat_messages ORDER BY id")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         chats.put_message(Message {
@@ -1099,6 +1127,10 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Chats> {
             via: r.get(4)?,
             at: r.get(5)?,
             body: r.get(6)?,
+            deleted: match (r.get::<_, Option<i64>>(7)?, r.get::<_, Option<String>>(8)?) {
+                (Some(at), Some(by)) => Some(crate::chats::Deleted { at, by }),
+                _ => None,
+            },
         });
     }
     // CHAT-14: the names principals signed in with, over their messages'.
@@ -1202,7 +1234,7 @@ impl Store {
                 .enumerate()
                 .map(|(i, body)| {
                     let author = if i % 2 == 0 { reader.to_string() } else { "agent:builder".to_string() };
-                    Message { id: MessageId::new(first + i as u64), chat: ChatId::new(chat), author, name: None, via: None, at: now - (count - i) as i64, body }
+                    Message { id: MessageId::new(first + i as u64), chat: ChatId::new(chat), author, name: None, via: None, at: now - (count - i) as i64, body, deleted: None }
                 })
                 .collect();
             let last = first + count as u64 - 1;

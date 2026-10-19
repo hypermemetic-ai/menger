@@ -190,6 +190,29 @@ export interface ChatsEventRenamed {
   chat: Chat;
 }
 
+/** CHAT-44: `delete`'s answer, and on `watch`: `ids` of `chat` deleted
+by `by` at `at` (only those it deleted now — one already deleted is
+not named again); `unread` is the caller's in the chat now. */
+export interface ChatsEventMessagesDeleted {
+  type: 'messages_deleted';
+  at: number;
+  by: string;
+  chat: ChatId;
+  ids: MessageId[];
+  unread: number;
+}
+
+/** CHAT-44: `restore`'s answer, and on `watch`: `ids` of `chat` put back
+by `by`; `unread` is the caller's in the chat now. */
+export interface ChatsEventMessagesRestored {
+  type: 'messages_restored';
+  at: number;
+  by: string;
+  chat: ChatId;
+  ids: MessageId[];
+  unread: number;
+}
+
 /** On `watch`: `principal` began (`waiting: true`) or stopped waiting on
 `await_message` for `chat` — the pane's "waiting for a message". */
 export interface ChatsEventListening {
@@ -285,7 +308,7 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventListening | ChatsEventActivity | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventMessagesDeleted | ChatsEventMessagesRestored | ChatsEventListening | ChatsEventActivity | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 
 export function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened { return e.type === 'opened'; }
 export function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat { return e.type === 'chat'; }
@@ -299,6 +322,8 @@ export function isChatsEventRead(e: ChatsEvent): e is ChatsEventRead { return e.
 export function isChatsEventClosed(e: ChatsEvent): e is ChatsEventClosed { return e.type === 'closed'; }
 export function isChatsEventReopened(e: ChatsEvent): e is ChatsEventReopened { return e.type === 'reopened'; }
 export function isChatsEventRenamed(e: ChatsEvent): e is ChatsEventRenamed { return e.type === 'renamed'; }
+export function isChatsEventMessagesDeleted(e: ChatsEvent): e is ChatsEventMessagesDeleted { return e.type === 'messages_deleted'; }
+export function isChatsEventMessagesRestored(e: ChatsEvent): e is ChatsEventMessagesRestored { return e.type === 'messages_restored'; }
 export function isChatsEventListening(e: ChatsEvent): e is ChatsEventListening { return e.type === 'listening'; }
 export function isChatsEventActivity(e: ChatsEvent): e is ChatsEventActivity { return e.type === 'activity'; }
 export function isChatsEventClaimLine(e: ChatsEvent): e is ChatsEventClaimLine { return e.type === 'claim_line'; }
@@ -312,6 +337,13 @@ export function isChatsEventLagged(e: ChatsEvent): e is ChatsEventLagged { retur
 export function isChatsEventWatchClosed(e: ChatsEvent): e is ChatsEventWatchClosed { return e.type === 'watch_closed'; }
 export function isChatsEventError(e: ChatsEvent): e is ChatsEventError { return e.type === 'error'; }
 
+/** CHAT-44: a message's deletion — when (unix seconds) and by whom (its
+author, or an admin of the chat's ticket or organization). */
+export interface Deleted {
+  at: number;
+  by: string;
+}
+
 /** One message, as kept. */
 export interface Message {
   /** When, unix seconds. */
@@ -321,6 +353,11 @@ export interface Message {
   /** What it says: markdown, rendered by the app's `md.rs`, never framed. */
   body: string;
   chat: ChatId;
+  /** CHAT-44: when and by whom it was deleted — kept and marked, never
+gone: `messages` still answers it, and the app folds a run of them
+into one line. A deleted message is no one's unread and no
+`await_message` reply. */
+  deleted?: Deleted | null;
   /** Its id: 1, 2, … across every chat, in the order posted, never reused
 — so a later message always has a greater id. */
   id: MessageId;

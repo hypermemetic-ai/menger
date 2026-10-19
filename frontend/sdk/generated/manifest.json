@@ -59,6 +59,12 @@
       "close": [
         "chat"
       ],
+      "delete": [
+        "chat",
+        "from",
+        "ids",
+        "to"
+      ],
       "list": [
         "after",
         "limit",
@@ -97,6 +103,12 @@
       ],
       "reopen": [
         "chat"
+      ],
+      "restore": [
+        "chat",
+        "from",
+        "ids",
+        "to"
       ],
       "schema": [],
       "watch": [

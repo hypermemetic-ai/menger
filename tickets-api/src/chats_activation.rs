@@ -33,6 +33,8 @@ use streams::*;
 mod await_message;
 #[cfg(feature = "server")]
 mod grants;
+#[cfg(feature = "server")]
+mod deletes;
 
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
@@ -62,16 +64,16 @@ impl ChatsActivation {
 // A viewer chats, as a viewer comments: every method is a viewer's — what
 // a call may do in a chat is the chat's to say (its participants), not a
 // role's.
-/// Chats among participants, on a ticket or outside tickets (direct messages and groups) — open, post, add, remove, list, messages, read, close, reopen, watch, await_message, activity, activity_log.
+/// Chats among participants, on a ticket or outside tickets (direct messages and groups) — open, post, add, remove, list, messages, read, close, reopen, delete, restore, watch, await_message, activity, activity_log.
 #[plexus_macros::activation(
     auth = "required",
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["open", "post", "add", "remove", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "candidates", "activity", "activity_log"],
+        viewer = ["open", "post", "add", "remove", "list", "messages", "read", "close", "reopen", "rename", "delete", "restore", "watch", "await_message", "candidates", "activity", "activity_log"],
         editor = [viewer],
         // CHAT-16: one granted a chat only — the chats it is in, nothing of the tickets.
-        chatter = ["post", "list", "messages", "read", "close", "reopen", "rename", "watch", "await_message", "activity", "activity_log"],
+        chatter = ["post", "list", "messages", "read", "close", "reopen", "rename", "delete", "restore", "watch", "await_message", "activity", "activity_log"],
     )
 )]
 impl ChatsActivation {
@@ -311,6 +313,56 @@ impl ChatsActivation {
         futures::stream::once(async move { rename(store, user, chat.get(), title.map(Title::into_string)).await })
     }
 
+    /// Delete messages in a chat — kept and marked deleted { at, by }, never gone; yields messages_deleted { chat, ids, by, at, unread } (CHAT-44).
+    ///
+    /// A message's author deletes it, and an admin of the chat's ticket
+    /// (outside tickets, of its organization) deletes any. Name them by
+    /// `ids`, or every message of the chat from `from` to `to`. All or
+    /// none: one the caller may not delete, or not the chat's, is
+    /// `refused`, naming each; one already deleted is not named again.
+    /// `messages` still answers a deleted message, marked; it is no one's
+    /// unread and no `await_message` reply. `watch` carries
+    /// `messages_deleted` to every participant.
+    #[plexus_macros::method(group = "write")]
+    pub async fn delete(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 6.
+        chat: ChatId,
+        /// The messages, e.g. 245,247 (optional: or from and to).
+        ids: Option<Vec<MessageId>>,
+        /// The first of a range of the chat's messages (optional; with to).
+        from: Option<MessageId>,
+        /// The last of the range, included (optional; with from).
+        to: Option<MessageId>,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        let (store, pick) = (self.store.clone(), deletes::pick(ids, from, to));
+        futures::stream::once(async move { deletes::delete(store, user, chat.get(), pick, false).await })
+    }
+
+    /// Put deleted messages back in a chat; yields messages_restored { chat, ids, by, at, unread } (CHAT-44).
+    ///
+    /// `delete`'s rule: a message's author, or an admin of the chat's
+    /// ticket (outside tickets, its organization); by `ids`, or `from` …
+    /// `to`; all or none. One not deleted is not named again. `watch`
+    /// carries `messages_restored` to every participant.
+    #[plexus_macros::method(group = "write")]
+    pub async fn restore(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 6.
+        chat: ChatId,
+        /// The messages, e.g. 245,247 (optional: or from and to).
+        ids: Option<Vec<MessageId>>,
+        /// The first of a range of the chat's messages (optional; with to).
+        from: Option<MessageId>,
+        /// The last of the range, included (optional; with from).
+        to: Option<MessageId>,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        let (store, pick) = (self.store.clone(), deletes::pick(ids, from, to));
+        futures::stream::once(async move { deletes::delete(store, user, chat.get(), pick, true).await })
+    }
+
     /// Reopen a closed chat; yields reopened { chat }.
     ///
     /// By any participant. Reopening an open chat changes nothing.
@@ -325,7 +377,7 @@ impl ChatsActivation {
         futures::stream::once(async move { settle(store, user, chat.get(), true).await })
     }
 
-    /// Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, listening, left — until disconnect.
+    /// Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, messages_deleted, messages_restored, listening, left — until disconnect.
     ///
     /// The chats the caller is in (with `ticket`, those on it — every one
     /// there for an admin of it), each change as the caller sees it: its own

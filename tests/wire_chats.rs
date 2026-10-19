@@ -476,3 +476,48 @@ async fn activity_reaches_participants_alone_and_the_memory_log_answers() {
     let bad = call(&builder, "chats.activity", json!({ "chat": chat, "state": "thinking" })).await;
     assert_eq!(bad[0]["type"], "error", "{bad:?}");
 }
+
+/// CHAT-44: `delete` and `restore` over the wire — the author deletes its
+/// own (`--from`/`--to` too), a participant cannot delete another's (all or
+/// none, named), the operator deletes anyone's, `messages` still answers a
+/// deleted message marked, the other participant's watch hears
+/// `messages_deleted` with its unread, and `restore` puts one back.
+#[tokio::test]
+async fn messages_are_deleted_kept_marked_and_restored() {
+    let port = start().await;
+    let boss = as_key(port, &BOSS, "boss").await;
+    kiln(&boss).await;
+    let ada = as_key(port, &ADA, "ada").await;
+    let builder = as_key(port, &BUILDER, "builder").await;
+    let opened = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [principal(&BUILDER)] })).await;
+    let chat = opened["chat"]["id"].as_u64().unwrap();
+    let mut ids = Vec::new();
+    for body in ["the report", "the report", "the report"] {
+        ids.push(one(&builder, "chats.post", json!({ "chat": chat, "body": body })).await["message"]["id"].as_u64().unwrap());
+    }
+    let mine = one(&ada, "chats.post", json!({ "chat": chat, "body": "one is enough" })).await["message"]["id"].as_u64().unwrap();
+    let mut watch = subscribe(&ada, "chats.watch", json!({})).await;
+
+    // ada may not delete builder's: refused, naming it; nothing written.
+    let refused = one(&ada, "chats.delete", json!({ "chat": chat, "ids": [ids[1], mine] })).await;
+    assert_eq!(refused["type"], "refused", "{refused}");
+    assert!(refused["reasons"][0].as_str().unwrap().contains(&format!("message {}", ids[1])), "{refused}");
+    // builder deletes two of its own by range; ada's watch hears it.
+    let d = one(&builder, "chats.delete", json!({ "chat": chat, "from": ids[1], "to": ids[2] })).await;
+    assert_eq!((d["type"].as_str(), d["ids"].clone(), d["by"].as_str()), (Some("messages_deleted"), json!([ids[1], ids[2]]), Some(principal(&BUILDER).as_str())), "{d}");
+    let heard = next(&mut watch).await;
+    assert_eq!((heard["type"].as_str(), heard["ids"].clone(), heard["unread"].as_u64()), (Some("messages_deleted"), json!([ids[1], ids[2]]), Some(0)), "{heard}");
+    // Kept and marked.
+    let msgs = call(&ada, "chats.messages", json!({ "chat": chat })).await;
+    let marked: Vec<u64> = msgs.iter().filter(|e| e["message"]["deleted"].is_object()).filter_map(|e| e["message"]["id"].as_u64()).collect();
+    assert_eq!((msgs.len(), marked), (5, vec![ids[1], ids[2]]), "{msgs:?}");
+    assert_eq!(msgs[1]["message"]["deleted"]["by"], principal(&BUILDER));
+    // The operator (admin on `*`, not in the chat) deletes anyone's.
+    let by_admin = one(&boss, "chats.delete", json!({ "chat": chat, "ids": [mine] })).await;
+    assert_eq!(by_admin["type"], "messages_deleted", "{by_admin}");
+    // builder puts one back.
+    let r = one(&builder, "chats.restore", json!({ "chat": chat, "ids": [ids[2]] })).await;
+    assert_eq!((r["type"].as_str(), r["ids"].clone()), (Some("messages_restored"), json!([ids[2]])), "{r}");
+    // Neither ids nor a range: refused in band.
+    assert_eq!(one(&builder, "chats.delete", json!({ "chat": chat })).await["type"], "refused");
+}
