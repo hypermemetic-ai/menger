@@ -1058,16 +1058,6 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         });
     };
     let released = move |_| press.update_value(|p| *p += 1);
-    // CHAT-50: a tap on a chip, link, image or a message's button keeps the
-    // composer focused, as Send does (CHAT-27). Else the tap's own mousedown
-    // blurs the box, `data-kb` comes off and the page reflows before the
-    // click: the first tap only lowered the keyboard.
-    let keep_focus = |ev: web_sys::MouseEvent| {
-        let tappable = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|el| el.closest("a, img, [data-act]").ok().flatten().is_some());
-        if tappable {
-            ev.prevent_default();
-        }
-    };
     // Esc leaves selection mode: the full chat's own Esc asks first
     // ([`leave_selection`]), the dock's is heard here.
     Effect::new(move |_| {
@@ -1144,7 +1134,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             {move || adding.get().then(|| view! {
                 <Picker ticket=t_picker.clone() add_to=Some((id, participants.get_untracked())) on_done=Callback::new(move |_| adding.set(false)) />
             })}
-            <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=move |_| if !doc_scroll.get_value() { on_scroll() } on:click=acts on:mousedown=keep_focus on:pointerdown=pressed on:pointerup=released on:pointercancel=released on:pointermove=released>
+            <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=move |_| if !doc_scroll.get_value() { on_scroll() } on:click=acts on:pointerdown=pressed on:pointerup=released on:pointercancel=released on:pointermove=released>
                 <div class="tcol">
                     {move || loading_earlier.get().then(|| view! { <div class="tearlier" role="status">"loading earlier…"</div> })}
                     {empty}
@@ -1158,7 +1148,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                     {waits}
                 </div>
             </div>
-            {move || arrow.get().map(|a| view! { <button type="button" class="tjump" on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default() on:click=jump>{a}</button> })}
+            {move || arrow.get().map(|a| view! { <button type="button" class="tjump" on:click=jump>{a}</button> })}
             {move || if selecting.with(Option::is_some) {
                 selbar().into_any()
             } else if is_open.get() {
