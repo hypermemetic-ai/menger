@@ -2,14 +2,19 @@
 //! drawn in every comment that shows one.
 //!
 //! **Attaching** ([`Attach`], [`Attachments`]): a screenshot pasted into the
-//! box, a file dropped on it, or one picked with its Image button is read,
+//! box, a file dropped on it, or one picked with its Image button is shown
+//! at once as a thumbnail of the file with a spinner (CHAT-30; a static
+//! "uploading…" under Motion none or calm), then read,
 //! checked here by the server's own rule (`menger_tickets_api::media::check`:
 //! PNG, JPEG, GIF or WebP by its bytes, never SVG, at most 7 MiB — a file
 //! refused says why and is never sent), and kept with `media.put` for the
 //! ticket the comment is on (none for a comment on the app). Its markdown,
 //! `![name](media:<hash>)`, goes into the box at the cursor, and the box
 //! shows it as a thumbnail — the thumbnails are the draft's own `media:`
-//! images, so deleting the markdown removes one, and × removes both.
+//! images, so deleting the markdown removes one, and × removes both. One
+//! that fails says why on its thumbnail, with *remove* (and *retry*, where
+//! trying again can help); the box's send waits while one is on its way or
+//! failed ([`waits`]), so a message never goes without its image.
 //!
 //! **Drawing** ([`hydrate`]): a comment's `media:` image is an `img.cimg`
 //! with no `src` (src/md.rs, [`segments`]); the page asks `media.get` for
@@ -870,9 +875,50 @@ pub(crate) fn zoom(ticket: &str, hash: &str, alt: &str) {
 
 // ── attaching ───────────────────────────────────────────────────────────
 
-/// One box's attaching: its draft, the box, the ticket an image is for,
-/// what it says (uploading, or why a file was refused) and how many uploads
-/// are out.
+/// CHAT-30: where an image on its way stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UpState {
+    /// Being read and put: a spinner on its thumbnail.
+    Uploading,
+    /// Not kept: why, and whether trying again can help (a dropped
+    /// connection can; a file the server's rule refuses cannot).
+    Failed { why: String, retry: bool },
+}
+
+/// CHAT-30: an image on its way, drawn at once as a thumbnail of the file
+/// itself, until `media.put` answers `stored` (then it is the draft's
+/// markdown, and the draft's thumbnail) or it fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Up {
+    pub(crate) key: u32,
+    pub(crate) alt: String,
+    /// The file's own `blob:` URL — none for a file that is no image.
+    pub(crate) url: Option<String>,
+    pub(crate) state: UpState,
+}
+
+/// Whether a box's send waits: an image is on its way, or one failed and
+/// is neither tried again nor removed — a message never goes without it.
+pub(crate) fn waits(ups: &[Up]) -> bool {
+    !ups.is_empty()
+}
+
+/// What the box says of its images on their way, for a screen reader.
+pub(crate) fn status_of(ups: &[Up]) -> Option<String> {
+    let going = ups.iter().filter(|u| u.state == UpState::Uploading).count();
+    let failed = ups.len() - going;
+    match (going, failed) {
+        (0, 0) => None,
+        (1, 0) => Some("uploading an image…".to_string()),
+        (n, 0) => Some(format!("uploading {n} images…")),
+        (0, 1) => Some("an image was not added".to_string()),
+        (0, n) => Some(format!("{n} images were not added")),
+        (g, f) => Some(format!("uploading {g}, {f} not added")),
+    }
+}
+
+/// One box's attaching: its draft, the box, the ticket an image is for, and
+/// the images on their way (CHAT-30) with their files, kept to try again.
 #[derive(Clone, Copy)]
 pub(crate) struct Attach {
     body: RwSignal<String>,
@@ -881,13 +927,22 @@ pub(crate) struct Attach {
     /// CHAT-14: the chat an image is for, in a chat's composer — seen by
     /// its participants alone.
     chat: StoredValue<Option<u64>>,
-    note: RwSignal<Option<(bool, String)>>,
-    out: RwSignal<u32>,
+    ups: RwSignal<Vec<Up>>,
+    files: StoredValue<HashMap<u32, web_sys::File>, LocalStorage>,
+    next: StoredValue<u32>,
 }
 
 impl Attach {
     pub(crate) fn new(body: RwSignal<String>, area: NodeRef<Textarea>, ticket: Option<String>) -> Self {
-        Self { body, area, ticket: StoredValue::new(ticket), chat: StoredValue::new(None), note: RwSignal::new(None), out: RwSignal::new(0) }
+        Self {
+            body,
+            area,
+            ticket: StoredValue::new(ticket),
+            chat: StoredValue::new(None),
+            ups: RwSignal::new(Vec::new()),
+            files: StoredValue::new_local(HashMap::new()),
+            next: StoredValue::new(0),
+        }
     }
 
     /// CHAT-14: a chat composer's attaching — images put for `chat`.
@@ -895,14 +950,21 @@ impl Attach {
         Self { chat: StoredValue::new(Some(chat)), ..Self::new(body, area, None) }
     }
 
-    /// Whether an image is still on its way (the box's Send waits for it).
+    /// Whether the box's send waits ([`waits`]): an image on its way, or
+    /// one that failed and is still shown.
     pub(crate) fn busy(self) -> bool {
-        self.out.get() > 0
+        self.ups.with(|u| waits(u))
     }
 
     /// [`Attach::busy`], untracked.
     pub(crate) fn busy_untracked(self) -> bool {
-        self.out.get_untracked() > 0
+        self.ups.with_untracked(|u| waits(u))
+    }
+
+    /// Whether one of the images on their way failed (a send then waits for
+    /// *retry* or *remove*, not for the upload).
+    pub(crate) fn failed(self) -> bool {
+        self.ups.with(|u| u.iter().any(|u| u.state != UpState::Uploading))
     }
 
     /// A paste: its images attached (and the paste itself not typed).
@@ -931,68 +993,112 @@ impl Attach {
         }
     }
 
-    /// Each file read, checked, put, and its markdown put in the box.
+    /// Each file shown at once, then read, checked, put, and its markdown
+    /// put in the box.
     pub(crate) fn files(self, files: Vec<web_sys::File>) {
         for f in files {
             self.one(f);
         }
     }
 
+    /// CHAT-30: the file's thumbnail with a spinner, in the same turn as
+    /// the paste — then its upload.
     fn one(self, file: web_sys::File) {
-        let name = file.name();
-        self.out.update(|n| *n += 1);
-        self.note.set(Some((false, format!("adding {}…", alt_of(&name)))));
+        let key = self.next.get_value();
+        self.next.set_value(key + 1);
+        let ty = file.type_();
+        let url = (ACCEPT.split(',').any(|a| a == ty)).then(|| web_sys::Url::create_object_url_with_blob(&file).ok()).flatten();
+        self.ups.update(|u| u.push(Up { key, alt: alt_of(&file.name()), url, state: UpState::Uploading }));
+        self.files.update_value(|f| {
+            f.insert(key, file);
+        });
+        self.go(key);
+    }
+
+    /// The upload of the image `key` on its way (again, after a failure).
+    fn go(self, key: u32) {
+        let Some(file) = self.files.with_value(|f| f.get(&key).cloned()) else { return };
+        self.set_state(key, UpState::Uploading);
         wasm_bindgen_futures::spawn_local(async move {
+            let name = file.name();
             let r = self.upload(&file, &name).await;
-            self.out.try_update(|n| *n = n.saturating_sub(1));
+            // Removed while it was on its way: nothing goes in the box.
+            if !self.ups.try_with_untracked(|u| u.iter().any(|u| u.key == key)).unwrap_or(false) {
+                return;
+            }
             match r {
                 Ok((alt, hash)) => {
-                    self.note.try_set(None);
+                    // The thumbnail and the comment draw from the file itself.
+                    let url = self.ups.with_untracked(|u| u.iter().find(|u| u.key == key).and_then(|u| u.url.clone()));
+                    if let Some(u) = url {
+                        settle(&hash, Known::Url(u));
+                    }
+                    self.files.update_value(|f| {
+                        f.remove(&key);
+                    });
+                    self.ups.update(|u| u.retain(|u| u.key != key));
                     self.put_markdown(&alt, &hash);
                 }
-                Err(e) => {
-                    self.note.try_set(Some((true, e)));
-                }
+                Err((why, retry)) => self.set_state(key, UpState::Failed { why, retry }),
             }
         });
     }
 
-    async fn upload(self, file: &web_sys::File, name: &str) -> Result<(String, String), String> {
+    fn set_state(self, key: u32, state: UpState) {
+        self.ups.try_update(|u| {
+            if let Some(one) = u.iter_mut().find(|u| u.key == key) {
+                one.state = state;
+            }
+        });
+    }
+
+    /// *remove* on an image on its way, or one that failed: gone, never sent.
+    fn drop_up(self, key: u32) {
+        let url = self.ups.with_untracked(|u| u.iter().find(|u| u.key == key).and_then(|u| u.url.clone()));
+        self.ups.update(|u| u.retain(|u| u.key != key));
+        self.files.update_value(|f| {
+            f.remove(&key);
+        });
+        if let Some(u) = url {
+            let _ = web_sys::Url::revoke_object_url(&u);
+        }
+    }
+
+    /// The file read, checked and put: its alt and hash, or why not and
+    /// whether trying again can help — a dropped connection or a server's
+    /// error can; the file's own bytes, or a refusal by the rule, cannot.
+    async fn upload(self, file: &web_sys::File, name: &str) -> Result<(String, String), (String, bool)> {
         use base64::Engine;
+        let fixed = |why: String| (why, false);
         // Past the cap, said before the bytes are read.
         let size = file.size() as usize;
         if size > rules::MAX_BYTES {
-            return Err(format!("{name}: {}", rules::Problem::TooLarge { bytes: size, max: rules::MAX_BYTES }));
+            return Err(fixed(format!("{name}: {}", rules::Problem::TooLarge { bytes: size, max: rules::MAX_BYTES })));
         }
-        let buf = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(|_| format!("{name}: could not be read"))?;
+        let buf = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(|_| fixed(format!("{name}: could not be read")))?;
         let bytes = js_sys::Uint8Array::new(&buf).to_vec();
-        let found = refusal(name, &file.type_(), &bytes)?;
-        let client = crate::session::media_client().ok_or_else(|| "not connected — the image was not sent".to_string())?;
-        let ticket = crate::typed::opt(self.ticket.get_value())?;
+        let found = refusal(name, &file.type_(), &bytes).map_err(fixed)?;
+        let client = crate::session::media_client().ok_or_else(|| ("not connected — the image was not sent".to_string(), true))?;
+        let ticket = crate::typed::opt(self.ticket.get_value()).map_err(fixed)?;
         let chat = self.chat.get_value().map(menger_tickets_api::vocab::ChatId::new);
-        let mime = crate::typed::typed(found.mime)?;
-        let data = crate::typed::typed(&base64::engine::general_purpose::STANDARD.encode(&bytes))?;
-        let events = client.put_all(ticket, chat, mime, data).await.map_err(|e| crate::session::describe(&e))?;
+        let mime = crate::typed::typed(found.mime).map_err(fixed)?;
+        let data = crate::typed::typed(&base64::engine::general_purpose::STANDARD.encode(&bytes)).map_err(fixed)?;
+        let events = client.put_all(ticket, chat, mime, data).await.map_err(|e| (format!("{name}: {}", crate::session::describe(&e)), true))?;
         for ev in events {
             match ev {
-                MediaEvent::Stored { hash, .. } => {
-                    // The thumbnail and the comment draw from the file itself.
-                    if let Ok(u) = web_sys::Url::create_object_url_with_blob(file) {
-                        settle(&hash, Known::Url(u));
-                    }
-                    return Ok((alt_of(name), hash));
-                }
-                MediaEvent::Refused { message, .. } | MediaEvent::Error { message } => return Err(format!("{name}: {message}")),
+                MediaEvent::Stored { hash, .. } => return Ok((alt_of(name), hash)),
+                MediaEvent::Refused { message, .. } => return Err(fixed(format!("{name}: {message}"))),
+                MediaEvent::Error { message } => return Err((format!("{name}: {message}"), true)),
                 MediaEvent::NotFound { ticket, .. } => {
-                    return Err(match self.chat.get_value() {
+                    return Err(fixed(match self.chat.get_value() {
                         Some(c) => format!("{name}: not kept — chat {c} is not one you are in"),
                         None => format!("{name}: not kept — {} is no ticket you can add images to", ticket.unwrap_or_default()),
-                    })
+                    }))
                 }
                 MediaEvent::Media { .. } => {}
             }
         }
-        Err(format!("{name}: no answer"))
+        Err((format!("{name}: no answer"), true))
     }
 
     /// The image's markdown into the box at its cursor, the cursor after it.
@@ -1022,11 +1128,48 @@ fn files_of(list: Option<web_sys::FileList>) -> Vec<web_sys::File> {
     (0..list.length()).filter_map(|i| list.get(i)).collect()
 }
 
-/// A box's images: the draft's thumbnails, the Image button (and its
-/// picker), and what it says.
+/// A box's images: those on their way (CHAT-30: a spinner, or why one
+/// failed with *retry* and *remove*), the draft's thumbnails, the Image
+/// button (and its picker).
 #[component]
 pub(crate) fn Attachments(a: Attach) -> impl IntoView {
     let picker = NodeRef::<leptos::html::Input>::new();
+    let going = move || {
+        a.ups
+            .get()
+            .into_iter()
+            .map(|up| {
+                let key = up.key;
+                let (failed, why, retry) = match &up.state {
+                    UpState::Uploading => (false, String::new(), false),
+                    UpState::Failed { why, retry } => (true, why.clone(), *retry),
+                };
+                let title = if failed { why.clone() } else { format!("{} — uploading…", up.alt) };
+                view! {
+                    <span class="cthumb cup" class:failed=failed data-up=key.to_string() title=title>
+                        {match up.url.clone() {
+                            Some(u) => view! { <img src=u alt=up.alt.clone() /> }.into_any(),
+                            None => view! { <span class="cup-name">{up.alt.clone()}</span> }.into_any(),
+                        }}
+                        {(!failed).then(|| view! {
+                            <span class="cup-spin" aria-hidden="true"></span>
+                            <span class="cup-still">"uploading…"</span>
+                        })}
+                        {failed.then(|| view! {
+                            <span class="cup-why" role="alert">{why.clone()}</span>
+                            <span class="cup-acts">
+                                {retry.then(|| view! { <button type="button" class="cup-retry" on:click=move |_| a.go(key)>"retry"</button> })}
+                                <button type="button" class="cup-remove" on:click=move |_| a.drop_up(key)>"remove"</button>
+                            </span>
+                        })}
+                        {(!failed).then(|| view! {
+                            <button type="button" class="cthumb-x" title="stop and remove the image" aria-label="stop and remove the image" on:click=move |_| a.drop_up(key)>"×"</button>
+                        })}
+                    </span>
+                }
+            })
+            .collect_view()
+    };
     let thumbs = move || {
         a.body
             .with(|b| refs(b))
@@ -1045,7 +1188,7 @@ pub(crate) fn Attachments(a: Attach) -> impl IntoView {
     };
     view! {
         <span class="cattach">
-            <span class="cthumbs">{thumbs}</span>
+            <span class="cthumbs">{thumbs}{going}</span>
             <button
                 type="button"
                 class="cpick"
@@ -1072,7 +1215,7 @@ pub(crate) fn Attachments(a: Attach) -> impl IntoView {
                     a.files(files);
                 }
             />
-            {move || a.note.get().map(|(bad, n)| view! { <span class="cnote" class:bad=bad role=if bad { "alert" } else { "status" }>{n}</span> })}
+            <span class="cnote cups" role="status">{move || a.ups.with(|u| status_of(u))}</span>
         </span>
     }
 }
@@ -1220,5 +1363,24 @@ mod tests {
         let mut big = png.clone();
         big.resize(9 * 1024 * 1024, 0);
         assert!(refusal("big.png", "image/png", &big).unwrap_err().contains("at most 7.0 MB"));
+    }
+
+    fn up(key: u32, state: UpState) -> Up {
+        Up { key, alt: "screenshot".into(), url: None, state }
+    }
+
+    /// CHAT-30: a box's send waits while an image is on its way, and while
+    /// one that failed is still shown; what the box says of them.
+    #[test]
+    fn chat_30_send_waits_for_the_images_on_their_way() {
+        let failed = UpState::Failed { why: "a.png: no answer".into(), retry: true };
+        assert!(!waits(&[]));
+        assert!(waits(&[up(0, UpState::Uploading)]));
+        assert!(waits(&[up(0, failed.clone())]), "never posted without it");
+        assert_eq!(status_of(&[]), None);
+        assert_eq!(status_of(&[up(0, UpState::Uploading)]).as_deref(), Some("uploading an image…"));
+        assert_eq!(status_of(&[up(0, UpState::Uploading), up(1, UpState::Uploading)]).as_deref(), Some("uploading 2 images…"));
+        assert_eq!(status_of(&[up(0, failed.clone())]).as_deref(), Some("an image was not added"));
+        assert_eq!(status_of(&[up(0, UpState::Uploading), up(1, failed)]).as_deref(), Some("uploading 1, 1 not added"));
     }
 }
