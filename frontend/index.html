@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{{TITLE}}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <!-- MFE-9: the app's data plane is the Plexus WebSocket, not the REST
@@ -333,6 +333,16 @@
     --diagram-text: auto; /* labels (mermaid primaryTextColor) */
   }
   /* tokens:end */
+  /* APP-65: the screen's safe area. `viewport-fit=cover` (the viewport
+     meta) lets the page run under an iPhone's rounded corners, island and
+     home indicator, and makes iOS report how far; everything that sits on
+     an edge pads by these — the phone bar, the tray, the composer, the
+     full-screen views, the column's sides in landscape. 0 everywhere else. */
+  :root {
+    --safe-top: env(safe-area-inset-top, 0px); --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-left: env(safe-area-inset-left, 0px);
+  }
+  #app { padding-left: var(--safe-left); padding-right: var(--safe-right); }
   /* DESIGN-38: the faces the contract's defaults name (--mono, --font-text:
      Geist Mono; --sans, --font-display: Geist), served beside the app. One
      rule per line — the lint reads an @font-face as a declaration. */
@@ -865,15 +875,15 @@
   .md code {
     font-family: var(--mono); font-size: calc(.92em * var(--text-scale));
     background: var(--panel); border: var(--border) solid var(--line);
-    border-radius: var(--radius-sm); padding: 0 .25rem;
+    border-radius: var(--radius-sm); padding: 0 .25rem; overflow-wrap: anywhere;
   }
   .md pre {
     font-family: var(--mono);
     background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius);
     padding: .6rem .8rem; overflow-x: auto;
   }
-  .md pre code { border: 0; padding: 0; background: none; font-size: inherit; }
-  .md a { color: var(--accent); }
+  .md pre code { border: 0; padding: 0; background: none; font-size: inherit; overflow-wrap: normal; }
+  .md a { color: var(--accent); overflow-wrap: anywhere; }
   .md blockquote {
     border-left: 3px solid var(--line); margin: .5rem 0;
     padding: 0 .8rem; color: var(--muted);
@@ -1705,7 +1715,7 @@
   /* APP-50: at the phone shape's widths the column ends at the bar's top
      edge, so the pill sits clear of it; on a page without the bar, above
      the dock's pill. */
-  @media (max-width: 820px) { #app:not(:has(#pbar)) .cmp-pill { bottom: calc(98px + env(safe-area-inset-bottom, 0px)); } }
+  @media (max-width: 820px) { #app:not(:has(#pbar)) .cmp-pill { bottom: calc(98px + var(--safe-bottom)); } }
   .cmp-view { position: fixed; inset: 0; z-index: 960; display: flex; flex-direction: column; box-sizing: border-box;
     padding: .5rem .75rem .75rem; background: var(--bg); color: var(--ink); animation: menger-cmp-in .18s var(--ease) both; }
   @keyframes menger-cmp-in { from { opacity: 0; transform: scale(.985); } }
@@ -2587,7 +2597,7 @@
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
   .lightbox .lb-bar {
-    position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); right: calc(10px + env(safe-area-inset-right, 0px));
+    position: absolute; top: calc(10px + var(--safe-top)); right: calc(10px + var(--safe-right));
     display: flex; gap: 4px; padding: 4px; border-radius: var(--radius-xl);
     background: var(--panel); border: var(--border) solid var(--line); box-shadow: 0 4px 16px var(--shadow);
   }
@@ -3747,14 +3757,14 @@
      grab handle; a row's answer opens in place under it. */
   @media (max-width: 640px) {
     #qtray .qc {
-      position: fixed; right: 12px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); height: 46px; max-width: calc(100% - 24px);
+      position: fixed; right: calc(12px + var(--safe-right)); bottom: calc(14px + var(--safe-bottom)); height: 46px; max-width: calc(100% - 24px - var(--safe-left) - var(--safe-right));
       padding: 0 16px 0 14px; border: var(--border) solid var(--u); border-radius: var(--radius-pill); box-shadow: 0 10px 30px var(--shadow);
     }
     #qtray .qc.loud { padding-bottom: 0; border-width: 1.5px; }
     #qtray .qc .lbl { display: none; }
     #qtray .qc.one .t { max-width: 150px; }
     #qtray.open .qc { transform: translateY(calc(100% + 30px)); }
-    #qtray .qarrived { position: fixed; right: 12px; bottom: calc(70px + env(safe-area-inset-bottom, 0px)); }
+    #qtray .qarrived { position: fixed; right: calc(12px + var(--safe-right)); bottom: calc(70px + var(--safe-bottom)); }
     #qtray .qedge { position: fixed; }
     #qtray .qscrim {
       display: block; position: fixed; inset: 0; background: var(--scrim); opacity: 0; pointer-events: none;
@@ -4427,7 +4437,7 @@
     font-size: calc(9.5px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase;
     color: var(--st-epic-fg); background: var(--st-epic-bg); padding: 0 5px; border-radius: var(--radius-sm);
   }
-  :is(#chatpane, #chatfull) .md code { font-family: var(--mono); font-size: .86em; background: var(--panel); padding: 0 4px; border-radius: var(--radius-sm); border: var(--border) solid var(--line); }
+  :is(#chatpane, #chatfull) .md code { font-family: var(--mono); font-size: .86em; background: var(--panel); padding: 0 4px; border-radius: var(--radius-sm); border: var(--border) solid var(--line); overflow-wrap: anywhere; }
   :is(#chatpane, #chatfull) .cblock { border: var(--border) solid var(--line); border-radius: var(--radius-lg); overflow: hidden; margin: 10px 0; background: var(--card); }
   :is(#chatpane, #chatfull) .chead {
     display: flex; gap: 10px; align-items: baseline; padding: 5px 12px; border-bottom: var(--border) solid var(--line);
@@ -4437,7 +4447,7 @@
   :is(#chatpane, #chatfull) .chead .ccopy { margin-left: auto; color: var(--muted); }
   :is(#chatpane, #chatfull) .chead .ccopy:hover { color: var(--accent); }
   :is(#chatpane, #chatfull) .cblock pre { margin: 0; padding: 10px 12px; overflow-x: auto; font: calc(12.5px * var(--text-scale))/1.55 var(--mono); }
-  :is(#chatpane, #chatfull) .cblock pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  :is(#chatpane, #chatfull) .cblock pre code { background: none; border: 0; padding: 0; font-size: inherit; overflow-wrap: normal; }
   :is(#chatpane, #chatfull, .ccompose) .tchip {
     display: inline-block; font: calc(11px * var(--text-scale)) var(--mono); color: var(--accent); border: var(--border) solid var(--accent);
     border-radius: var(--radius-sm); padding: 0 5px; text-decoration: none; line-height: 1.5; vertical-align: baseline;
@@ -4508,6 +4518,9 @@
   /* The composer: manifest's card (vox.css's .vox-input) in menger's tokens. */
   .ccompose { flex: none; min-width: 0; box-sizing: border-box; padding: 8px 12px 10px; background: var(--panel); border-top: var(--border) solid var(--line); position: relative; font-family: var(--mono); }
   #chatfull .ccompose { background: var(--bg); border-top: 0; padding: 6px 0 8px; width: min(100% - 32px, 780px); margin: 0 auto; }
+  /* APP-65: the session's foot — the composer, a closed chat's line, the
+     note under them — ends above the home indicator. */
+  #chatfull .chatview { padding-bottom: var(--safe-bottom); }
   .ccompose .ccard {
     border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--bg); padding: 8px 10px 8px;
     display: flex; flex-direction: column; gap: 6px; min-width: 0;
@@ -4546,6 +4559,7 @@
   #chatfull {
     position: fixed; inset: 0; z-index: 955; display: grid; grid-template-columns: 264px minmax(0, 1fr); background: var(--bg); color: var(--ink);
     font: calc(12px * var(--text-scale))/1.5 var(--mono); outline: 0;
+    padding: var(--safe-top) var(--safe-right) 0 var(--safe-left);
   }
   #chatfull.aside { grid-template-columns: 264px minmax(0, 1fr) 6px var(--aside-w, 440px); }
   #chatfull button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
@@ -4619,7 +4633,7 @@
     #chatfull .sback::before { content: "←"; font-size: calc(13px * var(--text-scale)); }
     #chatfull .spn, #chatfull .speople .ag, #chatfull .shead .sbtn:not(.smore) { display: none; }
     #chatfull .sdiv, #chatfull .sticket { display: none; }
-    #chatfull .ccompose { width: 100%; margin: 0; padding: 6px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+    #chatfull .ccompose { width: 100%; margin: 0; padding: 6px 10px 8px; }
     #chatfull .tcol { padding-top: 12px; }
     #chatfull .pmsgs { padding: 0 12px; }
     #chatfull .asugs { grid-template-columns: 1fr; }
@@ -4799,7 +4813,7 @@
      place's nudge; none moves nothing (the global rule). Tokens only. ── */
   #phead, #pbar, #pscrim, .pscrim-in, .psheet-head, .psheet-foot { display: none; }
   @media (max-width: 820px) {
-    :root { --pbar-h: calc(62px + env(safe-area-inset-bottom, 0px)); }
+    :root { --pbar-h: calc(62px + var(--safe-bottom)); }
     /* APP-53: the document scrolls, not the column — a phone's browser
        hides its own bars only when the document does. #phead stays at the
        top (sticky), #pbar at the bottom (fixed); the column leaves the
@@ -4823,8 +4837,8 @@
     main { padding: calc(14px * var(--space)) calc(16px * var(--space)) calc(32px * var(--space)); }
     /* The top: one line — the wordmark, the shortcode › the page, live. */
     #phead {
-      display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 20; height: 44px; box-sizing: border-box;
-      padding: 0 16px; background: var(--panel); border-bottom: var(--border) solid var(--line);
+      display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 20; height: calc(44px + var(--safe-top)); box-sizing: border-box;
+      padding: var(--safe-top) calc(16px + var(--safe-right)) 0 calc(16px + var(--safe-left)); background: var(--panel); border-bottom: var(--border) solid var(--line);
       font-family: var(--mono); font-size: calc(11.5px * var(--text-scale)); color: var(--muted);
     }
     #phead .wordmark { display: inline-flex; flex: none; }
@@ -4838,7 +4852,7 @@
     /* The bar. */
     #pbar {
       display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); position: fixed; left: 0; right: 0; bottom: 0; z-index: 940;
-      height: var(--pbar-h); box-sizing: border-box; padding: 0 4px env(safe-area-inset-bottom, 0px);
+      height: var(--pbar-h); box-sizing: border-box; padding: 0 calc(4px + var(--safe-right)) var(--safe-bottom) calc(4px + var(--safe-left));
       background: var(--panel); border-top: var(--border) solid var(--tree-line);
     }
     #pbar .pl {
@@ -5014,7 +5028,7 @@
     #qtray .qs { flex: 0 1 auto; height: 100%; border-radius: var(--radius-device) var(--radius-device) 0 0; }
     #qtray .qs.one { height: auto; max-height: 100%; }
     #qtray .qgrab { display: block; flex: none; width: 36px; height: 4px; border-radius: var(--radius-xs); background: var(--tree-line); margin: 8px auto 0; }
-    #qtray .qarrived { position: fixed; right: 12px; bottom: calc(var(--pbar-h) + 8px); }
+    #qtray .qarrived { position: fixed; right: calc(12px + var(--safe-right)); bottom: calc(var(--pbar-h) + 8px); }
     #qtray .qedge { position: fixed; bottom: var(--pbar-h); }
     /* APP-56: the keyboard up (src/keyboard.rs stamps data-kb and the
        --kb-* lengths off the visual viewport): the nav is hidden, and
@@ -5035,7 +5049,7 @@
     html[data-kb] #nav { height: min(calc(86dvh - var(--pbar-h)), calc(var(--kb-h) - 8px)); }
     html[data-kb] .overlay > #palette { max-height: min(calc(80dvh - var(--pbar-h)), calc(var(--kb-h) - 8px)); }
     html[data-kb] #qtray .qclip { top: max(12vh, calc(var(--kb-top) + 8px)); }
-    html[data-kb] #chatfull .ccompose { padding-bottom: 8px; }
+    html[data-kb] #chatfull .chatview { padding-bottom: 0; }
   }
   /* APP-56: the full-screen chat (and #/chats) is the visible area while
      the keyboard is up, its composer on the keyboard's top. */
@@ -5050,8 +5064,8 @@
      its end does not hand the drag on to the page. */
   html[data-kb] :is(#chatfull, #tdock-sheet) .pmsgs { overscroll-behavior: contain; }
   @media (min-width: 641px) and (max-width: 820px) {
-    :root { --pbar-h: calc(58px + env(safe-area-inset-bottom, 0px)); }
-    #pbar { padding: 0 max(4px, calc(50% - 300px)) env(safe-area-inset-bottom, 0px); }
+    :root { --pbar-h: calc(58px + var(--safe-bottom)); }
+    #pbar { padding: 0 max(calc(4px + var(--safe-right)), calc(50% - 300px)) var(--safe-bottom) max(calc(4px + var(--safe-left)), calc(50% - 300px)); }
     #pbar .pl { flex-direction: row; gap: 8px; font-size: calc(11px * var(--text-scale)); }
     #pbar .bdg { position: static; }
     #pbar .sub { padding: 0; }
