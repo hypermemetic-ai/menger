@@ -27,7 +27,9 @@
 //!   chat and comments"*): pasted, dropped or picked, as a comment's are
 //!   (COMMENT-5, src/media.rs) — checked, kept with `media.put` for the
 //!   chat (seen by its participants alone), a thumbnail in the box, drawn
-//!   in the turn, full size on a click. Send waits while one is on its way.
+//!   in the turn, full size on a click. Send waits while one is on its way
+//!   (CHAT-30): asked for then, it says *sends when the image is up* and
+//!   goes when it is ([`send_label`]); never without it.
 //! - **Send on a phone** (CHAT-27, [`tap_sends`]): a tap on Send never
 //!   takes the focus from the box, so the keyboard stays up and the tap
 //!   sends — it is read on its lift, not left to the click a blur loses.
@@ -446,6 +448,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
     let me = chats::me();
     let name = crate::chat_pane::names();
     let sending = RwSignal::new(false);
+    // CHAT-30: a send asked for while an image was on its way.
+    let queued = RwSignal::new(false);
     let refusal = RwSignal::new(None::<String>);
     let caret = RwSignal::new(0usize);
     let hi = RwSignal::new(0usize);
@@ -563,7 +567,16 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
         let add_one = add_one.clone();
         move || {
             let text = body.get_untracked();
-            if text.trim().is_empty() || sending.get_untracked() || attach.busy_untracked() {
+            if sending.get_untracked() {
+                return;
+            }
+            // CHAT-30: an image on its way — the send goes when it is up.
+            if attach.busy_untracked() {
+                queued.set(true);
+                return;
+            }
+            queued.set(false);
+            if text.trim().is_empty() {
                 return;
             }
             match act_of(&text) {
@@ -605,6 +618,16 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
             }
         }
     };
+    // CHAT-30: … and it goes once the image is up (never without it: a
+    // failed one waits for *retry* or *remove*).
+    Effect::new({
+        let send = send.clone();
+        move |_| {
+            if queued.get() && !attach.busy() {
+                send();
+            }
+        }
+    });
     let keydown = {
         let send = send.clone();
         let pick = pick.clone();
@@ -756,7 +779,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                             {if full { "⤡ pane" } else { "full ↗" }}
                         </button>
                     })}
-                    <button type="button" class="csend" aria-label="send" title="send (Enter)" disabled=move || sending.get() || attach.busy() || body.with(|b| b.trim().is_empty())
+                    <button type="button" class="csend" aria-label="send" title="send (Enter)" disabled=move || sending.get() || queued.get() || (!attach.busy() && body.with(|b| b.trim().is_empty()))
+                        class:queued=move || queued.get()
                         on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                         on:touchstart=move |ev: web_sys::TouchEvent| tap.set_value(landed(&ev))
                         on:touchend={
@@ -770,7 +794,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                             }
                         }
                         on:click=move |_| send()>
-                        {move || if sending.get() { "sending…" } else { "send" }}
+                        {move || send_label(sending.get(), queued.get(), attach.failed())}
                     </button>
                 </div>
             </div>
@@ -790,6 +814,17 @@ fn leave_box(ev: &web_sys::KeyboardEvent, full: bool) {
         None => {
             let _ = el.blur();
         }
+    }
+}
+
+/// What Send says (CHAT-30): sending, waiting for an image to be up (or,
+/// one having failed, for its *retry* or *remove*), or ready.
+pub(crate) fn send_label(sending: bool, queued: bool, failed: bool) -> &'static str {
+    match (sending, queued, failed) {
+        (true, _, _) => "sending…",
+        (false, true, false) => "sends when the image is up",
+        (false, true, true) => "waits for the image",
+        _ => "send",
     }
 }
 
@@ -990,5 +1025,14 @@ mod tests {
         assert!(!tap_sends((330.0, 616.0, 0.0), (330.0, 560.0, 120.0), button), "a scroll");
         assert!(!tap_sends((330.0, 616.0, 0.0), (330.0, 616.0, 900.0), button), "a hold");
         assert!(!tap_sends((302.0, 616.0, 0.0), (296.0, 616.0, 100.0), button), "lifted off the button");
+    }
+
+    /// CHAT-30: a send during an upload waits for it, and says so.
+    #[test]
+    fn chat_30_send_says_it_waits_for_the_image() {
+        assert_eq!(send_label(false, false, false), "send");
+        assert_eq!(send_label(true, false, false), "sending…");
+        assert_eq!(send_label(false, true, false), "sends when the image is up");
+        assert_eq!(send_label(false, true, true), "waits for the image", "a failed one: retry or remove");
     }
 }
