@@ -1,0 +1,57 @@
+# TETHER-7: menger tether — a Plexus RPC tool of its own (`synapse tether …`)
+# with substrate imported as a crate and called in memory (LOCAL-6's
+# HubTransport). Its own workspace, out of menger's: menger's rusqlite 0.37
+# pulls libsqlite3-sys 0.35 and substrate's sqlx 0.8 pulls libsqlite3-sys
+# 0.30, both `links = "sqlite3"`, and one resolve refuses two (TETHER-7).
+[workspace]
+
+[package]
+name = "menger-tether"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "menger tether: the local side of menger — agent sessions through an imported substrate, over Plexus RPC"
+publish = false
+
+[lib]
+name = "tether"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tether"
+path = "src/main.rs"
+
+[dependencies]
+# substrate, imported: its hub is built inside tether and called over the
+# in-memory hub transport. By sibling path, as substrate takes the plexus
+# 0.6 line (MFE-10) — one of each crate in the graph.
+plexus-substrate = { path = "../../plexus-substrate", default-features = false }
+plexus-core = { path = "../../plexus-core", version = "0.6" }
+plexus-macros = { path = "../../plexus-macros", version = "0.6" }
+plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.6" }
+plexus-transport = { path = "../../plexus-transport", version = "0.5" }
+plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2" }
+# The same path substrate names (`../menger/plexus-login`): two paths to one
+# crate are two packages to cargo, refused in one lockfile — so even from a
+# worktree of menger, this is the main checkout's.
+plexus-login = { path = "../../menger/plexus-login", version = "0.2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.1", features = ["derive", "uuid1"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+# What #[plexus_macros::activation]'s expansion names.
+async-trait = "0.1"
+jsonrpsee = { version = "0.26", features = ["server", "macros"] }
+async-stream = "0.3"
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.6", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+jsonrpsee = { version = "0.26", features = ["client", "ws-client", "server", "macros"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", features = ["adapters"] }

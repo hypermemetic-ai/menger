@@ -19,6 +19,9 @@
 # SCAFFOLD-9: `plexus-login/` is menger's login lifted out the same way
 # (published as `plexus-login`).
 members = [".", "tickets-api", "diagrams", "plexus-shell", "plexus-shell/toy", "plexus-login"]
+# TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
+# workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
+exclude = ["tether"]
 
 [package]
 name = "menger"
