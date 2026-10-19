@@ -422,13 +422,17 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     // around the read mark (more unread than a page), or `?at=MSG`.
     let size = scale::page_size(dom::window().inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(900.0));
     let at_url = at_in(&dom::window().location().hash().unwrap_or_default());
-    let started = StoredValue::new(false);
+    // APP-67: asked on mounting, and again on a new connection while the
+    // thread is not held — an ask lost with its socket is not the end.
+    let asked = StoredValue::new(None::<u32>);
+    let round = chats::round();
     Effect::new(move |_| {
         let Some(c) = chat.get() else { return };
-        if started.get_value() {
+        let r = round.get();
+        if !chats::asks(asked.get_value(), r, window_t.with_untracked(|t| t.fetched)) {
             return;
         }
-        started.set_value(true);
+        asked.set_value(Some(r));
         let around = at_url.or_else(|| (c.unread > size).then_some(c.mark.map(|m| m.get())).flatten());
         chats::load(id, size, around);
         // CHAT-18: what has been done before the chat opened, mid-turn.
@@ -781,10 +785,24 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     let empty = {
         let t = ticket.clone();
         move || {
-            if !thread.with(Vec::is_empty) || chat.with(|c| c.as_ref().is_some_and(|c| c.last_message.is_some())) {
+            // APP-67: a chat not yet known has said nothing about its messages.
+            if !thread.with(Vec::is_empty) || chat.with(|c| c.as_ref().is_none_or(|c| c.last_message.is_some())) {
                 return None;
             }
             Some(if alone.get() { alone_view(t.as_deref().unwrap_or("this chat"), body).into_any() } else { view! { <p class="pempty">"No messages yet. Say what this chat is about."</p> }.into_any() })
+        }
+    };
+    // APP-67: a chat with messages, its thread not yet held — said in
+    // place, never an empty list (the socket gone again, it says so).
+    let pending = {
+        let link = crate::session::link();
+        let held = held.clone();
+        move || {
+            let has = held.with(Option::is_none) || chat.with(|c| c.as_ref().is_some_and(|c| c.last_message.is_some()));
+            (has && !window_t.with(|t| t.fetched)).then(|| {
+                let words = if link.get() { "loading messages…" } else { "reconnecting…" };
+                view! { <div class="tearlier tpending" role="status">{words}</div> }
+            })
         }
     };
     let rows = {
@@ -889,6 +907,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                 <div class="tcol">
                     {move || loading_earlier.get().then(|| view! { <div class="tearlier" role="status">"loading earlier…"</div> })}
                     {empty}
+                    {pending}
                     <div class="tlist" node_ref=rows_ref data-first=move || thread.with(|t| t.first().map_or(0, |m| m.id.get())).to_string() data-held=move || thread.with(Vec::len).to_string()>
                         <div class="tspace" style=move || format!("height:{:.0}px", space_above.get())></div>
                         <For each=move || mounted.get() key=|m| m.id.get() children=rows />

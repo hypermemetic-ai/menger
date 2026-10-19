@@ -2186,7 +2186,10 @@ fn App() -> impl IntoView {
     motion::install();
     // APP-63: a page reloaded for a reconnect puts back its scroll and its
     // typed fields — and skips the boot, which it has seen.
-    if !resume::install() {
+    // APP-67: the reload says *reconnecting…* until its first `health`.
+    if resume::install() {
+        motion::resume_begin();
+    } else {
         motion::boot_begin(&settings::effective_ws_url());
     }
     // SCALE-26: the board's model of the store — the extents, the window's

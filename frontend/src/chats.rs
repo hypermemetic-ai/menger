@@ -441,6 +441,8 @@ thread_local! {
     /// CHAT-13: the standing chat members heard of ([`note_agents`]).
     static AGENTS: RefCell<std::collections::BTreeSet<String>> = const { RefCell::new(std::collections::BTreeSet::new()) };
     static HELD: ArcRwSignal<Option<Held>> = ArcRwSignal::new(None);
+    /// APP-67: the connections the chats were asked again on ([`refresh`]).
+    static ROUND: ArcRwSignal<u32> = ArcRwSignal::new(0);
     static WANTED: Cell<bool> = const { Cell::new(false) };
     static FETCH: Cell<u32> = const { Cell::new(0) };
     static HEARD: RefCell<Option<Vec<ChatsEvent>>> = const { RefCell::new(None) };
@@ -467,6 +469,24 @@ pub(crate) fn my_name() -> Option<String> {
     crate::signin::account().with_untracked(|a| a.me.as_ref().map(|m| m.name.clone())).filter(|n| !n.is_empty())
 }
 
+/// APP-67: which connection the chats were last asked on — moved by every
+/// [`refresh`], so an open pane asks again for a thread it does not hold.
+pub(crate) fn round() -> ArcRwSignal<u32> {
+    ROUND.with(Clone::clone)
+}
+
+/// APP-67: whether a pane asks [`load`] for its thread, now on connection
+/// `round`, having last asked on `asked` (none: not yet). Its first ask is
+/// always made; on a later connection only for a thread never fetched — an
+/// ask lost with its socket (cut in flight, or made before one was up),
+/// which nothing asked again, left the chat drawn with no messages.
+pub(crate) fn asks(asked: Option<u32>, round: u32, fetched: bool) -> bool {
+    match asked {
+        None => true,
+        Some(a) => a != round && !fetched,
+    }
+}
+
 /// A view needs the chats: watch and fetch them now if this is the first ask.
 pub(crate) fn want() {
     if !WANTED.with(|w| w.replace(true)) {
@@ -481,6 +501,7 @@ pub(crate) fn refresh() {
         ASKED.with(|a| a.borrow_mut().clear());
         ASKED_LIVE.with(|a| a.borrow_mut().clear());
         start();
+        ROUND.with(|r| r.update(|n| *n = n.wrapping_add(1)));
     }
 }
 
@@ -537,10 +558,12 @@ fn fetch() {
         loop {
             match client.list_all(None, None, None, after, Some(PAGE)).await {
                 Ok(events) => {
-                    let mut next = None;
+                    let Some((events, next)) = paged(events) else {
+                        leptos::logging::log!("chats: the list was cut short; asked again on the next connection");
+                        return;
+                    };
                     for ev in events {
                         match ev {
-                            ChatsEvent::Page { next: n } => next = n,
                             ChatsEvent::Error { message } => leptos::logging::log!("chats: {message}"),
                             ev => answer.push(ev),
                         }
@@ -679,16 +702,33 @@ async fn page(client: &menger_tickets_api::ChatsClient<std::rc::Rc<plexus_client
         Paging::After(a) => (Some(MessageId::new(a)), None, None),
     };
     let events = client.messages_all(ChatId::new(chat), after, before, newest, Some(size)).await.map_err(|_| ())?;
-    let mut out = Vec::new();
+    let (events, next) = paged(events).ok_or(())?;
+    let out = events
+        .into_iter()
+        .filter_map(|ev| match ev {
+            ChatsEvent::Message { message } => Some(message),
+            _ => None,
+        })
+        .collect();
+    Ok((out, next))
+}
+
+/// APP-67: a page's items and its `next` — or none when its `page` never
+/// came. A page the server answers always ends with one; a socket cut in
+/// flight ends the stream without it, and those few (often no) items were
+/// taken as the whole answer: a thread held empty, a chat list without
+/// the chat open ("not one you are in"), and nothing asked again.
+pub(crate) fn paged(events: Vec<ChatsEvent>) -> Option<(Vec<ChatsEvent>, Option<u64>)> {
     let mut next = None;
+    let mut ended = false;
+    let mut out = Vec::new();
     for ev in events {
         match ev {
-            ChatsEvent::Message { message } => out.push(message),
-            ChatsEvent::Page { next: n } => next = n,
-            _ => {}
+            ChatsEvent::Page { next: n } => (next, ended) = (n, true),
+            ev => out.push(ev),
         }
     }
-    Ok((out, next))
+    ended.then_some((out, next))
 }
 
 /// The one answer a write gives, applied at once — or what the server said
@@ -1035,5 +1075,27 @@ pub(crate) mod tests {
         assert!(is_agent("idp:5eed") && !is_agent("idp:ada"));
         // CHAT-14: a key is how an agent signs in.
         assert!(is_agent("key:54a9"));
+    }
+
+    /// APP-67: a thread whose ask was lost with its socket is asked again
+    /// on the next connection; one held is not.
+    #[test]
+    fn a_pane_asks_again_for_a_thread_it_never_got() {
+        assert!(asks(None, 0, false), "mounting asks");
+        assert!(asks(None, 3, true), "mounting asks, held or not (the newest page)");
+        assert!(!asks(Some(3), 3, false), "once per connection");
+        assert!(asks(Some(3), 4, false), "a new connection, nothing held: ask again");
+        assert!(!asks(Some(3), 4, true), "a new connection, the thread held: the watch keeps it");
+    }
+
+    /// APP-67: an answer is whole only with its `page`; one cut short is
+    /// no answer, never an empty one.
+    #[test]
+    fn a_page_cut_short_is_no_answer() {
+        assert_eq!(paged(Vec::new()), None, "the socket went before anything came");
+        let m = ChatsEvent::Left { chat: ChatId::new(1) };
+        assert_eq!(paged(vec![m.clone()]), None, "items but no end");
+        assert_eq!(paged(vec![ChatsEvent::Page { next: None }]), Some((Vec::new(), None)), "an empty chat, answered");
+        assert_eq!(paged(vec![m.clone(), ChatsEvent::Page { next: Some(7) }]), Some((vec![m], Some(7))));
     }
 }
