@@ -1,0 +1,33 @@
+# TETHER-9: menger tether as a systemd --user unit — listens to the remote
+# menger (inputs answered, change requests, comments on queued tickets) and
+# runs agent sessions here through the substrate inside it. Installed by
+# tether/deploy/install.sh as ~/.config/systemd/user/tether.service, running
+# the installed binary ~/.local/bin/tether (never a checkout).
+#
+#   systemctl --user status tether
+#   journalctl --user -u tether -f
+#   systemctl --user stop tether                # stop it now (its running turns end; kept as interrupted)
+#   systemctl --user disable --now tether       # stop it for good
+#
+# Its settings: ~/.config/menger/tether.env (the remote, the key name, the
+# work dir, the permission mode, the grace), then `systemctl --user restart tether`.
+[Unit]
+Description=menger tether (TETHER-9) - drives menger: listens to the remote, runs agent sessions here
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:%h/.ghcup/bin:/usr/local/bin:/usr/bin:/bin
+Environment=RUST_LOG=warn,tether=info
+EnvironmentFile=%h/.config/menger/tether.env
+WorkingDirectory=%h
+ExecStart=%h/.local/bin/tether
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

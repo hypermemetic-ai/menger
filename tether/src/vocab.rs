@@ -97,6 +97,31 @@ text_type!(
     work_dir
 );
 
+/// TETHER-9: what a run is — CHAT-45's archetypes, each with a default
+/// model in `~/.config/menger/archetypes.env` ([`crate::archetypes`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Archetype {
+    /// Answers in chat.
+    Architect,
+    /// A detached run that builds a ticket.
+    Builder,
+    /// Reads and reports.
+    Analyst,
+}
+
+impl Archetype {
+    pub const ALL: [Archetype; 3] = [Archetype::Architect, Archetype::Builder, Archetype::Analyst];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Archetype::Architect => "architect",
+            Archetype::Builder => "builder",
+            Archetype::Analyst => "analyst",
+        }
+    }
+}
+
 /// A session's name for `ticket`: its letters lowered, anything else `-`,
 /// then eight of a fresh uuid.
 pub fn name_for(ticket: &TicketId) -> SessionName {
