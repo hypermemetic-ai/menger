@@ -3471,7 +3471,7 @@
   #resumeveil {
     position: fixed; z-index: 2000; left: 50%; transform: translateX(-50%);
     top: calc(max(env(safe-area-inset-top, 0px), var(--sai-top, 0px)) + 10px);
-    padding: 4px 12px; border-radius: 999px; pointer-events: none;
+    padding: 4px 12px; border-radius: var(--radius-md); pointer-events: none;
     background: var(--panel); color: var(--muted); border: 1px solid var(--line);
     font: calc(11px * var(--text-scale, 1)) var(--mono);
   }
