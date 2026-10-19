@@ -7,6 +7,16 @@
 <meta name="referrer" content="same-origin">
 <title>Sign in · {{TITLE}}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- APP-64: the host's home-screen icon and manifest, at its root (a 404
+     where the host serves none — harmless). -->
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="{{TITLE}}">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#fbfbf9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101014" media="(prefers-color-scheme: dark)">
 <!-- THEME-7: the app's site theme (its tokens as the app last painted them,
      kept under {{APP}}.themes.site) is worn here too, and followed live when
      another tab of the app changes it. -->

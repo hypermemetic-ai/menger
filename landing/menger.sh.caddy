@@ -2,9 +2,10 @@
 #
 # Deployed by hypermemetic-infra's Ansible edge role (SCAFFOLD-19), which
 # copies menger's landing/ (index.html, style.css, main.js, favicon.svg,
-# guide/ — the reference — and media/ — the app's stills and clips, made by
-# scripts/landing-media.sh) to /srv/menger.sh and this file into the edge's
-# sites/ — replacing the inline placeholder there. Not deployed by hand. The
+# icons/ — APP-64's home-screen icon — guide/ — the reference — and
+# media/ — the app's stills and clips, made by scripts/landing-media.sh) to
+# /srv/menger.sh and this file into the edge's sites/ — replacing the inline
+# placeholder there. Not deployed by hand. The
 # hosted app is app.menger.sh (MENGER-8), a site of its own; nothing here
 # proxies to it.
 #
@@ -57,7 +58,7 @@ menger.sh {
 
 	# their assets: names are not fingerprinted, so an hour, then revalidate
 	# in the background for a day
-	@assets path /style.css /main.js /favicon.svg /grain.svg
+	@assets path /style.css /main.js /favicon.svg /grain.svg /icons/*
 	header @assets Cache-Control "public, max-age=3600, stale-while-revalidate=86400"
 	# the faces (DESIGN-37: Geist and Geist Mono, self-hosted under fonts/):
 	# a day, then revalidate in the background for a week — woff2 is

@@ -60,6 +60,7 @@ pub fn mime_of(key: &str) -> &'static str {
         Some("wasm") => "application/wasm",
         Some("css") => "text/css",
         Some("json") | Some("map") => "application/json",
+        Some("webmanifest") => "application/manifest+json",
         Some("svg") => "image/svg+xml",
         Some("ico") => "image/x-icon",
         Some("png") => "image/png",

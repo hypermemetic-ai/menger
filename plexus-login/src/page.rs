@@ -158,13 +158,14 @@ pub fn heading(title: &str, sub: &str) -> String {
 
 /// A Content-Security-Policy admitting these script and style blocks and
 /// nothing else of the kind: images its own or `data:` (the TOTP QR code),
+/// the host's web app manifest (APP-64),
 /// `fetch` to its own origin only. `form-action` is left out on purpose: a
 /// sign-in form's answer is a redirect to the identity backend and on to
 /// the person's IdP, which `form-action` would block in browsers that apply
 /// it to redirects.
 fn csp_of(scripts: &[String], styles: &[String]) -> String {
     format!(
-        "default-src 'none'; script-src {}; style-src {}; img-src 'self' data:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
+        "default-src 'none'; script-src {}; style-src {}; img-src 'self' data:; manifest-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'",
         or_none(&hash_all(scripts)),
         or_none(&hash_all(styles))
     )
