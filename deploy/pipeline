@@ -409,7 +409,7 @@ cmd_install() {
 
 # ── build: commit → gate → release ──────────────────────────────────────────
 cmd_build() {
-  need cargo; need trunk; need npm
+  need cargo; need trunk; need npm; need sqlite3; need node   # DEPLOY-41: the deploy after the build needs them; fail now, not after the gate
   local rev=${1:-main} sha short id stage disk
   # CI-2: a low disk refuses up front, not half-way through the gate
   disk=$("$REPO/scripts/disk-check.sh" --path "$HOME") || die "refused — $disk"
