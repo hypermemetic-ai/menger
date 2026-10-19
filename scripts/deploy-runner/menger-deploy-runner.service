@@ -22,7 +22,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/home/linuxbrew/.linuxbrew/bin:/var/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=%h/.config/menger/deploy-runner.env
 WorkingDirectory=%h
 ExecStart=/bin/sh -c 'exec node %h/.local/share/menger-deploy-runner/deploy/runner.mjs $MENGER_RUNNER_MODE'
