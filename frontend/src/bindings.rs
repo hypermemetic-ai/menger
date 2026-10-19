@@ -390,6 +390,10 @@ pub(crate) const BINDINGS: &[Binding] = &[
     // CHAT-5: the ticket menu's Chat item, by its letter (drawn beside it).
     b("menu.chat", &[C::Menu], &["c"], G::Dialogs, "in a ticket's menu: Chat — its chats (or, with none, the picker), the ticket opened with its chat pane"),
     b("dialog.close", &[C::Palette, C::Dialog, C::Menu, C::DatePicker], &["Escape"], G::Dialogs, "close it; focus goes back where it was"),
+    // APP-77: the image viewer's zoom.
+    b("image.zoom-in", &[C::Dialog], &["="], G::Dialogs, "in the image viewer: zoom in (= is + without Shift)"),
+    b("image.zoom-out", &[C::Dialog], &["-"], G::Dialogs, "in the image viewer: zoom out"),
+    b("image.fit", &[C::Dialog], &["0"], G::Dialogs, "in the image viewer: back to the fit"),
     b("dialog.next-field", &[C::Palette, C::Dialog], &["Tab"], G::Dialogs, "the next control, kept inside the dialog"),
     b("dialog.prev-field", &[C::Palette, C::Dialog], &["Shift+Tab"], G::Dialogs, "the previous control, kept inside the dialog"),
     // APP-38: the queue's sheet answers its rows in turn.
