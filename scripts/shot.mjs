@@ -46,6 +46,15 @@ options
                       that has none of the app's (a late-drawn local file)
   --out PATH          a directory, or a .png file when there is one shot
                                                   [$TMPDIR/menger-shots]
+  --origin URL        routes (#/…) on this menger, e.g. https://app.menger.sh,
+                      instead of --env or --port (APP-76)
+  --key FILE          sign the browser in with this agent key (a synapse key
+                      file, ~/.plexus/keys/NAME.key): a session is minted
+                      over the socket and set as the shell's cookie; the
+                      token stays in memory (APP-76)
+  --session FILE      the same with a session token already minted (0600)
+  --chat N            also put each shot into chat N (media.put, as the
+                      key's agent) and print its media:<hash> (APP-76)
   --as USER           sign in through the dev sign-in (IDENTITY-35) as USER
                       (a roster user keeps its grants; a new name is made a
                       viewer on *), where the environment offers it
@@ -84,6 +93,10 @@ try {
       'wait-for': { type: 'string' },
       out: { type: 'string' },
       as: { type: 'string' },
+      origin: { type: 'string' },
+      key: { type: 'string' },
+      session: { type: 'string' },
+      chat: { type: 'string' },
       page: { type: 'boolean', default: false },
       timeout: { type: 'string', default: '45' },
       help: { type: 'boolean', short: 'h', default: false },
@@ -100,6 +113,13 @@ if (opt.help) {
 }
 if (!parsed.positionals.length) usage('no target: give a route (#/board), a URL or an .html file');
 if (opt.env && opt.port) usage('--env and --port both given: pick one');
+if (opt.origin && (opt.env || opt.port)) usage('--origin with --env or --port: pick one');
+if (opt.origin && !/^https?:\/\/[^/]+\/?$/i.test(opt.origin)) usage(`--origin ${opt.origin}: http(s)://host[:port], nothing after it`);
+if (opt.key && opt.session) usage('--key and --session both given: pick one');
+if (opt.key && !existsSync(opt.key)) usage(`--key ${opt.key}: no such file`);
+if (opt.session && !existsSync(opt.session)) usage(`--session ${opt.session}: no such file`);
+if (opt.chat && !/^\d+$/.test(opt.chat)) usage(`--chat ${opt.chat}: a chat's number`);
+if (opt.chat && !opt.key && !opt.session) usage('--chat needs --key or --session (who puts the shot in the chat)');
 
 const int = (name, v, min, max) => {
   if (!/^\d+$/.test(v) || +v < min || +v > max) usage(`--${name} ${v}: a whole number from ${min} to ${max}`);
@@ -110,13 +130,16 @@ if (!themes) usage(`--theme ${opt.theme}: light, dark or both`);
 const widths = opt.width.split(',').map((w) => int('width', w.trim(), 200, 4000));
 const height = int('height', opt.height, 200, 4000);
 const timeoutMs = int('timeout', opt.timeout, 1, 600) * 1000;
-// Chromium will not paint a surface taller than this in one screenshot.
+// Chromium will not paint a surface taller than this in one screenshot; a
+// taller page is laid out whole (up to TALLEST) and shot in parts of PART.
 const MAX_HEIGHT = 16000;
+const TALLEST = 64000;
+const PART = 8000;
 
 // ── Where: an environment's file, a port, a URL, a file ──────────────────
 
 const ENVS = { prod: 4456, test: 4451 };
-const envName = opt.env ?? (opt.port ? null : 'prod');
+const envName = opt.origin ? null : opt.env ?? (opt.port ? null : 'prod');
 if (envName && !(envName in ENVS)) usage(`--env ${envName}: prod or test`);
 
 /** KEY=VALUE lines of an env file (systemd's EnvironmentFile shape). */
@@ -137,8 +160,10 @@ const confDir = join(homedir(), '.config', 'menger');
 // shell port is --port (so a port still finds its sign-in account).
 let envVars = {};
 let label = envName;
-let port = envName ? ENVS[envName] : int('port', opt.port, 1, 65535);
-if (envName) {
+let port = opt.origin ? null : envName ? ENVS[envName] : int('port', opt.port, 1, 65535);
+if (opt.origin) {
+  label = new URL(opt.origin).hostname;
+} else if (envName) {
   envVars = readEnvFile(join(confDir, `${envName}.env`));
   if (envVars.MENGER_SHELL_PORT) port = +envVars.MENGER_SHELL_PORT;
 } else {
@@ -152,7 +177,15 @@ if (envName) {
   }
 }
 const cred = (k) => process.env[k] || envVars[k] || '';
-const base = `http://127.0.0.1:${port}`;
+const base = opt.origin ? new URL(opt.origin).origin : `http://127.0.0.1:${port}`;
+/** The hub behind a shell: wss://host/ws behind https (ACCESS-30), else the
+ *  WebSocket port beside the shell's (the env file's, else shell − 1). */
+function hubOf(origin) {
+  const u = new URL(origin);
+  if (u.protocol === 'https:') return `wss://${u.host}/ws`;
+  const ws = +envVars.MENGER_WS_PORT || +u.port - 1;
+  return `ws://${u.hostname}:${ws}`;
+}
 
 /** A target → { url, name, app, origin } — `app` runs the app's checks. */
 function target(t) {
@@ -250,6 +283,10 @@ function probe({ app, waitFor }) {
   const frames = [...document.querySelectorAll('iframe')];
   const unsettled = frames.filter((f) => {
     const w = f.contentWindow;
+    // APP-43/APP-76: a mockup's page (a fixed-size frame in its host) is
+    // anyone's HTML and says nothing; its document and fonts loaded
+    // (framePending) and the layout still are its signal.
+    if (f.parentElement && f.parentElement.classList.contains('mframe-fixed')) return false;
     const menger = f.hasAttribute('data-channel') || (s && w && s.ready.has(w));
     return menger && !(s && w && s.settled.has(w));
   });
@@ -392,13 +429,13 @@ async function shoot(context, { t, theme, width }) {
     // so the window grows to the tallest scroller, and is settled again.
     if (!opt.screen) {
       for (let i = 0; i < 4 && state.tall > height; i++) {
-        const want = Math.min(MAX_HEIGHT, Math.ceil(state.tall));
+        const want = Math.min(TALLEST, Math.ceil(state.tall));
         const now = page.viewportSize().height;
         if (want <= now) break;
         await page.setViewportSize({ width, height: want });
         state = await settle(page, t.app, deadline);
       }
-      if (state.tall > MAX_HEIGHT) console.error(`shot: ${t.name}: the page is ${state.tall}px tall — cut at ${MAX_HEIGHT}px`);
+
     }
     for (const e of state.errors) console.error(`shot: ${t.name}: the app shows an error: ${e}`);
     for (const e of errors) console.error(`shot: ${t.name}: page error: ${e}`);
@@ -419,10 +456,41 @@ async function shoot(context, { t, theme, width }) {
         throw new Error(`no visible element matches --selector ${opt.selector}`);
       });
       await el.screenshot({ path: file, animations: 'disabled' });
-    } else {
+    } else if (opt.screen || page.viewportSize().height <= MAX_HEIGHT) {
       await page.screenshot({ path: file, fullPage: !opt.screen, animations: 'disabled' });
+    } else {
+      // APP-76: taller than one paint — in parts, file.1.png, file.2.png, …
+      // The page's content ends at its last drawn element — a box that fills
+      // the window (a column, a min-height) grows with it and is no end.
+      const vh = page.viewportSize().height;
+      const end = await page.evaluate((vh) => {
+        let bottom = 0;
+        const all = [...document.querySelectorAll('main *, iframe')];
+        // A sheet or a bar fixed to the window sits at its bottom, whatever its size.
+        const fixed = all.filter((el) => getComputedStyle(el).position === 'fixed');
+        for (const el of all) {
+          const r = el.getBoundingClientRect();
+          if (!r.height || r.height >= vh * 0.9 || fixed.some((f) => f.contains(el))) continue;
+          bottom = Math.max(bottom, r.bottom + window.scrollY);
+        }
+        return Math.ceil(bottom);
+      }, vh);
+      const total = Math.min(vh, end > 0 ? end + 24 : vh);
+      if (end + 24 > TALLEST) console.error(`shot: ${t.name}: the page is ${end}px tall — cut at ${TALLEST}px`);
+      const files = [];
+      for (let y = 0, k = 1; y < total; y += PART, k++) {
+        const part = file.replace(/\.png$/, `.${k}.png`);
+        await page.screenshot({ path: part, clip: { x: 0, y, width, height: Math.min(PART, total - y) }, animations: 'disabled' });
+        files.push(part);
+      }
+      for (const f of files) {
+        console.log(f);
+        if (opt.chat) await toChat(t.origin ?? base, f);
+      }
+      return true;
     }
     console.log(file);
+    if (opt.chat) await toChat(t.origin ?? base, file);
     return true;
   } catch (e) {
     console.error(`shot: ${t.name} ${theme} ${width}: ${e.message.split('\n')[0]}`);
@@ -433,11 +501,49 @@ async function shoot(context, { t, theme, width }) {
   }
 }
 
+// APP-76: signed in by an agent's key (or a session minted from one) —
+// the shell's session cookie on each target's origin; the token in memory.
+let login = null;
+if (opt.key || opt.session) {
+  login = await import(new URL('./throwaway-login.mjs', import.meta.url).href);
+}
+const tokens = new Map();
+async function tokenFor(origin) {
+  if (!tokens.has(origin)) {
+    tokens.set(origin, opt.session ? login.readToken(opt.session) : (await login.mintSession(hubOf(origin), resolve(opt.key), 'shot')).token);
+  }
+  return tokens.get(origin);
+}
+
+/** APP-76: the shot into chat `opt.chat` — media.put { chat } over the hub,
+ *  as the session's agent; prints its media:<hash>. */
+async function toChat(origin, file) {
+  const { call, connect } = await import(new URL('../deploy/menger-call.mjs', import.meta.url).href);
+  const ws = await connect(hubOf(origin), { Authorization: `Bearer ${await tokenFor(origin)}` });
+  let hash = null, why = null;
+  try {
+    const data = readFileSync(file).toString('base64');
+    await call(ws, 1, 'media.put', { chat: +opt.chat, mime: 'image/png', data }, (item) => {
+      if (item?.content?.type === 'stored') hash = item.content.hash;
+      else if (item?.type === 'error' || item?.content?.type === 'refused' || item?.content?.type === 'error') why = JSON.stringify(item.content ?? item);
+    });
+  } finally {
+    ws.close();
+  }
+  if (!hash) throw new Error(`chat ${opt.chat} did not take ${basename(file)}${why ? `: ${why}` : ''}`);
+  console.log(`media:${hash}`);
+}
+
 const browser = await chromium.launch();
 let ok = true;
 try {
   const context = await browser.newContext({ deviceScaleFactor: 1 });
   await context.addInitScript(listen);
+  if (login) {
+    for (const origin of new Set(targets.map((t) => t.origin).filter(Boolean))) {
+      await context.addCookies(login.sessionCookies(origin, await tokenFor(origin)));
+    }
+  }
   for (const s of shots) ok = (await shoot(context, s)) && ok;
 } finally {
   await browser.close();

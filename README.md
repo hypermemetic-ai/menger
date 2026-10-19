@@ -895,6 +895,23 @@ scripts/shot.mjs mock.html --wait-for '#drawn'      # a local file: no app check
 scripts/shot.mjs --help
 ```
 
+**Any menger, signed in by a key** (APP-76): `--origin https://app.menger.sh`
+takes the routes there, and `--key ~/.plexus/keys/builder.key` signs the
+browser in as that agent — a session minted over the socket
+(`throwaway-login.mjs`'s `mintSession`, `wss://<host>/ws` behind https) set
+as the shell's session cookie, the token kept in memory (`--session FILE`
+takes one already minted). A mockup's page counts as settled once its
+document and fonts are in and the layout is still (APP-43). A page taller
+than one paint (16,000 px) is shot in parts of 8,000 — `NAME.1.png`,
+`NAME.2.png`, … — cut at its last drawn element. `--chat N` puts each shot
+into chat N (`media.put { chat }`, as the key's agent) and prints its
+`media:<hash>`, to write as `![shot](media:<hash>)`:
+
+```sh
+scripts/shot.mjs '#/ticket/CHAT-35' --origin https://app.menger.sh \
+  --key ~/.plexus/keys/builder.key --width 390 --out /tmp/chat-35.png --chat 6
+```
+
 Files land in `$TMPDIR/menger-shots/` unless `--out` says otherwise, named
 `ENV.ROUTE.THEME.WIDTH.png` (`prod.ticket-DESIGN-3.dark.400.png`); the
 paths are printed on stdout. The whole page is the default: the app scrolls
