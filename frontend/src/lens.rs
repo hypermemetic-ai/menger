@@ -323,7 +323,7 @@ pub(crate) fn lens_hash(hash: &str, g: Option<&str>, n: Option<&str>, surface: O
 /// comments page, which has filters of its own; (DEPLOY-13) the deployments
 /// page, whose waiting list is its own clause.
 pub(crate) fn applies(route: &Route) -> bool {
-    !matches!(route, Route::Components(_) | Route::Settings | Route::Comments | Route::Deployments(_))
+    !matches!(route, Route::Components(_) | Route::Settings | Route::Comments | Route::Deployments(_) | Route::Deploy(_))
 }
 
 // ---------------------------------------------------------------------
@@ -1353,7 +1353,7 @@ mod tests {
         for r in [Route::Board, Route::Ticket("MNG-4".into()), Route::Waves("PLEXUS".into()), Route::Waves(String::new()), Route::Inputs] {
             assert!(applies(&r), "{r:?}");
         }
-        for r in [Route::Components(None), Route::Components(Some("m-stat".into())), Route::Settings, Route::Comments, Route::Deployments(None)] {
+        for r in [Route::Components(None), Route::Components(Some("m-stat".into())), Route::Settings, Route::Comments, Route::Deployments(None), Route::Deploy(None)] {
             assert!(!applies(&r), "{r:?}");
         }
     }
