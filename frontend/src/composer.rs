@@ -346,13 +346,25 @@ pub(crate) fn recall(thread: &[menger_tickets_api::Message], me: &str) -> Option
 // -- the rest ----------------------------------------------------------------------
 
 /// The box's placeholder — CHAT-14: a chat outside tickets (`None`) is
-/// "the chat".
-pub(crate) fn placeholder(ticket: Option<&str>, alone: bool) -> String {
+/// "the chat". CHAT-29: on a phone's touch screen it is one word — the
+/// rest are keyboard hints, and the box is one line.
+pub(crate) fn placeholder(ticket: Option<&str>, alone: bool, touch: bool) -> String {
+    if touch {
+        return "message".to_string();
+    }
     match (ticket, alone) {
         (Some(t), true) => format!("Write a note on {t}, or @ someone… (Enter sends · Shift+Enter newline · / commands)"),
         (Some(t), false) => format!("message {t}'s chat… (Enter sends · Shift+Enter newline · / commands · @ adds)"),
         (None, _) => "message the chat… (Enter sends · Shift+Enter newline · / commands · paste an image)".to_string(),
     }
+}
+
+/// CHAT-29: a phone's touch screen — the stylesheet's own query for the
+/// one-line composer (index.html), asked once as the box mounts.
+pub(crate) const TOUCH_PHONE: &str = "(max-width: 820px) and (pointer: coarse)";
+
+fn touch_phone() -> bool {
+    crate::dom::window().match_media(TOUCH_PHONE).ok().flatten().is_some_and(|m| m.matches())
 }
 
 /// Where a chat's draft is kept, per browser.
@@ -690,6 +702,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
     let dragover = move |ev: web_sys::DragEvent| attach.dragover(ev);
     let alone = Memo::new(move |_| participants.with(|p| p.len() <= 1));
     let t_ph = ticket.clone();
+    let touch = touch_phone();
     let hint = move || {
         if rows.with(|r| !r.is_empty()) {
             "↑↓ moves · Tab completes · Enter runs it · Esc closes · nothing here is sent as prose"
@@ -750,9 +763,9 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                 <textarea
                     node_ref=area
                     class="cbox grow"
-                    rows="2"
+                    rows=if touch { "1" } else { "2" }
                     aria-label=match &ticket { Some(t) => format!("message the chat on {t}"), None => "message the chat".to_string() }
-                    placeholder=move || placeholder(t_ph.as_deref(), alone.get())
+                    placeholder=move || placeholder(t_ph.as_deref(), alone.get(), touch)
                     prop:value=move || body.get()
                     on:input=move |ev| {
                         menu_shut.set(false);
@@ -1010,9 +1023,11 @@ mod tests {
 
     #[test]
     fn the_placeholder_says_the_keys() {
-        assert_eq!(placeholder(Some("KILN-7"), false), "message KILN-7's chat… (Enter sends · Shift+Enter newline · / commands · @ adds)");
-        assert!(placeholder(Some("KILN-7"), true).starts_with("Write a note on KILN-7"));
-        assert!(placeholder(None, false).contains("paste an image"), "CHAT-14: a chat outside tickets");
+        assert_eq!(placeholder(Some("KILN-7"), false, false), "message KILN-7's chat… (Enter sends · Shift+Enter newline · / commands · @ adds)");
+        assert!(placeholder(Some("KILN-7"), true, false).starts_with("Write a note on KILN-7"));
+        assert!(placeholder(None, false, false).contains("paste an image"), "CHAT-14: a chat outside tickets");
+        assert_eq!(placeholder(Some("KILN-7"), false, true), "message", "CHAT-29: one word on a phone");
+        assert_eq!(placeholder(None, true, true), "message");
     }
 
     /// CHAT-27: a tap on Send sends on its lift — one that lifts on the

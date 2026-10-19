@@ -104,6 +104,18 @@ impl Scroller {
         Self::of(&el.closest(".content").ok().flatten()?)
     }
 
+    /// CHAT-29: a chat's message list (`.pmsgs`) — itself where it scrolls,
+    /// the document where the stylesheet lets it run (the full-screen chat
+    /// on a phone).
+    pub(crate) fn list(el: &web_sys::Element) -> Option<Self> {
+        Self::of(el)
+    }
+
+    /// Whether this is the document's scroll.
+    pub(crate) fn is_doc(&self) -> bool {
+        self.doc
+    }
+
     fn of(content: &web_sys::Element) -> Option<Self> {
         let scrolls = window()
             .get_computed_style(content)

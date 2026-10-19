@@ -220,6 +220,48 @@ pub(crate) fn expand() -> bool {
 
 // -- the views ----------------------------------------------------------------
 
+/// CHAT-29: on a phone the session scrolls the document (so the browser's
+/// bars can slide away), and its head hides on a scroll down and comes back
+/// on a scroll up ([`crate::turns::head_shown`]) — `data-head="off"` on
+/// `#chatfull`, which the stylesheet slides up. Where the session is pinned
+/// (a wide window, the keyboard up) the document does not move and the head
+/// stays.
+pub(crate) fn follow_head(root: NodeRef<leptos::html::Div>) {
+    let state = StoredValue::new((true, 0.0f64));
+    // When the reader last touched, wheeled or keyed: a scroll within
+    // READER_MS of it is theirs (an iPhone's momentum included).
+    let touched = StoredValue::new(f64::NEG_INFINITY);
+    let mark = move |_: web_sys::Event| touched.set_value(js_sys::Date::now());
+    let hands = [
+        window_event_listener_untyped("touchmove", mark),
+        window_event_listener_untyped("touchend", mark),
+        window_event_listener_untyped("wheel", mark),
+        window_event_listener_untyped("keydown", mark),
+    ];
+    let listen = window_event_listener(leptos::ev::scroll, move |_| {
+        let Some(el) = root.get_untracked() else { return };
+        let y = dom::window().scroll_y().unwrap_or(0.0);
+        let head_h = el.query_selector(".shead").ok().flatten().and_then(|h| h.dyn_into::<web_sys::HtmlElement>().ok()).map_or(0.0, |h| f64::from(h.offset_height()));
+        let Some((shown, was)) = state.try_get_value() else { return };
+        let by_reader = js_sys::Date::now() - touched.get_value() < READER_MS;
+        let (now, at) = crate::turns::head_shown(shown, was, y, head_h, by_reader);
+        state.set_value((now, at));
+        if now != shown {
+            let _ = if now { el.remove_attribute("data-head") } else { el.set_attribute("data-head", "off") };
+        }
+    });
+    on_cleanup(move || {
+        listen.remove();
+        for h in hands {
+            h.remove();
+        }
+    });
+}
+
+/// CHAT-29: how long after a touch, a wheel or a key a scroll is still the
+/// reader's — an iPhone's fling runs on after the finger lifts.
+const READER_MS: f64 = 1500.0;
+
 /// The session, mounted once in the app: drawn while the chat is full
 /// screen on the route's ticket.
 #[component]
@@ -277,6 +319,7 @@ fn SessionView(s: Shown) -> impl IntoView {
     let renaming = RwSignal::new(None::<String>);
     let problem = RwSignal::new(None::<String>);
     let root = NodeRef::<leptos::html::Div>::new();
+    follow_head(root);
     root.on_load(|el| {
         // The composer takes focus when it mounts; else the session has it.
         spawn_local(async move {
