@@ -275,10 +275,12 @@ mod counts;
 mod deploys;
 mod drafts;
 mod thread;
+mod deploy_view;
 mod deploys_page;
 mod dom;
 mod draw;
 mod filter;
+mod flight;
 mod flat;
 mod frame;
 mod grow;
@@ -457,6 +459,10 @@ pub(crate) enum Route {
     /// and deploys; `#/deployments/<SHORTCODE>` one project's (held upper
     /// case). `?d=<id>` (a deploy to pick out) is the page's.
     Deployments(Option<String>),
+    /// DEPLOY-30: `#/deploy` — what we're working on, by area and by where
+    /// it will land; `#/deploy/<SHORTCODE>` one project's (held upper case).
+    /// `?to=<env>` (the destination) is the page's.
+    Deploy(Option<String>),
 }
 
 fn parse_route(hash: &str) -> Route {
@@ -489,6 +495,11 @@ fn parse_route(hash: &str) -> Route {
             Route::Deployments((!sc.is_empty()).then_some(sc))
         }
         None if path == "deployments" => Route::Deployments(None),
+        Some(("deploy", sc)) => {
+            let sc = sc.trim_end_matches('/').to_ascii_uppercase();
+            Route::Deploy((!sc.is_empty()).then_some(sc))
+        }
+        None if path == "deploy" => Route::Deploy(None),
         _ => Route::Board,
     }
 }
@@ -514,6 +525,8 @@ pub(crate) fn route_text(route: &Route) -> String {
         Route::Chats(chats_page::Pick::Chat(id)) => format!("#/chats/{id}"),
         Route::Deployments(None) => "#/deployments".to_string(),
         Route::Deployments(Some(sc)) => format!("#/deployments/{sc}"),
+        Route::Deploy(None) => "#/deploy".to_string(),
+        Route::Deploy(Some(sc)) => format!("#/deploy/{sc}"),
     }
 }
 
@@ -2414,6 +2427,16 @@ fn App() -> impl IntoView {
                     >
                         "waves"
                     </a>
+                    // DEPLOY-30: what we're working on, by where it lands —
+                    // a primary view beside the board and the waves.
+                    <a
+                        class="hlink"
+                        id="deploy-link"
+                        href="#/deploy"
+                        aria-current=move || matches!(route.get(), Route::Deploy(_)).then_some("page")
+                    >
+                        "deploy"
+                    </a>
                     // COMP-6: the component registry, beside them.
                     <a
                         class="hlink"
@@ -2547,6 +2570,7 @@ fn App() -> impl IntoView {
                                 Route::Members => "members (IDENTITY-22)",
                                 Route::Chats(_) => "chats (CHAT-14)",
                                 Route::Deployments(_) => "deployments (DEPLOY-13)",
+                                Route::Deploy(_) => "what we're working on (DEPLOY-30)",
                             }}
                         </span>
                     </div>
@@ -2588,6 +2612,7 @@ fn App() -> impl IntoView {
                         Route::Members => view! { <members_page::MembersPage /> }.into_any(),
                         Route::Chats(p) => view! { <chats_page::ChatsPage pick=p /> }.into_any(),
                         Route::Deployments(project) => view! { <deploys_page::DeploymentsPage project /> }.into_any(),
+                        Route::Deploy(project) => view! { <deploy_view::DeployPage project /> }.into_any(),
                     }}
                 </main>
             </div>
@@ -2650,6 +2675,9 @@ mod tests {
         assert_eq!(parse_route("#/deployments"), Route::Deployments(None));
         assert_eq!(parse_route("#/deployments/menger?d=4"), Route::Deployments(Some("MENGER".into())));
         assert_eq!(parse_route("#/deployments/"), Route::Deployments(None));
+        assert_eq!(parse_route("#/deploy"), Route::Deploy(None));
+        assert_eq!(parse_route("#/deploy/menger?to=prod"), Route::Deploy(Some("MENGER".into())));
+        assert_eq!(crate::route_text(&Route::Deploy(Some("MENGER".into()))), "#/deploy/MENGER");
         assert_eq!(parse_route("#/"), Route::Board);
         assert_eq!(parse_route(""), Route::Board);
         assert_eq!(parse_route("#/wavesX"), Route::Board);

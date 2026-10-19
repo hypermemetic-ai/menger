@@ -167,6 +167,8 @@ web-sys = { version = "0.3", features = [
   "HtmlCanvasElement",
   "CanvasRenderingContext2d",
   "PointerEvent",
+  # DEPLOY-30: the canvas of #/deploy scrolls and zooms on the wheel.
+  "WheelEvent",
   "FilePropertyBag",
 ] }
 

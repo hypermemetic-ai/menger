@@ -121,6 +121,7 @@ pub(crate) fn page_words(r: &Route) -> String {
         Route::Members => "members".into(),
         Route::Chats(_) => "chats".into(),
         Route::Deployments(_) => "deployments".into(),
+        Route::Deploy(_) => "deploy".into(),
     }
 }
 
@@ -465,6 +466,7 @@ pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
             <div class="pviews" role="navigation" aria-label="the views">
                 <a href="#/" aria-current=cur(|r| matches!(r, Route::Board | Route::Ticket(_)))>"board"</a>
                 <a href="#/waves" aria-current=cur(|r| matches!(r, Route::Waves(_) | Route::WavesOf(_)))>"waves"</a>
+                <a href="#/deploy" aria-current=cur(|r| matches!(r, Route::Deploy(_)))>"deploy"</a>
                 <a href="#/inputs" aria-current=cur(|r| matches!(r, Route::Inputs))>
                     "inputs"{move || open_inputs.get().filter(|n| *n > 0).map(|n| view! { <b>{n}</b> })}
                 </a>
