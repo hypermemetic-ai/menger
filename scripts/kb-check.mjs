@@ -4,7 +4,8 @@
 // in is on screen: the field inside the visible area (the true one, above
 // the keyboard), and for a pinned chat its head at the visible area's top
 // and its composer on the keyboard. Run it on any change to
-// frontend/src/keyboard.rs, #chatfull's rules or the composer's CSS.
+// frontend/src/keyboard.rs, #chatfull's rules or the composer's CSS
+// (case 6, APP-93: the composer's text the full width once it wraps).
 //
 // Against a throwaway server holding: a direct chat CHAT (#/chats/CHAT),
 // a ticket TICKET with a chat of its own (TCHAT) in its dock and an
@@ -32,8 +33,8 @@ const ok = (cond, what) => { if (!cond) fails.push(what); console.log(`${cond ? 
 const f0 = (n) => (n == null ? "∅" : Math.round(n));
 
 const browser = await pw.webkit.launch();
-async function phone(k = 336) {
-  const ctx = await browser.newContext({ ...pw.devices["iPhone 13"], colorScheme: "dark" });
+async function phone(k = 336, colorScheme = "dark") {
+  const ctx = await browser.newContext({ ...pw.devices["iPhone 13"], colorScheme });
   await ctx.addCookies([cookie]);
   await ctx.addInitScript(`window.__kbConf = { k: ${k}, ms: 300 };\n${shim}`);
   const page = await ctx.newPage();
@@ -250,6 +251,59 @@ for (const k of [336, 374]) {
     ok(errs.length === 0, `${kt} ticket page: no page errors ${errs.join(" | ")}`);
     await ctx.close();
   }
+}
+
+// ── 6. APP-93: the composer's text takes the card's full width once it
+// wraps, the buttons in a row under it; one line keeps them beside it ──
+const LONG = "the composer's text should take the full width of the box on a phone, with the buttons under it";
+const measure = (page, root) => page.evaluate((root) => {
+  const q = (s) => document.querySelector(`${root} ${s}`);
+  const r = (e) => e && e.getBoundingClientRect();
+  const card = q(".ccard"), box = q("textarea.cbox"), send = q(".csend");
+  const cs = card && getComputedStyle(card);
+  const inner = card && r(card).width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  return { wrap: card?.classList.contains("wrap"), inner, box: r(box) && { left: r(box).left, right: r(box).right, width: r(box).width, bottom: r(box).bottom }, send: r(send) && { left: r(send).left, top: r(send).top } };
+}, root);
+async function typeIn(page, sel, text) {
+  await page.fill(sel, text);
+  await page.waitForTimeout(400);
+}
+for (const scheme of ["light", "dark"]) {
+  const { ctx, page, errs } = await phone(336, scheme);
+  await page.goto(`${origin}/#/chats/${chat}`);
+  await page.waitForSelector("#chatfull textarea.cbox", { timeout: 30000 });
+  await page.waitForTimeout(1500);
+  const tag = `390 ${scheme} composer`;
+  await focus(page, "#chatfull textarea.cbox");
+  await typeIn(page, "#chatfull textarea.cbox", "short");
+  let m = await measure(page, "#chatfull");
+  ok(!m.wrap && m.box && m.send && m.send.left >= m.box.right - 1, `${tag}: one line, the buttons beside it (box to ${f0(m.box?.right)}, send from ${f0(m.send?.left)})`);
+  await shot(page, `app93-${scheme}-1-short`);
+  await typeIn(page, "#chatfull textarea.cbox", LONG);
+  m = await measure(page, "#chatfull");
+  ok(m.wrap && m.box && Math.abs(m.box.width - m.inner) <= 2, `${tag}: wrapped, the text takes the full width (${f0(m.box?.width)} of ${f0(m.inner)})`);
+  ok(m.send && m.send.top >= m.box.bottom - 1, `${tag}: wrapped, the buttons under the text (send at ${f0(m.send?.top)}, text to ${f0(m.box?.bottom)})`);
+  await shot(page, `app93-${scheme}-2-long`);
+  await typeIn(page, "#chatfull textarea.cbox", "short again");
+  m = await measure(page, "#chatfull");
+  ok(!m.wrap && m.send.left >= m.box.right - 1, `${tag}: back to one line, the buttons beside it again`);
+  await typeIn(page, "#chatfull textarea.cbox", "");
+  ok(errs.length === 0, `${tag}: no page errors ${errs.join(" | ")}`);
+  await ctx.close();
+}
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await ctx.addCookies([cookie]);
+  const page = await ctx.newPage();
+  await page.goto(`${origin}/#/chats/${chat}`);
+  await page.waitForSelector("#chatfull textarea.cbox", { timeout: 30000 });
+  await page.waitForTimeout(1500);
+  await typeIn(page, "#chatfull textarea.cbox", LONG + " " + LONG);
+  const m = await measure(page, "#chatfull");
+  ok(m.box && Math.abs(m.box.width - m.inner) <= 2 && m.send.top >= m.box.bottom - 1, `1440 composer: the text the full width, the buttons under it (${f0(m.box?.width)} of ${f0(m.inner)})`);
+  await page.screenshot({ path: `${out}/app93-1440.png` });
+  await typeIn(page, "#chatfull textarea.cbox", "");
+  await ctx.close();
 }
 
 // ── 1440: no keyboard, nothing moves ──
