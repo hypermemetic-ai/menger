@@ -851,3 +851,94 @@ async fn access_21_admin_of_a_ticket_scope_is_admin_on_one_covering_it() {
     assert!(u.admin_of(&alone("OUGHT-2"), &s).is_err());
     assert!(!u.administers("OUGHT-2"));
 }
+
+// ── ACCESS-57: a grant to everyone signed in ─────────────────────
+
+const KEY_AGENT: &str = "key:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+
+/// `principal` signed in, with `meta` beside its claim.
+fn as_principal(principal: &str, meta: serde_json::Value) -> AuthContext {
+    let mut meta = meta;
+    meta.as_object_mut().unwrap().insert("principal".into(), principal.into());
+    AuthContext::new(principal.into(), "s".into(), vec![], meta)
+}
+
+#[tokio::test]
+async fn everyone_s_grant_is_every_signed_in_principal_s_and_never_the_anonymous_one() {
+    let a = login(vec![]);
+    let s = deeper().await;
+    s.grant(SYS, grant("everyone", "IDENTITY", Role::Viewer)).await.unwrap();
+    a.attach(s.clone());
+    // A person and an agent, neither holding a grant of their own.
+    for who in [ALICE, KEY_AGENT] {
+        let me = as_principal(who, json!({}));
+        let u = a.verify_now(&me).unwrap();
+        assert_eq!(permitted(&u, &s), ["IDENTITY-1", "IDENTITY-2"], "{who}");
+        assert_eq!(readable(&a.verify_call(Some(&me), &reach_of(&a, &me, SEES)).unwrap(), &s), ["IDENTITY-1", "IDENTITY-2"], "{who}: its reads too");
+        assert!(u.permit::<Editor>(&t("IDENTITY-2"), &s).is_err(), "{who}: a viewer's");
+        assert!(a.gate().check(Some(&me), &GateGrant::new("tickets.get"), Some("IDENTITY-2")).is_ok(), "{who}: the gate holds it");
+        assert!(a.gate().check(Some(&me), &GateGrant::new("tickets.get"), Some("OUGHT-2")).is_err(), "{who}: nowhere else");
+        assert!(a.own_grants_of(who).is_empty());
+        assert_eq!(a.grants_of(who).iter().map(|g| g.principal.clone()).collect::<Vec<_>>(), [crate::vocab::Grantee::Everyone]);
+    }
+    // Holding nothing of their own, both still wait for an admin.
+    let waiting: Vec<String> = a.waiting().into_iter().map(|w| w.principal).collect();
+    assert_eq!(waiting.len(), 2, "{waiting:?}");
+    assert!(waiting.contains(&ALICE.to_string()) && waiting.contains(&KEY_AGENT.to_string()));
+    // The anonymous caller holds nothing of it.
+    let anon = AuthContext::anonymous();
+    assert!(a.gate().check(Some(&anon), &GateGrant::new("tickets.get"), Some("IDENTITY-2")).is_err());
+    assert!(a.gate().check(None, &GateGrant::new("tickets.get"), Some("IDENTITY-2")).is_err());
+    assert!(a.verify_now(&anon).is_err());
+}
+
+#[tokio::test]
+async fn everyone_s_grant_adds_to_one_s_own_and_the_higher_role_holds() {
+    let a = login(vec![]);
+    let s = deeper().await;
+    s.grant(SYS, grant("everyone", "IDENTITY", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant("everyone", "OUGHT", Role::Editor)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "IDENTITY", Role::Editor)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
+    a.attach(s.clone());
+    let u = a.verify_now(&ctx(json!({}))).unwrap();
+    assert!(u.permit::<Editor>(&t("IDENTITY-2"), &s).is_ok(), "her own editor over everyone's viewer");
+    assert!(u.permit::<Editor>(&t("OUGHT-2"), &s).is_ok(), "everyone's editor over her own viewer");
+    assert!(u.permit::<Viewer>(&t("PLEXUS-2"), &s).is_err());
+    assert!(a.waiting().is_empty(), "she holds grants of her own: she does not wait");
+}
+
+#[tokio::test]
+async fn a_ceiling_caps_everyone_s_grant_too() {
+    let a = login(vec![]);
+    let s = deeper().await;
+    s.grant(SYS, grant("everyone", "PLEXUS", Role::Editor)).await.unwrap();
+    a.attach(s.clone());
+    let g = a.gate();
+    let me = ctx(json!({ CEILING_KEY: ceiling(&[&["viewer@IDENTITY"]]) }));
+    assert!(g.check(Some(&me), &GateGrant::new("tickets.get"), Some("IDENTITY-2")).is_ok(), "IDENTITY is hosted under PLEXUS");
+    assert!(g.check(Some(&me), &GateGrant::new("tickets.set_status"), Some("IDENTITY-2")).is_err(), "held to viewer");
+    assert!(g.check(Some(&me), &GateGrant::new("tickets.get"), Some("PLEXUS-2")).is_err(), "held to IDENTITY");
+    let u = a.verify_now(&me).unwrap();
+    assert_eq!(readable(&a.verify_call(Some(&me), &reach_of(&a, &me, SEES)).unwrap(), &s), ["IDENTITY-1", "IDENTITY-2"]);
+    assert!(u.permit::<Editor>(&t("IDENTITY-2"), &s).is_err());
+}
+
+#[tokio::test]
+async fn everyone_s_grant_moves_the_generation_is_revoked_and_is_never_admin() {
+    let a = login(vec![]);
+    let s = deeper().await;
+    a.attach(s.clone());
+    let me = ctx(json!({}));
+    let before = a.verify_now(&me).unwrap().reach().generation();
+    let e = s.grant(SYS, grant("everyone", "*", Role::Admin)).await.unwrap_err();
+    assert!(e.to_string().contains("never admin"), "{e}");
+    assert_eq!(a.generation(), before, "nothing written");
+    s.grant(SYS, grant("everyone", "OUGHT", Role::Viewer)).await.unwrap();
+    let u = a.verify_now(&me).unwrap();
+    assert!(u.reach().generation() > before, "an open watch verifies again");
+    assert_eq!(permitted(&u, &s), ["OUGHT-1", "OUGHT-2"]);
+    assert_eq!(s.grants_of(SYS, "everyone").len(), 1, "kept as the grantee everyone");
+    assert!(s.revoke(SYS, crate::vocab::Grantee::Everyone, kept_scope("OUGHT")).await.unwrap());
+    assert!(permitted(&a.verify_now(&me).unwrap(), &s).is_empty(), "revoked");
+}

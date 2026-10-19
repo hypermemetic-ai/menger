@@ -25,7 +25,8 @@ fn deploy_record_adapter() {
 }
 
 /// RUN-21: `scripts/cleanup-gate.sh` (`scripts/tests/cleanup-gate`) — every
-/// leftover shape removed and every refusal refused, on a throwaway root under
+/// leftover shape removed and every refusal refused (CI-2: build-dirs, a
+/// worktree's with it, and the sweep), on a throwaway root under
 /// `/tmp/claude-UID/run21/` that the script itself removes at the end.
 #[test]
 fn cleanup_gate_script() {
@@ -39,6 +40,25 @@ fn cleanup_gate_script() {
     assert!(
         out.status.success(),
         "scripts/tests/cleanup-gate failed:\n{stdout}\n{stderr}"
+    );
+    assert!(stdout.contains(" 0 failed"), "{stdout}");
+}
+
+/// CI-2: `scripts/disk-check.sh` (`scripts/tests/disk-check`) — the floor
+/// (free GB, used %) and the alert at 90%: filed and queued once, not again
+/// while that ticket is open; synapse a stand-in, the disk said, not measured.
+#[test]
+fn disk_check_script() {
+    let run = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/tests/disk-check");
+    let out = Command::new("bash")
+        .arg(run)
+        .output()
+        .expect("scripts/tests/disk-check needs bash on PATH");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "scripts/tests/disk-check failed:\n{stdout}\n{stderr}"
     );
     assert!(stdout.contains(" 0 failed"), "{stdout}");
 }

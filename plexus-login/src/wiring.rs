@@ -107,6 +107,13 @@ pub struct LoginOptions {
     /// does). With no `public_url`, a shell listening elsewhere is reachable
     /// through whatever is in front of it, so it must name its proxy too.
     pub shell_loopback: bool,
+    /// IDENTITY-45: the WorkOS environment's API key, when the app holds it
+    /// (menger: `MENGER_WORKOS_API_KEY`, or `--workos-api-key-file`). With
+    /// it and no `identity`, a `workos=` provider's social buttons sign in
+    /// through the WorkOS backend on this page
+    /// ([`crate::backends::workos_direct`]); without it they stay the PKCE
+    /// path.
+    pub workos_key: Option<crate::backends::workos::ApiKey>,
 }
 
 impl std::fmt::Debug for LoginOptions {
@@ -149,6 +156,7 @@ impl LoginOptions {
             limits: Limits::default(),
             allow_development_backends: false,
             shell_loopback: true,
+            workos_key: None,
         }
     }
 
@@ -181,6 +189,18 @@ impl Wiring {
     /// and makes the session table, its cookies named for this shell
     /// (IDENTITY-38).
     pub fn new(mut opts: LoginOptions) -> anyhow::Result<Self> {
+        // IDENTITY-45: a keyed WorkOS provider's buttons through its backend.
+        if let Some(key) = opts.workos_key.take() {
+            anyhow::ensure!(opts.identity.is_none(), "a WorkOS API key beside --identity: the identity spec carries its own key");
+            match crate::backends::workos_direct(&opts.providers, &opts.buttons, key, opts.branding.app)? {
+                Some((backend, rest)) => {
+                    tracing::info!("Sign-in:   the WorkOS buttons complete through the WorkOS API on this page (email verification, Radar, organizations, MFA)");
+                    opts.identity = Some(backend);
+                    opts.buttons = rest;
+                }
+                None => anyhow::bail!("a WorkOS API key was given, but no workos= --auth-provider has a social --login-button (e.g. GitHub=workos:GitHubOAuth) to take"),
+            }
+        }
         // AUTH-22: the identity backend's tokens are admitted at the gate
         // through its provider-neutral OIDC adapter, as any provider's.
         if let Some(p) = opts.identity.as_ref().and_then(|b| b.gate_provider()) {

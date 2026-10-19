@@ -13,7 +13,7 @@
 
 use crate::comments::{Anchor, CommentIntent, CommentState, CommentsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
-use crate::vocab::{AnchorPath, Author, Body, CommentId, Query, Route, TicketRef, Under};
+use crate::vocab::{AnchorPath, Author, Body, CommentId, Message, Query, Reason, Route, TicketRef, Under};
 #[cfg(feature = "server")]
 use crate::access::{Access, MengerRequest, VerifiedUser};
 #[cfg(feature = "server")]
@@ -24,6 +24,8 @@ use futures::Stream;
 use std::sync::Arc;
 
 // ACCESS-19: the methods' logic, beside the activation.
+#[cfg(feature = "server")]
+mod failures;
 #[cfg(feature = "server")]
 mod streams;
 #[cfg(feature = "server")]
@@ -37,6 +39,8 @@ pub struct CommentsActivation {
     /// IDENTITY-19: the rule every method's caller is verified by
     /// ([`crate::access`]).
     access: Access,
+    /// COMMENT-9: the comments the app could not keep, as it reported them.
+    failures: failures::Failures,
 }
 
 #[cfg(feature = "server")]
@@ -51,7 +55,7 @@ impl CommentsActivation {
 
     /// IDENTITY-19: behind [`Access`].
     pub fn with_access(store: Arc<Store>, access: Access) -> Self {
-        Self { store, access }
+        Self { store, access, failures: Default::default() }
     }
 }
 
@@ -65,7 +69,7 @@ impl CommentsActivation {
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["add", "list", "watch"],
+        viewer = ["add", "list", "watch", "report", "failures"],
         editor = [viewer, "resolve", "reopen"],
     )
 )]
@@ -91,7 +95,12 @@ impl CommentsActivation {
     /// is listed and watched only by those who can view both. The anchor is
     /// kept as given (`ticket` stays what the element belonged to).
     /// ACCESS-19: a comment on the app (naming no ticket) is seen only by
-    /// its author and the admins of `*`.
+    /// its author and the admins of `*`. COMMENT-8: with `reply_to`, a reply
+    /// to that comment — no anchor (one given is refused): it takes its
+    /// thread's root's, and so its ticket and who sees it; a reply to a
+    /// reply answers the same root; a resolved root is reopened in the same
+    /// write (`watch` carries `added`, then `reopened`). The answer carries
+    /// `reply_to`, the root's id.
     #[plexus_macros::method(
         group = "write",
         example(note = "a note on a ticket's parent chip", params = r##"{"anchor": {"route": "#/ticket/DEMAND-2", "path": "[data-tag=\"ticket DEMAND-1\"]", "label": "Parent chip", "excerpt": "DEMAND-1", "ticket": "DEMAND-2"}, "body": "Show the parent's title here"}"##)
@@ -99,13 +108,15 @@ impl CommentsActivation {
     pub async fn add(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Where: {route: '#/ticket/DEMAND-2', path: '[data-tag="ticket DEMAND-1"]', label: 'Parent chip', excerpt: 'DEMAND-1', ticket: 'DEMAND-2' (optional)}; version is set by the server.
-        anchor: Anchor,
+        /// Where: {route: '#/ticket/DEMAND-2', path: '[data-tag="ticket DEMAND-1"]', label: 'Parent chip', excerpt: 'DEMAND-1', ticket: 'DEMAND-2' (optional)}; version is set by the server. Required unless reply_to is given.
+        anchor: Option<Anchor>,
         /// What it says (markdown; not empty, at most 64 KiB).
         body: Body,
+        /// COMMENT-8: the comment this answers, e.g. 29 — the reply takes its thread's anchor (optional).
+        reply_to: Option<CommentId>,
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
-        futures::stream::once(async move { add(store, user, anchor, body.into_string()).await })
+        futures::stream::once(async move { add(store, user, anchor, body.into_string(), reply_to.map(CommentId::get)).await })
     }
 
     /// List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.
@@ -150,6 +161,8 @@ impl CommentsActivation {
         text: Option<Query>,
         /// Only comments of this intent: comment | changes (APP-23: a change request) (optional).
         intent: Option<CommentIntent>,
+        /// COMMENT-8: only this comment's thread — its root and the root's replies, oldest last as every page (optional).
+        thread: Option<CommentId>,
         /// Cursor: start strictly after (older than) this comment id (optional).
         after: Option<CommentId>,
         /// At most this many comments (default 500, at most 1000); the page event carries the next cursor (optional).
@@ -157,7 +170,7 @@ impl CommentsActivation {
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let (ticket, under, route, path, author) = (ticket.map(String::from), under.map(String::from), route.map(String::from), path.map(String::from), author.map(String::from));
         let text = text.map(String::from).filter(|v| !v.trim().is_empty());
-        let q = CommentQuery { ticket, under, route, path, state, author, text, intent };
+        let q = CommentQuery { ticket, under, route, path, state, author, text, intent, thread: thread.map(CommentId::get) };
         list_stream(self.store.clone(), user, q, after.map(CommentId::get), limit)
     }
 
@@ -194,6 +207,45 @@ impl CommentsActivation {
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
         futures::stream::once(async move { settle(store, user, id.get(), true).await })
+    }
+
+    /// COMMENT-9: report a comment the app could not keep; yields `reported { failure }`.
+    ///
+    /// The app's word that a comment was not kept — the socket down, no
+    /// answer, a refusal — with the draft, so whoever can see where it was
+    /// being left reads it with `failures`. Kept in memory (the newest 200;
+    /// a restart forgets them) and logged; never a comment.
+    #[plexus_macros::method(group = "write")]
+    pub async fn report(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Where the comment was being left, as `add`'s anchor.
+        anchor: Anchor,
+        /// What it said (cut to 64 KiB).
+        body: Body,
+        /// Why it was not kept, in the app's words.
+        reason: Reason,
+        /// When it failed, unix seconds (optional: now).
+        failed_at: Option<i64>,
+        /// The browser, as it names itself (optional).
+        agent: Option<Message>,
+    ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+        let r = failures::Report { anchor, body: body.into_string(), reason: reason.to_string(), failed_at, agent: agent.and_then(Message::given) };
+        report_stream(self.failures.clone(), user, r)
+    }
+
+    /// COMMENT-9: the comments the app could not keep, newest first — `failure { failure }` each.
+    ///
+    /// The caller's own reports and those whose comment it would see had it
+    /// been kept; at most `limit` (default 50, at most 200).
+    #[plexus_macros::method(group = "read")]
+    pub async fn failures(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// At most this many (default 50, at most 200) (optional).
+        limit: Option<u32>,
+    ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+        failures_stream(self.failures.clone(), self.store.clone(), user, limit)
     }
 
     /// Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes.

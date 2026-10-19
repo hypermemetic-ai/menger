@@ -67,14 +67,17 @@ export function keyProof(seed, aud, agent, nonceRaw = crypto.randomBytes(32), ts
 }
 
 // ── a WebSocket client: RFC 6455, client side, text frames ──────────────────
-export function connect(url, headers) {
+// `opts.localAddress` (PERF-12) picks the source address — the concurrency
+// ladder spreads its sockets over 127.0.0.x.
+export function connect(url, headers, opts = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const secure = u.protocol === "wss:";
     const port = Number(u.port || (secure ? 443 : 80));
     const host = u.hostname.replace(/^\[|\]$/g, "");
-    const sock = secure ? tls.connect({ host, port, servername: net.isIP(host) ? undefined : host })
-                        : net.connect({ host, port });
+    const localAddress = opts.localAddress;
+    const sock = secure ? tls.connect({ host, port, localAddress, servername: net.isIP(host) ? undefined : host })
+                        : net.connect({ host, port, localAddress });
     const key = crypto.randomBytes(16).toString("base64");
     const lines = [`GET ${u.pathname || "/"}${u.search} HTTP/1.1`, `Host: ${u.host}`, "Upgrade: websocket",
       "Connection: Upgrade", `Sec-WebSocket-Key: ${key}`, "Sec-WebSocket-Version: 13",

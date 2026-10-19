@@ -395,6 +395,8 @@ pub(crate) fn repaint() {
         frame::retheme_all();
         mermaid::rerender_all();
     }
+    // APP-70: the pads and the drawings, painted in it.
+    crate::draw::repaint_all();
 }
 
 /// The ticket `id`'s page is open, its body `body`: its frontmatter read as

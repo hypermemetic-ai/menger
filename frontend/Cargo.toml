@@ -80,6 +80,13 @@ js-sys = "0.3"
 # the cheat sheet's close button).
 web-sys = { version = "0.3", features = [
   "Window",
+  # APP-56: the keyboard's top, read off the visual viewport (src/keyboard.rs).
+  "VisualViewport",
+  # APP-57: a held ticket opens the menu (src/menu/hold.rs) — the touch's
+  # point, and touchend's preventDefault, which keeps the lift from clicking.
+  "TouchEvent",
+  "TouchList",
+  "Touch",
   "HtmlSelectElement",
   # MFE-9: the WS port menger's shell stamps into the app's index.html.
   "HtmlMetaElement",
@@ -101,6 +108,7 @@ web-sys = { version = "0.3", features = [
   "UiEvent",
   "KeyboardEvent",
   "DomRect",
+  "Selection",
   "Navigator",
   "HtmlTextAreaElement",
   "HtmlInputElement",
@@ -134,6 +142,8 @@ web-sys = { version = "0.3", features = [
   # animationend) and the counters' clock.
   "DomTokenList",
   "Event",
+  # APP-63: a restored field's `input` bubbles to the app's handler.
+  "EventInit",
   "AddEventListenerOptions",
   "Performance",
   # APP-44: the mockup compare reads a body's mockups from an inert
@@ -142,9 +152,29 @@ web-sys = { version = "0.3", features = [
   "DocumentFragment",
   "DragEvent",
   "DataTransfer",
+  # COMMENT-5: images in comments — a pasted, dropped or picked file read
+  # (File, FileList, Blob, ClipboardEvent), and the bytes media.get answers
+  # made a blob: URL (Blob, BlobPropertyBag, Url). DragEvent and
+  # DataTransfer are APP-44's, above.
+  "File",
+  "FileList",
+  "Blob",
+  "BlobPropertyBag",
+  "Url",
+  "ClipboardEvent",
+  # APP-70: the drawing pad — a canvas drawn on with pointer events (a
+  # pencil's pressure), and the PNG it sends made a File to put.
+  "HtmlCanvasElement",
+  "CanvasRenderingContext2d",
+  "PointerEvent",
+  "FilePropertyBag",
 ] }
 
 console_error_panic_hook = "0.1"
+
+# COMMENT-5: an image travels as base64 (media.put, media.get) — already in
+# the tree (the server takes it; plexus-client's backends do).
+base64 = "0.22"
 
 # The WebSocket backend is picked by target, and `WsTransport` is one type
 # either way (MACRO-6). wasm32 is the app; the host build exists so

@@ -18,6 +18,26 @@ its raw JSON in `--out` (default `perf/out/chat`):
 node perf/chat-probe.mjs --dist /path/to/trunk-dist [--bin PATH] [--runs 5] [--writer-secs 30]
 ```
 
+**The concurrency ladder** (PERF-12, `concurrency.mjs`): one throwaway
+release `menger` (`--auth-provider key`, a temp database, kernel ports, the
+ACCESS-29 connection caps raised on it alone), climbed at 1, 10, … 10ⁿ
+signed-in WebSockets. Per rung: *idle* (each socket holding
+`tickets.watch`, `comments.watch`, `chats.watch`), *load* (a fixed writer —
+status changes, comments, chat posts — fanned out to every watch, plus a
+read mix per socket) and *after* (every socket closed: the floor), with the
+server's RSS, peak and CPU-seconds per wall-second sampled from /proc. The
+clients are forked `concurrency-worker.mjs` processes (one per 250 sockets)
+over 127.0.x.y source addresses and 8 keys; their CPU and RSS are reported
+too. The report gives MiB and CPU per socket, the fitted slopes, where growth
+bends, and write → every watcher latency; it stops at the rung the box
+cannot hold and says why. Report, SVG curves and raw JSON in
+`perf/out/concurrency` (`--out`); no Playwright needed:
+
+```sh
+node perf/concurrency.mjs --rungs 0..4          # on a quiet machine; --help for the knobs
+npm run smoke:concurrency                       # rungs 0..1, short phases; part of `npm run smoke`
+```
+
 ```sh
 cd perf
 npm install                       # playwright, pinned in package-lock.json

@@ -225,7 +225,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, held, highlight
 /// locate), as the SDK does in a body. APP-46's 2.4 has `<m-mockup>` post
 /// the decision's option it sits in (the bar's *pick this*), and a DECIDED
 /// decision whose options hold mockups draws its chosen option first.
-pub(crate) const SDK_VERSION: &str = "2.4.0";
+/// COMMENT-10's 2.5 draws a body's `media:` images: `menger:media { hash }`
+/// asked of the host, answered held to the frame's `data-media` ticket;
+/// `menger:zoom` shows one full screen.
+pub(crate) const SDK_VERSION: &str = "2.5.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -261,11 +264,38 @@ const PAGE_JS: &str = include_str!("../sdk/menger-page.js");
 pub(crate) struct Emulate {
     pub(crate) scheme: Option<Scheme>,
     pub(crate) reduce: Option<bool>,
+    /// APP-66: the screen's safe-area insets — a mockup's phone drawn with
+    /// its screen's shape (src/present.rs [`crate::present::screen`]); the
+    /// page sees them as `env(safe-area-inset-*)` and `--sai-*`. `None`: 0.
+    pub(crate) safe: Option<Insets>,
+}
+
+/// APP-66: a screen's safe-area insets, in CSS px.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct Insets {
+    pub(crate) top: u32,
+    pub(crate) right: u32,
+    pub(crate) bottom: u32,
+    pub(crate) left: u32,
+}
+
+impl Insets {
+    fn json(self) -> serde_json::Value {
+        serde_json::json!({ "top": self.top, "right": self.right, "bottom": self.bottom, "left": self.left })
+    }
+
+    fn js(self) -> JsValue {
+        let o = Object::new();
+        for (k, v) in [("top", self.top), ("right", self.right), ("bottom", self.bottom), ("left", self.left)] {
+            set(&o, k, &JsValue::from(v));
+        }
+        o.into()
+    }
 }
 
 impl Emulate {
     fn json(self) -> serde_json::Value {
-        serde_json::json!({ "scheme": self.scheme.map(Scheme::as_str), "reduce": self.reduce })
+        serde_json::json!({ "scheme": self.scheme.map(Scheme::as_str), "reduce": self.reduce, "safe": self.safe.map(Insets::json) })
     }
 }
 
@@ -705,6 +735,11 @@ pub(crate) enum Msg {
     /// LOOK-3: a whole body's sections and inputs, where each runs — what
     /// the ticket page's section dock is drawn from (src/sections.rs).
     Sections,
+    /// COMMENT-10: a body's image asks for its bytes (`hash`) — answered
+    /// held to the frame's `data-media` ticket.
+    Media,
+    /// COMMENT-10: a body's image, tapped — full screen over the app.
+    Zoom,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -732,6 +767,8 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:filter-everywhere" => Some(Msg::FilterEverywhere),
         "menger:sections" => Some(Msg::Sections),
         "menger:scrolled" => Some(Msg::Scrolled),
+        "menger:media" => Some(Msg::Media),
+        "menger:zoom" => Some(Msg::Zoom),
         "menger:extent" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Extent { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32 })
@@ -1112,6 +1149,31 @@ fn answer_call(
     });
 }
 
+/// COMMENT-10: answer a frame's image — `menger:media { hash, mime, data }`
+/// (base64), or `{ hash, missing: true }` for one not kept for the ticket
+/// the host stamped on the frame (`data-media`; none: every image is
+/// missing). One copy per (ticket, hash) for the page (src/media.rs).
+fn answer_media(frame: web_sys::HtmlIFrameElement, channel: String, hash: String) {
+    let ticket = frame.get_attribute("data-media").filter(|t| !t.trim().is_empty());
+    let asked = hash.clone();
+    let reply = move |got: Option<std::rc::Rc<crate::media::Got>>| {
+        let msg = message("menger:media", &channel);
+        set(&msg, "hash", &JsValue::from_str(&hash));
+        match got {
+            Some(g) => {
+                set(&msg, "mime", &JsValue::from_str(&g.mime));
+                set(&msg, "data", &JsValue::from_str(&g.data));
+            }
+            None => set(&msg, "missing", &JsValue::TRUE),
+        }
+        post(&frame, &msg.into());
+    };
+    match ticket {
+        Some(ticket) => crate::media::held(&ticket, &asked, reply),
+        None => reply(None),
+    }
+}
+
 /// INPUT-4: answer a frame's `menger.input.submit` — `menger:submitted {
 /// id, answer }` (the recorded answer, the wire's spelling) or `{ id, error
 /// }`: refused unless a gesture on this frame is under way (`gesture`,
@@ -1192,7 +1254,7 @@ pub(crate) fn retheme_all() {
             // MENGER-15: a whole document following the app is told its
             // `prefers-color-scheme` moved; a mockup's keeps its toggles.
             if f.has_attribute("data-follow") {
-                emulate(&f, Emulate { scheme: Some(scheme), reduce: None });
+                emulate(&f, Emulate { scheme: Some(scheme), reduce: None, safe: None });
             } else if !f.has_attribute("data-page") {
                 post(&f, &theme_message(&f, &channel));
             }
@@ -1218,6 +1280,7 @@ pub(crate) fn emulate(frame: &web_sys::HtmlIFrameElement, e: Emulate) {
     let msg = message("menger:emulate", &channel);
     set(&msg, "scheme", &e.scheme.map_or(JsValue::NULL, |s| s.as_str().into()));
     set(&msg, "reduce", &e.reduce.map_or(JsValue::NULL, JsValue::from_bool));
+    set(&msg, "safe", &e.safe.map_or(JsValue::NULL, Insets::js));
     post(frame, &msg.into());
 }
 
@@ -1532,6 +1595,26 @@ fn on_message(ev: web_sys::MessageEvent) {
             let restore = frame.clone().dyn_into::<web_sys::HtmlElement>().ok();
             links::follow(&href, links::From { ticket, place }, gesture, None, restore);
         }
+        Some(Msg::Media) => {
+            // COMMENT-10: the hash the frame names, read as the ticket the
+            // host stamped on it holds it — never one the frame names.
+            let Some(hash) = field("hash").and_then(|v| v.as_string()).filter(|h| crate::media::is_hash(h)) else { return };
+            answer_media(frame, channel, hash);
+        }
+        Some(Msg::Zoom) => {
+            // Only on a viewer's own gesture in this frame: a body's script
+            // cannot cover the app with an image.
+            let Some(hash) = field("hash").and_then(|v| v.as_string()) else { return };
+            let Some(ticket) = frame.get_attribute("data-media").filter(|t| !t.is_empty()) else { return };
+            if annotate::is_on() || !gesture::live_in(&frame) {
+                return;
+            }
+            if present::native() {
+                present::escape();
+            }
+            let alt = field("alt").and_then(|v| v.as_string()).unwrap_or_default();
+            crate::media::zoom(&ticket, &hash, &alt);
+        }
         Some(Msg::TicketMenu) => {
             // MENGER-34: the app's one ticket menu, on a chip in the body —
             // only while a gesture is live with focus in this very frame (a
@@ -1841,8 +1924,9 @@ struct Look {
 /// IDENTITY-36: and with `scope`, the shortcode its reads are held to
 /// (none: it reads nothing but components). MENGER-15: shown as `look`
 /// says.
-fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, scope: Option<&str>, look: Look) {
-    load_frame(container, body_html, Stamp { data_ticket: ticket, init_ticket: ticket, scope, cite: None, look });
+/// COMMENT-10: and `media`, the ticket whose images it draws.
+fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, scope: Option<&str>, media: Option<&str>, look: Look) {
+    load_frame(container, body_html, Stamp { data_ticket: ticket, init_ticket: ticket, scope, media, cite: None, look });
 }
 
 /// What a new frame is stamped with — [`load`]'s, or (COMP-14) a cited
@@ -1854,6 +1938,10 @@ struct Stamp<'a> {
     init_ticket: Option<&'a str>,
     /// `<iframe data-scope>`.
     scope: Option<&'a str>,
+    /// COMMENT-10: `<iframe data-media>` — the ticket whose images its
+    /// body draws (`media.get` held to it): the stored body's, or the
+    /// ticket a draft edits.
+    media: Option<&'a str>,
     /// COMP-14: the section shown, the window's key, its depth.
     cite: Option<(&'a cite::Section, &'a str, u32)>,
     /// MENGER-15: how it is shown.
@@ -1874,6 +1962,7 @@ pub(crate) fn load_cited(container: &web_sys::Element, body_html: &str, stamps: 
             data_ticket: stamps.data_ticket.as_deref(),
             init_ticket: stamps.init_ticket.as_deref(),
             scope: stamps.scope.as_deref(),
+            media: stamps.data_ticket.as_deref(),
             cite: Some((section, key, stamps.depth)),
             look: Look::default(),
         },
@@ -1881,7 +1970,7 @@ pub(crate) fn load_cited(container: &web_sys::Element, body_html: &str, stamps: 
 }
 
 fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
-    let Stamp { data_ticket, init_ticket, scope, cite, look } = stamp;
+    let Stamp { data_ticket, init_ticket, scope, media, cite, look } = stamp;
     let w = dom::window();
     let Some(doc) = w.document() else { return };
     let channel = next_channel();
@@ -1906,7 +1995,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     // says otherwise.
     let page = md::is_page(body_html);
     let follow = page && look.emulate.is_none();
-    let emulate = if follow { Some(Emulate { scheme: Some(scheme), reduce: None }) } else { look.emulate };
+    let emulate = if follow { Some(Emulate { scheme: Some(scheme), reduce: None, safe: None }) } else { look.emulate };
     let html = srcdoc(
         body_html,
         &Shell {
@@ -1949,6 +2038,9 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     }
     if let Some(ticket) = data_ticket {
         let _ = el.set_attribute("data-ticket", ticket);
+    }
+    if let Some(ticket) = media {
+        let _ = el.set_attribute("data-media", ticket);
     }
     if let Some((_, key, depth)) = cite {
         let _ = el.set_attribute("data-cite-key", key);
@@ -2010,8 +2102,12 @@ pub(crate) fn Frame(
     #[prop(optional)] scope: Option<String>,
     #[prop(optional)] emulate: Option<Signal<Emulate>>,
     #[prop(optional)] fixed: bool,
+    // COMMENT-10: a draft's ticket — whose images it draws (a stored body
+    // draws its own `ticket`'s).
+    #[prop(optional)] media: Option<String>,
 ) -> impl IntoView {
     let scope = bridge::scope_of(ticket.as_deref()).or_else(|| bridge::scope_of(scope.as_deref()));
+    let media = ticket.clone().or(media.filter(|m| !m.trim().is_empty()));
     install_listener();
     // COMP-5: a frame defines the components — the app keeps the registry.
     registry::want();
@@ -2026,15 +2122,16 @@ pub(crate) fn Frame(
         let n = asked.with_value(|n| n.wrapping_add(1));
         asked.set_value(n);
         if el.query_selector(":scope > iframe").ok().flatten().is_none() {
-            load(&el, &body, ticket.as_deref(), scope.as_deref(), look());
+            load(&el, &body, ticket.as_deref(), scope.as_deref(), media.as_deref(), look());
             return;
         }
         let ticket = ticket.clone();
         let scope = scope.clone();
+        let media = media.clone();
         spawn_local(async move {
             dom::sleep_ms(RERENDER_AFTER_MS).await;
             if asked.try_with_value(|v| *v == n) == Some(true) {
-                load(&el, &body, ticket.as_deref(), scope.as_deref(), look());
+                load(&el, &body, ticket.as_deref(), scope.as_deref(), media.as_deref(), look());
             }
         });
     });
@@ -2379,6 +2476,8 @@ mod tests {
         assert_eq!(parse_msg("menger:extent", Some(f64::NAN), None), None);
         assert_eq!(parse_msg("menger:extent", None, None), None);
         assert_eq!(parse_msg("menger:call", None, None), Some(Msg::Call));
+        assert_eq!(parse_msg("menger:media", None, None), Some(Msg::Media));
+        assert_eq!(parse_msg("menger:zoom", None, None), Some(Msg::Zoom));
         assert_eq!(parse_msg("menger:navigate", None, None), Some(Msg::Navigate));
         assert_eq!(parse_msg("menger:inspect", None, None), Some(Msg::Inspect));
         assert_eq!(parse_msg("menger:revealed", None, None), Some(Msg::Revealed));
@@ -2523,7 +2622,9 @@ mod tests {
         assert_eq!(every, ":root:not(:has(meta[name=menger-base][content=markdown i])) ");
         // MENGER-22: and the highlighter's spans (`.hljs-*`), which only the
         // SDK's own pass writes.
-        let owned = [".mermaid", ".menger-card", ".wave-ref", "a.wave-ref", ".hljs"];
+        // COMMENT-10: and a body's `media:` image (`img.bimg`, md.rs's), or
+        // the mark of one not available.
+        let owned = [".mermaid", ".menger-card", ".wave-ref", "a.wave-ref", ".hljs", "img.bimg", ".bimg-missing"];
         let tags_of = |compound: &str| -> Vec<String> {
             let named = compound.trim_end_matches("[data-md]");
             let named = named.strip_prefix(":is(").and_then(|n| n.strip_suffix(')')).unwrap_or(named);
@@ -2617,7 +2718,7 @@ mod tests {
     fn a_whole_document_is_its_own_page_with_the_csp_first_in_its_head() {
         let tokens = shell_tokens();
         let page = "<!doctype html>\n<!-- a comment naming <head> -->\n<html lang=\"en\" data-x='a>b'>\n<head>\n<meta charset=\"utf-8\"><style>@media (prefers-color-scheme: dark){body{background:#000}}</style><script>window.x=1</script></head><body><h1>Hi</h1></body></html>";
-        let doc = srcdoc(page, &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Dark), reduce: None })));
+        let doc = srcdoc(page, &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Dark), reduce: None, safe: None })));
         let csp = format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\">");
         let head = "<!doctype html>\n<!-- a comment naming <head> -->\n<html lang=\"en\" data-x='a>b'>\n<head>";
         assert!(doc.starts_with(&format!("{head}{csp}<script type=\"application/json\" id=\"menger-init\">")), "{}", &doc[..300]);
@@ -2631,7 +2732,7 @@ mod tests {
         }
         let init = &doc[at("id=\"menger-init\">") + "id=\"menger-init\">".len()..];
         let init: serde_json::Value = serde_json::from_str(&init[..init.find("</script>").unwrap()]).unwrap();
-        assert_eq!(init, serde_json::json!({ "channel": "f5", "page": true, "ticket": "MENGER-16", "emulate": { "scheme": "dark", "reduce": null } }));
+        assert_eq!(init, serde_json::json!({ "channel": "f5", "page": true, "ticket": "MENGER-16", "emulate": { "scheme": "dark", "reduce": null, "safe": null } }));
         // The sandbox and the CSP are every frame's.
         assert_eq!(SANDBOX, "allow-scripts allow-popups allow-popups-to-escape-sandbox");
         assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
@@ -2660,10 +2761,14 @@ mod tests {
         let tokens = shell_tokens();
         let plain = srcdoc("<b>x</b>", &page_shell(&tokens, None));
         assert!(!plain.contains("id=\"menger-page\""));
-        let mock = srcdoc("<b>x</b>", &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Light), reduce: Some(true) })));
+        let mock = srcdoc("<b>x</b>", &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Light), reduce: Some(true), safe: None })));
         let at = |needle: &str| mock.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
         assert!(at("id=\"menger-sdk\"") < at("id=\"menger-page\"") && at("id=\"menger-page\"") < at("<body>"));
-        assert!(mock.contains("\"emulate\":{\"reduce\":true,\"scheme\":\"light\"}"), "{}", &mock[..600]);
+        assert!(mock.contains("\"emulate\":{\"reduce\":true,\"safe\":null,\"scheme\":\"light\"}"), "{}", &mock[..600]);
+        // APP-66: a phone with its screen's shape tells the page its insets.
+        let safe = Insets { top: 47, right: 0, bottom: 34, left: 0 };
+        let phone = srcdoc("<b>x</b>", &page_shell(&tokens, Some(Emulate { scheme: None, reduce: None, safe: Some(safe) })));
+        assert!(phone.contains("\"safe\":{\"bottom\":34,\"left\":0,\"right\":0,\"top\":47}"), "{}", &phone[..600]);
     }
 
     /// MENGER-15: the page shim answers both features, listens only to its
@@ -2682,6 +2787,9 @@ mod tests {
             "post(\"menger:link\", { href: href })",
             "post(\"menger:navigate\"",
             "data-menger-scheme",
+            // APP-66: the safe area — env() answered as the device's insets.
+            "safe-area-inset-(top|right|bottom|left)",
+            "\"--sai-\" + k",
         ] {
             assert!(PAGE_JS.contains(needle), "{needle}");
         }

@@ -201,8 +201,10 @@ pub enum AuthError {
     MfaChallenge { pending: Secret, factors: Vec<String>, user: Option<User> },
     /// `mfa_enrollment`: the environment requires MFA and the user has none.
     MfaEnrollment { pending: Secret, user: Option<User> },
-    /// `email_verification_required`: WorkOS emailed a code.
-    EmailVerification { pending: Secret },
+    /// `email_verification_required`: WorkOS emailed a code to `email`
+    /// (IDENTITY-45: named on the page); `verification` is the
+    /// `email_verification_id` another code is sent for.
+    EmailVerification { pending: Secret, email: Option<String>, verification: Option<String> },
     /// `organization_selection_required`.
     OrganizationSelection { pending: Secret, organizations: Vec<Organization> },
     /// `sso_required`: only these SSO connections may sign the user in.
@@ -489,6 +491,18 @@ impl WorkOsApi {
         }
     }
 
+    /// IDENTITY-45: another email-verification code for the verification
+    /// an `email_verification_required` answer named — its user read from
+    /// `GET /user_management/email_verification/{id}` (the answer's code is
+    /// dropped unread), then `POST /user_management/users/{user}/email_verification/send`.
+    pub async fn resend_verification(&self, verification: &str) -> Result<(), CallError> {
+        let v = self.expect_ok(reqwest::Method::GET, &format!("/user_management/email_verification/{}", enc(verification)), None).await?;
+        let Some(user) = v.get("user_id").and_then(Value::as_str) else {
+            return Err(CallError::Unavailable("email_verification: an answer without a user".into()));
+        };
+        self.expect_ok(reqwest::Method::POST, &format!("/user_management/users/{}/email_verification/send", enc(user)), Some(json!({}))).await.map(|_| ())
+    }
+
     /// Ends a WorkOS session (`sid`).
     pub async fn revoke_session(&self, session: &str) -> Result<(), CallError> {
         match self.expect_ok(reqwest::Method::POST, "/user_management/sessions/revoke", Some(json!({ "session_id": session }))).await {
@@ -567,7 +581,9 @@ fn auth_error(status: StatusCode, v: &Value, retry_after: Option<u64>) -> AuthEr
             user,
         },
         ("mfa_enrollment", Some(pending)) => AuthError::MfaEnrollment { pending, user },
-        ("email_verification_required", Some(pending)) => AuthError::EmailVerification { pending },
+        ("email_verification_required", Some(pending)) => {
+            AuthError::EmailVerification { pending, email: s("email"), verification: s("email_verification_id") }
+        }
         ("organization_selection_required", Some(pending)) => AuthError::OrganizationSelection {
             pending,
             organizations: v

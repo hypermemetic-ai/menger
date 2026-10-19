@@ -73,7 +73,7 @@ pub struct UpdatedMany {
 }
 
 /// The aspects, in the order `changed` names them.
-const ASPECTS: [&str; 8] = ["title", "body", "kind", "status", "parent", "severity", "blocked_by", "labels"];
+const ASPECTS: [&str; 9] = ["title", "body", "kind", "status", "parent", "severity", "blocked_by", "labels", "assignees"];
 
 /// `changed` with `more` merged in, in [`ASPECTS`]' order.
 fn merged(changed: &[String], more: &[String]) -> Vec<String> {

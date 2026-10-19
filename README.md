@@ -467,6 +467,18 @@ and the tickets that wait on it (unblocked) — and then offers **Undo**
 (`undelete`) in its toast. A shortcode's row is its root's menu with the
 shortcode's Wave board. A tag outside any ticket keeps FILTER-22's menu.
 
+**Held on a touch screen** (APP-57, `src/menu/hold.rs`): a touch that rests
+500 ms on a ticket (within 10 px) opens the same menu — a board row, a nav
+row, a card, a chat's or a comment's ticket chip (any link to
+`#/ticket/<ID>`), a chip in a framed body — and its lift is not followed; a
+touch that moves (a scroll) or lifts first is a tap or a scroll, as before.
+A chip shows no iOS callout or link preview, and on a touch screen selects no
+text (a conversation keeps its text). At ≤ 820 px the menu is a sheet from
+the bottom, above the bar. In a framed body the chip is marked held at
+500 ms and the menu opens on the lift: the app opens a frame's menu only on
+a live gesture with focus in that frame (MENGER-34), and a touch still down
+is neither. Android's own long press (`contextmenu`) is the same hold.
+
 **The status chooser, three ways** (ACT-10). A status, kind, severity or
 label chip — on a row, a card, a nav row, the ticket page's Status / Kind /
 Severity — puts its own chooser first, flat: the same options, marks and
@@ -881,6 +893,26 @@ scripts/shot.mjs '#/board' --env test --as viewer --screen --out /tmp/look
 scripts/shot.mjs '#/ticket/FILTER-13' --port 4550 --selector '#ticket-page'
 scripts/shot.mjs mock.html --wait-for '#drawn'      # a local file: no app checks
 scripts/shot.mjs --help
+```
+
+**Any menger, signed in by a key** (APP-76): `--origin https://app.menger.sh`
+takes the routes there, and `--key ~/.plexus/keys/builder.key` signs the
+browser in as that agent — a session minted over the socket
+(`throwaway-login.mjs`'s `mintSession`, `wss://<host>/ws` behind https) set
+as the shell's session cookie, the token kept in memory (`--session FILE`
+takes one already minted). A mockup's page counts as settled once its
+document and fonts are in and the layout is still (APP-43). A page taller
+than one paint (16,000 px) is shot in slices of 8,000, cut at its last
+drawn element, and stitched into one image (APP-78). It comes out as parts
+(`NAME.1.png`, `NAME.2.png`, …) only when one image would be over 16
+megapixels (iOS Safari's limit), 32,000 px tall or 7 MiB (`media.put`'s
+cap). `--chat N` puts each shot
+into chat N (`media.put { chat }`, as the key's agent) and prints its
+`media:<hash>`, to write as `![shot](media:<hash>)`:
+
+```sh
+scripts/shot.mjs '#/ticket/CHAT-35' --origin https://app.menger.sh \
+  --key ~/.plexus/keys/builder.key --width 390 --out /tmp/chat-35.png --chat 6
 ```
 
 Files land in `$TMPDIR/menger-shots/` unless `--out` says otherwise, named
@@ -1461,6 +1493,22 @@ in this browser's localStorage per mockup (`menger.mockup-sizes:<ticket>`,
 or `<ticket>#m<n>` for a body's n-th `<m-mockup>`), never in the body;
 Reset clears them. At the app's phone width the grips give way to the field.
 
+**A phone is drawn as an iPhone's screen** (APP-66; `screen` in
+`frontend/src/present.rs`). A phone-sized device as tall as one (2 : 1 or
+more; not 375 × 667) gets its iPhone's display: rounded corners that clip
+the page (44–62 px by its width), the notch or the Dynamic Island, the home
+indicator, and the safe-area insets iOS reports for them — portrait top 47
+(390, notch) or 59 (393/430, island), bottom 34; on its side, the top inset
+on both sides and 21 at the bottom. The page is told the insets: the page
+shim sets `--sai-top` … `--sai-left` on its root and rewrites every
+`env(safe-area-inset-*)` its rules read to `var(--sai-*)` (a frame's
+`env()` is 0), and the contract's `--safe-*` tokens read them too. So a
+page that pads by the insets shows it, and one that doesn't is clipped by
+the corners and sits under the home indicator, as on the phone. On by
+default; **Screen shape** in the bar (in ⋯ on a phone) turns it off for the
+mockup. A Playwright check gets the same insets by setting `--sai-*` on the
+app's root (APP-65: the app's edges pad by `--safe-*`).
+
 **A body that is a whole HTML document** — `<!doctype html` (then an
 element) or `<html` first, past comments — renders as itself: its own head,
 styles and scripts, inline media included, never markdown and never under
@@ -1566,6 +1614,14 @@ it onto the placeholder (`title`, `description`: SDK 2.2's `menger:mockup`
 carries them — the body's own text); a referenced page's is read and drawn
 by the host and never reaches the citing frame, which hears only a height.
 
+**Said once** (APP-60; owner, 2026-10-18: *"the mockup renders poorly"* —
+on a phone the same sentence read twice, prose then caption). The line of
+prose above a mockup and its `description=` never repeat each other: the
+prose says why the view is here (what to look at, what it decides), the
+caption what the view shows (its state, its data) — or one of them says
+it and the other is left out (a `title=` and the prose, with no
+`description=`, is enough).
+
 **Answering on the mock** (APP-46; owner, 2026-10-16: *"I want the decision
 to contain mockups maybe, or for feedback to be left directly on the
 mockup."*). A decision between looks puts **a mockup in each option** — an
@@ -1653,6 +1709,21 @@ narrowest device shown is more than **3** of that device's screens tall,
 the bar says so quietly — *one view per mockup — this page scrolls N
 screens* — after a resize too (APP-33), and only as a hint to the author,
 never a refusal.
+
+**On a phone** (APP-60; a viewport ≤ 820 px, APP-50's shape). A mockup
+opens on **one** device — the narrowest it declares (Reset returns there)
+— drawn as wide as the screen allows: its box reaches past the body's
+padding to the screen's edges less 4 px (`mockup::bleed`, the host's
+choice; only its width moves), the bezels thin, so a 390 device is drawn
+at about 96% and a wider one is scaled to the column, never off its edge.
+The other widths are one tap away on the bar; **All** stacks the devices
+one under another at the scale that fits the widest. The bar is **one
+row**: the option's *pick this* (in a decision), the device picker, **⋯**
+and Full screen; *comment*, Size, Reset, Light / Dark, Reduced motion,
+Compare and the tall note fold into the ⋯ panel (a tap outside closes
+it; the Custom field opens it). **Full screen** draws the device at 100%,
+bezel-less, and its stage scrolls to the rest (a desktop pans). Above
+820 nothing changes (`mocksize::scale_for`, `mocksize::opening`).
 
 **What makes `prefers-color-scheme` follow inside the frame.** An iframe's
 `prefers-color-scheme` is the *embedder's* in Chromium, whatever the
@@ -2118,7 +2189,13 @@ for await (const ev of this.menger.tickets.inputs.list(undefined, undefined, und
   without the API is refused); the app's focused element is that `<iframe>`;
   since the app's own last click or key, the pointer came onto that frame
   or a Tab carried focus into it; and, while that click or key of the app's
-  is younger than 5 s, focus entered the frame after it. Any click or key
+  is younger than 5 s, focus entered the frame after it. On a touch screen
+  (APP-55) a tap in a frame gives the app no pointer at all, so where the
+  pointer the app last heard does not hover (a touch or pen; none heard
+  yet, `(hover: none)`), the pointer is not asked: while the app's own
+  touch is younger than 5 s the write is read again once that has run out
+  (APP-35's wait), and the tap's activation, with focus still on the frame,
+  is the gesture. Any click, tap or key
   elsewhere in the app is no gesture on the frame; **the frame renders a
   ticket** (its `data-ticket`); the params are exactly `{ input, value,
   rationale? }` (a `ticket` among them is refused); then, against that
@@ -2404,6 +2481,7 @@ what its proofs are for — a stale or mismatched proof writes nothing.
 | `update_many`, `label` / `commits.link` over `ids`, `reshortcode` | an editor's permit per ticket selected (the store checks they are exactly its selection) |
 | `delete` | `Permit<Admin>` per ticket that goes; `undelete`, `AdminOf` each one's shortcode |
 | `comments.add` / `resolve` / `reopen` | a viewer's (an editor's) permit on the comment's ticket; nothing more for a comment on the app |
+| `media.put` | `Permit<Editor>` for the ticket the image is for (`OnMedia`); with no ticket (an image on the app), nothing more than the call's grant — the image is then its putter's |
 | `members.grant` / `revoke` | `AdminOf` exactly its scope, minted for a signed-in admin (ACCESS-24: there is no other) |
 | `orgs.create` · `rename` · `delete` | `AdminOf` `*` · the organization (or `*`) |
 | `themes.define` · `themes.set` | `On<Editor>` `*` · `AdminOf` `*` for the site, `On<Editor>` the shortcode |
@@ -2774,9 +2852,9 @@ ticket's write does touches a comment.
 
 | method | yields |
 |---|---|
-| `comments.add { anchor, body }` | `comment { id, state, author, at, anchor, body }` — the comment as kept: the next id, `open`, the time (unix seconds), signed by the caller (ACCESS-19: its name, its principal when it has none, `owner` with login off — no call names its author). A comment on the app (no ticket) is seen, listed, watched and resolved only by its author and the admins of `*`. An empty body, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept |
-| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, intent?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `intent` `comment` / `changes` (APP-23: a change request — a comment carries `intent: changes`, a plain one carries no `intent`); `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case). Blank is none. A page is 500 unless `limit` says, never more than 1,000 (ACCESS-29). An unknown state, or an `after` naming no comment, is one in-band `error` |
-| `comments.resolve { id }` · `comments.reopen { id }` | `comment` — the state flipped; already there, the comment as it is (nothing written or broadcast); an id naming no comment is an in-band `error` |
+| `comments.add { anchor, body }` · `{ reply_to, body }` | `comment { id, state, author, at, anchor, body, reply_to? }` — the comment as kept: the next id, `open`, the time (unix seconds), signed by the caller (ACCESS-19: its name, its principal when it has none, `owner` with login off — no call names its author). A comment on the app (no ticket) is seen, listed, watched and resolved only by its author and the admins of `*`. An empty body, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept. COMMENT-8: with `reply_to` (and no `anchor` — both, or neither, is refused) a **reply**: on its thread's root's anchor, carrying `reply_to` (the root's id; a reply to a reply answers the same root), and a resolved root is reopened in the same write |
+| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, intent?, thread?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `intent` `comment` / `changes` (APP-23: a change request — a comment carries `intent: changes`, a plain one carries no `intent`); `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case); `thread` (COMMENT-8) the comment's thread — the root and its replies, named by either. Replies are listed inline with the rest, each carrying `reply_to`. Blank is none. A page is 500 unless `limit` says, never more than 1,000 (ACCESS-29). An unknown state, or an `after` naming no comment, is one in-band `error` |
+| `comments.resolve { id }` · `comments.reopen { id }` | `comment` — the state flipped (a reply's id settles its thread's root, which is answered); already there, the comment as it is (nothing written or broadcast); an id naming no comment is an in-band `error` |
 | `comments.watch {}` | open-ended stream of `added { comment }`, `resolved { comment }`, `reopened { comment }`; `lagged { missed }` as `tickets.watch` |
 
 Kept in the `comments` table behind the service-wide cache: read whole at
@@ -2849,6 +2927,139 @@ synapse -P 4455 -p '{"ticket": "APP-22", "path": "conversation"}' menger comment
 synapse -P 4455 menger comments add --anchor.route '#/ticket/APP-22' --anchor.path conversation \
   --anchor.label Conversation --anchor.ticket APP-22 --body "not what I meant: do X instead"
 ```
+
+**A comment is never lost on its way** (COMMENT-9). Every comment box — the
+Conversation and annotation mode's — keeps its draft in the browser
+(`localStorage` `menger.comment.drafts`, by the anchor's route and path)
+from the first keystroke until the server answers `comment`, and a box
+opened at the same place again starts from it (after a reload, or a trip to
+another page). `comments.add` has 15 s to answer: a socket that is down, or
+open and dead (a phone's backgrounded tab), shows *Not kept: <why> — your
+draft is still here.* with a **Retry**; a comment that lands after all (the
+watch's `added`, same place, same text) lets the draft go, so a Retry does
+not post it twice. Each failure is reported to the server —
+`comments.report { anchor, body, reason, failed_at?, agent? }`, from an
+outbox in the browser (`menger.comment.failures`) sent on this connection
+or the next — kept in memory (the newest 200; a restart forgets them) and
+logged (`WARN … COMMENT-9: a comment the app could not keep`, without the
+body). An agent reads them, newest first — its own and those whose comment
+it would have seen:
+
+```sh
+synapse -P 4455 menger comments failures --limit 20
+```
+
+**Replies** (COMMENT-8). A comment answers another with `reply_to`: it is
+a comment of its own, on its thread's root's anchor — so on the same ticket
+and page, seen by exactly who sees the root (a reply on the app, too: the
+root's author and the admins) — and threads are one level deep (a reply to
+a reply answers the root). A thread is open or resolved by its root:
+resolving or reopening a reply settles the root, and a reply to a resolved
+root reopens it, in the same write (`watch` says `added`, then
+`reopened`). In the app a reply is drawn under its root, oldest first, with
+**Reply** under the thread — in a ticket's Conversation, on `#/comments`
+(a row is a thread, found by its root or any reply; the count is threads)
+and in the annotation popover; no reply is pinned or counted apart. The
+Reply box keeps its draft as every box does (by its thread,
+`reply|<root>`), says *Not kept* with a Retry, and Ctrl+Enter sends:
+
+```sh
+synapse -P 4455 menger comments add --reply-to 29 --body @answer.md
+synapse -P 4455 menger comments list --thread 29
+```
+
+### Images in comments (COMMENT-5)
+
+A comment can show **images**: pasted (a screenshot from the clipboard),
+dropped on the box, or picked with its **Image** button — in every box that
+writes a comment (a ticket's Conversation, the annotation box, the tray's
+Request changes). The app checks the file first by the server's own rule,
+keeps it with `media.put` for the comment's ticket, writes its markdown into
+the box at the cursor and shows it there as a thumbnail (× takes it out;
+deleting the markdown does too). A posted comment draws it inline, at most
+the column's width, wherever comments are drawn (the Conversation, the
+annotation pins, `#/comments`); a click opens it full size, a click or Esc
+closes it. The image is named in the body as markdown:
+
+```markdown
+the hold drifts here ![the curve](media:9f2c6ae2b4d1e1a8f7c3b0d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718)
+```
+
+Only `media:` images (and `data:` PNG, JPEG, GIF or WebP) are drawn; an image
+from another origin is not (the page's CSP refuses it anyway) — its alt is
+drawn as a link to it.
+
+**Stored by menger, on the wire** — the `media` activation; no side door
+(the shell serves no upload route and no image path). The app turns
+`media.get`'s bytes into a `blob:` URL, once per image per page load.
+
+| method | yields |
+|---|---|
+| `media.put { ticket?, mime, data }` | `stored { hash, mime, bytes, width, height, duplicate }` — the image kept, named by its SHA-256 (64 hex digits); `data` is standard base64 (a `data:…;base64,` before it is read past). Its type is read from its magic bytes — PNG, JPEG, GIF or WebP, **never SVG** — and must be the `mime` given; width and height from its header. At most **7 MiB**. A refusal is `refused { reason, message, bytes?, max? }` (`too_large`, `not_an_image`, `type_mismatch`, `truncated`, `bad_data`), naming the limit, and nothing is kept; a ticket that is none, or out of the caller's reach, is `not_found { ticket }`. The same bytes again are one row (`duplicate: true`); put for a second ticket, the one image is that ticket's too. Without `ticket` (a comment on the app) the image is the putter's and the admins' of `*` |
+| `media.get { hash, ticket? }` | `media { hash, mime, bytes, width, height, data }` (data base64) — or `not_found { hash }`, alike for a hash that names nothing and for an image put only for tickets the caller cannot see (ACCESS-10). COMMENT-10: with `ticket`, held to that ticket's body — only an image put for that ticket; one kept for another ticket (even one the caller sees), a chat or the app is `not_found` there |
+
+**Reach.** An image belongs to the ticket it was put for: `get` answers it to
+a reader who sees that ticket (by its id through the resolver, so a
+reshortcoded ticket keeps its images and a deleted one hides them); `put` is
+the editor's, a `Permit` on that ticket (ACCESS-11; under login `media.get`
+is a viewer's grant, `media.put` an editor's, `target = "ticket"`).
+
+Kept in two tables of their own, `media` (a row per image, its bytes a BLOB)
+and `media_owners` (a row per ticket, or app putter, it is for); the cache
+holds what each image is, never its bytes, which `get` reads from the file on
+a read connection. A file gains the tables, empty, on its first open; no
+stored form moves (a release before COMMENT-5 opens such a file and never
+looks at them).
+
+The limit is 7 MiB, not 8 MB: an image travels as base64 (4/3 of its size)
+inside one WebSocket message, and the transport takes a message of at most
+10 MiB. A file past the cap is refused by the app before it is read; a
+call past the transport's 10 MiB closes the socket instead of answering
+(synapse waits on it — COMMENT-6). From a shell, the data is a **file** or stdin — never
+`"$(base64 …)"`, which Linux caps at 128 KB:
+
+```sh
+base64 -w0 shot.png > shot.b64
+synapse -P 4455 menger media put --ticket KILN-4 --mime image/png --data @shot.b64      # → stored { hash, … }
+base64 -w0 shot.png | synapse -P 4455 menger media put --ticket KILN-4 --mime image/png --data -
+synapse -P 4455 menger comments add --anchor.route '#/ticket/KILN-4' --anchor.path conversation \
+  --anchor.label Conversation --anchor.ticket KILN-4 --body 'the hold drifts here ![the curve](media:<hash>)'
+synapse -P 4455 -j menger media get --hash <hash> | jq -r 'select(.content.data) | .content.data' | base64 -d > back.png
+```
+
+### Images in ticket bodies (COMMENT-10)
+
+A ticket's body draws its `![alt](media:<hash>)` images too, as a comment
+does: at the column's width, a tap or click opens one full screen (a tap or
+Esc closes it). An agent files a screenshot into a body by putting it for
+that ticket first — `media put --ticket X`, then the markdown in X's body.
+
+**Held to the ticket.** A body's images are read with `media.get { hash,
+ticket }`, the body's own ticket — so a body reaches no image but its own
+ticket's: one kept for another ticket (even one the reader may see), a
+chat or the app is not found there, and is drawn as its alt with a **not
+available** mark (dashed). A reader who cannot see the ticket sees no body
+at all. The editor's preview draws the edited ticket's images (a first
+draft, of no ticket yet, marks each not available); a past revision of
+a ticket draws that ticket's.
+
+**Unframed and framed alike.** md.rs writes each as an `img.bimg
+data-media=<hash>` with no `src`; an unframed body is filled by the page
+(`media::hydrate_body`), a `blob:` URL from the bytes. A framed body's frame
+has no connection of its own (IDENTITY-28), so its SDK (2.5) asks the host
+— `menger:media { hash }` — and the host answers held to the ticket it
+stamped on the frame (`<iframe data-media>`: the stored body's ticket, or
+the ticket a draft edits; the frame cannot name one): `menger:media { hash,
+mime, data }` or `{ hash, missing: true }`. The frame draws a `blob:` URL of
+its own (no other origin, under ACCESS-28's policies) and settles once every
+image is answered. A tap asks the host (`menger:zoom { hash, alt }`, only
+inside a viewer's gesture on that frame) to show it full screen over the
+app. A touch screen gives an image no click (WebKit synthesizes none for
+an element that is not a control), so the SDK and the page both read the
+tap itself: one finger, lifted within 10 px and 500 ms of where it landed,
+its lift prevented so no click follows (a scroll or a hold is no tap). The
+page asks `media.get` once per (ticket, image) per load, however often the
+body re-renders.
 
 ### History and cancellation (MENGER-13)
 
@@ -3155,9 +3366,12 @@ its name); `via` is kept for AGENT-3 and never set by a call.
 | `chats.read { chat, upto }` | `read { chat, upto, unread }` — the caller's mark moved forward (never back) to its latest message at or before `upto` |
 | `chats.close { chat }` · `chats.reopen { chat }` | `closed { chat }` · `reopened { chat }` — by any participant; a closed chat is read-only, kept on its ticket |
 | `chats.rename { chat, title? }` | `renamed { chat }` (CHAT-7: the composer's `/title`) — by any participant; no title, or a blank one, clears it; the same title writes nothing. On watch too |
-| `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `renamed`, `listening { chat, principal, waiting }`, `left`, `lagged`, `watch_closed`. `claim_line` is declared for AGENT-3 and not emitted |
+| `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `renamed`, `listening { chat, principal, waiting }`, `activity { activity }` (CHAT-18, to participants), `left`, `lagged`, `watch_closed`. `claim_line` is declared for AGENT-3 and not emitted |
 | `chats.await_message { chat?, ticket?, since?, after?, timeout_minutes? }` | `waiting { chat?, ticket?, since }` at once, then one `message { message }` by someone else — in the chat, or any of the caller's chats (on `ticket`) — and the end; `timed_out` after the timeout. Without `since` or `after`, only what comes after the call; `since` (seconds) is at or after it, at least once; `after` (a message id) is exact. While it waits its chats show the caller in `waiting` (`listening` on watch) |
-| `chats.candidates { ticket }` | CHAT-4's picker: `candidate { principal, reads }` each, by principal — every principal holding a grant in the ticket's organization (on `*`, the org, a shortcode in it, a ticket or a subtree there; a team's members by name; the operator's `--admin`s) and every participant of the caller's chats there, but the caller; `reads` whether it can read the ticket now (`open` and `add` refuse one that cannot). A ticket the caller cannot read is `refused` (`no ticket X`). With login off nobody holds a grant: the list is the chats' participants |
+| `chats.activity { chat, state?, line? }` | CHAT-18: `activity { activity { seq, chat, by, name?, at, state, line? } }` — a participant's live work: `started` (it has the message), `working` (the default: a line of what it does now, or a heartbeat), `ended`; heard on every participant's `watch` (not an admin's who is not in it), **never a message** and never stored. The server keeps each chat's newest 200 in memory (lost on a restart); a line is cut at 500 characters. Anyone not in the chat: `not_found` |
+| `chats.activity_log { chat }` | CHAT-18: the chat's kept `activity { activity }` items, oldest first, then the end — what a viewer opening mid-turn has missed. Participants only (`not_found` else); empty after a restart |
+| `chats.remove { chat, principal }` | CHAT-14: `removed { chat, principal }` — a group's or a ticket's chat, by a participant (itself: it leaves) or, outside tickets, an admin of its organization; a direct message is refused. The one removed hears `left` |
+| `chats.candidates { ticket? }` | CHAT-4's picker: `candidate { principal, reads, name?, agent? }` each (CHAT-14: without a ticket, who may be in a direct message or a group), by principal — every principal holding a grant in the ticket's organization (on `*`, the org, a shortcode in it, a ticket or a subtree there; a team's members by name; the operator's `--admin`s) and every participant of the caller's chats there, but the caller; `reads` whether it can read the ticket now (`open` and `add` refuse one that cannot). A ticket the caller cannot read is `refused` (`no ticket X`). With login off nobody holds a grant: the list is the chats' participants |
 
 **In the app** (CHAT-4; in the section dock since CHAT-10, CHAT-9's
 answer): the dock lists your open chats on the ticket under its sections
@@ -3171,7 +3385,15 @@ cannot be picked; the same people's open chat opens instead), the closed
 list, who is in it, the turns, a *new* line at your read mark, and the
 composer. CHAT-7: **the turns** are a traditional agent chat's — yours
 bubbles on the right, theirs full-width prose under a mono line (a mark,
-the name, an agent tag, `via`, the time); a fence's code gets a head (its
+the name, an agent tag, `via`, the time); CHAT-18: **live work** — under
+the last turn, the moment a participant says `activity started`, a block
+*builder is on it* with a pulsing dot, then each step it says (the newest
+eight in view, the box scrolling to all) and its heartbeat; past a minute
+with no word it reads *no word for N min* (stale: the worker may be gone);
+on `ended`, or its answer arriving, it folds into **show work (N steps)**
+after that answer — for the session, and from the server's memory log
+(`activity_log`, fetched as a chat opens) while it runs — in the dock,
+full screen and `#/chats` alike; a fence's code gets a head (its
 language, the path the fence names after it, *copy*), a ticket code in
 the text is a chip and one alone on its line a card with the ticket's
 title and status; copy · quote · link on hover; manifest's two scroll
@@ -3184,7 +3406,8 @@ box (AGENT-3's *stop the session* waits on AGENT-3), **↑** in an empty box
 recalls your last message; `@` at a word's start opens the people menu
 (the one picked is added), `/` the commands — `/add NAME`, `/ticket CODE`,
 `/title TEXT`, `/close` — a command that can't run refused in a strip over
-the card (*not sent · why*), as is a pasted image; ticket codes typed show
+the card (*not sent · why*); a pasted, dropped or picked image is kept for
+the chat (CHAT-14, below); ticket codes typed show
 as chips there; each chat's draft is kept per browser
 (`menger.chat.draft.<id>`); Settings → Chat sets its font size. **Full
 screen**: ⤢ on the dock's chat head, *full ↗* in its composer, `g c`, or
@@ -3220,6 +3443,198 @@ write. Kept in `chats`, `chat_participants` (each one's read mark) and
 `chat_messages` behind the cache, gained empty on open; who is listening is
 the cache's alone, never stored.
 
+#### Direct messages and groups (CHAT-14)
+
+A chat may be **outside tickets** (owner, 2026-10-17: *"I think we should
+also support direct messages and groups outside of ticketing"*): `open`
+with no `ticket` and one other is a **direct message** — opening it again,
+by either of the two, answers the one they have (`existing: true`), the
+standing chat members (CHAT-13) beside them not making it another — and
+with several others a **group**, named by `title`. A `Chat` says its
+`kind` (`ticket`, `direct`, `group`) and names a `ticket` only when it has
+one. Such a chat lives in the caller's organization: each participant must
+hold a grant there (`refused`: `X holds no grant in hypermemetic`), and
+**only its participants read it** — no ticket's reach and no admin's read;
+to anyone else it is `not_found`. A group's members are added (`add`) and
+taken out (`chats.remove { chat, principal }` → `removed { chat, principal
+}`; the one removed hears `left`; removing yourself leaves) by its members
+and by an admin of its organization, who adds and removes without reading
+it. A direct message stays between two: `add` and `remove` are refused
+there (start a group; close it). `list` and `watch` carry them as any
+chat; the filter cells `chatting` / `unread` stay a ticket's.
+
+**Names.** `candidates` without a ticket lists who may be in one — every
+principal holding a grant in the caller's organizations, and the
+participants of its chats outside tickets — and every `candidate` now says
+`name` and `agent`. The name is the one the principal last signed in with
+(the identity's `name`: a provider's display name, or a key's — synapse's
+`--as builder` signs in as `builder`), kept by the store in
+`principal_names` when it changes ([`Store::note_name`], off the call),
+else the last name its messages carried; it is the caller's own word,
+shown, never trusted for access. `agent` is an `agent:` (AGENT-1) or
+`key:` principal — a key is how an agent signs in — or a standing chat
+member. AGENT-3's named agents will be `agent:<name>` principals and need
+nothing more here.
+
+**Images** (owner, 2026-10-17: *"allow pasting images into chat and
+comments"*): the composer takes pasted, dropped or picked images as a
+comment does (COMMENT-5) — `media.put { chat, mime, data }` (beside
+`ticket`, never with it; `put` is a viewer's now: a viewer chats, and a
+ticket's image still takes an editor's permit on it) keeps it for the
+chat, seen by **its participants alone**, never the ticket's other
+readers; `not_found` to anyone else, the same 7 MiB cap and refusals
+(SVG, a non-image, a mismatch). A turn draws `![name](media:<hash>)` as a
+comment does (asked for when its row mounts — the window mounts only what
+is near the view — and measured again when it loads), full size on a
+click. The bridge passes one to the agent as a note, `[image: name,
+size]`.
+
+**In the app**: `#/chats` (the header's **chats N**, N your unread across
+every chat) is CHAT-7's full-screen session with no ticket beside it — a
+rail of every chat you are in, unread first, then the newest (each its
+ticket's chip, or *direct* / *group*, who or its title, its last line, your
+unread), **＋ New message** (`c`, `#/chats/new`: one person picked is a
+direct message, several a group with a title; agents found by name), and
+the chat at `#/chats/ID` in one column — who is in it (agents marked; a
+group's members taken out with ×), **＋ add**, **KILN-7 ⟩** for a ticket's
+chat, **⋯** (rename, close or reopen, leave a group, copy link). **Esc**
+leaves for the board; at ≤ 760 the rail is the page until a chat is
+chosen. `#/members` names each person (an agent marked) and gives each
+**chat**: the direct message with them.
+
+#### An admin adds anyone (CHAT-16)
+
+Owner, 2026-10-17: *"I would like to be able to add anyone to any chat as
+admin. that would give them access to that ticket only. it could also
+optionally restrict ticket view. open a dialog when that user is being
+granted a scope to confirm."* An **admin of a chat's scope** — of its
+ticket (on `*`, its organization, its shortcode, `under` it or it), or
+outside tickets of its organization — adds anyone to it, in the chat or
+not (`chats.add` as before; the picker and **＋ add** list those waiting
+for a role too). One who can read it is simply added. One who can't is
+added only with a **grant the call names**, the add and the grant one
+write (both kept: the grant with who granted it, the seat with the scope
+its add granted):
+
+| `chats.add … --grant` | grants | they see |
+|---|---|---|
+| `ticket` | `viewer` on the ticket alone (ACCESS-21) | the ticket as a viewer of it alone, and the chat |
+| `chat` | `chatter` on the ticket alone (outside tickets: on the organization) | the chats they are in there; of the ticket its id and title (`Chat.ticket_title`), never its body — `tickets.get` is refused, as is every other ticket read, and another chat on it is `not_found` |
+| none | nothing: `needs_grant { chat, principal, ticket, choices }`, nothing written | — |
+
+A grant names only the chat's own scope, and only an admin of it grants (a
+participant who is not is `refused`). The answer is `added { chat,
+granted: "chatter on KILN-7" }`, and `Chat.granted` lists the seats whose
+add granted, while the grant stands. `chats.remove … --revoke true` takes
+the grant back in the same write as the seat (`removed { …, revoked:
+true }`); without it the grant stays. **In the app**: picking someone
+who can't read the chat (an admin's picker marks them *adding grants
+access*) opens a dialog — who is given what, where; **Ticket** or **Chat
+only** (chosen first: the narrower) — then Confirm or Cancel; × on a
+seat that came with a grant opens *Take X out of this chat* with **Also
+revoke that access** checked. One who holds chats only opens the app on
+`#/chats`.
+
+```sh
+synapse -P 4455 menger chats add --chat 41 --principal key:5a… --grant chat
+synapse -P 4455 menger chats remove --chat 41 --principal key:5a… --revoke true
+```
+
+#### The chat bridge (CHAT-11)
+
+A perpetual listener on the builder's chats: when the owner writes in a
+chat the builder is in, it spawns a Claude Code agent on this machine and
+posts its answer there. `scripts/chat-bridge/` holds it — `bridge.mjs`
+(Node ≥ 22, the standard library and `deploy/menger-call.mjs`'s socket),
+`live.mjs` (CHAT-18's live line), the unit `menger-chat-bridge.service`,
+`install.sh`, and its acceptance on a throwaway login-on server,
+`tests/throwaway.mjs WORKDIR [--real]` (`MENGER_BIN` a server with
+`chats.activity` until prod runs one), beside `node --test
+scripts/chat-bridge/tests/live.test.mjs` (the live line's rules).
+
+- **It runs** as `systemd --user` unit `menger-chat-bridge` (`Restart=always`,
+  `RestartSec=5`; lingering is on, so it survives logout and reboot), from
+  an installed copy in `~/.local/share/menger-chat-bridge` — never a
+  checkout. `scripts/chat-bridge/install.sh --start` (from main) installs or
+  updates it and (re)starts it.
+- **Stop it:** `systemctl --user stop menger-chat-bridge`; for good,
+  `systemctl --user disable --now menger-chat-bridge`. Its log:
+  `journalctl --user -u menger-chat-bridge -f`, and a JSON line per turn in
+  `~/.local/state/menger/chat-bridge/turns.log`.
+- **Which tracker:** `MENGER_URL` in `~/.config/menger/chat-bridge.env`.
+  RUN-13 moves prod's data to app.menger.sh. On 2026-10-17 the bridge was
+  installed on `wss://app.menger.sh/ws`, because that URL answered 976
+  tickets to the builder key and the local :4455 had been stopped. The
+  coordinator confirms or switches it when RUN-13 reports. Switching
+  (`ws://127.0.0.1:4455` is the local prod) takes two steps: edit that one
+  line, then run `systemctl --user restart menger-chat-bridge`. The builder
+  key must be granted on whichever tracker it names.
+- **Who it signs in as:** the builder's key (`MENGER_KEY_FILE`,
+  `~/.plexus/keys/builder.key`), a key proof at each upgrade. It watches
+  the chats the builder is **in** — and the builder is in every chat
+  (CHAT-13): the server's `--chat-member PRINCIPAL` (repeatable;
+  `MENGER_CHAT_MEMBERS`, `;`-separated) is a participant of every chat
+  opened, a chat of one too, and is seated in every open chat at startup
+  (once, an `added` participant signed `system`). One without read on a
+  chat's ticket is added anyway, with a warning in the log. A chat names
+  them in `agents`, and the app draws them as agents. `app-prod.env` and
+  `app-test.env` set it to the builder's key.
+- **Who it answers:** the principals in `~/.config/menger/chat-bridge.allow`,
+  one a line (`#` comments), read on every message — an edit needs no
+  restart. RUN-13's admin bootstrap appends the owner's production
+  principal. Never itself, never an `agent:` principal, and never a `key:`
+  one: a bare `key:`/`agent:` line is ignored, and only a line written
+  `+key:…` admits a key — for a test, removed after.
+- **A turn:** it says `chats.activity started` at once (CHAT-18: the app
+  shows *builder is on it* before the agent is spawned), marks the chat
+  read, runs `claude -p --output-format stream-json --verbose` in
+  `CHAT_BRIDGE_CWD` (menger's main checkout) — the chat's recent turns and
+  its ticket on the first, the new messages after — resuming the chat's
+  own session (`--resume`; the session any stream event names, the mapping
+  in `state.json` beside `turns.log`), posts the final message (the
+  stream's `result`), then says `activity ended`; a failed turn posts
+  "couldn't answer: <why>" and ends the same way. Only on a server that
+  takes no `chats.activity` does a turn still running after
+  `CHAT_BRIDGE_WORKING_AFTER` (20 s) post "_working…_" once. One turn
+  per chat at a time — what arrives meanwhile is the next turn, together;
+  chats run in parallel, at most `CHAT_BRIDGE_MAX` (3).
+- **Commands** (CHAT-40): a message that is exactly `/clear`, `/stop`,
+  `/status` or `/help` (trimmed, any case) is answered by the bridge itself,
+  at once, as the builder — no agent spawned, and around the one-turn-per-chat
+  queue, so a `/stop` reaches the turn it stops. `/clear` forgets the chat's
+  session (the next message starts a new one, its context the chat after the
+  `/clear`; a turn running then finishes in the old one); `/stop` sends the
+  running `claude` SIGTERM (SIGKILL 5 s later if it lingers), keeps its
+  session, and the turn's answer says the owner stopped it; `/status` says
+  whether a turn runs, since when, its last live line, what waits, and the
+  session's age; `/help` lists them. Any other `/x` goes to the agent. Each
+  is one `{command, message}` line in `turns.log`, and is answered once
+  across a restart.
+- **The live line** (CHAT-18, `live.mjs`): as the stream comes, each
+  assistant tool call is one line — `Bash: <its description, or the
+  command's first 120 characters>`, `Read <path>`, `Edit <path>`, `Grep
+  <pattern>`, `Agent: <description>`, … — and its interim text the first
+  200 characters; at least 300 ms between two sends (what comes meanwhile
+  is one line, ` · `-joined), and `working · Ns` after 15 s of quiet. Nothing
+  that looks like a secret is sent: `NAME=value` where the name says key,
+  token, secret, password, auth, cookie or seed, a bearer, `mgs_…`, a
+  provider-shaped key, a run of 32+ hex or base64 characters — each `•••`.
+  An activity call is never retried and never fails a turn; `turns.log`
+  counts the lines sent (`steps`).
+- **The agent's powers** are written in the unit's `ExecStart`, never
+  chosen at runtime: `--model claude-opus-5-5 --permission-mode
+  bypassPermissions` — the mode the owner runs builders in, every tool
+  without asking. Its system prompt says who it is (the owner's builder in
+  chat N on ticket T), the house rules (AGENTS.md, no `rm -r`, prod only
+  through `deploy/pipeline`, questions as inputs), short answers, and
+  worktrees and tickets for real work.
+- **Nothing missed, nothing twice:** per chat the last message handled is
+  kept; every (re)subscription — a dropped socket, a server restart, a
+  stream that ended silently (SYNAPSE-21), a `lagged` watch — pages
+  `chats messages --after` it in every open chat. An answer goes to the
+  outbox before it is posted and the mark moves after, so a restart between
+  the two posts it once. A heartbeat call each minute catches a dead socket.
+
 ### Notes (NOTE-2)
 
 A **note** is a thought written down before it is a ticket: dated, never
@@ -3246,6 +3661,49 @@ Under login a note is any member's — `add`, `list` and `get` are a viewer's,
 held anywhere — and `upgrade` is an editor's that also needs
 `tickets.create` where the ticket lands (the parent, else the shortcode's
 root, else `*`).
+
+### Assignees (TICKETS-9)
+
+A ticket has **assignees**: zero or more principals, people or agents
+(owner, 2026-10-17: *"oh make tickets assignable"*). They are a set on the
+row — `assignees`, sorted, each once, at most 16 — so every read that
+carries a row carries them (the board's column, the ticket page, `watch`).
+Every principal assigned must read the ticket: one who cannot is refused in
+band, naming why, and nothing is written.
+
+```sh
+synapse -P 4455 menger tickets assign --id TICKETS-9 --add key:4b5c… --message "yours"
+synapse -P 4455 menger tickets assign --id TICKETS-9 --remove key:4b5c… --add idp:0f8f…
+synapse -P 4455 menger tickets update_many --filter 'label kiln and unassigned' --assign key:4b5c…
+synapse -P 4455 menger tickets list --filter 'assigned me and not category done' --summary true
+```
+
+| method | yields |
+| -- | -- |
+| `tickets.assign { id \| ids, add?, remove?, source?, message? }` | `assignees_changed { ticket, added, removed }` per ticket — the whole ticket, its `assignees` as the write left them; `added` / `removed` the principals that moved (both empty: nothing moved, nothing written). A principal in both is added. `ids`: every one in one write, all or none. A principal who cannot read a ticket, a result past 16, a value that is no principal (`-32602`, naming `add`): refused, nothing written |
+| `tickets.update_many { …, assign?, unassign? }` | the same, beside `update_many`'s other aspects (`changed` names `assignees`); every principal assigned reads every ticket selected |
+
+Each principal moved is a line of the ticket's history: `history { id }`
+yields `assign_record { record }` after its queue records — `principal`,
+`action` (`assigned` / `unassigned`), `at_unix`, `actor`, `name`, `source`,
+`message`. They are a log of their own (`assignment_log`, gained empty on
+open), not transitions, as the queue's are; the set itself is a column of
+`tickets` (`assignees`, `[]` for every ticket from before it), which an
+older release, naming its columns, never reads. **The cells**: `assigned
+<principal>` (quoted, as `assigned "key:4b…"`), `assigned me` (the reader),
+`assigned` (anyone) and `unassigned` — answered from a kept index, principal
+→ tickets, on every filtered read and watch (`entered` / `left` in the write
+that moves it). Under login `assign` is an editor's, on the ticket.
+
+In the app: the board's **who** column (up to three avatars, then `+n`; an
+agent's round); the ticket page's **Assignees** — each one named, × to
+unassign, **+ assign** opening the person picker (the reader first, then
+who holds a grant in the ticket's organization, people and agents, named, an agent
+marked — CHAT-14's `chats.candidates` —, those who read it first; one who cannot is drawn but
+not offered); the right-click menu's **Assign to…** (one ticket or a
+selection); the filter menu's **People** (Assigned to me · Assigned ·
+Unassigned); and on `#/members`, each principal's **assigned →** — the board
+under `assigned "<principal>"`.
 
 ### Queue (MENGER-39)
 
@@ -3932,7 +4390,7 @@ it paints:
 | `colour.kind`, `colour.code` | `--kind-*` (AGS-13's glyphs), `--code-*` (MENGER-22's highlighting) |
 | `colour.diagram` | `--diagram-node --diagram-border --diagram-line --diagram-text` — `auto` (mermaid's own palette for the mode) unless a theme names a colour, which the app and every frame set into mermaid's `themeVariables` |
 | `type.face`, `.scale`, `.weight` | `--mono --sans --font-text` (the app's text) `--font-display` (a ticket's title); `--text-size --text-leading --text-scale` (every other size is `calc(N * var(--text-scale))`); `--weight-normal/-medium/-strong/-bold` |
-| `space` | `--space` — density, multiplying the page's gutters |
+| `space`, `.safe` | `--space` — density, multiplying the page's gutters; `--safe-top --safe-right --safe-bottom --safe-left` — the screen's safe area (APP-65: `env(safe-area-inset-*)`, or `--sai-*` from a mockup's phone, APP-66) |
 | `shape.radius`, `.border` | `--radius-xs … --radius-2xl`, `--radius-bubble --radius-device --radius-phone --radius-pill`; `--border` (every hairline's width) |
 | `motion` | `--motion-fast --motion-flash --ease` |
 
@@ -4178,6 +4636,26 @@ and stay the default until `--identity` is set.
 | `--trusted-proxy <cidr>\|none` | the edge whose `X-Forwarded-For` is believed for the client's IP (repeatable) — by the login throttles and the WebSocket's per-IP and anonymous quotas (TRANSPORT-7), or `none` when people connect directly; with `--identity` off loopback one is required (AUTH-24) — behind the infra's Caddy, the edge's address on the `edge` Docker network |
 | `--return-origin <origin>` | another origin a sign-in may return to (repeatable) |
 
+**The direct buttons with the key** (IDENTITY-45). WorkOS answers a direct
+social sign-in with a pending step when it needs one — always
+`email_verification_required` for a user whose address it has not verified
+(email verification is always on), and Radar's extra code, an organization
+to pick or a second factor — and every grant that completes such a step
+needs the client secret. So when menger holds the environment's API key
+(`--workos-api-key-file <file>`, `MENGER_WORKOS_API_KEY_FILE`; or the key in
+`MENGER_WORKOS_API_KEY`), a `workos=` provider's social `--login-button`s
+(`GitHub=workos:GitHubOAuth`, …) are drawn and completed by the page above
+over the WorkOS backend: the same `provider=…` round trip with PKCE, the code
+traded with the secret beside the verifier, and each pending step on its own
+page — *Verify your email* ("We sent a code to <address>"; *Send another
+code*; a wrong or expired code said so), Radar's code, *Choose an
+organization*, two-step verification. The pending token stays in the
+sign-in's server-side flow, never in a URL, a cookie or a log. No email
+field and no SSO by domain come with it; `--login-email workos:authkit`
+stays AuthKit's. Without a key nothing changes: the buttons are the PKCE
+path. On the box the key is a secret file (`/run/secrets/workos-api-key`,
+deploy/README.md "The WorkOS key on the box").
+
 The WorkOS environment lists `<public-url>/login/callback` as a redirect URI.
 plexus-login's README ("Our own sign-in page") has the safety design, the
 capability model and how a backend is swapped.
@@ -4226,6 +4704,7 @@ its subtree, as before.
 | `editor` | also create and change tickets, and answer inputs |
 | `admin` | also grant and revoke roles on the scope |
 | `deployer` | (DEPLOY-14) read under the scope and record its deployments — a CI's key; beside the line above, not on it |
+| `chatter` | (CHAT-16) the chats it is in on the scope — read, post, mark read, close, rename, its images — and nothing of the tickets (no `tickets.*`; a viewer's permit is never minted from it). Made by an admin's `chats.add --grant chat`, on the ticket alone (or, outside tickets, the organization); beside the line, not on it |
 
 Every read is answered under the caller's filter **and** their viewer
 scopes. `list --filter 'status Ready'` from someone with IDENTITY and OUGHT
@@ -4236,16 +4715,16 @@ what is in reach. A write needs the role on every ticket it touches — AUTH-7:
 refused by the gate, typed (`forbidden { grant: tickets.amend, scope: OUGHT,
 roles, held_on }`). A comment is signed with the
 caller's principal (`principal` beside `author`); no call names its author.
-Someone signed in with no grant reaches nothing and waits in
-`members.requests` for an admin. ACCESS-24: there is no login off; a grant
+Someone signed in with no grant reaches nothing (but what `everyone`
+holds, ACCESS-57, below) and waits in `members.requests` for an admin. ACCESS-24: there is no login off; a grant
 planted while there was is purged ("Login" → The purge).
 
 | method | yields |
 |---|---|
 | `members.mine {}` | `me { principal, name, admin_everywhere }`, then `grant { grant }` each |
 | `members.list { scope? }` | the grants on the scopes the caller administers |
-| `members.grant { principal, scope, role }` | the grant as kept; needs admin on the scope (`scope`: `*`, `acme:`, a shortcode, a ticket, `under` a ticket) |
-| `members.revoke { principal, scope }` | `revoked { principal, scope, existed }` |
+| `members.grant { principal \| team \| everyone: true, scope, role }` | the grant as kept; needs admin on the scope (`scope`: `*`, `acme:`, a shortcode, a ticket, `under` a ticket) |
+| `members.revoke { principal \| team \| everyone: true, scope }` | `revoked { principal, scope, existed }` |
 | `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant — an admin of `*` only (ACCESS-19: the list is every sign-in) |
 | `members.teams.list { org? }` | ACCESS-22: `team { name, org, created_by, at, members }` per team in the caller's organizations |
 | `members.teams.show { team }` | the `team`, a `team_member { member }` per principal in it, then a `grant` per grant it holds on a scope the caller administers |
@@ -4277,6 +4756,29 @@ synapse -P 4450 -t "$ADA" menger members teams create --name release-crew
 synapse -P 4450 -t "$ADA" menger members grant --team release-crew --scope 'under MENGER-5' --role editor
 synapse -P 4450 -t "$ADA" menger members teams add --team release-crew --principal idp:c952acd3-…
 synapse -P 4450 -t "$ADA" menger members teams show --team release-crew
+```
+
+**Everyone** (ACCESS-57) is the grantee every signed-in principal is — a
+person or a key — so a shortcode can be open to all users, someone still
+waiting for access included: `members grant --everyone true --scope DOCS
+--role viewer` keeps the grant to `principal: everyone` (a row of the
+`members` table like any other; no principal is one word, so none is
+`everyone`). Each signed-in caller holds it beside its own grants and its
+teams' — the higher role on a scope wins — within its session's ceiling;
+the anonymous caller holds nothing of it (the gate asks grants only of a
+principal). It is never `admin` (refused, nothing written), it takes admin
+on the scope as any grant, and a grant or revoke moves the generation, so
+open sockets follow. `members.mine` and `auth.whoami` list it (`grant {
+principal: everyone }`), so the app draws the nav for someone holding only
+it. Waiting is about one's own grants: someone holding none of their own
+stays in `members.requests` until an admin grants them something. (AUTH-7's
+`auth.waiting` asks the gate's memberships, which hold everyone's grant, so
+it lists only those who hold nothing at all.) An older build reads the row
+as no grant it knows and holds it nowhere.
+
+```sh
+synapse -P 4450 -t "$ADA" menger members grant --everyone true --scope DOCS --role viewer
+synapse -P 4450 -t "$ADA" menger members revoke --everyone true --scope DOCS
 ```
 
 The first admin is the operator's: `--admin <principal>` (repeatable,

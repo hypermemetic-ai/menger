@@ -328,6 +328,8 @@ impl Field {
             Field::Text(t) => text_matches(t, &f.id, &f.title),
             Field::Label(l) => f.labels.iter().any(|x| x.eq_ignore_ascii_case(l)),
             Field::Archived => f.archived,
+            // TICKETS-9: `unassigned` is `assigned`'s truth, negated.
+            Field::History(h) if h.event == Event::Unassigned => !f.history.iter().any(|x| x == ASSIGNED),
             Field::History(h) => {
                 let key = h.format();
                 f.history.contains(&key)
@@ -340,6 +342,9 @@ impl Field {
         }
     }
 }
+
+/// TICKETS-9: the truth `unassigned` reads — `assigned`, anyone.
+pub const ASSIGNED: &str = "assigned";
 
 /// `not` (or not) before a field.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1223,7 +1228,7 @@ fn predicate_mistake(raw: &str, s: &str) -> Option<Mistake> {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 43] = [
+const NAMES: [&str; 45] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -1258,6 +1263,9 @@ const NAMES: [&str; 43] = [
     "behind",
     // MENGER-39: the owner's queue.
     "queued",
+    // TICKETS-9: who holds it.
+    "unassigned",
+    "assigned",
     // CHAT-3: the reader's unread messages.
     "unread",
     "created",
@@ -1578,6 +1586,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "requested" => read_history(name, tail).map(Field::History),
         // MENGER-39: over the queue's kept entries.
         "queued" => read_history(name, tail).map(Field::History),
+        // TICKETS-9: over the kept assignments.
+        "assigned" | "unassigned" => read_history(name, tail).map(Field::History),
         // CHAT-3: over the chats, for the reader.
         "chatting" | "unread" => read_history(name, tail).map(Field::History),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
@@ -1788,6 +1798,13 @@ pub enum Event {
     /// ticket. Answered for the reader from the chats' read marks; no
     /// window, no `by`.
     Unread,
+    /// TICKETS-9: `assigned <who>` — the principal (`me`: the reader) is
+    /// among the ticket's assignees; `assigned` alone, anyone is. Answered
+    /// from the kept assignments; no window, no `by`.
+    Assigned(Option<Who>),
+    /// TICKETS-9: `unassigned` — the ticket has no assignee: `not
+    /// assigned`, read from the same truth.
+    Unassigned,
     /// ARCHIVE-2: `archived <window> [by who]` — the ticket is archived, and
     /// the write that archived it (its latest archive transition) was in
     /// the window, by that actor. Names the archive, as `archived` does.
@@ -1816,6 +1833,8 @@ impl Event {
             Event::Queued(_) => "queued",
             Event::Chatting => "chatting",
             Event::Unread => "unread",
+            Event::Assigned(_) => "assigned",
+            Event::Unassigned => "unassigned",
             Event::Archived => "archived",
             Event::Restored => "restored",
         }
@@ -2131,6 +2150,9 @@ impl History {
             Event::Queued(Some(u)) => format!("queued {u}"),
             Event::Chatting => "chatting".to_string(),
             Event::Unread => "unread".to_string(),
+            Event::Assigned(None) => "assigned".to_string(),
+            Event::Assigned(Some(w)) => format!("assigned {}", w.format()),
+            Event::Unassigned => "unassigned".to_string(),
             Event::Archived => "archived".to_string(),
             Event::Restored => "restored".to_string(),
             Event::Held(h) => {
@@ -2258,6 +2280,18 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
                 return Err(format!("`{extra}` is not understood here — `queued` takes an urgency (whenever, today, now, blocking) and nothing else: no window, no `by`"));
             }
             return Ok(History { event: Event::Queued(u), window: None, by: None });
+        }
+        // TICKETS-9: `assigned [who]`, `unassigned`, and nothing after.
+        "assigned" | "unassigned" => {
+            let who = (name == "assigned").then(|| w.first().map(|x| Who::read(x))).flatten();
+            if let Some(extra) = w.get(usize::from(who.is_some())) {
+                return Err(format!("`{extra}` is not understood here — `{name}` takes {}nothing else: no window, no `by`", if name == "assigned" { "a principal or `me`, and " } else { "" }));
+            }
+            if who == Some(Who::System) {
+                return Err("`assigned` names a principal or `me` — the store itself is never an assignee".into());
+            }
+            let event = if name == "assigned" { Event::Assigned(who) } else { Event::Unassigned };
+            return Ok(History { event, window: None, by: None });
         }
         // CHAT-3: `chatting`, `unread`, and nothing after either.
         "chatting" | "unread" => {

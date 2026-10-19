@@ -259,6 +259,7 @@ impl Store {
                 commits: Vec::new(),
                 // MENGER-12: labelled after birth, by `label`.
                 labels: Vec::new(),
+                assignees: Vec::new(),
                 // WAVE-10: checked above.
                 path: new.path,
                 // WAVE-6: placed below, with the derived state.

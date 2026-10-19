@@ -150,6 +150,53 @@ impl IdentitySpec {
     }
 }
 
+/// IDENTITY-45: a `workos=<client>` `--auth-provider`'s direct social
+/// buttons (`GitHub=workos:GitHubOAuth`, …) completed through the WorkOS
+/// backend once the app holds the environment's API key — so WorkOS's
+/// pending steps (an email to verify, Radar's extra code, an organization to
+/// pick, a second factor) are taken on the app's own page, where the code
+/// grants need the secret. What it answers: the backend (those buttons'
+/// providers its social sign-ins; no email field, no SSO by domain: the
+/// email field, `workos:authkit`, stays the provider's), and the buttons
+/// left to the provider's PKCE path. `None` without a `workos` provider or
+/// without a button it takes. Without the key nothing calls this: the
+/// buttons stay the PKCE path, unchanged.
+pub fn workos_direct(
+    providers: &[crate::login::Provider],
+    buttons: &[crate::login::LoginButton],
+    key: workos::ApiKey,
+    app: &str,
+) -> anyhow::Result<Option<(Arc<dyn IdentityBackend>, Vec<crate::login::LoginButton>)>> {
+    let Some((client, base)) = providers.iter().find_map(|p| match p {
+        crate::login::Provider::WorkOs { client, base, .. } => Some((client.clone(), base.clone())),
+        _ => None,
+    }) else {
+        return Ok(None);
+    };
+    let provider = providers.iter().find(|p| matches!(p, crate::login::Provider::WorkOs { .. })).map(|p| p.name().to_string()).unwrap_or_default();
+    let social_of = |b: &crate::login::LoginButton| -> Option<Social> {
+        if b.provider != provider {
+            return None;
+        }
+        let c = b.connection.as_deref()?;
+        Social::ALL.into_iter().find(|s| workos::provider_name(*s) == c)
+    };
+    let mut social = Vec::new();
+    let mut rest = Vec::new();
+    for b in buttons {
+        match social_of(b) {
+            Some(s) if !social.contains(&s) => social.push(s),
+            Some(_) => {}
+            None => rest.push(b.clone()),
+        }
+    }
+    if social.is_empty() {
+        return Ok(None);
+    }
+    let backend = workos::WorkOs::new(workos::WorkOsConfig { client, base, key, social, sso: false, email_code: false, totp_issuer: app.to_string() })?;
+    Ok(Some((Arc::new(backend), rest)))
+}
+
 /// [`IdentitySpec`] parsed and built.
 pub fn from_spec(spec: &str, app: &str) -> anyhow::Result<Arc<dyn IdentityBackend>> {
     spec.parse::<IdentitySpec>().map_err(anyhow::Error::msg)?.build(app)
@@ -180,6 +227,25 @@ mod tests {
         for bad in ["workos", "workos:x", "workos:client_1,social=myspace", "plexus-idp:x", "ldap:x", "memory:what=ever"] {
             assert!(bad.parse::<IdentitySpec>().is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_keyed_workos_provider_takes_its_social_buttons_and_leaves_the_rest() {
+        use crate::login::{LoginButton, Provider};
+        let providers: Vec<Provider> = ["workos=client_01ABC", "key"].iter().map(|s| s.parse().unwrap()).collect();
+        let b = |l: &str, p: &str, c: Option<&str>| LoginButton { label: l.into(), provider: p.into(), connection: c.map(str::to_string) };
+        let buttons = vec![b("GitHub", "workos", Some("GitHubOAuth")), b("SSO", "workos", Some("authkit")), b("Google", "workos", Some("GoogleOAuth"))];
+        let key = || workos::ApiKey::new("sk_test_direct0123456789").unwrap();
+        let (backend, rest) = workos_direct(&providers, &buttons, key(), "toy").unwrap().expect("taken");
+        assert_eq!(backend.name(), "workos");
+        let caps = backend.capabilities();
+        assert_eq!(caps.social, vec![Social::GitHub, Social::Google], "in the buttons' order");
+        assert!(!caps.email_code && !caps.sso_by_domain && !caps.password, "{caps:?}");
+        assert_eq!(rest, vec![buttons[1].clone()], "AuthKit stays the provider's");
+        // No workos provider, or no button it takes: nothing.
+        let other: Vec<Provider> = vec!["key".parse().unwrap()];
+        assert!(workos_direct(&other, &buttons, key(), "toy").unwrap().is_none());
+        assert!(workos_direct(&providers, &buttons[1..2], key(), "toy").unwrap().is_none());
     }
 
     #[test]

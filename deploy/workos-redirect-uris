@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""RUN-12: the redirect URIs a WorkOS environment accepts, through its API.
+
+  deploy/workos-redirect-uris list
+  deploy/workos-redirect-uris ensure URI [URI...]   add each that is missing (idempotent)
+  deploy/workos-redirect-uris remove URI [URI...]   delete each that is present
+  deploy/workos-redirect-uris user EMAIL            the environment's users with that email:
+                                                    id (menger's principal oidc:workos/<id>),
+                                                    created, and how they sign in (GitHub, …)
+
+The environment is the API key's: WORKOS_API_KEY in the environment, else the
+staging key at ~/.config/workos/staging.key. Production is run through the
+owner's Ledger, never with a key on disk:
+
+  ledger-secret run workos-prod WORKOS_API_KEY -- deploy/workos-redirect-uris ensure https://app.menger.sh/login/callback https://app-test.menger.sh/login/callback
+  ledger-secret run workos-prod WORKOS_API_KEY -- deploy/workos-redirect-uris user <owner email>
+
+The key is never printed. WorkOS refuses http:// and wildcards in production.
+"""
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+
+API = "https://api.workos.com/user_management/redirect_uris"
+USERS = "https://api.workos.com/user_management/users"
+
+
+def key():
+    k = os.environ.get("WORKOS_API_KEY")
+    if not k:
+        with open(os.path.expanduser("~/.config/workos/staging.key")) as f:
+            k = f.read().strip()
+    return k
+
+
+def call(method, url, body=None):
+    req = urllib.request.Request(url, method=method, headers={"Authorization": f"Bearer {key()}", "Content-Type": "application/json"})
+    data = json.dumps(body).encode() if body is not None else None
+    try:
+        with urllib.request.urlopen(req, data, timeout=30) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        sys.exit(f"workos-redirect-uris: {method} {url.split('?')[0]} → {e.code} {e.read().decode(errors='replace')[:300]}")
+
+
+def existing():
+    out, after = [], None
+    while True:
+        q = {"limit": "100", "order": "asc"}
+        if after:
+            q["after"] = after
+        page = call("GET", API + "?" + urllib.parse.urlencode(q))
+        out += page.get("data", [])
+        after = page.get("list_metadata", {}).get("after")
+        if not after:
+            return out
+
+
+def main(argv):
+    if argv[:1] == ["list"]:
+        for r in existing():
+            print(("* " if r.get("default") else "  ") + r["uri"])
+    elif argv[:1] == ["ensure"] and argv[1:]:
+        have = {r["uri"] for r in existing()}
+        for uri in argv[1:]:
+            if uri in have:
+                print(f"present  {uri}")
+            else:
+                call("POST", API, {"uri": uri})
+                print(f"added    {uri}")
+    elif argv[:1] == ["remove"] and argv[1:]:
+        have = {r["uri"]: r["id"] for r in existing()}
+        for uri in argv[1:]:
+            if uri in have:
+                call("DELETE", f"{API}/{have[uri]}")
+                print(f"removed  {uri}")
+            else:
+                print(f"absent   {uri}")
+    elif argv[:1] == ["user"] and len(argv) == 2:
+        users = call("GET", USERS + "?" + urllib.parse.urlencode({"email": argv[1]})).get("data", [])
+        if not users:
+            print(f"no user {argv[1]} in this environment")
+        for u in users:
+            ids = call("GET", f"{USERS}/{u['id']}/identities")
+            via = ", ".join(sorted({i.get("provider", "?") for i in (ids if isinstance(ids, list) else ids.get("data", []))})) or "password / magic auth"
+            print(f"oidc:workos/{u['id']}  {u.get('email')}  created {u.get('created_at')}  via {via}")
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

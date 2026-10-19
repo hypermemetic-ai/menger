@@ -87,7 +87,7 @@ async fn a_chat_is_opened_on_its_ticket_and_the_same_chat_again_is_that_chat() {
     // As ada lists them on KILN-7's page: hers there, each with her unread.
     let (rows, next) = store.chats(&reader(ADA), &ChatQuery { ticket: Some("kiln-7".into()), ..Default::default() }, None, 50).unwrap();
     assert_eq!(rows.iter().map(|c| c.id.get()).collect::<Vec<_>>(), [2, 1]);
-    assert_eq!((next, rows[0].ticket.as_str(), rows[0].unread), (None, "KILN-7", 0));
+    assert_eq!((next, rows[0].ticket.as_deref().unwrap_or(""), rows[0].unread), (None, "KILN-7", 0));
 }
 
 /// CHAT-6: a chat may have only you in it — `others` empty, or naming only
@@ -119,9 +119,9 @@ async fn a_chat_of_one_is_opened_and_others_join_it_later() {
     let wait = MessageWait { chat: Some(c.id), after: mine.id.get() - 1, ..Default::default() };
     assert_eq!(store.message_for(&reader(ADA), &wait), None, "your own posts don't count");
     // Adding: as ever, the one added must read the ticket.
-    let e = store.add_to_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), SAM.into(), reads).await.unwrap_err();
+    let e = store.add_to_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), SAM.into(), reads).await.unwrap_err();
     assert_eq!(e, ChatError::Refused(vec![format!("{SAM} can't read KILN-7")]));
-    let added = store.add_to_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), BUILDER.into(), reads).await.unwrap();
+    let added = store.add_to_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), BUILDER.into(), reads).await.unwrap();
     assert_eq!(added.parts.len(), 2);
     let answer = post(&store, BUILDER, c.id, "reading it now").await.unwrap();
     assert_eq!(store.message_for(&reader(ADA), &wait), Some(answer), "whoever is added and posts");
@@ -155,7 +155,7 @@ async fn only_participants_read_a_chat() {
     assert_eq!(store.chat_messages(&b, c.id, None, 100).unwrap().0.len(), 1);
     assert_eq!(store.chats(&b, &ChatQuery { ticket: Some("KILN-7".into()), ..Default::default() }, None, 50).unwrap().0.len(), 1);
     assert!(store.chats(&b, &ChatQuery::default(), None, 50).unwrap().0.is_empty(), "not its own chats");
-    let refused = store.post_chat(SYS.permit("KILN-7"), c.id, Signer::named(BOSS), "hello".into()).await.unwrap_err();
+    let refused = store.post_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(BOSS), "hello".into()).await.unwrap_err();
     assert!(matches!(&refused, ChatError::Refused(r) if r[0].starts_with("you are not in chat 1")), "{refused:?}");
 }
 
@@ -170,7 +170,7 @@ async fn every_participant_can_read_the_ticket() {
     assert!(store.tickets.read().unwrap().chats.by_id.is_empty());
     // Nor added later.
     let (c, _) = open(&store, ADA, "KILN-7", &[RUI]).await.unwrap();
-    let e = store.add_to_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), SAM.into(), reads).await.unwrap_err();
+    let e = store.add_to_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), SAM.into(), reads).await.unwrap_err();
     assert_eq!(e, ChatError::Refused(vec![format!("{SAM} can't read KILN-7")]));
     // A grant revoked: rui, a participant, without its reach on KILN, has
     // lost the chat — and has it back when the reach is back.
@@ -182,15 +182,15 @@ async fn every_participant_can_read_the_ticket() {
     assert!(store.chats(&revoked, &ChatQuery::default(), None, 50).unwrap().0.is_empty());
     assert!(store.chat_view(&reader(RUI), c.id).is_some());
     // An add: ada adds builder; adding builder again is the chat as it is.
-    let added = store.add_to_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), BUILDER.into(), reads).await.unwrap();
+    let added = store.add_to_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), BUILDER.into(), reads).await.unwrap();
     assert_eq!(added.parts.len(), 3);
     let _ = rx.try_recv();
     assert!(matches!(rx.try_recv().unwrap(), ChatChange::Added(_)));
-    let same = store.add_to_chat(SYS.permit("KILN-7"), c.id, Signer::named(RUI), BUILDER.into(), reads).await.unwrap();
+    let same = store.add_to_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(RUI), BUILDER.into(), reads).await.unwrap();
     assert_eq!(same, added);
     assert!(rx.try_recv().is_err());
     // The permit must be for this chat's ticket.
-    let wrong = store.add_to_chat(SYS.permit("KILN-4"), c.id, Signer::named(ADA), REVIEWER.into(), reads).await.unwrap_err();
+    let wrong = store.add_to_chat(SYS.permit::<Viewer>("KILN-4"), c.id, Signer::named(ADA), REVIEWER.into(), reads).await.unwrap_err();
     assert_eq!(wrong, ChatError::NotFound(c.id));
 }
 
@@ -200,7 +200,7 @@ async fn a_message_is_signed_by_its_caller() {
     let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
     let mut rx = store.subscribe_chats();
     let signer = Signer { principal: BUILDER.into(), name: Some("builder".into()) };
-    let m = store.post_chat(SYS.permit("KILN-7"), c.id, signer, "The test.".into()).await.unwrap();
+    let m = store.post_chat(SYS.permit::<Viewer>("KILN-7"), c.id, signer, "The test.".into()).await.unwrap();
     assert_eq!((m.id.get(), m.chat.get(), m.author.as_str(), m.name.as_deref(), m.via.as_deref(), m.body.as_str()), (1, 1, BUILDER, Some("builder"), None, "The test."));
     assert_eq!(rx.try_recv().unwrap(), ChatChange::Posted(m.clone()), "to every participant's watch");
     // The poster has read its own; the other has one unread.
@@ -258,6 +258,43 @@ async fn who_is_listening_is_shown_until_the_wait_ends() {
     assert!(store.chat_view(&reader(ADA), c.id).unwrap().waiting.is_empty());
 }
 
+/// CHAT-18: live work is said to the chat and kept in memory, never a
+/// message; only a participant says it or reads it back.
+#[tokio::test]
+async fn activity_is_live_and_kept_in_memory_never_a_message() {
+    use crate::chats::{ActivityState, ACTIVITY_KEPT, ACTIVITY_LINE_MAX};
+    let store = kiln().await;
+    let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    let mut rx = store.subscribe_chats();
+    let b = reader(BUILDER);
+    let started = store.chat_activity(&b, c.id, ActivityState::Started, None).unwrap();
+    assert_eq!((started.state, started.by.as_str(), started.line.as_deref()), (ActivityState::Started, BUILDER, None));
+    assert_eq!(rx.try_recv().unwrap(), ChatChange::Activity(started.clone()));
+    let long = "x".repeat(ACTIVITY_LINE_MAX * 2);
+    let line = store.chat_activity(&b, c.id, ActivityState::Working, Some(&long)).unwrap();
+    assert!(line.seq > started.seq);
+    assert_eq!(line.line.unwrap().chars().count(), ACTIVITY_LINE_MAX, "a line is cut");
+    // Nothing is a message, and no one's unread moved.
+    assert!(store.chat_messages(&reader(ADA), c.id, None, 100).unwrap().0.is_empty());
+    assert_eq!(store.chat_view(&reader(ADA), c.id).unwrap().unread, 0);
+    // The log: oldest first, for participants.
+    let log = store.chat_activity_log(&reader(ADA), c.id).unwrap();
+    assert_eq!(log.iter().map(|a| a.state).collect::<Vec<_>>(), [ActivityState::Started, ActivityState::Working]);
+    // Not in it — a reader of KILN, the ticket's admin, one of elsewhere: not found.
+    for who in [reader(RUI), boss(), outsider(SAM)] {
+        assert_eq!(store.chat_activity(&who, c.id, ActivityState::Working, Some("hi")), Err(ChatError::NotFound(c.id)));
+        assert_eq!(store.chat_activity_log(&who, c.id), Err(ChatError::NotFound(c.id)));
+    }
+    // The ring keeps the newest.
+    for i in 0..ACTIVITY_KEPT + 5 {
+        store.chat_activity(&b, c.id, ActivityState::Working, Some(&format!("step {i}"))).unwrap();
+    }
+    let log = store.chat_activity_log(&b, c.id).unwrap();
+    assert_eq!(log.len(), ACTIVITY_KEPT);
+    assert_eq!(log.last().unwrap().line.as_deref(), Some(format!("step {}", ACTIVITY_KEPT + 4).as_str()));
+    assert!(log.windows(2).all(|w| w[0].seq < w[1].seq));
+}
+
 #[tokio::test]
 async fn unread_is_kept_per_participant() {
     let store = kiln().await;
@@ -271,17 +308,17 @@ async fn unread_is_kept_per_participant() {
     assert_eq!(unread.len(), 1);
     let mut rx = store.subscribe_chats();
     // ada reads up to the second: one left.
-    assert_eq!(store.read_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), 2).await.unwrap(), (2, 1));
+    assert_eq!(store.read_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), 2).await.unwrap(), (2, 1));
     assert_eq!(rx.try_recv().unwrap(), ChatChange::Read { chat: c.id, principal: ADA.into(), upto: 2 });
     // A mark never moves back, and past the last it is the last.
-    assert_eq!(store.read_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), 1).await.unwrap(), (2, 1));
+    assert_eq!(store.read_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), 1).await.unwrap(), (2, 1));
     assert!(rx.try_recv().is_err(), "unmoved: nothing written");
-    assert_eq!(store.read_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), 99).await.unwrap(), (3, 0));
+    assert_eq!(store.read_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), 99).await.unwrap(), (3, 0));
     assert!(store.chats(&ada, &ChatQuery { unread: Some(true), ..Default::default() }, None, 50).unwrap().0.is_empty());
     // reviewer's own count is its own.
     assert_eq!(store.chat_view(&reader(REVIEWER), c.id).unwrap().unread, 0);
     // An admin of the ticket has no mark.
-    let e = store.read_chat(SYS.permit("KILN-7"), c.id, Signer::named(BOSS), 3).await.unwrap_err();
+    let e = store.read_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(BOSS), 3).await.unwrap_err();
     assert!(matches!(e, ChatError::Refused(_)), "{e:?}");
 }
 
@@ -289,10 +326,10 @@ async fn unread_is_kept_per_participant() {
 async fn a_chat_closes_read_only_and_reopens() {
     let store = kiln().await;
     let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
-    let closed = store.set_chat_state(SYS.permit("KILN-7"), c.id, Signer::named(ADA), false).await.unwrap();
+    let closed = store.set_chat_state(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), false).await.unwrap();
     assert_eq!(closed.state, ChatState::Closed);
     assert_eq!(post(&store, BUILDER, c.id, "one more thing").await.unwrap_err(), ChatError::Refused(vec!["chat 1 is closed".into()]));
-    let e = store.add_to_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), RUI.into(), reads).await.unwrap_err();
+    let e = store.add_to_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), RUI.into(), reads).await.unwrap_err();
     assert_eq!(e, ChatError::Refused(vec!["chat 1 is closed".into()]));
     // Kept on its ticket, in the closed list.
     let (rows, _) = store.chats(&reader(ADA), &ChatQuery { ticket: Some("KILN-7".into()), state: Some(ChatState::Closed), ..Default::default() }, None, 50).unwrap();
@@ -300,11 +337,11 @@ async fn a_chat_closes_read_only_and_reopens() {
     // A closed chat is not the open chat the same set finds: a new one opens.
     assert_eq!(open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap(), (store.tickets.read().unwrap().chats.by_id[&2].clone(), false));
     // Any participant reopens it; then it takes posts again.
-    let reopened = store.set_chat_state(SYS.permit("KILN-7"), c.id, Signer::named(BUILDER), true).await.unwrap();
+    let reopened = store.set_chat_state(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(BUILDER), true).await.unwrap();
     assert_eq!(reopened.state, ChatState::Open);
     assert!(post(&store, BUILDER, c.id, "one more thing").await.is_ok());
     // Not a participant: refused.
-    let e = store.set_chat_state(SYS.permit("KILN-7"), c.id, Signer::named(RUI), false).await.unwrap_err();
+    let e = store.set_chat_state(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(RUI), false).await.unwrap_err();
     assert!(matches!(e, ChatError::Refused(_)));
 }
 
@@ -326,7 +363,7 @@ async fn the_filter_cells_find_tickets_by_the_reader_s_chats() {
     post(&store, BUILDER, four.id, "which shelf is cone 5?").await.unwrap();
     post(&store, BUILDER, two.id, "fixed").await.unwrap();
     post(&store, ADA, two.id, "thanks").await.unwrap();
-    store.set_chat_state(SYS.permit("KILN-2"), two.id, Signer::named(ADA), false).await.unwrap();
+    store.set_chat_state(SYS.permit::<Viewer>("KILN-2"), two.id, Signer::named(ADA), false).await.unwrap();
     // What is waiting on ada: KILN-4 alone (her own on KILN-7 is read).
     assert_eq!(admitted(&store, ADA, "unread"), ["KILN-4"]);
     assert_eq!(admitted(&store, ADA, "chatting"), ["KILN-4", "KILN-7"], "KILN-2's chat is closed");
@@ -339,7 +376,7 @@ async fn the_filter_cells_find_tickets_by_the_reader_s_chats() {
     let mut filtered = store.subscribe_filtered();
     let lens = Lens::parse("unread").unwrap().with_clock(Clock { me: ADA.into(), ..Clock::default() });
     let watcher = store.watcher(lens);
-    store.read_chat(SYS.permit("KILN-4"), four.id, Signer::named(ADA), 99).await.unwrap();
+    store.read_chat(SYS.permit::<Viewer>("KILN-4"), four.id, Signer::named(ADA), 99).await.unwrap();
     assert!(admitted(&store, ADA, "unread").is_empty());
     let mut heard = Vec::new();
     while let Ok(c) = filtered.try_change() {
@@ -363,12 +400,12 @@ async fn the_chats_survive_a_reopen() {
         let store = Store::open(&path).unwrap();
         store.create(SYS, super::tests_reach::new("KILN", Kind::Scope, None, &[], "")).await.unwrap();
         store.create(SYS, super::tests_reach::new("KILN", Kind::Build, Some("KILN-1"), &[], "")).await.unwrap();
-        let (c, _) = store.open_chat(SYS.permit("KILN-2"), Signer::named(ADA), vec![BUILDER.into()], Some(" the gate ".into()), reads).await.unwrap();
-        store.post_chat(SYS.permit("KILN-2"), c.id, Signer::named(BUILDER), "one".into()).await.unwrap();
-        store.post_chat(SYS.permit("KILN-2"), c.id, Signer::named(BUILDER), "two".into()).await.unwrap();
-        store.read_chat(SYS.permit("KILN-2"), c.id, Signer::named(ADA), 1).await.unwrap();
-        store.add_to_chat(SYS.permit("KILN-2"), c.id, Signer::named(ADA), RUI.into(), reads).await.unwrap();
-        store.set_chat_state(SYS.permit("KILN-2"), c.id, Signer::named(ADA), false).await.unwrap();
+        let (c, _) = store.open_chat(SYS.permit::<Viewer>("KILN-2"), Signer::named(ADA), vec![BUILDER.into()], Some(" the gate ".into()), reads).await.unwrap();
+        store.post_chat(SYS.permit::<Viewer>("KILN-2"), c.id, Signer::named(BUILDER), "one".into()).await.unwrap();
+        store.post_chat(SYS.permit::<Viewer>("KILN-2"), c.id, Signer::named(BUILDER), "two".into()).await.unwrap();
+        store.read_chat(SYS.permit::<Viewer>("KILN-2"), c.id, Signer::named(ADA), 1).await.unwrap();
+        store.add_to_chat(SYS.permit::<Viewer>("KILN-2"), c.id, Signer::named(ADA), RUI.into(), reads).await.unwrap();
+        store.set_chat_state(SYS.permit::<Viewer>("KILN-2"), c.id, Signer::named(ADA), false).await.unwrap();
     }
     let store = Store::open(&path).unwrap();
     let view = store.chat_view(&reader(ADA), 1).unwrap();
@@ -378,9 +415,9 @@ async fn the_chats_survive_a_reopen() {
     let (msgs, next) = store.chat_messages(&reader(ADA), 1, Some(1), 100).unwrap();
     assert_eq!((msgs.len(), msgs[0].body.as_str(), next), (1, "two", None));
     // Ids go on from the file's.
-    store.set_chat_state(SYS.permit("KILN-2"), 1, Signer::named(ADA), true).await.unwrap();
-    assert_eq!(store.post_chat(SYS.permit("KILN-2"), 1, Signer::named(ADA), "three".into()).await.unwrap().id.get(), 3);
-    assert_eq!(store.open_chat(SYS.permit("KILN-2"), Signer::named(ADA), vec![REVIEWER.into()], None, reads).await.unwrap().0.id, 2);
+    store.set_chat_state(SYS.permit::<Viewer>("KILN-2"), 1, Signer::named(ADA), true).await.unwrap();
+    assert_eq!(store.post_chat(SYS.permit::<Viewer>("KILN-2"), 1, Signer::named(ADA), "three".into()).await.unwrap().id.get(), 3);
+    assert_eq!(store.open_chat(SYS.permit::<Viewer>("KILN-2"), Signer::named(ADA), vec![REVIEWER.into()], None, reads).await.unwrap().0.id, 2);
 }
 
 #[tokio::test]
@@ -413,15 +450,15 @@ async fn a_participant_renames_a_chat() {
     let store = kiln().await;
     let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
     let mut rx = store.subscribe_chats();
-    let named = store.rename_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), Some("  The hold at 1240 °C ".into())).await.unwrap();
+    let named = store.rename_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), Some("  The hold at 1240 °C ".into())).await.unwrap();
     assert_eq!(named.title.as_deref(), Some("The hold at 1240 °C"));
     assert!(matches!(rx.try_recv().unwrap(), ChatChange::Renamed(r) if r.id == c.id));
-    let same = store.rename_chat(SYS.permit("KILN-7"), c.id, Signer::named(BUILDER), Some("The hold at 1240 °C".into())).await.unwrap();
+    let same = store.rename_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(BUILDER), Some("The hold at 1240 °C".into())).await.unwrap();
     assert_eq!(same.title.as_deref(), Some("The hold at 1240 °C"));
     assert!(rx.try_recv().is_err(), "the same title: nothing written");
-    let e = store.rename_chat(SYS.permit("KILN-7"), c.id, Signer::named(RUI), Some("mine".into())).await.unwrap_err();
+    let e = store.rename_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(RUI), Some("mine".into())).await.unwrap_err();
     assert_eq!(e, ChatError::Refused(vec![format!("you are not in chat {}: only its participants rename it", c.id)]));
-    let cleared = store.rename_chat(SYS.permit("KILN-7"), c.id, Signer::named(ADA), Some(" ".into())).await.unwrap();
+    let cleared = store.rename_chat(SYS.permit::<Viewer>("KILN-7"), c.id, Signer::named(ADA), Some(" ".into())).await.unwrap();
     assert_eq!(cleared.title, None);
     assert_eq!(store.chat_view(&reader(ADA), c.id).unwrap().title, None);
 }
@@ -492,4 +529,69 @@ async fn synthetic_chats_are_seeded_in_bulk() {
     let lines = store.chat_page(&ada, made[1].1, Paging::Newest, 1).unwrap().0[0].body.lines().filter(|l| l.starts_with("Line ")).count();
     assert!(lines > 100, "{lines}");
     assert!(synthetic_message(4).contains("```rust"), "some code");
+}
+
+/// CHAT-13: the standing members (`--chat-member`) are in every chat
+/// opened — beside the caller and the others named, and in a chat of one —
+/// even one that can't read the ticket (added, and said in the log); the
+/// same chat again is that chat; a member opening is in it once; each is
+/// drawn as an agent (`Chat.agents`).
+#[tokio::test]
+async fn every_chat_opened_holds_the_standing_members() {
+    let store = kiln().await;
+    store.set_chat_members(vec![REVIEWER.into(), SAM.into(), " ".into(), REVIEWER.into()]);
+    assert_eq!(store.chat_members(), [REVIEWER, SAM], "blank and repeated set aside");
+    let (c, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    assert_eq!(c.parts.iter().map(|p| p.principal.as_str()).collect::<Vec<_>>(), [ADA, BUILDER, REVIEWER, SAM], "sam can't read KILN, and is added anyway");
+    assert!(c.parts.iter().all(|p| p.added_by == ADA));
+    let (again, existing) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    assert!(existing && again.id == c.id, "the same chat again is that chat");
+    // A chat of one is the caller's and the members'.
+    let (one, existing) = open(&store, ADA, "KILN-6", &[]).await.unwrap();
+    assert!(!existing);
+    assert_eq!(one.parts.iter().map(|p| p.principal.as_str()).collect::<Vec<_>>(), [ADA, REVIEWER, SAM]);
+    // A member opening is in it once.
+    let (own, _) = open(&store, REVIEWER, "KILN-5", &[ADA]).await.unwrap();
+    assert_eq!(own.parts.iter().map(|p| p.principal.as_str()).collect::<Vec<_>>(), [REVIEWER, ADA, SAM]);
+    // Naming one who can't read is still refused: the members' pass is theirs alone.
+    assert!(matches!(open(&store, ADA, "KILN-4", &[SAM]).await, Err(ChatError::Refused(_))));
+    // The view names them as agents.
+    let view = store.chat_view(&reader(ADA), c.id).unwrap();
+    assert_eq!(view.agents, [REVIEWER, SAM]);
+    assert!(store.chat_view(&reader(REVIEWER), c.id).is_some(), "a member sees the chat");
+}
+
+/// CHAT-13: at startup every open chat gains the standing members it
+/// lacks — signed `system`, an `added` change each — once: a second run
+/// writes nothing; a closed chat is left as it is; nothing set, nothing done.
+#[tokio::test]
+async fn the_startup_back_fill_seats_the_members_once() {
+    let store = kiln().await;
+    let (a, _) = open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap();
+    let (b, _) = open(&store, ADA, "KILN-6", &[]).await.unwrap();
+    let (closed, _) = open(&store, ADA, "KILN-5", &[]).await.unwrap();
+    store.set_chat_state(SYS.permit::<Viewer>("KILN-5"), closed.id, Signer::named(ADA), false).await.unwrap();
+    let (held, _) = open(&store, REVIEWER, "KILN-4", &[ADA]).await.unwrap();
+    assert!(store.seat_chat_members(SYS, |_, _| true).await.unwrap().is_empty(), "no members: nothing");
+    store.set_chat_members(vec![REVIEWER.into()]);
+    let mut rx = store.subscribe_chats();
+    let seated = store.seat_chat_members(SYS, |p, _| p != SAM).await.unwrap();
+    assert_eq!(seated, [a.id, b.id], "the open chats that lacked it; not the closed one, nor one it is in");
+    for id in [a.id, b.id] {
+        let ChatChange::Added(c) = rx.try_recv().unwrap() else { panic!("an added change") };
+        assert_eq!(c.id, id);
+        let p = c.parts.last().unwrap();
+        assert_eq!((p.principal.as_str(), p.added_by.as_str(), p.read_upto), (REVIEWER, "system", 0));
+    }
+    assert!(rx.try_recv().is_err());
+    let kept = store.tickets.read().unwrap().chats.by_id.clone();
+    assert!(!kept[&closed.id].has(REVIEWER) && kept[&held.id].parts.len() == 2);
+    // Again: nothing written, nothing said.
+    assert!(store.seat_chat_members(SYS, |_, _| true).await.unwrap().is_empty());
+    assert!(rx.try_recv().is_err());
+    assert_eq!(store.tickets.read().unwrap().chats.by_id, kept);
+    // A member without read is seated anyway.
+    store.set_chat_members(vec![REVIEWER.into(), SAM.into()]);
+    assert_eq!(store.seat_chat_members(SYS, |p, _| p != SAM).await.unwrap(), [a.id, b.id, held.id]);
+    assert!(store.tickets.read().unwrap().chats.by_id[&held.id].has(SAM));
 }

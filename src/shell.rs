@@ -118,6 +118,14 @@ const FAVICON: &str = include_str!("../web/favicon.svg");
 /// build (MFE-4); stamped as the app's entrypoint is (MFE-9, MFE-23).
 const VANILLA: &str = include_str!("../web/index.html");
 
+/// APP-64: the app build's files served at the root too, public — what
+/// Add to Home Screen and an installed app ask the origin for (iOS takes
+/// no SVG icon; frontend/icons/, scripts/icons.sh). No data in any of them,
+/// and a manifest is fetched without credentials, so none is behind a
+/// session.
+pub const ROOT_FILES: [&str; 5] =
+    ["apple-touch-icon.png", "icon-192.png", "icon-512.png", "icon-512-maskable.png", "manifest.webmanifest"];
+
 /// ACCESS-28: the app's pages' Content-Security-Policy (plexus-shell fills
 /// `{{SCRIPTS}}` with the page's inline-script hashes and `{{HUB}}` with the
 /// hub's WebSocket origins at the name the page was asked for):
@@ -203,6 +211,7 @@ pub fn app_shell(env: Option<&str>, app: AppSource) -> plexus_shell::ShellConfig
     cfg.root_fallback = Some(VANILLA.into());
     cfg.not_built = Some(NOT_BUILT.into());
     cfg.csp = PAGE_CSP.into();
+    cfg.root_files = ROOT_FILES.iter().map(|f| f.to_string()).collect();
     cfg
 }
 
@@ -327,9 +336,13 @@ async fn require_session(
 }
 
 /// IDENTITY-38 / DESIGN-40: the app's files a ticket body's frame loads
-/// from its opaque origin — public code and faces, no data.
+/// from its opaque origin — public code and faces, no data. APP-64: and the
+/// home-screen icons and manifest, at the root and under `/app/`.
 fn is_public_asset(path: &str) -> bool {
-    path.starts_with("/app/vendor/") || is_font(path)
+    let root_file = |p: &str| ROOT_FILES.contains(&p);
+    path.starts_with("/app/vendor/")
+        || is_font(path)
+        || path.strip_prefix("/app/").or(path.strip_prefix('/')).is_some_and(root_file)
 }
 
 /// DESIGN-40: the house faces, served from the app's build.
@@ -433,7 +446,8 @@ mod tests {
     }
 
     /// DESIGN-40: the faces and the vendored code are the public assets a
-    /// frame loads; nothing else of the app is.
+    /// frame loads; APP-64: and the home-screen files. Nothing else of the
+    /// app is.
     #[test]
     fn only_the_faces_and_the_vendored_code_are_public_assets() {
         assert!(is_public_asset("/app/fonts/geist-latin.woff2"));
@@ -441,6 +455,8 @@ mod tests {
         assert!(!is_public_asset("/app/index.html"));
         assert!(!is_public_asset("/app/fontsx"));
         assert!(!is_public_asset("/"));
+        assert!(is_public_asset("/apple-touch-icon.png") && is_public_asset("/app/manifest.webmanifest"));
+        assert!(!is_public_asset("/app/apple-touch-icon.png/x") && !is_public_asset("/vendor/manifest.webmanifest"));
     }
 
     /// DESIGN-40: a face is answered with `Access-Control-Allow-Origin: *`;

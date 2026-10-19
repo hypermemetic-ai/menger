@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# CI-2: what the hourly timer runs (menger-sweep.service): the sweep — build
+# output idle long enough (6 h; 1 h at 75% used; 15 min at 90%) and not in use
+# goes, each removal logged in ~/.local/state/menger/cleanup-gate.log — then
+# the disk check, which tells the owner (a queued ticket) when the disk is
+# still at 90% or more. Runs from the installed copy beside it.
+set -uo pipefail
+here=$(dirname "$(readlink -f "$0")")
+"$here/cleanup-gate.sh" --sweep --yes
+"$here/disk-check.sh" --alert
+exit 0

@@ -348,6 +348,10 @@
       const stream = this.rpc.call("tickets.archive", { dry_run: dryRun, filter, ids, max, message, tz });
       yield* extractData(stream);
     }
+    async* assign(add, id, ids, message, remove, source) {
+      const stream = this.rpc.call("tickets.assign", { add, id, ids, message, remove, source });
+      yield* extractData(stream);
+    }
     async* awaitReply(id, input, since, timeoutMinutes) {
       const stream = this.rpc.call("tickets.await_reply", { id, input, since, timeout_minutes: timeoutMinutes });
       yield* extractData(stream);
@@ -440,8 +444,8 @@
       const stream = this.rpc.call("tickets.update", { block, body, id, kind, message, parent, severity, source, status, title, unblock });
       yield* extractData(stream);
     }
-    async* updateMany(block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unblock, unlabel) {
-      const stream = this.rpc.call("tickets.update_many", { block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unblock, unlabel });
+    async* updateMany(assign, block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unassign, unblock, unlabel) {
+      const stream = this.rpc.call("tickets.update_many", { assign, block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unassign, unblock, unlabel });
       yield* extractData(stream);
     }
     async* watch(epic, filter, membership, revisions, tz) {

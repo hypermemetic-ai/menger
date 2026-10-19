@@ -108,8 +108,11 @@ impl Pin {
 pub(crate) fn pins(route: &str, comments: &[Comment], mut spot: impl FnMut(&Anchor) -> Spot) -> Vec<Pin> {
     let mut groups: Vec<(PinAt, Vec<u64>)> = Vec::new();
     // APP-22: a comment on the ticket as a whole is drawn in its Conversation,
-    // not pinned to anything.
-    for c in comments.iter().filter(|c| c.state == CommentState::Open && c.anchor.route == route && !crate::conversation::is_whole(c)) {
+    // not pinned to anything. COMMENT-8: a reply is drawn under its root.
+    for c in comments
+        .iter()
+        .filter(|c| c.state == CommentState::Open && comments::is_root(c) && c.anchor.route == route && !crate::conversation::is_whole(c))
+    {
         let at = match spot(&c.anchor) {
             Spot::Found => PinAt::Element(c.anchor.path.clone()),
             Spot::Missing => PinAt::Heading(c.anchor.ticket.clone()),
@@ -881,7 +884,8 @@ fn save(a: Annot, body: String) {
     });
     spawn_local(async move {
         let seq = d.seq;
-        let r = comments::add(d.anchor, body).await;
+        // COMMENT-9: the draft kept until the server answers.
+        let r = crate::drafts::send(d.anchor, body).await;
         let still = a.draft.try_with_untracked(|d| d.as_ref().is_some_and(|d| d.seq == seq)) == Some(true);
         if !still {
             return;
@@ -894,7 +898,7 @@ fn save(a: Annot, body: String) {
             Err(e) => a.draft.update(|d| {
                 if let Some(d) = d {
                     d.saving = false;
-                    d.error = Some(e);
+                    d.error = Some(crate::drafts::words(&e));
                 }
             }),
         }
@@ -909,7 +913,22 @@ fn viewport() -> (f64, f64) {
 /// The comment box at its element.
 fn draft_view(a: Annot, seq: u32) -> impl IntoView {
     let anchor = a.draft.with_untracked(|d| d.as_ref().map(|d| d.anchor.clone())).unwrap_or_default();
-    let body = RwSignal::new(String::new());
+    // COMMENT-9: a box opened where a draft was kept starts from it, and
+    // keeps every change until the server answers.
+    let kept = crate::drafts::key(&anchor);
+    let body = RwSignal::new(crate::drafts::load(&kept).unwrap_or_default());
+    {
+        let kept = kept.clone();
+        Effect::new(move |_| body.with(|b| crate::drafts::save(&kept, b)));
+    }
+    let landed = crate::drafts::landed_signal();
+    Effect::new(move |_| {
+        if let Some((k, b)) = landed.get() {
+            if k == kept && body.with_untracked(|t| t.trim() == b.trim()) {
+                body.set(String::new());
+            }
+        }
+    });
     let area = NodeRef::<leptos::html::Textarea>::new();
     crate::grow::follow(area, move || body.track());
     area.on_load(|el: web_sys::HtmlTextAreaElement| {
@@ -923,6 +942,12 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
     };
     let error = move || a.draft.with(|d| d.as_ref().filter(|d| d.seq == seq).and_then(|d| d.error.clone()));
     let saving = move || a.draft.with(|d| d.as_ref().is_some_and(|d| d.seq == seq && d.saving));
+    // COMMENT-5: images pasted, dropped or picked — for the comment's ticket
+    // (the element's, else the page's); on the app, none.
+    let attach = crate::media::Attach::new(body, area, crate::media::ticket_of(&anchor));
+    // APP-70: a drawing on the pad goes first.
+    let save_now = attach.then(move || save(a, body.get_untracked()));
+    let save_key = save_now.clone();
     let mut where_ = match &anchor.ticket {
         Some(t) => format!("{} · {t}", anchor.route),
         None => anchor.route.clone(),
@@ -947,7 +972,7 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
                     }
                     Some("comment.save") => {
                         ev.prevent_default();
-                        save(a, body.get_untracked());
+                        save_key();
                     }
                     _ => {}
                 }
@@ -958,6 +983,7 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
                 <span class="annot-what">{anchor.label.clone()}</span>
                 <span class="annot-where" title=anchor.path.clone()>{where_}</span>
             </div>
+            <crate::draw::PadView a=attach />
             <textarea
                 node_ref=area
                 class="grow"
@@ -965,11 +991,23 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
                 placeholder="Leave a comment — Ctrl+Enter saves, Esc cancels"
                 prop:value=move || body.get()
                 on:input=move |ev| body.set(event_target_value(&ev))
+                on:paste=move |ev| attach.paste(ev)
+                on:dragover=move |ev| attach.dragover(ev)
+                on:drop=move |ev| attach.dropped(ev)
             ></textarea>
-            {move || error().map(|e| view! { <p class="annot-err" role="alert">{e}</p> })}
+            {move || error().map(|e| {
+                let failed = e.starts_with("Not kept");
+                view! {
+                    <p class="annot-err" role="alert">
+                        {e}
+                        {failed.then(|| view! { " " <button class="annot-retry" disabled=saving on:click=move |_| save(a, body.get_untracked())>"Retry"</button> })}
+                    </p>
+                }
+            })}
             <div class="annot-acts">
+                <crate::media::Attachments a=attach />
                 <button class="annot-cancel" on:click=move |_| cancel(a)>"Cancel"</button>
-                <button class="annot-save" disabled=saving on:click=move |_| save(a, body.get_untracked())>
+                <button class="annot-save" disabled=move || saving() || attach.busy() on:click=move |_| save_now()>
                     {move || if saving() { "Saving…" } else { "Save" }}
                 </button>
             </div>
@@ -1050,6 +1088,7 @@ fn list_view(a: Annot, key: String, ids: Vec<u64>, moved: bool) -> AnyView {
                                             "Resolve"
                                         </button>
                                     </div>
+                                    <crate::thread::Replies root=c.clone() />
                                 </li>
                             }
                         })
@@ -1144,6 +1183,8 @@ mod tests {
             "#pending" => Spot::Pending,
             _ => Spot::Found,
         };
+        let mut all = all;
+        all.push(crate::comments::tests::reply(10, &all[1]));
         let got = pins(page, &all, spot);
         assert_eq!(
             got,

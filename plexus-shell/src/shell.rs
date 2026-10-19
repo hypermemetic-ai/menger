@@ -20,6 +20,8 @@ use std::sync::Arc;
 ///   page (HTTP 200: a documented state, with build instructions, never an
 ///   error).
 /// - `{mount}/{*path}` — a file of the build, by key; a miss is 404.
+/// - `/{key}` for each of [`Self::root_files`] — that file of the build at
+///   the root too (a miss is 404).
 /// - each of [`Self::pages`], stamped, and [`Self::routes`] as given.
 ///
 /// The entrypoint and the pages are stamped with `{{WS_PORT}}` (the hub's
@@ -50,6 +52,10 @@ pub struct ShellConfig {
     pub not_built: Option<String>,
     /// The app's own routes, merged in as they are.
     pub routes: Router,
+    /// Keys of the build also served at the root, `/{key}` — the files a
+    /// browser asks the origin's root for (menger's APP-64: the home-screen
+    /// icon and the web app manifest). Each is still a key into the table.
+    pub root_files: Vec<String>,
     /// ACCESS-28: the pages' Content-Security-Policy, a template —
     /// `{{SCRIPTS}}` becomes the page's inline-script hashes, `{{HUB}}` the
     /// hub's WebSocket origins at the name the page was asked for
@@ -70,6 +76,7 @@ impl ShellConfig {
             root_fallback: None,
             not_built: None,
             routes: Router::new(),
+            root_files: Vec::new(),
             csp: crate::DEFAULT_CSP.into(),
         }
     }
@@ -92,6 +99,7 @@ impl std::fmt::Debug for ShellConfig {
             .field("stamps", &self.stamps)
             .field("pages", &self.pages.iter().map(|(route, _)| route).collect::<Vec<_>>())
             .field("root_fallback", &self.root_fallback.is_some())
+            .field("root_files", &self.root_files)
             .field("csp", &self.csp)
             .finish_non_exhaustive()
     }
@@ -181,6 +189,13 @@ pub async fn router(cfg: ShellConfig, ws_port: u16) -> Router {
             .route(&mount, get(app_index))
             .route(&format!("{mount}/"), get(app_index))
             .route(&format!("{mount}/{{*path}}"), get(app_asset));
+        for key in &cfg.root_files {
+            let key = key.trim_start_matches('/').to_string();
+            r = r.route(
+                &format!("/{key}"),
+                get(move |st: State<Arc<ShellState>>, headers: HeaderMap| asset_by_key(st, headers, key.clone())),
+            );
+        }
     }
     let mut r = r.with_state(state);
     for (route, template) in &cfg.pages {
@@ -261,8 +276,13 @@ async fn app_index(State(st): State<Arc<ShellState>>, headers: HeaderMap) -> Res
     }
 }
 
-async fn app_asset(State(st): State<Arc<ShellState>>, headers: HeaderMap, AxumPath(path): AxumPath<String>) -> Response {
+async fn app_asset(st: State<Arc<ShellState>>, headers: HeaderMap, AxumPath(path): AxumPath<String>) -> Response {
     let key = if path.is_empty() || path.ends_with('/') { format!("{path}index.html") } else { path };
+    asset_by_key(st, headers, key).await
+}
+
+/// The build's file `key`, as [`app_asset`] and the root files answer it.
+async fn asset_by_key(State(st): State<Arc<ShellState>>, headers: HeaderMap, key: String) -> Response {
     // A miss asks whether the build changed before it is a 404: a page
     // loaded from a rebuilt entrypoint names assets the old table lacks.
     let mut table = st.app.table();
@@ -278,5 +298,43 @@ async fn app_asset(State(st): State<Arc<ShellState>>, headers: HeaderMap, AxumPa
         // to a present index.html is an ordinary 404 (stale link, typo).
         None if key == "index.html" => st.policy.page(&st.not_built, &headers),
         None => (StatusCode::NOT_FOUND, "no such asset").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn get(port: u16, path: &str) -> String {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n\r\n").as_bytes()).await.unwrap();
+        let mut resp = Vec::new();
+        s.read_to_end(&mut resp).await.unwrap();
+        String::from_utf8_lossy(&resp).to_ascii_lowercase()
+    }
+
+    /// APP-64: a root file is the build's file at `/{key}` too, by its
+    /// type; a key not named, or not in the build, is not served there.
+    #[tokio::test]
+    async fn a_root_file_is_the_builds_file_at_the_root() {
+        let dist = tempfile::tempdir().unwrap();
+        for (name, body) in [("index.html", "app"), ("manifest.webmanifest", "{}"), ("icon.png", "png"), ("app.js", "js")] {
+            std::fs::write(dist.path().join(name), body).unwrap();
+        }
+        let mut cfg = ShellConfig::new("app", AppSource::Dir(dist.path().to_path_buf()));
+        cfg.root_files = vec!["manifest.webmanifest".into(), "/icon.png".into(), "gone.png".into()];
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let app = router(cfg, 1).await;
+        tokio::spawn(serve_on(listener, app, std::future::pending()));
+
+        let manifest = get(port, "/manifest.webmanifest").await;
+        assert!(manifest.contains(" 200 ") && manifest.contains("content-type: application/manifest+json"), "{manifest}");
+        let icon = get(port, "/icon.png").await;
+        assert!(icon.contains("content-type: image/png") && icon.ends_with("png"), "{icon}");
+        assert!(get(port, "/app/icon.png").await.contains("image/png"), "still under the mount");
+        assert!(get(port, "/gone.png").await.contains(" 404 "), "named, not built");
+        assert!(get(port, "/app.js").await.contains(" 404 "), "not named");
     }
 }

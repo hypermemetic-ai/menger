@@ -81,6 +81,10 @@ pub mod labels;
 /// MENGER-39: the queue — a ticket put in front of the owner with an
 /// urgency. Wasm-safe: the store keeps it, the app's tray draws it.
 pub mod queue;
+/// TICKETS-9: a ticket's assignees — how `assign` moves the set, and the
+/// assignment history's records. Wasm-safe: the app draws them.
+pub mod assignees;
+pub use assignees::{AssignAction, AssignRecord};
 pub use queue::{Ending, QueueAction, QueueEntry, QueueRecord, Reply, Urgency};
 pub use types::{
     is_menger_doc, is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
@@ -128,13 +132,25 @@ pub use comments_activation::CommentsActivation;
 /// CHAT-3: the chats vocabulary — [`Chat`], [`Message`], [`ChatState`],
 /// [`ChatsEvent`]. Wasm-safe, like [`comments`].
 pub mod chats;
-pub use chats::{Chat, ChatState, ChatsEvent, Message};
+pub use chats::{Chat, ChatKind, ChatState, ChatsEvent, Message};
 /// CHAT-3: the `chats` activation, declared once: the server's [`Chats`]
 /// and the browser's [`ChatsClient`].
 pub mod chats_activation;
 pub use chats_activation::ChatsClient;
 #[cfg(feature = "server")]
 pub use chats_activation::ChatsActivation;
+
+/// COMMENT-5: the media vocabulary — [`MediaEvent`], the kept image types
+/// and the rule that reads an image's type and size from its bytes
+/// ([`media::check`]). Wasm-safe: the app refuses a file with it first.
+pub mod media;
+pub use media::{MediaEvent, MediaInfo};
+/// COMMENT-5: the `media` activation, declared once: the server's
+/// [`MediaActivation`] and the browser's [`MediaClient`].
+pub mod media_activation;
+pub use media_activation::MediaClient;
+#[cfg(feature = "server")]
+pub use media_activation::MediaActivation;
 
 /// NOTE-2: the notes vocabulary — [`Note`], [`NoteState`], [`NotesEvent`]
 /// — the rules `add` keeps a note by, and the title a note gives its

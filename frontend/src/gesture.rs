@@ -33,10 +33,28 @@
 //! asked again as at the arrival. A body that polls submit gets nothing it
 //! could not have by polling at that moment itself.
 //!
+//! APP-55: **a tap, where nothing hovers.** A touch screen gives the host
+//! no `pointerover` for a tap inside a frame — the touch goes to the frame,
+//! from its first event to its last (WebKit on an iPhone; Playwright's
+//! WebKit with touch shows the same: focus moves to the `<iframe>` and the
+//! activation reaches the app, and the app hears no pointer at all) — so
+//! the engagement above could never hold, and every Submit on a phone was
+//! refused. Where the pointer the host last heard does not hover (a
+//! `touch` or `pen`; none heard yet, a device whose primary pointer does
+//! not hover — `(hover: none)`), engagement is not asked; what stands in
+//! for it is APP-35's wait, always: while the app's own gesture (a touch in
+//! the app — a scroll of the page, APP-53, included) could still be what
+//! is live, a write is read again once it has run out, and a gesture in
+//! this frame since is the only activation left with focus on it. Focus
+//! that entered the frame since the app's gesture is no shortcut here: a
+//! frame can focus itself by script.
+//!
 //! What remains (said, not hidden): a frame that moves focus into itself
 //! by script while the pointer rests over it, within 5 s of a click
 //! elsewhere in the app, passes — the browser does not tell the host
 //! whether a frame's focus came from a click or from its own `focus()`.
+//! Where nothing hovers (APP-55), the same, without the pointer: a frame
+//! that focuses itself by script within 5 s of a tap in ANOTHER frame.
 //!
 //! The decision ([`on_this_frame`]) is pure and pinned by native tests;
 //! the listeners that feed it ([`install`]) and the reading at a write
@@ -83,6 +101,10 @@ pub(crate) struct Now {
     pub(crate) active: Option<bool>,
     /// The app has focus, and its focused element is this frame.
     pub(crate) focused: bool,
+    /// APP-55: the pointer hovers, so a gesture on a frame gives the host
+    /// a `pointerover` first (a mouse); `false`: a touch screen, which
+    /// gives none.
+    pub(crate) hovers: bool,
 }
 
 /// What the host makes of a write, read the moment it arrives.
@@ -107,11 +129,14 @@ pub(crate) fn verdict(seen: &Seen, now: &Now) -> Verdict {
     let host = seen.host.unwrap_or(f64::NEG_INFINITY);
     let by_pointer = seen.hovered.is_some_and(|since| since > host);
     let by_tab = seen.entered.is_some_and(|(at, tab)| tab && at >= host);
-    if !(by_pointer || by_tab) {
+    let engaged = by_pointer || by_tab;
+    // APP-55: where nothing hovers, no engagement can be seen; the wait
+    // below stands in for it.
+    if !engaged && now.hovers {
         return Verdict::No;
     }
     let host_still_active = now.at - host < ACTIVATION_MS;
-    if !host_still_active || seen.entered.is_some_and(|(at, _)| at >= host) {
+    if !host_still_active || (engaged && seen.entered.is_some_and(|(at, _)| at >= host)) {
         Verdict::Yes
     } else {
         Verdict::After(host + ACTIVATION_MS + SETTLE_MS)
@@ -137,6 +162,9 @@ pub(crate) fn settled(first: Verdict, again: impl FnOnce() -> Verdict) -> bool {
 #[derive(Default)]
 struct Track {
     host: Option<f64>,
+    /// APP-55: whether the pointer the host last heard hovers (`mouse`);
+    /// `None`: none heard yet.
+    hovers: Option<bool>,
     last_tab: Option<f64>,
     /// `(channel, since)`.
     hovered: Option<(String, f64)>,
@@ -150,6 +178,25 @@ thread_local! {
 
 fn now_ms() -> f64 {
     js_sys::Date::now()
+}
+
+/// APP-55: whether a pointer of this `pointerType` hovers — a mouse does; a
+/// touch, and a pen (it may hover, but need not tell the app), do not.
+pub(crate) fn type_hovers(pointer_type: &str) -> bool {
+    pointer_type == "mouse"
+}
+
+/// The `pointerType` of a pointer event; `None` for any other event.
+fn pointer_type(ev: &web_sys::Event) -> Option<String> {
+    Reflect::get(ev, &JsValue::from_str("pointerType")).ok()?.as_string().filter(|t| !t.is_empty())
+}
+
+/// APP-55: whether the device hovers — the last pointer the host heard, or,
+/// with none heard yet, whether its primary pointer does (`(hover: hover)`).
+fn device_hovers() -> bool {
+    TRACK.with(|tr| tr.borrow().hovers).unwrap_or_else(|| {
+        dom::window().match_media("(hover: hover)").ok().flatten().map_or(true, |m| m.matches())
+    })
 }
 
 /// The frame (`iframe.<class>`) an event's target is, by its channel.
@@ -175,9 +222,13 @@ pub(crate) fn install(class: &'static str) {
             Box::new(move |ev: web_sys::Event| {
                 let t = now_ms();
                 let tab = crate::bindings::moves_focus(&ev);
+                let kind = pointer_type(&ev);
                 TRACK.with(|tr| {
                     let mut tr = tr.borrow_mut();
                     tr.host = Some(t);
+                    if let Some(kind) = kind {
+                        tr.hovers = Some(type_hovers(&kind));
+                    }
                     if tab {
                         tr.last_tab = Some(t);
                     }
@@ -191,8 +242,12 @@ pub(crate) fn install(class: &'static str) {
         "pointerover",
         Box::new(move |ev: web_sys::Event| {
             let over = frame_channel(ev.target(), class);
+            let kind = pointer_type(&ev);
             TRACK.with(|tr| {
                 let mut tr = tr.borrow_mut();
+                if let Some(kind) = kind {
+                    tr.hovers = Some(type_hovers(&kind));
+                }
                 match over {
                     Some(ch) if tr.hovered.as_ref().is_some_and(|(c, _)| *c == ch) => {}
                     Some(ch) => tr.hovered = Some((ch, now_ms())),
@@ -244,7 +299,7 @@ pub(crate) fn on_frame(frame: &web_sys::HtmlIFrameElement) -> Verdict {
     let doc = dom::window().document();
     let focused = doc.as_ref().is_some_and(|d| d.has_focus().unwrap_or(false))
         && doc.and_then(|d| d.active_element()).is_some_and(|el| el.is_same_node(Some(frame)));
-    let now = Now { at: now_ms(), active: host_active(), focused };
+    let now = Now { at: now_ms(), active: host_active(), focused, hovers: device_hovers() };
     let seen = TRACK.with(|tr| {
         let tr = tr.borrow();
         Seen {
@@ -300,7 +355,7 @@ mod tests {
     const T: f64 = 100_000.0;
 
     fn now(at: f64) -> Now {
-        Now { at, active: Some(true), focused: true }
+        Now { at, active: Some(true), focused: true, hovers: true }
     }
 
     /// A click in the frame: the pointer came onto it, focus went in, the
@@ -327,7 +382,7 @@ mod tests {
     fn a_click_elsewhere_in_the_app_is_not() {
         // The click moved focus to the app: not focused.
         let seen = Seen { host: Some(T + 5_000.0), hovered: Some(T), entered: Some((T, false)) };
-        assert!(!on_this_frame(&seen, &Now { at: T + 5_100.0, active: Some(true), focused: false }));
+        assert!(!on_this_frame(&seen, &Now { at: T + 5_100.0, active: Some(true), focused: false, hovers: true }));
         // Focus kept in the frame (a mousedown the app prevented), the app
         // clicked since the pointer came onto it: no engagement since.
         assert!(!on_this_frame(&seen, &now(T + 5_100.0)));
@@ -345,7 +400,7 @@ mod tests {
     fn no_activation_or_no_api_is_no_gesture() {
         let seen = Seen { host: None, hovered: Some(T), entered: Some((T, false)) };
         for active in [Some(false), None] {
-            assert!(!on_this_frame(&seen, &Now { at: T + 10.0, active, focused: true }), "{active:?}");
+            assert!(!on_this_frame(&seen, &Now { at: T + 10.0, active, focused: true, hovers: true }), "{active:?}");
         }
         assert!(!on_this_frame(&Seen::default(), &now(T)), "nothing seen at all");
     }
@@ -383,8 +438,8 @@ mod tests {
         let first = verdict(&seen, &now(T + 400.0));
         assert!(matches!(first, Verdict::After(_)));
         let at = T + ACTIVATION_MS + SETTLE_MS;
-        assert!(!settled(first, || verdict(&seen, &Now { at, active: Some(false), focused: true })), "activation expired: the app's own");
-        assert!(!settled(first, || verdict(&seen, &Now { at, active: Some(true), focused: false })), "focus left the frame");
+        assert!(!settled(first, || verdict(&seen, &Now { at, active: Some(false), focused: true, hovers: true })), "activation expired: the app's own");
+        assert!(!settled(first, || verdict(&seen, &Now { at, active: Some(true), focused: false, hovers: true })), "focus left the frame");
         let left = Seen { hovered: None, ..seen };
         assert!(!settled(first, || verdict(&left, &now(at))), "the pointer left it");
         let again = Seen { host: Some(T + 4_000.0), ..seen };
@@ -405,6 +460,62 @@ mod tests {
         // A key in the app after the Tab: the frame no longer holds it.
         let seen = Seen { host: Some(T + 500.0), hovered: None, entered: Some((T + 30.0, true)) };
         assert!(!on_this_frame(&seen, &now(T + 600.0)));
+    }
+
+    fn touch(at: f64) -> Now {
+        Now { hovers: false, ..now(at) }
+    }
+
+    /// APP-55, the finding: on a touch screen a tap in the frame gives the
+    /// host no `pointerover` — only focus on the frame and the activation.
+    /// That is a gesture on it once the app's own activation cannot be the
+    /// live one: at once when the app's last touch is old (or there is
+    /// none), else read again when it has run out (a scroll of the page a
+    /// moment before, APP-53) — and recorded then, the tap's activation
+    /// still live, focus still on the frame.
+    #[test]
+    fn a_tap_on_a_touch_screen_is_a_gesture_on_its_frame() {
+        let tapped = Seen { host: Some(T), hovered: None, entered: Some((T + 20_000.0, false)) };
+        assert_eq!(verdict(&tapped, &touch(T + 20_500.0)), Verdict::Yes, "the app's touch long ago");
+        let cold = Seen { host: None, hovered: None, entered: Some((T, false)) };
+        assert_eq!(verdict(&cold, &touch(T + 100.0)), Verdict::Yes, "no touch in the app at all");
+        let no_blur = Seen { host: Some(T), hovered: None, entered: None };
+        assert_eq!(verdict(&no_blur, &touch(T + ACTIVATION_MS + 1.0)), Verdict::Yes);
+        // A scroll of the page a moment before: put off, then recorded.
+        let scrolled = Seen { host: Some(T), hovered: None, entered: Some((T - 30_000.0, false)) };
+        let first = verdict(&scrolled, &touch(T + 900.0));
+        assert_eq!(first, Verdict::After(T + ACTIVATION_MS + SETTLE_MS));
+        assert!(settled(first, || verdict(&scrolled, &touch(T + ACTIVATION_MS + SETTLE_MS))));
+        // A mouse is held to the pointer as before: the same reading refused.
+        assert_eq!(verdict(&tapped, &now(T + 20_500.0)), Verdict::No);
+    }
+
+    /// APP-55 keeps IDENTITY-36 where nothing hovers: a body that polls
+    /// submit records nothing on a tap elsewhere in the app — focus left
+    /// the frame; a frame that took focus back by script after the tap
+    /// waits out the tap's activation and finds none of its own; and no
+    /// activation, or focus elsewhere, is refused outright.
+    #[test]
+    fn a_tap_elsewhere_on_a_touch_screen_is_not() {
+        let seen = Seen { host: Some(T), hovered: None, entered: Some((T - 10_000.0, false)) };
+        assert_eq!(verdict(&seen, &Now { focused: false, ..touch(T + 100.0) }), Verdict::No, "focus went to the app");
+        let stole = Seen { host: Some(T), hovered: None, entered: Some((T + 50.0, false)) };
+        let first = verdict(&stole, &touch(T + 100.0));
+        assert!(matches!(first, Verdict::After(_)), "focus entered since the tap is no shortcut: {first:?}");
+        let at = T + ACTIVATION_MS + SETTLE_MS;
+        assert!(!settled(first, || verdict(&stole, &Now { active: Some(false), ..touch(at) })), "the tap's activation ran out");
+        let again = Seen { host: Some(T + 3_000.0), ..stole };
+        assert!(!settled(first, || verdict(&again, &touch(at))), "another touch in the app meanwhile");
+        for active in [Some(false), None] {
+            assert_eq!(verdict(&seen, &Now { active, ..touch(T + 60_000.0) }), Verdict::No, "{active:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_mouse_hovers() {
+        assert!(type_hovers("mouse"));
+        assert!(!type_hovers("touch"));
+        assert!(!type_hovers("pen"));
     }
 
     /// APP-46: a control the host drew writes only on the browser's own

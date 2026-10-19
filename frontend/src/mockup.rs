@@ -69,6 +69,13 @@
 //! an unknown or unreadable ticket, a ticket that is no whole page, a
 //! malformed element, one past [`MAX_PER_FRAME`], one inside a mock.
 //!
+//! **On a phone** (APP-60, ≤ [`crate::phonebar::PHONE_MAX`]) a box is
+//! widened past its body's padding to the screen's edges, less
+//! [`BLEED_MARGIN`] ([`bleed`]) — the host's choice, never the body's (only
+//! its width moves, never where it starts down the page) — so its one
+//! device is drawn at nearly 100%. Never one in a decision's option, which
+//! stays inside its card ([`bleeds`], APP-79).
+//!
 //! What decides is pure and pinned by native tests; the rest is DOM.
 
 use std::any::Any;
@@ -99,6 +106,27 @@ pub(crate) const BOX_CLASS: &str = "mmock";
 /// the ticket a `ref` shows.
 pub(crate) const TICKET_ATTR: &str = "data-mock-ticket";
 pub(crate) const REF_ATTR: &str = "data-mock-ref";
+
+/// APP-60: a phone's box keeps this far from the screen's edges, px.
+pub(crate) const BLEED_MARGIN: f64 = 4.0;
+
+/// APP-60: a box at `left`, `width` px in a container whose left edge is
+/// `origin` px from the viewport's, widened on a phone to the viewport
+/// `vw` px wide less [`BLEED_MARGIN`] each side — never narrowed.
+pub(crate) fn bleed(left: f64, width: f64, origin: f64, vw: f64) -> (f64, f64) {
+    let wide = vw - 2.0 * BLEED_MARGIN;
+    if !(origin.is_finite() && vw.is_finite()) || wide <= width {
+        return (left, width);
+    }
+    (BLEED_MARGIN - origin, wide)
+}
+
+/// APP-79: whether a box is widened to the screen's edges — on a phone,
+/// and never one in a decision's option, which stays inside its card (bled,
+/// it covered the card's borders and the option read as cut off).
+pub(crate) fn bleeds(phone: bool, in_option: bool) -> bool {
+    phone && !in_option
+}
 
 /// What a placeholder draws.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -349,13 +377,13 @@ fn paint(e: &mut Entry) {
     let body_ticket = e.citer.get_attribute("data-ticket").filter(|t| !t.is_empty());
     let remember = body_ticket.as_ref().map(|t| format!("{t}#m{}", e.n));
     // APP-46: its bar's *pick this* (in a decision) and *comment*.
-    let actions = mockpick::bar(key(&e.channel, e.n), body_ticket, e.posted.option.clone(), e.posted.title.clone());
+    let (actions, more) = mockpick::bar(key(&e.channel, e.n), body_ticket, e.posted.option.clone(), e.posted.title.clone());
     let handle = leptos::mount::mount_to(host, move || {
         let html = Signal::derive(move || html.get());
         let decl = Signal::derive(move || decl.get());
         match remember {
-            Some(remember) => view! { <present::Framed html decl ticket=None scope remember actions /> }.into_any(),
-            None => view! { <present::Framed html decl ticket=None scope actions /> }.into_any(),
+            Some(remember) => view! { <present::Framed html decl ticket=None scope remember actions more /> }.into_any(),
+            None => view! { <present::Framed html decl ticket=None scope actions more /> }.into_any(),
         }
     });
     e.mounted = Some(Box::new(handle));
@@ -371,9 +399,14 @@ fn position(e: &Entry) {
         f64::from(f.offset_width()),
         f64::from(f.offset_height()),
     );
+    let vw = dom::window().inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY);
+    let (left, width) = match e.overlay.offset_parent().filter(|_| p.shown && bleeds(crate::phonebar::is_phone(vw), e.posted.option.is_some())) {
+        Some(container) => bleed(p.left, p.width, container.get_bounding_client_rect().left() + f64::from(container.client_left()), vw),
+        None => (p.left, p.width),
+    };
     style(&e.overlay, "top", &format!("{}px", p.top));
-    style(&e.overlay, "left", &format!("{}px", p.left));
-    style(&e.overlay, "width", &format!("{}px", p.width));
+    style(&e.overlay, "left", &format!("{left}px"));
+    style(&e.overlay, "width", &format!("{width}px"));
     e.overlay.set_hidden(!p.shown);
 }
 
@@ -708,6 +741,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             labels: Vec::new(),
+            assignees: Vec::new(),
             archived: None,
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic),
@@ -816,6 +850,25 @@ mod tests {
         // What the frame is told stays the height alone.
         let reply = serde_json::to_value(mocked_reply(1, 300.0)).unwrap();
         assert_eq!(reply.as_object().unwrap().len(), 2);
+    }
+
+    /// APP-60: on a phone a box reaches the screen's edges less the margin,
+    /// wherever its container starts; never narrower than it was.
+    #[test]
+    fn app_79_a_box_in_an_option_stays_in_its_card() {
+        assert!(bleeds(true, false));
+        assert!(!bleeds(true, true), "an option's mockup is never widened past its card");
+        assert!(!bleeds(false, false));
+        assert!(!bleeds(false, true));
+    }
+
+    #[test]
+    fn a_phones_box_bleeds_to_the_screens_edges() {
+        assert_eq!(bleed(17.0, 324.0, 16.0, 390.0), (-12.0, 382.0));
+        assert_eq!(bleed(0.0, 324.0, 33.0, 390.0), (-29.0, 382.0));
+        // already as wide: left alone
+        assert_eq!(bleed(0.0, 382.0, 4.0, 390.0), (0.0, 382.0));
+        assert_eq!(bleed(5.0, 300.0, f64::NAN, 390.0), (5.0, 300.0));
     }
 
     /// The body hears only a height; a body draws a bounded number.

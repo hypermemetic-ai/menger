@@ -150,6 +150,7 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
         Change::CommitsLinked { ticket, added } => sees.id(&ticket.id).then(|| Change::CommitsLinked { ticket: row(ticket), added }),
         Change::CommitsUnlinked { ticket, removed } => sees.id(&ticket.id).then(|| Change::CommitsUnlinked { ticket: row(ticket), removed }),
         Change::LabelsChanged { ticket, added, removed } => sees.id(&ticket.id).then(|| Change::LabelsChanged { ticket: row(ticket), added, removed }),
+        Change::AssigneesChanged { ticket, added, removed } => sees.id(&ticket.id).then(|| Change::AssigneesChanged { ticket: row(ticket), added, removed }),
         Change::SeverityChanged { ticket, previous } => sees.id(&ticket.id).then(|| Change::SeverityChanged { ticket: row(ticket), previous }),
         // The waiter it gained or lost may be hidden: its row says so in
         // `hidden_unlocks`, and the name is blanked (ACCESS-3 #13).

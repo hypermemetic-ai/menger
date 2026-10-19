@@ -265,13 +265,18 @@ mod cite;
 mod compare;
 mod comments;
 mod comments_page;
+mod chats_page;
+mod chat_grant;
 mod composer;
 mod conversation;
 mod components;
 mod counts;
 mod deploys;
+mod drafts;
+mod thread;
 mod deploys_page;
 mod dom;
+mod draw;
 mod filter;
 mod flat;
 mod frame;
@@ -285,12 +290,17 @@ mod revisions;
 mod inputs;
 mod inputs_page;
 mod inspect;
+mod keyboard;
 mod keys;
 mod kids;
 mod labels;
+// TICKETS-9: a ticket's assignees — avatars, the picker.
+mod assignees;
 mod lens;
 mod links;
+mod live;
 mod md;
+mod media;
 mod menu;
 mod mock_anchor;
 mod mockpick;
@@ -302,6 +312,7 @@ mod ors;
 mod present;
 mod promote;
 mod queue;
+mod queue_tabs;
 mod questions;
 
 mod mermaid;
@@ -312,6 +323,7 @@ mod needs;
 mod orgs;
 mod phonebar;
 mod registry;
+mod resume;
 mod rowclick;
 mod saved;
 mod scale;
@@ -319,6 +331,7 @@ mod scopes;
 mod sections;
 mod selection;
 mod shape;
+mod sheet;
 mod swatches;
 mod session;
 mod settings;
@@ -435,6 +448,9 @@ pub(crate) enum Route {
     Comments,
     /// IDENTITY-22: `#/members` — who holds which role; an admin's page.
     Members,
+    /// CHAT-14: `#/chats` — every chat the reader is in; `#/chats/new` a
+    /// new message; `#/chats/<id>` one chat.
+    Chats(chats_page::Pick),
     /// DEPLOY-13: `#/deployments` (`None`) — every project's environments
     /// and deploys; `#/deployments/<SHORTCODE>` one project's (held upper
     /// case). `?d=<id>` (a deploy to pick out) is the page's.
@@ -464,6 +480,8 @@ fn parse_route(hash: &str) -> Route {
         _ if path.trim_end_matches('/') == "settings" => Route::Settings,
         _ if path.trim_end_matches('/') == "comments" => Route::Comments,
         _ if path.trim_end_matches('/') == "members" => Route::Members,
+        Some(("chats", rest)) => Route::Chats(chats_page::pick_of(rest)),
+        _ if path.trim_end_matches('/') == "chats" => Route::Chats(chats_page::Pick::List),
         Some(("deployments", sc)) => {
             let sc = sc.trim_end_matches('/').to_ascii_uppercase();
             Route::Deployments((!sc.is_empty()).then_some(sc))
@@ -489,6 +507,9 @@ pub(crate) fn route_text(route: &Route) -> String {
         Route::Settings => "#/settings".to_string(),
         Route::Comments => "#/comments".to_string(),
         Route::Members => "#/members".to_string(),
+        Route::Chats(chats_page::Pick::List) => "#/chats".to_string(),
+        Route::Chats(chats_page::Pick::New) => "#/chats/new".to_string(),
+        Route::Chats(chats_page::Pick::Chat(id)) => format!("#/chats/{id}"),
         Route::Deployments(None) => "#/deployments".to_string(),
         Route::Deployments(Some(sc)) => format!("#/deployments/{sc}"),
     }
@@ -755,11 +776,11 @@ fn measured_pitch(body: &web_sys::Element) -> Option<f64> {
 /// The board's geometry off the DOM, given the pitch to assume when no
 /// row is mounted to measure.
 fn measure_board(body: &web_sys::Element, pitch: f64) -> Option<Geom> {
-    let scroller = body.closest(".content").ok().flatten()?;
-    let (s, b) = (scroller.get_bounding_client_rect(), body.get_bounding_client_rect());
+    let scroller = dom::Scroller::around(body)?;
+    let (top, height) = scroller.view();
     Some(Geom {
-        above: s.top() - b.top(),
-        viewport: f64::from(scroller.client_height()),
+        above: top - body.get_bounding_client_rect().top(),
+        viewport: height,
         pitch: measured_pitch(body).unwrap_or(pitch),
     })
 }
@@ -778,7 +799,7 @@ pub(crate) fn scroll_board_to(index: usize, n: usize, pitch: f64) {
     let Some(body) = dom::window().document().and_then(|d| d.get_element_by_id("board")) else {
         return;
     };
-    let Some(scroller) = body.closest(".content").ok().flatten() else { return };
+    let Some(scroller) = dom::Scroller::around(&body) else { return };
     let Some(g) = measure_board(&body, pitch) else { return };
     let top = g.row_at(n, g.above);
     let fits = g.viewport / g.pitch();
@@ -791,7 +812,7 @@ pub(crate) fn scroll_board_to(index: usize, n: usize, pitch: f64) {
         return;
     };
     let delta = g.offset_of(n, want) - g.above;
-    scroller.set_scroll_top(scroller.scroll_top() + delta.round() as i32);
+    scroller.by(delta.round());
 }
 
 // ---------------------------------------------------------------------
@@ -845,8 +866,8 @@ fn Board(
         if prev.is_some_and(|p| p != now) {
             if let Some(Some(tb)) = body.try_get_untracked() {
                 let tb: &web_sys::Element = tb.as_ref();
-                if let Ok(Some(scroller)) = tb.closest(".content") {
-                    scroller.set_scroll_top(0);
+                if let Some(scroller) = dom::Scroller::around(tb) {
+                    scroller.set_top(0.0);
                 }
             }
         }
@@ -893,7 +914,7 @@ fn Board(
             present.get().then(|| {
                 view! {
                     <tr class="spacer" aria-hidden="true">
-                        <td colspan="6" style:height=move || format!("{}px", layout.with(px))></td>
+                        <td colspan="7" style:height=move || format!("{}px", layout.with(px))></td>
                     </tr>
                 }
             })
@@ -915,6 +936,7 @@ fn Board(
                 <tr aria-rowindex="1">
                     <th class="c-id">"id"</th><th class="c-title">"title"</th><th class="c-kind">"kind"</th>
                     <th class="c-status">"status"</th><th class="c-sev">"severity"</th><th class="c-blk">"blocked by"</th>
+                    <th class="c-who" title="assignees">"who"</th>
                 </tr>
             </thead>
             <tbody
@@ -949,7 +971,7 @@ fn Board(
                             board::Slot::Gap(_, len) => {
                                 return view! {
                                     <tr class="pending" aria-hidden="true">
-                                        <td colspan="6" style:height=move || format!("{}px", len as f64 * geom.with(|g| g.pitch()))>"…"</td>
+                                        <td colspan="7" style:height=move || format!("{}px", len as f64 * geom.with(|g| g.pitch()))>"…"</td>
                                     </tr>
                                 }
                                 .into_any();
@@ -1128,6 +1150,8 @@ fn Board(
                                             .collect_view()
                                     })}
                                 </td>
+                                // TICKETS-9: who holds it — avatars, live.
+                                <td class="who">{assignees::row_avatars(move || ticket.with(|t| t.assignees.clone()))}</td>
                             </tr>
                         }
                         .into_any()
@@ -1677,6 +1701,8 @@ fn ticket_view(
                 <div><dt>"Running"</dt><dd id="t-running"><deploys::Running id=running_id.to_string() commits /></dd></div>
                 // MENGER-12: its labels — chips, editable by a writer.
                 <div><dt>"Labels"</dt><dd id="t-labels"><labels::Editor ticket /></dd></div>
+                // TICKETS-9: who holds it — avatars, + assign through the picker.
+                <div class="assignees"><dt>"Assignees"</dt><dd id="t-assignees"><assignees::Editor ticket /></dd></div>
                 // CHAT-4: chat N — the reader's unread here; opens the dock on
                 // a chat (CHAT-10).
                 <div>
@@ -2160,7 +2186,14 @@ fn App() -> impl IntoView {
     // DESIGN-39: the Motion setting on <html> first, then the boot's sheet
     // over the app until the first `health`.
     motion::install();
-    motion::boot_begin(&settings::effective_ws_url());
+    // APP-63: a page reloaded for a reconnect puts back its scroll and its
+    // typed fields — and skips the boot, which it has seen.
+    // APP-67: the reload says *reconnecting…* until its first `health`.
+    if resume::install() {
+        motion::resume_begin();
+    } else {
+        motion::boot_begin(&settings::effective_ws_url());
+    }
     // SCALE-26: the board's model of the store — the extents, the window's
     // rows it holds — asked for by the session and kept by its own effect.
     let board = board::Board::new();
@@ -2171,6 +2204,10 @@ fn App() -> impl IntoView {
     frame::know(board);
     // MENGER-14: a click on a link people wrote, in the app's own page.
     links::install();
+    // APP-56: a phone's keyboard, followed — the docked composers sit on it.
+    keyboard::install();
+    // CHAT-31: every phone sheet's drag, and the page held still under it.
+    sheet::install();
     board.drive();
     let dock = RwSignal::new(None::<Dock>);
     let conn = RwSignal::new(Conn::Connecting);
@@ -2209,7 +2246,8 @@ fn App() -> impl IntoView {
     // MFE-9: the whole data plane is one task holding one WebSocket
     // (session.rs) — `watch` first, then MNG-9's summary pages walked with
     // `after = next`, then live. ~1s retry keeps a server restart to a few
-    // seconds of "reconnecting…" (MFE-2 criterion 3). It runs regardless of
+    // seconds of "reconnecting…" (MFE-2 criterion 3); APP-63: backing off
+    // while it stays down, and the reconnect reloads the page (resume.rs). It runs regardless of
     // route: the ticket page's liveness is this same stream. SCALE-26: no
     // walk — `extents` and the board's one window, then live.
     session::drive(board, dock, conn, socket, last_error, tree);
@@ -2287,11 +2325,14 @@ fn App() -> impl IntoView {
     let overlay = RwSignal::new(keys::Overlay::None);
     keys::install(overlay, board);
 
-    // MFE-12: the content column is the board's viewport. Its scroll and
+    // MFE-12: the content column is the board's viewport (APP-53: the
+    // document, on a phone). Its scroll and
     // the window's resize are the two things that move which rows are on
     // screen; the board measures itself when this fires.
     let viewport = Trigger::new();
     window_event_listener(leptos::ev::resize, move |_| viewport.notify());
+    // APP-53: on a phone the document scrolls, not the column.
+    window_event_listener(leptos::ev::scroll, move |_| viewport.notify());
 
     // MFE-22: where the header's `test ↗` goes — the settings page moves it.
     let test_link = RwSignal::new(settings::load().test_link());
@@ -2407,6 +2448,9 @@ fn App() -> impl IntoView {
                             })
                         }}
                     </a>
+                    // CHAT-14: every chat — direct messages, groups and the
+                    // tickets' — and the reader's unread across them.
+                    <chats_page::HeaderLink on=Signal::derive(move || matches!(route.get(), Route::Chats(_))) />
                     // DEPLOY-13: where work runs — every project's
                     // environments and deploys.
                     <a
@@ -2499,6 +2543,7 @@ fn App() -> impl IntoView {
                                 Route::Settings => "settings (MFE-21)",
                                 Route::Comments => "comments (COMMENT-3)",
                                 Route::Members => "members (IDENTITY-22)",
+                                Route::Chats(_) => "chats (CHAT-14)",
                                 Route::Deployments(_) => "deployments (DEPLOY-13)",
                             }}
                         </span>
@@ -2524,6 +2569,8 @@ fn App() -> impl IntoView {
                         }
                         // MENGER-43: Home is the board — Needs you is a
                         // filter on the nav (`g n`, src/needs.rs).
+                        // CHAT-16: one granted chats only has them, and nothing of the board.
+                        Route::Board if signin::account().with_untracked(|a| a.chat_only()) => view! { <chats_page::ChatsPage pick=chats_page::Pick::List /> }.into_any(),
                         Route::Board => view! { <Board board last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
@@ -2537,6 +2584,7 @@ fn App() -> impl IntoView {
                         Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
                         Route::Comments => view! { <comments_page::CommentsPage /> }.into_any(),
                         Route::Members => view! { <members_page::MembersPage /> }.into_any(),
+                        Route::Chats(p) => view! { <chats_page::ChatsPage pick=p /> }.into_any(),
                         Route::Deployments(project) => view! { <deploys_page::DeploymentsPage project /> }.into_any(),
                     }}
                 </main>

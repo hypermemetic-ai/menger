@@ -23,7 +23,8 @@
 //!   urgency and who queued it ([`queued_for`]). Its foot links `#/inputs`.
 //! - **Answer in place**: a row clicked (or Enter on it) opens its answer
 //!   under it — the tray's own controls (`queue::controls_of`: pick, then
-//!   one submit, APP-25), recorded with source `app`. An answered row stays
+//!   one submit, APP-25; a text reply's box takes images and drawings,
+//!   APP-70), recorded with source `app`. An answered row stays
 //!   in the panel as `✓ <answer>` while it is open (with *change it*, which
 //!   clears the answer), so the click is seen to land; the count drops at
 //!   once.
@@ -660,7 +661,7 @@ fn row_view(input: Input, a: Answering, p: Pinning, now: i64, queued: Option<Que
             let kind = input.kind;
             let pane_pin = pin_button(p, &pane_state, ticket.clone(), id.clone(), "qbtn");
             let (t, i) = (ticket.clone(), id.clone());
-            let send = move |_| {
+            let send = move || {
                 if a.busy.get_untracked() {
                     return;
                 }
@@ -668,18 +669,36 @@ fn row_view(input: Input, a: Answering, p: Pinning, now: i64, queued: Option<Que
                     submit(a, t.clone(), i.clone(), value);
                 }
             };
+            // APP-70: a text reply's box takes images and drawings, as the
+            // tray's does; submit waits for an upload, and a drawing's
+            // markdown lands in the reply the moment before it sends.
+            let reply = queue::reply_for(&input, a.pick, &ticket);
+            let attach = reply.map(|(_, _, at)| at);
+            let gated = reply.map(|(text, _, at)| {
+                let send = send.clone();
+                at.then(move || {
+                    a.pick.update(|p| p.text = text.get_untracked());
+                    send();
+                })
+            });
+            let send = move |_| match &gated {
+                Some(g) => g(),
+                None => send(),
+            };
+            let waits = move || attach.is_some_and(|at| at.busy());
+            let drawn = move || attach.is_some_and(|at| at.drawn());
             Some(
                 view! {
                     <div class="inrow">
                         <div class="qd">
                             {(kind == InputKind::Multi).then(|| view! { <p class="qnext">"tick any"</p> })}
-                            {queue::controls_of(&input, a.busy, a.pick)}
+                            {queue::controls_of(&input, a.busy, a.pick, reply)}
                             <div class="qacts">
                                 <button
                                     type="button"
                                     class="qbtn fill"
                                     data-act="submit"
-                                    disabled=move || a.busy.get() || a.pick.with(|p| p.value(kind).is_none())
+                                    disabled=move || a.busy.get() || waits() || (!drawn() && a.pick.with(|p| p.value(kind).is_none()))
                                     on:click=send
                                 >
                                     {move || if a.busy.get() { "submitting…" } else { "submit" }}

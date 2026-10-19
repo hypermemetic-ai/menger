@@ -21,6 +21,16 @@
 //! - **Rotate** swaps a device's width and height; **Reset** goes back to
 //!   the declared widths ([`resized`]).
 //!
+//! APP-60: **on a phone** (a viewport ≤ [`crate::phonebar::PHONE_MAX`]) a
+//! mockup opens on one device — the narrowest it declares ([`opening`]),
+//! and Reset goes back to it — scaled to the column alone, so a 390 device
+//! is drawn at (nearly) 100% and a wider one shrinks to the column, never
+//! off its edge; All stacks the devices one under another, each the
+//! column's width at most ([`scale_for`]). Full screen on a phone draws the
+//! device at 100%, its stage scrolling to the rest. The bar keeps the
+//! device picker ([`Sizer::picker`]) in its row; Size and Reset
+//! ([`Sizer::tools`]) fold into its ⋯ menu (src/present.rs).
+//!
 //! A device is a slot that keeps its frame: a resize only restyles the box
 //! the frame sits in, so the page reflows as in a resized window and never
 //! reloads — its scroll, its state and the emulated scheme and motion stay.
@@ -206,6 +216,46 @@ pub(crate) fn resized(current: &[Device], declared: &[Device], focus: Option<usi
     }
 }
 
+/// APP-60: the device a mockup opens on, alone — on a phone, the narrowest
+/// of several (the first, on a tie); else none (All).
+pub(crate) fn opening(devices: &[Device], phone: bool) -> Option<usize> {
+    if !phone || devices.len() < 2 {
+        return None;
+    }
+    devices.iter().enumerate().min_by_key(|(_, d)| d.w).map(|(i, _)| i)
+}
+
+/// APP-60: a device's bezel left and right of its screen, on a phone
+/// (index.html's ≤ 820 rules: 4 px a phone's, 6 a tablet's, 2 a desktop's).
+pub(crate) fn phone_bezel(d: Device) -> f64 {
+    match d.kind() {
+        "phone" => 8.0,
+        "tablet" => 12.0,
+        _ => 4.0,
+    }
+}
+
+/// The scale the devices `shown` are drawn at, on a stage `w` × `h` px.
+/// Wide (a desktop's viewport): side by side at one scale that fits ([`fit`]),
+/// the height too when full. APP-60, on a phone: full screen is 100% (the
+/// stage scrolls); else each device stacked alone in the column — the scale
+/// that fits the widest, never above 1.
+pub(crate) fn scale_for(shown: &[Device], w: f64, h: f64, phone: bool, full: bool) -> f64 {
+    if phone {
+        if full {
+            return 1.0;
+        }
+        return shown
+            .iter()
+            .map(|d| ((w - phone_bezel(*d)).max(1.0) / f64::from(d.w)).min(1.0))
+            .fold(1.0, f64::min)
+            .max(0.05);
+    }
+    let avail_h = full.then_some(h - CHROME_H);
+    // The stage's padding, each device's bezel and its grip are not scaled.
+    fit(shown, GAP, w - 12.0 - GRIP_W - BEZEL_W * shown.len() as f64, avail_h)
+}
+
 /// The localStorage key a mockup's sizes are kept under.
 pub(crate) fn storage_key(mockup: &str) -> String {
     format!("menger.mockup-sizes:{mockup}")
@@ -274,12 +324,15 @@ pub(crate) struct Sizer {
     field: RwSignal<Option<Target>>,
     refused: RwSignal<Option<String>>,
     grab: RwSignal<Option<Grab>>,
+    /// APP-60: whether the viewport is a phone's.
+    phone: Signal<bool>,
 }
 
 impl Sizer {
     /// The declared devices — or, when this browser kept the viewer's for
-    /// `remember` (the mockup's own name), those.
-    pub(crate) fn new(declared: Signal<Vec<Device>>, remember: Option<String>) -> Self {
+    /// `remember` (the mockup's own name), those. APP-60: on a `phone`, the
+    /// narrowest of them alone ([`opening`]).
+    pub(crate) fn new(declared: Signal<Vec<Device>>, remember: Option<String>, phone: Signal<bool>) -> Self {
         let kept = remember
             .as_deref()
             .and_then(|r| decode(storage().and_then(|s| s.get_item(&storage_key(r)).ok().flatten()).as_deref()));
@@ -287,10 +340,12 @@ impl Sizer {
         let start = kept.unwrap_or_else(|| declared.get_untracked());
         let slots: Vec<Slot> = start.into_iter().enumerate().map(|(i, d)| Slot { key: i as u32, dev: ArcRwSignal::new(d) }).collect();
         let n = slots.len() as u32;
+        let devs: Vec<Device> = slots.iter().map(|x| x.dev.get_untracked()).collect();
+        let solo = opening(&devs, phone.get_untracked()).map(|i| slots[i].key);
         let s = Sizer {
             slots: RwSignal::new(slots),
             next: StoredValue::new(n),
-            solo: RwSignal::new(None),
+            solo: RwSignal::new(solo),
             chosen: RwSignal::new(chosen),
             declared,
             remember: StoredValue::new(remember),
@@ -298,6 +353,7 @@ impl Sizer {
             field: RwSignal::new(None),
             refused: RwSignal::new(None),
             grab: RwSignal::new(None),
+            phone,
         };
         // The body re-declares its widths: a mockup at its declared ones
         // follows; one the viewer sized keeps the viewer's.
@@ -358,6 +414,13 @@ impl Sizer {
         {
             self.solo.set(None);
         }
+        // APP-60: Reset on a phone is the opening — the narrowest alone.
+        if op == Resize::Reset {
+            let solo = opening(&self.devices_untracked(), self.phone.get_untracked());
+            if let Some(i) = solo {
+                self.solo.set(self.slots.with_untracked(|v| v.get(i).map(|x| x.key)));
+            }
+        }
         let reset = op == Resize::Reset || self.devices_untracked() == declared;
         self.chosen.set(!reset);
         self.keep();
@@ -403,20 +466,25 @@ impl Sizer {
         }
     }
 
+    /// APP-60: whether the Custom field is open — on a phone it lives in
+    /// the bar's ⋯ menu, which it holds open.
+    pub(crate) fn field_open(&self) -> bool {
+        self.field.get().is_some()
+    }
+
     fn open_field(&self, t: Target) {
         self.menu.set(false);
         self.refused.set(None);
         self.field.set(Some(t));
     }
 
-    fn close_field(&self) {
+    pub(crate) fn close_field(&self) {
         self.refused.set(None);
         self.field.set(None);
     }
 
-    /// The bar's controls: All and each device, the Size menu, Reset, and
-    /// the Custom field when it is open.
-    pub(crate) fn controls(self) -> impl IntoView {
+    /// The bar's device picker: All and each device.
+    pub(crate) fn picker(self) -> impl IntoView {
         let s = self;
         let devices = move || {
             s.slots
@@ -438,6 +506,18 @@ impl Sizer {
                 })
                 .collect_view()
         };
+        view! {
+            <span class="framed-group framed-devices" role="group" aria-label="devices">
+                <button class="framed-btn" title="every device, side by side" aria-pressed=move || s.solo.get().is_none().to_string() on:click=move |_| s.solo.set(None)>"All"</button>
+                {devices}
+            </span>
+        }
+    }
+
+    /// The bar's sizing tools: the Size menu, Reset, and the Custom field
+    /// when it is open.
+    pub(crate) fn tools(self) -> impl IntoView {
+        let s = self;
         let menu_ref = NodeRef::<leptos::html::Div>::new();
         let toggle = move |_| {
             let open = !s.menu.get_untracked();
@@ -508,10 +588,6 @@ impl Sizer {
             }
         };
         view! {
-            <span class="framed-group" role="group" aria-label="devices">
-                <button class="framed-btn" title="every device, side by side" aria-pressed=move || s.solo.get().is_none().to_string() on:click=move |_| s.solo.set(None)>"All"</button>
-                {devices}
-            </span>
             <span class="framed-sizes" node_ref=wrap_ref on:focusout=left>
                 <button class="framed-btn" aria-haspopup="menu" aria-expanded=move || s.menu.get().to_string() title="Standard devices, or a size of your own" on:click=toggle>
                     "Size ▾"
@@ -584,6 +660,7 @@ impl Sizer {
         ticket: Option<String>,
         scope: String,
         emulate: Signal<Emulate>,
+        shaped: Signal<bool>,
         size: RwSignal<(f64, f64)>,
         is_full: Memo<bool>,
     ) -> impl IntoView {
@@ -597,18 +674,17 @@ impl Sizer {
             let solo = s.solo.get();
             let shown: Vec<Device> =
                 s.slots.with(|v| v.iter().filter(|x| solo.is_none_or(|k| k == x.key)).map(|x| x.dev.get()).collect());
-            let avail_h = is_full.get().then_some(h - CHROME_H);
-            // The stage's padding, each device's bezel and its grip are not scaled.
-            fit(&shown, GAP, w - 12.0 - GRIP_W - BEZEL_W * shown.len() as f64, avail_h)
+            scale_for(&shown, w, h, s.phone.get(), is_full.get())
         });
         view! {
             <For each=move || s.slots.get() key=|slot| slot.key children=move |slot: Slot| {
-                s.device(slot, html, ticket.clone(), scope.clone(), emulate, scale)
+                s.device(slot, html, ticket.clone(), scope.clone(), emulate, shaped, scale)
             } />
         }
     }
 
-    fn device(self, slot: Slot, html: Signal<String>, ticket: Option<String>, scope: String, emulate: Signal<Emulate>, scale: Memo<f64>) -> impl IntoView {
+    #[allow(clippy::too_many_arguments)]
+    fn device(self, slot: Slot, html: Signal<String>, ticket: Option<String>, scope: String, emulate: Signal<Emulate>, shaped: Signal<bool>, scale: Memo<f64>) -> impl IntoView {
         let s = self;
         let key = slot.key;
         let dev = slot.dev;
@@ -630,6 +706,17 @@ impl Sizer {
                 let d = d();
                 format!("width:{}px;height:{}px;transform:scale({:.4})", d.w, d.h, scale.get())
             }
+        };
+        // APP-66: an iPhone's screen, while the box's Screen shape is on —
+        // its corners clip the page, its cutout and home indicator are drawn
+        // over it, and the page is told its insets (the frame's emulation).
+        let shape = Memo::new({
+            let d = d.clone();
+            move |_| if shaped.get() { crate::present::screen(d()) } else { None }
+        });
+        let emulate = Signal::derive(move || Emulate { safe: shape.get().map(|x| x.insets), ..emulate.get() });
+        let corner = move || {
+            shape.get().map(|x| format!("--shape-r:{}px;--shape-rs:{:.1}px", x.radius, f64::from(x.radius) * scale.get()))
         };
         let dragging = move || s.grab.get().is_some_and(|g| g.key == key);
         // Pointer: the edge drags the width, the corner both.
@@ -714,7 +801,8 @@ impl Sizer {
         let readout2 = readout.clone();
         let data_kind = kind.clone();
         view! {
-            <figure class="device" data-slot=key.to_string() data-kind=data_kind data-w=data_w class:hidden=move || !shown() class:is-dragging=dragging>
+            <figure class="device" data-slot=key.to_string() data-kind=data_kind data-w=data_w class:hidden=move || !shown() class:is-dragging=dragging
+                data-shape=move || shape.get().map(|x| x.cutout.as_str()) data-landscape=move || shape.get().is_some_and(|x| x.landscape).then_some("") style=corner>
                 <figcaption class="device-label">
                     <span>{kind}</span>
                     <button class="device-size code" title="Type a size for this device" on:click=move |_| s.open_field(Target::Slot(key))>{readout}</button>
@@ -726,6 +814,10 @@ impl Sizer {
                     <div class="device-screen" style=screen>
                         <div class="device-inner" style=inner>
                             <Frame html ticket scope emulate fixed=true />
+                            {move || shape.get().map(|_| view! {
+                                <span class="device-cutout" aria-hidden="true"></span>
+                                <span class="device-home" aria-hidden="true"></span>
+                            })}
                         </div>
                     </div>
                     <span class="device-grip device-grip-e" tabindex="0" role="slider" aria-label=handle_label
@@ -867,6 +959,42 @@ mod tests {
             resized(&[tab], &declared, None, Resize::Reset),
             vec![(Some(0), declared[0]), (None, declared[1]), (None, declared[2])]
         );
+    }
+
+    /// APP-60: on a phone a mockup opens on its narrowest device alone (the
+    /// first, on a tie); one device, or a wide viewport, opens on All.
+    #[test]
+    fn a_phone_opens_on_the_narrowest_device() {
+        let (phone, desk, tab) = (Device { w: 390, h: 844 }, Device { w: 1440, h: 900 }, Device { w: 768, h: 1024 });
+        assert_eq!(opening(&[desk, phone], true), Some(1));
+        assert_eq!(opening(&[phone, tab, desk], true), Some(0));
+        assert_eq!(opening(&[desk, phone, Device { w: 390, h: 700 }], true), Some(1));
+        assert_eq!(opening(&[phone, desk], false), None);
+        assert_eq!(opening(&[desk], true), None);
+        assert_eq!(opening(&[], true), None);
+    }
+
+    /// APP-60: on a phone a device is scaled to the column alone (a 390 one
+    /// near 100% in a 382 px column, a 1440 one to fit it — never off its
+    /// edge), All stacked at the widest's scale; full screen is 100%. A wide
+    /// viewport keeps the side-by-side fit.
+    #[test]
+    fn a_phone_scales_each_device_to_the_column() {
+        let (phone, desk) = (Device { w: 390, h: 844 }, Device { w: 1440, h: 900 });
+        let s = scale_for(&[phone], 382.0, 700.0, true, false);
+        assert!((s - (382.0 - 8.0) / 390.0).abs() < 1e-9 && s > 0.95, "{s}");
+        let d = scale_for(&[desk], 382.0, 700.0, true, false);
+        assert!(1440.0 * d + 4.0 <= 382.0 + 1e-9, "{d}");
+        assert_eq!(scale_for(&[phone, desk], 382.0, 700.0, true, false), d);
+        assert_eq!(scale_for(&[Device { w: 320, h: 568 }], 382.0, 700.0, true, false), 1.0);
+        assert_eq!(scale_for(&[desk], 382.0, 700.0, true, true), 1.0);
+        // wide: as before
+        assert_eq!(scale_for(&[phone, desk], 1200.0, 800.0, false, false), fit(&[phone, desk], GAP, 1200.0 - 12.0 - GRIP_W - 2.0 * BEZEL_W, None));
+        assert_eq!(scale_for(&[phone, desk], 1200.0, 800.0, false, true), fit(&[phone, desk], GAP, 1200.0 - 12.0 - GRIP_W - 2.0 * BEZEL_W, Some(800.0 - CHROME_H)));
+        // the bezels the scale counts are the ones the phone's rules draw
+        let css = include_str!("../index.html");
+        assert!(css.contains(".device[data-kind=\"phone\"] .device-screen { border-width: 4px; }"));
+        assert!(css.contains(".device[data-kind=\"tablet\"] .device-screen { border-width: 6px; }"));
     }
 
     /// Kept as `WxH,…`, read back the same; anything unreadable is none.

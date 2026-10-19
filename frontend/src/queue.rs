@@ -79,7 +79,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{bridge, dom, inputs, session};
+use crate::queue_tabs::{self, Tab};
+use crate::{bridge, chat_pane, chats, dom, inputs, session};
 
 /// How long *snooze* puts a ticket away, in minutes.
 pub(crate) const SNOOZE_MINUTES: u32 = 10;
@@ -612,6 +613,8 @@ pub(crate) struct Face {
     pub(crate) ctl: Option<Control>,
     pub(crate) open: bool,
     pub(crate) fresh: Option<Urgency>,
+    /// CHAT-17: the open chats with unread — the place shows for them alone.
+    pub(crate) chats: usize,
 }
 
 thread_local! {
@@ -1027,6 +1030,21 @@ pub(crate) fn Tray() -> impl IntoView {
     let hover_gen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let hover_on = hover_setting();
     let tray_ref = NodeRef::<leptos::html::Div>::new();
+    // CHAT-17: the Chats tab — the open chats, in the inbox's order; how
+    // many hold unread; the tab shown; the row `j` / `k` is on.
+    chats::want();
+    let chats_held = chats::signal();
+    let chat_lines = {
+        let (held, me, name) = (chats_held.clone(), chats::me(), chat_pane::names());
+        Memo::new(move |_| held.with(|h| h.as_ref().map(|h| queue_tabs::lines(h, &me, &name)).unwrap_or_default()))
+    };
+    let chats_loaded = {
+        let held = chats_held.clone();
+        Signal::derive(move || held.with(Option::is_some))
+    };
+    let unread_chats = Memo::new(move |_| chat_lines.with(|l| queue_tabs::waiting(l)));
+    let tab = RwSignal::new(queue_tabs::kept());
+    let chat_sel = RwSignal::new(None::<u64>);
     let sheet_ref = NodeRef::<leptos::html::Div>::new();
     let control_ref = NodeRef::<leptos::html::Button>::new();
     // Arrivals play once the page is visible: each loses `seen` (a raised
@@ -1075,6 +1093,9 @@ pub(crate) fn Tray() -> impl IntoView {
     };
     let order = Memo::new(move |_| rows.with(|r| r.iter().map(|x| x.entry.ticket.clone()).collect::<Vec<_>>()));
     let one = Memo::new(move |_| rows.with(|r| r.len() == 1));
+    let shown = Memo::new(move |_| queue_tabs::shows(rows.with(Vec::len), unread_chats.get()));
+    // The sheet as one ticket's answer: only on the queue's tab.
+    let one_here = Memo::new(move |_| one.get() && tab.get() == Tab::Queue);
     let ctl = Memo::new(move |_| rows.with(|r| seen.with(|s| new.with(|n| control(r, s, n)))));
     let picked_row = Memo::new(move |_| picked.with(|p| p.as_ref().and_then(|id| rows.with(|r| r.iter().find(|x| &x.entry.ticket == id).cloned()))));
     let sheet = Sheet { open, picked, order, clock, problem, busy, draft, pick };
@@ -1110,8 +1131,14 @@ pub(crate) fn Tray() -> impl IntoView {
     // The sheet up: the row picked before (if still queued), else the
     // first — the most urgent, the oldest; the arrivals are no longer new.
     let open_sheet = move || {
+        // CHAT-17: nothing queued opens on Chats; else the tab last picked.
+        let on = queue_tabs::opening(order.with_untracked(Vec::len), queue_tabs::kept());
+        tab.set(on);
+        if on == Tab::Chats {
+            queue_tabs::learn_names();
+        }
         let keep = picked.get_untracked().filter(|p| order.with_untracked(|o| o.contains(p)));
-        if let Some(id) = keep.or_else(|| order.with_untracked(|o| o.first().cloned())) {
+        if let Some(id) = keep.or_else(|| order.with_untracked(|o| o.first().cloned())).filter(|_| on == Tab::Queue) {
             pick_row(id);
         }
         new.set(HashSet::new());
@@ -1135,7 +1162,7 @@ pub(crate) fn Tray() -> impl IntoView {
     {
         let face = FACE.with(Clone::clone);
         Effect::new(move |_| {
-            let now = Face { ctl: ctl.get(), open: open.get(), fresh: fresh.get() };
+            let now = Face { ctl: ctl.get(), open: open.get(), fresh: fresh.get(), chats: unread_chats.get() };
             if face.with_untracked(|f| *f != now) {
                 face.set(now);
             }
@@ -1149,7 +1176,7 @@ pub(crate) fn Tray() -> impl IntoView {
             }
             heard.set_value(n);
             match (up, open.get_untracked()) {
-                (true, false) if !order.with_untracked(Vec::is_empty) => open_sheet(),
+                (true, false) if shown.get_untracked() => open_sheet(),
                 (false, true) => close_sheet(false),
                 _ => {}
             }
@@ -1165,7 +1192,8 @@ pub(crate) fn Tray() -> impl IntoView {
             let prev = before.get_value();
             before.set_value(after.clone());
             if after.is_empty() {
-                if open.get_untracked() {
+                // CHAT-17: on the Chats tab the sheet stays up.
+                if open.get_untracked() && tab.get_untracked() == Tab::Queue {
                     open.set(false);
                     closing.set(true);
                     spawn_local(async move {
@@ -1233,6 +1261,42 @@ pub(crate) fn Tray() -> impl IntoView {
             dom::sleep_ms(0).await;
             reveal(&format!("#qtray .qr[data-ticket-id=\"{id}\"]"), web_sys::ScrollLogicalPosition::Nearest);
         });
+    };
+    // CHAT-17: j / k on the Chats tab — the next or previous chat, focused
+    // (Enter opens it).
+    let step_chat = move |by: i32| {
+        let ids: Vec<String> = chat_lines.with_untracked(|l| l.iter().map(|x| x.row.id.to_string()).collect());
+        let at = chat_sel.get_untracked().map(|i| i.to_string());
+        let Some(id) = step_pick(&ids, at.as_deref(), by).and_then(|i| i.parse::<u64>().ok()) else { return };
+        chat_sel.set(Some(id));
+        spawn_local(async move {
+            dom::sleep_ms(0).await;
+            if let Some(el) = dom::window().document().and_then(|d| d.query_selector(&format!("#qtray .qcr[data-chat=\"{id}\"]")).ok().flatten()) {
+                if let Ok(el) = el.dyn_into::<web_sys::HtmlElement>() {
+                    let _ = el.focus();
+                }
+            }
+        });
+    };
+    // CHAT-17: a tab picked — kept for the next time; the queue's picks its
+    // row as opening it does.
+    let set_tab = move |t: Tab| {
+        queue_tabs::keep(t);
+        if tab.get_untracked() == t {
+            return;
+        }
+        tab.set(t);
+        match t {
+            Tab::Chats => queue_tabs::learn_names(),
+            Tab::Queue => {
+                if picked.get_untracked().is_none() {
+                    if let Some(id) = order.with_untracked(|o| o.first().cloned()) {
+                        pick_row(id);
+                    }
+                }
+            }
+        }
+        focus_sheet();
     };
     // A head chip: its group's first row picked, the group brought to the
     // top of the list (whenever unfolded).
@@ -1306,14 +1370,28 @@ pub(crate) fn Tray() -> impl IntoView {
     };
     // The control's face: one ticket's id, title and urgency; or the count,
     // `queued`, the loudest's chip, what is new, and the caret.
+    // CHAT-17: what the chats add to it — `2 chats`, green.
+    let chats_mark = move || {
+        let n = unread_chats.get();
+        (n > 0).then(|| view! { <span class="qcchat">{format!("{n} chat{}", if n == 1 { "" } else { "s" })}</span> })
+    };
     let face = move || {
-        if one.get() {
+        if rows.with(Vec::is_empty) {
+            // Nothing queued, a chat with unread: its count, `chats`.
+            view! {
+                <span class="cnt">{move || unread_chats.get()}</span>
+                <span class="lbl">"chats"</span>
+                <span class="car" aria-hidden="true">"▴"</span>
+            }
+            .into_any()
+        } else if one.get() {
             let title = move || rows.with(|r| r.first().map(|r| r.ticket.title.clone()).unwrap_or_default());
             let tid = move || order.with(|o| o.first().cloned().unwrap_or_default());
             view! {
                 <span class="id">{tid}</span>
                 <span class="t">{title}</span>
                 <span class="chip-u">{move || ctl.with(|c| c.as_ref().map(Control::chip).unwrap_or_default())}</span>
+                {chats_mark}
                 <span class="car" aria-hidden="true">"▴"</span>
             }
             .into_any()
@@ -1323,6 +1401,7 @@ pub(crate) fn Tray() -> impl IntoView {
                 <span class="lbl">"queued"</span>
                 <span class="chip-u">{move || ctl.with(|c| c.as_ref().map(Control::chip).unwrap_or_default())}</span>
                 {move || ctl.with(|c| c.as_ref().filter(|c| c.new > 0).map(|c| c.new)).map(|n| view! { <span class="new">{format!("{n} new")}</span> })}
+                {chats_mark}
                 <span class="car" aria-hidden="true">"▴"</span>
             }
             .into_any()
@@ -1429,9 +1508,9 @@ pub(crate) fn Tray() -> impl IntoView {
             id="qtray"
             node_ref=tray_ref
             class="qtray"
-            class:empty=move || rows.with(Vec::is_empty) && !closing.get()
+            class:empty=move || !shown.get() && !closing.get() && !open.get()
             class:open=move || open.get()
-            class:one=move || one.get()
+            class:one=move || one_here.get()
             on:keydown=move |ev: web_sys::KeyboardEvent| {
                 if !open.get_untracked() {
                     return;
@@ -1444,6 +1523,14 @@ pub(crate) fn Tray() -> impl IntoView {
                     Some("dialog.close") => {
                         ev.stop_propagation();
                         close_sheet(true);
+                    }
+                    Some("queue.next") if !typing && tab.get_untracked() == Tab::Chats => {
+                        ev.prevent_default();
+                        step_chat(1);
+                    }
+                    Some("queue.prev") if !typing && tab.get_untracked() == Tab::Chats => {
+                        ev.prevent_default();
+                        step_chat(-1);
                     }
                     Some("queue.next") if !typing && !one.get_untracked() => {
                         ev.prevent_default();
@@ -1463,7 +1550,8 @@ pub(crate) fn Tray() -> impl IntoView {
                     id="qsheet"
                     node_ref=sheet_ref
                     class="qs"
-                    class:one=move || one.get()
+                    class:one=move || one_here.get()
+                    class:chats=move || tab.get() == Tab::Chats
                     class:loud=move || ctl.with(|c| c.as_ref().is_some_and(|c| c.loudest.loud()))
                     role="dialog"
                     aria-label="the queue"
@@ -1471,18 +1559,45 @@ pub(crate) fn Tray() -> impl IntoView {
                     inert=move || !open.get()
                     aria-live="polite"
                 >
-                    <div class="qgrab" aria-hidden="true"></div>
+                    <crate::sheet::Grip target="qsheet" head=".qh" class="qgrab" open=open dismiss=Callback::new(move |_| close_sheet(false)) />
                     <div class="qh">
-                        <span class="qt">"queue"</span>
-                        <b class="qn">{move || rows.with(Vec::len)}</b>
-                        {move || (!one.get()).then(|| view! { <span class="qjs">{chips}</span> })}
+                        // CHAT-17: two tabs — the queue, and the open chats.
+                        <span class="qtabs" role="tablist" aria-label="the queue and the chats">
+                            <button
+                                type="button"
+                                class="qtb"
+                                role="tab"
+                                data-tab="queue"
+                                aria-selected=move || (tab.get() == Tab::Queue).to_string()
+                                on:click=move |_| set_tab(Tab::Queue)
+                            >
+                                <span class="qt">"queue"</span>
+                                <b class="qn">{move || rows.with(Vec::len)}</b>
+                            </button>
+                            <button
+                                type="button"
+                                class="qtb"
+                                role="tab"
+                                data-tab="chats"
+                                aria-selected=move || (tab.get() == Tab::Chats).to_string()
+                                aria-label=move || format!("chats, {}", queue_tabs::words(unread_chats.get()))
+                                on:click=move |_| set_tab(Tab::Chats)
+                            >
+                                <span class="qt">"chats"</span>
+                                <b class=move || chat_n_class(unread_chats.get())>{move || unread_chats.get()}</b>
+                            </button>
+                        </span>
+                        {move || (tab.get() == Tab::Queue && !one.get() && !rows.with(Vec::is_empty)).then(|| view! { <span class="qjs">{chips}</span> })}
                         <span class="sp"></span>
-                        {move || (!one.get()).then(|| view! { <span class="kb" aria-hidden="true"><kbd>"j"</kbd>" "<kbd>"k"</kbd></span> })}
+                        {move || (tab.get() == Tab::Chats || !one.get()).then(|| view! { <span class="kb" aria-hidden="true"><kbd>"j"</kbd>" "<kbd>"k"</kbd></span> })}
                         <button type="button" class="qx" on:click=move |_| close_sheet(true)>"close ▾ "<kbd>"esc"</kbd></button>
                     </div>
                     <div class="qb">
-                        {move || (!one.get()).then(list)}
-                        {pane}
+                        {move || match tab.get() {
+                            Tab::Queue if rows.with(Vec::is_empty) => view! { <p class="qempty">"Nothing queued."</p> }.into_any(),
+                            Tab::Queue => view! { {move || (!one.get()).then(list)} {pane} }.into_any(),
+                            Tab::Chats => queue_tabs::list_view(chats_loaded, chat_lines, chat_sel, move || open.set(false)).into_any(),
+                        }}
                     </div>
                 </div>
             </div>
@@ -1495,10 +1610,22 @@ pub(crate) fn Tray() -> impl IntoView {
                 type="button"
                 id="qcontrol"
                 node_ref=control_ref
-                class=move || ctl.with(|c| c.as_ref().map(|c| c.class(open.get(), fresh.get())).unwrap_or_else(|| "qc".into()))
+                class=move || {
+                    ctl.with(|c| c.as_ref().map(|c| c.class(open.get(), fresh.get()))).unwrap_or_else(|| {
+                        if unread_chats.get() > 0 { queue_tabs::control_class(open.get()) } else { "qc".into() }
+                    })
+                }
                 aria-expanded=move || open.get().to_string()
                 aria-controls="qsheet"
-                aria-label=move || ctl.with(|c| c.as_ref().map(Control::words).unwrap_or_default())
+                aria-label=move || {
+                    let chats = unread_chats.get();
+                    let queued = ctl.with(|c| c.as_ref().map(Control::words));
+                    match (queued, chats) {
+                        (Some(q), 0) => q,
+                        (Some(q), n) => format!("{q}, {}", queue_tabs::words(n)),
+                        (None, n) => queue_tabs::words(n),
+                    }
+                }
                 aria-describedby=move || hovered.with(Option::is_some).then_some("qcard")
                 data-ticket-id=move || one.get().then(|| order.with(|o| o.first().cloned())).flatten()
                 on:mouseenter={
@@ -1532,6 +1659,15 @@ pub(crate) fn Tray() -> impl IntoView {
     }
 }
 
+/// CHAT-17: the Chats tab's N — green while a chat holds unread.
+fn chat_n_class(n: usize) -> &'static str {
+    if n > 0 {
+        "qn chat un"
+    } else {
+        "qn chat"
+    }
+}
+
 /// APP-26: whether a press lowers the sheet — one is up, no submit is out,
 /// and the press landed outside the tray (a tab, the sheet and the card are
 /// inside).
@@ -1557,7 +1693,6 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
             }
         }
     };
-    let send_key = send.clone();
     move || {
         if !draft.open.get() {
             return view! {
@@ -1567,15 +1702,21 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
             }
             .into_any();
         }
-        let (send, send_key) = (send.clone(), send_key.clone());
+        let send = send.clone();
         // A box drawn is focused (one ref per drawing: a ref loads once).
         let area = NodeRef::<leptos::html::Textarea>::new();
         area.on_load(|el: web_sys::HtmlTextAreaElement| {
             let _ = el.focus();
         });
         crate::grow::follow(area, move || draft.text.track());
+        // COMMENT-5: images pasted, dropped or picked — for this ticket.
+        let attach = crate::media::Attach::new(draft.text, area, Some(id.clone()));
+        // APP-70: a drawing on the pad goes first.
+        let send = attach.then(send);
+        let send_key = send.clone();
         view! {
             <div class="qchange open">
+                <crate::draw::PadView a=attach />
                 <textarea
                     node_ref=area
                     class="grow"
@@ -1584,6 +1725,9 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
                     placeholder=CHANGES_PLACEHOLDER
                     prop:value=move || draft.text.get()
                     on:input=move |ev| draft.text.set(event_target_value(&ev))
+                    on:paste=move |ev| attach.paste(ev)
+                    on:dragover=move |ev| attach.dragover(ev)
+                    on:drop=move |ev| attach.dropped(ev)
                     on:keydown=move |ev: web_sys::KeyboardEvent| match crate::bindings::hit(&ev, crate::bindings::Context::Field) {
                         Some("comment.save") => {
                             ev.prevent_default();
@@ -1599,10 +1743,11 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
                     }
                 ></textarea>
                 <div class="qchange-acts">
+                    <crate::media::Attachments a=attach />
                     <button
                         type="button"
                         class="qbtn fill"
-                        disabled=move || busy.get() || draft.text.with(|t| t.trim().is_empty())
+                        disabled=move || busy.get() || attach.busy() || (!attach.drawn() && draft.text.with(|t| t.trim().is_empty()))
                         on:click=move |_| send()
                     >
                         "send — request changes"
@@ -1637,10 +1782,13 @@ fn input_view(
         };
         return Some(view! { <div class="qinput"><p class="qq"><b>{question}</b></p><p class="qdone">{words}</p></div> }.into_any());
     }
+    // APP-70: a text reply is written in a box like any other — images and
+    // drawings too (their markdown in the reply), for this ticket.
+    let reply = reply_for(&input, pick, &id);
     // APP-25: every control only picks; the one submit sends.
-    let controls = controls_of(&input, busy, pick);
+    let controls = controls_of(&input, busy, pick, reply);
     let kind = input.kind;
-    let send = move |_| {
+    let send = move || {
         if busy.get_untracked() {
             return;
         }
@@ -1648,6 +1796,24 @@ fn input_view(
             submit(id.clone(), named.clone(), value, problem, busy, pick);
         }
     };
+    let attach = reply.map(|(_, _, a)| a);
+    let send = {
+        // The reply as it stands when the send goes (a drawing's markdown
+        // lands in the box the moment before).
+        let gated = reply.map(|(text, _, a)| {
+            let send = send.clone();
+            a.then(move || {
+                pick.update(|p| p.text = text.get_untracked());
+                send();
+            })
+        });
+        move |_| match &gated {
+            Some(g) => g(),
+            None => send(),
+        }
+    };
+    let waits = move || attach.is_some_and(|a| a.busy());
+    let drawn = move || attach.is_some_and(|a| a.drawn());
     let controls = view! {
         {controls}
         <div class="qsubmit">
@@ -1655,7 +1821,7 @@ fn input_view(
                 type="button"
                 class="qbtn fill"
                 data-act="submit"
-                disabled=move || busy.get() || pick.with(|p| p.value(kind).is_none())
+                disabled=move || busy.get() || waits() || (!drawn() && pick.with(|p| p.value(kind).is_none()))
                 on:click=send
             >
                 {move || if busy.get() { "submitting…" } else { "submit" }}
@@ -1666,10 +1832,29 @@ fn input_view(
 }
 
 
+/// APP-70: a text input's reply box — its text, the textarea, and what
+/// attaches images and drawings to it (for `ticket`); none for another kind.
+pub(crate) type Reply = (RwSignal<String>, NodeRef<leptos::html::Textarea>, crate::media::Attach);
+
+/// [`Reply`] for `input`, its text kept in `pick`.
+pub(crate) fn reply_for(input: &Input, pick: RwSignal<Pick>, ticket: &str) -> Option<Reply> {
+    (input.kind == InputKind::Text).then(|| {
+        let text = RwSignal::new(pick.with_untracked(|p| p.text.clone()));
+        Effect::new(move |_| {
+            let t = text.get();
+            if pick.with_untracked(|p| p.text != t) {
+                pick.update(|p| p.text = t);
+            }
+        });
+        let area = NodeRef::<leptos::html::Textarea>::new();
+        (text, area, crate::media::Attach::new(text, area, Some(ticket.to_string())))
+    })
+}
+
 /// APP-84: an open input's controls — a choice's options, a multi's boxes, a
-/// text's reply — each only picking into `pick` (APP-25); the tray's sheet
-/// and the header's panel both answer with them.
-pub(crate) fn controls_of(input: &Input, busy: RwSignal<bool>, pick: RwSignal<Pick>) -> AnyView {
+/// text's reply box (`reply`, APP-70) — each only picking into `pick`
+/// (APP-25); the tray's sheet and the header's panel both answer with them.
+pub(crate) fn controls_of(input: &Input, busy: RwSignal<bool>, pick: RwSignal<Pick>, reply: Option<Reply>) -> AnyView {
     match input.kind {
         InputKind::Choice => {
             let opts = input
@@ -1723,21 +1908,23 @@ pub(crate) fn controls_of(input: &Input, busy: RwSignal<bool>, pick: RwSignal<Pi
             view! { <div class="qopts multi">{boxes}</div> }.into_any()
         }
         InputKind::Text => {
-            let area = NodeRef::<leptos::html::Textarea>::new();
-            crate::grow::follow(area, move || pick.with(|p| p.text.clone()));
+            let (text, area, attach) = reply.expect("a text input's box");
+            crate::grow::follow(area, move || text.track());
             view! {
                 <div class="qopts text">
+                    <crate::draw::PadView a=attach />
                     <textarea
                         node_ref=area
                         class="grow"
                         rows="2"
                         aria-label="your reply"
-                        prop:value=move || pick.with(|p| p.text.clone())
-                        on:input=move |ev| {
-                            let t = event_target_value(&ev);
-                            pick.update(|p| p.text = t);
-                        }
+                        prop:value=move || text.get()
+                        on:input=move |ev| text.set(event_target_value(&ev))
+                        on:paste=move |ev| attach.paste(ev)
+                        on:dragover=move |ev| attach.dragover(ev)
+                        on:drop=move |ev| attach.dropped(ev)
                     ></textarea>
+                    <div class="qchange-acts"><crate::media::Attachments a=attach /></div>
                 </div>
             }
             .into_any()
@@ -1772,6 +1959,7 @@ pub(crate) mod tests {
             path: None,
             placement: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             created_unix: 0,
             updated_unix: 0,
         }
@@ -1870,6 +2058,7 @@ pub(crate) mod tests {
             parent_hidden: false,
             archived: None,
             labels: s.labels,
+            assignees: Vec::new(),
             id: s.id,
             epic: s.epic,
             shortcode: s.shortcode,

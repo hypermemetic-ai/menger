@@ -157,6 +157,18 @@
 [space]
 "--space" = ['1', '1', "density: the page's gutters, multiplied"]
 
+# APP-65 / APP-66: the screen's safe area — how far an iPhone's corners,
+# notch or island and home indicator inset the page (iOS reports them under
+# the app's `viewport-fit=cover`; 0 everywhere else). Whatever sits on an
+# edge pads by these. A mockup's phone sets `--sai-*` on the page it draws
+# (the page shim), and a check sets them on the app's root, so the insets
+# show where the browser reports none.
+[space.safe]
+"--safe-top" = ['max(env(safe-area-inset-top, 0px), var(--sai-top, 0px))', 'max(env(safe-area-inset-top, 0px), var(--sai-top, 0px))', 'the top inset: the status bar, the notch or island']
+"--safe-right" = ['max(env(safe-area-inset-right, 0px), var(--sai-right, 0px))', 'max(env(safe-area-inset-right, 0px), var(--sai-right, 0px))', 'the right inset: a corner, the island in landscape']
+"--safe-bottom" = ['max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))', 'max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))', 'the bottom inset: the home indicator']
+"--safe-left" = ['max(env(safe-area-inset-left, 0px), var(--sai-left, 0px))', 'max(env(safe-area-inset-left, 0px), var(--sai-left, 0px))', 'the left inset: a corner, the island in landscape']
+
 # -- shape ------------------------------------------------------------------
 
 [shape.radius]

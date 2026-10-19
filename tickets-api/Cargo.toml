@@ -51,6 +51,7 @@ server = [
     "dep:roaring",
     "dep:jiff",
     "dep:sha2",
+    "dep:base64",
 ]
 # ACCESS-9: the capabilities' test constructors (`VerifiedUser::for_tests`,
 # `System::for_tests`, …) for tests outside this crate's own `cfg(test)`.
@@ -111,8 +112,10 @@ roaring = { version = "0.10", optional = true }
 # system's tzdb, or a fixed offset. Server-only: the app sends its zone's
 # name and never evaluates a window.
 jiff = { version = "0.2", optional = true }
-# TICKETS-7: a revision's body is kept once per content, by its SHA-256.
+# COMMENT-5: an image is named by its SHA-256 and travels as base64 (media.put,
+# media.get). Both already in the lock (the server takes them); server-only.
 sha2 = { version = "0.10", optional = true }
+base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
 # ACCESS-24: the integration tests (tests/sdk_manifest.rs) build the

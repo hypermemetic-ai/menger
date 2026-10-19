@@ -303,6 +303,46 @@ pub async fn app_with(under: Under, t: Tweaks) -> App {
     App { base: wired.public_url.clone(), ws, login, wired: Arc::new(wired), under }
 }
 
+/// IDENTITY-45: an app whose login is a `workos=` `--auth-provider` (at the
+/// fake) with direct social buttons, and — when `key` is given — the
+/// environment's API key, so the buttons complete through the WorkOS
+/// backend on the app's own page. `under` is the fake and the backend the
+/// wiring made (without a key, a backend no page uses).
+pub async fn app_direct(key: Option<&str>, buttons: &[&str]) -> (App, FakeWorkOs) {
+    capture_logs();
+    let fake = FakeWorkOs::start().await;
+    let ws = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+    let shell = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let shell_port = shell.local_addr().unwrap().port();
+    let opts = LoginOptions {
+        buttons: buttons.iter().map(|b| b.parse().unwrap()).collect(),
+        workos_key: key.map(|k| ApiKey::new(k).unwrap()),
+        require: true,
+        ..LoginOptions::new(BRANDING, ws, shell_port).with_providers([format!("workos={},{}", fake_workos::CLIENT, fake.base)]).unwrap()
+    };
+    let wiring = Wiring::new(opts).unwrap();
+    let access = SimpleAccess::new(wiring.sessions(), &[]).unwrap();
+    let wired = wiring.finish(access.clone(), None).unwrap();
+    let hub = DynamicHub::new("toy").with_auth(access.auth_setup(wired.backend.clone()));
+    access.seed_roles(&hub);
+    let server = wired.apply(TransportServer::builder(Arc::new(hub), |h| DynamicHub::arc_into_rpc_module(h).map_err(|e| anyhow::anyhow!("{e}"))).with_websocket(ws));
+    tokio::spawn(async move { server.build().await.unwrap().serve().await.unwrap() });
+    let router = wired.router().expect("a page");
+    tokio::spawn(async move { axum::serve(shell, router.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(("127.0.0.1", ws)).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let backend = wired.identity.clone().unwrap_or_else(|| {
+        Arc::new(WorkOs::new(WorkOsConfig { client: fake_workos::CLIENT.into(), base: Some(fake.base.clone()), key: ApiKey::new(KEY).unwrap(), social: vec![], sso: false, email_code: false, totp_issuer: "toy".into() }).unwrap())
+    });
+    let login = wired.login.clone().unwrap();
+    let app = App { base: wired.public_url.clone(), ws, login, wired: Arc::new(wired), under: Under::WorkOs(fake.clone(), backend) };
+    (app, fake)
+}
+
 // ── a browser ───────────────────────────────────────────────────────────
 
 pub struct Resp {

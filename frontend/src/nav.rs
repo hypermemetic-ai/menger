@@ -508,6 +508,7 @@ fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, statu
         parent_hidden: false,
         archived: None,
         labels: Vec::new(),
+        assignees: Vec::new(),
         id: menger_tickets_api::TicketId::new(id),
         // ORG-3: `epic` is the shortcode's identity (THEME, or a namesake's
         // THEME.5); its letters are what precedes a namesake's dot.
@@ -4421,6 +4422,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             labels: Vec::new(),
+            assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),

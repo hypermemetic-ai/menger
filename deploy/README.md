@@ -70,12 +70,15 @@ deploy/pipeline media                # landing/media regenerated from the releas
 deploy/pipeline image [RELEASE]      # RUN-10: a TESTED release as an image (menger:<release> here; IMAGE_STORE=ghcr pushes)
 deploy/pipeline local --image IMG    # RUN-25: the image here as menger-app-local, 127.0.0.1:4470/4471
 deploy/pipeline remote test|prod     # RUN-25: app-test / app.menger.sh through infra (deploy/app.yml, RUN-11)
+deploy/pipeline remote-secret test|prod   # IDENTITY-45: the WorkOS API key on the box, from a pipe ("The WorkOS key on the box")
 ```
 
 1. **Build** (`build [REV]`, default `main`). A commit, never a working
    tree: `../menger-build` — a sibling checkout, so menger's relative plexus
    dependencies resolve — is moved to the commit and cleaned, keeping only
-   build outputs.
+   build outputs. A low disk refuses it before anything runs (CI-2:
+   `scripts/disk-check.sh` — under 50 GB free or 90% used, `DISK_MIN_FREE_GB`
+   / `DISK_MAX_USED_PCT`); `status` says the disk on its last line.
 2. **Gate.** `cargo test --workspace` and the frontend's native tests at that
    commit. Red: no release.
 3. **Release.** `cargo build --release` (menger, menger-diagrams), `trunk
@@ -357,7 +360,7 @@ host-layer contract (SCAFFOLD-12/-19): the image
 deploy/pipeline image [RELEASE]`), two hosts, the WebSocket (8080) and the
 shell (8081) inside the container, the standard routes (`/ws` and any
 upgrade → the WebSocket, the rest → the shell, so RUN-9's metadata needs no
-route), a `/data` volume per environment (each its own tracker), 512 MB,
+route), a `/data` volume per environment (each its own tracker), 1 GB,
 and the health checks below. infra makes `/opt/apps/menger-test` (test)
 and `/opt/apps/menger` (prod) on the box, the edge's site per host (Caddy:
 Let's Encrypt over HTTP-01, http → https 308), the A record (DNS-only →
@@ -367,7 +370,7 @@ pinned address, SCAFFOLD-22) over `app.env`.
 | environment | host | settings (copied to the box as `app.env`) | state |
 |---|---|---|---|
 | test | `app-test.menger.sh` | `deploy/env/app-test.env` | live since 2026-10-17, its own empty tracker |
-| prod | `app.menger.sh` | `deploy/env/app-prod.env` | declared, not deployed: RUN-11's `sign-in`, then RUN-13 |
+| prod | `app.menger.sh` | `deploy/env/app-prod.env` | live since 2026-10-17, prod's data moved there (RUN-13); WorkOS production, the GitHub button through WorkOS's API with the key on the box (IDENTITY-45) |
 
 The settings are menger's own (README "Bind", "Trusted proxies", "Behind
 https", Login): `MENGER_PUBLIC_URL=https://<host>`, `MENGER_BIND=0.0.0.0`,
@@ -378,6 +381,77 @@ four provider buttons, `MENGER_REQUIRE_LOGIN`, `MENGER_NO_REST`, and
 `MENGER_ADMINS` = the owner's WorkOS principal and the `operator` key —
 nothing else is granted. Nothing in either file is a secret; one would go in
 the box's own `secret.env`, which infra never reads or writes.
+
+prod signs in through WorkOS **production**, whose API key is sealed to the
+owner's Ledger (WORKOS-14): what needs it runs under `ledger-secret`, the
+owner approving on the device. `deploy/workos-redirect-uris` (RUN-12) keeps
+an environment's redirect URIs and names a user's principal — the staging
+key by default:
+
+```sh
+deploy/workos-redirect-uris list                               # staging
+ledger-secret run workos-prod WORKOS_API_KEY -- deploy/workos-redirect-uris ensure \
+  https://app.menger.sh/login/callback https://app-test.menger.sh/login/callback
+ledger-secret run workos-prod WORKOS_API_KEY -- deploy/workos-redirect-uris user <owner email>
+```
+
+**The move (RUN-13, 2026-10-17).** Prod's data runs on app.menger.sh:
+local prod stopped (`systemctl --user stop menger@prod`), a `sqlite3
+.backup` into `~/.local/share/menger/backups/tickets.db.<when>-move-RUN-13`,
+seeded by infra (`bin/infra seed.yml -e app_dir=. -e env=prod -e
+seed=<backup> -e '{"seed_verify":["/opt/menger/bin/menger","--verify-derived","--db-path","/data/tickets.db"]}'`
+— the volume's old file moved aside, never deleted), then `deploy/pipeline
+remote prod`. `~/.local/share/menger-deploy/prod.moved` makes `promote` and
+`rollback prod` refuse: local prod is the rollback, and two trackers must
+not run at once. The rollback: `systemctl --user start menger@prod`, remove
+`prod.moved`, agents back to `-P 4455` — what was written on app.menger.sh
+since the move is only there (copy it back the same way first, if it
+matters).
+
+### The WorkOS key on the box (IDENTITY-45)
+
+WorkOS answers a direct GitHub sign-in with `email_verification_required`
+for every user whose address it has not verified (email verification is
+always on), and the grant that completes that step needs the client secret.
+So each environment's menger can hold its WorkOS environment's API key — a
+file on the box, never in the repository, `app-*.env`, the image or a log —
+and then the GitHub button completes through WorkOS's API on menger's own
+page (README "The direct buttons with the key"). Without the file the
+button is the PKCE path, as before.
+
+`deploy/app.yml` declares the file (`secrets`: `workos-api-key`, read by
+the image's uid 10001, named to menger as `MENGER_WORKOS_API_KEY_FILE`).
+hypermemetic-infra keeps `/opt/apps/<project>/secrets/` (0500) on the box,
+mounts it read-only at `/run/secrets`, and sets the variable only for a file
+the box holds. `deploy/pipeline remote-secret` puts the value there through
+infra's `secret.yml`, on a pipe: written 0400, the container recreated (or
+restarted), health checked, and on a failed check the old value (or none)
+put back by itself. The value comes from `$WORKOS_API_KEY`, `--from FILE`, or
+stdin, and is checked to be an `sk_…` key before anything is sent:
+
+```sh
+# app.menger.sh: WorkOS production's key, sealed to the owner's Ledger — one approval on the device
+ledger-secret run workos-prod WORKOS_API_KEY -- deploy/pipeline remote-secret prod
+# or from a key file the owner placed (0600)
+deploy/pipeline remote-secret prod --from ~/.config/workos/production.key
+# app-test.menger.sh: WorkOS staging's key
+deploy/pipeline remote-secret test --from ~/.config/workos/staging.key
+# a dry run: infra's secret.yml --check --diff, nothing written
+deploy/pipeline remote-secret prod --from ~/.config/workos/production.key --check
+```
+
+Each run is a line in `deployments.log` (`app-prod secret workos-api-key
+ok`) and in the box's own log, never the value. Rotating is the same
+command with the new key. A new image needs nothing: the file stays on the
+box, and every `remote test` / `remote prod` mounts it again.
+
+menger has no admin-by-email form: `MENGER_ADMINS` names principals
+(`oidc:workos/user_…`). A person signed in with no grant waits in `members
+requests` (with the name the provider gave), where an admin — the
+`operator` key — grants them. `deploy/grant-first-admin --url
+wss://app.menger.sh/ws --name <email> --name <github name>` does it once,
+for the first such WorkOS sign-in (exactly one match, or nothing), and
+records it on RUN-11.
 
 ```sh
 IMAGE_STORE=ghcr deploy/pipeline image 20261017T081530Z-5773250   # a TESTED release → GHCR
@@ -570,17 +644,41 @@ where its work runs:
   wait for the next run, which sends them before its own. One menger refuses
   moves to `outbox/refused/` and is said, never retried. A record never
   fails a run.
-- **Where.** `MENGER_DEPLOY_TRACKER_PORT` (4455, prod's tracker — test's
-  deploys are recorded there too), `MENGER_DEPLOY_TRACKER_HOST`,
+- **Where** (DEPLOY-28). `MENGER_DEPLOY_TRACKER_URL`, default
+  `wss://app.menger.sh/ws` — the tracker since RUN-13 — always signed in as
+  the pipeline's key (below; with no key file the records wait, said).
+  `MENGER_DEPLOY_TRACKER_URL=local` is this machine's tracker, as before
+  RUN-13: `MENGER_DEPLOY_TRACKER_PORT` (4455), `MENGER_DEPLOY_TRACKER_HOST`,
   `MENGER_DEPLOY_TRACKER_TOKEN` (a token, through synapse — argv; prefer the key).
+- **Complete on test** (DEPLOY-28, DEPLOY-22's rule: Complete means running
+  on the lowest environment). A `succeeded` record to `test` — a deploy test,
+  or a sync that first passes a release — once menger keeps it (or kept it
+  already, so a drained outbox completes too), sets **Complete** on each
+  ticket it `carried` that is In Review and runs its current version there:
+  `deploy/record --complete` asks `tickets.nav.member` with `status "In
+  Review" and deployed menger/test and not behind menger/test`, then one
+  `tickets.update_many --status Complete`, its message `deploy menger/test
+  <release> carries its work (DEPLOY-22)`. The pipeline's key is viewer +
+  deployer, so that write signs in with `MENGER_DEPLOY_COMPLETE_KEY_FILE`
+  (default `~/.plexus/keys/builder.key`, an editor's; its agent the file's
+  name; `none`: records only). A refused completion is said, and the record
+  stands; nothing else (prod, a failure, a rollback) moves a status.
+- **app.menger.sh** (DEPLOY-28): `remote test` records `app-test` (from
+  `test`: the image of the release test passed) and `remote prod` records
+  `app-prod` (from `app-test`), each `started` then `succeeded` / `failed`,
+  so a ticket's Running and `#/deployments` show where app.menger.sh runs
+  it. `remote prod` ships the image app-test runs: its release is the one
+  `deployments.log` last shows app-test running `ok`, and its log line names
+  it (it was `-`).
 - **Signed in as the pipeline's key** (ACCESS-47; prod requires login).
   Where `MENGER_DEPLOY_KEY_FILE` (default `~/.plexus/keys/pipeline.key`,
   `synapse _key new pipeline --store file`; `none`: no key) is a file, every
   record goes over the socket — `deploy/record --url
-  ws://127.0.0.1:$MENGER_DEPLOY_TRACKER_PORT --agent pipeline`, whose
+  $MENGER_DEPLOY_TRACKER_URL --agent pipeline` (`local`: `ws://127.0.0.1:$MENGER_DEPLOY_TRACKER_PORT`), whose
   `deploy/menger-call.mjs` reads the seed from the file (0600, or it is
   refused) and signs a key proof; the seed is in no environment and no argv.
-  The key holds `viewer` on `*` and `deployer` on `MENGER` on prod (the
+  The key holds `viewer` on `*` and `deployer` on `MENGER` on prod and on
+  app.menger.sh (the
   operator granted them at the switch; test's database is prod's copy, so
   test has them from its next `deploy test` / `sync test`). A gate's refusal
   (the key not granted, or not admitted) is the tracker's setup, not the
@@ -985,6 +1083,10 @@ record names it; its delivery then stops.
   (refused: `outbox/refused/`); the last sent per env: `…/menger-deploy/sent/`
 - logs: `deploy/pipeline logs prod` (`journalctl --user -u menger@prod -u menger-diagrams@prod`)
 - prod backups: `~/.local/share/menger/backups/`
+- the build-output sweep (CI-2): `menger-sweep.timer`, hourly, from
+  `~/.local/share/menger-sweep` (`scripts/sweep/install.sh --start`); what it
+  removed in `~/.local/state/menger/cleanup-gate.log`, the run in
+  `journalctl --user -u menger-sweep`
 
 ## Rules
 

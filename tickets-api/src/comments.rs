@@ -30,6 +30,39 @@ pub const ANCHOR_FIELD_MAX: usize = 4_096;
 /// The longest author a comment keeps, in bytes.
 pub const AUTHOR_MAX: usize = 256;
 
+/// COMMENT-9: how many failure reports the server keeps (the newest).
+pub const FAILURES_KEPT: usize = 200;
+
+/// COMMENT-9: a comment the app could not keep, as it reported it — who,
+/// when, where, what it said and why it was not kept — so "can you see the
+/// failed submission?" has an answer. Kept in memory (the newest
+/// [`FAILURES_KEPT`]; a restart forgets them) and logged; read with
+/// `comments failures`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Failure {
+    /// 1, 2, … in the order reports arrived since the server started.
+    pub seq: u64,
+    /// When the server heard the report, unix seconds.
+    pub at: i64,
+    /// When the app failed to keep it, unix seconds, as the app says (a
+    /// report waits in the browser while the socket is down).
+    pub failed_at: i64,
+    /// The reporter's principal.
+    pub by: String,
+    /// The reporter's name, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Where the comment was being left.
+    pub anchor: Anchor,
+    /// What it said (cut to [`BODY_MAX`]).
+    pub body: String,
+    /// Why it was not kept, in the app's words.
+    pub reason: String,
+    /// The browser, as it names itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+}
+
 /// Where a comment was left: the app page, the place on it, what was there
 /// in words, and the ticket the element belongs to (when it belongs to one).
 ///
@@ -163,6 +196,10 @@ pub struct Comment {
     /// APP-23: `changes` for a change request; omitted for a comment.
     #[serde(default, skip_serializing_if = "CommentIntent::is_comment")]
     pub intent: CommentIntent,
+    /// COMMENT-8: the comment this answers — always a thread's root (a
+    /// reply to a reply is a reply to its root); omitted for a root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<crate::vocab::CommentId>,
 }
 
 /// What the `comments` activation's methods yield. In-band errors are
@@ -186,6 +223,9 @@ pub enum CommentsEvent {
         /// APP-23: `changes` for a change request; omitted for a comment.
         #[serde(default, skip_serializing_if = "CommentIntent::is_comment")]
         intent: CommentIntent,
+        /// COMMENT-8: the thread's root this answers; omitted for a root.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply_to: Option<u64>,
     },
     /// Where a `list` stands, once, after its rows: `next` is the cursor to
     /// pass as the next call's `after` (a comment id), `null` when nothing
@@ -203,14 +243,18 @@ pub enum CommentsEvent {
     /// ACCESS-12 (`watch`): the watch ended — its caller, verified again
     /// when the grants moved or its sign-in ended, was refused. Last.
     WatchClosed { reason: crate::types::WatchEnd, message: String },
+    /// COMMENT-9: `report`'s answer — the failure as the server keeps it.
+    Reported { failure: Failure },
+    /// COMMENT-9: one of `failures`' rows, newest first.
+    Failure { failure: Failure },
     /// A refusal, naming the problem; nothing was kept or changed.
     Error { message: String },
 }
 
 impl From<Comment> for CommentsEvent {
     fn from(c: Comment) -> Self {
-        let Comment { id, state, author, at, anchor, body, principal, intent } = c;
-        CommentsEvent::Comment { id: id.get(), state, author, at, anchor, body, principal, intent }
+        let Comment { id, state, author, at, anchor, body, principal, intent, reply_to } = c;
+        CommentsEvent::Comment { id: id.get(), state, author, at, anchor, body, principal, intent, reply_to: reply_to.map(|r| r.get()) }
     }
 }
 
@@ -219,13 +263,26 @@ impl CommentsEvent {
     /// `added`, `resolved` and `reopened` carry — and `None` for the rest.
     pub fn into_comment(self) -> Option<Comment> {
         match self {
-            CommentsEvent::Comment { id, state, author, at, anchor, body, principal, intent } => {
-                Some(Comment { id: crate::vocab::CommentId::new(id), state, author, at, anchor, body, principal, intent })
-            }
+            CommentsEvent::Comment { id, state, author, at, anchor, body, principal, intent, reply_to } => Some(Comment {
+                id: crate::vocab::CommentId::new(id),
+                state,
+                author,
+                at,
+                anchor,
+                body,
+                principal,
+                intent,
+                reply_to: reply_to.map(crate::vocab::CommentId::new),
+            }),
             CommentsEvent::Added { comment } | CommentsEvent::Resolved { comment } | CommentsEvent::Reopened { comment } => {
                 Some(comment)
             }
-            CommentsEvent::Page { .. } | CommentsEvent::Lagged { .. } | CommentsEvent::WatchClosed { .. } | CommentsEvent::Error { .. } => None,
+            CommentsEvent::Page { .. }
+            | CommentsEvent::Lagged { .. }
+            | CommentsEvent::WatchClosed { .. }
+            | CommentsEvent::Reported { .. }
+            | CommentsEvent::Failure { .. }
+            | CommentsEvent::Error { .. } => None,
         }
     }
 }
@@ -345,6 +402,7 @@ mod tests {
             body: "show the parent's title too".into(),
             principal: None,
             intent: CommentIntent::Comment,
+            reply_to: None,
         };
         let ev = serde_json::to_value(CommentsEvent::from(c.clone())).unwrap();
         assert_eq!(
@@ -371,6 +429,12 @@ mod tests {
         // APP-23: a change request says so; a comment says nothing of it.
         let changes = serde_json::to_value(CommentsEvent::from(Comment { intent: CommentIntent::Changes, ..c.clone() })).unwrap();
         assert_eq!(changes["intent"], json!("changes"));
+        // COMMENT-8: a reply names its root; a root says nothing of it.
+        let reply = Comment { reply_to: Some(crate::vocab::CommentId::new(29)), ..c.clone() };
+        let ev = serde_json::to_value(CommentsEvent::from(reply.clone())).unwrap();
+        assert_eq!(ev["reply_to"], json!(29));
+        assert_eq!(serde_json::from_value::<CommentsEvent>(ev).unwrap().into_comment(), Some(reply.clone()));
+        assert_eq!(serde_json::to_value(&reply).unwrap()["reply_to"], json!(29), "and inside added, resolved, reopened");
         assert_eq!("Changes".parse::<CommentIntent>(), Ok(CommentIntent::Changes));
         assert!("praise".parse::<CommentIntent>().unwrap_err().contains("comment or changes"));
         let resolved = serde_json::to_value(CommentState::Resolved).unwrap();

@@ -90,6 +90,36 @@ impl Scroll {
     }
 }
 
+/// CHAT-29: how far the document must move one way before the head follows
+/// — a finger's jitter moves nothing.
+pub(crate) const HEAD_SLOP_PX: f64 = 6.0;
+
+/// CHAT-29: on a phone the chat scrolls the document, and its head hides on
+/// a scroll down and comes back on a scroll up — always shown within its own
+/// height of the top. `y` the document's scroll now, `was` the last one the
+/// head moved at, `by_reader` whether the reader's finger, wheel or keys
+/// moved it — the view's own moves (landing, ↓, an arrival kept at the
+/// bottom) leave the head as it is. The answer is whether it shows, and the
+/// scroll to measure the next move from.
+pub(crate) fn head_shown(shown: bool, was: f64, y: f64, head_h: f64, by_reader: bool) -> (bool, f64) {
+    if y <= head_h.max(0.0) {
+        return (true, y);
+    }
+    if !by_reader {
+        return (shown, y);
+    }
+    let dy = y - was;
+    if dy > HEAD_SLOP_PX {
+        (false, y)
+    } else if dy < -HEAD_SLOP_PX {
+        (true, y)
+    } else {
+        // Within the slop: nothing moves, and the mark stays where it was
+        // unless the head already agrees with the way it is going.
+        (shown, if (shown && dy < 0.0) || (!shown && dy > 0.0) { y } else { was })
+    }
+}
+
 /// Each fenced block's language and path, in order — what a fence's info
 /// string says past the language is the head's path.
 pub(crate) fn fence_infos(src: &str) -> Vec<(Option<String>, Option<String>)> {
@@ -236,9 +266,10 @@ pub(crate) fn body_html(m: &Message, card: &dyn Fn(&str) -> Option<(String, Stri
 }
 
 /// Markdown as a turn draws it — a whole body, or a long one's head or a
-/// chunk of it (CHAT-8).
+/// chunk of it (CHAT-8). CHAT-14: a comment's images (COMMENT-5) — a
+/// `media:` image is drawn from `media.get`, another origin's is its alt.
 pub(crate) fn source_html(src: &str, card: &dyn Fn(&str) -> Option<(String, String)>) -> String {
-    let html = crate::md::render_body(src).html;
+    let html = crate::md::render_comment(src).html;
     chip_codes(&code_heads(&html, &fence_infos(src)), card)
 }
 
@@ -296,6 +327,23 @@ mod tests {
         assert_eq!((s.unseen, s.arrow()), (0, None), "back at the bottom: the arrow goes");
         assert!(!off_bottom(1000.0, 552.0, 400.0), "48 px off is still the bottom");
         assert!(off_bottom(1000.0, 551.0, 400.0), "49 px is reading back");
+    }
+
+    /// CHAT-29: the head hides going down, returns going up, always shows
+    /// near the top, and a jitter inside the slop moves nothing.
+    #[test]
+    fn the_head_follows_the_scroll() {
+        let h = 50.0;
+        assert_eq!(head_shown(true, 0.0, 30.0, h, true), (true, 30.0), "within its height of the top: shown");
+        assert_eq!(head_shown(true, 100.0, 140.0, h, true), (false, 140.0), "down: hidden");
+        assert_eq!(head_shown(false, 140.0, 300.0, h, true), (false, 300.0), "further down: still hidden");
+        assert_eq!(head_shown(false, 300.0, 296.0, h, true), (false, 300.0), "a jitter up: nothing");
+        assert_eq!(head_shown(false, 300.0, 290.0, h, true), (true, 290.0), "up past the slop: back");
+        assert_eq!(head_shown(true, 290.0, 293.0, h, true), (true, 290.0), "a jitter down: nothing");
+        assert_eq!(head_shown(true, 290.0, 288.0, h, true), (true, 288.0), "going up while shown keeps the mark with it");
+        assert_eq!(head_shown(false, 400.0, 20.0, h, true), (true, 20.0), "back at the top: shown");
+        assert_eq!(head_shown(true, 0.0, 3000.0, h, false), (true, 3000.0), "the view's own move (landing) leaves it shown");
+        assert_eq!(head_shown(false, 3000.0, 2900.0, h, false), (false, 2900.0), "and hidden");
     }
 
     #[test]

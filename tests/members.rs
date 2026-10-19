@@ -1106,3 +1106,56 @@ async fn access_22_removing_someone_from_a_team_stops_their_watch_for_its_scopes
     assert_eq!((amended(&heard), ended), (vec!["IDENTITY-2".to_string()], false), "{heard:?}");
     assert!(!heard.iter().any(|e| e.to_string().contains("secret")), "{heard:?}");
 }
+
+/// ACCESS-57's acceptance, over the real socket: a grant to everyone signed
+/// in. Bob holds nothing of his own; everyone's viewer on IDENTITY lets him
+/// read IDENTITY and nothing else, `members.mine` says why, and he is still
+/// on the waiting list. An anonymous socket reads nothing of it.
+#[tokio::test]
+async fn access_57_everyone_s_grant_reaches_a_principal_holding_nothing_of_their_own() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    let bob = as_(&w, BOB, "bob").await;
+    assert_eq!(call(&bob, "tickets.list", json!({})).await[0]["type"], "error", "nothing yet");
+
+    let everyone = |scope: &str, role: &str| json!({ "everyone": true, "scope": scope, "role": role });
+    let granted = call(&ada, "members.grant", everyone("IDENTITY", "viewer")).await;
+    assert_eq!((granted[0]["type"].clone(), granted[0]["grant"]["principal"].clone()), (json!("grant"), json!("everyone")), "{granted:?}");
+    let admin = call(&ada, "members.grant", everyone("OUGHT", "admin")).await;
+    assert!(admin[0]["message"].as_str().unwrap().contains("never admin"), "{admin:?}");
+    let both = call(&ada, "members.grant", json!({ "everyone": true, "principal": format!("idp:{BOB}"), "scope": "OUGHT", "role": "viewer" })).await;
+    assert!(both[0]["message"].as_str().unwrap().contains("one of the three"), "{both:?}");
+    // Alice administers OUGHT alone: everyone's grant on IDENTITY is not hers to give.
+    call(&ada, "members.grant", grant(ALICE, "OUGHT", "admin")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+    assert_eq!(call(&alice, "members.grant", everyone("IDENTITY", "editor")).await[0]["type"], "error", "admin on the scope, as any grant");
+
+    // Bob reads IDENTITY, and nothing else; writes nothing.
+    assert_eq!(ids(&call(&bob, "tickets.list", json!({})).await), set(&["IDENTITY-1", "IDENTITY-2"]));
+    assert_eq!(call(&bob, "tickets.get", json!({ "id": "IDENTITY-2" })).await[0]["type"], "ticket");
+    assert_eq!(call(&bob, "tickets.get", json!({ "id": "OUGHT-2" })).await[0]["type"], "not_found");
+    assert_eq!(call(&bob, "tickets.set_status", json!({ "id": "IDENTITY-2", "status": "Ready" })).await[0]["type"], "error");
+    // members.mine says why; auth.whoami too.
+    let mine = call(&bob, "members.mine", json!({})).await;
+    assert_eq!(mine.len(), 2, "{mine:?}");
+    assert_eq!((mine[1]["grant"]["principal"].clone(), mine[1]["grant"]["scope"].clone()), (json!("everyone"), json!("hypermemetic:IDENTITY")), "{mine:?}");
+    let who = call(&bob, "auth.whoami", json!({})).await;
+    assert_eq!(who[0]["memberships"], json!([{ "role": "viewer", "scope": "hypermemetic:IDENTITY" }]), "{who:?}");
+    // He holds nothing of his own: he still waits for an admin.
+    let waiting = call(&ada, "members.requests", json!({})).await;
+    assert!(waiting.iter().any(|e| e["type"] == "waiting" && e["principal"] == format!("idp:{BOB}")), "{waiting:?}");
+
+    // An anonymous socket reads nothing of it.
+    // (This harness refuses one at the upgrade; where one is let in, it
+    // reaches the anonymous view: the gate never asks a grant of no one.)
+    if let Ok(anon) = WsClientBuilder::default().build(format!("ws://127.0.0.1:{}", w.port)).await {
+        let refused = call(&anon, "tickets.get", json!({ "id": "IDENTITY-2" })).await;
+        assert_ne!(refused[0]["type"], "ticket", "{refused:?}");
+    }
+
+    // A revoke takes it back from everyone at once.
+    let gone = call(&ada, "members.revoke", json!({ "everyone": true, "scope": "IDENTITY" })).await;
+    assert_eq!((gone[0]["type"].clone(), gone[0]["existed"].clone()), (json!("revoked"), json!(true)), "{gone:?}");
+    assert_eq!(call(&bob, "tickets.list", json!({})).await[0]["type"], "error", "nothing again");
+}

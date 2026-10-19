@@ -162,6 +162,53 @@ impl Updating {
     }
 }
 
+/// COMMENT-5: what `media.put` takes — an editor's permit on the ticket the
+/// image is for (the system's, from `System::permit`, in tests and seeds),
+/// or, for an image on the app (put with no ticket, for a comment on the
+/// app), nothing more than the call's own grant ([`OnMedia::app`]).
+#[derive(Debug)]
+pub struct OnMedia(MediaBy);
+
+#[derive(Debug)]
+enum MediaBy {
+    Ticket(Permit<Editor>),
+    App,
+    /// CHAT-14: a chat its putter is in (checked again under the lock).
+    Chat(u64),
+}
+
+impl OnMedia {
+    /// An image on the app: its putter's.
+    pub fn app() -> Self {
+        Self(MediaBy::App)
+    }
+
+    /// CHAT-14: an image in chat `chat`, for a participant's seat in it.
+    pub fn chat(chat: u64, _seat: &super::Standing) -> Self {
+        Self(MediaBy::Chat(chat))
+    }
+
+    /// ACCESS-11: under the write lock, whose the image is — the permit's
+    /// ticket, by its key as the tree stands (a ticket gone since is
+    /// [`StoreError::NotFound`]), or the app putter `principal`.
+    pub(super) fn owner(&self, cache: &Cache, principal: Option<String>) -> Result<super::media::Owner, StoreError> {
+        match &self.0 {
+            MediaBy::Ticket(p) => key_of(cache, p.id()).map(super::media::Owner::Ticket).ok_or_else(|| StoreError::NotFound(p.id().to_string())),
+            MediaBy::App => Ok(super::media::Owner::App(principal)),
+            MediaBy::Chat(c) => match (cache.chats.by_id.get(c), principal.as_deref()) {
+                (Some(chat), Some(p)) if chat.has(p) => Ok(super::media::Owner::Chat(*c)),
+                _ => Err(StoreError::NotFound(format!("chat {c}"))),
+            },
+        }
+    }
+}
+
+impl From<Permit<Editor>> for OnMedia {
+    fn from(p: Permit<Editor>) -> Self {
+        Self(MediaBy::Ticket(p))
+    }
+}
+
 /// What a comment write takes: the system's word, a permit on the ticket
 /// its anchor names (viewer to add; editor to resolve or reopen — and on
 /// the ticket whose page its route is, when the caller names that too), or,

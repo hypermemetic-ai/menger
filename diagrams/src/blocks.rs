@@ -490,7 +490,7 @@ fn is_mermaid_fence(info: &str) -> bool {
     fn the_page_splits_the_frontmatter_first() {
         assert!(APP_MAIN_RS.contains("<notes::BodyView body="));
         assert!(APP_NOTES_RS.contains("md::is_framed(md::split_frontmatter(b).1)"));
-        assert!(APP_NOTES_RS.contains("body.with(|b| body_view(b, refs))"));
+        assert!(APP_NOTES_RS.contains("body.with(|b| body_view(b, refs, media.clone()))"));
         assert!(APP_NOTES_RS.contains("let (fm, md_src) = md::split_frontmatter(raw);"));
         assert!(APP_NOTES_RS.contains("md::render_body_with(md_src, "));
         assert!(APP_NOTES_RS.contains("md::render_body(md_src)"));

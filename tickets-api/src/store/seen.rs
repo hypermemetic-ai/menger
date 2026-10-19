@@ -68,6 +68,9 @@ pub trait Reader: sealed::Sealed + Sync {
     /// ACCESS-19: which comments on the app (a comment naming no ticket)
     /// it sees — every one, or only those its principal left.
     fn app_comments(&self) -> AppSight;
+
+    /// CHAT-14: who reads — `None` for the system, which reads everything.
+    fn principal_of(&self) -> Option<String>;
 }
 
 /// ACCESS-19 (ACCESS-1's first question, as proposed): a comment on the app
@@ -97,6 +100,10 @@ impl Reader for System {
         Ok(None)
     }
 
+    fn principal_of(&self) -> Option<String> {
+        None
+    }
+
     fn app_comments(&self) -> AppSight {
         AppSight::All
     }
@@ -105,6 +112,10 @@ impl Reader for System {
 impl Reader for VerifiedUser {
     fn reach(&self) -> Result<Option<Filter>, StoreError> {
         self.read_filter().map_err(StoreError::Filter)
+    }
+
+    fn principal_of(&self) -> Option<String> {
+        Some(self.principal_text())
     }
 
     fn app_comments(&self) -> AppSight {
@@ -118,6 +129,10 @@ impl Reader for VerifiedUser {
 impl Reader for ReadingAs<'_> {
     fn reach(&self) -> Result<Option<Filter>, StoreError> {
         self.read_filter().map_err(StoreError::Filter)
+    }
+
+    fn principal_of(&self) -> Option<String> {
+        Some(self.user().principal_text())
     }
 
     fn app_comments(&self) -> AppSight {
@@ -318,13 +333,29 @@ impl<'c> Sees<'c> {
     /// on — its anchor's, and the one whose page it was left on. ACCESS-19:
     /// a comment on the app alone (naming no ticket), only its author and
     /// the admins of `*` ([`AppSight`]) — no longer any reach at all.
+    ///
+    /// COMMENT-8: a reply is judged by its thread's root — seen by exactly
+    /// who sees the comment it answers.
     pub(super) fn comment(&self, c: &crate::comments::Comment) -> bool {
+        let c = c.reply_to.and_then(|r| self.cache.comments.get(r.get())).unwrap_or(c);
         let route = c.anchor.route.trim().strip_prefix("#/ticket/").map(|r| r.split(['?', '#']).next().unwrap_or(r).trim()).filter(|r| !r.is_empty());
         let mut on = c.anchor.ticket.iter().map(String::as_str).chain(route).peekable();
         if on.peek().is_none() {
             return self.app.admits(c.principal.as_deref());
         }
         self.all() || on.all(|t| self.cache.resolve(t).is_ok_and(|k| self.id(&k)))
+    }
+
+    /// COMMENT-5: whether the reach admits an image — one of the tickets it
+    /// was put for (by its key then, read through the resolver), or, put on
+    /// the app, as a comment on the app is: its putter's and the admins'.
+    pub(super) fn media(&self, owners: &[super::media::Owner]) -> bool {
+        owners.iter().any(|o| match o {
+            super::media::Owner::Ticket(t) => self.all() || self.cache.resolve(t).is_ok_and(|k| self.id(&k)),
+            super::media::Owner::App(p) => self.app.admits(p.as_deref()),
+            // CHAT-14: a chat's image is its participants' ([`super::Store::media_info`]).
+            super::media::Owner::Chat(_) => false,
+        })
     }
 
     /// Whether the reach admits the ticket at `k`.

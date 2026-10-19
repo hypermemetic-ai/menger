@@ -1,7 +1,7 @@
 import type { RpcClient } from '../rpc';
 import type { AnchorPath, CommentsEvent, Route, Under } from './types';
 import type { Author, Body, Query, TicketRef } from '../notes/types';
-import type { Anchor, CommentId, CommentIntent, CommentState } from '../tickets/types';
+import type { Anchor, CommentId, CommentIntent, CommentState, Message, Reason } from '../tickets/types';
 /** Typed client interface for comments plugin */
 export interface CommentsClient {
     /**
@@ -26,12 +26,27 @@ export interface CommentsClient {
   is listed and watched only by those who can view both. The anchor is
   kept as given (`ticket` stays what the element belonged to).
   ACCESS-19: a comment on the app (naming no ticket) is seen only by
-  its author and the admins of `*`.
+  its author and the admins of `*`. COMMENT-8: with `reply_to`, a reply
+  to that comment — no anchor (one given is refused): it takes its
+  thread's root's, and so its ticket and who sees it; a reply to a
+  reply answers the same root; a resolved root is reopened in the same
+  write (`watch` carries `added`, then `reopened`). The answer carries
+  `reply_to`, the root's id.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `comments.add` anywhere it is held
      */
-    add(anchor: Anchor, body: Body): AsyncGenerator<CommentsEvent>;
+    add(body: Body, anchor?: Anchor | null, replyTo?: CommentId | null): AsyncGenerator<CommentsEvent>;
+    /**
+     * COMMENT-9: the comments the app could not keep, newest first — `failure { failure }` each.
+  
+  The caller's own reports and those whose comment it would see had it
+  been kept; at most `limit` (default 50, at most 200).
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `comments.failures` anywhere it is held
+     */
+    failures(limit?: number | null): AsyncGenerator<CommentsEvent>;
     /**
      * List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.
   
@@ -55,7 +70,7 @@ export interface CommentsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `comments.list` anywhere it is held
      */
-    list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent>;
+    list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, thread?: CommentId | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent>;
     /**
      * Reopen a resolved comment; yields the comment, open.
   
@@ -68,6 +83,18 @@ export interface CommentsClient {
      * @requires `comments.reopen` anywhere it is held
      */
     reopen(id: CommentId): AsyncGenerator<CommentsEvent>;
+    /**
+     * COMMENT-9: report a comment the app could not keep; yields `reported { failure }`.
+  
+  The app's word that a comment was not kept — the socket down, no
+  answer, a refusal — with the draft, so whoever can see where it was
+  being left reads it with `failures`. Kept in memory (the newest 200;
+  a restart forgets them) and logged; never a comment.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `comments.report` anywhere it is held
+     */
+    report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): AsyncGenerator<CommentsEvent>;
     /**
      * Resolve a comment; yields the comment, resolved.
   
@@ -110,12 +137,20 @@ export declare const requires: {
         readonly grant: "comments.add";
         readonly target: null;
     };
+    readonly "comments.failures": {
+        readonly grant: "comments.failures";
+        readonly target: null;
+    };
     readonly "comments.list": {
         readonly grant: "comments.list";
         readonly target: null;
     };
     readonly "comments.reopen": {
         readonly grant: "comments.reopen";
+        readonly target: null;
+    };
+    readonly "comments.report": {
+        readonly grant: "comments.report";
         readonly target: null;
     };
     readonly "comments.resolve": {

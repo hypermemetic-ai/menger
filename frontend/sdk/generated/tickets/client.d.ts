@@ -1,7 +1,7 @@
 import type { RpcClient } from '../rpc';
 import type { CallerSource, Cursor, DeleteChildren, FilterText, InputId, Label, MengerPath, Message, Reason, Severity, SeverityChange, Status, TicketsEvent, Urgency, Zone } from './types';
 import type { Body, Kind, Query, ShortcodeRef, TicketRef, Title } from '../notes/types';
-import type { OrgId } from '../orgs/types';
+import type { OrgId, Principal } from '../orgs/types';
 import type { TicketsCommitsClient } from '../tickets/commits/client';
 import type { TicketsComponentsClient } from '../tickets/components/client';
 import type { TicketsInputsClient } from '../tickets/inputs/client';
@@ -52,6 +52,23 @@ export interface TicketsClient {
      * @requires `tickets.archive` on the scope of `ids`
      */
     archive(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    /**
+     * Assign or unassign a ticket's people and agents — principals that read it — or many tickets' (ids; one write, all or none); yields assignees_changed { ticket, added, removed } per ticket.
+  
+  TICKETS-9: moves a ticket's assignees — `add` assigned, `remove`
+  unassigned ([`crate::assignees::apply`]: sorted, each once, a
+  principal in both added, at most 16). Every principal added must read
+  the ticket: one that cannot is refused in band, naming why, and
+  nothing is written. Each one moved is a line of `history`
+  (`assign_record`: who, when, by whom); `watch` carries every
+  `assignees_changed` that moved something; the filter cells are
+  `assigned <who>`, `assigned me`, `assigned` and `unassigned`. Both
+  lists empty in the answer: nothing moved, nothing written.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `tickets.assign` on the scope of `id`
+     */
+    assign(add?: Principal[] | null, id?: TicketRef | null, ids?: TicketRef[] | null, message?: Message | null, remove?: Principal[] | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
     /**
      * Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes.
   
@@ -441,9 +458,9 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.update_many` on the scope of `ids`
      */
-    updateMany(block?: TicketRef[] | null, filter?: FilterText | null, ids?: TicketRef[] | null, kind?: Kind | null, label?: Label[] | null, max?: number | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, tz?: Zone | null, unblock?: TicketRef[] | null, unlabel?: Label[] | null): AsyncGenerator<TicketsEvent>;
+    updateMany(assign?: Principal[] | null, block?: TicketRef[] | null, filter?: FilterText | null, ids?: TicketRef[] | null, kind?: Kind | null, label?: Label[] | null, max?: number | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, tz?: Zone | null, unassign?: Principal[] | null, unblock?: TicketRef[] | null, unlabel?: Label[] | null): AsyncGenerator<TicketsEvent>;
     /**
-     * Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.
+     * Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / AssigneesChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.
   
   The reactive primitive: an open-ended stream of every mutation, as
   `Created` / `StatusChanged` / `UnlocksChanged` / `ChildrenChanged`
@@ -538,6 +555,10 @@ export declare const requires: {
     readonly "tickets.archive": {
         readonly grant: "tickets.archive";
         readonly target: "ids";
+    };
+    readonly "tickets.assign": {
+        readonly grant: "tickets.assign";
+        readonly target: "id";
     };
     readonly "tickets.await_reply": {
         readonly grant: "tickets.await_reply";

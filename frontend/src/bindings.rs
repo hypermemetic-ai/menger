@@ -126,11 +126,14 @@ pub(crate) enum Context {
     ComposerMenu,
     /// CHAT-7: the full-screen chat session (it owns the page's keys while it is up).
     Session,
+    /// APP-70: focus on a box's drawing pad (its surface, its tools, a
+    /// text being written on it).
+    Draw,
 }
 
 impl Context {
     #[cfg(test)]
-    pub(crate) const ALL: [Context; 22] = [
+    pub(crate) const ALL: [Context; 23] = [
         Context::Anywhere,
         Context::Global,
         Context::Nav,
@@ -153,6 +156,7 @@ impl Context {
         Context::Composer,
         Context::ComposerMenu,
         Context::Session,
+        Context::Draw,
     ];
 
     /// Where, in the reader's words — the tables' last column.
@@ -180,6 +184,7 @@ impl Context {
             Context::Composer => "in a chat's composer",
             Context::ComposerMenu => "in the composer's @ or / menu",
             Context::Session => "in a full-screen chat",
+            Context::Draw => "on a drawing pad"
         }
     }
 
@@ -189,7 +194,7 @@ impl Context {
     fn modal(self) -> bool {
         matches!(
             self,
-            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field | Context::Mockup | Context::Compare | Context::Composer | Context::ComposerMenu | Context::Session
+            Context::Annotate | Context::Palette | Context::Dialog | Context::Menu | Context::DatePicker | Context::TimeField | Context::Field | Context::Mockup | Context::Compare | Context::Composer | Context::ComposerMenu | Context::Session | Context::Draw
         )
     }
 
@@ -356,6 +361,10 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("chat.full", &[C::Global], &["g c"], G::View, "with a chat open on the ticket: the chat full screen, as an agent session"),
     b("session.new", &[C::Session], &["c"], G::View, "in the full-screen chat: a new chat on its ticket"),
     b("session.leave", &[C::Session], &["Escape"], G::View, "leave the full-screen chat: back to the ticket, the chat in its dock"),
+    b("draw.undo", &[C::Draw], &["Mod+z"], G::Forms, "on a drawing pad: undo the last stroke"),
+    b("draw.redo", &[C::Draw], &["Shift+Mod+z", "Mod+y"], G::Forms, "on a drawing pad: redo what was undone"),
+    b("draw.text-done", &[C::Draw], &["Enter"], G::Forms, "writing on a drawing: put the words on it"),
+    b("draw.text-cancel", &[C::Draw], &["Escape"], G::Forms, "writing on a drawing: drop the words"),
     // APP-22: the ticket page's Conversation box.
     b("comment.focus", &[C::TicketPage], &["c"], G::Annotate, "comment on the ticket as a whole: its Conversation box, focused"),
     // -- View
@@ -391,6 +400,10 @@ pub(crate) const BINDINGS: &[Binding] = &[
     // CHAT-5: the ticket menu's Chat item, by its letter (drawn beside it).
     b("menu.chat", &[C::Menu], &["c"], G::Dialogs, "in a ticket's menu: Chat — its chats (or, with none, the picker), the ticket opened with its chat pane"),
     b("dialog.close", &[C::Palette, C::Dialog, C::Menu, C::DatePicker], &["Escape"], G::Dialogs, "close it; focus goes back where it was"),
+    // APP-77: the image viewer's zoom.
+    b("image.zoom-in", &[C::Dialog], &["="], G::Dialogs, "in the image viewer: zoom in (= is + without Shift)"),
+    b("image.zoom-out", &[C::Dialog], &["-"], G::Dialogs, "in the image viewer: zoom out"),
+    b("image.fit", &[C::Dialog], &["0"], G::Dialogs, "in the image viewer: back to the fit"),
     b("dialog.next-field", &[C::Palette, C::Dialog], &["Tab"], G::Dialogs, "the next control, kept inside the dialog"),
     b("dialog.prev-field", &[C::Palette, C::Dialog], &["Shift+Tab"], G::Dialogs, "the previous control, kept inside the dialog"),
     // APP-38: the queue's sheet answers its rows in turn.
@@ -871,6 +884,12 @@ fn mouse_press(ev: &web_sys::MouseEvent) -> Press {
 /// Whether a mouse event is the middle button's.
 pub(crate) fn is_middle(ev: &web_sys::MouseEvent) -> bool {
     mouse_press(ev).button == Some(Button::MiddleClick)
+}
+
+/// Whether a mouse (or pointer) event is the main button's — CHAT-31's
+/// sheet drag starts only on it.
+pub(crate) fn is_main(ev: &web_sys::MouseEvent) -> bool {
+    mouse_press(ev).button == Some(Button::Click)
 }
 
 /// What this click (mousedown, right-click…) is in `ctx`.

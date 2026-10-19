@@ -161,7 +161,10 @@ impl Refs {
 /// through `md.rs` (a diagram handed to the mermaid renderer once mounted) —
 /// with its `{wave: ID}`s placed by `refs` (WAVE-11; a body with none
 /// renders as it always did).
-pub(crate) fn body_view(raw: &str, refs: Option<Refs>) -> AnyView {
+/// COMMENT-10: its `media:` images drawn held to `media`, the ticket whose
+/// body it is (none: a draft of no ticket yet — each is its alt, not
+/// available).
+pub(crate) fn body_view(raw: &str, refs: Option<Refs>, media: Option<String>) -> AnyView {
     let (fm, md_src) = md::split_frontmatter(raw);
     let fm_view = fm.map(|f| {
         let f = f.to_string();
@@ -185,6 +188,8 @@ pub(crate) fn body_view(raw: &str, refs: Option<Refs>) -> AnyView {
         }
         // MENGER-22: and its code highlighted — fetched only if it holds any.
         crate::highlight::mount(&el);
+        // COMMENT-10: and its images drawn, as its ticket holds them.
+        crate::media::hydrate_body(&el, media.as_deref());
     });
     view! {
         {fm_view}
@@ -217,13 +222,17 @@ pub(crate) fn BodyView(
     ticket: Option<String>,
     #[prop(optional)] scope: Option<String>,
     #[prop(optional)] title: Option<Signal<String>>,
+    // COMMENT-10: whose images a draft draws (or an old revision): the
+    // ticket it is of. A stored body draws its own `ticket`'s.
+    #[prop(optional)] media: Option<String>,
 ) -> impl IntoView {
     let framed = Memo::new(move |_| body.with(|b| md::is_framed(md::split_frontmatter(b).1)));
+    let media = ticket.clone().or(media.filter(|m| !m.trim().is_empty()));
     move || {
         if framed.get() {
-            framed_view(body, refs, ticket.clone(), scope.clone(), title)
+            framed_view(body, refs, ticket.clone(), scope.clone(), media.clone(), title)
         } else {
-            body.with(|b| body_view(b, refs))
+            body.with(|b| body_view(b, refs, media.clone()))
         }
     }
 }
@@ -232,7 +241,7 @@ pub(crate) fn BodyView(
 /// inside its own reactive children, so the caller's closure re-runs only
 /// when the body stops being framed. MENGER-15: a whole document is the
 /// frame's as written — not markdown, nothing placed in it.
-fn framed_view(body: Signal<String>, refs: Option<Refs>, ticket: Option<String>, scope: Option<String>, title: Option<Signal<String>>) -> AnyView {
+fn framed_view(body: Signal<String>, refs: Option<Refs>, ticket: Option<String>, scope: Option<String>, media: Option<String>, title: Option<Signal<String>>) -> AnyView {
     let fm = Memo::new(move |_| body.with(|b| md::split_frontmatter(b).0.map(str::to_string)));
     let html = Memo::new(move |_| {
         body.with(|b| {
@@ -253,9 +262,10 @@ fn framed_view(body: Signal<String>, refs: Option<Refs>, ticket: Option<String>,
         })
     });
     let scope = scope.unwrap_or_default();
+    let media = media.unwrap_or_default();
     let framed = match title {
-        Some(title) => view! { <present::Framed html decl ticket scope title /> }.into_any(),
-        None => view! { <present::Framed html decl ticket scope /> }.into_any(),
+        Some(title) => view! { <present::Framed html decl ticket scope title media /> }.into_any(),
+        None => view! { <present::Framed html decl ticket scope media /> }.into_any(),
     };
     view! {
         {move || fm.get().map(|f| view! {
@@ -389,7 +399,7 @@ pub(crate) fn BodyEditor(
                     prop:value=move || seed.get()
                     on:input=move |ev| draft.set(event_target_value(&ev))
                 ></textarea>
-                <div class="preview"><BodyView body=Signal::derive(move || draft.get()) refs=Some(refs) ticket=None scope=draft_scope.clone() /></div>
+                <div class="preview"><BodyView body=Signal::derive(move || draft.get()) refs=Some(refs) ticket=None scope=draft_scope.clone() media=id.get_untracked().unwrap_or_default() /></div>
             </div>
             <div class="actions">
                 <button class="save" on:click=save disabled=move || saving.get()>

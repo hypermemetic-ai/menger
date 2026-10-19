@@ -484,6 +484,8 @@ fn rekey(txn: &rusqlite::Transaction<'_>, map: &HashMap<String, String>, renamed
         ("components", "owner"),
         ("queue", "ticket"),
         ("queue_log", "ticket"),
+        // TICKETS-9: the assignment log.
+        ("assignment_log", "ticket"),
         ("tombstones", "parent"),
         ("members", "scope"),
         ("theme_settings", "scope"),
@@ -632,6 +634,7 @@ impl Store {
                 path: None,
                 placement: None,
                 labels: Vec::new(),
+                assignees: Vec::new(),
                 body: String::new(),
                 created_unix: now,
                 updated_unix: now,

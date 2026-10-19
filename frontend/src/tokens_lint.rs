@@ -471,3 +471,24 @@ fn focus_is_a_token_ring_and_not_the_selected_row_s_tint() {
         .expect("no selected-row rule");
     assert!(sel.contains("var(--row-sel)") && sel.contains("inset"), "{sel}");
 }
+
+/// APP-64: the home screen's colours are the page's — the manifest's
+/// background and theme, and the pages' `theme-color` (light and dark),
+/// are the contract's `--bg`.
+#[test]
+fn the_home_screen_colours_are_the_pages() {
+    let bg = menger_tickets_api::tokens::token("--bg").expect("--bg");
+    let manifest = std::fs::read_to_string(format!("{}/icons/manifest.webmanifest", root())).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    assert_eq!(manifest["background_color"], bg.light);
+    assert_eq!(manifest["theme_color"], bg.light);
+    assert_eq!(manifest["display"], "standalone");
+    for page in [index_html(), std::fs::read_to_string(format!("{}/../web/index.html", root())).unwrap()] {
+        for (scheme, colour) in [("light", bg.light), ("dark", bg.dark)] {
+            let meta = format!(r#"<meta name="theme-color" content="{colour}" media="(prefers-color-scheme: {scheme})">"#);
+            assert!(page.contains(&meta), "wants {meta}");
+        }
+        assert!(page.contains(r#"<link rel="apple-touch-icon" href="/apple-touch-icon.png">"#));
+        assert!(page.contains(r#"<link rel="manifest" href="/manifest.webmanifest">"#));
+    }
+}

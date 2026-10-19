@@ -49,6 +49,16 @@ plexus-login = "0.2"
 
 ## Our own sign-in page: identity backends (AUTH-22)
 
+**A keyed WorkOS provider** (IDENTITY-45): `LoginOptions::workos_key` set
+and no `identity`, a `workos=` provider's social buttons
+(`GitHub=workos:GitHubOAuth`) become this page's over the WorkOS backend
+(`backends::workos_direct`: those providers, no email field, no SSO by
+domain) — so WorkOS's pending answers to a social sign-in
+(`email_verification_required`, Radar, organization selection, MFA), whose
+grants need the client secret, are taken here. Without the key the buttons
+stay the provider's PKCE path. Tested against the fake in
+`tests/workos_direct.rs`.
+
 The page people sign in on is ours, whoever stands behind it. Who signs
 them in is an **identity backend**, one trait the page, its routes, its
 throttles, its CSRF and return rules and the session code depend on, and
@@ -67,6 +77,7 @@ pub trait IdentityBackend: Send + Sync + 'static {
     fn federated_url(&self, target, redirect_uri, state, pkce_challenge, login_hint) -> IdResult<String>;
     async fn complete_federated(&self, code, verifier, redirect_uri, req) -> IdResult<SignedIn>;
     async fn continue_with_code(&self, ticket, code, req) -> IdResult<SignedIn>;   // MFA, email verification, extra checks
+    async fn resend_code(&self, ticket, req) -> IdResult<()>;                     // IDENTITY-45: another verification code
     async fn choose(&self, ticket, choice, req) -> IdResult<SignedIn>;             // an organization
     async fn totp_enroll / totp_confirm / totp_factors / totp_remove / totp_discard(…);
     async fn refresh(&self, tokens, req) -> IdResult<SignedIn>;

@@ -67,6 +67,29 @@ export interface Archived {
 [`TicketRef`] or [`ShortcodeRef`] takes (the rule [`Under`] reads). */
 export type Asked = string;
 
+/** What one assignment write did to one principal. */
+export type AssignAction = "assigned" | "unassigned";
+
+/** One line of a ticket's assignment history — what `history` yields after
+its transitions and its queue records: who was assigned or unassigned,
+when, and by whom. */
+export interface AssignRecord {
+  action: AssignAction;
+  /** Who made the change: a principal. */
+  actor: string;
+  atUnix: number;
+  /** The assignment log's order (its own, not the transitions'). */
+  id: number;
+  /** Why, when the call said (`message`). */
+  message?: string | null;
+  /** Their display name, when they have one. */
+  name?: string | null;
+  /** The principal assigned or unassigned. */
+  principal: string;
+  source: TransitionSource;
+  ticket: string;
+}
+
 /** COMP-8: one declared attribute — `<attr name="board" type="shortcode"
 required>The shortcode to count.</attr>`. `name` is lowercased (HTML
 folds attribute names); `kind` is the `type` (`string` when omitted);
@@ -153,6 +176,9 @@ when login could be off). */
   /** IDENTITY-21: the Plexus principal of who left it, when they were
 signed in — `author` is only the name they go by. */
   principal?: string | null;
+  /** COMMENT-8: the comment this answers — always a thread's root (a
+reply to a reply is a reply to its root); omitted for a root. */
+  replyTo?: CommentId | null;
   state: CommentState;
 }
 
@@ -692,6 +718,14 @@ that set it — or none: a live ticket. A mark apart from the status
 blockers, and is in no view unless the filter names `archived`.
 Omitted on the wire for a live ticket. */
   archived?: Archived | null;
+  /** TICKETS-9: the ticket's assignees — principals, people or agents,
+sorted, each once, at most 16 ([`crate::assignees`]); `[]` when none.
+Moved by `tickets.assign` (and `update_many { assign, unassign }`)
+alone, and asked by the filter cells `assigned <who>` and
+`unassigned`. `default`: a server from before TICKETS-9 sends none;
+omitted on the wire when there is none, so a ticket nobody holds is
+the JSON it was. */
+  assignees?: string[];
   /** Ticket ids that must complete before this one starts. */
   blockedBy: TicketName[];
   /** Markdown body (Problem / Required behavior / Acceptance criteria …). */
@@ -809,6 +843,10 @@ export interface TicketSummary {
   /** ARCHIVE-2: as on [`Ticket`] — on the row, so a chip to an archived
 ticket is drawn struck through without a `get`. */
   archived?: Archived | null;
+  /** TICKETS-9: as on [`Ticket`] — on the row, so the board's column and
+a person's card draw who holds it without a `get`. Omitted when
+there is none, as on [`Ticket`]. */
+  assignees?: string[];
   blockedBy: TicketName[];
   childCount: number;
   /** SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
@@ -965,6 +1003,19 @@ export interface TicketsEventLabelsChanged {
   type: 'labels_changed';
   added: Label[];
   removed: Label[];
+  ticket: Ticket;
+}
+
+/** TICKETS-9: a ticket's assignees moved (yielded by `assign`, and by
+`watch` for every `assign` that changed something). `added` and
+`removed` are the principals that moved — both empty is `assign`'s
+own answer to a call that moved nothing, which `watch` never
+carries. The whole ticket rides along, its `assignees` as the write
+left them; `history` keeps each move as an `assign_record`. */
+export interface TicketsEventAssigneesChanged {
+  type: 'assignees_changed';
+  added: string[];
+  removed: string[];
   ticket: Ticket;
 }
 
@@ -1604,6 +1655,14 @@ export interface TicketsEventQueueRecord {
   record: QueueRecord;
 }
 
+/** TICKETS-9: a line of the ticket's assignment history (yielded by
+`history` after its queue records, oldest first): who was assigned
+or unassigned, when, by whom. */
+export interface TicketsEventAssignRecord {
+  type: 'assign_record';
+  record: AssignRecord;
+}
+
 /** TICKETS-7: one revision of a ticket (yielded per revision by
 `revisions list`, newest first). */
 export interface TicketsEventRevision {
@@ -1657,7 +1716,7 @@ export interface TicketsEventRevised {
   ticket: TicketId;
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord | TicketsEventRevision | TicketsEventRevisionsEnd | TicketsEventRevisionAt | TicketsEventRevisionDiff | TicketsEventRevisionRestored | TicketsEventRevised;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventAssigneesChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord | TicketsEventAssignRecord | TicketsEventRevision | TicketsEventRevisionsEnd | TicketsEventRevisionAt | TicketsEventRevisionDiff | TicketsEventRevisionRestored | TicketsEventRevised;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -1670,6 +1729,7 @@ export function isTicketsEventAmended(e: TicketsEvent): e is TicketsEventAmended
 export function isTicketsEventCommitsLinked(e: TicketsEvent): e is TicketsEventCommitsLinked { return e.type === 'commits_linked'; }
 export function isTicketsEventCommitsUnlinked(e: TicketsEvent): e is TicketsEventCommitsUnlinked { return e.type === 'commits_unlinked'; }
 export function isTicketsEventLabelsChanged(e: TicketsEvent): e is TicketsEventLabelsChanged { return e.type === 'labels_changed'; }
+export function isTicketsEventAssigneesChanged(e: TicketsEvent): e is TicketsEventAssigneesChanged { return e.type === 'assignees_changed'; }
 export function isTicketsEventUnlocksChanged(e: TicketsEvent): e is TicketsEventUnlocksChanged { return e.type === 'unlocks_changed'; }
 export function isTicketsEventUnlocksRemoved(e: TicketsEvent): e is TicketsEventUnlocksRemoved { return e.type === 'unlocks_removed'; }
 export function isTicketsEventBlockersChanged(e: TicketsEvent): e is TicketsEventBlockersChanged { return e.type === 'blockers_changed'; }
@@ -1727,6 +1787,7 @@ export function isTicketsEventNotQueued(e: TicketsEvent): e is TicketsEventNotQu
 export function isTicketsEventQueueRow(e: TicketsEvent): e is TicketsEventQueueRow { return e.type === 'queue_row'; }
 export function isTicketsEventQueueEnd(e: TicketsEvent): e is TicketsEventQueueEnd { return e.type === 'queue_end'; }
 export function isTicketsEventQueueRecord(e: TicketsEvent): e is TicketsEventQueueRecord { return e.type === 'queue_record'; }
+export function isTicketsEventAssignRecord(e: TicketsEvent): e is TicketsEventAssignRecord { return e.type === 'assign_record'; }
 export function isTicketsEventRevision(e: TicketsEvent): e is TicketsEventRevision { return e.type === 'revision'; }
 export function isTicketsEventRevisionsEnd(e: TicketsEvent): e is TicketsEventRevisionsEnd { return e.type === 'revisions_end'; }
 export function isTicketsEventRevisionAt(e: TicketsEvent): e is TicketsEventRevisionAt { return e.type === 'revision_at'; }

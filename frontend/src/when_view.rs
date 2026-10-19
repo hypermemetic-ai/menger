@@ -129,9 +129,44 @@ fn chats_view(lens: Lens, pop: Pop) -> impl IntoView {
     }
 }
 
+/// TICKETS-9: the People category's pane — its three cells, each a pill
+/// at once: `assigned me`, `assigned` (anyone), `unassigned`. A person by
+/// name is their card's link, or the palette's `assigned "<principal>"`.
+fn people_view(lens: Lens, pop: Pop) -> impl IntoView {
+    use menger_tickets_api::filter::Who;
+    let cells: [(&'static str, &'static str, &'static str, Option<Who>, bool); 3] = [
+        ("assigned-me", "Assigned to me", "you're among its assignees", Some(Who::Me), false),
+        ("assigned", "Assigned", "anyone holds it", None, false),
+        ("unassigned", "Unassigned", "nobody holds it", None, true),
+    ];
+    view! {
+        <div class="when-rows wform" role="menu" aria-label="people">
+            {cells.into_iter().map(|(key, label, what, who, unassigned)| view! {
+                <button
+                    type="button"
+                    class="frow cat when-row"
+                    role="menuitem"
+                    data-when=key
+                    title=what
+                    on:mousedown=|ev| ev.prevent_default()
+                    on:click=move |_| {
+                        put(lens, pop, None, &when::new_people(who.clone(), unassigned));
+                    }
+                >
+                    <span class="flabel">{label}</span>
+                    <span class="fmeta">{what}</span>
+                </button>
+            }).collect_view()}
+        </div>
+    }
+}
+
 fn root_view(lens: Lens, pop: Pop, cat: Cat) -> impl IntoView {
     if cat == Cat::Chats {
         return chats_view(lens, pop).into_any();
+    }
+    if cat == Cat::People {
+        return people_view(lens, pop).into_any();
     }
     // DEPLOY-13: under Deployed, its two rows; else When's six.
     let deployed = cat == Cat::Deployed;
