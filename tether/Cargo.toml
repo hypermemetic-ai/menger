@@ -28,9 +28,19 @@ path = "src/main.rs"
 plexus-substrate = { path = "../../plexus-substrate", default-features = false }
 plexus-core = { path = "../../plexus-core", version = "0.6" }
 plexus-macros = { path = "../../plexus-macros", version = "0.6" }
-plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.6" }
+# TETHER-9: the remote menger is reached as a client — WsTransport over a
+# native socket, signed in with a key proof on the upgrade (as synapse does).
+plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.6", features = ["ws-native"] }
+# wss:// to a remote behind TLS (app.menger.sh): the socket plexus-client's
+# ws-native opens, with rustls and the webpki roots.
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+# menger's vocabulary and its emitted clients (TicketsClient, CommentsClient,
+# ChatsClient) — the client half, no store, no rusqlite (TETHER-7's finding).
+menger-tickets-api = { path = "../tickets-api", default-features = false }
 plexus-transport = { path = "../../plexus-transport", version = "0.5" }
-plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2" }
+plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", features = ["adapters"] }
+base64 = "0.22"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 # The same path substrate names (`../menger/plexus-login`): two paths to one
 # crate are two packages to cargo, refused in one lockfile — so even from a
 # worktree of menger, this is the main checkout's.
@@ -53,5 +63,3 @@ uuid = { version = "1.6", features = ["v4"] }
 [dev-dependencies]
 tempfile = "3"
 jsonrpsee = { version = "0.26", features = ["client", "ws-client", "server", "macros"] }
-ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
-plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", features = ["adapters"] }

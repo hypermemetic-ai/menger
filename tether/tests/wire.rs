@@ -89,6 +89,7 @@ static SERVER: LazyLock<Server> = LazyLock::new(|| {
                 },
                 work_dir: work,
                 claude_path: Some(stub),
+                ..Default::default()
             };
             let (hub, login) = tether::build(opts).await.expect("tether");
             let builder = TransportServer::builder(hub, |h| DynamicHub::arc_into_rpc_module(h).map_err(|e| anyhow::anyhow!("{e}")))

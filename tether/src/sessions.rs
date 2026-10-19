@@ -1,45 +1,63 @@
 //! `sessions` (TETHER-7, TETHER-5's surface): agent sessions on this
 //! machine, each a substrate `claudecode` session tether started for a
-//! ticket — `start`, `stop`, `list`, `watch`.
-//!
-//! A session's turn runs in a task of tether's holding the `claudecode.chat`
-//! stream (through [`Engine`], in memory); its events become the session's
-//! tail, kept here and fanned out to every `watch`. `stop` aborts the task:
-//! the client's stream goes, the hub's with it (LOCAL-6), and substrate's
-//! executor kills Claude Code when its stream is dropped.
+//! ticket — `start`, `say`, `stop`, `list`, `watch`. The running of them is
+//! [`crate::runner`]'s; this file keeps their vocabulary and the methods.
 //!
 //! First slice: every signed-in viewer sees every session on the machine;
-//! an editor starts and stops them. A session acting as an AGENT-1 agent
-//! (TETHER-5) and a sandboxed one (TETHER-6) come later.
+//! an editor starts, resumes and stops them. A session acting as an
+//! AGENT-1 agent (TETHER-5) and a sandboxed one (TETHER-6) come later.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-
-use async_stream::stream;
-use futures::{Stream, StreamExt};
-use plexus_client::{ClientError, ClientEvent};
+use futures::Stream;
+use plexus_client::ClientError;
 use plexus_core::plexus::AuthContext;
-use plexus_substrate::activations::claudecode::{ChatEvent, CreateResult, Model};
+use plexus_substrate::activations::claudecode::Model;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
 
-use crate::engine::Engine;
-use crate::vocab::{name_for, Prompt, SessionName, TicketId, WorkDir};
+use crate::runner::{Runner, Start, Stopped};
+use crate::vocab::{Archetype, Prompt, SessionName, TicketId, WorkDir};
 
 /// Where a session stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
-    /// Its turn is running.
+    /// A turn is running.
     Running,
-    /// Its turn completed.
+    /// Its last turn completed; another may resume it.
     Finished,
     /// `stop` ended it.
     Stopped,
-    /// Its turn ended in an error (`message` says which).
+    /// Its last turn ended in an error (`message` says which).
     Failed,
+    /// TETHER-9: tether stopped while its turn ran (a restart finds it so).
+    Interrupted,
+}
+
+impl SessionState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            SessionState::Running => "running",
+            SessionState::Finished => "finished",
+            SessionState::Stopped => "stopped",
+            SessionState::Failed => "failed",
+            SessionState::Interrupted => "interrupted",
+        }
+    }
+}
+
+/// TETHER-9: what started a session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    /// `sessions.start`.
+    #[default]
+    Start,
+    /// `runs.start`: a brief, an archetype, a report.
+    Run,
+    /// The listener: an input answered that no session of tether's asked.
+    Answer,
+    /// The listener: a change request or a comment on a queued ticket.
+    Reply,
 }
 
 /// One agent session on this machine.
@@ -50,10 +68,11 @@ pub struct Session {
     /// The ticket it works.
     pub ticket: String,
     pub state: SessionState,
-    /// The principal that started it.
+    /// The principal that started it (`tether` for the listener's).
     pub started_by: String,
     /// Unix seconds.
     pub started_at: i64,
+    /// When its last turn ended.
     pub ended_at: Option<i64>,
     pub working_dir: String,
     pub model: Model,
@@ -63,6 +82,25 @@ pub struct Session {
     pub lines: u64,
     /// Why it failed, when it did.
     pub message: Option<String>,
+    /// TETHER-9: what started it.
+    #[serde(default)]
+    pub origin: Origin,
+    /// TETHER-9: its turns so far (a resume is another).
+    #[serde(default)]
+    pub turns: u32,
+    /// TETHER-9: the inputs it asked on its ticket — an answer to one
+    /// resumes it.
+    #[serde(default)]
+    pub asked: Vec<String>,
+    /// TETHER-9: a run's archetype.
+    #[serde(default)]
+    pub archetype: Option<Archetype>,
+    /// TETHER-9: the chat its report goes to when it ends.
+    #[serde(default)]
+    pub report_chat: Option<u64>,
+    /// TETHER-9: what its last turn said last (after its last tool call).
+    #[serde(default)]
+    pub report: Option<String>,
 }
 
 /// One line of a session's tail: a `claudecode.chat` event, said short.
@@ -76,19 +114,20 @@ pub struct TailLine {
     pub text: String,
 }
 
-/// What `sessions` answers.
+/// What `sessions` and `runs` answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionsEvent {
     /// `start`: the session is running.
     Started { session: Session },
-    /// `list`: one session; `stop` of one already ended.
+    /// `list`: one session; `stop` of one already ended; `say`: the
+    /// session, its turn running or the prompt waiting for the next.
     Session { session: Session },
     /// `stop`: it was running, and is stopped.
     Stopped { session: Session },
     /// `watch`: a line of its tail.
     Line { name: String, line: TailLine },
-    /// `watch`: the session ended; the watch ends with it.
+    /// `watch`: its turn ended with nothing waiting; the watch ends with it.
     Ended { session: Session },
     /// No session of that name.
     NotFound { name: String },
@@ -101,175 +140,36 @@ impl plexus_client::FromClientError for SessionsEvent {
     }
 }
 
-/// The most of a tail kept per session; a watch after more starts later.
-const TAIL_MAX: usize = 10_000;
-/// The longest text kept on one line.
-const LINE_MAX: usize = 4_000;
-
-#[derive(Clone)]
-enum Tail {
-    Line(TailLine),
-    End(Session),
+/// The principal behind a call.
+pub fn principal(auth: &AuthContext) -> String {
+    auth.principal().map(|p| p.to_string()).unwrap_or_else(|| auth.user_id.clone())
 }
 
-struct Entry {
-    session: Session,
-    tail: Vec<TailLine>,
-    tx: broadcast::Sender<Tail>,
-    task: Option<tokio::task::AbortHandle>,
-}
-
-/// Every session tether started, while it runs.
-#[derive(Default)]
-struct Registry(Mutex<BTreeMap<String, Entry>>);
-
-fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
-}
-
-fn short(mut s: String) -> String {
-    if s.len() > LINE_MAX {
-        let mut cut = LINE_MAX;
-        while !s.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        s.truncate(cut);
-        s.push('…');
-    }
-    s
-}
-
-/// A chat event as a tail line's kind and text.
-fn said(ev: ChatEvent) -> (&'static str, String) {
-    match ev {
-        ChatEvent::Start { id, .. } => ("start", id.to_string()),
-        ChatEvent::Content { text } => ("content", text),
-        ChatEvent::Thinking { thinking } => ("thinking", thinking),
-        ChatEvent::ToolUse { tool_name, input, .. } => ("tool_use", format!("{tool_name} {input}")),
-        ChatEvent::ToolResult { output, is_error, .. } => (if is_error { "tool_error" } else { "tool_result" }, output),
-        ChatEvent::Complete { claude_session_id, .. } => ("complete", claude_session_id),
-        ChatEvent::Passthrough { event_type, .. } => ("passthrough", event_type),
-        ChatEvent::Err { message } => ("error", message),
-    }
-}
-
-impl Registry {
-    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Entry>> {
-        self.0.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
-    fn add(&self, session: Session) {
-        let (tx, _) = broadcast::channel(1024);
-        self.lock().insert(session.name.clone(), Entry { session, tail: Vec::new(), tx, task: None });
-    }
-
-    fn hold(&self, name: &str, task: tokio::task::AbortHandle) {
-        if let Some(e) = self.lock().get_mut(name) {
-            e.task = Some(task);
-        }
-    }
-
-    fn get(&self, name: &str) -> Option<Session> {
-        self.lock().get(name).map(|e| e.session.clone())
-    }
-
-    fn push(&self, name: &str, kind: &str, text: String) {
-        let mut all = self.lock();
-        let Some(e) = all.get_mut(name) else { return };
-        let line = TailLine { seq: e.session.lines, kind: kind.into(), text: short(text) };
-        e.session.lines += 1;
-        if e.tail.len() >= TAIL_MAX {
-            e.tail.remove(0);
-        }
-        e.tail.push(line.clone());
-        let _ = e.tx.send(Tail::Line(line));
-    }
-
-    /// End a running session as `state`; the session as it ends, or `None`
-    /// when it had already ended (or is not here).
-    fn end(&self, name: &str, state: SessionState, message: Option<String>) -> Option<Session> {
-        let mut all = self.lock();
-        let e = all.get_mut(name)?;
-        if e.session.state != SessionState::Running {
-            return None;
-        }
-        e.session.state = state;
-        e.session.ended_at = Some(now());
-        e.session.message = message;
-        if let Some(task) = e.task.take() {
-            task.abort();
-        }
-        let _ = e.tx.send(Tail::End(e.session.clone()));
-        Some(e.session.clone())
-    }
-
-    fn list(&self, ticket: Option<&str>) -> Vec<Session> {
-        let mut out: Vec<Session> =
-            self.lock().values().map(|e| e.session.clone()).filter(|s| ticket.is_none_or(|t| s.ticket == t)).collect();
-        out.sort_by(|a, b| (a.started_at, &a.name).cmp(&(b.started_at, &b.name)));
-        out
-    }
-
-    /// A watch's start: its feed, the tail from `since`, and the session —
-    /// read under one lock, so no line falls between them.
-    fn follow(&self, name: &str, since: u64) -> Option<(broadcast::Receiver<Tail>, Vec<TailLine>, Session)> {
-        let all = self.lock();
-        let e = all.get(name)?;
-        let backlog = e.tail.iter().filter(|l| l.seq >= since).cloned().collect();
-        Some((e.tx.subscribe(), backlog, e.session.clone()))
+/// `stop`'s answer.
+pub fn stopped(name: String, s: Stopped) -> SessionsEvent {
+    match s {
+        Stopped::Now(session) => SessionsEvent::Stopped { session },
+        Stopped::Already(session) => SessionsEvent::Session { session },
+        Stopped::NotFound => SessionsEvent::NotFound { name },
     }
 }
 
 /// The `sessions` activation.
 #[derive(Clone)]
 pub struct SessionsActivation {
-    engine: Engine,
-    registry: Arc<Registry>,
-    work_dir: PathBuf,
+    runner: Runner,
 }
 
 impl SessionsActivation {
-    /// Sessions run by `engine`, in `work_dir` unless a start names one.
-    pub fn new(engine: Engine, work_dir: PathBuf) -> Self {
-        Self { engine, registry: Arc::default(), work_dir }
+    pub fn new(runner: Runner) -> Self {
+        Self { runner }
     }
-
-    /// The turn: `claudecode.chat` through the engine, its events the tail.
-    fn run(&self, name: String, prompt: String) -> tokio::task::AbortHandle {
-        let engine = self.engine.clone();
-        let registry = self.registry.clone();
-        tokio::spawn(async move {
-            let client = engine.claudecode();
-            let mut chat = client.chat(name.clone(), prompt, None, None);
-            let mut outcome = (SessionState::Failed, Some("the turn ended without completing".to_string()));
-            while let Some(ev) = chat.next().await {
-                let ev = match ev {
-                    Ok(ClientEvent::Data(ev)) => ev,
-                    Ok(_) => continue,
-                    Err(e) => ChatEvent::Err { message: e.to_string() },
-                };
-                match &ev {
-                    ChatEvent::Complete { .. } => outcome = (SessionState::Finished, None),
-                    ChatEvent::Err { message } => outcome = (SessionState::Failed, Some(message.clone())),
-                    _ => {}
-                }
-                let (kind, text) = said(ev);
-                registry.push(&name, kind, text);
-            }
-            registry.end(&name, outcome.0, outcome.1);
-        })
-        .abort_handle()
-    }
-}
-
-fn principal(auth: &AuthContext) -> String {
-    auth.principal().map(|p| p.to_string()).unwrap_or_else(|| auth.user_id.clone())
 }
 
 #[plexus_macros::activation(
-    version = "0.1.0",
+    version = "0.2.0",
     description = "Agent sessions on this machine, run by the substrate inside tether",
-    roles(viewer = ["list", "watch"], editor = [viewer, "start", "stop"]),
+    roles(viewer = ["list", "watch"], editor = [viewer, "start", "say", "stop"]),
     typed_params,
 )]
 impl SessionsActivation {
@@ -288,47 +188,33 @@ impl SessionsActivation {
         /// opus, sonnet or haiku (default: opus).
         model: Option<Model>,
     ) -> impl Stream<Item = SessionsEvent> + Send + 'static {
-        let me = self.clone();
-        let started_by = principal(auth);
-        stream! {
-            let name = name_for(&ticket).into_string();
-            let working_dir = working_dir.map(WorkDir::into_string).unwrap_or_else(|| me.work_dir.to_string_lossy().into_owned());
-            let model = model.unwrap_or(Model::Opus);
-            let prompt = prompt.map(Prompt::into_string).unwrap_or_else(|| format!("Work ticket {ticket}."));
-            let created = me.engine.claudecode().create_all(name.clone(), working_dir.clone(), model, None, None, None).await;
-            let substrate_id = match created.as_deref() {
-                Ok([CreateResult::Ok { id, .. }, ..]) => id.to_string(),
-                Ok([CreateResult::Err { message }, ..]) => {
-                    yield SessionsEvent::Error { message: format!("substrate refused the session: {message}") };
-                    return;
-                }
-                Ok(_) => {
-                    yield SessionsEvent::Error { message: "substrate answered nothing".into() };
-                    return;
-                }
-                Err(e) => {
-                    yield SessionsEvent::Error { message: format!("substrate: {e}") };
-                    return;
-                }
-            };
-            let session = Session {
-                name: name.clone(),
-                ticket: ticket.into_string(),
-                state: SessionState::Running,
-                started_by,
-                started_at: now(),
-                ended_at: None,
-                working_dir,
-                model,
-                substrate_id,
-                lines: 0,
-                message: None,
-            };
-            me.registry.add(session.clone());
-            let task = me.run(name.clone(), prompt);
-            me.registry.hold(&name, task);
-            yield SessionsEvent::Started { session };
-        }
+        let (runner, started_by) = (self.runner.clone(), principal(auth));
+        let prompt = prompt.map(Prompt::into_string).unwrap_or_else(|| format!("Work ticket {ticket}."));
+        let start = Start { ticket, prompt, working_dir: working_dir.map(WorkDir::into_string), model: model.unwrap_or(Model::Opus), origin: crate::sessions::Origin::Start, started_by, archetype: None, report_chat: None };
+        futures::stream::once(async move {
+            match runner.start(start).await {
+                Ok(session) => SessionsEvent::Started { session },
+                Err(message) => SessionsEvent::Error { message },
+            }
+        })
+    }
+
+    /// TETHER-9: say something to a session — another turn now, or after
+    /// the turn that runs.
+    #[plexus_macros::method]
+    pub async fn say(
+        &self,
+        /// The session's name.
+        name: SessionName,
+        /// What to tell it.
+        prompt: Prompt,
+    ) -> impl Stream<Item = SessionsEvent> + Send + 'static {
+        let name = name.into_string();
+        let ev = match self.runner.resume(&name, prompt.into_string()) {
+            Some(session) => SessionsEvent::Session { session },
+            None => SessionsEvent::NotFound { name },
+        };
+        futures::stream::iter([ev])
     }
 
     /// Stop a running session: its turn and its Claude Code end.
@@ -339,14 +225,7 @@ impl SessionsActivation {
         name: SessionName,
     ) -> impl Stream<Item = SessionsEvent> + Send + 'static {
         let name = name.into_string();
-        let ev = match self.registry.end(&name, SessionState::Stopped, None) {
-            Some(session) => SessionsEvent::Stopped { session },
-            None => match self.registry.get(&name) {
-                Some(session) => SessionsEvent::Session { session },
-                None => SessionsEvent::NotFound { name },
-            },
-        };
-        futures::stream::iter([ev])
+        futures::stream::iter([stopped(name.clone(), self.runner.stop(&name))])
     }
 
     /// Every session on this machine, oldest first.
@@ -356,12 +235,12 @@ impl SessionsActivation {
         /// Only this ticket's.
         ticket: Option<TicketId>,
     ) -> impl Stream<Item = SessionsEvent> + Send + 'static {
-        let all = self.registry.list(ticket.as_ref().map(TicketId::as_str));
+        let all = self.runner.list(ticket.as_ref().map(TicketId::as_str), None);
         futures::stream::iter(all.into_iter().map(|session| SessionsEvent::Session { session }))
     }
 
     /// A session's tail: its lines from `since`, then each as it comes,
-    /// then `ended` when the session ends.
+    /// then `ended` when its turn ends with nothing waiting.
     #[plexus_macros::method(streaming)]
     pub async fn watch(
         &self,
@@ -370,39 +249,6 @@ impl SessionsActivation {
         /// The first line wanted (default 0: the whole tail kept).
         since: Option<u64>,
     ) -> impl Stream<Item = SessionsEvent> + Send + 'static {
-        let name = name.into_string();
-        let followed = self.registry.follow(&name, since.unwrap_or(0));
-        stream! {
-            let Some((mut rx, backlog, session)) = followed else {
-                yield SessionsEvent::NotFound { name };
-                return;
-            };
-            let mut next = since.unwrap_or(0);
-            for line in backlog {
-                next = line.seq + 1;
-                yield SessionsEvent::Line { name: name.clone(), line };
-            }
-            if session.state != SessionState::Running {
-                yield SessionsEvent::Ended { session };
-                return;
-            }
-            loop {
-                match rx.recv().await {
-                    Ok(Tail::Line(line)) if line.seq >= next => {
-                        next = line.seq + 1;
-                        yield SessionsEvent::Line { name: name.clone(), line };
-                    }
-                    Ok(Tail::Line(_)) => {}
-                    Ok(Tail::End(session)) => {
-                        yield SessionsEvent::Ended { session };
-                        return;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        yield SessionsEvent::Error { message: format!("the watch fell {n} lines behind; watch again with since") };
-                    }
-                    Err(broadcast::error::RecvError::Closed) => return,
-                }
-            }
-        }
+        self.runner.watch(name.into_string(), since)
     }
 }
