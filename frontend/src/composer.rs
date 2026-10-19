@@ -28,6 +28,9 @@
 //!   (COMMENT-5, src/media.rs) — checked, kept with `media.put` for the
 //!   chat (seen by its participants alone), a thumbnail in the box, drawn
 //!   in the turn, full size on a click. Send waits while one is on its way.
+//! - **Send on a phone** (CHAT-27, [`tap_sends`]): a tap on Send never
+//!   takes the focus from the box, so the keyboard stays up and the tap
+//!   sends — it is read on its lift, not left to the click a blur loses.
 //! - **Drafts** ([`Drafts`]): each chat's unsent text, per browser, under
 //!   `menger.chat.draft.<id>` — restored on return, cleared on send, put
 //!   back when a send is refused.
@@ -657,6 +660,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
             }
         }
     };
+    // CHAT-27: where a touch on Send landed, until it lifts.
+    let tap = StoredValue::new(None::<(f64, f64, f64)>);
     let paste = move |ev: web_sys::ClipboardEvent| attach.paste(ev);
     let drop = move |ev: web_sys::DragEvent| attach.dropped(ev);
     let dragover = move |ev: web_sys::DragEvent| attach.dragover(ev);
@@ -751,7 +756,20 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                             {if full { "⤡ pane" } else { "full ↗" }}
                         </button>
                     })}
-                    <button type="button" class="csend" aria-label="send" title="send (Enter)" disabled=move || sending.get() || attach.busy() || body.with(|b| b.trim().is_empty()) on:click=move |_| send()>
+                    <button type="button" class="csend" aria-label="send" title="send (Enter)" disabled=move || sending.get() || attach.busy() || body.with(|b| b.trim().is_empty())
+                        on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
+                        on:touchstart=move |ev: web_sys::TouchEvent| tap.set_value(landed(&ev))
+                        on:touchend={
+                            let send = send.clone();
+                            move |ev: web_sys::TouchEvent| {
+                                if tapped(&ev, tap.get_value()) {
+                                    ev.prevent_default();
+                                    send();
+                                }
+                                tap.set_value(None);
+                            }
+                        }
+                        on:click=move |_| send()>
                         {move || if sending.get() { "sending…" } else { "send" }}
                     </button>
                 </div>
@@ -773,6 +791,37 @@ fn leave_box(ev: &web_sys::KeyboardEvent, full: bool) {
             let _ = el.blur();
         }
     }
+}
+
+/// CHAT-27: a tap on Send keeps the box focused. A phone's first tap on the
+/// button used to blur the box: the keyboard went down, the composer moved
+/// with it (APP-56's `data-kb` came off), and the click the tap was meant
+/// to make never sent. So the button never takes focus (its `mousedown` is
+/// prevented), and a tap sends on its lift — prevented, so no mouse events,
+/// no blur and no click follow — when it lifts on the button where it
+/// landed ([`tap_sends`]). The keyboard stays up, the box empties and keeps
+/// its focus for the next message.
+fn landed(ev: &web_sys::TouchEvent) -> Option<(f64, f64, f64)> {
+    let t = ev.touches();
+    (t.length() == 1).then(|| t.get(0)).flatten().map(|p| (f64::from(p.client_x()), f64::from(p.client_y()), js_sys::Date::now()))
+}
+
+/// Whether the touch that lifts in `ev`, landed at `from`, is a tap on Send.
+fn tapped(ev: &web_sys::TouchEvent, from: Option<(f64, f64, f64)>) -> bool {
+    let Some(from) = from else { return false };
+    let Some(p) = ev.changed_touches().get(0) else { return false };
+    let Some(button) = ev.current_target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return false };
+    let r = button.get_bounding_client_rect();
+    tap_sends(from, (f64::from(p.client_x()), f64::from(p.client_y()), js_sys::Date::now()), (r.left(), r.top(), r.right(), r.bottom()))
+}
+
+/// CHAT-27: a touch that landed at `from` and lifted at `to` (x, y, ms) on
+/// a button whose rect is `(left, top, right, bottom)` sends: a tap
+/// ([`crate::media::is_tap`]), lifted on the button. A scroll, a hold, or a
+/// finger slid off the button does not.
+pub(crate) fn tap_sends(from: (f64, f64, f64), to: (f64, f64, f64), rect: (f64, f64, f64, f64)) -> bool {
+    let (l, t, r, b) = rect;
+    crate::media::is_tap(from.0, from.1, from.2, to.0, to.1, to.2) && (l..=r).contains(&to.0) && (t..=b).contains(&to.1)
 }
 
 /// A command, run.
@@ -929,5 +978,17 @@ mod tests {
         assert_eq!(placeholder(Some("KILN-7"), false), "message KILN-7's chat… (Enter sends · Shift+Enter newline · / commands · @ adds)");
         assert!(placeholder(Some("KILN-7"), true).starts_with("Write a note on KILN-7"));
         assert!(placeholder(None, false).contains("paste an image"), "CHAT-14: a chat outside tickets");
+    }
+
+    /// CHAT-27: a tap on Send sends on its lift — one that lifts on the
+    /// button, where it landed and soon; a scroll, a hold or a slide off it
+    /// does not.
+    #[test]
+    fn chat_27_a_tap_on_send_sends_on_its_lift() {
+        let button = (300.0, 600.0, 360.0, 632.0);
+        assert!(tap_sends((330.0, 616.0, 0.0), (332.0, 618.0, 120.0), button), "a tap");
+        assert!(!tap_sends((330.0, 616.0, 0.0), (330.0, 560.0, 120.0), button), "a scroll");
+        assert!(!tap_sends((330.0, 616.0, 0.0), (330.0, 616.0, 900.0), button), "a hold");
+        assert!(!tap_sends((302.0, 616.0, 0.0), (296.0, 616.0, 100.0), button), "lifted off the button");
     }
 }
