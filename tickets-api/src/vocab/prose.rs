@@ -89,6 +89,28 @@ text_type!(
     reason
 );
 
+/// APP-90: the longest question `inputs ask` files, in bytes.
+pub const QUESTION_MAX: usize = 4 * 1024;
+
+fn question(text: &str) -> Result<String, String> {
+    let t = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match (t.is_empty(), t.len() <= QUESTION_MAX, t.chars().any(char::is_control)) {
+        (true, ..) => Err("a question is not blank".into()),
+        (_, false, _) => Err(too_long("a question", t.len(), QUESTION_MAX)),
+        (.., true) => Err(not_a(&t, "a question", "text, without control characters")),
+        _ => Ok(t),
+    }
+}
+
+text_type!(
+    /// APP-90: a question for the owner, filed as a text input — not blank,
+    /// its whitespace one space each (one line), at most [`QUESTION_MAX`]
+    /// bytes, without control characters. Kept as text: the store escapes
+    /// it into the body's markup.
+    Question,
+    question
+);
+
 fn activity_line(text: &str) -> Result<String, String> {
     match text.len() <= MESSAGE_MAX {
         true => Ok(text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().trim().to_string()),

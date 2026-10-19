@@ -1,0 +1,5 @@
+/** APP-90: a question for the owner, filed as a text input — not blank,
+its whitespace one space each (one line), at most [`QUESTION_MAX`]
+bytes, without control characters. Kept as text: the store escapes
+it into the body's markup. */
+export type Question = string;

@@ -569,6 +569,10 @@
         "ticket",
         "value"
       ],
+      "ask": [
+        "question",
+        "ticket"
+      ],
       "clear": [
         "input",
         "ticket"

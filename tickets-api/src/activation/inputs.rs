@@ -1,7 +1,8 @@
 //! ACCESS-14: `tickets inputs` — a ticket's inputs (INPUT-3), a child of
 //! `tickets` on the frame (README "The frame"): `list` (was `tickets.inputs`),
 //! `answer`, `clear` (was `clear_answer`), `close` (was `close_input`),
-//! `reopen` (was `reopen_input`). Reached as `tickets.inputs.<method>`; its
+//! `reopen` (was `reopen_input`), and `ask` (APP-90: a question filed as a
+//! text input). Reached as `tickets.inputs.<method>`; its
 //! grants are `inputs.<method>`, listed in its own `roles(...)`; the
 //! parent's client reaches it as `client.inputs()` (MACRO-16).
 //!
@@ -38,7 +39,7 @@ pub(super) fn source_of(caller: &VerifiedUser) -> AnswerSource {
     auth = "required",
     request = MengerRequest,
     typed_params,
-    roles(viewer = ["list"], editor = [viewer, "answer", "clear", "close", "reopen"])
+    roles(viewer = ["list"], editor = [viewer, "ask", "answer", "clear", "close", "reopen"])
 )]
 impl InputsActivation {
     /// Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket.
@@ -83,6 +84,36 @@ impl InputsActivation {
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         futures::stream::iter(inputs_events(&self.store, &user, ticket, epic, state, filter, tz))
+    }
+
+    /// File a question for the owner on a ticket: a new text input appended to its body (one write, one revision); yields input_changed with the input.
+    ///
+    /// APP-90: the chat composer's `/ask`. Appends `<m-input id="ask-N"
+    /// kind="text"><m-question>…</m-question></m-input>` to `ticket`'s
+    /// body — `N` the lowest no input of the ticket has had, so the id is
+    /// unique in it; the question escaped, so it is text and never markup —
+    /// through `amend`'s write (its revision, `asking` moved in it,
+    /// `amended` and `input_changed` broadcast). Yields exactly one event:
+    /// `InputChanged` (the new input, `open`), `NotFound`, or an in-band
+    /// `Error` — the body would pass `--max-body-bytes`, or its markup
+    /// elsewhere is malformed — and nothing is written.
+    #[plexus_macros::method(
+        group = "inputs",
+        target = "ticket",
+        example(note = "ask the owner on the chat's ticket", params = r#"{"ticket": "KILN-40", "question": "Hold at cone 6 or 5?"}"#)
+    )]
+    pub async fn ask(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Ticket id, e.g. KILN-40.
+        ticket: TicketRef,
+        /// The question, one line (its whitespace collapsed), e.g. "Hold at cone 6 or 5?".
+        question: Question,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        answered!(store = self.store.clone(), user, Some(ticket.to_string()) => {
+            let on = permit::<Editor>(&store, &user, &ticket)?;
+            Ok(input_event(store.ask(on, question.as_str()).await, ticket.into_string()))
+        })
     }
 
     /// Answer an input: record a value (checked against its kind and options) with a rationale, the time, and where it came from (said by the server); yields input_changed.

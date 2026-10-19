@@ -217,6 +217,23 @@ fn fetch() {
     });
 }
 
+/// APP-90: `tickets.inputs.ask { ticket, question }` — the composer's
+/// `/ask`: the question filed on `ticket` as a text input; the new input's
+/// id, or what the server refused.
+pub(crate) async fn ask(ticket: &str, question: &str) -> Result<String, String> {
+    let client = session::client().ok_or_else(|| "not connected".to_string())?;
+    let events = client.inputs().ask_all(crate::typed::typed(ticket)?, crate::typed::typed(question)?).await.map_err(|e| session::describe(&e))?;
+    for ev in events {
+        match ev {
+            TicketsEvent::InputChanged { input } => return Ok(input.id.to_string()),
+            TicketsEvent::NotFound { id } => return Err(format!("{id}: not found")),
+            TicketsEvent::Error { message } => return Err(message),
+            _ => {}
+        }
+    }
+    Err("no answer".into())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

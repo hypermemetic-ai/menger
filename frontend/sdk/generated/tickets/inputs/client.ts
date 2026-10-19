@@ -3,6 +3,7 @@
 
 import type { RpcClient } from '../../rpc';
 import { extractData, collectOne } from '../../rpc';
+import type { Question } from './types';
 import type { ShortcodeRef, TicketRef } from '../../notes/types';
 import type { FilterText, InputId, InputState, InputValue, Message, TicketsEvent, Zone } from '../../tickets/types';
 
@@ -31,6 +32,23 @@ body. `tickets.watch` carries the `InputChanged`.
    * @requires `inputs.answer` on the scope of `ticket`
    */
   answer(input: InputId, ticket: TicketRef, value: InputValue, rationale?: Message | null): AsyncGenerator<TicketsEvent>;
+  /**
+   * File a question for the owner on a ticket: a new text input appended to its body (one write, one revision); yields input_changed with the input.
+
+APP-90: the chat composer's `/ask`. Appends `<m-input id="ask-N"
+kind="text"><m-question>…</m-question></m-input>` to `ticket`'s
+body — `N` the lowest no input of the ticket has had, so the id is
+unique in it; the question escaped, so it is text and never markup —
+through `amend`'s write (its revision, `asking` moved in it,
+`amended` and `input_changed` broadcast). Yields exactly one event:
+`InputChanged` (the new input, `open`), `NotFound`, or an in-band
+`Error` — the body would pass `--max-body-bytes`, or its markup
+elsewhere is malformed — and nothing is written.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `inputs.ask` on the scope of `ticket`
+   */
+  ask(question: Question, ticket: TicketRef): AsyncGenerator<TicketsEvent>;
   /**
    * Clear an input's answer (open again; kept in its history, with where it came from, said by the server); yields input_changed.
 
@@ -113,6 +131,11 @@ class TicketsInputsClientImpl implements TicketsInputsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
+  async *ask(question: Question, ticket: TicketRef): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.inputs.ask', { question, ticket });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
   async *clear(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.inputs.clear', { input, ticket });
     yield* extractData<TicketsEvent>(stream);
@@ -147,6 +170,7 @@ export function createTicketsInputsClient(rpc: RpcClient): TicketsInputsClient {
 /** What each tickets.inputs method needs (AUTH-9): its grant, and the param that locates what it acts on (`null`: allowed wherever the grant is held). The gate decides, server-side. */
 export const requires = {
   "inputs.answer": { grant: "inputs.answer", target: "ticket" },
+  "inputs.ask": { grant: "inputs.ask", target: "ticket" },
   "inputs.clear": { grant: "inputs.clear", target: "ticket" },
   "inputs.close": { grant: "inputs.close", target: "ticket" },
   "inputs.list": { grant: "inputs.list", target: null },
@@ -156,6 +180,6 @@ export const requires = {
 
 /** The tickets.inputs activation's default roles, each the grants it lists (AUTH-3). Defaults only: a server's roles are data an admin may change, and `admin` holds every grant. */
 export const defaultRoles = {
-  "editor": ["inputs.list", "inputs.answer", "inputs.clear", "inputs.close", "inputs.reopen"],
+  "editor": ["inputs.list", "inputs.ask", "inputs.answer", "inputs.clear", "inputs.close", "inputs.reopen"],
   "viewer": ["inputs.list"],
 } as const;
