@@ -256,6 +256,36 @@ pub(crate) fn scale_for(shown: &[Device], w: f64, h: f64, phone: bool, full: boo
     fit(shown, GAP, w - 12.0 - GRIP_W - BEZEL_W * shown.len() as f64, avail_h)
 }
 
+/// APP-99: the room a phone's page keeps around a mockup that is shown whole
+/// — the app's header, the box's caption and bar — px.
+pub(crate) const PREVIEW_ROOM: f64 = 200.0;
+
+/// APP-99: the part of the viewport's height a phone's preview may take.
+pub(crate) const PREVIEW_PART: f64 = 1.0 / 3.0;
+
+/// APP-99: on a phone, the scale of the preview the devices `shown` are drawn
+/// at on a stage `w` px wide in a viewport `vh` px tall — stacked, their
+/// bezels and gaps counted, no taller than [`PREVIEW_PART`] of `vh`, never
+/// above the column's scale. `None` when the viewport is tall enough to show
+/// them whole at the column's scale ([`PREVIEW_ROOM`] to spare): then they
+/// are drawn as before, inline and interactive.
+pub(crate) fn preview_scale(shown: &[Device], w: f64, vh: f64) -> Option<f64> {
+    if shown.is_empty() || !vh.is_finite() || vh <= 0.0 {
+        return None;
+    }
+    let column = scale_for(shown, w, vh, true, false);
+    let frames: f64 = shown.iter().map(|d| phone_bezel(*d)).sum::<f64>() + PREVIEW_GAP * (shown.len() as f64 - 1.0);
+    let tall: f64 = shown.iter().map(|d| f64::from(d.h)).sum();
+    if tall * column + frames + PREVIEW_ROOM <= vh {
+        return None;
+    }
+    Some(((vh * PREVIEW_PART - frames).max(1.0) / tall).min(column).max(0.05))
+}
+
+/// APP-99: the gap between devices stacked on a phone (index.html's ≤ 820
+/// `.framed-stage` gap), px.
+const PREVIEW_GAP: f64 = 16.0;
+
 /// The localStorage key a mockup's sizes are kept under.
 pub(crate) fn storage_key(mockup: &str) -> String {
     format!("menger.mockup-sizes:{mockup}")
@@ -663,6 +693,7 @@ impl Sizer {
         shaped: Signal<bool>,
         size: RwSignal<(f64, f64)>,
         is_full: Memo<bool>,
+        vh: Signal<f64>,
     ) -> impl IntoView {
         let s = self;
         let scale = Memo::new(move |_| {
@@ -671,10 +702,13 @@ impl Sizer {
                 return g.scale;
             }
             let (w, h) = size.get();
-            let solo = s.solo.get();
-            let shown: Vec<Device> =
-                s.slots.with(|v| v.iter().filter(|x| solo.is_none_or(|k| k == x.key)).map(|x| x.dev.get()).collect());
-            scale_for(&shown, w, h, s.phone.get(), is_full.get())
+            let shown: Vec<Device> = s.shown().into_iter().map(|(_, d)| d).collect();
+            let (phone, full) = (s.phone.get(), is_full.get());
+            // APP-99: a phone's preview, no taller than a third of the screen.
+            match (phone && !full).then(|| preview_scale(&shown, w, vh.get())).flatten() {
+                Some(p) => p,
+                None => scale_for(&shown, w, h, phone, full),
+            }
         });
         view! {
             <For each=move || s.slots.get() key=|slot| slot.key children=move |slot: Slot| {
@@ -995,6 +1029,30 @@ mod tests {
         let css = include_str!("../index.html");
         assert!(css.contains(".device[data-kind=\"phone\"] .device-screen { border-width: 4px; }"));
         assert!(css.contains(".device[data-kind=\"tablet\"] .device-screen { border-width: 6px; }"));
+    }
+
+    /// APP-99: on an iPhone a mockup's preview is at most a third of the
+    /// screen tall, stacked devices together; a viewport tall enough to show
+    /// it whole (an iPad's portrait) draws it as before.
+    #[test]
+    fn app_99_a_phones_preview_is_at_most_a_third_of_the_screen() {
+        let (phone, desk) = (Device { w: 390, h: 844 }, Device { w: 1440, h: 900 });
+        let s = preview_scale(&[phone], 382.0, 844.0).unwrap();
+        let tall = 844.0 * s + phone_bezel(phone);
+        assert!(tall <= 844.0 / 3.0 + 1e-9, "{tall}");
+        assert!(tall > 844.0 / 3.0 - 1.0, "it takes the third it has: {tall}");
+        // All, stacked: the two together.
+        let tab = Device { w: 768, h: 1024 };
+        let s = preview_scale(&[phone, tab], 382.0, 844.0).unwrap();
+        let tall = (844.0 + 1024.0) * s + phone_bezel(phone) + phone_bezel(tab) + 16.0;
+        assert!(tall <= 844.0 / 3.0 + 1e-9, "{tall}");
+        // Never above the column's scale (a desktop at 382 px is short already).
+        let col = scale_for(&[desk], 382.0, 400.0, true, false);
+        assert!(preview_scale(&[desk], 382.0, 400.0).unwrap() <= col);
+        // An iPad's portrait shows a phone whole; nothing shown, nothing.
+        assert_eq!(preview_scale(&[phone], 760.0, 1024.0 + 100.0), None);
+        assert_eq!(preview_scale(&[], 382.0, 844.0), None);
+        assert_eq!(preview_scale(&[phone], 382.0, f64::NAN), None);
     }
 
     /// Kept as `WxH,…`, read back the same; anything unreadable is none.

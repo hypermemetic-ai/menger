@@ -59,6 +59,12 @@
 //! Dark, Reduced motion, Compare, the tall note) folds into the ⋯ menu —
 //! and it opens on one device at the column's width (src/mocksize.rs).
 //!
+//! APP-99: **on a phone a mockup is a preview** at most a third of the
+//! screen tall ([`crate::mocksize::preview_scale`]) — inert; a tap or ⤢ Open
+//! opens it full screen, and Back ([`push_full`]), Exit, Esc or a swipe down
+//! ([`swiped_down`]) closes it. Any mockup **collapses** to one line (its
+//! title, [`views_note`], ▸), kept per mockup on this device ([`fold_key`]).
+//!
 //! APP-66: **a phone is drawn as an iPhone's screen** ([`screen`]): the
 //! display's rounded corners clip the page, the notch or the Dynamic Island
 //! and the home indicator are drawn over it, and the page is told the
@@ -446,6 +452,30 @@ pub(crate) fn fit(devices: &[Device], gap: f64, avail_w: f64, avail_h: Option<f6
     s.max(0.05)
 }
 
+/// APP-99: the localStorage key a mockup's collapse is kept under, by its
+/// name (its sizes' name, [`crate::mocksize::storage_key`]'s).
+pub(crate) fn fold_key(mockup: &str) -> String {
+    format!("menger.mockup.folded.{mockup}")
+}
+
+/// APP-99: a collapsed mockup's one line past its title — its views, the
+/// devices it declares.
+pub(crate) fn views_note(n: usize) -> String {
+    match n {
+        1 => "1 view".into(),
+        n => format!("{n} views"),
+    }
+}
+
+/// APP-99: the full-screen viewer's swipe down, from the pointer's first
+/// point to its last: far enough down, and more down than across.
+pub(crate) fn swiped_down(dx: f64, dy: f64) -> bool {
+    dy >= SWIPE_DOWN && dy > 2.0 * dx.abs()
+}
+
+/// APP-99: how far down a swipe closes the full-screen viewer, px.
+pub(crate) const SWIPE_DOWN: f64 = 60.0;
+
 /// Does the route's query ask for full screen (`?view=full`)?
 pub(crate) fn wants_full(hash: &str) -> bool {
     hash.split_once('?').is_some_and(|(_, q)| q.split('&').any(|p| p == "view=full"))
@@ -482,6 +512,44 @@ thread_local! {
     /// APP-42: each mounted mockup's measured pages, by box number — each
     /// device's slot key and its frame's last [`Extent`].
     static EXTENTS: RefCell<Vec<(u32, ArcRwSignal<Vec<(u32, Extent)>>)>> = const { RefCell::new(Vec::new()) };
+    /// APP-99: the box whose full screen pushed a history entry — Back
+    /// closes it; leaving it another way takes the entry back.
+    static PUSHED: Cell<Option<u32>> = const { Cell::new(None) };
+}
+
+fn fold_storage() -> Option<web_sys::Storage> {
+    dom::window().local_storage().ok().flatten()
+}
+
+/// APP-99: whether the mockup `name` was left collapsed on this device.
+fn folded_kept(name: Option<&str>) -> bool {
+    name.and_then(|n| fold_storage()?.get_item(&fold_key(n)).ok().flatten()).is_some()
+}
+
+fn keep_folded(name: Option<&str>, folded: bool) {
+    let (Some(n), Some(st)) = (name, fold_storage()) else { return };
+    let _ = if folded { st.set_item(&fold_key(n), "1") } else { st.remove_item(&fold_key(n)) };
+}
+
+/// APP-99: a phone's full screen is one step of history — Back leaves it.
+fn push_full(id: u32) {
+    let w = dom::window();
+    let Ok(h) = w.history() else { return };
+    let url = w.location().href().ok();
+    if h.push_state_with_url(&JsValue::from_str("menger-full"), "", url.as_deref()).is_ok() {
+        PUSHED.with(|p| p.set(Some(id)));
+    }
+}
+
+/// Leaving full screen not by Back: the entry it pushed is taken back.
+fn pop_full(id: u32) {
+    if PUSHED.with(|p| p.get()) != Some(id) {
+        return;
+    }
+    PUSHED.with(|p| p.set(None));
+    if let Ok(h) = dom::window().history() {
+        let _ = h.back();
+    }
 }
 
 /// APP-42: `menger:extent` from a device's frame — its page is `height` px
@@ -606,6 +674,17 @@ fn install() {
     });
     let _ = doc.add_event_listener_with_callback("fullscreenchange", cb.as_ref().unchecked_ref());
     cb.forget();
+    // APP-99: Back on a phone's full screen closes it.
+    let back = Closure::<dyn FnMut()>::new(|| {
+        if let Some(id) = PUSHED.with(|p| p.take()) {
+            let f = full();
+            if f.get_untracked() == Some(id) {
+                f.set(None);
+            }
+        }
+    });
+    let _ = dom::window().add_event_listener_with_callback("popstate", back.as_ref().unchecked_ref());
+    back.forget();
 }
 
 /// Leaving the browser's full screen hands focus back to the element that
@@ -749,17 +828,44 @@ pub(crate) fn Framed(
     // APP-44: a mockup's name — the same as its sizes' — is what the page's
     // comparison holds it by.
     let compare_key = remember.or_else(|| ticket.clone());
-    // APP-60: whether the viewport is a phone's, as it turns.
+    // APP-60: whether the viewport is a phone's, as it turns; APP-99: and
+    // how tall it is, for a phone's preview.
     let phone = RwSignal::new(phone_now());
+    let vh = RwSignal::new(height_now());
     let turned = window_event_listener(leptos::ev::resize, move |_| {
         let now = phone_now();
         if phone.try_get_untracked().is_some_and(|was| was != now) {
             phone.set(now);
         }
+        let h = height_now();
+        if vh.try_get_untracked().is_some_and(|was| was != h) {
+            vh.set(h);
+        }
     });
     on_cleanup(move || turned.remove());
+    let size = RwSignal::new((0.0f64, 0.0f64));
+    stage.on_load(move |el: web_sys::HtmlDivElement| observe(el, size));
     let sizer = crate::mocksize::Sizer::new(declared_devices.into(), compare_key.clone(), phone.into());
     let compare_attr = compare_key.clone();
+    // APP-99: collapsed (kept per mockup on this device), and, on a phone
+    // that cannot show it whole, a preview a third of the screen tall —
+    // inert, a tap opens it full screen.
+    let fold_name = StoredValue::new(compare_key.clone());
+    let folded_mock = RwSignal::new(fold_name.with_value(|n| folded_kept(n.as_deref())));
+    let collapsed = Memo::new(move |_| mockup.get() && folded_mock.get() && !is_full.get());
+    let toggle_fold = move |_| {
+        let now = !folded_mock.get_untracked();
+        folded_mock.set(now);
+        fold_name.with_value(|n| keep_folded(n.as_deref(), now));
+    };
+    let preview = Memo::new(move |_| {
+        if !mockup.get() || !phone.get() || is_full.get() {
+            return false;
+        }
+        let shown: Vec<Device> = sizer.shown().into_iter().map(|(_, d)| d).collect();
+        crate::mocksize::preview_scale(&shown, size.get().0, vh.get()).is_some()
+    });
+    let views = Memo::new(move |_| views_note(declared_devices.get().len()));
     let compare_button = move || compare_key.clone().map(|k| crate::compare::toggle_button(k, mockup));
     // APP-42: what the mockup shows, said above it; and the note when its
     // page at the narrowest device shown scrolls several screens.
@@ -781,15 +887,13 @@ pub(crate) fn Framed(
     let reduce = RwSignal::new(prefers_reduced_motion());
     // APP-66: a phone drawn with its screen's shape — on until turned off.
     let shaped = RwSignal::new(true);
-    let size = RwSignal::new((0.0f64, 0.0f64));
-    stage.on_load(move |el: web_sys::HtmlDivElement| observe(el, size));
     let emulate = Signal::derive(move || Emulate { scheme: Some(scheme.get()), reduce: Some(reduce.get()), safe: None });
     let body = move || {
         let ticket = ticket.clone();
         let scope = scope.clone().unwrap_or_default();
         let media = media.clone().unwrap_or_default();
         if mockup.get() {
-            sizer.devices(html, ticket, scope, emulate, shaped.into(), size, is_full).into_any()
+            sizer.devices(html, ticket, scope, emulate, shaped.into(), size, is_full, vh.into()).into_any()
         } else {
             view! { <Frame html ticket scope media /> }.into_any()
         }
@@ -863,22 +967,80 @@ pub(crate) fn Framed(
         }
     };
     let data_compare = move || if mockup.get() { compare_attr.clone() } else { None };
+    // APP-99: a phone's full screen of a mockup is a step of history (Back
+    // leaves it) — not the ticket page's own box, whose route says it.
+    Effect::new(move |was: Option<bool>| {
+        let now = is_full.get();
+        if was.is_some_and(|w| w != now) || (was.is_none() && now) {
+            if now && mockup.get_untracked() && phone.get_untracked() && !on_page {
+                push_full(id);
+            } else if !now {
+                pop_full(id);
+            }
+        }
+        now
+    });
+    on_cleanup(move || pop_full(id));
+    let open = {
+        let f = f.clone();
+        move |_| f.set(Some(id))
+    };
+    // APP-99: a swipe down the full screen's bar or caption closes it.
+    let swipe = StoredValue::new(None::<(f64, f64)>);
+    let swipe_down = move |ev: web_sys::PointerEvent| {
+        let on_head = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            .and_then(|t| t.closest(".framed-bar, .framed-caption").ok().flatten())
+            .is_some();
+        swipe.set_value((is_full.get_untracked() && on_head).then(|| (f64::from(ev.client_x()), f64::from(ev.client_y()))));
+    };
+    let swipe_up = {
+        let f = f.clone();
+        move |ev: web_sys::PointerEvent| {
+            let Some((x, y)) = swipe.get_value() else { return };
+            swipe.set_value(None);
+            if swiped_down(f64::from(ev.client_x()) - x, f64::from(ev.client_y()) - y) && f.get_untracked() == Some(id) {
+                f.set(None);
+            }
+        }
+    };
+    let collapsed_title = move || decl.with(|d| d.caption.title.clone()).unwrap_or_else(|| "Mockup".into());
     view! {
-        <div class="framed" class:is-full=move || is_full.get() data-framed=id.to_string() data-view=mode data-compare=data_compare node_ref=root>
-            {move || caption.get().map(caption_view)}
-            <div class="framed-bar" data-folded=move || folded.get().then_some("")>
+        <div class="framed" class:is-full=move || is_full.get() data-framed=id.to_string() data-view=mode data-compare=data_compare node_ref=root
+            data-preview=move || preview.get().then_some("") data-collapsed=move || collapsed.get().then_some("")
+            on:pointerdown=swipe_down on:pointerup=swipe_up>
+            {move || collapsed.get().then(|| view! {
+                <button class="framed-collapsed" aria-expanded="false" title="Show the mockup" on:click=toggle_fold>
+                    <span class="framed-collapsed-title">{collapsed_title}</span>
+                    <span class="framed-collapsed-views">{move || views.get()}</span>
+                    <span class="framed-collapse-mark" aria-hidden="true">"▸"</span>
+                </button>
+            })}
+            {move || (!collapsed.get()).then(|| caption.get().map(caption_view))}
+            <div class="framed-bar" data-folded=move || folded.get().then_some("") hidden=move || collapsed.get()>
+                {move || (mockup.get() && !is_full.get()).then(|| view! {
+                    <button class="framed-btn framed-collapse" aria-expanded="true" title="Collapse the mockup" aria-label="Collapse the mockup" on:click=toggle_fold>"▾"</button>
+                })}
                 {move || if is_full.get() { heading() } else { None }}
                 {actions.map(|a| a.run())}
                 {move || (!folded.get()).then(|| view! { {head_more.clone().map(|m| m.run())} {note} })}
                 <span class="framed-gap"></span>
                 {controls}
                 <button class="framed-btn framed-full" title="Full screen (z) — Esc leaves it" aria-pressed=move || is_full.get().to_string() on:click=toggle>
-                    {label}
+                    {move || if preview.get() { "⤢ Open" } else { label() }}
                 </button>
             </div>
-            <div class="framed-stage" node_ref=stage>{body}</div>
+            <div class="framed-stage" node_ref=stage hidden=move || collapsed.get()
+                title=move || preview.get().then_some("Tap to open full screen")
+                on:click=move |ev| if preview.get_untracked() { open(ev) }>{body}</div>
         </div>
     }
+}
+
+/// APP-99: the viewport's height.
+fn height_now() -> f64 {
+    dom::window().inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(900.0)
 }
 
 /// APP-60: whether the viewport is a phone's (APP-50's shape).
@@ -974,6 +1136,19 @@ mod tests {
         }
         // The default phone (390) and every phone preset with the ratio have one.
         assert!(screen(Device::of_width(DEFAULT_WIDTHS[0])).is_some());
+    }
+
+    /// APP-99: a collapsed mockup says its views; its collapse is kept by
+    /// its name; a swipe down (not across) closes the full screen.
+    #[test]
+    fn app_99_collapse_is_kept_by_name_and_a_swipe_down_closes() {
+        assert_eq!(views_note(1), "1 view");
+        assert_eq!(views_note(3), "3 views");
+        assert_eq!(fold_key("APP-83#m2"), "menger.mockup.folded.APP-83#m2");
+        assert!(swiped_down(10.0, 80.0));
+        assert!(!swiped_down(0.0, 40.0), "too short");
+        assert!(!swiped_down(70.0, 80.0), "more across than down");
+        assert!(!swiped_down(0.0, -90.0), "up");
     }
 
     #[test]

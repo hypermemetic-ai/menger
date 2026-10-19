@@ -1725,6 +1725,26 @@ it; the Custom field opens it). **Full screen** draws the device at 100%,
 bezel-less, and its stage scrolls to the rest (a desktop pans). Above
 820 nothing changes (`mocksize::scale_for`, `mocksize::opening`).
 
+**A preview, collapsible** (APP-99; owner, 2026-10-19: *"on taller screens
+we can just show but on iphone it's a hassle … at most 1/3 of the screen in
+the preview"*). On a phone a mockup is drawn as a **preview**: its devices
+scaled so the whole view (stacked devices, bezels and gaps counted) is at
+most **⅓ of the viewport's height** (`mocksize::preview_scale`), centred,
+unlabelled and inert — its frames take no pointer, so a scroll over it
+scrolls the page. A **tap on it**, or the bar's **⤢ Open**, opens it full
+screen as above (100%, the bar on top, off the safe-area insets); **Exit**,
+Esc, **Back** (a phone's full screen of a body's mockup is one history
+entry; not the ticket page's own `view: mockup` box, whose route says it)
+or a **swipe down** the bar or caption closes it, back at the same scroll.
+A viewport tall enough to show the devices whole at the column's width
+with 200 px to spare (an iPad's portrait) draws them as before. Every
+mockup, at any width, has a **collapse** toggle (▾ at the head of its bar):
+collapsed it is one line — its title, its views (`2 views`: the devices it
+declares) and ▸ — and the body hears the shorter height; the state is kept
+per mockup on this device (`localStorage` `menger.mockup.folded.<T#mN>`).
+`scripts/mock-preview-check.mjs` holds it at 390 (light / dark, `--sai-*`)
+and 1440, in Chromium or WebKit.
+
 **What makes `prefers-color-scheme` follow inside the frame.** An iframe's
 `prefers-color-scheme` is the *embedder's* in Chromium, whatever the
 `<iframe>` element's `color-scheme` says (checked: Chromium 153 reports the
