@@ -5748,6 +5748,31 @@
   #deploy-page .step.skipped, #deploy-page .step.canceled { opacity: .7; }
   #deploy-page .slog { color: var(--accent); }
   #deploy-page .sdetail { flex-basis: 100%; margin: 2px 0 0; padding: 6px 8px; max-height: 10em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border-radius: var(--radius); color: var(--ink); }
+  /* DEPLOY-40: → prod beside → test, its reason when off, and its confirm sheet. */
+  #deploy-page .toprod .tobtn { border-color: var(--accent); color: var(--accent); max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+  #deploy-page .toff { font-size: calc(11px * var(--text-scale)); color: var(--muted); overflow-wrap: anywhere; }
+  .psheetwrap { z-index: 945; /* over the phone nav (#pbar, 940) */ padding: max(8vh, var(--safe-top)) max(1rem, var(--safe-right)) max(1rem, var(--safe-bottom)) max(1rem, var(--safe-left)); }
+  #prod-sheet { width: 36rem; max-height: min(80vh, 100%); padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .6rem; font-family: var(--sans); color: var(--ink); }
+  #prod-sheet h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0; }
+  #prod-sheet p { margin: 0; font-size: calc(.82rem * var(--text-scale)); color: var(--muted); }
+  #prod-sheet .prel { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: var(--ink); }
+  #prod-sheet .prel code { font-family: var(--mono); font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere; }
+  #prod-sheet .plabel { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+  #prod-sheet .pcount { color: var(--ink); font-weight: var(--weight-medium); }
+  #prod-sheet .pgroups { overflow: auto; min-height: 0; flex: 1; display: flex; flex-direction: column; gap: .5rem; border-top: var(--border) solid var(--line); padding-top: .5rem; }
+  #prod-sheet .pgroup h3 { display: flex; gap: 6px; align-items: baseline; margin: 0 0 3px; font-size: calc(12px * var(--text-scale)); font-family: var(--mono); }
+  #prod-sheet .pgroup h3 .n { color: var(--muted); font-weight: normal; }
+  #prod-sheet .pgroup ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  #prod-sheet .pgroup li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: calc(12px * var(--text-scale)); min-width: 0; }
+  #prod-sheet .pid { font-family: var(--mono); color: var(--accent); }
+  #prod-sheet .ptitle2 { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+  #prod-sheet .ns { font-size: calc(10px * var(--text-scale)); color: var(--muted); }
+  #prod-sheet .sacts { display: flex; justify-content: flex-end; gap: .5rem; }
+  #prod-sheet .sacts button { min-height: 36px; padding: 4px 14px; cursor: pointer; }
+  @media (max-width: 820px) {
+    .psheetwrap { align-items: flex-end; padding: max(1rem, var(--safe-top)) 0 0; }
+    #prod-sheet { width: 100%; max-height: 85vh; border-radius: var(--radius-xl) var(--radius-xl) 0 0; padding-bottom: max(1rem, var(--safe-bottom)); }
+  }
   #deploy-page .tools { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; flex-wrap: wrap; }
   #deploy-page .legend { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
   #deploy-page .legend button { cursor: pointer; font-size: calc(11px * var(--text-scale)); padding: 2px 8px; }

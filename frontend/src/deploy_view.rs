@@ -23,6 +23,9 @@
 //! moment later. Where each runs is the app's copy (src/deploys.rs), kept
 //! by `deployments.watch`: a deploy moves the marks and the lanes at once.
 //!
+//! **→ test** (DEPLOY-37, src/to_test.rs) and **→ prod** (DEPLOY-40,
+//! src/to_prod.rs) sit under the heading.
+//!
 //! `#/deploy` opens on the project that has `prod` (MENGER's); `#/deploy/
 //! <SHORTCODE>` one; `?to=<env>` the destination, when it has several.
 
@@ -36,6 +39,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::deploys::{self, Held};
 use crate::flight::{self, Cluster, Laid, Node, State, NH, NW};
+use crate::to_prod::ToProd;
 use crate::to_test::ToTest;
 use crate::{session, st_class};
 
@@ -295,6 +299,7 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
                 {head}
             </div>
             <ToTest project />
+            <ToProd project track />
             <div class="tools">
                 <div class="legend" role="group" aria-label="filter by stage">
                     {State::ALL.into_iter().map(|s| {

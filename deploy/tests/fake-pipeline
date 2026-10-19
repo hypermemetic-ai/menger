@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# DEPLOY-40: a stand-in for deploy/pipeline, for deploy/tests/runner.test.mjs —
+# it runs nothing: each call appends `IMAGE_STORE|MENGER_REQUEST|argv` to
+# $FAKE_PIPELINE_LOG and exits 0, or 1 when its first two words are
+# $FAKE_PIPELINE_FAIL (e.g. `remote test`).
+set -u
+printf '%s|%s|%s\n' "${IMAGE_STORE:-}" "${MENGER_REQUEST:-}" "$*" >>"${FAKE_PIPELINE_LOG:?}"
+echo "fake pipeline: $*"
+if [[ -n ${FAKE_PIPELINE_FAIL:-} && "${1:-} ${2:-}" == "$FAKE_PIPELINE_FAIL"* ]]; then
+  echo "$* FAILED: the fake's failure" >&2
+  exit 1
+fi

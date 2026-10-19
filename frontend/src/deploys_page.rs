@@ -810,16 +810,17 @@ fn source_of(project: &str, name: &str) -> Option<(String, Option<String>, Optio
 /// DEPLOY-25: `deployments.request` — the request as kept, or why not
 /// (APP-90: the composer's `/deploy` too).
 pub(crate) async fn queue(project: String, name: String, revision: String, note: String) -> Result<Deployment, String> {
-    ask(project, name, Some(revision), None, note).await
+    ask(project, name, Some(revision), None, None, note).await
 }
 
 /// DEPLOY-37: a request for a revision, or for a branch's tip (the
-/// executor resolves it, as #/deploy's → test asks for main's).
-pub(crate) async fn ask(project: String, name: String, revision: Option<String>, branch: Option<String>, note: String) -> Result<Deployment, String> {
+/// executor resolves it, as #/deploy's → test asks for main's); DEPLOY-40:
+/// or for a release (→ prod's, the one test passed).
+pub(crate) async fn ask(project: String, name: String, revision: Option<String>, release: Option<String>, branch: Option<String>, note: String) -> Result<Deployment, String> {
     let client = session::deployments_client().ok_or_else(|| "not connected".to_string())?;
     let (p, e) = (crate::typed::typed(&project)?, crate::typed::typed(&name)?);
-    let (rev, branch, note) = (crate::typed::opt(revision)?, crate::typed::opt(branch)?, crate::typed::opt(Some(note))?);
-    let events = client.request_all(p, e, rev, None, branch, note).await.map_err(|e| session::describe(&e))?;
+    let (rev, release, branch, note) = (crate::typed::opt(revision)?, crate::typed::opt(release)?, crate::typed::opt(branch)?, crate::typed::opt(Some(note))?);
+    let events = client.request_all(p, e, rev, release, branch, note).await.map_err(|e| session::describe(&e))?;
     for ev in events {
         match ev {
             DeploymentsEvent::Request { deployment, .. } => return Ok(deployment),

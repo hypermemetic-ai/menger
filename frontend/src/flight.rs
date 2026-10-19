@@ -192,10 +192,16 @@ pub(crate) fn destinations(envs: &[Environment], project: &str) -> Vec<String> {
     out.into_iter().map(|e| e.name.clone()).collect()
 }
 
-/// The destination a page opens on: `prod` when there is one, else the one
-/// that runs the most tickets.
+/// The destination a page opens on: of those that promote from another,
+/// the one deployed to last (DEPLOY-40: `app-prod` once prod moved to
+/// app.menger.sh, RUN-13), `prod` on a tie; with none deployed, `prod` when
+/// there is one, else the one that runs the most tickets.
 pub(crate) fn default_destination(envs: &[Environment], project: &str) -> Option<String> {
     let dests = destinations(envs, project);
+    let last_at = |d: &str| envs.iter().find(|e| e.project == project && e.name == d && e.from.is_some()).and_then(|e| e.last_at);
+    if let Some(d) = dests.iter().filter(|d| last_at(d).is_some()).max_by_key(|d| (last_at(d), *d == "prod")) {
+        return Some(d.clone());
+    }
     if dests.iter().any(|d| d == "prod") {
         return Some("prod".into());
     }
@@ -644,6 +650,19 @@ mod tests {
         assert_eq!(track(&envs, "MENGER", "prod"), ["test", "prod"]);
         assert_eq!(track(&envs, "MENGER", "app-prod"), ["test", "app-test", "app-prod"]);
         assert_eq!(track(&envs, "MENGER", "edge"), ["edge"]);
+        // DEPLOY-40: the destination deployed to last, of those on a track.
+        let at = |envs: Vec<Environment>, name: &str, t: i64| -> Vec<Environment> {
+            envs.into_iter().map(|mut e| {
+                if e.name == name {
+                    e.last_at = Some(t);
+                }
+                e
+            }).collect()
+        };
+        let envs2 = at(at(at(menger(), "prod", 100), "app-prod", 200), "edge", 300);
+        assert_eq!(default_destination(&envs2, "MENGER").as_deref(), Some("app-prod"), "edge promotes from nothing: not a track's end");
+        let envs2 = at(envs2, "prod", 200);
+        assert_eq!(default_destination(&envs2, "MENGER").as_deref(), Some("prod"), "a tie is prod's");
         // No prod: the destination that runs the most.
         let envs: Vec<Environment> = menger().into_iter().filter(|e| e.name != "prod").collect();
         assert_eq!(default_destination(&envs, "MENGER").as_deref(), Some("edge"));

@@ -1096,6 +1096,7 @@ executor resolves the tip, and its records carry the real revision.
 ## The deploy runner (DEPLOY-37)
 
 `deploy/runner.mjs` is menger's own executor: it takes a request to `test`
+(and to `app-prod`, below)
 and runs `deploy/pipeline build <the branch's tip>`, then `deploy/pipeline
 deploy test`, reporting each as a step, as the `pipeline` key
 (`MENGER_DEPLOY_KEY_FILE`). The deploy's own records name the request
@@ -1138,6 +1139,46 @@ Then **→ test** on `#/deploy` (admins of every project) files `request
 The runner's tests: `node --test deploy/tests/runner.test.mjs` (under
 `cargo test`, `tests/deploy_record.rs`); the button against a throwaway
 with the runner `--fake`: `scripts/deploy-button-check.mjs`.
+
+**→ prod** (DEPLOY-40) promotes the release test passed to the page's
+destination — `app-prod` (app.menger.sh) since RUN-13; the local prod is
+stopped and `promote` refuses while `prod.moved` exists. It is shown to an
+admin or a holder of `deployer` on the project, labelled `→ prod ·
+<release>` (what test runs), and off with its reason when test has nothing
+newer than the destination, test's last deploy did not succeed, or a
+request to it is open. Pressing it opens a confirm sheet — the release, its
+commit, and the tickets `ready for` app-test and app-prod, grouped by area —
+and Promote files `request --environment app-prod --release <release>`.
+The runner's `app-prod` plan, each a step:
+
+1. `image` — `IMAGE_STORE=ghcr deploy/pipeline image <release>` (stopped on a cancel);
+2. `app-test` — `deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>`;
+3. `app-prod` — `deploy/pipeline remote prod` (infra's promote.yml: what app-test runs);
+   its records name the request (`MENGER_REQUEST`), so the request ends with the real deploy.
+
+A failed step stops the plan, the rest skipped: app-prod keeps what it ran.
+**A request to app-prod is the owner's** (owner, 2026-10-19: "Deployments
+should be triggered by me"): the runner takes it only when its requester is
+one of `MENGER_RUNNER_OWNERS` (comma-separated principals, in
+`~/.config/menger/deploy-runner.env`; `--owner` on the command line) and
+never a `key:` or `agent:` principal, whatever that says, and only for a
+release with a `succeeded` record to test. Otherwise its first step fails
+with the refusal (`refused: key:… is a key — …`) and nothing runs. With
+`MENGER_RUNNER_OWNERS` empty every app-prod request is refused — **turning
+it on** is that line set to the owner's principal (the WorkOS one in
+`MENGER_ADMINS`), then `systemctl --user restart menger-deploy-runner`.
+With `--listen`, app-prod's webhook is set as test's above, with
+`environment: "app-prod"`; with `--watch` nothing more is needed.
+
+Checked on a throwaway, never the real environments:
+`scripts/prod-button-check.sh` starts menger with its own database, a
+loopback OIDC issuer for a synthetic owner (`scripts/fixture-idp.mjs` — the
+runner refuses keys, so the owner must be a person) and the runner
+`--listen --fake --owner idp:…`, and runs `scripts/prod-button-check.mjs`
+at 390 and 1440, light and dark: an agent's request refused, a failing step
+stopping the plan, the three steps drawn live to the end, the button off
+with its reason. The plan itself, over `deploy/tests/fake-pipeline`, is in
+`deploy/tests/runner.test.mjs`.
 
 **Later: hyperforge** (HYPERFORGE-10). The runner is one executor behind a
 seam menger keeps generic — a request (revision or branch), its signed

@@ -21,14 +21,29 @@
 // Later hyperforge's deploy.* (HYPERFORGE-10) takes the webhook in its place:
 // the webhook's URL moves, and nothing in menger changes.
 //
-// The plan, per environment (only `test` today: a request to another is refused
-// 422 — the webhook says why — or, watching, left for its own executor):
+// The plan, per environment (`test` and `app-prod`: a request to another is
+// refused 422 — the webhook says why — or, watching, left for its own executor):
 //
+//   test
 //   build   deploy/pipeline build <sha>   the branch's tip (the request's revision, else
 //                                         `git rev-parse <branch>`) → the full suite → a release;
 //                                         stopped when the request is canceled
 //   deploy  deploy/pipeline deploy test   the release → test, smoke checks; its records name the
 //                                         request (MENGER_REQUEST); runs to its end once begun
+//
+//   app-prod (DEPLOY-40: #/deploy's → prod — app.menger.sh since RUN-13; the local
+//            prod is stopped and `promote` refuses while prod.moved exists)
+//   image     IMAGE_STORE=ghcr deploy/pipeline image <release>   the release test passed, pushed
+//   app-test  deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
+//   app-prod  deploy/pipeline remote prod                         promote.yml: what app-test runs → app.menger.sh;
+//                                                                 its records name the request
+//
+// A request to app-prod is the owner's (owner, 2026-10-19: "Deployments should be
+// triggered by me"): taken only when its requester is one of --owner
+// (MENGER_RUNNER_OWNERS, comma-separated principals) and never a key or an agent,
+// and only for a release test passed (a `succeeded` record to test naming it).
+// Otherwise its first step is failed with the refusal, the rest skipped, and
+// nothing runs. A failed step stops the plan: what app-prod runs stays.
 //
 // One request at a time, in the order taken. Each step's output is kept in
 // --state-dir/runs/<request>/<step>.log and served at GET /runs/<request>/<step>.log
@@ -40,6 +55,7 @@
 //            --project MENGER                            whose requests
 //            --repo DIR --pipeline FILE                  the checkout and its deploy/pipeline (default: this one's)
 //            --state-dir DIR                             default ~/.local/state/menger-deploy-runner
+//            --owner PRINCIPAL                           who may ask for app-prod (repeat; MENGER_RUNNER_OWNERS)
 //            --fake                                      no pipeline: each step a pause (MENGER_RUNNER_FAKE_FAIL=<step>
 //                                                        fails it; MENGER_RUNNER_FAKE_SECS, default 2) — the tests'
 // The key is $MENGER_DEPLOY_KEY_FILE (default ~/.plexus/keys/pipeline.key: deployer on MENGER), never argv;
@@ -56,13 +72,47 @@ import { call, connect, deployKeyText, keyProof, seedOf } from "./menger-call.mj
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-/** The plan for an environment: its steps, in order. */
+/** Where `remote test` takes a release's image from (deploy/pipeline's IMAGE_GHCR). */
+export const IMAGE_GHCR = "ghcr.io/hypermemetic-ai/menger";
+
+/** The plan for an environment: its steps, in order. `records`: the step's
+ * own records name the request (MENGER_REQUEST) — only a step that records
+ * to the request's environment may. `env`: the step's environment. */
 export const PLANS = {
   test: [
     { name: "build", argv: (job) => ["build", job.sha], interruptible: true },
     { name: "deploy", argv: () => ["deploy", "test"], records: true },
   ],
+  "app-prod": [
+    { name: "image", argv: (job) => ["image", job.release], env: { IMAGE_STORE: "ghcr" }, interruptible: true },
+    { name: "app-test", argv: (job) => ["remote", "test", "--image", `${IMAGE_GHCR}:${job.release}`] },
+    { name: "app-prod", argv: () => ["remote", "prod"], records: true },
+  ],
 };
+
+/** DEPLOY-40: what a request to an environment needs beyond its plan. */
+export const GUARDS = {
+  "app-prod": { owner: true, tested: "test" },
+};
+
+/** Whether a principal is a key or an agent — never the owner, whatever the config says. */
+export const keyish = (p) => /^(key|agent):/.test(String(p || ""));
+
+/** DEPLOY-40: why `job` may not run as its guard says (its requester, the owners), or null. */
+export function unowned(job, owners) {
+  const g = GUARDS[job.environment];
+  if (!g?.owner) return null;
+  const by = String(job.requestedBy || "");
+  if (!by) return `refused: a request to ${job.environment} names its requester, and this one does not`;
+  if (keyish(by)) return `refused: ${by} is a key — a deploy to ${job.environment} is the owner's to ask for (owner, 2026-10-19), never an agent's`;
+  if (!owners.length) return `refused: this runner has no owner (MENGER_RUNNER_OWNERS) — a deploy to ${job.environment} is the owner's to ask for`;
+  if (!owners.includes(by)) return `refused: ${by} is not the owner — a deploy to ${job.environment} is the owner's to ask for (MENGER_RUNNER_OWNERS)`;
+  if (!job.release) return `refused: a request to ${job.environment} names the release to promote (the one ${g.tested} passed)`;
+  return null;
+}
+
+/** A release's commit: the hash it ends in. */
+export const shaOf = (release) => /-([0-9a-f]{7,40})$/.exec(String(release || ""))?.[1] ?? null;
 
 /** Whether `sig` is the body's signature under `secret` (timing-safe). */
 export function signed(secret, body, sig) {
@@ -88,6 +138,7 @@ function options(argv, env = process.env) {
     pipeline: env.MENGER_RUNNER_PIPELINE || "",
     stateDir: env.MENGER_RUNNER_STATE_DIR || path.join(os.homedir(), ".local/state/menger-deploy-runner"),
     agent: env.MENGER_AGENT || "deploy-runner",
+    owners: String(env.MENGER_RUNNER_OWNERS || "").split(",").map((s) => s.trim()).filter(Boolean),
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], next = () => { const v = argv[++i]; if (v === undefined) throw new Error(`${a} needs a value`); return v; };
@@ -102,6 +153,7 @@ function options(argv, env = process.env) {
     else if (a === "--pipeline") o.pipeline = next();
     else if (a === "--state-dir") o.stateDir = next();
     else if (a === "--agent") o.agent = next();
+    else if (a === "--owner") o.owners.push(next());
     else throw new Error(`unknown argument '${a}'`);
   }
   if (!o.listen && !o.watch) throw new Error("--listen (the webhook), --watch (dialling out), or both");
@@ -157,7 +209,7 @@ export class Runner {
   }
 
   async record(job, state) {
-    const rec = { project: job.project, environment: job.environment, state, revision: job.sha, request: job.request,
+    const rec = { project: job.project, environment: job.environment, state, revision: job.sha, request: job.request, ...(job.release ? { release: job.release } : {}),
       source: { system: "menger-deploy-runner", run: `request-${job.request}-${state}` } };
     try {
       const [ev] = await this.menger("deployments.record", rec);
@@ -183,8 +235,8 @@ export class Runner {
     if (this.taken.has(id)) return null; // a retry of a delivery already taken
     this.taken.add(id);
     fs.writeFileSync(this.takenFile, JSON.stringify([...this.taken].slice(-500)));
-    this.queue.push({ request: id, project: this.o.project, environment: env, revision: p.revision || "", branch: p.branch || "main" });
-    this.log(`request ${id}: taken (${env}, ${p.revision || `the tip of ${p.branch || "main"}`})`);
+    this.queue.push({ request: id, project: this.o.project, environment: env, revision: p.revision || "", branch: p.branch || "main", release: p.release || "", requestedBy: p.requested_by || "" });
+    this.log(`request ${id}: taken (${env}, ${p.release || p.revision || `the tip of ${p.branch || "main"}`})`);
     queueMicrotask(() => this.drain());
     return null;
   }
@@ -201,12 +253,33 @@ export class Runner {
     catch { return null; }
   }
 
+  /** DEPLOY-40: why the request may not run — its requester, or a release its guard's environment never passed. */
+  async refusal(job) {
+    const g = GUARDS[job.environment];
+    if (!g) return null;
+    const why = unowned(job, this.o.owners || []);
+    if (why || !g.tested) return why;
+    let rows;
+    try { rows = await this.menger("deployments.list", { project: job.project, environment: g.tested, state: "succeeded", limit: 1000 }); }
+    catch (e) { return `refused: could not ask ${this.o.url} what ${g.tested} passed — ${e.message}`; }
+    const passed = rows.some((r) => r?.deployment?.release === job.release);
+    return passed ? null : `refused: ${job.release} never passed ${g.tested} — promote only a release ${g.tested} passed`;
+  }
+
   async run(job) {
     const plan = PLANS[job.environment];
     const dir = path.join(this.o.stateDir, "runs", String(job.request));
     fs.mkdirSync(dir, { recursive: true });
-    job.sha = this.resolve(job);
+    job.sha = GUARDS[job.environment] ? job.revision || shaOf(job.release) : this.resolve(job);
     let outcome = "succeeded", recorded = false, i = 0;
+    const refused = await this.refusal(job);
+    if (refused) {
+      this.log(`request ${job.request}: ${refused}`);
+      await this.step(job, plan[0].name, "failed", { detail: refused });
+      for (const s of plan.slice(1)) await this.step(job, s.name, "skipped");
+      job.sha ||= "0000000";
+      return this.record(job, "failed");
+    }
     if (!job.sha) {
       await this.step(job, plan[0].name, "failed", { detail: `no commit '${job.revision || job.branch}' in ${this.o.repo}` });
       for (const s of plan.slice(1)) await this.step(job, s.name, "skipped");
@@ -215,7 +288,7 @@ export class Runner {
     }
     for (; i < plan.length; i++) {
       const s = plan[i];
-      const begun = await this.step(job, s.name, "started", { detail: `deploy/pipeline ${s.argv(job).join(" ")}`, url: this.urlOf(job, s) });
+      const begun = await this.step(job, s.name, "started", { detail: `${Object.entries(s.env || {}).map(([k, v]) => `${k}=${v} `).join("")}deploy/pipeline ${s.argv(job).join(" ")}`, url: this.urlOf(job, s) });
       if (begun.refused || begun.request?.cancel_asked_at) {
         outcome = "canceled";
         if (!begun.refused) await this.step(job, s.name, "canceled");
@@ -229,10 +302,11 @@ export class Runner {
     }
     for (const s of plan.slice(i + 1)) await this.step(job, s.name, outcome === "canceled" ? "canceled" : "skipped");
     this.log(`request ${job.request}: ${outcome}`);
-    // The pipeline's own records name the request once its deploy began; else the runner says how it ended.
-    if (recorded && !this.o.fake) return;
+    // The pipeline's own records name the request once its deploy began; else the runner says how it ended
+    // (and when a recording step ended before it recorded: the request still open).
     const now = await this.standing(job);
     if (now?.state === "canceled") return; // canceled outright: nothing ran to record
+    if (recorded && !this.o.fake && !["pending", "started"].includes(now?.state)) return;
     await this.record(job, outcome === "succeeded" ? "succeeded" : "failed");
   }
 
@@ -246,12 +320,12 @@ export class Runner {
       const out = fs.createWriteStream(logFile);
       let text = "", canceled = false, timer = null;
       const keep = (b) => { out.write(b); text = (text + b).slice(-64 * 1024); };
-      const env = { ...process.env, MENGER_DEPLOY_TRACKER_URL: this.o.url };
+      const env = { ...process.env, ...(s.env || {}), MENGER_DEPLOY_TRACKER_URL: this.o.url };
       if (s.records) env.MENGER_REQUEST = String(job.request);
       const fakeSecs = Number(process.env.MENGER_RUNNER_FAKE_SECS || 2);
       const fail = process.env.MENGER_RUNNER_FAKE_FAIL === s.name;
       const child = this.o.fake
-        ? spawn(process.execPath, ["-e", `console.log("fake ${s.name}: deploy/pipeline ${s.argv(job).join(" ")}"); setTimeout(() => { console.log(${JSON.stringify(fail ? `${s.name} FAILED: the fake's failure` : `${s.name} ok`)}); process.exit(${fail ? 1 : 0}); }, ${fakeSecs * 1000});`], { env })
+        ? spawn(process.execPath, ["-e", `console.log(${JSON.stringify(`fake ${s.name}: ${Object.entries(s.env || {}).map(([k, v]) => `${k}=${v} `).join("")}deploy/pipeline ${s.argv(job).join(" ")}`)}); setTimeout(() => { console.log(${JSON.stringify(fail ? `${s.name} FAILED: the fake's failure` : `${s.name} ok`)}); process.exit(${fail ? 1 : 0}); }, ${fakeSecs * 1000});`], { env })
         : spawn(this.o.pipeline, s.argv(job), { cwd: this.o.repo, env });
       child.stdout.on("data", keep); child.stderr.on("data", keep);
       if (s.interruptible) {
@@ -312,7 +386,7 @@ export class Runner {
   consider(d) {
     const q = d?.requested;
     if (!q || q.state !== "pending" || (q.steps || []).length || !PLANS[d.environment] || this.taken.has(d.id)) return;
-    this.take({ request: d.id, project: d.project, environment: d.environment, revision: d.revision, branch: q.branch });
+    this.take({ request: d.id, project: d.project, environment: d.environment, revision: d.revision, branch: q.branch, release: d.release, requested_by: d.recorded_by });
   }
 }
 

@@ -52,13 +52,13 @@ pub(crate) fn took(s: &DeployStep, now: i64) -> String {
 /// Why the button is off, or `None`: it may be pressed.
 pub(crate) fn blocked(last: Option<&Deployment>) -> Option<String> {
     let q = last?.requested.as_ref()?;
-    q.state.open().then(|| format!("request #{} to {ENV} is {}", last.map_or(0, |d| d.id), deploys::request_words(q)))
+    q.state.open().then(|| format!("request #{} to {} is {}", last.map_or(0, |d| d.id), last.map_or(ENV, |d| d.environment.as_str()), deploys::request_words(q)))
 }
 
-/// The newest request to `test` of `project`.
-async fn newest(project: String) -> Result<Option<Deployment>, String> {
+/// The newest request to `env` of `project` (DEPLOY-40: → prod's too).
+pub(crate) async fn newest(project: String, env: String) -> Result<Option<Deployment>, String> {
     let client = session::deployments_client().ok_or_else(|| "not connected".to_string())?;
-    let (p, e) = (crate::typed::typed(&project)?, crate::typed::typed(ENV)?);
+    let (p, e) = (crate::typed::typed(&project)?, crate::typed::typed(&env)?);
     let events = client.list_all(Some(p), Some(e), Some(DeployState::Requested), None, None, Some(1)).await.map_err(|e| session::describe(&e))?;
     for ev in events {
         match ev {
@@ -89,7 +89,7 @@ pub(crate) fn ToTest(project: Memo<Option<String>>) -> impl IntoView {
         epoch.track();
         let (Some(p), true) = (project.get(), link.get()) else { return };
         spawn_local(async move {
-            match newest(p).await {
+            match newest(p, ENV.into()).await {
                 Ok(d) => {
                     last.try_set(d);
                 }
@@ -104,7 +104,7 @@ pub(crate) fn ToTest(project: Memo<Option<String>>) -> impl IntoView {
         busy.set(true);
         problem.set(None);
         spawn_local(async move {
-            let asked = crate::deploys_page::ask(p, ENV.into(), None, Some(BRANCH.into()), format!("{BRANCH} → {ENV}, from #/deploy")).await;
+            let asked = crate::deploys_page::ask(p, ENV.into(), None, None, Some(BRANCH.into()), format!("{BRANCH} → {ENV}, from #/deploy")).await;
             busy.try_set(false);
             match asked {
                 Ok(d) => {
@@ -126,12 +126,7 @@ pub(crate) fn ToTest(project: Memo<Option<String>>) -> impl IntoView {
             }
         });
     };
-    let shown = move || {
-        last.get().filter(|d| {
-            let q = d.requested.as_ref();
-            q.is_some_and(|q| q.state.open()) || crate::now_unix() - d.recorded_at.max(d.at) < KEEP_SECS || q.is_some_and(|q| q.steps.iter().any(|s| s.ended_at.is_some_and(|t| crate::now_unix() - t < KEEP_SECS)))
-        })
-    };
+    let shown = move || last.get().filter(recent);
     move || {
         (admin() && has_test()).then(|| {
             let off = move || blocked(last.get().as_ref());
@@ -155,11 +150,18 @@ pub(crate) fn ToTest(project: Memo<Option<String>>) -> impl IntoView {
     }
 }
 
+/// Whether a request is still drawn under its button: open, or ended in
+/// the last [`KEEP_SECS`].
+pub(crate) fn recent(d: &Deployment) -> bool {
+    let q = d.requested.as_ref();
+    q.is_some_and(|q| q.state.open()) || crate::now_unix() - d.recorded_at.max(d.at) < KEEP_SECS || q.is_some_and(|q| q.steps.iter().any(|s| s.ended_at.is_some_and(|t| crate::now_unix() - t < KEEP_SECS)))
+}
+
 /// One request: its number, what it moves, where it stands, its steps.
-fn request_view(d: Deployment, cancel: impl Fn(u64) + Copy + 'static) -> impl IntoView {
+pub(crate) fn request_view(d: Deployment, cancel: impl Fn(u64) + Copy + 'static) -> impl IntoView {
     let Some(q) = d.requested.clone() else { return ().into_any() };
     let now = crate::now_unix();
-    let what = q.branch.clone().map(|b| format!("{b}'s tip")).unwrap_or_else(|| deploys::short(&d.revision));
+    let what = q.branch.clone().map(|b| format!("{b}'s tip")).or_else(|| d.release.clone()).unwrap_or_else(|| deploys::short(&d.revision));
     let cancelable = q.state.open() && q.cancel_asked_at.is_none();
     let id = d.id;
     let steps = q
