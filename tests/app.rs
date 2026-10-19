@@ -490,8 +490,8 @@ async fn the_tab_title_names_the_environment_and_the_icon_is_served() {
 }
 
 /// APP-64: the home-screen icon and the manifest are the app build's files,
-/// served at the root by their types (and under /app/); a root path that is
-/// not one of them is not the build's.
+/// served at the root by their types (and under /app/) — APP-92: and the
+/// service worker; a root path that is not one of them is not the build's.
 #[tokio::test]
 async fn the_home_screen_files_are_served_at_the_root() {
     let dist = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
@@ -502,7 +502,11 @@ async fn the_home_screen_files_are_served_at_the_root() {
     }
     let s = spawn_server_in(dist.path(), None).await;
     for f in menger::shell::ROOT_FILES {
-        let want = if f.ends_with(".png") { "image/png" } else { "application/manifest+json" };
+        let want = match f.rsplit('.').next() {
+            Some("png") => "image/png",
+            Some("js") => "text/javascript", // APP-92: the service worker
+            _ => "application/manifest+json",
+        };
         for path in [format!("/{f}"), format!("/app/{f}")] {
             let (status, ctype, body) = fetch(s.shell_port, Method::GET, &path, "").await;
             assert_eq!((status, ctype.as_str(), &body[..]), (StatusCode::OK, want, f.as_bytes()), "{path}");

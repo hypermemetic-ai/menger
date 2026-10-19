@@ -84,6 +84,11 @@ pub struct LoginOptions {
     pub title: &'static str,
     /// The app's name, version and mark, as the page says them.
     pub branding: Branding,
+    /// APP-92: the app's service worker, at its origin (menger: `/sw.js`) —
+    /// the sign-in page registers it, so the app downloads behind the page
+    /// and opens at once when the sign-in ends. None: the page registers
+    /// nothing.
+    pub service_worker: Option<&'static str>,
     /// The cookie names and the session metadata key; default
     /// [`LoginNames::for_app`] of the branding's name.
     pub names: LoginNames,
@@ -149,6 +154,7 @@ impl LoginOptions {
             page: true,
             title: branding.app,
             branding,
+            service_worker: None,
             names: LoginNames::for_app(branding.app),
             identity: None,
             trusted_proxies: TrustedProxies::default(),
@@ -289,6 +295,7 @@ impl Wiring {
                     require: opts.require,
                     title: opts.title,
                     branding: opts.branding,
+                    service_worker: opts.service_worker,
                     dev,
                     access: Some(access.clone()),
                     identity: opts.identity.clone(),

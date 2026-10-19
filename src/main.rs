@@ -376,6 +376,9 @@ async fn main() -> anyhow::Result<()> {
         require: true,
         page: !args.no_shell,
         title: shell::tab_title(args.env.as_deref()),
+        // APP-92: the sign-in page registers the app's service worker, so
+        // the app downloads while the person signs in.
+        service_worker: Some(shell::SERVICE_WORKER),
         names: menger::login_names(),
         identity: args.identity.as_ref().map(|s| s.build(menger::login_access::BRANDING.app)).transpose()?,
         trusted_proxies: plexus_login::client_ip::TrustedProxies::parse(&args.trusted_proxy).map_err(anyhow::Error::msg)?,

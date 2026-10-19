@@ -82,6 +82,8 @@ pub struct LoginConfig<A: LoginAccess> {
     pub title: &'static str,
     /// SCAFFOLD-3: the app's name, version and mark, as the page says them.
     pub branding: Branding,
+    /// APP-92: the app's service worker, which the page registers.
+    pub service_worker: Option<&'static str>,
     /// IDENTITY-30: the email field's provider (`--login-email
     /// workos:authkit`): the address goes to it as `login_hint`, so an SSO
     /// domain goes straight to its company's IdP and anyone else finishes on
@@ -129,6 +131,7 @@ pub struct Login<A: LoginAccess> {
     pub require: bool,
     title: &'static str,
     branding: Branding,
+    service_worker: Option<&'static str>,
     dev: Option<DevLogin<A>>,
     access: Option<A>,
     /// AUTH-22: our own sign-in page over the identity backend.
@@ -220,6 +223,7 @@ impl<A: LoginAccess> Login<A> {
                     ],
                     dev_cookie: sessions.names().dev_cookie.clone(),
                     dev_toggle: String::new(),
+                    service_worker: cfg.service_worker.map(str::to_string),
                 };
                 let cont = Arc::new(AppContinuation { sessions: sessions.clone(), tokens: tokens.clone(), chrome, secure });
                 let page = SignInPage::new(
@@ -258,6 +262,7 @@ impl<A: LoginAccess> Login<A> {
             require: cfg.require,
             title: cfg.title,
             branding: cfg.branding,
+            service_worker: cfg.service_worker,
             dev: cfg.dev,
             access: cfg.access,
             throttles,
@@ -579,6 +584,7 @@ impl<A: LoginAccess> Login<A> {
             facts: self.facts(dev),
             dev_cookie: self.sessions.names().dev_cookie.clone(),
             dev_toggle: toggle.unwrap_or_default(),
+            service_worker: self.service_worker.map(str::to_string),
         };
         let _ = alts;
         page::render(&chrome, Body { heading, error: error.map(str::to_string), main: password.unwrap_or_default(), alts: buttons, extra: nostr.unwrap_or_default() })

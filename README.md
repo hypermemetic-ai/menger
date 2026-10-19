@@ -4683,8 +4683,31 @@ alone; a body's scripts, styles, images and fonts load as before. The
 landing (menger.sh) is served by the edge under its own (`landing/menger.sh.caddy`). The page is
 self-contained (`plexus-login/web/login.html`), so an IdP can host it later.
 
+**The first paint** (APP-92). The app's page is a few KB: the build
+(`frontend/boot/split.mjs`, trunk's post_build hook) keeps in
+`index.html` only the tokens and the boot sheet — painted from the page
+itself, the carpet, the last load's ticket count and a bar — and moves the
+rest of the stylesheet to `/app/app-<hash>.css`, which the page's boot
+script loads; the sheet stays until that is in and the route's first view
+is drawn (nothing marked `data-pending`, no "Checking your access…"), then
+wipes (calm: fades; none or reduced motion: a still sheet, gone at once).
+The app's code — every file of the build under `/app/` but a page — is
+public, so it downloads **behind the sign-in page**: the page registers
+the service worker (`/sw.js`, `worker-src 'self'` in its policy), which
+keeps the build's script, wasm, stylesheet and faces (one cache per build)
+and the app's page (stale-while-revalidate: a reload draws the sheet
+without the network; a fetch that answers "signed out" drops it and
+reloads the open pages onto the sign-in page; `POST /logout` drops it).
+A file named with its build hash goes out `immutable`, `index.html` and
+`sw.js` `no-cache` (plexus-shell). Every button on the sign-in page locks
+when pressed — a spinner on the pressed one, a second press sends nothing
+— and unlocks on failure or a page brought back from history.
+`scripts/first-paint.mjs` measures it (first paint, empty frames, the
+double press) at 390, light and dark, fast and slow 3G.
+
 The whole app is behind it (ACCESS-24: always; `--require-login` was the
-flag). `/`, `/app/…` and `/vanilla` redirect to `/login?next=…`. AUTH-7: with any provider, the socket admits an
+flag). `/`, `/app/` and `/vanilla` redirect to `/login?next=…` (the
+app's code under `/app/` does not, APP-92). AUTH-7: with any provider, the socket admits an
 upgrade without a session or a provider token into the anonymous view (the
 auth door, nothing else), the protocol's gate decides **every call**, and
 **every method re-checks its caller's sign-in on every call**
