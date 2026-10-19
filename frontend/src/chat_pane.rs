@@ -1056,7 +1056,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         }
     });
     let esc = window_event_listener(leptos::ev::keydown, move |ev| {
-        if ev.key() == "Escape" && !ev.default_prevented() && selecting.try_with_untracked(Option::is_some) == Some(true) {
+        if crate::bindings::is(&ev, crate::bindings::Context::Global, "app.escape") && !ev.default_prevented() && selecting.try_with_untracked(Option::is_some) == Some(true) {
             selecting.set(None);
         }
     });
