@@ -1028,8 +1028,12 @@ mod tests {
         assert!(none.contains("animation: none !important"), "none stops every animation, the menu's with it");
         let tm = rule("html[data-motion=\"none\"] :is(#tmenu, #tmenu .sub)");
         assert!(tm.contains("animation: none"), "and names the menu");
-        let reduce = &css[css.find("@media (prefers-reduced-motion: reduce)").unwrap()..];
-        assert!(reduce[..reduce.find("\n  }").unwrap()].contains("html:not([data-motion]) :is(#tmenu, #tmenu .sub) { animation: none; }"));
+        // CHAT-38: in any of the reduced-motion blocks, not only the first.
+        let reduced = css.match_indices("@media (prefers-reduced-motion: reduce)").any(|(at, _)| {
+            let block = &css[at..];
+            block[..block.find("\n  }").unwrap()].contains("html:not([data-motion]) :is(#tmenu, #tmenu .sub) { animation: none; }")
+        });
+        assert!(reduced, "the system's reduced motion stops the menu's");
         // No rule keyed on calm takes it away: calm keeps a state change.
         assert!(!css.contains("html[data-motion=\"calm\"] :is(#tmenu"), "calm keeps it");
     }
