@@ -120,6 +120,11 @@ impl State {
         }
     }
 
+    /// The state a class names (DEPLOY-39: `?stage=ready`).
+    pub(crate) fn of_class(class: &str) -> Option<State> {
+        State::ALL.into_iter().find(|s| s.class() == class)
+    }
+
     /// The legend's word for it.
     pub(crate) const fn words(self) -> &'static str {
         match self {
@@ -352,6 +357,14 @@ pub(crate) fn clusters(nodes: Vec<Node>) -> Vec<Cluster> {
         .collect();
     out.sort_by(|a, b| b.nodes.len().cmp(&a.nodes.len()).then_with(|| a.code.cmp(&b.code)));
     out
+}
+
+/// DEPLOY-39: the nodes a stage pill admits — all of them when none is on.
+pub(crate) fn only(nodes: Vec<Node>, stage: Option<State>) -> Vec<Node> {
+    match stage {
+        Some(s) => nodes.into_iter().filter(|n| n.state == s).collect(),
+        None => nodes,
+    }
 }
 
 /// An id's number: `APP-64` → 64.
@@ -796,5 +809,23 @@ mod tests {
         assert!(!double_tap(Some((1000.0, 50.0, 50.0)), 1400.0, (50.0, 50.0)));
         assert!(!double_tap(Some((1000.0, 50.0, 50.0)), 1100.0, (150.0, 50.0)));
         assert!(!double_tap(None, 1100.0, (50.0, 50.0)));
+    }
+
+    /// DEPLOY-39: a stage pill leaves only its tickets; an area with none is no cluster.
+    #[test]
+    fn a_stage_filters_the_nodes_and_the_clusters() {
+        let node = |id: &str, state| {
+            let mut n = node_of(&row(id, Status::Complete), &[], "MENGER", &["test".to_string(), "prod".to_string()]).expect("a node");
+            n.state = state;
+            n
+        };
+        let nodes = vec![node("APP-1", State::Ready), node("APP-2", State::Waiting), node("DEPLOY-1", State::Waiting)];
+        assert_eq!(only(nodes.clone(), None).len(), 3);
+        let cs = clusters(only(nodes.clone(), Some(State::Ready)));
+        assert_eq!(cs.len(), 1);
+        assert_eq!(cs[0].summary().1, "1 ready".to_string());
+        assert_eq!(clusters(only(nodes.clone(), Some(State::Waiting))).len(), 2);
+        assert!(clusters(only(nodes, Some(State::Failed))).is_empty());
+        assert_eq!(State::of_class("ready"), Some(State::Ready));
     }
 }
