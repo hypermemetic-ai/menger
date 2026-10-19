@@ -55,6 +55,10 @@ import { fileURLToPath } from "node:url";
 import { connect } from "../deploy/menger-call.mjs";
 import { makeKey, mintSession } from "../scripts/throwaway-login.mjs";
 
+// Math.max(...xs) overflows the stack past ~10^5 elements (10^4 sockets).
+const maxOf = (xs) => xs.reduce((m, x) => (x > m ? x : m), -Infinity);
+const minOf = (xs) => xs.reduce((m, x) => (x < m ? x : m), Infinity);
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 const clock = () => performance.timeOrigin + performance.now();
@@ -331,11 +335,11 @@ class Sampler {
     const dt = b.t - a.t;
     return {
       secs: dt, samples: xs.length,
-      rss_mean: mean(tail.map((s) => s.rss)), rss_max: Math.max(...xs.map((s) => s.rss)), rss_end: b.rss,
+      rss_mean: mean(tail.map((s) => s.rss)), rss_max: maxOf(xs.map((s) => s.rss)), rss_end: b.rss,
       cpu_rate: dt > 0 ? (b.cpu - a.cpu) / dt : null,
       client_cpu_rate: dt > 0 ? (b.client_cpu - a.client_cpu) / dt : null,
-      client_rss_max: Math.max(...xs.map((s) => s.client_rss)),
-      threads_max: Math.max(...xs.map((s) => s.threads ?? 0)), fds_max: Math.max(...xs.map((s) => s.fds ?? 0)),
+      client_rss_max: maxOf(xs.map((s) => s.client_rss)),
+      threads_max: maxOf(xs.map((s) => s.threads ?? 0)), fds_max: maxOf(xs.map((s) => s.fds ?? 0)),
     };
   }
 }
@@ -443,14 +447,14 @@ async function runRung(r, ctx) {
       const wkey = `${w.key}#${w.occurrence}`;
       const per = stats.map((s) => s.per_write[wkey]).filter(Boolean);
       const got = per.reduce((a, p) => a + p.n, 0);
-      if (got >= live) everyMs.push(Math.max(...per.map((p) => p.max ?? 0)));
+      if (got >= live) everyMs.push(maxOf(per.map((p) => p.max ?? 0)));
       else short.push({ key: wkey, got, of: live });
     }
     byKind[kind] = {
       writes: writes.filter((w) => w.kind === kind).length, refused: writes.filter((w) => w.kind === kind && w.error).length,
       ack_p50: median(ws.map((w) => w.ack_ms).filter((x) => x != null)), ack_p99: pct(ws.map((w) => w.ack_ms).filter((x) => x != null), 99),
-      delivery_p50: median(ds), delivery_p99: pct(ds, 99), delivery_max: ds.length ? Math.max(...ds) : null,
-      every_p50: median(everyMs), every_p99: pct(everyMs, 99), every_max: everyMs.length ? Math.max(...everyMs) : null,
+      delivery_p50: median(ds), delivery_p99: pct(ds, 99), delivery_max: ds.length ? maxOf(ds) : null,
+      every_p50: median(everyMs), every_p99: pct(everyMs, 99), every_max: everyMs.length ? maxOf(everyMs) : null,
       reached_every: everyMs.length, short: short.length, short_examples: short.slice(0, 5),
       errors: [...new Set(writes.filter((w) => w.kind === kind && w.error).map((w) => w.error))].slice(0, 3),
     };
@@ -459,7 +463,7 @@ async function runRung(r, ctx) {
   for (const k of Object.keys(byKind)) allEvery.push(byKind[k].every_p99);
   const readMs = stats.flatMap((s) => s.reads.ms);
   const byMethod = {};
-  for (const s of stats) for (const [m, v] of Object.entries(s.reads.by_method)) (byMethod[m] ??= []).push(...v.ms);
+  for (const s of stats) for (const [m, v] of Object.entries(s.reads.by_method)) { const a = (byMethod[m] ??= []); for (const x of v.ms) a.push(x); }
   const events = {};
   for (const s of stats) for (const [k, v] of Object.entries(s.events_by_type)) events[k] = (events[k] ?? 0) + v;
   res.latency = {
@@ -480,7 +484,7 @@ async function runRung(r, ctx) {
   res.write_rate_per_s = o.statusRate + o.commentRate + o.chatRate;
   res.writes = writes.length;
   const peak = procSample(srv.pid);
-  res.peak_rss = res.peak_reset ? peak?.hwm : Math.max(...sampler.samples.filter((s) => s.rung === r && s.rss).map((s) => s.rss));
+  res.peak_rss = res.peak_reset ? peak?.hwm : maxOf(sampler.samples.filter((s) => s.rung === r && s.rss).map((s) => s.rss));
   console.log(`  idle ${f1(res.idle?.rss_mean / MiB)} MiB, ${f3(res.idle?.cpu_rate)} cpu-s/s · load ${f1(res.load?.rss_mean / MiB)} MiB, ${f3(res.load?.cpu_rate)} cpu-s/s · peak ${f1(res.peak_rss / MiB)} MiB`);
   console.log(`  status → every watcher p50 ${fms(byKind.status.every_p50)} p99 ${fms(byKind.status.every_p99)} · deliveries p50 ${fms(res.latency.delivery_p50)} p99 ${fms(res.latency.delivery_p99)} · reads ${fint(res.reads.ok)}/${fint(res.reads.sent)} p99 ${fms(res.reads.p99)}`);
 
@@ -594,8 +598,8 @@ function lineChart({ title, xLabel, yLabel, series, logX = false, logY = false, 
   const pts = series.flatMap((s) => s.points).filter((p) => p.y != null && Number.isFinite(p.y) && (!logY || p.y > 0));
   if (!pts.length) return null;
   const tx = (v) => (logX ? Math.log10(v) : v), ty = (v) => (logY ? Math.log10(v) : v);
-  let [x0, x1] = [Math.min(...pts.map((p) => tx(p.x))), Math.max(...pts.map((p) => tx(p.x)))];
-  let [y0, y1] = [logY ? Math.min(...pts.map((p) => ty(p.y))) : Math.min(0, ...pts.map((p) => p.y)), Math.max(...pts.map((p) => ty(p.y)))];
+  let [x0, x1] = [minOf(pts.map((p) => tx(p.x))), maxOf(pts.map((p) => tx(p.x)))];
+  let [y0, y1] = [logY ? minOf(pts.map((p) => ty(p.y))) : Math.min(0, minOf(pts.map((p) => p.y))), maxOf(pts.map((p) => ty(p.y)))];
   if (x1 === x0) { x0 -= 1; x1 += 1; }
   if (y1 === y0) { y1 = y0 + 1; }
   if (logY) { y0 = Math.floor(y0); y1 = Math.ceil(y1); } else y1 *= 1.08;
