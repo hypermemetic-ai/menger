@@ -154,7 +154,7 @@ fn title(rng: &mut Rng) -> String {
     let mut t = format!("{} {}", rng.pick(&VERBS), rng.pick(&OBJECTS));
     if rng.chance(40) {
         t.push(' ');
-        t.push_str(rng.pick(&QUALIFIERS));
+        t.push_str(*rng.pick(&QUALIFIERS));
     }
     t
 }
@@ -164,7 +164,7 @@ fn title(rng: &mut Rng) -> String {
 fn body(rng: &mut Rng, id: &str, blocked_by: &[String]) -> String {
     let mut b = String::with_capacity(640);
     b.push_str("## Problem\n\n");
-    b.push_str(rng.pick(&PROBLEMS));
+    b.push_str(*rng.pick(&PROBLEMS));
     if let Some(first) = blocked_by.first() {
         b.push_str(&format!(" Blocked on {first} until it lands."));
     }
@@ -172,7 +172,7 @@ fn body(rng: &mut Rng, id: &str, blocked_by: &[String]) -> String {
     let n = 2 + rng.below(2);
     for _ in 0..n {
         b.push_str("- ");
-        b.push_str(rng.pick(&BEHAVIORS));
+        b.push_str(*rng.pick(&BEHAVIORS));
         b.push('\n');
     }
     b.push_str("\n## Acceptance criteria\n\n");

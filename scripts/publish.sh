@@ -37,6 +37,11 @@
 # plexus-client, plexus-auth-core, plexus-transport) on crates.io first
 # (DIST-1 step 1): until then `dry-run` stops at resolving them. A crates.io
 # token comes from `cargo login` or CARGO_REGISTRY_TOKEN.
+#
+# Run by hyperforge (`build publish`, .hyperforge/config.toml [publish]),
+# HF_CARGO_CONFIG names a cargo config with a [patch.crates-io] for the
+# plexus crates of the same release not on crates.io yet; every cargo call
+# here takes it, so a dry run verifies against their checkouts.
 set -euo pipefail
 
 REPO=$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)
@@ -81,9 +86,11 @@ cp -R "$REPO/frontend/dist" "$STAGE/frontend/dist"
 rm -f "$STAGE/frontend/Cargo.toml"
 
 cd "$STAGE"
+cfg=()
+[[ -n ${HF_CARGO_CONFIG:-} ]] && cfg=(--config "$HF_CARGO_CONFIG")
 # The checkout's build directory, so verification reuses what it compiled.
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$REPO/target}
-list=$(cargo package -p menger --list --no-verify --allow-dirty 2>/dev/null)
+list=$(cargo package "${cfg[@]}" -p menger --list --no-verify --allow-dirty 2>/dev/null)
 grep -qx 'frontend/dist/index.html' <<<"$list" \
   || die "the staged package does not carry frontend/dist (is $STAGE inside a git repository that does not ignore it?)"
 if grep -E '^(tests|deploy|perf|diagrams|spike)/' <<<"$list" >/dev/null; then
@@ -96,7 +103,7 @@ size=$(grep -vx -e 'Cargo.toml.orig' -e '.cargo_vcs_info.json' <<<"$list" | tar 
 say "menger's package: about $((size / 1024)) KiB compressed (crates.io takes up to 10 MiB)"
 (( size < 10 * 1024 * 1024 )) || die "too big for crates.io"
 
-shell_list=$(cargo package -p plexus-shell --list --no-verify --allow-dirty 2>/dev/null)
+shell_list=$(cargo package "${cfg[@]}" -p plexus-shell --list --no-verify --allow-dirty 2>/dev/null)
 if grep -E '^(toy|target)/' <<<"$shell_list" >/dev/null; then
   die "plexus-shell's package carries files it should not: $(grep -E '^(toy|target)/' <<<"$shell_list" | head -3)"
 fi
@@ -136,11 +143,11 @@ case $mode in
     ;;
   dry-run)
     step "cargo publish --dry-run ${crates[*]} ${features[*]}"
-    cargo publish --dry-run "${crates[@]}" "${features[@]}"
+    cargo publish "${cfg[@]}" --dry-run "${crates[@]}" "${features[@]}"
     ;;
   publish)
     step "cargo publish ${crates[*]} ${features[*]}"
-    cargo publish "${crates[@]}" "${features[@]}"
+    cargo publish "${cfg[@]}" "${crates[@]}" "${features[@]}"
     say "published ${crates[*]} from $commit"
     ;;
 esac
