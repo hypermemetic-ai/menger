@@ -73,7 +73,8 @@
 //! widened past its body's padding to the screen's edges, less
 //! [`BLEED_MARGIN`] ([`bleed`]) — the host's choice, never the body's (only
 //! its width moves, never where it starts down the page) — so its one
-//! device is drawn at nearly 100%.
+//! device is drawn at nearly 100%. Never one in a decision's option, which
+//! stays inside its card ([`bleeds`], APP-79).
 //!
 //! What decides is pure and pinned by native tests; the rest is DOM.
 
@@ -118,6 +119,13 @@ pub(crate) fn bleed(left: f64, width: f64, origin: f64, vw: f64) -> (f64, f64) {
         return (left, width);
     }
     (BLEED_MARGIN - origin, wide)
+}
+
+/// APP-79: whether a box is widened to the screen's edges — on a phone,
+/// and never one in a decision's option, which stays inside its card (bled,
+/// it covered the card's borders and the option read as cut off).
+pub(crate) fn bleeds(phone: bool, in_option: bool) -> bool {
+    phone && !in_option
 }
 
 /// What a placeholder draws.
@@ -392,7 +400,7 @@ fn position(e: &Entry) {
         f64::from(f.offset_height()),
     );
     let vw = dom::window().inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY);
-    let (left, width) = match e.overlay.offset_parent().filter(|_| p.shown && crate::phonebar::is_phone(vw)) {
+    let (left, width) = match e.overlay.offset_parent().filter(|_| p.shown && bleeds(crate::phonebar::is_phone(vw), e.posted.option.is_some())) {
         Some(container) => bleed(p.left, p.width, container.get_bounding_client_rect().left() + f64::from(container.client_left()), vw),
         None => (p.left, p.width),
     };
@@ -846,6 +854,14 @@ mod tests {
 
     /// APP-60: on a phone a box reaches the screen's edges less the margin,
     /// wherever its container starts; never narrower than it was.
+    #[test]
+    fn app_79_a_box_in_an_option_stays_in_its_card() {
+        assert!(bleeds(true, false));
+        assert!(!bleeds(true, true), "an option's mockup is never widened past its card");
+        assert!(!bleeds(false, false));
+        assert!(!bleeds(false, true));
+    }
+
     #[test]
     fn a_phones_box_bleeds_to_the_screens_edges() {
         assert_eq!(bleed(17.0, 324.0, 16.0, 390.0), (-12.0, 382.0));
