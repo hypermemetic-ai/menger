@@ -4689,7 +4689,15 @@
   :is(#chatpane, #chatfull) .turn .bubble > :last-child, :is(#chatpane, #chatfull) .pmb > :last-child { margin-bottom: 0; }
   :is(#chatpane, #chatfull) .tmeta { display: flex; gap: 10px; align-items: baseline; color: var(--muted); font: calc(10.5px * var(--text-scale)) var(--mono); }
   :is(#chatpane, #chatfull) .tacts { display: inline-flex; gap: 10px; opacity: 0; color: var(--muted); font: calc(10.5px * var(--text-scale)) var(--mono); }
-  :is(#chatpane, #chatfull) .turn:is(:hover, :focus-within) .tacts { opacity: 1; }
+  /* CHAT-53: a desk's hover shows the menu; a phone's tap does not (iOS keeps
+     :hover on what was tapped, which marked the message) — its menu is the
+     long press (`.held`). A keyboard's focus still shows it. */
+  @media (hover: hover) { :is(#chatpane, #chatfull) .turn:hover .tacts { opacity: 1; } }
+  :is(#chatpane, #chatfull) .turn:has(:focus-visible) .tacts { opacity: 1; }
+  @media (pointer: coarse) {
+    :is(#chatpane, #chatfull) .turn { -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+    :is(#chatpane, #chatfull) .turn :is(textarea, input) { -webkit-user-select: text; user-select: text; }
+  }
   :is(#chatpane, #chatfull) .tacts button { color: inherit; }
   :is(#chatpane, #chatfull) .tacts button:hover { color: var(--accent); }
   :is(#chatpane, #chatfull) .turn.theirs .tacts { margin-top: 6px; }
