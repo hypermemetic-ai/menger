@@ -296,6 +296,7 @@ mod inputs;
 mod inputs_page;
 mod inspect;
 mod keyboard;
+mod tapkb;
 mod keys;
 mod kids;
 mod labels;
@@ -2237,6 +2238,8 @@ fn App() -> impl IntoView {
     links::install();
     // APP-56: a phone's keyboard, followed — the docked composers sit on it.
     keyboard::install();
+    // CHAT-54: what a tap does to that keyboard — one table.
+    tapkb::install();
     // CHAT-31: every phone sheet's drag, and the page held still under it.
     sheet::install();
     board.drive();

@@ -87,9 +87,10 @@ const focused = (page) => page.evaluate(() => document.activeElement?.matches("t
   await page.waitForTimeout(600);
   const c = await page.evaluate(() => window.__taps);
   ok(c.filter((e) => e.type === "click").length === 1 && c.find((e) => e.type === "mousedown")?.prevented === true, `link: one tap reaches the link's click, its mousedown prevented (${JSON.stringify(c)})`);
-  ok(await page.evaluate(() => document.documentElement.hasAttribute("data-kb")), "link: the keyboard is still up");
+  // CHAT-54: a link is an action that drops the keyboard once it has run.
+  ok(!(await page.evaluate(() => document.documentElement.hasAttribute("data-kb"))), "link: the keyboard is down (CHAT-54's table)");
   ok((await draft(page)) === DRAFT, `link: the draft is kept (${await draft(page)})`);
-  ok(await focused(page), "link: the composer keeps its focus");
+  ok(!(await focused(page)), "link: the composer is blurred after the click");
   await ctx.close();
 }
 // 3. jump to latest
