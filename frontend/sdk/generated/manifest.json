@@ -191,6 +191,7 @@
         "tickets"
       ],
       "request": [
+        "branch",
         "environment",
         "note",
         "project",
@@ -203,6 +204,13 @@
         "project"
       ],
       "schema": [],
+      "step": [
+        "detail",
+        "name",
+        "request",
+        "state",
+        "url"
+      ],
       "watch": []
     },
     "deployments.webhook": {

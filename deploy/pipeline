@@ -213,6 +213,8 @@ tell_() {
               --source-system menger-pipeline --source-run "${RUN:-$state@$at}" -c)
   [[ -n $p ]] && args+=(--previous "$p")
   from=$(promotes_from "$env"); [[ -n $from ]] && args+=(--promotes-from "$from")
+  # DEPLOY-37: run for a request (deploy/runner.mjs sets MENGER_REQUEST), its records name it.
+  [[ -n ${MENGER_REQUEST:-} ]] && args+=(--request "$MENGER_REQUEST")
   # Its commits: git log previous..revision in the build checkout, when the
   # run moves forward (a rollback carries none). Without them menger works
   # from the commits it has seen.

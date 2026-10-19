@@ -5,7 +5,7 @@
 
 use crate::chats::{ActivityState, ChatGrant, ChatState};
 use crate::comments::{CommentIntent, CommentState};
-use crate::deployments::DeployState;
+use crate::deployments::{DeployState, StepState};
 use crate::members::Role;
 use crate::notes::NoteState;
 use crate::queue::Urgency;
@@ -33,7 +33,7 @@ impl DeleteChildren {
 use std::fmt;
 use std::str::FromStr;
 
-lenient!(Status, Kind, Severity, InputState, AnswerSource, TransitionSource, Role, CommentState, NoteState, DeployState, Urgency, ThemeReach, Takeover);
+lenient!(Status, Kind, Severity, InputState, AnswerSource, TransitionSource, Role, CommentState, NoteState, DeployState, StepState, Urgency, ThemeReach, Takeover);
 lenient!(CallerSource, InputSource, DeleteChildren, AmendedField, CommentIntent, ChatState, ChatGrant, RevisionField, ActivityState);
 
 closed_schema!(Status, "A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case", [
@@ -56,6 +56,9 @@ closed_schema!(ActivityState, "CHAT-18: where a participant's live work stands: 
 closed_schema!(NoteState, "Where a note stands: still a note, or made a ticket (any case)", [NoteState::Open, NoteState::Upgraded]);
 closed_schema!(DeployState, "What a deployment did, or (DEPLOY-25) requested: asked for, not yet done (any case; rolled-back too)", [
     DeployState::Started, DeployState::Succeeded, DeployState::Failed, DeployState::RolledBack, DeployState::Requested,
+]);
+closed_schema!(StepState, "DEPLOY-37: where a step of a request's run stands: started, succeeded, failed, skipped or canceled (any case)", [
+    StepState::Started, StepState::Succeeded, StepState::Failed, StepState::Skipped, StepState::Canceled,
 ]);
 closed_schema!(Urgency, "How urgently the owner should look (any case)", [Urgency::Whenever, Urgency::Today, Urgency::Now, Urgency::Blocking]);
 closed_schema!(ThemeReach, "How far a theme's adoption reaches (any case)", [ThemeReach::Frame, ThemeReach::Ticket, ThemeReach::Site]);

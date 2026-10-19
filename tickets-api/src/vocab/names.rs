@@ -493,6 +493,26 @@ text_type!(
 );
 
 text_type!(
+    /// DEPLOY-37: a branch whose tip a request deploys —
+    /// [`crate::deployments::branch_of`].
+    Branch,
+    crate::deployments::branch_of
+);
+
+text_type!(
+    /// DEPLOY-37: a step of a request's run, as its executor names it —
+    /// [`crate::deployments::step_name_of`].
+    StepName,
+    crate::deployments::step_name_of
+);
+
+text_type!(
+    /// DEPLOY-37: where a step's run or log is read — a [`WebhookUrl`]'s rule.
+    StepUrl,
+    crate::deployments::webhook_url_of
+);
+
+text_type!(
     /// DEPLOY-25: where an environment's webhook POSTs — `https://…`, or
     /// `http://` to this machine (`localhost`, `127.0.0.1`, `[::1]`) for a
     /// local CI; no credentials in it, at most 2,048 bytes:

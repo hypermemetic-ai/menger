@@ -3,6 +3,10 @@
 
 import type { WatchEnd } from '../chats/types';
 
+/** DEPLOY-37: a branch whose tip a request deploys —
+[`crate::deployments::branch_of`]. */
+export type Branch = string;
+
 /** DEPLOY-25: one attempt to deliver a request's webhook. */
 export interface DeliveryAttempt {
   /** When it was made, unix seconds. */
@@ -26,6 +30,15 @@ export type DeliveryStage = "waiting" | "deploying" | "ready_for" | "failed";
 export interface DeployRequest {
   /** Each attempt, oldest first. */
   attempts?: DeliveryAttempt[];
+  /** DEPLOY-37: a request for a branch's tip names the branch (`main`) and
+no revision (the deployment's `revision` is empty): the executor
+resolves it, and its records say the revision it deployed. */
+  branch?: string | null;
+  /** DEPLOY-37: a cancel asked of a request its executor had picked up —
+when and by whom. The executor reads it in each `step`'s answer and
+stops; the request ends with the executor's record. */
+  cancelAskedAt?: number | null;
+  cancelAskedBy?: string | null;
   canceledAt?: number | null;
   canceledBy?: string | null;
   /** The webhook delivery's id (`X-Menger-Delivery`) — the same on every
@@ -41,6 +54,8 @@ the environment this one promotes from runs" (DEPLOY-21's `from`). */
   /** The latest CI record that names it. */
   outcome?: number | null;
   state: RequestState;
+  /** DEPLOY-37: the executor's steps, in the order first reported. */
+  steps?: DeployStep[];
   webhook: WebhookState;
 }
 
@@ -55,6 +70,25 @@ export interface DeploySource {
 
 /** What a deployment did, or (DEPLOY-25) requested: asked for, not yet done (any case; rolled-back too) */
 export type DeployState = "started" | "succeeded" | "failed" | "rolled_back" | "requested";
+
+/** DEPLOY-37: one step of a request's run, as its executor last reported
+it — kept by name: a step reported again (`started`, then `succeeded`)
+is the same step, its first report's place and start kept. */
+export interface DeployStep {
+  /** Who reported it last. */
+  by: string;
+  /** What the executor says of it — a failed step's last log lines; at
+most [`STEP_DETAIL_MAX`] bytes. */
+  detail?: string | null;
+  /** When it was reported ended, unix seconds. */
+  endedAt?: number | null;
+  name: string;
+  /** When it was first reported, unix seconds. */
+  startedAt: number;
+  state: StepState;
+  /** Where to read its run or log (`https://…`, or `http://` to this machine). */
+  url?: string | null;
+}
 
 /** A deployment as menger keeps it: the record, read, with its id, `at` as
 unix seconds, and who recorded it when. */
@@ -325,6 +359,16 @@ export interface StagedCell {
   stage: DeliveryStage;
   ticket: string;
 }
+
+/** DEPLOY-37: a step of a request's run, as its executor names it —
+[`crate::deployments::step_name_of`]. */
+export type StepName = string;
+
+/** DEPLOY-37: where a step of a request's run stands: started, succeeded, failed, skipped or canceled (any case) */
+export type StepState = "started" | "succeeded" | "failed" | "skipped" | "canceled";
+
+/** DEPLOY-37: where a step's run or log is read — a [`WebhookUrl`]'s rule. */
+export type StepUrl = string;
 
 /** DEPLOY-10: when — RFC 3339 (`2026-10-12T22:04:19Z`) or unix seconds,
 by its shape; the server reads the moment. */

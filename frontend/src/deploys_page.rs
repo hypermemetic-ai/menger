@@ -496,10 +496,10 @@ async fn open_requests(project: String, name: String) -> Result<Vec<Row>, String
 
 /// A row's key in a list: it is drawn again when anything it shows moves
 /// (DEPLOY-25: a request's state, its webhook, its attempts).
-type RowKey = (u64, bool, usize, usize, Option<(RequestState, menger_tickets_api::deployments::WebhookState, usize)>);
+type RowKey = (u64, bool, usize, usize, Option<(RequestState, menger_tickets_api::deployments::WebhookState, usize, usize, bool)>);
 
 fn row_key(r: &Row) -> RowKey {
-    (r.d.id, r.live, r.carried.len(), r.unlinked.len(), r.d.requested.as_ref().map(|q| (q.state, q.webhook, q.attempts.len())))
+    (r.d.id, r.live, r.carried.len(), r.unlinked.len(), r.d.requested.as_ref().map(|q| (q.state, q.webhook, q.attempts.len(), q.steps.len(), q.cancel_asked_at.is_some())))
 }
 
 /// One environment's column: what it runs, then its deploys, newest first.
@@ -784,7 +784,7 @@ fn scroll_to(id: u64) {
 }
 
 /// DEPLOY-25: `deployments.cancel_request`, its refusal in words.
-async fn cancel_request(id: u64) -> Result<(), String> {
+pub(crate) async fn cancel_request(id: u64) -> Result<(), String> {
     let client = session::deployments_client().ok_or_else(|| "not connected".to_string())?;
     let events = client.cancel_request_all(menger_tickets_api::vocab::DeploymentId::new(id)).await.map_err(|e| session::describe(&e))?;
     match events.into_iter().find_map(|e| match e {
@@ -810,10 +810,16 @@ fn source_of(project: &str, name: &str) -> Option<(String, Option<String>, Optio
 /// DEPLOY-25: `deployments.request` — the request as kept, or why not
 /// (APP-90: the composer's `/deploy` too).
 pub(crate) async fn queue(project: String, name: String, revision: String, note: String) -> Result<Deployment, String> {
+    ask(project, name, Some(revision), None, note).await
+}
+
+/// DEPLOY-37: a request for a revision, or for a branch's tip (the
+/// executor resolves it, as #/deploy's → test asks for main's).
+pub(crate) async fn ask(project: String, name: String, revision: Option<String>, branch: Option<String>, note: String) -> Result<Deployment, String> {
     let client = session::deployments_client().ok_or_else(|| "not connected".to_string())?;
     let (p, e) = (crate::typed::typed(&project)?, crate::typed::typed(&name)?);
-    let (rev, note) = (crate::typed::opt(Some(revision))?, crate::typed::opt(Some(note))?);
-    let events = client.request_all(p, e, rev, None, note).await.map_err(|e| session::describe(&e))?;
+    let (rev, branch, note) = (crate::typed::opt(revision)?, crate::typed::opt(branch)?, crate::typed::opt(Some(note))?);
+    let events = client.request_all(p, e, rev, None, branch, note).await.map_err(|e| session::describe(&e))?;
     for ev in events {
         match ev {
             DeploymentsEvent::Request { deployment, .. } => return Ok(deployment),

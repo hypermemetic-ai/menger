@@ -345,3 +345,51 @@ async fn a_request_is_kept_signed_and_followed() {
     assert_eq!(types(&listed), ["deployment", "page"]);
     assert!(!listed.iter().any(|e| e.to_string().contains(secret)));
 }
+
+/// DEPLOY-37 over the wire: an executor's steps on a request — each heard
+/// on `deployments.watch` as the request, kept by name; a bad state refused
+/// before the method runs; a cancel of the request under way asks it to
+/// stop (the next step's answer says so); its `failed` ends it, and a step
+/// after that is refused in band.
+#[tokio::test]
+async fn an_executors_steps_are_kept_and_followed() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    one(&client, "tickets.create", json!({"epic": "MENGER", "title": "menger", "kind": "scope"})).await;
+    let asked = one(&client, "deployments.request", json!({"project": "menger", "environment": "test", "revision": "824e943", "note": "→ test"})).await;
+    let id = asked["deployment"]["id"].as_u64().unwrap();
+    let mut heard = call(&client, "deployments.watch", json!({})).await;
+
+    one(&client, "deployments.record", json!({"project": "menger", "environment": "test", "state": "started", "revision": "824e943", "request": id})).await;
+    let s = one(&client, "deployments.step", json!({"request": id, "name": "build", "state": "started"})).await;
+    assert_eq!((s["type"].as_str(), s["deployment"]["requested"]["steps"][0]["name"].as_str()), (Some("request"), Some("build")), "{s}");
+    one(&client, "deployments.step", json!({"request": id, "name": "build", "state": "succeeded"})).await;
+    one(&client, "deployments.step", json!({"request": id, "name": "deploy", "state": "started", "detail": "deploy/pipeline deploy test"})).await;
+    let followed = loop {
+        let ev = watch_until(&mut heard, "request").await.pop().unwrap();
+        if ev["deployment"]["requested"]["steps"].as_array().is_some_and(|s| s.len() == 2) {
+            break ev;
+        }
+    };
+    let steps = &followed["deployment"]["requested"]["steps"];
+    assert_eq!((steps[0]["state"].as_str(), steps[1]["state"].as_str(), steps[1]["detail"].as_str()), (Some("succeeded"), Some("started"), Some("deploy/pipeline deploy test")));
+    assert!(steps[0]["ended_at"].is_i64() && steps[1]["ended_at"].is_null());
+
+    let bad = client.subscribe::<Value, _>("menger.call", {
+        let mut p = ObjectParams::new();
+        p.insert("method", "deployments.step").unwrap();
+        p.insert("params", json!({"request": id, "name": "deploy", "state": "exploded"})).unwrap();
+        p
+    }, "menger.call_unsub").await;
+    let item = bad.expect("subscribed").next().await.expect("an item").unwrap();
+    assert_eq!(item["error_kind"].as_str(), Some("invalid_params"), "{item}");
+
+    let asked_stop = one(&client, "deployments.cancel_request", json!({"id": id})).await;
+    assert_eq!(asked_stop["deployment"]["requested"]["state"], "started", "{asked_stop}");
+    assert!(asked_stop["deployment"]["requested"]["cancel_asked_at"].is_i64(), "{asked_stop}");
+    let s = one(&client, "deployments.step", json!({"request": id, "name": "deploy", "state": "canceled"})).await;
+    assert!(s["deployment"]["requested"]["cancel_asked_at"].is_i64(), "the executor reads it in the step's answer: {s}");
+    one(&client, "deployments.record", json!({"project": "menger", "environment": "test", "state": "failed", "revision": "824e943", "request": id})).await;
+    let no = one(&client, "deployments.step", json!({"request": id, "name": "smoke", "state": "started"})).await;
+    assert!(no["type"] == "error" && no["message"].as_str().unwrap().contains("has ended — failed"), "{no}");
+}

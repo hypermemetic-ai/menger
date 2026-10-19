@@ -23,9 +23,9 @@
 //! a request is POSTed, signed. The new methods' logic is beside the
 //! activation, in `deployments_activation/streams.rs`.
 
-use crate::deployments::{DeploySource, DeployState, DeploymentsEvent};
+use crate::deployments::{DeploySource, DeployState, DeploymentsEvent, StepState};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
-use crate::vocab::{CommitRef, DeploymentId, EnvironmentName, Message, Project, Release, TicketRef, Timestamp};
+use crate::vocab::{CommitRef, DeploymentId, EnvironmentName, Message, Project, Release, Branch, StepName, StepUrl, TicketRef, Timestamp};
 #[cfg(feature = "server")]
 use crate::access::Access;
 #[cfg(feature = "server")]
@@ -78,7 +78,7 @@ impl DeploymentsActivation {
 
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 #[plexus_macros::activation(
-    description = "Deployments: record, request, cancel_request, promotes, list, environments, for_ticket, running, watch; webhook",
+    description = "Deployments: record, request, step, cancel_request, promotes, list, environments, for_ticket, running, watch; webhook",
     typed_params,
     // AUTH-7: reads are a viewer's; recording is a deployer's alone (a
     // CI's key on the project's shortcode) — and admin's, who holds all.
@@ -86,7 +86,7 @@ impl DeploymentsActivation {
     roles(
         viewer = ["list", "environments", "for_ticket", "running", "watch"],
         editor = [viewer],
-        deployer = [viewer, "record", "request", "cancel_request"],
+        deployer = [viewer, "record", "request", "step", "cancel_request"],
     )
 )]
 impl DeploymentsActivation {
@@ -171,6 +171,8 @@ impl DeploymentsActivation {
     /// DEPLOY-25: queues a deploy from menger — kept as a deployment in the
     /// state `requested`: who asked, when, `project`'s `environment`, what
     /// to deploy (`revision`; else the latest recorded deploy of `release`;
+    /// DEPLOY-37: else `branch`'s tip, which the CI resolves — the request's
+    /// `revision` empty, `requested.branch` and the payload's `branch` set;
     /// else what the environment it promotes from runs, DEPLOY-21's `from`)
     /// and `note`. It runs nothing and completes nothing. When the
     /// environment has a webhook (`webhook set`), menger POSTs the request
@@ -189,6 +191,7 @@ impl DeploymentsActivation {
             environment = "The environment to deploy to, e.g. prod",
             revision = "The commit to deploy (optional; default: what the environment it promotes from runs)",
             release = "The artifact to deploy (optional; alone, the revision of its latest recorded deploy)",
+            branch = "The branch whose tip to deploy, resolved by the CI, e.g. main (optional; alone: no revision or release with it)",
             note = "Why, for the CI and the reader (optional; at most 2 KiB)"
         ),
         example(note = "promote what test runs to prod", params = r#"{"project": "menger", "environment": "prod", "note": "the week's work"}"#)
@@ -199,9 +202,11 @@ impl DeploymentsActivation {
         environment: EnvironmentName,
         revision: Option<CommitRef>,
         release: Option<Release>,
+        branch: Option<Branch>,
         note: Option<Message>,
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let ask = crate::store::RequestAsk {
+            branch: branch.map(Branch::into_string),
             project: project.into_string(),
             environment: environment.into_string(),
             revision: revision.map(String::from),
@@ -211,14 +216,55 @@ impl DeploymentsActivation {
         request_stream(self.store.clone(), self.access.verify_call(auth, &reach), ask)
     }
 
-    /// DEPLOY-25: withdraws a pending request — `canceled`, by the caller;
-    /// its webhook sends no more. One a CI has picked up (a record names
-    /// it), or one canceled already, is refused in band, naming why. Yields
-    /// exactly one `request { deployment, carried }` or an in-band `error`.
-    /// The deployer's (or admin's) on the request's project.
+    /// DEPLOY-37: reports one step of a request's run — what its executor
+    /// is doing (`build`, `gate`, `deploy`, `smoke`: the executor names
+    /// them; menger knows none) and how it stands: `started`, then
+    /// `succeeded`, `failed`, `skipped` or `canceled`. A step reported
+    /// again is the same step (its place and start kept). `detail` is what
+    /// it says — a failed step's last log lines (its last 4 KiB kept);
+    /// `url` where its run is read. It moves no cell, stage or status: the
+    /// executor's records (`record --request`) say the request started and
+    /// ended. A request ended takes no step, a canceled one only a step's
+    /// end. Yields exactly one
+    /// `request { deployment, carried }` — its `requested.cancel_asked_at`
+    /// set means stop — or an in-band `error`. The deployer's (or admin's)
+    /// on the request's project.
     #[plexus_macros::method(
         group = "write",
-        description = "Cancel a pending request (one no CI has picked up); yields request { deployment, carried }",
+        description = "Report a step of a request's run (its executor's): name, state, detail, url; yields request { deployment, carried }",
+        params(
+            request = "The request's id (a requested deployment's), e.g. 41",
+            name = "The step, as the executor names it: build, gate, deploy, smoke …",
+            state = "started | succeeded | failed | skipped | canceled",
+            detail = "What it says — a failed step's last log lines (optional; its last 4 KiB kept)",
+            url = "Where its run or log is read: https://…, or http:// to this machine (optional)"
+        ),
+        values(state = ["started", "succeeded", "failed", "skipped", "canceled"]),
+        example(note = "request 41's gate passed", params = r#"{"request": 41, "name": "gate", "state": "succeeded"}"#)
+    )]
+    pub async fn step(
+        &self, auth: Option<&AuthContext>, reach: Reach,
+        request: DeploymentId,
+        name: StepName,
+        state: StepState,
+        detail: Option<Message>,
+        url: Option<StepUrl>,
+    ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+        let report = crate::store::StepReport { request: request.get(), name: name.into_string(), state, detail: detail.and_then(Message::given), url: url.map(StepUrl::into_string) };
+        step_stream(self.store.clone(), self.access.verify_call(auth, &reach), report)
+    }
+
+    /// DEPLOY-25: withdraws a pending request — `canceled`, by the caller;
+    /// its webhook sends no more. DEPLOY-37: one its executor has under way
+    /// (a `started` record names it) is asked to stop — `cancel_asked_at`,
+    /// read by the executor in its next `step`'s answer; it runs on until
+    /// the executor records how it ended. One canceled, asked already, or
+    /// ended is refused in band, naming why. Yields exactly one `request
+    /// { deployment, carried }` or an in-band `error`. The deployer's (or
+    /// admin's) on the request's project.
+    #[plexus_macros::method(
+        group = "write",
+        description = "Cancel a request: a pending one outright, one under way by asking its executor to stop; yields request { deployment, carried }",
         params(id = "The request's id (a requested deployment's), e.g. 41"),
         example(note = "withdraw request 41", params = r#"{"id": 41}"#)
     )]
@@ -283,32 +329,13 @@ impl DeploymentsActivation {
         after: Option<DeploymentId>,
         limit: Option<u32>,
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.verify_call(auth, &reach);
-        stream! {
-            let allowed = match admitted.and_then(|c| allowed(&c, &store)) {
-                Ok(a) => a,
-                Err(message) => {
-                    yield DeploymentsEvent::Error { message };
-                    return;
-                }
-            };
-            let q = DeployQuery {
-                project: project.map(String::from),
-                environment: environment.map(String::from),
-                state,
-                ticket: ticket.map(String::from),
-            };
-            match store.deployments(&q, allowed.as_ref(), after.map(DeploymentId::get), limit) {
-                Ok(page) => {
-                    for row in page.rows {
-                        yield row;
-                    }
-                    yield DeploymentsEvent::Page { next: page.next };
-                }
-                Err(e) => yield refused(e),
-            }
-        }
+        let q = DeployQuery {
+            project: project.map(String::from),
+            environment: environment.map(String::from),
+            state,
+            ticket: ticket.map(String::from),
+        };
+        list_stream(self.store.clone(), self.access.verify_call(auth, &reach), q, after.map(DeploymentId::get), limit)
     }
 
     /// Every environment — of `project` when given — one `environment`
@@ -322,25 +349,7 @@ impl DeploymentsActivation {
         example(note = "menger's environments", params = r#"{"project": "menger"}"#)
     )]
     pub async fn environments(&self, auth: Option<&AuthContext>, reach: Reach, project: Option<Project>) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.verify_call(auth, &reach);
-        stream! {
-            let allowed = match admitted.and_then(|c| allowed(&c, &store)) {
-                Ok(a) => a,
-                Err(message) => {
-                    yield DeploymentsEvent::Error { message };
-                    return;
-                }
-            };
-            match store.environments(project.as_deref(), allowed.as_ref()) {
-                Ok(envs) => {
-                    for environment in envs {
-                        yield DeploymentsEvent::Environment { environment };
-                    }
-                }
-                Err(e) => yield refused(e),
-            }
-        }
+        environments_stream(self.store.clone(), self.access.verify_call(auth, &reach), project.map(String::from))
     }
 
     /// Where a ticket's work runs: one `running` event for each environment

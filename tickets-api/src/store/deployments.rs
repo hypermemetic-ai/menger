@@ -149,7 +149,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
     // DEPLOY-21: and one without the sources gains that table, empty.
     conn.execute_batch(SOURCES)?;
     // DEPLOY-25: and the requests', the deliveries' and the webhooks'.
-    conn.execute_batch(requests::TABLES)?;
+    requests::migrate(conn)?;
     if has_table(conn)? {
         // DEPLOY-25: a record names the request it answers.
         if !has_request_column(conn)? {
@@ -171,7 +171,7 @@ fn has_request_column(conn: &Connection) -> rusqlite::Result<bool> {
 
 /// DEPLOY-25: a request — what menger asked a CI for — and its webhook.
 mod requests;
-pub use requests::{Due, RequestAsk};
+pub use requests::{Due, RequestAsk, StepReport};
 #[cfg(test)]
 pub(super) use requests::NOTE_MAX;
 

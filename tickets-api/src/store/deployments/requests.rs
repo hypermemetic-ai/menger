@@ -13,7 +13,8 @@
 //! It is **pending** until a CI's record names it — then it says that
 //! record's state ([`crate::deployments::RequestState::of`]) and its
 //! outcome is that record — or it is canceled, which only a pending one may
-//! be. While pending it *would carry* tickets ([`Cache::request_carries`]):
+//! be. DEPLOY-37: an executor's first step (`deployments.step`) makes it
+//! `started` too; a cancel then asks the executor to stop. While pending it *would carry* tickets ([`Cache::request_carries`]):
 //! those running their current version where its revision runs, and those
 //! linking the revision itself, less those running their current version on
 //! its environment — what `requested <env>` holds for and `for_ticket`'s
@@ -30,6 +31,10 @@
 use super::*;
 use crate::deployments::{DeliveryAttempt, DeployRequest, RequestState, WebhookConfig, WebhookPayload, WebhookState};
 use crate::store::system::System;
+
+/// DEPLOY-37: the executor's steps, and a cancel asked of a running request.
+mod steps;
+pub use steps::StepReport;
 
 /// The tables — made on every open where they are not ([`super::migrate`]).
 pub(super) const TABLES: &str = "
@@ -61,6 +66,16 @@ pub(super) const TABLES: &str = "
             PRIMARY KEY (project, name)
         );
     ";
+
+/// Every table a request keeps — its own, and (DEPLOY-37) its steps'.
+pub(super) fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(TABLES)?;
+    let branched = conn.query_row("SELECT count(*) FROM pragma_table_info('deploy_requests') WHERE name = 'branch'", [], |r| r.get::<_, i64>(0))? > 0;
+    if !branched {
+        conn.execute_batch("ALTER TABLE deploy_requests ADD COLUMN branch TEXT")?;
+    }
+    conn.execute_batch(steps::TABLES)
+}
 
 /// The longest note a request keeps, in bytes.
 pub const NOTE_MAX: usize = 2048;
@@ -131,6 +146,8 @@ pub struct RequestAsk {
     pub environment: String,
     pub revision: Option<String>,
     pub release: Option<String>,
+    /// DEPLOY-37: a branch's tip, resolved by the executor — alone.
+    pub branch: Option<String>,
     pub note: Option<String>,
 }
 
@@ -141,11 +158,11 @@ pub struct RequestAsk {
 fn store_request(conn: &Connection, d: &Deployment) -> rusqlite::Result<()> {
     let Some(q) = &d.requested else { return Ok(()) };
     conn.prepare_cached(
-        "INSERT INTO deploy_requests (id, note, from_env, canceled_at, canceled_by, delivery, webhook, next_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO deploy_requests (id, note, from_env, canceled_at, canceled_by, delivery, webhook, next_at, branch) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT (id) DO UPDATE SET canceled_at = excluded.canceled_at, canceled_by = excluded.canceled_by,
                  webhook = excluded.webhook, next_at = excluded.next_at",
     )?
-    .execute(params![d.id as i64, q.note, q.from, q.canceled_at, q.canceled_by, q.delivery, q.webhook.as_str(), q.next_attempt_at])?;
+    .execute(params![d.id as i64, q.note, q.from, q.canceled_at, q.canceled_by, q.delivery, q.webhook.as_str(), q.next_attempt_at, q.branch])?;
     Ok(())
 }
 
@@ -170,7 +187,7 @@ pub(super) fn load(conn: &Connection, records: &mut [Deployment], webhooks: &mut
     }
     let mut rest: HashMap<u64, DeployRequest> = HashMap::new();
     {
-        let mut stmt = conn.prepare("SELECT id, note, from_env, canceled_at, canceled_by, delivery, webhook, next_at FROM deploy_requests")?;
+        let mut stmt = conn.prepare("SELECT id, note, from_env, canceled_at, canceled_by, delivery, webhook, next_at, branch FROM deploy_requests")?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             let id = r.get::<_, i64>(0)? as u64;
@@ -188,10 +205,15 @@ pub(super) fn load(conn: &Connection, records: &mut [Deployment], webhooks: &mut
                     webhook: webhook.parse().map_err(|e: String| anyhow::anyhow!("request {id}: {e}"))?,
                     attempts: attempts.remove(&id).unwrap_or_default(),
                     next_attempt_at: r.get(7)?,
+                    branch: r.get(8)?,
+                    steps: Vec::new(),
+                    cancel_asked_at: None,
+                    cancel_asked_by: None,
                 },
             );
         }
     }
+    steps::load(conn, &mut rest)?;
     for d in records.iter_mut().filter(|d| d.state == DeployState::Requested) {
         d.requested = Some(rest.remove(&d.id).unwrap_or_else(|| blank(None, None, None)));
     }
@@ -206,7 +228,7 @@ pub(super) fn load(conn: &Connection, records: &mut [Deployment], webhooks: &mut
 /// A new request's rest: pending, with a delivery when a webhook is set.
 fn blank(note: Option<String>, from: Option<String>, delivery: Option<String>) -> DeployRequest {
     let webhook = if delivery.is_some() { WebhookState::Pending } else { WebhookState::None };
-    DeployRequest { note, from, state: RequestState::Pending, outcome: None, canceled_at: None, canceled_by: None, delivery, webhook, attempts: Vec::new(), next_attempt_at: None }
+    DeployRequest { note, from, state: RequestState::Pending, outcome: None, canceled_at: None, canceled_by: None, delivery, webhook, attempts: Vec::new(), next_attempt_at: None, branch: None, steps: Vec::new(), cancel_asked_at: None, cancel_asked_by: None }
 }
 
 /// An error kept short — at most [`ATTEMPT_ERROR_MAX`] bytes, on a char boundary.
@@ -241,6 +263,10 @@ impl Deploys {
             let d = self.by_id[&id].clone();
             self.answered(r, &d);
         }
+        let stepped: Vec<u64> = self.by_id.values().filter(|d| d.requested.as_ref().is_some_and(|q| !q.steps.is_empty())).map(|d| d.id).collect();
+        for id in stepped {
+            self.stepped(id);
+        }
         self.pending = self.by_id.values().filter(|d| d.requested.as_ref().is_some_and(|q| q.state == RequestState::Pending)).map(|d| d.id).collect();
     }
 
@@ -254,6 +280,22 @@ impl Deploys {
             q.outcome = Some(d.id);
             q.state = RequestState::of(d.state);
         }
+        if q.webhook.due() {
+            q.webhook = WebhookState::Stopped;
+            q.next_attempt_at = None;
+        }
+        self.pending.remove(&r);
+    }
+
+    /// DEPLOY-37: an executor reported a step of the pending request `r`:
+    /// it has it — `started` until a record names it, and the webhook
+    /// sends no more.
+    pub(super) fn stepped(&mut self, r: u64) {
+        let Some(q) = self.by_id.get_mut(&r).and_then(|q| q.requested.as_mut()) else { return };
+        if q.state != RequestState::Pending {
+            return;
+        }
+        q.state = RequestState::Started;
         if q.webhook.due() {
             q.webhook = WebhookState::Stopped;
             q.next_attempt_at = None;
@@ -445,6 +487,11 @@ impl Store {
             None => None,
         };
         let release = ask.release.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
+        let branch = match ask.branch.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+            Some(b) if revision.is_some() || release.is_some() => return Err(bad(format!("a request names a revision, a release or a branch — not `{b}` too"))),
+            Some(b) => Some(crate::deployments::branch_of(b).map_err(bad)?),
+            None => None,
+        };
         let note = ask.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
         if let Some(n) = note.as_ref().filter(|n| n.len() > NOTE_MAX) {
             return Err(bad(format!("a note is at most {NOTE_MAX} bytes; this one is {}", n.len())));
@@ -457,7 +504,11 @@ impl Store {
                 return Err(bad(format!("no shortcode {project}: a project is a shortcode menger holds")));
             }
             allowed.deployer_on(&super::super::writs::scope_of(&cache, &ShortcodeId::new(&project)), "a request needs deployer on its project")?;
-            let (revision, release, from) = cache.deploys.what(&project, &environment, revision, release).map_err(bad)?;
+            // DEPLOY-37: a branch's tip is the executor's to resolve.
+            let (revision, release, from) = match branch {
+                Some(_) => (String::new(), None, None),
+                None => cache.deploys.what(&project, &environment, revision, release).map_err(bad)?,
+            };
             let at = (project.clone(), environment.clone());
             let delivery = cache.deploys.webhooks.contains_key(&at).then(|| uuid::Uuid::new_v4().to_string());
             let d = Deployment {
@@ -475,7 +526,7 @@ impl Store {
                 recorded_at: now,
                 recorded_by: by,
                 request: None,
-                requested: Some(blank(note, from, delivery)),
+                requested: Some(DeployRequest { branch, ..blank(note, from, delivery) }),
             };
             let carried = cache.request_carries(&d);
             let under = lineage::deployed_before_with(&self.unders, &cache, &cache.keys_of(&carried));
@@ -516,6 +567,11 @@ impl Store {
     /// exactly the request's project, checked under the write-serial lock.
     pub async fn cancel_request(&self, allowed: impl Into<Authority>, id: u64, by: String) -> Result<DeploymentsEvent, StoreError> {
         let allowed = allowed.into();
+        // DEPLOY-37: one an executor has under way is asked to stop.
+        let started = self.tickets.read().expect("store lock poisoned").deploys.by_id.get(&id).and_then(|d| d.requested.as_ref()).is_some_and(|q| q.state == RequestState::Started);
+        if started {
+            return self.ask_cancel(allowed, id, by).await;
+        }
         let now = chrono::Utc::now().timestamp();
         let serial = self.serial().await;
         let (row, under) = {
@@ -691,6 +747,7 @@ impl Store {
                 project: d.project.clone(),
                 environment: d.environment.clone(),
                 revision: d.revision.clone(),
+                branch: q.branch.clone(),
                 release: d.release.clone(),
                 from: q.from.clone(),
                 requested_by: d.recorded_by.clone(),

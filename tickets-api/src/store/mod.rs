@@ -5537,7 +5537,7 @@ pub use replies::{comment_on, reply_key, Awaiting};
 /// CHAT-3: chats on a ticket among participants — opened, posted, read.
 mod chats;
 pub use chats::{ChatChange, ChatError, ChatOn, ChatQuery, ChatRecord, ChatSeed, MessageDeletion, MessageWait, Paging, Pick, Seat, Signer, Standing};
-pub use deployments::{DeployPage, DeployQuery, Due, RequestAsk};
+pub use deployments::{DeployPage, DeployQuery, Due, RequestAsk, StepReport};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring
@@ -5674,6 +5674,9 @@ mod tests_stages;
 /// DEPLOY-25: requests — kept, canceled, answered, never running; the webhook's deliveries.
 #[cfg(test)]
 mod tests_requests;
+/// DEPLOY-37: a request's steps, and a cancel asked of one under way.
+#[cfg(test)]
+mod tests_steps;
 /// THEME-8: define, set, theme_for (every row), refusals, a reopen.
 #[cfg(test)]
 mod tests_themes;

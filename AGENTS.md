@@ -446,8 +446,14 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   never said back): the server's worker POSTs each request to it,
   `X-Menger-Signature: sha256=<HMAC-SHA256 of the body>`, retrying 1 s,
   5 s, 30 s, 2 min, 10 min, then `failed`. Never set a webhook on prod
-  from a test. `record`, `request` and `cancel_request` are the
-  `deployer` grant (a CI's key on the project's shortcode). README
+  from a test. DEPLOY-37: an executor reports each step against a
+  request (`deployments step --request N --name build --state started`;
+  the first makes it `started`), a request may name `--branch main` for
+  the tip, and a cancel of one under way sets `cancel_asked_at` for the
+  executor to stop; `#/deploy`'s **→ test** files one and draws its steps;
+  `deploy/runner.mjs` is this machine's executor (deploy/README "The
+  deploy runner"; hyperforge later). `record`, `request`, `step` and
+  `cancel_request` are the `deployer` grant (a CI's key on the project's shortcode). README
   "Deployments" → "Queue a deploy" has the rest:
 
   ```sh
