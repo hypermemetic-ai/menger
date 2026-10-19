@@ -1675,7 +1675,6 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
             }
         }
     };
-    let send_key = send.clone();
     move || {
         if !draft.open.get() {
             return view! {
@@ -1685,7 +1684,7 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
             }
             .into_any();
         }
-        let (send, send_key) = (send.clone(), send_key.clone());
+        let send = send.clone();
         // A box drawn is focused (one ref per drawing: a ref loads once).
         let area = NodeRef::<leptos::html::Textarea>::new();
         area.on_load(|el: web_sys::HtmlTextAreaElement| {
@@ -1694,8 +1693,12 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
         crate::grow::follow(area, move || draft.text.track());
         // COMMENT-5: images pasted, dropped or picked — for this ticket.
         let attach = crate::media::Attach::new(draft.text, area, Some(id.clone()));
+        // APP-70: a drawing on the pad goes first.
+        let send = attach.then(send);
+        let send_key = send.clone();
         view! {
             <div class="qchange open">
+                <crate::draw::PadView a=attach />
                 <textarea
                     node_ref=area
                     class="grow"
@@ -1726,7 +1729,7 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
                     <button
                         type="button"
                         class="qbtn fill"
-                        disabled=move || busy.get() || attach.busy() || draft.text.with(|t| t.trim().is_empty())
+                        disabled=move || busy.get() || attach.busy() || (!attach.drawn() && draft.text.with(|t| t.trim().is_empty()))
                         on:click=move |_| send()
                     >
                         "send — request changes"
@@ -1761,6 +1764,19 @@ fn input_view(
         };
         return Some(view! { <div class="qinput"><p class="qq"><b>{question}</b></p><p class="qdone">{words}</p></div> }.into_any());
     }
+    // APP-70: a text reply is written in a box like any other — images and
+    // drawings too (their markdown in the reply), for this ticket.
+    let reply = (input.kind == InputKind::Text).then(|| {
+        let text = RwSignal::new(pick.with_untracked(|p| p.text.clone()));
+        Effect::new(move |_| {
+            let t = text.get();
+            if pick.with_untracked(|p| p.text != t) {
+                pick.update(|p| p.text = t);
+            }
+        });
+        let area = NodeRef::<leptos::html::Textarea>::new();
+        (text, area, crate::media::Attach::new(text, area, Some(id.clone())))
+    });
     // APP-25: every control only picks; the one submit sends.
     let controls = match input.kind {
         InputKind::Choice => {
@@ -1815,28 +1831,30 @@ fn input_view(
             view! { <div class="qopts multi">{boxes}</div> }.into_any()
         }
         InputKind::Text => {
-            let area = NodeRef::<leptos::html::Textarea>::new();
-            crate::grow::follow(area, move || pick.with(|p| p.text.clone()));
+            let (text, area, attach) = reply.expect("a text input's box");
+            crate::grow::follow(area, move || text.track());
             view! {
                 <div class="qopts text">
+                    <crate::draw::PadView a=attach />
                     <textarea
                         node_ref=area
                         class="grow"
                         rows="2"
                         aria-label="your reply"
-                        prop:value=move || pick.with(|p| p.text.clone())
-                        on:input=move |ev| {
-                            let t = event_target_value(&ev);
-                            pick.update(|p| p.text = t);
-                        }
+                        prop:value=move || text.get()
+                        on:input=move |ev| text.set(event_target_value(&ev))
+                        on:paste=move |ev| attach.paste(ev)
+                        on:dragover=move |ev| attach.dragover(ev)
+                        on:drop=move |ev| attach.dropped(ev)
                     ></textarea>
+                    <div class="qchange-acts"><crate::media::Attachments a=attach /></div>
                 </div>
             }
             .into_any()
         }
     };
     let kind = input.kind;
-    let send = move |_| {
+    let send = move || {
         if busy.get_untracked() {
             return;
         }
@@ -1844,6 +1862,24 @@ fn input_view(
             submit(id.clone(), named.clone(), value, problem, busy, pick);
         }
     };
+    let attach = reply.map(|(_, _, a)| a);
+    let send = {
+        // The reply as it stands when the send goes (a drawing's markdown
+        // lands in the box the moment before).
+        let gated = reply.map(|(text, _, a)| {
+            let send = send.clone();
+            a.then(move || {
+                pick.update(|p| p.text = text.get_untracked());
+                send();
+            })
+        });
+        move |_| match &gated {
+            Some(g) => g(),
+            None => send(),
+        }
+    };
+    let waits = move || attach.is_some_and(|a| a.busy());
+    let drawn = move || attach.is_some_and(|a| a.drawn());
     let controls = view! {
         {controls}
         <div class="qsubmit">
@@ -1851,7 +1887,7 @@ fn input_view(
                 type="button"
                 class="qbtn fill"
                 data-act="submit"
-                disabled=move || busy.get() || pick.with(|p| p.value(kind).is_none())
+                disabled=move || busy.get() || waits() || (!drawn() && pick.with(|p| p.value(kind).is_none()))
                 on:click=send
             >
                 {move || if busy.get() { "submitting…" } else { "submit" }}

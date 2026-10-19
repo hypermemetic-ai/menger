@@ -945,6 +945,9 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
     // COMMENT-5: images pasted, dropped or picked — for the comment's ticket
     // (the element's, else the page's); on the app, none.
     let attach = crate::media::Attach::new(body, area, crate::media::ticket_of(&anchor));
+    // APP-70: a drawing on the pad goes first.
+    let save_now = attach.then(move || save(a, body.get_untracked()));
+    let save_key = save_now.clone();
     let mut where_ = match &anchor.ticket {
         Some(t) => format!("{} · {t}", anchor.route),
         None => anchor.route.clone(),
@@ -969,7 +972,7 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
                     }
                     Some("comment.save") => {
                         ev.prevent_default();
-                        save(a, body.get_untracked());
+                        save_key();
                     }
                     _ => {}
                 }
@@ -980,6 +983,7 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
                 <span class="annot-what">{anchor.label.clone()}</span>
                 <span class="annot-where" title=anchor.path.clone()>{where_}</span>
             </div>
+            <crate::draw::PadView a=attach />
             <textarea
                 node_ref=area
                 class="grow"
@@ -1003,7 +1007,7 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
             <div class="annot-acts">
                 <crate::media::Attachments a=attach />
                 <button class="annot-cancel" on:click=move |_| cancel(a)>"Cancel"</button>
-                <button class="annot-save" disabled=move || saving() || attach.busy() on:click=move |_| save(a, body.get_untracked())>
+                <button class="annot-save" disabled=move || saving() || attach.busy() on:click=move |_| save_now()>
                     {move || if saving() { "Saving…" } else { "Save" }}
                 </button>
             </div>

@@ -86,8 +86,6 @@ pub(crate) fn Replies(root: Comment) -> impl IntoView {
             }
         });
     };
-    let send_key = send.clone();
-    let retry = send.clone();
     let area = NodeRef::<leptos::html::Textarea>::new();
     crate::grow::follow(area, move || body.track());
     // Opened by Reply: the box focused, in view above a phone's keyboard.
@@ -99,6 +97,10 @@ pub(crate) fn Replies(root: Comment) -> impl IntoView {
         }
     });
     let attach = crate::media::Attach::new(body, area, root.anchor.ticket.clone());
+    // APP-70: a drawing on the pad goes first.
+    let send = attach.then(send);
+    let send_key = send.clone();
+    let retry = send.clone();
     let who = root.author.clone();
     view! {
         <div class="creplies" data-thread=id.to_string()>
@@ -112,6 +114,7 @@ pub(crate) fn Replies(root: Comment) -> impl IntoView {
                 let send_key = send_key.clone();
                 view! {
                     <div class="crnew">
+                        <crate::draw::PadView a=attach />
                         <textarea
                             node_ref=area
                             class="crbox grow"
@@ -151,7 +154,7 @@ pub(crate) fn Replies(root: Comment) -> impl IntoView {
                             <button class="crcancel" on:click=move |_| open.set(false)>"Cancel"</button>
                             <button
                                 class="csend crsend"
-                                disabled=move || sending.get() || attach.busy() || body.with(|b| b.trim().is_empty())
+                                disabled=move || sending.get() || attach.busy() || (!attach.drawn() && body.with(|b| b.trim().is_empty()))
                                 on:click=move |_| send()
                             >
                                 {move || if sending.get() { "Sending…" } else { "Reply" }}

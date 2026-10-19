@@ -186,12 +186,14 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
             }
         });
     };
-    let send_key = send.clone();
-    let retry = send.clone();
     let area = NodeRef::<leptos::html::Textarea>::new();
     crate::grow::follow(area, move || body.track());
     // COMMENT-5: images pasted, dropped or picked — for this ticket.
     let attach = crate::media::Attach::new(body, area, Some(ticket.clone()));
+    // APP-70: a drawing on the pad goes first.
+    let send = attach.then(send);
+    let send_key = send.clone();
+    let retry = send.clone();
     let count = move || rows.with(|r| r.as_ref().map(|r| r.len()));
     view! {
         <section class="convsec" id="conversation" data-ticket-id=ticket.clone()>
@@ -210,6 +212,7 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                 }
             }}
             <div class="cnew">
+                <crate::draw::PadView a=attach />
                 <textarea
                     node_ref=area
                     class="cbox grow"
@@ -246,7 +249,7 @@ pub(crate) fn Conversation(ticket: String) -> impl IntoView {
                     })}
                     <button
                         class="csend"
-                        disabled=move || sending.get() || attach.busy() || body.with(|b| b.trim().is_empty())
+                        disabled=move || sending.get() || attach.busy() || (!attach.drawn() && body.with(|b| b.trim().is_empty()))
                         on:click=move |_| send()
                     >
                         {move || if sending.get() { "Sending…" } else { "Send" }}

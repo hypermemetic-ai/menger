@@ -276,6 +276,7 @@ mod drafts;
 mod thread;
 mod deploys_page;
 mod dom;
+mod draw;
 mod filter;
 mod flat;
 mod frame;

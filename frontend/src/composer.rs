@@ -582,6 +582,8 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
             if sending.get_untracked() {
                 return;
             }
+            // APP-70: a drawing on the pad is put first, as an image.
+            attach.flush();
             // CHAT-30: an image on its way — the send goes when it is up.
             if attach.busy_untracked() {
                 queued.set(true);
@@ -760,6 +762,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
             }}
             {menu}
             <div class="ccard">
+                <crate::draw::PadView a=attach />
                 <textarea
                     node_ref=area
                     class="cbox grow"
@@ -792,7 +795,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                             {if full { "⤡ pane" } else { "full ↗" }}
                         </button>
                     })}
-                    <button type="button" class="csend" aria-label="send" title="send (Enter)" disabled=move || sending.get() || queued.get() || (!attach.busy() && body.with(|b| b.trim().is_empty()))
+                    <button type="button" class="csend" aria-label="send" title="send (Enter)" disabled=move || sending.get() || queued.get() || (!attach.busy() && !attach.drawn() && body.with(|b| b.trim().is_empty()))
                         class:queued=move || queued.get()
                         on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
                         on:touchstart=move |ev: web_sys::TouchEvent| tap.set_value(landed(&ev))
