@@ -9,7 +9,8 @@
      surface; the queue and the live update are clauses, not sections (owner,
      2026-10-15: "show the actual page as a mockup in a doc"; "show the nav";
      "custom components"; "emphasize collaboration").
-     Static: this file, style.css, main.js, favicon.svg, grain.svg, fonts/
+     Static: this file, style.css, main.js, favicon.svg, grain.svg, icons/
+     (the home-screen icon, APP-64), fonts/
      (Geist and Geist Mono, OFL, latin), media/ (stills and clips of the real
      app, made by scripts/landing-media.sh from a throwaway menger seeded
      with a sample project) and guide/ (the reference). No inline style or
@@ -44,6 +45,9 @@
 <meta name="theme-color" content="#fbfbf9" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#101014" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<!-- APP-64: the mark on a home screen (iOS takes no SVG for it): scripts/icons.sh -->
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="menger">
 <link rel="preload" href="fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/geist-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">

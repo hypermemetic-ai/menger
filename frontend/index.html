@@ -2,9 +2,29 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{{TITLE}}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- APP-64: Add to Home Screen. iOS takes no SVG for it (it drew a plain
+     "M"), so the mark as PNG (scripts/icons.sh, icons/), and a manifest:
+     standalone, opened at /. The files ride into dist/ and src/shell.rs
+     serves them at the root, public. The colours are tokens.toml's --bg,
+     light and dark (a native test pins them); viewport-fit=cover reports
+     the safe area, which the phone bar, the tray and the composer keep
+     clear. -->
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="{{TITLE}}">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#fbfbf9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101014" media="(prefers-color-scheme: dark)">
+<link data-trunk rel="copy-file" href="icons/apple-touch-icon.png" />
+<link data-trunk rel="copy-file" href="icons/icon-192.png" />
+<link data-trunk rel="copy-file" href="icons/icon-512.png" />
+<link data-trunk rel="copy-file" href="icons/icon-512-maskable.png" />
+<link data-trunk rel="copy-file" href="icons/manifest.webmanifest" />
 <!-- MFE-9: the app's data plane is the Plexus WebSocket, not the REST
      bridge, and a page served from disk cannot know which port that is.
      menger's shell substitutes the placeholder when it serves this file
@@ -365,9 +385,12 @@
   }
 
   * { box-sizing: border-box; }
+  /* APP-64: viewport-fit=cover reports the safe area; a phone on its side
+     keeps the page off the notch (0 everywhere else). */
   body {
     margin: 0; background: var(--bg); color: var(--ink);
     font: var(--text-size)/var(--text-leading) var(--font-text);
+    padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
   }
   /* MFE-21: the header wraps rather than overflow — a fourth link, and an
      overridden backend's URL in the status, outgrow a narrow column. */
