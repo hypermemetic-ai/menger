@@ -11,7 +11,12 @@
 // `chats.activity` (CHAT-18): MENGER_BIN names a build that has it until
 // prod runs one. CHAT-40: `/help` and `/status` answered by the bridge with
 // no agent spawned; `/stop` ends a long turn within 5 s, its session kept
-// and resumed; `/clear` then a message starts a new session.
+// and resumed; `/clear` then a message starts a new session. CHAT-45: with
+// no archetypes file a turn runs on `--model`; the file's architect line is
+// the default, read without a restart; `/model` lists, `/model sonnet` moves
+// the chat's next turns (the session resumed, kept across a bridge restart),
+// `/model default` goes back, an unknown name is refused — none spawns an
+// agent; `/status` says the model.
 //
 //   node scripts/chat-bridge/tests/throwaway.mjs WORKDIR [--real] [--port 6150]
 //
@@ -82,6 +87,8 @@ const bridgeLog = path.join(work, "bridge.log");
 const allowFile = path.join(work, "allow");
 const stateDir = path.join(work, "state");
 const markFile = path.join(work, "fake-claude.marks");
+const modelsFile = path.join(work, "fake-claude.models");
+const archFile = path.join(work, "archetypes.env");
 
 // CHAT-18: the owner's watch, held on its own socket — every activity and
 // post with the moment it arrived.
@@ -100,7 +107,7 @@ function startBridge(extra = {}) {
   const env = {
     ...process.env, MENGER_URL: url, MENGER_KEY_FILE: builder.file, MENGER_AGENT: "builder",
     CHAT_BRIDGE_ALLOW: allowFile, CHAT_BRIDGE_STATE: stateDir, CHAT_BRIDGE_CWD: work, CHAT_BRIDGE_WORKING_AFTER: "0",
-    FAKE_CLAUDE_MARK: markFile,
+    FAKE_CLAUDE_MARK: markFile, FAKE_CLAUDE_MODELS: modelsFile, CHAT_BRIDGE_ARCHETYPES: archFile,
     ...extra,
     CLAUDE_BIN: real ? (process.env.CLAUDE_BIN || path.join(os.homedir(), ".local/bin/claude")) : path.join(here, "fake-claude.mjs"),
   };
@@ -312,6 +319,50 @@ try {
     const unk = await post(owner, c, "/frobnicate");
     const ur = await replyTo(unk, 15);
     check(!!ur && /fake reply/.test(ur.body), `an unknown /x goes to the agent (${ur?.body?.slice(0, 60) ?? "none"})`);
+  }
+
+  // 10. CHAT-45: the model — the archetypes file, /model per chat, each turn on the chat's model
+  if (!real) {
+    const spawned = () => (fs.existsSync(markFile) ? fs.readFileSync(markFile, "utf8").trim().split("\n").filter(Boolean).length : 0);
+    check(turns().find((x) => x.messages)?.model === "claude-opus-5-5", `with no archetypes file a turn runs on --model (${turns().find((x) => x.messages)?.model})`);
+    fs.writeFileSync(archFile, "# CHAT-45 test\nMENGER_MODEL_ARCHITECT=haiku\nMENGER_MODEL_BUILDER=claude-opus-5-5\n");
+    const c = (await rpc(owner, "chats.open", { others: [builder.principal, stranger.principal], title: "models" })).find((i) => i.type === "opened").chat.id;
+    const replyTo = async (m, secs = 15) => {
+      for (let i = 0; i < secs * 4; i++) { const r = (await replies(c)).find((x) => x.id > m.id); if (r) return r; await sleep(250); }
+      return null;
+    };
+    const flat = (r) => r?.body?.replace(/\n/g, " ") ?? "none";
+    const a1 = await replyTo(await post(owner, c, "first, on the default"));
+    check(/ on claude-haiku-5-5 to: /.test(a1?.body ?? ""), `the archetypes file's architect is the default, read without a restart (${flat(a1)})`);
+    const session = /\((?:new|resumed) ([0-9a-f-]{36})\)/.exec(a1?.body ?? "")?.[1];
+    const n0 = spawned();
+    const l = await replyTo(await post(owner, c, "/model"));
+    check(!!l && /`sonnet` — Sonnet 5\.5/.test(l.body) && /Haiku 5\.5 · the architect's default · \*\*this chat\*\*/.test(l.body), `/model lists the models, this chat's and the default marked (${flat(l)})`);
+    const sw = await replyTo(await post(owner, c, "/model sonnet"));
+    check(!!sw && /runs on Sonnet 5\.5 \(`claude-sonnet-5-5`\) from the next turn/.test(sw.body), `/model sonnet switches the chat (${flat(sw)})`);
+    const st = await replyTo(await post(owner, c, "/status"));
+    check(!!st && /Model: Sonnet 5\.5 \(`claude-sonnet-5-5`\), set in this chat — the architect's default is Haiku 5\.5/.test(st.body), `/status says the chat's model (${flat(st)})`);
+    const bad = await replyTo(await post(owner, c, "/model gpt-9"));
+    check(!!bad && /No model “gpt-9”/.test(bad.body), `an unknown model is refused, naming the choices (${flat(bad)})`);
+    await sleep(500);
+    check(spawned() === n0, `/model and /status spawned no agent (${spawned() - n0})`);
+    const a2 = await replyTo(await post(owner, c, "now on sonnet"));
+    check(!!session && (a2?.body ?? "").includes(`(resumed ${session}) on claude-sonnet-5-5`), `the next turn runs on sonnet, the session resumed (${flat(a2)})`);
+    check(JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8")).chats[c]?.model === "claude-sonnet-5-5", "state.json keeps the chat's model");
+    await stopBridge(); startBridge();
+    await waitLog(/caught up \(start\)/, 15);
+    const a3 = await replyTo(await post(owner, c, "after a bridge restart"));
+    check((a3?.body ?? "").includes(`(resumed ${session}) on claude-sonnet-5-5`), `after a bridge restart the chat is still on sonnet (${flat(a3)})`);
+    const df = await replyTo(await post(owner, c, "/model default"));
+    check(!!df && /Back on the architect's default, Haiku 5\.5/.test(df.body), `/model default goes back (${flat(df)})`);
+    const a4 = await replyTo(await post(owner, c, "back on the default"));
+    check((a4?.body ?? "").includes(`(resumed ${session}) on claude-haiku-5-5`), `then a turn on the default, the session resumed (${flat(a4)})`);
+    const ms = turns().filter((x) => x.chat === c && x.messages).map((x) => x.model);
+    check(JSON.stringify(ms) === JSON.stringify(["claude-haiku-5-5", "claude-sonnet-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]), `turns.log has each turn's model (${ms})`);
+    const ran = fs.readFileSync(modelsFile, "utf8").trim().split("\n").slice(-4);
+    check(JSON.stringify(ran) === JSON.stringify(ms), `claude was run with --model each time (${ran})`);
+    const cl = await replyTo(await post(owner, c, "/clear now"));
+    check(/fake reply .* to: \/clear now/.test(cl?.body ?? ""), `a command with a word after it (not /model) is the agent's (${flat(cl)})`);
   }
 } catch (e) {
   log(`FAIL ${e.stack || e.message}`); failures++;
