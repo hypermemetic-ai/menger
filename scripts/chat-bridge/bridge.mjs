@@ -52,7 +52,7 @@
 //   CHAT_BRIDGE_STATE          its state dir (~/.local/state/menger/chat-bridge)
 //   CHAT_BRIDGE_CWD            where the agent runs (~/dev/controlflow/hypermemetic/menger)
 //   CHAT_BRIDGE_MAX            chats answered at once (3)
-//   CHAT_BRIDGE_TURN_MINUTES   a turn's limit before it is stopped (60)
+//   CHAT_BRIDGE_TURN_MINUTES   a turn's limit before it is stopped (0: none, the default; CHAT-36)
 //   CHAT_BRIDGE_WORKING_AFTER  seconds before "working…" is posted, only where the
 //                              server takes no chats.activity (20; 0 = never)
 //   CLAUDE_BIN                 the claude binary (~/.local/bin/claude)
@@ -94,7 +94,7 @@ const cfg = {
   state: env.CHAT_BRIDGE_STATE || path.join(HOME, ".local/state/menger/chat-bridge"),
   cwd: env.CHAT_BRIDGE_CWD || path.join(HOME, "dev/controlflow/hypermemetic/menger"),
   max: Math.max(1, Number(env.CHAT_BRIDGE_MAX || 3)),
-  turnMinutes: Number(env.CHAT_BRIDGE_TURN_MINUTES || 60),
+  turnMinutes: Math.max(0, Number(env.CHAT_BRIDGE_TURN_MINUTES || 0)),
   workingAfter: Number(env.CHAT_BRIDGE_WORKING_AFTER ?? 20),
   claude: env.CLAUDE_BIN || path.join(HOME, ".local/bin/claude"),
 };
@@ -488,13 +488,14 @@ function claude(prompt, session, sys, onLine = () => {}) {
     });
     child.stdout.on("data", (d) => { const t = String(d); lines.push(t); tail = (tail + t).slice(-2000); });
     child.stderr.on("data", (d) => { err += d; if (err.length > 20_000) err = err.slice(-10_000); });
-    const timer = setTimeout(() => { child.kill("SIGTERM"); }, cfg.turnMinutes * 60_000);
+    // CHAT-36: no limit unless one is set — a long build is not a hung turn.
+    const timer = cfg.turnMinutes > 0 ? setTimeout(() => { child.kill("SIGTERM"); }, cfg.turnMinutes * 60_000) : null;
     child.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, exit: -1, why: `claude did not start: ${e.message}` }); });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
       lines.push("\n");
       const j = result;
-      if (signal) return resolve({ ok: false, exit: -1, session: sessionId, why: `the agent was stopped (${signal}${signal === "SIGTERM" ? `, past ${cfg.turnMinutes} min?` : ""})` });
+      if (signal) return resolve({ ok: false, exit: -1, session: sessionId, why: `the agent was stopped (${signal}${signal === "SIGTERM" && cfg.turnMinutes > 0 ? `, past ${cfg.turnMinutes} min?` : ""})` });
       if (!j) return resolve({ ok: false, exit: code, session: sessionId, why: `claude exited ${code}: ${(err || tail).trim().split("\n").pop()?.slice(0, 300) || "no output"}` });
       if (j.is_error || code !== 0) return resolve({ ok: false, exit: code, session: sessionId, why: `${j.subtype ?? "error"}: ${String(j.result ?? err).slice(0, 300)}` });
       const text = String(j.result ?? "").trim();
