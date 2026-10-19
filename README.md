@@ -4137,6 +4137,15 @@ entrance, and a delivery under way breathes (Motion: calm holds it still,
 none stops both). A ticket page's **Running** adds *requested for prod by …*
 for each pending request that would carry it.
 
+**→ test** (DEPLOY-37): `#/deploy`'s button, for admins of every project,
+files `request --environment test --branch main` and draws, under it, the
+newest request to test — its state, each step its executor reports
+(`deployments step`: name, state, time, a failed step's last lines, its
+log) and *cancel*: a pending request is canceled, one under way asked to
+stop (`cancel_asked_at`). The button is off while a request to test is
+open. Who carries a request out is not menger's — deploy/README "The
+deploy runner" (this machine's), later hyperforge (HYPERFORGE-10).
+
 **Under login**, `record` is its own grant, held by the `deployer` role
 (`deployments.record`, DEPLOY-25's `request` and `cancel_request`, and the
 reads; `webhook.*` is admin's alone) — what a CI's key carries on the

@@ -84,3 +84,19 @@ fn deploy_pipeline_records() {
     );
     assert!(stdout.contains(" 0 failed"), "{stdout}");
 }
+
+/// DEPLOY-37: `deploy/runner.mjs`, the executor behind a deploy request's
+/// webhook — its signature check, what it takes and refuses, its log tails
+/// (`deploy/tests/runner.test.mjs`, node's own runner; loopback only).
+#[test]
+fn deploy_runner() {
+    let run = concat!(env!("CARGO_MANIFEST_DIR"), "/deploy/tests/runner.test.mjs");
+    let out = Command::new("node")
+        .args(["--test", run])
+        .output()
+        .expect("deploy/tests/runner.test.mjs needs node on PATH");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "runner tests failed:\n{stdout}\n{stderr}");
+    assert!(stdout.contains("ℹ fail 0"), "{stdout}");
+}

@@ -5664,6 +5664,31 @@
   #deploy-page .ptitle .sub { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
   #deploy-page .dests { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   #deploy-page .rev { font-family: var(--mono); font-size: calc(11px * var(--text-scale)); color: var(--muted); }
+  /* DEPLOY-37: → test, and the newest request to test with its executor's steps. */
+  #deploy-page .totest { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; min-width: 0; }
+  #deploy-page .tobtn { align-self: flex-start; cursor: pointer; font-family: var(--mono); font-size: calc(12px * var(--text-scale)); font-weight: var(--weight-strong); min-height: 32px; padding: 4px 12px; border-radius: var(--radius); border: var(--border) solid var(--live); color: var(--live); background: var(--card); }
+  #deploy-page .tobtn:disabled { cursor: not-allowed; opacity: .55; }
+  #deploy-page .treq { border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); padding: 8px 10px; min-width: 0; }
+  #deploy-page .treq.failed, #deploy-page .treq.rolled_back { border-color: var(--err-line); }
+  #deploy-page .treq.succeeded { border-color: var(--live); }
+  #deploy-page .trow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: calc(12px * var(--text-scale)); }
+  #deploy-page .tid, #deploy-page .twhat { font-family: var(--mono); }
+  #deploy-page .tstate { font-weight: var(--weight-medium); }
+  #deploy-page .treq.failed .tstate { color: var(--err-fg); }
+  #deploy-page .treq.succeeded .tstate { color: var(--live); }
+  #deploy-page .thook, #deploy-page .tcancel { color: var(--muted); }
+  #deploy-page .tcancelbtn { margin-left: auto; cursor: pointer; min-height: 32px; padding: 2px 10px; font-size: calc(11px * var(--text-scale)); border-radius: var(--radius); border: var(--border) solid var(--line); background: var(--card); color: var(--ink); }
+  #deploy-page .steps { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+  #deploy-page .step { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font-family: var(--mono); font-size: calc(11px * var(--text-scale)); color: var(--muted); }
+  #deploy-page .step .sname { color: var(--ink); min-width: 4.5em; }
+  #deploy-page .step::before { content: "\00b7"; width: 1em; text-align: center; }
+  #deploy-page .step.started::before { content: "\21bb"; color: var(--accent); }
+  #deploy-page .step.succeeded::before { content: "\2713"; color: var(--live); }
+  #deploy-page .step.failed::before { content: "\00d7"; color: var(--err-fg); }
+  #deploy-page .step.failed .sstate { color: var(--err-fg); }
+  #deploy-page .step.skipped, #deploy-page .step.canceled { opacity: .7; }
+  #deploy-page .slog { color: var(--accent); }
+  #deploy-page .sdetail { flex-basis: 100%; margin: 2px 0 0; padding: 6px 8px; max-height: 10em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border-radius: var(--radius); color: var(--ink); }
   #deploy-page .tools { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; flex-wrap: wrap; }
   #deploy-page .legend { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
   #deploy-page .legend button { cursor: pointer; font-size: calc(11px * var(--text-scale)); padding: 2px 8px; }

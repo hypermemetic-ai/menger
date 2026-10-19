@@ -36,6 +36,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::deploys::{self, Held};
 use crate::flight::{self, Cluster, Laid, Node, State, NH, NW};
+use crate::to_test::ToTest;
 use crate::{session, st_class};
 
 /// How many tickets the page asks for at most.
@@ -264,6 +265,7 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
                 <span class="sub">{counts}</span>
                 {head}
             </div>
+            <ToTest project />
             <div class="tools">
                 <div class="legend" role="group" aria-label="highlight by state">
                     {State::ALL.into_iter().map(|s| {

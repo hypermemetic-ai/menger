@@ -1065,6 +1065,10 @@ mod tests {
             webhook: WebhookState::None,
             attempts: vec![],
             next_attempt_at: None,
+            branch: None,
+            steps: vec![],
+            cancel_asked_at: None,
+            cancel_asked_by: None,
         };
         assert_eq!((webhook_words(&q), request_words(&q)), ("no CI configured".to_string(), "waiting for its CI"));
         q.webhook = WebhookState::Retrying;

@@ -257,6 +257,127 @@ pub struct DeliveryAttempt {
     pub error: Option<String>,
 }
 
+/// DEPLOY-37: the most steps one request keeps.
+pub const STEPS_MAX: usize = 32;
+
+/// DEPLOY-37: the longest step name, in bytes.
+pub const STEP_NAME_MAX: usize = 64;
+
+/// DEPLOY-37: the most of a step's detail kept, in bytes — its end (a log's
+/// last lines), when it is longer.
+pub const STEP_DETAIL_MAX: usize = 4096;
+
+/// DEPLOY-37: where one step of a request's run stands, as its executor
+/// reports it (`deployments step`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepState {
+    /// Under way.
+    Started,
+    Succeeded,
+    Failed,
+    /// Not run (an earlier step failed, or there was nothing to do).
+    Skipped,
+    /// Stopped because the request was canceled while it ran.
+    Canceled,
+}
+
+impl StepState {
+    pub const ALL: [StepState; 5] = [StepState::Started, StepState::Succeeded, StepState::Failed, StepState::Skipped, StepState::Canceled];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            StepState::Started => "started",
+            StepState::Succeeded => "succeeded",
+            StepState::Failed => "failed",
+            StepState::Skipped => "skipped",
+            StepState::Canceled => "canceled",
+        }
+    }
+
+    /// Whether the step is over.
+    pub const fn ended(self) -> bool {
+        !matches!(self, StepState::Started)
+    }
+}
+
+impl fmt::Display for StepState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for StepState {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let t = s.trim().to_ascii_lowercase();
+        StepState::ALL
+            .into_iter()
+            .find(|v| v.as_str() == t)
+            .ok_or_else(|| format!("unknown step state '{t}' (expected started, succeeded, failed, skipped or canceled)"))
+    }
+}
+
+/// DEPLOY-37: the longest branch name a request keeps, in bytes.
+pub const BRANCH_MAX: usize = 128;
+
+/// DEPLOY-37: a branch's name as kept — letters, digits, `-`, `_`, `.` and
+/// `/`, not beginning with `-` or `/`, no `..`, at most [`BRANCH_MAX`] —
+/// or why not.
+pub fn branch_of(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    let ok = !t.is_empty()
+        && t.len() <= BRANCH_MAX
+        && t.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && !t.contains("..")
+        && !t.ends_with('/')
+        && t.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/'));
+    if ok {
+        Ok(t.to_string())
+    } else {
+        Err(format!("`{t}` is not a branch name: letters, digits, `-`, `_`, `.` and `/`, at most {BRANCH_MAX}"))
+    }
+}
+
+/// DEPLOY-37: a step's name as kept — lower case; letters, digits, `-`,
+/// `_` and `.`, at most [`STEP_NAME_MAX`] — or why not. The executor names
+/// its own steps (`build`, `gate`, `deploy`, `smoke`, …); menger knows none.
+pub fn step_name_of(text: &str) -> Result<String, String> {
+    let t = text.trim().to_ascii_lowercase();
+    let ok = !t.is_empty()
+        && t.len() <= STEP_NAME_MAX
+        && t.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && t.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    if ok {
+        Ok(t)
+    } else {
+        Err(format!("`{}` is not a step name: letters, digits, `-`, `_` and `.`, at most {STEP_NAME_MAX}", text.trim()))
+    }
+}
+
+/// DEPLOY-37: one step of a request's run, as its executor last reported
+/// it — kept by name: a step reported again (`started`, then `succeeded`)
+/// is the same step, its first report's place and start kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeployStep {
+    pub name: String,
+    pub state: StepState,
+    /// When it was first reported, unix seconds.
+    pub started_at: i64,
+    /// When it was reported ended, unix seconds.
+    #[serde(default)]
+    pub ended_at: Option<i64>,
+    /// What the executor says of it — a failed step's last log lines; at
+    /// most [`STEP_DETAIL_MAX`] bytes.
+    #[serde(default)]
+    pub detail: Option<String>,
+    /// Where to read its run or log (`https://…`, or `http://` to this machine).
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Who reported it last.
+    pub by: String,
+}
+
 /// DEPLOY-25: what a `requested` deployment carries beyond a record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DeployRequest {
@@ -286,6 +407,21 @@ pub struct DeployRequest {
     /// When the next attempt is due, unix seconds — while `retrying`.
     #[serde(default)]
     pub next_attempt_at: Option<i64>,
+    /// DEPLOY-37: a request for a branch's tip names the branch (`main`) and
+    /// no revision (the deployment's `revision` is empty): the executor
+    /// resolves it, and its records say the revision it deployed.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// DEPLOY-37: the executor's steps, in the order first reported.
+    #[serde(default)]
+    pub steps: Vec<DeployStep>,
+    /// DEPLOY-37: a cancel asked of a request its executor had picked up —
+    /// when and by whom. The executor reads it in each `step`'s answer and
+    /// stops; the request ends with the executor's record.
+    #[serde(default)]
+    pub cancel_asked_at: Option<i64>,
+    #[serde(default)]
+    pub cancel_asked_by: Option<String>,
 }
 
 /// DEPLOY-25: what a request's webhook POSTs, as JSON, signed —
@@ -297,7 +433,11 @@ pub struct WebhookPayload {
     pub request: u64,
     pub project: String,
     pub environment: String,
+    /// The commit to deploy — empty when the request names a `branch`.
     pub revision: String,
+    /// DEPLOY-37: the branch whose tip to deploy, resolved by the receiver.
+    #[serde(default)]
+    pub branch: Option<String>,
     pub release: Option<String>,
     /// The environment the revision was taken from, when it was.
     pub from: Option<String>,

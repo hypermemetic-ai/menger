@@ -1069,10 +1069,82 @@ printf 'sha256=%s\n' "$(openssl dgst -sha256 -hmac "$SECRET" -hex < body.json | 
 **Closing the loop.** The CI records what it did as any deploy, naming the
 request, so menger shows its outcome: `deploy/record --state started
 --request 41 … --send`, then `succeeded` or `failed` the same way (or
-`MENGER_REQUEST=41` in the job's environment). menger's own pipeline is not
-a receiver yet; this machine's `deploy/pipeline` would be one added later.
-A request can be canceled (`deployments cancel_request --id 41`) until a
-record names it; its delivery then stops.
+`MENGER_REQUEST=41` in the job's environment). menger's own receiver is
+the deploy runner (below, DEPLOY-37). A pending request can be canceled
+(`deployments cancel_request --id 41`); its delivery then stops. One an
+executor has under way is asked to stop instead (`cancel_asked_at`).
+
+**Steps** (DEPLOY-37). An executor reports each step against the request,
+by a name it chooses, and menger draws them live (`#/deploy`'s → test):
+
+```sh
+synapse -P 4455 menger deployments step --request 41 --name build --state started --url https://ci.example.com/runs/9
+synapse -P 4455 menger deployments step --request 41 --name build --state failed --detail @last-lines.txt
+```
+
+`--state` is `started`, `succeeded`, `failed`, `skipped` or `canceled`; a
+step is kept by its name (a second report moves it), at most 32 a request,
+its `--detail` cut to its last 4 KiB. The first step makes a pending
+request `started` (and stops its webhook); a record naming the request
+still says how it ended. Each answer is the request whole: when its
+`cancel_asked_at` is set, the owner asked it to stop — stop, report the
+step `canceled`, and record `failed`. A request may name a **branch**
+instead of a revision (`deployments request --branch main`): the
+executor resolves the tip, and its records carry the real revision.
+`step` is the `deployer` grant, as `record` is.
+
+## The deploy runner (DEPLOY-37)
+
+`deploy/runner.mjs` is menger's own executor: it takes a request to `test`
+and runs `deploy/pipeline build <the branch's tip>`, then `deploy/pipeline
+deploy test`, reporting each as a step, as the `pipeline` key
+(`MENGER_DEPLOY_KEY_FILE`). The deploy's own records name the request
+(`MENGER_REQUEST`, so that deploy sets its tickets Complete as any deploy
+test does); a build that fails or is canceled, the runner records
+`failed` itself. One request at a time; a build is stopped on a cancel, a
+deploy that began runs to its end. Each step's output is in
+`~/.local/state/menger-deploy-runner/runs/<request>/<step>.log`.
+
+It takes requests two ways:
+
+- `--watch` dials out: it holds `deployments.watch` on the tracker and
+  takes each pending request to `test` (and those pending when it starts).
+  **This is the mode for app.menger.sh**, which cannot reach this
+  machine's loopback. No webhook is needed.
+- `--listen` is the webhook's receiver on `127.0.0.1:4475`: the signature
+  checked, `202` and queued (`401` unsigned, `422` a request it has no plan
+  for), `GET /runs/<request>/<step>.log` each step's log (the step's url).
+  For a tracker that can reach it — one on this machine, or an https route.
+
+**Turning it on** (the owner, once; nothing is installed until then):
+
+```sh
+scripts/deploy-runner/install.sh --start     # the unit, ~/.config/menger/deploy-runner.env (--watch on
+                                             # app.menger.sh), a random 0600 webhook secret
+systemctl --user status menger-deploy-runner
+journalctl --user -u menger-deploy-runner -f
+```
+
+With `--listen` (`MENGER_RUNNER_MODE=--listen` in the env file), set the
+environment's webhook from the secret file — never typed, never printed:
+
+```sh
+node -e 'const fs=require("fs"),h=require("os").homedir();fs.writeFileSync("webhook.json",JSON.stringify({project:"MENGER",environment:"test",url:"http://127.0.0.1:4475/",secret:fs.readFileSync(h+"/.config/menger/deploy-runner.secret","utf8").trim()}),{mode:0o600})'
+synapse -P 4455 -p @webhook.json menger deployments webhook set   # admin
+```
+
+Then **→ test** on `#/deploy` (admins of every project) files `request
+--environment test --branch main` and draws the runner's steps as they come.
+The runner's tests: `node --test deploy/tests/runner.test.mjs` (under
+`cargo test`, `tests/deploy_record.rs`); the button against a throwaway
+with the runner `--fake`: `scripts/deploy-button-check.mjs`.
+
+**Later: hyperforge** (HYPERFORGE-10). The runner is one executor behind a
+seam menger keeps generic — a request (revision or branch), its signed
+webhook, `deployments.step` and `record --request`, and `cancel_asked_at`.
+hyperforge's `deploy.*` takes the same payload at its own URL; moving to it
+is `webhook set` with that URL and stopping the runner. Nothing in menger
+changes.
 
 ## Where things are
 

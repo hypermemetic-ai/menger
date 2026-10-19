@@ -1,5 +1,5 @@
 import type { RpcClient } from '../rpc';
-import type { DeploySource, DeployState, DeploymentId, DeploymentsEvent, EnvironmentName, Project, Release, Timestamp } from './types';
+import type { Branch, DeploySource, DeployState, DeploymentId, DeploymentsEvent, EnvironmentName, Project, Release, StepName, StepState, StepUrl, Timestamp } from './types';
 import type { TicketRef } from '../notes/types';
 import type { CommitRef, Message } from '../tickets/types';
 import type { DeploymentsWebhookClient } from '../deployments/webhook/client';
@@ -9,13 +9,16 @@ export interface DeploymentsClient {
   signed: `deployments.webhook.set|clear|show`. Admin's alone. */
     readonly webhook: DeploymentsWebhookClient;
     /**
-     * Cancel a pending request (one no CI has picked up); yields request { deployment, carried }
+     * Cancel a request: a pending one outright, one under way by asking its executor to stop; yields request { deployment, carried }
      *
      * DEPLOY-25: withdraws a pending request — `canceled`, by the caller;
-     * its webhook sends no more. One a CI has picked up (a record names
-     * it), or one canceled already, is refused in band, naming why. Yields
-     * exactly one `request { deployment, carried }` or an in-band `error`.
-     * The deployer's (or admin's) on the request's project.
+     * its webhook sends no more. DEPLOY-37: one its executor has under way
+     * (a `started` record names it) is asked to stop — `cancel_asked_at`,
+     * read by the executor in its next `step`'s answer; it runs on until
+     * the executor records how it ended. One canceled, asked already, or
+     * ended is refused in band, naming why. Yields exactly one `request
+     * { deployment, carried }` or an in-band `error`. The deployer's (or
+     * admin's) on the request's project.
      * @requires `deployments.cancel_request` anywhere it is held
      */
     cancelRequest(id: DeploymentId): AsyncGenerator<DeploymentsEvent>;
@@ -104,6 +107,8 @@ export interface DeploymentsClient {
      * DEPLOY-25: queues a deploy from menger — kept as a deployment in the
      * state `requested`: who asked, when, `project`'s `environment`, what
      * to deploy (`revision`; else the latest recorded deploy of `release`;
+     * DEPLOY-37: else `branch`'s tip, which the CI resolves — the request's
+     * `revision` empty, `requested.branch` and the payload's `branch` set;
      * else what the environment it promotes from runs, DEPLOY-21's `from`)
      * and `note`. It runs nothing and completes nothing. When the
      * environment has a webhook (`webhook set`), menger POSTs the request
@@ -115,7 +120,7 @@ export interface DeploymentsClient {
      * (or admin's) on the project.
      * @requires `deployments.request` on the scope of `project`
      */
-    request(environment: EnvironmentName, project: Project, note?: Message | null, release?: Release | null, revision?: CommitRef | null): AsyncGenerator<DeploymentsEvent>;
+    request(environment: EnvironmentName, project: Project, branch?: Branch | null, note?: Message | null, release?: Release | null, revision?: CommitRef | null): AsyncGenerator<DeploymentsEvent>;
     /**
      * The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }], staged: [{ ticket, stage }] } per environment
      *
@@ -136,6 +141,25 @@ export interface DeploymentsClient {
      * @requires `deployments.schema` anywhere it is held
      */
     schema(): Promise<unknown>;
+    /**
+     * Report a step of a request's run (its executor's): name, state, detail, url; yields request { deployment, carried }
+     *
+     * DEPLOY-37: reports one step of a request's run — what its executor
+     * is doing (`build`, `gate`, `deploy`, `smoke`: the executor names
+     * them; menger knows none) and how it stands: `started`, then
+     * `succeeded`, `failed`, `skipped` or `canceled`. A step reported
+     * again is the same step (its place and start kept). `detail` is what
+     * it says — a failed step's last log lines (its last 4 KiB kept);
+     * `url` where its run is read. It moves no cell, stage or status: the
+     * executor's records (`record --request`) say the request started and
+     * ended. A request ended takes no step, a canceled one only a step's
+     * end. Yields exactly one
+     * `request { deployment, carried }` — its `requested.cancel_asked_at`
+     * set means stop — or an in-band `error`. The deployer's (or admin's)
+     * on the request's project.
+     * @requires `deployments.step` anywhere it is held
+     */
+    step(name: StepName, request: DeploymentId, state: StepState, detail?: Message | null, url?: StepUrl | null): AsyncGenerator<DeploymentsEvent>;
     /**
      * Watch deployments: deployed, then environment_changed, as each is recorded
      *
@@ -186,6 +210,10 @@ export declare const requires: {
     };
     readonly "deployments.schema": {
         readonly grant: "deployments.schema";
+        readonly target: null;
+    };
+    readonly "deployments.step": {
+        readonly grant: "deployments.step";
         readonly target: null;
     };
     readonly "deployments.watch": {

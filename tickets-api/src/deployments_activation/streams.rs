@@ -6,7 +6,7 @@
 
 use crate::access::{Deployer, VerifiedUser};
 use crate::deployments::{DeploymentsEvent, Record};
-use crate::store::{RequestAsk, Store, StoreError};
+use crate::store::{DeployQuery, RequestAsk, StepReport, Store, StoreError};
 use std::collections::HashSet;
 use crate::vocab::WebhookSecret;
 use futures::Stream;
@@ -89,6 +89,60 @@ pub(super) fn cancel_stream(store: Arc<Store>, admitted: Result<VerifiedUser, St
         let on = caller.on::<Deployer>(&scope, &store).map_err(|r| r.to_string())?;
         store.cancel_request(on, id, by(&caller)).await.map_err(|e| e.to_string())
     })
+}
+
+/// `step` (DEPLOY-37): deployer on the request's project, then the store's write.
+pub(super) fn step_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, report: StepReport) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+    once(async move {
+        let caller = admitted?;
+        let project = store.request_project(report.request).ok_or_else(|| format!("no request {} (nothing was recorded)", report.request))?;
+        let scope = crate::activation::scope_named(&store, &project)?;
+        let on = caller.on::<Deployer>(&scope, &store).map_err(|r| r.to_string())?;
+        store.request_step(on, report, by(&caller)).await.map_err(|e| e.to_string())
+    })
+}
+
+/// `list`: the projects the caller reads, then a page of the cache's.
+pub(super) fn list_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, q: DeployQuery, after: Option<u64>, limit: Option<u32>) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+    async_stream::stream! {
+        let allowed = match admitted.and_then(|c| allowed(&c, &store)) {
+            Ok(a) => a,
+            Err(message) => {
+                yield DeploymentsEvent::Error { message };
+                return;
+            }
+        };
+        match store.deployments(&q, allowed.as_ref(), after, limit) {
+            Ok(page) => {
+                for row in page.rows {
+                    yield row;
+                }
+                yield DeploymentsEvent::Page { next: page.next };
+            }
+            Err(e) => yield refused(e),
+        }
+    }
+}
+
+/// `environments`: the projects the caller reads, then each environment.
+pub(super) fn environments_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, project: Option<String>) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+    async_stream::stream! {
+        let allowed = match admitted.and_then(|c| allowed(&c, &store)) {
+            Ok(a) => a,
+            Err(message) => {
+                yield DeploymentsEvent::Error { message };
+                return;
+            }
+        };
+        match store.environments(project.as_deref(), allowed.as_ref()) {
+            Ok(envs) => {
+                for environment in envs {
+                    yield DeploymentsEvent::Environment { environment };
+                }
+            }
+            Err(e) => yield refused(e),
+        }
+    }
 }
 
 /// What a webhook method does once its caller is admin on the project.
