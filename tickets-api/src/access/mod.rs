@@ -350,11 +350,21 @@ impl RoleStore for Book {
 
 impl Memberships for Book {
     fn held(&self, who: &Principal) -> Vec<Membership> {
-        self.grants_of(&who.to_string())
-            .into_iter()
-            .map(|g| Membership { principal: who.clone(), role: RoleName::new(g.role.as_str()), scope: ScopeRef::parse(&g.scope.text()) })
-            .collect()
+        memberships(who, self.grants_of(&who.to_string()))
     }
+
+    /// ACCESS-58: without `everyone`'s, so `auth.waiting` and `auth.signup`
+    /// decide waiting as `members.requests` does.
+    fn own_held(&self, who: &Principal) -> Vec<Membership> {
+        memberships(who, self.own_grants_of(&who.to_string()))
+    }
+}
+
+fn memberships(who: &Principal, grants: Vec<Grant>) -> Vec<Membership> {
+    grants
+        .into_iter()
+        .map(|g| Membership { principal: who.clone(), role: RoleName::new(g.role.as_str()), scope: ScopeRef::parse(&g.scope.text()) })
+        .collect()
 }
 
 #[async_trait]

@@ -867,6 +867,30 @@ async fn an_agent_asks_for_access_with_auth_signup() {
     assert_eq!((mine[1]["grant"]["scope"].as_str(), mine[1]["grant"]["role"].as_str()), (Some("hypermemetic:A"), Some("viewer")), "{mine:?}");
 }
 
+/// ACCESS-58: `everyone`'s grant (ACCESS-57) is not the principal's own —
+/// with one on A, a new principal still signs up onto the waiting list and
+/// `auth.waiting` still lists it, as `members.requests` does; its own grant
+/// takes it off.
+#[tokio::test]
+async fn everyone_s_grant_leaves_a_new_principal_waiting() {
+    let dir = tmp();
+    let s = spawn(&dir.path().join("t.db")).await;
+    let boss = as_key(s.port, &BOSS, "boss").await;
+    tickets(&boss).await;
+    one(&boss, "members.grant", json!({ "everyone": true, "scope": "A", "role": "viewer" })).await;
+    let agent = as_key(s.port, &AGENT, "worker-1").await;
+    let who = one(&agent, "auth.whoami", json!({})).await;
+    assert_eq!(who["memberships"], json!([{ "role": "viewer", "scope": "hypermemetic:A" }]), "everyone's reaches it: {who}");
+    let w = one(&agent, "auth.signup", json!({})).await;
+    assert_eq!((w["type"].as_str(), w["principal"].as_str()), (Some("waiting"), Some(principal(&AGENT).as_str())), "{w}");
+    let waiting = call(&boss, "auth.waiting", json!({})).await;
+    assert!(waiting.iter().any(|w| w["principal"] == principal(&AGENT)), "{waiting:?}");
+    let listed = call(&boss, "members.requests", json!({})).await;
+    assert!(listed.iter().any(|r| r["principal"] == principal(&AGENT)), "{listed:?}");
+    one(&boss, "auth.grant", json!({ "principal": principal(&AGENT), "role": "viewer", "scope": "B" })).await;
+    assert!(call(&boss, "auth.waiting", json!({})).await.is_empty(), "its own grant: it waits no longer");
+}
+
 // ── No open mode (ACCESS-24) ──────────────────────────────────────────
 
 /// The binary on `db` with `args` and no provider in the environment: how it
