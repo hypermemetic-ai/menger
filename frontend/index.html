@@ -1671,12 +1671,27 @@
   .framed-bar[data-folded] > .mpick { flex: 0 1 auto; min-width: 0; }
   .framed-bar[data-folded] .mpick-name { min-width: 0; }
   .framed-bar[data-folded] .framed-btn { padding: .3rem .55rem; }
+  /* APP-99: a mockup collapses to one line — its title, its views, ▸ */
+  .framed-collapse { order: -1; }
+  .framed-collapsed { font: inherit; display: flex; align-items: baseline; gap: .5rem; width: 100%; text-align: left; cursor: pointer;
+    color: var(--ink); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); padding: .4rem .6rem; }
+  .framed-collapsed:hover { background: var(--hover); }
+  .framed-collapsed:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .framed-collapsed-title { font-weight: var(--weight-strong); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .framed-collapsed-views { color: var(--muted); font-size: calc(.85rem * var(--text-scale)); white-space: nowrap; }
+  .framed-collapse-mark { margin-left: auto; color: var(--muted); }
+  .framed[data-collapsed] > .framed-bar, .framed[data-collapsed][data-view] > .framed-stage { display: none; }
   @media (max-width: 820px) {
     .device-grip { display: none; }
     .framed[data-view="mockup"] .framed-stage { padding: 0; flex-direction: column; gap: 16px; }
     .device[data-kind="phone"] .device-screen { border-width: 4px; }
     .device[data-kind="tablet"] .device-screen { border-width: 6px; }
-    .framed.is-full[data-view="mockup"] { padding: .4rem 0 0; }
+    .framed.is-full[data-view="mockup"] { padding: calc(.4rem + var(--safe-top)) var(--safe-right) var(--safe-bottom) var(--safe-left); }    /* APP-99: off the notch and the home indicator */
+    /* APP-99: a preview no taller than a third of the screen (src/mocksize.rs preview_scale) — inert, its devices
+       centred and unlabelled; a tap on it opens it full screen; a scroll over it is the page's */
+    .framed[data-preview] .framed-stage { align-items: center; cursor: zoom-in; }
+    .framed[data-preview] .device-label { display: none; }
+    .framed[data-preview] .device-body { pointer-events: none; }
     .framed.is-full[data-view="mockup"] .framed-bar { padding: 0 .5rem .4rem; }
     .framed.is-full[data-view="mockup"] .framed-caption { padding: 0 .5rem .3rem; }
     .framed.is-full[data-view="mockup"] .framed-stage { justify-content: flex-start; align-items: flex-start; -webkit-overflow-scrolling: touch; }
