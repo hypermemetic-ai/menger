@@ -308,6 +308,18 @@ pub(crate) fn who(e: &QueueEntry) -> &str {
     e.name.as_deref().unwrap_or(&e.by)
 }
 
+/// APP-87: whether `me` (the reader's principal) queued it — a pin from the
+/// header's panel: the tray says *★ pinned by you*, and *done with it* is
+/// *unpin*.
+pub(crate) fn pinned_by(e: &QueueEntry, me: Option<&str>) -> bool {
+    me.is_some_and(|m| e.by == m)
+}
+
+/// The reader's principal, once the app knows it.
+fn me() -> Option<String> {
+    crate::signin::account().with(|a| a.me.as_ref().map(|m| m.principal.clone()))
+}
+
 /// APP-38: the urgencies, loudest first — the sheet's groups, in order, and
 /// its head's chips.
 pub(crate) const LOUDEST_FIRST: [Urgency; 4] = [Urgency::Blocking, Urgency::Now, Urgency::Today, Urgency::Whenever];
@@ -940,8 +952,12 @@ fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
     let hd = {
         let e = e.clone();
         let clock = s.clock;
-        move || format!("{} · queued by {} · {}", e.urgency.as_str(), who(&e), ago(clock.get(), e.asked_unix))
+        move || {
+            let by = if pinned_by(&e, me().as_deref()) { "pinned by you".to_string() } else { format!("queued by {}", who(&e)) };
+            format!("{} · {by} · {}", e.urgency.as_str(), ago(clock.get(), e.asked_unix))
+        }
     };
+    let mine = pinned_by(&e, me().as_deref());
     let (snooze_id, done_id) = (id.clone(), id.clone());
     let (problem, open) = (s.problem, s.open);
     let place = move || {
@@ -961,7 +977,7 @@ fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
             <div class="qacts">
                 // APP-48 (owner): done with it is the filled one; open sits at the far right.
                 <button type="button" class="qbtn" on:click=move |_| snooze(snooze_id.clone(), problem)>{format!("snooze {SNOOZE_MINUTES}m")}</button>
-                <button type="button" class="qbtn fill" data-act="done" on:click=move |_| done(done_id.clone(), problem)>"done with it"</button>
+                <button type="button" class="qbtn fill" data-act="done" on:click=move |_| done(done_id.clone(), problem)>{if mine { "unpin" } else { "done with it" }}</button>
                 {place}
                 <a class="qbtn qopen" href=open_href(&e) on:click=move |_| open.set(false)>"open ↗"</a>
             </div>
@@ -1441,6 +1457,8 @@ pub(crate) fn Tray() -> impl IntoView {
                 <span class="m">
                     {move || now_row.with(|r| r.as_ref().map(|r| age(clock.get(), r.entry.asked_unix)).unwrap_or_default())}
                     {move || now_row.with(|r| r.as_ref().is_some_and(|r| r.entry.input.is_some())).then(|| view! { " · "<span class="ask">"asks"</span> })}
+                    // APP-87: the reader's own pin.
+                    {move || now_row.with(|r| r.as_ref().is_some_and(|r| pinned_by(&r.entry, me().as_deref()))).then(|| view! { " · "<span class="pinned">"★ pinned"</span> })}
                 </span>
             </button>
             {move || here().then(|| picked_row.get().map(|r| view! { <div class="qd-ph">{answer_view(r, sheet, true)}</div> }))}
@@ -1766,7 +1784,61 @@ fn input_view(
     }
     // APP-70: a text reply is written in a box like any other — images and
     // drawings too (their markdown in the reply), for this ticket.
-    let reply = (input.kind == InputKind::Text).then(|| {
+    let reply = reply_for(&input, pick, &id);
+    // APP-25: every control only picks; the one submit sends.
+    let controls = controls_of(&input, busy, pick, reply);
+    let kind = input.kind;
+    let send = move || {
+        if busy.get_untracked() {
+            return;
+        }
+        if let Some(value) = pick.with_untracked(|p| p.value(kind)) {
+            submit(id.clone(), named.clone(), value, problem, busy, pick);
+        }
+    };
+    let attach = reply.map(|(_, _, a)| a);
+    let send = {
+        // The reply as it stands when the send goes (a drawing's markdown
+        // lands in the box the moment before).
+        let gated = reply.map(|(text, _, a)| {
+            let send = send.clone();
+            a.then(move || {
+                pick.update(|p| p.text = text.get_untracked());
+                send();
+            })
+        });
+        move |_| match &gated {
+            Some(g) => g(),
+            None => send(),
+        }
+    };
+    let waits = move || attach.is_some_and(|a| a.busy());
+    let drawn = move || attach.is_some_and(|a| a.drawn());
+    let controls = view! {
+        {controls}
+        <div class="qsubmit">
+            <button
+                type="button"
+                class="qbtn fill"
+                data-act="submit"
+                disabled=move || busy.get() || waits() || (!drawn() && pick.with(|p| p.value(kind).is_none()))
+                on:click=send
+            >
+                {move || if busy.get() { "submitting…" } else { "submit" }}
+            </button>
+        </div>
+    };
+    Some(view! { <div class="qinput"><p class="qq"><b>{question}</b></p>{controls}</div> }.into_any())
+}
+
+
+/// APP-70: a text input's reply box — its text, the textarea, and what
+/// attaches images and drawings to it (for `ticket`); none for another kind.
+pub(crate) type Reply = (RwSignal<String>, NodeRef<leptos::html::Textarea>, crate::media::Attach);
+
+/// [`Reply`] for `input`, its text kept in `pick`.
+pub(crate) fn reply_for(input: &Input, pick: RwSignal<Pick>, ticket: &str) -> Option<Reply> {
+    (input.kind == InputKind::Text).then(|| {
         let text = RwSignal::new(pick.with_untracked(|p| p.text.clone()));
         Effect::new(move |_| {
             let t = text.get();
@@ -1775,10 +1847,15 @@ fn input_view(
             }
         });
         let area = NodeRef::<leptos::html::Textarea>::new();
-        (text, area, crate::media::Attach::new(text, area, Some(id.clone())))
-    });
-    // APP-25: every control only picks; the one submit sends.
-    let controls = match input.kind {
+        (text, area, crate::media::Attach::new(text, area, Some(ticket.to_string())))
+    })
+}
+
+/// APP-84: an open input's controls — a choice's options, a multi's boxes, a
+/// text's reply box (`reply`, APP-70) — each only picking into `pick`
+/// (APP-25); the tray's sheet and the header's panel both answer with them.
+pub(crate) fn controls_of(input: &Input, busy: RwSignal<bool>, pick: RwSignal<Pick>, reply: Option<Reply>) -> AnyView {
+    match input.kind {
         InputKind::Choice => {
             let opts = input
                 .options
@@ -1852,57 +1929,15 @@ fn input_view(
             }
             .into_any()
         }
-    };
-    let kind = input.kind;
-    let send = move || {
-        if busy.get_untracked() {
-            return;
-        }
-        if let Some(value) = pick.with_untracked(|p| p.value(kind)) {
-            submit(id.clone(), named.clone(), value, problem, busy, pick);
-        }
-    };
-    let attach = reply.map(|(_, _, a)| a);
-    let send = {
-        // The reply as it stands when the send goes (a drawing's markdown
-        // lands in the box the moment before).
-        let gated = reply.map(|(text, _, a)| {
-            let send = send.clone();
-            a.then(move || {
-                pick.update(|p| p.text = text.get_untracked());
-                send();
-            })
-        });
-        move |_| match &gated {
-            Some(g) => g(),
-            None => send(),
-        }
-    };
-    let waits = move || attach.is_some_and(|a| a.busy());
-    let drawn = move || attach.is_some_and(|a| a.drawn());
-    let controls = view! {
-        {controls}
-        <div class="qsubmit">
-            <button
-                type="button"
-                class="qbtn fill"
-                data-act="submit"
-                disabled=move || busy.get() || waits() || (!drawn() && pick.with(|p| p.value(kind).is_none()))
-                on:click=send
-            >
-                {move || if busy.get() { "submitting…" } else { "submit" }}
-            </button>
-        </div>
-    };
-    Some(view! { <div class="qinput"><p class="qq"><b>{question}</b></p>{controls}</div> }.into_any())
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use menger_tickets_api::{Kind, QueueAction, Status, TransitionSource, Urgency};
 
-    fn summary(id: &str, title: &str) -> TicketSummary {
+    pub(crate) fn summary(id: &str, title: &str) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
             hidden_blocked_by: 0,
@@ -1930,7 +1965,7 @@ mod tests {
         }
     }
 
-    fn entry(id: &str, u: Urgency, at: i64) -> QueueEntry {
+    pub(crate) fn entry(id: &str, u: Urgency, at: i64) -> QueueEntry {
         QueueEntry {
             ticket: id.into(),
             urgency: u,
@@ -2192,6 +2227,10 @@ mod tests {
         assert_eq!(who(&e), "idp:agent");
         e.name = Some("Ada".into());
         assert_eq!(who(&e), "Ada");
+        // APP-87: the reader's own pin is told by its principal, not its name.
+        assert!(pinned_by(&e, Some("idp:agent")));
+        assert!(!pinned_by(&e, Some("Ada")));
+        assert!(!pinned_by(&e, None));
         assert_eq!(open_href(&e), "#/ticket/A-1");
         e.input = Some("landing".into());
         assert_eq!(open_href(&e), "#/ticket/A-1?anchor=landing");

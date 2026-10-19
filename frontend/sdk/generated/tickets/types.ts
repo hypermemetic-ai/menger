@@ -389,9 +389,15 @@ holds none) and its whole history, oldest first.
 
 The declaration follows the body: every write of the body re-reads it.
 An answer stays what was recorded when a later body changes the options
-it named — the history is a record, never rewritten. */
+it named — the history is a record, never rewritten.
+
+APP-84: `asked_unix` is when it was asked — the write whose body first
+declared it (or declared it again after it was removed); an input older
+than the record carries its ticket's creation. `null` only from a server
+before APP-84. */
 export interface Input {
   answer?: Answer | null;
+  askedUnix?: number | null;
   history: InputHistoryEntry[];
   id: InputId;
   kind: InputKind;

@@ -313,6 +313,7 @@ mod present;
 mod promote;
 mod queue;
 mod queue_tabs;
+mod questions;
 
 mod mermaid;
 mod motion;
@@ -2337,12 +2338,6 @@ fn App() -> impl IntoView {
     let test_link = RwSignal::new(settings::load().test_link());
     let page_origin = settings::page_origin();
 
-    // INPUT-6: the header's open-input count — `None` until the app holds
-    // the inputs (the first time #/inputs opens), then kept live by `watch`.
-    let open_inputs = {
-        let held = inputs::signal();
-        Memo::new(move |_| held.with(|h| h.as_ref().map(inputs::Inputs::open_count)))
-    };
     // COMMENT-3: the header's open-comment count — once the app holds them.
     let open_comments = {
         let held = comments::signal();
@@ -2350,7 +2345,6 @@ fn App() -> impl IntoView {
     };
 
     // DESIGN-39: a header count that moves ticks.
-    motion::tick_on_change("#inputs-link .hbadge", move || open_inputs.get());
     motion::tick_on_change("#comments-link .hbadge", move || open_comments.get());
 
     // IDENTITY-22: whether the views may show — a memo, so the nav is
@@ -2426,9 +2420,8 @@ fn App() -> impl IntoView {
                     >
                         "components"
                     </a>
-                    // INPUT-6: every input across tickets, beside them —
-                    // the open count once the app holds the inputs (the
-                    // page asks for them; nothing at startup does).
+                    // INPUT-6: every input across tickets, beside them.
+                    // APP-84: its count moved to `questions`, beside `live`.
                     <a
                         class="hlink"
                         id="inputs-link"
@@ -2436,11 +2429,6 @@ fn App() -> impl IntoView {
                         aria-current=move || matches!(route.get(), Route::Inputs).then_some("page")
                     >
                         "inputs"
-                        {move || {
-                            open_inputs.get().map(|n| view! {
-                                <span class="hbadge" class:zero=n == 0 title=inputs_page::badge_title(n)>{n}</span>
-                            })
-                        }}
                     </a>
                     // MENGER-12: what waits on the owner — Home's panel, and
                     // its live count.
@@ -2507,6 +2495,9 @@ fn App() -> impl IntoView {
                     <counts::GlobalCount board />
                     // IDENTITY-15: who this connection is, or `sign in`.
                     <signin::Who />
+                    // APP-84: every open question — a quiet count beside
+                    // `live`, opening the panel.
+                    <questions::HeaderCount />
                     // MFE-21: `override` marks a backend other than this
                     // page's server (highlighted, its URL in the words).
                     <span
@@ -2601,6 +2592,8 @@ fn App() -> impl IntoView {
             // MENGER-39: the tray — the owner's queue along the main
             // column's bottom edge (a grid item over the content's cell).
             {move || can_view.get().then(|| view! { <queue::Tray /> })}
+            // APP-84: the header's panel of every open question.
+            {move || can_view.get().then(|| view! { <questions::Panel /> })}
             // APP-50: the phone nav — a bar along the bottom edge (≤ 820).
             {move || can_view.get().then(|| view! { <phonebar::Bar route overlay tree /> })}
             // CHAT-4: the route and the chat shown, in step — the chat itself

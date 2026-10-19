@@ -303,6 +303,8 @@ pub(crate) fn Head(route: RwSignal<Route>, #[prop(into)] conn_class: Signal<Stri
                 }}
             </span>
             <span class=move || format!("pconn {}", conn_class.get())><i class="cell" aria-hidden="true"></i>{move || conn_words.get()}</span>
+            // APP-84: every open question — the bar has no fifth place.
+            <crate::questions::PhoneCount />
         </div>
     }
 }

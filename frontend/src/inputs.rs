@@ -1,5 +1,5 @@
 //! INPUT-6: the app's copy of the inputs store (INPUT-3) — what `#/inputs`
-//! lists and what the header's `inputs` badge counts.
+//! lists and what the header's `questions` count and panel (APP-84) show.
 //!
 //! **Asked for by what shows it** — COMP-5's registry rule (src/registry.rs),
 //! held to the same discipline. Nothing at startup asks `inputs` (SCALE-26:
@@ -8,8 +8,9 @@
 //! calls [`want`]; from then on they are fetched on every new connection and
 //! after every `lagged` ([`refresh`]), and kept in between by `watch`:
 //! `input_changed` carries the whole input, so applying it is one upsert
-//! ([`heard`]). The header's badge reads the same copy, so it shows from the
-//! first time the page is opened, and stays live after the page is left.
+//! ([`heard`]). APP-84: the header's `questions` count (src/questions.rs)
+//! reads the same copy and asks for it at start — the tray already did — so
+//! it is live from the first screen.
 //!
 //! **What is fetched**: `inputs {}` — every input, every state, in the
 //! store's order (tickets by shortcode and sequence, each ticket's inputs in
@@ -107,7 +108,7 @@ impl Inputs {
         &self.list
     }
 
-    /// How many are `open` — what the header's badge says.
+    /// How many are `open` — what the header's `questions` count says (APP-84).
     pub(crate) fn open_count(&self) -> usize {
         self.list.iter().filter(|i| i.state == InputState::Open).count()
     }
@@ -147,7 +148,7 @@ thread_local! {
     static HEARD: RefCell<Option<Vec<TicketsEvent>>> = const { RefCell::new(None) };
 }
 
-/// The inputs, as a signal — what `#/inputs` and the header's badge draw
+/// The inputs, as a signal — what `#/inputs` and the header's `questions` count draw
 /// from.
 pub(crate) fn signal() -> ArcRwSignal<Option<Inputs>> {
     INPUTS.with(Clone::clone)
@@ -236,6 +237,7 @@ pub(crate) mod tests {
             state: InputState::Open,
             answer: None,
             history: Vec::new(),
+            asked_unix: Some(100),
         }
     }
 

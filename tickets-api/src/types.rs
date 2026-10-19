@@ -1350,6 +1350,11 @@ pub struct InputHistoryEntry {
 /// The declaration follows the body: every write of the body re-reads it.
 /// An answer stays what was recorded when a later body changes the options
 /// it named — the history is a record, never rewritten.
+///
+/// APP-84: `asked_unix` is when it was asked — the write whose body first
+/// declared it (or declared it again after it was removed); an input older
+/// than the record carries its ticket's creation. `null` only from a server
+/// before APP-84.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Input {
     pub ticket: TicketId,
@@ -1361,6 +1366,8 @@ pub struct Input {
     pub state: InputState,
     pub answer: Option<Answer>,
     pub history: Vec<InputHistoryEntry>,
+    #[serde(default)]
+    pub asked_unix: Option<i64>,
 }
 
 /// MENGER-13: which of a ticket's fields a transition moved — its status, or
