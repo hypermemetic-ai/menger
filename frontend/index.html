@@ -3433,6 +3433,31 @@
   #qtray .qopts.multi, #qtray .qopts.text { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
   #qtray .qopts.text textarea { flex: 1 1 320px; min-height: 3em; min-height: calc(2lh + 4px + 2 * var(--border)); font-family: var(--sans); }
   #qtray .qtick { display: inline-flex; align-items: center; gap: 6px; }
+  /* APP-86: an entry of several questions — where it stands, a step each
+     (✓ and its answer once answered; the blocking one marked), the
+     current one ringed; a step goes back to it. */
+  #qtray .qprog { display: flex; align-items: center; gap: 10px; margin: 4px 0 6px; font-family: var(--mono); font-size: calc(11px * var(--text-scale)); color: var(--muted); }
+  #qtray .qprog b { color: var(--ink); font-weight: var(--weight-medium); }
+  #qtray .qprog .bar2 { flex: 1; max-width: 220px; height: 4px; background: var(--line); border-radius: var(--radius-pill); overflow: hidden; }
+  #qtray .qprog .bar2 i { display: block; height: 100%; background: var(--accent); transition: width .3s var(--ease); }
+  #qtray .steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
+  #qtray .stp {
+    display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 4px 10px 4px 6px; cursor: pointer;
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale)); font-weight: var(--weight-medium);
+    border: var(--border) solid var(--tree-line); border-radius: var(--radius-pill); color: var(--muted); background: var(--card);
+    transition: border-color var(--motion-fast) var(--ease);
+  }
+  #qtray .stp:hover { border-color: var(--ink); }
+  #qtray .stp .nb { width: 18px; height: 18px; flex: none; display: grid; place-items: center; font-size: calc(10px * var(--text-scale)); border: var(--border) solid var(--tree-line); border-radius: var(--radius-pill); }
+  #qtray .stp.done { color: var(--live); border-color: color-mix(in srgb, var(--live) 40%, var(--tree-line)); }
+  #qtray .stp.done .nb { background: var(--live); color: var(--card); border-color: var(--live); }
+  #qtray .stp.cur { color: var(--ink); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  #qtray .stp.cur .nb { background: var(--accent); color: var(--card); border-color: var(--accent); }
+  #qtray .stp[aria-current="step"].done { box-shadow: 0 0 0 1px var(--live); }
+  #qtray .stp .v { font-weight: var(--weight-normal); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+  #qtray .stp .blk { color: var(--urgent); font-size: calc(9.5px * var(--text-scale)); letter-spacing: .1em; text-transform: uppercase; }
+  #qtray .qstep-hint { margin: -6px 0 14px; display: block; }
+  #qtray .qsteps-acts { display: flex; gap: 8px; margin-top: 4px; }
   
   #qtray .qacts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   #qtray .qbtn {

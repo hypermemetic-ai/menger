@@ -38,7 +38,7 @@ use crate::types::{InputValue, Kind, Severity, Status, TicketsEvent};
 use crate::types::InputState;
 use crate::queue::Urgency;
 use crate::vocab::{
-    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, Label, MengerPath, Message,
+    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, Message,
     Query, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
@@ -998,16 +998,17 @@ impl TicketsActivation {
         history_stream(self.store.clone(), user, id.into_string())
     }
 
-    /// Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why; queued again it is raised, never lowered; yields queued { entry, ticket, action }.
+    /// Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why, with the inputs it asks (repeat --input; --blocking the one you are idle on); queued again it is raised, never lowered, and its inputs added; yields queued { entry, ticket, action }.
     ///
     /// MENGER-39: puts a ticket in front of the owner — at an urgency, for a
     /// reason; `blocking` names the input that answers it. Queued again: the
-    /// urgency raised, never lowered. Yields one `queued`, or an `error`.
+    /// urgency raised, never lowered. APP-86: several inputs, in order, and
+    /// the one the caller is idle on. Yields one `queued`, or an `error`.
     #[plexus_macros::method(
         group = "write",
         target = "id",
         values(urgency = ["whenever", "today", "now", "blocking"], source = ["app", "api", "pipeline"]),
-        example(note = "an agent idle until a decision is answered", params = r#"{"id": "RETURNS-13", "urgency": "blocking", "reason": "the import waits on this", "input": "landing"}"#)
+        example(note = "an agent idle until a decision is answered", params = r#"{"id": "RETURNS-13", "urgency": "blocking", "reason": "the import waits on this", "input": ["format", "naming"], "blocking": "naming"}"#)
     )]
     pub async fn queue(
         &self,
@@ -1018,12 +1019,15 @@ impl TicketsActivation {
         urgency: Urgency,
         /// Why the owner should look (required).
         reason: Reason,
-        /// The input on the ticket whose answer is asked (required for blocking); closing it unqueues the ticket.
-        input: Option<InputId>,
+        /// The inputs on the ticket whose answers are asked, in order — repeat the flag (required for blocking); closing every one unqueues the ticket.
+        input: Option<InputIds>,
+        /// The one input the caller is idle on — among them; required with urgency blocking when there are several (optional).
+        blocking: Option<InputId>,
         /// app | api | pipeline (optional, default api).
         source: Option<CallerSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queue_stream(self.store.clone(), user, id.into_string(), Ask::Queue { urgency, reason, input }, source)
+        let (inputs, blocking) = (input.map(InputIds::into_strings).unwrap_or_default(), blocking.map(InputId::into_string));
+        queue_stream(self.store.clone(), user, id.into_string(), Ask::Queue { urgency, reason, inputs, blocking }, source)
     }
 
     /// Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued.

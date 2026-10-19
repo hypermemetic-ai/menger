@@ -375,6 +375,7 @@
         "tz"
       ],
       "queue": [
+        "blocking",
         "id",
         "input",
         "reason",

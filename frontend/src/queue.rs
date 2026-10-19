@@ -33,6 +33,13 @@
 //!   control with it. With one ticket the sheet holds its answer alone.
 //!   Esc, close, the scrim, the control again, or a press anywhere outside
 //!   the tray — a frame's included (APP-26, [`outside_lowers`]) — lowers it.
+//! - **Several questions** (APP-86): an entry naming several inputs says
+//!   `1 of 3 answered` on its row; its answer steps through them — `2 of 3
+//!   questions`, a bar, a step each (✓ and the answer once answered, the
+//!   blocking one marked) — and Submit records the current one and moves to
+//!   the next open ([`steps`], [`after`]); the last one's Submit takes the
+//!   entry out, as one input's does. A step clicked goes back to it, and an
+//!   answer still open to a change is changed there.
 //! - **Chosen, then submitted** (APP-25): an option clicked is selected
 //!   ([`Pick`]), nothing sent; ticks and a reply are held the same way, and
 //!   one **submit** sends whichever it is. The sheet comes down once that
@@ -502,6 +509,69 @@ pub(crate) fn open_href(e: &QueueEntry) -> String {
     }
 }
 
+/// APP-86: one question of an entry that names several, as its answer
+/// steps through them.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Step {
+    pub(crate) id: String,
+    /// The input as the app holds it; `None` while its record is not read
+    /// (or it is gone from the body).
+    pub(crate) input: Option<Input>,
+    /// The one the caller is idle on.
+    pub(crate) blocking: bool,
+}
+
+impl Step {
+    /// Answered (or closed on an answer): `✓`.
+    pub(crate) fn answered(&self) -> bool {
+        self.input.as_ref().is_some_and(|i| matches!(i.state, InputState::Answered | InputState::Closed))
+    }
+
+    /// Settled: nothing more to answer — answered, closed, removed, withdrawn.
+    pub(crate) fn settled(&self) -> bool {
+        self.input.as_ref().is_some_and(|i| i.state != InputState::Open)
+    }
+
+    /// The answer, as the step says it.
+    pub(crate) fn said(&self) -> Option<String> {
+        let i = self.input.as_ref()?;
+        i.answer.as_ref().map(|a| said(i, &a.value))
+    }
+}
+
+/// APP-86: the questions `e` names, in order, each with its input as
+/// `inputs` holds it.
+pub(crate) fn steps(e: &QueueEntry, inputs: &[Input]) -> Vec<Step> {
+    let blocking = e.blocking_input();
+    e.named()
+        .into_iter()
+        .map(|id| Step {
+            id: id.to_string(),
+            input: inputs.iter().find(|i| i.ticket == e.ticket && i.id == id).cloned(),
+            blocking: blocking == Some(id),
+        })
+        .collect()
+}
+
+/// APP-86: the step shown — the one asked for, while it is one of them;
+/// else the first not settled; else the first.
+pub(crate) fn current(steps: &[Step], asked: Option<&str>) -> Option<usize> {
+    asked.and_then(|a| steps.iter().position(|s| s.id == a)).or_else(|| steps.iter().position(|s| !s.settled())).or((!steps.is_empty()).then_some(0))
+}
+
+/// APP-86: after `at` is answered, the next step not settled — after it,
+/// then from the start; `None`: every one is, and the entry is done.
+pub(crate) fn after(steps: &[Step], at: usize) -> Option<usize> {
+    let n = steps.len();
+    (1..n).map(|k| (at + k) % n).find(|&i| !steps[i].settled())
+}
+
+/// APP-86: a row's `1 of 3 answered`, for an entry naming several; `None`
+/// for one (its row says `asks`).
+pub(crate) fn progress(steps: &[Step]) -> Option<String> {
+    (steps.len() > 1).then(|| format!("{} of {} answered", steps.iter().filter(|s| s.answered()).count(), steps.len()))
+}
+
 /// APP-25: what the sheet's controls hold until **submit** — the option
 /// chosen, the boxes ticked, the reply written. Choosing sends nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -512,6 +582,15 @@ pub(crate) struct Pick {
 }
 
 impl Pick {
+    /// APP-86: a pick holding an answer given — a step gone back to.
+    pub(crate) fn of(value: &InputValue) -> Self {
+        match value {
+            InputValue::Choice { option } => Pick { choice: Some(option.clone()), ..Pick::default() },
+            InputValue::Multi { options } => Pick { ticked: options.clone(), ..Pick::default() },
+            InputValue::Text { text } => Pick { text: text.clone(), ..Pick::default() },
+        }
+    }
+
     /// `value` chosen (a choice's option); the one chosen before is not.
     pub(crate) fn choose(&mut self, value: &str) {
         self.choice = Some(value.to_string());
@@ -788,12 +867,31 @@ pub(crate) const CHANGES_PLACEHOLDER: &str = "What should change? It goes on the
 /// the queue. Once both writes succeed the pick goes and the row leaves, and
 /// the tray picks the next (APP-38; the last one takes the sheet down); a
 /// refusal of either keeps the row with the problem shown.
-fn submit(id: String, input: String, value: InputValue, problem: RwSignal<Option<String>>, busy: RwSignal<bool>, pick: RwSignal<Pick>) {
+///
+/// APP-86: with several questions, `last` is whether this one is the last
+/// not settled — only then is the entry taken out; before it, the answer is
+/// recorded and `moved` steps to the next.
+fn submit(id: String, input: String, value: InputValue, s: Sheet, last: bool, moved: Option<String>) {
+    let (problem, busy, pick) = (s.problem, s.busy, s.pick);
     let Some(client) = session::client() else { return };
     busy.set(true);
     problem.set(None);
     spawn_local(async move {
         let sent = bridge::submit(&client, id.clone(), bridge::Submit { input, value, rationale: None }).await;
+        if !last {
+            match sent {
+                Ok(_) => {
+                    pick.try_set(Pick::default());
+                    s.editing.try_set(false);
+                    s.step.try_set(moved.map(|m| (id.clone(), m)));
+                }
+                Err(why) => {
+                    problem.try_set(Some(why));
+                }
+            }
+            busy.try_set(false);
+            return;
+        }
         let unqueued = match sent {
             Ok(_) => match crate::typed::typed(&id) {
                 Ok(tid) => client.unqueue_all(tid, Some(CallerSource::App)).await.map_err(|e| session::describe(&e)),
@@ -924,6 +1022,11 @@ struct Sheet {
     busy: RwSignal<bool>,
     draft: Draft,
     pick: RwSignal<Pick>,
+    /// APP-86: the step gone to in an entry of several — its ticket and
+    /// input (another ticket's is none); `None`: the first not settled.
+    step: RwSignal<Option<(String, String)>>,
+    /// APP-86: *change it* pressed on the step shown — its answer's controls.
+    editing: RwSignal<bool>,
 }
 
 /// One ticket's answer — today's sheet: who and when, the reason, the
@@ -937,7 +1040,8 @@ fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
     let hd = {
         let e = e.clone();
         let clock = s.clock;
-        move || format!("{} · queued by {} · {}", e.urgency.as_str(), who(&e), ago(clock.get(), e.asked_unix))
+        let on = e.blocking_input().map(|b| format!(" on {b}")).unwrap_or_default();
+        move || format!("{}{on} · queued by {} · {}", e.urgency.as_str(), who(&e), ago(clock.get(), e.asked_unix))
     };
     let (snooze_id, done_id) = (id.clone(), id.clone());
     let (problem, open) = (s.problem, s.open);
@@ -953,7 +1057,10 @@ fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
             <div class="qhd">{hd}</div>
             <h4><a class="code" href=format!("#/ticket/{id}")>{id.clone()}</a>" · "{row.ticket.title.clone()}</h4>
             <p class="qwhy">{e.reason.clone()}</p>
-            {input_view(id.clone(), e.input.clone(), input, s.problem, s.busy, s.pick)}
+            {match e.named().len() > 1 {
+                true => steps_view(e.clone(), s).into_any(),
+                false => input_view(id.clone(), e.input.clone(), input, s).into_any(),
+            }}
             {changes_view(id.clone(), s.problem, s.busy, s.draft)}
             <div class="qacts">
                 // APP-48 (owner): done with it is the filled one; open sits at the far right.
@@ -1061,13 +1168,17 @@ pub(crate) fn Tray() -> impl IntoView {
     let one = Memo::new(move |_| rows.with(|r| r.len() == 1));
     let ctl = Memo::new(move |_| rows.with(|r| seen.with(|s| new.with(|n| control(r, s, n)))));
     let picked_row = Memo::new(move |_| picked.with(|p| p.as_ref().and_then(|id| rows.with(|r| r.iter().find(|x| &x.entry.ticket == id).cloned()))));
-    let sheet = Sheet { open, picked, order, clock, problem, busy, draft, pick };
+    let step = RwSignal::new(None::<(String, String)>);
+    let editing = RwSignal::new(false);
+    let sheet = Sheet { open, picked, order, clock, problem, busy, draft, pick, step, editing };
     // A row picked: its answer starts clean, it is opened (no nudge, no dot).
     let pick_row = move |id: String| {
         if picked.with_untracked(|p| p.as_deref() != Some(id.as_str())) {
             problem.set(None);
             draft.clear();
             pick.set(Pick::default());
+            step.set(None);
+            editing.set(false);
             picked.set(Some(id.clone()));
         }
         if seen.with_untracked(|s| !s.contains(&id)) {
@@ -1361,7 +1472,17 @@ pub(crate) fn Tray() -> impl IntoView {
                 <span class="t">{move || now_row.with(|r| r.as_ref().map(|r| r.ticket.title.clone()).unwrap_or_default())}</span>
                 <span class="m">
                     {move || now_row.with(|r| r.as_ref().map(|r| age(clock.get(), r.entry.asked_unix)).unwrap_or_default())}
-                    {move || now_row.with(|r| r.as_ref().is_some_and(|r| r.entry.input.is_some())).then(|| view! { " · "<span class="ask">"asks"</span> })}
+                    {move || {
+                        let words = now_row.with(|r| {
+                            let r = r.as_ref()?;
+                            match r.entry.named().len() {
+                                0 => None,
+                                1 => Some("asks".to_string()),
+                                _ => inputs::signal().with(|h| progress(&steps(&r.entry, h.as_ref().map(|h| h.list()).unwrap_or(&[])))),
+                            }
+                        });
+                        words.map(|w| view! { " · "<span class="ask">{w}</span> })
+                    }}
                 </span>
             </button>
             {move || here().then(|| picked_row.get().map(|r| view! { <div class="qd-ph">{answer_view(r, sheet, true)}</div> }))}
@@ -1599,26 +1720,123 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
 
 /// The named input in the sheet: its question and its controls while it is
 /// open, what was answered once it is, or nothing when there is none.
-fn input_view(
-    id: String,
-    named: Option<String>,
-    input: Option<Input>,
-    problem: RwSignal<Option<String>>,
-    busy: RwSignal<bool>,
-    pick: RwSignal<Pick>,
-) -> Option<AnyView> {
+fn input_view(id: String, named: Option<String>, input: Option<Input>, s: Sheet) -> Option<AnyView> {
     let named = named?;
     let Some(input) = input else {
         return Some(view! { <p class="qq muted">"asks "<code>{format!("#{named}")}</code>" — on the ticket"</p> }.into_any());
     };
-    let question = input.question.clone().unwrap_or_else(|| format!("#{named}"));
     if input.state != InputState::Open {
+        let question = input.question.clone().unwrap_or_else(|| format!("#{named}"));
         let words = match (&input.state, &input.answer) {
             (InputState::Answered, Some(a)) => format!("answered: {} — the agent acts on it and closes it", said(&input, &a.value)),
             (state, _) => format!("the input is {}", state.as_str()),
         };
         return Some(view! { <div class="qinput"><p class="qq"><b>{question}</b></p><p class="qdone">{words}</p></div> }.into_any());
     }
+    Some(controls_view(id, input, s, true, None, "submit"))
+}
+
+/// APP-86: an entry's several questions — where it stands (`2 of 3
+/// questions`, the bar, `1 answered`), a step each, then the current one:
+/// its controls while it is open (Submit records it and moves on; the last
+/// one's takes the entry out), else its answer, *change it* while the
+/// input is still open to a change, and *next open →*.
+fn steps_view(e: QueueEntry, s: Sheet) -> impl IntoView {
+    let held = inputs::signal();
+    let id = e.ticket.clone();
+    move || {
+        let all = held.with(|h| h.as_ref().map(|h| steps(&e, h.list())).unwrap_or_else(|| steps(&e, &[])));
+        let asked = s.step.with(|st| st.as_ref().filter(|(t, _)| *t == id).map(|(_, i)| i.clone()));
+        let Some(at) = current(&all, asked.as_deref()) else { return ().into_any() };
+        let n = all.len();
+        let done = all.iter().filter(|x| x.answered()).count();
+        let width = format!("width:{}%", done * 100 / n.max(1));
+        let chips = all
+            .iter()
+            .enumerate()
+            .map(|(k, x)| {
+                let class = if x.answered() { "stp done" } else if k == at { "stp cur" } else { "stp" };
+                let go = (id.clone(), x.id.clone());
+                let pick = s.pick;
+                let value = x.input.as_ref().and_then(|i| i.answer.as_ref()).map(|a| a.value.clone());
+                view! {
+                    <button type="button" class=class data-input=x.id.clone() aria-current=(k == at).then_some("step")
+                        on:click=move |_| {
+                            s.editing.set(false);
+                            s.step.set(Some(go.clone()));
+                            pick.set(value.as_ref().map(Pick::of).unwrap_or_default());
+                        }>
+                        <span class="nb">{if x.answered() { "✓".to_string() } else { (k + 1).to_string() }}</span>
+                        {x.id.clone()}
+                        {x.said().filter(|_| x.answered()).map(|v| view! { <span class="v">{v}</span> })}
+                        {(x.blocking && !x.answered()).then(|| view! { <span class="blk">"blocking"</span> })}
+                    </button>
+                }
+            })
+            .collect_view();
+        let head = view! {
+            <div class="qprog">
+                <span><b>{format!("{} of {n}", at + 1)}</b>" questions"</span>
+                <span class="bar2"><i style=width></i></span>
+                <span>{format!("{done} answered")}</span>
+            </div>
+            <div class="steps">{chips}</div>
+        };
+        let x = all[at].clone();
+        let others_settled = all.iter().enumerate().all(|(k, y)| k == at || y.settled());
+        let next = after(&all, at).map(|k| all[k].id.clone());
+        let body = match x.input.clone() {
+            None => view! { <p class="qq muted">"asks "<code>{format!("#{}", x.id)}</code>" — on the ticket"</p> }.into_any(),
+            Some(input) if input.state == InputState::Open || (input.state == InputState::Answered && s.editing.get()) => {
+                let label = if others_settled { "submit" } else { "submit · next ›" };
+                let hint = if others_settled {
+                    format!("the last of {n} · submit sends it, and the entry leaves the queue")
+                } else {
+                    "submit records this one and moves to the next question".to_string()
+                };
+                view! {
+                    {controls_view(id.clone(), input, s, others_settled, next.clone(), label)}
+                    <p class="qnext qstep-hint">{hint}</p>
+                }
+                .into_any()
+            }
+            Some(input) => {
+                let question = input.question.clone().unwrap_or_else(|| format!("#{}", x.id));
+                let words = match (&input.state, x.said()) {
+                    (InputState::Answered, Some(v)) => format!("✓ {v}"),
+                    (InputState::Closed, Some(v)) => format!("decided: {v}"),
+                    (state, _) => format!("the input is {}", state.as_str()),
+                };
+                let change = (input.state == InputState::Answered).then(|| {
+                    let v = input.answer.as_ref().map(|a| a.value.clone());
+                    let pick = s.pick;
+                    view! { <button type="button" class="qbtn" data-act="change-answer" on:click=move |_| { pick.set(v.as_ref().map(Pick::of).unwrap_or_default()); s.editing.set(true); }>"change it"</button> }
+                });
+                let onward = next.clone().map(|m| {
+                    let (go, pick) = ((id.clone(), m), s.pick);
+                    view! { <button type="button" class="qbtn fill" data-act="next-open" on:click=move |_| { s.editing.set(false); s.step.set(Some(go.clone())); pick.set(Pick::default()); }>"next open →"</button> }
+                });
+                view! {
+                    <div class="qinput">
+                        <p class="qq"><b>{question}</b></p>
+                        <p class="qdone">{words}</p>
+                        <div class="qsubmit qsteps-acts">{change}{onward}</div>
+                    </div>
+                }
+                .into_any()
+            }
+        };
+        view! { {head}{body} }.into_any()
+    }
+}
+
+/// An open input's controls and its submit — APP-25's: every control only
+/// picks; the one submit sends (APP-86: `last` takes the entry out; else
+/// `next` is the step it moves to).
+fn controls_view(id: String, input: Input, s: Sheet, last: bool, next: Option<String>, label: &'static str) -> AnyView {
+    let (busy, pick) = (s.busy, s.pick);
+    let named = input.id.to_string();
+    let question = input.question.clone().unwrap_or_else(|| format!("#{named}"));
     // APP-25: every control only picks; the one submit sends.
     let controls = match input.kind {
         InputKind::Choice => {
@@ -1699,7 +1917,7 @@ fn input_view(
             return;
         }
         if let Some(value) = pick.with_untracked(|p| p.value(kind)) {
-            submit(id.clone(), named.clone(), value, problem, busy, pick);
+            submit(id.clone(), named.clone(), value, s, last, next.clone());
         }
     };
     let controls = view! {
@@ -1712,11 +1930,11 @@ fn input_view(
                 disabled=move || busy.get() || pick.with(|p| p.value(kind).is_none())
                 on:click=send
             >
-                {move || if busy.get() { "submitting…" } else { "submit" }}
+                {move || if busy.get() { "submitting…" } else { label }}
             </button>
         </div>
     };
-    Some(view! { <div class="qinput"><p class="qq"><b>{question}</b></p>{controls}</div> }.into_any())
+    view! { <div class="qinput"><p class="qq"><b>{question}</b></p>{controls}</div> }.into_any()
 }
 
 #[cfg(test)]
@@ -1757,6 +1975,8 @@ mod tests {
             urgency: u,
             reason: "why".into(),
             input: None,
+            inputs: Vec::new(),
+            blocking: None,
             by: "idp:agent".into(),
             name: None,
             source: TransitionSource::Api,
@@ -1942,6 +2162,63 @@ mod tests {
         assert!(a.is_empty(), "a reconnect's refetch, new rows, a raise and replayed events included");
         assert_eq!(ids(held.as_ref().unwrap()), ["A-1", "A-3", "A-2"]);
         assert!(step(&mut held, Cause::Tick(20, 50), 50).1.is_empty(), "the clock alone moves nothing");
+    }
+
+    fn asked(ticket: &str, id: &str, state: InputState, answer: Option<&str>) -> Input {
+        use menger_tickets_api::{Answer, AnswerSource, InputOption, TicketId};
+        Input {
+            ticket: TicketId::new(ticket),
+            id: crate::typed::typed(id).unwrap(),
+            kind: InputKind::Choice,
+            question: Some(format!("{id}?")),
+            options: ["card", "sheet"].iter().map(|v| InputOption { value: v.to_string(), label: format!("A {v}"), recommended: false }).collect(),
+            recommendation: None,
+            state,
+            answer: answer.map(|o| Answer { value: InputValue::Choice { option: o.into() }, rationale: None, source: AnswerSource::App, at_unix: 1 }),
+            history: Vec::new(),
+        }
+    }
+
+    /// APP-86: an entry of three — its steps in order, the blocking one
+    /// marked, where it stands, the step shown, and where Submit moves.
+    #[test]
+    fn several_questions_step_in_order() {
+        let mut e = entry("GLAZE-11", Urgency::Blocking, 0);
+        e.inputs = vec!["format".into(), "fields".into(), "naming".into()];
+        e.blocking = Some("naming".into());
+        e.input = Some("naming".into());
+        let held = [
+            asked("GLAZE-11", "format", InputState::Answered, Some("card")),
+            asked("GLAZE-11", "fields", InputState::Open, None),
+            asked("GLAZE-11", "naming", InputState::Open, None),
+            asked("OTHER-1", "fields", InputState::Answered, Some("card")),
+        ];
+        let st = steps(&e, &held);
+        assert_eq!(st.iter().map(|s| (s.id.as_str(), s.answered(), s.blocking)).collect::<Vec<_>>(), [("format", true, false), ("fields", false, false), ("naming", false, true)]);
+        assert_eq!(st[0].said().as_deref(), Some("A card"));
+        assert_eq!(progress(&st).as_deref(), Some("1 of 3 answered"));
+        assert_eq!(current(&st, None), Some(1), "the first not settled");
+        assert_eq!(current(&st, Some("format")), Some(0), "a step gone back to");
+        assert_eq!(current(&st, Some("gone")), Some(1));
+        assert_eq!(after(&st, 1), Some(2), "fields → naming");
+        assert_eq!(after(&st, 2), Some(1), "naming → back to fields, still open");
+        // The last open one: Submit finishes the entry.
+        let mut last = st.clone();
+        last[1].input = Some(asked("GLAZE-11", "fields", InputState::Closed, Some("sheet")));
+        assert_eq!(after(&last, 2), None);
+        // One input: the row says `asks`, no progress.
+        let mut one = entry("KILN-7", Urgency::Now, 0);
+        one.input = Some("layout".into());
+        assert_eq!(progress(&steps(&one, &[])), None);
+        assert_eq!(steps(&one, &[]).len(), 1, "an entry before APP-86 names its one input");
+    }
+
+    /// APP-86: a step gone back to holds its answer, to change it.
+    #[test]
+    fn a_pick_holds_an_answer_given() {
+        assert!(Pick::of(&InputValue::Choice { option: "card".into() }).chosen("card"));
+        assert_eq!(Pick::of(&InputValue::Multi { options: vec!["cone".into()] }).value(InputKind::Multi), Some(InputValue::Multi { options: vec!["cone".into()] }));
+        assert_eq!(Pick::of(&InputValue::Text { text: "x".into() }).text, "x");
     }
 
     /// APP-25: choosing picks, nothing more; submit is enabled only once

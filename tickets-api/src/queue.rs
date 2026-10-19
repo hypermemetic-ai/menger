@@ -7,6 +7,11 @@
 //!   where, when it was first queued and last asked, and until when it is
 //!   snoozed. A ticket is in the queue at most once; queueing it again
 //!   raises the urgency and never lowers it.
+//! - **Several questions** (APP-86): an entry may name several inputs
+//!   ([`QueueEntry::inputs`], in the order asked) and the one the caller is
+//!   idle on ([`QueueEntry::blocking`]); it leaves the queue when every one
+//!   it names is closed. `input` stays, for every reader before APP-86: the
+//!   blocking one, else the first.
 //! - **The order** ([`order`]): most urgent first, then the oldest.
 //! - **Its history** ([`QueueRecord`]): every queueing, raise, snooze and
 //!   unqueue — who, from where, why — kept in a log of its own beside the
@@ -73,6 +78,9 @@ impl FromStr for Urgency {
 /// The longest reason the queue keeps, in bytes.
 pub const REASON_MAX: usize = 2_000;
 
+/// APP-86: the most inputs one entry names.
+pub const INPUTS_MAX: usize = 16;
+
 /// The longest snooze, in minutes: a week.
 pub const SNOOZE_MAX_MINUTES: u32 = 7 * 24 * 60;
 
@@ -84,9 +92,21 @@ pub struct QueueEntry {
     /// Why the owner should look.
     pub reason: String,
     /// The input on the ticket whose answer is what is asked — required at
-    /// `blocking`; closing it takes the ticket out of the queue.
+    /// `blocking`. APP-86: with several named, the blocking one, else the
+    /// first ([`QueueEntry::inputs`] holds them all).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
+    /// APP-86: every input the entry names, in the order asked — the
+    /// questions the owner answers in turn. It leaves the queue when every
+    /// one is closed (one closed is progress). Written only with two or
+    /// more; [`QueueEntry::named`] reads both forms.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+    /// APP-86: the input the caller is idle on — one of the named; at
+    /// urgency `blocking` with one input it is implied, and not written
+    /// ([`QueueEntry::blocking_input`] reads both).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<String>,
     /// Who queued it last: a principal (`anonymous` on one kept before ACCESS-24, when login could be off).
     pub by: String,
     /// Their display name, when they have one.
@@ -106,6 +126,39 @@ impl QueueEntry {
     /// Whether it is snoozed at `now`.
     pub fn snoozed_at(&self, now: i64) -> bool {
         self.snoozed_until_unix.is_some_and(|u| u > now)
+    }
+
+    /// APP-86: the inputs it names, in order — `inputs`, or (an entry kept
+    /// before APP-86) its one `input`.
+    pub fn named(&self) -> Vec<&str> {
+        match self.inputs.is_empty() {
+            true => self.input.iter().map(String::as_str).collect(),
+            false => self.inputs.iter().map(String::as_str).collect(),
+        }
+    }
+
+    /// APP-86: the input the caller is idle on — `blocking`, or an entry at
+    /// urgency `blocking` naming one input: that one.
+    pub fn blocking_input(&self) -> Option<&str> {
+        self.blocking.as_deref().or_else(|| (self.urgency == Urgency::Blocking && self.named().len() == 1).then_some(self.input.as_deref()).flatten())
+    }
+
+    /// APP-86: as the wire and the file keep it — an entry naming at most one
+    /// input is MENGER-39's, byte for byte (`input` alone; `blocking` only
+    /// where the urgency does not already say it); with several, `inputs`
+    /// lists them and `input` is the blocking one, else the first.
+    pub fn compact(mut self) -> Self {
+        let named: Vec<String> = self.named().into_iter().map(str::to_string).collect();
+        self.input = self.blocking.clone().filter(|b| named.contains(b)).or_else(|| named.first().cloned());
+        if named.len() <= 1 {
+            self.inputs = Vec::new();
+            if self.urgency == Urgency::Blocking && self.blocking == self.input {
+                self.blocking = None;
+            }
+        } else {
+            self.inputs = named;
+        }
+        self
     }
 }
 
@@ -188,6 +241,12 @@ pub struct QueueRecord {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
+    /// APP-86: every input the entry named after the write.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+    /// APP-86: the one the caller was idle on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<String>,
     pub at_unix: i64,
     pub actor: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -260,6 +319,8 @@ mod tests {
             urgency: u,
             reason: "r".into(),
             input: None,
+            inputs: Vec::new(),
+            blocking: None,
             by: "a".into(),
             name: None,
             source: TransitionSource::Api,

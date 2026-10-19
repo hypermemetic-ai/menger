@@ -29,7 +29,7 @@ fn refused(store: &Store, caller: &VerifiedUser, id: String, e: StoreError) -> T
 
 /// What a queue write asks: `queue`, `unqueue` or `snooze`.
 pub(super) enum Ask {
-    Queue { urgency: Urgency, reason: Reason, input: Option<InputId> },
+    Queue { urgency: Urgency, reason: Reason, inputs: Vec<String>, blocking: Option<String> },
     Unqueue,
     Snooze { minutes: u32 },
 }
@@ -60,7 +60,10 @@ pub(super) fn queue_stream(
             }
         };
         let answer = match ask {
-            Ask::Queue { urgency, reason, input } => store.queue_by(on, urgency, &reason, input.as_deref(), act).await.map(wire),
+            Ask::Queue { urgency, reason, inputs, blocking } => {
+                let ask = crate::store::QueueAsk { urgency, reason: reason.into_string(), inputs, blocking };
+                store.queue_with(on, ask, act).await.map(wire)
+            }
             Ask::Unqueue => store
                 .unqueue_by(on, act)
                 .await

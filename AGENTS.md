@@ -685,6 +685,7 @@ close, as always). Queue the question first — the input — then the ticket:
 
 ```sh
 synapse -P 4455 menger tickets queue --id RETURNS-13 --urgency blocking --input landing --reason "the import is idle until this is decided"
+synapse -P 4455 menger tickets queue --id GLAZE-11 --urgency blocking --input format --input fields --input naming --blocking naming --reason "the import is idle"
 synapse -P 4455 menger tickets queue --id MENGER-41 --urgency now --reason "the promote rolled back"
 synapse -P 4455 menger tickets queued                       # most urgent first, then oldest
 synapse -P 4455 menger tickets snooze --id MENGER-41 --minutes 30
@@ -707,6 +708,15 @@ ends with `timed_out`. An agent never queues and then just stops:
 synapse -P 4455 -j menger tickets await_reply --id RETURNS-13 --input landing --timeout-minutes 240
 synapse -P 4455 menger tickets request_changes --id RETURNS-13 --body "neither: …"   # the owner, from a shell
 ```
+
+**Several questions in one entry** (APP-86): repeat `--input` (in the
+order to ask them) and name the one you are idle on with `--blocking`
+(required at `blocking` with several). The entry leaves the queue when
+every input it names is closed — close each as you act on it; one closed is
+progress. Queueing again adds inputs and never lowers the urgency.
+`await_reply` without `--input` replies on each answer: call it again with
+`--since` for the next. The tray steps the owner through them (`1 of 3
+answered`).
 
 `watch` carries `queued` / `unqueued` / `snoozed`; `history --id X` ends with
 the ticket's `queue_record`s (who queued it, why, at what urgency). `queued`

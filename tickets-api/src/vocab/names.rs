@@ -224,6 +224,79 @@ text_type!(
     input_id
 );
 
+/// APP-86: the inputs a queue entry names — `--input a --input b` (or
+/// `a,b`), in the order asked. A list on the wire (its schema `InputId`'s
+/// array, so synapse repeats the flag), and — for every caller before
+/// APP-86 — a bare string reads as the list of that one. Each is an
+/// [`InputId`]; an empty list is none.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub struct InputIds(Vec<InputId>);
+
+impl InputIds {
+    /// Each, in order.
+    pub fn as_slice(&self) -> &[InputId] {
+        &self.0
+    }
+
+    /// Each as text, in order.
+    pub fn into_strings(self) -> Vec<String> {
+        self.0.into_iter().map(InputId::into_string).collect()
+    }
+
+    /// Whether it names none.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<Vec<InputId>> for InputIds {
+    fn from(ids: Vec<InputId>) -> Self {
+        Self(ids)
+    }
+}
+
+impl From<InputId> for InputIds {
+    fn from(id: InputId) -> Self {
+        Self(vec![id])
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for InputIds {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum OneOrMany {
+            One(String),
+            Many(Vec<String>),
+        }
+        let texts = match OneOrMany::deserialize(d).map_err(|_| serde::de::Error::custom("an input's id, or a list of them (`--input a --input b`)"))? {
+            OneOrMany::One(t) => vec![t],
+            OneOrMany::Many(v) => v,
+        };
+        texts.into_iter().map(InputId::try_from).collect::<Result<Vec<_>, _>>().map(Self).map_err(serde::de::Error::custom)
+    }
+}
+
+impl schemars::JsonSchema for InputIds {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "InputIds".into()
+    }
+    /// Inlined where it is used, as `Vec<InputId>` is: the generators read
+    /// `InputId[]`.
+    fn inline_schema() -> bool {
+        true
+    }
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let item = g.subschema_for::<InputId>();
+        schemars::json_schema!({
+            "type": "array",
+            "description": "Inputs on the ticket, by id, in order (a bare id reads as one)",
+            "items": item
+        })
+    }
+}
+
 fn component_name(text: &str) -> Result<String, String> {
     let t = text.trim();
     match crate::component_docs::is_component_name(t) {

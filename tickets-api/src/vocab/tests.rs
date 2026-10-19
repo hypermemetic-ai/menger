@@ -107,6 +107,20 @@ fn a_label_is_the_label_rule() {
     assert_eq!("Needs-You".parse::<Label>().unwrap().as_str(), "needs-you");
 }
 
+/// APP-86: a queue's inputs — a list, or (every caller before) one bare id.
+#[test]
+fn input_ids_are_a_list_or_one() {
+    let read = |v: serde_json::Value| serde_json::from_value::<InputIds>(v).map(InputIds::into_strings).map_err(|e| e.to_string());
+    assert_eq!(read(json!("landing")), Ok(vec!["landing".to_string()]));
+    assert_eq!(read(json!([" format ", "naming"])), Ok(vec!["format".to_string(), "naming".to_string()]));
+    assert_eq!(read(json!([])), Ok(vec![]));
+    assert!(read(json!(["a", ""])).is_err() && read(json!("")).is_err() && read(json!(7)).is_err());
+    let ids: InputIds = serde_json::from_value(json!(["a", "b"])).unwrap();
+    assert_eq!(serde_json::to_value(&ids).unwrap(), json!(["a", "b"]), "a list on the wire");
+    let schema = serde_json::to_value(schemars::schema_for!(InputIds)).unwrap();
+    assert_eq!(schema["type"], json!("array"), "synapse repeats the flag: {schema}");
+}
+
 #[test]
 fn the_small_names_hold_their_rules() {
     holds::<InputId>(&["landing", " landing ", "a b"], &["", " "]);
