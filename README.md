@@ -902,8 +902,11 @@ browser in as that agent — a session minted over the socket
 as the shell's session cookie, the token kept in memory (`--session FILE`
 takes one already minted). A mockup's page counts as settled once its
 document and fonts are in and the layout is still (APP-43). A page taller
-than one paint (16,000 px) is shot in parts of 8,000 — `NAME.1.png`,
-`NAME.2.png`, … — cut at its last drawn element. `--chat N` puts each shot
+than one paint (16,000 px) is shot in slices of 8,000, cut at its last
+drawn element, and stitched into one image (APP-78). It comes out as parts
+(`NAME.1.png`, `NAME.2.png`, …) only when one image would be over 16
+megapixels (iOS Safari's limit), 32,000 px tall or 7 MiB (`media.put`'s
+cap). `--chat N` puts each shot
 into chat N (`media.put { chat }`, as the key's agent) and prints its
 `media:<hash>`, to write as `![shot](media:<hash>)`:
 

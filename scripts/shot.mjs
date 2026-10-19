@@ -13,7 +13,7 @@
 // Playwright comes from perf/node_modules, as deploy/smoke-browser.mjs's.
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -131,10 +131,16 @@ const widths = opt.width.split(',').map((w) => int('width', w.trim(), 200, 4000)
 const height = int('height', opt.height, 200, 4000);
 const timeoutMs = int('timeout', opt.timeout, 1, 600) * 1000;
 // Chromium will not paint a surface taller than this in one screenshot; a
-// taller page is laid out whole (up to TALLEST) and shot in parts of PART.
+// taller page is laid out whole (up to TALLEST) and shot in slices of PART,
+// stitched into one image (APP-78) unless one would pass what a phone shows
+// (ONE_PIXELS: iOS Safari's decode limit), a canvas holds (ONE_HEIGHT) or
+// the chat takes (ONE_BYTES: media.put's cap) — then they stay parts.
 const MAX_HEIGHT = 16000;
 const TALLEST = 64000;
 const PART = 8000;
+const ONE_PIXELS = 16_000_000;
+const ONE_HEIGHT = 32_000;
+const ONE_BYTES = 7 * 1024 * 1024;
 
 // ── Where: an environment's file, a port, a URL, a file ──────────────────
 
@@ -459,7 +465,8 @@ async function shoot(context, { t, theme, width }) {
     } else if (opt.screen || page.viewportSize().height <= MAX_HEIGHT) {
       await page.screenshot({ path: file, fullPage: !opt.screen, animations: 'disabled' });
     } else {
-      // APP-76: taller than one paint — in parts, file.1.png, file.2.png, …
+      // APP-76: taller than one paint — in slices, stitched into one (APP-78)
+      // or, past its limits, file.1.png, file.2.png, …
       // The page's content ends at its last drawn element — a box that fills
       // the window (a column, a min-height) grows with it and is no end.
       const vh = page.viewportSize().height;
@@ -477,12 +484,22 @@ async function shoot(context, { t, theme, width }) {
       }, vh);
       const total = Math.min(vh, end > 0 ? end + 24 : vh);
       if (end + 24 > TALLEST) console.error(`shot: ${t.name}: the page is ${end}px tall — cut at ${TALLEST}px`);
-      const files = [];
-      for (let y = 0, k = 1; y < total; y += PART, k++) {
-        const part = file.replace(/\.png$/, `.${k}.png`);
-        await page.screenshot({ path: part, clip: { x: 0, y, width, height: Math.min(PART, total - y) }, animations: 'disabled' });
-        files.push(part);
+      const slices = [];
+      for (let y = 0; y < total; y += PART) {
+        slices.push(await page.screenshot({ clip: { x: 0, y, width, height: Math.min(PART, total - y) }, animations: 'disabled' }));
       }
+      const one = await stitch(page.context(), slices, width, total);
+      if (one) {
+        writeFileSync(file, one);
+        console.log(file);
+        if (opt.chat) await toChat(t.origin ?? base, file);
+        return true;
+      }
+      const files = slices.map((b, i) => {
+        const part = file.replace(/\.png$/, `.${i + 1}.png`);
+        writeFileSync(part, b);
+        return part;
+      });
       for (const f of files) {
         console.log(f);
         if (opt.chat) await toChat(t.origin ?? base, f);
@@ -517,6 +534,36 @@ async function tokenFor(origin) {
 
 /** APP-76: the shot into chat `opt.chat` — media.put { chat } over the hub,
  *  as the session's agent; prints its media:<hash>. */
+// APP-78: the slices as one PNG, drawn on a canvas in a blank page of the
+// same browser — or null past ONE_PIXELS, ONE_HEIGHT or ONE_BYTES.
+async function stitch(context, slices, width, total) {
+  const w = width; // the context's scale is 1
+  const h = total;
+  if (w * h > ONE_PIXELS || h > ONE_HEIGHT) return null;
+  const blank = await context.newPage();
+  try {
+    const data = await blank.evaluate(async (parts) => {
+      const imgs = await Promise.all(parts.map((b64) => new Promise((ok, no) => {
+        const i = new Image();
+        i.onload = () => ok(i);
+        i.onerror = () => no(new Error('a slice did not decode'));
+        i.src = `data:image/png;base64,${b64}`;
+      })));
+      const c = document.createElement('canvas');
+      c.width = Math.max(...imgs.map((i) => i.naturalWidth));
+      c.height = imgs.reduce((n, i) => n + i.naturalHeight, 0);
+      const g = c.getContext('2d');
+      let y = 0;
+      for (const i of imgs) { g.drawImage(i, 0, y); y += i.naturalHeight; }
+      return c.toDataURL('image/png').split(',')[1];
+    }, slices.map((b) => b.toString('base64')));
+    const png = Buffer.from(data, 'base64');
+    return png.length > ONE_BYTES ? null : png;
+  } finally {
+    await blank.close();
+  }
+}
+
 async function toChat(origin, file) {
   const { call, connect } = await import(new URL('../deploy/menger-call.mjs', import.meta.url).href);
   const ws = await connect(hubOf(origin), { Authorization: `Bearer ${await tokenFor(origin)}` });
