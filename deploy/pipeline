@@ -424,6 +424,12 @@ cmd_build() {
   # A clean tree at the commit; build outputs and installed node modules stay
   # so a build is incremental.
   git -C "$BUILD" clean -ffdxq -e /target/ -e /frontend/target/ -e /perf/node_modules/ -e /diagrams/node/node_modules/
+  # The build compiles in its own targets, never a shared CARGO_TARGET_DIR: with
+  # one set (this machine sets ~/.cache/cargo-target/menger for every
+  # worktree), cargo wrote the release elsewhere and the copy below took a
+  # stale $BUILD/target/release/menger, and trunk raced another checkout's
+  # build in the same target and shipped a 0-byte wasm.
+  export CARGO_TARGET_DIR=$BUILD/target
 
   step "gate: cargo test --workspace"
   local gate_ws gate_fe
@@ -432,7 +438,7 @@ cmd_build() {
     || { record build test "$short" "gate failed"; die "gate failed — $BUILD/.gate-workspace.log"; }
   grep -q '^test result: FAILED' "$BUILD/.gate-workspace.log" && { record build test "$short" "gate failed"; die "gate failed: $gate_ws"; }
   step "gate: frontend tests"
-  gate_fe=$(cd "$BUILD/frontend" && cargo test 2>&1 | tee "$BUILD/.gate-frontend.log" | grep -E '^test result' \
+  gate_fe=$(cd "$BUILD/frontend" && CARGO_TARGET_DIR=$BUILD/frontend/target cargo test 2>&1 | tee "$BUILD/.gate-frontend.log" | grep -E '^test result' \
             | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') \
     || { record build test "$short" "gate failed"; die "frontend gate failed — $BUILD/.gate-frontend.log"; }
   grep -q '^test result: FAILED' "$BUILD/.gate-frontend.log" && { record build test "$short" "gate failed"; die "frontend gate failed: $gate_fe"; }
@@ -441,7 +447,16 @@ cmd_build() {
   step "release build"
   (cd "$BUILD" && cargo build --release -p menger -p menger-diagrams > "$BUILD/.build-release.log" 2>&1) \
     || die "release build failed — $BUILD/.build-release.log"
-  (cd "$BUILD/frontend" && trunk build --release >/dev/null 2>&1) || die "trunk build failed"
+  (cd "$BUILD/frontend" && CARGO_TARGET_DIR=$BUILD/frontend/target trunk build --release >/dev/null 2>&1) || die "trunk build failed"
+  # What goes into the release was built now, from this commit, and is whole.
+  local f
+  for f in "$BUILD/target/release/menger" "$BUILD/target/release/menger-diagrams"; do
+    [[ -s $f ]] || die "release build: $f is missing or empty"
+  done
+  compgen -G "$BUILD/frontend/dist/*.wasm" >/dev/null || die "trunk build: no wasm in $BUILD/frontend/dist"
+  for f in "$BUILD/frontend/dist/"*.wasm "$BUILD/frontend/dist/"*.js; do
+    [[ -s $f ]] || die "trunk build: $f is empty"
+  done
   (cd "$BUILD/diagrams/node" && npm ci --silent >/dev/null)
 
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
