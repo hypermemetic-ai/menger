@@ -33,6 +33,15 @@
 // `/status` says what runs and the session's age, `/help` lists them. Any
 // other `/x` goes to the agent as before.
 //
+// CHAT-45: which model a turn runs on. Each archetype has a default model,
+// kept in one file the bridge and every launcher read (models.mjs:
+// CHAT_BRIDGE_ARCHETYPES, else ~/.config/menger/archetypes.env, read on
+// every turn and command — an edit needs no restart); the bridge is the
+// architect. A chat may change it for itself: `/model` lists the models,
+// this chat's marked, `/model sonnet` switches the chat's next turns (kept
+// in state.json; the session is resumed on the new model), `/model default`
+// goes back to the architect's. `/status` says which model the chat is on.
+//
 // Nothing is missed or answered twice: the bridge keeps, per chat, the last
 // message it has handled, and every time the watch is (re)subscribed — the
 // socket dropped, the server restarted, a stream ended silently
@@ -47,17 +56,19 @@
 // explicitly (for a test, removed after). The list is read on every
 // message: an edit needs no restart.
 //
-// The agent's model and permission mode are this process's arguments, so
-// they are written in the unit (scripts/chat-bridge/menger-chat-bridge.service),
-// never chosen at runtime:
+// The agent's permission mode is this process's argument, written in the
+// unit (scripts/chat-bridge/menger-chat-bridge.service), never chosen at
+// runtime. Its model is the chat's (CHAT-45, above); `--model` is only the
+// architect's default where the archetypes file names none:
 //
-//   node bridge.mjs --model claude-opus-5-5 --permission-mode bypassPermissions
+//   node bridge.mjs --permission-mode bypassPermissions [--model claude-opus-5-5]
 //
 // Environment (the unit reads ~/.config/menger/chat-bridge.env):
 //   MENGER_URL                 the hub's socket (ws://127.0.0.1:4455, wss://app.menger.sh/ws)
 //   MENGER_KEY_FILE            the key it signs in with (~/.plexus/keys/builder.key; 0600)
 //   MENGER_AGENT               the key proof's agent name (builder)
 //   CHAT_BRIDGE_ALLOW          the allow list (~/.config/menger/chat-bridge.allow)
+//   CHAT_BRIDGE_ARCHETYPES     the archetypes' default models (~/.config/menger/archetypes.env; CHAT-45)
 //   CHAT_BRIDGE_STATE          its state dir (~/.local/state/menger/chat-bridge)
 //   CHAT_BRIDGE_CWD            where the agent runs (~/dev/controlflow/hypermemetic/menger)
 //   CHAT_BRIDGE_MAX            chats answered at once (3)
@@ -75,6 +86,7 @@ import os from "node:os";
 import path from "node:path";
 import { connect, keyProof, publicHex, seedOf } from "../../deploy/menger-call.mjs";
 import { clip, jsonLines, linesOf, liveLine } from "./live.mjs";
+import { MODELS, defaultFile, modelName, readDefaults, resolveModel } from "./models.mjs";
 
 const HOME = os.homedir();
 const env = process.env;
@@ -89,7 +101,8 @@ function args(argv) {
     else if (a === "--permission-mode") o.permissionMode = next();
     else fail(`unknown argument '${a}'`);
   }
-  if (!o.model || !o.permissionMode) fail("usage: bridge.mjs --model MODEL --permission-mode MODE (written in the unit)");
+  if (!o.permissionMode) fail("usage: bridge.mjs --permission-mode MODE [--model MODEL] (written in the unit)");
+  if (o.model && !resolveModel(o.model)) fail(`--model ${o.model}: not a model`);
   return o;
 }
 function fail(msg) { console.error(`chat-bridge: ${msg}`); process.exit(1); }
@@ -100,6 +113,7 @@ const cfg = {
   keyFile: env.MENGER_KEY_FILE || path.join(HOME, ".plexus/keys/builder.key"),
   agent: env.MENGER_AGENT || "builder",
   allow: env.CHAT_BRIDGE_ALLOW || path.join(HOME, ".config/menger/chat-bridge.allow"),
+  archetypes: defaultFile(env),
   state: env.CHAT_BRIDGE_STATE || path.join(HOME, ".local/state/menger/chat-bridge"),
   cwd: env.CHAT_BRIDGE_CWD || path.join(HOME, "dev/controlflow/hypermemetic/menger"),
   max: Math.max(1, Number(env.CHAT_BRIDGE_MAX || 3)),
@@ -145,6 +159,21 @@ function save() {
 for (const c of Object.values(state.chats)) delete c.inflight;
 save();
 const chatState = (id) => (state.chats[id] ??= { handled: null, session: null, ticket: null });
+
+// ── models (CHAT-45): the architect's default, and each chat's own ─────────
+let saidProblems = "";
+/** The architect's default: the archetypes file's line, else `--model`, else the built-in. */
+function architectDefault() {
+  const d = readDefaults(cfg.archetypes);
+  const p = d.problems.join("; ");
+  if (p !== saidProblems) { saidProblems = p; if (p) log(`archetypes: ${p}`); }
+  return d.from.architect === "built-in" && opt.model ? resolveModel(opt.model) : d.models.architect;
+}
+/** The model a chat's next turn runs on: its own, else the default. */
+function chatModel(s) {
+  const def = architectDefault();
+  return { id: s.model ?? def, set: !!s.model, def };
+}
 
 // ── the hub: one socket, many calls on it ──────────────────────────────────
 class Hub {
@@ -335,14 +364,20 @@ const COMMANDS = {
   clear: "forget this chat's agent session: the next message starts a new one (the chat itself stays)",
   stop: "end this chat's running turn; its session is kept",
   status: "what is running for this chat: the turn, since when, its last step; the session's age",
+  model: "this chat's model: `/model` lists them, `/model sonnet` switches the next turns, `/model default` goes back",
   help: "this list",
 };
-/** The command a body is, when the whole of it (trimmed) is one; else null. */
+const TAKES_ARG = new Set(["model"]);
+/** The command a body is, when the whole of it (trimmed) is one; else null.
+ *  Only `/model` takes a word after it (CHAT-45); `/clear now` is the agent's. */
 function commandOf(body) {
-  const m = /^\/([a-z]+)$/i.exec(String(body ?? "").trim());
+  const m = /^\/([a-z]+)(?:[ \t]+(\S.*))?$/i.exec(String(body ?? "").trim());
   const c = m?.[1].toLowerCase();
-  return c && Object.hasOwn(COMMANDS, c) ? c : null;
+  if (!c || !Object.hasOwn(COMMANDS, c)) return null;
+  return m[2] === undefined || TAKES_ARG.has(c) ? c : null;
 }
+/** The word after a command, trimmed; "" when none. */
+const argOf = (body) => (/^\/[a-z]+[ \t]+(\S.*)$/i.exec(String(body ?? "").trim())?.[1] ?? "").trim();
 const ago = (ms) => {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 90) return `${s}s`;
@@ -353,7 +388,7 @@ const ago = (ms) => {
 const hhmm = (ms) => `${new Date(ms).toISOString().slice(11, 16)}Z`;
 
 /** What a command says (and does) in a chat. */
-function commandAnswer(cmd, chatId) {
+function commandAnswer(cmd, chatId, arg = "") {
   const s = chatState(chatId);
   const t = turning.get(chatId);
   const waiting = pending.get(chatId)?.length ?? 0;
@@ -380,6 +415,7 @@ function commandAnswer(cmd, chatId) {
       }
       return `Stopping the turn that began ${hhmm(t.started)} (${ago(Date.now() - t.started)} ago). The session is kept: the next message resumes it.`;
     }
+    case "model": return modelAnswer(s, t, arg);
     case "status": {
       const lines = [];
       if (t) {
@@ -391,15 +427,46 @@ function commandAnswer(cmd, chatId) {
         ? `Session ${s.session.slice(0, 8)}…, ${s.sessionAt ? `begun ${ago(Date.now() - s.sessionAt)} ago` : "its age unknown (begun before CHAT-40)"}.`
         : t?.session && (s.cleared ?? 0) === t.cleared ? `Session ${t.session.slice(0, 8)}…, begun by this turn.`
         : "No session: the next message starts a new one.");
+      const md = chatModel(s);
+      lines.push(`Model: ${modelName(md.id)} (\`${md.id}\`), ${md.set ? `set in this chat — the architect's default is ${modelName(md.def)}` : "the architect's default"}${t?.model && t.model !== md.id ? `; the running turn is on ${modelName(t.model)}` : ""}.`);
       return lines.join("\n");
     }
   }
 }
 
+/** CHAT-45: `/model` — list; `/model NAME` — switch this chat; `/model default` — back. */
+function modelAnswer(s, t, arg) {
+  const word = arg.trim().toLowerCase();
+  const running = t ? ` The turn running now finishes on ${modelName(t.model ?? chatModel(s).id)}.` : "";
+  if (word === "default") {
+    const was = s.model;
+    delete s.model;
+    const def = architectDefault();
+    return was
+      ? `Back on the architect's default, ${modelName(def)} (\`${def}\`), from the next turn; the session carries over.${running}`
+      : `This chat is already on the architect's default, ${modelName(def)}.`;
+  }
+  if (word) {
+    const id = resolveModel(word);
+    if (!id) return `No model “${clip(arg, 60)}”. ${choices(s)}`;
+    const def = architectDefault();
+    if (id === def) { delete s.model; return `This chat runs on ${modelName(id)} from the next turn — the architect's default; the session carries over.${running}`; }
+    if (s.model === id) return `This chat is already on ${modelName(id)}.`;
+    s.model = id;
+    return `This chat runs on ${modelName(id)} (\`${id}\`) from the next turn; the session carries over. The architect's default is ${modelName(def)} — \`/model default\` goes back.${running}`;
+  }
+  const md = chatModel(s);
+  return [`**Model** for this chat: ${modelName(md.id)} (\`${md.id}\`), ${md.set ? "set here" : "the architect's default"}.`, "",
+    ...MODELS.map((m) => `- \`${m.alias}\` — ${m.name}${m.id === md.def ? " · the architect's default" : ""}${m.id === md.id ? " · **this chat**" : ""}`),
+    ...(MODELS.some((m) => m.id === md.id) ? [] : [`- \`${md.id}\` · **this chat**`]), "",
+    "`/model <name>` switches this chat's next turns (the session carries over); `/model default` goes back."].join("\n");
+}
+const choices = (s) => `Choices: ${MODELS.map((m) => `\`${m.alias}\``).join(", ")}, or \`default\` — \`/model\` lists them.`;
+
 /** A command: done, answered as the builder, its message marked handled. */
 async function command(cmd, m) {
   const s = chatState(m.chat);
-  const body = commandAnswer(cmd, m.chat);
+  const body = commandAnswer(cmd, m.chat, argOf(m.body));
   if (cmd === "clear") s.clearedAt = m.id;
   save();
   await rpc("chats.read", { chat: m.chat, upto: m.id }).catch((e) => log(`chat ${m.chat}: read: ${e.message}`));
@@ -409,7 +476,7 @@ async function command(cmd, m) {
   else (s.commands ??= []).push(m.id);
   if (s.commands) { s.commands = s.commands.filter((id) => id > (s.handled ?? 0)); if (!s.commands.length) delete s.commands; }
   save();
-  fs.appendFileSync(TURNS_LOG, JSON.stringify({ at: new Date().toISOString(), chat: m.chat, command: cmd, message: m.id }) + "\n");
+  fs.appendFileSync(TURNS_LOG, JSON.stringify({ at: new Date().toISOString(), chat: m.chat, command: cmd, message: m.id, ...(cmd === "model" ? { model: chatModel(s).id } : {}) }) + "\n");
   log(`chat ${m.chat}: /${cmd} answered`);
 }
 
@@ -423,7 +490,8 @@ async function turn(chatId) {
   const upto = batch[batch.length - 1].id;
   const started = Date.now();
   const cleared = s.cleared ?? 0;
-  const t = { started, lastLine: null, child: null, stopped: false, session: null, cleared };
+  const model = chatModel(s).id;
+  const t = { started, lastLine: null, child: null, stopped: false, session: null, cleared, model };
   turning.set(chatId, t);
   try { await turnBody(chatId, batch, s, t, cleared, upto, started); } finally { turning.delete(chatId); }
 }
@@ -446,7 +514,7 @@ async function turnBody(chatId, batch, s, t, cleared, upto, started) {
 
   let answer, exit = 0, session = s.session, why = null;
   try {
-    const r = await runAgent(chatId, chat, ticket, batch, s.session, (line) => { t.lastLine = line; live?.line(line); }, t);
+    const r = await runAgent(chatId, chat, ticket, batch, s.session, (line) => { t.lastLine = line; live?.line(line); }, t, t.model);
     session = r.session ?? session;
     exit = r.exit;
     if (r.ok) answer = r.text;
@@ -462,9 +530,9 @@ async function turnBody(chatId, batch, s, t, cleared, upto, started) {
   delete s.inflight;
   save();
   await flushOutbox().finally(() => (activityOk ? activity(chatId, "ended") : null));
-  const line = { at: new Date().toISOString(), chat: chatId, ticket, messages: batch.map((m) => m.id), session, duration_ms: Date.now() - started, exit, ok: !why, steps, ...(t.stopped ? { stopped: true } : {}) };
+  const line = { at: new Date().toISOString(), chat: chatId, ticket, messages: batch.map((m) => m.id), session, model: t.model, duration_ms: Date.now() - started, exit, ok: !why, steps, ...(t.stopped ? { stopped: true } : {}) };
   fs.appendFileSync(TURNS_LOG, JSON.stringify(line) + "\n");
-  log(`chat ${chatId}: answered ${batch.map((m) => m.id).join(",")} in ${Math.round(line.duration_ms / 1000)}s (session ${session ?? "-"}, exit ${exit}${why ? `, ${why}` : ""})`);
+  log(`chat ${chatId}: answered ${batch.map((m) => m.id).join(",")} in ${Math.round(line.duration_ms / 1000)}s (session ${session ?? "-"}, ${t.model}, exit ${exit}${why ? `, ${why}` : ""})`);
 }
 
 /** CHAT-18: say `state` (and `line`) in `chat`'s live line — never retried
@@ -551,7 +619,7 @@ function systemPrompt(chatId, ticket, title, chat) {
   ].join("\n");
 }
 
-async function runAgent(chatId, chat, ticket, batch, session, onLine, t = {}) {
+async function runAgent(chatId, chat, ticket, batch, session, onLine, t = {}, model = architectDefault()) {
   let title = null;
   let prompt;
   const fresh = await withNotes(batch);
@@ -574,10 +642,10 @@ async function runAgent(chatId, chat, ticket, batch, session, onLine, t = {}) {
       `New — answer this:\n\n${fresh.map(fmt).join("\n\n")}`,
     ].join("\n\n---\n\n");
   }
-  let r = await claude(prompt, session, systemPrompt(chatId, ticket, title, chat), onLine, t);
+  let r = await claude(prompt, session, systemPrompt(chatId, ticket, title, chat), onLine, t, model);
   if (!r.ok && !t.stopped && session && /No conversation found|session/i.test(r.why ?? "")) {
     log(`chat ${chatId}: session ${session} could not be resumed (${r.why}); a new one`);
-    r = await claude(prompt, null, systemPrompt(chatId, ticket, title, chat), onLine, t);
+    r = await claude(prompt, null, systemPrompt(chatId, ticket, title, chat), onLine, t, model);
   }
   return r;
 }
@@ -588,9 +656,9 @@ const CWDS = (() => { try { return [cfg.cwd, fs.realpathSync(cfg.cwd)]; } catch 
 /** One `claude -p` run, streamed (CHAT-18): each event's lines to `onLine`;
  *  the answer is the stream's `result` event, its session the one any event
  *  names (as `--output-format json`'s result named it before). */
-function claude(prompt, session, sys, onLine = () => {}, t = {}) {
+function claude(prompt, session, sys, onLine = () => {}, t = {}, model = architectDefault()) {
   return new Promise((resolve) => {
-    const argv = ["-p", "--output-format", "stream-json", "--verbose", "--model", opt.model, "--permission-mode", opt.permissionMode, "--append-system-prompt", sys];
+    const argv = ["-p", "--output-format", "stream-json", "--verbose", "--model", model, "--permission-mode", opt.permissionMode, "--append-system-prompt", sys];
     if (session) argv.push("--resume", session);
     if (t.stopped) return resolve({ ok: false, exit: -1, why: "stopped by the owner (/stop)" });
     const child = spawn(cfg.claude, argv, { cwd: cfg.cwd, env: { ...env, MENGER_URL: cfg.url }, stdio: ["pipe", "pipe", "pipe"] });
@@ -671,5 +739,5 @@ async function holdWatch() {
 process.on("unhandledRejection", (e) => log(`unhandled: ${e?.stack || e}`));
 process.on("SIGTERM", () => { log("stopping"); process.exit(0); });
 process.on("SIGINT", () => { log("stopping"); process.exit(0); });
-log(`chat bridge: ${cfg.url} as ${SELF} (${cfg.agent}); allow list ${cfg.allow}; state ${cfg.state}; agent ${cfg.claude} --model ${opt.model} --permission-mode ${opt.permissionMode} in ${cfg.cwd}; ${cfg.max} at once`);
+log(`chat bridge: ${cfg.url} as ${SELF} (${cfg.agent}); allow list ${cfg.allow}; state ${cfg.state}; agent ${cfg.claude} --permission-mode ${opt.permissionMode} in ${cfg.cwd}, the architect on ${architectDefault()} (${cfg.archetypes}${opt.model ? `; --model ${opt.model} where it names none` : ""}); ${cfg.max} at once`);
 holdWatch();

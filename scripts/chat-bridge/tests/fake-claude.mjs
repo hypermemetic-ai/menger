@@ -8,7 +8,9 @@
 // (s) holds the result, as a slow turn would; FAKE_CLAUDE_MARK (a file)
 // gets one line per run, the unix ms of its first output. CHAT-40: a prompt
 // whose last line holds `[slow]` holds its result FAKE_CLAUDE_SLOW (s, 60)
-// — a long turn for `/stop` to end.
+// — a long turn for `/stop` to end. CHAT-45: the `--model` it was run with is
+// in its reply (`on <model>`) and, with FAKE_CLAUDE_MODELS (a file), one line
+// per run.
 import crypto from "node:crypto";
 import fs from "node:fs";
 const argv = process.argv.slice(2);
@@ -18,6 +20,8 @@ if (!argv.includes("stream-json") || !argv.includes("--verbose")) {
 }
 const r = argv.indexOf("--resume");
 const session = r >= 0 ? argv[r + 1] : crypto.randomUUID();
+const mi = argv.indexOf("--model");
+const model = mi >= 0 ? argv[mi + 1] : "(none)";
 const prompt = fs.readFileSync(0, "utf8");
 const last = prompt.trim().split("\n").pop();
 const step = Number(process.env.FAKE_CLAUDE_STEP ?? 300);
@@ -26,6 +30,7 @@ const say = (ev) => process.stdout.write(JSON.stringify({ ...ev, session_id: ses
 const tool = (name, input) => say({ type: "assistant", message: { content: [{ type: "tool_use", id: crypto.randomUUID(), name, input }] } });
 
 if (process.env.FAKE_CLAUDE_MARK) fs.appendFileSync(process.env.FAKE_CLAUDE_MARK, `${Date.now()}\n`);
+if (process.env.FAKE_CLAUDE_MODELS) fs.appendFileSync(process.env.FAKE_CLAUDE_MODELS, `${model}\n`);
 say({ type: "system", subtype: "init", cwd: process.cwd(), tools: ["Bash", "Read"] });
 await sleep(step);
 say({ type: "assistant", message: { content: [{ type: "text", text: "Looking at it now." }] } });
@@ -38,4 +43,4 @@ await sleep(step);
 tool("Bash", { command: "MENGER_TOKEN=supersecret-value cargo test" });
 await sleep(Number(process.env.FAKE_CLAUDE_SLEEP || 0) * 1000);
 if (last.includes("[slow]")) await sleep(Number(process.env.FAKE_CLAUDE_SLOW || 60) * 1000);
-say({ type: "result", subtype: "success", is_error: false, result: `fake reply (${r >= 0 ? "resumed" : "new"} ${session}) to: ${last}` });
+say({ type: "result", subtype: "success", is_error: false, result: `fake reply (${r >= 0 ? "resumed" : "new"} ${session}) on ${model} to: ${last}` });

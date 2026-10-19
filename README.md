@@ -3546,11 +3546,13 @@ A perpetual listener on the builder's chats: when the owner writes in a
 chat the builder is in, it spawns a Claude Code agent on this machine and
 posts its answer there. `scripts/chat-bridge/` holds it — `bridge.mjs`
 (Node ≥ 22, the standard library and `deploy/menger-call.mjs`'s socket),
-`live.mjs` (CHAT-18's live line), the unit `menger-chat-bridge.service`,
+`live.mjs` (CHAT-18's live line), `models.mjs` (CHAT-45's archetypes and
+models), the unit `menger-chat-bridge.service`,
 `install.sh`, and its acceptance on a throwaway login-on server,
 `tests/throwaway.mjs WORKDIR [--real]` (`MENGER_BIN` a server with
 `chats.activity` until prod runs one), beside `node --test
-scripts/chat-bridge/tests/live.test.mjs` (the live line's rules).
+scripts/chat-bridge/tests/live.test.mjs` (the live line's rules) and
+`scripts/chat-bridge/tests/models.test.mjs` (the archetypes file's).
 
 - **It runs** as `systemd --user` unit `menger-chat-bridge` (`Restart=always`,
   `RestartSec=5`; lingering is on, so it survives logout and reboot), from
@@ -3610,6 +3612,32 @@ scripts/chat-bridge/tests/live.test.mjs` (the live line's rules).
   session's age; `/help` lists them. Any other `/x` goes to the agent. Each
   is one `{command, message}` line in `turns.log`, and is answered once
   across a restart.
+- **Models** (CHAT-45): each archetype has a default model, kept in one
+  file that the bridge and every launcher read —
+  `~/.config/menger/archetypes.env` (`CHAT_BRIDGE_ARCHETYPES` names another),
+  env-style so a shell launcher may source it, read on every turn and
+  command (an edit needs no restart):
+
+  | line | archetype | built-in default |
+  |---|---|---|
+  | `MENGER_MODEL_ARCHITECT=claude-opus-5-5` | answers in chat — the bridge | Opus 5.5 |
+  | `MENGER_MODEL_BUILDER=claude-opus-5-5` | a detached run that builds a ticket | Opus 5.5 |
+  | `MENGER_MODEL_ANALYST=claude-sonnet-5-5` | reads and reports | Sonnet 5.5 |
+
+  A value is a model's id or its short name (`opus`, `sonnet`, `haiku`,
+  `fable`); a missing line is the built-in default, a line that cannot be
+  read is logged and keeps it. A delegate (CHAT-46) takes the default of
+  the archetype it is given. A launcher asks for one:
+  `claude -p --model "$(node scripts/chat-bridge/models.mjs builder)" …`.
+  `install.sh` writes the file from `archetypes.env.example` once and
+  never rewrites it. In a chat, `/model` lists the models (Opus 5.5,
+  Sonnet 5.5, Haiku 5.5, Fable 5.1) with this chat's and the architect's
+  default marked; `/model sonnet` (a short name, a name, or a `claude-…`
+  id) moves the chat's next turns — kept in `state.json` across a restart,
+  the session resumed on the new model, a turn running finishing on its
+  own; `/model default` goes back to the architect's. Like the other
+  commands it is answered by the bridge, no agent spawned; `/status` says
+  the chat's model, and each turn's is in `turns.log` (`model`).
 - **The live line** (CHAT-18, `live.mjs`): as the stream comes, each
   assistant tool call is one line — `Bash: <its description, or the
   command's first 120 characters>`, `Read <path>`, `Edit <path>`, `Grep
@@ -3622,9 +3650,10 @@ scripts/chat-bridge/tests/live.test.mjs` (the live line's rules).
   An activity call is never retried and never fails a turn; `turns.log`
   counts the lines sent (`steps`).
 - **The agent's powers** are written in the unit's `ExecStart`, never
-  chosen at runtime: `--model claude-opus-5-5 --permission-mode
-  bypassPermissions` — the mode the owner runs builders in, every tool
-  without asking. Its system prompt says who it is (the owner's builder in
+  chosen at runtime: `--permission-mode bypassPermissions` — the mode the
+  owner runs builders in, every tool without asking. Its model is the
+  chat's (above); `--model` on the command line is only the architect's
+  default where the archetypes file names none. Its system prompt says who it is (the owner's builder in
   chat N on ticket T), the house rules (AGENTS.md, no `rm -r`, prod only
   through `deploy/pipeline`, questions as inputs), short answers, and
   worktrees and tickets for real work.

@@ -22,13 +22,15 @@ Type=simple
 Environment=PATH=%h/.local/bin:%h/.cargo/bin:%h/.ghcup/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=%h/.config/menger/chat-bridge.env
 WorkingDirectory=%h
-# The spawned agent's model and permission mode are written here, never
-# chosen at runtime. Permission mode: bypassPermissions — the mode the owner
+# The spawned agent's permission mode is written here, never chosen at
+# runtime. Its model is each chat's (CHAT-45): the architect's default from
+# ~/.config/menger/archetypes.env, or what /model set in that chat.
+# Permission mode: bypassPermissions — the mode the owner
 # runs his builders in: the agent runs every tool without asking (no
 # --allowedTools list narrows it). Its rules are its system prompt's: the
 # house's AGENTS.md, no `rm -r`, prod only through deploy/pipeline,
 # questions as inputs.
-ExecStart=%h/.local/bin/node %h/.local/share/menger-chat-bridge/scripts/chat-bridge/bridge.mjs --model claude-opus-5-5 --permission-mode bypassPermissions
+ExecStart=%h/.local/bin/node %h/.local/share/menger-chat-bridge/scripts/chat-bridge/bridge.mjs --permission-mode bypassPermissions
 Restart=always
 RestartSec=5
 KillMode=control-group
