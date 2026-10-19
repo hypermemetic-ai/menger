@@ -1,0 +1,12 @@
+repo_name = "menger"
+org = "hypermemetic-ai"
+forges = ["github"]
+
+# DIST-12: hyperforge's `build publish` (HYPERFORGE-23) runs this in place of
+# `cargo publish` for these crates — publish.sh stages the app's build into
+# menger's package. HF_PUBLISH_MODE says dry-run or execute; HF_CARGO_CONFIG
+# is the [patch.crates-io] for the plexus crates not on crates.io yet.
+[publish]
+crates = ["plexus-shell", "menger-tickets-api", "plexus-login", "menger"]
+dry_run = "scripts/publish.sh dry-run"
+execute = "scripts/publish.sh publish"
