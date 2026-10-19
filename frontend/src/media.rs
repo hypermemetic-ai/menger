@@ -16,7 +16,8 @@
 //! its bytes — once per image per page load — and sets a `blob:` URL (the
 //! CSP allows `blob:` and `data:` images; nothing else is drawn). An image
 //! the reader may not see is `not_found` and stays its alt. A click opens it
-//! full size ([`open_full`]); a click or Esc closes it.
+//! full size ([`open_full`]): fitted, scrolled and zoomed (APP-77); ×, Esc
+//! or a tap on the backdrop closes it.
 //!
 //! COMMENT-10: **a ticket body's images** ([`hydrate_body`], [`held`]) are
 //! `img.bimg`s, asked for held to the body's ticket (`media.get { hash,
@@ -414,39 +415,302 @@ pub(crate) fn is_tap(x0: f64, y0: f64, at0: f64, x: f64, y: f64, at: f64) -> boo
     (x - x0).hypot(y - y0) <= 10.0 && at - at0 <= 500.0
 }
 
-/// The image at `src`, full size, over the page: a click or Esc closes it.
+/// APP-77: the width an image opens at — inside the screen, as it always
+/// was, unless that draws it a sliver: a tall one drawn under half the
+/// screen's width fits the width and scrolls down; a wide one under a
+/// quarter of its height (a landscape photo on a phone is neither) fits the
+/// height and scrolls across. Never past its own size.
+pub(crate) fn fit_width(nw: f64, nh: f64, vw: f64, vh: f64) -> f64 {
+    if nw <= 0.0 || nh <= 0.0 || vw <= 0.0 || vh <= 0.0 {
+        return vw.max(1.0);
+    }
+    let pad = if vw > 4.0 * FIT_PAD && vh > 4.0 * FIT_PAD { FIT_PAD } else { 0.0 };
+    let contain = nw.min(vw - 2.0 * pad).min((vh - 2.0 * pad) * nw / nh);
+    if contain < vw / 2.0 && nh / nw > vh / vw {
+        nw.min(vw)
+    } else if contain * nh / nw < vh / 4.0 && nw / nh > vw / vh {
+        nw.min(vh * nw / nh)
+    } else {
+        contain
+    }
+}
+
+/// The room left round an image that fits inside the screen.
+const FIT_PAD: f64 = 16.0;
+
+/// The zoom's range, in multiples of the fit.
+pub(crate) const ZOOM_MAX: f64 = 8.0;
+
+/// A double-tap's zoom from the fit.
+const ZOOM_TAP: f64 = 2.5;
+
+/// A button's step.
+const ZOOM_STEP: f64 = 1.5;
+
+/// A zoom held to its range.
+pub(crate) fn clamp_zoom(z: f64) -> f64 {
+    if z.is_finite() { z.clamp(1.0, ZOOM_MAX) } else { 1.0 }
+}
+
+/// Where a scroller's offset goes when what it scrolls scales from `z0` to
+/// `z1` about a point `at` px into its view, so the point under the
+/// fingers (or the tap) stays where it is.
+pub(crate) fn anchored(scroll: f64, at: f64, z0: f64, z1: f64) -> f64 {
+    if z0 <= 0.0 {
+        return scroll;
+    }
+    ((scroll + at) * z1 / z0 - at).max(0.0)
+}
+
+/// Whether a tap at `(x, y)` at `at` is the second of a double-tap after
+/// one at `(x0, y0)` at `at0`: within 300ms and 30px.
+pub(crate) fn is_double(x0: f64, y0: f64, at0: f64, x: f64, y: f64, at: f64) -> bool {
+    (x - x0).hypot(y - y0) <= 30.0 && at - at0 <= 300.0 && at >= at0
+}
+
+/// The viewer's zoom: the fit's width, the zoom, a pinch under way (its
+/// fingers' first distance and the zoom then), the last tap.
+#[derive(Default)]
+struct View {
+    fit: f64,
+    z: f64,
+    pinch: Option<(f64, f64)>,
+    tap: Option<(f64, f64, f64)>,
+    start: Option<(f64, f64, f64)>,
+}
+
+/// The image at `src`, full size, over the page (APP-77): fitted
+/// ([`fit_width`]), its own scroller, zoomed by a pinch, a double-tap or
+/// double-click, `=` / `-` / `0` or the bar's buttons; × , Esc or a tap on
+/// the backdrop closes it (a tap on the image never does — it is touched to
+/// pan).
 pub(crate) fn open_full(src: &str, alt: &str) {
+    use std::rc::Rc;
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
     let Some(doc) = crate::dom::window().document() else { return };
-    let (Ok(wrap), Ok(img)) = (doc.create_element("div"), doc.create_element("img")) else { return };
+    let mk = |tag: &str| doc.create_element(tag).ok();
+    let (Some(wrap), Some(bar), Some(scroller), Some(img)) = (mk("div"), mk("div"), mk("div"), mk("img")) else { return };
     let _ = wrap.set_attribute("class", "lightbox");
     let _ = wrap.set_attribute("role", "dialog");
     let _ = wrap.set_attribute("aria-label", if alt.is_empty() { "image" } else { alt });
     let _ = wrap.set_attribute("tabindex", "-1");
+    let _ = bar.set_attribute("class", "lb-bar");
+    for (z, label, text) in [("out", "zoom out", "−"), ("fit", "fit to the screen", "fit"), ("in", "zoom in", "+"), ("close", "close", "×")] {
+        let Some(b) = mk("button") else { return };
+        let _ = b.set_attribute("type", "button");
+        let _ = b.set_attribute("data-z", z);
+        let _ = b.set_attribute("aria-label", label);
+        let _ = b.set_attribute("title", label);
+        b.set_text_content(Some(text));
+        let _ = bar.append_child(&b);
+    }
+    let _ = scroller.set_attribute("class", "lb-scroll");
+    let _ = scroller.set_attribute("tabindex", "-1");
     let _ = img.set_attribute("src", src);
     let _ = img.set_attribute("alt", alt);
-    let _ = wrap.append_child(&img);
+    let _ = img.set_attribute("draggable", "false");
+    let _ = scroller.append_child(&img);
+    let _ = wrap.append_child(&scroller);
+    let _ = wrap.append_child(&bar);
     let Some(body) = doc.body() else { return };
     let _ = body.append_child(&wrap);
-    let w = wrap.clone();
-    let close = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
-        // A click anywhere on it; of the keys, the dialog's close (Esc).
-        if let Some(k) = ev.dyn_ref::<web_sys::KeyboardEvent>() {
-            if !crate::bindings::is(k, crate::bindings::Context::Dialog, "dialog.close") {
+
+    let Ok(sc) = scroller.clone().dyn_into::<web_sys::HtmlElement>() else { return };
+    let Ok(im) = img.clone().dyn_into::<web_sys::HtmlElement>() else { return };
+    let view = Rc::new(RefCell::new(View { z: 1.0, ..View::default() }));
+    // The zoom to `z`, about `(ax, ay)` in the scroller's view.
+    let zoom: Rc<dyn Fn(f64, f64, f64)> = {
+        let (sc, im, view) = (sc.clone(), im.clone(), view.clone());
+        Rc::new(move |z: f64, ax: f64, ay: f64| {
+            let (z0, fit) = {
+                let v = view.borrow();
+                (v.z, v.fit)
+            };
+            let z1 = clamp_zoom(z);
+            let (x0, y0) = (sc.scroll_left() as f64, sc.scroll_top() as f64);
+            let _ = im.style().set_property("width", &format!("{:.1}px", fit * z1));
+            view.borrow_mut().z = z1;
+            sc.set_scroll_left(anchored(x0, ax, z0, z1).round() as i32);
+            sc.set_scroll_top(anchored(y0, ay, z0, z1).round() as i32);
+        })
+    };
+    // The middle of the view, for a zoom with no point.
+    let middle = {
+        let sc = sc.clone();
+        move || (sc.client_width() as f64 / 2.0, sc.client_height() as f64 / 2.0)
+    };
+    // Into the view's coordinates.
+    let at = {
+        let sc = sc.clone();
+        move |x: f64, y: f64| {
+            let r = sc.get_bounding_client_rect();
+            (x - r.left(), y - r.top())
+        }
+    };
+    // The fit, once the image's size is known (and again on a resize).
+    let refit = {
+        let (sc, im, img, view) = (sc.clone(), im.clone(), img.clone(), view.clone());
+        Rc::new(move || {
+            let n = |k: &str| js_sys::Reflect::get(&img, &k.into()).ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let fit = fit_width(n("naturalWidth"), n("naturalHeight"), sc.client_width() as f64, sc.client_height() as f64);
+            let z = {
+                let mut v = view.borrow_mut();
+                v.fit = fit;
+                v.z
+            };
+            let _ = im.style().set_property("width", &format!("{:.1}px", fit * z));
+        })
+    };
+    if js_sys::Reflect::get(&img, &"complete".into()).ok().and_then(|v| v.as_bool()).unwrap_or(false) {
+        refit();
+    }
+    let on_load = {
+        let refit = refit.clone();
+        Closure::<dyn FnMut()>::new(move || refit())
+    };
+    let _ = img.add_event_listener_with_callback("load", on_load.as_ref().unchecked_ref());
+    on_load.forget();
+
+    let close = {
+        let w = wrap.clone();
+        Rc::new(move || w.remove())
+    };
+    // Clicks: a button's, the backdrop's (closes); the image's does nothing.
+    let on_click = {
+        let (close, zoom, middle) = (close.clone(), zoom.clone(), middle.clone());
+        let (view, sc) = (view.clone(), sc.clone());
+        Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
+            let Some(t) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+            ev.stop_propagation();
+            let (mx, my) = middle();
+            let z = view.borrow().z;
+            match t.get_attribute("data-z").as_deref() {
+                Some("in") => zoom(z * ZOOM_STEP, mx, my),
+                Some("out") => zoom(z / ZOOM_STEP, mx, my),
+                Some("fit") => zoom(1.0, mx, my),
+                Some("close") => close(),
+                _ if t.tag_name().eq_ignore_ascii_case("img") => {}
+                _ if t.class_list().contains("lb-bar") => {}
+                _ => close(),
+            }
+            let _ = sc.focus();
+        })
+    };
+    let _ = wrap.add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref());
+    on_click.forget();
+    // A double-click on the image: the fit ↔ 2.5×, about the pointer.
+    let on_dbl = {
+        let (zoom, at, view) = (zoom.clone(), at.clone(), view.clone());
+        Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
+            ev.prevent_default();
+            let (ax, ay) = at(ev.client_x() as f64, ev.client_y() as f64);
+            let z = view.borrow().z;
+            zoom(if z > 1.01 { 1.0 } else { ZOOM_TAP }, ax, ay);
+        })
+    };
+    let _ = img.add_event_listener_with_callback("dblclick", on_dbl.as_ref().unchecked_ref());
+    on_dbl.forget();
+    // Keys: Esc closes; = / - / 0 zoom (the table's, AGS-28).
+    let on_key = {
+        let (close, zoom, middle, view) = (close.clone(), zoom.clone(), middle.clone(), view.clone());
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |k: web_sys::KeyboardEvent| {
+            use crate::bindings::{is, Context::Dialog};
+            let (mx, my) = middle();
+            let z = view.borrow().z;
+            if is(&k, Dialog, "dialog.close") {
+                close();
+            } else if is(&k, Dialog, "image.zoom-in") {
+                zoom(z * ZOOM_STEP, mx, my);
+            } else if is(&k, Dialog, "image.zoom-out") {
+                zoom(z / ZOOM_STEP, mx, my);
+            } else if is(&k, Dialog, "image.fit") {
+                zoom(1.0, mx, my);
+            } else {
                 return;
             }
-        }
-        ev.prevent_default();
-        ev.stop_propagation();
-        w.remove();
-    });
-    let _ = wrap.add_event_listener_with_callback("click", close.as_ref().unchecked_ref());
-    let _ = wrap.add_event_listener_with_callback("keydown", close.as_ref().unchecked_ref());
-    close.forget();
-    if let Ok(h) = wrap.dyn_into::<web_sys::HtmlElement>() {
-        let _ = h.focus();
+            k.prevent_default();
+            k.stop_propagation();
+        })
+    };
+    let _ = wrap.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
+    on_key.forget();
+
+    // Touch: one finger scrolls natively (touch-action: pan-x pan-y); two
+    // pinch, about their middle; a double-tap zooms about the tap.
+    let pair = |ev: &web_sys::TouchEvent| {
+        let t = ev.touches();
+        let (a, b) = (t.get(0)?, t.get(1)?);
+        let (ax, ay, bx, by) = (a.client_x() as f64, a.client_y() as f64, b.client_x() as f64, b.client_y() as f64);
+        Some(((bx - ax).hypot(by - ay), (ax + bx) / 2.0, (ay + by) / 2.0))
+    };
+    let passive_off = web_sys::AddEventListenerOptions::new();
+    passive_off.set_passive(false);
+    let on_start = {
+        let view = view.clone();
+        Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |ev: web_sys::TouchEvent| {
+            let mut v = view.borrow_mut();
+            if let Some((d, _, _)) = pair(&ev) {
+                ev.prevent_default();
+                v.pinch = Some((d.max(1.0), v.z));
+                v.start = None;
+            } else if let Some(t) = ev.touches().get(0) {
+                v.start = Some((t.client_x() as f64, t.client_y() as f64, js_sys::Date::now()));
+            }
+        })
+    };
+    let on_move = {
+        let (view, zoom, at) = (view.clone(), zoom.clone(), at.clone());
+        Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |ev: web_sys::TouchEvent| {
+            let pinch = view.borrow().pinch;
+            let (Some((d0, z0)), Some((d, mx, my))) = (pinch, pair(&ev)) else { return };
+            ev.prevent_default();
+            let (ax, ay) = at(mx, my);
+            zoom(z0 * d / d0, ax, ay);
+        })
+    };
+    let on_end = {
+        let (view, zoom, at) = (view.clone(), zoom.clone(), at.clone());
+        Closure::<dyn FnMut(web_sys::TouchEvent)>::new(move |ev: web_sys::TouchEvent| {
+            let mut v = view.borrow_mut();
+            if v.pinch.is_some() {
+                if ev.touches().length() < 2 {
+                    v.pinch = None;
+                    v.tap = None;
+                }
+                return;
+            }
+            let (Some((x0, y0, t0)), Some(t)) = (v.start.take(), ev.changed_touches().get(0)) else { return };
+            let (x, y, now) = (t.client_x() as f64, t.client_y() as f64, js_sys::Date::now());
+            if !is_tap(x0, y0, t0, x, y, now) {
+                v.tap = None;
+                return;
+            }
+            match v.tap.take() {
+                Some((px, py, pt)) if is_double(px, py, pt, x, y, now) => {
+                    ev.prevent_default(); // no click, no dblclick after it
+                    let z = v.z;
+                    drop(v);
+                    let (ax, ay) = at(x, y);
+                    zoom(if z > 1.01 { 1.0 } else { ZOOM_TAP }, ax, ay);
+                }
+                _ => v.tap = Some((x, y, now)),
+            }
+        })
+    };
+    for (name, f) in [("touchstart", &on_start), ("touchmove", &on_move), ("touchend", &on_end)] {
+        let _ = scroller.add_event_listener_with_callback_and_add_event_listener_options(name, f.as_ref().unchecked_ref(), &passive_off);
     }
+    on_start.forget();
+    on_move.forget();
+    on_end.forget();
+    // Safari's own pinch would zoom the page under the viewer.
+    let hold = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| ev.prevent_default());
+    for name in ["gesturestart", "gesturechange"] {
+        let _ = wrap.add_event_listener_with_callback_and_add_event_listener_options(name, hold.as_ref().unchecked_ref(), &passive_off);
+    }
+    hold.forget();
+    let _ = sc.focus();
 }
 
 // ── COMMENT-10: a ticket body's images, held to its ticket ─────────────
@@ -816,6 +1080,40 @@ pub(crate) fn Attachments(a: Attach) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_77_a_tall_screenshot_fits_the_width_and_an_ordinary_one_the_screen() {
+        // 390x8000 on a 390x844 phone: the whole width, scrolled down.
+        assert_eq!(fit_width(390.0, 8000.0, 390.0, 844.0), 390.0);
+        // a 1170-wide one too, at the screen's width.
+        assert_eq!(fit_width(1170.0, 24000.0, 390.0, 844.0), 390.0);
+        // a landscape photo on a phone fits inside, with room round it.
+        let w = fit_width(4000.0, 3000.0, 390.0, 844.0);
+        assert!((w - 358.0).abs() < 0.01, "{w}");
+        // a small image stays its size.
+        assert_eq!(fit_width(120.0, 80.0, 1440.0, 900.0), 120.0);
+        // a desktop's full-page shot on a phone: the width, not 152px.
+        assert_eq!(fit_width(1440.0, 8000.0, 390.0, 844.0), 390.0);
+        // a wide strip fits the height and scrolls across.
+        assert_eq!(fit_width(20000.0, 400.0, 1440.0, 900.0), 20000.0_f64.min(900.0 * 20000.0 / 400.0));
+        // nothing known yet: the screen's width.
+        assert_eq!(fit_width(0.0, 0.0, 390.0, 844.0), 390.0);
+    }
+
+    #[test]
+    fn app_77_a_zoom_keeps_the_point_under_the_fingers() {
+        // at the fit, the point 100px down: 2x puts it 200px into the content
+        assert_eq!(anchored(0.0, 100.0, 1.0, 2.0), 100.0);
+        assert_eq!(anchored(300.0, 100.0, 2.0, 4.0), 700.0);
+        // back to the fit never scrolls before the start
+        assert_eq!(anchored(50.0, 400.0, 4.0, 1.0), 0.0);
+        assert_eq!(clamp_zoom(0.2), 1.0);
+        assert_eq!(clamp_zoom(99.0), ZOOM_MAX);
+        assert_eq!(clamp_zoom(f64::NAN), 1.0);
+        assert!(is_double(10.0, 10.0, 0.0, 20.0, 15.0, 250.0));
+        assert!(!is_double(10.0, 10.0, 0.0, 10.0, 10.0, 400.0));
+        assert!(!is_double(10.0, 10.0, 0.0, 80.0, 10.0, 100.0));
+    }
 
     fn h(c: char) -> String {
         std::iter::repeat_n(c, 64).collect()
