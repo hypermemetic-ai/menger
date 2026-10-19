@@ -26,7 +26,7 @@ fs.mkdirSync(out, { recursive: true });
 const shim = fs.readFileSync(new URL("./kb-shim.js", import.meta.url), "utf8");
 const token = fs.readFileSync(tokenFile, "utf8").trim();
 const u = new URL(origin);
-const cookie = { name: `menger_session_${u.port}`, value: token, url: `${origin}/`, httpOnly: true, sameSite: "Lax" };
+const cookie = { name: u.protocol === "https:" ? "__Host-menger_session" : `menger_session_${u.port}`, secure: u.protocol === "https:", value: token, url: `${origin}/`, httpOnly: true, sameSite: "Lax" };
 const fails = [];
 const ok = (cond, what) => { if (!cond) fails.push(what); console.log(`${cond ? "ok  " : "FAIL"} ${what}`); };
 const f0 = (n) => (n == null ? "∅" : Math.round(n));
