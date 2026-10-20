@@ -441,11 +441,45 @@ fn listen() {
     end.forget();
 }
 
-/// APP-70: *edit drawing* for an image that is one — a comment's or a
-/// turn's (`data-media`), or a box's thumbnail (`data-media-hash`).
-fn edit_of(img: &web_sys::Element) -> Option<std::rc::Rc<dyn Fn()>> {
+/// What an image opened full size offers on its bar: APP-70's *edit
+/// drawing* for a drawing, APP-104's *mark up* for any other image.
+pub(crate) enum Edit {
+    Drawing(std::rc::Rc<dyn Fn()>),
+    MarkUp(std::rc::Rc<dyn Fn()>),
+}
+
+impl Edit {
+    fn run(&self) {
+        match self {
+            Edit::Drawing(f) | Edit::MarkUp(f) => f(),
+        }
+    }
+
+    /// Its button's words and its title.
+    pub(crate) fn words(&self) -> (&'static str, &'static str) {
+        match self {
+            Edit::Drawing(_) => ("edit drawing", "open the drawing on the pad to change it — it sends as a new image"),
+            Edit::MarkUp(_) => ("mark up", "draw over this image on the pad — it sends as a new image, the original kept"),
+        }
+    }
+}
+
+/// The edit for an image — a comment's or a turn's (`data-media`), or a
+/// box's thumbnail (`data-media-hash`): *edit drawing* when it is one,
+/// else *mark up* (APP-104) — none when no box is up to draw in.
+fn edit_of(img: &web_sys::Element) -> Option<Edit> {
     let hash = img.get_attribute("data-media").or_else(|| img.closest(".cthumb").ok().flatten().and_then(|t| t.get_attribute("data-media-hash")))?;
-    crate::draw::editor(&hash, img)
+    if let Some(e) = crate::draw::editor(&hash, img) {
+        return Some(Edit::Drawing(e));
+    }
+    let src = img.get_attribute("src").filter(|s| !s.is_empty())?;
+    crate::draw::marker(&hash, &src, img).map(Edit::MarkUp)
+}
+
+/// APP-104: whether the image `hash` is known not to be had (not there, or
+/// not the reader's).
+pub(crate) fn missing_now(hash: &str) -> bool {
+    known().with_untracked(|m| matches!(m.get(hash), Some(Known::Missing)))
 }
 
 thread_local! {
@@ -534,8 +568,9 @@ pub(crate) fn open_full(src: &str, alt: &str) {
 }
 
 /// [`open_full`], with APP-70's *edit drawing* on its bar when the image is
-/// a drawing a box can open again.
-pub(crate) fn open_full_with(src: &str, alt: &str, edit: Option<std::rc::Rc<dyn Fn()>>) {
+/// a drawing a box can open again, or APP-104's *mark up* — first on the
+/// bar, and on a phone its one filled button.
+pub(crate) fn open_full_with(src: &str, alt: &str, edit: Option<Edit>) {
     use std::rc::Rc;
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
@@ -547,13 +582,14 @@ pub(crate) fn open_full_with(src: &str, alt: &str, edit: Option<std::rc::Rc<dyn 
     let _ = wrap.set_attribute("aria-label", if alt.is_empty() { "image" } else { alt });
     let _ = wrap.set_attribute("tabindex", "-1");
     let _ = bar.set_attribute("class", "lb-bar");
-    if edit.is_some() {
+    if let Some(e) = &edit {
         if let Some(b) = mk("button") {
+            let (words, title) = e.words();
             let _ = b.set_attribute("type", "button");
             let _ = b.set_attribute("data-z", "edit");
-            let _ = b.set_attribute("class", "lb-edit");
-            let _ = b.set_attribute("title", "open the drawing on the pad to change it — it sends as a new image");
-            b.set_text_content(Some("edit drawing"));
+            let _ = b.set_attribute("class", if matches!(e, Edit::MarkUp(_)) { "lb-edit lb-markup" } else { "lb-edit" });
+            let _ = b.set_attribute("title", title);
+            b.set_text_content(Some(words));
             let _ = bar.append_child(&b);
         }
     }
@@ -654,7 +690,7 @@ pub(crate) fn open_full_with(src: &str, alt: &str, edit: Option<std::rc::Rc<dyn 
                 Some("edit") => {
                     close();
                     if let Some(edit) = &edit {
-                        edit();
+                        edit.run();
                     }
                 }
                 _ if t.tag_name().eq_ignore_ascii_case("img") => {}
@@ -930,7 +966,10 @@ fn missing(el: &web_sys::Element) {
 pub(crate) fn zoom(ticket: &str, hash: &str, alt: &str) {
     if let Some(Some(g)) = held_now(ticket, hash) {
         if let Some(u) = g.url() {
-            open_full(&u, alt);
+            // APP-104: a frame's image is marked up in the nearest box up.
+            let body: Option<web_sys::Element> = crate::dom::window().document().and_then(|d| d.body()).map(Into::into);
+            let edit = body.and_then(|b| crate::draw::marker(hash, &u, &b)).map(Edit::MarkUp);
+            open_full_with(&u, alt, edit);
         }
     }
 }
@@ -1028,11 +1067,12 @@ impl Attach {
     /// inside) and put like a pasted image — at once a thumbnail with a
     /// spinner, then its markdown in the text. Whether it did.
     pub(crate) fn flush(self) -> bool {
+        let name = if self.pad.over() { "markup.png" } else { "drawing.png" };
         let Some(bytes) = self.pad.take_png() else { return false };
         let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(&bytes[..]));
         let opts = web_sys::FilePropertyBag::new();
         opts.set_type("image/png");
-        let Ok(file) = web_sys::File::new_with_u8_array_sequence_and_options(&parts, "drawing.png", &opts) else { return false };
+        let Ok(file) = web_sys::File::new_with_u8_array_sequence_and_options(&parts, name, &opts) else { return false };
         self.one(file);
         true
     }
@@ -1058,6 +1098,24 @@ impl Attach {
             self.take_out(hash);
         }
         self.pad.open_with(strokes);
+    }
+
+    /// APP-104: the pad opened over an image (`bg`) with `strokes` — a
+    /// mark-up edited again taken out of the draft (`replacing`) first.
+    pub(crate) fn mark_up(self, bg: crate::draw::Bg, strokes: Vec<crate::draw::Stroke>, replacing: Option<&str>) {
+        if let Some(hash) = replacing {
+            if self.body.try_with_untracked(|b| refs(b).iter().any(|(_, h)| h == hash)) == Some(true) {
+                self.take_out(hash);
+            }
+        }
+        self.pad.open_over(bg, strokes);
+        // The pad is where the eye goes next.
+        wasm_bindgen_futures::spawn_local(async move {
+            crate::dom::sleep_ms(0).await;
+            if let Some(c) = self.pad.canvas_el() {
+                c.scroll_into_view_with_bool(false);
+            }
+        });
     }
 
     /// CHAT-14: a chat composer's attaching — images put for `chat`.

@@ -31,6 +31,15 @@
 //!   with its strokes. A drawing still in the draft is taken out of it and
 //!   comes back edited; a sent one is never changed — the edit is a new
 //!   image.
+//! - **Marking up an image** (APP-104): any image opened full size offers
+//!   *mark up* ([`marker`]); it opens the nearest box's pad **over that
+//!   image** — the image the pad's background at its aspect ([`Bg`]), the
+//!   strokes over it with the same tools, inks, undo and pressure. The send
+//!   flattens image and strokes to one PNG (scaled down until it fits
+//!   [`MAX_BYTES`](menger_tickets_api::media::MAX_BYTES)), its strokes kept
+//!   as before with the source image's hash ([`Source`]), so *edit drawing*
+//!   on it opens the photo and the strokes apart again. A marked-up image
+//!   is never re-painted for the theme: the photo is what it is.
 //! - **Motion**: nothing on the pad moves but the ink under the pointer.
 //!
 //! What decides — the stroke model, undo and redo, the eraser's hit test,
@@ -372,6 +381,30 @@ pub(crate) struct Drawing {
     pub(crate) v: u32,
     pub(crate) h: f64,
     pub(crate) strokes: Vec<Stroke>,
+    /// APP-104: the image the strokes were drawn over, if any — read by an
+    /// app from before it as a plain drawing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) bg: Option<Source>,
+}
+
+/// APP-104: the image a mark-up was drawn over: its hash (`media.get`) and
+/// its size in pixels, so its aspect is the drawing's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Source {
+    pub(crate) hash: String,
+    pub(crate) w: u32,
+    pub(crate) h: u32,
+}
+
+/// APP-104: the widest a flattened mark-up is made, in pixels.
+pub(crate) const MARKUP_MAX_PX: f64 = 2400.0;
+
+/// APP-104: the width a mark-up of an image `w` px wide is flattened at
+/// on the `n`-th try (0 first): the image's own, at most
+/// [`MARKUP_MAX_PX`], three quarters again each try — a try past the cap
+/// is one smaller — and never under 240.
+pub(crate) fn markup_px(w: f64, n: u32) -> f64 {
+    (w.min(MARKUP_MAX_PX) * 0.75f64.powi(n as i32)).max(240.0).round()
 }
 
 impl Drawing {
@@ -379,7 +412,14 @@ impl Drawing {
     /// further down.
     pub(crate) fn of(strokes: Vec<Stroke>, h: f64) -> Self {
         let h = round(h.max(bottom(&strokes) + 8.0).max(40.0), 10.0);
-        Drawing { v: VERSION, h, strokes }
+        Drawing { v: VERSION, h, strokes, bg: None }
+    }
+
+    /// APP-104: the strokes over the image `src` — the drawing its aspect,
+    /// whatever reaches past its edge cut off with it.
+    pub(crate) fn over(strokes: Vec<Stroke>, src: Source) -> Self {
+        let h = UNITS * f64::from(src.h.max(1)) / f64::from(src.w.max(1));
+        Drawing { v: VERSION, h: (h * 10.0).round() / 10.0, strokes, bg: Some(src) }
     }
 
     pub(crate) fn to_json(&self) -> String {
@@ -577,9 +617,14 @@ fn context(canvas: &web_sys::HtmlCanvasElement) -> Option<web_sys::CanvasRenderi
     canvas.get_context("2d").ok().flatten()?.dyn_into().ok()
 }
 
-/// A drawing as a PNG `px` wide, on the theme's `--card`, in the theme
-/// read off `el` — the PNG's bytes.
+/// A drawing as a PNG `px` wide, on the theme's `--card` (APP-104: over
+/// `bg`, when it is a mark-up), in the theme read off `el` — the PNG's
+/// bytes.
 fn render_png(d: &Drawing, px: f64, el: &web_sys::Element) -> Option<Vec<u8>> {
+    render_over(d, None, px, el)
+}
+
+fn render_over(d: &Drawing, bg: Option<&web_sys::HtmlImageElement>, px: f64, el: &web_sys::Element) -> Option<Vec<u8>> {
     let doc = crate::dom::window().document()?;
     let canvas: web_sys::HtmlCanvasElement = doc.create_element("canvas").ok()?.dyn_into().ok()?;
     let k = px / UNITS;
@@ -587,7 +632,9 @@ fn render_png(d: &Drawing, px: f64, el: &web_sys::Element) -> Option<Vec<u8>> {
     canvas.set_height((d.h * k).ceil() as u32);
     let ctx = context(&canvas)?;
     let paint = paint_of(el);
-    if !paint.card.is_empty() {
+    if let Some(img) = bg {
+        ctx.draw_image_with_html_image_element_and_dw_and_dh(img, 0.0, 0.0, f64::from(canvas.width()), f64::from(canvas.height())).ok()?;
+    } else if !paint.card.is_empty() {
         ctx.set_fill_style_str(&paint.card);
         ctx.fill_rect(0.0, 0.0, f64::from(canvas.width()), f64::from(canvas.height()));
     }
@@ -626,7 +673,7 @@ pub(crate) fn is_drawing(hash: &str) -> bool {
 
 /// A known drawing painted in the theme worn now, as a `blob:` URL.
 pub(crate) fn themed_url(hash: &str) -> Option<String> {
-    let d = DRAWINGS.with(|m| m.borrow().get(hash).cloned())?;
+    let d = DRAWINGS.with(|m| m.borrow().get(hash).cloned()).filter(|d| d.bg.is_none())?;
     let root = crate::dom::window().document()?.document_element()?;
     let png = render_png(&d, 1200.0, &root)?;
     let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(&png[..]));
@@ -684,7 +731,70 @@ pub(crate) fn editor(hash: &str, near: &web_sys::Element) -> Option<Rc<dyn Fn()>
     let d = DRAWINGS.with(|m| m.borrow().get(hash).cloned())?;
     let a = box_near(near)?;
     let hash = hash.to_string();
-    Some(Rc::new(move || a.edit_drawing(&hash, d.strokes.clone())))
+    let Some(src) = d.bg.clone() else { return Some(Rc::new(move || a.edit_drawing(&hash, d.strokes.clone()))) };
+    // APP-104: a mark-up opens over its photo again, the strokes apart.
+    Some(Rc::new(move || {
+        let (hash, src, strokes) = (hash.clone(), src.clone(), d.strokes.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            match source_url(&src.hash).await {
+                Some(url) => match Bg::load(&src.hash, &url).await {
+                    Some(bg) => a.mark_up(bg, strokes, Some(&hash)),
+                    None => leptos::logging::log!("mark up: {} would not load", src.hash),
+                },
+                None => leptos::logging::log!("mark up: {} is not available", src.hash),
+            }
+        });
+    }))
+}
+
+/// APP-104: what *mark up* on the image `hash` (drawn at `near` from
+/// `url`) does: the nearest box's pad opened over it — none when no box is
+/// up to draw in.
+pub(crate) fn marker(hash: &str, url: &str, near: &web_sys::Element) -> Option<Rc<dyn Fn()>> {
+    let a = box_near(near)?;
+    let (hash, url) = (hash.to_string(), url.to_string());
+    Some(Rc::new(move || {
+        let (hash, url) = (hash.clone(), url.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            match Bg::load(&hash, &url).await {
+                Some(bg) => a.mark_up(bg, Vec::new(), None),
+                None => leptos::logging::log!("mark up: {hash} would not load"),
+            }
+        });
+    }))
+}
+
+/// The image `hash`'s URL, once the page has it (asked for if it is not
+/// yet) — none if it is not to be had.
+async fn source_url(hash: &str) -> Option<String> {
+    for _ in 0..100 {
+        if let Some(u) = crate::media::url(hash) {
+            return Some(u);
+        }
+        if crate::media::missing_now(hash) {
+            return None;
+        }
+        crate::dom::sleep_ms(100).await;
+    }
+    None
+}
+
+/// APP-104: a pad's background — the image, loaded, and what it is.
+#[derive(Clone)]
+pub(crate) struct Bg {
+    pub(crate) src: Source,
+    img: web_sys::HtmlImageElement,
+}
+
+impl Bg {
+    /// The image at `url` (the image `hash`), decoded — none if it will not.
+    pub(crate) async fn load(hash: &str, url: &str) -> Option<Self> {
+        let img = web_sys::HtmlImageElement::new().ok()?;
+        img.set_src(url);
+        wasm_bindgen_futures::JsFuture::from(img.decode()).await.ok()?;
+        let (w, h) = (img.natural_width(), img.natural_height());
+        (w > 0 && h > 0).then(|| Bg { src: Source { hash: hash.to_string(), w, h }, img })
+    }
 }
 
 // ── the pad ─────────────────────────────────────────────────────────────
@@ -703,6 +813,8 @@ pub(crate) struct Pad {
     erasing: StoredValue<Option<Vec<Stroke>>>,
     pointer: StoredValue<Option<i32>>,
     canvas: NodeRef<Canvas>,
+    /// APP-104: the image the pad draws over, when it marks one up.
+    bg: RwSignal<Option<Bg>, LocalStorage>,
 }
 
 impl Pad {
@@ -717,6 +829,7 @@ impl Pad {
             erasing: StoredValue::new(None),
             pointer: StoredValue::new(None),
             canvas: NodeRef::new(),
+            bg: RwSignal::new_local(None),
         }
     }
 
@@ -727,13 +840,21 @@ impl Pad {
 
     /// The pad opened on `strokes` (an edit), its history fresh.
     pub(crate) fn open_with(self, strokes: Vec<Stroke>) {
+        self.bg.set(None);
         self.board.set(Board::with(strokes));
         self.typing.set(None);
         self.open.set(true);
     }
 
+    /// APP-104: the pad opened over `bg`, with `strokes` on it.
+    pub(crate) fn open_over(self, bg: Bg, strokes: Vec<Stroke>) {
+        self.open_with(strokes);
+        self.bg.set(Some(bg));
+    }
+
     /// Put away, its strokes gone.
     pub(crate) fn discard(self) {
+        self.bg.set(None);
         self.board.set(Board::default());
         self.typing.set(None);
         self.open.set(false);
@@ -750,13 +871,35 @@ impl Pad {
             Some(c) => c.into(),
             None => crate::dom::window().document()?.document_element()?,
         };
-        let r = el.get_bounding_client_rect();
-        let (w, h) = if r.width() > 0.0 { (r.width(), r.height()) } else { (780.0, 300.0) };
-        let d = Drawing::of(self.board.get_untracked().strokes, h * UNITS / w);
-        let png = render_png(&d, (w * 2.0).clamp(480.0, 2000.0), &el)?;
-        let bytes = embed(&png, &d.to_json())?;
+        let strokes = self.board.get_untracked().strokes;
+        let bytes = if let Some(bg) = self.bg.get_untracked() {
+            // APP-104: the image and the strokes, one PNG under the cap.
+            let d = Drawing::over(strokes, bg.src.clone());
+            let json = d.to_json();
+            let max = menger_tickets_api::media::MAX_BYTES;
+            (0..8).find_map(|n| {
+                let px = markup_px(f64::from(bg.src.w), n);
+                embed(&render_over(&d, Some(&bg.img), px, &el)?, &json).filter(|b| b.len() <= max)
+            })?
+        } else {
+            let r = el.get_bounding_client_rect();
+            let (w, h) = if r.width() > 0.0 { (r.width(), r.height()) } else { (780.0, 300.0) };
+            let d = Drawing::of(strokes, h * UNITS / w);
+            let png = render_png(&d, (w * 2.0).clamp(480.0, 2000.0), &el)?;
+            embed(&png, &d.to_json())?
+        };
         self.discard();
         Some(bytes)
+    }
+
+    /// APP-104: whether the pad is marking up an image.
+    pub(crate) fn over(self) -> bool {
+        self.bg.with_untracked(Option::is_some)
+    }
+
+    /// The pad's canvas, while it is up.
+    pub(crate) fn canvas_el(self) -> Option<web_sys::HtmlCanvasElement> {
+        self.canvas.get_untracked()
     }
 
     /// Pixels a unit, the canvas as laid out now.
@@ -782,6 +925,11 @@ impl Pad {
         let _ = ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
         ctx.clear_rect(0.0, 0.0, f64::from(pw), f64::from(ph));
         let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
+        self.bg.with_untracked(|bg| {
+            if let Some(bg) = bg {
+                let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(&bg.img, 0.0, 0.0, r.width(), r.height());
+            }
+        });
         let k = r.width() / UNITS;
         let paint = paint_of(&c);
         self.board.with_untracked(|b| {
@@ -926,15 +1074,20 @@ pub(crate) const PENCIL: &str = r#"<path d="M4 20l4-1 11-11-3-3L5 16z"/><path d=
 #[component]
 pub(crate) fn PadView(a: crate::media::Attach) -> impl IntoView {
     let pad = a.pad();
-    move || pad.open.get().then(|| untrack(|| pad_body(pad)))
+    move || pad.open.get().then(|| untrack(|| pad_body(pad, a)))
 }
 
-fn pad_body(pad: Pad) -> impl IntoView {
+fn pad_body(pad: Pad, a: crate::media::Attach) -> impl IntoView {
     // Painted again when its strokes move and when the theme does.
     Effect::new(move |_| {
         pad.board.track();
+        pad.bg.track();
         theme_gen();
-        pad.paint();
+        // After the surface takes the image's aspect.
+        wasm_bindgen_futures::spawn_local(async move {
+            crate::dom::sleep_ms(0).await;
+            pad.paint();
+        });
     });
     pad.canvas.on_load(move |_| {
         wasm_bindgen_futures::spawn_local(async move {
@@ -1025,17 +1178,25 @@ fn pad_body(pad: Pad) -> impl IntoView {
     view! {
         <div class="dpad" role="group" aria-label="drawing pad" on:keydown=keys>
             <div class="dtop">
-                <span class="dlbl">"drawing · kept as strokes"</span>
+                <span class="dlbl">{move || if pad.bg.with(Option::is_some) { "mark-up · strokes over the image" } else { "drawing · kept as strokes" }}</span>
+                // APP-104: a mark-up goes into the box as an image (words may
+                // follow it); the box's send takes it too.
+                {move || pad.bg.with(Option::is_some).then(|| view! {
+                    <button type="button" class="dtxt dattach" data-act="attach" title="put the marked-up image in the box"
+                        disabled=move || pad.board.with(|b| b.strokes.is_empty())
+                        on:click=move |_| { a.flush(); }>"attach"</button>
+                })}
                 <button type="button" class="dtxt" data-act="discard" title="put the drawing away" on:click=move |_| pad.discard()>"discard"</button>
             </div>
-            <div class="dsurf">
+            <div class="dsurf" class:over=move || pad.bg.with(Option::is_some)
+                style=move || pad.bg.with(|b| b.as_ref().map(|b| format!("--arw: {}; --arh: {}", b.src.w, b.src.h)).unwrap_or_default())>
                 <canvas node_ref=pad.canvas class="dink" tabindex="0" aria-label="drawing pad: draw with a finger, a pencil or the mouse"
                     on:pointerdown=move |ev| pad.down(ev)
                     on:pointermove=move |ev| pad.moved(ev)
                     on:pointerup=move |ev| pad.up(ev)
                     on:pointercancel=move |ev| pad.up(ev)
                 ></canvas>
-                {move || (pad.board.with(|b| b.strokes.is_empty()) && pad.typing.with(Option::is_none)).then(|| view! {
+                {move || (pad.board.with(|b| b.strokes.is_empty()) && pad.typing.with(Option::is_none) && pad.bg.with(Option::is_none)).then(|| view! {
                     <span class="dempty">"draw here: a finger, a pencil or the mouse"</span>
                 })}
                 {text_field}
@@ -1254,5 +1415,36 @@ mod tests {
         assert_eq!(chunks(&again).unwrap().iter().filter(|c| &c.1 == b"iTXt").count(), 1);
         assert_eq!(embed(b"not a png", "{}"), None);
         assert_eq!(embed(&png[..png.len() - 4], "{}"), None, "a truncated PNG");
+    }
+
+    /// APP-104: a mark-up's strokes travel with the hash of the image they
+    /// were drawn over, and are learned apart from it.
+    #[test]
+    fn a_mark_up_keeps_its_photo_and_its_strokes_apart() {
+        let src = Source { hash: "ab".repeat(32), w: 1170, h: 2532 };
+        let d = Drawing::over(vec![pen(&[(100.0, 100.0), (400.0, 900.0)])], src.clone());
+        assert_eq!(d.h, 2164.1, "the image's aspect, in units");
+        let with = embed(&tiny_png(), &d.to_json()).expect("embedded");
+        assert_eq!(drawing_in(&with), Some(d.clone()), "the strokes and the source come back");
+        assert!(learn("cd", &with), "a mark-up is a drawing the page knows");
+        assert!(is_drawing("cd"));
+        let back = DRAWINGS.with(|m| m.borrow().get("cd").cloned()).unwrap();
+        assert_eq!(back.bg, Some(src), "with the photo's hash, to open over it again");
+        assert_eq!(back.strokes, d.strokes);
+        // A drawing from before APP-104 reads as it did, with no image.
+        let old = r#"{"v":1,"h":300,"strokes":[]}"#;
+        assert_eq!(Drawing::from_json(old).map(|d| d.bg), Some(None));
+        assert!(!Drawing::of(Vec::new(), 300.0).to_json().contains("bg"), "a plain drawing writes no bg");
+    }
+
+    /// APP-104: a mark-up is flattened at the photo's width, at most
+    /// 2,400 px, a quarter smaller each try past the cap.
+    #[test]
+    fn a_mark_up_shrinks_to_fit_the_cap() {
+        assert_eq!(markup_px(1170.0, 0), 1170.0);
+        assert_eq!(markup_px(4032.0, 0), 2400.0);
+        assert_eq!(markup_px(4032.0, 1), 1800.0);
+        assert_eq!(markup_px(4032.0, 2), 1350.0);
+        assert_eq!(markup_px(300.0, 5), 240.0, "never under 240");
     }
 }
