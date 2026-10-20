@@ -1697,7 +1697,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "menger"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1762,7 +1762,7 @@ dependencies = [
 
 [[package]]
 name = "menger-tickets-api"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2062,7 +2062,7 @@ dependencies = [
 
 [[package]]
 name = "plexus-login"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2102,7 +2102,7 @@ dependencies = [
 
 [[package]]
 name = "plexus-shell"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "axum",

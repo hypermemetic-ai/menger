@@ -1,6 +1,6 @@
 [package]
 name = "plexus-login"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT"
 description = "Login for a Plexus RPC hub — our own sign-in page over a swappable identity backend (WorkOS, plexus-idp, memory), provider specs (OIDC, WorkOS, Auth0, plexus-idp, nostr, agent keys), the login page and its routes, sessions, the WebSocket gate and the auth backend — generic over the app's access rules"

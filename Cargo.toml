@@ -28,7 +28,7 @@ name = "menger"
 # SCAFFOLD-9: 0.6 — the login moved to plexus-login; `menger::sessions`,
 # `menger::login`, … are its re-exports, and their signatures changed
 # (`Sessions::new(ttl, &names)`, `LoginAuth::new(…, app)`).
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
 license = "MIT"
 description = "A plan is a program whose leaves are prose — ticketing on Plexus RPC"
@@ -72,12 +72,12 @@ path = "src/main.rs"
 # and its generated client, from one declaration — shared with the browser
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
-menger-tickets-api = { path = "tickets-api", version = "0.6.1" }
+menger-tickets-api = { path = "tickets-api", version = "0.6.2" }
 
 # SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
 # the local server (`menger::local`'s serving) — lifted out of menger into
 # plexus-shell, which menger consumes: one copy.
-plexus-shell = { path = "plexus-shell", version = "0.1.2" }
+plexus-shell = { path = "plexus-shell", version = "0.1.3" }
 
 # MFE-10: the plexus 0.6 line — plexus-core 0.6.0, plexus-macros 0.6.0
 # (the `client` / `server_cfg` activation flags, MACRO-4) and
@@ -98,7 +98,7 @@ plexus-auth-core = { path = "../plexus-auth-core", version = "0.2.1", features =
 # gate, the auth backend, the wiring — its own crate (a workspace member,
 # published before menger); menger implements its `LoginAccess` over
 # `Access` (src/login_access.rs) and `main` runs on its `Wiring`.
-plexus-login = { path = "plexus-login", version = "0.2.1" }
+plexus-login = { path = "plexus-login", version = "0.2.2" }
 # IDENTITY-19: the login page — the shell asks the provider itself (discovery,
 # token endpoint), keeps sessions keyed by a random id (hashed), and runs the
 # code flow with PKCE. All already in the lock through plexus-auth-core.
@@ -139,7 +139,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [build-dependencies]
 # SCAFFOLD-5: build.rs embeds frontend/dist through plexus-shell's build
 # half — no dependencies of its own.
-plexus-shell = { path = "plexus-shell", version = "0.1.2", default-features = false, features = ["build"] }
+plexus-shell = { path = "plexus-shell", version = "0.1.3", default-features = false, features = ["build"] }
 
 [dev-dependencies]
 # Wire-level tests speak the same protocol as web/index.html.
