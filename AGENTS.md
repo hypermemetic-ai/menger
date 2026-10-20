@@ -422,6 +422,19 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger chats tickets --chat 6
   ```
 
+  **A reply** (CHAT-66) is a token first in the body, as an image is:
+  `[↩](message:N)` — the stored body keeps only it. `chats.post` reads it
+  off and refuses an N outside the chat (in band, naming it); every message
+  is answered with `reply_to` and `quote { id, author, name, snippet,
+  deleted }`. The app draws a quoted header that jumps to N (*reply* in a
+  turn's menu, or a swipe right on a phone); elsewhere the token is a chip,
+  `↩ message N`. The chat bridge shows the agent "(replying to #N: …)":
+
+  ```sh
+  printf '[↩](message:512) archive — holds are real.\n' > reply.md
+  synapse -P 4455 menger chats post --chat 6 --body @reply.md
+  ```
+
   **An admin adds anyone** (CHAT-16): an admin of a chat's ticket (or,
   outside tickets, its organization) adds anyone, in the chat or not; one
   who can't read it needs `--grant ticket` (viewer on that ticket alone)

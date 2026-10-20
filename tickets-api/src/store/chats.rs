@@ -432,7 +432,10 @@ impl Chats {
         self.by_id.insert(c.id, c);
     }
 
-    fn put_message(&mut self, m: Message) {
+    fn put_message(&mut self, mut m: Message) {
+        // CHAT-66: what it answers, read off its body (kept nowhere else).
+        m.reply_to = crate::chat_reply::reply_to_in(&m.body).map(MessageId::new);
+        m.quote = None;
         if let Some(n) = m.name.as_ref().filter(|n| !n.trim().is_empty()) {
             if !self.signed.contains(&m.author) {
                 self.names.insert(m.author.clone(), n.clone());
@@ -443,6 +446,18 @@ impl Chats {
             self.deleted.entry(m.chat.get()).or_default().insert(m.id.get());
         }
         self.messages.insert(m.id.get(), m);
+    }
+
+    /// CHAT-66: `m` with its quote — the original it answers as it is now.
+    pub(crate) fn quoted(&self, mut m: Message) -> Message {
+        m.quote = m.reply_to.and_then(|r| self.messages.get(&r.get())).filter(|o| o.chat == m.chat).map(|o| crate::chats::Quote {
+            id: o.id,
+            author: o.author.clone(),
+            name: o.name.clone().or_else(|| self.names.get(&o.author).cloned()),
+            snippet: if o.deleted.is_some() { String::new() } else { crate::chat_reply::snippet(&o.body) },
+            deleted: o.deleted.is_some(),
+        });
+        m
     }
 
     fn ids(&self, chat: u64) -> &[u64] {
@@ -630,7 +645,7 @@ impl Store {
             Paging::After(after) => {
                 let from = ids.partition_point(|&i| i <= after);
                 let to = (from + n).min(ids.len());
-                let page: Vec<Message> = ids[from..to].iter().filter_map(|i| cache.chats.messages.get(i).cloned()).collect();
+                let page: Vec<Message> = ids[from..to].iter().filter_map(|i| cache.chats.messages.get(i).cloned()).map(|m| cache.chats.quoted(m)).collect();
                 let next = (to < ids.len()).then(|| page.last().map(|m| m.id.get())).flatten();
                 return Ok((page, next));
             }
@@ -640,7 +655,7 @@ impl Store {
             }
             Paging::Newest => (ids.len().saturating_sub(n), ids.len(), true),
         };
-        let page: Vec<Message> = ids[from..to].iter().filter_map(|i| cache.chats.messages.get(i).cloned()).collect();
+        let page: Vec<Message> = ids[from..to].iter().filter_map(|i| cache.chats.messages.get(i).cloned()).map(|m| cache.chats.quoted(m)).collect();
         let next = (more_back && from > 0).then(|| page.first().map(|m| m.id.get())).flatten();
         Ok((page, next))
     }
@@ -675,6 +690,7 @@ impl Store {
             .filter(|m| w.since.is_none_or(|s| m.at >= s) && m.author != signer.principal && m.deleted.is_none())
             .min_by_key(|m| m.id)
             .cloned()
+            .map(|m| chats.quoted(m))
     }
 
     /// CHAT-3: the newest message's id — what a wait without `since` sets
@@ -849,7 +865,12 @@ impl Store {
             if c.state == ChatState::Closed {
                 return Err(refused(format!("chat {chat} is closed")));
             }
-            let message = Message { id: MessageId::new(cache.chats.next_message()), chat: ChatId::new(chat), author: by.principal.clone(), name: by.name.clone(), via: None, at: now, body, deleted: None };
+            // CHAT-66: a reply answers a message of its own chat.
+            let reply_to = crate::chat_reply::reply_to_in(&body);
+            if let Some(r) = reply_to.filter(|r| cache.chats.messages.get(r).is_none_or(|o| o.chat.get() != chat)) {
+                return Err(refused(format!("message {r} is not in chat {chat}: a reply answers a message of its own chat")));
+            }
+            let message = cache.chats.quoted(Message { id: MessageId::new(cache.chats.next_message()), chat: ChatId::new(chat), author: by.principal.clone(), name: by.name.clone(), via: None, at: now, body, deleted: None, reply_to: reply_to.map(MessageId::new), quote: None });
             if let Some(p) = c.parts.iter_mut().find(|p| p.principal == by.principal) {
                 p.read_upto = message.id.get();
             }
@@ -1179,6 +1200,8 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Chats> {
                 (Some(at), Some(by)) => Some(crate::chats::Deleted { at, by }),
                 _ => None,
             },
+            reply_to: None,
+            quote: None,
         });
     }
     // CHAT-55: the tickets each chat names.
@@ -1286,7 +1309,7 @@ impl Store {
                 .enumerate()
                 .map(|(i, body)| {
                     let author = if i % 2 == 0 { reader.to_string() } else { "agent:builder".to_string() };
-                    Message { id: MessageId::new(first + i as u64), chat: ChatId::new(chat), author, name: None, via: None, at: now - (count - i) as i64, body, deleted: None }
+                    Message { id: MessageId::new(first + i as u64), chat: ChatId::new(chat), author, name: None, via: None, at: now - (count - i) as i64, body, deleted: None, reply_to: None, quote: None }
                 })
                 .collect();
             let last = first + count as u64 - 1;

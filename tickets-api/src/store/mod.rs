@@ -5581,6 +5581,9 @@ mod tests_chat_tickets;
 /// CHAT-20: a message's inputs.
 #[cfg(test)]
 mod tests_chat_inputs;
+/// CHAT-66: replies.
+#[cfg(test)]
+mod tests_chat_reply;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

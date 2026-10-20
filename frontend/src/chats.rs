@@ -774,6 +774,24 @@ pub(crate) fn jump_newest(chat: u64, size: u32) {
     });
 }
 
+/// CHAT-66: the window put around message `at` — a reply's original out of
+/// view: the page back to it and the page after it, as `?at=` opens one.
+pub(crate) fn load_around(chat: u64, size: u32, at: u64) {
+    let Some(client) = session::chats_client() else { return };
+    spawn_local(async move {
+        let Ok((back, older)) = page(&client, chat, Paging::Before(at + 1), size).await else { return };
+        let Ok((ahead, newer)) = page(&client, chat, Paging::After(at), size).await else { return };
+        HELD.with(|s| {
+            s.try_update(|h| {
+                h.get_or_insert_with(Held::default).with_thread(chat, |t| {
+                    *t = Thread::default();
+                    t.around(back, older.is_some(), ahead, newer.is_some());
+                })
+            })
+        });
+    });
+}
+
 /// CHAT-8: `n` messages dropped from one end of `chat`'s window.
 pub(crate) fn drop_side(chat: u64, side: crate::scale::Side, n: usize) {
     HELD.with(|s| s.update(|h| h.get_or_insert_with(Held::default).with_thread(chat, |t| t.drop_side(side, n))));
@@ -1004,7 +1022,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn msg(id: u64, chat: u64, author: &str, body: &str) -> Message {
-        Message { id: MessageId::new(id), chat: ChatId::new(chat), author: author.into(), name: None, via: None, at: 100 + id as i64, body: body.into(), deleted: None }
+        Message { id: MessageId::new(id), chat: ChatId::new(chat), author: author.into(), name: None, via: None, at: 100 + id as i64, body: body.into(), deleted: None, reply_to: None, quote: None }
     }
 
     /// Reading row: a message by another adds one to the reader's unread,

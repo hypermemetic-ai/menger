@@ -199,6 +199,13 @@ fn media_img(class: &str, hash: &str, alt: &str) -> String {
     format!("<img class=\"{class}\" data-media=\"{hash}\" alt=\"{esc}\" title=\"{esc}\" />")
 }
 
+/// CHAT-66: the chip a `message:N` link becomes, anywhere: `↩ message N`.
+/// In a chat's turn a tap on it jumps to the message (`data-act`); elsewhere
+/// it names it and links nowhere, so it says nothing the reader can't see.
+fn message_chip(id: u64) -> String {
+    format!("<span class=\"msgref\" data-act=\"jump-reply\" data-to=\"{id}\" title=\"message {id}\">↩ message {id}</span>")
+}
+
 /// COMMENT-10: a ticket body's `media:` images, after the rest — each an
 /// `img.bimg` with no `src`, which the page (src/media.rs) or, in a frame,
 /// the SDK fills from `media.get` held to the body's ticket. Every other
@@ -839,6 +846,8 @@ fn render_as(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, frame
     // Depth counters for dropped tags, so each End pairs with its Start.
     let mut dropped_links = 0u32;
     let mut dropped_images = 0u32;
+    // CHAT-66: inside a `message:` link — its text gives way to the chip.
+    let mut message_link = false;
     // Inside a ```mermaid fence: the source collected so far. The fence's
     // own Start/Text/End events are swallowed; the End emits the placeholder.
     let mut mermaid_src: Option<String> = None;
@@ -907,6 +916,12 @@ fn render_as(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, frame
                 _ => None,
             };
         }
+        if message_link {
+            if matches!(ev, Event::End(TagEnd::Link)) {
+                message_link = false;
+            }
+            return None;
+        }
         if framed {
             match &ev {
                 Event::Start(Tag::HtmlBlock) => {
@@ -944,6 +959,12 @@ fn render_as(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, frame
             // Raw HTML renders as inert, visible text (push_html escapes Text)
             // — unless the body is framed (COMP-4), where it is the point.
             Event::Html(s) | Event::InlineHtml(s) if !framed => Some(Event::Text(s)),
+            // CHAT-66: `[↩](message:N)` names a chat message — a chip, which
+            // a chat's turn jumps from (src/reply.rs); its words are the chip's.
+            Event::Start(Tag::Link { ref dest_url, .. }) if menger_tickets_api::chat_reply::message_ref(dest_url).is_some() => {
+                message_link = true;
+                Some(Event::Html(message_chip(menger_tickets_api::chat_reply::message_ref(dest_url).expect("checked")).into()))
+            }
             Event::Start(Tag::Link {
                 link_type,
                 dest_url,
@@ -1244,6 +1265,19 @@ mod tests {
             render_markdown("![x](data:text/html,<script>1</script>) ![y](https://e.com/i.png)");
         assert!(!out.contains("data:"), "{out}");
         assert!(out.contains("src=\"https://e.com/i.png\""), "{out}");
+    }
+
+    /// CHAT-66: a `message:` link is a chip, in a comment, a body and a frame
+    /// alike — its words give way; a bad id stays a dropped link.
+    #[test]
+    fn a_message_link_is_a_chip() {
+        let chip = "<span class=\"msgref\" data-act=\"jump-reply\" data-to=\"512\" title=\"message 512\">↩ message 512</span>";
+        assert!(render_comment("see [↩](message:512) there").html.contains(chip));
+        assert!(render_body("see [the plan](message:512)").html.contains(chip));
+        assert!(!render_body("see [the plan](message:512)").html.contains("the plan"));
+        assert!(render_body_framed("<m-status></m-status>\n\n[↩](message:512)", &|_| None).html.contains(chip));
+        let bad = render_comment("[↩](message:x) y").html;
+        assert!(!bad.contains("msgref") && !bad.contains("href=\"message:"), "{bad}");
     }
 
     /// COMMENT-5: a comment draws its `media:` images (no `src` until the

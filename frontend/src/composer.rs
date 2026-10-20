@@ -45,6 +45,9 @@
 //! - **Send on a phone** (CHAT-27, [`tap_sends`]): a tap on Send never
 //!   takes the focus from the box, so the keyboard stays up and the tap
 //!   sends — it is read on its lift, not left to the click a blur loses.
+//! - **A reply** (CHAT-66, src/reply.rs): a turn's *reply* or a swipe
+//!   puts *↩ replying to …* × over the card; Send prepends the message's
+//!   token, Esc or × takes it off.
 //! - **Drafts** ([`Drafts`]): each chat's unsent text, per browser, under
 //!   `menger.chat.draft.<id>` — restored on return, cleared on send, put
 //!   back when a send is refused.
@@ -725,12 +728,19 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                     sending.set(true);
                     body.set(String::new());
                     Drafts::clear(&mut Local, id);
+                    // CHAT-66: a reply goes as its token, then the text.
+                    let replying = crate::reply::get_untracked(id);
+                    let out = crate::reply::outgoing(replying.as_ref().map(|r| r.id), &text);
+                    crate::reply::clear(id);
                     spawn_local(async move {
-                        let r = chats::post(id, &text).await;
+                        let r = chats::post(id, &out).await;
                         sending.try_set(false);
                         if let Err(e) = r {
-                            // A refused send puts the text back.
+                            // A refused send puts the text back — and what it replied to.
                             body.try_set(text.clone());
+                            if let Some(r) = replying {
+                                crate::reply::set(id, r);
+                            }
                             refusal.try_set(Some(e));
                         } else {
                             refusal.try_set(None);
@@ -850,6 +860,13 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                 }
                 return;
             }
+            // CHAT-66: Esc takes a reply off before it leaves the box.
+            if matches!(key_act(hit, empty, false), KeyAct::Blur | KeyAct::Stop) && crate::reply::get_untracked(id).is_some() {
+                ev.prevent_default();
+                ev.stop_propagation();
+                crate::reply::clear(id);
+                return;
+            }
             match key_act(hit, empty, false) {
                 KeyAct::Send => {
                     ev.prevent_default();
@@ -942,6 +959,12 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                 })
             }}
             {menu}
+            {move || crate::reply::get(id).map(|r| view! {
+                <div class="cstrip creply" role="status"><span class="crq" aria-hidden="true">"↩"</span><span class="crt">{crate::reply::bar_text(&r)}</span>
+                    <button type="button" class="cx" aria-label="don't reply" title="don't reply (Esc)"
+                        on:mousedown=|ev: web_sys::MouseEvent| ev.prevent_default()
+                        on:click=move |_| crate::reply::clear(id)>"×"</button></div>
+            })}
             <div class="ccard">
                 <crate::draw::PadView a=attach />
                 {move || tok.get().map(|c| view! {

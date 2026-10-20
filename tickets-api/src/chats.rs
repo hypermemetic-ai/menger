@@ -346,6 +346,32 @@ pub struct Message {
     /// `await_message` reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted: Option<Deleted>,
+    /// CHAT-66: the message it answers — its body's leading
+    /// `[↩](message:<id>)` ([`crate::chat_reply::reply_to_in`]), read by the
+    /// server so no client parses it; always a message of the same chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<MessageId>,
+    /// CHAT-66: what the reply's quoted header draws — the original's author
+    /// and first words, as it is now (deleted: said so). Answered with the
+    /// message, never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<Quote>,
+}
+
+/// CHAT-66: the original a reply answers, as its header draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Quote {
+    pub id: MessageId,
+    /// Its author's principal.
+    pub author: String,
+    /// The name its author went by, when it had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Its first words ([`crate::chat_reply::snippet`]); empty once deleted.
+    pub snippet: String,
+    /// CHAT-44: it was deleted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
 }
 
 /// CHAT-44: a message's deletion — when (unix seconds) and by whom (its
@@ -530,7 +556,7 @@ mod tests {
 
     #[test]
     fn the_wire_shapes_are_the_spec_s() {
-        let m = Message { id: MessageId::new(3), chat: ChatId::new(41), author: "idp:ada".into(), name: None, via: None, at: 10, body: "1240 is allowed.".into(), deleted: None };
+        let m = Message { id: MessageId::new(3), chat: ChatId::new(41), author: "idp:ada".into(), name: None, via: None, at: 10, body: "1240 is allowed.".into(), deleted: None, reply_to: None, quote: None };
         assert_eq!(
             serde_json::to_value(ChatsEvent::Posted { message: m.clone(), inputs: vec![] }).unwrap(),
             json!({ "type": "posted", "message": { "id": 3, "chat": 41, "author": "idp:ada", "at": 10, "body": "1240 is allowed." } })

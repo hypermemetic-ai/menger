@@ -14,6 +14,7 @@ mkdir -p "$dest/scripts/chat-bridge" "$dest/deploy" "$HOME/.config/systemd/user"
 install -m 0644 "$repo/scripts/chat-bridge/bridge.mjs" "$dest/scripts/chat-bridge/bridge.mjs"
 install -m 0644 "$repo/scripts/chat-bridge/live.mjs" "$dest/scripts/chat-bridge/live.mjs"
 install -m 0644 "$repo/scripts/chat-bridge/models.mjs" "$dest/scripts/chat-bridge/models.mjs"
+install -m 0644 "$repo/scripts/chat-bridge/reply.mjs" "$dest/scripts/chat-bridge/reply.mjs"
 install -m 0644 "$repo/deploy/menger-call.mjs" "$dest/deploy/menger-call.mjs"
 git -C "$repo" rev-parse --short HEAD > "$dest/REVISION" 2>/dev/null || true
 install -m 0644 "$here/menger-chat-bridge.service" "$HOME/.config/systemd/user/menger-chat-bridge.service"

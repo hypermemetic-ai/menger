@@ -751,6 +751,48 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         scroll.update_value(|s| s.moved(true));
         arrow.set(None);
     };
+    // CHAT-66: a reply's header (or a `message:` chip) taps to its
+    // original — held: the scroll put there; not held: the window around it
+    // fetched first (CHAT-8) — and it flashes.
+    let show_message = move |to: u64| {
+        if !thread.with_untracked(|t| t.iter().any(|m| m.id.get() == to)) {
+            chats::load_around(id, size, to);
+        }
+        let hold = move || {
+            stick.set_value(false);
+            let lift = scroller().map_or(0.0, |sc| covered(&sc));
+            anchor.set_value(Some((to, -40.0 - lift)));
+            landed.set_value(true);
+            settle_scroll();
+        };
+        hold();
+        spawn_local(async move {
+            // Held on it while the window arrives and its rows are measured
+            // (each a scroll of the view's own) — until it is on screen; then
+            // marked.
+            for _ in 0..40 {
+                dom::sleep_ms(100).await;
+                if list_ref.try_get_untracked().flatten().is_none() {
+                    return;
+                }
+                if thread.with_untracked(|t| t.iter().any(|m| m.id.get() == to)) {
+                    hold();
+                }
+                let Some(list) = list_ref.get_untracked() else { return };
+                let Ok(Some(el)) = list.query_selector(&format!("[data-message-id=\"{to}\"]")) else { continue };
+                let r = el.get_bounding_client_rect();
+                let vh = dom::window().inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                if r.bottom() < 60.0 || r.top() > vh - 80.0 {
+                    continue;
+                }
+                let _ = el.class_list().remove_1("tflash");
+                let _ = el.class_list().add_1("tflash");
+                dom::sleep_ms(1600).await;
+                let _ = el.class_list().remove_1("tflash");
+                return;
+            }
+        });
+    };
     // CHAT-18: the live work — the turns still running under the last
     // turn, the folded ones after their answers (src/live.rs) — and a clock
     // for staleness, ticking while a turn is live.
@@ -987,8 +1029,32 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         let name = name.clone();
         move || shape.with(|s| s.live.clone()).into_iter().map(|w| live_view(w, &name, now)).collect_view()
     };
+    // CHAT-66: the composer replies to message `mid` (src/reply.rs).
+    let reply_to = {
+        let name = name.clone();
+        move |mid: u64| {
+            let Some(m) = thread.with_untracked(|l| l.iter().find(|m| m.id.get() == mid).cloned()) else { return };
+            let who = m.name.clone().unwrap_or_else(|| name(&m.author));
+            crate::reply::set(id, crate::reply::Replying { id: mid, who, snippet: menger_tickets_api::chat_reply::snippet(&m.body) });
+            if let Some(b) = dom::window().document().and_then(|d| d.query_selector(".ccompose .cbox").ok().flatten()).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
+                let _ = b.focus();
+            }
+        }
+    };
+    let unhold_all = move || {
+        if let Some(el) = list_ref.get_untracked() {
+            if let Ok(all) = el.query_selector_all(".turn.held") {
+                for i in 0..all.length() {
+                    if let Some(e) = all.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) {
+                        let _ = e.class_list().remove_1("held");
+                    }
+                }
+            }
+        }
+    };
     // copy · quote · link, and a code block's copy — one listener.
     let acts = {
+        let reply_to = reply_to.clone();
         let t = ticket.clone();
         move |ev: web_sys::MouseEvent| {
             let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
@@ -1012,7 +1078,8 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             let Some(btn) = el.closest("[data-act]").ok().flatten() else { return };
             let turn = btn.closest("[data-message-id]").ok().flatten();
             let mid: u64 = turn.as_ref().and_then(|t| t.get_attribute("data-message-id")).and_then(|v| v.parse().ok()).unwrap_or(0);
-            let text_of = |mid: u64| thread.with_untracked(|l| l.iter().find(|m| m.id.get() == mid).map(|m| m.body.clone())).unwrap_or_default();
+            // CHAT-66: a reply's words, without its token.
+            let text_of = |mid: u64| thread.with_untracked(|l| l.iter().find(|m| m.id.get() == mid).map(|m| menger_tickets_api::chat_reply::without_token(&m.body).to_string())).unwrap_or_default();
             match btn.get_attribute("data-act").as_deref() {
                 Some("copy-code") => {
                     let code = btn.closest(".cblock").ok().flatten().and_then(|b| b.query_selector("pre").ok().flatten()).and_then(|p| p.text_content()).unwrap_or_default();
@@ -1042,6 +1109,16 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                     }
                 }
                 Some("quote") => body.update(|b| b.push_str(&turns::quoted(&text_of(mid)))),
+                // CHAT-66: *reply* — the composer's bar, the box focused.
+                Some("reply") => {
+                    reply_to(mid);
+                    unhold_all();
+                }
+                Some("jump-reply") => {
+                    if let Some(to) = btn.get_attribute("data-to").and_then(|v| v.parse::<u64>().ok()) {
+                        show_message(to);
+                    }
+                }
                 Some("link") => {
                     let w = dom::window();
                     let base = format!("{}{}", w.location().origin().unwrap_or_default(), w.location().pathname().unwrap_or_default());
@@ -1089,7 +1166,64 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             }
         });
     };
-    let released = move |_| press.update_value(|p| *p += 1);
+    // CHAT-66: a swipe right on a turn replies to it (a phone's): the turn
+    // follows the finger, and lifted past src/reply.rs's SWIPE_PX it is the
+    // one the composer answers.
+    let swiping: StoredValue<Option<(f64, f64, web_sys::HtmlElement, crate::reply::Swipe)>, LocalStorage> = StoredValue::new_local(None);
+    let swipe_down = move |ev: &web_sys::PointerEvent| {
+        if ev.pointer_type() != "touch" || selecting.with_untracked(Option::is_some) {
+            return;
+        }
+        let el = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+        if el.as_ref().is_some_and(|e| e.closest(".tkcards, .cblock, iframe").ok().flatten().is_some()) {
+            return;
+        }
+        let turn = el.and_then(|e| e.closest(".turn").ok().flatten()).and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok());
+        swiping.set_value(turn.map(|t| (f64::from(ev.client_x()), f64::from(ev.client_y()), t, crate::reply::Swipe::None)));
+    };
+    let swipe_move = move |ev: web_sys::PointerEvent| {
+        press.update_value(|p| *p += 1);
+        swiping.update_value(|s| {
+            let Some((x, y, turn, at)) = s.as_mut() else { return };
+            let now = crate::reply::swipe(f64::from(ev.client_x()) - *x, f64::from(ev.client_y()) - *y);
+            let px = match now {
+                crate::reply::Swipe::Follow(px) | crate::reply::Swipe::Reply(px) => px,
+                crate::reply::Swipe::None => 0.0,
+            };
+            let _ = turn.class_list().toggle_with_force("swiping", px > 0.0);
+            let _ = turn.class_list().toggle_with_force("swiped", matches!(now, crate::reply::Swipe::Reply(_)));
+            let _ = web_sys::HtmlElement::style(turn).set_property("--swipe", &format!("{px}px"));
+            *at = now;
+        });
+    };
+    let swipe_end = {
+        let reply_to = reply_to.clone();
+        move |replies: bool| {
+            let Some((_, _, turn, at)) = swiping.try_update_value(Option::take).flatten() else { return };
+            let _ = turn.class_list().remove_2("swiping", "swiped");
+            let _ = web_sys::HtmlElement::style(&turn).remove_property("--swipe");
+            if replies && matches!(at, crate::reply::Swipe::Reply(_)) {
+                if let Some(mid) = turn.get_attribute("data-message-id").and_then(|v| v.parse::<u64>().ok()) {
+                    reply_to(mid);
+                }
+            }
+        }
+    };
+    let pressed = move |ev: web_sys::PointerEvent| {
+        swipe_down(&ev);
+        pressed(ev);
+    };
+    let lifted = {
+        let swipe_end = swipe_end.clone();
+        move |_: web_sys::PointerEvent| {
+            press.update_value(|p| *p += 1);
+            swipe_end(true);
+        }
+    };
+    let canceled = move |_: web_sys::PointerEvent| {
+        press.update_value(|p| *p += 1);
+        swipe_end(false);
+    };
     // Esc leaves selection mode: the full chat's own Esc asks first
     // ([`leave_selection`]), the dock's is heard here.
     Effect::new(move |_| {
@@ -1168,7 +1302,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             {move || adding.get().then(|| view! {
                 <Picker ticket=t_picker.clone() add_to=Some((id, participants.get_untracked())) on_done=Callback::new(move |_| adding.set(false)) />
             })}
-            <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=move |_| if !doc_scroll.get_value() { on_scroll() } on:click=acts on:pointerdown=pressed on:pointerup=released on:pointercancel=released on:pointermove=released>
+            <div class="pmsgs" class:turns=true node_ref=list_ref aria-live="polite" on:scroll=move |_| if !doc_scroll.get_value() { on_scroll() } on:click=acts on:pointerdown=pressed on:pointerup=lifted on:pointercancel=canceled on:pointermove=swipe_move>
                 <div class="tcol">
                     {move || loading_earlier.get().then(|| view! { <div class="tearlier" role="status">"loading earlier…"</div> })}
                     {empty}
@@ -1279,6 +1413,18 @@ fn alone_view(ticket: &str, body: RwSignal<String>) -> impl IntoView {
 /// phone).
 fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str) -> String, (chat, ticket): (u64, Option<String>)) -> impl IntoView {
     let who = m.name.clone().unwrap_or_else(|| name(&m.author));
+    // CHAT-66: a reply draws its quoted header, and its body without the
+    // token (src/reply.rs).
+    let quote = crate::reply::header(m.reply_to.map(|r| r.get()), m.quote.as_ref(), name).map(|(qwho, said)| {
+        let to = m.reply_to.map_or(0, |r| r.get()).to_string();
+        let label = if qwho.is_empty() { format!("a reply to {said}") } else { format!("a reply to {qwho}: {said} — show it") };
+        view! {
+            <button type="button" class="treply" data-act="jump-reply" data-to=to aria-label=label>
+                {(!qwho.is_empty()).then(|| view! { <b>{qwho}</b> })}<span>{said}</span>
+            </button>
+        }
+    });
+    let m = Message { body: menger_tickets_api::chat_reply::without_token(&m.body).to_string(), ..m };
     // CHAT-21: a body that would be framed as a ticket's draws in its own
     // frame, made near the view (src/chat_frames.rs); any other as ever.
     let framed = md::is_framed(&m.body).then(|| {
@@ -1356,6 +1502,7 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
     });
     let acts = view! {
         <div class="tacts">
+            <button type="button" data-act="reply">"reply"</button>
             <button type="button" data-act="copy">"copy"</button>
             <button type="button" data-act="quote">"quote"</button>
             <button type="button" data-act="link">"link"</button>
@@ -1371,9 +1518,10 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
         view! {
             <div class="turn mine pmsg" class:fresh=fresh data-message-id=mid>
                 {match framed {
-                    Some(f) => f.into_any(),
+                    Some(f) => view! { {quote} {f} }.into_any(),
                     None => view! {
                         <div class="bubble">
+                            {quote}
                             <div class="md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
                             {tail}
                             {more}
@@ -1397,9 +1545,10 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
                         <span class="t" title=fmt_unix(m.at)>{clock(m.at)}</span>
                     </div>
                     {match framed {
-                        Some(f) => f.into_any(),
+                        Some(f) => view! { {quote} {f} }.into_any(),
                         None => view! {
                             <div class="pmb">
+                                {quote}
                                 <div class="md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
                                 {tail}
                                 {more}
