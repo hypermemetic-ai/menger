@@ -1094,6 +1094,8 @@ executor resolves the tip, and its records carry the real revision.
 `step` is the `deployer` grant, as `record` is.
 
 ## The deploy runner (DEPLOY-37)
+**DEPLOY-42:** the runner's own closing record (when the pipeline's never landed) names the release too — read from the build/deploy output (`release <id>`, `test runs <id>`) — so `deployments environments` shows test's release after a runner-carried deploy, as one from a shell does.
+
 
 `deploy/runner.mjs` is menger's own executor: it takes a request to `test`
 (and to `app-prod`, below)

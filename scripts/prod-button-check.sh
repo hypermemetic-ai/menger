@@ -84,6 +84,13 @@ for width in 390 1440; do
     runner;          check "$work/owner.session" ok "$width" "$theme"
                      check "$work/owner.session" none "$width" "$theme"
     reset
+    # DEPLOY-42: test's last deploy failed; then test's record without a release (a runner's)
+    S deployments record --project menger --environment test --state failed --revision 8cb79df --release "$NEW" --previous 0dd0000 --commits a1a1a1a,b2b2b2b,c3c3c3c,8cb79df
+    check "$work/owner.session" testfailed "$width" "$theme"
+    S deployments record --project menger --environment test --state succeeded --revision 0dd0000
+    check "$work/owner.session" norelease "$width" "$theme"
+    S deployments record --project menger --environment test --state succeeded --revision 8cb79df --release "$NEW" --previous 0dd0000 --commits a1a1a1a,b2b2b2b,c3c3c3c,8cb79df
+    reset
   done
 done
 log "runner log (last lines)"; tail -n 6 "$work/runner.log"

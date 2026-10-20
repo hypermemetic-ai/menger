@@ -111,6 +111,9 @@ export function unowned(job, owners) {
   return null;
 }
 
+/** DEPLOY-42: the release a step's output names last (`release <id>` from build, `test runs <id>` from deploy), or null. */
+export const releaseIn = (text) => [...String(text || "").matchAll(/\b\d{8}T\d{6}Z-[0-9a-f]{7,40}\b/g)].at(-1)?.[0] ?? null;
+
 /** A release's commit: the hash it ends in. */
 export const shaOf = (release) => /-([0-9a-f]{7,40})$/.exec(String(release || ""))?.[1] ?? null;
 
@@ -296,6 +299,8 @@ export class Runner {
       }
       const res = await this.exec(job, s, path.join(dir, `${s.name}.log`));
       if (s.records) recorded = true;
+      // The runner's own closing record must name the release too, or it overwrites the pipeline's with none.
+      if (!GUARDS[job.environment]) job.release ||= releaseIn(res.out) || "";
       if (res.canceled) { outcome = "canceled"; await this.step(job, s.name, "canceled", { detail: tail(res.out) || undefined }); break; }
       if (res.code !== 0) { outcome = "failed"; await this.step(job, s.name, "failed", { detail: tail(res.out) || `exit ${res.code}`, url: this.urlOf(job, s) }); break; }
       await this.step(job, s.name, "succeeded", { url: this.urlOf(job, s) });
