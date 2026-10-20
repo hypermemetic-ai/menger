@@ -68,6 +68,9 @@ pub mod inputs;
 /// reference evaluator. Wasm-safe, with no feature gate: the server
 /// compiles it against its cells, the app parses what a reader types.
 pub mod filter;
+/// TETHER-11: a machine key's pairing code — what `tether pair` prints and
+/// `#/pair` shows, so a person checks one against the other. Wasm-safe.
+pub mod pairing;
 /// FILTER-36: where a saved filter lives (FILTER-6) and how a name is
 /// matched — the slug the app paths its docs by and the server resolves
 /// `saved "Name"` by. Wasm-safe: one rule for both.

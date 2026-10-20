@@ -10,6 +10,7 @@ pub mod engine;
 pub mod listen;
 pub mod listener;
 pub mod login;
+pub mod pair;
 pub mod prompts;
 pub mod remote;
 pub mod runner;

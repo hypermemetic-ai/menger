@@ -991,6 +991,7 @@ dependencies = [
  "pulldown-cmark",
  "schemars",
  "serde",
+ "sha2",
 ]
 
 [[package]]

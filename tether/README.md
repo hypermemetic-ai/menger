@@ -82,6 +82,37 @@ connected, where it is (`since`, its comment mark), what it heard and
 acted on, what waits out its grace, and how many tickets are queued.
 `--no-listen` keeps the remote for posting reports only.
 
+## Pairing a machine (TETHER-11)
+
+`tether pair` enrols this machine's key with a remote menger, so no one
+copies a `key:<hex>` around by hand. It runs before the server does:
+
+```sh
+tether pair --remote https://app.menger.sh --name alice-laptop   # opens the browser
+tether pair --remote https://app.menger.sh --no-browser          # prints the URL, to open on any device
+```
+
+It makes the key when there is none (`~/.plexus/keys/<name>.key`, 0600, as
+synapse keeps one; `--key FILE` names another; `--name` defaults to the
+host name), signs in with it (a key holding nothing joins the remote's
+`members.requests`, under its name), and prints a **pairing code** — the
+first 8 base32 characters of the SHA-256 of the public key, `MMG4-2KLG`
+(`menger_tickets_api::pairing`) — and
+`<app>/#/pair?principal=key:<hex>&name=<name>`: the public key and the
+name, nothing secret. It opens that URL with `xdg-open` (a display only),
+`open` or the Windows URL handler, unless `--no-browser`. On the app's
+`#/pair` the person checks the code matches the terminal's and presses
+**Pair** (editor, by default, on a scope they administer — `members.grant`)
+or **Not mine**; one who administers nothing is told who can. tether asks
+`members.mine` every 3 s, at most `--wait-secs` (600), then prints
+`paired: alice-laptop → editor on hypermemetic:PROJ` and writes
+`TETHER_REMOTE` / `TETHER_REMOTE_AS` into `~/.config/menger/tether.env`
+(`--env-file`) where they are missing — a file that does not exist is made
+from `deploy/tether.env.example`. A remote given as its socket
+(`ws://127.0.0.1:4460`) whose app is elsewhere takes `--app
+http://127.0.0.1:4461`. `scripts/pair-check.sh` checks the page;
+`tests/pair.rs` the whole flow on a throwaway menger.
+
 ## Runs (TETHER-9)
 
 A run replaces a hand-launched `systemd-run … claude -p`: a brief, an

@@ -10,6 +10,58 @@ use tether::login::{LoginConfig, StartGrant};
 /// the substrate inside it.
 #[derive(Parser, Debug)]
 #[command(name = "tether")]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+    #[command(flatten)]
+    serve: Args,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Cmd {
+    /// TETHER-11: enrol this machine's key with a remote menger — a code to
+    /// compare, the app's #/pair opened in the browser, a person grants it.
+    Pair(PairArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct PairArgs {
+    /// The remote menger: its app (https://app.menger.sh) or its socket (wss://…/ws).
+    #[arg(long, default_value = "https://app.menger.sh")]
+    remote: String,
+
+    /// The app's origin when it is not the remote's (a local menger's shell port).
+    #[arg(long)]
+    app: Option<String>,
+
+    /// This machine's name there — what it signs in as and its key's name
+    /// (default: the host name).
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Its key (default `~/.plexus/keys/<name>.key`, made when there is none).
+    #[arg(long)]
+    key: Option<PathBuf>,
+
+    /// Don't open the browser: print the URL and the code, to open on any device.
+    #[arg(long)]
+    no_browser: bool,
+
+    /// How long to wait for the grant.
+    #[arg(long, default_value = "600")]
+    wait_secs: u64,
+
+    /// How often to ask whether it came.
+    #[arg(long, default_value = "3", hide = true)]
+    poll_secs: u64,
+
+    /// Where TETHER_REMOTE / TETHER_REMOTE_AS are written, where missing
+    /// (default `~/.config/menger/tether.env`).
+    #[arg(long)]
+    env_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
 struct Args {
     /// The WebSocket's port.
     #[arg(short, long, env = "TETHER_PORT", default_value = "4486")]
@@ -85,13 +137,17 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let cli = Cli::parse();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,tether=info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
+    if let Some(Cmd::Pair(p)) = cli.cmd {
+        return pair(p).await;
+    }
+    let args = cli.serve;
 
     if let Some(why) = tether::login::refusal(&args.auth_provider) {
         anyhow::bail!(why);
@@ -148,4 +204,25 @@ async fn main() -> anyhow::Result<()> {
     })
     .with_websocket(args.port);
     login.apply(builder).build().await?.serve().await
+}
+
+/// TETHER-11: `tether pair`.
+async fn pair(p: PairArgs) -> anyhow::Result<()> {
+    use tether::pair;
+    let endpoints = pair::endpoints(&p.remote, p.app.as_deref()).map_err(anyhow::Error::msg)?;
+    let name = pair::check_name(&p.name.unwrap_or_else(pair::default_name)).map_err(anyhow::Error::msg)?;
+    let key_file = match p.key {
+        Some(k) => k,
+        None => tether::remote::default_key_file(&name).ok_or_else(|| anyhow::anyhow!("no HOME: give --key"))?,
+    };
+    let cfg = pair::Config {
+        endpoints,
+        name,
+        key_file,
+        no_browser: p.no_browser,
+        wait: std::time::Duration::from_secs(p.wait_secs),
+        poll: std::time::Duration::from_secs(p.poll_secs.max(1)),
+        env_file: p.env_file.or_else(pair::default_env_file),
+    };
+    pair::run(&cfg, &mut std::io::stdout()).await.map(|_| ())
 }

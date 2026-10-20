@@ -50,7 +50,6 @@ server = [
     "dep:tracing",
     "dep:roaring",
     "dep:jiff",
-    "dep:sha2",
     "dep:base64",
 ]
 # ACCESS-9: the capabilities' test constructors (`VerifiedUser::for_tests`,
@@ -113,8 +112,10 @@ roaring = { version = "0.10", optional = true }
 # name and never evaluates a window.
 jiff = { version = "0.2", optional = true }
 # COMMENT-5: an image is named by its SHA-256 and travels as base64 (media.put,
-# media.get). Both already in the lock (the server takes them); server-only.
-sha2 = { version = "0.10", optional = true }
+# media.get). Both already in the lock (the server takes them). TETHER-11:
+# sha2 is not server-only — a machine's pairing code (`pairing`) is its key's
+# SHA-256, computed alike by tether and by the app's #/pair. Pure Rust.
+sha2 = "0.10"
 base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
