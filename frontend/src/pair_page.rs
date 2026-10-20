@@ -8,13 +8,22 @@
 //! a crafted link from enrolling someone else's key. Then **Pair** grants
 //! it a role (`members.grant`) on a scope the reader administers — editor
 //! on their own scope by default, never more than they can grant — and
-//! **Not mine** dismisses it, granting nothing. A reader who administers
+//! **No** dismisses it, granting nothing. A reader who administers
 //! nothing is told who can. The machine's name was kept by the server when
 //! it signed in (CHAT-14's `principal_names`), so the page writes only the
 //! grant.
+//!
+//! TETHER-12: the link is also a QR code a phone's camera opens, so the
+//! page is a confirm-a-match screen first — the code large, *Does your
+//! terminal show it?*, **Yes, pair it** / **No**. And `#/pair` with no
+//! query (the account's **Pair a machine**) takes the code typed, or the
+//! key pasted, for a phone without a camera: a code is found among the
+//! machines waiting (`members.pairing`), and typing it is the match, so
+//! the confirm screen does not ask it again.
 
 use leptos::prelude::*;
 use menger_tickets_api::members::Role;
+use menger_tickets_api::pairing;
 use menger_tickets_api::{Grant, MembersEvent};
 use wasm_bindgen_futures::spawn_local;
 
@@ -81,6 +90,51 @@ pub(crate) fn grantable(admin_everywhere: bool, grants: &[Grant]) -> Vec<String>
     own
 }
 
+/// TETHER-12: what a person typed into the field.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Typed {
+    /// A pairing code, in its one spelling (`MMG4-2KLG`).
+    Code(String),
+    /// A key, as its principal (`key:<hex>`).
+    Key(String),
+    /// Neither.
+    Neither,
+}
+
+/// The field's text read as a code (any case, dashes and spaces
+/// optional) or a key (`key:<hex>` or the bare hex).
+pub(crate) fn typed(text: &str) -> Typed {
+    if let Some(p) = pairing::principal_of(text) {
+        Typed::Key(p)
+    } else if let Some(c) = pairing::normalize(text) {
+        Typed::Code(c)
+    } else {
+        Typed::Neither
+    }
+}
+
+/// The machine on the confirm screen.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Machine {
+    pub(crate) principal: String,
+    pub(crate) name: Option<String>,
+    /// The reader typed its code: the match is made, not asked.
+    pub(crate) typed_code: bool,
+}
+
+/// The machines waiting that a `members.pairing` answer names.
+fn waiting(evs: Vec<MembersEvent>) -> Result<Vec<Machine>, String> {
+    let mut out = Vec::new();
+    for e in evs {
+        match e {
+            MembersEvent::Waiting { principal, name, .. } => out.push(Machine { principal, name, typed_code: true }),
+            MembersEvent::Error { message } => return Err(message),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 /// What the page has done.
 #[derive(Clone, Debug, PartialEq)]
 enum Done {
@@ -92,30 +146,17 @@ enum Done {
 /// The roles a machine is offered.
 const ROLES: [&str; 2] = ["editor", "viewer"];
 
+/// The code as a screen reader says it: one character at a time.
+fn spoken(code: &str) -> String {
+    let chars: Vec<String> = code.chars().filter(|c| *c != '-').map(String::from).collect();
+    format!("pairing code {}", chars.join(" "))
+}
+
 #[component]
 pub(crate) fn PairPage() -> impl IntoView {
     let here = crate::dom::window().location().hash().unwrap_or_default();
     let l = link(&here);
     let account = signin::account();
-    let done = RwSignal::new(None::<Done>);
-    let busy = RwSignal::new(false);
-    let scope = RwSignal::new(None::<String>);
-    let role = RwSignal::new("editor".to_string());
-
-    let Some(principal) = l.principal.clone().filter(|p| menger_tickets_api::pairing::code(p).is_some()) else {
-        return view! {
-            <section id="pair-page">
-                <h2>"Pair a machine"</h2>
-                <p class="invalid" id="pair-bad" role="alert">
-                    "This link names no machine key. Run "<code>"tether pair"</code>" on the machine and open the link it prints."
-                </p>
-            </section>
-        }
-        .into_any();
-    };
-    let code = menger_tickets_api::pairing::code(&principal).unwrap_or_default();
-    let name = l.name.clone().unwrap_or_else(|| "a machine".into());
-
     let scopes = {
         let account = account.clone();
         Memo::new(move |_| {
@@ -123,14 +164,136 @@ pub(crate) fn PairPage() -> impl IntoView {
             grantable(a.admin_everywhere, a.grants.as_deref().unwrap_or(&[]))
         })
     };
-    let known = {
-        let account = account.clone();
-        Memo::new(move |_| account.get().grants.is_some() || account.get().admin_everywhere)
+    let known = Memo::new(move |_| account.get().grants.is_some() || account.get().admin_everywhere);
+
+    let from_link = l.principal.clone().filter(|p| pairing::code(p).is_some()).map(|principal| Machine { principal, name: l.name.clone(), typed_code: false });
+    // A query that names no key is a bad link; none at all is the field.
+    let bad_link = from_link.is_none() && here.contains('?');
+    let machine = RwSignal::new(from_link);
+
+    view! {
+        <section id="pair-page">
+            {move || match machine.get() {
+                Some(m) => view! { <Confirm m scopes known /> }.into_any(),
+                None => view! {
+                    <h2>"Pair a machine"</h2>
+                    {bad_link.then(|| view! {
+                        <p class="invalid" id="pair-bad" role="alert">
+                            "This link names no machine key. Run "<code>"tether pair"</code>" on the machine and scan or open what it prints — or type its code below."
+                        </p>
+                    })}
+                    {move || match (known.get(), scopes.get().is_empty()) {
+                        (false, _) => view! { <p class="hint">"…"</p> }.into_any(),
+                        (true, true) => cannot().into_any(),
+                        (true, false) => view! { <Entry machine /> }.into_any(),
+                    }}
+                }.into_any(),
+            }}
+        </section>
+    }
+}
+
+/// Said to a reader who administers nothing.
+fn cannot() -> impl IntoView {
+    view! {
+        <p class="hint" id="pair-cannot">
+            "You can't grant this machine access: only an admin can — whoever made you a member here, or an admin of the project it is for. Send them this page's link; they will see the same code."
+        </p>
+    }
+}
+
+/// TETHER-12: the field for a phone without a camera — the code the
+/// terminal shows, or its key.
+#[component]
+fn Entry(machine: RwSignal<Option<Machine>>) -> impl IntoView {
+    let text = RwSignal::new(String::new());
+    let note = RwSignal::new(None::<String>);
+    let choices = RwSignal::new(Vec::<Machine>::new());
+    let busy = RwSignal::new(false);
+    let ask = move |code: String, key: Option<String>| {
+        let Some(client) = session::members_client() else {
+            note.set(Some("not connected".into()));
+            return;
+        };
+        busy.set(true);
+        spawn_local(async move {
+            let found = match crate::typed::typed(&code) {
+                Err(e) => Err(e),
+                Ok(c) => client.pairing_all(c).await.map_err(|e| session::describe(&e)).and_then(waiting),
+            };
+            busy.set(false);
+            match (found, key) {
+                // A pasted key: the name the server kept for it, when it waits.
+                (Ok(w), Some(k)) => {
+                    let name = w.into_iter().find(|m| m.principal == k).and_then(|m| m.name);
+                    machine.set(Some(Machine { principal: k, name, typed_code: false }));
+                }
+                (Ok(w), None) if w.is_empty() => note.set(Some(format!(
+                    "No machine waiting shows {code}. Check it against the terminal — or, if tether pair has stopped, run it again."
+                ))),
+                (Ok(mut w), None) if w.len() == 1 => machine.set(w.pop()),
+                (Ok(w), None) => choices.set(w),
+                (Err(e), Some(k)) => {
+                    // The name is a nicety; the key is the machine.
+                    leptos::logging::log!("TETHER-12: no name for the key: {e}");
+                    machine.set(Some(Machine { principal: k, name: None, typed_code: false }));
+                }
+                (Err(e), None) => note.set(Some(e)),
+            }
+        });
     };
+    let submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        note.set(None);
+        choices.set(Vec::new());
+        match typed(&text.get_untracked()) {
+            Typed::Code(c) => ask(c, None),
+            Typed::Key(k) => ask(pairing::code(&k).unwrap_or_default(), Some(k)),
+            Typed::Neither => note.set(Some("That is neither a code (8 characters, as MMG4-2KLG) nor a key (key: and 64 hex digits).".into())),
+        }
+    };
+    view! {
+        <form id="pair-entry" on:submit=submit>
+            <label for="pair-text">"Enter the code your terminal shows, or paste its key"</label>
+            <input id="pair-text" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="go"
+                placeholder="MMG4-2KLG" prop:value=move || text.get() on:input=move |ev| text.set(event_target_value(&ev)) />
+            <p class="hint">"tether pair prints both. Typing the code is the check that it is your machine."</p>
+            <div class="pair-actions">
+                <button type="submit" class="primary" id="pair-find" disabled=move || busy.get()>"Find it"</button>
+            </div>
+        </form>
+        {move || note.get().map(|m| view! { <p class="invalid" id="pair-note" role="alert">{m}</p> })}
+        {move || (!choices.get().is_empty()).then(|| view! {
+            <div id="pair-choices">
+                <p>"More than one machine shows that code. Which is yours?"</p>
+                {choices.get().into_iter().enumerate().map(|(i, m)| {
+                    let label = m.name.clone().unwrap_or_else(|| "a machine".into());
+                    let key = m.principal.clone();
+                    view! {
+                        <button class="pair-choice" id=format!("pair-choice-{i}") on:click=move |_| machine.set(Some(m.clone()))>
+                            <strong>{label}</strong><code>{key}</code>
+                        </button>
+                    }
+                }).collect_view()}
+            </div>
+        })}
+    }
+}
+
+/// The confirm-a-match screen: the code large, the machine, the role and
+/// scope, **Yes, pair it** / **No**.
+#[component]
+fn Confirm(m: Machine, scopes: Memo<Vec<String>>, known: Memo<bool>) -> impl IntoView {
+    let done = RwSignal::new(None::<Done>);
+    let busy = RwSignal::new(false);
+    let scope = RwSignal::new(None::<String>);
+    let role = RwSignal::new("editor".to_string());
+    let code = pairing::code(&m.principal).unwrap_or_default();
+    let name = m.name.clone().unwrap_or_else(|| "a machine".into());
     let chosen = move || scope.get().or_else(|| scopes.get().into_iter().next());
 
     let pair = {
-        let (principal, name) = (principal.clone(), name.clone());
+        let (principal, name) = (m.principal.clone(), name.clone());
         move |_| {
             let (Some(s), r) = (chosen(), role.get_untracked()) else { return };
             let Some(client) = session::members_client() else {
@@ -162,70 +325,73 @@ pub(crate) fn PairPage() -> impl IntoView {
         }
     };
 
-    let card = view! {
+    let typed_code = m.typed_code;
+    let head = view! {
+        <p class="pair-codelabel">"Pairing code"</p>
+        <p class="pair-code" id="pair-code" aria-label=spoken(&code)>{code.clone()}</p>
+        {if typed_code {
+            view! { <p class="pair-ask" id="pair-matched">"You typed the code "<strong>{name.clone()}</strong>" shows."</p> }.into_any()
+        } else {
+            view! { <p class="pair-ask" id="pair-ask">"Does your terminal show "<strong>{code.clone()}</strong>"?"</p> }.into_any()
+        }}
         <dl class="pair-who">
             <dt>"machine"</dt><dd id="pair-name">{name.clone()}</dd>
-            <dt>"key"</dt><dd><code id="pair-principal">{principal.clone()}</code></dd>
+            <dt>"key"</dt><dd><code id="pair-principal">{m.principal.clone()}</code></dd>
         </dl>
-        <p class="pair-codelabel">"Pairing code"</p>
-        <p class="pair-code" id="pair-code" aria-label=format!("pairing code {}", code.chars().filter(|c| *c != '-').map(String::from).collect::<Vec<_>>().join(" "))>{code.clone()}</p>
-        <p class="hint">"Check it is the code "<code>"tether pair"</code>" printed in your terminal. If it is not, or you did not just run it, choose "<strong>"Not mine"</strong>"."</p>
     };
 
     view! {
-        <section id="pair-page">
-            <h2>"Pair a machine"</h2>
-            <div class="pair-card">
-                {card}
-                {move || match done.get() {
-                    Some(Done::Paired(said)) => view! { <p class="probe ok" id="pair-done" role="status">"Paired: "{said}</p> }.into_any(),
-                    Some(Done::Dismissed) => view! {
-                        <p class="hint" id="pair-dismissed" role="status">"Dismissed — nothing was granted. If someone sent you this link, they wanted a key of theirs in your name: ignore it."</p>
-                    }.into_any(),
-                    other => {
-                        let refused = match other { Some(Done::Refused(m)) => Some(m), _ => None };
-                        let pair = pair.clone();
-                        view! {
-                            {refused.map(|m| view! { <p class="invalid" id="pair-note" role="alert">{m}</p> })}
-                            {move || match (known.get(), scopes.get().is_empty()) {
-                                (false, _) => view! { <p class="hint">"…"</p> }.into_any(),
-                                (true, true) => view! {
-                                    <p class="hint" id="pair-cannot">
-                                        "You can't grant this machine access: only an admin can — whoever made you a member here, or an admin of the project it is for. Send them this page's link; they will see the same code."
-                                    </p>
-                                }.into_any(),
-                                (true, false) => view! {
-                                    <div class="pair-grant">
-                                        <label>"as "
-                                            <select id="pair-role" on:change=move |ev| role.set(event_target_value(&ev))>
-                                                {ROLES.iter().map(|r| view! { <option value=*r selected=move || role.get() == *r>{*r}</option> }).collect_view()}
-                                            </select>
-                                        </label>
-                                        <label>" on "
-                                            <select id="pair-scope" on:change=move |ev| scope.set(Some(event_target_value(&ev)))>
-                                                {move || scopes.get().into_iter().map(|s| {
-                                                    let (v, label) = (s.clone(), s.clone());
-                                                    view! { <option value=s selected=move || chosen().as_deref() == Some(v.as_str())>{label}</option> }
-                                                }).collect_view()}
-                                            </select>
-                                        </label>
-                                    </div>
-                                }.into_any(),
-                            }}
-                            <div class="pair-actions">
-                                {move || (known.get() && !scopes.get().is_empty()).then(|| {
-                                    let pair = pair.clone();
-                                    view! { <button class="primary" id="pair-go" disabled=move || busy.get() on:click=pair>"Pair"</button> }
-                                })}
-                                <button id="pair-not-mine" disabled=move || busy.get() on:click=move |_| done.set(Some(Done::Dismissed))>"Not mine"</button>
-                            </div>
-                        }.into_any()
-                    }
-                }}
-            </div>
-        </section>
+        <div class="pair-card">
+            {head}
+            {move || match done.get() {
+                Some(Done::Paired(said)) => view! { <p class="probe ok" id="pair-done" role="status">"Paired: "{said}</p> }.into_any(),
+                Some(Done::Dismissed) => view! {
+                    <p class="hint" id="pair-dismissed" role="status">
+                        "Not paired — nothing was granted. If someone sent you this link or this code, it was to get a key of theirs into your account: ignore it, and tell whoever runs this menger."
+                    </p>
+                }.into_any(),
+                other => {
+                    let refused = match other { Some(Done::Refused(m)) => Some(m), _ => None };
+                    let pair = pair.clone();
+                    view! {
+                        {refused.map(|m| view! { <p class="invalid" id="pair-note" role="alert">{m}</p> })}
+                        {move || match (known.get(), scopes.get().is_empty()) {
+                            (false, _) => view! { <p class="hint">"…"</p> }.into_any(),
+                            (true, true) => cannot().into_any(),
+                            (true, false) => view! {
+                                <div class="pair-grant">
+                                    <label>"as "
+                                        <select id="pair-role" on:change=move |ev| role.set(event_target_value(&ev))>
+                                            {ROLES.iter().map(|r| view! { <option value=*r selected=move || role.get() == *r>{*r}</option> }).collect_view()}
+                                        </select>
+                                    </label>
+                                    <label>" on "
+                                        <select id="pair-scope" on:change=move |ev| scope.set(Some(event_target_value(&ev)))>
+                                            {move || scopes.get().into_iter().map(|s| {
+                                                let (v, label) = (s.clone(), s.clone());
+                                                view! { <option value=s selected=move || chosen().as_deref() == Some(v.as_str())>{label}</option> }
+                                            }).collect_view()}
+                                        </select>
+                                    </label>
+                                </div>
+                            }.into_any(),
+                        }}
+                        <div class="pair-actions">
+                            {move || (known.get() && !scopes.get().is_empty()).then(|| {
+                                let pair = pair.clone();
+                                view! {
+                                    <button class="primary" id="pair-go" disabled=move || busy.get() on:click=pair>
+                                        {if typed_code { "Pair it" } else { "Yes, pair it" }}
+                                    </button>
+                                }
+                            })}
+                            <button id="pair-not-mine" disabled=move || busy.get() on:click=move |_| done.set(Some(Done::Dismissed))>"No"</button>
+                        </div>
+                    }.into_any()
+                }
+            }}
+        </div>
     }
-    .into_any()
 }
 
 #[cfg(test)]
@@ -255,6 +421,28 @@ mod tests {
         assert_eq!(link("#/pair"), Link::default());
         assert_eq!(decode("a%2"), "a%2", "a short escape kept");
         assert_eq!(decode("%zz+x"), "%zz x");
+        assert_eq!(spoken("MMG4-2KLG"), "pairing code M M G 4 2 K L G");
+    }
+
+    #[test]
+    fn the_field_takes_the_code_in_any_spelling_or_the_key() {
+        for code in ["MMG4-2KLG", "mmg42klg", " mmg4 2klg ", "Mmg4-2Klg"] {
+            assert_eq!(typed(code), Typed::Code("MMG4-2KLG".into()), "{code}");
+        }
+        assert_eq!(typed(FIXTURE), Typed::Key(FIXTURE.into()));
+        assert_eq!(typed(&FIXTURE[4..].to_uppercase()), Typed::Key(FIXTURE.into()), "the bare hex");
+        for neither in ["", "MMG4", "MMG4-2KL1", "idp:4b1c", "key:00"] {
+            assert_eq!(typed(neither), Typed::Neither, "{neither}");
+        }
+    }
+
+    #[test]
+    fn a_pairing_answer_is_the_machines_waiting() {
+        let w = |p: &str, n: &str| MembersEvent::Waiting { principal: p.into(), name: Some(n.into()), provider: None, since: 0 };
+        let found = waiting(vec![w(FIXTURE, "alice-laptop"), w("key:ff", "bob-box")]).unwrap();
+        assert_eq!(found.iter().map(|m| (m.name.as_deref().unwrap(), m.typed_code)).collect::<Vec<_>>(), [("alice-laptop", true), ("bob-box", true)]);
+        assert!(waiting(vec![]).unwrap().is_empty());
+        assert_eq!(waiting(vec![MembersEvent::Error { message: "no".into() }]), Err("no".into()));
     }
 
     fn g(scope: &str, role: Role) -> Grant {

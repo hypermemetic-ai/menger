@@ -316,6 +316,7 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("members.grant", Today::Admin, Some("scope")),
     ("members.revoke", Today::Admin, Some("scope")),
     ("members.requests", Today::Admin, None),
+    ("members.pairing", Today::Admin, None),
     ("session.whoami", Today::Anyone, None),
     ("session.login", Today::SignedIn, None),
     ("session.logout", Today::SignedIn, None),
@@ -869,6 +870,33 @@ async fn an_agent_asks_for_access_with_auth_signup() {
     assert!(call(&boss, "auth.waiting", json!({})).await.is_empty(), "granted: it waits no longer");
     let mine = call(&agent, "members.mine", json!({})).await;
     assert_eq!((mine[1]["grant"]["scope"].as_str(), mine[1]["grant"]["role"].as_str()), (Some("hypermemetic:A"), Some("viewer")), "{mine:?}");
+}
+
+/// TETHER-12: a machine waiting is found by the code its terminal shows —
+/// by an admin of a shortcode, who cannot read the whole waiting list; the
+/// code typed in any spelling, an unknown one answered with nothing, and a
+/// viewer refused by the gate.
+#[tokio::test]
+async fn a_machine_waiting_is_found_by_its_pairing_code() {
+    let dir = tmp();
+    let s = spawn(&dir.path().join("t.db")).await;
+    let boss = as_key(s.port, &BOSS, "boss").await;
+    one(&boss, "members.grant", json!({ "principal": principal(&OTHER), "scope": "A", "role": "admin" })).await;
+    let admin_of_a = as_key(s.port, &OTHER, "alice").await;
+    let agent = as_key(s.port, &AGENT, "worker-1").await;
+    one(&agent, "auth.signup", json!({})).await;
+    let code = menger_tickets_api::pairing::code(&principal(&AGENT)).unwrap();
+    assert_eq!(one(&admin_of_a, "members.requests", json!({})).await["type"], "error", "the whole list is *'s");
+    let typed = code.to_lowercase().replace('-', " ");
+    let found = one(&admin_of_a, "members.pairing", json!({ "code": typed })).await;
+    assert_eq!((found["type"].as_str(), found["principal"].as_str(), found["name"].as_str()), (Some("waiting"), Some(principal(&AGENT).as_str()), Some("worker-1")), "{found}");
+    let other = if code == "AAAA-AAAA" { "BBBB-BBBB" } else { "AAAA-AAAA" };
+    assert!(call(&admin_of_a, "members.pairing", json!({ "code": other })).await.is_empty(), "no machine shows that code");
+    let bad = call(&admin_of_a, "members.pairing", json!({ "code": "K7QF-29X1" })).await;
+    assert!(format!("{bad:?}").contains("pairing code"), "a code it cannot be is refused, naming why: {bad:?}");
+    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
+    assert!(call(&admin_of_a, "members.pairing", json!({ "code": code })).await.is_empty(), "granted: it waits no longer");
+    assert_eq!(one(&agent, "members.pairing", json!({ "code": code })).await["error_kind"], "forbidden", "a viewer pairs nothing");
 }
 
 /// ACCESS-58: `everyone`'s grant (ACCESS-57) is not the principal's own —

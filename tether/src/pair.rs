@@ -15,6 +15,10 @@
 //!    arrives (at most `--wait-secs`), then `paired: <name> → <role> on
 //!    <scope>`, and `TETHER_REMOTE` / `TETHER_REMOTE_AS` written into
 //!    `tether.env` where they are missing.
+//!
+//! TETHER-12: beside the URL, the URL as a QR code drawn in the terminal
+//! ([`qr_lines`]), for a phone's camera — and the code and the key, for
+//! one without: any one of the three pairs it.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -93,6 +97,62 @@ pub fn default_name() -> String {
 /// The page that grants it: the public key and the name, nothing else.
 pub fn pair_url(app: &str, principal: &str, name: &str) -> String {
     format!("{app}/#/pair?principal={principal}&name={name}")
+}
+
+/// The columns a QR code may take: a terminal's 80.
+pub const QR_COLUMNS: usize = 80;
+
+/// How [`qr_lines`] paints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Paint {
+    /// Black on white, said in ANSI colours: right on any terminal.
+    Ansi,
+    /// No colours: the light modules drawn in the terminal's ink, for the
+    /// usual light-on-dark terminal (a log file reads it inverted).
+    Plain,
+}
+
+/// TETHER-12: `text` as a QR code in Unicode half blocks (`▀ ▄ █`), two
+/// rows of modules to a line and one column each, with the four-module
+/// quiet zone a camera needs drawn in. Medium error correction, down to Low
+/// when that is what fits [`QR_COLUMNS`]; an error when nothing does.
+pub fn qr_lines(text: &str, paint: Paint) -> Result<Vec<String>, String> {
+    use qrcode::{Color, EcLevel, QrCode};
+    const QUIET: usize = 4;
+    let code = [EcLevel::M, EcLevel::L]
+        .into_iter()
+        .filter_map(|ec| QrCode::with_error_correction_level(text, ec).ok())
+        .find(|c| c.width() + 2 * QUIET <= QR_COLUMNS)
+        .ok_or_else(|| format!("{} characters do not fit a QR code {QR_COLUMNS} columns wide", text.len()))?;
+    let (w, colors) = (code.width(), code.to_colors());
+    let side = w + 2 * QUIET;
+    let dark = |x: usize, y: usize| -> bool {
+        (QUIET..QUIET + w).contains(&x) && (QUIET..QUIET + w).contains(&y) && colors[(y - QUIET) * w + (x - QUIET)] == Color::Dark
+    };
+    // What the ink draws: the dark modules on white, the light ones on a dark terminal.
+    let ink = |x: usize, y: usize| y < side && (dark(x, y) == (paint == Paint::Ansi));
+    Ok((0..side.div_ceil(2))
+        .map(|row| {
+            let line: String = (0..side)
+                .map(|x| match (ink(x, 2 * row), ink(x, 2 * row + 1)) {
+                    (true, true) => '█',
+                    (true, false) => '▀',
+                    (false, true) => '▄',
+                    (false, false) => ' ',
+                })
+                .collect();
+            match paint {
+                Paint::Ansi => format!("\x1b[30;107m{line}\x1b[0m"),
+                Paint::Plain => line,
+            }
+        })
+        .collect())
+}
+
+/// `app.menger.sh/#/pair` — where the code is typed, as a person reads it.
+pub fn typing_place(app: &str) -> String {
+    let host = app.split_once("://").map_or(app, |(_, h)| h);
+    format!("{host}/#/pair")
 }
 
 /// What opens a URL in the browser here, if anything can: `open` on macOS,
@@ -238,6 +298,8 @@ pub struct Config {
     pub poll: Duration,
     /// Where `TETHER_REMOTE` / `TETHER_REMOTE_AS` go; none: nowhere.
     pub env_file: Option<PathBuf>,
+    /// How the QR code is painted (TETHER-12): ANSI on a terminal.
+    pub paint: Paint,
 }
 
 /// The grants a `members.mine` names for the machine itself — its own and
@@ -274,7 +336,7 @@ pub async fn run(cfg: &Config, out: &mut (dyn std::io::Write + Send)) -> anyhow:
     let principal = remote.principal().to_string();
     let code = menger_tickets_api::pairing::code(&principal).ok_or_else(|| anyhow::anyhow!("{principal} is not a key"))?;
     writeln!(out, "tether pair: this machine is {} ({principal}){}", cfg.name, if made { ", its key made just now" } else { "" })?;
-    writeln!(out, "  key   {}", cfg.key_file.display())?;
+    writeln!(out, "  file  {}", cfg.key_file.display())?;
 
     let already = mine(&remote).await.map_err(|e| anyhow::anyhow!("signing in to {}: {e}", cfg.endpoints.ws))?;
     let grants = if !already.is_empty() {
@@ -282,8 +344,20 @@ pub async fn run(cfg: &Config, out: &mut (dyn std::io::Write + Send)) -> anyhow:
         already
     } else {
         let url = pair_url(&cfg.endpoints.app, &principal, &cfg.name);
+        match qr_lines(&url, cfg.paint) {
+            Ok(qr) => {
+                writeln!(out)?;
+                for l in qr {
+                    writeln!(out, "  {l}")?;
+                }
+                writeln!(out)?;
+            }
+            Err(e) => writeln!(out, "  (no QR code: {e})")?,
+        }
         writeln!(out, "  code  {code}")?;
+        writeln!(out, "  key   {principal}")?;
         writeln!(out, "  open  {url}")?;
+        writeln!(out, "Any one of them works: scan, or go to {} and type the code (or paste the key).", typing_place(&cfg.endpoints.app))?;
         let how = (!cfg.no_browser).then(|| opener(std::env::consts::OS, |v| std::env::var(v).ok())).flatten();
         match how {
             Some(o) if open(&o, &url) => writeln!(out, "Opened in your browser: check the code there is {code}, then Pair.")?,
@@ -357,6 +431,61 @@ mod tests {
         assert_eq!(pair_url("https://app.menger.sh", p, "alice-laptop"), format!("https://app.menger.sh/#/pair?principal={p}&name=alice-laptop"));
         // The code tether prints and #/pair shows, for the fixture both pin.
         assert_eq!(menger_tickets_api::pairing::code(p).as_deref(), Some("MMG4-2KLG"));
+    }
+
+    /// A drawn QR code read back as a camera would: each character two
+    /// modules, scaled up, decoded by `rqrr`.
+    fn scan(lines: &[String], paint: Paint) -> String {
+        let plain: Vec<Vec<char>> = lines.iter().map(|l| l.trim_start_matches("\x1b[30;107m").trim_end_matches("\x1b[0m").chars().collect()).collect();
+        let (w, h) = (plain[0].len(), plain.len() * 2);
+        let ink = |x: usize, y: usize| match plain[y / 2][x] {
+            '█' => true,
+            '▀' => y % 2 == 0,
+            '▄' => y % 2 == 1,
+            _ => false,
+        };
+        const PX: usize = 6;
+        let mut img = rqrr::PreparedImage::prepare_from_greyscale(w * PX, h * PX, |x, y| {
+            let dark = ink(x / PX, y / PX) == (paint == Paint::Ansi);
+            if dark { 0 } else { 255 }
+        });
+        let grids = img.detect_grids();
+        assert_eq!(grids.len(), 1, "one code in the picture");
+        grids[0].decode().expect("it decodes").1
+    }
+
+    #[test]
+    fn the_qr_code_is_the_pair_url_and_fits_80_columns() {
+        let p = "key:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+        let longest = "x".repeat(64);
+        for (app, name) in [("https://app.menger.sh", "alice-laptop"), ("https://app.menger.sh", longest.as_str()), ("https://app-test.menger.sh", longest.as_str()), ("http://127.0.0.1:4461", "b")] {
+            let url = pair_url(app, p, name);
+            for paint in [Paint::Ansi, Paint::Plain] {
+                let lines = qr_lines(&url, paint).unwrap();
+                let cols = lines.iter().map(|l| l.trim_start_matches("\x1b[30;107m").trim_end_matches("\x1b[0m").chars().count()).max().unwrap();
+                // Printed two in: the indent and the code inside 80.
+                assert!(cols + 2 <= QR_COLUMNS, "{cols} columns for {url}");
+                assert!(lines.len() <= 40, "{} lines", lines.len());
+                assert_eq!(scan(&lines, paint), url, "{paint:?}");
+            }
+        }
+        assert!(qr_lines(&"x".repeat(2000), Paint::Plain).is_err(), "too long to fit is said, never drawn wider");
+    }
+
+    #[test]
+    fn nothing_secret_is_in_the_qr_code() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("m.key");
+        ensure_key(&f).unwrap();
+        let seed = crate::remote::read_seed(&f).unwrap();
+        let remote = Remote::new("wss://app.menger.sh/ws", "m", &f).unwrap();
+        let url = pair_url("https://app.menger.sh", remote.principal(), "m");
+        let read = scan(&qr_lines(&url, Paint::Plain).unwrap(), Paint::Plain);
+        use base64::Engine as _;
+        let hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
+        assert!(!read.contains(&hex) && !read.contains(&base64::engine::general_purpose::STANDARD.encode(seed)), "{read}");
+        assert_eq!(read, format!("https://app.menger.sh/#/pair?principal={}&name=m", remote.principal()), "the public key and the name only");
+        assert_eq!(typing_place("https://app.menger.sh"), "app.menger.sh/#/pair");
     }
 
     #[test]

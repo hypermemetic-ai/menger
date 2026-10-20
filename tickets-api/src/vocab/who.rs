@@ -148,6 +148,17 @@ text_type!(
     team_name
 );
 
+fn pairing_code(text: &str) -> Result<String, String> {
+    crate::pairing::normalize(text).ok_or_else(|| not_a(text.trim(), "a pairing code", "the 8 characters tether pair prints, as MMG4-2KLG (dash, case and spaces optional)"))
+}
+
+text_type!(
+    /// TETHER-12: a machine's pairing code as a person types it, kept in
+    /// its one spelling (`mmg4 2klg` is `MMG4-2KLG`).
+    PairingCode,
+    pairing_code
+);
+
 /// The prefix a team takes where a grantee is written: no principal's
 /// issuer is `team`, so the two never collide.
 pub const TEAM_PREFIX: &str = "team:";

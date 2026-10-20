@@ -113,6 +113,23 @@ from `deploy/tether.env.example`. A remote given as its socket
 http://127.0.0.1:4461`. `scripts/pair-check.sh` checks the page;
 `tests/pair.rs` the whole flow on a throwaway menger.
 
+**Three ways to the same page** (TETHER-12). Beside the URL, `tether pair`
+draws it as a **QR code** (Unicode half blocks, black on white in ANSI on a
+terminal, at most 80 columns; plain, light on dark, into a pipe or with
+`NO_COLOR`), and prints the **code** and the **key**, with *any one of them
+works: scan, or go to app.menger.sh/#/pair and type the code (or paste
+the key)*. A phone's camera opens the link; a sign-in on the way comes back
+to that same `#/pair?…` (the sign-in page carries the `#` part in its
+`next`). On a phone the page is a confirm-a-match screen: the code large,
+*Does your terminal show MMG4-2KLG?*, the machine, the role and scope,
+**Yes, pair it** / **No**. `#/pair` with no query (the account's **Pair a
+machine**, the phone menu's *pair a machine*) takes the code typed — any
+case, dashes and spaces optional, found among the machines waiting by
+`members.pairing`, so typing it is the match and it is not asked again —
+or the key pasted (`key:<hex>` or the bare hex); an unknown code is said
+so, and two machines with one code are both shown to pick from. The QR
+holds the public key and the name, nothing secret.
+
 ## Runs (TETHER-9)
 
 A run replaces a hand-launched `systemd-run … claude -p`: a brief, an

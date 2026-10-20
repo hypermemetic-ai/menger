@@ -5054,6 +5054,7 @@ planted while there was is purged ("Login" → The purge).
 | `members.grant { principal \| team \| everyone: true, scope, role }` | the grant as kept; needs admin on the scope (`scope`: `*`, `acme:`, a shortcode, a ticket, `under` a ticket) |
 | `members.revoke { principal \| team \| everyone: true, scope }` | `revoked { principal, scope, existed }` |
 | `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant — an admin of `*` only (ACCESS-19: the list is every sign-in) |
+| `members.pairing { code }` | TETHER-12: `waiting { … }` per machine key on that list whose pairing code (`menger_tickets_api::pairing`) is `code` — typed in any spelling (`mmg4 2klg` is `MMG4-2KLG`); an admin of any scope, and nothing else of the list. `#/pair`'s field asks it |
 | `members.teams.list { org? }` | ACCESS-22: `team { name, org, created_by, at, members }` per team in the caller's organizations |
 | `members.teams.show { team }` | the `team`, a `team_member { member }` per principal in it, then a `grant` per grant it holds on a scope the caller administers |
 | `members.teams.create { name, org? }` | the `team`, empty; needs admin somewhere |

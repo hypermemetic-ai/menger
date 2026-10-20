@@ -236,6 +236,15 @@
     // link once followed. The answer is a new page (a failure comes back
     // with its reason, every button live); one the back button restores
     // from the cache is unlocked.
+    // TETHER-12: a link into the app keeps its place after the `#`
+    // (`/#/pair?principal=…`), which no request carries: the redirect here
+    // kept it in this page's address, so every way in takes it on in its
+    // `next` and the sign-in comes back to that same place.
+    if (location.hash.length > 1) {
+      for (const n of document.querySelectorAll('input[name="next"]')) {
+        if (n.value.startsWith("/") && !n.value.includes("#") && n.value.length + location.hash.length <= 512) n.value += location.hash;
+      }
+    }
     const busy = (el) => {
       el.setAttribute("aria-busy", "true");
       if (el.tagName === "A") el.setAttribute("aria-disabled", "true");

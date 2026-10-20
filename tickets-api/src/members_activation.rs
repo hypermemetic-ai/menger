@@ -26,7 +26,7 @@
 
 use crate::members::{MembersEvent, Role};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
-use crate::vocab::{Principal, ScopeRef, TeamName};
+use crate::vocab::{PairingCode, Principal, ScopeRef, TeamName};
 #[cfg(feature = "server")]
 use crate::access::{Access, MengerRequest, VerifiedUser};
 #[cfg(feature = "server")]
@@ -167,6 +167,22 @@ impl MembersActivation {
     #[plexus_macros::method(group = "admin")]
     pub async fn requests(&self, #[from_auth(self.access.verify)] user: VerifiedUser) -> impl Stream<Item = MembersEvent> + Send + 'static {
         requests_stream(self.access.clone(), user)
+    }
+
+    /// The machines waiting whose pairing code is this one (TETHER-12: a code typed on #/pair).
+    ///
+    /// One `waiting { principal, name, provider, since }` per key on the
+    /// waiting list whose code ([`crate::pairing`]) is `code` — none, one,
+    /// or (at 40 bits, rarely) several; nothing else of the list. Needs
+    /// admin somewhere: whoever can grant a machine anything.
+    #[plexus_macros::method(group = "admin")]
+    pub async fn pairing(
+        &self,
+        #[from_auth(self.access.verify)] _user: VerifiedUser,
+        /// The code tether pair prints, as MMG4-2KLG (dash, case and spaces optional).
+        code: PairingCode,
+    ) -> impl Stream<Item = MembersEvent> + Send + 'static {
+        pairing_stream(self.access.clone(), code)
     }
 
     /// Teams — a named set of principals that holds grants (ACCESS-22): `members.teams.*`.

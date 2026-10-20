@@ -296,6 +296,9 @@
         "scope"
       ],
       "mine": [],
+      "pairing": [
+        "code"
+      ],
       "requests": [],
       "revoke": [
         "everyone",

@@ -27,7 +27,8 @@ const BUDGETS: &[(&str, usize)] = &[
     // comments_activation/failures.rs and streams.rs.
     ("tickets-api/src/comments_activation.rs", 270),
     ("tickets-api/src/notes_activation.rs", 330),
-    ("tickets-api/src/members_activation.rs", 180),
+    // TETHER-12: members.pairing — one method's docs; its logic in streams.rs.
+    ("tickets-api/src/members_activation.rs", 196),
     ("tickets-api/src/orgs_activation.rs", 240),
     ("tickets-api/src/session_activation.rs", 250),
     ("diagrams/src/activation.rs", 140),

@@ -342,7 +342,11 @@ pub(crate) fn AccountGroup() -> impl IntoView {
                     <label>"Roles"</label>
                     <div class="control"><ul class="grants">{rows}</ul></div>
                 </div>
-                <div class="line actions"><SignOut /></div>
+                <div class="line actions">
+                    // TETHER-12: a machine paired by its code, for an admin of anything.
+                    {a.is_admin().then(|| view! { <a class="hbtn" id="account-pair" href="#/pair">"Pair a machine"</a> })}
+                    <SignOut />
+                </div>
             </fieldset>
         })
     }
