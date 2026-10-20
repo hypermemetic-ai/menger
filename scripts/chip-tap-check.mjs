@@ -96,16 +96,17 @@ const focused = (page) => page.evaluate(() => document.activeElement?.matches("t
 // 3. jump to latest
 {
   const { ctx, page } = await open(1500);
-  const has = await page.evaluate(() => !!document.querySelector(".tjump"));
-  ok(has, "jump: the pill shows when read back");
+  // CHAT-62: the ↓ is always in the composer; it shows (.on) a screen off.
+  const has = await page.evaluate(() => !!document.querySelector(".tjump.on"));
+  ok(has, "jump: the ↓ shows when read back");
   if (has) {
     const where = () => page.evaluate(() => window.__kb.state().realY + (document.querySelector(".pmsgs")?.scrollTop ?? 0));
     const y0 = await where();
-    await page.tap(".tjump");
+    await page.tap(".tjump.on");
     await page.waitForTimeout(1500);
     const y1 = await where();
-    const gone = await page.evaluate(() => !document.querySelector(".tjump"));
-    ok(gone && y1 > y0, `jump: one tap goes to the latest (scrollY ${Math.round(y0)} → ${Math.round(y1)}, pill gone ${gone})`);
+    const gone = await page.evaluate(() => !document.querySelector(".tjump.on"));
+    ok(gone && y1 > y0, `jump: one tap goes to the latest (scrollY ${Math.round(y0)} → ${Math.round(y1)}, ↓ gone ${gone})`);
     ok((await draft(page)) === DRAFT, "jump: the draft is kept");
     ok(await focused(page), "jump: the composer keeps its focus");
     ok(await page.evaluate(() => document.documentElement.hasAttribute("data-kb")), "jump: the keyboard is still up");

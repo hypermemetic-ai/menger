@@ -534,7 +534,8 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     let space_above = Memo::new(move |_| layout.with(|l| l.tops.get(range.get().0).copied().unwrap_or(0.0)));
     let space_below = Memo::new(move |_| layout.with(|l| l.total() - l.tops.get(range.get().1).copied().unwrap_or(l.total())));
     let scroll = StoredValue::new(turns::Scroll::default());
-    let arrow = RwSignal::new(None::<String>);
+    // CHAT-62: the ↓ — `Some(new below)` while more than a screen off.
+    let jump_n = RwSignal::new(None::<u32>);
     let anchor = StoredValue::new(None::<(u64, f64)>);
     let stick = StoredValue::new(true);
     let landed = StoredValue::new(false);
@@ -657,7 +658,15 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         }
         let n = thread.with(|t| t.iter().filter(|m| m.id.get() > before).count()) as u32;
         if !scroll.try_update_value(|s| s.arrived(n)).unwrap_or(true) {
-            arrow.set(scroll.with_value(turns::Scroll::arrow));
+            // CHAT-62: what came in may have put you a screen off.
+            spawn_local(async move {
+                dom::sleep_ms(0).await;
+                let Some(el) = scroller() else { return };
+                let far = turns::far_off(el.scroll_height(), el.top(), el.client_height());
+                if scroll.try_update_value(|s| s.moved(false, far)).is_some() {
+                    jump_n.try_set(scroll.with_value(turns::Scroll::jump));
+                }
+            });
         }
     });
     // A row's height changes after it mounts (code highlighted, a long
@@ -697,11 +706,14 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             near_edges();
             return;
         }
-        let at = !turns::off_bottom(el.scroll_height(), el.top(), el.client_height());
+        let (sh, top, ch) = (el.scroll_height(), el.top(), el.client_height());
+        let at = !turns::off_bottom(sh, top, ch);
         stick.set_value(at && !window_t.with_untracked(|t| t.newer));
         anchor.set_value(layout.with_untracked(|l| l.anchor(rel_top.get_untracked())));
-        scroll.update_value(|s| s.moved(at));
-        arrow.set(scroll.with_value(turns::Scroll::arrow));
+        // A window short of the newest is never the bottom for the ↓.
+        let far = turns::far_off(sh, top, ch) || (window_t.with_untracked(|t| t.newer) && !at);
+        scroll.update_value(|s| s.moved(at, far));
+        jump_n.set(scroll.with_value(turns::Scroll::jump));
         near_edges();
     };
     // CHAT-29: the document's scroll, where it is the list's; and a switch
@@ -738,7 +750,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             obs.disconnect();
         }
     });
-    let jump = move |_| {
+    let jump = move |_: ()| {
         if window_t.with_untracked(|t| t.newer) {
             // The window stops short of the newest: fetch the newest again.
             chats::jump_newest(id, size);
@@ -748,8 +760,8 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             ours.set_value(js_sys::Date::now());
             el.set_top(el.scroll_height());
         }
-        scroll.update_value(|s| s.moved(true));
-        arrow.set(None);
+        scroll.update_value(|s| s.moved(true, false));
+        jump_n.set(None);
     };
     // CHAT-66: a reply's header (or a `message:` chip) taps to its
     // original — held: the scroll put there; not held: the window around it
@@ -793,6 +805,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             }
         });
     };
+    let jump = Jump { n: jump_n.into(), go: Callback::new(jump) };
     // CHAT-18: the live work — the turns still running under the last
     // turn, the folded ones after their answers (src/live.rs) — and a clock
     // for staleness, ticking while a turn is live.
@@ -1316,18 +1329,43 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                     {waits}
                 </div>
             </div>
-            {move || arrow.get().map(|a| view! { <button type="button" class="tjump" on:click=jump>{a}</button> })}
             {move || if selecting.with(Option::is_some) {
                 selbar().into_any()
             } else if is_open.get() {
-                view! { <crate::composer::Composer props=crate::composer::Props { id, ticket: t_comp.clone(), body, full } /> }.into_any()
+                view! { <crate::composer::Composer props=crate::composer::Props { id, ticket: t_comp.clone(), body, full, jump } /> }.into_any()
             } else if found.get() {
-                view! { <div class="pshut">"closed — read-only"<button type="button" class="preopen" on:click=move |_| spawn_local(async move { let _ = chats::settle_state(id, true).await; })>"reopen"</button></div> }.into_any()
+                view! { <div class="pshut" class:jumping=move || jump.n.with(Option::is_some)>{jump_dock(jump)}"closed — read-only"<button type="button" class="preopen" on:click=move |_| spawn_local(async move { let _ = chats::settle_state(id, true).await; })>"reopen"</button></div> }.into_any()
             } else {
                 ().into_any()
             }}
             {move || foot().map(|f| view! { <p class="sfoot">{f}</p> })}
         </div>
+    }
+}
+
+/// CHAT-62: the ↓ the chat hands its composer (or a closed chat's line):
+/// `n` the new turns below while it shows, `go` the jump to the latest.
+#[derive(Clone, Copy)]
+pub(crate) struct Jump {
+    pub(crate) n: Signal<Option<u32>>,
+    pub(crate) go: Callback<()>,
+}
+
+/// CHAT-62: the round **↓**, docked on the composer's top-right edge — 44 px
+/// to tap, 36 drawn, the count as a badge. It is always there and fades in
+/// (`.on`) a screen off the bottom; while it shows, its parent is
+/// `.jumping` and reserves the band it sits in, so it lies over no turn.
+/// `.tjump` is in tapkb's KEEPS: a tap keeps the keyboard as it was.
+pub(crate) fn jump_dock(j: Jump) -> impl IntoView {
+    let on = move || j.n.with(Option::is_some);
+    let n = move || j.n.get().unwrap_or(0);
+    view! {
+        <button type="button" class="tjump" class:on=on aria-hidden=move || (!on()).to_string() tabindex=move || if on() { "0" } else { "-1" }
+            aria-label=move || turns::jump_label(n()) title=move || turns::jump_label(n())
+            on:click=move |_| if on() { j.go.run(()) }>
+            <span class="tjdisc" aria-hidden="true">"↓"</span>
+            {move || turns::jump_badge(n()).map(|b| view! { <span class="tjn" aria-hidden="true">{b}</span> })}
+        </button>
     }
 }
 

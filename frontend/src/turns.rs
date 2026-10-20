@@ -18,8 +18,12 @@
 //! - **Scrolling** — manifest's two rules (`conversationScroll.ts`), in
 //!   [`Scroll`]: opening lands on the read mark (or the newest) once, with
 //!   no animation, and a message arriving never moves you. More than
-//!   [`OFF_BOTTOM_PX`] off the bottom, a round **↓ N new · jump to latest**
-//!   shows; at the bottom, new turns appear in place and keep you there.
+//!   [`OFF_BOTTOM_PX`] off the bottom you are reading back, and what arrives
+//!   is counted; at the bottom, new turns appear in place and keep you there.
+//!   CHAT-62: more than a screen off ([`far_off`]) a round **↓** fades in,
+//!   docked on the composer's top-right edge (src/chat_pane.rs's
+//!   [`jump_dock`](crate::chat_pane::jump_dock)) with the count as a badge,
+//!   and the space it takes is the composer's, never a turn's.
 //!
 //! What decides is pure and pinned by native tests; the rest is the DOM.
 
@@ -30,6 +34,12 @@ pub(crate) const OFF_BOTTOM_PX: f64 = 48.0;
 /// Whether a scroller is more than [`OFF_BOTTOM_PX`] off its bottom.
 pub(crate) fn off_bottom(scroll_height: f64, scroll_top: f64, client_height: f64) -> bool {
     scroll_height - scroll_top - client_height > OFF_BOTTOM_PX
+}
+
+/// CHAT-62: whether a scroller is more than a screen off its bottom — the
+/// ↓ shows only then.
+pub(crate) fn far_off(scroll_height: f64, scroll_top: f64, client_height: f64) -> bool {
+    scroll_height - scroll_top - client_height > client_height.max(OFF_BOTTOM_PX)
 }
 
 /// Where opening a chat lands: the first unread turn, or the newest.
@@ -46,13 +56,15 @@ pub(crate) enum Landing {
 pub(crate) struct Scroll {
     landed: bool,
     pub(crate) at_bottom: bool,
+    /// CHAT-62: more than a screen off the bottom ([`far_off`]).
+    pub(crate) far: bool,
     /// Turns that arrived below while you read back.
     pub(crate) unseen: u32,
 }
 
 impl Default for Scroll {
     fn default() -> Self {
-        Scroll { landed: false, at_bottom: true, unseen: 0 }
+        Scroll { landed: false, at_bottom: true, far: false, unseen: 0 }
     }
 }
 
@@ -67,7 +79,7 @@ impl Scroll {
     }
 
     /// `n` turns arrived: whether to keep the view at the bottom (you were
-    /// there). Off it, nothing moves; they are counted for the arrow.
+    /// there). Off it, nothing moves; they are counted for the ↓.
     pub(crate) fn arrived(&mut self, n: u32) -> bool {
         if self.at_bottom {
             return true;
@@ -76,20 +88,38 @@ impl Scroll {
         false
     }
 
-    /// The reader scrolled (or the content moved under them).
-    pub(crate) fn moved(&mut self, at_bottom: bool) {
+    /// The reader scrolled (or the content moved under them): whether
+    /// they are at the bottom, and whether more than a screen off it.
+    pub(crate) fn moved(&mut self, at_bottom: bool, far: bool) {
         self.at_bottom = at_bottom;
+        self.far = far && !at_bottom;
         if at_bottom {
             self.unseen = 0;
         }
     }
 
-    /// Rule 2: the arrow's words while off the bottom.
-    pub(crate) fn arrow(&self) -> Option<String> {
-        (!self.at_bottom).then(|| match self.unseen {
-            0 => "↓ jump to latest".to_string(),
-            n => format!("↓ {n} new · jump to latest"),
-        })
+    /// Rule 2, CHAT-62: the ↓ while more than a screen off the bottom —
+    /// `Some(n)`, the turns that came in below since (its badge when not 0).
+    pub(crate) fn jump(&self) -> Option<u32> {
+        (!self.at_bottom && self.far).then_some(self.unseen)
+    }
+}
+
+/// CHAT-62: the ↓'s badge — the count, `99+` past it; none for 0.
+pub(crate) fn jump_badge(n: u32) -> Option<String> {
+    match n {
+        0 => None,
+        1..=99 => Some(n.to_string()),
+        _ => Some("99+".to_string()),
+    }
+}
+
+/// CHAT-62: what the ↓ says to a screen reader and on hover.
+pub(crate) fn jump_label(n: u32) -> String {
+    match n {
+        0 => "jump to latest".to_string(),
+        1 => "jump to latest · 1 new message".to_string(),
+        n => format!("jump to latest · {n} new messages"),
     }
 }
 
@@ -323,7 +353,8 @@ mod tests {
     use super::*;
 
     /// manifest's rules: land once; an arrival never moves you off the
-    /// bottom; ↓ appears past 48 px with what came in since.
+    /// bottom and is counted past 48 px; CHAT-62: the ↓ shows only more
+    /// than a screen off, with what came in since.
     #[test]
     fn the_scroll_rules() {
         let mut s = Scroll::default();
@@ -333,17 +364,37 @@ mod tests {
         assert_eq!(n.land(None), Some(Landing::Newest), "or the newest");
         // At the bottom: arrivals keep you there.
         assert!(s.arrived(1));
-        assert_eq!(s.arrow(), None);
-        // Read back: an arrival moves nothing, and is counted.
-        s.moved(false);
-        assert_eq!(s.arrow().as_deref(), Some("↓ jump to latest"));
+        assert_eq!(s.jump(), None);
+        // Read back a little: an arrival moves nothing, and is counted, but
+        // the ↓ waits until you are a screen away.
+        s.moved(false, false);
+        assert_eq!(s.jump(), None, "under a screen off: no ↓");
         assert!(!s.arrived(2));
+        s.moved(false, true);
+        assert_eq!(s.jump(), Some(2), "a screen off: the ↓, with what came in");
         assert!(!s.arrived(1));
-        assert_eq!(s.arrow().as_deref(), Some("↓ 3 new · jump to latest"));
-        s.moved(true);
-        assert_eq!((s.unseen, s.arrow()), (0, None), "back at the bottom: the arrow goes");
+        assert_eq!(s.jump(), Some(3));
+        s.moved(true, true);
+        assert_eq!((s.unseen, s.jump(), s.far), (0, None, false), "back at the bottom: the ↓ goes");
+        s.moved(false, true);
+        assert_eq!(s.jump(), Some(0), "read back again: ↓ with no badge");
         assert!(!off_bottom(1000.0, 552.0, 400.0), "48 px off is still the bottom");
         assert!(off_bottom(1000.0, 551.0, 400.0), "49 px is reading back");
+        assert!(!far_off(3000.0, 2200.0, 400.0), "400 px off with a 400 px screen: not yet");
+        assert!(far_off(3000.0, 2199.0, 400.0), "past a screen: the ↓");
+        assert!(!far_off(100.0, 30.0, 30.0), "a tiny screen still needs 48 px");
+    }
+
+    /// CHAT-62: the badge is the count (none for 0, 99+ past it) and the
+    /// label says it in words.
+    #[test]
+    fn the_jump_badge_and_label() {
+        assert_eq!(jump_badge(0), None);
+        assert_eq!(jump_badge(3).as_deref(), Some("3"));
+        assert_eq!(jump_badge(140).as_deref(), Some("99+"));
+        assert_eq!(jump_label(0), "jump to latest");
+        assert_eq!(jump_label(1), "jump to latest · 1 new message");
+        assert_eq!(jump_label(3), "jump to latest · 3 new messages");
     }
 
     /// CHAT-29: the head hides going down, returns going up, always shows

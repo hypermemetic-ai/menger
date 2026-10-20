@@ -4978,9 +4978,39 @@
     letter-spacing: .14em; text-transform: uppercase;
   }
   #chatfull .pnewline::before, #chatfull .pnewline::after { content: ""; flex: 1; height: var(--border); background: var(--accent); opacity: .4; }
-  :is(#chatpane, #chatfull) .tjump {
-    position: absolute; right: 18px; bottom: calc(var(--compose-h, 120px) + 14px); z-index: 3; padding: 6px 12px;
-    border-radius: var(--radius-pill); background: var(--ink); color: var(--bg); font: calc(11px * var(--text-scale)) var(--mono); box-shadow: var(--shadow);
+  /* CHAT-62: the ↓ is docked on the composer's top-right edge (inside its
+     card, src/chat_pane.rs's jump_dock): a 44 px hit area, 36 drawn,
+     resting on the card's top border, the count as a badge. While it shows
+     the composer is .jumping and opens a band above the card for it, so it
+     never lies over a turn's text; the composer's own place (sticky, under
+     the keyboard, the dock) carries it along. It fades in and out (none
+     under reduced motion). */
+  :is(.ccompose, .pshut) .tjump {
+    position: absolute; z-index: 3; right: -4px; top: -42px; width: 44px; height: 44px; padding: 0; margin: 0;
+    display: grid; place-items: center; border: 0; background: none; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s var(--ease), visibility 0s linear .18s;
+  }
+  :is(.ccompose, .pshut) .tjump.on { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity .18s var(--ease), visibility 0s; }
+  :is(.ccompose, .pshut) .tjump .tjdisc {
+    width: 36px; height: 36px; box-sizing: border-box; border-radius: 50%; display: grid; place-items: center;
+    background: var(--card); color: var(--ink); border: var(--border) solid var(--line); box-shadow: 0 1px 3px var(--shadow);
+    font: var(--weight-strong) 17px/1 var(--sans);
+  }
+  @media (hover: hover) { :is(.ccompose, .pshut) .tjump:hover .tjdisc { color: var(--accent); border-color: var(--accent); } }
+  :is(.ccompose, .pshut) .tjump:focus-visible { outline: none; }
+  :is(.ccompose, .pshut) .tjump:focus-visible .tjdisc { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+  :is(.ccompose, .pshut) .tjump .tjn {
+    position: absolute; top: 0; right: 0; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: var(--radius-pill);
+    display: grid; place-items: center; background: var(--accent); color: var(--urgent-ink); font: var(--weight-strong) 10.5px/1 var(--mono);
+  }
+  .ccompose .ccard { position: relative; }
+  .ccompose.jumping .ccard { margin-top: 42px; }
+  .pshut { position: relative; }
+  .pshut .tjump { top: -40px; right: 8px; }
+  .pshut.jumping { margin-top: 42px; }
+  html[data-motion="none"] :is(.ccompose, .pshut) .tjump { transition: none; }
+  @media (prefers-reduced-motion: reduce) {
+    html:not([data-motion]) :is(.ccompose, .pshut) .tjump, html[data-motion="calm"] :is(.ccompose, .pshut) .tjump { transition: none; }
   }
   /* An empty chat of one (CHAT-6), as an empty agent chat. */
   :is(#chatpane, #chatfull) .alone { text-align: center; margin: auto; padding: 24px 8px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
@@ -5225,7 +5255,6 @@
     #chatfull :is(.ccompose, .pshut) { position: sticky; bottom: 0; z-index: 3; background: var(--bg); padding-bottom: calc(5px + var(--safe-bottom)); }
     #chatfull :is(.ccompose, .pshut) { order: 2; }
     #chatfull .sfoot { order: 1; margin: 0; padding: 4px 0 8px; }
-    #chatfull .tjump { position: fixed; bottom: calc(64px + var(--safe-bottom)); }
     #chatfull .ccompose .cfull { display: none; }
     html[data-kb] #chatfull { position: fixed; inset: 0; display: grid; min-height: 0; }
     html[data-kb] #chatfull .smain { min-height: 0; }
@@ -5233,7 +5262,6 @@
     html[data-kb] #chatfull .chatview { flex: 1; min-height: 0; }
     html[data-kb] #chatfull .pmsgs { flex: 1; min-height: 0; overflow-y: auto; }
     html[data-kb] #chatfull :is(.ccompose, .pshut) { position: relative; padding-bottom: 5px; }
-    html[data-kb] #chatfull .tjump { position: absolute; bottom: calc(var(--compose-h, 120px) + 14px); }
   }
   /* CHAT-29: on a phone's touch screen the composer is one line at rest —
      the box, then Image as an icon beside send — and grows as you type. No
