@@ -48,6 +48,9 @@ S tickets commits link --id KILN-2 --commits a1a1a1a
 S tickets commits link --id KILN-3 --commits b2b2b2b
 S tickets commits link --id GLAZE-2 --commits c3c3c3c
 S tickets update_many --ids KILN-2,KILN-3,GLAZE-2 --status Complete
+# DEPLOY-43: the old local prod, deployed before everything below, promoted into by nothing
+S deployments record --project menger --environment prod --state succeeded --revision ace860b --release 20261017T010101Z-ace860b
+sleep 1.2
 OLD=20261017T094508Z-0dd0000 NEW=20261019T192902Z-8cb79df
 S deployments record --project menger --environment test --state succeeded --revision 0dd0000 --release "$OLD"
 S deployments record --project menger --environment app-test --state succeeded --revision 0dd0000 --release "$OLD" --from test
@@ -70,14 +73,15 @@ runner() { # [FAIL_STEP]
 }
 
 failed=0 total=0
-check() { # SESSION MODE WIDTH THEME
+check() { # SESSION MODE WIDTH THEME  (ONLY=<mode> runs one mode)
+  [[ -n ${ONLY:-} && $2 != "$ONLY" ]] && return
   total=$((total + 1))
   node "$here/scripts/prod-button-check.mjs" "http://127.0.0.1:$shell" "$1" "$2" "$3" "$4" $shots >"$work/check.out" 2>&1
   local rc=$?; cat "$work/check.out"; [[ $rc -eq 0 ]] || failed=$((failed + 1))
 }
 [[ -n $shots ]] && mkdir -p "$shots"
-for width in 390 1440; do
-  for theme in light dark; do
+for width in ${WIDTHS:-390 1440}; do
+  for theme in ${THEMES:-light dark}; do
     log "$width $theme"
     runner;          check "$work/op.session" agent "$width" "$theme"
     runner app-test; check "$work/owner.session" fail "$width" "$theme"
@@ -91,6 +95,7 @@ for width in 390 1440; do
     check "$work/owner.session" norelease "$width" "$theme"
     S deployments record --project menger --environment test --state succeeded --revision 8cb79df --release "$NEW" --previous 0dd0000 --commits a1a1a1a,b2b2b2b,c3c3c3c,8cb79df
     reset
+    check "$work/owner.session" retired "$width" "$theme"
   done
 done
 log "runner log (last lines)"; tail -n 6 "$work/runner.log"

@@ -17,6 +17,9 @@
 //   testfailed  (DEPLOY-42) test's last deploy failed: the button is off, still a button, saying so
 //   norelease   (DEPLOY-42) test's record names a commit and no release, app-prod runs it: off,
 //          "→ prod · nothing newer", the reason right under it
+//   retired     (DEPLOY-43) an old `prod` nothing promotes into, deployed before app-prod: no `to`
+//          and ?to=app-prod open on app-prod; a saved ?to=prod is moved to it with a note; the picker
+//          lists prod last, marked retired; picked, → prod is still drawn, off, saying why
 // Every mode also checks the button reads as a button (DEPLOY-42): on screen, as tall as → test
 // (when drawn), a full-strength label, and its reason (when off) in the text colour, not faint.
 // Exit 1 on a failure.
@@ -39,7 +42,8 @@ const ctx = await browser.newContext({ viewport: { width: w, height: w < 820 ? 8
 await ctx.addCookies([cookie]);
 const page = await ctx.newPage();
 const errs = [];
-page.on("pageerror", (e) => errs.push(String(e)));
+page.on("pageerror", (e) => { errs.push(String(e)); if (process.env.CHECK_DEBUG) console.log(e.stack); });
+if (process.env.CHECK_DEBUG) page.on("console", (m) => console.log("console:", m.text().slice(0, 300)));
 const shot = async (name) => out && page.screenshot({ path: `${out}/prod-${mode}-${w}-${theme}-${name}.png` });
 const R = "#deploy-page .toprod .treq";
 const steps = () => page.$$eval(`${R} .step`, (ls) => ls.map((l) => `${l.dataset.step}:${l.querySelector(".sstate").textContent}`));
@@ -50,9 +54,52 @@ const until = async (f, ms = 40000) => {
   return false;
 };
 
+if (mode === "retired") {
+  const btn = async (q) => {
+    await page.goto(`${origin}/#/deploy/MENGER${q}`);
+    await page.reload();
+    await page.waitForSelector("#deploy-page #to-prod", { timeout: Number(process.env.CHECK_TIMEOUT || 30000) });
+    await page.waitForFunction(() => !document.getElementById("boot"), null, { timeout: Number(process.env.CHECK_TIMEOUT || 30000) });
+    await page.waitForTimeout(600);
+  };
+  const seen = () => page.evaluate(() => {
+    const b = document.querySelector("#to-prod"), r = b.getBoundingClientRect(), t = document.querySelector("#deploy-page .totest:not(.toprod) .tobtn");
+    const sel = document.querySelector("#deploy-page select[aria-label=destination]");
+    return {
+      dest: b.dataset.dest, disabled: b.disabled, onScreen: r.width > 40 && r.height >= 30 && r.left >= 0 && r.right <= innerWidth,
+      sameHeight: t ? Math.abs(t.getBoundingClientRect().height - r.height) <= 2 : true,
+      note: document.querySelector("#deploy-page .movednote")?.textContent ?? null,
+      hash: location.hash, options: sel ? [...sel.options].map((o) => o.textContent) : [], chosen: sel?.value,
+      why: document.querySelector("#deploy-page .toprod .toff")?.textContent ?? null,
+    };
+  });
+  for (const q of ["", "?to=app-prod", "?to=prod"]) {
+    await btn(q);
+    const v = await seen();
+    console.log(`errors after ${q || "(no to)"}: ${errs.length}`);
+    ok(v.dest === "app-prod" && v.onScreen && v.sameHeight, `${tag} ${q || "(no to)"}: opens on app-prod with → prod drawn (${JSON.stringify(v)})`);
+    ok(v.options[0] === "app-prod" && v.options.at(-1) === "prod (retired)", `${tag} ${q || "(no to)"}: the picker lists prod last, retired (${v.options.join()})`);
+    ok(q === "?to=prod" ? v.note === "prod moved to app-prod (RUN-13)" && /to=app-prod/.test(v.hash) : v.note === null, `${tag} ${q || "(no to)"}: the note is there only for a stale ?to=prod (${v.note})`);
+    if (q === "?to=prod") await shot("moved");
+  }
+  await page.selectOption("#deploy-page select[aria-label=destination]", "prod");
+  await page.waitForTimeout(600);
+  const v = await seen();
+  console.log(`errors after picking prod: ${errs.length}`);
+  ok(v.dest === "prod" && v.disabled && v.onScreen && v.sameHeight && /pick app-prod/.test(v.why ?? ""), `${tag}: prod picked: → prod still drawn, off, saying why (${JSON.stringify(v)})`);
+  await shot("prod-picked");
+  ok(errs.length === 0, `${tag}: no page errors${errs.length ? ` (${errs.join("; ")})` : ""}`);
+  await browser.close();
+  console.log(fails.length ? `${fails.length} failed` : "all ok");
+  process.exit(fails.length ? 1 : 0);
+}
+
 await page.goto(`${origin}/#/deploy/MENGER?to=app-prod`);
-await page.waitForSelector("#deploy-page #to-prod", { timeout: 30000 });
-await page.waitForFunction(() => !document.getElementById("boot"), null, { timeout: 30000 }); // APP-92's sheet gone
+await page.waitForSelector("#deploy-page #to-prod", { timeout: Number(process.env.CHECK_TIMEOUT || 30000) }).catch(async (e) => {
+  console.log("no #to-prod; the page says:", (await page.innerText("body").catch(() => "")).slice(0, 600));
+  throw e;
+});
+await page.waitForFunction(() => !document.getElementById("boot"), null, { timeout: Number(process.env.CHECK_TIMEOUT || 30000) }); // APP-92's sheet gone
 ok(await page.$eval("#to-prod", (b) => b.dataset.dest) === "app-prod", `${tag}: → prod promotes to the track's end, app-prod`);
 
 // DEPLOY-42: a button, not a ghost — visible, test's size, full strength, its reason in the ink.

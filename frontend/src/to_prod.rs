@@ -107,7 +107,7 @@ async fn tickets(filter: String) -> Result<Vec<TicketSummary>, String> {
 
 /// The button, its confirm sheet, and the newest request to the destination.
 #[component]
-pub(crate) fn ToProd(project: Memo<Option<String>>, track: Memo<Vec<String>>) -> impl IntoView {
+pub(crate) fn ToProd(project: Memo<Option<String>>, track: Memo<Vec<String>>, dest: Memo<Option<String>>, fallback: Memo<Option<String>>) -> impl IntoView {
     let account = crate::signin::account();
     let held = deploys::held();
     let allowed = move || project.get().is_some_and(|p| account.with(|a| may_deploy(a, &p)));
@@ -205,7 +205,23 @@ pub(crate) fn ToProd(project: Memo<Option<String>>, track: Memo<Vec<String>>) ->
     on_cleanup(move || on_key.remove());
     let shown = move || last.get().filter(recent);
     move || {
-        let (true, Some((from, to))) = (allowed(), ends.get()) else { return None };
+        if !allowed() {
+            return None;
+        }
+        let Some((from, to)) = ends.get() else {
+            // DEPLOY-43: a destination nothing promotes into still draws the button, off, with why.
+            let d = dest.get()?;
+            let why = match fallback.get().filter(|f| *f != d) {
+                Some(f) => format!("{d} isn't promoted to from another environment — pick {f}"),
+                None => format!("{d} isn't promoted to from another environment"),
+            };
+            return Some(view! {
+                <div class="totest toprod">
+                    <button type="button" class="tobtn" id="to-prod" data-dest=d disabled=true title=why.clone()>"→ prod"</button>
+                    <span class="toff">{why}</span>
+                </div>
+            }.into_any());
+        };
         let off = move || blocked(last.get().as_ref()).map(Err).unwrap_or_else(|| offered.get().map(|_| ()));
         let label = move || match offered.get() {
             Ok(rel) => format!("→ prod · {rel}"),
@@ -231,7 +247,7 @@ pub(crate) fn ToProd(project: Memo<Option<String>>, track: Memo<Vec<String>>) ->
                 {move || problem.get().map(|p| view! { <p class="derr">{p}</p> })}
                 {move || sheet.get().map(|s| confirm_sheet(s, offered.get().ok(), from2.clone(), to2.clone(), busy, confirm, move || sheet.set(None)))}
             </div>
-        })
+        }.into_any())
     }
 }
 

@@ -210,6 +210,30 @@ pub(crate) fn default_destination(envs: &[Environment], project: &str) -> Option
         .max_by_key(|d| envs.iter().find(|e| e.project == project && &e.name == d).map_or(0, |e| e.tickets))
 }
 
+/// DEPLOY-43: the destinations another has taken the role of. A destination
+/// other than the page's default is retired when its last deploy is older than
+/// the default's (or it never had one) and it sits later in the order than
+/// the default that took its place (`prod`'s 40 after `app-prod`'s 25). Read
+/// from the deployments data, never a name.
+pub(crate) fn retired(envs: &[Environment], project: &str) -> Vec<String> {
+    let Some(cur) = default_destination(envs, project) else { return Vec::new() };
+    let of = |n: &str| envs.iter().find(|e| e.project == project && e.name == n);
+    let (Some(cur_env), cur_track) = (of(&cur), track(envs, project, &cur)) else { return Vec::new() };
+    let Some(cur_at) = cur_env.last_at else { return Vec::new() };
+    if cur_track.len() < 2 {
+        return Vec::new();
+    }
+    destinations(envs, project)
+        .into_iter()
+        .filter(|d| *d != cur)
+        .filter(|d| {
+            let Some(e) = of(d) else { return false };
+            let older = e.last_at.is_none_or(|t| t < cur_at);
+            older && e.order > cur_env.order
+        })
+        .collect()
+}
+
 /// The track that ends at `dest`: it and every environment it promotes
 /// from, first to last (`["test", "prod"]`).
 pub(crate) fn track(envs: &[Environment], project: &str, dest: &str) -> Vec<String> {
@@ -667,6 +691,21 @@ mod tests {
         let envs: Vec<Environment> = menger().into_iter().filter(|e| e.name != "prod").collect();
         assert_eq!(default_destination(&envs, "MENGER").as_deref(), Some("edge"));
         assert_eq!(default_destination(&envs, "OTHER"), None);
+    }
+
+    /// DEPLOY-43: prod, no longer deployed to once app-prod took its role, is
+    /// retired; edge (its own track, same order as app-prod) never is.
+    #[test]
+    fn a_destination_another_took_over_is_retired() {
+        let at = |t: [(&str, i64); 3]| -> Vec<Environment> {
+            menger().into_iter().map(|mut e| { e.last_at = t.iter().find(|(n, _)| *n == e.name).map(|x| x.1); e }).collect()
+        };
+        let envs = at([("prod", 100), ("app-prod", 200), ("edge", 50)]);
+        assert_eq!(retired(&envs, "MENGER"), ["prod"]);
+        assert!(retired(&menger(), "MENGER").is_empty(), "nothing deployed: nothing retired");
+        let live = at([("prod", 300), ("app-prod", 200), ("edge", 50)]);
+        assert_eq!(default_destination(&live, "MENGER").as_deref(), Some("prod"));
+        assert!(retired(&live, "MENGER").is_empty());
     }
 
     /// The filter is the language's: it parses, and names every cell of the
