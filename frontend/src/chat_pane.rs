@@ -48,7 +48,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::chat_deleted::{self, Folds, Role};
 use crate::chats::{self, short, Held};
-use crate::{dom, fmt_unix, live, scale, turns};
+use crate::{dom, fmt_unix, live, md, scale, turns};
 
 /// What the pane shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -675,6 +675,16 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         // they end.
         let _ = el.add_event_listener_with_callback("transitionend", cb.as_ref().unchecked_ref());
         cb.forget();
+        // CHAT-21: a message's frame sized (its document drawn, a
+        // component opened) — its turn measured again; and the scroll the
+        // browser makes for it (anchoring, a frame above growing) is the
+        // view's own, not the reader's: a reader at the bottom stays there.
+        let sized = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+            ours.set_value(js_sys::Date::now());
+            measure();
+        });
+        let _ = el.add_event_listener_with_callback(crate::chat_frames::SIZED, sized.as_ref().unchecked_ref());
+        sized.forget();
     });
     let on_scroll = move || {
         let Some(el) = scroller() else { return };
@@ -902,6 +912,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
     let rows = {
         let name = name.clone();
         let me = me.clone();
+        let ticket = ticket.clone();
         move |m: Message| {
             let (new_at, seen) = mark.get_value().unwrap_or((None, u64::MAX));
             let mid = m.id.get();
@@ -938,7 +949,8 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             });
             let kept = {
                 let name = name.clone();
-                move || shown.get().then(|| turn_view(m.clone(), mine, mid > seen, can, &name))
+                let ticket = ticket.clone();
+                move || shown.get().then(|| turn_view(m.clone(), mine, mid > seen, can, &name, (id, ticket.clone())))
             };
             let run = move || {
                 (role.get() == Role::Head).then(|| view! { <chat_deleted::Run head=mid folds=folds chat=id fresh=first != Role::Head may=may clock=clock /> })
@@ -1254,8 +1266,14 @@ fn alone_view(ticket: &str, body: RwSignal<String>) -> impl IntoView {
 /// tag, `via`, the time. Each shows copy · quote · link on hover (and,
 /// CHAT-44, delete · select to its author or an admin; a long press on a
 /// phone).
-fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str) -> String) -> impl IntoView {
+fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str) -> String, (chat, ticket): (u64, Option<String>)) -> impl IntoView {
     let who = m.name.clone().unwrap_or_else(|| name(&m.author));
+    // CHAT-21: a body that would be framed as a ticket's draws in its own
+    // frame, made near the view (src/chat_frames.rs); any other as ever.
+    let framed = md::is_framed(&m.body).then(|| {
+        let (body, message) = (m.body.clone(), m.id.get());
+        view! { <crate::chat_frames::MessageFrame body chat message ticket /> }
+    });
     let agent = chats::is_agent(&m.author) || m.via.is_some();
     // CHAT-56: a code alone on its line is a card under the turn
     // (src/chat_cards.rs), live.
@@ -1341,11 +1359,16 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
     if mine {
         view! {
             <div class="turn mine pmsg" class:fresh=fresh data-message-id=mid>
-                <div class="bubble">
-                    <div class="md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
-                    {tail}
-                    {more}
-                </div>
+                {match framed {
+                    Some(f) => f.into_any(),
+                    None => view! {
+                        <div class="bubble">
+                            <div class="md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
+                            {tail}
+                            {more}
+                        </div>
+                    }.into_any(),
+                }}
                 {cards}
                 <div class="tmeta"><span title=fmt_unix(m.at)>{format!("{who} · {}", clock(m.at))}</span>{acts}</div>
             </div>
@@ -1362,11 +1385,16 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
                         {m.via.clone().map(|v| view! { <span class="via" title=v.clone()>{format!("via {}", short(&v))}</span> })}
                         <span class="t" title=fmt_unix(m.at)>{clock(m.at)}</span>
                     </div>
-                    <div class="pmb">
-                        <div class="md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
-                        {tail}
-                        {more}
-                    </div>
+                    {match framed {
+                        Some(f) => f.into_any(),
+                        None => view! {
+                            <div class="pmb">
+                                <div class="md" data-links="chat" node_ref=node inner_html=move || html.get()></div>
+                                {tail}
+                                {more}
+                            </div>
+                        }.into_any(),
+                    }}
                     {cards}
                     {acts}
                 </div>

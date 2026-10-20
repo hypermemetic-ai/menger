@@ -3585,6 +3585,36 @@ question in a direct message is on no ticket, so no ticket cell holds it:
 closing the last one unqueues the ticket, as a ticket's input's closing
 does.
 
+#### A message that carries components (CHAT-21)
+
+A message whose body would be framed as a ticket's (`md::is_framed`: HTML
+or a custom element outside code, a definition, a mockup) draws in **its
+own sandboxed frame** (CHAT-19 decision `frame`: one per message), at the
+message's width, in the reader's theme, under the same bar a body has
+(Full screen) plus *source* (the markdown, as text) and ⤢ (the pane's
+whole width). Any other message draws as ever. The frame is the body's
+(`/app/frame`, never a `srcdoc`; the frame CSP unchanged), stamped
+`data-chat` and `data-message` and **no `data-ticket`**: its reads are
+held to the chat's ticket's shortcode (a direct message's read only
+components), its components are what its markup names and what its reach
+holds (ACCESS-26), and no write from it can touch a ticket.
+
+**Lazy**: a turn makes its frame within about a screen of the view (an
+IntersectionObserver on the turn, the list as root where it scrolls) and
+drops its document past that, keeping the height it had (a hatched block);
+the chat's window (CHAT-8) unmounts what is further. A frame's resize is
+the list's own move — a reader at the bottom stays there.
+
+**Answered in the frame**: inside a message's frame `menger.input.ticket`
+is `message:<id>` (SDK 2.7) — `menger.call('inputs.list', { ticket })`
+answers the message's own inputs (`chats.inputs.list`, each an `input` of
+that `ticket`), each `input_changed` of one reaches its frames with it,
+and `menger.input.submit` / `clear` — from a click in that frame, as a
+body's — are `chats.inputs.answer` / `clear` for the message. So the house
+`m-decision` / `m-input` ask and answer in a chat as in a body.
+`scripts/chat-frames-check.mjs` checks it in a browser on a throwaway
+(390 / 1440, light / dark; a 300-message chat with 40 framed).
+
 #### Direct messages and groups (CHAT-14)
 
 A chat may be **outside tickets** (owner, 2026-10-17: *"I think we should

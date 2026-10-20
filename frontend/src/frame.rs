@@ -228,7 +228,7 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, held, highlight
 /// COMMENT-10's 2.5 draws a body's `media:` images: `menger:media { hash }`
 /// asked of the host, answered held to the frame's `data-media` ticket;
 /// `menger:zoom` shows one full screen.
-pub(crate) const SDK_VERSION: &str = "2.6.0";
+pub(crate) const SDK_VERSION: &str = "2.7.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -1132,19 +1132,32 @@ fn answer_call(
     method: String,
     params: Result<String, String>,
     scope: Option<String>,
+    home: Option<(u64, u64)>,
 ) {
     // ACCESS-26: what the frame's markup names, for `components.list`.
     let names = held::names_from_attr(frame.get_attribute("data-names").as_deref());
     spawn_local(async move {
         let reply = match params.and_then(|p| bridge::parse_call(&method, &p)) {
             Err(e) => Err(e),
+            // CHAT-21: a message's frame asks for its message's inputs.
+            Ok(bridge::Call::Inputs { .. }) if home.is_some() => {
+                let (chat, message) = home.unwrap_or_default();
+                match crate::chat_frames::inputs(chat, message).await {
+                    Ok(items) => {
+                        let msg = message_reply(&channel, &id);
+                        set(&msg, "items", &to_js(&items));
+                        post(&frame, &msg.into());
+                        return;
+                    }
+                    Err(e) => Err(e),
+                }
+            }
             Ok(call) => match session::client() {
                 Some(client) => bridge::run_scoped(&client, call, scope.as_deref(), &names).await,
                 None => Err(format!("{method}: not connected")),
             },
         };
-        let msg = message("menger:result", &channel);
-        set(&msg, "id", &id);
+        let msg = message_reply(&channel, &id);
         match reply {
             Ok(items) => set(&msg, "items", &to_js(&items)),
             Err(error) => set(&msg, "error", &error.into()),
@@ -1231,6 +1244,71 @@ fn answer_write(
         }
         post(&frame, &msg.into());
     });
+}
+
+/// `menger:result { id }`, its items or error to be set.
+fn message_reply(channel: &str, id: &JsValue) -> Object {
+    let msg = message("menger:result", channel);
+    set(&msg, "id", id);
+    msg
+}
+
+/// CHAT-21: [`answer_write`] for a message's frame — the same gesture
+/// check, then the message's own input (`home`, the host's stamp:
+/// src/chat_frames.rs), never a ticket's: `chats.inputs.answer` / `clear`.
+/// The replies are the SDK's, an input's `ticket` the home's key.
+fn answer_message_write(
+    write: Msg,
+    frame: web_sys::HtmlIFrameElement,
+    channel: String,
+    id: JsValue,
+    (chat, mid): (u64, u64),
+    gesture: gesture::Verdict,
+    params: Result<String, String>,
+) {
+    let (sdk, reply_kind, field) = if write == Msg::Clear {
+        (bridge::CLEAR, "menger:cleared", "input")
+    } else {
+        (bridge::SUBMIT, "menger:submitted", "answer")
+    };
+    spawn_local(async move {
+        let reply = async {
+            let gesture = gesture::settle(&frame, gesture).await;
+            bridge::admit(sdk, Some(&crate::chat_frames::key(mid)), gesture)?;
+            let params = params?;
+            if write == Msg::Clear {
+                let clear = bridge::parse_clear(&params)?;
+                crate::chat_frames::clear(chat, mid, clear).await.map(|input| to_js(&input))
+            } else {
+                let submit = bridge::parse_submit(&params)?;
+                crate::chat_frames::submit(chat, mid, submit).await.map(|answer| to_js(&answer))
+            }
+        }
+        .await;
+        let msg = message(reply_kind, &channel);
+        set(&msg, "id", &id);
+        match reply {
+            Ok(done) => set(&msg, field, &done),
+            Err(error) => set(&msg, "error", &error.into()),
+        }
+        post(&frame, &msg.into());
+    });
+}
+
+/// CHAT-21: `event`, a change notice, to the frames of chat message
+/// `message` alone (src/chat_frames.rs's relay of its inputs).
+pub(crate) fn to_message<T: Serialize>(message: u64, event: &T) {
+    let id = message.to_string();
+    for f in frames() {
+        if f.get_attribute("data-message").as_deref() != Some(id.as_str()) {
+            continue;
+        }
+        if let Some(channel) = f.get_attribute("data-channel") {
+            let msg = self::message("menger:change", &channel);
+            set(&msg, "event", &to_js(event));
+            post(&f, &msg.into());
+        }
+    }
 }
 
 /// Every frame in the document.
@@ -1391,7 +1469,8 @@ fn on_message(ev: web_sys::MessageEvent) {
             };
             // IDENTITY-36: the host's own stamp — the frame cannot name one.
             let scope = frame.get_attribute("data-scope");
-            answer_call(frame, channel, id, method, params, scope);
+            let home = crate::chat_frames::home_of(&frame);
+            answer_call(frame, channel, id, method, params, scope, home);
         }
         Some(write @ (Msg::Submit | Msg::Clear)) => {
             // Now, while the gesture that sent it is under way — and on
@@ -1408,7 +1487,11 @@ fn on_message(ev: web_sys::MessageEvent) {
             // The host's own stamp — nothing in the frame can move it.
             let ticket = frame.get_attribute("data-ticket");
             let cited = frame.has_attribute("data-cite-key");
-            answer_write(write, frame, channel, id, ticket, gesture, params, cited);
+            // CHAT-21: a message's frame answers its message's inputs.
+            match crate::chat_frames::home_of(&frame) {
+                Some(home) => answer_message_write(write, frame, channel, id, home, gesture, params),
+                None => answer_write(write, frame, channel, id, ticket, gesture, params, cited),
+            }
         }
         Some(Msg::Size { height, settled }) => {
             // MENGER-15: a device's frame keeps its device's height.
@@ -1417,6 +1500,11 @@ fn on_message(ev: web_sys::MessageEvent) {
             }
             // COMMENT-3: its elements may have moved under their pins.
             annotate::frame_changed(&channel);
+            // CHAT-21: a message's frame keeps its height for when it is
+            // dropped, and its chat measures the turn again.
+            if let Some((_, m)) = crate::chat_frames::home_of(&frame) {
+                crate::chat_frames::sized(&frame, m, f64::from(height));
+            }
             // A first frame shows at once; a re-render waits until drawn.
             if frame.get_attribute("data-state").as_deref() == Some("pending") && (settled || !has_live_sibling(&frame)) {
                 promote(&frame);
@@ -1930,8 +2018,8 @@ struct Look {
 /// (none: it reads nothing but components). MENGER-15: shown as `look`
 /// says.
 /// COMMENT-10: and `media`, the ticket whose images it draws.
-fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, scope: Option<&str>, media: Option<&str>, look: Look) {
-    load_frame(container, body_html, Stamp { data_ticket: ticket, init_ticket: ticket, scope, media, cite: None, look });
+fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, scope: Option<&str>, media: Option<&str>, look: Look, message: Option<(u64, u64)>) {
+    load_frame(container, body_html, Stamp { data_ticket: ticket, init_ticket: ticket, scope, media, cite: None, look, message });
 }
 
 /// What a new frame is stamped with — [`load`]'s, or (COMP-14) a cited
@@ -1951,6 +2039,9 @@ struct Stamp<'a> {
     cite: Option<(&'a cite::Section, &'a str, u32)>,
     /// MENGER-15: how it is shown.
     look: Look,
+    /// CHAT-21: `<iframe data-chat data-message>` — the message whose body
+    /// it is (src/chat_frames.rs); `menger.input.ticket` is its key.
+    message: Option<(u64, u64)>,
 }
 
 /// COMP-14: load a cited window's frame — `body_html`, the cited ticket's
@@ -1970,12 +2061,16 @@ pub(crate) fn load_cited(container: &web_sys::Element, body_html: &str, stamps: 
             media: stamps.data_ticket.as_deref(),
             cite: Some((section, key, stamps.depth)),
             look: Look::default(),
+            message: None,
         },
     );
 }
 
 fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
-    let Stamp { data_ticket, init_ticket, scope, media, cite, look } = stamp;
+    let Stamp { data_ticket, init_ticket, scope, media, cite, look, message } = stamp;
+    // CHAT-21: a message's frame answers its message's inputs, by its key.
+    let home_key = message.map(|(_, m)| crate::chat_frames::key(m));
+    let init_ticket = home_key.as_deref().or(init_ticket);
     let w = dom::window();
     let Some(doc) = w.document() else { return };
     let channel = next_channel();
@@ -2047,6 +2142,10 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     if let Some(ticket) = media {
         let _ = el.set_attribute("data-media", ticket);
     }
+    if let Some((chat, m)) = message {
+        let _ = el.set_attribute("data-chat", &chat.to_string());
+        let _ = el.set_attribute("data-message", &m.to_string());
+    }
     if let Some((_, key, depth)) = cite {
         let _ = el.set_attribute("data-cite-key", key);
         let _ = el.set_attribute("data-cite-depth", &depth.to_string());
@@ -2070,7 +2169,12 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     if look.fixed || page {
         let _ = el.set_attribute("data-fixed", "");
     }
-    let _ = el.set_attribute("title", if cite.is_some() { "cited section" } else { "ticket body" });
+    let title = match (cite, message) {
+        (Some(_), _) => "cited section",
+        (None, Some(_)) => "chat message",
+        (None, None) => "ticket body",
+    };
+    let _ = el.set_attribute("title", title);
     let Ok(frame) = el.dyn_into::<web_sys::HtmlIFrameElement>() else { return };
     if let Some(s) = emulate.and_then(|e| e.scheme) {
         let _ = web_sys::HtmlElement::style(&frame).set_property("color-scheme", s.as_str());
@@ -2110,6 +2214,8 @@ pub(crate) fn Frame(
     // COMMENT-10: a draft's ticket — whose images it draws (a stored body
     // draws its own `ticket`'s).
     #[prop(optional)] media: Option<String>,
+    // CHAT-21: the chat and message whose body this is (src/chat_frames.rs).
+    #[prop(optional)] message: Option<(u64, u64)>,
 ) -> impl IntoView {
     let scope = bridge::scope_of(ticket.as_deref()).or_else(|| bridge::scope_of(scope.as_deref()));
     let media = ticket.clone().or(media.filter(|m| !m.trim().is_empty()));
@@ -2127,7 +2233,7 @@ pub(crate) fn Frame(
         let n = asked.with_value(|n| n.wrapping_add(1));
         asked.set_value(n);
         if el.query_selector(":scope > iframe").ok().flatten().is_none() {
-            load(&el, &body, ticket.as_deref(), scope.as_deref(), media.as_deref(), look());
+            load(&el, &body, ticket.as_deref(), scope.as_deref(), media.as_deref(), look(), message);
             return;
         }
         let ticket = ticket.clone();
@@ -2136,7 +2242,7 @@ pub(crate) fn Frame(
         spawn_local(async move {
             dom::sleep_ms(RERENDER_AFTER_MS).await;
             if asked.try_with_value(|v| *v == n) == Some(true) {
-                load(&el, &body, ticket.as_deref(), scope.as_deref(), media.as_deref(), look());
+                load(&el, &body, ticket.as_deref(), scope.as_deref(), media.as_deref(), look(), message);
             }
         });
     });

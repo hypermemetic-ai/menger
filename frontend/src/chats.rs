@@ -603,6 +603,8 @@ fn heard(ev: &ChatsEvent) {
         s.maybe_update(|held| held.as_mut().is_some_and(|held| held.apply(ev, &me)));
     });
     crate::chat_strip::heard(ev);
+    // CHAT-21: a message's inputs, to its frames.
+    crate::chat_frames::heard(ev);
 }
 
 fn fetch() {

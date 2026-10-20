@@ -383,6 +383,14 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 -j menger chats await_message --chat 6 --input 812/fire --timeout-minutes 240
   ```
 
+  **A message that carries components** (CHAT-21): a message whose body
+  would be framed as a ticket's draws in its own frame (made near the view,
+  no `data-ticket`, reads held to the chat's ticket), so a builder may post
+  `<m-stat>`, `<m-cases>` or an `<m-decision id>` and the reader answers it
+  with a click in the frame (`menger.input.ticket` is `message:<id>`,
+  SDK 2.7; the writes are `chats.inputs.*`). Post it with `--body @file`.
+  README "A message that carries components".
+
   **A chat's tickets** (CHAT-55): every ticket its messages name, and
   every ticket filed (`tickets create --chat N`) or linked (`chats link`)
   from it — `chats tickets --chat N` (each with its stage: waits on you,
