@@ -9,6 +9,7 @@
 #   scripts/cleanup-gate.sh --list             every leftover it recognises (never removes)
 #   scripts/cleanup-gate.sh --sweep            CI-2: build output nothing has touched for a while (dry run)
 #   … --yes                                    remove for real, and log it
+#   … --log-days N                             the sweep's pipeline-log age (default 60; CLEANUP_GATE_LOG_DAYS)
 #   … --idle-hours N                           the sweep's idle threshold (default 6; CLEANUP_GATE_IDLE_HOURS)
 #
 # A dry run is the default: it says what it would remove and the space it
@@ -37,6 +38,10 @@
 #               server's database and log
 #   session     anything below /tmp/claude-UID/ (a session's scratch)
 #   sweep       /tmp/theme-sweep (scripts/theme-sweep.mjs's default out)
+#   pipeline-log ~/.local/state/menger-deploy/logs/<stamp>-….log (CI-6): one
+#               run's log; the sweep takes those older than 60 days
+#               (--log-days N, CLEANUP_GATE_LOG_DAYS) and never a red run's —
+#               `<stamp>.red` beside them marks it, and a path names none of those
 #
 # — and it is refused if it is /, $HOME, any of those roots itself, under
 # ~/.local/share/menger, a repository's main checkout, publish.sh's stage
@@ -61,6 +66,7 @@ set -uo pipefail
 
 usage() { sed -n '/^#   scripts/p' "$0" | sed 's/^# *//' >&2; exit 1; }
 
+LOG_DAYS=${CLEANUP_GATE_LOG_DAYS:-60}
 yes=0 list=0 sweep=0 mode=name idle_hours=${CLEANUP_GATE_IDLE_HOURS:-6}
 args=()
 while [[ $# -gt 0 ]]; do
@@ -71,6 +77,8 @@ while [[ $# -gt 0 ]]; do
     --sweep) sweep=1 ;;
     --idle-hours) shift; idle_hours=${1:-} ;;
     --idle-hours=*) idle_hours=${1#*=} ;;
+    --log-days) shift; LOG_DAYS=${1:-} ;;
+    --log-days=*) LOG_DAYS=${1#*=} ;;
     --path) mode=path ;;
     -h|--help) usage ;;
     --) shift; args+=("$@"); break ;;
@@ -79,6 +87,7 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+[[ ${LOG_DAYS:-60} =~ ^[0-9]+$ ]] || { echo 'cleanup-gate: --log-days takes a whole number of days' >&2; exit 1; }
 [[ $idle_hours =~ ^[0-9]+$ ]] || { echo 'cleanup-gate: --idle-hours takes a whole number of hours' >&2; exit 1; }
 if [[ $sweep == 1 ]]; then
   [[ $list == 1 || ${#args[@]} -gt 0 || $mode == path ]] && { echo 'cleanup-gate: --sweep takes no names, paths or --list' >&2; exit 1; }
@@ -101,10 +110,12 @@ CT=$H/.cache/cargo-target
 CB=$H/.cache/cargo-build
 SCR=$TMPR/claude-$(id -u)
 DATA=$H/.local/share/menger
+PLOGS=$H/.local/state/menger-deploy/logs
 LOG=${CLEANUP_GATE_LOG:-$H/.local/state/menger/cleanup-gate.log}
 HERE_PWD=$(readlink -f -- "$PWD" 2>/dev/null || echo "$PWD")
 # a root that does not exist resolves to itself; one that does, to its real path
 real() { readlink -f -- "$1" 2>/dev/null || echo "$1"; }
+PLOGS=$(real "$PLOGS")
 WS=$(real "$WS") CT=$(real "$CT") CB=$(real "$CB") SCR=$(real "$SCR") DATA=$(real "$DATA")
 
 refused=0 total=0
@@ -199,8 +210,11 @@ remove_path() {
     shape=session
   elif [[ -d $r && $r == "$TMPR/theme-sweep" ]]; then
     shape=sweep
+  elif [[ -f $r && $(dirname "$r") == "$PLOGS" && $(basename "$r") =~ ^([0-9]{8}T[0-9]{6}Z)-.+\.log$ ]]; then
+    if [[ -e $PLOGS/${BASH_REMATCH[1]}.red ]]; then refuse "$shown" "a red run's log (kept: $PLOGS/${BASH_REMATCH[1]}.red)"; return; fi
+    shape=pipeline-log
   else
-    refuse "$shown" 'not a leftover shape (worktree, ws-scratch, target, target-part, cargo-build, scratch-db, session, sweep)'; return
+    refuse "$shown" 'not a leftover shape (worktree, ws-scratch, target, target-part, cargo-build, scratch-db, session, sweep, pipeline-log)'; return
   fi
   local busy=""
   if [[ $sweep == 1 ]] && busy=$(busy_since "$r" "$idle_min") && [[ -n $busy ]]; then
@@ -246,7 +260,7 @@ remove_path() {
       if [[ -d $r ]]; then out=$(rm -r --one-file-system -- "$r" 2>&1); rc=$?
       else out=$(rm -f -- "$r" 2>&1); rc=$?; fi
       [[ $rc == 0 ]] || { refuse "$shown" "rm: ${out//$'\n'/ }"; return; } ;;
-    scratch-db)
+    scratch-db|pipeline-log)
       out=$(rm -f -- "$r" 2>&1) || { refuse "$shown" "rm: $out"; return; } ;;
   esac
   # a hash's XX/ parent goes when its last build-dir does (rmdir: only if empty)
@@ -299,6 +313,11 @@ candidates() {
 sweep_candidates() {
   local d s
   for d in "$CB"/*/*; do [[ -d $d ]] && cargo_build_shape "$d" && printf '%s\n' "$d"; done
+  # CI-6: green pipeline logs older than LOG_DAYS (a red run's stay: <stamp>.red)
+  if [[ -d $PLOGS ]]; then
+    find "$PLOGS" -maxdepth 1 -type f -name '*.log' -mtime "+$LOG_DAYS" -print 2>/dev/null \
+      | while IFS= read -r d; do s=$(basename "$d"); [[ -e $PLOGS/${s%%-*}.red ]] || printf '%s\n' "$d"; done
+  fi
   for d in "$CT"/*; do
     [[ -e $d || -L $d ]] || continue
     s=$(basename "$d")
