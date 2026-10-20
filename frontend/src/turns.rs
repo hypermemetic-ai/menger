@@ -7,8 +7,9 @@
 //!   tag, `via` and the time.
 //! - **Code blocks** get a head ([`code_heads`]): the language, the path the
 //!   fence names after it (```` ```rust kiln/src/schedule.rs ````), *copy*.
-//! - **Ticket codes** become chips, and a code alone on its line a card with
-//!   the ticket's title and status ([`chip_codes`]) — `/ticket CODE` posts one.
+//! - **Ticket codes** become chips ([`chip_codes`]); a code alone on its line
+//!   is drawn again under the turn as a card that acts (CHAT-56,
+//!   src/chat_cards.rs) — `/ticket CODE` posts one.
 //! - A turn shows **copy · quote · link** on hover: its text to the
 //!   clipboard, `> quoted` into the composer, its URL (`?chat=ID&at=MSG`).
 //! - **Scrolling** — manifest's two rules (`conversationScroll.ts`), in
@@ -19,7 +20,6 @@
 //!
 //! What decides is pure and pinned by native tests; the rest is the DOM.
 
-use menger_tickets_api::Message;
 
 /// manifest's `conversation.offBottomPx`: past this, you are reading back.
 pub(crate) const OFF_BOTTOM_PX: f64 = 48.0;
@@ -174,11 +174,10 @@ pub(crate) fn code_heads(html: &str, infos: &[(Option<String>, Option<String>)])
     out
 }
 
-/// The rendered body with each ticket code in its text a chip, and a code
-/// alone in its paragraph a card — `card(code)` gives the card's title and
-/// status when the app holds the ticket. Nothing inside `<pre>`, `<code>`
-/// or `<a>` is touched.
-pub(crate) fn chip_codes(html: &str, card: &dyn Fn(&str) -> Option<(String, String)>) -> String {
+/// The rendered body with each ticket code in its text a chip (a code alone
+/// on its line is a card under the turn, CHAT-56). Nothing inside `<pre>`,
+/// `<code>` or `<a>` is touched.
+pub(crate) fn chip_codes(html: &str) -> String {
     let mut out = String::with_capacity(html.len() + 64);
     let mut skip = 0usize;
     let mut rest = html;
@@ -192,17 +191,6 @@ pub(crate) fn chip_codes(html: &str, card: &dyn Fn(&str) -> Option<(String, Stri
                     skip = skip.saturating_sub(1);
                 } else {
                     skip += 1;
-                }
-            }
-            // `<p>CODE</p>`: a card.
-            if tag == "<p>" && skip == 0 {
-                if let Some(close) = rest[end..].find("</p>") {
-                    let inner = rest[end..end + close].trim();
-                    if crate::composer::is_code(inner) {
-                        out.push_str(&card_html(inner, card(inner)));
-                        rest = &rest[end + close + "</p>".len()..];
-                        continue;
-                    }
                 }
             }
             out.push_str(tag);
@@ -253,24 +241,12 @@ fn chip_text(text: &str) -> String {
     out
 }
 
-fn card_html(code: &str, held: Option<(String, String)>) -> String {
-    let (title, status) = held.unwrap_or_default();
-    let status_html = if status.is_empty() { String::new() } else { format!("<span class=\"tcstatus st st-{}\">{}</span>", escape(&status.to_ascii_lowercase().replace(' ', "-")), escape(&status)) };
-    format!("<a class=\"tcard\" href=\"#/ticket/{code}\"><span class=\"tchip\">{code}</span><span class=\"tctitle\">{}</span>{status_html}</a>", escape(&title))
-}
-
-/// A message's body as a turn draws it: rendered, code heads, chips.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn body_html(m: &Message, card: &dyn Fn(&str) -> Option<(String, String)>) -> String {
-    source_html(&m.body, card)
-}
-
 /// Markdown as a turn draws it — a whole body, or a long one's head or a
 /// chunk of it (CHAT-8). CHAT-14: a comment's images (COMMENT-5) — a
 /// `media:` image is drawn from `media.get`, another origin's is its alt.
-pub(crate) fn source_html(src: &str, card: &dyn Fn(&str) -> Option<(String, String)>) -> String {
+pub(crate) fn source_html(src: &str) -> String {
     let html = crate::md::render_comment(src).html;
-    chip_codes(&code_heads(&html, &fence_infos(src)), card)
+    chip_codes(&code_heads(&html, &fence_infos(src)))
 }
 
 /// The text a turn's *quote* puts in the composer.
@@ -358,14 +334,12 @@ mod tests {
     }
 
     #[test]
-    fn codes_become_chips_and_a_code_alone_a_card() {
-        let card = |c: &str| (c == "KILN-7").then(|| ("Cone 6 glaze firing".to_string(), "In Review".to_string()));
+    fn codes_become_chips_and_a_code_alone_a_chip_too() {
         let html = "<p>Fixed KILN-7's test; see <code>KILN-3</code> and <a href=\"x\">KILN-4</a>.</p>\n<p>KILN-7</p>\n<p>KILN-9</p>\n";
-        let out = chip_codes(html, &card);
+        let out = chip_codes(html);
         assert!(out.contains("Fixed <a class=\"tchip\" href=\"#/ticket/KILN-7\">KILN-7</a>'s test"), "{out}");
         assert!(out.contains("<code>KILN-3</code>") && out.contains(">KILN-4</a>"), "code and links untouched: {out}");
-        assert!(out.contains("<a class=\"tcard\" href=\"#/ticket/KILN-7\"><span class=\"tchip\">KILN-7</span><span class=\"tctitle\">Cone 6 glaze firing</span><span class=\"tcstatus st st-in-review\">In Review</span></a>"), "{out}");
-        assert!(out.contains("<a class=\"tcard\" href=\"#/ticket/KILN-9\"><span class=\"tchip\">KILN-9</span><span class=\"tctitle\"></span></a>"), "a ticket not held: the code alone");
+        assert!(out.contains("<p><a class=\"tchip\" href=\"#/ticket/KILN-9\">KILN-9</a></p>"), "alone: a chip; its card is drawn under the turn: {out}");
     }
 
     #[test]
