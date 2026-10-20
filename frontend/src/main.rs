@@ -350,6 +350,7 @@ mod session;
 mod settings;
 mod signin;
 mod members_page;
+mod pair_page;
 mod tags;
 mod theme;
 #[cfg(test)]
@@ -463,6 +464,9 @@ pub(crate) enum Route {
     Comments,
     /// IDENTITY-22: `#/members` — who holds which role; an admin's page.
     Members,
+    /// TETHER-11: `#/pair?principal=key:<hex>&name=<name>` — a machine's key,
+    /// enrolled by a person who checks its code. The query is the page's.
+    Pair,
     /// CHAT-14: `#/chats` — every chat the reader is in; `#/chats/new` a
     /// new message; `#/chats/<id>` one chat.
     Chats(chats_page::Pick),
@@ -499,6 +503,7 @@ fn parse_route(hash: &str) -> Route {
         _ if path.trim_end_matches('/') == "settings" => Route::Settings,
         _ if path.trim_end_matches('/') == "comments" => Route::Comments,
         _ if path.trim_end_matches('/') == "members" => Route::Members,
+        _ if path.trim_end_matches('/') == "pair" => Route::Pair,
         Some(("chats", rest)) => Route::Chats(chats_page::pick_of(rest)),
         _ if path.trim_end_matches('/') == "chats" => Route::Chats(chats_page::Pick::List),
         Some(("deployments", sc)) => {
@@ -531,6 +536,7 @@ pub(crate) fn route_text(route: &Route) -> String {
         Route::Settings => "#/settings".to_string(),
         Route::Comments => "#/comments".to_string(),
         Route::Members => "#/members".to_string(),
+        Route::Pair => "#/pair".to_string(),
         Route::Chats(chats_page::Pick::List) => "#/chats".to_string(),
         Route::Chats(chats_page::Pick::New) => "#/chats/new".to_string(),
         Route::Chats(chats_page::Pick::Chat(id)) => format!("#/chats/{id}"),
@@ -2599,6 +2605,7 @@ fn App() -> impl IntoView {
                                 Route::Settings => "settings (MFE-21)",
                                 Route::Comments => "comments (COMMENT-3)",
                                 Route::Members => "members (IDENTITY-22)",
+                                Route::Pair => "pair a machine (TETHER-11)",
                                 Route::Chats(_) => "chats (CHAT-14)",
                                 Route::Deployments(_) => "deployments (DEPLOY-13)",
                                 Route::Deploy(_) => "what we're working on (DEPLOY-30)",
@@ -2641,6 +2648,7 @@ fn App() -> impl IntoView {
                         Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
                         Route::Comments => view! { <comments_page::CommentsPage /> }.into_any(),
                         Route::Members => view! { <members_page::MembersPage /> }.into_any(),
+                        Route::Pair => view! { <pair_page::PairPage /> }.into_any(),
                         Route::Chats(p) => view! { <chats_page::ChatsPage pick=p /> }.into_any(),
                         Route::Deployments(project) => view! { <deploys_page::DeploymentsPage project /> }.into_any(),
                         Route::Deploy(project) => view! { <deploy_view::DeployPage project /> }.into_any(),

@@ -478,6 +478,22 @@
   #members td { padding: .35rem .5rem; border-bottom: var(--border) solid var(--line); }
   #members td:nth-child(2) code, #members td:nth-child(3) { white-space: nowrap; }
   #members button.primary { border: var(--border) solid var(--accent); color: var(--accent); background: var(--card); border-radius: var(--radius); padding: .2rem .6rem; }
+  /* TETHER-11: #/pair — a machine's key, its code to check, Pair / Not mine. */
+  #pair-page { max-width: 34rem; margin: 1.5rem auto; padding: 0 1rem; }
+  #pair-page .pair-card { padding: 1.25rem 1.5rem; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-2xl); }
+  #pair-page .pair-who { display: grid; grid-template-columns: auto 1fr; gap: .35rem .9rem; margin: 0 0 1rem; }
+  #pair-page .pair-who dt { color: var(--muted); }
+  #pair-page .pair-who dd { margin: 0; min-width: 0; }
+  #pair-page .pair-who code { font-size: calc(.8rem * var(--text-scale)); overflow-wrap: anywhere; }
+  #pair-page .pair-codelabel { margin: 0; color: var(--muted); font-size: calc(.85rem * var(--text-scale)); }
+  #pair-page .pair-code { margin: .2rem 0 .6rem; font-family: var(--mono); font-size: calc(2rem * var(--text-scale));
+    font-weight: var(--weight-medium); letter-spacing: .12em; color: var(--ink); }
+  #pair-page .hint { color: var(--muted); }
+  #pair-page .pair-grant { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 1rem 0 .5rem; }
+  #pair-page select { font: inherit; padding: .3rem .5rem; background: var(--card); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius); max-width: 100%; }
+  #pair-page .pair-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1rem; }
+  #pair-page .pair-actions button { font: inherit; min-height: 2.75rem; padding: .4rem 1.1rem; border-radius: var(--radius); border: var(--border) solid var(--line); background: var(--card); color: var(--ink); }
+  #pair-page .pair-actions button.primary { border-color: var(--accent); color: var(--accent); }
   #members button.link { background: none; border: 0; color: var(--accent); cursor: pointer; }
   #members .line { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
   #settings ul.grants { list-style: none; margin: 0; padding: 0; }

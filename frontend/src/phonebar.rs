@@ -119,6 +119,7 @@ pub(crate) fn page_words(r: &Route) -> String {
         Route::Settings => "settings".into(),
         Route::Comments => "comments".into(),
         Route::Members => "members".into(),
+        Route::Pair => "pair a machine".into(),
         Route::Chats(_) => "chats".into(),
         Route::Deployments(_) => "deployments".into(),
         Route::Deploy(_) => "deploy".into(),
