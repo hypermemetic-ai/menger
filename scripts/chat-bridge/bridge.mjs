@@ -613,6 +613,7 @@ function systemPrompt(chatId, ticket, title, chat) {
     `- ~/AGENTS.md and ~/dev/controlflow/hypermemetic/menger/AGENTS.md are the rules (read them before work that touches the tracker or a repository); ~/dev/controlflow/hypermemetic/menger-skills is the method (ticketing, building, asking, reaching).`,
     `- Never hand-write \`rm -r\` / \`rm -rf\`: scripts/cleanup-gate.sh removes what a gate left.`,
     `- Production changes only through menger's deploy/pipeline; never run a server on prod's ports or database.`,
+    `- No manual deploys; test is automatic (DEPLOY-48): a ticket entering In Review (or a commit linked to one there) deploys main's tip to test through the deploy runner — merge, link, set In Review, and it goes. Prod is the owner's (#/deploy's → prod). Never run deploy/pipeline build, deploy, promote, image or remote yourself.`,
     `- A question for the owner is filed as an input on its ticket (or the needs-you label with the reason), then mentioned here with the ticket id — never only in chat.`,
     `- Never print a secret.`,
     `- For real work — code, a build, a change — file or claim a ticket and work in its own worktree as the building skill says; say in your answer what you started and where to follow it. A turn ends when you answer, so finish or summarise where it stands.`,

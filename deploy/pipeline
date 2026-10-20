@@ -1271,9 +1271,28 @@ cmd_status() {
     record_status "$env"
   done
   edge_status
+  runner_status
   # CI-2: how full the disk is; a low one is said, the build would refuse it
   local disk; disk=$("$REPO/scripts/disk-check.sh" --path "$HOME" 2>&1) || disk="$disk — deploy/pipeline build refuses until there is room"
   printf '%s\n' "$disk"
+}
+# DEPLOY-48: whether a ticket entering In Review deploys test by itself (the deploy
+# runner's MENGER_RUNNER_AUTO_TEST), and what it holds — its auto.json: the pending
+# request and its tickets, the tickets waiting out the debounce, the last run.
+runner_status() {
+  local envf=$HOME/.config/menger/deploy-runner.env unit on
+  local state=${MENGER_RUNNER_STATE_DIR:-$HOME/.local/state/menger-deploy-runner}/auto.json
+  if [[ ! -f $envf ]]; then printf 'auto-test  off — the deploy runner is not installed (scripts/deploy-runner/install.sh --start)\n'; return 0; fi
+  unit=$(systemctl --user is-active menger-deploy-runner.service 2>/dev/null || true)
+  on=$(sed -n 's/^MENGER_RUNNER_AUTO_TEST=//p' "$envf" | tail -n 1)
+  if [[ $on == 0 ]]; then printf 'auto-test  off (MENGER_RUNNER_AUTO_TEST=0 in %s)\n' "$envf"; return 0; fi
+  printf 'auto-test  on — a ticket entering In Review deploys test; the runner is %s\n' "${unit:-unknown}"
+  [[ -f $state ]] || { printf '  pending   none\n'; return 0; }
+  jq -r '(select(.running) | "  running   request \(.running.request) for \(.running.tickets | join(", "))"),
+    "  pending   \(if .pending then "request \(.pending.request) for \(.pending.tickets | join(", "))" else "none" end)",
+    (select((.waiting // []) | length > 0) | "  waiting   \(.waiting | join(", ")) (the debounce; filed or folded \(if .due_at then "at \(.due_at / 1000 | floor | todate)" else "soon" end))"),
+    (select(.last) | "  last      request \(.last.request) \(.last.outcome) for \(.last.tickets | join(", ")) at \(.last.at)")' "$state" 2>/dev/null \
+    || printf '  pending   ? (%s unreadable)\n' "$state"
 }
 # ACCESS-47: tickets.health on PORT — its ticket count, or why not (a gate's
 # refusal, the key not granted there); signed in as the pipeline's key where

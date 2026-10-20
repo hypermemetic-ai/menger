@@ -207,6 +207,25 @@ has "status: the disk" "$out" "disk: "
 DISK_CHECK_AVAIL_GB=3 run status
 has "status: a low disk is said" "$(<"$SCRATCH/out")" "low (under 50 GB free)"
 has "status: … and that build refuses" "$(<"$SCRATCH/out")" "deploy/pipeline build refuses until there is room"
+
+# ── DEPLOY-48: status says whether test is automatic, and what it holds ────
+run status
+has "status: no runner, auto-test off" "$(<"$SCRATCH/out")" "auto-test  off — the deploy runner is not installed"
+printf 'MENGER_RUNNER_MODE=--watch\n' >"$HOME/.config/menger/deploy-runner.env"
+mkdir -p "$HOME/.local/state/menger-deploy-runner"
+printf '%s\n' '{"on":true,"waiting":["CHAT-60"],"due_at":1792470666000,"running":{"request":13,"tickets":["DEPLOY-47"]},"pending":{"request":12,"tickets":["CHAT-58","CHAT-59"]},"last":{"request":11,"outcome":"failed","tickets":["DEPLOY-47"],"at":"2026-10-19T22:00:00Z"}}' \
+  >"$HOME/.local/state/menger-deploy-runner/auto.json"
+run status
+out=$(<"$SCRATCH/out")
+has "status: auto-test on by default" "$out" "auto-test  on — a ticket entering In Review deploys test; the runner is active"
+has "status: the running request" "$out" "running   request 13 for DEPLOY-47"
+has "status: the pending request" "$out" "pending   request 12 for CHAT-58, CHAT-59"
+has "status: the debounce" "$out" "waiting   CHAT-60 (the debounce"
+has "status: the last run" "$out" "last      request 11 failed for DEPLOY-47"
+printf 'MENGER_RUNNER_AUTO_TEST=0\n' >>"$HOME/.config/menger/deploy-runner.env"
+run status
+has "status: the off switch" "$(<"$SCRATCH/out")" "auto-test  off (MENGER_RUNNER_AUTO_TEST=0 in "
+
 mkdir -p "$SCRATCH/bin-build"
 for t in cargo trunk npm; do printf '#!/usr/bin/env bash\necho "%s ran" >>"%s"; exit 99\n' "$t" "$SCRATCH/built" >"$SCRATCH/bin-build/$t"; chmod +x "$SCRATCH/bin-build/$t"; done
 PATH=$SCRATCH/bin-build:$PATH DISK_CHECK_USED_PCT=93 DISK_CHECK_AVAIL_GB=120 run build

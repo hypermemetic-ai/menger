@@ -51,6 +51,20 @@
 // last 40 lines (stepLog, at most 4000 bytes), so the app has the log to quote
 // when the owner asks the builder about it — the url is this machine's alone.
 //
+// DEPLOY-48: test is automatic (owner, 2026-10-19: "we always instantly deploy everything to
+// test … our system should do this automatically upon something entering review"). The runner
+// holds `tickets.watch` and, for a ticket of its project (MENGER and every shortcode hosted under
+// it) that enters In Review — or that is In Review when a commit is linked to it — files a test
+// request for main's tip itself (`deployments.request --branch main`, the pipeline key's
+// deployer grant). A ticket moved back to Coding triggers nothing; its next entry does. Triggers
+// are debounced (--debounce-secs, 60) and coalesced: one run at a time and at most one pending
+// request — a trigger while one is pending folds into it, and it takes main's tip when it starts.
+// A red run of such a request posts the failing lines to the triggering ticket's chat (else
+// --chat, 6) and files a gap blocking the triggering tickets (CI-3), as the editor key
+// (MENGER_RUNNER_EDITOR_KEY_FILE, default ~/.plexus/keys/builder.key). Off:
+// MENGER_RUNNER_AUTO_TEST=0 (or --no-auto-test). What it holds is in --state-dir/auto.json, which
+// `deploy/pipeline status` reads. Prod stays the owner's (above).
+//
 //   node deploy/runner.mjs --listen [--port 4475] --secret-file ~/.config/menger/deploy-runner.secret
 //   node deploy/runner.mjs --watch
 //   options: --url wss://app.menger.sh/ws (MENGER_URL)   the tracker
@@ -58,6 +72,9 @@
 //            --repo DIR --pipeline FILE                  the checkout and its deploy/pipeline (default: this one's)
 //            --state-dir DIR                             default ~/.local/state/menger-deploy-runner
 //            --owner PRINCIPAL                           who may ask for app-prod (repeat; MENGER_RUNNER_OWNERS)
+//            --no-auto-test                              DEPLOY-48 off (MENGER_RUNNER_AUTO_TEST=0)
+//            --debounce-secs N  --chat N                 DEPLOY-48: the quiet before a run (60); a red run's
+//                                                        fallback chat (6; MENGER_RUNNER_DEBOUNCE_SECS, MENGER_RUNNER_CHAT)
 //            --fake                                      no pipeline: each step a pause (MENGER_RUNNER_FAKE_FAIL=<step>
 //                                                        fails it; MENGER_RUNNER_FAKE_SECS, default 2) — the tests'
 // The key is $MENGER_DEPLOY_KEY_FILE (default ~/.plexus/keys/pipeline.key: deployer on MENGER), never argv;
@@ -119,6 +136,34 @@ export const releaseIn = (text) => [...String(text || "").matchAll(/\b\d{8}T\d{6
 /** A release's commit: the hash it ends in. */
 export const shaOf = (release) => /-([0-9a-f]{7,40})$/.exec(String(release || ""))?.[1] ?? null;
 
+/** DEPLOY-48: whether a ticket is `project`'s — its own shortcode or one hosted under it (the
+ * address's first segment: `hypermemetic:MENGER/RUN/DEPLOY-48` is MENGER's). */
+export function ofProject(ticket, project) {
+  const want = String(project || "").toUpperCase();
+  const addr = String(ticket?.address || "");
+  const first = (addr.includes(":") ? addr.slice(addr.indexOf(":") + 1) : addr).split("/")[0];
+  const code = first.replace(/-\d+$/, "").replace(/\.\d+$/, "").toUpperCase();
+  return code ? code === want : String(ticket?.epic || "").toUpperCase() === want;
+}
+
+/** DEPLOY-48: a `tickets.watch` event that should deploy test — a ticket of `project` entering
+ * In Review, or a commit linked to one that is In Review — as `{ ticket, why }`; else null.
+ * Leaving In Review (back to Coding) triggers nothing: its re-entry does. */
+export function triggerOf(ev, project) {
+  const t = ev?.ticket;
+  if (!t || t.status !== "In Review" || !ofProject(t, project)) return null;
+  if (ev.type === "status_changed" && ev.previous !== "In Review") return { ticket: t.id, why: "entered In Review" };
+  if (ev.type === "commits_linked" && (ev.added || []).length) return { ticket: t.id, why: `${ev.added.length} commit(s) linked in review` };
+  return null;
+}
+
+/** DEPLOY-48: what a red step's log says failed — cargo's and node's failing lines — or its tail. */
+export function failingLines(out, max = 25) {
+  const lines = String(out || "").split("\n");
+  const hits = lines.filter((l) => /^test .* \.\.\. FAILED|^---- .* ----$|panicked at|^error(\[|:)|^not ok |^# fail [1-9]|test result: FAILED|^FAILED|✗|refused/.test(l.trim()));
+  return (hits.length ? hits.slice(0, max) : lines.filter(Boolean).slice(-max)).join("\n").slice(0, 3000);
+}
+
 /** Whether `sig` is the body's signature under `secret` (timing-safe). */
 export function signed(secret, body, sig) {
   const want = "sha256=" + crypto.createHmac("sha256", secret).update(body).digest("hex");
@@ -140,7 +185,7 @@ export function stepLog(command, out, lines = 40, max = 4000, code = 0) {
   return body ? `${head}\n${body}` : head;
 }
 
-function options(argv, env = process.env) {
+export function options(argv, env = process.env) {
   const o = {
     listen: false, watch: false, fake: false,
     port: Number(env.MENGER_RUNNER_PORT || 4475),
@@ -152,6 +197,9 @@ function options(argv, env = process.env) {
     stateDir: env.MENGER_RUNNER_STATE_DIR || path.join(os.homedir(), ".local/state/menger-deploy-runner"),
     agent: env.MENGER_AGENT || "deploy-runner",
     owners: String(env.MENGER_RUNNER_OWNERS || "").split(",").map((s) => s.trim()).filter(Boolean),
+    autoTest: env.MENGER_RUNNER_AUTO_TEST !== "0",
+    debounceMs: Number(env.MENGER_RUNNER_DEBOUNCE_SECS || 60) * 1000,
+    chat: Number(env.MENGER_RUNNER_CHAT || 6),
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], next = () => { const v = argv[++i]; if (v === undefined) throw new Error(`${a} needs a value`); return v; };
@@ -167,6 +215,9 @@ function options(argv, env = process.env) {
     else if (a === "--state-dir") o.stateDir = next();
     else if (a === "--agent") o.agent = next();
     else if (a === "--owner") o.owners.push(next());
+    else if (a === "--no-auto-test") o.autoTest = false;
+    else if (a === "--debounce-secs") o.debounceMs = Number(next()) * 1000;
+    else if (a === "--chat") o.chat = Number(next());
     else throw new Error(`unknown argument '${a}'`);
   }
   if (!o.listen && !o.watch) throw new Error("--listen (the webhook), --watch (dialling out), or both");
@@ -193,15 +244,27 @@ export class Runner {
     try { for (const id of JSON.parse(fs.readFileSync(this.takenFile, "utf8"))) this.taken.add(id); } catch {}
     const text = deployKeyText({ ...process.env, MENGER_DEPLOY_KEY_FILE: process.env.MENGER_DEPLOY_KEY_FILE || path.join(os.homedir(), ".plexus/keys/pipeline.key") });
     this.seed = text ? seedOf(text) : null;
+    // DEPLOY-48: the auto-test state — tickets waiting out the debounce, and each request's triggering tickets.
+    this.auto = { waiting: new Map(), timer: null, triggers: {}, pending: null, last: null };
+    this.autoFile = path.join(o.stateDir, "auto.json");
+    try { this.auto.triggers = JSON.parse(fs.readFileSync(this.autoFile, "utf8")).triggers || {}; } catch {}
   }
 
-  headers() {
-    return this.seed ? { Authorization: `Bearer ${keyProof(this.seed, this.o.url.replace(/\/+$/, ""), this.o.agent)}` } : {};
+  headers(seed = this.seed, agent = this.o.agent) {
+    return seed ? { Authorization: `Bearer ${keyProof(seed, this.o.url.replace(/\/+$/, ""), agent)}` } : {};
   }
 
-  /** One menger call on a socket of its own: its data items. */
-  async menger(method, params) {
-    const ws = await connect(this.o.url, this.headers());
+  /** DEPLOY-48: the editor's key (a red run's chat post and gap) — the builder's unless named; null: none. */
+  editor() {
+    if (this.editorSeed !== undefined) return this.editorSeed;
+    const f = process.env.MENGER_RUNNER_EDITOR_KEY_FILE || path.join(os.homedir(), ".plexus/keys/builder.key");
+    try { this.editorSeed = f === "none" ? null : seedOf(deployKeyText({ MENGER_DEPLOY_KEY_FILE: f })); } catch { this.editorSeed = null; }
+    return this.editorSeed;
+  }
+
+  /** One menger call on a socket of its own: its data items. `as`: the editor's key. */
+  async menger(method, params, as = null) {
+    const ws = await connect(this.o.url, as === "editor" ? this.headers(this.editor(), process.env.MENGER_RUNNER_EDITOR_AGENT || "builder") : this.headers());
     const items = [];
     try { await call(ws, 1, method, params, (it) => items.push(it)); } finally { ws.close(); }
     const refused = items.find((it) => it?.type === "error");
@@ -257,7 +320,14 @@ export class Runner {
   async drain() {
     if (this.busy) return;
     this.busy = true;
-    try { while (this.queue.length) await this.run(this.queue.shift()); } finally { this.busy = false; }
+    try {
+      while (this.queue.length) {
+        const job = this.current = this.queue.shift();
+        if (job.environment === "test") this.autoStarted(job);
+        try { await this.run(job); } finally { this.current = null; }
+        if (job.environment === "test") await this.autoEnded(job, job.outcome || "failed");
+      }
+    } finally { this.busy = false; }
   }
 
   resolve(job) {
@@ -313,17 +383,153 @@ export class Runner {
       // The runner's own closing record must name the release too, or it overwrites the pipeline's with none.
       if (!GUARDS[job.environment]) job.release ||= releaseIn(res.out) || "";
       if (res.canceled) { outcome = "canceled"; await this.step(job, s.name, "canceled", { detail: stepLog(cmd, res.out) }); break; }
-      if (res.code !== 0) { outcome = "failed"; await this.step(job, s.name, "failed", { detail: stepLog(cmd, res.out, 40, 4000, res.code), url: this.urlOf(job, s) }); break; }
+      if (res.code !== 0) { outcome = "failed"; job.red = { step: s.name, out: res.out }; await this.step(job, s.name, "failed", { detail: stepLog(cmd, res.out, 40, 4000, res.code), url: this.urlOf(job, s) }); break; }
       await this.step(job, s.name, "succeeded", { detail: stepLog(cmd, res.out), url: this.urlOf(job, s) });
     }
     for (const s of plan.slice(i + 1)) await this.step(job, s.name, outcome === "canceled" ? "canceled" : "skipped");
     this.log(`request ${job.request}: ${outcome}`);
+    job.outcome = outcome;
     // The pipeline's own records name the request once its deploy began; else the runner says how it ended
     // (and when a recording step ended before it recorded: the request still open).
     const now = await this.standing(job);
     if (now?.state === "canceled") return; // canceled outright: nothing ran to record
     if (recorded && !this.o.fake && !["pending", "started"].includes(now?.state)) return;
     await this.record(job, outcome === "succeeded" ? "succeeded" : "failed");
+  }
+
+  // ── DEPLOY-48: test is automatic ─────────────────────────────────────────
+
+  /** What auto-test holds, for `deploy/pipeline status`. */
+  saveAuto() {
+    const triggers = Object.fromEntries(Object.entries(this.auto.triggers).slice(-50));
+    this.auto.triggers = triggers;
+    const doc = { on: !!this.o.autoTest, waiting: [...this.auto.waiting.keys()], due_at: this.auto.due ?? null,
+      running: this.auto.running ?? null, pending: this.auto.pending, last: this.auto.last, triggers, at: new Date().toISOString() };
+    try { fs.writeFileSync(this.autoFile, JSON.stringify(doc, null, 1) + "\n"); } catch (e) { this.log(`auto-test: ${this.autoFile}: ${e.message}`); }
+  }
+
+  /** A trigger: the ticket waits out the debounce with the others; each one restarts it. */
+  trigger({ ticket, why }) {
+    if (!this.o.autoTest) return false;
+    this.auto.waiting.set(ticket, why);
+    clearTimeout(this.auto.timer);
+    this.auto.due = Date.now() + this.o.debounceMs;
+    this.auto.timer = setTimeout(() => this.autoFire(), this.o.debounceMs);
+    this.auto.timer.unref?.();
+    this.log(`auto-test: ${ticket} ${why}; test in ${Math.round(this.o.debounceMs / 1000)} s unless more come`);
+    this.saveAuto();
+    return true;
+  }
+
+  /** The pending test request, if any — queued here, else pending on the tracker (a → test's). */
+  async pendingTest() {
+    const here = this.queue.find((j) => j.environment === "test");
+    if (here) return here.request;
+    const rows = await this.menger("deployments.list", { project: this.o.project, environment: "test", state: "requested", limit: 100 });
+    return rows.map((r) => r?.deployment).find((d) => d?.requested?.state === "pending" && !(d.requested.steps || []).length && d.id !== this.current?.request)?.id ?? null;
+  }
+
+  /** The debounce ran out: fold the waiting tickets into the pending request, or file one for main's tip. */
+  async autoFire() {
+    this.auto.timer = null; this.auto.due = null;
+    const tickets = [...this.auto.waiting.keys()];
+    if (!tickets.length || !this.o.autoTest) return;
+    const why = [...this.auto.waiting].map(([t, w]) => `${t} ${w}`).join("; ");
+    this.auto.waiting.clear();
+    const attach = (id) => { this.auto.triggers[id] = [...new Set([...(this.auto.triggers[id] || []), ...tickets])]; };
+    try {
+      const pending = await this.pendingTest();
+      if (pending) {
+        attach(pending);
+        this.auto.pending = { request: pending, tickets: this.auto.triggers[pending] };
+        this.log(`auto-test: ${tickets.join(", ")} folded into pending request ${pending} (main's tip when it starts)`);
+        return this.saveAuto();
+      }
+      const [ev] = await this.menger("deployments.request", { project: this.o.project, environment: "test", branch: "main", note: `auto-test (DEPLOY-48): ${why}`.slice(0, 2000) });
+      const d = ev?.deployment;
+      if (!d?.id) throw new Error(ev?.message || "no request in the answer");
+      attach(d.id);
+      this.auto.pending = { request: d.id, tickets: this.auto.triggers[d.id] };
+      this.log(`auto-test: request ${d.id} filed for main's tip — ${why}`);
+      this.saveAuto();
+      this.take({ request: d.id, project: d.project || this.o.project, environment: "test", branch: "main", requested_by: d.recorded_by });
+    } catch (e) {
+      // not filed: the tickets wait again, and the next quiet tries again
+      this.log(`auto-test: request not filed — ${e.message}; again in ${Math.round(this.o.debounceMs / 1000)} s`);
+      for (const t of tickets) if (!this.auto.waiting.has(t)) this.auto.waiting.set(t, "waiting to be filed");
+      this.auto.due = Date.now() + this.o.debounceMs;
+      this.auto.timer = setTimeout(() => this.autoFire(), this.o.debounceMs);
+      this.auto.timer.unref?.();
+      this.saveAuto();
+    }
+  }
+
+  /** A test run began: the pending request is now the running one, and the next trigger files another. */
+  autoStarted(job) {
+    if (!this.auto.triggers[job.request]) return;
+    this.auto.running = { request: job.request, tickets: this.auto.triggers[job.request] };
+    if (this.auto.pending?.request === job.request) this.auto.pending = null;
+    this.saveAuto();
+  }
+
+  /** A test run ended: no longer pending; a red one carrying triggers is said where its tickets are. */
+  async autoEnded(job, outcome) {
+    if (this.auto.pending?.request === job.request) this.auto.pending = null;
+    if (this.auto.running?.request === job.request) this.auto.running = null;
+    const tickets = this.auto.triggers[job.request];
+    if (!tickets) return;
+    this.auto.last = { request: job.request, outcome, tickets, at: new Date().toISOString() };
+    this.saveAuto();
+    if (outcome === "failed" && job.red) await this.reportRed(job, tickets);
+  }
+
+  /** CI-3: a red run is the batch's — a gap blocking each triggering ticket, and the failing lines in its chat. */
+  async reportRed(job, tickets) {
+    if (!this.editor()) return this.log(`auto-test: request ${job.request} red — no editor key (MENGER_RUNNER_EDITOR_KEY_FILE), nothing posted or filed`);
+    const lines = failingLines(job.red.out);
+    const fence = "```";
+    const body = `Auto-test request ${job.request} (main at ${String(job.sha || "").slice(0, 7)}) went red in \`${job.red.step}\`.\n\n${fence}text\n${lines}\n${fence}\n\nTriggered by ${tickets.join(", ")}. The red is the batch's (CI-3): find the commit, fix or revert; the next ticket entering In Review deploys test again. Log: ${this.o.stateDir}/runs/${job.request}/${job.red.step}.log`;
+    let gap = null;
+    try {
+      const [ev] = await this.menger("tickets.create", { epic: tickets[0].replace(/-\d+$/, ""), parent: tickets[0], kind: "gap",
+        title: `test deploy red: request ${job.request} (${job.red.step}) — main at ${String(job.sha || "").slice(0, 7)}`, body }, "editor");
+      if (ev?.type === "error") throw new Error(ev.message);
+      gap = ev?.ticket?.id || null;
+      if (gap) for (const t of tickets) {
+        try {
+          const [u] = await this.menger("tickets.update", { id: t, block: [gap], message: `auto-test request ${job.request} went red` }, "editor");
+          if (u?.type === "error") throw new Error(u.message);
+        }
+        catch (e) { this.log(`auto-test: ${gap} could not block ${t} — ${e.message}`); }
+      }
+    } catch (e) { this.log(`auto-test: no gap filed for request ${job.request} — ${e.message}`); }
+    let chat = null;
+    try { chat = (await this.menger("chats.list", { ticket: tickets[0], state: "open", limit: 1 }, "editor")).find((c) => c?.type === "chat")?.chat?.id ?? null; } catch {}
+    chat ||= this.o.chat;
+    try {
+      const [p] = await this.menger("chats.post", { chat, body: `${body}${gap ? `\n\nFiled ${gap}, blocking ${tickets.join(", ")}.` : ""}` }, "editor");
+      if (p?.type === "error") throw new Error(p.message);
+    }
+    catch (e) { this.log(`auto-test: could not post to chat ${chat} — ${e.message}`); }
+    this.log(`auto-test: request ${job.request} red — ${gap ? `${gap} filed` : "no gap"}, chat ${chat}`);
+    return { gap, chat };
+  }
+
+  /** --watch's or --listen's companion: `tickets.watch`, each trigger debounced; again after a dropped socket. */
+  async watchTickets() {
+    this.saveAuto();
+    for (;;) {
+      try {
+        const ws = await connect(this.o.url, this.headers());
+        this.log(`auto-test: watching ${this.o.url} for ${this.o.project}'s tickets entering In Review`);
+        await call(ws, 2, "tickets.watch", {}, (it) => {
+          const t = it?.type === "data" ? triggerOf(it.content, this.o.project) : null;
+          if (t) this.trigger(t);
+        }).catch((e) => this.log(`auto-test: watch: ${e.message}`));
+        ws.close();
+      } catch (e) { this.log(`auto-test: watch: ${e.message}`); }
+      await new Promise((r) => setTimeout(r, 5000));
+    }
   }
 
   urlOf(job, s) {
@@ -413,4 +619,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process
   const r = new Runner(o);
   if (o.listen) r.listen(secret);
   if (o.watch) r.watch();
+  if (o.autoTest) r.watchTickets(); else { r.saveAuto(); r.log("auto-test: off (MENGER_RUNNER_AUTO_TEST=0)"); }
 }
