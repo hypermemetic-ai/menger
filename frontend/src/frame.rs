@@ -1502,14 +1502,15 @@ fn on_message(ev: web_sys::MessageEvent) {
             }
             // COMMENT-3: its elements may have moved under their pins.
             annotate::frame_changed(&channel);
-            // CHAT-21: a message's frame keeps its height for when it is
-            // dropped, and its chat measures the turn again.
-            if let Some((_, m)) = crate::chat_frames::home_of(&frame) {
-                crate::chat_frames::sized(&frame, m, f64::from(height));
-            }
             // A first frame shows at once; a re-render waits until drawn.
             if frame.get_attribute("data-state").as_deref() == Some("pending") && (settled || !has_live_sibling(&frame)) {
                 promote(&frame);
+            }
+            // CHAT-21: a message's frame keeps its height for when it is
+            // dropped, and its chat measures the turn again — CHAT-61: once
+            // it is in the flow (promoted), so the measure sees it.
+            if let Some((_, m)) = crate::chat_frames::home_of(&frame) {
+                crate::chat_frames::sized(&frame, m, f64::from(height), settled);
             }
             match frame.get_attribute("data-cite-key") {
                 // COMP-14: a window's frame — where its section runs.

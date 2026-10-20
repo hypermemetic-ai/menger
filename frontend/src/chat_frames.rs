@@ -28,7 +28,6 @@
 //!   relayed to its frames as a `menger:change` with the key ([`heard`]).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 use leptos::prelude::*;
 use menger_tickets_api::chat_inputs::ChatInput;
@@ -214,8 +213,10 @@ fn relay(input: &ChatInput) {
 
 thread_local! {
     /// The height each message's frame last had, so the turn keeps it while
-    /// its document is dropped (and before it is first made, a guess).
-    static HEIGHTS: RefCell<HashMap<u64, f64>> = RefCell::new(HashMap::new());
+    /// its document is dropped and takes it while the next one settles —
+    /// CHAT-61: kept beyond the tab ([`STORE_KEY`]), so a fresh load mounts
+    /// at the right height too.
+    static HEIGHTS: RefCell<Option<Kept>> = const { RefCell::new(None) };
 }
 
 /// Before a message's frame is first measured.
@@ -224,9 +225,73 @@ const GUESS_PX: f64 = 160.0;
 /// How far beyond the view a frame is kept: about a screen each way.
 const NEAR: &str = "100% 0px 100% 0px";
 
+/// CHAT-61: where the kept heights live (localStorage), and how many.
+const STORE_KEY: &str = "menger.cframe-heights";
+const KEEP: usize = 400;
+
+/// CHAT-61: the heights of the last [`KEEP`] message frames, each its
+/// turn's frame box as drawn (the bar and the frame) — the most recently
+/// sized last, the oldest forgotten first.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Kept(Vec<(u64, u32)>);
+
+impl Kept {
+    pub(crate) fn get(&self, message: u64) -> Option<f64> {
+        self.0.iter().find(|(m, _)| *m == message).map(|(_, h)| f64::from(*h))
+    }
+
+    /// Keeps `height` for `message`, most recent; whether anything changed.
+    pub(crate) fn put(&mut self, message: u64, height: f64) -> bool {
+        let h = height.round().clamp(1.0, f64::from(u16::MAX)) as u32;
+        if self.0.last() == Some(&(message, h)) {
+            return false;
+        }
+        self.0.retain(|(m, _)| *m != message);
+        self.0.push((message, h));
+        let over = self.0.len().saturating_sub(KEEP);
+        self.0.drain(..over);
+        true
+    }
+
+    pub(crate) fn to_json(&self) -> String {
+        serde_json::to_string(&self.0).unwrap_or_default()
+    }
+
+    /// What [`to_json`](Self::to_json) wrote — anything else is nothing kept.
+    pub(crate) fn from_json(s: &str) -> Self {
+        let mut k = Kept(serde_json::from_str::<Vec<(u64, u32)>>(s).unwrap_or_default());
+        let over = k.0.len().saturating_sub(KEEP);
+        k.0.drain(..over);
+        k
+    }
+}
+
+fn storage() -> Option<web_sys::Storage> {
+    dom::window().local_storage().ok().flatten()
+}
+
+fn with_kept<R>(f: impl FnOnce(&mut Kept) -> R) -> R {
+    HEIGHTS.with(|h| {
+        let mut h = h.borrow_mut();
+        let k = h.get_or_insert_with(|| storage().and_then(|s| s.get_item(STORE_KEY).ok().flatten()).map(|s| Kept::from_json(&s)).unwrap_or_default());
+        f(k)
+    })
+}
+
+fn keep(message: u64, height: f64) {
+    if height <= 0.0 {
+        return;
+    }
+    if let Some(json) = with_kept(|k| k.put(message, height).then(|| k.to_json())) {
+        if let Some(s) = storage() {
+            let _ = s.set_item(STORE_KEY, &json);
+        }
+    }
+}
+
 /// The height a message's frame takes while its document is not made.
 pub(crate) fn kept_height(message: u64) -> f64 {
-    HEIGHTS.with(|h| h.borrow().get(&message).copied()).unwrap_or(GUESS_PX)
+    with_kept(|k| k.get(message)).unwrap_or(GUESS_PX)
 }
 
 /// CHAT-21: a framed message — its body (`body`, the markdown it was
@@ -245,9 +310,8 @@ pub(crate) fn MessageFrame(body: String, chat: u64, message: u64, ticket: Option
     let holder = NodeRef::<leptos::html::Div>::new();
     let kept = Callback::new(move |(): ()| {
         if let Some(el) = holder.get_untracked() {
-            let h = f64::from(el.offset_height());
-            if h > 0.0 {
-                HEIGHTS.with(|m| m.borrow_mut().insert(message, h));
+            if !waiting(&el) {
+                keep(message, f64::from(el.offset_height()));
             }
         }
     });
@@ -272,10 +336,18 @@ pub(crate) fn MessageFrame(body: String, chat: u64, message: u64, ticket: Option
     let src = body.clone();
     let made = move || {
         if near.get() {
+            // CHAT-61: the turn holds its kept height until the frame says
+            // it is settled ([`sized`]), so its steps never move the chat.
+            if let Some(el) = holder.get_untracked() {
+                let _ = web_sys::HtmlElement::style(&el).set_property("min-height", &format!("{}px", kept_height(message)));
+            }
             let actions = actions.clone();
             let scope = scope.clone();
             view! { <present::Framed html decl ticket=None scope actions message=(chat, message) /> }.into_any()
         } else {
+            if let Some(el) = holder.get_untracked() {
+                let _ = web_sys::HtmlElement::style(&el).remove_property("min-height");
+            }
             let h = kept_height(message);
             view! { <div class="cframe-wait" aria-hidden="true" style=format!("min-height:{h}px")></div> }.into_any()
         }
@@ -329,11 +401,21 @@ fn watch_near(el: &web_sys::HtmlDivElement, near: RwSignal<bool>, kept: Callback
 /// and a reader at the bottom stays there.
 pub(crate) const SIZED: &str = "menger-cframe-sized";
 
-/// A message's frame took `height`: kept, so a later drop keeps the right
-/// one, and said on `frame` ([`SIZED`]).
-pub(crate) fn sized(frame: &web_sys::HtmlIFrameElement, message: u64, height: f64) {
-    if height > 0.0 {
-        HEIGHTS.with(|m| m.borrow_mut().insert(message, height));
+/// Whether a message's frame box still holds its kept height, its frame
+/// not yet settled.
+fn waiting(holder: &web_sys::HtmlElement) -> bool {
+    !holder.style().get_property_value("min-height").unwrap_or_default().is_empty()
+}
+
+/// A message's frame took `height`: said on `frame` ([`SIZED`]). CHAT-61:
+/// until it is `settled` its turn holds the kept height; once it is, the
+/// turn takes its own — in one step — and that is kept, so a later drop,
+/// or the next load, mounts at the right one.
+pub(crate) fn sized(frame: &web_sys::HtmlIFrameElement, message: u64, height: f64, settled: bool) {
+    let holder = frame.closest("[data-message-frame]").ok().flatten().and_then(|h| h.dyn_into::<web_sys::HtmlElement>().ok());
+    if let Some(holder) = holder.filter(|_| settled && height > 0.0) {
+        let _ = holder.style().remove_property("min-height");
+        keep(message, f64::from(holder.offset_height()));
     }
     let init = web_sys::EventInit::new();
     init.set_bubbles(true);
@@ -399,6 +481,28 @@ mod tests {
         let i = &held[0];
         assert!(menger_tickets_api::inputs::check(i.kind, &i.options, InputValue::Choice { option: "keep".into() }).is_ok());
         assert!(menger_tickets_api::inputs::check(i.kind, &i.options, InputValue::Choice { option: "nope".into() }).is_err());
+    }
+
+    /// CHAT-61: the kept heights — the most recent kept, the oldest past
+    /// the bound forgotten, and what was stored read back.
+    #[test]
+    fn a_frame_s_height_is_kept_bounded_and_read_back() {
+        let mut k = Kept::default();
+        assert!(k.put(490, 312.4));
+        assert!(!k.put(490, 312.0), "the same height again changes nothing");
+        assert_eq!(k.get(490), Some(312.0));
+        assert!(k.put(490, 300.0));
+        assert_eq!(k.get(490), Some(300.0), "the newest height wins");
+        for m in 0..KEEP as u64 {
+            k.put(1000 + m, 100.0);
+        }
+        assert_eq!(k.get(490), None, "the oldest goes past the bound");
+        assert_eq!(k.0.len(), KEEP);
+        k.put(1000, 120.0);
+        assert_eq!(k.0.last(), Some(&(1000, 120)), "a height sized again is the most recent");
+        let back = Kept::from_json(&k.to_json());
+        assert_eq!(back, k);
+        assert_eq!(Kept::from_json("not json"), Kept::default(), "anything else is nothing kept");
     }
 
     /// CHAT-59: a chat inside a ticket reads under its shortcode; one with

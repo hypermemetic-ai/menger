@@ -434,6 +434,16 @@ fn covered(sc: &dom::Scroller) -> f64 {
         .sum()
 }
 
+/// CHAT-61: a ResizeObserver calling `f` (it is called after layout, before
+/// paint) — `None` where the engine has none.
+fn resize_observer(f: impl FnMut() + 'static) -> Option<web_sys::ResizeObserver> {
+    let mut f = f;
+    let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || f());
+    let ro = web_sys::ResizeObserver::new(cb.as_ref().unchecked_ref()).ok()?;
+    cb.forget();
+    Some(ro)
+}
+
 /// One chat: who is in it (the dock's; the session's head says it), its
 /// turns (src/turns.rs), the composer (src/composer.rs) — or, closed,
 /// reopen. CHAT-7: the same view in the dock and full screen (`full`).
@@ -579,6 +589,64 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             heights.update(|m| m.extend(changed));
         }
     };
+    // CHAT-61: the turn the reader sees and where (src/turns.rs
+    // `first_seen`), noted at every scroll but the hold's own; and the
+    // scroll the hold last set, to know its echo.
+    let seen = StoredValue::new(None::<(u64, f64)>);
+    let held_at = StoredValue::new(None::<i32>);
+    let note_seen = move || {
+        let (Some(sc), Some(rows)) = (scroller(), rows_ref.get_untracked()) else { return };
+        let Ok(list) = rows.query_selector_all(".trow[data-mid]") else { return };
+        let mut at = Vec::new();
+        for i in 0..list.length() {
+            let Some(el) = list.item(i).and_then(|n| n.dyn_into::<web_sys::Element>().ok()) else { continue };
+            let Some(mid) = el.get_attribute("data-mid").and_then(|v| v.parse::<u64>().ok()) else { continue };
+            let r = el.get_bounding_client_rect();
+            at.push((mid, r.top(), r.bottom()));
+        }
+        seen.set_value(turns::first_seen(&at, sc.view().0 + covered(&sc)));
+    };
+    // CHAT-61: manual scroll anchoring, on every engine (WebKit has no
+    // `overflow-anchor`, and the list turns it off): after a layout, before
+    // it is painted, what changed above the turn seen is scrolled away by
+    // as much, so nothing above the view moves what the reader is looking
+    // at; a change below it moves nothing. At the bottom the list sticks.
+    // The seen turn put back where it was, from the DOM — `false` when it
+    // is not mounted (none yet, or paged out): the layout's anchor then.
+    let hold_seen = move |sc: &dom::Scroller| -> bool {
+        let Some((mid, before)) = seen.get_value() else { return false };
+        let row = rows_ref.get_untracked().and_then(|r| r.query_selector(&format!(".trow[data-mid=\"{mid}\"]")).ok().flatten());
+        let Some(row) = row else { return false };
+        if let Some(d) = turns::held_by(before, row.get_bounding_client_rect().top()) {
+            ours.set_value(js_sys::Date::now());
+            sc.by(d);
+            held_at.set_value(Some(sc.top() as i32));
+            // No signal moves here (what is mounted follows the scroll
+            // event); the layout's anchor is put where the reader now is.
+            if let Some((sc, off)) = list_offset() {
+                anchor.set_value(layout.with_untracked(|l| l.anchor(sc.top() - off)));
+            }
+        }
+        true
+    };
+    let hold = move || {
+        if !landed.get_value() {
+            return;
+        }
+        let Some(sc) = scroller() else { return };
+        if stick.get_value() {
+            ours.set_value(js_sys::Date::now());
+            sc.set_top(sc.scroll_height());
+        } else if !hold_seen(&sc) {
+            note_seen();
+        }
+    };
+    let watcher: StoredValue<Option<web_sys::ResizeObserver>, LocalStorage> = StoredValue::new_local(resize_observer(hold));
+    on_cleanup(move || {
+        if let Some(Some(ro)) = watcher.try_get_value() {
+            ro.disconnect();
+        }
+    });
     // After any change of the list or a height: land once, else stick to
     // the bottom, else put the anchor back.
     let settle_scroll = move || {
@@ -605,12 +673,18 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         if stick.get_value() {
             ours.set_value(js_sys::Date::now());
             el.set_top(el.scroll_height());
+        } else if hold_seen(&el) {
+            // CHAT-61: the turn seen is mounted — held from the DOM, never
+            // from a layout that may not have measured what just changed.
+            read_scroll();
+            return;
         } else if let Some(y) = anchor.get_value().and_then(|a| layout.with_untracked(|l| l.restore(a))) {
             ours.set_value(js_sys::Date::now());
             el.set_top(off + y);
         }
         let _ = total;
         read_scroll();
+        note_seen();
     };
     // CHAT-8: grow the window as you near its edge, trim its far end.
     let grow = move |side: scale::Side| {
@@ -697,12 +771,33 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         });
         let _ = el.add_event_listener_with_callback(crate::chat_frames::SIZED, sized.as_ref().unchecked_ref());
         sized.forget();
+        // CHAT-61: anything in the column changing height — a frame, an
+        // image, a card, a row mounted at other than its guess — is heard
+        // after layout and before paint, and held. Only the scroll moves
+        // there: a measure would change the list in this very step (its
+        // effects run as it returns), and that would be painted unheld; the
+        // turn is measured by what changed it (the observers above).
+        // Each turn is watched too (`rows`): one growing above the seen turn
+        // while another shrinks below it leaves the column's height as it
+        // was, and would go unheard.
+        if let (Some(col), Some(Some(ro))) = (el.parent_element(), watcher.try_get_value()) {
+            ro.observe(&col);
+        }
     });
     let on_scroll = move || {
         let Some(el) = scroller() else { return };
         read_scroll();
+        // CHAT-61: every move but the hold's own echo says what is seen.
+        if held_at.get_value() != Some(el.top() as i32) {
+            held_at.set_value(None);
+            note_seen();
+        }
         if js_sys::Date::now() - ours.get_value() < 80.0 {
-            // The view's own move: what is mounted follows, nothing else.
+            // The view's own move: what is mounted follows, and where the
+            // reader is (a fling goes on under it) — nothing else.
+            if !stick.get_value() {
+                anchor.set_value(layout.with_untracked(|l| l.anchor(rel_top.get_untracked())));
+            }
             near_edges();
             return;
         }
@@ -974,6 +1069,14 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         move |m: Message| {
             let (new_at, seen) = mark.get_value().unwrap_or((None, u64::MAX));
             let mid = m.id.get();
+            // CHAT-61: heard by the hold while mounted.
+            let row_ref = NodeRef::<leptos::html::Div>::new();
+            row_ref.on_load(move |el| {
+                if let Some(Some(ro)) = watcher.try_get_value() {
+                    ro.observe(&el);
+                    on_cleanup(move || ro.unobserve(&el));
+                }
+            });
             let line = (new_at == Some(mid)).then(|| view! { <div class="pnewline" role="separator">"new"</div> });
             let mine = m.author == me;
             let can = may.run(m.author.clone());
@@ -1015,7 +1118,7 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
             };
             let picked = move || selecting.with(|s| s.as_ref().is_some_and(|s| s.contains(&mid)));
             view! {
-                <div class="trow" class:tgone=move || role.get() == Role::Member class:kept=move || role.get() == Role::Kept class:can=can class:picked=picked data-mid=mid.to_string()>
+                <div class="trow" node_ref=row_ref class:tgone=move || role.get() == Role::Member class:kept=move || role.get() == Role::Kept class:can=can class:picked=picked data-mid=mid.to_string()>
                     {line}
                     <div class="tkeep" class:gone=move || gone.get()><div class="tkclip">{kept}</div></div>
                     {run}
@@ -1321,9 +1424,9 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                     {empty}
                     {pending}
                     <div class="tlist" node_ref=rows_ref data-first=move || thread.with(|t| t.first().map_or(0, |m| m.id.get())).to_string() data-held=move || thread.with(Vec::len).to_string()>
-                        <div class="tspace" style=move || format!("height:{:.0}px", space_above.get())></div>
+                        <div class="tspace" style=move || format!("height:{:.2}px", space_above.get())></div>
                         <For each=move || mounted.get() key=|m| m.id.get() children=rows />
-                        <div class="tspace" style=move || format!("height:{:.0}px", space_below.get())></div>
+                        <div class="tspace" style=move || format!("height:{:.2}px", space_below.get())></div>
                     </div>
                     {live}
                     {waits}
