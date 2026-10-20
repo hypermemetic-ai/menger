@@ -150,7 +150,8 @@ pub(crate) fn Strip(chat: u64) -> impl IntoView {
     });
     let down = StoredValue::new(None::<f64>);
     let on_key = move |e: web_sys::KeyboardEvent| {
-        if e.key() == "Escape" && open.get_untracked().is_some() {
+        // The open list is a menu: Esc closes it (dialog.close).
+        if crate::bindings::hit(&e, crate::bindings::Context::Menu) == Some("dialog.close") && open.get_untracked().is_some() {
             e.stop_propagation();
             open.set(None);
         }

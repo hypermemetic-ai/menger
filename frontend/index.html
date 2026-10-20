@@ -4759,13 +4759,56 @@
     display: inline-block; font: calc(11px * var(--text-scale)) var(--mono); color: var(--accent); border: var(--border) solid var(--accent);
     border-radius: var(--radius-sm); padding: 0 5px; text-decoration: none; line-height: 1.5; vertical-align: baseline;
   }
-  :is(#chatpane, #chatfull) .tcard {
-    display: flex; align-items: center; gap: 10px; margin: 8px 0; padding: 8px 12px; border: var(--border) solid var(--line);
-    border-radius: var(--radius-lg); background: var(--card); color: var(--ink); text-decoration: none; font: calc(12px * var(--text-scale)) var(--mono);
+  /* CHAT-56: a ticket named on its own line is a card under the turn — its
+     status, where it runs, its questions answered here, and what to do. */
+  :is(#chatpane, #chatfull) .tkcards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px; max-width: 560px; }
+  :is(#chatpane, #chatfull) .tkcards:empty { display: none; }
+  :is(#chatpane, #chatfull) .turn.mine .tkcards { margin-left: auto; width: 100%; }
+  :is(#chatpane, #chatfull) .tkcard { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); color: var(--ink); text-align: left; }
+  :is(#chatpane, #chatfull) .tkh { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  :is(#chatpane, #chatfull) .tkt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); text-decoration: none; font: calc(13px * var(--text-scale)) var(--sans); }
+  :is(#chatpane, #chatfull) .tkt:hover { color: var(--accent); }
+  :is(#chatpane, #chatfull) .tkh .st { flex: none; }
+  :is(#chatpane, #chatfull) .tkm { display: flex; gap: 6px; flex-wrap: wrap; }
+  :is(#chatpane, #chatfull) .tkm:empty { display: none; }
+  :is(#chatpane, #chatfull) .tkqs { border-top: var(--border) solid var(--line); padding-top: 6px; }
+  :is(#chatpane, #chatfull) .tkqs > summary { cursor: pointer; color: var(--ask); font: calc(11.5px * var(--text-scale)) var(--mono); list-style: none; }
+  :is(#chatpane, #chatfull) .tkqs > summary::-webkit-details-marker { display: none; }
+  :is(#chatpane, #chatfull) .tkqs > summary::before { content: "▸ "; }
+  :is(#chatpane, #chatfull) .tkqs[open] > summary::before { content: "▾ "; }
+  :is(#chatpane, #chatfull) .tkq { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--ask-bg); border: var(--border) solid var(--ask-line); }
+  :is(#chatpane, #chatfull) .tkq[data-state="answered"] { background: none; border-color: var(--line); }
+  :is(#chatpane, #chatfull) .tkqq { margin: 0; font: calc(13px * var(--text-scale))/1.4 var(--sans); }
+  :is(#chatpane, #chatfull) .tkopts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  :is(#chatpane, #chatfull) .tkopt { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: var(--border) solid var(--line); border-radius: var(--radius-pill); background: var(--card); color: var(--ink); font: calc(12px * var(--text-scale)) var(--sans); cursor: pointer; }
+  :is(#chatpane, #chatfull) .tkopt:hover { border-color: var(--accent); }
+  :is(#chatpane, #chatfull) .tkopt.on { border-color: var(--accent); background: var(--sel); color: var(--accent); }
+  :is(#chatpane, #chatfull) .tkopt .rec { color: var(--muted); font: calc(10px * var(--text-scale)) var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+  :is(#chatpane, #chatfull) .tkrec, :is(#chatpane, #chatfull) .tkans { margin: 0; color: var(--muted); font: calc(12px * var(--text-scale))/1.4 var(--sans); }
+  :is(#chatpane, #chatfull) .tkans { color: var(--accent); font-family: var(--mono); }
+  :is(#chatpane, #chatfull) .tktext { display: flex; gap: 6px; width: 100%; }
+  :is(#chatpane, #chatfull) .tktext input { flex: 1; min-width: 0; padding: 5px 8px; border: var(--border) solid var(--line); border-radius: var(--radius-sm); background: var(--bg); color: var(--ink); font: calc(13px * var(--text-scale)) var(--sans); }
+  :is(#chatpane, #chatfull) .tka { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  :is(#chatpane, #chatfull) .tkall { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  :is(#chatpane, #chatfull) .tkallw { color: var(--muted); font: calc(11px * var(--text-scale)) var(--mono); }
+  :is(#chatpane, #chatfull) :is(.tka, .tkall, .tkq, .tkundo) .qa { display: inline-flex; align-items: center; padding: 4px 12px; border: var(--border) solid var(--line); border-radius: var(--radius-pill); background: var(--card); color: var(--ink); font: calc(12px * var(--text-scale)) var(--mono); text-decoration: none; cursor: pointer; }
+  :is(#chatpane, #chatfull) :is(.tka, .tkall, .tkq, .tkundo) .qa:hover { border-color: var(--accent); }
+  :is(#chatpane, #chatfull) :is(.tka, .tkall, .tkq, .tkundo) .qa.go { border-color: var(--accent); color: var(--accent); }
+  :is(#chatpane, #chatfull) :is(.tka, .tkall) .qa.prim { background: var(--accent); color: var(--bg); }
+  :is(#chatpane, #chatfull) .tka .qa.warn { color: var(--err-fg); border-color: var(--err-line); }
+  :is(#chatpane, #chatfull) .tka .qa.mut { color: var(--muted); }
+  :is(#chatpane, #chatfull) .qa:disabled { opacity: .5; cursor: default; }
+  :is(#chatpane, #chatfull) .tkdots { display: none !important; }
+  :is(#chatpane, #chatfull) .tkundo { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: var(--radius-md); background: var(--err-bg); color: var(--err-fg); font: calc(12px * var(--text-scale)) var(--mono); }
+  :is(#chatpane, #chatfull) .tkerr { margin: 0; color: var(--err-fg); font: calc(12px * var(--text-scale)) var(--sans); }
+  @media (pointer: coarse) { :is(#chatpane, #chatfull) :is(.tka, .tkall, .tkq, .tkundo) .qa, :is(#chatpane, #chatfull) .tkopt { min-height: 36px; } }
+  @media (max-width: 760px) {
+    :is(#chatpane, #chatfull) .tkcards { max-width: none; width: 100%; }
+    :is(#chatpane, #chatfull) .tka { flex-wrap: nowrap; }
+    :is(#chatpane, #chatfull) .tka:not(.all) .qa.rest { display: none; }
+    :is(#chatpane, #chatfull) .tkdots { display: inline-flex !important; margin-left: auto; }
+    :is(#chatpane, #chatfull) .tka.all { flex-wrap: wrap; }
   }
-  :is(#chatpane, #chatfull) .tcard:hover { border-color: var(--accent); }
-  :is(#chatpane, #chatfull) .tcard .tctitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  :is(#chatpane, #chatfull) .tcard .tcstatus { padding: 1px 6px; border-radius: var(--radius-sm); font-size: calc(10.5px * var(--text-scale)); background: var(--st-bg); color: var(--st-fg); }
   :is(#chatpane, #chatfull) .swait { display: flex; gap: 8px; align-items: center; background: none; padding: 0 0 0 38px; font: calc(11.5px * var(--text-scale)) var(--mono); color: var(--live); }
   /* CHAT-18: the live work under the last turn — "builder is on it", a
      pulsing dot, the newest steps in a box that scrolls to the rest; stale

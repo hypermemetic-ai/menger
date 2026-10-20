@@ -3519,6 +3519,24 @@ restore in it and on a resync; each row is a row-cache row, so a status,
 an input or a deploy moves its pill live. No tickets, no strip.
 `scripts/chat-strip-check.mjs` checks it in a browser.
 
+#### Ticket cards that act (CHAT-56)
+
+A ticket named on a line of its own in a message (the builder's "I filed"
+line; in bold, code or a list item too, never inside a fence) is a **card**
+under the message: id, title, status, where it runs per environment, and
+its open or answered questions. The card acts with the caller's own grants:
+**go** (Pending → Ready), **drop** (→ Canceled, with **undo** for 10 s,
+which puts back what the cancel canceled), **open**, and **ask again**
+(`@builder about ID: ` in the composer). A message naming two or more
+Pending tickets gets **go all N** (one `update_many`). A decision, a multi
+or a text question is answered on the card through `tickets inputs answer`;
+the card then shows the answer, and the input stays the agent's to close.
+Each card is a row-cache row, so it moves live. A code the reader cannot
+read gets no card and stays a chip; a code named only in a sentence is a
+chip. On a phone a card is the turn's width, its actions one row (⋯ for the
+rest), its questions folded to "N questions"; on a wide screen it is at
+most 560 px. `scripts/chat-card-check.mjs` checks it in a browser.
+
 #### Direct messages and groups (CHAT-14)
 
 A chat may be **outside tickets** (owner, 2026-10-17: *"I think we should

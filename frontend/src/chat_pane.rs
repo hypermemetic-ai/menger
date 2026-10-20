@@ -1010,6 +1010,14 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                     }
                 }),
                 Some("select") => selecting.set(Some([mid].into())),
+                // CHAT-56: a card's *ask again* — the composer, addressed.
+                Some("ask") => {
+                    let tid = btn.get_attribute("data-ticket").unwrap_or_default();
+                    body.set(crate::chat_cards::ask_text(&tid));
+                    if let Some(b) = dom::window().document().and_then(|d| d.query_selector(".ccompose .cbox").ok().flatten()).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
+                        let _ = b.focus();
+                    }
+                }
                 Some("quote") => body.update(|b| b.push_str(&turns::quoted(&text_of(mid)))),
                 Some("link") => {
                     let w = dom::window();
@@ -1044,7 +1052,8 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         if el.closest(".tacts").ok().flatten().is_none() {
             unhold();
         }
-        if ev.pointer_type() != "touch" || selecting.with_untracked(Option::is_some) {
+        // CHAT-56: a card's buttons are taps, never the turn's long press.
+        if ev.pointer_type() != "touch" || selecting.with_untracked(Option::is_some) || el.closest(".tkcards").ok().flatten().is_some() {
             return;
         }
         let Some(turn) = el.closest(".turn").ok().flatten() else { return };
@@ -1248,8 +1257,8 @@ fn alone_view(ticket: &str, body: RwSignal<String>) -> impl IntoView {
 fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str) -> String) -> impl IntoView {
     let who = m.name.clone().unwrap_or_else(|| name(&m.author));
     let agent = chats::is_agent(&m.author) || m.via.is_some();
-    // A ticket card follows its row: drawn once the app holds the ticket,
-    // its status live.
+    // CHAT-56: a code alone on its line is a card under the turn
+    // (src/chat_cards.rs), live.
     // CHAT-8: past 200 lines, the head and *show all N lines*, the rest
     // rendered a chunk of blocks a task (src/scale.rs's split_long).
     let (head, rest, lines) = {
@@ -1258,10 +1267,7 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
     };
     let html = {
         let head = head.clone();
-        Memo::new(move |_| {
-            let card = |code: &str| crate::cache::find(code).map(|r| r.with(|t| (t.title.clone(), t.status.to_string())));
-            turns::source_html(&head, &card)
-        })
+        Memo::new(move |_| turns::source_html(&head))
     };
     let chunks = RwSignal::new(Vec::<String>::new());
     let showing = RwSignal::new(false);
@@ -1274,8 +1280,7 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
         spawn_local(async move {
             let parts = rest.try_get_value().unwrap_or_default();
             for part in parts {
-                let card = |code: &str| crate::cache::get(code).map(|r| r.with_untracked(|t| (t.title.clone(), t.status.to_string())));
-                let h = turns::source_html(&part, &card);
+                let h = turns::source_html(&part);
                 if chunks.try_update(|c| c.push(h)).is_none() {
                     return;
                 }
@@ -1332,6 +1337,7 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
         </div>
     };
     let mid = m.id.get().to_string();
+    let cards = view! { <crate::chat_cards::Cards body=m.body.clone() /> };
     if mine {
         view! {
             <div class="turn mine pmsg" class:fresh=fresh data-message-id=mid>
@@ -1340,6 +1346,7 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
                     {tail}
                     {more}
                 </div>
+                {cards}
                 <div class="tmeta"><span title=fmt_unix(m.at)>{format!("{who} · {}", clock(m.at))}</span>{acts}</div>
             </div>
         }
@@ -1360,6 +1367,7 @@ fn turn_view(m: Message, mine: bool, fresh: bool, del: bool, name: &impl Fn(&str
                         {tail}
                         {more}
                     </div>
+                    {cards}
                     {acts}
                 </div>
             </div>
