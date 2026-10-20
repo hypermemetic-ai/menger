@@ -523,6 +523,14 @@ export interface Message {
     id: MessageId;
     /** The name the author went by when it wrote it, when signed in with one. */
     name?: string | null;
+    /** CHAT-66: what the reply's quoted header draws — the original's author
+  and first words, as it is now (deleted: said so). Answered with the
+  message, never stored. */
+    quote?: Quote | null;
+    /** CHAT-66: the message it answers — its body's leading
+  `[↩](message:<id>)` ([`crate::chat_reply::reply_to_in`]), read by the
+  server so no client parses it; always a message of the same chat. */
+    replyTo?: MessageId | null;
     /** AGENT-3: the process that held the agent who wrote it (its claimant).
   Kept, never set by a call; `None` until agents claim. */
     via?: string | null;
@@ -551,6 +559,18 @@ export type Placement = PlacementWave | PlacementDone | PlacementMissingBlocker;
 export declare function isPlacementWave(e: Placement): e is PlacementWave;
 export declare function isPlacementDone(e: Placement): e is PlacementDone;
 export declare function isPlacementMissingBlocker(e: Placement): e is PlacementMissingBlocker;
+/** CHAT-66: the original a reply answers, as its header draws it. */
+export interface Quote {
+    /** Its author's principal. */
+    author: string;
+    /** CHAT-44: it was deleted. */
+    deleted?: boolean;
+    id: MessageId;
+    /** The name its author went by, when it had one. */
+    name?: string | null;
+    /** Its first words ([`crate::chat_reply::snippet`]); empty once deleted. */
+    snippet: string;
+}
 /** How bad a gap is (any case) */
 export type Severity = "Critical" | "High" | "Medium" | "Low";
 /** A shortcode's identity, minted by the store: its code for a shortcode made before ORG-3, CODE.N for a namesake made after */

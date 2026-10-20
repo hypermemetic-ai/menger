@@ -223,6 +223,11 @@ async fn pair(p: PairArgs) -> anyhow::Result<()> {
         wait: std::time::Duration::from_secs(p.wait_secs),
         poll: std::time::Duration::from_secs(p.poll_secs.max(1)),
         env_file: p.env_file.or_else(pair::default_env_file),
+        // TETHER-12: colours only where a person reads it, and not when told not to.
+        paint: match std::io::IsTerminal::is_terminal(&std::io::stdout()) && std::env::var_os("NO_COLOR").is_none() {
+            true => pair::Paint::Ansi,
+            false => pair::Paint::Plain,
+        },
     };
     pair::run(&cfg, &mut std::io::stdout()).await.map(|_| ())
 }

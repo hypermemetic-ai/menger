@@ -5,7 +5,7 @@
 //!
 //! The code is the first [`CODE_CHARS`] characters of the RFC 4648 base32
 //! of the SHA-256 of the key's 32 public bytes, grouped by four
-//! (`K7QF-29XM`): derived from the key alone, so the server keeps nothing
+//! (`MMG4-2KLG`): derived from the key alone, so the server keeps nothing
 //! for it. 40 bits: enough that a key crafted to show the same code costs
 //! about 2^40 tries — and a person compares it once, while they wait.
 
@@ -44,6 +44,25 @@ pub fn code(principal: &str) -> Option<String> {
     key_bytes(principal).map(|k| code_of_key(&k))
 }
 
+/// TETHER-12: a code as a person types it — `mmg4 2klg`, `K7QF29XM`,
+/// `k7qf-29xm` — in its one spelling, `MMG4-2KLG`; `None` when it is not
+/// [`CODE_CHARS`] characters of the alphabet once spaces and dashes go.
+pub fn normalize(typed: &str) -> Option<String> {
+    let chars: String = typed.chars().filter(|c| !c.is_whitespace() && *c != '-').map(|c| c.to_ascii_uppercase()).collect();
+    let ok = chars.len() == CODE_CHARS && chars.bytes().all(|b| ALPHABET.contains(&b));
+    ok.then(|| format!("{}-{}", &chars[..4], &chars[4..]))
+}
+
+/// TETHER-12: what a person pastes for a machine — `key:<hex>` or the bare
+/// 64 hex, either case, spaces around — as its principal, `key:<hex>` in
+/// lower case; `None` for anything else.
+pub fn principal_of(pasted: &str) -> Option<String> {
+    let t = pasted.trim();
+    let hex = t.strip_prefix("key:").or_else(|| t.strip_prefix("KEY:")).unwrap_or(t).to_ascii_lowercase();
+    let p = format!("key:{hex}");
+    (hex.bytes().all(|b| b.is_ascii_hexdigit()) && key_bytes(&p).is_some()).then_some(p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,6 +80,27 @@ mod tests {
         let c = code(FIXTURE).unwrap();
         assert_eq!(c.len(), CODE_CHARS + 1);
         assert!(c.chars().all(|ch| ch == '-' || ALPHABET.contains(&(ch as u8))));
+    }
+
+    #[test]
+    fn a_typed_code_in_any_spelling_is_the_code() {
+        for typed in ["MMG4-2KLG", "mmg4-2klg", "mmg42klg", " mmg4 2klg ", "MMG4 - 2KLG", "m-m-g-4-2-k-l-g"] {
+            assert_eq!(normalize(typed).as_deref(), Some("MMG4-2KLG"), "{typed}");
+        }
+        for bad in ["", "MMG4-2KL", "MMG4-2KLGX", "MMG4-2KL1", "MMG4_2KLG", "MMG4-2KL8"] {
+            assert!(normalize(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_pasted_key_is_its_principal() {
+        let hex = &FIXTURE[4..];
+        for pasted in [FIXTURE.to_string(), hex.to_string(), hex.to_uppercase(), format!("  {FIXTURE}\n"), format!("KEY:{}", hex.to_uppercase())] {
+            assert_eq!(principal_of(&pasted).as_deref(), Some(FIXTURE), "{pasted}");
+        }
+        for bad in ["", "key:", "idp:4b1c", &hex[2..], "MMG4-2KLG", &format!("+1{}", &hex[2..])] {
+            assert!(principal_of(bad).is_none(), "{bad}");
+        }
     }
 
     #[test]

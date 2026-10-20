@@ -217,6 +217,9 @@ fn who_granted_and_who_holds_read_as_their_text() {
     assert!(EVERYONE.parse::<Principal>().is_err());
     assert!(matches!("team:everyone".parse::<Grantee>(), Ok(Grantee::Team(_))), "a team named everyone is a team");
     holds::<TeamName>(&["release-crew", "a1"], &["", "1a", "a-", "A", &"a".repeat(33)]);
+    // TETHER-12: a code as typed, kept in its one spelling.
+    holds::<PairingCode>(&["MMG4-2KLG", "mmg4 2klg", "MMG42KLG"], &["", "MMG4-2KL", "MMG4-2KL1", "key:00"]);
+    assert_eq!("mmg4 2klg".parse::<PairingCode>().unwrap().as_str(), "MMG4-2KLG");
 }
 
 #[test]

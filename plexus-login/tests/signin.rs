@@ -522,6 +522,13 @@ async fn return_to_stays_on_this_origin_or_a_listed_one() {
     let out = b.social("github", "https://evil.example/").await;
     let done = b.get(&out.location.unwrap()).await;
     assert_eq!(done.location.as_deref(), Some("/"));
+    // TETHER-12: a place in the app after the `#` (the login page's script
+    // puts it in `next`) comes back whole, query and all.
+    let pair = "/#/pair?principal=key:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f&name=alice-laptop";
+    let b = Browser::new(&a);
+    let out = b.social("github", pair).await;
+    let done = b.get(&out.location.unwrap()).await;
+    assert_eq!(done.location.as_deref(), Some(pair));
 }
 
 #[tokio::test]

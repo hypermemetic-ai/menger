@@ -1,5 +1,5 @@
 import type { RpcClient } from '../rpc';
-import type { MembersEvent, ScopeRef, TeamName } from './types';
+import type { MembersEvent, PairingCode, ScopeRef, TeamName } from './types';
 import type { Principal, Role } from '../orgs/types';
 import type { MembersTeamsClient } from '../members/teams/client';
 /** Typed client interface for members plugin */
@@ -45,6 +45,18 @@ export interface MembersClient {
      */
     mine(): AsyncGenerator<MembersEvent>;
     /**
+     * The machines waiting whose pairing code is this one (TETHER-12: a code typed on #/pair).
+  
+  One `waiting { principal, name, provider, since }` per key on the
+  waiting list whose code ([`crate::pairing`]) is `code` — none, one,
+  or (at 40 bits, rarely) several; nothing else of the list. Needs
+  admin somewhere: whoever can grant a machine anything.
+     * @requiresAuth — resolver: self.access.verify
+     * @server-derived auth
+     * @requires `members.pairing` anywhere it is held
+     */
+    pairing(code: PairingCode): AsyncGenerator<MembersEvent>;
+    /**
      * Who signed in without a grant, waiting for an admin.
   
   Everyone who signed in and holds no grant yet, oldest first: one
@@ -88,6 +100,10 @@ export declare const requires: {
     };
     readonly "members.mine": {
         readonly grant: "members.mine";
+        readonly target: null;
+    };
+    readonly "members.pairing": {
+        readonly grant: "members.pairing";
         readonly target: null;
     };
     readonly "members.requests": {

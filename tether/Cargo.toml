@@ -59,7 +59,9 @@ clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.6", features = ["v4"] }
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
 jsonrpsee = { version = "0.26", features = ["client", "ws-client", "server", "macros"] }
+rqrr = { version = "0.11", default-features = false }

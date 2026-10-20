@@ -78,8 +78,15 @@ async fn pair_waits_for_the_grant_an_admin_gives_and_writes_tether_env() {
     assert!(head.contains(&principal) && head.contains("test-box") && !head.contains("made just now"), "{head}");
     let c = next_until(&mut lines, &log, "the code", &|l| l.trim_start().starts_with("code"), &mut said).await;
     assert_eq!(c.split_whitespace().last(), Some(code.as_str()));
+    // TETHER-12: the QR code came before it, the key after it.
+    assert!(said.iter().filter(|l| l.contains('█') || l.contains('▀')).count() >= 20, "a QR code: {said:#?}");
+    let k = next_until(&mut lines, &log, "the key", &|l| l.trim_start().starts_with("key "), &mut said).await;
+    assert_eq!(k.split_whitespace().last(), Some(principal.as_str()));
     let url = next_until(&mut lines, &log, "the URL", &|l| l.trim_start().starts_with("open"), &mut said).await;
     assert_eq!(url.split_whitespace().last().unwrap(), format!("http://127.0.0.1:9/#/pair?principal={principal}&name=test-box"));
+    let any = next_until(&mut lines, &log, "any one works", &|l| l.starts_with("Any one of them works"), &mut said).await;
+    assert!(any.contains("scan, or go to 127.0.0.1:9/#/pair and type the code"), "{any}");
+    assert!(!said.iter().any(|l| l.contains('\x1b')), "no colours into a pipe");
     let how = next_until(&mut lines, &log, "what to do", &|l| l.contains("then Pair"), &mut said).await;
     assert!(how.starts_with("Open it on any device"), "--no-browser opens nothing: {how}");
     next_until(&mut lines, &log, "waiting", &|l| l.starts_with("Waiting for the grant"), &mut said).await;

@@ -142,3 +142,15 @@ pub(super) fn requests_stream(access: Access, user: VerifiedUser) -> impl Stream
         }
     }
 }
+
+/// TETHER-12: `members.pairing` — the gate admitted it held somewhere (admin
+/// on a shortcode); the waiting keys whose pairing code is `code`, and none
+/// of the rest of the list. A code is 40 bits of the key's hash: naming one
+/// tells only who shows it, as the terminal beside the person does.
+pub(super) fn pairing_stream(access: Access, code: crate::vocab::PairingCode) -> impl Stream<Item = MembersEvent> + Send + 'static {
+    stream! {
+        for w in access.waiting().into_iter().filter(|w| crate::pairing::code(&w.principal).as_deref() == Some(code.as_str())) {
+            yield MembersEvent::Waiting { principal: w.principal, name: w.name, provider: w.provider, since: w.since };
+        }
+    }
+}

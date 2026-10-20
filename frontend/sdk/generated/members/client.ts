@@ -3,7 +3,7 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { MembersEvent, ScopeRef, TeamName } from './types';
+import type { MembersEvent, PairingCode, ScopeRef, TeamName } from './types';
 import type { Principal, Role } from '../orgs/types';
 import type { MembersTeamsClient } from '../members/teams/client';
 import { createMembersTeamsClient } from '../members/teams/client';
@@ -50,6 +50,18 @@ caller holds — its own, each team's (`principal: team:<name>`) and
    * @requires `members.mine` anywhere it is held
    */
   mine(): AsyncGenerator<MembersEvent>;
+  /**
+   * The machines waiting whose pairing code is this one (TETHER-12: a code typed on #/pair).
+
+One `waiting { principal, name, provider, since }` per key on the
+waiting list whose code ([`crate::pairing`]) is `code` — none, one,
+or (at 40 bits, rarely) several; nothing else of the list. Needs
+admin somewhere: whoever can grant a machine anything.
+   * @requiresAuth — resolver: self.access.verify
+   * @server-derived auth
+   * @requires `members.pairing` anywhere it is held
+   */
+  pairing(code: PairingCode): AsyncGenerator<MembersEvent>;
   /**
    * Who signed in without a grant, waiting for an admin.
 
@@ -105,6 +117,11 @@ class MembersClientImpl implements MembersClient {
     yield* extractData<MembersEvent>(stream);
   }
 
+  async *pairing(code: PairingCode): AsyncGenerator<MembersEvent> {
+    const stream = this.rpc.call('members.pairing', { code });
+    yield* extractData<MembersEvent>(stream);
+  }
+
   async *requests(): AsyncGenerator<MembersEvent> {
     const stream = this.rpc.call('members.requests', {});
     yield* extractData<MembersEvent>(stream);
@@ -131,6 +148,7 @@ export const requires = {
   "members.grant": { grant: "members.grant", target: "scope" },
   "members.list": { grant: "members.list", target: null },
   "members.mine": { grant: "members.mine", target: null },
+  "members.pairing": { grant: "members.pairing", target: null },
   "members.requests": { grant: "members.requests", target: null },
   "members.revoke": { grant: "members.revoke", target: "scope" },
   "members.schema": { grant: "members.schema", target: null },

@@ -479,6 +479,7 @@ pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
                 <a href="#/deployments" aria-current=cur(|r| matches!(r, Route::Deployments(_)))>"deployments"</a>
                 <a href="#/components" aria-current=cur(|r| matches!(r, Route::Components(_)))>"components"</a>
                 {move || admin.get().then(|| view! { <a href="#/members" aria-current=cur(|r| matches!(r, Route::Members))>"members"</a> })}
+                {move || admin.get().then(|| view! { <a href="#/pair" aria-current=cur(|r| matches!(r, Route::Pair))>"pair a machine"</a> })}
                 <a href="#/settings" aria-current=cur(|r| matches!(r, Route::Settings))>"settings"</a>
             </div>
         </div>

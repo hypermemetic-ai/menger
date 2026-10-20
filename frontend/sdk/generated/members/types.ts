@@ -87,6 +87,10 @@ export function isMembersEventTeamLeft(e: MembersEvent): e is MembersEventTeamLe
 export function isMembersEventTeamDeleted(e: MembersEvent): e is MembersEventTeamDeleted { return e.type === 'team_deleted'; }
 export function isMembersEventError(e: MembersEvent): e is MembersEventError { return e.type === 'error'; }
 
+/** TETHER-12: a machine's pairing code as a person types it, kept in
+its one spelling (`mmg4 2klg` is `MMG4-2KLG`). */
+export type PairingCode = string;
+
 /** ORG-4: a scope as a call writes it (ACCESS-37's grammar) — `*`, an
 organization (`acme:`), or a shortcode in one by any short form of
 its address (`acme:MENGER/THEME`, `IDENTITY`), its codes upper case:
