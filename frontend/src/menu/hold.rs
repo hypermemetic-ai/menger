@@ -228,7 +228,7 @@ mod tests {
         let css = crate::tokens_lint::app_css();
         assert!(css.contains(r##":is([data-ticket-id], a[href^="#/ticket/"]) { -webkit-touch-callout: none; }"##));
         assert!(css.contains(r##":is([data-ticket-id]:not(section), a[href^="#/ticket/"]) { -webkit-user-select: none; user-select: none; }"##));
-        assert!(css.contains(":is(#tmenu, #tagmenu)[data-sheet] {"));
+        assert!(css.contains(":is(#tmenu, #tagmenu, #dmenu)[data-sheet] {"), "DEPLOY-47: the deployment menu is a sheet too");
         let sdk = include_str!("../../sdk/menger-sdk.js");
         assert!(sdk.contains("'[data-ticket-id], m-ticket { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }'"));
     }

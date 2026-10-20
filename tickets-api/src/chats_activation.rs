@@ -92,7 +92,8 @@ impl ChatsActivation {
     /// add to later (CHAT-6); every one of them must be able to read the
     /// ticket, or the call is `refused { reasons }`, naming each who cannot,
     /// and nothing is made. A ticket the caller cannot read is refused as
-    /// one that is none. CHAT-14: without a ticket, one other is a direct
+    /// one that is none. DEPLOY-47: on a ticket, a `title` finds only their
+    /// open chat of that title — a chat per subject. CHAT-14: without a ticket, one other is a direct
     /// message (the one the two have, when they have one) and several a
     /// group (`title` names it); each must hold a grant in the caller's
     /// organization, and only its participants read it. `watch` carries

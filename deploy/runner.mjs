@@ -47,7 +47,9 @@
 //
 // One request at a time, in the order taken. Each step's output is kept in
 // --state-dir/runs/<request>/<step>.log and served at GET /runs/<request>/<step>.log
-// (the step's url); a failed step's last lines are its detail.
+// (the step's url); DEPLOY-47: every ended step's detail is its command and its
+// last 40 lines (stepLog, at most 4000 bytes), so the app has the log to quote
+// when the owner asks the builder about it — the url is this machine's alone.
 //
 //   node deploy/runner.mjs --listen [--port 4475] --secret-file ~/.config/menger/deploy-runner.secret
 //   node deploy/runner.mjs --watch
@@ -128,6 +130,14 @@ export function tail(text, lines = 30, max = 4000) {
   let t = text.trimEnd().split("\n").slice(-lines).join("\n");
   while (Buffer.byteLength(t) > max) t = t.slice(t.indexOf("\n") + 1 || 1);
   return t;
+}
+
+/** DEPLOY-47: an ended step's detail — `$ <command>`, then its log's last
+ * `lines` (`exit N` when it printed nothing), the whole at most `max` bytes. */
+export function stepLog(command, out, lines = 40, max = 4000, code = 0) {
+  const head = `$ ${command}`.slice(0, 500);
+  const body = tail(out || "", lines, Math.max(0, max - Buffer.byteLength(head) - 1)) || (code ? `exit ${code}` : "");
+  return body ? `${head}\n${body}` : head;
 }
 
 function options(argv, env = process.env) {
@@ -291,7 +301,8 @@ export class Runner {
     }
     for (; i < plan.length; i++) {
       const s = plan[i];
-      const begun = await this.step(job, s.name, "started", { detail: `${Object.entries(s.env || {}).map(([k, v]) => `${k}=${v} `).join("")}deploy/pipeline ${s.argv(job).join(" ")}`, url: this.urlOf(job, s) });
+      const cmd = `${Object.entries(s.env || {}).map(([k, v]) => `${k}=${v} `).join("")}deploy/pipeline ${s.argv(job).join(" ")}`;
+      const begun = await this.step(job, s.name, "started", { detail: cmd, url: this.urlOf(job, s) });
       if (begun.refused || begun.request?.cancel_asked_at) {
         outcome = "canceled";
         if (!begun.refused) await this.step(job, s.name, "canceled");
@@ -301,9 +312,9 @@ export class Runner {
       if (s.records) recorded = true;
       // The runner's own closing record must name the release too, or it overwrites the pipeline's with none.
       if (!GUARDS[job.environment]) job.release ||= releaseIn(res.out) || "";
-      if (res.canceled) { outcome = "canceled"; await this.step(job, s.name, "canceled", { detail: tail(res.out) || undefined }); break; }
-      if (res.code !== 0) { outcome = "failed"; await this.step(job, s.name, "failed", { detail: tail(res.out) || `exit ${res.code}`, url: this.urlOf(job, s) }); break; }
-      await this.step(job, s.name, "succeeded", { url: this.urlOf(job, s) });
+      if (res.canceled) { outcome = "canceled"; await this.step(job, s.name, "canceled", { detail: stepLog(cmd, res.out) }); break; }
+      if (res.code !== 0) { outcome = "failed"; await this.step(job, s.name, "failed", { detail: stepLog(cmd, res.out, 40, 4000, res.code), url: this.urlOf(job, s) }); break; }
+      await this.step(job, s.name, "succeeded", { detail: stepLog(cmd, res.out), url: this.urlOf(job, s) });
     }
     for (const s of plan.slice(i + 1)) await this.step(job, s.name, outcome === "canceled" ? "canceled" : "skipped");
     this.log(`request ${job.request}: ${outcome}`);

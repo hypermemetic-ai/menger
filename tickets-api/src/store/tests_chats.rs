@@ -345,6 +345,21 @@ async fn a_chat_closes_read_only_and_reopens() {
     assert!(matches!(e, ChatError::Refused(_)));
 }
 
+/// DEPLOY-47: a titled chat is found again by its title — a chat per
+/// subject among the same people on one ticket; untitled, the set's.
+#[tokio::test]
+async fn a_titled_chat_is_found_again_by_its_title() {
+    let store = kiln().await;
+    let titled = |t: &str| store.open_chat(SYS.permit::<Viewer>("KILN-7"), Signer::named(ADA), vec![BUILDER.into()], Some(t.into()), reads);
+    let (a, made) = titled("deploy test r1").await.unwrap();
+    assert!(!made);
+    assert_eq!(titled(" deploy test r1 ").await.unwrap(), (a.clone(), true), "the same title: the same chat");
+    let (b, made) = titled("deploy test r2").await.unwrap();
+    assert!(!made && b.id != a.id, "another title: another chat");
+    assert_eq!(b.title.as_deref(), Some("deploy test r2"));
+    assert_eq!(open(&store, ADA, "KILN-7", &[BUILDER]).await.unwrap().1, true, "untitled: the set's open chat, whatever its title");
+}
+
 /// The tickets `filter` admits, as `me` reads it.
 fn admitted(store: &Store, me: &str, filter: &str) -> Vec<String> {
     let lens = Lens::parse(filter).unwrap().with_clock(Clock { me: me.into(), ..Clock::default() });

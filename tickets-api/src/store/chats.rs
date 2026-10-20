@@ -729,7 +729,9 @@ impl Store {
     /// — each of `with` one `reads` says can read the ticket; CHAT-6: `with`
     /// may name no one, and the chat is `by`'s alone — or answers
     /// the open chat those participants already have there (`true`), and
-    /// writes nothing.
+    /// writes nothing. DEPLOY-47: with a `title`, the one of theirs there
+    /// with that title — a chat per subject (`deploy test <release>`), so
+    /// another title on the same ticket among the same people opens anew.
     pub async fn open_chat(&self, on: Permit<Viewer>, by: Signer, with: Vec<String>, title: Option<String>, reads: impl Fn(&str) -> bool) -> Result<(ChatRecord, bool), ChatError> {
         let key = on.id().as_str().to_string();
         let mut set: Vec<String> = vec![by.principal.clone()];
@@ -760,12 +762,13 @@ impl Store {
         let (record, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let wanted: BTreeSet<&str> = set.iter().map(String::as_str).collect();
-            let same = cache.chats.by_id.values().find(|c| c.state == ChatState::Open && !c.kind.outside() && c.set() == wanted && cache.resolve(&c.ticket).ok().as_deref() == Some(key.as_str()));
+            let title = title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+            let titled = |c: &ChatRecord| title.is_none() || c.title == title;
+            let same = cache.chats.by_id.values().find(|c| c.state == ChatState::Open && !c.kind.outside() && c.set() == wanted && titled(c) && cache.resolve(&c.ticket).ok().as_deref() == Some(key.as_str()));
             if let Some(c) = same {
                 return Ok((c.clone(), true));
             }
             let parts = set.iter().map(|p| Part { principal: p.clone(), added_by: by.principal.clone(), added_at: now, read_upto: 0, granted: None }).collect();
-            let title = title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
             let record = ChatRecord { id: cache.chats.next_chat(), ticket: key.clone(), title, state: ChatState::Open, opened_by: by.principal.clone(), opened_at: now, parts, kind: ChatKind::Ticket, org: String::new() };
             (record, self.chats_before(&cache, &key))
         };

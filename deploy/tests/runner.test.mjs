@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { GUARDS, PLANS, Runner, releaseIn, shaOf, signed, tail, unowned } from "../runner.mjs";
+import { GUARDS, PLANS, Runner, releaseIn, shaOf, signed, stepLog, tail, unowned } from "../runner.mjs";
 
 const SECRET = "runner-test-secret-0123456789";
 const sign = (body) => "sha256=" + crypto.createHmac("sha256", SECRET).update(body).digest("hex");
@@ -35,6 +35,18 @@ test("a log's tail: its last lines, at most the bytes asked", () => {
   const log = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n") + "\n";
   assert.equal(tail(log, 3), "line 97\nline 98\nline 99");
   assert.ok(Buffer.byteLength(tail("x".repeat(9000) + "\nend", 30, 4000)) <= 4000);
+});
+
+test("DEPLOY-47: an ended step's detail is its command and its last 40 lines, at most 4000 bytes", () => {
+  const log = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n") + "\n";
+  const d = stepLog("deploy/pipeline build abc1234", log);
+  assert.equal(d.split("\n")[0], "$ deploy/pipeline build abc1234");
+  assert.equal(d.split("\n").length, 41);
+  assert.equal(d.split("\n")[1], "line 60");
+  assert.ok(d.endsWith("line 99"));
+  assert.ok(Buffer.byteLength(stepLog("x", "y".repeat(9000) + "\nend")) <= 4000);
+  assert.equal(stepLog("x", "", 40, 4000, 2), "$ x\nexit 2");
+  assert.equal(stepLog("x", ""), "$ x");
 });
 
 test("test's plan: build the tip, then deploy test naming the request", () => {
@@ -133,6 +145,9 @@ test("the owner's request runs the three steps in order; only app-prod's records
   assert.deepEqual(r.ran(), [`ghcr||image ${REL}`, `||remote test --image ghcr.io/hypermemetic-ai/menger:${REL}`, "|21|remote prod"]);
   assert.deepEqual(r.steps(), ["image:started", "image:succeeded", "app-test:started", "app-test:succeeded", "app-prod:started", "app-prod:succeeded"]);
   assert.match(r.calls.find(([m, p]) => m === "deployments.step" && p.name === "image").at(1).detail, /^IMAGE_STORE=ghcr deploy\/pipeline image /);
+  // DEPLOY-47: a step that succeeded sends its log's tail, so the app can quote it.
+  const done = r.calls.find(([m, p]) => m === "deployments.step" && p.name === "app-test" && p.state === "succeeded").at(1).detail;
+  assert.match(done, /^\$ deploy\/pipeline remote test --image \S+\nfake pipeline: remote test --image /);
 });
 
 test("a failing step stops the plan: the rest skipped, app-prod never runs, the request failed", async () => {
