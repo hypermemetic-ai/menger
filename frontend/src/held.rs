@@ -79,6 +79,10 @@ pub(crate) fn names_from_attr(attr: Option<&str>) -> HashSet<String> {
 /// ticket's body) whose markup names `names` is handed it — see the
 /// module's doc. In `all`'s order.
 pub(crate) fn held_registry(all: &[Component], reach: Option<&Reach>, names: &HashSet<String>) -> Vec<Component> {
+    // CHAT-59: a frame that reads as the reader (a message outside any
+    // ticket) is handed what its markup names, as one with no reach — its
+    // reads reach everything the reader may, its registry no further.
+    let reach = reach.filter(|r| !r.reader);
     let inside = |id: &str| reach.is_some_and(|r| r.holds_id(id));
     let mut held: HashSet<&str> = all
         .iter()
@@ -258,5 +262,17 @@ mod tests {
         assert_eq!((k.ticket("SECRET-4"), k.shortcode("SECRET")), (None, None));
         let k = bounded_known(&All, None);
         assert_eq!((k.ticket("SUB-4"), k.shortcode("AREA")), (None, None));
+    }
+
+    /// CHAT-59: a frame that reads as the reader is handed what its markup
+    /// names and what that uses — never every component the reader sees.
+    #[test]
+    fn a_reader_s_frame_is_handed_what_it_names() {
+        let all = registry();
+        let me = Reach::reader();
+        assert!(held_registry(&all, Some(&me), &HashSet::new()).is_empty());
+        let held = held_registry(&all, Some(&me), &names_in("<m-area-chart>"));
+        assert_eq!(names(&held), ["m-area-chart", "m-badge"]);
+        assert_eq!(held[1].references, ["m-area-chart"], "no ticket's id");
     }
 }

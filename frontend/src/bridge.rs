@@ -334,6 +334,22 @@ pub(crate) fn scope_of(ticket: Option<&str>) -> Option<String> {
     ticket.map(shortcode_of).filter(|e| shortcode_ok(e))
 }
 
+/// CHAT-59: the scope of a frame that reads as **the reader** — a message
+/// in a chat with no ticket (a direct message, a group). Its reads go as
+/// asked and the server answers each from the reader's own grants: what
+/// the reader could read anyway, never the author's. Only the host stamps
+/// it (src/chat_frames.rs); no shortcode is spelled so.
+pub(crate) const READER: &str = "*";
+
+/// A scope the host passes a frame (`Frame`'s `scope`): a shortcode, as
+/// [`scope_of`] reads it, or [`READER`].
+pub(crate) fn scope_named(scope: Option<&str>) -> Option<String> {
+    match scope.map(str::trim) {
+        Some(READER) => Some(READER.to_string()),
+        other => scope_of(other),
+    }
+}
+
 /// The filter a frame scoped to `epic` reads under: `under EPIC`, ANDed
 /// with the frame's own (`theirs`, when it says anything) — or why not: a
 /// filter the language does not take, named.
@@ -356,6 +372,9 @@ pub(crate) struct Reach {
     pub(crate) epic: String,
     pub(crate) epics: HashSet<String>,
     pub(crate) tickets: u64,
+    /// CHAT-59: the reader's whole reach ([`READER`]) — every shortcode is
+    /// inside, as the server answers the reader.
+    pub(crate) reader: bool,
 }
 
 impl Reach {
@@ -363,13 +382,19 @@ impl Reach {
     /// wider than its answer).
     pub(crate) fn only(epic: &str) -> Self {
         let epic = epic.to_ascii_uppercase();
-        Self { epics: HashSet::from([epic.clone()]), epic, tickets: 0 }
+        Self { epics: HashSet::from([epic.clone()]), epic, tickets: 0, reader: false }
+    }
+
+    /// CHAT-59: the reader's reach — nothing for the host to ask: the server
+    /// holds every answer to the reader's grants.
+    pub(crate) fn reader() -> Self {
+        Self { epic: READER.to_string(), epics: HashSet::new(), tickets: 0, reader: true }
     }
 
     /// No shortcode at all — a frame that renders no ticket's body: it
     /// hears components, and nothing of any ticket.
     pub(crate) fn none() -> Self {
-        Self { epic: String::new(), epics: HashSet::new(), tickets: 0 }
+        Self { epic: String::new(), epics: HashSet::new(), tickets: 0, reader: false }
     }
 
     /// From `counts { filter: "under EPIC" }`'s answer — or the server's
@@ -391,7 +416,7 @@ impl Reach {
 
     /// Whether the shortcode `epic` is inside.
     pub(crate) fn holds(&self, epic: &str) -> bool {
-        self.epics.contains(&epic.to_ascii_uppercase())
+        self.reader || self.epics.contains(&epic.to_ascii_uppercase())
     }
 
     /// Whether the ticket `id` (or path address) is inside.
@@ -409,12 +434,15 @@ thread_local! {
 /// The reach known for `epic` — its shortcode alone until the server has
 /// said more.
 pub(crate) fn known_reach(epic: &str) -> Reach {
+    if epic == READER {
+        return Reach::reader();
+    }
     REACHES.with(|r| r.borrow().get(&epic.to_ascii_uppercase()).cloned()).unwrap_or_else(|| Reach::only(epic))
 }
 
 /// Whether the server has said how far `epic` reaches.
 pub(crate) fn reach_known(epic: &str) -> bool {
-    REACHES.with(|r| r.borrow().contains_key(&epic.to_ascii_uppercase()))
+    epic == READER || REACHES.with(|r| r.borrow().contains_key(&epic.to_ascii_uppercase()))
 }
 
 /// A `group_changed` heard: a shortcode that now hangs outside a reach it
@@ -451,6 +479,9 @@ pub(crate) fn moved(reaches: &mut HashMap<String, Reach>, group: &menger_tickets
 
 /// Ask the server how far `epic` reaches for this viewer, and remember it.
 pub(crate) async fn reach_of(client: &Client, epic: &str) -> Result<Reach, String> {
+    if epic == READER {
+        return Ok(Reach::reader());
+    }
     let filter = crate::typed::typed(&scoped_filter(None, epic)?)?;
     let events = client.nav().counts_all(Some(filter), None, crate::session::zone()).await.map_err(|e| crate::session::describe(&e))?;
     let reach = Reach::from_counts(epic, events)?;
@@ -472,6 +503,8 @@ pub(crate) enum Scoped {
 /// `work.waves` of a shortcode outside refused, naming it; the rest as asked —
 /// every answer is then held to the reach ([`admit_event`]). `reach: None`
 /// (a frame that renders no ticket's body): `components.list` only.
+/// CHAT-59: the reader's reach ([`Reach::reader`]): every call as asked —
+/// the server answers it from the reader's grants.
 pub(crate) fn scope_call(call: Call, reach: Option<&Reach>) -> Result<Scoped, String> {
     let Some(reach) = reach else {
         return match call {
@@ -482,6 +515,9 @@ pub(crate) fn scope_call(call: Call, reach: Option<&Reach>) -> Result<Scoped, St
             )),
         };
     };
+    if reach.reader {
+        return Ok(Scoped::Call(call));
+    }
     let epic = reach.epic.as_str();
     Ok(match call {
         // ACT-6: a `get` is asked whatever its id's letters — an old id names
@@ -527,6 +563,14 @@ pub(crate) fn scope_call(call: Call, reach: Option<&Reach>) -> Result<Scoped, St
 /// answer, and every `watch` event a frame hears, passes through here.
 pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEvent> {
     use TicketsEvent as E;
+    // CHAT-59: the reader's reach hears what the reader's watch hears —
+    // components still held per frame (ACCESS-26).
+    if reach.reader {
+        return match ev {
+            E::Component { .. } | E::ComponentChanged { .. } | E::ComponentRemoved { .. } => None,
+            ev => Some(ev),
+        };
+    }
     let inside = |epic: &str| reach.holds(epic);
     let top = |mut group: menger_tickets_api::Group| {
         if group.host.as_deref().is_some_and(|h| !reach.holds_id(h)) {
@@ -1649,5 +1693,66 @@ mod tests {
         let mut reaches = HashMap::from([("AREA".to_string(), area())]);
         assert_eq!(moved(&mut reaches, &group("SUB", None)), ["AREA"], "to the top");
         assert!(!reaches["AREA"].holds("SUB"));
+    }
+
+    /// CHAT-59: a message in a chat with no ticket reads as the reader —
+    /// its calls go as asked (the server answers from the reader's grants),
+    /// what it hears is the reader's watch, any shortcode; components are
+    /// still held per frame.
+    #[test]
+    fn a_scopeless_message_frame_reads_as_the_reader() {
+        assert_eq!(scope_named(Some(READER)), Some(READER.into()));
+        assert_eq!(scope_named(Some("kiln")), Some("KILN".into()));
+        assert_eq!(scope_named(None), None);
+        assert_eq!(scope_of(Some(READER)), None, "no ticket's id names the reader");
+        assert!(reach_known(READER) && known_reach(READER).reader);
+        let me = Reach::reader();
+        assert!(me.holds("ANY") && me.holds_id("ENV-5") && me.holds_id("KILN/_MENGER/board"));
+        let list = Call::List { epic: None, status: None, parent: None, after: None, limit: None, summary: None, filter: Some("status Ready".into()) };
+        match scope_call(list.clone(), Some(&me)).unwrap() {
+            Scoped::Call(c) => assert_eq!(c, list, "no `under` added"),
+            other => panic!("{other:?}"),
+        }
+        let waves = Call::Waves { epics: vec!["ENV".into(), "KILN".into()], kinds: None };
+        assert!(matches!(scope_call(waves, Some(&me)), Ok(Scoped::Call(_))));
+        assert!(matches!(scope_call(Call::Blockers { id: "ENV-5".into() }, Some(&me)), Ok(Scoped::Call(_))));
+        let got = held_to(vec![TicketsEvent::Ticket { ticket: tkt("ENV-5") }], &me, Some("ENV-5".into()));
+        assert!(matches!(&got[..], [TicketsEvent::Ticket { ticket }] if ticket.id == "ENV-5"), "{got:?}");
+        assert!(admit_event(TicketsEvent::StatusChanged { ticket: tkt("KILN-2"), previous: Status::Ready }, &me).is_some());
+        assert!(admit_event(TicketsEvent::ComponentRemoved { name: "m-dial".into() }, &me).is_none(), "held by the host (ACCESS-26)");
+    }
+
+    /// CHAT-59: a component named in a direct message is handed (with what
+    /// it uses), nothing else of the registry, and no ticket's id in its
+    /// references; its read is answered.
+    #[test]
+    fn a_component_named_in_a_dm_is_handed_and_its_read_answered() {
+        let comp = |name: &str, owner: &str, refs: &[&str]| menger_tickets_api::Component {
+            name: name.into(),
+            source: String::new(),
+            owner: Some(owner.into()),
+            references: refs.iter().map(|r| r.to_string()).collect(),
+            docs: None,
+            preview: vec![],
+        };
+        let events = vec![
+            TicketsEvent::Component { component: comp("m-dial", "ART-1", &["KILN-1", "ENV-2"]) },
+            TicketsEvent::Component { component: comp("m-arc", "ART-2", &["m-dial"]) },
+            TicketsEvent::Component { component: comp("kiln-hill", "KILN-3", &["KILN-4"]) },
+        ];
+        let names = crate::held::names_in("<m-dial scope=\"KILN-1\"></m-dial>");
+        let me = Reach::reader();
+        let got: Vec<String> = held_components(events, Some(&me), &names)
+            .iter()
+            .map(|e| match e {
+                TicketsEvent::Component { component } => format!("{} {:?}", component.name, component.references),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(got, ["m-dial []", "m-arc [\"m-dial\"]"]);
+        // m-dial's read: `get` of the scope it names, answered as the server answered the reader.
+        assert!(matches!(scope_call(Call::Get { id: "KILN-1".into() }, Some(&me)), Ok(Scoped::Call(Call::Get { .. }))));
+        let got = held_to(vec![TicketsEvent::Ticket { ticket: tkt("KILN-1") }], &me, Some("KILN-1".into()));
+        assert!(matches!(&got[..], [TicketsEvent::Ticket { ticket }] if ticket.id == "KILN-1"), "{got:?}");
     }
 }

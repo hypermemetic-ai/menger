@@ -9,8 +9,12 @@
 //! the host stamps on it (`data-chat`, `data-message`), which nothing in the
 //! frame can move. It carries no `data-ticket`, so no write from it can
 //! answer a ticket's input; its reads are held to the chat's ticket's
-//! shortcode (`data-scope`), and with no ticket (a direct message) it reads
-//! only components. The SDK's `menger.input.ticket` is the home's key,
+//! shortcode (`data-scope`). CHAT-59: with no ticket (a direct message, a
+//! group) it reads as the reader ([`bridge::READER`]) — `menger.call` and
+//! `watch` as the reader's own, the server answering from the reader's
+//! grants, never the author's — so `<m-dial>`, `<m-ring>` or a project's
+//! own component draws with its data; it is handed the components its
+//! markup names and what they use (ACCESS-26). The SDK's `menger.input.ticket` is the home's key,
 //! [`key`] (`message:<id>`), so the house `m-decision` / `m-input` ask and
 //! answer as they do in a body:
 //!
@@ -229,7 +233,8 @@ pub(crate) fn kept_height(message: u64) -> f64 {
 /// posted as) in a [`present::Framed`] box with the body's bar plus
 /// *source* (the markdown, as text) and ⤢ (the pane's whole width), the
 /// frame made only while the turn is within [`NEAR`] of the view. `chat`'s
-/// ticket (`ticket`) is the reach its reads are held to.
+/// ticket (`ticket`) is the reach its reads are held to — none: the
+/// reader's ([`scope`]).
 #[component]
 pub(crate) fn MessageFrame(body: String, chat: u64, message: u64, ticket: Option<String>) -> impl IntoView {
     let html = Signal::stored(md::render_body_framed(&body, &|_| None).html);
@@ -263,12 +268,12 @@ pub(crate) fn MessageFrame(body: String, chat: u64, message: u64, ticket: Option
             <button type="button" class="framed-btn" data-act="frame-wide" title="the pane's whole width" aria-pressed=move || wide.get().to_string() on:click=move |_| wide.update(|w| *w = !*w)>"⤢"</button>
         }
     });
-    let scope = bridge::scope_of(ticket.as_deref());
+    let scope = scope(ticket.as_deref());
     let src = body.clone();
     let made = move || {
         if near.get() {
             let actions = actions.clone();
-            let scope = scope.clone().unwrap_or_default();
+            let scope = scope.clone();
             view! { <present::Framed html decl ticket=None scope actions message=(chat, message) /> }.into_any()
         } else {
             let h = kept_height(message);
@@ -281,6 +286,12 @@ pub(crate) fn MessageFrame(body: String, chat: u64, message: u64, ticket: Option
             {move || source.get().then(|| view! { <pre class="tsrc">{src.clone()}</pre> })}
         </div>
     }
+}
+
+/// CHAT-59: the scope a message's frame reads under — its chat's ticket's
+/// shortcode, or, in a chat with no ticket, the reader's reach.
+pub(crate) fn scope(ticket: Option<&str>) -> String {
+    bridge::scope_of(ticket).unwrap_or_else(|| bridge::READER.to_string())
 }
 
 /// An observer and the closure it calls, held while the turn is mounted.
@@ -388,5 +399,14 @@ mod tests {
         let i = &held[0];
         assert!(menger_tickets_api::inputs::check(i.kind, &i.options, InputValue::Choice { option: "keep".into() }).is_ok());
         assert!(menger_tickets_api::inputs::check(i.kind, &i.options, InputValue::Choice { option: "nope".into() }).is_err());
+    }
+
+    /// CHAT-59: a chat inside a ticket reads under its shortcode; one with
+    /// no ticket, as the reader.
+    #[test]
+    fn a_message_frame_s_scope_is_its_ticket_s_or_the_reader_s() {
+        assert_eq!(scope(Some("KILN-7")), "KILN");
+        assert_eq!(scope(None), bridge::READER);
+        assert_eq!(bridge::scope_named(Some(&scope(None))), Some(bridge::READER.to_string()));
     }
 }
