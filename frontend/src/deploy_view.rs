@@ -144,17 +144,53 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
             })
         })
     };
+    let retired = {
+        let held = held.clone();
+        Memo::new(move |_| match (project.get(), held.with(|h| h.is_some())) {
+            (Some(p), true) => held.with(|h| h.as_ref().map(|h| flight::retired(h.envs(), &p)).unwrap_or_default()),
+            _ => Vec::new(),
+        })
+    };
     let to = RwSignal::new(asked_to);
+    // A `?to=` of the address that names a retired destination is not honoured; a pick from the menu is.
+    let from_url = StoredValue::new(true);
     let dest = {
         let held = held.clone();
         Memo::new(move |_| {
             let (p, ds) = (project.get()?, dests.get());
             match to.get() {
-                Some(t) if ds.contains(&t) => Some(t),
+                Some(t) if ds.contains(&t) && !(from_url.get_value() && retired.with(|r| r.contains(&t))) => Some(t),
                 _ => held.with(|h| h.as_ref().and_then(|h| flight::default_destination(h.envs(), &p))),
             }
         })
     };
+    let fallback = {
+        let held = held.clone();
+        Memo::new(move |_| {
+            let p = project.get()?;
+            held.with(|h| h.as_ref().and_then(|h| flight::default_destination(h.envs(), &p)))
+        })
+    };
+    // DEPLOY-43: a saved `?to=` naming a retired destination is moved to
+    // where the project's prod is now, with a line saying so (once).
+    let moved = RwSignal::new(None::<String>);
+    let checked = StoredValue::new(false);
+    let held_fx = held.clone();
+    Effect::new(move |_| {
+        let held = held_fx.clone();
+        let (Some(p), false) = (project.get(), checked.get_value()) else { return };
+        if !held.with(|h| h.is_some()) {
+            return;
+        }
+        checked.set_value(true);
+        if let Some(t) = to.get_untracked().filter(|t| retired.with(|r| r.contains(t))) {
+            if let Some(now) = held.with_untracked(|h| h.as_ref().and_then(|h| flight::default_destination(h.envs(), &p))) {
+                moved.set(Some(format!("{t} moved to {now} (RUN-13)")));
+                to.set(Some(now.clone()));
+                keep_hash(&href(&p, Some(&now), None));
+            }
+        }
+    });
     let track = {
         let held = held.clone();
         Memo::new(move |_| match (project.get(), dest.get()) {
@@ -279,6 +315,8 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
         if let Some(p) = project.get_untracked() {
             keep_hash(&href(&p, Some(&v), hi.get_untracked()));
         }
+        from_url.set_value(false);
+        moved.set(None);
         to.set(Some(v));
     };
     // The pill that is on lives in the address (`?stage=ready`).
@@ -298,8 +336,9 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
                 <span class="sub">{counts}</span>
                 {head}
             </div>
+            {move || moved.get().map(|m| view! { <p class="movednote" role="status">{m}</p> })}
             <ToTest project />
-            <ToProd project track />
+            <ToProd project track dest fallback />
             <div class="tools">
                 <div class="legend" role="group" aria-label="filter by stage">
                     {State::ALL.into_iter().map(|s| {
@@ -326,10 +365,16 @@ pub(crate) fn DeployPage(project: Option<String>) -> impl IntoView {
                     <label class="to">
                         "to "
                         <select on:change=pick_dest aria-label="destination">
-                            {dests.get().into_iter().map(|d| {
-                                let on = dest.get().as_deref() == Some(d.as_str());
-                                view! { <option value=d.clone() selected=on>{d.clone()}</option> }
-                            }).collect_view()}
+                            {move || {
+                                let r = retired.get();
+                                let (mut live, old): (Vec<String>, Vec<String>) = dests.get().into_iter().partition(|d| !r.contains(d));
+                                live.extend(old);
+                                live.into_iter().map(|d| {
+                                    let on = dest.get().as_deref() == Some(d.as_str());
+                                    let word = if r.contains(&d) { format!("{d} (retired)") } else { d.clone() };
+                                    view! { <option value=d.clone() selected=on>{word}</option> }
+                                }).collect_view()
+                            }}
                         </select>
                     </label>
                 })}
@@ -364,14 +409,19 @@ fn Canvas(laid: Memo<Laid>, clusters: Memo<Vec<Cluster>>, track: Memo<Vec<String
     // (k, tx, ty): the zoom and the pan.
     let view_at = RwSignal::new((1.0_f64, 12.0_f64, 0.0_f64));
     let fitted = StoredValue::new(false);
-    let size = move || cv.get_untracked().map(|el| {
+    // DEPLOY-43: `fit` runs in an animation frame, which can land after the
+    // canvas is gone (a destination with nothing in flight draws none): every
+    // read and write here is the one that answers "gone" rather than panics.
+    let size = move || cv.try_get_untracked().flatten().map(|el| {
         let r = el.get_bounding_client_rect();
         (r.width(), r.height())
     });
     let fit = move || {
         if let Some((w, _)) = size().filter(|(w, _)| *w > 0.0) {
-            view_at.set(laid.with_untracked(|l| flight::fit_width(l, w)));
-            fitted.set_value(true);
+            if let Some(v) = laid.try_with_untracked(|l| flight::fit_width(l, w)) {
+                view_at.try_set(v);
+            }
+            fitted.try_set_value(true);
         }
     };
     // Fit once there is something drawn and room to draw it — at once at a
