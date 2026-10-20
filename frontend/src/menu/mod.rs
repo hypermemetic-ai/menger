@@ -542,6 +542,11 @@ fn at(el: &web_sys::Element, x: f64, y: f64, held: bool) -> Option<Target> {
     // its header and a row that stands for no ticket open the nav's
     // items alone.
     let nav = nav::at(el).filter(offers);
+    // DEPLOY-47: a deployment nearer than any ticket element is its own
+    // menu's (src/deploy_ask.rs).
+    if crate::deploy_ask::at(el).is_some() {
+        return None;
+    }
     // ACT-4: anywhere on a ticket element — its chips too — this menu.
     if let Some(host) = host_of(el) {
         if held && host.local_name() == "section" {
@@ -575,6 +580,12 @@ fn install_listeners(target: RwSignal<Option<Target>>, last_error: RwSignal<Opti
             ev.prevent_default();
             hold::claim();
             target.set(Some(t));
+        } else if let Some(p) = crate::deploy_ask::at(&el) {
+            // DEPLOY-47: a deployment's own menu, through the same doors.
+            ev.prevent_default();
+            hold::claim();
+            close_menu(target);
+            crate::deploy_ask::open_at(p, x, y);
         }
     });
     let _ = doc.add_event_listener_with_callback("contextmenu", on_context.as_ref().unchecked_ref());
@@ -582,10 +593,12 @@ fn install_listeners(target: RwSignal<Option<Target>>, last_error: RwSignal<Opti
 
     // APP-57: a touch held on the same elements opens the same menu.
     hold::install(
-        |el, x, y| at(el, x, y, true).is_some(),
+        |el, x, y| at(el, x, y, true).is_some() || crate::deploy_ask::at(el).is_some(),
         move |el, x, y| {
             if let Some(t) = at(el, x, y, true) {
                 target.set(Some(t));
+            } else if let Some(p) = crate::deploy_ask::at(el) {
+                crate::deploy_ask::open_at(p, x, y);
             }
         },
     );

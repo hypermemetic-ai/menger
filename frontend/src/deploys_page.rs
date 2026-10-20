@@ -638,6 +638,8 @@ fn timeline_row(r: Row, picked: Option<u64>) -> AnyView {
 
 fn deploy_view(r: Row, picked: Option<u64>) -> impl IntoView {
     let Row { d, carried, unlinked, live } = r;
+    // DEPLOY-47: kept for the deployment's menu (Ask the builder).
+    crate::deploy_ask::keep(&d);
     let state = d.state;
     let cls = match (state, live) {
         (DeployState::Succeeded, true) => "ok",
@@ -704,6 +706,7 @@ fn deploy_view(r: Row, picked: Option<u64>) -> impl IntoView {
 /// canceled. Drawn again (with its entrance) as it moves.
 fn request_view(r: Row, picked: Option<u64>) -> impl IntoView {
     let Row { d, carried, .. } = r;
+    crate::deploy_ask::keep(&d);
     let Some(q) = d.requested.clone() else {
         return view! { <li class="ddeploy dreq" data-deploy=d.id>"requested"</li> }.into_any();
     };

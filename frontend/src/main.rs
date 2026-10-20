@@ -278,6 +278,7 @@ mod counts;
 mod deploys;
 mod drafts;
 mod thread;
+mod deploy_ask;
 mod deploy_view;
 mod deploys_page;
 mod to_prod;
@@ -2662,6 +2663,8 @@ fn App() -> impl IntoView {
             // draws builds a filter from it; mounted once, as the ticket
             // menu is.
             <tags::TagMenu />
+            // DEPLOY-47: a deployment's menu — Ask the builder about this.
+            <deploy_ask::DeployMenu tree />
             // FILTER-26: Make global's toast, with its Undo.
             <promote::PromoteToast />
             <keys::Overlays overlay />

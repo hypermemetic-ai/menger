@@ -160,6 +160,8 @@ pub(crate) fn recent(d: &Deployment) -> bool {
 /// One request: its number, what it moves, where it stands, its steps.
 pub(crate) fn request_view(d: Deployment, cancel: impl Fn(u64) + Copy + 'static) -> impl IntoView {
     let Some(q) = d.requested.clone() else { return ().into_any() };
+    // DEPLOY-47: kept for the deployment's menu (Ask the builder).
+    crate::deploy_ask::keep(&d);
     let now = crate::now_unix();
     let what = q.branch.clone().map(|b| format!("{b}'s tip")).or_else(|| d.release.clone()).unwrap_or_else(|| deploys::short(&d.revision));
     let cancelable = q.state.open() && q.cancel_asked_at.is_none();
@@ -169,13 +171,24 @@ pub(crate) fn request_view(d: Deployment, cancel: impl Fn(u64) + Copy + 'static)
         .iter()
         .map(|s| {
             let failed = s.state == StepState::Failed;
+            // DEPLOY-47: a failed or canceled step's lines open; an ended
+            // one's folded under *last lines* — each line its own, so a
+            // right-click picks it.
+            let lines = s.state.ended().then(|| s.detail.clone()).flatten().filter(|t| !t.trim().is_empty()).map(|t| {
+                let pre = view! { <pre class="sdetail">{log_lines(&t)}</pre> };
+                if failed || s.state == StepState::Canceled {
+                    pre.into_any()
+                } else {
+                    view! { <details class="slines"><summary>"last lines"</summary>{pre}</details> }.into_any()
+                }
+            });
             view! {
                 <li class=format!("step {}", s.state) data-step=s.name.clone()>
                     <span class="sname">{s.name.clone()}</span>
                     <span class="sstate">{s.state.to_string()}</span>
                     <span class="stime">{took(s, now)}</span>
                     {s.url.clone().map(|u| view! { <a class="slog" href=u target="_blank" rel="noopener">"log"</a> })}
-                    {(failed || s.state == StepState::Canceled).then(|| s.detail.clone()).flatten().map(|t| view! { <pre class="sdetail">{t}</pre> })}
+                    {lines}
                 </li>
             }
         })
@@ -184,7 +197,7 @@ pub(crate) fn request_view(d: Deployment, cancel: impl Fn(u64) + Copy + 'static)
     let stopped = q.cancel_asked_at.is_some() && !q.state.open();
     let (class, words) = if stopped { ("canceled", "canceled") } else { (request_class(q.state), deploys::request_words(&q)) };
     view! {
-        <div class=format!("treq {class}") data-request=id>
+        <div class=format!("treq {class}") data-request=id data-deploy=id>
             <div class="trow">
                 <span class="tid">{format!("#{id}")}</span>
                 <span class="twhat">{what}" → "{d.environment.clone()}</span>
@@ -197,6 +210,18 @@ pub(crate) fn request_view(d: Deployment, cancel: impl Fn(u64) + Copy + 'static)
         </div>
     }
     .into_any()
+}
+
+/// DEPLOY-47: a step's log, a span per line (`data-line`, from 0) — what a
+/// right-click on one line picks.
+fn log_lines(text: &str) -> impl IntoView {
+    let lines: Vec<String> = text.trim_end().lines().map(str::to_string).collect();
+    let n = lines.len();
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| view! { <span class="sline" data-line=i>{l}{(i + 1 < n).then_some("\n")}</span> })
+        .collect_view()
 }
 
 #[cfg(test)]

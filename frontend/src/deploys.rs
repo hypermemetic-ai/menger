@@ -803,7 +803,7 @@ pub(crate) fn Running(id: String, commits: Memo<Vec<String>>) -> impl IntoView {
                             };
                             let not = behind.iter().map(|c| short(c)).collect::<Vec<_>>().join(", ");
                             view! {
-                                <a class="run behind" data-env=env.clone() data-behind="true" href=href(&project, Some(deployment)) title=title>
+                                <a class="run behind" data-env=env.clone() data-behind="true" data-deploy=deployment href=href(&project, Some(deployment)) title=title>
                                     {pre}<span class="envmark behind">{env.clone()}</span>{runs}<code class="rev">{not}</code>" not deployed"
                                 </a>
                             }
@@ -817,7 +817,7 @@ pub(crate) fn Running(id: String, commits: Memo<Vec<String>>) -> impl IntoView {
                             );
                             let pre = many.then(|| format!("{project} "));
                             view! {
-                                <a class="run" data-env=env.clone() href=href(&project, Some(deployment)) title=title>
+                                <a class="run" data-env=env.clone() data-deploy=deployment href=href(&project, Some(deployment)) title=title>
                                     {pre}<span class="envmark">{env.clone()}</span>{format!(" since {}", since(at))}
                                 </a>
                             }
@@ -836,7 +836,7 @@ pub(crate) fn Running(id: String, commits: Memo<Vec<String>>) -> impl IntoView {
                             };
                             let title = format!("requested for {project} {env} by {by}, {} — request {request}; {hook}", crate::fmt_unix(at));
                             view! {
-                                <a class="run requested" data-env=env.clone() data-request=request href=href(&project, Some(request)) title=title>
+                                <a class="run requested" data-env=env.clone() data-request=request data-deploy=request href=href(&project, Some(request)) title=title>
                                     "requested for "{pre}<span class="envmark requested">{env.clone()}</span>{format!(" by {by} · {hook}")}
                                 </a>
                             }

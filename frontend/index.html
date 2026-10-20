@@ -1014,7 +1014,7 @@
   #nav .prefix { color: var(--tree-line); white-space: pre; user-select: none; }
   #nav .toggle { width: 1ch; color: var(--muted); }
   #nav .toggle.clickable { cursor: pointer; }
-  #nav .code, #tmenu .code, #tagmenu .code, #toast .code, #ticket-page .code {
+  #nav .code, #tmenu .code, #tagmenu .code, #dmenu .code, #toast .code, #ticket-page .code {
     font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: .02em; color: var(--chip-fg);
     background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-md);
     padding: 0 5px; white-space: nowrap;
@@ -1200,25 +1200,25 @@
      status list opens inline under "Set status"; each row shows the
      status as its chip, the current one marked. FILTER-22: the tag menu
      (Filter · Add · Build a filter from) wears the same face. */
-  #tmenu, #tagmenu {
+  #tmenu, #tagmenu, #dmenu {
     position: fixed; z-index: 1000; min-width: 230px; max-width: 360px;
     max-height: calc(100vh - 8px); overflow: auto; padding: 4px;
     background: var(--bg); color: var(--ink); border: var(--border) solid var(--line);
     border-radius: var(--radius-xl); box-shadow: 0 10px 30px var(--shadow);
     font: calc(12.5px * var(--text-scale))/1.5 var(--mono); user-select: none; outline: none;
   }
-  #tmenu .h, #tagmenu .h {
+  #tmenu .h, #tagmenu .h, #dmenu .h {
     display: flex; align-items: baseline; gap: 6px; padding: 4px 10px 6px;
     border-bottom: var(--border) solid var(--line); margin-bottom: 4px; white-space: nowrap;
   }
-  #tmenu .h .title, #tagmenu .h .title { overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
-  #tmenu .h .tag, #tagmenu .h .tag { flex: none; font-size: calc(10px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-lg); }
-  #tmenu .item, #tagmenu .item {
+  #tmenu .h .title, #tagmenu .h .title, #dmenu .h .title { overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  #tmenu .h .tag, #tagmenu .h .tag, #dmenu .h .tag { flex: none; font-size: calc(10px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-lg); }
+  #tmenu .item, #tagmenu .item, #dmenu .item {
     display: block; width: 100%; text-align: left; padding: 4px 10px;
     border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink);
     cursor: pointer; font: inherit; text-decoration: none; white-space: nowrap;
   }
-  #tmenu .item:hover, #tmenu .item:focus, #tagmenu .item:hover, #tagmenu .item:focus {
+  #tmenu .item:hover, #tmenu .item:focus, #tagmenu .item:hover, #dmenu .item:hover, #tagmenu .item:focus, #dmenu .item:focus {
     background: var(--hover); color: var(--accent); outline: none;
   }
   #tmenu .item .arrow { color: var(--muted); }
@@ -1231,7 +1231,7 @@
   #tmenu .flat .mark { display: inline-block; width: 1.4em; color: var(--live); }
   #tmenu .flat .st { padding: 0 5px; border-radius: var(--radius-lg); font-size: calc(11px * var(--text-scale)); }
   /* ACT-7: the Nav ▸ items' separators. */
-  #tmenu .rule, #tagmenu .rule { border-top: var(--border) solid var(--line); margin: 4px 6px; }
+  #tmenu .rule, #tagmenu .rule, #dmenu .rule { border-top: var(--border) solid var(--line); margin: 4px 6px; }
   /* ACT-4: the one menu — Delete… in the error colour; a form (a ticket
      picker, Rename…, Link commits…, Add a label…) in the items' place. */
   #tmenu .item.danger { color: var(--err-fg); }
@@ -1275,21 +1275,25 @@
      (on the keyboard's top while it is up, APP-56), its rows thumb-high;
      menu::place marks it [data-sheet] instead of placing it at the point. */
   :is([data-ticket-id], a[href^="#/ticket/"]) { -webkit-touch-callout: none; }
+  /* DEPLOY-47: a deployment, a run's step or a log line held opens its
+     own menu (src/deploy_ask.rs) the same way. */
+  [data-deploy] { -webkit-touch-callout: none; }
   @media (pointer: coarse) {
     :is([data-ticket-id]:not(section), a[href^="#/ticket/"]) { -webkit-user-select: none; user-select: none; }
+    [data-deploy] { -webkit-user-select: none; user-select: none; }
     /* APP-61: a field keeps its selection, its handles and its edit menu
        wherever it sits. */
     :is(textarea, input, [contenteditable]:not([contenteditable="false"])) { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
   }
   @media (max-width: 820px) {
-    :is(#tmenu, #tagmenu)[data-sheet] {
+    :is(#tmenu, #tagmenu, #dmenu)[data-sheet] {
       left: 0; right: 0; top: auto; bottom: var(--pbar-h, 0px); min-width: 0; max-width: none;
       max-height: calc(78dvh - var(--pbar-h, 0px)); overscroll-behavior: contain;
       padding: 6px 8px 10px; border-width: var(--border) 0 0; border-radius: var(--radius-xl) var(--radius-xl) 0 0;
       font-size: calc(14px * var(--text-scale)); animation: menger-sheet-up .24s cubic-bezier(.2, .8, .2, 1) both;
     }
-    :is(#tmenu, #tagmenu)[data-sheet] :is(.item, .h) { padding: 10px 12px; }
-    :is(#tmenu, #tagmenu)[data-sheet] .sub .item { padding-left: 22px; }
+    :is(#tmenu, #tagmenu, #dmenu)[data-sheet] :is(.item, .h) { padding: 10px 12px; }
+    :is(#tmenu, #tagmenu, #dmenu)[data-sheet] .sub .item { padding-left: 22px; }
   }
   /* ACT-4: Delete…'s confirmation — every ticket, and what moves. */
   #delete { width: 34rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .6rem; }
@@ -3219,21 +3223,21 @@
   #nav .nsel-clear:hover { color: var(--bg); opacity: 1; }
   /* Menus: a card on the stronger hairline, 6px corners, a deep soft shadow;
      items 5px 9px; the one under the cursor or the keys tinted with the bar. */
-  #tmenu, #tagmenu {
+  #tmenu, #tagmenu, #dmenu {
     background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-lg);
     box-shadow: 0 18px 50px var(--shadow); font-size: calc(12px * var(--text-scale));
   }
-  #tmenu, #tagmenu { padding: 5px; }
-  #tmenu .item, #tagmenu .item { padding: 5px 9px; border-radius: var(--radius); }
-  #tmenu .item:hover, #tmenu .item:focus, #tagmenu .item:hover, #tagmenu .item:focus {
+  #tmenu, #tagmenu, #dmenu { padding: 5px; }
+  #tmenu .item, #tagmenu .item, #dmenu .item { padding: 5px 9px; border-radius: var(--radius); }
+  #tmenu .item:hover, #tmenu .item:focus, #tagmenu .item:hover, #dmenu .item:hover, #tagmenu .item:focus, #dmenu .item:focus {
     background: var(--row-sel); color: var(--ink); box-shadow: inset 2px 0 var(--accent);
   }
   
-  #tmenu .h, #tagmenu .h { padding: 5px 9px 7px; border-bottom-color: var(--line); }
-  #tmenu .rule, #tagmenu .rule { margin: 4px 2px; }
+  #tmenu .h, #tagmenu .h, #dmenu .h { padding: 5px 9px 7px; border-bottom-color: var(--line); }
+  #tmenu .rule, #tagmenu .rule, #dmenu .rule { margin: 4px 2px; }
   #tmenu .sub { border-top-color: var(--line); }
 
-  #tmenu .sub .st, #tmenu .flat .st, #tmenu .h .tag, #tagmenu .h .tag, #tmenu .pick .tag { border-radius: var(--radius-sm); }
+  #tmenu .sub .st, #tmenu .flat .st, #tmenu .h .tag, #tagmenu .h .tag, #dmenu .h .tag, #tmenu .pick .tag { border-radius: var(--radius-sm); }
   /* Dialogs: the overlay's scrim, then a card — 8px corners, the deep
      shadow; the title in the display face; the buttons on a panel foot. */
   .overlay { background: var(--scrim); }
@@ -5859,6 +5863,9 @@
   #deploy-page .step.failed .sstate { color: var(--err-fg); }
   #deploy-page .step.skipped, #deploy-page .step.canceled { opacity: .7; }
   #deploy-page .slog { color: var(--accent); }
+  #deploy-page .slines { flex-basis: 100%; }
+  #deploy-page .slines summary { cursor: pointer; color: var(--muted); min-height: 24px; }
+  #deploy-page .sline { display: inline; }
   #deploy-page .sdetail { flex-basis: 100%; margin: 2px 0 0; padding: 6px 8px; max-height: 10em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border-radius: var(--radius); color: var(--ink); }
   /* DEPLOY-40: → prod beside → test, its reason when off, and its confirm sheet. */
   /* DEPLOY-42: enabled, → prod is the page's primary action (filled); off, it is still a plain button
