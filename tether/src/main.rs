@@ -20,7 +20,7 @@ struct Cli {
 #[derive(clap::Subcommand, Debug)]
 enum Cmd {
     /// TETHER-11: enrol this machine's key with a remote menger — a code to
-    /// compare, the app's #/pair opened in the browser, a person grants it.
+    /// compare, the app's #/pair printed (opened with --open), a person grants it.
     Pair(PairArgs),
 }
 
@@ -43,8 +43,15 @@ struct PairArgs {
     #[arg(long)]
     key: Option<PathBuf>,
 
-    /// Don't open the browser: print the URL and the code, to open on any device.
+    // DIST-14: the house rule — print the URL, code, key and QR always; open
+    // the browser only when asked.
+    /// Also open the pairing page in this machine's browser.
     #[arg(long)]
+    open: bool,
+
+    // DIST-14: opening was the default (TETHER-11); it is not now, so
+    // `--no-browser` changes nothing, and is accepted so nothing breaks.
+    #[arg(long, hide = true)]
     no_browser: bool,
 
     /// How long to wait for the grant.
@@ -219,7 +226,8 @@ async fn pair(p: PairArgs) -> anyhow::Result<()> {
         endpoints,
         name,
         key_file,
-        no_browser: p.no_browser,
+        // DIST-14: `--no-browser` is the default now.
+        open: p.open && !p.no_browser,
         wait: std::time::Duration::from_secs(p.wait_secs),
         poll: std::time::Duration::from_secs(p.poll_secs.max(1)),
         env_file: p.env_file.or_else(pair::default_env_file),

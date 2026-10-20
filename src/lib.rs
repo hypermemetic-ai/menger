@@ -68,6 +68,9 @@ pub mod webhooks;
 /// `LocalServer::start(LocalConfig)`.
 pub mod local;
 
+/// DIST-14: `menger` with no flags — the local admin and its one-time links.
+pub mod first_run;
+
 /// The cache and its storage, re-exported from the activation crate so
 /// `menger::store::SeedSpec` and friends keep their paths.
 pub use menger_tickets_api::store;

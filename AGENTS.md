@@ -16,17 +16,21 @@ PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/m
 synapse -P 4460 _login menger --key builder --as builder   # once per server start; then synapse -P 4460 … as usual
 ```
 
-**There is no open mode** (ACCESS-24): `menger` without `--auth-provider`
-(or `--identity`) exits at once — `menger has no open mode: give it a login
-provider with --auth-provider <SPEC> …` — and opens nothing. A dev server
-runs `key` with your key as `--admin`; add `idp=…`, `workos=…` and the rest
-for people. Login is always required (`--require-login` is gone: it is the
-only mode), there is no REST bridge (`--rest-port` is gone; `--no-rest` is
-accepted and changes nothing) and no `--stdio`. The tests run the same way:
-`tests/support` starts every server under `key` with a fixture key as
-`--admin`, and every client proves that key. The first start of this build
-on a database purges the grants planted while it ran open (README "Login"
-→ The purge).
+**There is no open mode** (ACCESS-24). `menger` with no flags (DIST-14)
+runs on loopback as its **local admin**: a key made in its data directory
+(`~/.local/share/menger/local.key`; the database `local.db`, never
+`tickets.db`) and a one-time sign-in link printed at start (`menger login`
+prints another; `--open` opens it). Beyond loopback (`--bind`, an off-machine
+`--public-url`) with no provider it refuses, naming the flag. A dev server
+still runs `key` with your key as `--admin` (above) — on its own ports and
+database, never the defaults on this machine. Login is always required
+(`--require-login` is gone: it is the only mode), there is no REST bridge
+(`--rest-port` is gone; `--no-rest` is accepted and changes nothing) and no
+`--stdio`. The tests run the same way: `tests/support` starts every server
+under `key` with a fixture key as `--admin`, and every client proves that
+key; `tests/first_run.rs` runs the no-flags start on a temp HOME. The first
+start of this build on a database purges the grants planted while it ran
+open (README "Login" → The purge).
 
 **tether** (`tether/`, TETHER-7) is menger's local side as a Plexus RPC
 tool of its own (`synapse tether sessions …`), with substrate imported as
@@ -35,9 +39,11 @@ its **own cargo workspace** — substrate's sqlx and menger's rusqlite link
 two `libsqlite3-sys` — so `cargo test` here does not cover it: `cd tether
 && cargo test`. Its README has how to run and reach it.
 
-Bare `cargo run` takes prod's ports (4455–4456) **and prod's database**
-(the default `--db-path` is `~/.local/share/menger/tickets.db`) — never run
-it that way while prod is installed.
+Bare `cargo run` takes prod's ports (4455–4456, or the next free ones)
+and the default data directory, `~/.local/share/menger` — prod's directory
+on this machine. Since DIST-14 its database is `local.db`, not prod's
+`tickets.db`, but it still writes `local.key`, `local.json` and `once/`
+beside prod's file — never run it that way here.
 
 Every listener answers only its own names (ACCESS-25): `127.0.0.1:<port>`,
 `localhost:<port>`, `--public-url`'s host, and each `--allowed-host`

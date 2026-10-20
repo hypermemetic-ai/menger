@@ -106,6 +106,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 url = "2"
 rand = "0.8"
 sha2 = "0.10"
+# DIST-14: the local admin key's public half (`first_run`).
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 base64 = "0.22"
 # IDENTITY-35: the dev sign-in registers accounts at plexus-idp over its
 # Plexus socket (identity.register); already in the lock (plexus-transport).

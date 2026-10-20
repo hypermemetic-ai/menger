@@ -957,16 +957,18 @@ fn refused(db: &Path, args: &[&str]) -> (Option<i32>, String) {
     (None, format!("still serving after 10 s — not refused: {}", String::from_utf8_lossy(&out.stderr)))
 }
 
-/// ACCESS-24: without a login provider menger refuses to start, and says
-/// which flag it needs; it opens no database and serves nothing. `--stdio`
-/// (no credential rides it) is refused with a provider too.
+/// ACCESS-24: reached beyond this machine without a login provider, menger
+/// refuses to start, and says which flag it needs; it opens no database and
+/// serves nothing (DIST-14: on loopback it signs its local admin in by a
+/// one-time link instead — tests/first_run.rs). `--stdio` (no credential
+/// rides it) is refused with a provider too.
 #[test]
 fn without_a_provider_menger_refuses_to_start_naming_the_flag() {
     let dir = tmp();
     let db = dir.path().join("t.db");
-    let (code, err) = refused(&db, &[]);
+    let (code, err) = refused(&db, &["--bind", "0.0.0.0"]);
     assert!(matches!(code, Some(c) if c != 0), "exited non-zero: {code:?} {err}");
-    assert!(err.contains("no open mode") && err.contains("--auth-provider"), "{err}");
+    assert!(err.contains("without a way to sign in") && err.contains("--auth-provider"), "{err}");
     assert!(!db.exists(), "nothing opened before the refusal");
     let (code, err) = refused(&db, &["--auth-provider", "key", "--stdio"]);
     assert!(matches!(code, Some(c) if c != 0), "exited non-zero: {code:?} {err}");
