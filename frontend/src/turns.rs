@@ -42,6 +42,28 @@ pub(crate) fn far_off(scroll_height: f64, scroll_top: f64, client_height: f64) -
     scroll_height - scroll_top - client_height > client_height.max(OFF_BOTTOM_PX)
 }
 
+/// CHAT-61: the turn the reader is looking at — of the mounted turns'
+/// `(id, top, bottom)` on screen, in order, the first that begins inside
+/// the view (below `view_top`, a sticky head's bottom where one covers it),
+/// else the one the top cuts — and where its top is. What moves above it
+/// is undone by [`held_by`]; so is a turn cut by the top changing height,
+/// which moves what is below it.
+pub(crate) fn first_seen(rows: &[(u64, f64, f64)], view_top: f64) -> Option<(u64, f64)> {
+    let begins = rows.iter().find(|(_, top, _)| *top >= view_top - 0.5);
+    let cut = || rows.iter().find(|(_, _, bottom)| *bottom > view_top + 0.5);
+    begins.or_else(cut).map(|&(id, top, _)| (id, top))
+}
+
+/// CHAT-61: how far to scroll so the turn seen at `before` is back there,
+/// now that it is at `after` — `None` under half a pixel. Something above
+/// it grew (a message's frame drawn, an image loaded): its top went down,
+/// and the scroll goes down as far; something below it changed: it did not
+/// move, and nothing is done.
+pub(crate) fn held_by(before: f64, after: f64) -> Option<f64> {
+    let d = after - before;
+    (d.abs() >= 0.5).then_some(d)
+}
+
 /// Where opening a chat lands: the first unread turn, or the newest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Landing {
@@ -395,6 +417,29 @@ mod tests {
         assert_eq!(jump_label(0), "jump to latest");
         assert_eq!(jump_label(1), "jump to latest · 1 new message");
         assert_eq!(jump_label(3), "jump to latest · 3 new messages");
+    }
+
+    /// CHAT-61: the turn in view is held where it was — a frame growing
+    /// above it scrolls by as much; one growing below it moves nothing.
+    #[test]
+    fn what_grows_above_the_view_never_moves_what_is_seen() {
+        // Three turns; the view's top at 100 (a head covers 0..100).
+        let rows = [(1, -300.0, 40.0), (2, 40.0, 140.0), (3, 140.0, 600.0)];
+        assert_eq!(first_seen(&rows, 100.0), Some((3, 140.0)), "the first turn that begins below the head");
+        assert_eq!(first_seen(&rows, 0.0), Some((2, 40.0)), "not the turn the top cuts: its own height moves what is below");
+        assert_eq!(first_seen(&rows, 40.0), Some((2, 40.0)), "a turn beginning at the top");
+        assert_eq!(first_seen(&rows[..2], 100.0), Some((2, 40.0)), "a turn taller than the view: the one the top cuts");
+        assert_eq!(first_seen(&[], 0.0), None);
+        // Turn 1 (a message's frame) drew 220 px taller: turn 2 went down 220.
+        let grown = [(1, -300.0, 260.0), (2, 260.0, 360.0), (3, 360.0, 820.0)];
+        let (id, before) = first_seen(&rows, 0.0).unwrap();
+        let after = grown.iter().find(|r| r.0 == id).unwrap().1;
+        assert_eq!(held_by(before, after), Some(220.0), "the scroll goes down as far");
+        // …and shrank (a guess too tall): back up as far.
+        assert_eq!(held_by(40.0, -20.0), Some(-60.0));
+        // Turn 3 grew below: turn 2 did not move, nothing is done.
+        assert_eq!(held_by(40.0, 40.0), None);
+        assert_eq!(held_by(40.0, 40.4), None, "under half a pixel is rounding");
     }
 
     /// CHAT-29: the head hides going down, returns going up, always shows

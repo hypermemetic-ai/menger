@@ -80,6 +80,8 @@ js-sys = "0.3"
 # the cheat sheet's close button).
 web-sys = { version = "0.3", features = [
   "Window",
+  # CHAT-61: the chat list holds what is seen (src/chat_pane.rs).
+  "ResizeObserver",
   # APP-56: the keyboard's top, read off the visual viewport (src/keyboard.rs).
   "VisualViewport",
   # APP-57: a held ticket opens the menu (src/menu/hold.rs) — the touch's

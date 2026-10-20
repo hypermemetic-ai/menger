@@ -4709,6 +4709,8 @@
     html[data-kb] #chatfull .cstrip-wrap { position: relative; top: auto; transform: none; }
   }
   :is(#chatpane, #chatfull) .pmsgs.turns { padding: 14px 14px 8px; gap: 0; }
+  /* CHAT-61: the list anchors its scroll itself, on every engine (src/chat_pane.rs `hold`). */
+  :is(#chatpane, #chatfull) .pmsgs.turns { overflow-anchor: none; }
   :is(#chatpane, #chatfull) .tcol { display: flex; flex-direction: column; gap: 16px; width: 100%; margin: 0 auto; }
   #chatfull .tcol { max-width: 780px; padding: 18px 0 6px; gap: 22px; }
   /* CHAT-8: the virtual list — rows spaced by their own padding (so a
