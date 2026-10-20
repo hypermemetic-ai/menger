@@ -142,7 +142,7 @@ async fn decode(bytes: &[u8], declared: &str) -> Option<Decoded> {
     (ok && img.natural_width() > 0).then_some(Decoded::Img(img))
 }
 
-/// A canvas `w` × `h` with the image drawn on it (on white for a JPEG).
+/// A canvas `w` × `h` with the image drawn on it (on the theme's `--card` for a JPEG, which has no alpha).
 fn canvas(d: &Decoded, w: u32, h: u32, opaque: bool) -> Option<web_sys::HtmlCanvasElement> {
     let doc = crate::dom::window().document()?;
     let canvas: web_sys::HtmlCanvasElement = doc.create_element("canvas").ok()?.dyn_into().ok()?;
@@ -150,7 +150,8 @@ fn canvas(d: &Decoded, w: u32, h: u32, opaque: bool) -> Option<web_sys::HtmlCanv
     canvas.set_height(h);
     let ctx: web_sys::CanvasRenderingContext2d = canvas.get_context("2d").ok().flatten()?.dyn_into().ok()?;
     if opaque {
-        ctx.set_fill_style_str("#fff");
+        let card = doc.document_element().and_then(|el| crate::dom::window().get_computed_style(&el).ok().flatten()).and_then(|s| s.get_property_value("--card").ok()).map(|v| v.trim().to_string()).unwrap_or_default();
+        ctx.set_fill_style_str(if card.is_empty() { "Canvas" } else { &card });
         ctx.fill_rect(0.0, 0.0, f64::from(w), f64::from(h));
     }
     d.draw(&ctx, w, h)?;
