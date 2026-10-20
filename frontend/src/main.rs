@@ -357,6 +357,8 @@ mod tokens_lint;
 #[cfg(test)]
 mod motion_lint;
 mod turns;
+// CHAT-66: replying to a message.
+mod reply;
 mod typed;
 mod waves;
 mod when;

@@ -190,7 +190,7 @@ mod tests {
     }
 
     fn msg(id: u64, author: &str, at: i64) -> Message {
-        Message { id: MessageId::new(id), chat: ChatId::new(4), author: author.into(), name: None, via: None, at, body: "x".into(), deleted: None }
+        Message { id: MessageId::new(id), chat: ChatId::new(4), author: author.into(), name: None, via: None, at, body: "x".into(), deleted: None, reply_to: None, quote: None }
     }
 
     use ActivityState::{Ended, Started, Working};

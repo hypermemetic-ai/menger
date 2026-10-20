@@ -119,10 +119,10 @@ impl ChatsActivation {
 
     /// Post a message in a chat; yields posted { message, inputs }, signed by the caller.
     ///
-    /// Only a participant posts; a closed chat is `refused`. The body is
-    /// markdown, not blank, at most the ticket body cap; its `<m-decision id>` / `<m-input id kind>`
+    /// Only a participant posts; a closed chat is `refused`. The body is markdown, not blank, at most the ticket body cap; its `<m-decision id>` / `<m-input id kind>`
     /// are inputs, born `open` (CHAT-20; a malformed one refuses the post). A chat the caller
-    /// does not see is `not_found`. `watch` carries `posted` to every participant, and it answers their `await_message`.
+    /// does not see is `not_found`. `watch` carries `posted` to every participant, and it answers their `await_message`. CHAT-66: a body
+    /// that starts `[↩](message:N)` replies to N — its `reply_to` and `quote`; N outside this chat is `refused`, naming it.
     #[plexus_macros::method(group = "write")]
     pub async fn post(
         &self,

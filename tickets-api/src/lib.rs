@@ -136,6 +136,8 @@ pub mod chats;
 pub mod chat_tickets;
 // CHAT-20: a message's inputs, the wire half.
 pub mod chat_inputs;
+// CHAT-66: a reply's token, read the one way.
+pub mod chat_reply;
 pub use chats::{Chat, ChatKind, ChatState, ChatsEvent, Message};
 /// CHAT-3: the `chats` activation, declared once: the server's [`Chats`]
 /// and the browser's [`ChatsClient`].

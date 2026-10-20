@@ -87,6 +87,7 @@ import path from "node:path";
 import { connect, keyProof, publicHex, seedOf } from "../../deploy/menger-call.mjs";
 import { clip, jsonLines, linesOf, liveLine } from "./live.mjs";
 import { MODELS, defaultFile, modelName, readDefaults, resolveModel } from "./models.mjs";
+import { fmtMessage } from "./reply.mjs";
 
 const HOME = os.homedir();
 const env = process.env;
@@ -598,7 +599,8 @@ async function withNotes(ms) {
 /** Where a chat is, in words: on a ticket, or (CHAT-14) a direct message or a group. */
 const where = (chat, ticket) => (ticket ? `on ticket ${ticket}` : chat?.kind === "group" ? "a group chat outside tickets" : "a direct message outside tickets");
 
-const fmt = (m) => `[message ${m.id} · ${m.name ? `${m.name} (${m.author})` : m.author} · ${new Date(m.at * 1000).toISOString().slice(0, 16).replace("T", " ")}Z]\n${m.body}`;
+// CHAT-66: a reply says what it answers (reply.mjs).
+const fmt = fmtMessage;
 
 function systemPrompt(chatId, ticket, title, chat) {
   return [
@@ -607,6 +609,7 @@ function systemPrompt(chatId, ticket, title, chat) {
     ``,
     `Keep chat answers short: a few sentences of markdown, the answer first. The owner is reading on a phone.`,
     `Name tickets in the notation (CHAT-57; menger-skills chatting): bold, the id alone — **KILN-7**, a run **KILN-2..5**, a set **KILN-11/12**, an ask **KILN-7** · inputid. The chat draws each as a live chip and a card under your message; bold only the tickets the message is about, and leave a passing mention plain.`,
+    `A message that starts \`[↩](message:N)\` replies to message N (CHAT-66); you see it as "(replying to #N: …)". To answer one message in particular, start your answer with that token, N its id — the chat draws it as a quoted header that jumps to the original.`,
     `A message may carry runtime components (CHAT-21, CHAT-59; menger-skills chatting): m-stat, m-dial, m-ring, m-cases, m-decision, a project's own (\`tickets components list\`) — markup outside code draws in the message's own frame, and its components read live as each reader (in a ticket's chat, that ticket's shortcode; in a direct message or a group, the reader's own reach). Put it in your answer as markup, not in a code fence; a separate message goes as \`chats post --chat ${chatId} --body @file\`, never "$(cat …)".`,
     ``,
     `House rules — follow them as any builder here does:`,
