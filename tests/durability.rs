@@ -927,7 +927,8 @@ async fn fresh_location_starts_empty_and_writable() {
 
 /// Criterion 6: with no override, the startup output names the default
 /// location and it is under the user's data directory. Hermetic: the data
-/// directory itself is redirected via XDG_DATA_HOME.
+/// directory itself is redirected via XDG_DATA_HOME. The default file is
+/// `first_run::DB_FILE` (DIST-14: `local.db`, never prod's `tickets.db`).
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn default_location_is_under_the_user_data_dir() {
@@ -944,7 +945,7 @@ async fn default_location_is_under_the_user_data_dir() {
     .await;
     let c = connect(s.port).await;
 
-    let expected = data_home.join("menger").join("tickets.db");
+    let expected = data_home.join("menger").join(menger::first_run::DB_FILE);
     let log = s.startup_output();
     assert!(
         log.contains(&format!("database: {}", expected.display())),
