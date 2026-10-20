@@ -989,8 +989,11 @@
     border-left: 3px solid var(--line); margin: .5rem 0;
     padding: 0 .8rem; color: var(--muted);
   }
-  .md table { width: auto; }
-  .md th, .md td { border: var(--border) solid var(--line); padding: .25rem .5rem; }
+  /* CHAT-78: a cell wraps at its words, never inside one (overflow-wrap: anywhere
+     under a message's body would let a cell's minimum width drop to one letter);
+     a table wider than its box scrolls in it. */
+  .md table { display: block; width: auto; max-width: 100%; overflow-x: auto; }
+  .md th, .md td { border: var(--border) solid var(--line); padding: .25rem .5rem; overflow-wrap: break-word; }
 
   /* AGS-12: the persistent left nav — manifest's sidebar pattern. A
      full-height two-column grid: the nav column collapses (and the
