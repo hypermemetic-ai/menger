@@ -135,6 +135,23 @@ database, which the next `deploy test` or `sync test` replaces. Run it alone:
 **Drills.** `DEPLOY_SMOKE_FAIL=test deploy/pipeline promote --to test` fails
 the first smoke on purpose, so the automatic rollback can be watched on test.
 
+### Logs (CI-6)
+
+Every log a run writes is a file of its own, never overwritten:
+`~/.local/state/menger-deploy/logs/<UTC yyyymmddThhmmssZ>-<short sha>-<step>.log`
+(`MENGER_DEPLOY_LOGS` moves the directory). `build` keeps `gate-workspace`,
+`gate-frontend`, `build-release` and `build-trunk` apart; `build`, `deploy`,
+`sync`, `promote`, `rollback`, `smoke`, `landing`, `media`, `image`, `local` and
+`remote` also keep everything they said as `<stamp>-<command>[-<arg>].log`. Each
+says `log: <path>` as it opens one, and a `die` names the file. The gate runs
+`cargo test --workspace --no-fail-fast`, so one red shows every failing test,
+and a red gate prints `FAILED <test>` for each. A run that fails is marked
+(`<stamp>.red` beside its logs). The deploy runner copies the logs a step named
+into `runs/<request>/<step>-<name>.log` (served at `GET /runs/<request>/…`) and its
+red post names them. `deploy/pipeline status` prints the newest log. Retention:
+the hourly sweep (`scripts/cleanup-gate.sh --sweep`) removes logs older than 60
+days (`--log-days`) and never a marked run's.
+
 ### The landing page (DEPLOY-17)
 
 menger.sh is `landing/` at one commit, pinned in hypermemetic-infra

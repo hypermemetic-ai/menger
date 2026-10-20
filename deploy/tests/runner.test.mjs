@@ -324,6 +324,26 @@ test("a red auto-test: the request failed, a gap blocking each triggering ticket
   assert.deepEqual([r.auto.last.request, r.auto.last.outcome], [101, "failed"]);
 });
 
+test("CI-6: the pipeline's own logs are copied into the run's directory and named in the red post", async () => {
+  const r = autoRunner({ extra: { fake: false, pipeline: path.join(import.meta.dirname, "fake-pipeline") } });
+  const kept = path.join(r.o.stateDir, "20261020T100000Z-abc1234-gate-workspace.log");
+  process.env.FAKE_PIPELINE_LOG = path.join(r.o.stateDir, "pipeline.log");
+  process.env.FAKE_PIPELINE_FAIL = "build";
+  process.env.FAKE_PIPELINE_KEEP_LOG = kept;
+  r.auto.triggers[102] = ["CHAT-58"];
+  r.auto.pending = { request: 102, tickets: ["CHAT-58"] };
+  r.standing = async () => ({ state: "started" });
+  r.queue.push({ request: 102, project: "MENGER", environment: "test", revision: "", branch: "HEAD", release: "", requestedBy: "key:0ca8" });
+  delete r.drain;
+  await r.drain();
+  process.env.FAKE_PIPELINE_FAIL = ""; delete process.env.FAKE_PIPELINE_KEEP_LOG;
+  const copy = path.join(r.o.stateDir, "runs", "102", "build-20261020T100000Z-abc1234-gate-workspace.log");
+  assert.match(fs.readFileSync(copy, "utf8"), /test b::two \.\.\. FAILED/);
+  const [[, post]] = r.calls.filter(([x]) => x === "chats.post");
+  assert.ok(post.body.includes(`Test output: ${copy} (kept at ${kept})`), post.body);
+  assert.match(post.body, /test a::one \.\.\. FAILED/);
+});
+
 test("a red run's failing lines: cargo's and node's, else the tail", () => {
   const cargo = "running 3 tests\ntest a ... ok\ntest store::b ... FAILED\n\nfailures:\n\n---- store::b stdout ----\nthread 'store::b' panicked at src/x.rs:4:5:\nleft == right\ntest result: FAILED. 2 passed; 1 failed\n";
   assert.equal(failingLines(cargo), "test store::b ... FAILED\n---- store::b stdout ----\nthread 'store::b' panicked at src/x.rs:4:5:\ntest result: FAILED. 2 passed; 1 failed");

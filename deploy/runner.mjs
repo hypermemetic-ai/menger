@@ -160,7 +160,7 @@ export function triggerOf(ev, project) {
 /** DEPLOY-48: what a red step's log says failed — cargo's and node's failing lines — or its tail. */
 export function failingLines(out, max = 25) {
   const lines = String(out || "").split("\n");
-  const hits = lines.filter((l) => /^test .* \.\.\. FAILED|^---- .* ----$|panicked at|^error(\[|:)|^not ok |^# fail [1-9]|test result: FAILED|^FAILED|✗|refused/.test(l.trim()));
+  const hits = [...new Set(lines)].filter((l) => /^test .* \.\.\. FAILED|^---- .* ----$|panicked at|^error(\[|:)|^not ok |^# fail [1-9]|test result: FAILED|^FAILED|✗|refused/.test(l.trim()));
   return (hits.length ? hits.slice(0, max) : lines.filter(Boolean).slice(-max)).join("\n").slice(0, 3000);
 }
 
@@ -379,11 +379,12 @@ export class Runner {
         break;
       }
       const res = await this.exec(job, s, path.join(dir, `${s.name}.log`));
+      this.keepLogs(job, s, dir, res);
       if (s.records) recorded = true;
       // The runner's own closing record must name the release too, or it overwrites the pipeline's with none.
       if (!GUARDS[job.environment]) job.release ||= releaseIn(res.out) || "";
       if (res.canceled) { outcome = "canceled"; await this.step(job, s.name, "canceled", { detail: stepLog(cmd, res.out) }); break; }
-      if (res.code !== 0) { outcome = "failed"; job.red = { step: s.name, out: res.out }; await this.step(job, s.name, "failed", { detail: stepLog(cmd, res.out, 40, 4000, res.code), url: this.urlOf(job, s) }); break; }
+      if (res.code !== 0) { outcome = "failed"; job.red = { step: s.name, out: res.out, logs: res.logs }; await this.step(job, s.name, "failed", { detail: stepLog(cmd, res.out, 40, 4000, res.code), url: this.urlOf(job, s) }); break; }
       await this.step(job, s.name, "succeeded", { detail: stepLog(cmd, res.out), url: this.urlOf(job, s) });
     }
     for (const s of plan.slice(i + 1)) await this.step(job, s.name, outcome === "canceled" ? "canceled" : "skipped");
@@ -486,9 +487,9 @@ export class Runner {
   /** CI-3: a red run is the batch's — a gap blocking each triggering ticket, and the failing lines in its chat. */
   async reportRed(job, tickets) {
     if (!this.editor()) return this.log(`auto-test: request ${job.request} red — no editor key (MENGER_RUNNER_EDITOR_KEY_FILE), nothing posted or filed`);
-    const lines = failingLines(job.red.out);
+    const lines = failingLines(job.red.out, 80);
     const fence = "```";
-    const body = `Auto-test request ${job.request} (main at ${String(job.sha || "").slice(0, 7)}) went red in \`${job.red.step}\`.\n\n${fence}text\n${lines}\n${fence}\n\nTriggered by ${tickets.join(", ")}. The red is the batch's (CI-3): find the commit, fix or revert; the next ticket entering In Review deploys test again. Log: ${this.o.stateDir}/runs/${job.request}/${job.red.step}.log`;
+    const body = `Auto-test request ${job.request} (main at ${String(job.sha || "").slice(0, 7)}) went red in \`${job.red.step}\`.\n\n${fence}text\n${lines}\n${fence}\n\nTriggered by ${tickets.join(", ")}. The red is the batch's (CI-3): find the commit, fix or revert; the next ticket entering In Review deploys test again. Log: ${this.o.stateDir}/runs/${job.request}/${job.red.step}.log${(job.red.logs || []).map((l) => `\nTest output: ${this.o.stateDir}/runs/${job.request}/${l.name} (kept at ${l.from})`).join("")}`;
     let gap = null;
     try {
       const [ev] = await this.menger("tickets.create", { epic: tickets[0].replace(/-\d+$/, ""), parent: tickets[0], kind: "gap",
@@ -536,6 +537,17 @@ export class Runner {
     return this.o.listen ? `http://127.0.0.1:${this.o.port}/runs/${job.request}/${s.name}.log` : undefined;
   }
 
+  /** CI-6: the logs the pipeline said it kept (`log: <path>`) are copied beside the step's, so GET /runs/<request>/ serves the real test output. */
+  keepLogs(job, s, dir, res) {
+    res.logs = [];
+    for (const m of res.out.matchAll(/^(?:pipeline: .* — |log: )(\/\S+\.log)$/gm)) {
+      const from = m[1];
+      if (res.logs.some((l) => l.from === from)) continue;
+      const name = `${s.name}-${path.basename(from)}`.replace(/[^A-Za-z0-9._-]/g, "_");
+      try { fs.copyFileSync(from, path.join(dir, name)); res.logs.push({ from, name }); } catch { /* not readable here: the path is still said */ }
+    }
+  }
+
   /** One step's command, its output kept; stopped (when it may be) on a cancel. */
   exec(job, s, logFile) {
     return new Promise((resolve) => {
@@ -567,7 +579,7 @@ export class Runner {
       const answer = (code, text) => { res.writeHead(code, { "content-type": "text/plain; charset=utf-8" }); res.end(text + "\n"); };
       if (req.method === "GET") {
         if (req.url === "/health") return answer(200, "ok");
-        const m = /^\/runs\/(\d+)\/([a-z0-9._-]+)\.log$/.exec(req.url || "");
+        const m = /^\/runs\/(\d+)\/([A-Za-z0-9._-]+)\.log$/.exec(req.url || "");
         if (!m) return answer(404, "not here");
         const f = path.join(this.o.stateDir, "runs", m[1], `${m[2]}.log`);
         return fs.existsSync(f) ? answer(200, fs.readFileSync(f, "utf8")) : answer(404, "no such log");

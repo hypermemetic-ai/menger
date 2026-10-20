@@ -81,6 +81,10 @@ BUILD=$(dirname "$REPO")/menger-build
 HOME_DIR=${MENGER_DEPLOY_HOME:-$HOME/.local/share/menger-deploy}
 RELEASES=$HOME_DIR/releases
 LOG=$HOME_DIR/deployments.log
+# CI-6: every log a run writes is a file of its own, <UTC stamp>-<sha>-<step>.log, never overwritten;
+# a red run is marked (<stamp>.red) so the sweep keeps its logs past the 60 days it keeps the green ones.
+LOGS=${MENGER_DEPLOY_LOGS:-$HOME/.local/state/menger-deploy/logs}
+LOG_STAMP="" LOG_SHA=""
 CONFIG=$HOME/.config/menger
 UNITS=$HOME/.config/systemd/user
 BACKUPS=$HOME/.local/share/menger/backups
@@ -120,6 +124,20 @@ step() { say "── $*"; }
 record() { # env action release result — one line of deployments.log, a run's ending with its id
   mkdir -p "$HOME_DIR"
   printf '%s\t%s\t%s\t%s\t%s%s\n' "$(date -u +%FT%TZ)" "$1" "$2" "$3" "$4" "${RUN:+$'\t'$RUN}" >> "$LOG"
+}
+log_path() { # step → a new file in $LOGS for this run (the run's stamp; its sha when it has one)
+  mkdir -p "$LOGS"
+  [[ -n $LOG_STAMP ]] || LOG_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+  local f=$LOGS/$LOG_STAMP${LOG_SHA:+-$LOG_SHA}-$1.log n=1
+  while [[ -e $f ]]; do n=$((n + 1)); f=$LOGS/$LOG_STAMP${LOG_SHA:+-$LOG_SHA}-$1.$n.log; done
+  : > "$f"; printf '%s\n' "$f"
+}
+red_run() { mkdir -p "$LOGS"; : > "$LOGS/$LOG_STAMP.red"; } # this run's logs are kept whatever their age
+gate_red() { # LABEL LOGFILE SHORT — the gate failed: marked, recorded, every failing test named, the log said
+  local label=$1 f=$2
+  red_run; record build test "$3" "gate failed"
+  grep -E '^test .* \.\.\. FAILED$' "$f" | sort -u | sed 's/^test \(.*\) \.\.\. FAILED$/FAILED \1/' >&2 || true
+  die "$label gate failed — $f"
 }
 need() { command -v "$1" >/dev/null || die "needs $1 on PATH"; }
 
@@ -185,6 +203,8 @@ units_of() { echo "menger@$1.service menger-diagrams@$1.service"; }
 begin_run() { RUN_AT=$(date -u +%FT%TZ); RUN="$1@$RUN_AT#$$"; } # e.g. promote@2026-10-12T22:04:02Z#4242
 PENDING=() # ENV RELEASE PREVIOUS of a run that told `started` and has not ended
 on_exit() {
+  local rc=$?
+  [[ $rc -ne 0 && -n $LOG_STAMP ]] && red_run # CI-6: a run that failed keeps its logs
   [[ ${#PENDING[@]} -eq 3 ]] && tell "${PENDING[0]}" failed "${PENDING[1]}" "${PENDING[2]}"
   [[ -n $LANDING_EXPORT && -d $LANDING_EXPORT ]] && rm -rf "$LANDING_EXPORT"
   [[ -n ${IMAGE_CONTEXT:-} && -d $IMAGE_CONTEXT ]] && { chmod -R u+w "$IMAGE_CONTEXT"; rm -rf "$IMAGE_CONTEXT"; }
@@ -433,23 +453,26 @@ cmd_build() {
   # build in the same target and shipped a 0-byte wasm.
   export CARGO_TARGET_DIR=$BUILD/target
 
-  step "gate: cargo test --workspace"
-  local gate_ws gate_fe
-  gate_ws=$(cd "$BUILD" && cargo test --workspace 2>&1 | tee "$BUILD/.gate-workspace.log" | grep -E '^test result' \
-            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') \
-    || { record build test "$short" "gate failed"; die "gate failed — $BUILD/.gate-workspace.log"; }
-  grep -q '^test result: FAILED' "$BUILD/.gate-workspace.log" && { record build test "$short" "gate failed"; die "gate failed: $gate_ws"; }
+  LOG_SHA=$short
+  step "gate: cargo test --workspace --no-fail-fast"
+  local gate_ws gate_fe lw lf lr
+  lw=$(log_path gate-workspace); say "log: $lw"
+  gate_ws=$(cd "$BUILD" && cargo test --workspace --no-fail-fast 2>&1 | tee "$lw" | grep -E '^test result' \
+            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') || gate_red workspace "$lw" "$short"
+  grep -q '^test result: FAILED' "$lw" && gate_red workspace "$lw" "$short"
   step "gate: frontend tests"
-  gate_fe=$(cd "$BUILD/frontend" && CARGO_TARGET_DIR=$BUILD/frontend/target cargo test 2>&1 | tee "$BUILD/.gate-frontend.log" | grep -E '^test result' \
-            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') \
-    || { record build test "$short" "gate failed"; die "frontend gate failed — $BUILD/.gate-frontend.log"; }
-  grep -q '^test result: FAILED' "$BUILD/.gate-frontend.log" && { record build test "$short" "gate failed"; die "frontend gate failed: $gate_fe"; }
+  lf=$(log_path gate-frontend); say "log: $lf"
+  gate_fe=$(cd "$BUILD/frontend" && CARGO_TARGET_DIR=$BUILD/frontend/target cargo test --no-fail-fast 2>&1 | tee "$lf" | grep -E '^test result' \
+            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') || gate_red frontend "$lf" "$short"
+  grep -q '^test result: FAILED' "$lf" && gate_red frontend "$lf" "$short"
   say "gate: workspace $gate_ws; frontend $gate_fe"
 
   step "release build"
-  (cd "$BUILD" && cargo build --release -p menger -p menger-diagrams > "$BUILD/.build-release.log" 2>&1) \
-    || die "release build failed — $BUILD/.build-release.log"
-  (cd "$BUILD/frontend" && CARGO_TARGET_DIR=$BUILD/frontend/target trunk build --release >/dev/null 2>&1) || die "trunk build failed"
+  lr=$(log_path build-release); say "log: $lr"
+  (cd "$BUILD" && cargo build --release -p menger -p menger-diagrams > "$lr" 2>&1) \
+    || { red_run; die "release build failed — $lr"; }
+  lr=$(log_path build-trunk); say "log: $lr"
+  (cd "$BUILD/frontend" && CARGO_TARGET_DIR=$BUILD/frontend/target trunk build --release >"$lr" 2>&1) || { red_run; die "trunk build failed — $lr"; }
   # What goes into the release was built now, from this commit, and is whole.
   local f
   for f in "$BUILD/target/release/menger" "$BUILD/target/release/menger-diagrams"; do
@@ -1275,6 +1298,9 @@ cmd_status() {
   # CI-2: how full the disk is; a low one is said, the build would refuse it
   local disk; disk=$("$REPO/scripts/disk-check.sh" --path "$HOME" 2>&1) || disk="$disk — deploy/pipeline build refuses until there is room"
   printf '%s\n' "$disk"
+  # CI-6: the newest log a run kept
+  local nl; nl=$(ls -1t "$LOGS"/*.log 2>/dev/null | head -n 1 || true)
+  printf 'log        %s\n' "${nl:-none yet ($LOGS)}"
 }
 # DEPLOY-48: whether a ticket entering In Review deploys test by itself (the deploy
 # runner's MENGER_RUNNER_AUTO_TEST), and what it holds — its auto.json: the pending
@@ -1331,6 +1357,13 @@ cmd_logs() { local env=${1:-}; check_env "$env"; shift; journalctl --user -u "me
 
 # ── dispatch ────────────────────────────────────────────────────────────────
 cmd=${1:-}; shift || true
+# CI-6: what a long command says is also kept, in a file of its own (build also keeps each gate's).
+case $cmd in
+  build|deploy|sync|promote|rollback|smoke|landing|media|image|local|remote)
+    LOG_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+    _l=$(log_path "$cmd${1:+-${1//[^A-Za-z0-9._-]/_}}"); say "log: $_l"
+    exec > >(tee -a "$_l") 2> >(tee -a "$_l" >&2) ;;
+esac
 case $cmd in
   install)  cmd_install "$@" ;;
   build)    cmd_build "$@" ;;

@@ -7,6 +7,11 @@ set -u
 printf '%s|%s|%s\n' "${IMAGE_STORE:-}" "${MENGER_REQUEST:-}" "$*" >>"${FAKE_PIPELINE_LOG:?}"
 echo "fake pipeline: $*"
 [[ -n ${FAKE_PIPELINE_RELEASE:-} && ${1:-} == deploy ]] && echo "test runs $FAKE_PIPELINE_RELEASE — smoke passed"
+# CI-6: a log of its own, said as the pipeline says it (`log: <path>`)
+if [[ -n ${FAKE_PIPELINE_KEEP_LOG:-} ]]; then
+  printf 'test a::one ... FAILED\ntest b::two ... FAILED\n' >"$FAKE_PIPELINE_KEEP_LOG"
+  cat "$FAKE_PIPELINE_KEEP_LOG"; echo "log: $FAKE_PIPELINE_KEEP_LOG"
+fi
 if [[ -n ${FAKE_PIPELINE_FAIL:-} && "${1:-} ${2:-}" == "$FAKE_PIPELINE_FAIL"* ]]; then
   echo "$* FAILED: the fake's failure" >&2
   exit 1

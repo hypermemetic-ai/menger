@@ -256,6 +256,27 @@ refused "a hash's parent" "not a leftover shape" --path "$CB/zz"
 refused "not a hash" "not a leftover shape" --path "$CB/zz/not-a-hash"
 refused "a shared target's final artifact" "not a leftover shape" --path "$CT/menger/debug/menger"
 
+# ── CI-6: pipeline logs — green ones past 60 days go, a red run's stay ─────
+PL=$H/.local/state/menger-deploy/logs; mkdir -p "$PL"
+for n in 20260101T010101Z-aaaaaaa-gate-workspace.log 20260101T010101Z-aaaaaaa-gate-frontend.log \
+         20260102T010101Z-bbbbbbb-gate-workspace.log 20260102T010101Z-bbbbbbb-build-release.log 20261019T010101Z-ccccccc-gate-workspace.log; do echo l >"$PL/$n"; done
+: >"$PL/20260102T010101Z.red"
+aged '90 days ago' "$PL"/20260101T010101Z-* "$PL"/20260102T010101Z-* "$PL/20260102T010101Z.red"
+aged '3 days ago' "$PL"/20261019T010101Z-*
+cg "sweep: logs, dry run" 0 --sweep
+has "logs: a green log past 60 days" "$out" "would remove  pipeline-log $PL/20260101T010101Z-aaaaaaa-gate-workspace.log"
+has "logs: its sibling" "$out" "pipeline-log $PL/20260101T010101Z-aaaaaaa-gate-frontend.log"
+hasnt "logs: a red run's gate log" "$out" "20260102T010101Z-bbbbbbb-gate-workspace.log"
+hasnt "logs: a red run's build log" "$out" "20260102T010101Z-bbbbbbb-build-release.log"
+hasnt "logs: a recent one" "$out" "20261019T010101Z"
+cg "sweep: logs" 0 --yes --sweep
+gone "logs: green, old" "$PL/20260101T010101Z-aaaaaaa-gate-workspace.log"; gone "logs: green, old (2)" "$PL/20260101T010101Z-aaaaaaa-gate-frontend.log"
+there "logs: red kept" "$PL/20260102T010101Z-bbbbbbb-gate-workspace.log"; there "logs: red kept (2)" "$PL/20260102T010101Z-bbbbbbb-build-release.log"
+there "logs: recent kept" "$PL/20261019T010101Z-ccccccc-gate-workspace.log"; there "logs: the red mark kept" "$PL/20260102T010101Z.red"
+refused "a red run's log by path" "a red run's log" --path "$PL/20260102T010101Z-bbbbbbb-gate-workspace.log"
+cg "--log-days 1 takes the recent green one" 0 --yes --sweep --log-days 1
+gone "logs: --log-days 1" "$PL/20261019T010101Z-ccccccc-gate-workspace.log"; there "logs: still the red" "$PL/20260102T010101Z-bbbbbbb-build-release.log"
+
 # ── done: the root goes through the script itself (a session's scratch) ───
 printf 'cleanup-gate: %d passed, %d failed\n' "$pass" "$fail"
 CLEANUP_GATE_LOG=/dev/null "$CG" --yes --path "$T" >/dev/null || printf 'cleanup-gate: the test root %s was not removed\n' "$T" >&2
