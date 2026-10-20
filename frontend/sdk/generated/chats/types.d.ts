@@ -600,6 +600,9 @@ export interface TicketSummary {
     commits: CommitRef[];
     createdUnix: number;
     epic: Code;
+    /** TICKETS-6: as on [`Ticket`] — on the row, so the nav, the board and
+  the ticket page draw ❄ without a `get`. */
+    frozen?: boolean;
     /** ACCESS-10: as on [`Ticket`]. */
     hiddenBlockedBy?: number;
     /** ACCESS-10: as on [`Ticket`]. */

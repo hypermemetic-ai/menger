@@ -367,7 +367,7 @@ pub(crate) fn token_of(f: &Field) -> Option<(Cat, Option<String>)> {
         // category's value.
         // FILTER-36: a nested group and a saved name are drawn as their text.
         // ARCHIVE-2: `archived` is a pill of its own too (ARCHIVE-3 draws it).
-        Field::Category(_) | Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::History(_) | Field::Group(_) | Field::Saved(_) | Field::Archived => {
+        Field::Category(_) | Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::History(_) | Field::Group(_) | Field::Saved(_) | Field::Archived | Field::Frozen => {
             return None
         }
     })
@@ -1743,6 +1743,7 @@ mod tests {
             asking: false,
             labels: Vec::new(),
             archived: false,
+            frozen: false,
             id: id.into(),
             epic: "PLEXUS".into(),
             title: String::new(),

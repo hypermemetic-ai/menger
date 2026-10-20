@@ -414,6 +414,7 @@ pub(crate) mod tests {
                                 asking: flags & 4 != 0,
                                 labels: if hi == 1 { vec!["needs-you".into()] } else { Vec::new() },
                                 archived: false,
+                                frozen: false,
                                 lineage: vec![format!("{epic}-{n}"), epic.into(), "PLEXUS-1".into()],
                                 history: h.iter().map(|s| s.to_string()).collect(),
                             });

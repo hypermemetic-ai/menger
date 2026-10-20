@@ -603,6 +603,8 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         labels: s.labels.iter().map(ToString::to_string).collect(),
         // ARCHIVE-2: on its row.
         archived: s.archived.is_some(),
+        // TICKETS-6: on its row.
+        frozen: s.frozen,
         id: s.id.to_string(),
         epic: s.epic.to_string(),
         title: s.title.clone(),
@@ -1145,6 +1147,7 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
             </div>
             <a class="title" href=href>{move || row.with(|t| t.title.clone())}</a>
             // MENGER-12: its labels.
+            {crate::labels::frozen_mark(move || row.with(|t| t.frozen))}
             {crate::labels::row_chips(move || row.with(|t| t.labels.clone()))}
             <div class="foot">
                 {move || {
@@ -1605,6 +1608,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             archived: None,
+            frozen: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
@@ -1732,6 +1736,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             archived: None,
+            frozen: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: s.id,

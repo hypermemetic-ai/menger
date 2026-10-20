@@ -131,6 +131,7 @@ pub(super) fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
                 title: t.title.clone(),
                 status: t.status,
                 kind: t.kind,
+                frozen: t.frozen,
             }),
             host: g.host.clone().map(TicketId::new),
         })

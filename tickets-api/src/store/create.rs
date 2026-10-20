@@ -184,6 +184,9 @@ impl Store {
                 (None, true) => None,
                 (None, _) => shortcode_root(tickets, &sc).map(|r| r.id.clone()).map(String::from),
             };
+            // TICKETS-6: not under a frozen scope, and no new number in a
+            // shortcode whose root is frozen (a new shortcode numbers none).
+            rules::frozen_refusal(tickets, parent.as_deref(), (!first).then_some(&sc))?;
             // ACCESS-11: the proofs name exactly where it is filed and what
             // it waits on — the ticket checked is the ticket written.
             let org = minted.as_ref().map(|m| m.ns.org.clone()).or_else(|| tickets.shortcodes.org(&sc).cloned());
@@ -250,6 +253,7 @@ impl Store {
                 hidden_unlocks: 0,
                 parent_hidden: false,
                 archived: None,
+                frozen: false,
                 parent: parent.clone().map(crate::address::TicketId::new),
                 // SCALE-4: none, unless a hand-edited database already
                 // names this id as some ticket's parent — the index has

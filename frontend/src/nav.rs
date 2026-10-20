@@ -498,15 +498,16 @@ pub(crate) fn shortcode_node(g: &Group) -> Node {
 /// its root.
 pub(crate) fn face(g: &Group) -> Option<TicketSummary> {
     let (id, row) = (g.root.as_ref()?, g.root_row.as_ref()?);
-    Some(root_summary(id, g.shortcode.as_str(), g.host.clone().map(String::from), row.title.clone(), row.status, row.kind))
+    Some(root_summary(id, g.shortcode.as_str(), g.host.clone().map(String::from), row.title.clone(), row.status, row.kind, row.frozen))
 }
 
-fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, status: Status, kind: Kind) -> TicketSummary {
+fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, status: Status, kind: Kind, frozen: bool) -> TicketSummary {
     TicketSummary {
         hidden_blocked_by: 0,
         hidden_unlocks: 0,
         parent_hidden: false,
         archived: None,
+        frozen,
         labels: Vec::new(),
         assignees: Vec::new(),
         id: menger_tickets_api::TicketId::new(id),
@@ -3302,7 +3303,7 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
                     .flatten()
                     .filter(|t| t.id == id)
                     .or_else(|| prev.cloned())
-                    .unwrap_or_else(|| root_summary(&id, &epic, None, String::new(), Status::Pending, Kind::Scope))
+                    .unwrap_or_else(|| root_summary(&id, &epic, None, String::new(), Status::Pending, Kind::Scope, false))
             })))
         }
         Node::Group(_) => None,
@@ -4332,6 +4333,7 @@ fn leaf_row(
                 })
             }}
             // MENGER-12: its labels.
+            {crate::labels::frozen_mark(move || ticket.with(|t| t.frozen))}
             {crate::labels::row_chips(move || ticket.with(|t| t.labels.clone()))}
             // FILTER-14: the matches under the row, as its badge (a
             // shortcode's row has its tally instead).
@@ -4393,7 +4395,7 @@ mod tests {
             docs,
             archived: 0,
             root: root.map(|r| menger_tickets_api::TicketId::new(r.0)),
-            root_row: root.map(|(_, title, status, kind)| RootRow { title: title.into(), status, kind }),
+            root_row: root.map(|(_, title, status, kind)| RootRow { title: title.into(), status, kind, frozen: false }),
             host: host.map(menger_tickets_api::TicketId::new),
         }
     }
@@ -4421,6 +4423,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             archived: None,
+            frozen: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),

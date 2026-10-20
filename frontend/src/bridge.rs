@@ -544,6 +544,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::CommitsUnlinked { ref ticket, .. }
         | E::LabelsChanged { ref ticket, .. }
         | E::AssigneesChanged { ref ticket, .. }
+        | E::FrozenChanged { ref ticket }
         | E::UnlocksChanged { ref ticket, .. }
         | E::UnlocksRemoved { ref ticket, .. }
         | E::BlockersChanged { ref ticket, .. }
@@ -638,6 +639,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::NotFound { .. }
         | E::Error { .. }
         | E::Ambiguous { .. }
+        | E::Frozen { .. }
         | E::BodyTooLarge { .. } => Some(ev),
         // ACCESS-26: the registry is held per frame (src/held.rs) — by
         // [`held_components`] for a call, by the host for a change.
@@ -1289,6 +1291,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             archived: None,
+            frozen: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),

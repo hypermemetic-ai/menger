@@ -157,6 +157,17 @@ export interface TicketsClient {
      */
     find(query: Query, after?: Cursor | null, filter?: FilterText | null, limit?: number | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
     /**
+     * Freeze a scope (admin): no new children of it, no new numbers in the shortcode it roots, until it is unfrozen; yields frozen_changed { ticket }.
+  
+  TICKETS-6: the rules and the write are [`crate::store::Store::freeze`]'s
+  module's. Only a scope freezes; one already frozen writes nothing.
+  A refused birth or move answers `frozen { scope, message }`.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `tickets.freeze` on the scope of `id`
+     */
+    freeze(id: TicketRef): AsyncGenerator<TicketsEvent>;
+    /**
      * Get one ticket by id, or by path address SHORTCODE/path (e.g. PLEXUS/_MENGER/board).
   
   Yields exactly one event: `Ticket` if found, `NotFound` otherwise.
@@ -427,6 +438,15 @@ export interface TicketsClient {
      */
     undelete(ids: TicketRef[]): AsyncGenerator<TicketsEvent>;
     /**
+     * Unfreeze a scope (admin): it and its shortcode grow again; yields frozen_changed { ticket }.
+  
+  TICKETS-6: [`Self::freeze`] undone; one not frozen writes nothing.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `tickets.unfreeze` on the scope of `id`
+     */
+    unfreeze(id: TicketRef): AsyncGenerator<TicketsEvent>;
+    /**
      * Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued.
   
   MENGER-39: takes a ticket out of the queue. Yields one `unqueued`,
@@ -579,6 +599,10 @@ export declare const requires: {
         readonly grant: "tickets.find";
         readonly target: null;
     };
+    readonly "tickets.freeze": {
+        readonly grant: "tickets.freeze";
+        readonly target: "id";
+    };
     readonly "tickets.get": {
         readonly grant: "tickets.get";
         readonly target: null;
@@ -646,6 +670,10 @@ export declare const requires: {
     readonly "tickets.undelete": {
         readonly grant: "tickets.undelete";
         readonly target: "ids";
+    };
+    readonly "tickets.unfreeze": {
+        readonly grant: "tickets.unfreeze";
+        readonly target: "id";
     };
     readonly "tickets.unqueue": {
         readonly grant: "tickets.unqueue";

@@ -277,6 +277,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
                     hidden_unlocks: 0,
                     parent_hidden: false,
                     archived: None,
+                    frozen: false,
                     labels: Vec::new(),
                     assignees: Vec::new(),
                     id: id.into(),

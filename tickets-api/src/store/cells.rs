@@ -141,6 +141,8 @@ pub struct Key {
     /// never shares a cell with a live one, and a view that does not name
     /// the archive admits no cell that holds one: nothing walks them.
     archived: bool,
+    /// TICKETS-6: it is a frozen scope.
+    frozen: bool,
 }
 
 fn place<T: PartialEq>(all: &[T], v: &T) -> u8 {
@@ -159,12 +161,18 @@ impl Key {
             asking: false,
             labels: LabelSet::NONE,
             archived: false,
+            frozen: false,
         }
     }
 
     /// ARCHIVE-2: this cell, archived or not.
     pub(super) fn archiving(self, archived: bool) -> Self {
         Self { archived, ..self }
+    }
+
+    /// TICKETS-6: this cell, frozen or not.
+    pub(super) fn freezing(self, frozen: bool) -> Self {
+        Self { frozen, ..self }
     }
 
     /// MENGER-12: this cell, asking or not, holding `labels`.
@@ -188,6 +196,7 @@ impl Key {
         )
         .with(asking, LabelSet::of(&t.labels))
         .archiving(t.archived.is_some())
+        .freezing(t.frozen)
     }
 
     pub fn status(self) -> Status {
@@ -229,6 +238,11 @@ impl Key {
     pub fn archived(self) -> bool {
         self.archived
     }
+
+    /// TICKETS-6: whether it is frozen.
+    pub fn frozen(self) -> bool {
+        self.frozen
+    }
 }
 
 /// As `--verify-derived` names a cell: `(Ready, build, none, blocked, no
@@ -242,7 +256,7 @@ impl fmt::Display for Key {
         };
         write!(
             f,
-            "({}, {}, {}, {}, {}{}{}{}{})",
+            "({}, {}, {}, {}, {}{}{}{}{}{})",
             self.status(),
             self.kind(),
             self.severity().map_or("none".to_string(), |s| s.as_str().to_ascii_lowercase()),
@@ -252,6 +266,7 @@ impl fmt::Display for Key {
             if self.asking { ", asking" } else { "" },
             labels,
             if self.archived { ", archived" } else { "" },
+            if self.frozen { ", frozen" } else { "" },
         )
     }
 }

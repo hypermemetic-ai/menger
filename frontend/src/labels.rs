@@ -74,6 +74,15 @@ pub(crate) fn row_chips(ticket: impl Fn() -> Vec<Label> + Send + Sync + 'static)
     }
 }
 
+/// TICKETS-6: a frozen scope's ❄, live — nothing when it is not frozen.
+pub(crate) fn frozen_mark(frozen: impl Fn() -> bool + Send + Sync + 'static) -> impl IntoView {
+    move || {
+        frozen().then(|| {
+            view! { <span class="frozen-mark" aria-label="frozen" title="frozen — no new children or numbers until it is unfrozen">"❄"</span> }
+        })
+    }
+}
+
 /// Whether the person may write — no login, or a grant that writes
 /// (editor or admin). The server decides each call; this only keeps a
 /// reader from being offered what will be refused.

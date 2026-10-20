@@ -1086,6 +1086,8 @@ fn Board(
                                 <td title=move || ticket.with(|t| t.title.clone())>
                                     {move || ticket.with(|t| t.title.clone())}
                                     // MENGER-12: its labels, after the title.
+                                    // TICKETS-6: a frozen scope's ❄.
+                                    {labels::frozen_mark(move || ticket.with(|t| t.frozen))}
                                     {labels::row_chips(move || ticket.with(|t| t.labels.clone()))}
                                 </td>
                                 <td class="kind" data-kind=move || ticket.with(|t| t.kind.to_string())>
@@ -1629,6 +1631,8 @@ fn ticket_view(
             <h2 data-ticket-id=header_id node_ref=head>
                 <span class="id code" data-tag=move || ticket.with(|t| tags::Tag::ticket(&t.id).attr())>{move || ticket.with(|t| t.id.to_string())}</span>
                 <span class="t">{move || ticket.with(|t| t.title.clone())}</span>
+                // TICKETS-6: a frozen scope's ❄.
+                {labels::frozen_mark(move || ticket.with(|t| t.frozen))}
                 // TICKETS-7: to its History — every version it had.
                 <button class="histjump" title="every version of this ticket: open one, diff two, restore one" on:click=move |_| {
                     if let Some(el) = dom::window().document().and_then(|d| d.get_element_by_id("t-history")) {

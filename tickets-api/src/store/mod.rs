@@ -216,6 +216,7 @@ fn whole(row: Row, body: String) -> Ticket {
         labels,
         assignees,
         archived,
+        frozen,
         created_unix,
         updated_unix,
     } = row;
@@ -242,6 +243,7 @@ fn whole(row: Row, body: String) -> Ticket {
         labels,
         assignees,
         archived,
+        frozen,
         body,
         created_unix,
         updated_unix,
@@ -786,6 +788,9 @@ pub enum Change {
     /// TICKETS-9: a ticket's assignees moved (`assign`); `added` and
     /// `removed` are the principals that moved. Carries the full ticket.
     AssigneesChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
+    /// TICKETS-6: a scope was frozen or unfrozen (`freeze` / `unfreeze`);
+    /// only broadcast when it moved. Carries the full ticket.
+    FrozenChanged { ticket: Ticket },
     /// An existing ticket's `unlocks` gained `added` because a newly
     /// created ticket named it in `blocked_by`. Carries the full updated
     /// ticket so watch-only clients stay coherent.
@@ -916,6 +921,7 @@ impl Change {
             | Self::CommitsUnlinked { ticket, .. }
             | Self::LabelsChanged { ticket, .. }
             | Self::AssigneesChanged { ticket, .. }
+            | Self::FrozenChanged { ticket }
             | Self::UnlocksChanged { ticket, .. }
             | Self::UnlocksRemoved { ticket, .. }
             | Self::BlockersChanged { ticket, .. }
@@ -1150,6 +1156,10 @@ pub enum StoreError {
     /// scope roots its own shortcode; it moves into one first (ACT-6's
     /// `reshortcode`). `parent` is where it hangs. Nothing changed.
     ScopeNotRoot { id: String, root: String, parent: String },
+    /// TICKETS-6: `scope` is frozen — a new child of it, a move under it,
+    /// or a kind change off a scope (`numbers: None`); or a new number in
+    /// the shortcode `numbers` it roots. Nothing changed.
+    Frozen { scope: String, numbers: Option<String> },
     /// MNG-14: a ticket's parent must be inside its own shortcode; only a
     /// shortcode's scope root may hang under another shortcode (its host).
     /// Nothing changed.
@@ -1430,6 +1440,10 @@ impl std::fmt::Display for StoreError {
                 "'{id}' isn't its shortcode's root ({root} is): a scope roots its own shortcode (ORG-5) — move it into one of its \
                  own first (tickets reshortcode --ids {id} --to NEW --new-scope TITLE --parent {parent}) (nothing changed)"
             ),
+            Self::Frozen { scope, numbers: None } => write!(f, "{scope} is frozen — unfreeze it first (tickets unfreeze --id {scope}) (nothing changed)"),
+            Self::Frozen { scope, numbers: Some(code) } => {
+                write!(f, "{code} is frozen — no new {code} numbers (tickets unfreeze --id {scope}) (nothing changed)")
+            }
             Self::PathKind { id, path, kind } => write!(
                 f,
                 "'{id}' holds the path '{path}': only a doc carries a path (menger's own documents), so it \
@@ -2767,6 +2781,7 @@ impl Cache {
             title: t.title.clone(),
             status: t.status,
             kind: t.kind,
+            frozen: t.frozen,
         });
         g
     }
@@ -3135,6 +3150,8 @@ impl Store {
         db::migrate_add_archived(&mut conn)?;
         // TICKETS-9: and the assignees beside them, `[]` for every ticket.
         db::migrate_add_assignees(&mut conn)?;
+        // TICKETS-6: and `frozen`, 0 for every ticket. No row is rewritten.
+        db::migrate_add_frozen(&mut conn)?;
         // COMP-3: a database written before COMP-3 — or a new one — gains the
         // `components` table here, once, durably, with the registry built
         // from every body; after it, every open reads the table.
@@ -5354,6 +5371,9 @@ pub use update_many::{refused as refused_many, Selection, UpdatedMany, UPDATE_MA
 /// ACT-5: `delete` and `undelete` — tombstones, the purge, the rebuild.
 // ARCHIVE-2: the archive — a mark apart from status.
 mod archive;
+mod freeze;
+#[cfg(test)]
+mod tests_freeze;
 pub use archive::{ArchiveAnswer, RestoreAnswer};
 #[cfg(test)]
 mod tests_archive;
