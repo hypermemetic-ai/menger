@@ -2,7 +2,7 @@
 //! CHAT-55's strip (owner, chat 6, 2026-10-19: *"start the work that turns
 //! this chat into a ticket surface"*).
 //!
-//! A message that names a ticket on a line of its own ([`lone_codes`]: the
+//! A message that names a ticket on a line of its own ([`lone`]: the
 //! builder's "I filed" line, `/ticket CODE`) gets a **card** under it: the
 //! id, title and status, where it runs per environment
 //! ([`crate::deploys::row_marks`]), and its open questions, answered on the
@@ -18,22 +18,29 @@
 //! message. On a phone a card is the turn's width, its actions one row (⋯
 //! for the rest) and its questions folded to "N questions" until tapped; at
 //! 1440 at most 560 px.
+//!
+//! CHAT-57: the notation (menger-skills `chatting`) widens the rule — every
+//! ticket a message names **in bold** gets a card too ([`card_codes`]:
+//! `**KILN-7**`, each of `**ENV-2..5**`'s and `**A-11/12**`'s), and
+//! `**ENV-1** · entity` opens that input on ENV-1's card. More than two
+//! cards fold to one row, "N tickets", on a phone ([`folds`]). The cards
+//! colour the turn's live chips (`.tchip.live[data-ticket]`, src/turns.rs)
+//! by their ticket's stage, the strip's ([`crate::chat_strip::stage_now`]).
 
 use crate::cache::{Holder, RowSignal};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use menger_tickets_api::chat_tickets::{is_code, mentions_in};
+use menger_tickets_api::chat_tickets::{is_code, mentions_in, names_on_line, Form};
 use menger_tickets_api::{Input, InputKind, InputState, InputValue, Kind, Status, TicketSummary, TicketsEvent};
 use std::collections::{BTreeMap, BTreeSet};
+use wasm_bindgen::JsCast;
 
 /// How long a drop can be taken back.
 pub(crate) const UNDO_MS: i32 = 10_000;
 
-/// The codes a body names on lines of their own — a line that is the code
-/// alone (in bold or code, or a list item, too), outside fenced blocks;
-/// each once, in order.
-pub(crate) fn lone_codes(body: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+/// A body's lines outside fenced blocks.
+fn unfenced(body: &str) -> Vec<&str> {
+    let mut out = Vec::new();
     let mut fence: Option<&str> = None;
     for line in body.lines() {
         let t = line.trim();
@@ -45,16 +52,50 @@ pub(crate) fn lone_codes(body: &str) -> Vec<String> {
             };
             continue;
         }
-        if fence.is_some() {
-            continue;
-        }
-        let t = t.trim_start_matches(['-', '*', '+']).trim_start();
-        let t = t.trim_matches(|c| matches!(c, '*' | '_' | '`')).trim();
-        if is_code(t) && !out.iter().any(|o| o == t) {
-            out.push(t.to_string());
+        if fence.is_none() {
+            out.push(line);
         }
     }
     out
+}
+
+/// The code a line is alone (in bold or code, or a list item, too).
+fn lone(line: &str) -> Option<&str> {
+    let t = line.trim().trim_start_matches(['-', '*', '+']).trim_start();
+    let t = t.trim_matches(|c| matches!(c, '*' | '_' | '`')).trim();
+    is_code(t).then_some(t)
+}
+
+/// CHAT-57: the tickets a body draws cards for — a code on a line of its
+/// own ([`lone`]) and every ticket named in bold (a run's and a set's
+/// each), in the order written, each once, outside fenced blocks — and the
+/// input a bold name asks (`**ENV-1** · entity`), by ticket.
+pub(crate) fn card_codes(body: &str) -> (Vec<String>, BTreeMap<String, String>) {
+    let mut out: Vec<String> = Vec::new();
+    let mut asks = BTreeMap::new();
+    let add = |c: &str, out: &mut Vec<String>| {
+        if !out.iter().any(|o| o == c) {
+            out.push(c.to_string());
+        }
+    };
+    for line in unfenced(body) {
+        for n in names_on_line(line) {
+            n.codes.iter().for_each(|c| add(c, &mut out));
+            if let (Form::One, Some(i)) = (n.form, n.input) {
+                asks.entry(n.text).or_insert(i);
+            }
+        }
+        if let Some(t) = lone(line) {
+            add(t, &mut out);
+        }
+    }
+    (out, asks)
+}
+
+/// CHAT-57: whether `n` cards fold to one row, "N tickets" — more than two,
+/// on a phone.
+pub(crate) fn folds(n: usize, wide: bool) -> bool {
+    !wide && n > 2
 }
 
 /// What a card offers, in the order drawn.
@@ -200,16 +241,17 @@ fn resolve(code: String, holder: Holder, rows: RwSignal<BTreeMap<String, RowSign
 // -- the views -----------------------------------------------------------------
 
 /// The cards under a turn whose body is `body`: one per ticket it names on a
-/// line of its own, and *Go all* when it names several Pending tickets.
-/// Nothing when it names none.
+/// line of its own or in bold ([`card_codes`]), and *Go all* when it names
+/// several Pending tickets. Nothing when it names none.
 #[component]
 pub(crate) fn Cards(body: String) -> impl IntoView {
-    let lone = lone_codes(&body);
+    let (lone, asks) = card_codes(&body);
     let named = mentions_in(&body);
     let lone_set: BTreeSet<String> = lone.iter().cloned().collect();
     let rows: RwSignal<BTreeMap<String, RowSignal>> = RwSignal::new(BTreeMap::new());
     if !named.is_empty() {
         crate::inputs::want();
+        crate::deploys::want();
         let holder = Holder::new();
         for code in named.iter().filter(|c| lone_set.contains(*c) || named.len() > 1) {
             resolve(code.clone(), holder.clone(), rows);
@@ -228,14 +270,32 @@ pub(crate) fn Cards(body: String) -> impl IntoView {
             err.try_set(r.err());
         });
     };
+    let wide = crate::dom::window().inner_width().ok().and_then(|w| w.as_f64()).is_some_and(|w| w > 760.0);
     let cards = move || {
-        lone.iter()
-            .filter_map(|c| rows.with(|m| m.get(c).cloned()))
-            .map(|row| view! { <Card row /> })
-            .collect_view()
+        let list: Vec<(RowSignal, Option<String>)> = lone.iter().filter_map(|c| rows.with(|m| m.get(c).cloned()).map(|r| (r, asks.get(c).cloned()))).collect();
+        let n = list.len();
+        let items = list.into_iter().map(|(row, focus)| view! { <Card row focus /> }).collect_view();
+        if folds(n, wide) {
+            view! { <details class="tkfold"><summary>{format!("{n} tickets")}</summary>{items}</details> }.into_any()
+        } else {
+            items.into_any()
+        }
     };
+    // CHAT-57: the turn's live chips take their ticket's stage.
+    let node = NodeRef::<leptos::html::Div>::new();
+    Effect::new(move |_| {
+        let stages: Vec<(String, &'static str, &'static str)> = rows.with(|m| m.iter().map(|(c, r)| (c.clone(), crate::chat_strip::stage_now(r))).map(|(c, s)| (c, s.as_str(), s.words())).collect());
+        let Some(turn) = node.get().and_then(|el| el.closest(".turn").ok().flatten()) else { return };
+        for (code, stage, words) in stages {
+            let Ok(all) = turn.query_selector_all(&format!(".tchip.live[data-ticket=\"{code}\"]")) else { continue };
+            for e in (0..all.length()).filter_map(|i| all.item(i)).filter_map(|n| n.dyn_into::<web_sys::Element>().ok()) {
+                let _ = e.set_attribute("data-stage", stage);
+                let _ = e.set_attribute("title", &format!("{code} · {words}"));
+            }
+        }
+    });
     view! {
-        <div class="tkcards">
+        <div class="tkcards" node_ref=node>
             {cards}
             {move || {
                 let n = many.with(Vec::len);
@@ -251,9 +311,10 @@ pub(crate) fn Cards(body: String) -> impl IntoView {
     }
 }
 
-/// One ticket's card.
+/// One ticket's card; `focus`, the input a bold name asks on it (CHAT-57:
+/// its questions open, that one marked).
 #[component]
-fn Card(row: RowSignal) -> impl IntoView {
+fn Card(row: RowSignal, focus: Option<String>) -> impl IntoView {
     let row = RwSignal::from(row);
     let id = row.with_untracked(|t| t.id.to_string());
     let href = format!("#/ticket/{id}");
@@ -347,7 +408,10 @@ fn Card(row: RowSignal) -> impl IntoView {
         let n = list.len();
         (n > 0).then(|| {
             let open_n = list.iter().filter(|i| i.state == InputState::Open).count();
-            let items = list.into_iter().map(|i| view! { <Question input=i /> }).collect_view();
+            let items = list.into_iter().map(|i| {
+                let on = focus.as_deref().is_some_and(|f| i.id.to_string() == f);
+                view! { <Question input=i focus=on /> }
+            }).collect_view();
             let label = match (n, open_n) {
                 (1, 1) => "1 question".to_string(),
                 (1, _) => "1 question, answered".to_string(),
@@ -356,7 +420,7 @@ fn Card(row: RowSignal) -> impl IntoView {
                 (n, o) => format!("{n} questions, {o} open"),
             };
             view! {
-                <details class="tkqs" open=wide>
+                <details class="tkqs" open=wide || focus.is_some()>
                     <summary>{label}</summary>
                     {items}
                 </details>
@@ -384,7 +448,7 @@ fn Card(row: RowSignal) -> impl IntoView {
 /// One question on a card: its options (the recommended marked) — a tap
 /// answers; a multi's ticks and a text's reply are sent with *answer*.
 #[component]
-fn Question(input: Input) -> impl IntoView {
+fn Question(input: Input, focus: bool) -> impl IntoView {
     let ticket = input.ticket.to_string();
     let key = input.id.to_string();
     let answered: Option<InputValue> = input.answer.as_ref().map(|a| a.value.clone());
@@ -473,7 +537,7 @@ fn Question(input: Input) -> impl IntoView {
         _ => None,
     };
     view! {
-        <div class="tkq" data-input=key.clone() data-state=format!("{:?}", input.state).to_lowercase()>
+        <div class="tkq" class:focus=focus data-input=key.clone() data-state=format!("{:?}", input.state).to_lowercase()>
             <p class="tkqq">{input.question.clone().unwrap_or_else(|| key.clone())}</p>
             <div class="tkopts">{body}</div>
             {input.recommendation.clone().map(|r| view! { <p class="tkrec">{r}</p> })}
@@ -501,8 +565,24 @@ mod tests {
     #[test]
     fn a_code_on_its_own_line_is_a_card() {
         let body = "I filed\n\n**DEPLOY-42**\n\n- KILN-7\n`KILN-8`\nsee KILN-9 too\n```\nKILN-10\n```\nDEPLOY-42";
-        assert_eq!(lone_codes(body), ["DEPLOY-42", "KILN-7", "KILN-8"]);
-        assert!(lone_codes("Filed KILN-2 and KILN-3.").is_empty(), "named in a sentence: chips only");
+        assert_eq!(card_codes(body).0, ["DEPLOY-42", "KILN-7", "KILN-8"]);
+        assert!(card_codes("Filed KILN-2 and KILN-3.").0.is_empty(), "named in a sentence: chips only");
+    }
+
+    #[test]
+    fn a_name_in_bold_is_a_card_and_its_input_opens() {
+        let body = "Filed **HYPERFORGE-9** (the hub), **ENV-2..5**, **HYPERFORGE-11/12**.\n\n**ENV-1** · entity\n\nKILN-7\nsee KILN-9\n```\n**KILN-10**\n```";
+        let (codes, asks) = card_codes(body);
+        assert_eq!(codes, ["HYPERFORGE-9", "ENV-2", "ENV-3", "ENV-4", "ENV-5", "HYPERFORGE-11", "HYPERFORGE-12", "ENV-1", "KILN-7"]);
+        assert_eq!(asks.get("ENV-1").map(String::as_str), Some("entity"));
+        assert_eq!(asks.len(), 1);
+        assert!(card_codes("Filed KILN-2 and KILN-3.").0.is_empty(), "plain in a sentence: chips only");
+    }
+
+    #[test]
+    fn more_than_two_cards_fold_on_a_phone() {
+        assert!(!folds(2, false) && folds(3, false));
+        assert!(!folds(9, true), "at 1440 every card shows");
     }
 
     #[test]

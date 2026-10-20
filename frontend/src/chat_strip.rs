@@ -83,11 +83,17 @@ impl Row {
     /// Its stage now: the row's status (the watch moves it), its open
     /// inputs, its marks.
     fn stage(&self) -> ChatStage {
-        let (id, kind, status) = self.row.with(|t| (t.id.to_string(), t.kind, t.status));
-        let asking = crate::inputs::signal().with(|i| i.as_ref().is_some_and(|i| i.of_ticket(&id).iter().any(|x| x.state == InputState::Open)));
-        let (staged, running) = runs(&deploys::marks_of(&id));
-        stage_of(kind, status, asking, staged, running)
+        stage_now(&self.row)
     }
+}
+
+/// A row's stage now: its status (the watch moves it), its open inputs,
+/// its marks — the strip's, and CHAT-57's live chips' colour.
+pub(crate) fn stage_now(row: &RowSignal) -> ChatStage {
+    let (id, kind, status) = row.with(|t| (t.id.to_string(), t.kind, t.status));
+    let asking = crate::inputs::signal().with(|i| i.as_ref().is_some_and(|i| i.of_ticket(&id).iter().any(|x| x.state == InputState::Open)));
+    let (staged, running) = runs(&deploys::marks_of(&id));
+    stage_of(kind, status, asking, staged, running)
 }
 
 /// `chats.tickets { chat }`: the rows, or why not.

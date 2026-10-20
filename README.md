@@ -3537,6 +3537,21 @@ chip. On a phone a card is the turn's width, its actions one row (⋯ for the
 rest), its questions folded to "N questions"; on a wide screen it is at
 most 560 px. `scripts/chat-card-check.mjs` checks it in a browser.
 
+#### The ticket notation (CHAT-57)
+
+How a message names tickets (menger-skills `chatting`; the chat bridge's
+prompt says it too): **bold, the id alone** — `**KILN-7**`, a run
+`**KILN-2..5**` (KILN-2 to KILN-5), a set `**KILN-11/12**`, an ask
+`**KILN-7** · fire` (the ticket and its input's id). `chat_tickets::
+mentions_in` reads all four and a plain id, a run or a set at most 20
+tickets (`EXPAND_CAP`), so each joins the chat's tickets; `bold_names`
+reads the bold ones with their input. In the message a bold name is a
+**live chip**, coloured by its ticket's stage (the strip's), a run or a set
+one chip that opens to its tickets' on a tap. Each ticket named in bold
+gets a **card** under the message, as one alone on its line does; more
+than two fold to one row, "N tickets", on a phone; `· fire` opens that
+question on the card, marked.
+
 #### Questions in a message (CHAT-20)
 
 A message asks as a ticket body does (CHAT-19, the owner's `home` decision:

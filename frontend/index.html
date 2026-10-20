@@ -4761,6 +4761,31 @@
     display: inline-block; font: calc(11px * var(--text-scale)) var(--mono); color: var(--accent); border: var(--border) solid var(--accent);
     border-radius: var(--radius-sm); padding: 0 5px; text-decoration: none; line-height: 1.5; vertical-align: baseline;
   }
+  /* CHAT-57: a name in bold is a live chip, coloured by its ticket's stage
+     (the strip's: waits on you, ready, in progress, in review, on test,
+     shipped) once its card resolves it; a run or a set opens to its chips. */
+  :is(#chatpane, #chatfull) .tchip.live { font-weight: var(--weight-strong); }
+  :is(#chatpane, #chatfull) .tchip.live[data-stage] { color: var(--st-fg); background: var(--st-bg); border-color: color-mix(in srgb, var(--st-fg) 45%, transparent); }
+  :is(#chatpane, #chatfull) .tchip.live[data-stage="waits_on_you"] { --st-fg: var(--ask); --st-bg: var(--ask-bg); }
+  :is(#chatpane, #chatfull) .tchip.live[data-stage="ready"] { --st-fg: var(--st-ready-fg); --st-bg: var(--st-ready-bg); }
+  :is(#chatpane, #chatfull) .tchip.live[data-stage="in_progress"] { --st-fg: var(--st-coding-fg); --st-bg: var(--st-coding-bg); }
+  :is(#chatpane, #chatfull) .tchip.live[data-stage="in_review"],
+  :is(#chatpane, #chatfull) .tchip.live[data-stage="on_test"] { --st-fg: var(--st-in-review-fg); --st-bg: var(--st-in-review-bg); }
+  :is(#chatpane, #chatfull) .tchip.live[data-stage="shipped"] { --st-fg: var(--st-complete-fg); --st-bg: var(--st-complete-bg); }
+  :is(#chatpane, #chatfull) .tchip.live[data-stage="closed"] { --st-fg: var(--st-canceled-fg); --st-bg: var(--st-canceled-bg); text-decoration: line-through; }
+  :is(#chatpane, #chatfull) .tchip.live[data-stage="other"] { --st-fg: var(--st-doc-fg); --st-bg: var(--st-doc-bg); }
+  :is(#chatpane, #chatfull) .tchip.run { cursor: pointer; background: var(--card); }
+  :is(#chatpane, #chatfull) .tchip.run .trn { margin-left: 5px; padding: 0 4px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--accent) 14%, transparent); font-weight: normal; }
+  :is(#chatpane, #chatfull) .tchip.run[aria-expanded="true"] { background: var(--sel); }
+  :is(#chatpane, #chatfull) .trun .trx { margin-left: 4px; }
+  :is(#chatpane, #chatfull) .trun .trx .tchip { margin: 1px 2px 1px 0; }
+  @media (pointer: coarse) { :is(#chatpane, #chatfull) .tchip.live { padding: 2px 7px; } }
+  /* CHAT-57: more than two cards fold to one row on a phone; an input a
+     bold name asks is marked on its card. */
+  :is(#chatpane, #chatfull) .tkfold { display: flex; flex-direction: column; gap: 8px; }
+  :is(#chatpane, #chatfull) .tkfold > summary { cursor: pointer; padding: 8px 12px; min-height: 44px; display: flex; align-items: center; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); font: calc(12px * var(--text-scale)) var(--mono); color: var(--muted); }
+  :is(#chatpane, #chatfull) .tkfold[open] > summary { color: var(--accent); }
+  :is(#chatpane, #chatfull) .tkq.focus { outline: 2px solid var(--ask-line); outline-offset: 2px; border-radius: var(--radius-sm); }
   /* CHAT-56: a ticket named on its own line is a card under the turn — its
      status, where it runs, its questions answered here, and what to do. */
   :is(#chatpane, #chatfull) .tkcards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px; max-width: 560px; }

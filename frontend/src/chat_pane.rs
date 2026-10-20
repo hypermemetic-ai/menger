@@ -1030,6 +1030,14 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
                         let _ = b.focus();
                     }
                 }
+                // CHAT-57: a run's or a set's live chip opens to its tickets'.
+                Some("expand") => {
+                    let open = btn.get_attribute("aria-expanded").as_deref() != Some("true");
+                    let _ = btn.set_attribute("aria-expanded", &open.to_string());
+                    if let Some(x) = btn.next_element_sibling() {
+                        let _ = if open { x.remove_attribute("hidden") } else { x.set_attribute("hidden", "") };
+                    }
+                }
                 Some("quote") => body.update(|b| b.push_str(&turns::quoted(&text_of(mid)))),
                 Some("link") => {
                     let w = dom::window();
