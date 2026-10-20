@@ -439,6 +439,12 @@ pub enum ChatsEvent {
     /// first), and on every participant's `watch`: `by`'s live work in
     /// `chat` — started, a line, ended. Never a message.
     Activity { activity: Activity },
+    /// CHAT-55: one of `tickets`' rows — a ticket the chat names, filed or
+    /// linked, as the caller reads it, with its stage.
+    Ticket { ticket: crate::chat_tickets::ChatTicket },
+    /// CHAT-55: `link`'s answer, and on `watch`: `tickets` came into `chat`
+    /// (filed from it, or linked) — those new to it.
+    Linked { chat: ChatId, tickets: Vec<String>, how: crate::chat_tickets::MentionHow },
     /// AGENT-3: a participating agent's claim began or ended — a line in the
     /// chat. Declared for AGENT-3's claims; nothing emits it yet.
     ClaimLine { chat: ChatId, agent: String, holder: String, began: bool, at: i64 },

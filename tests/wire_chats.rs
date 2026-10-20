@@ -521,3 +521,43 @@ async fn messages_are_deleted_kept_marked_and_restored() {
     // Neither ids nor a range: refused in band.
     assert_eq!(one(&builder, "chats.delete", json!({ "chat": chat })).await["type"], "refused");
 }
+
+/// CHAT-55: a chat's tickets on the wire — named by its messages (one out
+/// of the reader's reach left out), filed from it (`tickets.create
+/// --chat`, a participant only) and linked (`chats.link`); `linked` on the
+/// watch; `in chat N` as a filter; nothing for one outside it.
+#[tokio::test]
+async fn a_chat_s_tickets_are_named_filed_and_linked() {
+    let port = start().await;
+    let boss = as_key(port, &BOSS, "boss").await;
+    kiln(&boss).await;
+    let g = one(&boss, "members.grant", json!({ "principal": principal(&BUILDER), "scope": "A", "role": "editor" })).await;
+    assert_ne!(g["type"], "error", "{g}");
+    let ada = as_key(port, &ADA, "ada").await;
+    let builder = as_key(port, &BUILDER, "builder").await;
+    let rui = as_key(port, &RUI, "rui").await;
+    let chat = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [principal(&BUILDER)] })).await["chat"]["id"].as_u64().unwrap();
+    one(&ada, "chats.post", json!({ "chat": chat, "body": "A-1 first, then B-2." })).await;
+    let mut watch = subscribe(&ada, "chats.watch", json!({})).await;
+
+    // Filed from the chat: by a participant; one outside it is refused, nothing filed.
+    let outside = call(&boss, "tickets.create", json!({ "epic": "A", "title": "from outside", "chat": chat })).await;
+    assert_ne!(outside[0]["type"], "created", "{outside:?}");
+    let filed = one(&builder, "tickets.create", json!({ "epic": "A", "title": "the strip", "chat": chat })).await;
+    assert_eq!((filed["type"].as_str(), filed["ticket"]["id"].as_str()), (Some("created"), Some("A-3")), "{filed}");
+    assert_eq!(next(&mut watch).await, json!({ "type": "linked", "chat": chat, "tickets": ["A-3"], "how": "filed" }));
+
+    let rows = |v: &[Value]| v.iter().map(|e| format!("{} {} {}", e["ticket"]["summary"]["id"].as_str().unwrap_or("?"), e["ticket"]["stage"].as_str().unwrap_or("?"), e["ticket"]["how"].as_str().unwrap_or("?"))).collect::<Vec<_>>();
+    let mine = call(&ada, "chats.tickets", json!({ "chat": chat })).await;
+    assert_eq!(rows(&mine), ["A-3 waits_on_you filed", "A-1 other mentioned"], "B-2 is not ada's to read: {mine:?}");
+    // Linked: new ones only; one ada cannot read is refused by name.
+    let linked = one(&ada, "chats.link", json!({ "chat": chat, "tickets": ["A-2", "A-3"] })).await;
+    assert_eq!(linked, json!({ "type": "linked", "chat": chat, "tickets": ["A-2"], "how": "linked" }));
+    let hidden = one(&ada, "chats.link", json!({ "chat": chat, "tickets": ["B-2"] })).await;
+    assert_eq!(hidden, json!({ "type": "refused", "reasons": ["no ticket B-2"] }));
+    // The cell, for a reader in the chat; rui (a reader of A, not in it) has none of it.
+    let listed = call(&ada, "tickets.list", json!({ "filter": format!("in chat {chat}"), "summary": true })).await;
+    let ids: Vec<&str> = listed.iter().filter_map(|e| e["summary"]["id"].as_str()).collect();
+    assert_eq!(ids, ["A-1", "A-2", "A-3"], "{listed:?}");
+    assert_ne!(one(&rui, "chats.tickets", json!({ "chat": chat })).await["type"], "ticket");
+}

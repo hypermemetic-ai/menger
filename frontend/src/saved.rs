@@ -538,7 +538,7 @@ async fn amend(client: &session::Client, id: &str, title: Option<String>, body: 
 async fn create_doc(client: &session::Client, title: &str, body: String, parent: &str, path: Option<String>) -> Result<Ticket, String> {
     use crate::typed::{opt, typed};
     let events = client
-        .create_all(typed(EPIC)?, typed(title)?, Some(menger_tickets_api::Kind::Doc), None, None, Some(typed(&body)?), Some(typed(parent)?), opt(path)?, None)
+        .create_all(typed(EPIC)?, typed(title)?, Some(menger_tickets_api::Kind::Doc), None, None, Some(typed(&body)?), Some(typed(parent)?), opt(path)?, None, None)
         .await
         .map_err(|e| session::describe(&e))?;
     ticket_of(events).map_err(|m| format!("create: {m}"))

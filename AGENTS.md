@@ -369,6 +369,20 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger chats candidates                                 # names, agents
   ```
 
+  **A chat's tickets** (CHAT-55): every ticket its messages name, and
+  every ticket filed (`tickets create --chat N`) or linked (`chats link`)
+  from it — `chats tickets --chat N` (each with its stage: waits on you,
+  ready, in progress, in review, on test, shipped), the `in chat N` filter
+  cell; the app draws them as the strip under the chat's head. **File work
+  the owner asks for in a chat with `--chat N`**, so it shows there. README
+  "A chat's tickets":
+
+  ```sh
+  synapse -P 4455 menger tickets create --epic CHAT --title "the strip" --chat 6
+  synapse -P 4455 menger chats link --chat 6 --tickets CHAT-55,CHAT-56
+  synapse -P 4455 menger chats tickets --chat 6
+  ```
+
   **An admin adds anyone** (CHAT-16): an admin of a chat's ticket (or,
   outside tickets, its organization) adds anyone, in the chat or not; one
   who can't read it needs `--grant ticket` (viewer on that ticket alone)

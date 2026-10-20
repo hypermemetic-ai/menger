@@ -133,7 +133,7 @@ impl Kind {
             Event::Stage(s, _) => Kind::Stage(*s),
             Event::Requested(_) => Kind::Requested,
             Event::Queued(_) => Kind::Queued,
-            Event::Chatting | Event::Unread => Kind::Chats,
+            Event::Chatting | Event::Unread | Event::InChat(_) => Kind::Chats,
             Event::Assigned(_) | Event::Unassigned => Kind::People,
             Event::Archived => Kind::Archived,
             Event::Restored => Kind::Restored,
@@ -624,6 +624,7 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
         Event::Restored => out.push((None, "restored".into())),
         Event::Chatting => out.push((None, "chatting".into())),
         Event::Unread => out.push((None, "unread".into())),
+        Event::InChat(n) => out.push((None, format!("in chat {n}"))),
         // TICKETS-9: "assigned to me", "assigned to <principal>", "assigned", "unassigned".
         Event::Assigned(None) => out.push((None, "assigned".into())),
         Event::Assigned(Some(menger_tickets_api::filter::Who::Me)) => out.push((None, "assigned to me".into())),

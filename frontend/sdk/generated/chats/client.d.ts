@@ -106,6 +106,17 @@ export interface ChatsClient {
      */
     delete(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent>;
     /**
+     * Link tickets to a chat, as a builder's work from it; yields linked { chat, tickets, how } — those new to it (CHAT-55).
+  
+  By a participant; each ticket one the caller reads, or the call is
+  `refused`, naming each, and nothing is linked. `watch` carries
+  `linked` to every participant.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `chats.link` anywhere it is held
+     */
+    link(chat: ChatId, tickets: TicketRef[]): AsyncGenerator<ChatsEvent>;
+    /**
      * The caller's chats, by last activity, newest first — on a ticket, with or without unread, open or closed; a chat { chat } each, then page { next }.
   
   Without `ticket`, the chats the caller is in; with it, those on that
@@ -222,6 +233,19 @@ export interface ChatsClient {
      */
     schema(): Promise<unknown>;
     /**
+     * The tickets a chat names — in its messages, filed from it or linked to it — each a ticket { ticket } with its stage, newest first (CHAT-55).
+  
+  A message's codes count from when it is posted (a deleted message's
+  drop out); `tickets create --chat` and `link` add theirs. Only the
+  tickets the caller reads; a chat it does not see is `not_found`.
+  The stage: waits_on_you, ready, in_progress, in_review, on_test,
+  shipped (closed, other: not work in hand).
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `chats.tickets` anywhere it is held
+     */
+    tickets(chat: ChatId): AsyncGenerator<ChatsEvent>;
+    /**
      * Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, messages_deleted, messages_restored, listening, left — until disconnect.
   
   The chats the caller is in (with `ticket`, those on it — every one
@@ -269,6 +293,10 @@ export declare const requires: {
         readonly grant: "chats.delete";
         readonly target: null;
     };
+    readonly "chats.link": {
+        readonly grant: "chats.link";
+        readonly target: null;
+    };
     readonly "chats.list": {
         readonly grant: "chats.list";
         readonly target: null;
@@ -307,6 +335,10 @@ export declare const requires: {
     };
     readonly "chats.schema": {
         readonly grant: "chats.schema";
+        readonly target: null;
+    };
+    readonly "chats.tickets": {
+        readonly grant: "chats.tickets";
         readonly target: null;
     };
     readonly "chats.watch": {

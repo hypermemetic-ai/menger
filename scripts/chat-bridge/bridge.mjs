@@ -614,6 +614,7 @@ function systemPrompt(chatId, ticket, title, chat) {
     `- A question for the owner is filed as an input on its ticket (or the needs-you label with the reason), then mentioned here with the ticket id — never only in chat.`,
     `- Never print a secret.`,
     `- For real work — code, a build, a change — file or claim a ticket and work in its own worktree as the building skill says; say in your answer what you started and where to follow it. A turn ends when you answer, so finish or summarise where it stands.`,
+    `- A ticket you file for this chat is filed with \`--chat ${chatId}\` (\`tickets create … --chat ${chatId}\`), and one you start from it is linked (\`chats link --chat ${chatId} --tickets ID\`), so it shows on the chat's ticket strip (CHAT-55).`,
     ``,
     `The tracker is ${cfg.url}. synapse reaches it as ${/^ws:\/\/127\.0\.0\.1:(\d+)/.test(cfg.url) ? `\`synapse -P ${cfg.url.match(/:(\d+)/)[1]} menger …\`` : `\`synapse --url ${cfg.url} menger …\``} (the builder's key is signed in). The chat's messages: \`chats messages --chat ${chatId} --newest true\`.`,
   ].join("\n");

@@ -1540,6 +1540,11 @@ fn read_field(rest: &str) -> Result<Field, String> {
                 .map(Field::Severity)
                 .ok_or_else(|| format!("unknown severity `{v}` — the severities are critical, high, medium, low, none"))
         }
+        // CHAT-55: `in chat N` — a chat's tickets, before `in CODE`.
+        "in" if in_chat(tail).is_some() => Ok(Field::History(History { event: Event::InChat(in_chat(tail).unwrap_or_default()), window: None, by: None })),
+        "in" if tail.split_whitespace().next().is_some_and(|w| w.eq_ignore_ascii_case("chat")) && tail.split_whitespace().count() > 1 => {
+            Err(format!("`in chat` takes a chat's number, as `in chat 6` — not `{}`", tail.split_whitespace().skip(1).collect::<Vec<_>>().join(" ")))
+        }
         "in" => {
             let v = value()?;
             // ACCESS-8: the one shortcode rule, `Code`'s.
@@ -1798,6 +1803,10 @@ pub enum Event {
     /// ticket. Answered for the reader from the chats' read marks; no
     /// window, no `by`.
     Unread,
+    /// CHAT-55: `in chat N` — chat N names the ticket (a message's code, or
+    /// filed or linked from it), for a reader in that chat. Answered from
+    /// the chats' kept mentions; no window, no `by`.
+    InChat(u64),
     /// TICKETS-9: `assigned <who>` — the principal (`me`: the reader) is
     /// among the ticket's assignees; `assigned` alone, anyone is. Answered
     /// from the kept assignments; no window, no `by`.
@@ -1833,6 +1842,7 @@ impl Event {
             Event::Queued(_) => "queued",
             Event::Chatting => "chatting",
             Event::Unread => "unread",
+            Event::InChat(_) => "in chat",
             Event::Assigned(_) => "assigned",
             Event::Unassigned => "unassigned",
             Event::Archived => "archived",
@@ -2150,6 +2160,7 @@ impl History {
             Event::Queued(Some(u)) => format!("queued {u}"),
             Event::Chatting => "chatting".to_string(),
             Event::Unread => "unread".to_string(),
+            Event::InChat(n) => format!("in chat {n}"),
             Event::Assigned(None) => "assigned".to_string(),
             Event::Assigned(Some(w)) => format!("assigned {}", w.format()),
             Event::Unassigned => "unassigned".to_string(),
@@ -2874,3 +2885,10 @@ fn satisfiable(groups: &[&Group]) -> bool {
 #[cfg(test)]
 #[path = "filter_tests.rs"]
 mod tests;
+
+/// CHAT-55: `chat N` after `in` — the chat's number.
+fn in_chat(tail: &str) -> Option<u64> {
+    let mut w = tail.split_whitespace();
+    let (Some(c), Some(n), None) = (w.next(), w.next(), w.next()) else { return None };
+    (c.eq_ignore_ascii_case("chat") && !n.starts_with('0')).then(|| n.parse::<u64>().ok()).flatten().filter(|n| *n > 0)
+}

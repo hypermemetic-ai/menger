@@ -326,6 +326,14 @@ fn relay(store: &Store, user: &VerifiedUser, ticket: Option<&str>, change: &Chat
         ChatChange::Listening { principal, waiting, .. } => ChatsEvent::Listening { chat, principal: principal.clone(), waiting: *waiting },
         ChatChange::Removed { principal, .. } => ChatsEvent::Removed { chat: view, principal: principal.clone(), revoked: false },
         ChatChange::Activity(a) => ChatsEvent::Activity { activity: a.clone() },
+        // CHAT-55: only the tickets the hearer reads.
+        ChatChange::Linked { tickets, how, .. } => {
+            let tickets: Vec<String> = tickets.iter().filter(|t| user.permit::<Viewer>(&TicketId::new(t.as_str()), store).is_ok()).cloned().collect();
+            if tickets.is_empty() {
+                return None;
+            }
+            ChatsEvent::Linked { chat, tickets, how: *how }
+        }
         ChatChange::Deleted { ids, by, at, restored, .. } => {
             let (ids, by, at, unread) = (ids.iter().copied().map(MessageId::new).collect(), by.clone(), *at, view.unread);
             match restored {

@@ -1,4 +1,4 @@
-import type { WatchEnd } from '../chats/types';
+import type { Archived, Code, CommitRef, Label, Placement, Severity, ShortcodeId, Status, TicketId, TicketName, TicketSummary, WatchEnd } from '../chats/types';
 import type { Kind, TicketRef } from '../notes/types';
 /** MNG-16: what an `amend` moved — its title, its body. */
 export type AmendedField = "title" | "body";
@@ -42,17 +42,6 @@ export interface Answer {
 viewer's click, which the host says on its `answer`; `api`, everything
 else (synapse, an agent). The only "who" until CONTEXT adds identity. */
 export type AnswerSource = never;
-/** ARCHIVE-2: an archived ticket's mark — when it was archived, by whom
-(the principal, as a transition names its actor), why (the archive's
-`message`), and which write set it (the id of that write's first
-transition: every ticket one archive took shares it, so a restore
-`with_children` brings back exactly what went with its ticket). */
-export interface Archived {
-    atUnix: number;
-    by: string;
-    message?: string | null;
-    write: number;
-}
 /** ACCESS-48: a ticket or a shortcode as a call named it, echoed back —
 `not_found`'s and `ambiguous`'s `id`: what was asked, by any name
 [`TicketRef`] or [`ShortcodeRef`] takes (the rule [`Under`] reads). */
@@ -124,17 +113,6 @@ export declare function isAttrKindTicket(e: AttrKind): e is AttrKindTicket;
 export declare function isAttrKindEnum(e: AttrKind): e is AttrKindEnum;
 /** Where a write comes from: app, api (default) or pipeline (synapse is api, merge pipeline) */
 export type CallerSource = "app" | "api" | "pipeline";
-/** ORG-3: a shortcode's letters — ASCII letters and digits, upper case (a
-code is read case-blind and kept upper case), 1 to [`CODE_MAX`]. ORG-9:
-in hyphen-separated segments (`SYNAPSE-CC`) — [`is_code`]'s rule.
-
-Not an identity: two shortcodes of one code live in two namespaces. So
-it has no `Hash`, no `Ord` and no `Borrow<str>` — nothing can key a map
-or a set by it (the module's examples hold that to the compiler) — and its `Display` is
-its letters, never an address. It compares equal to another code of the
-same letters, which is what a search over the letters asks; the store
-compares shortcodes by [`ShortcodeId`]. */
-export type Code = string;
 /** One comment, as kept. */
 export interface Comment {
     anchor: Anchor;
@@ -164,12 +142,6 @@ export type CommentId = number;
 export type CommentIntent = "comment" | "changes";
 /** Where a comment stands (any case) */
 export type CommentState = "open" | "resolved";
-/** SDLC-9: a commit — a hexadecimal object name of 7 to 64 characters
-(kept lower case), optionally a repository and `@` before it
-(`77df9a0`, `plexus-macros@4f7114a`). Nothing is trimmed: an entry is
-a reference or it is not. Compared as its text — the server holds
-no repository (moved here from `store::commits::reference`). */
-export type CommitRef = string;
 /** COMP-3: one entry of the **component registry** — a custom element some
 ticket defined in a ` ```component <name> ` block (COMP-1 decisions 2, 3,
 pins 6–8), as the server keeps it.
@@ -424,9 +396,6 @@ export type InputValue = InputValueChoice | InputValueMulti | InputValueText;
 export declare function isInputValueChoice(e: InputValue): e is InputValueChoice;
 export declare function isInputValueMulti(e: InputValue): e is InputValueMulti;
 export declare function isInputValueText(e: InputValue): e is InputValueText;
-/** MENGER-12: a label — ASCII letters, digits and `-`, 1 to 32, kept
-lower case (`Needs-You` is `needs-you`): [`crate::labels::normalize`]. */
-export type Label = string;
 /** ARCHIVE-2: a ticket an archive took that was still live work (not in
 category done) — the warning's row: its id and status. */
 export interface LiveTicket {
@@ -472,24 +441,6 @@ export interface PartDoc {
     name: string;
     scripted?: boolean;
 }
-export interface PlacementWave {
-    type: 'wave';
-    n: number;
-}
-export interface PlacementDone {
-    type: 'done';
-}
-export interface PlacementMissingBlocker {
-    type: 'missing_blocker';
-}
-/** WAVE-4: where a ticket sits in the order of work — what `waves` says of
-each ticket it places, derived from `blocked_by` over the whole graph by
-MNG-4's rule (a blocker is satisfied iff it is a `Complete`,
-`Superseded` or `Canceled` ticket; an id naming no ticket never is). */
-export type Placement = PlacementWave | PlacementDone | PlacementMissingBlocker;
-export declare function isPlacementWave(e: Placement): e is PlacementWave;
-export declare function isPlacementDone(e: Placement): e is PlacementDone;
-export declare function isPlacementMissingBlocker(e: Placement): e is PlacementMissingBlocker;
 /** WAVE-6: one ticket whose kept placement a write moved — its id and the
 placement it has now (a `placements_changed` carries one per ticket). */
 export interface PlacementChange {
@@ -631,12 +582,8 @@ export interface SearchWord {
     also: string[];
     word: string;
 }
-/** How bad a gap is (any case) */
-export type Severity = "Critical" | "High" | "Medium" | "Low";
 /** A severity to set, or none to clear it */
 export type SeverityChange = "Critical" | "High" | "Medium" | "Low" | "none";
-/** A shortcode's identity, minted by the store: its code for a shortcode made before ORG-3, CODE.N for a namesake made after */
-export type ShortcodeId = string;
 /** ACT-6: one ticket a `reshortcode` moved — the id it had and the id it
 has. The old one keeps naming it (the store's pins). */
 export interface ShortcodeMove {
@@ -649,8 +596,6 @@ export interface SlotDoc {
     description: string;
     name?: string | null;
 }
-/** A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case */
-export type Status = "Pending" | "Ready" | "Coding" | "In Review" | "Blocked" | "Complete" | "Idea" | "Epic" | "Superseded" | "Canceled" | "Doc";
 /** A text's line diff: lines added and removed, the hunks, and whether the
 hunks stop short of the whole ([`MAX_LINES`]). */
 export interface TextDiff {
@@ -757,80 +702,6 @@ export interface Ticket {
     status: Status;
     title: string;
     /** Ticket ids that can start once this one completes. */
-    unlocks: TicketName[];
-    updatedUnix: number;
-}
-/** ORG-3: a ticket's key — the immutable, opaque identity a ticket keeps
-for good (ORG-6 finding 1): today's id text for today's tickets,
-[`ShortcodeId::key`] for a newborn. What every row that names a ticket
-names it by; an address resolves *to* one. Its JSON is the id string, as
-it always was. */
-export type TicketId = string;
-/** ACCESS-48: a ticket as a `blocked_by` / `unlocks` list records it —
-its key ([`TicketId`]) when it is a ticket, or, for a forward
-reference (a blocker not born yet) and a dangling one (a blocker
-deleted, or never born), the name as the write recorded it: the key
-it will take (`MNG-9`), or the address as written folded
-(`MENGER/THEME-12`), which a birth of that name settles into its key
-(`unlocks_changed`). Minted by the store alone
-(`Store::name_ticket`); the JSON is the text, as it always was. */
-export type TicketName = string;
-/** MNG-9: a ticket row without its body — every field of [`Ticket`]
-except `body`.
-
-The body is ~70 % of a ticket's weight (PERF-4: 98 MiB of `list` at
-100,000 tickets, against ~30 MiB of everything-but-bodies), and a
-board, a nav or a picker shows none of it — they show what is here.
-A consumer that needs one body calls `get` for that one ticket.
-
-Unlike `Ticket`, `severity` and `parent` are written out as `null`
-rather than skipped: a row shape a client destructures should have
-the same keys in every row. */
-export interface TicketSummary {
-    /** ORG-3: as on [`Ticket`]. */
-    address?: string;
-    /** ARCHIVE-2: as on [`Ticket`] — on the row, so a chip to an archived
-  ticket is drawn struck through without a `get`. */
-    archived?: Archived | null;
-    /** TICKETS-9: as on [`Ticket`] — on the row, so the board's column and
-  a person's card draw who holds it without a `get`. Omitted when
-  there is none, as on [`Ticket`]. */
-    assignees?: string[];
-    blockedBy: TicketName[];
-    childCount: number;
-    /** SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
-  the ticket page all have it without a `get`. */
-    commits: CommitRef[];
-    createdUnix: number;
-    epic: Code;
-    /** ACCESS-10: as on [`Ticket`]. */
-    hiddenBlockedBy?: number;
-    /** ACCESS-10: as on [`Ticket`]. */
-    hiddenUnlocks?: number;
-    id: TicketId;
-    kind: Kind;
-    /** MENGER-12: as on [`Ticket`] — on the row, so the board, the nav and
-  Home's "Needs you" draw a ticket's label chips without a `get`. */
-    labels?: Label[];
-    parent?: TicketId | null;
-    /** ACCESS-10: as on [`Ticket`] — omitted unless the reader may not see
-  the parent. */
-    parentHidden?: boolean;
-    /** WAVE-10: as on [`Ticket`] — on the row, so the nav can hide
-  `_MENGER/` documents without a `get`. Unlike `severity` and
-  `parent`, omitted when there is none (the ticket's contract): every
-  ticket but menger's own documents would carry a `null`. */
-    path?: string | null;
-    /** WAVE-6: as on [`Ticket`] — the kept placement, on the row, so the
-  board, the nav and a body's `{wave: ID}` have it without a `get`;
-  omitted for a doc. */
-    placement?: Placement | null;
-    seq: number;
-    severity?: Severity | null;
-    /** ORG-3: as on [`Ticket`]. */
-    shortcode?: ShortcodeId;
-    status: Status;
-    title: string;
     unlocks: TicketName[];
     updatedUnix: number;
 }

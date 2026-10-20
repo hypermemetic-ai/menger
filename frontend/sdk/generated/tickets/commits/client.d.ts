@@ -1,6 +1,7 @@
 import type { RpcClient } from '../../rpc';
+import type { CommitRef } from '../../chats/types';
 import type { TicketRef } from '../../notes/types';
-import type { CommitRef, TicketsEvent } from '../../tickets/types';
+import type { TicketsEvent } from '../../tickets/types';
 /** Typed client interface for tickets.commits plugin */
 export interface TicketsCommitsClient {
     /**

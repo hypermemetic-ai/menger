@@ -65,6 +65,10 @@
         "ids",
         "to"
       ],
+      "link": [
+        "chat",
+        "tickets"
+      ],
       "list": [
         "after",
         "limit",
@@ -111,6 +115,9 @@
         "to"
       ],
       "schema": [],
+      "tickets": [
+        "chat"
+      ],
       "watch": [
         "ticket"
       ]
@@ -394,6 +401,7 @@
       "create": [
         "blocked_by",
         "body",
+        "chat",
         "epic",
         "kind",
         "org",

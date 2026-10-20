@@ -243,6 +243,8 @@ pub(crate) fn follow_head(root: NodeRef<leptos::html::Div>) {
         let Some(el) = root.get_untracked() else { return };
         let y = dom::window().scroll_y().unwrap_or(0.0);
         let head_h = el.query_selector(".shead").ok().flatten().and_then(|h| h.dyn_into::<web_sys::HtmlElement>().ok()).map_or(0.0, |h| f64::from(h.offset_height()));
+        // CHAT-55: the ticket strip is pinned under the head.
+        let _ = web_sys::HtmlElement::style(&el).set_property("--shead-h", &format!("{head_h}px"));
         let Some((shown, was)) = state.try_get_value() else { return };
         let by_reader = js_sys::Date::now() - touched.get_value() < READER_MS;
         let (now, at) = crate::turns::head_shown(shown, was, y, head_h, by_reader);

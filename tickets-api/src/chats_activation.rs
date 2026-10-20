@@ -35,6 +35,9 @@ mod await_message;
 mod grants;
 #[cfg(feature = "server")]
 mod deletes;
+// CHAT-55: a chat's tickets, and the link a filing makes.
+#[cfg(feature = "server")]
+pub mod tickets;
 
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
@@ -64,16 +67,16 @@ impl ChatsActivation {
 // A viewer chats, as a viewer comments: every method is a viewer's — what
 // a call may do in a chat is the chat's to say (its participants), not a
 // role's.
-/// Chats among participants, on a ticket or outside tickets (direct messages and groups) — open, post, add, remove, list, messages, read, close, reopen, delete, restore, watch, await_message, activity, activity_log.
+/// Chats among participants, on a ticket or outside tickets (direct messages and groups) — open, post, add, remove, list, messages, read, close, reopen, delete, restore, tickets, link, watch, await_message, activity, activity_log.
 #[plexus_macros::activation(
     auth = "required",
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["open", "post", "add", "remove", "list", "messages", "read", "close", "reopen", "rename", "delete", "restore", "watch", "await_message", "candidates", "activity", "activity_log"],
+        viewer = ["open", "post", "add", "remove", "list", "messages", "read", "close", "reopen", "rename", "delete", "restore", "tickets", "link", "watch", "await_message", "candidates", "activity", "activity_log"],
         editor = [viewer],
         // CHAT-16: one granted a chat only — the chats it is in, nothing of the tickets.
-        chatter = ["post", "list", "messages", "read", "close", "reopen", "rename", "delete", "restore", "watch", "await_message", "activity", "activity_log"],
+        chatter = ["post", "list", "messages", "read", "close", "reopen", "rename", "delete", "restore", "tickets", "watch", "await_message", "activity", "activity_log"],
     )
 )]
 impl ChatsActivation {
@@ -375,6 +378,41 @@ impl ChatsActivation {
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
         let store = self.store.clone();
         futures::stream::once(async move { settle(store, user, chat.get(), true).await })
+    }
+
+    /// The tickets a chat names — in its messages, filed from it or linked to it — each a ticket { ticket } with its stage, newest first (CHAT-55).
+    ///
+    /// A message's codes count from when it is posted (a deleted message's
+    /// drop out); `tickets create --chat` and `link` add theirs. Only the
+    /// tickets the caller reads; a chat it does not see is `not_found`.
+    /// The stage: waits_on_you, ready, in_progress, in_review, on_test,
+    /// shipped (closed, other: not work in hand).
+    #[plexus_macros::method(group = "read")]
+    pub async fn tickets(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 6.
+        chat: ChatId,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        futures::stream::iter(tickets::tickets(&self.store, &user, chat.get()))
+    }
+
+    /// Link tickets to a chat, as a builder's work from it; yields linked { chat, tickets, how } — those new to it (CHAT-55).
+    ///
+    /// By a participant; each ticket one the caller reads, or the call is
+    /// `refused`, naming each, and nothing is linked. `watch` carries
+    /// `linked` to every participant.
+    #[plexus_macros::method(group = "write")]
+    pub async fn link(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The chat, e.g. 6.
+        chat: ChatId,
+        /// The tickets, e.g. CHAT-55,CHAT-56.
+        tickets: Vec<TicketRef>,
+    ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
+        let (store, names) = (self.store.clone(), tickets.into_iter().map(TicketRef::into_string).collect());
+        futures::stream::once(async move { tickets::link(store, &user, chat.get(), names, crate::chat_tickets::MentionHow::Linked).await })
     }
 
     /// Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, messages_deleted, messages_restored, listening, left — until disconnect.

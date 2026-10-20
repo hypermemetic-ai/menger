@@ -62,6 +62,8 @@ mod activity;
 // CHAT-44: deleting and restoring messages — kept and marked.
 mod deletes;
 pub use deletes::{MessageDeletion, Pick};
+// CHAT-55: the tickets a chat names, filed or links — kept, back-filled.
+pub(super) mod mentions;
 
 /// CHAT-8: which way a page of messages runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,6 +150,8 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
         conn.execute_batch("ALTER TABLE chat_messages ADD COLUMN deleted_at INTEGER; ALTER TABLE chat_messages ADD COLUMN deleted_by TEXT;")?;
         tracing::warn!("CHAT-44: chat_messages gained `deleted_at` / `deleted_by` (no message kept is deleted)");
     }
+    // CHAT-55: the mentions, back-filled from every message once.
+    mentions::migrate(conn)?;
     Ok(!had)
 }
 
@@ -219,6 +223,8 @@ pub enum ChatChange {
     Deleted { chat: u64, ids: Vec<u64>, by: String, at: i64, restored: bool },
     /// CHAT-18: a participant's live work — heard by participants alone.
     Activity(crate::chats::Activity),
+    /// CHAT-55: `tickets` came into `chat` — filed from it or linked.
+    Linked { chat: u64, tickets: Vec<String>, how: crate::chat_tickets::MentionHow },
 }
 
 impl ChatChange {
@@ -227,7 +233,7 @@ impl ChatChange {
         match self {
             ChatChange::Opened(c) | ChatChange::Added(c) | ChatChange::Closed(c) | ChatChange::Reopened(c) | ChatChange::Renamed(c) => c.id,
             ChatChange::Posted(m) => m.chat.get(),
-            ChatChange::Read { chat, .. } | ChatChange::Listening { chat, .. } | ChatChange::Deleted { chat, .. } => *chat,
+            ChatChange::Read { chat, .. } | ChatChange::Listening { chat, .. } | ChatChange::Deleted { chat, .. } | ChatChange::Linked { chat, .. } => *chat,
             ChatChange::Removed { chat, .. } => chat.id,
             ChatChange::Activity(a) => a.chat.get(),
         }
@@ -382,6 +388,9 @@ pub(crate) struct Chats {
     activity: HashMap<u64, std::collections::VecDeque<crate::chats::Activity>>,
     /// CHAT-18: the last activity's `seq`.
     activity_seq: u64,
+    /// CHAT-55: each chat's tickets — its messages' codes, its filed and
+    /// linked tickets — in the order written.
+    mentions: HashMap<u64, Vec<mentions::Mention>>,
 }
 
 impl Chats {
@@ -699,6 +708,13 @@ impl Store {
         lineage::chats_before_with(&self.unders, cache, &[(&k.shortcode, k.seq)])
     }
 
+    /// CHAT-55: …before a write on each of `keys` (a post's chat's ticket and
+    /// the tickets it names).
+    fn chats_before_keys(&self, cache: &Cache, keys: &[String]) -> Option<UnderBefore> {
+        let at: Vec<(&ShortcodeId, u32)> = keys.iter().filter_map(|k| cache.at.get(k)).map(|k| (&k.shortcode, k.seq)).collect();
+        (!at.is_empty()).then(|| lineage::chats_before_with(&self.unders, cache, &at)).flatten()
+    }
+
     /// CHAT-3: opens a chat on the ticket `on` names among `by` and `with` (the call's `others`)
     /// — each of `with` one `reads` says can read the ticket; CHAT-6: `with`
     /// may name no one, and the chat is `by`'s alone — or answers
@@ -822,7 +838,10 @@ impl Store {
             if let Some(p) = c.parts.iter_mut().find(|p| p.principal == by.principal) {
                 p.read_upto = message.id.get();
             }
-            (c, message, on.key().and_then(|k| self.chats_before(&cache, k)))
+            // CHAT-55: `in chat N` moves with the tickets it names, too.
+            let mut keys: Vec<String> = on.key().map(str::to_string).into_iter().collect();
+            keys.extend(mentions::of_message(&message).into_iter().filter_map(|m| cache.resolve(&m.ticket).ok()));
+            (c, message, self.chats_before_keys(&cache, &keys))
         };
         self.chat_write(serial, record, Some(message.clone()), under, ChatChange::Posted(message.clone())).await.map(|()| message)
     }
@@ -981,11 +1000,16 @@ impl Store {
                 store_chat(tx, &stored.0)?;
                 if let Some(m) = &stored.1 {
                     store_message(tx, m)?;
+                    // CHAT-55: the tickets it names, in the same transaction.
+                    for x in mentions::of_message(m) {
+                        mentions::store(tx, m.chat.get(), &x)?;
+                    }
                 }
                 Ok(())
             },
             move |cache, _| {
                 if let Some(m) = kept.1 {
+                    cache.chats.put_mentions(m.chat.get(), mentions::of_message(&m));
                     cache.chats.put_message(m);
                 }
                 cache.chats.put_chat(kept.0);
@@ -1133,6 +1157,8 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Chats> {
             },
         });
     }
+    // CHAT-55: the tickets each chat names.
+    mentions::load(conn, &mut chats)?;
     // CHAT-14: the names principals signed in with, over their messages'.
     let mut stmt = conn.prepare("SELECT principal, name FROM principal_names")?;
     let mut rows = stmt.query([])?;

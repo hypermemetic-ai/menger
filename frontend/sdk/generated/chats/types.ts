@@ -2,6 +2,7 @@
 // Do not edit manually
 
 import type { ChatId } from '../media/types';
+import type { Kind } from '../notes/types';
 
 /** CHAT-18: one item of a participant's live work in a chat — never a
 message, never stored: the server keeps a chat's last
@@ -32,6 +33,18 @@ export type ActivityLine = string;
 
 /** CHAT-18: where a participant's live work stands: started, working, or ended (any case) */
 export type ActivityState = "started" | "working" | "ended";
+
+/** ARCHIVE-2: an archived ticket's mark — when it was archived, by whom
+(the principal, as a transition names its actor), why (the archive's
+`message`), and which write set it (the id of that write's first
+transition: every ticket one archive took shares it, so a restore
+`with_children` brings back exactly what went with its ticket). */
+export interface Archived {
+  atUnix: number;
+  by: string;
+  message?: string | null;
+  write: number;
+}
 
 /** One chat, as one caller sees it: `unread` is the caller's own count —
 the messages after its read mark (zero for an admin who is not in it). */
@@ -86,8 +99,26 @@ export type ChatGrant = "ticket" | "chat";
 direct message between two, or a group. */
 export type ChatKind = "ticket" | "direct" | "group";
 
+/** CHAT-55: where a chat's ticket stands, as the strip groups it. */
+export type ChatStage = "waits_on_you" | "ready" | "in_progress" | "in_review" | "on_test" | "shipped" | "closed" | "other";
+
 /** Where a chat stands: open, or closed (read-only) (any case) */
 export type ChatState = "open" | "closed";
+
+/** CHAT-55: one of `chats tickets`' rows — a ticket the chat names, as the
+caller reads it. */
+export interface ChatTicket {
+  /** Its open inputs. */
+  asking?: number;
+  /** When it first came in, unix seconds. */
+  at: number;
+  /** How it first came into the chat. */
+  how: MentionHow;
+  /** The first message that named it (none: filed or linked without one). */
+  message?: MessageId | null;
+  stage: ChatStage;
+  summary: TicketSummary;
+}
 
 /** `open`'s answer, and on `watch` a chat opened with the caller in it.
 `existing`: the same participants already had this chat open on the
@@ -230,6 +261,22 @@ export interface ChatsEventActivity {
   activity: Activity;
 }
 
+/** CHAT-55: one of `tickets`' rows — a ticket the chat names, filed or
+linked, as the caller reads it, with its stage. */
+export interface ChatsEventTicket {
+  type: 'ticket';
+  ticket: ChatTicket;
+}
+
+/** CHAT-55: `link`'s answer, and on `watch`: `tickets` came into `chat`
+(filed from it, or linked) — those new to it. */
+export interface ChatsEventLinked {
+  type: 'linked';
+  chat: ChatId;
+  how: MentionHow;
+  tickets: string[];
+}
+
 /** AGENT-3: a participating agent's claim began or ended — a line in the
 chat. Declared for AGENT-3's claims; nothing emits it yet. */
 export interface ChatsEventClaimLine {
@@ -308,7 +355,7 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventMessagesDeleted | ChatsEventMessagesRestored | ChatsEventListening | ChatsEventActivity | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventMessagesDeleted | ChatsEventMessagesRestored | ChatsEventListening | ChatsEventActivity | ChatsEventTicket | ChatsEventLinked | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 
 export function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened { return e.type === 'opened'; }
 export function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat { return e.type === 'chat'; }
@@ -326,6 +373,8 @@ export function isChatsEventMessagesDeleted(e: ChatsEvent): e is ChatsEventMessa
 export function isChatsEventMessagesRestored(e: ChatsEvent): e is ChatsEventMessagesRestored { return e.type === 'messages_restored'; }
 export function isChatsEventListening(e: ChatsEvent): e is ChatsEventListening { return e.type === 'listening'; }
 export function isChatsEventActivity(e: ChatsEvent): e is ChatsEventActivity { return e.type === 'activity'; }
+export function isChatsEventTicket(e: ChatsEvent): e is ChatsEventTicket { return e.type === 'ticket'; }
+export function isChatsEventLinked(e: ChatsEvent): e is ChatsEventLinked { return e.type === 'linked'; }
 export function isChatsEventClaimLine(e: ChatsEvent): e is ChatsEventClaimLine { return e.type === 'claim_line'; }
 export function isChatsEventWaiting(e: ChatsEvent): e is ChatsEventWaiting { return e.type === 'waiting'; }
 export function isChatsEventTimedOut(e: ChatsEvent): e is ChatsEventTimedOut { return e.type === 'timed_out'; }
@@ -337,12 +386,38 @@ export function isChatsEventLagged(e: ChatsEvent): e is ChatsEventLagged { retur
 export function isChatsEventWatchClosed(e: ChatsEvent): e is ChatsEventWatchClosed { return e.type === 'watch_closed'; }
 export function isChatsEventError(e: ChatsEvent): e is ChatsEventError { return e.type === 'error'; }
 
+/** ORG-3: a shortcode's letters — ASCII letters and digits, upper case (a
+code is read case-blind and kept upper case), 1 to [`CODE_MAX`]. ORG-9:
+in hyphen-separated segments (`SYNAPSE-CC`) — [`is_code`]'s rule.
+
+Not an identity: two shortcodes of one code live in two namespaces. So
+it has no `Hash`, no `Ord` and no `Borrow<str>` — nothing can key a map
+or a set by it (the module's examples hold that to the compiler) — and its `Display` is
+its letters, never an address. It compares equal to another code of the
+same letters, which is what a search over the letters asks; the store
+compares shortcodes by [`ShortcodeId`]. */
+export type Code = string;
+
+/** SDLC-9: a commit — a hexadecimal object name of 7 to 64 characters
+(kept lower case), optionally a repository and `@` before it
+(`77df9a0`, `plexus-macros@4f7114a`). Nothing is trimmed: an entry is
+a reference or it is not. Compared as its text — the server holds
+no repository (moved here from `store::commits::reference`). */
+export type CommitRef = string;
+
 /** CHAT-44: a message's deletion — when (unix seconds) and by whom (its
 author, or an admin of the chat's ticket or organization). */
 export interface Deleted {
   at: number;
   by: string;
 }
+
+/** MENGER-12: a label — ASCII letters, digits and `-`, 1 to 32, kept
+lower case (`Needs-You` is `needs-you`): [`crate::labels::normalize`]. */
+export type Label = string;
+
+/** How a ticket came into a chat. */
+export type MentionHow = "mentioned" | "filed" | "linked";
 
 /** One message, as kept. */
 export interface Message {
@@ -371,6 +446,115 @@ Kept, never set by a call; `None` until agents claim. */
 /** CHAT-3: a chat message's number, from 1 across every chat in the
 order posted — a later message's is always greater. */
 export type MessageId = number;
+
+export interface PlacementWave {
+  type: 'wave';
+  n: number;
+}
+
+export interface PlacementDone {
+  type: 'done';
+}
+
+export interface PlacementMissingBlocker {
+  type: 'missing_blocker';
+}
+
+/** WAVE-4: where a ticket sits in the order of work — what `waves` says of
+each ticket it places, derived from `blocked_by` over the whole graph by
+MNG-4's rule (a blocker is satisfied iff it is a `Complete`,
+`Superseded` or `Canceled` ticket; an id naming no ticket never is). */
+export type Placement = PlacementWave | PlacementDone | PlacementMissingBlocker;
+
+export function isPlacementWave(e: Placement): e is PlacementWave { return e.type === 'wave'; }
+export function isPlacementDone(e: Placement): e is PlacementDone { return e.type === 'done'; }
+export function isPlacementMissingBlocker(e: Placement): e is PlacementMissingBlocker { return e.type === 'missing_blocker'; }
+
+/** How bad a gap is (any case) */
+export type Severity = "Critical" | "High" | "Medium" | "Low";
+
+/** A shortcode's identity, minted by the store: its code for a shortcode made before ORG-3, CODE.N for a namesake made after */
+export type ShortcodeId = string;
+
+/** A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case */
+export type Status = "Pending" | "Ready" | "Coding" | "In Review" | "Blocked" | "Complete" | "Idea" | "Epic" | "Superseded" | "Canceled" | "Doc";
+
+/** ORG-3: a ticket's key — the immutable, opaque identity a ticket keeps
+for good (ORG-6 finding 1): today's id text for today's tickets,
+[`ShortcodeId::key`] for a newborn. What every row that names a ticket
+names it by; an address resolves *to* one. Its JSON is the id string, as
+it always was. */
+export type TicketId = string;
+
+/** ACCESS-48: a ticket as a `blocked_by` / `unlocks` list records it —
+its key ([`TicketId`]) when it is a ticket, or, for a forward
+reference (a blocker not born yet) and a dangling one (a blocker
+deleted, or never born), the name as the write recorded it: the key
+it will take (`MNG-9`), or the address as written folded
+(`MENGER/THEME-12`), which a birth of that name settles into its key
+(`unlocks_changed`). Minted by the store alone
+(`Store::name_ticket`); the JSON is the text, as it always was. */
+export type TicketName = string;
+
+/** MNG-9: a ticket row without its body — every field of [`Ticket`]
+except `body`.
+
+The body is ~70 % of a ticket's weight (PERF-4: 98 MiB of `list` at
+100,000 tickets, against ~30 MiB of everything-but-bodies), and a
+board, a nav or a picker shows none of it — they show what is here.
+A consumer that needs one body calls `get` for that one ticket.
+
+Unlike `Ticket`, `severity` and `parent` are written out as `null`
+rather than skipped: a row shape a client destructures should have
+the same keys in every row. */
+export interface TicketSummary {
+  /** ORG-3: as on [`Ticket`]. */
+  address?: string;
+  /** ARCHIVE-2: as on [`Ticket`] — on the row, so a chip to an archived
+ticket is drawn struck through without a `get`. */
+  archived?: Archived | null;
+  /** TICKETS-9: as on [`Ticket`] — on the row, so the board's column and
+a person's card draw who holds it without a `get`. Omitted when
+there is none, as on [`Ticket`]. */
+  assignees?: string[];
+  blockedBy: TicketName[];
+  childCount: number;
+  /** SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
+the ticket page all have it without a `get`. */
+  commits: CommitRef[];
+  createdUnix: number;
+  epic: Code;
+  /** ACCESS-10: as on [`Ticket`]. */
+  hiddenBlockedBy?: number;
+  /** ACCESS-10: as on [`Ticket`]. */
+  hiddenUnlocks?: number;
+  id: TicketId;
+  kind: Kind;
+  /** MENGER-12: as on [`Ticket`] — on the row, so the board, the nav and
+Home's "Needs you" draw a ticket's label chips without a `get`. */
+  labels?: Label[];
+  parent?: TicketId | null;
+  /** ACCESS-10: as on [`Ticket`] — omitted unless the reader may not see
+the parent. */
+  parentHidden?: boolean;
+  /** WAVE-10: as on [`Ticket`] — on the row, so the nav can hide
+`_MENGER/` documents without a `get`. Unlike `severity` and
+`parent`, omitted when there is none (the ticket's contract): every
+ticket but menger's own documents would carry a `null`. */
+  path?: string | null;
+  /** WAVE-6: as on [`Ticket`] — the kept placement, on the row, so the
+board, the nav and a body's `{wave: ID}` have it without a `get`;
+omitted for a doc. */
+  placement?: Placement | null;
+  seq: number;
+  severity?: Severity | null;
+  /** ORG-3: as on [`Ticket`]. */
+  shortcode?: ShortcodeId;
+  status: Status;
+  title: string;
+  unlocks: TicketName[];
+  updatedUnix: number;
+}
 
 /** ACCESS-12: why an open watch ended — its caller verified again when the
 grants moved (or its sign-in ended), and refused. Every watch (`tickets`,

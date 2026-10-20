@@ -111,6 +111,17 @@ unread and no `await_message` reply. `watch` carries
    */
   delete(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent>;
   /**
+   * Link tickets to a chat, as a builder's work from it; yields linked { chat, tickets, how } — those new to it (CHAT-55).
+
+By a participant; each ticket one the caller reads, or the call is
+`refused`, naming each, and nothing is linked. `watch` carries
+`linked` to every participant.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `chats.link` anywhere it is held
+   */
+  link(chat: ChatId, tickets: TicketRef[]): AsyncGenerator<ChatsEvent>;
+  /**
    * The caller's chats, by last activity, newest first — on a ticket, with or without unread, open or closed; a chat { chat } each, then page { next }.
 
 Without `ticket`, the chats the caller is in; with it, those on that
@@ -227,6 +238,19 @@ carries `messages_restored` to every participant.
    */
   schema(): Promise<unknown>;
   /**
+   * The tickets a chat names — in its messages, filed from it or linked to it — each a ticket { ticket } with its stage, newest first (CHAT-55).
+
+A message's codes count from when it is posted (a deleted message's
+drop out); `tickets create --chat` and `link` add theirs. Only the
+tickets the caller reads; a chat it does not see is `not_found`.
+The stage: waits_on_you, ready, in_progress, in_review, on_test,
+shipped (closed, other: not work in hand).
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `chats.tickets` anywhere it is held
+   */
+  tickets(chat: ChatId): AsyncGenerator<ChatsEvent>;
+  /**
    * Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, messages_deleted, messages_restored, listening, left — until disconnect.
 
 The chats the caller is in (with `ticket`, those on it — every one
@@ -283,6 +307,11 @@ class ChatsClientImpl implements ChatsClient {
     yield* extractData<ChatsEvent>(stream);
   }
 
+  async *link(chat: ChatId, tickets: TicketRef[]): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.link', { chat, tickets });
+    yield* extractData<ChatsEvent>(stream);
+  }
+
   async *list(after?: ChatId | null, limit?: number | null, state?: ChatState | null, ticket?: TicketRef | null, unread?: boolean | null): AsyncGenerator<ChatsEvent> {
     const stream = this.rpc.call('chats.list', { after, limit, state, ticket, unread });
     yield* extractData<ChatsEvent>(stream);
@@ -333,6 +362,11 @@ class ChatsClientImpl implements ChatsClient {
     return collectOne<unknown>(stream);
   }
 
+  async *tickets(chat: ChatId): AsyncGenerator<ChatsEvent> {
+    const stream = this.rpc.call('chats.tickets', { chat });
+    yield* extractData<ChatsEvent>(stream);
+  }
+
   async *watch(ticket?: TicketRef | null): AsyncGenerator<ChatsEvent> {
     const stream = this.rpc.call('chats.watch', { ticket });
     yield* extractData<ChatsEvent>(stream);
@@ -353,6 +387,7 @@ export const requires = {
   "chats.candidates": { grant: "chats.candidates", target: null },
   "chats.close": { grant: "chats.close", target: null },
   "chats.delete": { grant: "chats.delete", target: null },
+  "chats.link": { grant: "chats.link", target: null },
   "chats.list": { grant: "chats.list", target: null },
   "chats.messages": { grant: "chats.messages", target: null },
   "chats.open": { grant: "chats.open", target: null },
@@ -363,5 +398,6 @@ export const requires = {
   "chats.reopen": { grant: "chats.reopen", target: null },
   "chats.restore": { grant: "chats.restore", target: null },
   "chats.schema": { grant: "chats.schema", target: null },
+  "chats.tickets": { grant: "chats.tickets", target: null },
   "chats.watch": { grant: "chats.watch", target: null },
 } as const;

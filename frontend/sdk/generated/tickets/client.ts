@@ -3,7 +3,9 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { CallerSource, Cursor, DeleteChildren, FilterText, InputId, Label, MengerPath, Message, MockupRef, Reason, Severity, SeverityChange, Status, TicketsEvent, Urgency, Zone } from './types';
+import type { CallerSource, Cursor, DeleteChildren, FilterText, InputId, MengerPath, Message, MockupRef, Reason, SeverityChange, TicketsEvent, Urgency, Zone } from './types';
+import type { Label, Severity, Status } from '../chats/types';
+import type { ChatId } from '../media/types';
 import type { Body, Kind, Query, ShortcodeRef, TicketRef, Title } from '../notes/types';
 import type { OrgId, Principal } from '../orgs/types';
 import type { TicketsCommitsClient } from '../tickets/commits/client';
@@ -124,7 +126,7 @@ Yields exactly one event: `Created` or `Error`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.create` anywhere it is held
    */
-  create(epic: ShortcodeRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, kind?: Kind | null, org?: OrgId | null, parent?: TicketRef | null, path?: MengerPath | null, severity?: Severity | null): AsyncGenerator<TicketsEvent>;
+  create(epic: ShortcodeRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, chat?: ChatId | null, kind?: Kind | null, org?: OrgId | null, parent?: TicketRef | null, path?: MengerPath | null, severity?: Severity | null): AsyncGenerator<TicketsEvent>;
   /**
    * Delete tickets for good (admin): refused while children, blockers, a shortcode, a component, a theme or a live input point at one, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones }.
 
@@ -596,8 +598,8 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *create(epic: ShortcodeRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, kind?: Kind | null, org?: OrgId | null, parent?: TicketRef | null, path?: MengerPath | null, severity?: Severity | null): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.create', { blocked_by: blockedBy, body, epic, kind, org, parent, path, severity, title });
+  async *create(epic: ShortcodeRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, chat?: ChatId | null, kind?: Kind | null, org?: OrgId | null, parent?: TicketRef | null, path?: MengerPath | null, severity?: Severity | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.create', { blocked_by: blockedBy, body, chat, epic, kind, org, parent, path, severity, title });
     yield* extractData<TicketsEvent>(stream);
   }
 

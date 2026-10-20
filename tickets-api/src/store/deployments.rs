@@ -723,7 +723,7 @@ impl Deploys {
 
     /// DEPLOY-21: every environment kept or named by a source (either end),
     /// of every project.
-    fn env_keys(&self) -> BTreeSet<(String, String)> {
+    pub(super) fn env_keys(&self) -> BTreeSet<(String, String)> {
         let named = self.sources.iter().flat_map(|((p, e), f)| [(p.clone(), e.clone()), (p.clone(), f.clone())]);
         self.envs.keys().cloned().chain(named).collect()
     }
@@ -839,6 +839,8 @@ impl Cache {
             // CHAT-3: for the reader, from the chats.
             crate::filter::Event::Chatting => super::chats::holds(self, &clock.me, false),
             crate::filter::Event::Unread => super::chats::holds(self, &clock.me, true),
+            // CHAT-55: for the reader, from the chats' mentions.
+            crate::filter::Event::InChat(n) => super::chats::mentions::holds(self, &clock.me, *n),
             // TICKETS-9: from the kept assignments — `me`, the reader.
             crate::filter::Event::Assigned(who) => match who {
                 None => self.assignments.holds(None, &self.at),
@@ -864,6 +866,7 @@ impl Cache {
             | crate::filter::Event::Requested(_)
             | crate::filter::Event::Chatting
             | crate::filter::Event::Unread
+            | crate::filter::Event::InChat(_)
             | crate::filter::Event::Assigned(_)
             | crate::filter::Event::Unassigned => None,
             _ => self.log.next_boundary(h, clock),

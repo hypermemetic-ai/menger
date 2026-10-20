@@ -360,8 +360,8 @@
       const stream = this.rpc.call("tickets.await_reply", { id, input, since, timeout_minutes: timeoutMinutes });
       yield* extractData(stream);
     }
-    async* create(epic, title, blockedBy, body, kind, org, parent, path, severity) {
-      const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, epic, kind, org, parent, path, severity, title });
+    async* create(epic, title, blockedBy, body, chat, kind, org, parent, path, severity) {
+      const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, chat, epic, kind, org, parent, path, severity, title });
       yield* extractData(stream);
     }
     async* delete(children, filter, ids, max, message, tz, unblock) {
