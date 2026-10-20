@@ -4660,6 +4660,37 @@
   /* ── CHAT-7: the turns, the composer and the full-screen session — one
      view in the dock (#chatpane) and full screen (#chatfull). ── */
   .chatview { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
+  /* CHAT-55: the chat's ticket strip — a pill per stage under the head,
+     one row that scrolls sideways; a pill opens its tickets as a drop over
+     the chat (half the screen at most on a phone; a swipe up closes it). */
+  .cstrip-wrap { position: relative; flex: none; z-index: 3; }
+  .cstrip { display: flex; gap: 6px; align-items: center; padding: 6px 14px; border-bottom: var(--border) solid var(--line); overflow-x: auto; scrollbar-width: none; background: var(--panel); }
+  .cstrip::-webkit-scrollbar { display: none; }
+  .cstrip .sl { color: var(--muted); font: calc(10px * var(--text-scale)) var(--mono); letter-spacing: .14em; text-transform: uppercase; margin-right: 4px; flex: none; }
+  :is(#chatpane, #chatfull) .cstrip button { flex: none; border: var(--border) solid var(--line); border-radius: var(--radius-pill); padding: 3px 10px; white-space: nowrap; background: var(--card); color: var(--muted); font: calc(11.5px * var(--text-scale)) var(--mono); }
+  :is(#chatpane, #chatfull) .cstrip button b { color: var(--ink); font-weight: var(--weight-strong); }
+  :is(#chatpane, #chatfull) .cstrip button.w { border-color: var(--ask-line); background: var(--ask-bg); color: var(--ask); }
+  :is(#chatpane, #chatfull) .cstrip button.w b { color: var(--ask); }
+  :is(#chatpane, #chatfull) .cstrip button[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); background: var(--sel); }
+  :is(#chatpane, #chatfull) .cstrip button:hover { border-color: var(--accent); }
+  .cdrop { position: absolute; left: 0; right: 0; top: 100%; max-height: min(60vh, 480px); overflow-y: auto; overscroll-behavior: contain; background: var(--bg); border-bottom: var(--border) solid var(--line); box-shadow: 0 8px 16px -8px var(--shadow); display: flex; flex-direction: column; touch-action: pan-y; }
+  .cdrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "id t st" "m m m"; align-items: center; gap: 2px 10px; padding: 8px 14px; border-bottom: var(--border) solid var(--line); color: var(--ink); text-decoration: none; font: calc(12px * var(--text-scale)) var(--mono); }
+  .cdrow:hover { background: var(--hover); }
+  .cdrow .code { grid-area: id; color: var(--accent); }
+  .cdrow .cdt { grid-area: t; font-family: var(--sans); font-size: calc(13px * var(--text-scale)); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cdrow .st { grid-area: st; }
+  .cdrow .cdm { grid-area: m; display: flex; gap: 6px; flex-wrap: wrap; }
+  .cdrow .cdm:empty { display: none; }
+  :is(#chatpane, #chatfull) .cdclose { align-self: center; color: var(--muted); padding: 6px 14px; font: calc(11px * var(--text-scale)) var(--mono); }
+  :is(#chatpane, #chatfull) .cdclose::before { content: "↑ "; }
+  @media (pointer: coarse) { :is(#chatpane, #chatfull) .cstrip button { min-height: 36px; } .cdrow { min-height: 44px; } }
+  @media (max-width: 760px) {
+    .cstrip { padding: 6px 12px; }
+    .cdrop { max-height: 50dvh; }
+    #chatfull .cstrip-wrap { position: sticky; top: var(--shead-h, 0px); transition: top .2s var(--ease); }
+    #chatfull[data-head="off"] .cstrip-wrap { top: var(--safe-top); }
+    html[data-kb] #chatfull .cstrip-wrap { position: relative; top: auto; }
+  }
   :is(#chatpane, #chatfull) .pmsgs.turns { padding: 14px 14px 8px; gap: 0; }
   :is(#chatpane, #chatfull) .tcol { display: flex; flex-direction: column; gap: 16px; width: 100%; margin: 0 auto; }
   #chatfull .tcol { max-width: 780px; padding: 18px 0 6px; gap: 22px; }

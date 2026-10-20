@@ -1121,6 +1121,8 @@ pub(crate) fn ChatView(ticket: Option<String>, id: u64, #[prop(optional)] full: 
         <div class="chatview" class:full=full class:selecting=move || selecting.with(Option::is_some)>
             {move || (held_some.get() && !found.get()).then(|| view! { <p class="pempty">"This chat is not one you are in."</p> })}
             {(!full).then(|| who.clone())}
+            // CHAT-55: the chat's tickets, under its head.
+            <crate::chat_strip::Strip chat=id />
             {move || revoking.get().map(|p| view! {
                 <crate::chat_grant::RevokeDialog chat=id principal=p
                     done=Callback::new(move |r: Result<(), String>| {

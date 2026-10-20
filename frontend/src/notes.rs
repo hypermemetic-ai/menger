@@ -366,7 +366,7 @@ pub(crate) fn BodyEditor(
                     Save::Amend { id: tid, body: b } => client.amend_all(typed(&tid)?, None, Some(typed(&b)?)).await,
                     Save::Create { create: c, body: b } => {
                         let (epic, title, path) = (typed(&c.epic)?, typed(&c.title)?, typed(&c.path)?);
-                        client.create_all(epic, title, Some(menger_tickets_api::Kind::Doc), None, None, Some(typed(&b)?), None, Some(path), None).await
+                        client.create_all(epic, title, Some(menger_tickets_api::Kind::Doc), None, None, Some(typed(&b)?), None, Some(path), None, None).await
                     }
                 })
             };

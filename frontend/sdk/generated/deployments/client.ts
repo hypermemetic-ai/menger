@@ -4,8 +4,9 @@
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
 import type { Branch, DeploySource, DeployState, DeploymentId, DeploymentsEvent, EnvironmentName, Project, Release, StepName, StepState, StepUrl, Timestamp } from './types';
+import type { CommitRef } from '../chats/types';
 import type { TicketRef } from '../notes/types';
-import type { CommitRef, Message } from '../tickets/types';
+import type { Message } from '../tickets/types';
 import type { DeploymentsWebhookClient } from '../deployments/webhook/client';
 import { createDeploymentsWebhookClient } from '../deployments/webhook/client';
 

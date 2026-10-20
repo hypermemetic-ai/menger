@@ -3474,6 +3474,51 @@ write. Kept in `chats`, `chat_participants` (each one's read mark) and
 `chat_messages` behind the cache, gained empty on open; who is listening is
 the cache's alone, never stored.
 
+#### A chat's tickets (CHAT-55)
+
+A chat is a ticket surface (owner, 2026-10-19, chat 6; CHAT-35's strip).
+**Its tickets** are every ticket a message in it names (a code as the
+chips draw it, outside a fenced block — a log names tickets it is not
+about), and every ticket **filed** from it (`tickets create --chat N`; you
+must be in the chat, else nothing is filed) or **linked** to it (`chats
+link --chat N --tickets A-1,A-2`, a participant, each ticket one you read;
+at most 100 a call; one already there is not written again). Kept by the
+server in `chat_mentions` (one row per chat, message and ticket, written in
+the post's own transaction; a file without the table is back-filled from
+its messages once), as written, and resolved when read — a ticket moved
+(ACT-6) or filed after its code was written is found. A deleted message's
+tickets drop out (CHAT-44) and come back with it.
+
+```sh
+synapse -P 4455 menger chats tickets --chat 6        # newest first: ticket { summary, stage, how, message, at, asking }
+synapse -P 4455 menger chats link --chat 6 --tickets CHAT-55,CHAT-56
+synapse -P 4455 menger tickets create --epic CHAT --title "the strip" --chat 6
+synapse -P 4455 menger tickets list --filter 'in chat 6 and not category done' --summary true
+```
+
+`chats tickets` reads through the chat (one you are not in is not found)
+and your reach (a ticket you cannot read is not there). Each row has a
+**stage** (`chat_tickets::stage_of`, the app's too): `waits_on_you`
+(Pending or an Idea, or open work with an open input), `ready` (Ready or
+Blocked), `in_progress` (Coding), `in_review`, `on_test` (In Review and
+running somewhere, or Complete and ready for, deploying to or failed on
+the environment that promotes from where it runs — DEPLOY-21), `shipped`
+(Complete), and `closed` / `other` (Canceled or Superseded; a scope or a
+doc) that the strip does not draw. `watch` says `linked { chat, tickets,
+how }`. The cell `in chat N` (FILTER-3's language) is the same set for a
+reader in chat N — none for anyone else; `in chat` alone is still the
+shortcode CHAT.
+
+**The strip** (the app): under every chat's head (the dock, the full chat,
+`#/chats`), one row of pills, a stage each, with its count — *waits on you*
+tinted as an ask; a pill opens its tickets (id, title, status, where it
+runs) as a drop over the chat (at most half the screen on a phone, pinned
+under the head as the chat scrolls, closed by a swipe up, the pill again
+or Escape). Asked when the chat opens, again on a post, link, delete or
+restore in it and on a resync; each row is a row-cache row, so a status,
+an input or a deploy moves its pill live. No tickets, no strip.
+`scripts/chat-strip-check.mjs` checks it in a browser.
+
 #### Direct messages and groups (CHAT-14)
 
 A chat may be **outside tickets** (owner, 2026-10-17: *"I think we should

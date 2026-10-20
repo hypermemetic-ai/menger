@@ -602,6 +602,7 @@ fn heard(ev: &ChatsEvent) {
     HELD.with(|s| {
         s.maybe_update(|held| held.as_mut().is_some_and(|held| held.apply(ev, &me)));
     });
+    crate::chat_strip::heard(ev);
 }
 
 fn fetch() {

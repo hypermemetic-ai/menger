@@ -38,7 +38,7 @@ use crate::types::{InputValue, Kind, Severity, Status, TicketsEvent};
 use crate::types::InputState;
 use crate::queue::Urgency;
 use crate::vocab::{
-    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, MockupRef, Message, Principal,
+    Body, CallerSource, ChatId, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, MockupRef, Message, Principal,
     Query, Question, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
@@ -302,19 +302,22 @@ impl TicketsActivation {
         path: Option<MengerPath>,
         /// ORG-4: the organization, e.g. acme (optional: your only one; refused, naming them, when you hold roles in several and the epic is new).
         org: Option<OrgId>,
+        /// CHAT-55: the chat it is filed from, e.g. 6 (optional; you must be in it) — it joins that chat's tickets.
+        chat: Option<ChatId>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // ORG-4: the organization first (activation/orgs.rs); ACCESS-11:
         // the proofs a birth takes (activation/writes.rs); MENGER-13: its
         // first status is a transition, the caller's.
         // ARCHIVE-2: under an archived parent, its chain comes back after.
         answered_then!(store = self.store.clone(), user, None, then => {
-            let epic = epic_in(&store, &user, epic.into_string(), org, parent.as_deref())?;
+            let (epic, chat) = (epic_in(&store, &user, epic.into_string(), org, parent.as_deref())?, crate::chats_activation::tickets::may_file_in(&store, &user, chat)?);
             let at = filing(&store, &user, &epic, parent.as_deref(), blocked_by.as_deref())?;
             let (act, chain) = (act_of(&user, None, None)?, chain_under(&store, &user, &epic, parent.as_deref())?);
             let (title, kind, blocked_by) = (title.into_string(), kind.unwrap_or(Kind::Build), blocked_by.unwrap_or_default());
             let (parent, path, body) = (parent.map(String::from), path.map(String::from), body.map(String::from).unwrap_or_default());
             let ticket = store.create_by(at, NewTicket { epic, title, kind, severity, blocked_by, parent, path, body }, act).await?;
             then = restore_chain(&store, &user, chain, format!("{} was filed under it", ticket.id)).await;
+            crate::chats_activation::tickets::filed(store.clone(), &user, chat, ticket.id.to_string()).await;
             Ok(TicketsEvent::Created { ticket })
         })
     }

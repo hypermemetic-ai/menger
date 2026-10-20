@@ -93,7 +93,12 @@ impl Store {
                 return Ok(MessageDeletion { chat, ids: Vec::new(), by: by.principal, at: now });
             }
             let key = (!c.kind.outside()).then(|| cache.resolve(&c.ticket).ok()).flatten();
-            (changing, key.and_then(|k| self.chats_before(&cache, &k)))
+            // CHAT-55: and the tickets those messages name (`in chat N`).
+            let mut keys: Vec<String> = key.into_iter().collect();
+            let named = cache.chats.mentions.get(&chat).into_iter().flatten().filter(|m| changing.contains(&m.message));
+            keys.extend(named.filter_map(|m| cache.resolve(&m.ticket).ok()));
+            let under = self.chats_before_keys(&cache, &keys);
+            (changing, under)
         };
         let mark = (!restore).then(|| Deleted { at: now, by: by.principal.clone() });
         let tickets = Arc::clone(&self.tickets);

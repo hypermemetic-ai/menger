@@ -260,6 +260,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None, None,
                 None,
+                None,
             )
             .await
             .expect("create"),
@@ -273,7 +274,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // The rule itself, typed: a build first is the activation's own Error.
     match one(
         client
-            .create_all(p("FRESH"), p("a build first"), None, None, None, None, None, None, None)
+            .create_all(p("FRESH"), p("a build first"), None, None, None, None, None, None, None, None)
             .await
             .expect("the call succeeds; the activation says no"),
     ) {
@@ -353,6 +354,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None, None,
                 None,
+                None,
             )
             .await
             .expect("create DG-1"),
@@ -376,7 +378,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- parent / children (AGS-19, MNG-14, MNG-12's set_parent) ------------
     let parent = created(
         client
-            .create_all(p("PA"), p("P"), Some(p("scope")), None, None, None, None, None, None)
+            .create_all(p("PA"), p("P"), Some(p("scope")), None, None, None, None, None, None, None)
             .await
             .expect("create PA-1"),
     );
@@ -392,6 +394,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 Some(p("PA-1")), None,
                 None,
+                None,
             )
             .await
             .expect("create PA-2"),
@@ -401,7 +404,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // No parent named: the shortcode root (MNG-14).
     let third = created(
         client
-            .create_all(p("PA"), p("loose"), None, None, None, None, None, None, None)
+            .create_all(p("PA"), p("loose"), None, None, None, None, None, None, None, None)
             .await
             .expect("create PA-3"),
     );
@@ -440,7 +443,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- an unlocks edge ----------------------------------------------------
     created(
         client
-            .create_all(p("RS"), p("A"), Some(p("scope")), None, None, None, None, None, None)
+            .create_all(p("RS"), p("A"), Some(p("scope")), None, None, None, None, None, None, None)
             .await
             .expect("create RS-1"),
     );
@@ -455,6 +458,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None, None,
                 None,
+                None,
             )
             .await
             .expect("create RS-2"),
@@ -464,7 +468,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // A doc collection's root made a scope, through the emitted client.
     created(
         client
-            .create_all(p("KD"), p("identity"), Some(p("doc")), None, None, None, None, None, None)
+            .create_all(p("KD"), p("identity"), Some(p("doc")), None, None, None, None, None, None, None)
             .await
             .expect("create KD-1"),
     );
@@ -636,7 +640,7 @@ async fn waves_decode_typed_through_the_generated_client() {
     ] {
         created(
             client
-                .create_all(p(epic), p("t"), Some(p(kind)), None, blocked_by, None, None, None, None)
+                .create_all(p(epic), p("t"), Some(p(kind)), None, blocked_by, None, None, None, None, None)
                 .await
                 .expect("create"),
         );
@@ -680,7 +684,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
     let client = TicketsClient::new(&transport);
     let mut watch = client.watch(None, None, None, None, None);
     let make = |kind: &str, blocked_by: Option<Vec<TicketRef>>, path: Option<&str>| {
-        client.create_all(p("PT"), p("t"), Some(p(kind)), None, blocked_by, None, None, path.map(p), None)
+        client.create_all(p("PT"), p("t"), Some(p(kind)), None, blocked_by, None, None, path.map(p), None, None)
     };
     created(make("scope", None, None).await.expect("create")); // PT-1
     let y = created(make("build", None, None).await.expect("create")); // PT-2
@@ -734,7 +738,7 @@ async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
     let client = TicketsClient::new(&transport);
     let mut watch = client.watch(None, None, None, None, None);
     let make = |epic: &str, kind: &str, blocked_by: Option<Vec<TicketRef>>, body: Option<&str>| {
-        client.create_all(p(epic), p("t"), Some(p(kind)), None, blocked_by, body.map(p), None, None, None)
+        client.create_all(p(epic), p("t"), Some(p(kind)), None, blocked_by, body.map(p), None, None, None, None)
     };
     created(make("RS", "scope", None, None).await.expect("create")); // RS-1
     created(make("RS", "build", None, None).await.expect("create")); // RS-2
@@ -794,8 +798,8 @@ async fn the_comments_through_the_generated_client() {
     let transport = connect(port).await;
     let tickets = TicketsClient::new(&transport);
     let comments = CommentsClient::new(&transport);
-    tickets.create_all(p("DEMAND"), p("demands"), Some(p("scope")), None, None, None, None, None, None).await.expect("create");
-    tickets.create_all(p("DEMAND"), p("the chip"), None, None, None, None, None, None, None).await.expect("create");
+    tickets.create_all(p("DEMAND"), p("demands"), Some(p("scope")), None, None, None, None, None, None, None).await.expect("create");
+    tickets.create_all(p("DEMAND"), p("the chip"), None, None, None, None, None, None, None, None).await.expect("create");
     let version = match one(tickets.get_all(p("DEMAND-2")).await.expect("get")) {
         TicketsEvent::Ticket { ticket } => ticket.updated_unix,
         other => panic!("expected `ticket`, got {other:?}"),
@@ -886,8 +890,8 @@ async fn replies_through_the_generated_client() {
     let transport = connect(port).await;
     let tickets = TicketsClient::new(&transport);
     let comments = CommentsClient::new(&transport);
-    tickets.create_all(p("LINKED"), p("links"), Some(p("scope")), None, None, None, None, None, None).await.expect("create");
-    tickets.create_all(p("LINKED"), p("the page"), None, None, None, None, None, None, None).await.expect("create");
+    tickets.create_all(p("LINKED"), p("links"), Some(p("scope")), None, None, None, None, None, None, None).await.expect("create");
+    tickets.create_all(p("LINKED"), p("the page"), None, None, None, None, None, None, None, None).await.expect("create");
     let mut watch = comments.watch();
     let _ = comments.list_all(None, None, None, None, None, None, None, None, None, None, Some(1)).await.expect("round trip");
     tokio::time::sleep(Duration::from_millis(250)).await;

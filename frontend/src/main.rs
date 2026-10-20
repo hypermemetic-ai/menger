@@ -260,6 +260,7 @@ mod card;
 mod chat_deleted;
 mod chat_full;
 mod chat_pane;
+mod chat_strip;
 mod chats;
 mod carpet;
 mod cite;
