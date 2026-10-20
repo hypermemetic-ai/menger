@@ -125,6 +125,23 @@ deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
   builder's key); it reaches users when its release is promoted — say which
   release in the ticket when it matters. Work in a repository with no
   environment (`repo@hash` outside menger) is Complete at its merge.
+- **Test is automatic; prod is the owner's** (owner, 2026-10-19, DEPLOY-48:
+  "we always instantly deploy everything to test. we tolerate rollback").
+  The deploy runner (`deploy/runner.mjs`, `menger-deploy-runner`) watches
+  the tracker: a ticket of MENGER (or a shortcode hosted under it) entering
+  **In Review**, or a commit linked to one while it is there, files a test
+  request for main's tip by itself — debounced 60 s, one run at a time and
+  at most one pending request (a burst of merges is one more run; the
+  pending one takes main's tip when it starts). A ticket moved back to
+  Coding triggers nothing until it re-enters review. A red run records
+  `failed`, posts the failing lines to the ticket's chat (else chat 6) and
+  files a gap blocking the triggering tickets (CI-3). So a builder merges
+  `--no-ff`, links, sets In Review — and runs no deploy; never squash or
+  rebase on merge (a ticket's branch commits are how "is it on test" is
+  answered). Off: `MENGER_RUNNER_AUTO_TEST=0` in
+  `~/.config/menger/deploy-runner.env`, then restart the runner;
+  `deploy/pipeline status` says `auto-test on|off` and what is running and
+  pending. deploy/README "The deploy runner" → Automatic test.
 - Check work on the test environment (http://127.0.0.1:4451/) or a throwaway
   server — never on prod. The tracker itself is prod: `synapse -P 4455` is
   still how tickets are read and written.

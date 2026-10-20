@@ -1142,6 +1142,48 @@ The runner's tests: `node --test deploy/tests/runner.test.mjs` (under
 `cargo test`, `tests/deploy_record.rs`); the button against a throwaway
 with the runner `--fake`: `scripts/deploy-button-check.mjs`.
 
+### Automatic test (DEPLOY-48)
+
+Owner, 2026-10-19: "we always instantly deploy everything to test. we
+tolerate rollback. our system should do this automatically upon something
+entering review." The runner also holds `tickets.watch` (as the pipeline
+key, `viewer` on `*`) and files the test request itself
+(`deployments.request --environment test --branch main`, its `deployer`
+grant) — **for test only**; prod stays the owner's (below).
+
+- **Trigger:** a ticket of the project — MENGER or any shortcode hosted
+  under it, by its address — entering **In Review**, or a commit linked
+  (`tickets commits link`) to one that is In Review. Leaving review triggers
+  nothing; a ticket's commits while Coding go when it re-enters.
+- **Debounce:** the request is filed 60 s (`MENGER_RUNNER_DEBOUNCE_SECS`)
+  after the last trigger; each trigger restarts the wait.
+- **Coalesce:** one run at a time and at most one pending request. When a
+  test request is already pending — queued here or on the tracker (a
+  `→ test`) — the triggers fold into it; it resolves main's tip when it
+  starts. The request under way is never folded into.
+- **Plan:** test's, as → test runs it (build with the full gate → deploy
+  test); the deploy sets Complete (DEPLOY-22/28) as any does.
+- **Red:** the request is recorded `failed`; the failing lines (cargo's
+  `FAILED` / `panicked`, else the tail) are posted to the open chat of the
+  first triggering ticket, else `MENGER_RUNNER_CHAT` (6), and a gap is filed
+  under it blocking every triggering ticket — both as the editor key
+  (`MENGER_RUNNER_EDITOR_KEY_FILE`, `~/.plexus/keys/builder.key`; `none`:
+  neither).
+- **Off:** `MENGER_RUNNER_AUTO_TEST=0` in `~/.config/menger/deploy-runner.env`
+  (or `--no-auto-test`), then `systemctl --user restart
+  menger-deploy-runner`. `deploy/pipeline status` says `auto-test on|off`
+  and, from `~/.local/state/menger-deploy-runner/auto.json`, the request
+  running, the one pending (and for which tickets), what waits out the
+  debounce and the last run.
+- **Tracking:** a ticket's work is its branch's commits; merges are
+  `--no-ff`, so each stays in main with its hash and "is X on test" is "is
+  X's newest linked commit an ancestor of what test runs" (DEPLOY-46).
+  Never squash or rebase on merge.
+
+Its tests are in `deploy/tests/runner.test.mjs` (trigger, debounce,
+coalesce, re-entering review, the off switch, a red run) and
+`deploy/tests/pipeline` (the status lines).
+
 **→ prod** (DEPLOY-40) promotes the release test passed to the page's
 destination — `app-prod` (app.menger.sh) since RUN-13; the local prod is
 stopped and `promote` refuses while `prod.moved` exists. It is shown to an
