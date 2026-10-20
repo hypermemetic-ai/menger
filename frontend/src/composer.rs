@@ -576,6 +576,8 @@ pub(crate) struct Props {
     pub(crate) ticket: Option<String>,
     pub(crate) body: RwSignal<String>,
     pub(crate) full: bool,
+    /// CHAT-62: the chat's ↓, docked on the card's top-right edge.
+    pub(crate) jump: crate::chat_pane::Jump,
 }
 
 /// One row of the menu over the card.
@@ -588,7 +590,7 @@ enum Row {
 /// The composer: the card, its strip, its menu.
 #[component]
 pub(crate) fn Composer(props: Props) -> impl IntoView {
-    let Props { id, ticket, body, full } = props;
+    let Props { id, ticket, body, full, jump } = props;
     let held = chats::signal();
     let me = chats::me();
     let name = crate::chat_pane::names();
@@ -941,7 +943,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
     // `#/chats` has no dock to fold the chat into (CHAT-14).
     let on_ticket = ticket.is_some() && !crate::chat_full::in_inbox();
     view! {
-        <div class="ccompose" class:full=full>
+        <div class="ccompose" class:full=full class:jumping=move || jump.n.with(Option::is_some)>
             {move || refusal.get().map(|r| view! {
                 <div class="cstrip refuse" role="alert"><span>{if r.starts_with("not ") { r.clone() } else { format!("not sent · {r}") }}</span>
                     <button type="button" class="cx" aria-label="dismiss" on:click=move |_| refusal.set(None)>"×"</button></div>
@@ -966,6 +968,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                         on:click=move |_| crate::reply::clear(id)>"×"</button></div>
             })}
             <div class="ccard">
+                {crate::chat_pane::jump_dock(jump)}
                 <crate::draw::PadView a=attach />
                 {move || tok.get().map(|c| view! {
                     <span class="ctok"><span class="tn">{format!("/{}", c.name)}</span>
