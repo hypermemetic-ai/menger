@@ -61,7 +61,10 @@
  *     host's: `menger:link { href }`, and the host navigates, asks before
  *     a link that leaves menger, or refuses one it never follows;
  *     `input` (INPUT-4, frozen) — `ticket`, the ticket whose stored body
- *     this frame renders (null: none — an editor's preview, a help card),
+ *     this frame renders (null: none — an editor's preview, a help card;
+ *     2.7, CHAT-21: in a chat message's frame, `message:<id>`, the
+ *     message's own inputs' home — `inputs.list` with it answers them,
+ *     `submit` / `clear` answer them through `chats.inputs.*`),
  *     and `submit(id, value, rationale?)` → a Promise of the answer
  *     recorded (`{ value, rationale, source, atUnix }`, the typed client's
  *     spelling; the source the server's, from the viewer): the first write a
@@ -363,7 +366,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.6.0";
+  var VERSION = "2.7.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;

@@ -4764,6 +4764,17 @@
   :is(#chatpane, #chatfull) .tkcards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 2px; max-width: 560px; }
   :is(#chatpane, #chatfull) .tkcards:empty { display: none; }
   :is(#chatpane, #chatfull) .turn.mine .tkcards { margin-left: auto; width: 100%; }
+  /* CHAT-21: a message whose body would be framed as a ticket's draws in its
+     own frame at the message's width, made near the view (src/chat_frames.rs);
+     far off, a hatched block of the height it had keeps its place. */
+  :is(#chatpane, #chatfull) .tframe { margin-top: 4px; min-width: 0; width: 100%; }
+  :is(#chatpane, #chatfull) .turn.mine .tframe { max-width: min(100%, 560px); }
+  :is(#chatpane, #chatfull) .tframe .mframe { max-width: none; }
+  :is(#chatpane, #chatfull) .tframe.src .mframe { display: none; }
+  :is(#chatpane, #chatfull) .tframe .tsrc { margin: 0; padding: 10px 12px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--panel); font: calc(12px * var(--text-scale))/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+  :is(#chatpane, #chatfull) .cframe-wait { border-radius: var(--radius-lg); background: repeating-linear-gradient(135deg, var(--panel) 0 8px, var(--bg) 8px 16px); border: var(--border) dashed var(--line); }
+  :is(#chatpane, #chatfull) .turn.mine .tframe.twide { max-width: none; }
+  #chatfull .tcol:has(.tframe.twide) { max-width: none; }
   :is(#chatpane, #chatfull) .tkcard { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); color: var(--ink); text-align: left; }
   :is(#chatpane, #chatfull) .tkh { display: flex; align-items: center; gap: 8px; min-width: 0; }
   :is(#chatpane, #chatfull) .tkt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); text-decoration: none; font: calc(13px * var(--text-scale)) var(--sans); }

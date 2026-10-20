@@ -114,6 +114,10 @@ web-sys = { version = "0.3", features = [
   "HtmlInputElement",
   "MediaQueryList",
   "HtmlButtonElement",
+  # CHAT-21: a chat message's frame is made only near the view.
+  "IntersectionObserver",
+  "IntersectionObserverEntry",
+  "IntersectionObserverInit",
   # SCALE-24: the nav gives focus back to a row its window's keyed <For>
   # moved in the DOM (a moved element loses focus), from a MutationObserver
   # — without scrolling (FocusOptions).

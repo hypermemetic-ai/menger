@@ -82,6 +82,11 @@ export interface MengerInput {
    * `state`, `ticket`).
    * `null` in a frame that renders no ticket's stored body (an editor's
    * preview, a component's help card), where `submit` always rejects.
+   * 2.7 (CHAT-21): `message:<id>` in a chat message's frame — the home of
+   * the message's own inputs, never a ticket: `menger.call('inputs.list',
+   * { ticket })` answers them (each `input` carrying that `ticket`), each
+   * `input_changed` of one comes with it, and `submit` / `clear` answer
+   * them (`chats.inputs.answer` / `clear`, made by the host).
    */
   readonly ticket: string | null;
 
@@ -156,7 +161,7 @@ export interface MengerTheme {
 }
 
 export interface Menger {
-  /** "2.6.0". */
+  /** "2.7.0". */
   readonly version: string;
 
   /**

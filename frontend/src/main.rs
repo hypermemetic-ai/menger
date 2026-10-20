@@ -258,6 +258,7 @@ mod calendar;
 mod cache;
 mod card;
 mod chat_cards;
+mod chat_frames;
 mod chat_deleted;
 mod chat_full;
 mod chat_pane;

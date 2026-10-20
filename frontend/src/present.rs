@@ -740,6 +740,8 @@ pub(crate) fn Framed(
     #[prop(optional)] more: Option<ViewFn>,
     // COMMENT-10: a draft's ticket, whose images its frame draws.
     #[prop(optional)] media: Option<String>,
+    // CHAT-21: the chat and message whose body it is (src/chat_frames.rs).
+    #[prop(optional)] message: Option<(u64, u64)>,
 ) -> impl IntoView {
     install();
     let id = NEXT.with(|n| {
@@ -894,6 +896,8 @@ pub(crate) fn Framed(
         let media = media.clone().unwrap_or_default();
         if mockup.get() {
             sizer.devices(html, ticket, scope, emulate, shaped.into(), size, is_full, vh.into()).into_any()
+        } else if let Some(message) = message {
+            view! { <Frame html ticket scope media message /> }.into_any()
         } else {
             view! { <Frame html ticket scope media /> }.into_any()
         }
