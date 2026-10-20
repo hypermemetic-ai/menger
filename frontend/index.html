@@ -5749,8 +5749,11 @@
   #deploy-page .slog { color: var(--accent); }
   #deploy-page .sdetail { flex-basis: 100%; margin: 2px 0 0; padding: 6px 8px; max-height: 10em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border-radius: var(--radius); color: var(--ink); }
   /* DEPLOY-40: → prod beside → test, its reason when off, and its confirm sheet. */
-  #deploy-page .toprod .tobtn { border-color: var(--accent); color: var(--accent); max-width: 100%; overflow-wrap: anywhere; text-align: left; }
-  #deploy-page .toff { font-size: calc(11px * var(--text-scale)); color: var(--muted); overflow-wrap: anywhere; }
+  /* DEPLOY-42: enabled, → prod is the page's primary action (filled); off, it is still a plain button
+     (the accent outline, full strength) with its reason right under it in the text colour. */
+  #deploy-page .toprod .tobtn { border-color: var(--accent); color: var(--bg); background: var(--accent); max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+  #deploy-page .toprod .tobtn:disabled { opacity: 1; color: var(--accent); background: var(--card); border-style: dashed; }
+  #deploy-page .toff { font-size: calc(12px * var(--text-scale)); color: var(--ink); overflow-wrap: anywhere; }
   .psheetwrap { z-index: 945; /* over the phone nav (#pbar, 940) */ padding: max(8vh, var(--safe-top)) max(1rem, var(--safe-right)) max(1rem, var(--safe-bottom)) max(1rem, var(--safe-left)); }
   #prod-sheet { width: 36rem; max-height: min(80vh, 100%); padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .6rem; font-family: var(--sans); color: var(--ink); }
   #prod-sheet h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0; }

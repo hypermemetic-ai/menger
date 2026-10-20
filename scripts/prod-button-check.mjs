@@ -14,6 +14,11 @@
 //   agent  an agent's key (an admin): the request is filed, the runner refuses it in its
 //          first step ("is a key"), the rest skipped, nothing runs
 //   none   the button is off with its reason drawn beside it: nothing newer than app-prod
+//   testfailed  (DEPLOY-42) test's last deploy failed: the button is off, still a button, saying so
+//   norelease   (DEPLOY-42) test's record names a commit and no release, app-prod runs it: off,
+//          "→ prod · nothing newer", the reason right under it
+// Every mode also checks the button reads as a button (DEPLOY-42): on screen, as tall as → test
+// (when drawn), a full-strength label, and its reason (when off) in the text colour, not faint.
 // Exit 1 on a failure.
 import { createRequire } from "node:module";
 import fs from "node:fs";
@@ -50,7 +55,34 @@ await page.waitForSelector("#deploy-page #to-prod", { timeout: 30000 });
 await page.waitForFunction(() => !document.getElementById("boot"), null, { timeout: 30000 }); // APP-92's sheet gone
 ok(await page.$eval("#to-prod", (b) => b.dataset.dest) === "app-prod", `${tag}: → prod promotes to the track's end, app-prod`);
 
-if (mode === "none") {
+// DEPLOY-42: a button, not a ghost — visible, test's size, full strength, its reason in the ink.
+const look = await page.evaluate(() => {
+  const b = document.querySelector("#to-prod"), r = b.getBoundingClientRect(), cs = getComputedStyle(b);
+  const t = document.querySelector("#deploy-page .totest:not(.toprod) .tobtn"), off = document.querySelector("#deploy-page .toprod .toff");
+  const ink = getComputedStyle(document.querySelector("#deploy-page")).color;
+  return {
+    onScreen: r.width > 40 && r.height >= 30 && r.left >= 0 && r.right <= innerWidth && getComputedStyle(b).visibility === "visible",
+    opacity: Number(cs.opacity), sameHeight: t ? Math.abs(t.getBoundingClientRect().height - r.height) <= 2 : true,
+    reasonInk: off ? getComputedStyle(off).color === ink && Number(getComputedStyle(off).opacity) === 1 : null,
+    reasonBelow: off ? off.getBoundingClientRect().top >= r.bottom - 1 && off.getBoundingClientRect().top - r.bottom < 24 : null,
+    disabled: b.disabled,
+  };
+});
+ok(look.onScreen && look.opacity === 1, `${tag}: → prod is on screen, a full-strength button (${JSON.stringify(look)})`);
+ok(look.sameHeight, `${tag}: as tall as → test`);
+ok(look.reasonInk !== false && look.reasonBelow !== false, `${tag}: its reason, when there is one, sits right under it in the text colour`);
+ok(look.disabled === (mode === "none" || mode === "testfailed" || mode === "norelease"), `${tag}: off exactly when it should be`);
+
+if (mode === "testfailed") {
+  ok(/test's last deploy failed/.test(await page.textContent("#deploy-page .toprod .toff")), `${tag}: the reason says test's deploy failed`);
+  ok((await page.textContent("#to-prod")) === "→ prod", `${tag}: the label is → prod`);
+  await shot("off");
+} else if (mode === "norelease") {
+  ok((await page.textContent("#to-prod")) === "→ prod · nothing newer", `${tag}: the label says nothing newer`);
+  ok(/app-prod runs \S+ already: test has nothing newer/.test(await page.textContent("#deploy-page .toprod .toff")), `${tag}: the reason names the commit app-prod runs`);
+  await shot("off");
+} else if (mode === "none") {
+  ok((await page.textContent("#to-prod")) === "→ prod · nothing newer", `${tag}: the label says nothing newer`);
   ok(await until(() => page.$eval("#to-prod", (b) => b.disabled && /runs \S+ already: test has nothing newer/.test(b.title))), `${tag}: the button is off, its title says why`);
   ok(/runs \S+ already/.test(await page.textContent("#deploy-page .toprod .toff")), `${tag}: and the reason is drawn beside it`);
   await shot("off");

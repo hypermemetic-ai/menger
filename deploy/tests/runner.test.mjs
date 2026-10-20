@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { GUARDS, PLANS, Runner, shaOf, signed, tail, unowned } from "../runner.mjs";
+import { GUARDS, PLANS, Runner, releaseIn, shaOf, signed, tail, unowned } from "../runner.mjs";
 
 const SECRET = "runner-test-secret-0123456789";
 const sign = (body) => "sha256=" + crypto.createHmac("sha256", SECRET).update(body).digest("hex");
@@ -165,4 +165,20 @@ test("a watched request to app-prod carries its release and its requester", () =
   const r = runner({ owners: [OWNER] });
   r.consider({ id: 30, project: "MENGER", environment: "app-prod", revision: "8cb79df", release: REL, recorded_by: OWNER, requested: { state: "pending", steps: [] } });
   assert.deepEqual(r.queue[0], { request: 30, project: "MENGER", environment: "app-prod", revision: "8cb79df", branch: "main", release: REL, requestedBy: OWNER });
+});
+
+test("DEPLOY-42: a runner-carried deploy test names its release in the runner's own record", async () => {
+  const r = prodRunner();
+  process.env.FAKE_PIPELINE_RELEASE = REL;
+  const recs = [];
+  const call = r.menger;
+  r.menger = async (m, p) => { if (m === "deployments.record") recs.push(p); return call(m, p); };
+  r.standing = async () => ({ state: "started" }); // the pipeline's own record never landed
+  await r.run(job({ environment: "test", revision: "HEAD", release: "" }));
+  delete process.env.FAKE_PIPELINE_RELEASE;
+  assert.equal(recs.length, 1);
+  assert.equal(recs[0].environment, "test");
+  assert.equal(recs[0].release, REL);
+  assert.equal(releaseIn("a\nrelease 20261019T213135Z-e6efbff\nb"), "20261019T213135Z-e6efbff");
+  assert.equal(releaseIn("nothing"), null);
 });

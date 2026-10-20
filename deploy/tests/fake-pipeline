@@ -6,6 +6,7 @@
 set -u
 printf '%s|%s|%s\n' "${IMAGE_STORE:-}" "${MENGER_REQUEST:-}" "$*" >>"${FAKE_PIPELINE_LOG:?}"
 echo "fake pipeline: $*"
+[[ -n ${FAKE_PIPELINE_RELEASE:-} && ${1:-} == deploy ]] && echo "test runs $FAKE_PIPELINE_RELEASE — smoke passed"
 if [[ -n ${FAKE_PIPELINE_FAIL:-} && "${1:-} ${2:-}" == "$FAKE_PIPELINE_FAIL"* ]]; then
   echo "$* FAILED: the fake's failure" >&2
   exit 1

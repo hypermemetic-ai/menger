@@ -52,7 +52,16 @@ pub(crate) fn commit_of(release: &str) -> Option<&str> {
 /// environment) runs — or why it is off.
 pub(crate) fn offer(from: Option<&Environment>, dest: Option<&Environment>, from_name: &str, dest_name: &str) -> Result<String, String> {
     let Some(from) = from else { return Err(format!("{from_name} is not an environment of this project")) };
-    let Some(release) = from.release.clone() else { return Err(format!("{from_name} runs no release yet: nothing to promote")) };
+    let Some(release) = from.release.clone() else {
+        // DEPLOY-42: a record that named no release still names a commit; the same commit there is nothing newer.
+        if let (Some(a), Some(b)) = (from.revision.as_deref(), dest.and_then(|d| d.revision.as_deref())) {
+            let n = a.len().min(b.len()).min(7);
+            if n >= 7 && a[..n].eq_ignore_ascii_case(&b[..n]) {
+                return Err(format!("{dest_name} runs {} already: {from_name} has nothing newer", &b[..n]));
+            }
+        }
+        return Err(format!("{from_name} runs no release yet: nothing to promote"));
+    };
     match from.last_state {
         Some(DeployState::Started) => return Err(format!("a deploy to {from_name} is under way: promote once it has passed")),
         Some(DeployState::Failed) => return Err(format!("{from_name}'s last deploy failed: promote once {from_name} passes again")),
@@ -200,6 +209,7 @@ pub(crate) fn ToProd(project: Memo<Option<String>>, track: Memo<Vec<String>>) ->
         let off = move || blocked(last.get().as_ref()).map(Err).unwrap_or_else(|| offered.get().map(|_| ()));
         let label = move || match offered.get() {
             Ok(rel) => format!("→ prod · {rel}"),
+            Err(w) if w.ends_with("has nothing newer") => "→ prod · nothing newer".to_string(),
             Err(_) => "→ prod".to_string(),
         };
         let (from2, to2) = (from.clone(), to.clone());
@@ -323,6 +333,14 @@ mod tests {
         assert!(offer(Some(&env("test", Some(NEW), Some(DeployState::Started))), None, "test", "app-prod").unwrap_err().contains("under way"));
         assert!(offer(Some(&env("test", None, None)), None, "test", "app-prod").unwrap_err().contains("runs no release"));
         assert!(offer(None, None, "test", "app-prod").is_err());
+        // DEPLOY-42: test's record has a commit and no release; app-prod runs the same commit.
+        let mut t = env("test", None, ok);
+        t.revision = Some("e6efbff1199aaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+        let mut d = env("app-prod", Some(NEW), ok);
+        d.revision = Some("e6efbff".into());
+        assert_eq!(offer(Some(&t), Some(&d), "test", "app-prod"), Err("app-prod runs e6efbff already: test has nothing newer".into()));
+        d.revision = Some("0dd0000".into());
+        assert!(offer(Some(&t), Some(&d), "test", "app-prod").unwrap_err().contains("runs no release"));
     }
 
     #[test]
