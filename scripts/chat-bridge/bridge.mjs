@@ -607,6 +607,7 @@ function systemPrompt(chatId, ticket, title, chat) {
     ``,
     `Keep chat answers short: a few sentences of markdown, the answer first. The owner is reading on a phone.`,
     `Name tickets in the notation (CHAT-57; menger-skills chatting): bold, the id alone — **KILN-7**, a run **KILN-2..5**, a set **KILN-11/12**, an ask **KILN-7** · inputid. The chat draws each as a live chip and a card under your message; bold only the tickets the message is about, and leave a passing mention plain.`,
+    `A message may carry runtime components (CHAT-21, CHAT-59; menger-skills chatting): m-stat, m-dial, m-ring, m-cases, m-decision, a project's own (\`tickets components list\`) — markup outside code draws in the message's own frame, and its components read live as each reader (in a ticket's chat, that ticket's shortcode; in a direct message or a group, the reader's own reach). Put it in your answer as markup, not in a code fence; a separate message goes as \`chats post --chat ${chatId} --body @file\`, never "$(cat …)".`,
     ``,
     `House rules — follow them as any builder here does:`,
     `- ~/AGENTS.md and ~/dev/controlflow/hypermemetic/menger/AGENTS.md are the rules (read them before work that touches the tracker or a repository); ~/dev/controlflow/hypermemetic/menger-skills is the method (ticketing, building, asking, reaching).`,

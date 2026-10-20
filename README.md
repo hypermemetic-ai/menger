@@ -3609,10 +3609,22 @@ message's width, in the reader's theme, under the same bar a body has
 (Full screen) plus *source* (the markdown, as text) and ⤢ (the pane's
 whole width). Any other message draws as ever. The frame is the body's
 (`/app/frame`, never a `srcdoc`; the frame CSP unchanged), stamped
-`data-chat` and `data-message` and **no `data-ticket`**: its reads are
-held to the chat's ticket's shortcode (a direct message's read only
-components), its components are what its markup names and what its reach
-holds (ACCESS-26), and no write from it can touch a ticket.
+`data-chat` and `data-message` and **no `data-ticket`**: in a chat inside
+a ticket its reads are held to that ticket's shortcode; its components are
+what its markup names and what its reach holds (ACCESS-26), and no write
+from it can touch a ticket.
+
+**Runtime components in a chat with no ticket** (CHAT-59, owner in chat 6:
+*"you should be able to use runtime components"*): a direct message's or
+a group's frame is stamped `data-scope="*"` (`bridge::READER`) and **reads
+as the reader** — every `menger.call` (`list`, `get`, `nav`, `work.waves`,
+…) goes as asked and the server answers it from the reader's own grants,
+never the author's, and the reader's `watch` events reach it — so
+`<m-dial scope="KILN-1">`, `<m-ring id="ENV-5">` or a project's own
+component draws with its data, each reader seeing what they may. It is
+handed only the components its markup names and what they use (never the
+reader's whole registry), and writes stay as above: no ticket input is
+answered from a message.
 
 **Lazy**: a turn makes its frame within about a screen of the view (an
 IntersectionObserver on the turn, the list as root where it scrolls) and

@@ -113,7 +113,9 @@
 //! shortcode and the shortcodes hosted under it (FILTER-13's `under`,
 //! src/bridge.rs: [`bridge::run_scoped`]), and every `watch` event reaches a
 //! frame only if its reach admits it ([`broadcast_change`]). A frame with no
-//! scope reads and hears components alone.
+//! scope reads and hears components alone. CHAT-59: a message in a chat
+//! with no ticket is stamped [`bridge::READER`] — it reads and hears as the
+//! reader, the server answering from the reader's grants.
 //!
 //! ACCESS-26: **and is handed only the components its ticket could show.**
 //! The registry a frame gets — in its init block, on `menger:ready`, on a
@@ -2200,6 +2202,8 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
 /// reads are held to `ticket`'s shortcode — or, with no ticket, to `scope`
 /// (an editor's draft: the shortcode of the ticket it edits; a help card:
 /// its component's owner's), and with neither it reads only components.
+/// CHAT-59: `scope` may be [`bridge::READER`] — a message outside any
+/// ticket, which reads as the reader.
 /// MENGER-15: `html` may be a whole document (md::is_page), which renders
 /// as itself ([`page_srcdoc`]); a mockup's device passes `emulate` (its
 /// toggles, applied live) and `fixed` (the screen's height, not the
@@ -2217,7 +2221,7 @@ pub(crate) fn Frame(
     // CHAT-21: the chat and message whose body this is (src/chat_frames.rs).
     #[prop(optional)] message: Option<(u64, u64)>,
 ) -> impl IntoView {
-    let scope = bridge::scope_of(ticket.as_deref()).or_else(|| bridge::scope_of(scope.as_deref()));
+    let scope = bridge::scope_of(ticket.as_deref()).or_else(|| bridge::scope_named(scope.as_deref()));
     let media = ticket.clone().or(media.filter(|m| !m.trim().is_empty()));
     install_listener();
     // COMP-5: a frame defines the components — the app keeps the registry.
