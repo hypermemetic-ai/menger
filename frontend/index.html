@@ -4693,9 +4693,13 @@
   @media (max-width: 760px) {
     .cstrip { padding: 6px 12px; }
     .cdrop { max-height: 50dvh; }
-    #chatfull .cstrip-wrap { position: sticky; top: var(--shead-h, 0px); transition: top .2s var(--ease); }
-    #chatfull[data-head="off"] .cstrip-wrap { top: var(--safe-top); }
-    html[data-kb] #chatfull .cstrip-wrap { position: relative; top: auto; }
+    /* CHAT-60: the strip is part of the head's sticky block — it slides up
+       with the head on a scroll down (to the same edge, the safe area's)
+       and back with it, on the head's timing; a transform, so the turns
+       never move. */
+    #chatfull .cstrip-wrap { position: sticky; top: var(--shead-h, 0px); transition: transform .2s var(--ease); }
+    #chatfull[data-head="off"] .cstrip-wrap { transform: translateY(calc(var(--safe-top) - var(--shead-h, 0px) - 100%)); }
+    html[data-kb] #chatfull .cstrip-wrap { position: relative; top: auto; transform: none; }
   }
   :is(#chatpane, #chatfull) .pmsgs.turns { padding: 14px 14px 8px; gap: 0; }
   :is(#chatpane, #chatfull) .tcol { display: flex; flex-direction: column; gap: 16px; width: 100%; margin: 0 auto; }

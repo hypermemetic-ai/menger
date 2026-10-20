@@ -103,8 +103,13 @@ pub(crate) const HEAD_SLOP_PX: f64 = 6.0;
 /// head moved at, `by_reader` whether the reader's finger, wheel or keys
 /// moved it — the view's own moves (landing, ↓, an arrival kept at the
 /// bottom) leave the head as it is. The answer is whether it shows, and the
-/// scroll to measure the next move from.
-pub(crate) fn head_shown(shown: bool, was: f64, y: f64, head_h: f64, by_reader: bool) -> (bool, f64) {
+/// scroll to measure the next move from. CHAT-60: the ticket strip is part
+/// of the head — `head_h` is the two together, and a strip that is `open`
+/// (a stage's tickets dropped) holds both where they are.
+pub(crate) fn head_shown(shown: bool, was: f64, y: f64, head_h: f64, by_reader: bool, open: bool) -> (bool, f64) {
+    if open {
+        return (shown, y);
+    }
     if y <= head_h.max(0.0) {
         return (true, y);
     }
@@ -346,16 +351,28 @@ mod tests {
     #[test]
     fn the_head_follows_the_scroll() {
         let h = 50.0;
-        assert_eq!(head_shown(true, 0.0, 30.0, h, true), (true, 30.0), "within its height of the top: shown");
-        assert_eq!(head_shown(true, 100.0, 140.0, h, true), (false, 140.0), "down: hidden");
-        assert_eq!(head_shown(false, 140.0, 300.0, h, true), (false, 300.0), "further down: still hidden");
-        assert_eq!(head_shown(false, 300.0, 296.0, h, true), (false, 300.0), "a jitter up: nothing");
-        assert_eq!(head_shown(false, 300.0, 290.0, h, true), (true, 290.0), "up past the slop: back");
-        assert_eq!(head_shown(true, 290.0, 293.0, h, true), (true, 290.0), "a jitter down: nothing");
-        assert_eq!(head_shown(true, 290.0, 288.0, h, true), (true, 288.0), "going up while shown keeps the mark with it");
-        assert_eq!(head_shown(false, 400.0, 20.0, h, true), (true, 20.0), "back at the top: shown");
-        assert_eq!(head_shown(true, 0.0, 3000.0, h, false), (true, 3000.0), "the view's own move (landing) leaves it shown");
-        assert_eq!(head_shown(false, 3000.0, 2900.0, h, false), (false, 2900.0), "and hidden");
+        assert_eq!(head_shown(true, 0.0, 30.0, h, true, false), (true, 30.0), "within its height of the top: shown");
+        assert_eq!(head_shown(true, 100.0, 140.0, h, true, false), (false, 140.0), "down: hidden");
+        assert_eq!(head_shown(false, 140.0, 300.0, h, true, false), (false, 300.0), "further down: still hidden");
+        assert_eq!(head_shown(false, 300.0, 296.0, h, true, false), (false, 300.0), "a jitter up: nothing");
+        assert_eq!(head_shown(false, 300.0, 290.0, h, true, false), (true, 290.0), "up past the slop: back");
+        assert_eq!(head_shown(true, 290.0, 293.0, h, true, false), (true, 290.0), "a jitter down: nothing");
+        assert_eq!(head_shown(true, 290.0, 288.0, h, true, false), (true, 288.0), "going up while shown keeps the mark with it");
+        assert_eq!(head_shown(false, 400.0, 20.0, h, true, false), (true, 20.0), "back at the top: shown");
+        assert_eq!(head_shown(true, 0.0, 3000.0, h, false, false), (true, 3000.0), "the view's own move (landing) leaves it shown");
+        assert_eq!(head_shown(false, 3000.0, 2900.0, h, false, false), (false, 2900.0), "and hidden");
+    }
+
+    /// CHAT-60: the strip goes with the head — its height counts as the
+    /// head's near the top, and while it is open neither moves.
+    #[test]
+    fn the_strip_goes_with_the_head() {
+        let (head, strip) = (50.0, 44.0);
+        assert_eq!(head_shown(true, 0.0, 80.0, head + strip, true, false), (true, 80.0), "within the head and the strip of the top: shown");
+        assert_eq!(head_shown(true, 100.0, 140.0, head + strip, true, false), (false, 140.0), "down past both: hidden, together");
+        assert_eq!(head_shown(false, 300.0, 290.0, head + strip, true, false), (true, 290.0), "up: back, together");
+        assert_eq!(head_shown(true, 100.0, 400.0, head + strip, true, true), (true, 400.0), "the strip open: nothing slides away");
+        assert_eq!(head_shown(false, 400.0, 300.0, head + strip, true, true), (false, 300.0), "and nothing comes back either");
     }
 
     #[test]

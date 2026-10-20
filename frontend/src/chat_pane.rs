@@ -419,16 +419,19 @@ fn pane_view(s: Shown, lit: Signal<String>, back: Callback<bool>) -> impl IntoVi
 }
 
 /// CHAT-29: how much of the top of the view a sticky head covers, where
-/// the document scrolls the list (the full chat's head on a phone).
+/// the document scrolls the list (the full chat's head on a phone) — and,
+/// CHAT-60, the ticket strip sticky under it.
 fn covered(sc: &dom::Scroller) -> f64 {
     if !sc.is_doc() {
         return 0.0;
     }
-    dom::window()
-        .document()
-        .and_then(|d| d.query_selector("#chatfull .shead").ok().flatten())
-        .and_then(|h| h.dyn_into::<web_sys::HtmlElement>().ok())
-        .map_or(0.0, |h| f64::from(h.offset_height()))
+    let Some(doc) = dom::window().document() else { return 0.0 };
+    ["#chatfull .shead", "#chatfull .cstrip"]
+        .into_iter()
+        .filter_map(|sel| doc.query_selector(sel).ok().flatten())
+        .filter_map(|h| h.dyn_into::<web_sys::HtmlElement>().ok())
+        .map(|h| f64::from(h.offset_height()))
+        .sum()
 }
 
 /// One chat: who is in it (the dock's; the session's head says it), its
