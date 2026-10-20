@@ -272,6 +272,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.restore", Today::Editor, Some("ids")),
     // ACT-5: gone for good, and back — admin's alone.
     ("tickets.delete", Today::Admin, Some("ids")),
+    ("tickets.freeze", Today::Admin, Some("id")),
+    ("tickets.unfreeze", Today::Admin, Some("id")),
     ("tickets.undelete", Today::Admin, Some("ids")),
     // ACCESS-14: tickets' inputs child, gated by its whole path.
     ("tickets.inputs.list", Today::Viewer, None),
