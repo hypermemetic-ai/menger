@@ -297,3 +297,63 @@ async fn the_stages_are_kept_across_a_reopen() {
         other => panic!("{other:?}"),
     }
 }
+
+/// DEPLOY-46: a ticket's version is its newest own commit — another
+/// repository's (`repo@hash`), linked after, no deploy here carries, so it
+/// never makes the ticket behind or waiting. ACCESS-47's shape: its branch
+/// and merge, then a `menger-skills@` commit.
+#[tokio::test]
+async fn another_repositorys_commit_is_no_version() {
+    let store = Store::new();
+    menger(&store, 1).await;
+    store.set_promotes(SYS, "menger", "prod", Some("test"), "owner".into()).await.unwrap();
+    link(&store, "MENGER-2", &["9d287ce"]).await;
+    link(&store, "MENGER-2", &["menger-skills@df17c74"]).await;
+    assert_eq!(admitted(&store, "waiting test"), ["MENGER-2"], "its own commits run nowhere yet");
+
+    record(&store, rec("test", "succeeded", "9d287ce", &["2222222", "9d287ce"], T0)).await;
+    assert_eq!(stages(&store, "test"), of(&["waiting: ", "deploying: ", "ready for: ", "failed: ", "deployed: MENGER-2"]));
+    assert_eq!(stages(&store, "prod"), of(&["waiting: ", "deploying: ", "ready for: MENGER-2", "failed: ", "deployed: "]));
+    assert!(admitted(&store, "behind test").is_empty(), "menger-skills@df17c74 is not menger's to carry");
+    record(&store, rec("prod", "succeeded", "9d287ce", &["2222222", "9d287ce"], T0 + 10)).await;
+    assert_eq!(stages(&store, "prod"), of(&["waiting: ", "deploying: ", "ready for: ", "failed: ", "deployed: MENGER-2"]));
+
+    // An own commit after it is a version still.
+    link(&store, "MENGER-2", &["2a2a2a2"]).await;
+    assert_eq!(admitted(&store, "waiting test"), ["MENGER-2"]);
+    assert_eq!(admitted(&store, "behind prod"), ["MENGER-2"]);
+}
+
+/// DEPLOY-46: a ticket whose every commit is another repository's is in no
+/// delivery stage anywhere — not waiting, nor ready for, deploying or failed
+/// when a record names it — and `--verify-derived` agrees.
+#[tokio::test]
+async fn foreign_only_work_has_no_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("foreign.db");
+    {
+        let store = Store::open(&path).unwrap();
+        menger(&store, 1).await;
+        store.set_promotes(SYS, "menger", "prod", Some("test"), "owner".into()).await.unwrap();
+        store.create(SYS, ticket("MENGER", "a skills change", Kind::Build)).await.unwrap();
+        link(&store, "MENGER-3", &["menger-skills@df17c74", "plexus-core@abcdef0"]).await;
+        complete(&store, "MENGER-3").await;
+        assert_eq!(admitted(&store, "waiting test"), ["MENGER-2"], "MENGER-3 waits for nothing");
+        assert_eq!(admitted(&store, "waiting prod"), ["MENGER-2"]);
+
+        // Records that name it: deployed test, still no stage for prod.
+        let named = |mut r: Record| {
+            r.tickets = vec!["MENGER-3".into()];
+            r
+        };
+        record(&store, named(rec("test", "succeeded", "2222222", &["2222222"], T0))).await;
+        record(&store, named(rec("prod", "started", "2222222", &["2222222"], T0 + 10))).await;
+        record(&store, named(rec("prod", "failed", "2222222", &["2222222"], T0 + 20))).await;
+        assert_eq!(stages(&store, "test"), of(&["waiting: ", "deploying: ", "ready for: ", "failed: ", "deployed: MENGER-2 MENGER-3"]));
+        assert_eq!(stages(&store, "prod"), of(&["waiting: ", "deploying: ", "ready for: ", "failed: MENGER-2", "deployed: "]), "MENGER-2's failed; MENGER-3 none");
+    }
+    match Store::verify_derived(&path).unwrap() {
+        Verdict::Consistent { deployments, .. } => assert_eq!(deployments, Some(3)),
+        other => panic!("{other:?}"),
+    }
+}

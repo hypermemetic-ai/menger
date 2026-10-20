@@ -66,6 +66,12 @@
 //! other two are set algebra over the kept cells and the cell table at
 //! read time ([`Cache::holds_stage`]). A record "carries a version" as
 //! DEPLOY-20 says a deploy does ([`Touch::current`]).
+//!
+//! **A ticket's version is its own** (DEPLOY-46): only its commits with no
+//! `repo@` are versions — another repository's commit no deploy here
+//! carries. A ticket whose every commit is another repository's is in no
+//! delivery stage anywhere ([`Links::foreign`]): never deploying, failed,
+//! ready for or waiting, as DEPLOY-22 makes such work Complete at its merge.
 
 use super::history::Clock;
 use super::versions::{self, Linked};
@@ -206,6 +212,10 @@ pub(crate) struct Links {
     /// DEPLOY-20: each ticket's link record — which version each commit
     /// linked since DEPLOY-20 is, and when.
     record: HashMap<String, Linked>,
+    /// DEPLOY-46: the tickets whose every commit is another repository's
+    /// (`repo@hash`) — work no deploy of a project carries, in no delivery
+    /// stage anywhere (DEPLOY-22: it is Complete at its merge).
+    foreign: BTreeSet<String>,
 }
 
 /// DEPLOY-20: a ticket running an earlier version in an environment — its
@@ -242,7 +252,16 @@ impl Links {
         } else {
             self.of.insert(ticket.to_string(), commits.to_vec());
         }
+        match !commits.is_empty() && commits.iter().all(|c| c.repo().is_some()) {
+            true => self.foreign.insert(ticket.to_string()),
+            false => self.foreign.remove(ticket),
+        };
         true
+    }
+
+    /// DEPLOY-46: whether `ticket`'s commits are all another repository's.
+    fn foreign(&self, ticket: &str) -> bool {
+        self.foreign.contains(ticket)
     }
 
     /// The tickets linking the commit `c` names (a ticket may come twice).
@@ -253,15 +272,18 @@ impl Links {
     /// DEPLOY-20: whether `ticket`, running where `carries` says which
     /// commits are (and, when a record there named it, `named` the latest
     /// such record's moment), runs an earlier version: the versions linked
-    /// after its newest carried commit's, when there are any.
+    /// after its newest carried commit's, when there are any. DEPLOY-46:
+    /// only its own commits (no `repo@`) are versions — another
+    /// repository's no deploy carries, so it never makes one behind.
     fn behind(&self, ticket: &str, carries: impl Fn(&str) -> bool, named: Option<i64>) -> Option<Behind> {
-        let commits = self.of.get(ticket)?;
+        let all = self.of.get(ticket)?;
         let linked = self.record.get(ticket);
-        let version = versions::groups(commits, linked);
+        let (commits, version): (Vec<&CommitRef>, Vec<u32>) =
+            all.iter().zip(versions::groups(all, linked)).filter(|(c, _)| c.repo().is_none()).unzip();
         let carried = |c: &CommitRef| {
             carries(c.as_str()) || named.is_some_and(|t| versions::at(c.as_str(), linked).is_none_or(|at| at <= t))
         };
-        let newest = commits.iter().rposition(carried);
+        let newest = commits.iter().rposition(|c| carried(c));
         let after = newest.map(|i| version[i]);
         let not: Vec<String> =
             commits.iter().zip(&version).filter(|(_, v)| after.is_none_or(|a| **v > a)).map(|(c, _)| c.to_string()).collect();
@@ -350,12 +372,13 @@ impl Touch {
 
     /// Whether it carries `ticket`'s current version: its newest version
     /// is carried (DEPLOY-20's rule) — a ticket with no commits, when it
-    /// names it.
+    /// names it. DEPLOY-46: a ticket whose commits are all another
+    /// repository's has no version a deploy carries — never.
     fn current(&self, ticket: &str, links: &Links) -> bool {
         let named = self.tickets.iter().any(|t| t == ticket).then_some(self.at);
         match links.of.contains_key(ticket) {
             false => named.is_some(),
-            true => links.behind(ticket, |c| self.carries(c), named).is_none(),
+            true => !links.foreign(ticket) && links.behind(ticket, |c| self.carries(c), named).is_none(),
         }
     }
 
@@ -747,11 +770,13 @@ impl Deploys {
 
     /// DEPLOY-21: the tickets ready for `(project, name)`: running their
     /// current version where it promotes from, not here, neither deploying
-    /// nor failed here.
+    /// nor failed here. DEPLOY-46: never one whose commits are all another
+    /// repository's.
     pub(super) fn ready_for<'a>(&'a self, project: &str, name: &str, k: &'a Kept) -> Vec<&'a str> {
         let Some(from) = self.sources.get(&(project.to_string(), name.to_string())) else { return Vec::new() };
         let Some(src) = self.envs.get(&(project.to_string(), from.clone())) else { return Vec::new() };
-        src.currents().filter(|t| !k.current(t) && !k.deploying.contains(*t) && !k.failed.contains(*t)).collect()
+        let staged = |t: &str| !self.links.foreign(t) && !k.current(t) && !k.deploying.contains(t) && !k.failed.contains(t);
+        src.currents().filter(|t| staged(t)).collect()
     }
 
     /// DEPLOY-21: the tickets whose stage anywhere in `project` a change to
@@ -909,7 +934,10 @@ impl Cache {
         let mut gone: BTreeMap<&ShortcodeId, RoaringBitmap> = BTreeMap::new();
         let track = self.deploys.track(project, name);
         let running = track.iter().filter_map(|e| self.deploys.envs.get(&(project.to_string(), e.clone()))).flat_map(Kept::currents);
-        for key in running.chain(k.deploying.iter().chain(&k.failed).map(String::as_str)).filter_map(|t| self.at.get(t)) {
+        // DEPLOY-46: and every ticket whose commits are all another
+        // repository's — Complete at its merge, waiting for nothing.
+        let foreign = self.deploys.links.foreign.iter().map(String::as_str);
+        for key in running.chain(k.deploying.iter().chain(&k.failed).map(String::as_str)).chain(foreign).filter_map(|t| self.at.get(t)) {
             gone.entry(&key.shortcode).or_default().insert(key.seq);
         }
         let home = ShortcodeId::new(project);
