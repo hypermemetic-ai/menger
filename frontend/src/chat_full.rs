@@ -224,7 +224,8 @@ pub(crate) fn expand() -> bool {
 /// CHAT-29: on a phone the session scrolls the document (so the browser's
 /// bars can slide away), and its head hides on a scroll down and comes back
 /// on a scroll up ([`crate::turns::head_shown`]) — `data-head="off"` on
-/// `#chatfull`, which the stylesheet slides up. Where the session is pinned
+/// `#chatfull`, which the stylesheet slides up, the ticket strip under it
+/// with it (CHAT-60). Where the session is pinned
 /// (a wide window, the keyboard up) the document does not move and the head
 /// stays.
 pub(crate) fn follow_head(root: NodeRef<leptos::html::Div>) {
@@ -242,12 +243,16 @@ pub(crate) fn follow_head(root: NodeRef<leptos::html::Div>) {
     let listen = window_event_listener(leptos::ev::scroll, move |_| {
         let Some(el) = root.get_untracked() else { return };
         let y = dom::window().scroll_y().unwrap_or(0.0);
-        let head_h = el.query_selector(".shead").ok().flatten().and_then(|h| h.dyn_into::<web_sys::HtmlElement>().ok()).map_or(0.0, |h| f64::from(h.offset_height()));
-        // CHAT-55: the ticket strip is pinned under the head.
+        let height = |sel: &str| el.query_selector(sel).ok().flatten().and_then(|h| h.dyn_into::<web_sys::HtmlElement>().ok()).map_or(0.0, |h| f64::from(h.offset_height()));
+        let head_h = height(".shead");
+        // CHAT-55: the ticket strip is pinned under the head; CHAT-60: it
+        // slides away and back with it, and holds it while it is open.
         let _ = web_sys::HtmlElement::style(&el).set_property("--shead-h", &format!("{head_h}px"));
+        let strip_h = height(".cstrip");
+        let open = el.query_selector(".cdrop").ok().flatten().is_some();
         let Some((shown, was)) = state.try_get_value() else { return };
         let by_reader = js_sys::Date::now() - touched.get_value() < READER_MS;
-        let (now, at) = crate::turns::head_shown(shown, was, y, head_h, by_reader);
+        let (now, at) = crate::turns::head_shown(shown, was, y, head_h + strip_h, by_reader, open);
         state.set_value((now, at));
         if now != shown {
             let _ = if now { el.remove_attribute("data-head") } else { el.set_attribute("data-head", "off") };
