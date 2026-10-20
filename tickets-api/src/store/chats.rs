@@ -64,6 +64,9 @@ mod deletes;
 pub use deletes::{MessageDeletion, Pick};
 // CHAT-55: the tickets a chat names, filed or links — kept, back-filled.
 pub(super) mod mentions;
+// CHAT-20: a message's inputs — born at post, answered by participants.
+pub(super) mod inputs;
+pub use inputs::{AnswerWait, ChatInputOp, ChatInputQuery, ChatInputWrite};
 
 /// CHAT-8: which way a page of messages runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +155,8 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
     }
     // CHAT-55: the mentions, back-filled from every message once.
     mentions::migrate(conn)?;
+    // CHAT-20: and what messages ask, empty.
+    inputs::migrate(conn)?;
     Ok(!had)
 }
 
@@ -225,6 +230,8 @@ pub enum ChatChange {
     Activity(crate::chats::Activity),
     /// CHAT-55: `tickets` came into `chat` — filed from it or linked.
     Linked { chat: u64, tickets: Vec<String>, how: crate::chat_tickets::MentionHow },
+    /// CHAT-20: a message's input, as a write left it.
+    Input(crate::chat_inputs::ChatInput),
 }
 
 impl ChatChange {
@@ -236,6 +243,7 @@ impl ChatChange {
             ChatChange::Read { chat, .. } | ChatChange::Listening { chat, .. } | ChatChange::Deleted { chat, .. } | ChatChange::Linked { chat, .. } => *chat,
             ChatChange::Removed { chat, .. } => chat.id,
             ChatChange::Activity(a) => a.chat.get(),
+            ChatChange::Input(i) => i.chat.get(),
         }
     }
 }
@@ -391,6 +399,8 @@ pub(crate) struct Chats {
     /// CHAT-55: each chat's tickets — its messages' codes, its filed and
     /// linked tickets — in the order written.
     mentions: HashMap<u64, Vec<mentions::Mention>>,
+    /// CHAT-20: each message's inputs, in its body's order.
+    inputs: HashMap<u64, Vec<crate::types::Input>>,
 }
 
 impl Chats {
@@ -823,8 +833,10 @@ impl Store {
     pub async fn post_chat(&self, on: impl Into<ChatOn>, chat: u64, by: Signer, body: String) -> Result<Message, ChatError> {
         let on: ChatOn = on.into();
         check_body(&body, self.body_max()).map_err(refused)?;
-        let serial = self.serial().await;
         let now = chrono::Utc::now().timestamp();
+        // CHAT-20: what it asks, read as a body is; a problem refuses it.
+        let asked = inputs::declared(&body, now).map_err(ChatError::Refused)?;
+        let serial = self.serial().await;
         let (record, message, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let mut c = self.held(&cache, &on, chat, &by.principal)?;
@@ -843,7 +855,7 @@ impl Store {
             keys.extend(mentions::of_message(&message).into_iter().filter_map(|m| cache.resolve(&m.ticket).ok()));
             (c, message, self.chats_before_keys(&cache, &keys))
         };
-        self.chat_write(serial, record, Some(message.clone()), under, ChatChange::Posted(message.clone())).await.map(|()| message)
+        self.chat_write_asking(serial, record, Some(message.clone()), asked, under, ChatChange::Posted(message.clone())).await.map(|()| message)
     }
 
     /// CHAT-3: `by` adds `principal` to chat `chat` — one `reads` says can
@@ -992,8 +1004,13 @@ impl Store {
     /// One chat write, through the write path every write takes: the chat
     /// whole (its participants and marks) and a message, when one is posted.
     async fn chat_write(&self, serial: tokio::sync::OwnedMutexGuard<()>, record: ChatRecord, message: Option<Message>, under: Option<UnderBefore>, change: ChatChange) -> Result<(), ChatError> {
+        self.chat_write_asking(serial, record, message, Vec::new(), under, change).await
+    }
+
+    /// …and CHAT-20: the inputs the message asks, kept with it.
+    async fn chat_write_asking(&self, serial: tokio::sync::OwnedMutexGuard<()>, record: ChatRecord, message: Option<Message>, asked: Vec<crate::types::Input>, under: Option<UnderBefore>, change: ChatChange) -> Result<(), ChatError> {
         let tickets = Arc::clone(&self.tickets);
-        let (stored, kept) = ((record.clone(), message.clone()), (record, message));
+        let (stored, kept) = ((record.clone(), message.clone(), asked.clone()), (record, message, asked));
         self.write(
             serial,
             move |tx| {
@@ -1004,12 +1021,16 @@ impl Store {
                     for x in mentions::of_message(m) {
                         mentions::store(tx, m.chat.get(), &x)?;
                     }
+                    inputs::store_all(tx, m, &stored.2)?;
                 }
                 Ok(())
             },
             move |cache, _| {
                 if let Some(m) = kept.1 {
                     cache.chats.put_mentions(m.chat.get(), mentions::of_message(&m));
+                    if !kept.2.is_empty() {
+                        cache.chats.inputs.insert(m.id.get(), kept.2);
+                    }
                     cache.chats.put_message(m);
                 }
                 cache.chats.put_chat(kept.0);
@@ -1159,6 +1180,8 @@ pub(super) fn load(conn: &Connection) -> anyhow::Result<Chats> {
     }
     // CHAT-55: the tickets each chat names.
     mentions::load(conn, &mut chats)?;
+    // CHAT-20: and what each message asks.
+    inputs::load(conn, &mut chats)?;
     // CHAT-14: the names principals signed in with, over their messages'.
     let mut stmt = conn.prepare("SELECT principal, name FROM principal_names")?;
     let mut rows = stmt.query([])?;

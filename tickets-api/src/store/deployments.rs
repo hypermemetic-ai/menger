@@ -864,6 +864,8 @@ impl Cache {
             // CHAT-3: for the reader, from the chats.
             crate::filter::Event::Chatting => super::chats::holds(self, &clock.me, false),
             crate::filter::Event::Unread => super::chats::holds(self, &clock.me, true),
+            // CHAT-20: for the reader, from the chats' kept inputs.
+            crate::filter::Event::Asked => super::chats::inputs::holds(self, &clock.me),
             // CHAT-55: for the reader, from the chats' mentions.
             crate::filter::Event::InChat(n) => super::chats::mentions::holds(self, &clock.me, *n),
             // TICKETS-9: from the kept assignments — `me`, the reader.
@@ -891,6 +893,7 @@ impl Cache {
             | crate::filter::Event::Requested(_)
             | crate::filter::Event::Chatting
             | crate::filter::Event::Unread
+            | crate::filter::Event::Asked
             | crate::filter::Event::InChat(_)
             | crate::filter::Event::Assigned(_)
             | crate::filter::Event::Unassigned => None,

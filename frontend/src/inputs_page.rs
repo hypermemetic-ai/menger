@@ -934,8 +934,8 @@ mod tests {
         m.recommendation = Some("Run both before merging.".into());
         let v = InputValue::Multi { options: vec!["unit".into(), "wire".into()] };
         m.history = vec![
-            InputHistoryEntry { action: InputAction::Answered, value: Some(v.clone()), rationale: None, source: AnswerSource::App, at_unix: 10 },
-            InputHistoryEntry { action: InputAction::Cleared, value: None, rationale: None, source: AnswerSource::Api, at_unix: 20 },
+            InputHistoryEntry { action: InputAction::Answered, value: Some(v.clone()), rationale: None, source: AnswerSource::App, at_unix: 10, by: None, name: None },
+            InputHistoryEntry { action: InputAction::Cleared, value: None, rationale: None, source: AnswerSource::Api, at_unix: 20, by: None, name: None },
         ];
         let r = row(&m);
         assert_eq!(r.recommendation.as_deref(), Some("Run both before merging."));

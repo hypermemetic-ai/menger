@@ -561,3 +561,63 @@ async fn a_chat_s_tickets_are_named_filed_and_linked() {
     assert_eq!(ids, ["A-1", "A-2", "A-3"], "{listed:?}");
     assert_ne!(one(&rui, "chats.tickets", json!({ "chat": chat })).await["type"], "ticket");
 }
+
+/// CHAT-20: a message's inputs over the wire — ada asks in a message,
+/// `posted` carries its inputs, ada waits on one with `await_message
+/// --input`, builder answers it through `chats.inputs.answer` (who, the
+/// server's: builder's principal, `api`), and ada's wait answers with it;
+/// `asked` puts A-2 under builder's Needs you and not ada's; rui, in no
+/// chat, lists none and answers none; a queue entry names the input by
+/// `message` and closing it unqueues the ticket.
+#[tokio::test]
+async fn a_message_s_inputs_are_answered_awaited_asked_and_queued() {
+    let port = start().await;
+    let boss = as_key(port, &BOSS, "boss").await;
+    kiln(&boss).await;
+    let (ada, builder, rui) = (as_key(port, &ADA, "ada").await, as_key(port, &BUILDER, "builder").await, as_key(port, &RUI, "rui").await);
+    let opened = one(&ada, "chats.open", json!({ "ticket": "A-2", "others": [principal(&BUILDER)] })).await;
+    let chat = opened["chat"]["id"].as_u64().unwrap();
+    let body = "Fire it?\n\n<m-decision data-field=\"decision\" id=\"fire\"><m-question data-field=\"question\">Fire tonight?</m-question>\
+        <m-option data-field=\"option\" name=\"Yes\" value=\"yes\"></m-option><m-option data-field=\"option\" name=\"No\" value=\"no\"></m-option></m-decision>\n";
+    let posted = one(&ada, "chats.post", json!({ "chat": chat, "body": body })).await;
+    assert_eq!(posted["type"], "posted", "{posted}");
+    let message = posted["message"]["id"].as_u64().unwrap();
+    let born = &posted["inputs"][0];
+    assert_eq!((born["id"].as_str(), born["state"].as_str(), born["ticket"].as_str(), born["message"].as_u64()), (Some("fire"), Some("open"), Some("A-2"), Some(message)), "{born}");
+
+    // The ticket is under builder's Needs you, not under ada's.
+    let ids = |evs: Vec<Value>| evs.iter().filter_map(|e| e["summary"]["id"].as_str().map(str::to_string)).collect::<Vec<_>>();
+    assert_eq!(ids(call(&builder, "tickets.list", json!({ "filter": "saved \"Needs you\"", "summary": true })).await), ["A-2"]);
+    assert!(ids(call(&ada, "tickets.list", json!({ "filter": "asked", "summary": true })).await).is_empty());
+
+    // rui is in no chat: lists none, answers none.
+    let none = call(&rui, "chats.inputs.list", json!({})).await;
+    assert_eq!(none, [json!({ "type": "page", "next": null })], "{none:?}");
+    let no = one(&rui, "chats.inputs.answer", json!({ "chat": chat, "message": message, "input": "fire", "value": { "type": "choice", "option": "yes" } })).await;
+    assert_ne!(no["type"], "input_changed", "{no}");
+
+    // A queue entry names the message's input.
+    let q = one(&boss, "tickets.queue", json!({ "id": "A-2", "urgency": "blocking", "reason": "idle until it is decided", "input": ["fire"], "message": message })).await;
+    assert_eq!(q["type"], "queued", "{q}");
+
+    // ada waits on `fire`; builder answers it.
+    let mut wait = subscribe(&ada, "chats.await_message", json!({ "chat": chat, "input": format!("{message}/fire"), "timeout_minutes": 5 })).await;
+    assert_eq!(next(&mut wait).await["type"], "waiting");
+    let a = one(&builder, "chats.inputs.answer", json!({ "chat": chat, "message": message, "input": "fire", "value": { "type": "choice", "option": "yes" }, "rationale": "the kiln is dry" })).await;
+    assert_eq!((a["type"].as_str(), a["input"]["state"].as_str()), (Some("input_changed"), Some("answered")), "{a}");
+    assert_eq!((a["input"]["answer"]["by"].as_str(), a["input"]["answer"]["source"].as_str()), (Some(principal(&BUILDER).as_str()), Some("api")));
+    let heard = next(&mut wait).await;
+    assert_eq!((heard["type"].as_str(), heard["input"].as_str(), heard["value"]["option"].as_str(), heard["by"].as_str()), (Some("answered"), Some("fire"), Some("yes"), Some(principal(&BUILDER).as_str())), "{heard}");
+    assert_eq!(next(&mut wait).await["type"], "done");
+
+    let before = call(&boss, "tickets.queued", json!({})).await;
+    assert!(before.iter().any(|e| e["entry"]["ticket"] == "A-2"), "an answer is not the close: {before:?}");
+    // Builder may not close what ada asked; ada closes it, and the entry leaves the queue.
+    let refused = one(&builder, "chats.inputs.close", json!({ "chat": chat, "message": message, "input": "fire" })).await;
+    assert_eq!(refused["type"], "refused", "{refused}");
+    let closed = one(&ada, "chats.inputs.close", json!({ "chat": chat, "message": message, "input": "fire" })).await;
+    assert_eq!(closed["input"]["state"], "closed", "{closed}");
+    let queued = call(&boss, "tickets.queued", json!({})).await;
+    assert!(queued.iter().all(|e| e["entry"]["ticket"] != "A-2"), "{queued:?}");
+    assert!(ids(call(&builder, "tickets.list", json!({ "filter": "asked", "summary": true })).await).is_empty());
+}

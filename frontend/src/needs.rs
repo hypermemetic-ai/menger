@@ -1,7 +1,7 @@
 //! MENGER-43: **Needs you** is a filter on the nav, not a panel.
 //!
 //! - **What waits on the owner** is the result of a filter: by default
-//!   [`DEFAULT`], `queued or asking or label needs-you` — every ticket in the
+//!   [`DEFAULT`], `queued or asking or asked or label needs-you` — every ticket in the
 //!   owner's queue (MENGER-39), every ticket with an open input (`asking`,
 //!   INPUT-1's questions) and every ticket labelled `needs-you`. The filter
 //!   is a **saved filter** (FILTER-6, src/saved.rs): the one named "Needs
@@ -341,10 +341,10 @@ mod tests {
     fn the_default_is_queued_asking_or_needs_you() {
         let f = default_filter();
         // Canonical, an `or` group is parenthesized.
-        assert_eq!(f.format(), "(queued or asking or label needs-you)");
+        assert_eq!(f.format(), "(queued or asking or asked or label needs-you)");
         assert_eq!(
             asked(&f).as_deref(),
-            Some("(queued or asking or label needs-you) and not status Canceled"),
+            Some("(queued or asking or asked or label needs-you) and not status Canceled"),
             "MENGER-13: never a canceled ticket"
         );
         assert_eq!(Filter::parse(&f.format()).unwrap(), f, "the canonical text reads back");
@@ -388,7 +388,7 @@ mod tests {
         let canon = default_filter().format();
         assert!(is_applied(&canon, DEFAULT), "the lens's canonical text against the default as written");
         assert!(is_applied(DEFAULT, &canon));
-        assert!(is_applied("  queued or asking or label needs-you ", DEFAULT));
+        assert!(is_applied("  queued or asking or asked or label needs-you ", DEFAULT));
         assert!(is_applied("label Needs-You", "label needs-you"), "a label is read in its canonical case");
         // The nav's default, another filter, or Needs you narrowed is not it.
         let nav_default = lens::nav_default().filter.format();

@@ -134,6 +134,8 @@ pub use comments_activation::CommentsActivation;
 pub mod chats;
 // CHAT-55: a chat's tickets — the code rule, the stage, the row.
 pub mod chat_tickets;
+// CHAT-20: a message's inputs, the wire half.
+pub mod chat_inputs;
 pub use chats::{Chat, ChatKind, ChatState, ChatsEvent, Message};
 /// CHAT-3: the `chats` activation, declared once: the server's [`Chats`]
 /// and the browser's [`ChatsClient`].

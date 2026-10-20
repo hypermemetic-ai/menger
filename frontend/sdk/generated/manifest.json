@@ -49,6 +49,7 @@
       "await_message": [
         "after",
         "chat",
+        "input",
         "since",
         "ticket",
         "timeout_minutes"
@@ -121,6 +122,39 @@
       "watch": [
         "ticket"
       ]
+    },
+    "chats.inputs": {
+      "answer": [
+        "chat",
+        "input",
+        "message",
+        "rationale",
+        "value"
+      ],
+      "clear": [
+        "chat",
+        "input",
+        "message"
+      ],
+      "close": [
+        "chat",
+        "input",
+        "message"
+      ],
+      "list": [
+        "after",
+        "chat",
+        "kind",
+        "limit",
+        "state",
+        "ticket"
+      ],
+      "reopen": [
+        "chat",
+        "input",
+        "message"
+      ],
+      "schema": []
     },
     "comments": {
       "add": [
@@ -455,6 +489,7 @@
         "blocking",
         "id",
         "input",
+        "message",
         "mockup",
         "reason",
         "source",

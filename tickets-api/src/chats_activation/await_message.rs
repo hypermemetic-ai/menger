@@ -13,12 +13,17 @@
 //! **Listening.** While it waits, the chats it waits on hold the caller as
 //! listening ([`Store::listen`]) — `listening` on their watches, and the
 //! chats' `waiting` — until the stream ends or is dropped.
+//!
+//! **Answers** (CHAT-20). An answer, by someone else, to an input in the
+//! caller's own messages ends the wait too (`answered`), as a message does
+//! ([`Store::answer_for`]); with `input` (`<message>/<input>`), only that
+//! input's answer does — at once when it holds one given since `since`.
 
 use super::streams::refusal;
 use crate::access::{Access, Followed, Following, VerifiedUser, Viewer};
 use crate::address::TicketId;
 use crate::chats::{ChatState, ChatsEvent};
-use crate::store::{ChatQuery, MessageWait, Signer, Store};
+use crate::store::{AnswerWait, ChatQuery, MessageWait, Signer, Store};
 use crate::vocab::ChatId;
 use async_stream::stream;
 use futures::Stream;
@@ -32,6 +37,8 @@ pub(super) struct Ask {
     pub(super) since: Option<i64>,
     pub(super) after: Option<u64>,
     pub(super) timeout_minutes: Option<u32>,
+    /// CHAT-20: only this input's answer.
+    pub(super) input: Option<crate::vocab::MessageInput>,
 }
 
 /// While held, `principal` listens on `chats`.
@@ -55,6 +62,16 @@ enum Woke {
 
 /// What is asked, checked: the chat the caller's, the ticket one it reads.
 fn prepared(store: &Store, user: &VerifiedUser, ask: &Ask) -> Result<Option<String>, Box<ChatsEvent>> {
+    // CHAT-20: the input named is one of the chat's messages'.
+    if let Some(named) = &ask.input {
+        let (message, id) = named.parts();
+        let inputs = store.message_inputs(message);
+        let found = inputs.iter().find(|i| i.id.as_str() == id).filter(|i| ask.chat.is_none_or(|c| i.chat.get() == c));
+        match found.map(|i| i.chat.get()) {
+            Some(chat) if store.chat_seen(user, chat).is_ok_and(|(_, s)| s.participant) => {}
+            _ => return Err(Box::new(ChatsEvent::Refused { reasons: vec![format!("no input {} in a chat of yours", named.as_str())] })),
+        }
+    }
     if let Some(id) = ask.chat {
         match store.chat_seen(user, id) {
             Ok((_, s)) if s.participant => {}
@@ -97,6 +114,8 @@ pub(super) fn await_message_stream(store: Arc<Store>, access: Access, user: Veri
             }
         };
         let w = MessageWait { chat: ask.chat, ticket: ticket.clone(), since: ask.since, after };
+        let named = ask.input.as_ref().map(|i| (i.parts().0, i.parts().1.to_string()));
+        let answer = AnswerWait { chat: ask.chat, input: named.clone(), since: ask.since.unwrap_or(started) };
         yield ChatsEvent::Waiting { chat: ask.chat.map(ChatId::new), ticket: ticket.clone(), since: ask.since.unwrap_or(started) };
         let principal = Signer::of(following.user()).principal;
         let chats: Vec<u64> = match ask.chat {
@@ -112,7 +131,11 @@ pub(super) fn await_message_stream(store: Arc<Store>, access: Access, user: Veri
         let sleep = tokio::time::sleep_until(deadline.unwrap_or_else(|| tokio::time::Instant::now() + std::time::Duration::from_secs(10 * 365 * 24 * 3600)));
         tokio::pin!(sleep);
         loop {
-            if let Some(message) = store.message_for(following.user(), &w) {
+            if let Some(answered) = store.answer_for(following.user(), &answer) {
+                yield answered;
+                return;
+            }
+            if let Some(message) = named.is_none().then(|| store.message_for(following.user(), &w)).flatten() {
                 yield ChatsEvent::Message { message };
                 return;
             }

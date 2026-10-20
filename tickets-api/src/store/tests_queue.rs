@@ -171,7 +171,7 @@ async fn the_filter_cells_are_answered_from_the_queue() {
     assert_eq!(count(&store, "queued blocking"), 1);
     assert_eq!(count(&store, "queued now"), 0);
     assert_eq!(count(&store, "not queued"), 2);
-    assert_eq!(count(&store, "queued or asking or label needs-you"), 2, "Needs you's filter");
+    assert_eq!(count(&store, "queued or asking or asked or label needs-you"), 2, "Needs you's filter");
     assert_eq!(count(&store, "queued and kind scope"), 0);
     for bad in ["queued soon", "queued today within 1h", "queued by me"] {
         assert!(Lens::parse(bad).is_err(), "{bad}");

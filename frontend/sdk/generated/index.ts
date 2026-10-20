@@ -12,6 +12,7 @@ export * from './transport';
 // Namespace modules (types + clients)
 export * as Auth from './auth';
 export * as Chats from './chats';
+export * as ChatsInputs from './chats/inputs';
 export * as Comments from './comments';
 export * as Deployments from './deployments';
 export * as DeploymentsWebhook from './deployments/webhook';

@@ -1180,7 +1180,7 @@ mod tests {
     #[test]
     fn the_reply_is_the_recorded_answer_or_the_servers_refusal() {
         let mut changed = input("DEMO-1", "d1", InputKind::Choice, &["a", "b"], InputState::Answered);
-        let answer = Answer { value: choice("b"), rationale: Some("why".into()), source: AnswerSource::App, at_unix: 1_791_400_000 };
+        let answer = Answer { value: choice("b"), rationale: Some("why".into()), source: AnswerSource::App, at_unix: 1_791_400_000, by: None, name: None };
         changed.answer = Some(answer.clone());
         assert_eq!(recorded(vec![TicketsEvent::InputChanged { input: changed }]), Ok(answer));
         assert_eq!(
@@ -1264,8 +1264,8 @@ mod tests {
     fn the_clears_reply_is_the_input_or_the_servers_refusal() {
         let mut open = input("DEMO-1", "d1", InputKind::Choice, &["a", "b"], InputState::Open);
         open.history = vec![
-            InputHistoryEntry { action: InputAction::Answered, value: Some(choice("a")), rationale: None, source: AnswerSource::App, at_unix: 1 },
-            InputHistoryEntry { action: InputAction::Cleared, value: None, rationale: None, source: AnswerSource::App, at_unix: 2 },
+            InputHistoryEntry { action: InputAction::Answered, value: Some(choice("a")), rationale: None, source: AnswerSource::App, at_unix: 1, by: None, name: None },
+            InputHistoryEntry { action: InputAction::Cleared, value: None, rationale: None, source: AnswerSource::App, at_unix: 2, by: None, name: None },
         ];
         assert_eq!(cleared(vec![TicketsEvent::InputChanged { input: open.clone() }]), Ok(open.clone()));
         assert_eq!(cleared(vec![TicketsEvent::Input { input: open.clone() }]), Ok(open), "held no answer: nothing written");

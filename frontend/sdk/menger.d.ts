@@ -31,7 +31,10 @@
  */
 
 import type { TicketsClient } from './generated/tickets/client';
-import type { Answer, Input, InputValue } from './generated/tickets/types';
+import type { Input } from './generated/tickets/types';
+// CHAT-20: a message's inputs share these, so the generator keeps them
+// with `chats`, the first namespace that uses them.
+import type { Answer, InputValue } from './generated/chats/types';
 
 export type { TicketsClient } from './generated/tickets/client';
 export type { TicketsInputsClient } from './generated/tickets/inputs/client';
@@ -50,6 +53,7 @@ export type { TicketsCommitsClient } from './generated/tickets/commits/client';
  */
 export type FrameTickets = TicketsClient;
 export type * from './generated/tickets/types';
+export type * from './generated/chats/types';
 
 /**
  * One data event of a call or of the change stream, as the wire spells it —

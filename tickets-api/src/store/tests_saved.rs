@@ -181,7 +181,7 @@ async fn needs_you_means_the_apps_default_until_one_is_saved() {
     store.create(SYS, ticket("PLEXUS", "the platform", Kind::Scope, None, None, "")).await.unwrap();
     store.create(SYS, ticket("PLEXUS", "work", Kind::Build, Some("PLEXUS-1"), None, "")).await.unwrap();
     store.label(SYS.permit("PLEXUS-2"), vec!["needs-you".into()], Vec::new()).await.unwrap();
-    assert_eq!(store.resolved(Some(&Filter::parse("saved \"Needs you\"").unwrap())).unwrap().format(), "(queued or asking or label needs-you)");
+    assert_eq!(store.resolved(Some(&Filter::parse("saved \"Needs you\"").unwrap())).unwrap().format(), "(queued or asking or asked or label needs-you)");
     assert_eq!(ids(&store, "saved \"needs you\""), ["PLEXUS-2"]);
     assert!(refusal(&store, "saved Plexus-Ready").contains("no saved filter named"), "no other name has a default");
 }

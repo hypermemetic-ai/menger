@@ -267,8 +267,10 @@ pub(crate) mod tests {
             rationale: Some("because".into()),
             source: AnswerSource::Api,
             at_unix: at,
+            by: None,
+            name: None,
         });
-        i.answer = Some(Answer { value, rationale: Some("because".into()), source: AnswerSource::Api, at_unix: at });
+        i.answer = Some(Answer { value, rationale: Some("because".into()), source: AnswerSource::Api, at_unix: at, by: None, name: None });
         i.state = InputState::Answered;
         i
     }

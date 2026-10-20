@@ -1717,8 +1717,8 @@ mod tests {
     fn the_field_counts_the_unread_here() {
         let mut h = Held::from_events([ChatsEvent::Chat { chat: chat(41, "KILN-7", &["ada", "builder"]) }]);
         assert_eq!(field_count(h.unread_on("KILN-7")), None);
-        h.apply(&ChatsEvent::Posted { message: msg(1, 41, "builder", "x") }, "ada");
-        h.apply(&ChatsEvent::Posted { message: msg(2, 41, "builder", "y") }, "ada");
+        h.apply(&ChatsEvent::Posted { message: msg(1, 41, "builder", "x"), inputs: vec![] }, "ada");
+        h.apply(&ChatsEvent::Posted { message: msg(2, 41, "builder", "y"), inputs: vec![] }, "ada");
         assert_eq!(field_count(h.unread_on("KILN-7")).as_deref(), Some("2"));
     }
 
@@ -1734,7 +1734,7 @@ mod tests {
         assert_eq!(tab_label(&chat(7, "KILN-7", &["idp:ada"]), "idp:ada", name), "ada", "alone in it: the reader");
         let open = h.on("KILN-7", ChatState::Open);
         assert_eq!(default_view(&open), View::Chat(41));
-        h.apply(&ChatsEvent::Posted { message: msg(1, 42, "key:4b2e0000aa", "x") }, "idp:ada");
+        h.apply(&ChatsEvent::Posted { message: msg(1, 42, "key:4b2e0000aa", "x"), inputs: vec![] }, "idp:ada");
         assert_eq!(default_view(&h.on("KILN-7", ChatState::Open)), View::Chat(42), "the one with unread");
         assert_eq!(default_view(&[]), View::Pick, "none yet: the picker");
         let mut titled = chat(9, "KILN-7", &["idp:ada"]);

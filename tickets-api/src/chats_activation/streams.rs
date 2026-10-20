@@ -179,7 +179,10 @@ pub(super) async fn post(store: Arc<Store>, user: VerifiedUser, chat: u64, body:
         Err(e) => return refusal(e),
     };
     match store.post_chat(s.on, chat, Signer::of(&user), body).await {
-        Ok(message) => ChatsEvent::Posted { message },
+        Ok(message) => {
+            let inputs = store.message_inputs(message.id.get());
+            ChatsEvent::Posted { message, inputs }
+        }
         Err(e) => refusal(e),
     }
 }
@@ -316,7 +319,9 @@ fn relay(store: &Store, user: &VerifiedUser, ticket: Option<&str>, change: &Chat
     let chat = view.id;
     Some(match change {
         ChatChange::Opened(_) => ChatsEvent::Opened { chat: view, existing: false },
-        ChatChange::Posted(m) => ChatsEvent::Posted { message: m.clone() },
+        ChatChange::Posted(m) => ChatsEvent::Posted { message: m.clone(), inputs: store.message_inputs(m.id.get()) },
+        // CHAT-20: a message's input, to the chat's readers.
+        ChatChange::Input(i) => ChatsEvent::InputChanged { input: i.clone() },
         ChatChange::Added(_) => ChatsEvent::Added { chat: view, granted: None },
         ChatChange::Read { principal, upto, .. } if *principal == me => ChatsEvent::Read { chat, upto: MessageId::new(*upto), unread: view.unread },
         ChatChange::Read { .. } => return None,

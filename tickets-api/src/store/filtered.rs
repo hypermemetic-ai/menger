@@ -164,7 +164,7 @@ impl Lens {
     /// CHAT-3: whether it asks `chatting` or `unread` — what a chat write
     /// can move.
     pub fn asks_chats(&self) -> bool {
-        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Chatting | crate::filter::Event::Unread | crate::filter::Event::InChat(_)))
+        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Chatting | crate::filter::Event::Unread | crate::filter::Event::Asked | crate::filter::Event::InChat(_)))
     }
 
     /// MENGER-13: whether what it admits moves as time passes — a history

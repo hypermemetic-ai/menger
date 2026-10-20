@@ -216,7 +216,7 @@ impl Held {
                 self.chats.insert(id, chat.clone());
                 true
             }
-            ChatsEvent::Posted { message } => self.posted(message, me),
+            ChatsEvent::Posted { message, .. } => self.posted(message, me),
             ChatsEvent::Read { chat, unread, .. } => self.with_chat(chat.get(), |c| {
                 let moved = c.unread != *unread;
                 c.unread = *unread;
@@ -1013,14 +1013,14 @@ pub(crate) mod tests {
         let mut h = Held::from_events([ChatsEvent::Chat { chat: chat(41, "KILN-7", &["ada", "builder"]) }, ChatsEvent::Chat { chat: chat(42, "KILN-7", &["ada", "reviewer"]) }]);
         assert_eq!(h.unread_on("kiln-7"), 0);
         let m = msg(1, 41, "builder", "The test.");
-        assert!(h.apply(&ChatsEvent::Posted { message: m.clone() }, "ada"));
-        h.apply(&ChatsEvent::Posted { message: m }, "ada");
+        assert!(h.apply(&ChatsEvent::Posted { message: m.clone(), inputs: vec![] }, "ada"));
+        h.apply(&ChatsEvent::Posted { message: m, inputs: vec![] }, "ada");
         assert_eq!(h.get(41).unwrap().unread, 1, "heard twice, counted once");
-        h.apply(&ChatsEvent::Posted { message: msg(2, 42, "reviewer", "?") }, "ada");
+        h.apply(&ChatsEvent::Posted { message: msg(2, 42, "reviewer", "?"), inputs: vec![] }, "ada");
         assert_eq!((h.unread_on("KILN-7"), h.unread_total()), (2, 2));
         h.apply(&ChatsEvent::Read { chat: ChatId::new(41), upto: MessageId::new(1), unread: 0 }, "ada");
         assert_eq!(h.unread_on("KILN-7"), 1, "read in another open app: the count follows");
-        h.apply(&ChatsEvent::Posted { message: msg(3, 42, "ada", "1240 is allowed.") }, "ada");
+        h.apply(&ChatsEvent::Posted { message: msg(3, 42, "ada", "1240 is allowed."), inputs: vec![] }, "ada");
         assert_eq!(h.get(42).unwrap().unread, 0, "the poster's mark moves to its post");
         assert_eq!(h.get(42).unwrap().last_message.map(|m| m.get()), Some(3));
         assert!(h.with_unread().is_empty());
@@ -1094,11 +1094,11 @@ pub(crate) mod tests {
     fn threads_hold_each_message_once_in_order() {
         let mut h = Held::from_events([ChatsEvent::Chat { chat: chat(41, "KILN-7", &["ada", "builder"]) }]);
         h.loaded(41, vec![msg(3, 41, "ada", "c"), msg(1, 41, "ada", "a")]);
-        h.apply(&ChatsEvent::Posted { message: msg(2, 41, "builder", "b") }, "ada");
-        h.apply(&ChatsEvent::Posted { message: msg(3, 41, "ada", "c") }, "ada");
+        h.apply(&ChatsEvent::Posted { message: msg(2, 41, "builder", "b"), inputs: vec![] }, "ada");
+        h.apply(&ChatsEvent::Posted { message: msg(3, 41, "ada", "c"), inputs: vec![] }, "ada");
         let bodies: Vec<&str> = h.thread(41).unwrap().list.iter().map(|m| m.body.as_str()).collect();
         assert_eq!(bodies, ["a", "b", "c"]);
-        let again = settle(vec![ChatsEvent::Chat { chat: chat(41, "KILN-7", &["ada", "builder"]) }], &[ChatsEvent::Posted { message: msg(4, 41, "builder", "d") }], "ada", Some(&h));
+        let again = settle(vec![ChatsEvent::Chat { chat: chat(41, "KILN-7", &["ada", "builder"]) }], &[ChatsEvent::Posted { message: msg(4, 41, "builder", "d"), inputs: vec![] }], "ada", Some(&h));
         assert_eq!(again.thread(41).unwrap().last(), Some(4));
         assert_eq!(again.get(41).unwrap().unread, 1);
     }

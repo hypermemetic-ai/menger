@@ -64,8 +64,11 @@ fn activation() -> Surface {
     let children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&hub).into_iter().map(|(path, c)| surface_at(&format!("tickets.{path}"), c)).collect();
     let comments = CommentsActivation::new(Arc::clone(&store)).plugin_schema();
     // CHAT-3: and chats.
-    let chats = ChatsActivation::new(Arc::clone(&store)).plugin_schema();
+    let chats_hub = ChatsActivation::new(Arc::clone(&store));
+    let chats = chats_hub.plugin_schema();
     assert_eq!(chats.namespace, "chats");
+    // CHAT-20: chats' child, `chats.inputs`.
+    let chat_children: Vec<Surface> = plexus_core::plexus::Activation::static_child_schemas(&chats_hub).into_iter().map(|(path, c)| surface_at(&format!("chats.{path}"), c)).collect();
     // NOTE-2: and notes.
     let notes = NotesActivation::new(Arc::clone(&store)).plugin_schema();
     // DEPLOY-11: and deployments.
@@ -102,7 +105,7 @@ fn activation() -> Surface {
     out.extend(surface(session));
     out.extend(surface(members));
     out.extend(surface(orgs));
-    children.into_iter().chain(member_children).chain(deployment_children).for_each(|c| out.extend(c));
+    children.into_iter().chain(member_children).chain(deployment_children).chain(chat_children).for_each(|c| out.extend(c));
     out.extend(surface(media));
     out
 }

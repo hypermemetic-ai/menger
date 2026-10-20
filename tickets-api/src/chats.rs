@@ -337,7 +337,8 @@ pub struct Message {
     pub via: Option<String>,
     /// When, unix seconds.
     pub at: i64,
-    /// What it says: markdown, rendered by the app's `md.rs`, never framed.
+    /// What it says: markdown, rendered by the app's `md.rs` — CHAT-21: in a
+    /// frame of its own when it holds what a body is framed for.
     pub body: String,
     /// CHAT-44: when and by whom it was deleted — kept and marked, never
     /// gone: `messages` still answers it, and the app folds a run of them
@@ -390,8 +391,13 @@ pub enum ChatsEvent {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         agent: bool,
     },
-    /// `post`'s answer, and on every participant's `watch`.
-    Posted { message: Message },
+    /// `post`'s answer, and on every participant's `watch`. CHAT-20:
+    /// `inputs` — the inputs its body declares, born `open`.
+    Posted {
+        message: Message,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        inputs: Vec<crate::chat_inputs::ChatInput>,
+    },
     /// One of `messages`' rows (oldest first), and `await_message`'s answer.
     Message { message: Message },
     /// `add`'s answer, and on `watch`: the chat with its participants now.
@@ -445,6 +451,29 @@ pub enum ChatsEvent {
     /// CHAT-55: `link`'s answer, and on `watch`: `tickets` came into `chat`
     /// (filed from it, or linked) — those new to it.
     Linked { chat: ChatId, tickets: Vec<String>, how: crate::chat_tickets::MentionHow },
+    /// CHAT-20: one of `inputs list`'s rows — a message's input.
+    Input { input: crate::chat_inputs::ChatInput },
+    /// CHAT-20: a message's input changed — `inputs answer`, `clear`,
+    /// `close` and `reopen`'s answer, and on every participant's `watch`.
+    InputChanged { input: crate::chat_inputs::ChatInput },
+    /// CHAT-20: `await_message`'s answer when an input it waits on is
+    /// answered — the input named (`--input`), or, without it, one in the
+    /// caller's own messages: the chat, the message, the input's id, the
+    /// value and who gave it.
+    Answered {
+        chat: ChatId,
+        message: MessageId,
+        input: crate::vocab::InputId,
+        value: crate::types::InputValue,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rationale: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        source: crate::types::AnswerSource,
+        at_unix: i64,
+    },
     /// AGENT-3: a participating agent's claim began or ended — a line in the
     /// chat. Declared for AGENT-3's claims; nothing emits it yet.
     ClaimLine { chat: ChatId, agent: String, holder: String, began: bool, at: i64 },
@@ -503,7 +532,7 @@ mod tests {
     fn the_wire_shapes_are_the_spec_s() {
         let m = Message { id: MessageId::new(3), chat: ChatId::new(41), author: "idp:ada".into(), name: None, via: None, at: 10, body: "1240 is allowed.".into(), deleted: None };
         assert_eq!(
-            serde_json::to_value(ChatsEvent::Posted { message: m.clone() }).unwrap(),
+            serde_json::to_value(ChatsEvent::Posted { message: m.clone(), inputs: vec![] }).unwrap(),
             json!({ "type": "posted", "message": { "id": 3, "chat": 41, "author": "idp:ada", "at": 10, "body": "1240 is allowed." } })
         );
         assert_eq!(serde_json::to_value(ChatsEvent::TimedOut).unwrap(), json!({ "type": "timed_out" }));
