@@ -1,6 +1,6 @@
 {
   "name": "@plexus/client",
-  "version": "0.0.0-8b8a222c11a69774",
+  "version": "0.0.0-25bc4d72b81561f3",
   "type": "module",
   "main": "index.ts",
   "_generatedBy": "hub-codegen",

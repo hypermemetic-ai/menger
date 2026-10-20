@@ -369,6 +369,20 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger chats candidates                                 # names, agents
   ```
 
+  **A message's questions** (CHAT-20): an `<m-decision id>` / `<m-input
+  id kind>` in a message is an input of the message — `chats inputs
+  list|answer|clear|close|reopen` (`--chat --message --input`); a
+  participant answers, who answered clears, who asked closes; every answer
+  (a ticket's too) says `by`. `await_message` ends on an answer to your
+  message's input (`--input M/I`: that one alone); the cell `asked` puts its
+  ticket under Needs you for the others in the chat; `tickets queue
+  --message M --input I` queues it. README "Questions in a message":
+
+  ```sh
+  synapse -P 4455 menger chats inputs answer --chat 6 --message 812 --input fire --value.type choice --value.option yes
+  synapse -P 4455 -j menger chats await_message --chat 6 --input 812/fire --timeout-minutes 240
+  ```
+
   **A chat's tickets** (CHAT-55): every ticket its messages name, and
   every ticket filed (`tickets create --chat N`) or linked (`chats link`)
   from it — `chats tickets --chat N` (each with its stage: waits on you,
@@ -777,7 +791,7 @@ nested parameter as one string (SYNAPSE-9).
 2026-10-12, MENGER-12). Put it on its ticket as an input — or, when it is
 not a choice or a reply, label the ticket `needs-you` with the reason in its
 body — and only then mention it in chat, with the ticket id. The nav under its
-Needs you filter (`queued or asking or label needs-you` — `g n`, or the
+Needs you filter (`queued or asking or asked or label needs-you` — `g n`, or the
 header's count) is where the owner looks; when it cannot wait, queue it too (below, MENGER-39);
 a question that lives only in a chat transcript is never seen. Whoever acts
 on a `needs-you` takes the label off:
@@ -1124,7 +1138,7 @@ and `view: mockup` + `widths:` makes a whole body one.
   the reason in the body), and is mentioned in chat with the ticket id —
   never asked only in chat. `asking` and `label <name>` are filter cells
   (FILTER-3's language); the nav under its Needs you filter (`g n`,
-  or the header's count) shows `queued or asking or label needs-you`. An urgent one is queued too (MENGER-39, "Queue").
+  or the header's count) shows `queued or asking or asked or label needs-you`. An urgent one is queued too (MENGER-39, "Queue").
 - Ticketing follows **menger-skills** (`../menger-skills`, the house
   methodology — its `ticketing/`, `planning/`, `asking/`, `building/`
   skills; `ought` is retired, owner 2026-10-14). Its lifecycle is

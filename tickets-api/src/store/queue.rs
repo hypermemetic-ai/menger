@@ -362,15 +362,23 @@ pub(super) fn record_of(id: u64, entry: &QueueEntry, action: QueueAction, act: &
 }
 
 /// Whether `input` of `ticket` may name what answers a queue entry: one it
-/// declares, not closed, removed or withdrawn.
+/// declares (CHAT-20: or `<message>/<input>`, a message's in a chat on it),
+/// not closed, removed or withdrawn.
 fn check_input(cache: &Cache, ticket: &str, input: &str) -> Result<(), StoreError> {
     let (t, i) = (ticket.to_string(), input.to_string());
-    let held = cache.inputs.get(ticket, input).ok_or_else(|| StoreError::InputUnknown {
-        ticket: t.clone(),
-        input: i.clone(),
-        known: cache.inputs.of(ticket).iter().map(|x| x.id.to_string()).collect(),
-    })?;
-    match held.state {
+    let state = match input.contains('/') {
+        true => super::chats::inputs::state_named(cache, ticket, input).ok_or_else(|| StoreError::InputUnknown {
+            ticket: t.clone(),
+            input: i.clone(),
+            known: Vec::new(),
+        })?,
+        false => cache.inputs.get(ticket, input).map(|x| x.state).ok_or_else(|| StoreError::InputUnknown {
+            ticket: t.clone(),
+            input: i.clone(),
+            known: cache.inputs.of(ticket).iter().map(|x| x.id.to_string()).collect(),
+        })?,
+    };
+    match state {
         InputState::Closed => Err(StoreError::InputClosed { ticket: t, input: i }),
         InputState::Removed => Err(StoreError::InputRemoved { ticket: t, input: i }),
         InputState::Withdrawn => Err(StoreError::InputWithdrawn { ticket: t, input: i }),
@@ -393,7 +401,11 @@ impl Closing {
     pub(super) fn of(cache: &Cache, ticket: &str, input: &str, at: i64) -> Option<Self> {
         let entry = cache.queue.get(ticket).filter(|e| e.named().contains(&input))?.clone();
         let settled = |i: &str| {
-            i == input || cache.inputs.get(ticket, i).is_none_or(|x| matches!(x.state, InputState::Closed | InputState::Removed | InputState::Withdrawn))
+            let state = match i.contains('/') {
+                true => super::chats::inputs::state_named(cache, ticket, i),
+                false => cache.inputs.get(ticket, i).map(|x| x.state),
+            };
+            i == input || state.is_none_or(|s| matches!(s, InputState::Closed | InputState::Removed | InputState::Withdrawn))
         };
         if !entry.named().into_iter().all(settled) {
             return None;

@@ -3,8 +3,8 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { CallerSource, Cursor, DeleteChildren, FilterText, InputId, MengerPath, Message, MockupRef, Reason, SeverityChange, TicketsEvent, Urgency, Zone } from './types';
-import type { Label, Severity, Status } from '../chats/types';
+import type { CallerSource, Cursor, DeleteChildren, FilterText, MengerPath, Message, MockupRef, Reason, SeverityChange, TicketsEvent, Urgency, Zone } from './types';
+import type { InputId, Label, MessageId, Severity, Status } from '../chats/types';
 import type { ChatId } from '../media/types';
 import type { Body, Kind, Query, ShortcodeRef, TicketRef, Title } from '../notes/types';
 import type { OrgId, Principal } from '../orgs/types';
@@ -283,7 +283,7 @@ the one the caller is idle on. Yields one `queued`, or an `error`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.queue` on the scope of `id`
    */
-  queue(id: TicketRef, reason: Reason, urgency: Urgency, blocking?: InputId | null, input?: InputId[] | null, mockup?: MockupRef[] | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+  queue(id: TicketRef, reason: Reason, urgency: Urgency, blocking?: InputId | null, input?: InputId[] | null, message?: MessageId | null, mockup?: MockupRef[] | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
   /**
    * The owner's queue, most urgent first, then oldest: a queue_row { entry, ticket } each, then queue_end { count, snoozed, now_unix }.
 
@@ -638,8 +638,8 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *queue(id: TicketRef, reason: Reason, urgency: Urgency, blocking?: InputId | null, input?: InputId[] | null, mockup?: MockupRef[] | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.queue', { blocking, id, input, mockup, reason, source, urgency });
+  async *queue(id: TicketRef, reason: Reason, urgency: Urgency, blocking?: InputId | null, input?: InputId[] | null, message?: MessageId | null, mockup?: MockupRef[] | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.queue', { blocking, id, input, message, mockup, reason, source, urgency });
     yield* extractData<TicketsEvent>(stream);
   }
 

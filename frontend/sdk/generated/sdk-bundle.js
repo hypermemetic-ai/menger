@@ -392,8 +392,8 @@
       const stream = this.rpc.call("tickets.list", { after, at, epic, filter, keep, limit, parent, status, summary, tz });
       yield* extractData(stream);
     }
-    async* queue(id, reason, urgency, blocking, input, mockup, source) {
-      const stream = this.rpc.call("tickets.queue", { blocking, id, input, mockup, reason, source, urgency });
+    async* queue(id, reason, urgency, blocking, input, message, mockup, source) {
+      const stream = this.rpc.call("tickets.queue", { blocking, id, input, message, mockup, reason, source, urgency });
       yield* extractData(stream);
     }
     async* queued(snoozed) {

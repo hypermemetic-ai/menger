@@ -2437,7 +2437,7 @@ pub(crate) mod tests {
             options: ["card", "sheet"].iter().map(|v| InputOption { value: v.to_string(), label: format!("A {v}"), recommended: false }).collect(),
             recommendation: None,
             state,
-            answer: answer.map(|o| Answer { value: InputValue::Choice { option: o.into() }, rationale: None, source: AnswerSource::App, at_unix: 1 }),
+            answer: answer.map(|o| Answer { value: InputValue::Choice { option: o.into() }, rationale: None, source: AnswerSource::App, at_unix: 1, by: None, name: None }),
             history: Vec::new(),
             asked_unix: None,
         }

@@ -1228,7 +1228,7 @@ fn predicate_mistake(raw: &str, s: &str) -> Option<Mistake> {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 45] = [
+const NAMES: [&str; 46] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -1268,6 +1268,8 @@ const NAMES: [&str; 45] = [
     "assigned",
     // CHAT-3: the reader's unread messages.
     "unread",
+    // CHAT-20: a message's question waiting on the reader.
+    "asked",
     "created",
     // FILTER-30: the ticket's last touch.
     "touched",
@@ -1594,7 +1596,7 @@ fn read_field(rest: &str) -> Result<Field, String> {
         // TICKETS-9: over the kept assignments.
         "assigned" | "unassigned" => read_history(name, tail).map(Field::History),
         // CHAT-3: over the chats, for the reader.
-        "chatting" | "unread" => read_history(name, tail).map(Field::History),
+        "chatting" | "unread" | "asked" => read_history(name, tail).map(Field::History),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
         // FILTER-36: a saved filter, by its name.
         "saved" => {
@@ -1803,6 +1805,10 @@ pub enum Event {
     /// ticket. Answered for the reader from the chats' read marks; no
     /// window, no `by`.
     Unread,
+    /// CHAT-20: `asked` — a message in an open chat on the ticket, the
+    /// reader in it, asks an open input of someone else's. Answered for the
+    /// reader from the chats' kept inputs; no window, no `by`.
+    Asked,
     /// CHAT-55: `in chat N` — chat N names the ticket (a message's code, or
     /// filed or linked from it), for a reader in that chat. Answered from
     /// the chats' kept mentions; no window, no `by`.
@@ -1842,6 +1848,7 @@ impl Event {
             Event::Queued(_) => "queued",
             Event::Chatting => "chatting",
             Event::Unread => "unread",
+            Event::Asked => "asked",
             Event::InChat(_) => "in chat",
             Event::Assigned(_) => "assigned",
             Event::Unassigned => "unassigned",
@@ -2160,6 +2167,7 @@ impl History {
             Event::Queued(Some(u)) => format!("queued {u}"),
             Event::Chatting => "chatting".to_string(),
             Event::Unread => "unread".to_string(),
+            Event::Asked => "asked".to_string(),
             Event::InChat(n) => format!("in chat {n}"),
             Event::Assigned(None) => "assigned".to_string(),
             Event::Assigned(Some(w)) => format!("assigned {}", w.format()),
@@ -2305,11 +2313,11 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
             return Ok(History { event, window: None, by: None });
         }
         // CHAT-3: `chatting`, `unread`, and nothing after either.
-        "chatting" | "unread" => {
+        "chatting" | "unread" | "asked" => {
             if let Some(extra) = w.first() {
                 return Err(format!("`{extra}` is not understood here — `{name}` takes nothing after it: no window, no `by`"));
             }
-            let event = if name == "chatting" { Event::Chatting } else { Event::Unread };
+            let event = match name { "chatting" => Event::Chatting, "unread" => Event::Unread, _ => Event::Asked };
             return Ok(History { event, window: None, by: None });
         }
         _ => {

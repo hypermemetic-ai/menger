@@ -37,7 +37,7 @@ thread_local! {
 /// restored there, or tickets linked to it.
 pub(crate) fn moves(ev: &ChatsEvent) -> Option<u64> {
     match ev {
-        ChatsEvent::Posted { message } => Some(message.chat.get()),
+        ChatsEvent::Posted { message, .. } => Some(message.chat.get()),
         ChatsEvent::Linked { chat, .. } | ChatsEvent::MessagesDeleted { chat, .. } | ChatsEvent::MessagesRestored { chat, .. } => Some(chat.get()),
         _ => None,
     }

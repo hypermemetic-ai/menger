@@ -1522,23 +1522,23 @@ fn lookup_in<'a>(saved: &'a [(&'a str, &'a str)]) -> impl FnMut(&str) -> Option<
 #[test]
 fn resolve_expands_names_where_they_stand() {
     let saved = [
-        ("Needs you", "(queued or asking or label needs-you)"),
+        ("Needs you", "(queued or asking or asked or label needs-you)"),
         ("Plexus-Ready", "in (PLEXUS, SYNAPSE) and not category done and not blocked"),
         ("Deployment", "in (DEPLOY, FILTER) and not kind doc"),
         ("Both", "saved \"needs you\" and kind build"),
     ];
     for (text, resolved) in [
-        ("saved \"Needs you\"", "(queued or asking or label needs-you)"),
+        ("saved \"Needs you\"", "(queued or asking or asked or label needs-you)"),
         ("saved Plexus-Ready", "in (PLEXUS, SYNAPSE) and not category done and not blocked"),
         ("kind build and saved plexus-ready", "kind build and in (PLEXUS, SYNAPSE) and not category done and not blocked"),
         (
             "saved \"Needs you\" or saved Plexus-Ready",
-            "(queued or asking or label needs-you or (in (PLEXUS, SYNAPSE) and not category done and not blocked))",
+            "(queued or asking or asked or label needs-you or (in (PLEXUS, SYNAPSE) and not category done and not blocked))",
         ),
         ("not saved Deployment", "not (in (DEPLOY, FILTER) and not kind doc)"),
-        ("not saved \"Needs you\"", "not (queued or asking or label needs-you)"),
+        ("not saved \"Needs you\"", "not (queued or asking or asked or label needs-you)"),
         ("(ready or saved Deployment) · flat", "(ready or (in (DEPLOY, FILTER) and not kind doc)) · flat"),
-        ("saved Both", "(queued or asking or label needs-you) and kind build"),
+        ("saved Both", "(queued or asking or asked or label needs-you) and kind build"),
         ("blocked and status Ready", "blocked and status Ready"),
     ] {
         let got = parsed(text).resolve(&mut lookup_in(&saved)).unwrap_or_else(|e| panic!("{text}: {e}"));

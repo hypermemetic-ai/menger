@@ -139,6 +139,8 @@ fn input_ids_are_a_list_or_one() {
 #[test]
 fn the_small_names_hold_their_rules() {
     holds::<InputId>(&["landing", " landing ", "a b"], &["", " "]);
+    holds::<MessageInput>(&["812/undated", " 812/undated "], &["", "undated", "0/a", "x/a", "812/", "812/a/b"]);
+    assert_eq!("812/undated".parse::<MessageInput>().unwrap().parts(), (812, "undated"));
     holds::<ComponentName>(&["m-chart", "x-y.z"], &["", "chart", "M-chart", "1-a"]);
     holds::<Referrer>(&["m-chart", "MNG-1"], &["", "chart"]);
     assert!("m-chart".parse::<Referrer>().unwrap().is_component() && !"MNG-1".parse::<Referrer>().unwrap().is_component());

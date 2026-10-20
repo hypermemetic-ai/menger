@@ -25,11 +25,19 @@ pub struct InputsActivation {
 /// an agent's key (or a session minted from one) and for every call that
 /// proves no one (login off). Never what the caller says.
 #[cfg(feature = "server")]
-pub(super) fn source_of(caller: &VerifiedUser) -> AnswerSource {
+pub(crate) fn source_of(caller: &VerifiedUser) -> AnswerSource {
     match caller.context() {
         Some(ctx) if ctx.is_authenticated() && ctx.get_metadata_string(crate::access::AGENT_KEY).is_none() => AnswerSource::App,
         _ => AnswerSource::Api,
     }
+}
+
+/// CHAT-20: who makes a change, as the server reads its caller — its
+/// [`source_of`], its principal and the name it signed in with.
+#[cfg(feature = "server")]
+pub fn who_of(caller: &VerifiedUser) -> crate::store::Who {
+    let signer = crate::store::Signer::of(caller);
+    crate::store::Who { source: source_of(caller), by: Some(signer.principal), name: signer.name }
 }
 
 // The attribute is NOT `#[cfg]`-gated: it has to run in the client-only
@@ -154,7 +162,7 @@ impl InputsActivation {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         answered!(store = self.store.clone(), user, Some(ticket.to_string()) => {
             let on = permit::<Editor>(&store, &user, &ticket)?;
-            Ok(input_event(store.answer(on, &input, value, rationale.and_then(Message::given), source_of(&user)).await, ticket.into_string()))
+            Ok(input_event(store.answer(on, &input, value, rationale.and_then(Message::given), who_of(&user)).await, ticket.into_string()))
         })
     }
 
@@ -176,7 +184,7 @@ impl InputsActivation {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         answered!(store = self.store.clone(), user, Some(ticket.to_string()) => {
             let on = permit::<Editor>(&store, &user, &ticket)?;
-            Ok(input_event(store.clear_answer(on, &input, source_of(&user)).await, ticket.into_string()))
+            Ok(input_event(store.clear_answer(on, &input, who_of(&user)).await, ticket.into_string()))
         })
     }
 
@@ -198,7 +206,7 @@ impl InputsActivation {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         answered!(store = self.store.clone(), user, Some(ticket.to_string()) => {
             let on = permit::<Editor>(&store, &user, &ticket)?;
-            Ok(input_event(store.close_input(on, &input).await, ticket.into_string()))
+            Ok(input_event(store.close_input_as(on, &input, who_of(&user)).await, ticket.into_string()))
         })
     }
 
@@ -219,7 +227,7 @@ impl InputsActivation {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         answered!(store = self.store.clone(), user, Some(ticket.to_string()) => {
             let on = permit::<Editor>(&store, &user, &ticket)?;
-            Ok(input_event(store.reopen_input(on, &input).await, ticket.into_string()))
+            Ok(input_event(store.reopen_input_as(on, &input, who_of(&user)).await, ticket.into_string()))
         })
     }
 }

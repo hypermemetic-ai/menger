@@ -1,7 +1,8 @@
 import type { RpcClient } from '../../rpc';
 import type { Question } from './types';
+import type { InputId, InputState, InputValue } from '../../chats/types';
 import type { ShortcodeRef, TicketRef } from '../../notes/types';
-import type { FilterText, InputId, InputState, InputValue, Message, TicketsEvent, Zone } from '../../tickets/types';
+import type { FilterText, Message, TicketsEvent, Zone } from '../../tickets/types';
 /** Typed client interface for tickets.inputs plugin */
 export interface TicketsInputsClient {
     /**

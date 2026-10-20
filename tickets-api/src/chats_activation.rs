@@ -15,7 +15,7 @@
 
 use crate::chats::{ActivityState, ChatGrant, ChatState, ChatsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
-use crate::vocab::{ActivityLine, Body, ChatId, MessageId, Principal, TicketRef, Title};
+use crate::vocab::{ActivityLine, Body, ChatId, MessageId, MessageInput, Principal, TicketRef, Title};
 #[cfg(feature = "server")]
 use crate::access::{Access, MengerRequest, VerifiedUser};
 #[cfg(feature = "server")]
@@ -38,6 +38,10 @@ mod deletes;
 // CHAT-55: a chat's tickets, and the link a filing makes.
 #[cfg(feature = "server")]
 pub mod tickets;
+mod inputs;
+pub use inputs::MessageInputsClient;
+#[cfg(feature = "server")]
+pub use inputs::MessageInputsActivation;
 
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
@@ -112,12 +116,12 @@ impl ChatsActivation {
         futures::stream::once(async move { open(store, access, user, ticket.map(TicketRef::into_string), others, title.map(Title::into_string)).await })
     }
 
-    /// Post a message in a chat; yields posted { message }, signed by the caller.
+    /// Post a message in a chat; yields posted { message, inputs }, signed by the caller.
     ///
     /// Only a participant posts; a closed chat is `refused`. The body is
-    /// markdown, not blank, at most the ticket body cap. A chat the caller
-    /// does not see is `not_found`. `watch` carries `posted` to every
-    /// participant, and it answers their `await_message`.
+    /// markdown, not blank, at most the ticket body cap; its `<m-decision id>` / `<m-input id kind>`
+    /// are inputs, born `open` (CHAT-20; a malformed one refuses the post). A chat the caller
+    /// does not see is `not_found`. `watch` carries `posted` to every participant, and it answers their `await_message`.
     #[plexus_macros::method(group = "write")]
     pub async fn post(
         &self,
@@ -434,6 +438,12 @@ impl ChatsActivation {
         watch_stream(self.access.clone(), self.store.clone(), user, ticket.map(TicketRef::into_string))
     }
 
+    /// A message's inputs — `chats.inputs.list` / `answer` / `clear` / `close` / `reopen` (CHAT-20).
+    #[plexus_macros::child]
+    fn inputs(&self) -> inputs::MessageInputsActivation {
+        inputs::MessageInputsActivation { store: Arc::clone(&self.store), access: self.access.clone() }
+    }
+
     /// Who could be in a chat — on a ticket, or (without one) outside tickets: a candidate { principal, reads, name?, agent } each — every principal holding a grant in the organization (a team's members by name), and those in the caller's chats there — then the end.
     ///
     /// CHAT-4's picker: `reads` says whether the principal can read the
@@ -457,7 +467,7 @@ impl ChatsActivation {
         futures::stream::iter(candidates(&store, &access, &user, ticket.map(TicketRef::into_string).as_deref()))
     }
 
-    /// Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — and the end; timed_out after timeout_minutes.
+    /// Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — or one answered { … } to an input in the caller's own messages (input: that one alone), and the end; timed_out after timeout_minutes.
     ///
     /// The first message after `since` (unix seconds, at or after it; without
     /// it, after the call) and after the message `after` by anyone but the
@@ -480,8 +490,10 @@ impl ChatsActivation {
         after: Option<MessageId>,
         /// Give up after this many minutes with timed_out (optional; default never).
         timeout_minutes: Option<u32>,
+        /// Only the answer to this input, `<message>/<input>`, e.g. 812/undated (optional; CHAT-20).
+        input: Option<MessageInput>,
     ) -> impl Stream<Item = ChatsEvent> + Send + 'static {
-        let ask = await_message::Ask { chat: chat.map(ChatId::get), ticket: ticket.map(TicketRef::into_string), since, after: after.map(MessageId::get), timeout_minutes };
+        let ask = await_message::Ask { chat: chat.map(ChatId::get), ticket: ticket.map(TicketRef::into_string), since, after: after.map(MessageId::get), timeout_minutes, input };
         await_message::await_message_stream(self.store.clone(), self.access.clone(), user, ask)
     }
 }

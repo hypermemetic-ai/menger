@@ -34,6 +34,27 @@ export type ActivityLine = string;
 /** CHAT-18: where a participant's live work stands: started, working, or ended (any case) */
 export type ActivityState = "started" | "working" | "ended";
 
+/** INPUT-3: an input's current answer — the value, its rationale (`null`
+when none was given), who gave it and when (unix seconds). The latest
+`answered` of its history, unless a `cleared` came after it. */
+export interface Answer {
+  atUnix: number;
+  /** CHAT-20: who gave it — the caller's principal (absent on an answer
+recorded before CHAT-20, and on the store's own entries). */
+  by?: string | null;
+  /** CHAT-20: the name `by` went by then (a person's sign-in, a key's
+`--as`), when it had one. */
+  name?: string | null;
+  rationale?: string | null;
+  source: AnswerSource;
+  value: InputValue;
+}
+
+/** INPUT-3: who made a change to an input (INPUT-1's language) — `app`, a
+viewer's click, which the host says on its `answer`; `api`, everything
+else (synapse, an agent). The only "who" until CONTEXT adds identity. */
+export type AnswerSource = never;
+
 /** ARCHIVE-2: an archived ticket's mark — when it was archived, by whom
 (the principal, as a transition names its actor), why (the archive's
 `message`), and which write set it (the id of that write's first
@@ -95,6 +116,28 @@ sees of the ticket, beside its id. */
 /** CHAT-16: what an admin's add grants one who can't read the chat's ticket: ticket (view it) or chat (this chat only) (any case) */
 export type ChatGrant = "ticket" | "chat";
 
+/** One input of a message, as the store keeps it: its home — the chat, the
+message, the chat's ticket by its key now (none outside tickets) and
+who asked (the message's author) — then what a ticket's input carries:
+its id (unique in the message), kind, question, options, recommendation,
+state, current answer (`null` with none) and whole history, oldest
+first, and when it was asked (the post). */
+export interface ChatInput {
+  answer?: Answer | null;
+  askedUnix?: number | null;
+  author: string;
+  chat: ChatId;
+  history: InputHistoryEntry[];
+  id: InputId;
+  kind: InputKind;
+  message: MessageId;
+  options: InputOption[];
+  question?: string | null;
+  recommendation?: string | null;
+  state: InputState;
+  ticket?: string | null;
+}
+
 /** CHAT-14: what a chat is — on a ticket (CHAT-1), or outside tickets: a
 direct message between two, or a group. */
 export type ChatKind = "ticket" | "direct" | "group";
@@ -151,9 +194,11 @@ export interface ChatsEventCandidate {
   reads: boolean;
 }
 
-/** `post`'s answer, and on every participant's `watch`. */
+/** `post`'s answer, and on every participant's `watch`. CHAT-20:
+`inputs` — the inputs its body declares, born `open`. */
 export interface ChatsEventPosted {
   type: 'posted';
+  inputs: ChatInput[];
   message: Message;
 }
 
@@ -277,6 +322,36 @@ export interface ChatsEventLinked {
   tickets: string[];
 }
 
+/** CHAT-20: one of `inputs list`'s rows — a message's input. */
+export interface ChatsEventInput {
+  type: 'input';
+  input: ChatInput;
+}
+
+/** CHAT-20: a message's input changed — `inputs answer`, `clear`,
+`close` and `reopen`'s answer, and on every participant's `watch`. */
+export interface ChatsEventInputChanged {
+  type: 'input_changed';
+  input: ChatInput;
+}
+
+/** CHAT-20: `await_message`'s answer when an input it waits on is
+answered — the input named (`--input`), or, without it, one in the
+caller's own messages: the chat, the message, the input's id, the
+value and who gave it. */
+export interface ChatsEventAnswered {
+  type: 'answered';
+  atUnix: number;
+  by: string | null;
+  chat: ChatId;
+  input: InputId;
+  message: MessageId;
+  name: string | null;
+  rationale: string | null;
+  source: AnswerSource;
+  value: InputValue;
+}
+
 /** AGENT-3: a participating agent's claim began or ended — a line in the
 chat. Declared for AGENT-3's claims; nothing emits it yet. */
 export interface ChatsEventClaimLine {
@@ -355,7 +430,7 @@ export interface ChatsEventError {
 /** What the `chats` activation's methods yield. In-band errors are
 `Error { message }`, as every menger method's; a chat the caller does
 not see is `not_found`, whether it is there or not (ACCESS-9). */
-export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventMessagesDeleted | ChatsEventMessagesRestored | ChatsEventListening | ChatsEventActivity | ChatsEventTicket | ChatsEventLinked | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
+export type ChatsEvent = ChatsEventOpened | ChatsEventChat | ChatsEventCandidate | ChatsEventPosted | ChatsEventMessage | ChatsEventAdded | ChatsEventNeedsGrant | ChatsEventRemoved | ChatsEventRead | ChatsEventClosed | ChatsEventReopened | ChatsEventRenamed | ChatsEventMessagesDeleted | ChatsEventMessagesRestored | ChatsEventListening | ChatsEventActivity | ChatsEventTicket | ChatsEventLinked | ChatsEventInput | ChatsEventInputChanged | ChatsEventAnswered | ChatsEventClaimLine | ChatsEventWaiting | ChatsEventTimedOut | ChatsEventPage | ChatsEventLeft | ChatsEventNotFound | ChatsEventRefused | ChatsEventLagged | ChatsEventWatchClosed | ChatsEventError;
 
 export function isChatsEventOpened(e: ChatsEvent): e is ChatsEventOpened { return e.type === 'opened'; }
 export function isChatsEventChat(e: ChatsEvent): e is ChatsEventChat { return e.type === 'chat'; }
@@ -375,6 +450,9 @@ export function isChatsEventListening(e: ChatsEvent): e is ChatsEventListening {
 export function isChatsEventActivity(e: ChatsEvent): e is ChatsEventActivity { return e.type === 'activity'; }
 export function isChatsEventTicket(e: ChatsEvent): e is ChatsEventTicket { return e.type === 'ticket'; }
 export function isChatsEventLinked(e: ChatsEvent): e is ChatsEventLinked { return e.type === 'linked'; }
+export function isChatsEventInput(e: ChatsEvent): e is ChatsEventInput { return e.type === 'input'; }
+export function isChatsEventInputChanged(e: ChatsEvent): e is ChatsEventInputChanged { return e.type === 'input_changed'; }
+export function isChatsEventAnswered(e: ChatsEvent): e is ChatsEventAnswered { return e.type === 'answered'; }
 export function isChatsEventClaimLine(e: ChatsEvent): e is ChatsEventClaimLine { return e.type === 'claim_line'; }
 export function isChatsEventWaiting(e: ChatsEvent): e is ChatsEventWaiting { return e.type === 'waiting'; }
 export function isChatsEventTimedOut(e: ChatsEvent): e is ChatsEventTimedOut { return e.type === 'timed_out'; }
@@ -412,6 +490,78 @@ export interface Deleted {
   by: string;
 }
 
+/** INPUT-3: what one entry of an input's history did — an answer recorded
+(`answered`), the answer cleared (`cleared`), the input frozen
+(`closed`) or unfrozen (`reopened`). */
+export type InputAction = never;
+
+/** INPUT-3: one change an input went through, oldest first — the action,
+the value and rationale of an `answered` (`null` for the others), who
+made it and when (unix seconds). Every change is kept, a removed input's
+included. */
+export interface InputHistoryEntry {
+  action: InputAction;
+  atUnix: number;
+  /** CHAT-20: who made it — as [`Answer::by`]. */
+  by?: string | null;
+  /** CHAT-20: the name `by` went by then. */
+  name?: string | null;
+  rationale?: string | null;
+  source: AnswerSource;
+  value?: InputValue | null;
+}
+
+/** INPUT-1: an input's id — the `id` attribute of its `<m-decision>` or
+`<m-input>`, trimmed, unique in its ticket. */
+export type InputId = string;
+
+/** INPUT-3: what an **input** asks for (INPUT-1 decision 2, the owner's
+fixed set): `choice` — one of its options (an `<m-decision>`); `multi` —
+any of its options, a set; `text` — a free reply (both an `<m-input>`).
+Lowercase on the wire, as [`Kind`] is. */
+export type InputKind = "choice" | "multi" | "text";
+
+/** INPUT-3: one option an input declares — `value` is what an answer names
+(an `<m-option>`'s `value`, else its `name`; an `<m-choice>`'s `value`),
+`label` what a reader sees (the `name`, else the value; an `<m-choice>`'s
+text, else its value), `recommended` whether the option is marked so. */
+export interface InputOption {
+  label: string;
+  recommended: boolean;
+  value: string;
+}
+
+/** Where an input stands (any case) */
+export type InputState = "open" | "answered" | "closed" | "removed" | "withdrawn";
+
+export interface InputValueChoice {
+  type: 'choice';
+  option: string;
+}
+
+export interface InputValueMulti {
+  type: 'multi';
+  options: string[];
+}
+
+export interface InputValueText {
+  type: 'text';
+  text: string;
+}
+
+/** INPUT-3: an answer's value, typed by its input's kind — internally
+tagged, as [`Placement`] is: `{"type": "choice", "option": "archive"}`
+(one option's `value`), `{"type": "multi", "options": ["a", "b"]}` (a set
+of them — stored in the order the body declares them, each once; it may
+be empty: none ticked), `{"type": "text", "text": "…"}` (a reply, not
+blank). Through synapse, a param's fields are dotted flags:
+`--value.type choice --value.option archive`. */
+export type InputValue = InputValueChoice | InputValueMulti | InputValueText;
+
+export function isInputValueChoice(e: InputValue): e is InputValueChoice { return e.type === 'choice'; }
+export function isInputValueMulti(e: InputValue): e is InputValueMulti { return e.type === 'multi'; }
+export function isInputValueText(e: InputValue): e is InputValueText { return e.type === 'text'; }
+
 /** MENGER-12: a label — ASCII letters, digits and `-`, 1 to 32, kept
 lower case (`Needs-You` is `needs-you`): [`crate::labels::normalize`]. */
 export type Label = string;
@@ -425,7 +575,8 @@ export interface Message {
   at: number;
   /** Who wrote it: the caller's principal (`anonymous` on one kept before ACCESS-24, when login could be off). */
   author: string;
-  /** What it says: markdown, rendered by the app's `md.rs`, never framed. */
+  /** What it says: markdown, rendered by the app's `md.rs` — CHAT-21: in a
+frame of its own when it holds what a body is framed for. */
   body: string;
   chat: ChatId;
   /** CHAT-44: when and by whom it was deleted — kept and marked, never
@@ -446,6 +597,10 @@ Kept, never set by a call; `None` until agents claim. */
 /** CHAT-3: a chat message's number, from 1 across every chat in the
 order posted — a later message's is always greater. */
 export type MessageId = number;
+
+/** CHAT-20: a message's input, named whole — the message's id and its
+input's id, `<message>/<input>` (`812/undated`). */
+export type MessageInput = string;
 
 export interface PlacementWave {
   type: 'wave';

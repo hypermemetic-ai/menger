@@ -222,6 +222,7 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
             | Event::Queued(_)
             | Event::Chatting
             | Event::Unread
+            | Event::Asked
             | Event::InChat(_)
             | Event::Assigned(_)
             | Event::Unassigned => false,

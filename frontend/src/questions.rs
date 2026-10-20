@@ -473,7 +473,7 @@ fn pin(p: Pinning) {
         // this one to its entry (the urgency raised, never lowered).
         let joins = queue::signal().with_untracked(|q| q.as_ref().is_some_and(|q| q.get(&ask.ticket).is_some()));
         let asked = menger_tickets_api::vocab::InputIds::from(input);
-        let refused = queue_write(client.queue_all(id, u, reason, Some(asked), None, None, Some(CallerSource::App)).await).await;
+        let refused = queue_write(client.queue_all(id, u, reason, Some(asked), None, None, None, Some(CallerSource::App)).await).await;
         match refused {
             Some(why) => {
                 p.problem.try_set(Some(why));
@@ -999,7 +999,7 @@ mod tests {
         let i = at(input("A-1", "x"), 100);
         assert_eq!(since(&i), Some(100));
         let mut cleared = answered(i.clone(), "archive", 150);
-        cleared.history.push(InputHistoryEntry { action: InputAction::Cleared, value: None, rationale: None, source: AnswerSource::App, at_unix: 200 });
+        cleared.history.push(InputHistoryEntry { action: InputAction::Cleared, value: None, rationale: None, source: AnswerSource::App, at_unix: 200, by: None, name: None });
         cleared.state = InputState::Open;
         assert_eq!(since(&cleared), Some(200));
         let mut old = input("A-1", "y");

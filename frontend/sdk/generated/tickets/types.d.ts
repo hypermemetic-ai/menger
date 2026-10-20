@@ -1,4 +1,4 @@
-import type { Archived, Code, CommitRef, Label, Placement, Severity, ShortcodeId, Status, TicketId, TicketName, TicketSummary, WatchEnd } from '../chats/types';
+import type { Answer, Archived, Code, CommitRef, InputHistoryEntry, InputId, InputKind, InputOption, InputState, Label, Placement, Severity, ShortcodeId, Status, TicketId, TicketName, TicketSummary, WatchEnd } from '../chats/types';
 import type { Kind, TicketRef } from '../notes/types';
 /** MNG-16: what an `amend` moved — its title, its body. */
 export type AmendedField = "title" | "body";
@@ -29,19 +29,6 @@ export interface Anchor {
   `ticket`; a value sent is replaced. */
     version?: number | null;
 }
-/** INPUT-3: an input's current answer — the value, its rationale (`null`
-when none was given), who gave it and when (unix seconds). The latest
-`answered` of its history, unless a `cleared` came after it. */
-export interface Answer {
-    atUnix: number;
-    rationale?: string | null;
-    source: AnswerSource;
-    value: InputValue;
-}
-/** INPUT-3: who made a change to an input (INPUT-1's language) — `app`, a
-viewer's click, which the host says on its `answer`; `api`, everything
-else (synapse, an agent). The only "who" until CONTEXT adds identity. */
-export type AnswerSource = never;
 /** ACCESS-48: a ticket or a shortcode as a call named it, echoed back —
 `not_found`'s and `ambiguous`'s `id`: what was asked, by any name
 [`TicketRef`] or [`ShortcodeRef`] takes (the rule [`Under`] reads). */
@@ -339,63 +326,6 @@ export interface Input {
     state: InputState;
     ticket: TicketId;
 }
-/** INPUT-3: what one entry of an input's history did — an answer recorded
-(`answered`), the answer cleared (`cleared`), the input frozen
-(`closed`) or unfrozen (`reopened`). */
-export type InputAction = never;
-/** INPUT-3: one change an input went through, oldest first — the action,
-the value and rationale of an `answered` (`null` for the others), who
-made it and when (unix seconds). Every change is kept, a removed input's
-included. */
-export interface InputHistoryEntry {
-    action: InputAction;
-    atUnix: number;
-    rationale?: string | null;
-    source: AnswerSource;
-    value?: InputValue | null;
-}
-/** INPUT-1: an input's id — the `id` attribute of its `<m-decision>` or
-`<m-input>`, trimmed, unique in its ticket. */
-export type InputId = string;
-/** INPUT-3: what an **input** asks for (INPUT-1 decision 2, the owner's
-fixed set): `choice` — one of its options (an `<m-decision>`); `multi` —
-any of its options, a set; `text` — a free reply (both an `<m-input>`).
-Lowercase on the wire, as [`Kind`] is. */
-export type InputKind = "choice" | "multi" | "text";
-/** INPUT-3: one option an input declares — `value` is what an answer names
-(an `<m-option>`'s `value`, else its `name`; an `<m-choice>`'s `value`),
-`label` what a reader sees (the `name`, else the value; an `<m-choice>`'s
-text, else its value), `recommended` whether the option is marked so. */
-export interface InputOption {
-    label: string;
-    recommended: boolean;
-    value: string;
-}
-/** Where an input stands (any case) */
-export type InputState = "open" | "answered" | "closed" | "removed" | "withdrawn";
-export interface InputValueChoice {
-    type: 'choice';
-    option: string;
-}
-export interface InputValueMulti {
-    type: 'multi';
-    options: string[];
-}
-export interface InputValueText {
-    type: 'text';
-    text: string;
-}
-/** INPUT-3: an answer's value, typed by its input's kind — internally
-tagged, as [`Placement`] is: `{"type": "choice", "option": "archive"}`
-(one option's `value`), `{"type": "multi", "options": ["a", "b"]}` (a set
-of them — stored in the order the body declares them, each once; it may
-be empty: none ticked), `{"type": "text", "text": "…"}` (a reply, not
-blank). Through synapse, a param's fields are dotted flags:
-`--value.type choice --value.option archive`. */
-export type InputValue = InputValueChoice | InputValueMulti | InputValueText;
-export declare function isInputValueChoice(e: InputValue): e is InputValueChoice;
-export declare function isInputValueMulti(e: InputValue): e is InputValueMulti;
-export declare function isInputValueText(e: InputValue): e is InputValueText;
 /** ARCHIVE-2: a ticket an archive took that was still live work (not in
 category done) — the warning's row: its id and status. */
 export interface LiveTicket {

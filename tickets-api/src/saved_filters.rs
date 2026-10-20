@@ -27,7 +27,7 @@ pub const SLUG_MAX: usize = 64;
 /// you", the owner's queue, what asks and what is labelled so — and the
 /// text it holds until a doc of that name is saved: what `saved "Needs
 /// you"` means meanwhile, on the server as in the app.
-pub const NEEDS_YOU: (&str, &str) = ("Needs you", "queued or asking or label needs-you");
+pub const NEEDS_YOU: (&str, &str) = ("Needs you", "queued or asking or asked or label needs-you");
 
 /// The text a name means while no doc holds it ([`NEEDS_YOU`]'s), by slug.
 pub fn default_text(name: &str) -> Option<&'static str> {
@@ -94,7 +94,7 @@ mod tests {
         assert_eq!(filter_line("filter: kind build\n"), Some("kind build"));
         assert_eq!(filter_line("intro\n  filter:   status Ready  \nfilter: x"), Some("status Ready"));
         assert_eq!(filter_line("nothing"), None);
-        assert_eq!(default_text("needs YOU"), Some("queued or asking or label needs-you"));
+        assert_eq!(default_text("needs YOU"), Some("queued or asking or asked or label needs-you"));
         assert_eq!(default_text("Plexus-Ready"), None);
     }
 }

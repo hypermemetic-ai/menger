@@ -707,7 +707,7 @@ ticket reads through ("Members and roles").
 **Needs you** (MENGER-12, MENGER-43) is a filter on the nav: what waits
 on the owner is the saved filter named "Needs you"
 (`VIEW/_MENGER/view/needs-you`; until one is saved, the default
-`(queued or asking or label needs-you)` — MENGER-39's queue first). `g n`,
+`(queued or asking or asked or label needs-you)` — MENGER-39's queue first). `g n`,
 or a click on the header's **needs you N**, puts it on the nav exactly as
 a saved filter's chip puts it on a surface (the nav's own clauses replaced;
 its chips, its text and the URL's `n=` following), focuses the nav's first row,
@@ -3537,6 +3537,54 @@ chip. On a phone a card is the turn's width, its actions one row (⋯ for the
 rest), its questions folded to "N questions"; on a wide screen it is at
 most 560 px. `scripts/chat-card-check.mjs` checks it in a browser.
 
+#### Questions in a message (CHAT-20)
+
+A message asks as a ticket body does (CHAT-19, the owner's `home` decision:
+a message's question belongs to the chat): an `<m-decision id>` or
+`<m-input id kind>` in its body is an **input** whose home is the message —
+born `open` at `post` (one the reader cannot read refuses the post, naming
+why), kept in `chat_inputs` / `chat_answers`, never in a ticket's inputs.
+`posted` carries them (`inputs`), and `watch` says `input_changed { input }`
+(the input whole: `chat`, `message`, `ticket` — none in a direct message —,
+`author`, kind, question, options, state, answer, history) to every
+participant.
+
+```sh
+synapse -P 4455 menger chats inputs list --state open                 # every question in your chats
+synapse -P 4455 menger chats inputs answer --chat 6 --message 812 --input fire --value.type choice --value.option yes --rationale "dry"
+synapse -P 4455 menger chats inputs clear --chat 6 --message 812 --input fire
+synapse -P 4455 menger chats inputs close --chat 6 --message 812 --input fire     # who asked, or an admin of the ticket
+synapse -P 4455 -j menger chats await_message --chat 6 --input 812/fire --timeout-minutes 240
+synapse -P 4455 menger tickets queue --id KILN-7 --urgency blocking --input fire --message 812 --reason "idle until it is decided"
+```
+
+**Who answers**: a participant, while the chat is open and the message
+kept (a closed chat or a deleted message asks no one). Every answer —
+a ticket's too, from this release on — records **who** gave it (`by`, the
+verified caller's principal, and `name`), beside the `source` the server
+says (ACCESS-14). Only who answered clears the answer; who asked (the
+message's author) or an admin of the chat's ticket closes and reopens.
+The grants are `message_inputs.*` (a viewer's and a chatter's; the chat
+decides who may), apart from `tickets inputs`' `inputs.*`.
+
+**Waiting**: `await_message` ends on an answer, by someone else, to an
+input in the caller's own messages (`answered { chat, message, input,
+value, rationale, by, name, source, at_unix }`), as it ends on a message;
+with `--input <message>/<input>` only that input's answer ends it — at once
+when it already holds one given since `since`.
+
+**Needs you**: the cell `asked` is a ticket with an open chat on it, the
+reader in it, where a message not the reader's asks an open input — so the
+default Needs you is `queued or asking or asked or label needs-you`. A
+saved "Needs you" doc keeps its own text: add `or asked` to it. A
+question in a direct message is on no ticket, so no ticket cell holds it:
+`chats inputs list --state open` and the chat's unread do.
+
+**The queue**: `tickets queue --message M` names the inputs as message M's
+(in a chat on the ticket); the entry keeps them as `M/<input>`, and
+closing the last one unqueues the ticket, as a ticket's input's closing
+does.
+
 #### Direct messages and groups (CHAT-14)
 
 A chat may be **outside tickets** (owner, 2026-10-17: *"I think we should
@@ -3935,7 +3983,7 @@ An `inputs close` of the input an entry names takes it out in the same write
 `queued` and `queued <urgency>` are filter cells (FILTER-3's language),
 answered from the queue's kept entries — a snoozed ticket is still queued —
 on every filtered read and watch; the Needs you filter (`g n`, on the nav)
-is `queued or asking or label needs-you`. `history { id }` yields the ticket's **queue records**
+is `queued or asking or asked or label needs-you`. `history { id }` yields the ticket's **queue records**
 after its transitions — `queue_record { record }`: `action` (queued,
 raised, requeued, snoozed, unqueued, closed, changes_requested), `urgency`, `reason`, `input`
 (and `inputs`, `blocking` with several; `mockups`),

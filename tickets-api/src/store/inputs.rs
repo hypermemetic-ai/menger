@@ -29,7 +29,7 @@
 //! `position` in its ticket's list, `kind`, `question`, `options` as JSON,
 //! `recommendation`, `state`); `answers` — a row per history entry
 //! (`ticket`, `input`, `action`, `value` as JSON, `rationale`, `source`,
-//! `at_unix`), in the order recorded. Read whole at open ([`load`]); a
+//! `at_unix`, CHAT-20's `by_principal` and `by_name`), in the order recorded. Read whole at open ([`load`]); a
 //! database without them gains both on first open, durably, once, with
 //! every body's inputs read in ([`migrate`]). The history is the record, not
 //! a cache of the bodies.
@@ -61,7 +61,9 @@ const TABLES: &str = "
             value     TEXT,
             rationale TEXT,
             source    TEXT NOT NULL,
-            at_unix   INTEGER NOT NULL
+            at_unix   INTEGER NOT NULL,
+            by_principal TEXT,
+            by_name   TEXT
         );
         CREATE INDEX IF NOT EXISTS answers_by_input ON answers (ticket, input, seq);
     ";
@@ -78,6 +80,8 @@ pub(crate) fn answer_of(history: &[InputHistoryEntry]) -> Option<Answer> {
         rationale: last.rationale.clone(),
         source: last.source,
         at_unix: last.at_unix,
+        by: last.by.clone(),
+        name: last.name.clone(),
     })
 }
 
@@ -116,21 +120,42 @@ pub(crate) fn state_of(declared: bool, history: &[InputHistoryEntry]) -> InputSt
     }
 }
 
+/// CHAT-20: who makes a change to an input — where it comes from (`app`,
+/// `api`), and the caller's principal and the name it goes by. An
+/// [`AnswerSource`] alone is a change by no one named (a test's, an
+/// older caller's).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Who {
+    pub source: AnswerSource,
+    pub by: Option<String>,
+    pub name: Option<String>,
+}
+
+impl From<AnswerSource> for Who {
+    fn from(source: AnswerSource) -> Self {
+        Self { source, by: None, name: None }
+    }
+}
+
 /// A change to one input ([`apply`]).
 #[derive(Debug, Clone)]
 pub(crate) enum Op {
     Answer {
         value: InputValue,
         rationale: Option<String>,
-        source: AnswerSource,
+        who: Who,
     },
     /// INPUT-9: with who cleared it — `app` when the host clears it for a
     /// frame (`menger.input.clear`), else `api`.
     Clear {
-        source: AnswerSource,
+        who: Who,
     },
-    Close,
-    Reopen,
+    Close {
+        who: Who,
+    },
+    Reopen {
+        who: Who,
+    },
 }
 
 /// Why an [`Op`] is refused.
@@ -157,26 +182,28 @@ pub(crate) fn apply(input: &Input, op: Op, now: i64) -> Result<Option<(Input, In
         return Err(Refused::Withdrawn);
     }
     let closed = input.state == InputState::Closed;
-    let entry = |action, value, rationale, source| InputHistoryEntry {
+    let entry = |action, value, rationale, who: Who| InputHistoryEntry {
         action,
         value,
         rationale,
-        source,
+        source: who.source,
         at_unix: now,
+        by: who.by,
+        name: who.name,
     };
     let entry = match op {
         Op::Answer { .. } | Op::Clear { .. } if closed => return Err(Refused::Closed),
-        Op::Answer { value, rationale, source } => {
+        Op::Answer { value, rationale, who } => {
             let value = markup::check(input.kind, &input.options, value).map_err(Refused::Invalid)?;
             let rationale = rationale.filter(|r| !r.trim().is_empty());
-            entry(InputAction::Answered, Some(value), rationale, source)
+            entry(InputAction::Answered, Some(value), rationale, who)
         }
         Op::Clear { .. } if input.answer.is_none() => return Ok(None),
-        Op::Clear { source } => entry(InputAction::Cleared, None, None, source),
-        Op::Close if closed => return Ok(None),
-        Op::Close => entry(InputAction::Closed, None, None, AnswerSource::Api),
-        Op::Reopen if !closed => return Ok(None),
-        Op::Reopen => entry(InputAction::Reopened, None, None, AnswerSource::Api),
+        Op::Clear { who } => entry(InputAction::Cleared, None, None, who),
+        Op::Close { .. } if closed => return Ok(None),
+        Op::Close { who } => entry(InputAction::Closed, None, None, who),
+        Op::Reopen { .. } if !closed => return Ok(None),
+        Op::Reopen { who } => entry(InputAction::Reopened, None, None, who),
     };
     let mut next = input.clone();
     next.history.push(entry.clone());
@@ -194,6 +221,8 @@ fn system_entry(input: &Input, action: InputAction, reason: &str, now: i64) -> (
         rationale: Some(reason.to_string()),
         source: AnswerSource::System,
         at_unix: now,
+        by: None,
+        name: None,
     };
     let mut next = input.clone();
     next.history.push(entry.clone());
@@ -484,8 +513,8 @@ pub(crate) fn store(conn: &Connection, ticket: &str, list: &[Input]) -> rusqlite
 /// inside the caller's transaction.
 pub(crate) fn record(conn: &Connection, input: &Input, entry: &InputHistoryEntry) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO answers (ticket, input, action, value, rationale, source, at_unix)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO answers (ticket, input, action, value, rationale, source, at_unix, by_principal, by_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )?
     .execute(params![
         input.ticket,
@@ -495,6 +524,8 @@ pub(crate) fn record(conn: &Connection, input: &Input, entry: &InputHistoryEntry
         entry.rationale,
         entry.source.as_str(),
         entry.at_unix,
+        entry.by,
+        entry.name,
     ])?;
     conn.prepare_cached("UPDATE inputs SET state = ?1 WHERE ticket = ?2 AND id = ?3")?
         .execute(params![input.state.as_str(), input.ticket, input.id])?;
@@ -540,8 +571,10 @@ pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Inputs> {
         };
         inputs.by_ticket.entry(ticket).or_default().push(input);
     }
+    // CHAT-20: a file before who answered reads none.
+    let by = if has_column(conn, "answers", "by_principal")? { "by_principal, by_name" } else { "NULL, NULL" };
     let mut stmt =
-        conn.prepare("SELECT ticket, input, action, value, rationale, source, at_unix FROM answers ORDER BY seq")?;
+        conn.prepare(&format!("SELECT ticket, input, action, value, rationale, source, at_unix, {by} FROM answers ORDER BY seq"))?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let ticket: String = r.get(0)?;
@@ -555,6 +588,8 @@ pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Inputs> {
             rationale: r.get(4)?,
             source: column(r, 5, |s| s.parse::<AnswerSource>())?,
             at_unix: r.get(6)?,
+            by: r.get(7)?,
+            name: r.get(8)?,
         };
         match inputs.by_ticket.get_mut(&ticket).and_then(|l| l.iter_mut().find(|i| i.id == id)) {
             Some(input) => input.history.push(entry),
@@ -588,7 +623,12 @@ fn has_tables(conn: &Connection) -> rusqlite::Result<bool> {
 
 /// APP-84: whether `inputs` has the `asked_unix` column.
 fn has_asked(conn: &Connection) -> rusqlite::Result<bool> {
-    conn.query_row("SELECT count(*) FROM pragma_table_info('inputs') WHERE name = 'asked_unix'", [], |r| {
+    has_column(conn, "inputs", "asked_unix")
+}
+
+/// Whether `table` has the column `name`.
+pub(crate) fn has_column(conn: &Connection, table: &str, name: &str) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT count(*) FROM pragma_table_info(?1) WHERE name = ?2", [table, name], |r| {
         r.get::<_, i64>(0).map(|n| n == 1)
     })
 }
@@ -601,6 +641,10 @@ pub(crate) fn migrate_asked(conn: &mut Connection) -> anyhow::Result<usize> {
     let tx = conn.transaction()?;
     if !has_asked(&tx)? {
         tx.execute("ALTER TABLE inputs ADD COLUMN asked_unix INTEGER", [])?;
+    }
+    // CHAT-20: and who made each change — none for every one before.
+    if !has_column(&tx, "answers", "by_principal")? {
+        tx.execute_batch("ALTER TABLE answers ADD COLUMN by_principal TEXT; ALTER TABLE answers ADD COLUMN by_name TEXT;")?;
     }
     let dated = tx.execute(
         "UPDATE inputs SET asked_unix = (SELECT created_unix FROM tickets WHERE tickets.id = inputs.ticket)
@@ -735,36 +779,40 @@ mod tests {
         let answer = |o: &str| Op::Answer {
             value: InputValue::Choice { option: o.into() },
             rationale: Some("because".into()),
-            source: AnswerSource::App,
+            who: Who { source: AnswerSource::App, by: Some("idp:ada".into()), name: Some("Ada".into()) },
         };
-        let clear = || Op::Clear { source: AnswerSource::Api };
+        let clear = || Op::Clear { who: AnswerSource::Api.into() };
+        let (close, reopen) = (|| Op::Close { who: AnswerSource::Api.into() }, || Op::Reopen { who: AnswerSource::Api.into() });
         assert!(matches!(apply(&a, answer("z"), 1), Err(Refused::Invalid(_))));
         assert_eq!(apply(&a, clear(), 1).unwrap(), None, "nothing to clear");
-        assert_eq!(apply(&a, Op::Reopen, 1).unwrap(), None, "not closed");
+        assert_eq!(apply(&a, reopen(), 1).unwrap(), None, "not closed");
         let (a, e) = apply(&a, answer("x"), 10).unwrap().unwrap();
         assert_eq!((a.state, e.action, e.source), (InputState::Answered, InputAction::Answered, AnswerSource::App));
+        // CHAT-20: who answered, on the entry and the answer.
+        assert_eq!((e.by.as_deref(), e.name.as_deref()), (Some("idp:ada"), Some("Ada")));
+        assert_eq!(a.answer.as_ref().and_then(|x| x.by.as_deref()), Some("idp:ada"));
         assert_eq!(a.answer.as_ref().map(|x| (&x.value, x.at_unix)), Some((&InputValue::Choice { option: "x".into() }, 10)));
         let (a, _) = apply(&a, answer("y"), 11).unwrap().unwrap();
-        let (a, _) = apply(&a, Op::Close, 12).unwrap().unwrap();
+        let (a, _) = apply(&a, close(), 12).unwrap().unwrap();
         assert_eq!(a.state, InputState::Closed);
         assert_eq!(a.answer.as_ref().map(|x| x.value.clone()), Some(InputValue::Choice { option: "y".into() }), "frozen with its answer");
         assert_eq!(apply(&a, answer("x"), 13), Err(Refused::Closed));
         assert_eq!(apply(&a, clear(), 13), Err(Refused::Closed));
-        assert_eq!(apply(&a, Op::Close, 13).unwrap(), None);
-        let (a, _) = apply(&a, Op::Reopen, 14).unwrap().unwrap();
+        assert_eq!(apply(&a, close(), 13).unwrap(), None);
+        let (a, _) = apply(&a, reopen(), 14).unwrap().unwrap();
         assert_eq!(a.state, InputState::Answered, "reopened to what its history says");
         let (a, e) = apply(&a, clear(), 15).unwrap().unwrap();
         assert_eq!((a.state, a.answer.as_ref(), e.source), (InputState::Open, None, AnswerSource::Api));
         // INPUT-9: a clear made for a frame is the app's.
         let (b, _) = apply(&a, answer("x"), 16).unwrap().unwrap();
-        let (b, e) = apply(&b, Op::Clear { source: AnswerSource::App }, 17).unwrap().unwrap();
+        let (b, e) = apply(&b, Op::Clear { who: AnswerSource::App.into() }, 17).unwrap().unwrap();
         assert_eq!((b.state, b.answer.as_ref(), e.action, e.source), (InputState::Open, None, InputAction::Cleared, AnswerSource::App));
         let actions: Vec<InputAction> = a.history.iter().map(|e| e.action).collect();
         use InputAction::*;
         assert_eq!(actions, [Answered, Answered, Closed, Reopened, Cleared]);
         let mut gone = a.clone();
         gone.state = InputState::Removed;
-        for op in [answer("x"), clear(), Op::Close, Op::Reopen] {
+        for op in [answer("x"), clear(), close(), reopen()] {
             assert_eq!(apply(&gone, op, 16), Err(Refused::Removed));
         }
     }
@@ -778,7 +826,7 @@ mod tests {
         let op = Op::Answer {
             value: InputValue::Choice { option: "x".into() },
             rationale: Some("  ".into()),
-            source: AnswerSource::Api,
+            who: AnswerSource::Api.into(),
         };
         let (a, _) = apply(a, op, 1).unwrap().unwrap();
         assert_eq!(a.answer.unwrap().rationale, None);

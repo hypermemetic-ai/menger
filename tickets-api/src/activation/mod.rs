@@ -186,7 +186,7 @@ pub use components::ComponentsActivation;
 mod inputs;
 pub use inputs::InputsClient;
 #[cfg(feature = "server")]
-pub use inputs::InputsActivation;
+pub use inputs::{who_of, InputsActivation};
 // ACCESS-16: mounted — `tickets.nav.<method>`, its client `client.nav()`.
 // Not server-gated: its client half is the app's.
 mod nav;
@@ -1077,10 +1077,13 @@ impl TicketsActivation {
         blocking: Option<InputId>,
         /// Views of mockups the owner answers looking at — repeat the flag: T#mN, T (a whole-page body), or mockup:T#N@W (optional).
         mockup: Option<Vec<MockupRef>>,
+        /// The inputs are this message's, in a chat on the ticket (CHAT-20), e.g. 812 (optional).
+        message: Option<crate::vocab::MessageId>,
         /// app | api | pipeline (optional, default api).
         source: Option<CallerSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let (inputs, blocking) = (input.map(InputIds::into_strings).unwrap_or_default(), blocking.map(InputId::into_string));
+        let name = |i: String| message.map_or(i.clone(), |m| format!("{}/{i}", m.get()));
+        let (inputs, blocking) = (input.map(InputIds::into_strings).unwrap_or_default().into_iter().map(name).collect(), blocking.map(InputId::into_string).map(name));
         let ask = Ask::Queue { urgency, reason, inputs, blocking, mockups: mockup.unwrap_or_default() };
         queue_stream(self.store.clone(), user, id.into_string(), ask, source)
     }

@@ -1276,6 +1276,14 @@ pub struct Answer {
     pub rationale: Option<String>,
     pub source: AnswerSource,
     pub at_unix: i64,
+    /// CHAT-20: who gave it — the caller's principal (absent on an answer
+    /// recorded before CHAT-20, and on the store's own entries).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    /// CHAT-20: the name `by` went by then (a person's sign-in, a key's
+    /// `--as`), when it had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// INPUT-3: what one entry of an input's history did — an answer recorded
@@ -1336,6 +1344,12 @@ pub struct InputHistoryEntry {
     pub rationale: Option<String>,
     pub source: AnswerSource,
     pub at_unix: i64,
+    /// CHAT-20: who made it — as [`Answer::by`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    /// CHAT-20: the name `by` went by then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// INPUT-3: one **input** — a component in a ticket's body that asks for an

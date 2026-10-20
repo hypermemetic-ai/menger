@@ -224,6 +224,33 @@ text_type!(
     input_id
 );
 
+fn message_input(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    let ok = t.split_once('/').is_some_and(|(m, i)| m.parse::<u64>().is_ok_and(|n| n > 0) && input_id(i).is_ok_and(|i| !i.contains('/')));
+    match ok {
+        true => {
+            let (m, i) = t.split_once('/').unwrap_or_default();
+            Ok(format!("{}/{}", m.parse::<u64>().unwrap_or_default(), i.trim()))
+        }
+        false => Err(not_a(t, "a message's input", "the message's id and the input's id, `<message>/<input>`, e.g. 812/undated")),
+    }
+}
+
+text_type!(
+    /// CHAT-20: a message's input, named whole — the message's id and its
+    /// input's id, `<message>/<input>` (`812/undated`).
+    MessageInput,
+    message_input
+);
+
+impl MessageInput {
+    /// The message's id and the input's.
+    pub fn parts(&self) -> (u64, &str) {
+        let (m, i) = self.0.split_once('/').unwrap_or_default();
+        (m.parse().unwrap_or_default(), i)
+    }
+}
+
 /// APP-86: the inputs a queue entry names — `--input a --input b` (or
 /// `a,b`), in the order asked. A list on the wire (its schema `InputId`'s
 /// array, so synapse repeats the flag), and — for every caller before
