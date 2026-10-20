@@ -88,8 +88,8 @@ acted on, what waits out its grace, and how many tickets are queued.
 copies a `key:<hex>` around by hand. It runs before the server does:
 
 ```sh
-tether pair --remote https://app.menger.sh --name alice-laptop   # opens the browser
-tether pair --remote https://app.menger.sh --no-browser          # prints the URL, to open on any device
+tether pair --remote https://app.menger.sh --name alice-laptop   # prints the URL, code, key and QR
+tether pair --remote https://app.menger.sh --open                # and opens the URL in this browser too
 ```
 
 It makes the key when there is none (`~/.plexus/keys/<name>.key`, 0600, as
@@ -100,7 +100,9 @@ first 8 base32 characters of the SHA-256 of the public key, `MMG4-2KLG`
 (`menger_tickets_api::pairing`) — and
 `<app>/#/pair?principal=key:<hex>&name=<name>`: the public key and the
 name, nothing secret. It opens that URL with `xdg-open` (a display only),
-`open` or the Windows URL handler, unless `--no-browser`. On the app's
+`open` or the Windows URL handler only with `--open` (DIST-14: print by
+default, open when asked — the house rule; `--no-browser` is accepted and
+changes nothing). On the app's
 `#/pair` the person checks the code matches the terminal's and presses
 **Pair** (editor, by default, on a scope they administer — `members.grant`)
 or **Not mine**; one who administers nothing is told who can. tether asks

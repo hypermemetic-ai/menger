@@ -9,8 +9,8 @@
 //!    holds nothing joins the remote's waiting list (`members.requests`)
 //!    under its name (`principal_names`, CHAT-14);
 //! 3. the pairing code ([`menger_tickets_api::pairing`]) and the URL of the
-//!    app's `#/pair` — the public key and the name, nothing secret — opened
-//!    in the browser unless `--no-browser` or there is no display;
+//!    app's `#/pair` — the public key and the name, nothing secret — printed,
+//!    and opened in the browser only with `--open` (DIST-14) and a display;
 //! 4. `members.mine` again every few seconds until a grant of its own
 //!    arrives (at most `--wait-secs`), then `paired: <name> → <role> on
 //!    <scope>`, and `TETHER_REMOTE` / `TETHER_REMOTE_AS` written into
@@ -171,6 +171,12 @@ pub fn opener(os: &str, env: impl Fn(&str) -> Option<String>) -> Option<(String,
     }
 }
 
+/// DIST-14: what opens the pairing page — nothing unless `--open` asked,
+/// then [`opener`]'s choice.
+pub fn opener_for(asked: bool, os: &str, env: impl Fn(&str) -> Option<String>) -> Option<(String, Vec<String>)> {
+    asked.then(|| opener(os, env)).flatten()
+}
+
 /// Open `url` with `opener`; whether it started. The child is reaped on a
 /// thread of its own, its output dropped.
 fn open(opener: &(String, Vec<String>), url: &str) -> bool {
@@ -290,8 +296,8 @@ pub struct Config {
     pub name: String,
     /// Its key's file (`~/.plexus/keys/<name>.key`).
     pub key_file: PathBuf,
-    /// Never open a browser.
-    pub no_browser: bool,
+    /// DIST-14: open the browser too (`--open`); the URL is printed either way.
+    pub open: bool,
     /// How long to wait for the grant.
     pub wait: Duration,
     /// How often to ask whether it came.
@@ -358,10 +364,15 @@ pub async fn run(cfg: &Config, out: &mut (dyn std::io::Write + Send)) -> anyhow:
         writeln!(out, "  key   {principal}")?;
         writeln!(out, "  open  {url}")?;
         writeln!(out, "Any one of them works: scan, or go to {} and type the code (or paste the key).", typing_place(&cfg.endpoints.app))?;
-        let how = (!cfg.no_browser).then(|| opener(std::env::consts::OS, |v| std::env::var(v).ok())).flatten();
+        let how = opener_for(cfg.open, std::env::consts::OS, |v| std::env::var(v).ok());
         match how {
             Some(o) if open(&o, &url) => writeln!(out, "Opened in your browser: check the code there is {code}, then Pair.")?,
-            _ => writeln!(out, "Open it on any device signed in to menger, check the code there is {code}, then Pair.")?,
+            _ => {
+                if cfg.open {
+                    writeln!(out, "(No browser to open here.)")?;
+                }
+                writeln!(out, "Open it on any device signed in to menger, check the code there is {code}, then Pair.")?
+            }
         }
         writeln!(out, "Waiting for the grant (up to {} min)…", cfg.wait.as_secs().div_ceil(60))?;
         out.flush()?;
@@ -399,6 +410,16 @@ mod tests {
 
     fn env<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |k| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+    }
+
+    /// DIST-14: printed by default; opened only with `--open`.
+    #[test]
+    fn the_browser_opens_only_when_asked() {
+        let display = env(&[("DISPLAY", ":0")]);
+        assert!(opener_for(false, "linux", &display).is_none(), "the default prints and opens nothing");
+        assert!(opener_for(false, "macos", env(&[])).is_none());
+        assert_eq!(opener_for(true, "linux", &display).unwrap().0, "xdg-open");
+        assert!(opener_for(true, "linux", env(&[])).is_none(), "asked, but no display: printed only");
     }
 
     #[test]

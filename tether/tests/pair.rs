@@ -53,7 +53,7 @@ async fn pair_waits_for_the_grant_an_admin_gives_and_writes_tether_env() {
     cmd.env("PLEXUS_NO_REGISTRY", "1")
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
-        .args(["pair", "--remote", &remote, "--app", "http://127.0.0.1:9", "--name", "test-box", "--no-browser"])
+        .args(["pair", "--remote", &remote, "--app", "http://127.0.0.1:9", "--name", "test-box"])
         .args(["--poll-secs", "1", "--wait-secs", "90", "--key"])
         .arg(&key)
         .arg("--env-file")
@@ -88,7 +88,7 @@ async fn pair_waits_for_the_grant_an_admin_gives_and_writes_tether_env() {
     assert!(any.contains("scan, or go to 127.0.0.1:9/#/pair and type the code"), "{any}");
     assert!(!said.iter().any(|l| l.contains('\x1b')), "no colours into a pipe");
     let how = next_until(&mut lines, &log, "what to do", &|l| l.contains("then Pair"), &mut said).await;
-    assert!(how.starts_with("Open it on any device"), "--no-browser opens nothing: {how}");
+    assert!(how.starts_with("Open it on any device"), "DIST-14: the default prints and opens nothing: {how}");
     next_until(&mut lines, &log, "waiting", &|l| l.starts_with("Waiting for the grant"), &mut said).await;
 
     // 2. The remote learned of it: waiting, under its name.

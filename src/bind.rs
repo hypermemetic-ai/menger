@@ -42,19 +42,20 @@ pub fn check_public_url(bind: IpAddr, public_url: Option<&str>, login: bool) -> 
     }
     let Some(u) = parsed.as_ref() else {
         return Err(format!(
-            "--bind {bind} with login on needs --public-url https://<host> (MENGER_PUBLIC_URL): the URL people reach, \
-             behind a proxy that terminates TLS — sign-ins and cookies never travel in clear (ACCESS-30)"
+            "--bind {bind} needs the address people reach menger at, over https, so sign-ins never travel in clear.\n\
+             Add --public-url https://<host> (behind a proxy that terminates TLS), or leave out --bind to run on this machine only."
         ));
     };
     match u.scheme() {
         "https" => Ok(None),
         "http" if host.as_ref().is_some_and(is_lan_host) => Ok(Some(format!(
             "--public-url {u} is plain http on the LAN: sign-ins and the session cookie travel in clear there, \
-             and cookies are not Secure. Put TLS in front and make it https://… (ACCESS-30)"
+             and cookies are not Secure. Put TLS in front and make it https://…"
         ))),
         s => Err(format!(
-            "--public-url {u} is {s}:// for a server reached beyond this machine: it must be https://, \
-             behind a proxy that terminates TLS (README \"Behind https\"; ACCESS-30)"
+            "--public-url {u} is {s}:// for a server reached beyond this machine.\n\
+             Make it --public-url https://{}, behind a proxy that terminates TLS (README \"Behind https\").",
+            u.host_str().unwrap_or("<host>")
         )),
     }
 }
@@ -129,7 +130,7 @@ mod tests {
         }
         // Beyond loopback with no public URL: refused.
         let e = check_public_url(ip("0.0.0.0"), None, true).unwrap_err();
-        assert!(e.contains("needs --public-url https://"), "{e}");
+        assert!(e.contains("--public-url https://"), "{e}");
         // Plain http on the LAN: served, said.
         for u in ["http://192.168.8.117:4456", "http://10.0.0.5", "http://dream.local:4456", "http://dream:4456", "http://[fd00::1]:4456", "http://box.home.arpa"] {
             let w = check_public_url(lo, Some(u), true).unwrap().unwrap_or_else(|| panic!("{u}: a warning"));
@@ -139,10 +140,10 @@ mod tests {
         // Plain http anywhere else: refused.
         for u in ["http://app.menger.sh", "http://45.56.124.48", "ftp://app.menger.sh"] {
             let e = check_public_url(lo, Some(u), true).unwrap_err();
-            assert!(e.contains("must be https://"), "{u}: {e}");
+            assert!(e.contains("Make it --public-url https://"), "{u}: {e}");
         }
         let e = check_public_url(ip("0.0.0.0"), Some("http://127.0.0.1:4456"), true).unwrap_err();
-        assert!(e.contains("must be https://"), "a loopback URL does not excuse a public bind: {e}");
+        assert!(e.contains("Make it --public-url https://"), "a loopback URL does not excuse a public bind: {e}");
         assert!(check_public_url(lo, Some("not a url"), true).unwrap_err().contains("is not a URL"));
     }
 

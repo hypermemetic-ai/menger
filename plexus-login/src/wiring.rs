@@ -119,6 +119,9 @@ pub struct LoginOptions {
     /// ([`crate::backends::workos_direct`]); without it they stay the PKCE
     /// path.
     pub workos_key: Option<crate::backends::workos::ApiKey>,
+    /// DIST-14: one-time sign-in links ([`crate::once`]) — the app's, on a
+    /// shell it serves on loopback alone; none elsewhere.
+    pub once: Option<Arc<dyn crate::once::OnceLinks>>,
 }
 
 impl std::fmt::Debug for LoginOptions {
@@ -163,6 +166,7 @@ impl LoginOptions {
             allow_development_backends: false,
             shell_loopback: true,
             workos_key: None,
+            once: None,
         }
     }
 
@@ -304,7 +308,7 @@ impl Wiring {
                     limits: opts.limits,
                 },
                 sessions.clone(),
-            )?))
+            )?.with_once(opts.once.clone())))
         } else {
             None
         };

@@ -1,36 +1,81 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use menger::store::{SeedShape, SeedSpec, Store, Verdict};
 use menger::login::{LoginButton, Provider};
 use menger::wiring::{LoginOptions, Wiring};
 use menger_tickets_api::access::Access;
-use menger::{build_rpc_login, default_db_path, local, shell, MengerAccess};
+use menger::first_run::{self, Mode};
+use menger::{build_rpc_login, local, shell, MengerAccess};
 use plexus_transport::{ConnectionQuotas, TransportServer};
 use std::path::PathBuf;
+use std::sync::Arc;
+
+// DIST-14: `menger --help` is short — what menger is and the flags a person
+// uses; `--help-all` is everything, grouped by topic. User-facing text names
+// no tickets: the ids live in these `//` comments.
+const RUN: &str = "Run";
+const SIGN_IN: &str = "Sign-in";
+const LIMITS: &str = "Limits";
+const MAINTENANCE: &str = "Maintenance and testing";
 
 #[derive(Parser, Debug)]
-#[command(name = "menger")]
-#[command(about = "A plan is a program whose leaves are prose — ticketing on Plexus RPC")]
+#[command(name = "menger", version)]
+#[command(about = "menger — a plan is a program whose leaves are prose. Tickets, chats and docs, served to your browser.")]
+#[command(long_about = None)]
+#[command(disable_help_flag = true)]
+#[command(after_help = "Start it with `menger`: it prints a one-time sign-in link (`menger --open` opens it for you).\n`menger login` prints another. `menger --help-all` for every option.")]
+#[command(after_long_help = "Start it with `menger`: it prints a one-time sign-in link (`menger --open` opens it for you).\n`menger login` prints another.")]
 struct Args {
-    /// WebSocket port (4440-4459 is the synapse scan range)
-    #[arg(short, long, default_value = "4455")]
-    port: u16,
+    #[command(subcommand)]
+    command: Option<Command>,
 
-    /// Web shell port
-    #[arg(long, default_value = "4456")]
-    shell_port: u16,
+    /// Print help (`--help-all` for every option)
+    #[arg(short = 'h', long = "help", action = clap::ArgAction::HelpShort, global = true)]
+    help: Option<bool>,
 
-    /// RUN-8: the address the WebSocket and the shell listen on — `0.0.0.0` / `::` for every address this machine has, or
-    /// one of them (IPv6 with or without brackets). Default loopback. The
-    /// names they answer to are still ACCESS-25's: a specific address adds
-    /// its own literal (and the shell's origin at it may open the socket);
-    /// any other name is an --allowed-host (and an --allowed-origin).
-    #[arg(long, env = "MENGER_BIND", default_value = "127.0.0.1", value_name = "ADDR", value_parser = menger::bind::parse_bind)]
+    /// Print every option, grouped by topic
+    #[arg(long = "help-all", action = clap::ArgAction::HelpLong, global = true)]
+    help_all: Option<bool>,
+
+    // DIST-14: print the URL always; open it only when asked.
+    /// Open menger in your browser once it is running
+    #[arg(long, help_heading = RUN)]
+    open: bool,
+
+    // DIST-14: a port not given that is taken falls back to the next free
+    // one, said; one given is bound or startup fails (prod names both).
+    /// The WebSocket's port (default 4455, or the next free one)
+    #[arg(short, long, value_name = "PORT", help_heading = RUN)]
+    port: Option<u16>,
+
+    /// The web app's port (default 4456, or the next free one)
+    #[arg(long, value_name = "PORT", help_heading = RUN, hide_short_help = true)]
+    shell_port: Option<u16>,
+
+    // DIST-14: the data directory — the database (unless --db-path), the
+    // local admin key and the one-time links.
+    /// Where menger keeps its data (default ~/.local/share/menger)
+    #[arg(long, env = "MENGER_DATA_DIR", value_name = "DIR", help_heading = RUN, global = true)]
+    data_dir: Option<PathBuf>,
+
+    /// The database file (default <data-dir>/local.db; a new file starts empty)
+    #[arg(long, env = "MENGER_DB_PATH", value_name = "PATH", help_heading = RUN)]
+    db_path: Option<PathBuf>,
+
+    // RUN-8: names stay ACCESS-25's: a specific address adds its own literal
+    // (and the shell's origin at it may open the socket); any other name is
+    // an --allowed-host (and an --allowed-origin).
+    /// The address to listen on (default: this machine only)
+    ///
+    /// `0.0.0.0` / `::` for every address this machine has, or one of them
+    /// (IPv6 with or without brackets). Beyond it, people need a way to sign in
+    /// (--auth-provider) and an https --public-url.
+    #[arg(long, env = "MENGER_BIND", default_value = "127.0.0.1", value_name = "ADDR", value_parser = menger::bind::parse_bind, help_heading = RUN, hide_short_help = true)]
     bind: std::net::IpAddr,
 
-    /// ACCESS-24: the REST bridge cannot carry an identity, and menger has
-    /// no open mode, so it is not served at all; `--no-rest` (and
-    /// `MENGER_NO_REST`) is accepted and changes nothing, so a launcher or
-    /// an env file that says it still starts.
+    // ACCESS-24: the REST bridge cannot carry an identity, and menger has no
+    // open mode, so it is not served at all; `--no-rest` (and
+    // `MENGER_NO_REST`) is accepted and changes nothing, so a launcher or an
+    // env file that says it still starts.
     #[arg(
         long,
         env = "MENGER_NO_REST",
@@ -40,313 +85,313 @@ struct Args {
     )]
     no_rest: bool,
 
-    /// Directory holding the built Leptos app (frontend/dist), served at
-    /// /app/ on the shell port. Missing output degrades to a "frontend
-    /// not built" page, never an error. DIST-3: without it, a binary built
-    /// with `embedded-app` serves the build compiled into it, any other the
-    /// checkout's frontend/dist.
-    #[arg(long, env = "MENGER_APP_DIST", value_name = "DIR")]
+    // DIST-3: without it, a binary built with `embedded-app` serves the build
+    // compiled into it, any other the checkout's frontend/dist.
+    /// Directory holding the web app's build (frontend/dist). A missing build
+    /// shows a "frontend not built" page.
+    #[arg(long, env = "MENGER_APP_DIST", value_name = "DIR", help_heading = RUN, hide_short_help = true)]
     app_dist: Option<PathBuf>,
 
-    /// MFE-23: the environment's name (`prod`, `test`, …); the deploy env
-    /// files set `MENGER_ENV`. `test` titles the browser tab `menger.test`,
-    /// anything else (or none) `menger`.
-    #[arg(long, env = "MENGER_ENV", value_name = "NAME")]
+    // MFE-23: the deploy env files set `MENGER_ENV`.
+    /// The environment's name (`prod`, `test`, …). `test` titles the browser
+    /// tab `menger.test`.
+    #[arg(long, env = "MENGER_ENV", value_name = "NAME", help_heading = RUN, hide_short_help = true)]
     env: Option<String>,
 
-    /// ACCESS-24: stdio carries no credential, and menger has no open mode
-    /// — `--stdio` is refused with the reason.
+    // ACCESS-24: stdio carries no credential — refused with the reason.
     #[arg(long, hide = true)]
     stdio: bool,
 
-    /// Disable the web shell
-    #[arg(long)]
+    /// Serve no web app, only the WebSocket
+    #[arg(long, help_heading = RUN, hide_short_help = true)]
     no_shell: bool,
 
-    /// Database file (the system of record). Defaults to a per-user data
-    /// directory; a fresh location starts empty.
-    #[arg(long, env = "MENGER_DB_PATH", value_name = "PATH")]
-    db_path: Option<PathBuf>,
+    // CHAT-13.
+    /// A member of every chat (repeatable; a principal, e.g. a chat bridge's
+    /// key): added to every chat opened, and to every open chat at startup.
+    /// In the env var, separated by `;`.
+    #[arg(long = "chat-member", env = "MENGER_CHAT_MEMBERS", value_name = "PRINCIPAL", value_delimiter = ';', help_heading = RUN, hide_short_help = true)]
+    chat_member: Vec<String>,
 
-    /// PERF-2: seed N synthetic tickets into the database before serving
-    /// (bulk — a few transactions, no per-row fsync; deterministic per
-    /// --seed-value). Refuses a database that already holds tickets
-    /// unless --seed-into-existing.
-    #[arg(long, env = "MENGER_SEED_SYNTHETIC", value_name = "N")]
+    // IDENTITY-14 / IDENTITY-42 / IDENTITY-30. ACCESS-24: menger has no open
+    // mode; DIST-14: with none on loopback, the local admin signs in by a
+    // one-time link. Login is always required (`--require-login` went).
+    /// How people sign in, e.g. `workos=<client-id>` or `key` (repeatable)
+    ///
+    /// The specs: `workos=<client-id>`,
+    /// `idp=<issuer>,<audience>`, `auth0=<domain>,<audience>[,<roles-claim>]`,
+    /// `oidc:<name>=<issuer>,<audience>[,<roles-claim>]`,
+    /// `nostr=<ws-url>[,…]`, or `key` (agents' Ed25519 keys, e.g. synapse's).
+    /// With none, on this machine only, menger makes a local admin and prints
+    /// a one-time sign-in link. In the env var, separated by `;`.
+    #[arg(long = "auth-provider", env = "MENGER_AUTH_PROVIDERS", value_name = "SPEC", value_delimiter = ';', help_heading = SIGN_IN)]
+    auth_provider: Vec<Provider>,
+
+    // IDENTITY-21.
+    /// A principal who is admin everywhere (repeatable; `key:<hex>`,
+    /// `idp:<uuid>`, `oidc:<provider>/<sub>`, `nostr:<hex>`) — how the first
+    /// admin exists. In the env var, separated by `;`.
+    #[arg(long = "admin", env = "MENGER_ADMINS", value_name = "PRINCIPAL", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    admin: Vec<String>,
+
+    // IDENTITY-19. ACCESS-30: beyond loopback it is required and https.
+    /// Where people reach menger, e.g. `https://tickets.example.com`
+    ///
+    /// Default http://127.0.0.1:<shell-port>. Reached beyond this machine it must be
+    /// https, behind a proxy that terminates TLS; the provider's redirect URI
+    /// is `<this>/login/callback`.
+    #[arg(long, env = "MENGER_PUBLIC_URL", value_name = "URL", help_heading = SIGN_IN)]
+    public_url: Option<String>,
+
+    // IDENTITY-19.
+    /// A button on the sign-in page (repeatable), `<Label>=<provider>[:<connection>]`,
+    /// e.g. `Google=workos:GoogleOAuth`, `Apple=auth0:apple`. In the env var,
+    /// separated by `;`.
+    #[arg(long = "login-button", env = "MENGER_LOGIN_BUTTONS", value_name = "SPEC", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    login_button: Vec<LoginButton>,
+
+    // IDENTITY-30.
+    /// An email field on the sign-in page, `<provider>[:<connection>]`, e.g.
+    /// `workos:authkit`: the address goes to that provider. The password form
+    /// then shows only at `/login?password`.
+    #[arg(long, env = "MENGER_LOGIN_EMAIL", value_name = "SPEC", value_parser = parse_email, help_heading = SIGN_IN, hide_short_help = true)]
+    login_email: Option<LoginButton>,
+
+    // IDENTITY-19 / IDENTITY-30.
+    /// The provider the sign-in page's password form goes to (default: the
+    /// first OIDC provider that takes passwords; `none`: no form).
+    #[arg(long, env = "MENGER_LOGIN_PASSWORD", value_name = "PROVIDER", help_heading = SIGN_IN, hide_short_help = true)]
+    login_password: Option<String>,
+
+    // IDENTITY-19.
+    /// A "Forgot password?" link on the sign-in page.
+    #[arg(long, env = "MENGER_LOGIN_FORGOT", value_name = "URL", help_heading = SIGN_IN, hide_short_help = true)]
+    login_forgot: Option<String>,
+
+    // AUTH-22. `memory` and `plexus-idp` only with `--env test`.
+    /// Menger's own sign-in page over an identity backend:
+    /// `workos:<client_…>[,social=google+github+apple][,sso=off][,key=@<file>]`
+    /// (the API key from MENGER_WORKOS_API_KEY or the file, never the flag),
+    /// `plexus-idp:<issuer>,<audience>` or `memory` (both for testing only).
+    #[arg(long, env = "MENGER_IDENTITY", value_name = "SPEC", help_heading = SIGN_IN, hide_short_help = true)]
+    identity: Option<plexus_login::backends::IdentitySpec>,
+
+    // IDENTITY-45.
+    /// A file holding the WorkOS API key (one line, 0600), or the key in
+    /// MENGER_WORKOS_API_KEY (never a flag's value): a `workos=` provider's
+    /// social buttons then complete on menger's own page.
+    #[arg(long, env = "MENGER_WORKOS_API_KEY_FILE", value_name = "FILE", help_heading = SIGN_IN, hide_short_help = true)]
+    workos_api_key_file: Option<std::path::PathBuf>,
+
+    // IDENTITY-29.
+    /// Another origin whose pages may open the WebSocket (repeatable); the
+    /// app's own always may.
+    #[arg(long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    allowed_origin: Vec<String>,
+
+    // ACCESS-25: DNS rebinding.
+    /// Another `Host` menger answers to (repeatable; `host:port`, or `host`).
+    /// `127.0.0.1`, `localhost` and --public-url's host always are; any other
+    /// is refused. In the env var, separated by `;`.
+    #[arg(long = "allowed-host", env = "MENGER_ALLOWED_HOSTS", value_name = "HOST", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    allowed_host: Vec<String>,
+
+    // AUTH-22 / TRANSPORT-7. AUTH-24 #2: with --identity and a --public-url
+    // off loopback, one of the two is required.
+    /// The proxy in front (CIDR or address, repeatable) whose X-Forwarded-For
+    /// is believed for the client's IP, or `none`. In the env var, separated
+    /// by `;`.
+    #[arg(long = "trusted-proxy", env = "MENGER_TRUSTED_PROXIES", value_name = "CIDR|none", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    trusted_proxy: Vec<String>,
+
+    // AUTH-22.
+    /// Another origin a sign-in may send the browser back to (repeatable).
+    #[arg(long = "return-origin", env = "MENGER_RETURN_ORIGINS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    return_origin: Vec<String>,
+
+    // IDENTITY-19.
+    /// How long a sign-in lasts.
+    #[arg(long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS", help_heading = SIGN_IN, hide_short_help = true)]
+    session_hours: i64,
+
+    // ACCESS-29.
+    /// A browser's sign-in ends after this long unused (0: only when it
+    /// expires).
+    #[arg(long, env = "MENGER_SESSION_IDLE_MINUTES", default_value_t = menger::sessions::IDLE_SECS_DEFAULT / 60, value_name = "MINUTES", help_heading = SIGN_IN, hide_short_help = true)]
+    session_idle_minutes: i64,
+
+    // IDENTITY-35 / IDENTITY-38: the dev sign-in, only with `--env test`.
+    /// Testing only (with `--env test`): the sign-in page can send anyone's
+    /// sign-in to this provider (plexus-idp's name), as any user.
+    #[arg(long, env = "MENGER_DEV_LOGIN", value_name = "PROVIDER", requires_all = ["dev_password", "dev_idp_ws"], help_heading = MAINTENANCE, hide_short_help = true)]
+    dev_login: Option<String>,
+
+    /// Testing only: the password every dev user has at plexus-idp.
+    #[arg(long, env = "MENGER_DEV_PASSWORD", value_name = "PASSWORD", hide_env_values = true, help_heading = MAINTENANCE, hide_short_help = true)]
+    dev_password: Option<String>,
+
+    /// Testing only: plexus-idp's socket, e.g. `ws://127.0.0.1:4480`.
+    #[arg(long, env = "MENGER_DEV_IDP_WS", value_name = "URL", help_heading = MAINTENANCE, hide_short_help = true)]
+    dev_idp_ws: Option<String>,
+
+    /// Testing only: a seeded dev user (repeatable), `name=role@SCOPE[,…]`,
+    /// e.g. `viewer=viewer@*`. In the env var, separated by `;`.
+    #[arg(long = "dev-user", env = "MENGER_DEV_USERS", value_name = "SPEC", value_delimiter = ';', help_heading = MAINTENANCE, hide_short_help = true)]
+    dev_user: Vec<menger::dev_login::DevUser>,
+
+    // SCALE-28 (+ SCALE-32, FILTER-4, FILTER-13): read-only — changes nothing,
+    // migrates nothing, serves nothing.
+    /// Check the database's derived state against a scan of its tickets and
+    /// exit: 0 consistent, 1 a difference, 2 unreadable. Changes nothing.
+    #[arg(long, help_heading = MAINTENANCE, hide_short_help = true)]
+    verify_derived: bool,
+
+    // PERF-2.
+    /// Seed N synthetic tickets before serving (into an empty database unless
+    /// --seed-into-existing).
+    #[arg(long, env = "MENGER_SEED_SYNTHETIC", value_name = "N", help_heading = MAINTENANCE, hide_short_help = true)]
     seed_synthetic: Option<usize>,
 
-    /// CHAT-8: seed synthetic chats before serving, for its perf probe —
-    /// a comma list, each a count of messages (`10000`) or one message's
-    /// lines (`L5000`): a scope CHATS-1 and a ticket per chat, each chat
-    /// between the first --admin (its reader, who has read it all) and
-    /// `agent:builder`. Into a fresh database (it files tickets).
-    #[arg(long, env = "MENGER_SEED_SYNTHETIC_CHAT", value_name = "SPEC", value_delimiter = ',')]
+    // CHAT-8: the perf probe's chats, read by the first --admin.
+    /// Seed synthetic chats before serving: a comma list, each a count of
+    /// messages (`10000`) or one message's lines (`L5000`). Needs an --admin.
+    #[arg(long, env = "MENGER_SEED_SYNTHETIC_CHAT", value_name = "SPEC", value_delimiter = ',', help_heading = MAINTENANCE, hide_short_help = true)]
     seed_synthetic_chat: Vec<menger_tickets_api::store::ChatSeed>,
 
-    /// RNG seed for --seed-synthetic: the same value reproduces the same
-    /// tickets.
-    #[arg(long, env = "MENGER_SEED_VALUE", default_value = "1", value_name = "U64")]
+    /// The seed of --seed-synthetic: the same value, the same tickets.
+    #[arg(long, env = "MENGER_SEED_VALUE", default_value = "1", value_name = "U64", help_heading = MAINTENANCE, hide_short_help = true)]
     seed_value: u64,
 
-    /// FILTER-13: where --seed-synthetic hangs its tickets: `flat` (every
-    /// ticket under its shortcode's root, PERF-2's) or `nested` (FILTER-3
-    /// §6.5's tree: executions under the root, builds under executions,
-    /// docs under builds).
-    #[arg(long, env = "MENGER_SEED_SHAPE", default_value = "flat", value_name = "SHAPE")]
+    // FILTER-13: flat is PERF-2's; nested FILTER-3 §6.5's tree.
+    /// Where --seed-synthetic hangs its tickets: `flat` or `nested`.
+    #[arg(long, env = "MENGER_SEED_SHAPE", default_value = "flat", value_name = "SHAPE", help_heading = MAINTENANCE, hide_short_help = true)]
     seed_shape: SeedShape,
 
-    /// Let --seed-synthetic add to a database that already holds tickets
-    /// (ids continue after the existing ones). As an env var, 1/true/yes
-    /// enable it.
+    /// Let --seed-synthetic add to a database that already holds tickets.
     #[arg(
         long,
         env = "MENGER_SEED_INTO_EXISTING",
         action = clap::ArgAction::SetTrue,
-        value_parser = clap::builder::FalseyValueParser::new()
+        value_parser = clap::builder::FalseyValueParser::new(),
+        help_heading = MAINTENANCE,
+        hide_short_help = true
     )]
     seed_into_existing: bool,
 
-    /// SCALE-28: check the database (--db-path, or the default) instead of
-    /// serving it: rebuild its derived state — shortcode runs, dangling
-    /// forward references, roll-ups, children and child_count, and
-    /// (SCALE-32) each ticket's unsatisfied blockers, the ready set and
-    /// every shortcode's status counts, and (FILTER-4) the cell table with
-    /// every shortcode's bitmap and count of each cell, and (FILTER-13) the
-    /// kept tree's tallies and holders — by a scan
-    /// of its tickets, compare with what it stores, print each difference
-    /// or "consistent", and exit 0 when consistent, 1 on any difference
-    /// (or none stored), 2 when it cannot be read. Read-only: changes
-    /// nothing, migrates nothing, serves nothing.
-    #[arg(long)]
-    verify_derived: bool,
-
-    /// MENGER-15: the longest ticket body `create` and `amend` store, in
-    /// bytes (default 8 MiB: a whole page with its media inlined). A larger
-    /// body is refused with the typed `body_too_large { bytes, max }`.
-    /// Bodies are not cached (SCALE-14), so this bounds one read or write,
-    /// not the process. Above ~9 MB the WebSocket's own 10 MB request limit
-    /// refuses first (JSON escaping grows a body), and the REST bridge's
-    /// request limit (2 MB, axum's default) is lower still.
-    #[arg(long, env = "MENGER_MAX_BODY_BYTES", value_name = "BYTES", default_value_t = menger_tickets_api::store::BODY_MAX_DEFAULT)]
+    // MENGER-15: bodies are not cached (SCALE-14); above ~9 MB the
+    // WebSocket's own 10 MB request limit refuses first.
+    /// The longest ticket body stored, in bytes (default 8 MiB).
+    #[arg(long, env = "MENGER_MAX_BODY_BYTES", value_name = "BYTES", default_value_t = menger_tickets_api::store::BODY_MAX_DEFAULT, help_heading = LIMITS, hide_short_help = true)]
     max_body_bytes: usize,
 
-    /// IDENTITY-14: admit callers through this identity provider
-    /// (repeatable): `idp=<issuer>,<audience>`,
-    /// `auth0=<domain>,<audience>[,<roles-claim>]`,
-    /// `oidc:<name>=<issuer>,<audience>[,<roles-claim>]`,
-    /// `workos=<client-id>[,<api-base>]` (IDENTITY-30),
-    /// `nostr=<ws-url>[,<ws-url>…]`, or (IDENTITY-42) `key` /
-    /// `key=<ws-url>[,<ws-url>…]` — agents' Ed25519 key proofs naming this
-    /// socket (ws://127.0.0.1:<port>, ws://localhost:<port>, the ws form of
-    /// --public-url) or a URL given; not offered on the login page. A caller's credential rides the
-    /// `access_token` or `nostr` cookie, or `Authorization: Bearer`, and its
-    /// provider's adapter makes it a Plexus identity at the WebSocket
-    /// upgrade. In the env var, specs are separated by `;`. ACCESS-24: at
-    /// least one (or --identity) — menger has no open mode and refuses to
-    /// start without a login provider (a development server runs `key`).
-    /// Login is always required: the app's routes go to the login page, an
-    /// upgrade that proves no one is admitted into the anonymous view
-    /// (auth.providers, auth.login, auth.signup, and nothing else), and the
-    /// gate decides every call (`--require-login` went: it is the only mode).
-    #[arg(long = "auth-provider", env = "MENGER_AUTH_PROVIDERS", value_name = "SPEC", value_delimiter = ';')]
-    auth_provider: Vec<Provider>,
-
-
-    /// IDENTITY-19: a button on the login page (repeatable),
-    /// `<Label>=<provider>[:<connection>]`, e.g. `Google=auth0:google-oauth2`,
-    /// `Apple=auth0:apple`, `SSO=auth0:samlp` (asks for a work email); for
-    /// WorkOS `Google=workos:GoogleOAuth`, `Apple=workos:AppleOAuth`,
-    /// `Email=workos:authkit`, `SSO=workos:authkit`. The provider needs
-    /// `client=<id>` in its `--auth-provider` (WorkOS's is its spec). In the
-    /// env var, separated by `;`.
-    #[arg(long = "login-button", env = "MENGER_LOGIN_BUTTONS", value_name = "SPEC", value_delimiter = ';')]
-    login_button: Vec<LoginButton>,
-
-    /// IDENTITY-30: an email field on the login page, `<provider>[:<connection>]`,
-    /// e.g. `workos:authkit`: the address goes to that IdP as `login_hint`,
-    /// so an SSO domain goes straight to its company's IdP and anyone else
-    /// finishes on the IdP's page with the address filled in. Beside it, the
-    /// password form shows only at `/login?password` (automation's way in).
-    #[arg(long, env = "MENGER_LOGIN_EMAIL", value_name = "SPEC", value_parser = parse_email)]
-    login_email: Option<LoginButton>,
-
-    /// IDENTITY-19: the provider the login page's password form goes to;
-    /// default the first OIDC `--auth-provider` that takes passwords (not
-    /// WorkOS). `none`: no password form (IDENTITY-30).
-    #[arg(long, env = "MENGER_LOGIN_PASSWORD", value_name = "PROVIDER")]
-    login_password: Option<String>,
-
-    /// IDENTITY-19: a "Forgot password?" link on the login page.
-    #[arg(long, env = "MENGER_LOGIN_FORGOT", value_name = "URL")]
-    login_forgot: Option<String>,
-
-    /// IDENTITY-19: where people reach this shell (the login page's base for
-    /// the code flow's redirect URI and the nostr URL); default
-    /// http://127.0.0.1:<shell-port>. ACCESS-30: with login on and the
-    /// server reached beyond loopback (`--bind`, or this URL's host), it is
-    /// required and `https://` — a proxy terminates TLS in front, the app
-    /// opens `wss://<host>/ws`, cookies are `Secure` and `__Host-`, and the
-    /// provider's redirect URI is `<this>/login/callback`. An `http://` URL
-    /// on the LAN is served with a warning.
-    #[arg(long, env = "MENGER_PUBLIC_URL", value_name = "URL")]
-    public_url: Option<String>,
-
-    /// IDENTITY-29: another origin whose pages may open the socket
-    /// (repeatable); the shell's own are always allowed.
-    #[arg(long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';')]
-    allowed_origin: Vec<String>,
-
-    /// ACCESS-25: another `Host` every listener (WebSocket, shell, REST)
-    /// answers to (repeatable; `host:port`, or `host` for a default port).
-    /// Always answered: `127.0.0.1:<its port>`, `localhost:<its port>` and
-    /// `--public-url`'s host; anything else is refused 421 before routing
-    /// (DNS rebinding). In the env var, separated by `;`.
-    #[arg(long = "allowed-host", env = "MENGER_ALLOWED_HOSTS", value_name = "HOST", value_delimiter = ';')]
-    allowed_host: Vec<String>,
-
-    /// IDENTITY-21: a principal who is admin on every shortcode from the
-    /// operator (repeatable; `idp:<uuid>`, `oidc:<provider>/<sub>`,
-    /// `nostr:<hex>`) — how the first admin exists. In the env var,
-    /// separated by `;`.
-    #[arg(long = "admin", env = "MENGER_ADMINS", value_name = "PRINCIPAL", value_delimiter = ';')]
-    admin: Vec<String>,
-
-    /// CHAT-13: a standing chat member (repeatable; a principal, e.g. the
-    /// chat bridge's key) — a participant of every chat opened, beside the
-    /// caller and the others named (a chat of one too), and added to every
-    /// open chat at startup, once. One without read on a chat's ticket is
-    /// added anyway, with a warning. In the env var, separated by `;`.
-    #[arg(long = "chat-member", env = "MENGER_CHAT_MEMBERS", value_name = "PRINCIPAL", value_delimiter = ';')]
-    chat_member: Vec<String>,
-
-    /// IDENTITY-35: the dev sign-in, test only (only with `--env test`, IDENTITY-38):
-    /// the login page's checkbox sends this browser's sign-in to this
-    /// `--auth-provider` (plexus-idp's name, e.g. `plexus-idp`), where a
-    /// seeded user is one click and any username can be signed in as.
-    #[arg(long, env = "MENGER_DEV_LOGIN", value_name = "PROVIDER", requires_all = ["dev_password", "dev_idp_ws"])]
-    dev_login: Option<String>,
-
-    /// IDENTITY-35: the password every dev user has at plexus-idp.
-    #[arg(long, env = "MENGER_DEV_PASSWORD", value_name = "PASSWORD", hide_env_values = true)]
-    dev_password: Option<String>,
-
-    /// IDENTITY-35: plexus-idp's Plexus socket, where the dev sign-in
-    /// registers accounts, e.g. `ws://127.0.0.1:4480`.
-    #[arg(long, env = "MENGER_DEV_IDP_WS", value_name = "URL")]
-    dev_idp_ws: Option<String>,
-
-    /// IDENTITY-35: a seeded dev user (repeatable),
-    /// `name=role@SCOPE[,role@SCOPE…]`, e.g. `viewer=viewer@*`,
-    /// `mixed=editor@OUGHT,viewer@PLEXUS`, `nobody=`. In the env var,
-    /// separated by `;`.
-    #[arg(long = "dev-user", env = "MENGER_DEV_USERS", value_name = "SPEC", value_delimiter = ';')]
-    dev_user: Vec<menger::dev_login::DevUser>,
-
-    /// AUTH-22: our own sign-in page over an identity backend, chosen by
-    /// configuration: `workos:<client_…>[,social=google+github+apple][,sso=off][,key=@<file>]`
-    /// (WorkOS's User Management API, no AuthKit screen; the API key from
-    /// MENGER_WORKOS_API_KEY or the file `key=@` names, never the flag),
-    /// `plexus-idp:<issuer>,<audience>` (passwords; local only), or `memory`
-    /// (tests and development) — those two only with `--env test`. Its tokens are admitted at the socket through
-    /// its provider, as any --auth-provider's. Changing it needs a restart.
-    #[arg(long, env = "MENGER_IDENTITY", value_name = "SPEC")]
-    identity: Option<plexus_login::backends::IdentitySpec>,
-
-    /// IDENTITY-45: a file holding the WorkOS environment's API key (one
-    /// line, 0600 — on a box, a secret mounted at /run/secrets/…), or the key
-    /// itself in MENGER_WORKOS_API_KEY (never a flag's value). With it, a
-    /// `workos=` --auth-provider's social --login-buttons (`GitHub=workos:GitHubOAuth`)
-    /// complete through WorkOS's API on menger's own login page — the steps
-    /// WorkOS asks for (an email to verify, Radar's extra code, an
-    /// organization, a second factor) taken there, the pending token kept
-    /// server-side. Without it the buttons are the PKCE path, unchanged. A
-    /// file named and unreadable stops startup. Not with --identity, whose
-    /// spec carries its own key.
-    #[arg(long, env = "MENGER_WORKOS_API_KEY_FILE", value_name = "FILE")]
-    workos_api_key_file: Option<std::path::PathBuf>,
-
-    /// AUTH-22: a proxy (CIDR or address, repeatable) whose X-Forwarded-For
-    /// is believed for the client's IP — the edge in front of the shell and
-    /// the WebSocket (TRANSPORT-7: its per-IP and anonymous quotas count the
-    /// forwarded client; a header from any other peer is ignored) —
-    /// or `none`: people connect directly. AUTH-24 #2: with --identity and a
-    /// --public-url off loopback, one of the two is required. In the env
-    /// var, separated by `;`.
-    #[arg(long = "trusted-proxy", env = "MENGER_TRUSTED_PROXIES", value_name = "CIDR|none", value_delimiter = ';')]
-    trusted_proxy: Vec<String>,
-
-    /// AUTH-22: another origin a sign-in may send the browser back to
-    /// (repeatable); the shell's own always may.
-    #[arg(long = "return-origin", env = "MENGER_RETURN_ORIGINS", value_name = "ORIGIN", value_delimiter = ';')]
-    return_origin: Vec<String>,
-
-    /// IDENTITY-19: how long a sign-in lasts.
-    #[arg(long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS")]
-    session_hours: i64,
-
-    /// ACCESS-29: a browser's sign-in ends after this long unused — no
-    /// socket open on it and no page loaded with it — as well as at its
-    /// --session-hours. 0: only at its expiry. A minted token (an agent's)
-    /// keeps only its expiry.
-    #[arg(long, env = "MENGER_SESSION_IDLE_MINUTES", default_value_t = menger::sessions::IDLE_SECS_DEFAULT / 60, value_name = "MINUTES")]
-    session_idle_minutes: i64,
-
-    /// ACCESS-29: the calls one WebSocket connection may have open at once
-    /// (each call — a `watch` for as long as it runs — is a subscription);
-    /// past it a call is answered `error_kind: too_many_calls`.
-    #[arg(long, env = "MENGER_MAX_CALLS_PER_CONNECTION", default_value_t = menger::calls::CALLS_PER_CONNECTION, value_name = "N")]
+    // ACCESS-29.
+    /// Calls one connection may have open at once.
+    #[arg(long, env = "MENGER_MAX_CALLS_PER_CONNECTION", default_value_t = menger::calls::CALLS_PER_CONNECTION, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_calls_per_connection: usize,
 
-    /// ACCESS-29: a WebSocket connection with no call open for this long is
-    /// closed. 0: never.
-    #[arg(long, env = "MENGER_IDLE_TIMEOUT_SECS", default_value_t = menger::calls::IDLE_SECS, value_name = "SECS")]
+    /// Close a connection with no call open for this long (0: never).
+    #[arg(long, env = "MENGER_IDLE_TIMEOUT_SECS", default_value_t = menger::calls::IDLE_SECS, value_name = "SECS", help_heading = LIMITS, hide_short_help = true)]
     idle_timeout_secs: u64,
 
-    /// ACCESS-29 (AUTH-12's quotas): WebSocket connections open in all.
-    #[arg(long, env = "MENGER_MAX_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_connections, value_name = "N")]
+    // ACCESS-29 (AUTH-12's quotas).
+    /// Connections open in all.
+    #[arg(long, env = "MENGER_MAX_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_connections, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections: u32,
 
-    /// ACCESS-29: connections from one IP address (the peer's: behind a
-    /// proxy, the proxy's).
-    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_per_ip, value_name = "N")]
+    /// Connections from one IP address (behind a proxy, the client's when it
+    /// is a --trusted-proxy).
+    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_per_ip, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections_per_ip: u32,
 
-    /// ACCESS-29: connections one signed-in principal holds.
-    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_PRINCIPAL", default_value_t = ConnectionQuotas::default().max_per_principal, value_name = "N")]
+    /// Connections one signed-in principal holds.
+    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_PRINCIPAL", default_value_t = ConnectionQuotas::default().max_per_principal, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections_per_principal: u32,
 
-    /// ACCESS-29: connections that prove no one, in all — held below
-    /// --max-connections, so they never lock a signed-in caller out.
-    #[arg(long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_anonymous, value_name = "N")]
+    /// Connections that prove no one, in all (held below --max-connections).
+    #[arg(long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_anonymous, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_anonymous_connections: u32,
 
-    /// ACCESS-29: anonymous connections from one IP address.
-    #[arg(long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_anonymous_per_ip, value_name = "N")]
+    /// Anonymous connections from one IP address.
+    #[arg(long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_anonymous_per_ip, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_anonymous_connections_per_ip: u32,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    // DIST-14: against the server running on --data-dir (its `local.json`).
+    /// Print a new one-time sign-in link for the menger running here
+    Login,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    // DIST-14: refusals are said plainly, on stderr, and exit 1 — no
+    // `Error:` debug dump.
+    if let Err(e) = run(args).await {
+        eprintln!("menger: {e:#}");
+        std::process::exit(1);
+    }
+    Ok(())
+}
 
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,menger=debug".into());
+async fn run(args: Args) -> anyhow::Result<()> {
+    let data_dir = args.data_dir.clone().unwrap_or_else(first_run::default_data_dir);
+    // DIST-14: `menger login` — a fresh link for the server running here.
+    if let Some(Command::Login) = args.command {
+        let link = first_run::login(&data_dir).map_err(anyhow::Error::msg)?;
+        println!("{link}");
+        println!("  (one-time, 10 minutes)");
+        if args.open && !plexus_login::browser::open(&link) {
+            println!("  (no browser to open here: open the link yourself)");
+        }
+        return Ok(());
+    }
+    // ACCESS-24: no open mode. DIST-14: with no provider, on loopback, the
+    // local admin and its one-time links; beyond it, a refusal naming the
+    // flag to add.
+    let mode = first_run::mode(&args.auth_provider, args.identity.is_some(), args.stdio, args.bind, args.public_url.as_deref()).map_err(anyhow::Error::msg)?;
+
+    // DIST-14: a first run's terminal shows the banner, not the log; RUST_LOG
+    // says otherwise.
+    let quiet = mode == Mode::Local && !args.verify_derived;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| if quiet { "error".into() } else { "info,menger=debug".into() });
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
 
-    let db_path = args.db_path.unwrap_or_else(default_db_path);
+    // DIST-14: the default database is the data directory's `local.db`, never
+    // prod's tickets.db (prod, test and the image name theirs).
+    let db_path = args.db_path.clone().unwrap_or_else(|| data_dir.join(first_run::DB_FILE));
     if args.verify_derived {
         std::process::exit(verify_derived(db_path).await);
     }
-    // ACCESS-24: no open mode — no provider, no start; and nothing that
-    // cannot carry a credential (stdio) is served.
-    if let Some(refusal) = refusal(&args.auth_provider, args.identity.is_some(), args.stdio) {
-        anyhow::bail!(refusal);
-    }
+    // DIST-14: the local admin — its key made on the first start — and the
+    // `key` provider, so synapse signs in with that key too.
+    let mut providers = args.auth_provider.clone();
+    let mut admins = args.admin.clone();
+    let once = match mode {
+        Mode::Providers => None,
+        Mode::Local => {
+            let principal = first_run::local_admin(&data_dir)?;
+            providers.push("key".parse().map_err(anyhow::Error::msg)?);
+            admins.push(principal.clone());
+            Some(Arc::new(first_run::OnceLinks::new(&data_dir, principal)))
+        }
+    };
+    // DIST-14: ports not given fall back to the next free one, said.
+    let (ws_port, ws_moved) = first_run::pick_port(args.bind, args.port, 4455, &[])?;
+    let (shell_port, shell_moved) = first_run::pick_port(args.bind, args.shell_port, 4456, &[ws_port])?;
+    let moved: Vec<String> = [(ws_moved, "WebSocket", 4455, ws_port), (shell_moved, "app", 4456, shell_port)]
+        .into_iter()
+        .filter(|m| m.0)
+        .map(|(_, what, from, to)| format!("port {from} was taken: the {what} is on {to}"))
+        .collect();
+
     // CHAT-8: the probe's chats, read by the first --admin (who signs in).
     if !args.seed_synthetic_chat.is_empty() {
-        let reader = args.admin.first().cloned().ok_or_else(|| anyhow::anyhow!("--seed-synthetic-chat needs an --admin: the chats' reader"))?;
+        let reader = admins.first().cloned().ok_or_else(|| anyhow::anyhow!("--seed-synthetic-chat needs an --admin: the chats' reader"))?;
         seed_chats(&db_path, &args.seed_synthetic_chat, &reader).await?;
     }
     let seed = args.seed_synthetic.map(|count| SeedSpec {
@@ -361,14 +406,14 @@ async fn main() -> anyhow::Result<()> {
     // table (IDENTITY-38: its cookie named for this shell, so prod and test
     // on one host keep apart), the page, the gate and the auth backend.
     let wiring = Wiring::new(LoginOptions {
-        providers: args.auth_provider.clone(),
+        providers,
         buttons: args.login_button.clone(),
         email: args.login_email.clone(),
         password: args.login_password.clone(),
         forgot: args.login_forgot.clone(),
         public_url: args.public_url.clone(),
         // RUN-8: the shell's pages at a specific bound address may open the socket.
-        allowed_origins: args.allowed_origin.iter().cloned().chain(menger::bind::bind_origin(args.bind, args.shell_port)).collect(),
+        allowed_origins: args.allowed_origin.iter().cloned().chain(menger::bind::bind_origin(args.bind, shell_port)).collect(),
         // AUTH-25 N9 / RUN-8: a shell off loopback names its proxy.
         shell_loopback: args.bind.is_loopback(),
         session_ttl_secs: args.session_hours * 3600,
@@ -392,7 +437,9 @@ async fn main() -> anyhow::Result<()> {
             Some(_) => None,
             None => plexus_login::backends::workos::ApiKey::from_env_or_file(menger::login_access::BRANDING.app, args.workos_api_key_file.as_deref()).map_err(anyhow::Error::msg)?,
         },
-        ..LoginOptions::new(menger::login_access::BRANDING, args.port, args.shell_port)
+        // DIST-14: the one-time links, on loopback alone (`mode` refused the rest).
+        once: once.clone().map(|o| o as Arc<dyn plexus_login::once::OnceLinks>),
+        ..LoginOptions::new(menger::login_access::BRANDING, ws_port, shell_port)
     })?;
     // ACCESS-30: beyond loopback, a sign-in is made over https — the public
     // URL says where, and the cookies, the redirect URI and the app's socket
@@ -415,7 +462,7 @@ async fn main() -> anyhow::Result<()> {
     // IDENTITY-19: the rule every method asks. IDENTITY-42: session.login
     // mints its tokens in the login's own table.
     let table = menger::session_table(wiring.sessions());
-    let access = Access::with_login(table.clone(), args.admin.clone()).minting(table);
+    let access = Access::with_login(table.clone(), admins.clone()).minting(table);
     // IDENTITY-35: the dev sign-in is the test environment's, never prod's.
     // IDENTITY-38: allowed only where named for it, `--env test` — not
     // refused only where named prod, so an unnamed server is not open.
@@ -469,7 +516,7 @@ async fn main() -> anyhow::Result<()> {
     let mut builder = TransportServer::builder(hub.clone(), move |hub| menger::calls::rpc_module(hub, limits))
         .bind(args.bind)
         .with_trusted_proxies(plexus_transport::TrustedProxies::parse(&args.trusted_proxy).map_err(anyhow::Error::msg)?)
-        .with_websocket(args.port)
+        .with_websocket(ws_port)
         .with_connection_quotas(ConnectionQuotas {
             max_connections: args.max_connections,
             max_per_ip: args.max_connections_per_ip,
@@ -477,8 +524,8 @@ async fn main() -> anyhow::Result<()> {
             max_anonymous: args.max_anonymous_connections,
             max_anonymous_per_ip: args.max_anonymous_connections_per_ip,
         })
-        .with_allowed_hosts(hosts(args.port));
-    tracing::info!("WebSocket: ws://{}", std::net::SocketAddr::new(args.bind, args.port));
+        .with_allowed_hosts(hosts(ws_port));
+    tracing::info!("WebSocket: ws://{}", std::net::SocketAddr::new(args.bind, ws_port));
     // IDENTITY-29: only menger's own pages may open the socket from a
     // browser, login or not; synapse sends no Origin and is unaffected.
     // AUTH-6/AUTH-7: no credential → admitted into the anonymous view (only the auth door); a credential presented and
@@ -487,36 +534,66 @@ async fn main() -> anyhow::Result<()> {
     let names: Vec<&str> = wired.providers.iter().map(|p| p.name()).collect();
     tracing::info!("Login:     {} — anonymous callers see only the auth door", names.join(", "));
     // ACCESS-30: the one redirect URI a provider must list, derived.
-    tracing::info!("Sign-in:   returns to {}/login/callback", wiring_public_url(&args.public_url, args.shell_port));
+    tracing::info!("Sign-in:   returns to {}/login/callback", wiring_public_url(&args.public_url, shell_port));
     if let Some(spec) = &args.identity {
         tracing::info!("Sign-in:   our own page over {spec}");
     }
     // ACCESS-24: no REST bridge — it cannot carry an identity.
     if !args.no_shell {
         let cfg = shell::ShellConfig {
-            port: args.shell_port,
-            ws_port: args.port,
+            port: shell_port,
+            ws_port,
             // DIST-3: --app-dist given → that directory; else the build
             // embedded in this binary (`embedded-app`), if any; else the
             // checkout's frontend/dist.
-            app: args.app_dist.map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
+            app: args.app_dist.clone().map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
             env: args.env.clone(),
             login: wired.login.clone(),
-            allowed_hosts: hosts(args.shell_port),
+            allowed_hosts: hosts(shell_port),
             // ACCESS-30: reached over https — every answer says so (HSTS).
             https,
             // RUN-9: RFC 9728's document on the public origin, behind https.
             metadata: wired.metadata_route(),
         };
-        let bind = args.bind;
+        // DIST-14: bound before the banner, so the link answers when printed.
+        let at = std::net::SocketAddr::new(args.bind, shell_port);
+        let listener = tokio::net::TcpListener::bind(at).await.map_err(|e| anyhow::anyhow!("can't listen on {at} for the app: {e} — give another with --shell-port"))?;
         tokio::spawn(async move {
-            if let Err(e) = shell::serve_at(bind, cfg).await {
+            if let Err(e) = shell::serve_on(listener, cfg, std::future::pending()).await {
                 tracing::error!("shell server exited: {e}");
             }
         });
     }
 
-    builder.build().await?.serve().await
+    // DIST-14: serving, and the banner once the socket answers — the link
+    // works the moment it is printed.
+    let serving = tokio::spawn(builder.build().await?.serve());
+    let ws_at = std::net::SocketAddr::new(if args.bind.is_unspecified() { std::net::Ipv4Addr::LOCALHOST.into() } else { args.bind }, ws_port);
+    for _ in 0..200 {
+        if serving.is_finished() || tokio::net::TcpStream::connect(ws_at).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    if serving.is_finished() {
+        return serving.await?;
+    }
+    // DIST-14: what a person reads — it runs, where to open it, the data,
+    // how to stop it; with --open, the browser too.
+    let url = match &once {
+        Some(o) => {
+            first_run::Running { pid: std::process::id(), ws_port, shell_port }.write(&data_dir)?;
+            first_run::link(shell_port, &o.mint()?)
+        }
+        None => format!("{}/", wiring_public_url(&args.public_url, shell_port)),
+    };
+    if !args.no_shell {
+        print!("{}", first_run::banner(env!("CARGO_PKG_VERSION"), &url, once.is_some(), &db_path, &moved));
+        if args.open && !plexus_login::browser::open(&url) {
+            println!("  (no browser to open here: open the link above yourself)");
+        }
+    }
+    serving.await?
 }
 
 
@@ -633,24 +710,6 @@ fn parse_email(spec: &str) -> Result<LoginButton, String> {
     format!("email={spec}").parse()
 }
 
-/// ACCESS-24: why this start is refused, if it is — no login provider
-/// (menger has no open mode), or stdio (no credential rides it).
-fn refusal(providers: &[Provider], identity: bool, stdio: bool) -> Option<String> {
-    if stdio {
-        return Some(
-            "--stdio is gone: menger has no open mode, and stdio carries no credential (ACCESS-24) — \
-             reach it over the WebSocket with a key (synapse _login, or --auth-provider key)"
-                .into(),
-        );
-    }
-    (providers.is_empty() && !identity).then(|| {
-        "menger has no open mode: give it a login provider with --auth-provider <SPEC> \
-         (MENGER_AUTH_PROVIDERS) — `--auth-provider key` admits agents' Ed25519 keys, enough for \
-         a development server with `--admin key:<hex>` — or --identity (ACCESS-24)"
-            .into()
-    })
-}
-
 /// IDENTITY-38: the dev sign-in runs only on the environment named test.
 fn dev_login_allowed(env: Option<&str>) -> bool {
     env == Some("test")
@@ -658,18 +717,6 @@ fn dev_login_allowed(env: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    /// ACCESS-24: no provider, no start — the message names the flag;
-    /// stdio is refused with or without one.
-    #[test]
-    fn a_start_without_a_provider_is_refused_naming_the_flag() {
-        let none = super::refusal(&[], false, false).expect("refused");
-        assert!(none.contains("--auth-provider") && none.contains("no open mode"), "{none}");
-        let key: Vec<menger::login::Provider> = vec!["key".parse().unwrap()];
-        assert_eq!(super::refusal(&key, false, false), None);
-        assert_eq!(super::refusal(&[], true, false), None, "--identity is a provider");
-        assert!(super::refusal(&key, false, true).expect("stdio").contains("--stdio"));
-    }
-
     #[test]
     fn the_dev_sign_in_is_test_s_alone() {
         assert!(super::dev_login_allowed(Some("test")));

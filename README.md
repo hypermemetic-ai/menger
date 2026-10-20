@@ -14,19 +14,72 @@ clients; the app does not use it.
 ## Run
 
 ```sh
-# ACCESS-24: menger has no open mode — it needs a login provider to start
-cargo run -- --auth-provider key --admin "$(synapse _key show builder)"
-                              # the app http://127.0.0.1:4456/ (behind /login),
-                              # WebSocket :4455, day-one page /vanilla
-synapse -P 4455 _login menger --key builder --as builder   # then synapse as usual
+cargo install menger
+menger --open
+```
+
+That is the whole first run (DIST-14). With no flags menger keeps its data
+in `~/.local/share/menger` (`local.db`; `--data-dir`, `--db-path`), listens
+on this machine only, and prints where to open it:
+
+```
+menger 0.6.1 — running
+  open:  http://127.0.0.1:4456/login?once=…   (one-time; `menger login` for another)
+  data:  ~/.local/share/menger/local.db
+  stop:  Ctrl-C
+```
+
+`--open` opens that link in the browser too (`xdg-open` with a display,
+`open`, the Windows URL handler; with none it says so and keeps running).
+`menger --help` is the short list; `menger --help-all` is every option,
+grouped; `menger --version`.
+
+**Still no open mode** (ACCESS-24). With no `--auth-provider` (or
+`--identity`) and every listener on loopback, menger signs its one person
+in by itself, as Jupyter does:
+
+- On the first start it makes a **local admin key** in the data directory
+  (`local.key`, 0600, synapse's format) and makes its `key:<hex>` the
+  server's `--admin`; the `key` provider is on, so synapse signs in with
+  that key too.
+- Each start prints a **one-time link**, `http://127.0.0.1:<shell
+  port>/login?once=<token>`: one use, ten minutes, taken only from
+  loopback. Opening it signs the browser in as the local admin; a second
+  use says so, and how to get another. `menger login` (against the server
+  running on that data directory — its `local.json`) prints a fresh one.
+  The links are files under `once/` in the data directory, each named by
+  its token's SHA-256.
+- A port not given that is taken falls back to the next free one, and the
+  banner says which (`note: port 4455 was taken: …`); a port given is
+  bound or startup fails — prod and test name theirs.
+- The terminal shows the banner, not the log (errors only; `RUST_LOG` says
+  otherwise).
+
+Reached beyond this machine (`--bind`, a `--public-url` off loopback) with
+no provider, it refuses, saying which flag to add:
+
+```
+menger: can't be reached from other machines (--bind 0.0.0.0) without a way to sign in.
+Add a login provider, for example:
+  menger --bind 0.0.0.0 --auth-provider workos=<client-id> --admin <your principal>
+or leave out --bind to run on this machine only (it then signs you in with a one-time link).
+```
+
+The default database moved from `tickets.db` to `local.db` (DIST-14), so a
+menger installed on a machine that runs prod never opens prod's file; prod,
+test and the image name theirs (`MENGER_DB_PATH`, and the ports —
+`tests/first_run.rs` holds deploy/ to it).
+
+A development server from the checkout runs a provider and its own ports
+and database:
+
+```sh
+cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
+  --auth-provider key --admin "$(synapse _key show builder)"
+                              # the app http://127.0.0.1:4461/ (behind /login),
+                              # WebSocket :4460, day-one page /vanilla
+synapse -P 4460 _login menger --key builder --as builder   # then synapse as usual
 cargo test                    # every test server runs `key`, every client is its --admin
-```
-
-**No open mode** (ACCESS-24). Without `--auth-provider` (or `--identity`)
-menger exits before it opens anything:
-
-```
-Error: menger has no open mode: give it a login provider with --auth-provider <SPEC> (MENGER_AUTH_PROVIDERS) — `--auth-provider key` admits agents' Ed25519 keys, enough for a development server with `--admin key:<hex>` — or --identity (ACCESS-24)
 ```
 
 Login is always required — the shell's pages are behind `/login`, an

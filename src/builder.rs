@@ -16,12 +16,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// The default database location when no override is given: a per-user
-/// data directory (`~/.local/share/menger/tickets.db` on Linux).
+/// data directory's `local.db` (`~/.local/share/menger/local.db` on Linux).
+/// DIST-14: never `tickets.db`, prod's file on a machine that runs it
+/// (prod, test and the image name theirs).
 pub fn default_db_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("menger")
-        .join("tickets.db")
+    crate::first_run::default_data_dir().join(crate::first_run::DB_FILE)
 }
 
 /// ACT-5: the purge of deleted tickets' bodies past their 30 days — at start,

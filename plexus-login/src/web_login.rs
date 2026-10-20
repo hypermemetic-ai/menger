@@ -10,6 +10,7 @@
 //! | `POST /logout` | the session ended (and the provider's, where it keeps one: WorkOS) |
 //! | `GET /login/me` | who the session is, as JSON, or 401 |
 //! | `POST /login/dev` | IDENTITY-35, test only: be a seeded or any user, through plexus-idp ([`crate::dev_login`]) |
+//! | `GET /login?once=…` | DIST-14: a one-time link ([`crate::once`]), from loopback, where the app has them: a session, once |
 //! | `GET /login?cli=1&state=…` | AUTH-7: the page for a loopback sign-in (`auth.login {browser}`): every way in carries on to `/auth/cli` |
 //! | `GET /auth/cli`, `POST /auth/cli` | AUTH-7: the person is signed in — the sign-in's state taken, a one-time code issued, and the browser sent back to the client's loopback `redirect?code=…&state=…`; a sign-in older than two minutes asks first (a button, POSTed from this page) |
 //!
@@ -143,6 +144,8 @@ pub struct Login<A: LoginAccess> {
     /// (the module docs), and whose `X-Forwarded-For` names the client.
     throttles: Throttles,
     trusted: TrustedProxies,
+    /// DIST-14: the app's one-time sign-in links, when it has them.
+    once: Option<Arc<dyn crate::once::OnceLinks>>,
 }
 
 impl<A: LoginAccess> Login<A> {
@@ -267,6 +270,7 @@ impl<A: LoginAccess> Login<A> {
             access: cfg.access,
             throttles,
             trusted,
+            once: None,
         })
     }
 
@@ -420,6 +424,13 @@ impl<A: LoginAccess> Login<A> {
     /// (IDENTITY-35).
     pub fn page_for(&self, next: &str, error: Option<&str>, with_password: bool, dev: bool) -> String {
         self.page_html(next, error, with_password, dev, None).html
+    }
+
+    /// DIST-14: one-time sign-in links ([`crate::once`]): `/login?once=`
+    /// trades one, from loopback, for a session.
+    pub fn with_once(mut self, once: Option<Arc<dyn crate::once::OnceLinks>>) -> Self {
+        self.once = once;
+        self
     }
 
     /// AUTH-22: our own sign-in page, when there is one.
@@ -604,6 +615,8 @@ pub struct PageQuery {
     /// `state`, every way in carries on to `/auth/cli`.
     cli: Option<String>,
     state: Option<String>,
+    /// DIST-14: a one-time sign-in link's token ([`crate::once`]).
+    once: Option<String>,
 }
 
 /// AUTH-7: where a loopback sign-in goes once the person is signed in.
@@ -611,7 +624,19 @@ fn cli_next(state: &str) -> String {
     format!("/auth/cli?state={}", url::form_urlencoded::byte_serialize(state.as_bytes()).collect::<String>())
 }
 
-pub async fn page<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
+pub async fn page<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, peer: Peer, Query(q): Query<PageQuery>) -> Response {
+    // DIST-14: a one-time link, where the app has them and the caller is on
+    // this machine: taken once for a session, else said spent. Anywhere
+    // else `once` is no query of the page's.
+    if let (Some(token), Some(once)) = (q.once.as_deref(), login.once.as_ref()) {
+        if crate::client_ip::peer_ip(&peer).is_some_and(|ip| ip.is_loopback()) {
+            let next = safe_next(q.next.as_deref());
+            return match once.redeem(token) {
+                Some(ctx) => login.sign_in(ctx, &next),
+                None => login.page_view(Some(&headers), &next, Some(&once.spent()), false, false, StatusCode::FORBIDDEN),
+            };
+        }
+    }
     let next = match (q.cli.as_deref(), q.state.as_deref()) {
         (Some(_), Some(state)) if login.sessions.cli_waiting(state) => cli_next(state),
         // AUTH-22: with our own page, where to land follows its return
@@ -622,7 +647,9 @@ pub async fn page<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: H
     if login.session(&headers).is_some() {
         return see_other(&next);
     }
-    login.page_view(Some(&headers), &next, None, q.password.is_some(), login.dev_on(&headers), StatusCode::OK)
+    // DIST-14: where one-time links are the way in, the page says how to get one.
+    let hint = login.once.as_ref().map(|o| o.hint());
+    login.page_view(Some(&headers), &next, hint.as_deref(), q.password.is_some(), login.dev_on(&headers), StatusCode::OK)
 }
 
 #[derive(Deserialize)]
