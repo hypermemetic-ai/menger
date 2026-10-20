@@ -9,7 +9,10 @@
 //!   fence names after it (```` ```rust kiln/src/schedule.rs ````), *copy*.
 //! - **Ticket codes** become chips ([`chip_codes`]); a code alone on its line
 //!   is drawn again under the turn as a card that acts (CHAT-56,
-//!   src/chat_cards.rs) — `/ticket CODE` posts one.
+//!   src/chat_cards.rs) — `/ticket CODE` posts one. CHAT-57: a name in bold
+//!   (`**KILN-7**`, `**ENV-2..5**`, `**A-11/12**`) is a **live chip**
+//!   ([`live_chip`]): coloured by its ticket's stage once its card resolves
+//!   it, a run or a set one chip that opens to its tickets' on a tap.
 //! - A turn shows **copy · quote · link** on hover: its text to the
 //!   clipboard, `> quoted` into the composer, its URL (`?chat=ID&at=MSG`).
 //! - **Scrolling** — manifest's two rules (`conversationScroll.ts`), in
@@ -185,6 +188,17 @@ pub(crate) fn chip_codes(html: &str) -> String {
         if let Some(stripped) = rest.strip_prefix('<') {
             let end = stripped.find('>').map_or(rest.len(), |e| e + 2);
             let tag = &rest[..end];
+            // CHAT-57: `<strong>ENV-2..5</strong>` — a name in bold.
+            if skip == 0 && tag == "<strong>" {
+                if let Some(close) = rest[end..].find("</strong>") {
+                    let inner = &rest[end..end + close];
+                    if let Some(chip) = (!inner.contains('<')).then(|| live_chip(inner.trim())).flatten() {
+                        out.push_str(&chip);
+                        rest = &rest[end + close + "</strong>".len()..];
+                        continue;
+                    }
+                }
+            }
             let name: String = tag.trim_start_matches(['<', '/']).chars().take_while(char::is_ascii_alphanumeric).collect();
             if matches!(name.as_str(), "pre" | "code" | "a") {
                 if tag.starts_with("</") {
@@ -207,6 +221,28 @@ pub(crate) fn chip_codes(html: &str) -> String {
         rest = &rest[end..];
     }
     out
+}
+
+/// CHAT-57: a name in bold as a live chip — `data-ticket` for the card to
+/// colour by its stage (`data-stage`); a run or a set a chip whose tap
+/// (`data-act="expand"`) shows its tickets' chips beside it. None when
+/// `name` is not one.
+pub(crate) fn live_chip(name: &str) -> Option<String> {
+    use menger_tickets_api::chat_tickets::{parse_name, Form};
+    let (form, codes) = parse_name(name)?;
+    let one = |c: &str| format!("<a class=\"tchip live\" data-ticket=\"{c}\" href=\"#/ticket/{c}\">{c}</a>");
+    Some(match form {
+        Form::One => one(name),
+        Form::Range | Form::Set => {
+            let all: Vec<String> = codes.iter().map(|c| one(c)).collect();
+            format!(
+                "<span class=\"trun\"><button type=\"button\" class=\"tchip live run\" data-act=\"expand\" aria-expanded=\"false\" title=\"{}\">{name}<span class=\"trn\">{}</span></button><span class=\"trx\" hidden>{}</span></span>",
+                codes.join(" · "),
+                codes.len(),
+                all.join(" ")
+            )
+        }
+    })
 }
 
 fn chip_text(text: &str) -> String {
@@ -340,6 +376,17 @@ mod tests {
         assert!(out.contains("Fixed <a class=\"tchip\" href=\"#/ticket/KILN-7\">KILN-7</a>'s test"), "{out}");
         assert!(out.contains("<code>KILN-3</code>") && out.contains(">KILN-4</a>"), "code and links untouched: {out}");
         assert!(out.contains("<p><a class=\"tchip\" href=\"#/ticket/KILN-9\">KILN-9</a></p>"), "alone: a chip; its card is drawn under the turn: {out}");
+    }
+
+    #[test]
+    fn a_name_in_bold_is_a_live_chip() {
+        let out = chip_codes("<p>Filed <strong>HYPERFORGE-9</strong>, <strong>ENV-2..5</strong> and <strong>A-11/12</strong>; <strong>ENV-1</strong> · entity. <strong>not one</strong> <code><strong>KILN-1</strong></code></p>");
+        assert!(out.contains("Filed <a class=\"tchip live\" data-ticket=\"HYPERFORGE-9\" href=\"#/ticket/HYPERFORGE-9\">HYPERFORGE-9</a>,"), "{out}");
+        assert!(out.contains("data-act=\"expand\" aria-expanded=\"false\" title=\"ENV-2 · ENV-3 · ENV-4 · ENV-5\">ENV-2..5<span class=\"trn\">4</span></button><span class=\"trx\" hidden>"), "{out}");
+        assert_eq!(out.matches("data-ticket=\"ENV-").count(), 5, "the run's four, hidden until tapped, and ENV-1: {out}");
+        assert!(out.contains("data-ticket=\"A-12\""), "{out}");
+        assert!(out.contains("</a> · entity."), "the input's word stays: {out}");
+        assert!(out.contains("<strong>not one</strong>") && out.contains("<code><strong>KILN-1</strong></code>"), "{out}");
     }
 
     #[test]

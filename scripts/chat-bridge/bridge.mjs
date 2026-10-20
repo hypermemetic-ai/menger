@@ -606,6 +606,7 @@ function systemPrompt(chatId, ticket, title, chat) {
     `The chat bridge (menger's scripts/chat-bridge, CHAT-11) runs you. Your final message is posted to that chat as the builder, verbatim, so do not post it yourself with chats.post.`,
     ``,
     `Keep chat answers short: a few sentences of markdown, the answer first. The owner is reading on a phone.`,
+    `Name tickets in the notation (CHAT-57; menger-skills chatting): bold, the id alone — **KILN-7**, a run **KILN-2..5**, a set **KILN-11/12**, an ask **KILN-7** · inputid. The chat draws each as a live chip and a card under your message; bold only the tickets the message is about, and leave a passing mention plain.`,
     ``,
     `House rules — follow them as any builder here does:`,
     `- ~/AGENTS.md and ~/dev/controlflow/hypermemetic/menger/AGENTS.md are the rules (read them before work that touches the tracker or a repository); ~/dev/controlflow/hypermemetic/menger-skills is the method (ticketing, building, asking, reaching).`,

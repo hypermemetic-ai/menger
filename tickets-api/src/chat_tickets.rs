@@ -32,15 +32,152 @@ pub fn is_code(s: &str) -> bool {
         && n.chars().all(|c| c.is_ascii_digit())
 }
 
+/// CHAT-57: the most tickets one run or set names — `KILN-1..500` names
+/// its first 20.
+pub const EXPAND_CAP: usize = 20;
+
+/// CHAT-57: how a name in a message is written (the notation, menger-skills
+/// `chatting`): `**KILN-7**`, a run `**ENV-2..5**`, a set
+/// `**HYPERFORGE-11/12**`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    /// One ticket: `KILN-7`.
+    One,
+    /// A run of numbers: `ENV-2..5` is ENV-2, ENV-3, ENV-4 and ENV-5.
+    Range,
+    /// A set: `HYPERFORGE-11/12` is HYPERFORGE-11 and HYPERFORGE-12.
+    Set,
+}
+
+/// A ticket number as written: digits, from 1, no leading zero.
+fn number(s: &str) -> Option<u64> {
+    (!s.is_empty() && !s.starts_with('0') && s.chars().all(|c| c.is_ascii_digit())).then(|| s.parse().ok()).flatten()
+}
+
+/// CHAT-57: one name — `KILN-7`, `ENV-2..5` or `HYPERFORGE-11/12` — read
+/// whole: its form and the codes it names, in order, each once, at most
+/// [`EXPAND_CAP`]. A run that does not go up, or anything else, is none.
+pub fn parse_name(s: &str) -> Option<(Form, Vec<String>)> {
+    if is_code(s) {
+        return Some((Form::One, vec![s.to_string()]));
+    }
+    if let Some((first, last)) = s.split_once("..") {
+        let (head, n) = first.split_once('-')?;
+        let (from, to) = (number(n)?, number(last)?);
+        if !is_code(first) || to <= from {
+            return None;
+        }
+        return Some((Form::Range, (from..=to).take(EXPAND_CAP).map(|i| format!("{head}-{i}")).collect()));
+    }
+    let mut parts = s.split('/');
+    let first = parts.next()?;
+    if !is_code(first) {
+        return None;
+    }
+    let head = first.split_once('-')?.0;
+    let mut out = vec![first.to_string()];
+    for p in parts {
+        let code = format!("{head}-{}", number(p)?);
+        if !out.contains(&code) {
+            out.push(code);
+        }
+    }
+    (out.len() > 1).then(|| (Form::Set, out.into_iter().take(EXPAND_CAP).collect()))
+}
+
 /// Every ticket code in `text`, once each, in the order first written — a
 /// word on its own (`KILN-7`, `KILN-7's`, `(KILN-7)`), never part of a
-/// longer word.
+/// longer word. CHAT-57: a run (`ENV-2..5`) and a set (`A-11/12`) name each
+/// of theirs ([`parse_name`]); `KILN-7/KILN-8` names both.
 pub fn codes_in(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for raw in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
-        let w = raw.trim_matches('-');
-        if is_code(w) && !out.iter().any(|o| o == w) {
-            out.push(w.to_string());
+    let mut add = |c: String| {
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    };
+    for raw in text.split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))) {
+        let w = raw.trim_matches(|c| matches!(c, '-' | '.' | '/'));
+        match parse_name(w) {
+            Some((_, codes)) => codes.into_iter().for_each(&mut add),
+            None => w.split(['.', '/']).map(|p| p.trim_matches('-')).filter(|p| is_code(p)).for_each(|p| add(p.to_string())),
+        }
+    }
+    out
+}
+
+/// CHAT-57: a name written in bold — `**ENV-2..5**` — and the input after
+/// it, `**ENV-1** · entity`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    /// As written between the stars: `ENV-2..5`.
+    pub text: String,
+    pub form: Form,
+    /// The tickets it names ([`parse_name`]).
+    pub codes: Vec<String>,
+    /// The input asked on it: the word after ` · `.
+    pub input: Option<String>,
+}
+
+/// CHAT-57: the bold names on one line — `**X**` or `__X__` whose inside is
+/// a name ([`parse_name`]), each with the input after it (` · entity`, the
+/// word in backticks too). Inline code is not read.
+pub fn names_on_line(line: &str) -> Vec<Named> {
+    let mut out = Vec::new();
+    let mut rest = line;
+    while let Some(at) = rest.find(['*', '_', '`']) {
+        let tail = &rest[at..];
+        if tail.starts_with('`') {
+            // Inline code: skip to its end.
+            let ticks = tail.chars().take_while(|c| *c == '`').count();
+            let close = tail[ticks..].find(&tail[..ticks]).map_or(tail.len(), |e| ticks + e + ticks);
+            rest = &tail[close..];
+            continue;
+        }
+        let mark = if tail.starts_with("**") { "**" } else if tail.starts_with("__") { "__" } else {
+            rest = &tail[1..];
+            continue;
+        };
+        let inner_from = &tail[2..];
+        let Some(end) = inner_from.find(mark) else { break };
+        let inner = inner_from[..end].trim();
+        let after = &inner_from[end + 2..];
+        match parse_name(inner) {
+            Some((form, codes)) => {
+                out.push(Named { text: inner.to_string(), form, codes, input: input_after(after) });
+                rest = after;
+            }
+            None => rest = &tail[2..],
+        }
+    }
+    out
+}
+
+/// The input named after a bold name: ` · entity` (or `` · `entity` ``).
+fn input_after(after: &str) -> Option<String> {
+    let t = after.trim_start().strip_prefix('·')?.trim_start();
+    let t = t.strip_prefix('`').unwrap_or(t);
+    let w: String = t.chars().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')).collect();
+    let w = w.trim_end_matches(['.', ':', '-']);
+    (!w.is_empty()).then(|| w.to_string())
+}
+
+/// Whether `line` opens or closes a fence — its mark (```` ``` ```` or `~~~`).
+fn fence_mark(line: &str) -> Option<&'static str> {
+    let t = line.trim_start();
+    ["```", "~~~"].into_iter().find(|m| t.starts_with(m))
+}
+
+/// CHAT-57: the bold names in a body, outside fenced code blocks, in order.
+pub fn bold_names(body: &str) -> Vec<Named> {
+    let mut out = Vec::new();
+    let mut fence: Option<&str> = None;
+    for line in body.lines() {
+        match (fence, fence_mark(line)) {
+            (None, Some(m)) => fence = Some(m),
+            (Some(f), Some(m)) if f == m && line.trim().trim_start_matches(m.chars().next().unwrap_or('`')).is_empty() => fence = None,
+            (None, None) => out.extend(names_on_line(line)),
+            _ => {}
         }
     }
     out
@@ -48,16 +185,16 @@ pub fn codes_in(text: &str) -> Vec<String> {
 
 /// The tickets a message's body names, as a chat keeps them: [`codes_in`]
 /// its text outside fenced code blocks (a log or a test's output names
-/// tickets it is not about); inline code counts.
+/// tickets it is not about); inline code counts. CHAT-57: all four forms of
+/// the notation — `**KILN-7**`, `**ENV-2..5**`, `**A-11/12**`, `**ENV-1** ·
+/// entity` — and a plain id.
 pub fn mentions_in(body: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut fence: Option<&str> = None;
     for line in body.lines() {
-        let t = line.trim_start();
-        let mark = ["```", "~~~"].into_iter().find(|m| t.starts_with(m));
-        match (fence, mark) {
+        match (fence, fence_mark(line)) {
             (None, Some(m)) => fence = Some(m),
-            (Some(f), Some(m)) if f == m && t.trim_end().trim_start_matches(m.chars().next().unwrap_or('`')).is_empty() => fence = None,
+            (Some(f), Some(m)) if f == m && line.trim().trim_start_matches(m.chars().next().unwrap_or('`')).is_empty() => fence = None,
             (None, None) => {
                 for c in codes_in(line) {
                     if !out.contains(&c) {
@@ -211,6 +348,29 @@ mod tests {
         assert_eq!(mentions_in(body), ["CHAT-55", "CHAT-56", "APP-74", "KILN-9"]);
         assert_eq!(mentions_in("~~~\nA-1\n~~~\nB-2"), ["B-2"]);
         assert_eq!(codes_in("(KILN-7)'s KILN-7"), ["KILN-7"]);
+    }
+
+    #[test]
+    fn the_notation_reads_its_four_forms() {
+        assert_eq!(parse_name("HYPERFORGE-9"), Some((Form::One, vec!["HYPERFORGE-9".to_string()])));
+        assert_eq!(parse_name("ENV-2..5").map(|(f, c)| (f, c.join(","))), Some((Form::Range, "ENV-2,ENV-3,ENV-4,ENV-5".to_string())));
+        assert_eq!(parse_name("HYPERFORGE-11/12").map(|(f, c)| (f, c.join(","))), Some((Form::Set, "HYPERFORGE-11,HYPERFORGE-12".to_string())));
+        assert_eq!(parse_name("A-1/3/3/7").map(|(_, c)| c.join(",")), Some("A-1,A-3,A-7".to_string()));
+        assert_eq!(parse_name("KILN-1..500").map(|(_, c)| c.len()), Some(EXPAND_CAP), "capped");
+        for no in ["ENV-5..2", "ENV-2..2", "ENV-2..05", "A-1/", "A-1/x", "a-1..3", "ENV-2..ENV-5", "A-1/1"] {
+            assert_eq!(parse_name(no), None, "{no}");
+        }
+        let body = "Filed **HYPERFORGE-9** (the hub), **ENV-2..5** and **HYPERFORGE-11/12**.\n\n**ENV-1** · entity — and `**KILN-1**`, **not a name**, plain CHAT-55.\n```\n**KILN-2**\n```";
+        let names = bold_names(body);
+        let got: Vec<(&str, Form, usize, Option<&str>)> = names.iter().map(|n| (n.text.as_str(), n.form, n.codes.len(), n.input.as_deref())).collect();
+        assert_eq!(got, [("HYPERFORGE-9", Form::One, 1, None), ("ENV-2..5", Form::Range, 4, None), ("HYPERFORGE-11/12", Form::Set, 2, None), ("ENV-1", Form::One, 1, Some("entity"))]);
+        assert_eq!(names_on_line("__A-2__ · `fire`.")[0].input.as_deref(), Some("fire"));
+        assert_eq!(
+            mentions_in(body),
+            ["HYPERFORGE-9", "ENV-2", "ENV-3", "ENV-4", "ENV-5", "HYPERFORGE-11", "HYPERFORGE-12", "ENV-1", "KILN-1", "CHAT-55"],
+            "every form expanded; inline code counts, a fence does not"
+        );
+        assert_eq!(codes_in("see KILN-7/KILN-8, then KILN-9... and A-3..4."), ["KILN-7", "KILN-8", "KILN-9", "A-3", "A-4"]);
     }
 
     #[test]
