@@ -49,6 +49,10 @@ use menger_tickets_api::{Anchor, MediaEvent};
 /// What the picker offers.
 pub(crate) const ACCEPT: &str = "image/png,image/jpeg,image/gif,image/webp";
 
+/// CHAT-58: what the Image button's picker offers — the kept types, and a
+/// HEIC, made a JPEG before it is sent ([`crate::heic`]).
+const PICK: &str = "image/png,image/jpeg,image/gif,image/webp,image/heic,image/heif,.heic,.heif";
+
 /// A stretch of a comment's text: words, or an image written in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Seg {
@@ -1132,7 +1136,7 @@ impl Attach {
         self.set_state(key, UpState::Uploading);
         wasm_bindgen_futures::spawn_local(async move {
             let name = file.name();
-            let r = self.upload(&file, &name).await;
+            let r = self.upload(key, &file, &name).await;
             // Removed while it was on its way: nothing goes in the box.
             if !self.ups.try_with_untracked(|u| u.iter().any(|u| u.key == key)).unwrap_or(false) {
                 return;
@@ -1186,17 +1190,34 @@ impl Attach {
     /// The file read, checked and put: its alt and hash, or why not and
     /// whether trying again can help — a dropped connection or a server's
     /// error can; the file's own bytes, or a refusal by the rule, cannot.
-    async fn upload(self, file: &web_sys::File, name: &str) -> Result<(String, String), (String, bool)> {
+    async fn upload(self, key: u32, file: &web_sys::File, name: &str) -> Result<(String, String), (String, bool)> {
         use base64::Engine;
         let fixed = |why: String| (why, false);
-        // Past the cap, said before the bytes are read.
+        // Past the cap, said before the bytes are read — a HEIC's is its
+        // JPEG's (CHAT-58), so its own may be larger.
         let size = file.size() as usize;
-        if size > rules::MAX_BYTES {
-            return Err(fixed(format!("{name}: {}", rules::Problem::TooLarge { bytes: size, max: rules::MAX_BYTES })));
+        let max = if crate::heic::is_heic(&file.type_(), &[]) || crate::heic::named_heic(name) { crate::heic::MAX_SOURCE } else { rules::MAX_BYTES };
+        if size > max {
+            return Err(fixed(format!("{name}: {}", rules::Problem::TooLarge { bytes: size, max })));
         }
         let buf = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(|_| fixed(format!("{name}: could not be read")))?;
-        let bytes = js_sys::Uint8Array::new(&buf).to_vec();
-        let found = refusal(name, &file.type_(), &bytes).map_err(fixed)?;
+        let mut bytes = js_sys::Uint8Array::new(&buf).to_vec();
+        let mut declared = file.type_();
+        // CHAT-58: a HEIC made a JPEG (a PNG with alpha) here; its
+        // thumbnail is what it became.
+        if crate::heic::is_heic(&declared, &bytes) {
+            let (out, mime) = crate::heic::convert(&bytes, &declared, rules::MAX_BYTES).await.map_err(|why| fixed(format!("{name}: {why}")))?;
+            bytes = out;
+            declared = mime.to_string();
+            if let Some(u) = blob_url(&bytes, mime) {
+                self.ups.try_update(|ups| {
+                    if let Some(one) = ups.iter_mut().find(|u| u.key == key) {
+                        one.url = Some(u);
+                    }
+                });
+            }
+        }
+        let found = refusal(name, &declared, &bytes).map_err(fixed)?;
         let client = crate::session::media_client().ok_or_else(|| ("not connected — the image was not sent".to_string(), true))?;
         let ticket = crate::typed::opt(self.ticket.get_value()).map_err(fixed)?;
         let chat = self.chat.get_value().map(menger_tickets_api::vocab::ChatId::new);
@@ -1359,7 +1380,7 @@ pub(crate) fn Attachments(a: Attach) -> impl IntoView {
             <input
                 type="file"
                 class="cfile"
-                accept=ACCEPT
+                accept=PICK
                 multiple=true
                 hidden=true
                 node_ref=picker

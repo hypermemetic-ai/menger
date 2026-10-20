@@ -3010,6 +3010,19 @@ Only `media:` images (and `data:` PNG, JPEG, GIF or WebP) are drawn; an image
 from another origin is not (the page's CSP refuses it anyway) — its alt is
 drawn as a link to it.
 
+**A HEIC** (CHAT-58) — an iPhone's photo or screenshot as a file — is made
+a JPEG in the app before it is sent, on every path that attaches one (the
+chat composer and every comment box; paste, drop, pick): known by its type
+(`image/heic`, `image/heif`) or its `ftyp` brand (`heic`, `heix`, `mif1`,
+`msf1`, `hevc`, …; an AVIF is not one), decoded by the browser
+(`createImageBitmap`, else an `<img>`; Safari reads HEIC itself), drawn on
+a canvas and encoded at 0.9 — a PNG when it has alpha — and drawn smaller
+until it is within 7 MiB (a HEIC itself may be up to 64 MiB). A browser
+that cannot decode it (Chrome and Firefox on a desktop) refuses it plainly:
+"HEIC can't be read in this browser; send it as JPEG or PNG". The server
+is unchanged. `frontend/src/heic.rs`; checked by `scripts/heic-check.mjs`
+(WebKit and Chromium, `scripts/fixtures/tiny.heic`).
+
 **Stored by menger, on the wire** — the `media` activation; no side door
 (the shell serves no upload route and no image path). The app turns
 `media.get`'s bytes into a `blob:` URL, once per image per page load.

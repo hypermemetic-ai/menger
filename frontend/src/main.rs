@@ -291,6 +291,7 @@ mod flight;
 mod flat;
 mod frame;
 mod grow;
+mod heic;
 mod held;
 mod gesture;
 mod highlight;
