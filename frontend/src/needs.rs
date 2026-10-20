@@ -330,6 +330,7 @@ mod tests {
             asking,
             labels: labels.iter().map(|l| l.to_string()).collect(),
             archived: false,
+            frozen: false,
             lineage: vec!["T-1".into(), "T".into()],
             history: Vec::new(),
         }

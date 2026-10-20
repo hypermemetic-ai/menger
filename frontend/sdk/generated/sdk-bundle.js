@@ -372,6 +372,10 @@
       const stream = this.rpc.call("tickets.find", { after, filter, limit, query, tz });
       yield* extractData(stream);
     }
+    async* freeze(id) {
+      const stream = this.rpc.call("tickets.freeze", { id });
+      yield* extractData(stream);
+    }
     async* get(id) {
       const stream = this.rpc.call("tickets.get", { id });
       yield* extractData(stream);
@@ -438,6 +442,10 @@
     }
     async* undelete(ids) {
       const stream = this.rpc.call("tickets.undelete", { ids });
+      yield* extractData(stream);
+    }
+    async* unfreeze(id) {
+      const stream = this.rpc.call("tickets.unfreeze", { id });
       yield* extractData(stream);
     }
     async* unqueue(id, source) {

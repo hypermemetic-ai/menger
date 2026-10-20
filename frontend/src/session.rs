@@ -1124,7 +1124,9 @@ async fn session(
                 // MENGER-12: labels are on the row the same way.
                 | TicketsEvent::LabelsChanged { ticket, .. }
                 // TICKETS-9: and the assignees.
-                | TicketsEvent::AssigneesChanged { ticket, .. },
+                | TicketsEvent::AssigneesChanged { ticket, .. }
+                // TICKETS-6: and the frozen mark.
+                | TicketsEvent::FrozenChanged { ticket },
             ) => {
                 let summary = TicketSummary::from(&ticket);
                 remember(&summary);
@@ -1634,6 +1636,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             archived: None,
+            frozen: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),

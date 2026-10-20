@@ -498,6 +498,8 @@ export type RevisionSource = "app" | "api" | "pipeline" | "cascade" | "baseline"
 shortcode — the three fields of the root ticket a row shows beside its
 id ([`Group::root`]). */
 export interface RootRow {
+    /** TICKETS-6: the root is frozen — the row's ❄. */
+    frozen?: boolean;
     kind: Kind;
     status: Status;
     title: string;
@@ -575,6 +577,12 @@ export interface Ticket {
   shows — two shortcodes of one code are told apart by `shortcode`
   and `address`, never by this. */
     epic: Code;
+    /** TICKETS-6: a frozen scope takes no new children, and — when it roots
+  its shortcode — the shortcode takes no new numbers, until it is
+  unfrozen. Moved by `tickets.freeze` / `tickets.unfreeze` alone (admin),
+  only ever true on a scope; asked by the filter cell `frozen`. Omitted
+  on the wire when false. */
+    frozen?: boolean;
     /** ACCESS-10: how many of `blocked_by` the reader may not see — dropped
   from the list and counted here, so readiness stays honest. Omitted
   (0) for a reader who sees them all. */
@@ -742,6 +750,14 @@ export interface TicketsEventLabelsChanged {
     type: 'labels_changed';
     added: Label[];
     removed: Label[];
+    ticket: Ticket;
+}
+/** TICKETS-6: a scope was frozen or unfrozen (yielded by `freeze` /
+`unfreeze` — also when it already was, which writes nothing — and by
+`watch` for every one that moved it). The whole ticket rides along,
+its `frozen` as the write left it. */
+export interface TicketsEventFrozenChanged {
+    type: 'frozen_changed';
     ticket: Ticket;
 }
 /** TICKETS-9: a ticket's assignees moved (yielded by `assign`, and by
@@ -1160,6 +1176,15 @@ export interface TicketsEventAmbiguous {
     candidates: string[];
     id: Asked;
 }
+/** TICKETS-6: refused because `scope` is frozen — a new child of it, a
+move under it, a new number in the shortcode it roots, or a kind
+change off a scope. `message` names the scope and the unfreeze
+command; nothing was written. */
+export interface TicketsEventFrozen {
+    type: 'frozen';
+    message: string;
+    scope: TicketId;
+}
 /** In-band error (bad enum value, invalid epic, blocked_by cycle, …).
 A *data* event: the call succeeded and the activation said no,
 which is not the same thing as a transport or remote failure. */
@@ -1389,7 +1414,7 @@ export interface TicketsEventRevised {
     rev: number;
     ticket: TicketId;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventAssigneesChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord | TicketsEventAssignRecord | TicketsEventRevision | TicketsEventRevisionsEnd | TicketsEventRevisionAt | TicketsEventRevisionDiff | TicketsEventRevisionRestored | TicketsEventRevised;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventFrozenChanged | TicketsEventAssigneesChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventFrozen | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord | TicketsEventAssignRecord | TicketsEventRevision | TicketsEventRevisionsEnd | TicketsEventRevisionAt | TicketsEventRevisionDiff | TicketsEventRevisionRestored | TicketsEventRevised;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -1401,6 +1426,7 @@ export declare function isTicketsEventAmended(e: TicketsEvent): e is TicketsEven
 export declare function isTicketsEventCommitsLinked(e: TicketsEvent): e is TicketsEventCommitsLinked;
 export declare function isTicketsEventCommitsUnlinked(e: TicketsEvent): e is TicketsEventCommitsUnlinked;
 export declare function isTicketsEventLabelsChanged(e: TicketsEvent): e is TicketsEventLabelsChanged;
+export declare function isTicketsEventFrozenChanged(e: TicketsEvent): e is TicketsEventFrozenChanged;
 export declare function isTicketsEventAssigneesChanged(e: TicketsEvent): e is TicketsEventAssigneesChanged;
 export declare function isTicketsEventUnlocksChanged(e: TicketsEvent): e is TicketsEventUnlocksChanged;
 export declare function isTicketsEventUnlocksRemoved(e: TicketsEvent): e is TicketsEventUnlocksRemoved;
@@ -1441,6 +1467,7 @@ export declare function isTicketsEventHiddenBlockers(e: TicketsEvent): e is Tick
 export declare function isTicketsEventMember(e: TicketsEvent): e is TicketsEventMember;
 export declare function isTicketsEventNotFound(e: TicketsEvent): e is TicketsEventNotFound;
 export declare function isTicketsEventAmbiguous(e: TicketsEvent): e is TicketsEventAmbiguous;
+export declare function isTicketsEventFrozen(e: TicketsEvent): e is TicketsEventFrozen;
 export declare function isTicketsEventError(e: TicketsEvent): e is TicketsEventError;
 export declare function isTicketsEventBodyTooLarge(e: TicketsEvent): e is TicketsEventBodyTooLarge;
 export declare function isTicketsEventNode(e: TicketsEvent): e is TicketsEventNode;

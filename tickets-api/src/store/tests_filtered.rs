@@ -303,6 +303,7 @@ impl Plain {
             asking: k.asking(),
             labels: t.labels.iter().map(|l| l.to_string()).collect(),
             archived: k.archived(),
+            frozen: k.frozen(),
             id: t.id.to_string(),
             epic: t.epic.to_string(),
             title: t.title.clone(),

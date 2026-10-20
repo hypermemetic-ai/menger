@@ -80,7 +80,7 @@ async fn a_doc_is_born_in_doc_and_may_root_a_shortcode() {
             archived: 0,
             root: Some("MAN-1".into()),
             // AGS-23: the root's row, as the nav draws it — its `Doc` chip.
-            root_row: Some(RootRow { title: "a doc in MAN".into(), status: Status::Doc, kind: Kind::Doc }),
+            root_row: Some(RootRow { title: "a doc in MAN".into(), status: Status::Doc, kind: Kind::Doc, frozen: false }),
             host: None,
         }],
         "a doc collection is a row: no work, one doc"
@@ -274,7 +274,7 @@ async fn the_ready_set_never_holds_a_doc_and_list_filters_on_doc() {
 /// and the status counts carry `Doc` as a bucket of its own.
 #[tokio::test]
 async fn roll_ups_ignore_docs_and_count_them_apart() {
-    let scope_row = |status| RootRow { title: "a scope in P".into(), status, kind: Kind::Scope };
+    let scope_row = |status| RootRow { title: "a scope in P".into(), status, kind: Kind::Scope, frozen: false };
     let store = Store::new();
     store.create(SYS, new("P", Kind::Scope, None, &[])).await.unwrap(); // P-1
     store.create(SYS, work("P", None)).await.unwrap(); // P-2

@@ -179,6 +179,9 @@ pub enum Field {
     /// admits no archived ticket ([`Filter::matches`]): `not archived` is
     /// every filter's default.
     Archived,
+    /// `frozen` (TICKETS-6): a frozen scope — it takes no new children, and
+    /// the shortcode it roots no new numbers, until it is unfrozen.
+    Frozen,
     /// `in <SHORTCODE>`: its shortcode is the one named (upper case). ORG-3:
     /// by its letters — every shortcode with them, wherever hosted.
     In(String),
@@ -234,6 +237,7 @@ impl Field {
             Field::Asking => "asking",
             Field::Label(_) => "label",
             Field::Archived => "archived",
+            Field::Frozen => "frozen",
             Field::In(_) => "in",
             Field::Under(_) => "under",
             Field::Ticket(_) => "ticket",
@@ -253,7 +257,7 @@ impl Field {
             Field::Category(c) => c.as_str().into(),
             Field::Kind(k) => k.as_str().into(),
             Field::Severity(s) => severity_name(*s).into(),
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived => return None,
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen => return None,
             Field::In(x) | Field::Under(x) | Field::Ticket(x) | Field::Text(x) | Field::Label(x) | Field::Saved(x) => x.clone(),
             // FILTER-36: a nested group's value is its text.
             Field::Group(g) => g.format(),
@@ -308,7 +312,7 @@ impl Field {
             | Field::Ticket(_)
             | Field::Text(_)
             | Field::Label(_)
-            | Field::Archived
+            | Field::Archived | Field::Frozen
             | Field::History(_)
             | Field::Group(_)
             | Field::Saved(_) => return None,
@@ -328,6 +332,7 @@ impl Field {
             Field::Text(t) => text_matches(t, &f.id, &f.title),
             Field::Label(l) => f.labels.iter().any(|x| x.eq_ignore_ascii_case(l)),
             Field::Archived => f.archived,
+            Field::Frozen => f.frozen,
             // TICKETS-9: `unassigned` is `assigned`'s truth, negated.
             Field::History(h) if h.event == Event::Unassigned => !f.history.iter().any(|x| x == ASSIGNED),
             Field::History(h) => {
@@ -373,7 +378,7 @@ impl Predicate {
     pub fn format(&self) -> String {
         let head = if self.not { "not " } else { "" };
         match &self.field {
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived => {
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen => {
                 format!("{head}{}", self.field.name())
             }
             Field::Text(t) => format!("{head}text \"{t}\""),
@@ -742,6 +747,8 @@ pub struct Facts {
     pub labels: Vec<String>,
     /// ARCHIVE-2: it carries the archive's mark.
     pub archived: bool,
+    /// TICKETS-6: it is a frozen scope.
+    pub frozen: bool,
     /// What `under` finds it under: its own id, its ancestors' ids, its
     /// shortcode and the shortcodes hosting it.
     pub lineage: Vec<String>,
@@ -1228,7 +1235,7 @@ fn predicate_mistake(raw: &str, s: &str) -> Option<Mistake> {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 46] = [
+const NAMES: [&str; 47] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -1244,6 +1251,8 @@ const NAMES: [&str; 46] = [
     "severity",
     "past cap",
     "archived",
+    // TICKETS-6: a frozen scope.
+    "frozen",
     // ARCHIVE-2: the archive's other end.
     "restored",
     // CHAT-3: the reader's chats.
@@ -1512,6 +1521,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "has commits" => flag(Field::HasCommits),
         "menger doc" => flag(Field::MengerDoc),
         "asking" => flag(Field::Asking),
+        // TICKETS-6: the frozen mark (a cell).
+        "frozen" => flag(Field::Frozen),
         // ARCHIVE-2: the mark (a cell); with a window or `by`, the archive
         // write that set it (the transition log).
         "archived" if tail.is_empty() => Ok(Field::Archived),
@@ -2721,6 +2732,8 @@ enum Dim {
     Saved(String),
     /// ARCHIVE-2: whether it is archived — free: any ticket may be.
     Archived,
+    /// TICKETS-6: whether it is frozen — free, as the archive's mark is.
+    Frozen,
 }
 
 fn dims(field: &Field) -> Vec<Dim> {
@@ -2732,7 +2745,7 @@ fn dims(field: &Field) -> Vec<Dim> {
         Field::HasCommits => vec![Dim::Commits],
         Field::Asking => vec![Dim::Asking],
         Field::In(_) => vec![Dim::Epic],
-        Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived => {
+        Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen => {
             var(field).into_iter().collect()
         }
         // FILTER-36: what its leaves read.
@@ -2757,6 +2770,7 @@ fn var(field: &Field) -> Option<Dim> {
         Field::History(h) => Some(Dim::History(h.format())),
         Field::Saved(n) => Some(Dim::Saved(crate::saved_filters::slug(n))),
         Field::Archived => Some(Dim::Archived),
+        Field::Frozen => Some(Dim::Frozen),
         _ => None,
     }
 }
@@ -2825,7 +2839,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
                     epics.push(e);
                 }
             }
-            f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived) => {
+            f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen) => {
                 if let Some(v) = var(f).filter(|v| !vars.contains(v)) {
                     vars.push(v);
                 }
@@ -2855,7 +2869,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
             .map(|p| {
                 let lit = match &p.field {
                     Field::In(e) => Lit::Epic(epics.iter().position(|x| x.eq_ignore_ascii_case(e)).unwrap_or(usize::MAX)),
-                    f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived) => {
+                    f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen) => {
                         match var(f) {
                             Some(v) => Lit::Var(vars.iter().position(|x| *x == v).unwrap_or(usize::MAX)),
                             None => Lit::Always,

@@ -470,6 +470,13 @@ pub struct Ticket {
     /// Omitted on the wire for a live ticket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<Archived>,
+    /// TICKETS-6: a frozen scope takes no new children, and — when it roots
+    /// its shortcode — the shortcode takes no new numbers, until it is
+    /// unfrozen. Moved by `tickets.freeze` / `tickets.unfreeze` alone (admin),
+    /// only ever true on a scope; asked by the filter cell `frozen`. Omitted
+    /// on the wire when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub frozen: bool,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -587,6 +594,10 @@ pub struct TicketSummary {
     /// ticket is drawn struck through without a `get`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<Archived>,
+    /// TICKETS-6: as on [`Ticket`] — on the row, so the nav, the board and
+    /// the ticket page draw ❄ without a `get`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub frozen: bool,
     pub created_unix: i64,
     pub updated_unix: i64,
 }
@@ -616,6 +627,7 @@ impl From<Ticket> for TicketSummary {
             labels: t.labels,
             assignees: t.assignees,
             archived: t.archived,
+            frozen: t.frozen,
             created_unix: t.created_unix,
             updated_unix: t.updated_unix,
         }
@@ -741,6 +753,9 @@ pub struct RootRow {
     pub title: String,
     pub status: Status,
     pub kind: Kind,
+    /// TICKETS-6: the root is frozen — the row's ❄.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub frozen: bool,
 }
 
 impl Group {
@@ -1656,6 +1671,11 @@ pub enum TicketsEvent {
     /// never carries. The whole ticket rides along, its `labels` as the
     /// write left them.
     LabelsChanged { ticket: Ticket, added: Vec<Label>, removed: Vec<Label> },
+    /// TICKETS-6: a scope was frozen or unfrozen (yielded by `freeze` /
+    /// `unfreeze` — also when it already was, which writes nothing — and by
+    /// `watch` for every one that moved it). The whole ticket rides along,
+    /// its `frozen` as the write left it.
+    FrozenChanged { ticket: Ticket },
     /// TICKETS-9: a ticket's assignees moved (yielded by `assign`, and by
     /// `watch` for every `assign` that changed something). `added` and
     /// `removed` are the principals that moved — both empty is `assign`'s
@@ -1951,6 +1971,11 @@ pub enum TicketsEvent {
     /// each one's full address, in the store's order. Nothing was read or
     /// written; name one of them in full, or by a short form only it has.
     Ambiguous { id: crate::vocab::Asked, candidates: Vec<String> },
+    /// TICKETS-6: refused because `scope` is frozen — a new child of it, a
+    /// move under it, a new number in the shortcode it roots, or a kind
+    /// change off a scope. `message` names the scope and the unfreeze
+    /// command; nothing was written.
+    Frozen { scope: TicketId, message: String },
     /// In-band error (bad enum value, invalid epic, blocked_by cycle, …).
     /// A *data* event: the call succeeded and the activation said no,
     /// which is not the same thing as a transport or remote failure.
@@ -2319,6 +2344,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             archived: None,
+            frozen: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: "W-2".into(),
@@ -2396,6 +2422,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             archived: None,
+            frozen: false,
             id: "SUM-1".into(),
             epic: "SUM".into(),
             shortcode: "SUM".into(),

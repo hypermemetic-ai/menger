@@ -246,6 +246,8 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
             let Some(p) = parent_row.as_ref() else {
                 return Err(refuse("new_scope makes a scope under --parent: name where it hangs — nothing written".into()));
             };
+            // TICKETS-6: no new shortcode hosted under a frozen scope.
+            rules::frozen_refusal(cache, Some(&p.id), None)?;
             match cache.target(&to, Some(p), true)? {
                 Target::Mint(sc) => {
                     let root = sc.id.key(1);
@@ -274,6 +276,8 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
                         Some(p) => Some(p.id.to_string()),
                         None => root_of(&sc),
                     };
+                    // TICKETS-6: a frozen shortcode takes no new numbers.
+                    rules::frozen_refusal(cache, home.as_deref(), Some(&sc))?;
                     (sc.clone(), None, None, cache.next_seq(&sc), home)
                 }
                 None => {
@@ -286,6 +290,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
                         )));
                     }
                     let hangs = parent_row.clone().or_else(|| first.parent.as_deref().and_then(|p| cache.get(p)).cloned());
+                    rules::frozen_refusal(cache, hangs.as_ref().map(|h| h.id.as_str()), None)?;
                     match cache.target(&to, hangs.as_ref(), true)? {
                         Target::Mint(sc) => (sc.id.clone(), Some(sc.clone()), None, 1, Some(sc.id.key(1))),
                         Target::In(there) => {
@@ -628,6 +633,7 @@ impl Store {
                 hidden_unlocks: 0,
                 parent_hidden: false,
                 archived: None,
+                frozen: false,
                 parent: Some(crate::address::TicketId::new(parent.clone())),
                 child_count: 0,
                 commits: Vec::new(),

@@ -49,6 +49,10 @@ pub(super) fn kind_status(id: &str, previous: Kind, current: Status, kind: Kind,
 /// graph at either end; a shortcode's root stays a kind that roots one; a
 /// path holder stays a doc.
 pub(super) fn kind_refusal(cache: &Cache, row: &Row, blocked_by: &[TicketName], kind: Kind) -> Result<(), StoreError> {
+    // TICKETS-6: a frozen scope stays one until it is unfrozen.
+    if row.frozen && kind != Kind::Scope {
+        return Err(StoreError::Frozen { scope: row.id.to_string(), numbers: None });
+    }
     if !kind.has_lifecycle() && (!blocked_by.is_empty() || !row.unlocks.is_empty()) {
         return Err(StoreError::DocInGraph {
             blocked_by: distinct(blocked_by),
@@ -101,6 +105,21 @@ pub(super) fn parent_refusal(cache: &Cache, child: &Row, parent: &str) -> Result
     }
     if let Some(path) = find_parent_cycle(cache, &child.id, parent) {
         return Err(StoreError::ParentCycle { id: child.id.to_string(), path });
+    }
+    frozen_refusal(cache, Some(parent), None)
+}
+
+/// TICKETS-6: whether a ticket may come to hang under `parent` (a birth or
+/// a move) and — `numbered` — take a new number in that shortcode (a birth
+/// or a reshortcode into it, never a move inside it): refused when the
+/// parent is a frozen scope (its children, and the shortcodes hosted under
+/// it, do not grow), else when the shortcode's root is (no new numbers).
+pub(super) fn frozen_refusal(cache: &Cache, parent: Option<&str>, numbered: Option<&ShortcodeId>) -> Result<(), StoreError> {
+    if let Some(p) = parent.and_then(|p| cache.get(p)).filter(|p| p.frozen) {
+        return Err(StoreError::Frozen { scope: p.id.to_string(), numbers: None });
+    }
+    if let Some(root) = numbered.and_then(|sc| shortcode_root(cache, sc)).filter(|r| r.frozen) {
+        return Err(StoreError::Frozen { scope: root.id.to_string(), numbers: Some(root.epic.to_string()) });
     }
     Ok(())
 }

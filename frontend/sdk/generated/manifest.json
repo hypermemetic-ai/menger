@@ -460,6 +460,9 @@
         "query",
         "tz"
       ],
+      "freeze": [
+        "id"
+      ],
       "get": [
         "id"
       ],
@@ -553,6 +556,9 @@
       ],
       "undelete": [
         "ids"
+      ],
+      "unfreeze": [
+        "id"
       ],
       "unqueue": [
         "id",

@@ -228,6 +228,8 @@ fn redact(e: StoreError, sees: &dyn Fn(&str) -> bool) -> String {
         StoreError::ParentOutsideShortcode { id, parent } => StoreError::ParentOutsideShortcode { id: one(id), parent: one(parent) }.to_string(),
         StoreError::ComponentOwned { id, name, owner } => StoreError::ComponentOwned { id, name, owner: one(owner) }.to_string(),
         StoreError::ScopeNotRoot { id, root, parent } => StoreError::ScopeNotRoot { id: one(id), root: one(root), parent: one(parent) }.to_string(),
+        // TICKETS-6: the frozen scope, when it is out of reach.
+        StoreError::Frozen { scope, numbers } => StoreError::Frozen { scope: one(scope), numbers }.to_string(),
         StoreError::PathTaken { epic, path, holder } => StoreError::PathTaken { epic, path, holder: one(holder) }.to_string(),
         StoreError::PathParent { path, parent, root } => StoreError::PathParent { path, parent: one(parent), root: one(root) }.to_string(),
         StoreError::DocAwaited { id, by } => StoreError::DocAwaited { id, by: veiled(by) }.to_string(),

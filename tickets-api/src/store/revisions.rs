@@ -887,6 +887,7 @@ fn as_it_was(cache: &Cache, key: &str, kept: &Kept_, body: String) -> Ticket {
                 hidden_unlocks: 0,
                 parent_hidden: false,
                 archived: None,
+                frozen: false,
                 parent: None,
                 child_count: 0,
                 commits: Vec::new(),

@@ -168,6 +168,17 @@ narrows nothing (empty, a display part alone) is no filter.
    */
   find(query: Query, after?: Cursor | null, filter?: FilterText | null, limit?: number | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
   /**
+   * Freeze a scope (admin): no new children of it, no new numbers in the shortcode it roots, until it is unfrozen; yields frozen_changed { ticket }.
+
+TICKETS-6: the rules and the write are [`crate::store::Store::freeze`]'s
+module's. Only a scope freezes; one already frozen writes nothing.
+A refused birth or move answers `frozen { scope, message }`.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `tickets.freeze` on the scope of `id`
+   */
+  freeze(id: TicketRef): AsyncGenerator<TicketsEvent>;
+  /**
    * Get one ticket by id, or by path address SHORTCODE/path (e.g. PLEXUS/_MENGER/board).
 
 Yields exactly one event: `Ticket` if found, `NotFound` otherwise.
@@ -438,6 +449,15 @@ ids, tickets }`, or one `Error` naming every refused ticket and why.
    */
   undelete(ids: TicketRef[]): AsyncGenerator<TicketsEvent>;
   /**
+   * Unfreeze a scope (admin): it and its shortcode grow again; yields frozen_changed { ticket }.
+
+TICKETS-6: [`Self::freeze`] undone; one not frozen writes nothing.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `tickets.unfreeze` on the scope of `id`
+   */
+  unfreeze(id: TicketRef): AsyncGenerator<TicketsEvent>;
+  /**
    * Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued.
 
 MENGER-39: takes a ticket out of the queue. Yields one `unqueued`,
@@ -613,6 +633,11 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
+  async *freeze(id: TicketRef): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.freeze', { id });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
   async *get(id: TicketRef): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.get', { id });
     yield* extractData<TicketsEvent>(stream);
@@ -698,6 +723,11 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
+  async *unfreeze(id: TicketRef): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.unfreeze', { id });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
   async *unqueue(id: TicketRef, source?: CallerSource | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.unqueue', { id, source });
     yield* extractData<TicketsEvent>(stream);
@@ -733,6 +763,7 @@ export const requires = {
   "tickets.create": { grant: "tickets.create", target: null },
   "tickets.delete": { grant: "tickets.delete", target: "ids" },
   "tickets.find": { grant: "tickets.find", target: null },
+  "tickets.freeze": { grant: "tickets.freeze", target: "id" },
   "tickets.get": { grant: "tickets.get", target: null },
   "tickets.health": { grant: "tickets.health", target: null },
   "tickets.history": { grant: "tickets.history", target: null },
@@ -750,6 +781,7 @@ export const requires = {
   "tickets.set_status": { grant: "tickets.set_status", target: "id" },
   "tickets.snooze": { grant: "tickets.snooze", target: "id" },
   "tickets.undelete": { grant: "tickets.undelete", target: "ids" },
+  "tickets.unfreeze": { grant: "tickets.unfreeze", target: "id" },
   "tickets.unqueue": { grant: "tickets.unqueue", target: "id" },
   "tickets.update": { grant: "tickets.update", target: "id" },
   "tickets.update_many": { grant: "tickets.update_many", target: "ids" },

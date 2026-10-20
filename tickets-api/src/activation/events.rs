@@ -100,6 +100,7 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         }
         Change::LabelsChanged { ticket, added, removed } => TicketsEvent::LabelsChanged { ticket, added, removed },
         Change::AssigneesChanged { ticket, added, removed } => TicketsEvent::AssigneesChanged { ticket, added, removed },
+        Change::FrozenChanged { ticket } => TicketsEvent::FrozenChanged { ticket },
         Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
         // MENGER-30: `update`'s.
         Change::UnlocksRemoved { ticket, removed } => TicketsEvent::UnlocksRemoved { ticket, removed },
@@ -211,8 +212,15 @@ pub(super) fn membership_event(store: &Store, m: Membership) -> TicketsEvent {
 pub(super) fn refusal(e: StoreError) -> TicketsEvent {
     match e {
         StoreError::Ambiguous { text, candidates } => TicketsEvent::Ambiguous { id: crate::vocab::Asked::stored(text), candidates },
+        StoreError::Frozen { scope, numbers } => frozen(scope, numbers),
         e => TicketsEvent::Error { message: e.to_string() },
     }
+}
+
+/// TICKETS-6: a refusal by a frozen scope, as its typed event.
+fn frozen(scope: String, numbers: Option<String>) -> TicketsEvent {
+    let message = StoreError::Frozen { scope: scope.clone(), numbers }.to_string();
+    TicketsEvent::Frozen { scope: crate::address::TicketId::new(scope), message }
 }
 
 /// A write's own answer: the change it made, which is always one that
@@ -283,6 +291,8 @@ pub(super) fn answer(store: &Store, caller: &VerifiedUser, asked: Option<&str>, 
         Err(Failed::Store(StoreError::NotFound(_))) if asked.is_some() => TicketsEvent::NotFound { id: Asked::stored(asked.unwrap_or_default()) },
         Err(Failed::Store(e @ StoreError::BodyTooLarge { .. })) => too_large(e),
         Err(Failed::Store(e @ StoreError::Ambiguous { .. })) => veiled(caller, e),
+        // TICKETS-6: typed, naming the scope — to a caller who sees it.
+        Err(Failed::Store(StoreError::Frozen { scope, numbers })) if sees_id(store, &caller.sight(), &scope) => frozen(scope, numbers),
         Err(Failed::Store(e)) => said(store, caller, e),
     }
 }

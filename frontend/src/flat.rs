@@ -1077,6 +1077,7 @@ fn flat_row(
                 })
             }}
             // MENGER-12: its labels.
+            {crate::labels::frozen_mark(move || ticket.with(|t| t.frozen))}
             {crate::labels::row_chips(move || ticket.with(|t| t.labels.clone()))}
             // The status tag, its paint and its word one effect: they move
             // together.
@@ -1213,6 +1214,7 @@ mod tests {
             hidden_unlocks: 0,
             parent_hidden: false,
             archived: None,
+            frozen: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),

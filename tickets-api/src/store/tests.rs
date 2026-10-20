@@ -1329,6 +1329,7 @@ pub(super) fn nav(store: &Store) -> Vec<Group> {
                 title: t.title.clone(),
                 status: t.status,
                 kind: t.kind,
+                frozen: t.frozen,
             }),
             root: r.root.map(TicketId::new),
             host: r.host.map(TicketId::new),
@@ -1582,7 +1583,7 @@ async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
         .create(SYS, NewTicket { kind: Kind::Scope, ..child_of("SUB", "the sub", "HOST-2") })
         .await
         .unwrap(); // SUB-1, hosted under HOST-2
-    let row = |title: &str, status| Some(RootRow { title: title.into(), status, kind: Kind::Scope });
+    let row = |title: &str, status| Some(RootRow { title: title.into(), status, kind: Kind::Scope, frozen: false });
     let by = |epic: &str| store.groups(SYS).into_iter().find(|g| g.epic == epic).unwrap();
     assert_eq!(by("HOST").root_row, row("the host", Status::Pending));
     assert_eq!(by("SUB").root_row, row("the sub", Status::Pending));
@@ -1646,6 +1647,7 @@ pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)])
                 hidden_unlocks: 0,
                 parent_hidden: false,
                 archived: None,
+                frozen: false,
                 labels: Vec::new(),
                 assignees: Vec::new(),
                 id: (*id).into(),
@@ -2028,6 +2030,7 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
                 hidden_unlocks: 0,
                 parent_hidden: false,
                 archived: None,
+                frozen: false,
                 labels: Vec::new(),
                 assignees: Vec::new(),
                 id: (*id).into(),

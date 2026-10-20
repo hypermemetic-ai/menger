@@ -666,6 +666,40 @@ impl TicketsActivation {
         assign_stream(self.store.clone(), self.access.clone(), user, id, ids, add, remove, source, message)
     }
 
+    /// Freeze a scope (admin): no new children of it, no new numbers in the shortcode it roots, until it is unfrozen; yields frozen_changed { ticket }.
+    ///
+    /// TICKETS-6: the rules and the write are [`crate::store::Store::freeze`]'s
+    /// module's. Only a scope freezes; one already frozen writes nothing.
+    /// A refused birth or move answers `frozen { scope, message }`.
+    #[plexus_macros::method(group = "write", target = "id", example(note = "stop a scope growing", params = r#"{"id": "THEME-1"}"#))]
+    pub async fn freeze(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Scope id, e.g. THEME-1.
+        id: TicketRef,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        answered!(store = self.store.clone(), user, Some(id.to_string()) => {
+            let on = permit::<crate::access::Admin>(&store, &user, &id)?;
+            Ok(change_event(store.freeze(on, true).await?))
+        })
+    }
+
+    /// Unfreeze a scope (admin): it and its shortcode grow again; yields frozen_changed { ticket }.
+    ///
+    /// TICKETS-6: [`Self::freeze`] undone; one not frozen writes nothing.
+    #[plexus_macros::method(group = "write", target = "id", example(note = "let it grow again", params = r#"{"id": "THEME-1"}"#))]
+    pub async fn unfreeze(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Scope id, e.g. THEME-1.
+        id: TicketRef,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        answered!(store = self.store.clone(), user, Some(id.to_string()) => {
+            let on = permit::<crate::access::Admin>(&store, &user, &id)?;
+            Ok(change_event(store.freeze(on, false).await?))
+        })
+    }
+
     /// Change any part of a ticket in one write — title, body, kind, status, parent, severity, blockers (block / unblock); all lands or none does; yields updated { ticket, changed }.
     ///
     /// MENGER-30: any part of a ticket in one write, all of it or none — the
