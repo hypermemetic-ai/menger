@@ -19,7 +19,10 @@
 # as ACCESS-25 requires: 0.0.0.0 adds no name. ACCESS-24: menger has no open
 # mode — a container started without MENGER_AUTH_PROVIDERS (or
 # MENGER_IDENTITY) exits at once, saying so; the run supplies them.
-FROM debian:bookworm-slim
+# DEPLOY-51: trixie (glibc 2.41). The release binary is built on this machine
+# and, since DIST-14, references GLIBC_2.39 (std's pidfd_spawnp), so bookworm's
+# 2.36 can't load it. The base must be at least as new as the glibc it links.
+FROM debian:trixie-slim
 # ca-certificates: login providers' keys are fetched over https.
 # tini: PID 1 that hands SIGTERM to menger (which keeps the default
 # disposition), so `docker stop` stops it at once.

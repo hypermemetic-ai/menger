@@ -276,7 +276,7 @@ IMAGE_STORE=ghcr deploy/pipeline image     # ghcr.io/hypermemetic-ai/menger:<rel
   RELEASE  ok REF`, or `build failed` / `push failed`) — not a deployment:
   `backfill` and `deploy/record` pass it by.
 
-**Inside the image**: `debian:bookworm-slim`, user `menger` (uid 10001),
+**Inside the image**: `debian:trixie-slim` (glibc 2.41 — at least the glibc the release binary links, built on this machine: since DIST-14 it needs 2.39, DEPLOY-51), user `menger` (uid 10001),
 `tini` as PID 1 (so `docker stop` is a SIGTERM menger heeds), menger bound
 to `0.0.0.0` (`MENGER_BIND`), the WebSocket on 8080 and the shell on 8081
 (`MENGER_WS_PORT`, `MENGER_SHELL_PORT`), the REST bridge off
