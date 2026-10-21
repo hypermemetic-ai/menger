@@ -293,12 +293,95 @@ pub fn pick_port(bind: IpAddr, asked: Option<u16>, default: u16, taken: &[u16]) 
     anyhow::bail!("no free port from {default} to {}: give one with --port / --shell-port", default.saturating_add(99))
 }
 
+/// DIST-17: the name synapse knows the local admin's key by.
+pub const AGENT_KEY: &str = "menger-local";
+
+/// The line an agent runs once to sign in as the local admin, for the
+/// WebSocket on `ws_port`.
+pub fn agent_line(ws_port: u16) -> String {
+    format!("synapse -P {ws_port} _login menger --key {AGENT_KEY} --as {AGENT_KEY}")
+}
+
+/// What handing the key to synapse came to.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Handed {
+    /// `~/.plexus/keys/menger-local.key` is a link to the key (made now, or already).
+    Linked,
+    /// Something else is there; left alone.
+    Elsewhere(PathBuf),
+    /// No link could be made (no symlinks here, or no home): why.
+    Manual(String),
+}
+
+/// DIST-17: make `~/.plexus/keys/menger-local.key` a symlink to
+/// `data_dir/local.key`, so synapse can `_login` with it. Never a copy of
+/// the seed; an existing file or link is left alone (and reported when it
+/// is not this key).
+pub fn hand_key_to_synapse(data_dir: &Path) -> Handed {
+    use std::os::unix::fs::DirBuilderExt;
+    let key = data_dir.join(KEY_FILE);
+    let Some(home) = dirs::home_dir() else { return Handed::Manual("there is no home directory".into()) };
+    let keys = home.join(".plexus").join("keys");
+    let link = keys.join(format!("{AGENT_KEY}.key"));
+    let same = |l: &Path| matches!((std::fs::canonicalize(l), std::fs::canonicalize(&key)), (Ok(a), Ok(b)) if a == b);
+    if link.symlink_metadata().is_ok() {
+        return if same(&link) { Handed::Linked } else { Handed::Elsewhere(link) };
+    }
+    let made = std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&keys)
+        .and_then(|_| std::os::unix::fs::symlink(std::fs::canonicalize(&key).unwrap_or(key.clone()), &link));
+    match made {
+        Ok(()) => Handed::Linked,
+        // Another start made the same link first.
+        Err(_) if link.symlink_metadata().is_ok() => if same(&link) { Handed::Linked } else { Handed::Elsewhere(link) },
+        Err(e) => Handed::Manual(e.to_string()),
+    }
+}
+
+/// The banner's lines about agents: the `_login` line when the key is
+/// handed over, else a note saying why not.
+pub fn agent_lines(handed: &Handed, data_dir: &Path, ws_port: u16) -> Vec<String> {
+    match handed {
+        Handed::Linked => vec![format!("agents: {}", agent_line(ws_port))],
+        Handed::Elsewhere(p) => vec![format!("note:  {} is already there and is not this key; left alone", shown(p))],
+        Handed::Manual(why) => vec![format!(
+            "note:  no key link for synapse ({why}); make {AGENT_KEY}.key in synapse's keys a link to {}, then: {}",
+            shown(&data_dir.join(KEY_FILE)),
+            agent_line(ws_port)
+        )],
+    }
+}
+
+/// `menger login --agent`: the agent line for the server running on
+/// `data_dir`, or why there is none.
+pub fn login_agent(data_dir: &Path) -> Result<String, String> {
+    let not_running = || format!("menger isn't running on {}. Start it with `menger`.", shown(data_dir));
+    let running = Running::read(data_dir).ok_or_else(not_running)?;
+    if std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], running.ws_port).into(), std::time::Duration::from_secs(2)).is_err() {
+        return Err(not_running());
+    }
+    if !data_dir.join(KEY_FILE).exists() {
+        return Err(format!("the menger running on {} signs people in with a login provider: there is no local key to hand to an agent", shown(data_dir)));
+    }
+    match hand_key_to_synapse(data_dir) {
+        Handed::Linked => Ok(agent_line(running.ws_port)),
+        Handed::Elsewhere(p) => Err(format!("{} is already there and is not this key; left alone", shown(&p))),
+        Handed::Manual(why) => Err(format!("can't link the key for synapse: {why}")),
+    }
+}
+
 /// What a start prints, in this order: that it runs, where to open it
-/// (`once`: a one-time link), the data, how to stop it — and a port that
-/// moved, said.
-pub fn banner(version: &str, url: &str, once: bool, db: &Path, moved: &[String]) -> String {
+/// (`once`: a one-time link), the agents' lines (local starts), the data,
+/// how to stop it — and a port that moved, said.
+pub fn banner(version: &str, url: &str, once: bool, agents: &[String], db: &Path, moved: &[String]) -> String {
     let note = if once { "   (one-time; `menger login` for another)" } else { "" };
-    let mut out = format!("menger {version} — running\n  open:  {url}{note}\n  data:  {}\n  stop:  Ctrl-C\n", shown(db));
+    let mut out = format!("menger {version} — running\n  open:  {url}{note}\n");
+    for a in agents {
+        out.push_str(&format!("  {a}\n"));
+    }
+    out.push_str(&format!("  data:  {}\n  stop:  Ctrl-C\n", shown(db)));
     for m in moved {
         out.push_str(&format!("  note:  {m}\n"));
     }
@@ -395,14 +478,47 @@ mod tests {
 
     #[test]
     fn the_banner_says_it_runs_the_link_the_data_and_how_to_stop() {
-        let b = banner("0.6.1", "http://127.0.0.1:4456/login?once=x", true, Path::new("/data/local.db"), &[]);
+        let b = banner("0.6.1", "http://127.0.0.1:4456/login?once=x", true, &[], Path::new("/data/local.db"), &[]);
         let lines: Vec<&str> = b.lines().collect();
         assert_eq!(lines[0], "menger 0.6.1 — running");
         assert!(lines[1].trim_start().starts_with("open:  http://127.0.0.1:4456/login?once=x"));
         assert!(lines[2].contains("data:  /data/local.db"));
         assert!(lines[3].contains("stop:  Ctrl-C"));
         assert!(lines[1].contains("`menger login` for another"));
-        let p = banner("0.6.1", "https://t.example/", false, Path::new("/d.db"), &["port 4455 was taken: the WebSocket is on 4457".into()]);
+        let p = banner("0.6.1", "https://t.example/", false, &[], Path::new("/d.db"), &["port 4455 was taken: the WebSocket is on 4457".into()]);
         assert!(p.contains("open:  https://t.example/\n") && p.contains("note:  port 4455 was taken"), "{p}");
+    }
+
+    #[test]
+    fn the_banner_puts_the_agents_line_under_open() {
+        let agents = agent_lines(&Handed::Linked, Path::new("/d"), 4455);
+        let b = banner("0.6.1", "http://127.0.0.1:4456/login?once=x", true, &agents, Path::new("/data/local.db"), &[]);
+        let lines: Vec<&str> = b.lines().collect();
+        assert_eq!(lines[2].trim_start(), "agents: synapse -P 4455 _login menger --key menger-local --as menger-local");
+        assert!(lines[3].contains("data:"));
+    }
+
+    #[test]
+    fn the_key_is_linked_never_copied_and_an_existing_one_is_left_alone() {
+        // HOME is process-wide: this is the only test that sets it.
+        let home = tempfile::tempdir().unwrap();
+        let data = home.path().join("data");
+        local_admin(&data).unwrap();
+        let prev = std::env::var_os("HOME");
+        // SAFETY: no other test in this binary reads HOME.
+        unsafe { std::env::set_var("HOME", home.path()) };
+        let link = home.path().join(".plexus/keys/menger-local.key");
+        assert_eq!(hand_key_to_synapse(&data), Handed::Linked);
+        assert_eq!(std::fs::read_link(&link).unwrap(), std::fs::canonicalize(data.join(KEY_FILE)).unwrap(), "a link, not a copy");
+        assert_eq!(hand_key_to_synapse(&data), Handed::Linked, "a second time changes nothing");
+        // Another file there: left alone.
+        std::fs::remove_file(&link).unwrap();
+        std::fs::write(&link, "other").unwrap();
+        assert_eq!(hand_key_to_synapse(&data), Handed::Elsewhere(link.clone()));
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "other");
+        match prev {
+            Some(h) => unsafe { std::env::set_var("HOME", h) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
     }
 }

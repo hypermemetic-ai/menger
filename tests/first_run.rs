@@ -135,8 +135,10 @@ async fn a_first_run_prints_a_link_that_signs_in_once_and_menger_login_prints_an
     let open = lines[1].trim_start();
     assert!(open.starts_with(&format!("open:  http://127.0.0.1:{shell}/login?once=")), "{lines:?}");
     assert!(open.contains("`menger login` for another"), "{open}");
-    assert_eq!(lines[2].trim_start(), "data:  ~/.local/share/menger/local.db");
-    assert_eq!(lines[3].trim_start(), "stop:  Ctrl-C");
+    // DIST-17: under open, how an agent signs in.
+    assert_eq!(lines[2].trim_start(), format!("agents: synapse -P {ws} _login menger --key menger-local --as menger-local"));
+    assert_eq!(lines[3].trim_start(), "data:  ~/.local/share/menger/local.db");
+    assert_eq!(lines[4].trim_start(), "stop:  Ctrl-C");
     let link = open.split_whitespace().nth(1).unwrap().to_string();
 
     // Its own data directory, the key 0600, never prod's tickets.db.
@@ -173,6 +175,50 @@ async fn a_first_run_prints_a_link_that_signs_in_once_and_menger_login_prints_an
     assert!(fresh.starts_with(&format!("http://127.0.0.1:{shell}/login?once=")) && fresh != link, "{fresh}");
     let second = get(shell, path_of(fresh), None).await;
     assert!(status(&second) == 303 && session_cookie(&second).is_some(), "{second}");
+}
+
+/// DIST-17: a local start links its key for synapse, says how to sign in,
+/// `menger login --agent` says it again, an existing file is never
+/// overwritten, and a provider's server links nothing and prints no line.
+#[tokio::test]
+async fn a_local_start_hands_its_key_to_synapse_and_never_overwrites() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let home = dir.path();
+    let (ws, shell) = (free_port(), free_port());
+    let line = format!("synapse -P {ws} _login menger --key menger-local --as menger-local");
+    let link = home.join(".plexus/keys/menger-local.key");
+    {
+        let (_server, lines) = start(home, ws, shell, &[]);
+        assert!(lines.iter().any(|l| l.trim_start() == format!("agents: {line}")), "{lines:?}");
+        let key = home.join(".local/share/menger/local.key");
+        assert_eq!(std::fs::read_link(&link).unwrap().canonicalize().unwrap(), key.canonicalize().unwrap(), "a link to the key, not a copy");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        let out = menger(home).args(["login", "--agent"]).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), line);
+    }
+    // A second start changes nothing and says the same.
+    let (ws2, shell2) = (free_port(), free_port());
+    let target = std::fs::read_link(&link).unwrap();
+    {
+        let (_server, lines) = start(home, ws2, shell2, &[]);
+        assert!(lines.iter().any(|l| l.contains(&format!("synapse -P {ws2} _login menger"))), "{lines:?}");
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    }
+    // Something else already there: left alone, said, no line.
+    std::fs::remove_file(&link).unwrap();
+    std::fs::write(&link, "someone else's").unwrap();
+    {
+        let (_server, lines) = start(home, free_port(), free_port(), &[]);
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "someone else's");
+        assert!(lines.iter().any(|l| l.contains("is already there and is not this key")), "{lines:?}");
+        assert!(!lines.iter().any(|l| l.contains("agents:")), "{lines:?}");
+    }
+    // A provider's server: no link, no line.
+    let other = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let (_server, lines) = start(other.path(), free_port(), free_port(), &["--auth-provider", "key", "--admin", &format!("key:{}", "ab".repeat(32))]);
+    assert!(!lines.iter().any(|l| l.contains("agents:")), "{lines:?}");
+    assert!(!other.path().join(".plexus").exists());
 }
 
 #[tokio::test]

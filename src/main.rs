@@ -320,7 +320,12 @@ struct Args {
 enum Command {
     // DIST-14: against the server running on --data-dir (its `local.json`).
     /// Print a new one-time sign-in link for the menger running here
-    Login,
+    Login {
+        // DIST-17.
+        /// Print the line an agent runs to sign in with the local key, not a link
+        #[arg(long)]
+        agent: bool,
+    },
 }
 
 #[tokio::main]
@@ -338,7 +343,12 @@ async fn main() -> anyhow::Result<()> {
 async fn run(args: Args) -> anyhow::Result<()> {
     let data_dir = args.data_dir.clone().unwrap_or_else(first_run::default_data_dir);
     // DIST-14: `menger login` — a fresh link for the server running here.
-    if let Some(Command::Login) = args.command {
+    if let Some(Command::Login { agent }) = args.command {
+        // DIST-17: `--agent` prints the line an agent signs in with.
+        if agent {
+            println!("{}", first_run::login_agent(&data_dir).map_err(anyhow::Error::msg)?);
+            return Ok(());
+        }
         let link = first_run::login(&data_dir).map_err(anyhow::Error::msg)?;
         println!("{link}");
         println!("  (one-time, 10 minutes)");
@@ -580,15 +590,19 @@ async fn run(args: Args) -> anyhow::Result<()> {
     }
     // DIST-14: what a person reads — it runs, where to open it, the data,
     // how to stop it; with --open, the browser too.
+    let mut handed = first_run::Handed::Linked;
     let url = match &once {
         Some(o) => {
             first_run::Running { pid: std::process::id(), ws_port, shell_port }.write(&data_dir)?;
+            handed = first_run::hand_key_to_synapse(&data_dir);
             first_run::link(shell_port, &o.mint()?)
         }
         None => format!("{}/", wiring_public_url(&args.public_url, shell_port)),
     };
     if !args.no_shell {
-        print!("{}", first_run::banner(env!("CARGO_PKG_VERSION"), &url, once.is_some(), &db_path, &moved));
+        // DIST-17: a local start hands its key to synapse and says how to sign in.
+        let agents = if once.is_some() { first_run::agent_lines(&handed, &data_dir, ws_port) } else { vec![] };
+        print!("{}", first_run::banner(env!("CARGO_PKG_VERSION"), &url, once.is_some(), &agents, &db_path, &moved));
         if args.open && !plexus_login::browser::open(&url) {
             println!("  (no browser to open here: open the link above yourself)");
         }
