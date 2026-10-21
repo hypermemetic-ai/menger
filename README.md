@@ -25,6 +25,7 @@ on this machine only, and prints where to open it:
 ```
 menger 0.6.1 — running
   open:  http://127.0.0.1:4456/login?once=…   (one-time; `menger login` for another)
+  agents: synapse -P 4455 _login menger --key menger-local --as menger-local
   data:  ~/.local/share/menger/local.db
   stop:  Ctrl-C
 ```
@@ -49,6 +50,15 @@ in by itself, as Jupyter does:
   running on that data directory — its `local.json`) prints a fresh one.
   The links are files under `once/` in the data directory, each named by
   its token's SHA-256.
+- **Agents** (DIST-17): a local start makes `~/.plexus/keys/menger-local.key`
+  (under `$HOME`) a symlink to `local.key` — never a copy of the seed — and
+  prints the `agents:` line, with the WebSocket's real port; run it once
+  and synapse is signed in as the local admin. `menger login --agent`
+  prints the line again for the running server. An existing file or link
+  there is left alone (the banner says so, and prints no line); where
+  symlinks can't be made it writes nothing and prints a note with the
+  manual way. A server with a login provider, `--bind` or `--admin` of its
+  own links nothing and prints no line.
 - A port not given that is taken falls back to the next free one, and the
   banner says which (`note: port 4455 was taken: …`); a port given is
   bound or startup fails — prod and test name theirs.
