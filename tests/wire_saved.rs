@@ -1,10 +1,10 @@
-//! FILTER-36: `saved "Name"` over the real protocol — a real
+//! FILTER-36, FILTER-46: `saved "Name"` over the real protocol — a real
 //! TransportServer, a real WebSocket client, the `menger.call` envelope
-//! (tests/wire.rs's): a store seeded with the collection and two saved
-//! filters the way the app's Save as… writes them; `list` answering the
-//! union of two names as the two listed apart, `counts` agreeing, a missing
-//! name and a cycle each one in-band `error`, and a membership watch on the
-//! union said what a saved doc's amend did to it.
+//! (tests/wire.rs's): filters saved with `tickets.filters.save`; `list`
+//! answering the union of two names as the two listed apart, `counts`
+//! agreeing, a missing name and a cycle refused, a membership watch on the
+//! union said what a replace did to it, and `filters.*` listed, read, checked,
+//! renamed and deleted with the watch hearing `filter_saved` / `filter_deleted`.
 
 
 /// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
@@ -141,32 +141,20 @@ async fn counted(client: &WsClient, filter: &str) -> Result<u64, String> {
     Ok(evs.iter().map(|e| e["held"].as_u64().unwrap()).sum())
 }
 
-/// A saved filter's doc, as the app's Save as… writes one (FILTER-6): in
-/// VIEW, under the collection, at `_MENGER/view/<slug>`, titled with its
-/// name, its body the one `filter:` line.
-async fn save(client: &WsClient, name: &str, slug: &str, text: &str) -> String {
-    let ev = one(
-        client,
-        "tickets.create",
-        json!({"epic": "VIEW", "title": name, "kind": "doc", "parent": "VIEW-1", "path": format!("_MENGER/view/{slug}"), "body": format!("filter: {text}")}),
-    )
-    .await;
-    assert_eq!(ev["type"], "created", "{ev}");
-    ev["ticket"]["id"].as_str().unwrap().to_string()
+/// A saved filter, through `tickets.filters.save` — the event it answers.
+async fn save(client: &WsClient, name: &str, text: &str) -> Value {
+    one(client, "tickets.filters.save", json!({"name": name, "filter": text})).await
 }
 
 #[tokio::test]
 async fn saved_names_over_the_wire_list_count_refuse_and_move_a_watch() {
     let port = start_server().await;
     let client = connect(port).await;
-    // The collection, as the app's first save makes it, then two saved filters.
-    one(&client, "tickets.create", json!({"epic": "FILTER", "title": "filters", "kind": "scope"})).await;
-    let view = one(&client, "tickets.create", json!({"epic": "VIEW", "title": "Saved filters", "kind": "doc", "parent": "FILTER-1", "body": ""})).await;
-    assert_eq!(view["ticket"]["id"], "VIEW-1", "{view}");
-    save(&client, "Needs you", "needs-you", "(asking or label needs-you)").await;
-    let plexus = save(&client, "Plexus-Ready", "plexus-ready", "in PLEXUS and status Ready").await;
-    let list = "- <m-demand id=\"needs-you\">Needs you</m-demand>\n- <m-demand id=\"plexus-ready\">Plexus-Ready</m-demand>\n";
-    one(&client, "tickets.amend", json!({"id": "VIEW-1", "body": list})).await;
+    // Two saved filters.
+    let saved = save(&client, "Needs you", "(asking or label needs-you)").await;
+    assert_eq!(saved["type"], "filter_saved", "{saved}");
+    assert_eq!(saved["filter"]["filter"], "(asking or label needs-you)");
+    save(&client, "Plexus-Ready", "in PLEXUS and status Ready").await;
     // The work they choose from: PLEXUS-2, 3 Ready; 3, 4 needing you.
     one(&client, "tickets.create", json!({"epic": "PLEXUS", "title": "the platform", "kind": "scope"})).await;
     for i in 0..3 {
@@ -175,6 +163,17 @@ async fn saved_names_over_the_wire_list_count_refuse_and_move_a_watch() {
     one(&client, "tickets.set_status", json!({"id": "PLEXUS-2", "status": "Ready"})).await;
     one(&client, "tickets.set_status", json!({"id": "PLEXUS-3", "status": "Ready"})).await;
     collect(call(&client, "tickets.label", json!({"ids": ["PLEXUS-3", "PLEXUS-4"], "add": ["needs-you"]})).await).await;
+
+    // list, get and check answer what was saved, with counts.
+    let rows = collect(call(&client, "tickets.filters.list", json!({})).await).await;
+    let named: Vec<(&str, u64)> = rows.iter().map(|e| (e["filter"]["name"].as_str().unwrap(), e["filter"]["count"].as_u64().unwrap())).collect();
+    assert_eq!(named, [("Needs you", 2), ("Plexus-Ready", 2)]);
+    let got = one(&client, "tickets.filters.get", json!({"name": "plexus ready"})).await;
+    assert_eq!((got["filter"]["name"].as_str(), got["filter"]["count"].as_u64()), (Some("Plexus-Ready"), Some(2)));
+    let checked = one(&client, "tickets.filters.check", json!({"filter": "label   needs-you"})).await;
+    assert_eq!((checked["type"].as_str(), checked["filter"].as_str(), checked["count"].as_u64()), (Some("filter_checked"), Some("label needs-you"), Some(2)));
+    let bad = one(&client, "tickets.filters.check", json!({"filter": "kind wobbly"})).await;
+    assert!(bad["type"] == "error" && bad["message"].as_str().unwrap().contains("kind wobbly"), "{bad}");
 
     // Each name is its filter; `or` is the union, `and` the intersection.
     let needs = listed(&client, "saved \"Needs you\"").await.unwrap();
@@ -188,30 +187,31 @@ async fn saved_names_over_the_wire_list_count_refuse_and_move_a_watch() {
     both.dedup();
     assert_eq!(listed(&client, union).await.unwrap(), both);
     assert_eq!(listed(&client, "saved \"Needs you\" and saved Plexus-Ready").await.unwrap(), ["PLEXUS-3"]);
-    // counts agree.
     assert_eq!(counted(&client, union).await.unwrap(), both.len() as u64);
     assert_eq!(counted(&client, "saved needs-you").await.unwrap(), 2, "a name by its slug");
 
-    // A name nothing holds; a cycle: one in-band error each, naming it.
+    // A name nothing holds is one in-band error; a save naming one, or making a cycle, is refused.
     let missing = listed(&client, "saved Nope or ready").await.unwrap_err();
     assert!(missing.contains("no saved filter named \"Nope\""), "{missing}");
     assert!(counted(&client, "saved Nope").await.unwrap_err().contains("no saved filter named \"Nope\""));
-    save(&client, "Loop A", "loop-a", "saved \"Loop B\" and ready").await;
-    save(&client, "Loop B", "loop-b", "(blocked or saved \"Loop A\")").await;
-    let cycle = listed(&client, "saved \"Loop A\"").await.unwrap_err();
-    assert!(cycle.contains("a cycle: \"Loop A\" names \"Loop B\" names \"Loop A\""), "{cycle}");
+    let unsaved = save(&client, "Dangling", "saved Nope").await;
+    assert!(unsaved["type"] == "error" && unsaved["message"].as_str().unwrap().contains("no saved filter named"), "{unsaved}");
+    save(&client, "Loop B", "blocked").await;
+    save(&client, "Loop A", "saved \"Loop B\" and ready").await;
+    let cycle = save(&client, "Loop B", "(blocked or saved \"Loop A\")").await;
+    assert!(cycle["message"].as_str().unwrap().contains("a cycle: \"Loop A\" names \"Loop B\" names \"Loop A\""), "{cycle}");
     let mut bad = call(&client, "tickets.watch", json!({"filter": "saved Nope"})).await;
     let ev = content(bad.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "error", "{ev}");
 
-    // A watch on the union: Plexus-Ready's text amended moves it — PLEXUS-2
+    // A watch on the union: Plexus-Ready replaced moves it — PLEXUS-2
     // leaves (Ready, needing no one), PLEXUS-1 (the root, Pending) enters.
     let mut members = call(&client, "tickets.watch", json!({"filter": union, "membership": true})).await;
     let mut all = call(&client, "tickets.watch", json!({"filter": union})).await;
-    one(&client, "tickets.amend", json!({"id": plexus, "body": "filter: in PLEXUS and status Pending"})).await;
+    save(&client, "Plexus-Ready", "in PLEXUS and status Pending").await;
     let heard = watch_until(&mut all, "left").await;
     let kinds: Vec<&str> = heard.iter().map(|e| e["type"].as_str().unwrap()).collect();
-    assert_eq!(&kinds[kinds.len() - 3..], ["amended", "entered", "left"], "after the change that moved it: {kinds:?}");
+    assert_eq!(&kinds[kinds.len() - 3..], ["filter_saved", "entered", "left"], "after the change that moved it: {kinds:?}");
     let evs = watch_until(&mut members, "left").await;
     assert_eq!(
         evs,
@@ -221,9 +221,22 @@ async fn saved_names_over_the_wire_list_count_refuse_and_move_a_watch() {
         ]
     );
     assert_eq!(listed(&client, union).await.unwrap(), ["PLEXUS-1", "PLEXUS-3", "PLEXUS-4"]);
-    // …and the watch judges the next cell move by the filter as it now is:
-    // PLEXUS-2 back to Pending enters.
     one(&client, "tickets.set_status", json!({"id": "PLEXUS-2", "status": "Pending"})).await;
     let evs = watch_until(&mut members, "entered").await;
     assert_eq!(evs, [json!({"type": "entered", "id": "PLEXUS-2", "epic": "PLEXUS", "shortcode": "PLEXUS", "seq": 2})]);
+
+    // rename and delete are said to the watch, and followed by the name.
+    let mut plain = call(&client, "tickets.watch", json!({})).await;
+    let renamed = one(&client, "tickets.filters.rename", json!({"name": "Plexus-Ready", "to": "Plexus pending"})).await;
+    assert_eq!((renamed["filter"]["name"].as_str(), renamed["renamed_from"].as_str()), (Some("Plexus pending"), Some("Plexus-Ready")));
+    let said = watch_until(&mut plain, "filter_saved").await;
+    assert_eq!(said.last().unwrap()["renamed_from"], "Plexus-Ready", "{said:?}");
+    assert_eq!(listed(&client, "saved \"plexus pending\"").await.unwrap(), ["PLEXUS-1", "PLEXUS-2", "PLEXUS-4"]);
+    assert!(listed(&client, "saved Plexus-Ready").await.unwrap_err().contains("no saved filter named \"Plexus-Ready\""));
+    let gone = one(&client, "tickets.filters.delete", json!({"name": "plexus pending"})).await;
+    assert_eq!(gone, json!({"type": "filter_deleted", "name": "Plexus pending"}));
+    let said = watch_until(&mut plain, "filter_deleted").await;
+    assert_eq!(said.last().unwrap()["name"], "Plexus pending");
+    let again = one(&client, "tickets.filters.get", json!({"name": "Plexus pending"})).await;
+    assert_eq!(again["type"], "error", "{again}");
 }

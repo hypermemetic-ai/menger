@@ -504,6 +504,21 @@ export interface RootRow {
     status: Status;
     title: string;
 }
+/** One saved filter, as `tickets filters` answers it. */
+export interface SavedFilter {
+    /** How many tickets in the caller's reach it admits now (`list`, `get` and `save`; omitted elsewhere). */
+    count?: number | null;
+    /** The filter, as canonical text (FILTER-3's language). */
+    filter: string;
+    /** Its name, as saved. */
+    name: string;
+    /** When it was first saved, unix seconds. */
+    savedAt: number;
+    /** Who saved it (the principal, as the server names it). */
+    savedBy: string;
+    /** When it was last written (a replace or a rename), unix seconds. */
+    updatedAt: number;
+}
 /** SEARCH-2: one word of a `search`, as the query was read — and the
 index's words it also matched, being one or two edits away (a typo).
 `also` is empty for a word the index holds — as itself, or as the start
@@ -1132,6 +1147,23 @@ export interface TicketsEventInputChanged {
     type: 'input_changed';
     input: Input;
 }
+/** FILTER-46: a saved filter (yielded by `filters.list` and `get` per filter, by `save` and `rename`, and by `watch` on every save, replace and rename — `renamed_from` the name it had). */
+export interface TicketsEventFilterSaved {
+    type: 'filter_saved';
+    filter: SavedFilter;
+    renamedFrom: string | null;
+}
+/** FILTER-46: a saved filter deleted (yielded by `filters.delete` and by `watch`). */
+export interface TicketsEventFilterDeleted {
+    type: 'filter_deleted';
+    name: string;
+}
+/** FILTER-46: what `filters.check` found — the filter reads, resolves and admits `count` tickets in the caller's reach. */
+export interface TicketsEventFilterChecked {
+    type: 'filter_checked';
+    count: number;
+    filter: string;
+}
 /** One resolved blocker of the queried ticket, at its current status
 (yielded per-entry by `blockers`). */
 export interface TicketsEventBlocker {
@@ -1414,7 +1446,7 @@ export interface TicketsEventRevised {
     rev: number;
     ticket: TicketId;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventFrozenChanged | TicketsEventAssigneesChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventFrozen | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord | TicketsEventAssignRecord | TicketsEventRevision | TicketsEventRevisionsEnd | TicketsEventRevisionAt | TicketsEventRevisionDiff | TicketsEventRevisionRestored | TicketsEventRevised;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventFrozenChanged | TicketsEventAssigneesChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventFilterSaved | TicketsEventFilterDeleted | TicketsEventFilterChecked | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventFrozen | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord | TicketsEventAssignRecord | TicketsEventRevision | TicketsEventRevisionsEnd | TicketsEventRevisionAt | TicketsEventRevisionDiff | TicketsEventRevisionRestored | TicketsEventRevised;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -1461,6 +1493,9 @@ export declare function isTicketsEventComponentChanged(e: TicketsEvent): e is Ti
 export declare function isTicketsEventComponentRemoved(e: TicketsEvent): e is TicketsEventComponentRemoved;
 export declare function isTicketsEventInput(e: TicketsEvent): e is TicketsEventInput;
 export declare function isTicketsEventInputChanged(e: TicketsEvent): e is TicketsEventInputChanged;
+export declare function isTicketsEventFilterSaved(e: TicketsEvent): e is TicketsEventFilterSaved;
+export declare function isTicketsEventFilterDeleted(e: TicketsEvent): e is TicketsEventFilterDeleted;
+export declare function isTicketsEventFilterChecked(e: TicketsEvent): e is TicketsEventFilterChecked;
 export declare function isTicketsEventBlocker(e: TicketsEvent): e is TicketsEventBlocker;
 export declare function isTicketsEventDanglingBlocker(e: TicketsEvent): e is TicketsEventDanglingBlocker;
 export declare function isTicketsEventHiddenBlockers(e: TicketsEvent): e is TicketsEventHiddenBlockers;

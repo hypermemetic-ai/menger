@@ -617,6 +617,8 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         // TICKETS-7: a revision is its ticket's; a frame reads none of
         // them (its SDK has no `revisions`), only a `revised` it hears.
         E::Revised { ref ticket, .. } => reach.holds_id(ticket).then_some(ev),
+        // FILTER-46: the saved filters are the app's, not a frame's.
+        E::FilterSaved { .. } | E::FilterDeleted { .. } | E::FilterChecked { .. } => None,
         E::Revision { .. } | E::RevisionsEnd { .. } | E::RevisionAt { .. } | E::RevisionDiff { .. } | E::RevisionRestored { .. } => None,
         E::Group { group } => inside(group.shortcode.as_str()).then(|| E::Group { group: top(group) }),
         E::GroupChanged { group } => inside(group.shortcode.as_str()).then(|| E::GroupChanged { group: top(group) }),

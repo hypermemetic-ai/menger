@@ -765,6 +765,45 @@
     return new TicketsComponentsClientImpl(rpc);
   }
 
+  // generated/tickets/filters/client.ts
+  class TicketsFiltersClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* check(filter) {
+      const stream = this.rpc.call("tickets.filters.check", { filter });
+      yield* extractData(stream);
+    }
+    async* delete(name) {
+      const stream = this.rpc.call("tickets.filters.delete", { name });
+      yield* extractData(stream);
+    }
+    async* get(name) {
+      const stream = this.rpc.call("tickets.filters.get", { name });
+      yield* extractData(stream);
+    }
+    async* list() {
+      const stream = this.rpc.call("tickets.filters.list", {});
+      yield* extractData(stream);
+    }
+    async* rename(name, to) {
+      const stream = this.rpc.call("tickets.filters.rename", { name, to });
+      yield* extractData(stream);
+    }
+    async* save(filter, name) {
+      const stream = this.rpc.call("tickets.filters.save", { filter, name });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.filters.schema", {});
+      return collectOne(stream);
+    }
+  }
+  function createTicketsFiltersClient(rpc) {
+    return new TicketsFiltersClientImpl(rpc);
+  }
+
   // generated/tickets/inputs/client.ts
   class TicketsInputsClientImpl {
     rpc;
@@ -914,6 +953,7 @@
     rpc;
     commits;
     components;
+    filters;
     inputs;
     nav;
     revisions;
@@ -922,6 +962,7 @@
       this.rpc = rpc;
       this.commits = createTicketsCommitsClient(rpc);
       this.components = createTicketsComponentsClient(rpc);
+      this.filters = createTicketsFiltersClient(rpc);
       this.inputs = createTicketsInputsClient(rpc);
       this.nav = createTicketsNavClient(rpc);
       this.revisions = createTicketsRevisionsClient(rpc);

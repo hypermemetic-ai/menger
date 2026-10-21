@@ -1947,6 +1947,16 @@ pub enum TicketsEvent {
     /// after every other event of its write. `watch { epic }` filters it by
     /// its ticket's shortcode.
     InputChanged { input: Input },
+    /// FILTER-46: a saved filter (yielded by `filters.list` and `get` per filter, by `save` and `rename`, and by `watch` on every save, replace and rename — `renamed_from` the name it had).
+    FilterSaved {
+        filter: crate::saved_filters::SavedFilter,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        renamed_from: Option<String>,
+    },
+    /// FILTER-46: a saved filter deleted (yielded by `filters.delete` and by `watch`).
+    FilterDeleted { name: String },
+    /// FILTER-46: what `filters.check` found — the filter reads, resolves and admits `count` tickets in the caller's reach.
+    FilterChecked { filter: String, count: u64 },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },

@@ -1,51 +1,42 @@
-//! FILTER-6: saved filters — a level's filter saved under a name and chosen
-//! again later, kept in the tracker as docs, so they follow the owner to any
-//! browser and agents can read them.
+//! FILTER-6, FILTER-46: saved filters — a level's filter saved under a name
+//! and chosen again later, kept in the tracker's `saved_filters` table
+//! (`tickets filters`), so they follow the owner to any browser and agents
+//! can read them.
 //!
-//! - **Where they live**: one collection, `VIEW-1`, a doc titled "Saved
-//!   filters" hanging under `FILTER-1` (the first save creates it), whose
-//!   body lists the saved filters in order, one line each:
-//!   `- <m-demand id="open-builds">open builds</m-demand>` — DEMAND-1's
-//!   element, written now so the list is ready for it (`<m-demand>` is not a
-//!   registered component yet: it renders as its text). Each saved filter is
-//!   a doc under `VIEW-1` at the path `_MENGER/view/<slug>` (WAVE-10: `get
-//!   VIEW/_MENGER/view/open-builds`), titled with its name, whose body is the
-//!   filter as canonical text on one line: `filter: kind in (build) and not
-//!   status in (Complete)`. The nav hides `_MENGER/` docs by default.
+//! - **Where they live**: the server's table, one row per name (matched by
+//!   its slug — `Open Builds` is `open builds`, FILTER-36's rule, kept once
+//!   in `tickets-api`), written with `tickets.filters.save | rename |
+//!   delete` and read with `list` | `get`. They are not tickets.
 //! - **The menu** ([`SavedButton`]): `Saved ▾` beside each level's `Filter`
 //!   button — the global one in the header, a surface's in its bar. It reads
-//!   `VIEW-1` as it opens (nothing is asked at startup) and lists the names
-//!   in its order; a name applies its filter to the level (its pills, its
-//!   text and its URL follow — a surface's own categories cleared, since a
-//!   saved filter has none); `rename` changes the doc's title and the line
-//!   together; `remove` takes the line out (the doc stays, unlisted: a doc
-//!   has no removal); `Save as…` opens the dialog.
+//!   `filters.list` as it opens (nothing is asked at startup) and lists the
+//!   names; a name applies its filter to the level (its pills, its text and
+//!   its URL follow — a surface's own categories cleared, since a saved
+//!   filter has none); `rename` and `remove` write the table; `Save as…`
+//!   opens the dialog.
 //! - **Save as…** ([`SaveDialog`]): a name, the canonical text it saves, and
 //!   — where the level has a surface-only part (the wave board's Wave,
 //!   Readiness, Off-board blockers, Title; the inputs page's State, Removed)
 //!   — what is left out. A name whose slug a listed filter's name already
-//!   has offers to replace that filter or to choose another name. A new
-//!   name's path is its slug, or — a listed filter (renamed since) holding
-//!   that path — the first free `slug-2`, `slug-3`, …; an unlisted doc at the
-//!   path (a removed filter) is taken over rather than refused.
-//! - **The writes**: `create` and `amend` through the session's client, as
-//!   the board annotation's (WAVE-11, src/notes.rs) — the collection first,
-//!   then the doc, then the collection's line, so a failed write never
-//!   leaves a line naming nothing. Every refusal (a dead socket, the
-//!   server's in-band words) is shown where the action was taken.
+//!   has offers to replace that filter or to choose another name.
+//! - **The writes** go through the session's client; the list follows
+//!   `watch` (`filter_saved`, `filter_deleted`: another browser's save,
+//!   rename or delete). Every refusal (a dead socket, the server's in-band
+//!   words — a filter the language cannot read, a cycle) is shown where the
+//!   action was taken.
 //!
 //! - FILTER-37: **naming saves** (src/naming.rs) writes through the same
 //!   `save`, `rename` and `remove` — a tree given a name is saved from that
-//!   moment and every edit after amends its doc ([`amend_filter`]); a filter
+//!   moment and every edit after saves it again ([`amend_filter`]); a filter
 //!   chosen here binds its level to its name (the bar shows it), and so
 //!   does a Save as…, which stays as a second door.
 //!
-//! Everything that decides — the slug, the list read from `VIEW-1` and
-//! rewritten, the saved text and its reading, collisions and free paths,
-//! what is left out — is a pure function here, pinned by native tests.
+//! Everything that decides — the slug, collisions, what is left out — is a
+//! pure function here, pinned by native tests.
 
 use leptos::prelude::*;
 use menger_tickets_api::filter::Filter;
+use menger_tickets_api::saved_filters::SavedFilter;
 use menger_tickets_api::{Ticket, TicketsEvent};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -55,28 +46,22 @@ use crate::lens::{Kept, Lens, Level};
 use crate::{dom, session};
 
 // ---------------------------------------------------------------------
-// Where they live
+// What they are called
 
-// FILTER-36: where they live and how a name is matched are the server's
-// too — `saved "Name"` resolves by the same slug — so they are kept once,
-// in `tickets-api`.
-pub(crate) use menger_tickets_api::saved_filters::{COLLECTION, EPIC, FILTER_LINE, PATH_PREFIX};
+// FILTER-36: how a name is matched is the server's too — `saved "Name"`
+// resolves by the same slug — so it is kept once, in `tickets-api`.
 #[cfg(test)]
 pub(crate) use menger_tickets_api::saved_filters::SLUG_MAX;
-/// The collection's title.
-pub(crate) const COLLECTION_TITLE: &str = "Saved filters";
-/// What the collection hangs under: the filters' scope.
-pub(crate) const COLLECTION_PARENT: &str = "FILTER-1";
 /// The longest name kept.
-pub(crate) const NAME_MAX: usize = 120;
+pub(crate) const NAME_MAX: usize = menger_tickets_api::saved_filters::NAME_MAX;
 
 /// FILTER-27: the filters every reader is offered before saving any —
 /// "to get attention in one place": what was born today, what moved today,
 /// and what is stuck. Each is shown under **Suggested** in `Saved ▾` until a
 /// filter of its name is listed; choosing one applies it, `keep` saves it as
-/// an ordinary saved filter (a doc under `VIEW-1`, renamed and changed like
-/// any). Offered by the app rather than written into the tracker, so no
-/// install seeds docs into anyone's store.
+/// an ordinary saved filter (renamed and changed like any). Offered by the
+/// app rather than written into the tracker, so no install seeds anyone's
+/// store.
 pub(crate) const SUGGESTED: [(&str, &str); 4] = [
     ("New today", "created today"),
     ("Moved today", "changed today"),
@@ -85,19 +70,9 @@ pub(crate) const SUGGESTED: [(&str, &str); 4] = [
     ("Untouched 2w", "not touched within 2w and not category done and not kind doc"),
 ];
 
-/// A name as a path's last part (FILTER-36: the server's rule, the one
-/// `saved "Name"` is resolved by).
+/// A name as the server matches it (FILTER-36: the rule `saved "Name"` is
+/// resolved by).
 pub(crate) use menger_tickets_api::saved_filters::slug;
-
-/// A saved filter's path in the collection's shortcode.
-pub(crate) fn path_of(id: &str) -> String {
-    format!("{PATH_PREFIX}{id}")
-}
-
-/// A saved filter's path address — what `get` finds it by.
-pub(crate) fn address_of(id: &str) -> String {
-    format!("{EPIC}/{}", path_of(id))
-}
 
 /// A name as kept: its whitespace runs one space, trimmed, at most
 /// [`NAME_MAX`] characters.
@@ -105,15 +80,19 @@ pub(crate) fn clean_name(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(NAME_MAX).collect::<String>().trim_end().to_string()
 }
 
-// ---------------------------------------------------------------------
-// The collection's list
-
-/// A saved filter as the collection lists it: its id (the slug its doc's
-/// path ends in) and its name.
+/// A saved filter as the list shows it: its id (its name's slug — what the
+/// server finds it by, whatever its spelling) and its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Entry {
     pub(crate) id: String,
     pub(crate) name: String,
+}
+
+impl Entry {
+    /// The entry of the name `name`.
+    pub(crate) fn of(name: &str) -> Self {
+        Entry { id: slug(name), name: name.to_string() }
+    }
 }
 
 #[cfg(test)]
@@ -123,254 +102,8 @@ impl Entry {
     }
 }
 
-/// One `<m-demand id="…">…</m-demand>` element of a body, by byte offsets:
-/// the element, and its text inside.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Demand {
-    id: String,
-    start: usize,
-    inner: std::ops::Range<usize>,
-    end: usize,
-}
-
-const OPEN: &str = "<m-demand";
-const CLOSE: &str = "</m-demand>";
-
-/// Every `<m-demand>` element of `body` with an `id`, in order.
-fn demands(body: &str) -> Vec<Demand> {
-    let mut out = Vec::new();
-    let mut from = 0;
-    while let Some(at) = body[from..].find(OPEN).map(|i| from + i) {
-        let after = at + OPEN.len();
-        from = after;
-        // `<m-demands` is another element.
-        if !body[after..].starts_with(|c: char| c.is_whitespace() || c == '>' || c == '/') {
-            continue;
-        }
-        let Some(gt) = body[after..].find('>').map(|i| after + i) else { break };
-        let Some(close) = body[gt + 1..].find(CLOSE).map(|i| gt + 1 + i) else { break };
-        let end = close + CLOSE.len();
-        from = end;
-        if let Some(id) = attr(&body[after..gt], "id").map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
-            out.push(Demand { id, start: at, inner: gt + 1..close, end });
-        }
-    }
-    out
-}
-
-/// The value of `name` among a tag's attributes (`id="a"`, `id='a'`, `id=a`),
-/// its entities read.
-fn attr(attrs: &str, name: &str) -> Option<String> {
-    let b = attrs.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        while i < b.len() && (b[i].is_ascii_whitespace() || b[i] == b'/') {
-            i += 1;
-        }
-        let k = i;
-        while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'=' && b[i] != b'/' {
-            i += 1;
-        }
-        let key = &attrs[k..i];
-        if key.is_empty() {
-            i += 1;
-            continue;
-        }
-        while i < b.len() && b[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        let mut value = None;
-        if i < b.len() && b[i] == b'=' {
-            i += 1;
-            while i < b.len() && b[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            if i < b.len() && (b[i] == b'"' || b[i] == b'\'') {
-                let q = b[i];
-                let v = i + 1;
-                i = v;
-                while i < b.len() && b[i] != q {
-                    i += 1;
-                }
-                value = Some(&attrs[v..i.min(b.len())]);
-                i += 1;
-            } else {
-                let v = i;
-                while i < b.len() && !b[i].is_ascii_whitespace() {
-                    i += 1;
-                }
-                value = Some(&attrs[v..i]);
-            }
-        }
-        if key.eq_ignore_ascii_case(name) {
-            return Some(unescape(value.unwrap_or("")));
-        }
-    }
-    None
-}
-
-/// Text for HTML: `&`, `<`, `>` and `"` as entities.
-pub(crate) fn escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-/// HTML text read: the entities [`escape`] writes, `&#39;` and numeric
-/// ones; an unknown entity stays as written.
-pub(crate) fn unescape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(at) = rest.find('&') {
-        out.push_str(&rest[..at]);
-        let tail = &rest[at..];
-        let semi = tail.find(';').filter(|i| *i <= 10);
-        let named = semi.and_then(|i| {
-            let e = &tail[1..i];
-            match e {
-                "amp" => Some('&'),
-                "lt" => Some('<'),
-                "gt" => Some('>'),
-                "quot" => Some('"'),
-                "apos" => Some('\''),
-                _ => e
-                    .strip_prefix("#x")
-                    .or_else(|| e.strip_prefix("#X"))
-                    .and_then(|h| u32::from_str_radix(h, 16).ok())
-                    .or_else(|| e.strip_prefix('#').and_then(|d| d.parse().ok()))
-                    .and_then(char::from_u32),
-            }
-            .map(|c| (c, i))
-        });
-        match named {
-            Some((c, i)) => {
-                out.push(c);
-                rest = &tail[i + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &tail[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-/// A demand's text as a name: tags stripped, entities read, whitespace
-/// collapsed.
-fn text_of(raw: &str) -> String {
-    let mut plain = String::with_capacity(raw.len());
-    let mut in_tag = false;
-    for ch in raw.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' if in_tag => in_tag = false,
-            c if !in_tag => plain.push(c),
-            _ => {}
-        }
-    }
-    clean_name(&unescape(&plain))
-}
-
-/// The saved filters `VIEW-1`'s body lists, in its order — every
-/// `<m-demand id>` element, the first of an id kept; a demand with no text
-/// is named by its id.
-pub(crate) fn entries(body: &str) -> Vec<Entry> {
-    let mut out: Vec<Entry> = Vec::new();
-    for d in demands(body) {
-        if out.iter().any(|e| e.id == d.id) {
-            continue;
-        }
-        let name = text_of(&body[d.inner.clone()]);
-        let name = if name.is_empty() { d.id.clone() } else { name };
-        out.push(Entry { id: d.id, name });
-    }
-    out
-}
-
-/// A saved filter's line in the collection.
-pub(crate) fn demand_line(e: &Entry) -> String {
-    format!("- <m-demand id=\"{}\">{}</m-demand>", escape(&e.id), escape(&e.name))
-}
-
-/// The body with `e`'s line added after the last listed one — at its end
-/// when it lists none.
-pub(crate) fn with_added(body: &str, e: &Entry) -> String {
-    let line = demand_line(e);
-    match demands(body).last() {
-        Some(last) => {
-            let eol = body[last.end..].find('\n').map_or(body.len(), |i| last.end + i);
-            format!("{}\n{line}{}", &body[..eol], &body[eol..])
-        }
-        None if body.trim().is_empty() => line,
-        None => format!("{}\n\n{line}", body.trim_end()),
-    }
-}
-
-/// The body with `id`'s name now `name` — `None` when it does not list
-/// `id`.
-pub(crate) fn with_renamed(body: &str, id: &str, name: &str) -> Option<String> {
-    let d = demands(body).into_iter().find(|d| d.id == id)?;
-    Some(format!("{}{}{}", &body[..d.inner.start], escape(name), &body[d.inner.end..]))
-}
-
-/// The body without `id`'s line — the whole line when the element was all
-/// of it (a list item), else the element alone; `None` when it does not
-/// list `id`. Every element of that id goes.
-pub(crate) fn with_removed(body: &str, id: &str) -> Option<String> {
-    let d = demands(body).into_iter().find(|d| d.id == id)?;
-    let line_start = body[..d.start].rfind('\n').map_or(0, |i| i + 1);
-    let line_end = body[d.end..].find('\n').map_or(body.len(), |i| d.end + i);
-    let rest = format!("{}{}", &body[line_start..d.start], &body[d.end..line_end]);
-    let next = if matches!(rest.trim(), "" | "-" | "*" | "+") {
-        if line_end < body.len() {
-            // The last line of a list between blank lines: one blank line
-            // is left, not two.
-            let (before, mut after) = (&body[..line_start], &body[line_end + 1..]);
-            if before.ends_with("\n\n") && after.starts_with('\n') {
-                after = &after[1..];
-            }
-            format!("{before}{after}")
-        } else {
-            body[..line_start].trim_end_matches('\n').to_string()
-        }
-    } else {
-        format!("{}{}", &body[..d.start], &body[d.end..])
-    };
-    Some(with_removed(&next, id).unwrap_or(next))
-}
-
 // ---------------------------------------------------------------------
-// A saved filter's doc
-
-/// A saved filter's body: its filter as canonical text, on one line.
-pub(crate) fn saved_text(f: &Filter) -> String {
-    format!("{FILTER_LINE} {}", f.format())
-}
-
-/// The filter a saved filter's body holds — its first `filter:` line, read
-/// by the language; else what is wrong.
-pub(crate) fn filter_of(body: &str) -> Result<Filter, String> {
-    let text = body
-        .lines()
-        .find_map(|l| l.trim().strip_prefix(FILTER_LINE))
-        .ok_or_else(|| format!("it holds no `{FILTER_LINE}` line"))?;
-    Filter::parse(text.trim()).map_err(|e| {
-        e.chunks.into_iter().map(|c| format!("`{}` — {}", c.text, c.why)).collect::<Vec<_>>().join("; ")
-    })
-}
-
-// ---------------------------------------------------------------------
-// Names: collisions and free paths
+// Names: collisions
 
 /// Why a name is not taken as asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -400,24 +133,13 @@ pub(crate) fn taken_by<'a>(listed: &'a [Entry], name: &str) -> Option<&'a Entry>
     (!s.is_empty()).then(|| listed.iter().find(|e| slug(&e.name) == s)).flatten()
 }
 
-/// The path id for slug `s`: `s`, or — a listed filter holding it (one
-/// renamed since it was saved) — the first of `s-2`, `s-3`, … none holds.
-pub(crate) fn free_slug(listed: &[Entry], s: &str) -> String {
-    let held = |c: &str| listed.iter().any(|e| e.id == c);
-    if !held(s) {
-        return s.to_string();
-    }
-    (2..).map(|n| format!("{s}-{n}")).find(|c| !held(c)).expect("a free number")
-}
-
 /// What a Save as… writes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Plan {
-    /// A new line, and the doc at its id's path (created, or — unlisted
-    /// there already — taken over).
+    /// A new filter, under its name.
     New(Entry),
-    /// The listed filter of that id replaced: its doc's filter and title,
-    /// its line's name.
+    /// The listed filter of that name replaced (its spelling taken from the
+    /// new name).
     Replace(Entry),
 }
 
@@ -440,11 +162,11 @@ pub(crate) fn plan_save(listed: &[Entry], raw: &str, replace: bool) -> Result<Pl
     match taken_by(listed, &name) {
         Some(e) if replace => Ok(Plan::Replace(Entry { id: e.id.clone(), name })),
         Some(e) => Err(Refusal::Taken(e.clone())),
-        None => Ok(Plan::New(Entry { id: free_slug(listed, &s), name })),
+        None => Ok(Plan::New(Entry { id: s, name })),
     }
 }
 
-/// Rename `id` to `raw`: the entry as it becomes — or a refusal: no name,
+/// Rename `id` to `raw`: the entry as it becomes (its id the new name's slug) — or a refusal: no name,
 /// `id` not listed, or another listed filter already named so.
 pub(crate) fn plan_rename(listed: &[Entry], id: &str, raw: &str) -> Result<Entry, Refusal> {
     let name = clean_name(raw);
@@ -458,7 +180,7 @@ pub(crate) fn plan_rename(listed: &[Entry], id: &str, raw: &str) -> Result<Entry
     if let Some(e) = listed.iter().find(|e| e.id != id && slug(&e.name) == s) {
         return Err(Refusal::Taken(e.clone()));
     }
-    Ok(Entry { id: id.to_string(), name })
+    Ok(Entry { id: s, name })
 }
 
 /// The collision prompt's words: the name typed is already saved — under
@@ -500,7 +222,7 @@ pub(crate) fn chosen(filter: Filter) -> Kept {
 // ---------------------------------------------------------------------
 // The writes
 
-/// What a write's events say: the ticket — or the server's refusal.
+/// What a ticket read's events say: the ticket — or the server's refusal.
 fn ticket_of(events: Vec<TicketsEvent>) -> Result<Ticket, String> {
     for ev in events {
         match ev {
@@ -513,13 +235,9 @@ fn ticket_of(events: Vec<TicketsEvent>) -> Result<Ticket, String> {
     Err("no answer".into())
 }
 
-/// `get { id }` — `None` when nothing is there.
+/// A ticket by id — `None` when nothing is there.
 pub(crate) async fn get_doc(id: &str) -> Result<Option<Ticket>, String> {
-    get(&connected()?, id).await
-}
-
-/// `get { id }` — `None` when nothing is there.
-async fn get(client: &session::Client, id: &str) -> Result<Option<Ticket>, String> {
+    let client = connected()?;
     let events = client.get_all(crate::typed::typed(id)?).await.map_err(|e| session::describe(&e))?;
     if events.iter().any(|e| matches!(e, TicketsEvent::NotFound { .. })) {
         return Ok(None);
@@ -527,31 +245,43 @@ async fn get(client: &session::Client, id: &str) -> Result<Option<Ticket>, Strin
     ticket_of(events).map(Some)
 }
 
-/// `amend { id, title, body }` — the ticket as it is after.
-async fn amend(client: &session::Client, id: &str, title: Option<String>, body: Option<String>) -> Result<Ticket, String> {
-    let (ticket, title, body) = (crate::typed::typed(id)?, crate::typed::opt(title)?, body.map(|b| crate::typed::typed(&b)).transpose()?);
-    let events = client.amend_all(ticket, title, body).await.map_err(|e| session::describe(&e))?;
-    ticket_of(events).map_err(|m| format!("amend {id}: {m}"))
-}
-
-/// `create { epic, title, kind: doc, body, parent, path }`.
-async fn create_doc(client: &session::Client, title: &str, body: String, parent: &str, path: Option<String>) -> Result<Ticket, String> {
-    use crate::typed::{opt, typed};
-    let events = client
-        .create_all(typed(EPIC)?, typed(title)?, Some(menger_tickets_api::Kind::Doc), None, None, Some(typed(&body)?), Some(typed(parent)?), opt(path)?, None, None)
-        .await
-        .map_err(|e| session::describe(&e))?;
-    ticket_of(events).map_err(|m| format!("create: {m}"))
-}
-
 fn connected() -> Result<session::Client, String> {
     session::client().ok_or_else(|| "not connected yet".to_string())
 }
 
-/// The collection's list, read now — empty while there is no collection.
-pub(crate) async fn read_list() -> Result<Vec<Entry>, String> {
+/// The filters a `tickets.filters` answer holds — or the server's refusal.
+fn filters_of(events: Vec<TicketsEvent>) -> Result<Vec<SavedFilter>, String> {
+    let mut out = Vec::new();
+    for ev in events {
+        match ev {
+            TicketsEvent::FilterSaved { filter, .. } => out.push(filter),
+            TicketsEvent::Error { message } => return Err(message),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// What a server says of a name it has no filter for.
+const NONE_NAMED: &str = "no saved filter named";
+
+/// `filters.get { name }` — `None` when no filter is saved under it. Needs
+/// you's default is no saved filter (the server answers it, saved at 0).
+pub(crate) async fn fetch_row(name: &str) -> Result<Option<SavedFilter>, String> {
     let client = connected()?;
-    Ok(get(&client, COLLECTION).await?.map(|t| entries(&t.body)).unwrap_or_default())
+    let events = client.filters().get_all(crate::typed::typed(name)?).await.map_err(|e| session::describe(&e))?;
+    match filters_of(events) {
+        Ok(rows) => Ok(rows.into_iter().next()),
+        Err(why) if why.contains(NONE_NAMED) => Ok(None),
+        Err(why) => Err(why),
+    }
+}
+
+/// The saved filters, read now (Needs you's default left out until it is
+/// saved).
+pub(crate) async fn read_list() -> Result<Vec<Entry>, String> {
+    let events = connected()?.filters().list_all().await.map_err(|e| session::describe(&e))?;
+    Ok(filters_of(events)?.into_iter().filter(|f| f.saved_at != 0).map(|f| Entry::of(&f.name)).collect())
 }
 
 /// A failed Save as… or rename.
@@ -561,110 +291,79 @@ pub(crate) enum Failure {
     Failed(String),
 }
 
-/// Save as… `name` with `filter`: the collection first (created, the first
-/// time, under [`COLLECTION_PARENT`]), then the doc, then the line —
-/// the entry saved and the list after.
+/// `filters.save { name, filter }` — the row saved.
+async fn put(client: &session::Client, name: &str, filter: &Filter) -> Result<SavedFilter, String> {
+    use crate::typed::typed;
+    let events = client.filters().save_all(typed(name)?, typed(&filter.format())?).await.map_err(|e| session::describe(&e))?;
+    filters_of(events)?.into_iter().next().ok_or_else(|| "no answer".to_string())
+}
+
+/// Save as… `name` with `filter`: the entry saved and the list after.
 pub(crate) async fn save(filter: Filter, name: String, replace: bool) -> Result<(Entry, Vec<Entry>), Failure> {
     let failed = Failure::Failed;
     let client = connected().map_err(failed)?;
-    let held = get(&client, COLLECTION).await.map_err(failed)?;
-    let listed = held.as_ref().map(|t| entries(&t.body)).unwrap_or_default();
+    let listed = read_list().await.map_err(failed)?;
     let plan = plan_save(&listed, &name, replace).map_err(Failure::Refused)?;
-    let view = match held {
-        Some(t) => t,
-        None => {
-            let t = create_doc(&client, COLLECTION_TITLE, String::new(), COLLECTION_PARENT, None).await.map_err(failed)?;
-            if t.id != COLLECTION {
-                return Err(Failure::Failed(format!("the collection was created as {}, not {COLLECTION}", t.id)));
-            }
-            t
-        }
-    };
     let entry = plan.entry().clone();
-    let body = saved_text(&filter);
-    match get(&client, &address_of(&entry.id)).await.map_err(failed)? {
-        Some(doc) => {
-            amend(&client, &doc.id, Some(entry.name.clone()), Some(body)).await.map_err(failed)?;
-        }
-        None => {
-            create_doc(&client, &entry.name, body, &view.id, Some(path_of(&entry.id))).await.map_err(failed)?;
-        }
-    }
-    let next = match &plan {
-        Plan::New(e) => with_added(&view.body, e),
-        Plan::Replace(e) => with_renamed(&view.body, &e.id, &e.name).unwrap_or_else(|| view.body.clone()),
-    };
-    let after = if next != view.body { amend(&client, &view.id, None, Some(next)).await.map_err(failed)?.body } else { view.body };
+    put(&client, &entry.name, &filter).await.map_err(failed)?;
     // MENGER-43: Needs you's count follows a save of its filter.
     crate::needs::saved_changed(&entry.id, &filter);
-    Ok((entry, entries(&after)))
+    Ok((entry, read_list().await.map_err(failed)?))
 }
 
-/// Rename `id` to `name`: the doc's title, then the line — the list after.
+/// Rename `id` to `name` — the list after.
 pub(crate) async fn rename(id: String, name: String) -> Result<Vec<Entry>, Failure> {
+    use crate::typed::typed;
     let failed = Failure::Failed;
     let client = connected().map_err(failed)?;
-    let view = get(&client, COLLECTION).await.map_err(failed)?.ok_or(Failure::Refused(Refusal::Unlisted))?;
-    let entry = plan_rename(&entries(&view.body), &id, &name).map_err(Failure::Refused)?;
-    let address = address_of(&id);
-    let doc = get(&client, &address).await.map_err(failed)?.ok_or_else(|| Failure::Failed(format!("{address}: not found")))?;
-    if doc.title != entry.name {
-        amend(&client, &doc.id, Some(entry.name.clone()), None).await.map_err(failed)?;
-    }
-    let next = with_renamed(&view.body, &id, &entry.name).unwrap_or_else(|| view.body.clone());
-    let after = if next != view.body { amend(&client, &view.id, None, Some(next)).await.map_err(failed)?.body } else { view.body };
-    Ok(entries(&after))
+    let entry = plan_rename(&read_list().await.map_err(failed)?, &id, &name).map_err(Failure::Refused)?;
+    let (was, to) = (typed(&id).map_err(failed)?, typed(&entry.name).map_err(failed)?);
+    let events = client.filters().rename_all(was, to).await.map_err(|e| failed(session::describe(&e)))?;
+    filters_of(events).map_err(failed)?;
+    read_list().await.map_err(failed)
 }
 
-/// Take `id`'s line out of the collection (its doc stays) — the list after.
+/// Delete the filter `id` — the list after.
 pub(crate) async fn remove(id: String) -> Result<Vec<Entry>, String> {
-    let client = connected()?;
-    let Some(view) = get(&client, COLLECTION).await? else { return Ok(Vec::new()) };
-    let after = match with_removed(&view.body, &id) {
-        Some(next) => amend(&client, &view.id, None, Some(next)).await?.body,
-        None => view.body,
-    };
-    Ok(entries(&after))
+    let events = connected()?.filters().delete_all(crate::typed::typed(&id)?).await.map_err(|e| session::describe(&e))?;
+    if let Some(TicketsEvent::Error { message }) = events.into_iter().find(|e| matches!(e, TicketsEvent::Error { .. })) {
+        return Err(message);
+    }
+    read_list().await
 }
 
-/// FILTER-37: the saved filter `id`'s doc amended to hold `filter` — what
-/// naming saves writes after every edit of a named tree.
+/// FILTER-37: the saved filter `id` saved again as `filter` — what naming
+/// saves writes after every edit of a named tree.
 pub(crate) async fn amend_filter(id: &str, filter: &Filter) -> Result<(), String> {
     let client = connected()?;
-    let address = address_of(id);
-    let doc = get(&client, &address).await?.ok_or_else(|| format!("{address}: not found"))?;
-    let body = saved_text(filter);
-    if filter_of(&doc.body).ok().as_ref() != Some(filter) {
-        amend(&client, &doc.id, None, Some(body)).await?;
+    let row = fetch_row(id).await?.ok_or_else(|| format!("{NONE_NAMED} \"{id}\""))?;
+    if Filter::parse(&row.filter).ok().as_ref() != Some(filter) {
+        put(&client, &row.name, filter).await?;
     }
     crate::needs::saved_changed(id, filter);
     Ok(())
 }
 
-/// MENGER-12: the filter `id`'s doc holds, or `None` while nothing is saved
+/// MENGER-12: the filter saved under `id`, or `None` while nothing is saved
 /// under it — Needs you reads its saved filter this way (MENGER-43: on every
 /// `g n` too), and falls back to its default.
 pub(crate) async fn load_if_saved(id: &str) -> Result<Option<Filter>, String> {
-    let client = connected()?;
-    let address = address_of(id);
-    match get(&client, &address).await? {
-        None => Ok(None),
-        Some(doc) => filter_of(&doc.body).map(Some).map_err(|why| format!("{address}: {why}")),
+    match fetch_row(id).await? {
+        Some(row) if row.saved_at != 0 => Filter::parse(&row.filter).map(Some).map_err(|e| format!("{id}: {e}")),
+        _ => Ok(None),
     }
 }
 
-/// The filter `id`'s doc holds.
+/// The filter saved under `id`.
 async fn load(id: String) -> Result<Filter, String> {
-    let client = connected()?;
-    let address = address_of(&id);
-    let doc = get(&client, &address).await?.ok_or_else(|| format!("{address}: not found"))?;
-    filter_of(&doc.body).map_err(|why| format!("{address}: {why}"))
+    let row = fetch_row(&id).await?.ok_or_else(|| format!("{NONE_NAMED} \"{id}\""))?;
+    Filter::parse(&row.filter).map_err(|e| format!("{id}: {e}"))
 }
 
 // ---------------------------------------------------------------------
 // The state
 
-/// The collection's list, as the app last read it.
+/// The saved filters, as the app last read them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Listing {
     Unread,
@@ -749,15 +448,11 @@ impl Saved {
                 s.close_menu(false);
             }
         });
-        // Once read, the list follows `watch`: the collection's `amended`
-        // (another browser's save, rename, remove) carries its body.
+        // Once read, the list follows `watch`: a filter saved, renamed or
+        // deleted (another browser's) is read again.
         session::listen(move |ev| {
-            let (TicketsEvent::Amended { ticket, .. } | TicketsEvent::Created { ticket }) = ev else { return };
-            if ticket.id == COLLECTION && s.list.try_with_untracked(|l| !matches!(l, Listing::Unread)) == Some(true) {
-                let next = Listing::Read(entries(&ticket.body));
-                if s.list.with_untracked(|l| *l != next) {
-                    s.list.set(next);
-                }
+            if matches!(ev, TicketsEvent::FilterSaved { .. } | TicketsEvent::FilterDeleted { .. }) && s.list.try_with_untracked(|l| matches!(l, Listing::Read(_))) == Some(true) {
+                s.refresh();
             }
         });
         provide_context(s);
@@ -879,9 +574,6 @@ impl Saved {
 mod tests {
     use super::*;
 
-    /// The slug: lower case, letters and digits, one `-` per run of anything
-    /// else, none at the ends — empty for a name with no letter or digit;
-    /// at most 64 characters, never ending in `-`.
     #[test]
     fn the_suggestions_parse() {
         for (name, text) in SUGGESTED {
@@ -891,6 +583,9 @@ mod tests {
         assert_eq!(SUGGESTED.len(), 4);
     }
 
+    /// The slug: lower case, letters and digits, one `-` per run of anything
+    /// else, none at the ends — empty for a name with no letter or digit;
+    /// at most 64 characters, never ending in `-`.
     #[test]
     fn a_name_becomes_a_slug() {
         assert_eq!(slug("open builds"), "open-builds");
@@ -906,118 +601,21 @@ mod tests {
         assert_eq!(slug("· ✓ ·"), "");
         let long = slug(&"ab ".repeat(40));
         assert!(long.chars().count() <= SLUG_MAX && !long.ends_with('-'), "{long}");
-        assert_eq!(path_of("open-builds"), "_MENGER/view/open-builds");
-        assert_eq!(address_of("open-builds"), "VIEW/_MENGER/view/open-builds");
         assert_eq!(clean_name("  open \t builds  "), "open builds");
         assert_eq!(clean_name(&"x".repeat(200)).chars().count(), NAME_MAX);
-    }
-
-    /// The list from VIEW-1: every `<m-demand id>` in order, by name — other
-    /// text ignored, entities read, tags inside stripped, the first of an id
-    /// kept, a demand without an id or a close skipped, a demand with no
-    /// text named by its id.
-    #[test]
-    fn the_list_is_read_from_the_collection() {
-        let body = "- <m-demand id=\"open-builds\">open builds</m-demand>\n";
-        assert_eq!(entries(body), vec![Entry::new("open-builds", "open builds")]);
-        let body = "Saved by the app.\n\n\
-            - <m-demand id=\"open-builds\">open builds</m-demand>\n\
-            - <m-demand id='mine' data-x=\"y\">my <b>reviews</b> &amp; fixes</m-demand>\n\
-            * <m-demand id=bare>bare</m-demand>\n\
-            - <m-demand>no id</m-demand>\n\
-            - <m-demands id=\"other\">another element</m-demands>\n\
-            - <m-demand id=\"open-builds\">again</m-demand>\n\
-            - <m-demand id=\"empty\"></m-demand>\n";
-        assert_eq!(
-            entries(body),
-            vec![
-                Entry::new("open-builds", "open builds"),
-                Entry::new("mine", "my reviews & fixes"),
-                Entry::new("bare", "bare"),
-                Entry::new("empty", "empty"),
-            ]
-        );
-        assert_eq!(entries(""), vec![]);
-        assert_eq!(entries("no list here"), vec![]);
-        assert_eq!(entries("<m-demand id=\"x\">unclosed"), vec![], "no close, no demand");
-        assert_eq!(unescape("a &lt;b&gt; &quot;c&quot; &#39;d&#39; &#x41; &bogus; & e"), "a <b> \"c\" 'd' A &bogus; & e");
-    }
-
-    /// The line written, and the list rewritten: added after the last line
-    /// (at the end of a body with none), renamed in place, removed with its
-    /// line — every other byte of the body kept; the name escaped, and read
-    /// back as written.
-    #[test]
-    fn the_list_is_rewritten_line_by_line() {
-        let a = Entry::new("open-builds", "open builds");
-        assert_eq!(demand_line(&a), "- <m-demand id=\"open-builds\">open builds</m-demand>");
-        let body = with_added("", &a);
-        assert_eq!(body, "- <m-demand id=\"open-builds\">open builds</m-demand>");
-        let b = Entry::new("mine", "mine <& yours>");
-        let body = with_added(&body, &b);
-        assert_eq!(body, "- <m-demand id=\"open-builds\">open builds</m-demand>\n- <m-demand id=\"mine\">mine &lt;&amp; yours&gt;</m-demand>");
-        assert_eq!(entries(&body), vec![a.clone(), b.clone()], "read back as written");
-
-        // Text around the list stays.
-        let framed = "Intro.\n\n- <m-demand id=\"open-builds\">open builds</m-demand>\n\nOutro.\n";
-        let c = Entry::new("c", "c");
-        assert_eq!(
-            with_added(framed, &c),
-            "Intro.\n\n- <m-demand id=\"open-builds\">open builds</m-demand>\n- <m-demand id=\"c\">c</m-demand>\n\nOutro.\n"
-        );
-        assert_eq!(with_added("Intro.\n", &c), "Intro.\n\n- <m-demand id=\"c\">c</m-demand>");
-
-        // Renamed: the name only, the id (the doc's path) kept.
-        let renamed = with_renamed(&body, "open-builds", "builds in flight").unwrap();
-        assert_eq!(entries(&renamed), vec![Entry::new("open-builds", "builds in flight"), b.clone()]);
-        assert_eq!(with_renamed(&body, "nope", "x"), None);
-
-        // Removed: its line; the last one leaves an empty list.
-        let removed = with_removed(&body, "open-builds").unwrap();
-        assert_eq!(removed, "- <m-demand id=\"mine\">mine &lt;&amp; yours&gt;</m-demand>");
-        assert_eq!(with_removed(&removed, "mine").unwrap(), "");
-        assert_eq!(with_removed(&body, "mine").unwrap(), "- <m-demand id=\"open-builds\">open builds</m-demand>");
-        assert_eq!(with_removed(&body, "nope"), None);
-        assert_eq!(
-            with_removed(framed, "open-builds").unwrap(),
-            "Intro.\n\nOutro.\n",
-            "the line goes, the text around it stays"
-        );
-        // An element sharing its line with other words: the element alone.
-        assert_eq!(with_removed("see <m-demand id=\"x\">x</m-demand> here", "x").unwrap(), "see  here");
-        // A hand-written duplicate goes too.
-        assert_eq!(with_removed("- <m-demand id=\"x\">x</m-demand>\n- <m-demand id=\"x\">x</m-demand>\n", "x").unwrap(), "");
-    }
-
-    /// The saved text: `filter: ` and the canonical text, read back as the
-    /// same filter; a body without the line, or with one the language
-    /// refuses, says why.
-    #[test]
-    fn the_saved_text_is_the_canonical_filter() {
-        let f = Filter::parse("kind in (build) and not status in (Complete)").unwrap();
-        let text = saved_text(&f);
-        assert_eq!(text, format!("filter: {}", f.format()));
-        assert_eq!(filter_of(&text).unwrap(), f);
-        assert_eq!(filter_of(&format!("A note.\n\n  {text}\n")).unwrap(), f, "the first filter: line, wherever it is");
-        let g = Filter::parse("status in (Ready, \"In Review\") and not in MNG · flat").unwrap();
-        assert_eq!(filter_of(&saved_text(&g)).unwrap(), g, "quotes and the display part round trip");
-        assert_eq!(filter_of("filter: ").unwrap(), Filter::default(), "the empty filter");
-        assert!(filter_of("no line").unwrap_err().contains("filter:"));
-        let bad = filter_of("filter: status Bogus").unwrap_err();
-        assert!(bad.contains("status Bogus"), "{bad}");
+        assert_eq!(Entry::of("Open Builds"), Entry::new("open-builds", "Open Builds"));
     }
 
     /// Name collisions: a name a listed filter has (by slug) is refused,
-    /// naming it — or, asked, that filter is replaced at its own path under
-    /// the new spelling; a new name takes its slug, or the first free
-    /// `slug-n` when a renamed filter holds it; a name with no letter or
-    /// digit is no name.
+    /// naming it — or, asked, that filter is replaced under the new
+    /// spelling; a new name is its slug; a name with no letter or digit is
+    /// no name.
     #[test]
     fn a_name_already_saved_is_offered_for_replacing() {
-        let listed = vec![Entry::new("open-builds", "open builds"), Entry::new("mine", "my reviews")];
+        let listed = vec![Entry::new("open-builds", "open builds"), Entry::new("my-reviews", "my reviews")];
         assert_eq!(plan_save(&listed, "Open  Builds", false), Err(Refusal::Taken(listed[0].clone())));
         assert_eq!(plan_save(&listed, "open builds!", true), Ok(Plan::Replace(Entry::new("open-builds", "open builds!"))));
-        assert_eq!(plan_save(&listed, "My Reviews", true), Ok(Plan::Replace(Entry::new("mine", "My Reviews"))), "its own path, not the name's slug");
+        assert_eq!(plan_save(&listed, "My Reviews", true), Ok(Plan::Replace(Entry::new("my-reviews", "My Reviews"))));
         assert_eq!(plan_save(&listed, "blocked work", false), Ok(Plan::New(Entry::new("blocked-work", "blocked work"))));
         assert_eq!(plan_save(&listed, " ?! ", false), Err(Refusal::NoName));
         assert_eq!(plan_save(&[], "open builds", false), Ok(Plan::New(Entry::new("open-builds", "open builds"))));
@@ -1027,27 +625,21 @@ mod tests {
             taken_words("Open Builds", &listed[0]),
             "\u{201c}Open Builds\u{201d} is already saved, as \u{201c}open builds\u{201d} — replace that filter, or choose another name?"
         );
-
-        // `mine` was saved as "mine" and renamed; "mine" again is a new name
-        // whose path is held.
-        assert_eq!(plan_save(&listed, "Mine", false), Ok(Plan::New(Entry::new("mine-2", "Mine"))));
-        let more = [listed.clone(), vec![Entry::new("mine-2", "x")]].concat();
-        assert_eq!(free_slug(&more, "mine"), "mine-3");
-        assert_eq!(free_slug(&more, "fresh"), "fresh");
         assert_eq!(taken_by(&listed, "OPEN-builds").map(|e| e.id.as_str()), Some("open-builds"));
         assert_eq!(taken_by(&listed, "--"), None);
     }
 
     /// A rename: to a name no other listed filter has (its own, respelled,
     /// is fine); refused for no name, an unlisted filter, or another's name.
+    /// The entry's id becomes the new name's slug (the server finds a filter
+    /// by it).
     #[test]
     fn a_rename_keeps_names_apart() {
-        let listed = vec![Entry::new("open-builds", "open builds"), Entry::new("mine", "my reviews")];
-        assert_eq!(plan_rename(&listed, "open-builds", "builds in flight"), Ok(Entry::new("open-builds", "builds in flight")));
+        let listed = vec![Entry::new("open-builds", "open builds"), Entry::new("my-reviews", "my reviews")];
+        assert_eq!(plan_rename(&listed, "open-builds", "builds in flight"), Ok(Entry::new("builds-in-flight", "builds in flight")));
         assert_eq!(plan_rename(&listed, "open-builds", "Open Builds"), Ok(Entry::new("open-builds", "Open Builds")));
         assert_eq!(plan_rename(&listed, "open-builds", "My  reviews"), Err(Refusal::Taken(listed[1].clone())));
         assert_eq!(plan_rename(&listed, "gone", "anything"), Err(Refusal::Unlisted));
-        assert_eq!(plan_rename(&listed, "mine", "  "), Err(Refusal::NoName));
+        assert_eq!(plan_rename(&listed, "my-reviews", "  "), Err(Refusal::NoName));
     }
-
 }

@@ -1,46 +1,24 @@
-//! FILTER-36: the **saved-filter registry** — what `saved "Name"` reads —
-//! and every filter a read, a count or a watch is asked, resolved through it
-//! before it is compiled to cells.
+//! FILTER-36: what `saved "Name"` reads — and every filter a read, a count or
+//! a watch is asked, resolved through it before it is compiled to cells.
 //!
-//! **What is kept** ([`SavedFilters`]): for each ticket whose body holds a
-//! `filter:` line ([`crate::saved_filters::filter_line`]), that line's text,
-//! by the ticket's id — nothing else of the body (SCALE-14: bodies stay out
-//! of the cache). It is read from the bodies of every doc at a view path at
-//! open ([`load`]), and moved by every write of a body with the component
-//! registry, in the same critical section as the ticket's row
-//! ([`super::Cache::take_registry`]): `create`, `amend`, `update`, `delete`
-//! (its text goes) and `undelete` (its text comes back). A file read back
-//! after a batch or a re-shortcode is read again whole. Derived from the
-//! bodies, it is not stored, and `--verify-derived` has nothing to compare.
-//!
-//! **What a name finds** ([`super::Cache::saved_text`]): a doc in the
-//! shortcode `VIEW` at a path `_MENGER/view/<slug>` — a saved filter as the
-//! app writes one (FILTER-6) — whose title's slug is the name's (`Needs
-//! you`, `needs you` and `needs-you` are one name); several so titled, the
-//! one whose path is that slug, else the first in the store's order. No
-//! title so: the doc whose path is the name's slug — the old name of a
-//! renamed filter keeps naming it until another filter takes the name. Its
-//! title and path are read from its row, so a rename (a title written
-//! alone) moves what a name finds without a body written. A doc the
-//! collection no longer lists (`remove` in `Saved ▾` keeps the doc) still
-//! resolves: a filter naming a filter taken off the menu keeps working
-//! while the doc exists. A deleted doc resolves nothing. No doc at all:
-//! `Needs you` still means what the app means by it until one is saved
-//! (MENGER-43's default, [`crate::saved_filters::NEEDS_YOU`]); every other
-//! name is refused.
+//! **What a name finds** is the saved filter of FILTER-46 ([`super::filters`],
+//! the `saved_filters` table): the row whose slug is the name's (`Needs you`,
+//! `needs you` and `needs-you` are one name); with none, `Needs you` still
+//! means what the app means by it (MENGER-43's default,
+//! [`crate::saved_filters::NEEDS_YOU`]) and every other name is refused.
 //!
 //! **What is resolved** ([`Store::lens`], [`Store::narrowing`],
 //! [`Store::resolved`]): the text parsed by the language, every name
-//! expanded by [`crate::filter::Filter::resolve`] from the registry under
-//! the read lock — a name no doc has, a cycle, a saved text the language
+//! expanded by [`crate::filter::Filter::resolve`] from the table under
+//! the read lock — a name no row has, a cycle, a saved text the language
 //! refuses, one holding `text`: the read's in-band `error`, naming it —
 //! then compiled to cells as FILTER-4 always did. A filter naming no name
 //! is compiled exactly as before.
 //!
 //! **A watch** keeps the text it was asked ([`Watcher::naming`]): at each
 //! change it hears, a watch whose filter names saved filters resolves it
-//! again, and where the resolved filter moved — a doc's text amended, a
-//! rename, a delete — says what that did to its membership
+//! again, and where the resolved filter moved — a filter saved, renamed or
+//! deleted — says what that did to its membership
 //! ([`Watcher::resaved`]): `entered` / `left` for each ticket it moved, or
 //! a `recount` per shortcode past [`super::cells::RECOUNT_OVER`], as a cell
 //! change would; a name that stops resolving ends the watch with the
@@ -52,76 +30,6 @@ use super::lineage::Compiled;
 use super::*;
 use crate::address::ShortcodeId;
 use crate::filter::Filter;
-use crate::saved_filters::{path_slug, slug, EPIC};
-
-/// FILTER-36: every saved filter's text, by its doc's id.
-#[derive(Debug, Default, Clone)]
-pub(super) struct SavedFilters {
-    texts: HashMap<String, String>,
-}
-
-impl SavedFilters {
-    /// `ticket`'s body written: its `filter:` line now, or none.
-    pub(super) fn take(&mut self, ticket: String, text: Option<String>) {
-        match text {
-            Some(t) => {
-                self.texts.insert(ticket, t);
-            }
-            None => {
-                self.texts.remove(&ticket);
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn len(&self) -> usize {
-        self.texts.len()
-    }
-}
-
-/// Whether `row` is a saved filter's doc: in `VIEW`, at a view path.
-pub(super) fn is_saved_doc(row: &Row) -> bool {
-    row.epic.as_str().eq_ignore_ascii_case(EPIC) && row.path.as_deref().and_then(path_slug).is_some()
-}
-
-/// The registry from the file: the `filter:` line of every doc at a view
-/// path.
-pub(super) fn load(conn: &rusqlite::Connection) -> rusqlite::Result<SavedFilters> {
-    let mut stmt = conn.prepare("SELECT id, body FROM tickets WHERE path LIKE '\\_MENGER/view/%' ESCAPE '\\'")?;
-    let mut texts = HashMap::new();
-    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-        let (id, body) = row?;
-        if let Some(text) = crate::saved_filters::filter_line(&body) {
-            texts.insert(id, text.to_string());
-        }
-    }
-    Ok(SavedFilters { texts })
-}
-
-impl Cache {
-    /// FILTER-36: the text of the saved filter `name` finds (the module
-    /// doc's rule), `None` when it finds none.
-    pub(super) fn saved_text(&self, name: &str) -> Option<String> {
-        let key = slug(name);
-        let mut titled: Option<(bool, &OrderKey, &String)> = None;
-        let mut pathed: Option<(&OrderKey, &String)> = None;
-        for (id, text) in &self.saved.texts {
-            let Some(k) = self.at.get(id) else { continue };
-            let Some(row) = self.order.get(k).filter(|r| is_saved_doc(r)) else { continue };
-            let at_path = row.path.as_deref().and_then(path_slug) == Some(key.as_str());
-            if slug(&row.title) == key {
-                let better = titled.is_none_or(|(p, o, _)| (!at_path, k) < (!p, o));
-                if better {
-                    titled = Some((at_path, k, text));
-                }
-            } else if at_path && pathed.is_none_or(|(o, _)| k < o) {
-                pathed = Some((k, text));
-            }
-        }
-        // MENGER-43: and a name every reader has before saving it.
-        titled.map(|(_, _, t)| t).or(pathed.map(|(_, t)| t)).cloned().or_else(|| crate::saved_filters::default_text(name).map(str::to_string))
-    }
-}
 
 impl Store {
     /// FILTER-36: `filter` with every saved name in it resolved from the

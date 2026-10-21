@@ -696,4 +696,15 @@ impl VerifiedUser {
     pub fn orgs(&self) -> Option<Vec<crate::address::OrgId>> {
         self.reach.orgs()
     }
+
+    /// CHAT-14, FILTER-46: the organization a write outside tickets goes
+    /// to — the caller's only one, or (roles in several, or everywhere) the
+    /// first the store keeps among them.
+    pub fn home_org(&self, store: &Store) -> Option<crate::address::OrgId> {
+        let all: Vec<crate::address::OrgId> = store.orgs().into_iter().map(|o| o.name).collect();
+        match self.orgs() {
+            Some(mine) => all.into_iter().find(|o| mine.contains(o)).or_else(|| mine.into_iter().next()),
+            None => all.into_iter().next(),
+        }
+    }
 }

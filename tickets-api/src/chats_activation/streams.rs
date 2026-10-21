@@ -63,11 +63,7 @@ pub(super) async fn open(store: Arc<Store>, access: Access, user: VerifiedUser, 
 /// caller's only one, or (holding roles in several, or everywhere) the
 /// first the store keeps among them.
 pub(super) fn home_org(store: &Store, user: &VerifiedUser) -> Option<OrgId> {
-    let all: Vec<OrgId> = store.orgs().into_iter().map(|o| o.name).collect();
-    match user.orgs() {
-        Some(mine) => all.into_iter().find(|o| mine.contains(o)).or_else(|| mine.into_iter().next()),
-        None => all.into_iter().next(),
-    }
+    user.home_org(store)
 }
 
 /// `chats.candidates` (CHAT-4's picker): who could be named in a chat on

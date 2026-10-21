@@ -5,7 +5,7 @@
 //!   owner's queue (MENGER-39), every ticket with an open input (`asking`,
 //!   INPUT-1's questions) and every ticket labelled `needs-you`. The filter
 //!   is a **saved filter** (FILTER-6, src/saved.rs): the one named "Needs
-//!   you" (`VIEW/_MENGER/view/needs-you`) when one is saved, else the
+//!   you" (`tickets filters get --name "Needs you"`) when one is saved, else the
 //!   default. It is changed as any saved filter is: apply it, edit the
 //!   tree (FILTER-37: applied, the bar wears its name and every edit
 //!   amends it), or **Save as…** "Needs you" (replace) — the count follows the save
@@ -360,11 +360,10 @@ mod tests {
         assert_eq!(asked(&Filter::parse("asking and not asking").unwrap()), None, "admits nothing: asked of no one");
     }
 
-    /// The saved filter is FILTER-6's, named "Needs you".
+    /// The saved filter is named "Needs you".
     #[test]
     fn the_saved_filter_is_named_needs_you() {
         assert_eq!(saved_id(), "needs-you");
-        assert_eq!(saved::address_of(&saved_id()), "VIEW/_MENGER/view/needs-you");
     }
 
     /// An input is answered in its ticket's frame, scrolled to it.

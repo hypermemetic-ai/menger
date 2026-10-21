@@ -117,6 +117,7 @@ pub mod activation;
 pub use activation::TicketsClient;
 // ACCESS-16: `tickets nav`, a child of `tickets` (`TicketsClient::nav()`).
 pub use activation::NavClient;
+pub use activation::FiltersClient;
 #[cfg(feature = "server")]
 pub use activation::{NavActivation, TicketsActivation};
 

@@ -207,9 +207,12 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
 
   Groups nest and saved filters are named (FILTER-36): `(a or (b and
   c))` to any depth, and `saved "Name"` (`saved Name` without spaces) —
-  the saved filter's doc under VIEW-1, expanded by the server before the
-  cells (a missing name or a cycle is the in-band error; a watch re-says
-  its membership when a named doc changes). README "Nesting and names":
+  the saved filter of that name (`tickets filters`, FILTER-46: its own
+  table, written `tickets filters save --name N --filter F`, listed with
+  `list`, also `get | rename | delete | check`), expanded by the server
+  before the cells (a missing name or a cycle is the in-band error; a watch
+  re-says its membership when a named filter changes). README "Nesting and
+  names":
 
   ```sh
   synapse -P 4455 menger tickets list --filter 'saved "Needs you" or saved Plexus-Ready' --summary true

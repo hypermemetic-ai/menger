@@ -622,6 +622,27 @@
       "list": [],
       "schema": []
     },
+    "tickets.filters": {
+      "check": [
+        "filter"
+      ],
+      "delete": [
+        "name"
+      ],
+      "get": [
+        "name"
+      ],
+      "list": [],
+      "rename": [
+        "name",
+        "to"
+      ],
+      "save": [
+        "filter",
+        "name"
+      ],
+      "schema": []
+    },
     "tickets.inputs": {
       "answer": [
         "input",
