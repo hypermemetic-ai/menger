@@ -917,7 +917,9 @@ cmd_image() {
   [[ -x $r/bin/menger && -f $r/bin/run-menger && -f $r/app/index.html ]] || die "$rel lacks bin/menger, bin/run-menger or app/index.html"
   # The image binds 0.0.0.0 inside the container: a menger from before RUN-8
   # listens on loopback only and could not be reached through its ports.
-  "$r/bin/menger" --help 2>/dev/null | grep -e '--bind' >/dev/null \
+  # DEPLOY-50: since DIST-14 --help is the short list and --bind is in
+  # --help-all; a release before it has no --help-all. Read both.
+  { "$r/bin/menger" --help-all; "$r/bin/menger" --help; } 2>/dev/null | grep -e '--bind' >/dev/null \
     || die "$rel's menger has no --bind (RUN-8, c2b5723): an image of it could not be reached — deploy test a newer release first"
   need docker
   local sha subject ref tags=()
