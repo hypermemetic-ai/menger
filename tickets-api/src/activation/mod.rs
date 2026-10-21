@@ -193,6 +193,11 @@ mod nav;
 pub use nav::NavClient;
 #[cfg(feature = "server")]
 pub use nav::NavActivation;
+// FILTER-46: `tickets filters` — the saved filters; its client half is the app's.
+mod filters;
+pub use filters::FiltersClient;
+#[cfg(feature = "server")]
+pub use filters::FiltersActivation;
 // ACCESS-17: `tickets work`, filled and mounted — not `cfg`-gated, since its
 // attribute emits `WorkClient` for the client-only build too.
 mod work;
@@ -1042,6 +1047,12 @@ impl TicketsActivation {
     #[plexus_macros::child]
     fn nav(&self) -> NavActivation {
         NavActivation::new(self.store.clone(), self.access.clone())
+    }
+
+    /// Saved filters — `tickets.filters.list | get | save | rename | delete | check` (FILTER-46).
+    #[plexus_macros::child]
+    fn filters(&self) -> FiltersActivation {
+        FiltersActivation::new(self.store.clone(), self.access.clone())
     }
 
     /// The component registry — `tickets.components.list` (COMP-3, ACCESS-18), through the caller's reach.

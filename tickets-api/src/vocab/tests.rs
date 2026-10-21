@@ -91,7 +91,7 @@ fn a_cursor_is_a_page_s_next_folded() {
 
 #[test]
 fn a_menger_path_starts_with_menger_and_names_something() {
-    holds::<MengerPath>(&["_MENGER/board", "_MENGER/view/x"], &["", "_MENGER/", "MENGER/board", "board"]);
+    holds::<MengerPath>(&["_MENGER/board", "_MENGER/board/x"], &["", "_MENGER/", "MENGER/board", "board"]);
 }
 
 #[test]
@@ -385,4 +385,10 @@ fn a_shortcode_may_hold_hyphens_and_a_ticket_splits_at_its_last() {
     for bad in ["hypermemetic:SYNAPSE-CC-1", "hypermemetic:A--B", "hypermemetic:-A"] {
         assert!(de::<Scope>(bad).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn a_saved_filter_is_named_and_its_source_is_kept_unread() {
+    holds::<FilterName>(&["Open builds", " Plexus-Ready ", "Über"], &["", "  ", "--", &"a".repeat(crate::saved_filters::NAME_MAX + 1)]);
+    holds::<FilterSource>(&["", "kind build", "kind wobbly", "status ("], &[&"a".repeat(crate::limits::FILTER_MAX + 1)]);
 }

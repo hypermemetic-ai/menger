@@ -1643,7 +1643,7 @@ mod tests {
                 let q = join(&pairs_of(level, &k));
                 assert_eq!(read(&q, level), Some(Some(k.clone())), "{form}: the URL at {level:?}");
             }
-            let saved = crate::saved::filter_of(&crate::saved::saved_text(&k.filter)).unwrap();
+            let saved = Filter::parse(&k.filter.format()).unwrap();
             assert_eq!(crate::saved::chosen(saved), k, "{form}: saved");
         }
         // A shape the language refuses reads nothing: `or` and `and` in one pair.

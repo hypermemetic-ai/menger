@@ -6,6 +6,7 @@ import type { Body, Kind, Query, ShortcodeRef, TicketRef, Title } from '../notes
 import type { OrgId, Principal } from '../orgs/types';
 import type { TicketsCommitsClient } from '../tickets/commits/client';
 import type { TicketsComponentsClient } from '../tickets/components/client';
+import type { TicketsFiltersClient } from '../tickets/filters/client';
 import type { TicketsInputsClient } from '../tickets/inputs/client';
 import type { TicketsNavClient } from '../tickets/nav/client';
 import type { TicketsRevisionsClient } from '../tickets/revisions/client';
@@ -16,6 +17,8 @@ export interface TicketsClient {
     readonly commits: TicketsCommitsClient;
     /** The component registry — `tickets.components.list` (COMP-3, ACCESS-18), through the caller's reach. */
     readonly components: TicketsComponentsClient;
+    /** Saved filters — `tickets.filters.list | get | save | rename | delete | check` (FILTER-46). */
+    readonly filters: TicketsFiltersClient;
     /** A ticket's inputs — `tickets.inputs.<method>`: list, answer, clear, close, reopen (INPUT-3, ACCESS-14). */
     readonly inputs: TicketsInputsClient;
     /** What the nav and the menus ask — `tickets.nav.<method>`: groups, extents, tree, counts, facets, member (ACCESS-16). */

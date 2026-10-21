@@ -12,6 +12,8 @@ import type { TicketsCommitsClient } from '../tickets/commits/client';
 import { createTicketsCommitsClient } from '../tickets/commits/client';
 import type { TicketsComponentsClient } from '../tickets/components/client';
 import { createTicketsComponentsClient } from '../tickets/components/client';
+import type { TicketsFiltersClient } from '../tickets/filters/client';
+import { createTicketsFiltersClient } from '../tickets/filters/client';
 import type { TicketsInputsClient } from '../tickets/inputs/client';
 import { createTicketsInputsClient } from '../tickets/inputs/client';
 import type { TicketsNavClient } from '../tickets/nav/client';
@@ -27,6 +29,8 @@ export interface TicketsClient {
   readonly commits: TicketsCommitsClient;
   /** The component registry — `tickets.components.list` (COMP-3, ACCESS-18), through the caller's reach. */
   readonly components: TicketsComponentsClient;
+  /** Saved filters — `tickets.filters.list | get | save | rename | delete | check` (FILTER-46). */
+  readonly filters: TicketsFiltersClient;
   /** A ticket's inputs — `tickets.inputs.<method>`: list, answer, clear, close, reopen (INPUT-3, ACCESS-14). */
   readonly inputs: TicketsInputsClient;
   /** What the nav and the menus ask — `tickets.nav.<method>`: groups, extents, tree, counts, facets, member (ACCESS-16). */
@@ -584,6 +588,7 @@ class TicketsClientImpl implements TicketsClient {
   private rpc: RpcClient;
   readonly commits: TicketsCommitsClient;
   readonly components: TicketsComponentsClient;
+  readonly filters: TicketsFiltersClient;
   readonly inputs: TicketsInputsClient;
   readonly nav: TicketsNavClient;
   readonly revisions: TicketsRevisionsClient;
@@ -592,6 +597,7 @@ class TicketsClientImpl implements TicketsClient {
     this.rpc = rpc;
     this.commits = createTicketsCommitsClient(rpc);
     this.components = createTicketsComponentsClient(rpc);
+    this.filters = createTicketsFiltersClient(rpc);
     this.inputs = createTicketsInputsClient(rpc);
     this.nav = createTicketsNavClient(rpc);
     this.revisions = createTicketsRevisionsClient(rpc);

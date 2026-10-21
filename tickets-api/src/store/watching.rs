@@ -202,6 +202,10 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
             Some(Change::Queue { shortcode, change })
         }
 
+        // ── About a saved filter (FILTER-46): the filters are the
+        // organization's to read, heard by whoever may.
+        Change::Filters(c) => Some(Change::Filters(c)),
+
         // ── About several tickets: of those the reach admits.
         Change::PlacementsChanged { changes } => {
             let changes: Vec<_> = changes.into_iter().filter(|(_, c)| sees.id(&c.id)).collect();

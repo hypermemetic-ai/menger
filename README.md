@@ -769,7 +769,7 @@ ticket reads through ("Members and roles").
 
 **Needs you** (MENGER-12, MENGER-43) is a filter on the nav: what waits
 on the owner is the saved filter named "Needs you"
-(`VIEW/_MENGER/view/needs-you`; until one is saved, the default
+(`tickets filters get --name "Needs you"`; until one is saved, the default
 `(queued or asking or asked or label needs-you)` — MENGER-39's queue first). `g n`,
 or a click on the header's **needs you N**, puts it on the nav exactly as
 a saved filter's chip puts it on a surface (the nav's own clauses replaced;
@@ -797,30 +797,43 @@ them by name, each counted (ticked, one joins the selected group by name,
 applies its filter to that level (a surface's own categories cleared),
 bound by its name; `save as…` — on the line, or in the panel's foot for any
 level — keeps the level's filter under a name, and the bound name, clicked,
-renames it (emptied, it is unlisted). They live in the tracker, so every browser and agent reads
-the same ones: the collection is `VIEW-1`, a doc titled "Saved filters"
-under `FILTER-1` (the first save creates it), whose body lists them in
-order as `- <m-demand id="open-builds">open builds</m-demand>` (DEMAND-1's
-element); each is a doc under `VIEW-1` at `_MENGER/view/<slug>`, titled with
-its name, whose body is `filter: <canonical text>`. A name already saved
-(compared by slug) offers to replace that filter or to choose another
-name; a rename changes the doc's title and the line (the path stays);
-remove takes the line out and leaves the doc, unlisted — saving that name
-again takes it over. The wave board's Wave, Readiness, Off-board blockers
-and Title (the inputs page's State and Removed) are not in the language,
-so a save leaves them out. The app reads `VIEW-1` when the panel or an
-empty line first needs it — nothing at startup — and, once read, follows
-its `amended`.
+renames it (emptied, it is deleted). They live in the tracker, so every browser and agent reads
+the same ones: **`tickets filters`** (FILTER-46), a child activation beside
+`nav`, `inputs` and `work`, over a table of its own, `saved_filters` — a name
+(unique within its organization, matched by its slug), the filter as
+canonical text, who saved it and when. They are not tickets. The store keeps
+them in its cache like everything else and writes through; a change is a
+`Change` classified in `Store::heard`, and `watch` carries `filter_saved` and
+`filter_deleted`, so every open app follows. `list`, `get` and `check` are a
+viewer's; `save`, `rename` and `delete` an editor's, in the caller's
+organization. `save` refuses, in band and keeping nothing, a filter the
+language cannot read (naming the chunk and where it stands), one naming no
+predicate or holding `text`, and a `saved "…"` that names none or closes a
+cycle. A name already saved (compared by slug) is replaced by `save`, and the
+app offers to replace that filter or to choose another name; a rename keeps
+the filter and who saved it. The wave board's Wave, Readiness, Off-board
+blockers and Title (the inputs page's State and Removed) are not in the
+language, so a save leaves them out. The app reads `filters list` when the
+panel or an empty line first needs it — nothing at startup — and, once read,
+follows `filter_saved` / `filter_deleted`.
+
+```sh
+synapse … menger tickets filters list                                  # name, filter, count, who saved it, when
+synapse … menger tickets filters get --name "Shipped today"
+synapse … menger tickets filters save --name "Shipped today" --filter 'deployed app-prod today'   # create or replace
+synapse … menger tickets filters rename --name "Shipped today" --to "Shipped"
+synapse … menger tickets filters delete --name "Shipped"
+synapse … menger tickets filters check --filter 'deployed app-prod today'   # the count, or the error with its position; writes nothing
+```
 
 **Naming saves** (FILTER-37, `src/naming.rs`; FILTER-41: behind `save
 as…`): the name a level is given *is* its save. Given a name (Enter, or leaving the field), the level's
-filter is written as Save as… writes it — the doc at `_MENGER/view/<slug>`
-and its line in `VIEW-1` — and the name is underlined in `--live`; from then
-on **every edit** amends that doc, 400 ms after the last change, one write
+filter is saved as Save as… saves it (`filters save`) — and the name is
+underlined in `--live`; from then
+on **every edit** saves it again, 400 ms after the last change, one write
 at a time, the last always written. A name another listed filter holds
 offers to replace it or to choose another; typing another name renames it
-(the title and the line; the path stays); emptying the name unlists it (the
-line goes, the doc stays). A name given to an empty tree is saved with its
+(`filters rename`); emptying the name deletes it. A name given to an empty tree is saved with its
 first clause. A filter chosen from a chip opens with its name on the line,
 and editing it there edits it — and every filter that names it. What lets
 go of a name: a filter applied from outside the line (a link's `g=` / `n=`,
@@ -842,26 +855,23 @@ in (A, B)`) — and `format(parse(x)) == x`, `parse(format(f)) == f` hold
 over random trees. `text "…"` stays a top-level `and` group of its own, at
 any depth. **`saved "Name"`** (`saved Name` when the name holds no space,
 comma, parenthesis or quote; `not saved "Name"` too) is a predicate naming
-a saved filter: the doc in `VIEW` at `_MENGER/view/…` whose title has the
-name's slug (`Needs you` = `needs you` = `needs-you`) — several so titled,
-the one at that slug's path; none, the doc at that path (a renamed
-filter's old name keeps naming it until another filter takes the name). An
-unlisted doc (taken off `Saved ▾`) still resolves while it exists; a
-deleted one does not; `Needs you` means MENGER-43's default, `(queued or
-asking or label needs-you)`, until a doc of that name is saved. The server
+a saved filter: the row of `saved_filters` (FILTER-46) whose name has the
+slug (`Needs you` = `needs you` = `needs-you`); a deleted or renamed one
+no longer names it; `Needs you` means MENGER-43's default, `(queued or
+asking or label needs-you)`, until one of that name is saved. The server
 expands every name before it compiles a filter to cells — a name standing
 alone at the top brings its groups in; anywhere else all of them are one
 group under the join (and the `not`) it stood in, so `saved "Needs you" or
 saved Plexus-Ready` is the union of two `and`s of groups — from a registry
-of the saved docs' texts kept in the cache (`store/saved.rs`: read from the
-bodies on open, moved by every body's write; derived, not stored). Every
+of the saved filters kept in the cache (`store/filters.rs`: read from the
+table on open, moved by `save`, `rename` and `delete`). Every
 filtered read, count and watch resolves (`list`, `counts`, `facets`,
 `tree`, `find`, `search`, `inputs list`, `work ready`, `member`, `update_many`,
 `delete`, `watch`); a refusal is the read's one in-band `error`, naming the
 chunk: `no saved filter named "X"`, a cycle (`"A" names "B" names "A"`),
 names nested past 8, a saved text the language does not read, one naming
 no predicate, one holding `text`. A membership watch keeps the text it was
-asked: when a filter it names changes — its doc amended, renamed, deleted —
+asked: when a filter it names changes — saved again, renamed, deleted —
 it says what that did, `entered` / `left` per ticket (a `recount` per
 shortcode past 256), after the change that did it; a name that stops
 resolving ends it with the `error`. The app reads and carries any such
@@ -933,8 +943,8 @@ everywhere: …**, and an Alt+click reaches the app as `menger:filter-everywhere
 { id }` (SDK 1.17).
 
 ```sh
-synapse -P 4455 menger tickets get --id VIEW-1                          # the list
-synapse -P 4455 menger tickets get --id VIEW/_MENGER/view/open-builds   # one filter
+synapse -P 4455 menger tickets filters list                             # the list
+synapse -P 4455 menger tickets filters get --name "Open builds"        # one filter
 ```
 
 ### Screenshots (DEPLOY-7)
@@ -5684,7 +5694,7 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        board, waves, inputs — their URL and storage, the
                        header's bar (FILTER-11), src/counts.rs menu counts and
                        the header's n of N (FILTER-12), src/saved.rs saved
-                       filters — VIEW-1, choosing and naming (FILTER-6, 41),
+                       filters — the table (tickets filters), choosing and naming (FILTER-6, 41),
                        src/when.rs + src/when_view.rs the When category —
                        time clauses as pills, the window editor (FILTER-27),
                        src/calendar.rs the calendar and time selector,

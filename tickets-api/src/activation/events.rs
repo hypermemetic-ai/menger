@@ -3,7 +3,7 @@
 //! `activation.rs` as they were, so that file holds the methods alone.
 
 use super::*;
-use crate::store::QueueChange;
+use crate::store::{FilterChange, QueueChange};
 
 /// MNG-9: one page of the store, as the events that carry it — a row per
 /// ticket and then exactly one `page` event, which is what tells a client
@@ -88,6 +88,8 @@ pub(super) fn without_first(ev: TicketsEvent) -> TicketsEvent {
 /// `entered`, `left` and `recount` for its filter.
 pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
     Some(match change {
+        Change::Filters(FilterChange::Saved { filter, renamed_from }) => TicketsEvent::FilterSaved { filter, renamed_from },
+        Change::Filters(FilterChange::Deleted { name }) => TicketsEvent::FilterDeleted { name },
         Change::Created { ticket } => TicketsEvent::Created { ticket },
         Change::StatusChanged { ticket, previous } => {
             TicketsEvent::StatusChanged { ticket, previous }

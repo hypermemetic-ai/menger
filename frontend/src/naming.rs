@@ -5,15 +5,14 @@
 //!
 //! - **A name binds the tree** ([`Bound`]): given a name (the field's change
 //!   — Enter, or leaving it), the level's filter is saved as FILTER-6's
-//!   Save as… saves it (src/saved.rs's writes: the collection, the doc
-//!   `VIEW/_MENGER/view/<slug>`, its line), and the level is bound to it;
-//!   **every edit after** amends the doc — 400 ms after the last change
+//!   Save as… saves it (src/saved.rs's writes: `tickets filters save`),
+//!   and the level is bound to it; **every edit after** saves it again — 400 ms after the last change
 //!   ([`DEBOUNCE_MS`]), one write at a time, and the text written last is
 //!   always the tree's: a change that lands while a write is out is written
 //!   after it. A name whose slug another listed filter holds offers to
 //!   replace it or to choose another, as Save as… does ([`plan`]). Typing
-//!   another name renames (the doc's title and the line; the path stays);
-//!   emptying it unlists (the line goes, the doc stays, as `remove` does).
+//!   another name renames (`filters rename`); emptying it deletes it (as
+//!   `remove` does).
 //!   A name given to an empty tree waits for its first clause.
 //! - **What lets go of a name**: a filter applied from outside the bar — a
 //!   link's URL, `Saved ▾` choosing another (which binds that one), Make
@@ -22,10 +21,9 @@
 //!   (`menger.lens.<level>.named`), and comes back while the level holds
 //!   the text it last wrote. Unnamed, a tree is the level's filter alone.
 //! - **Texts** ([`Fetch`]): a saved query's text, read when it is first
-//!   peeked, inlined or evaluated — the collection's entry for the name
-//!   (by slug), its doc's `filter:` line; Needs you, with no doc, its
-//!   default (FILTER-36); kept, and moved by `watch` (a doc amended
-//!   anywhere).
+//!   peeked, inlined or evaluated — `filters get` by the name (by slug);
+//!   Needs you, with none saved, its default (FILTER-36); kept, and moved
+//!   by `watch` (`filter_saved`, `filter_deleted`).
 //! - **The picker's order** ([`order`]): the most recently used first
 //!   (kept per viewer, [`RECENT_KEY`]), then the level's own (a saved query
 //!   filed under the level's shortcode — none yet: the collection does not
@@ -40,12 +38,11 @@ use std::collections::HashMap;
 
 use leptos::prelude::*;
 use menger_tickets_api::filter::{Field, Filter, Predicate};
-use menger_tickets_api::saved_filters::{default_text, filter_line, path_slug, PATH_PREFIX};
 use menger_tickets_api::TicketsEvent;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::lens::{storage_key, Lens, Level};
-use crate::saved::{self, slug, Entry, Failure, Listing, Refusal, Saved};
+use crate::saved::{self, slug, Entry, Failure, Refusal, Saved};
 use crate::{dom, session};
 
 /// How long after the last change a bound tree's doc is amended.
@@ -224,18 +221,23 @@ impl Naming {
                 n.schedule(level);
             });
         }
-        // A saved query's doc changed anywhere: its text follows.
+        // A saved filter changed anywhere: its text follows (FILTER-46).
         session::listen(move |ev| {
-            let (TicketsEvent::Amended { ticket, .. } | TicketsEvent::Created { ticket } | TicketsEvent::Ticket { ticket }) = ev else { return };
-            let Some(path) = ticket.path.as_deref().filter(|p| p.starts_with(PATH_PREFIX)) else { return };
-            let Some(text) = filter_line(&ticket.body).map(str::to_string) else { return };
-            let keys = [slug(&ticket.title), path_slug(path).unwrap_or_default().to_string()];
-            n.texts.try_update(|m| {
-                for k in keys {
-                    if m.contains_key(&k) {
-                        m.insert(k, Fetch::Text(text.clone()));
+            n.texts.try_update(|m| match ev {
+                TicketsEvent::FilterSaved { filter, renamed_from } => {
+                    if let Some(old) = renamed_from {
+                        m.remove(&slug(&old));
+                    }
+                    if m.contains_key(&slug(&filter.name)) {
+                        m.insert(slug(&filter.name), Fetch::Text(filter.filter.clone()));
                     }
                 }
+                TicketsEvent::FilterDeleted { name } => {
+                    if m.contains_key(&slug(&name)) {
+                        m.insert(slug(&name), Fetch::Missing);
+                    }
+                }
+                _ => {}
             });
         });
         provide_context(n);
@@ -338,10 +340,10 @@ impl Naming {
                         Ok(list) => {
                             self.saved.set_list(list);
                             self.unbind(level);
-                            self.note[i].try_set(Some((false, format!("\u{201c}{was}\u{201d} is unlisted — its doc stays"))));
+                            self.note[i].try_set(Some((false, format!("\u{201c}{was}\u{201d} is deleted"))));
                         }
                         Err(why) => {
-                            self.note[i].try_set(Some((true, format!("not unlisted: {why}"))));
+                            self.note[i].try_set(Some((true, format!("not deleted: {why}"))));
                         }
                     }
                 });
@@ -355,7 +357,7 @@ impl Naming {
                         Ok(list) => {
                             self.saved.set_list(list);
                             let text = self.written[i].get_value().unwrap_or_default();
-                            self.bind(level, Bound { id, name: name.clone() }, text);
+                            self.bind(level, Bound { id: slug(&name), name: name.clone() }, text);
                             self.note[i].try_set(Some((false, format!("renamed \u{201c}{name}\u{201d}"))));
                         }
                         Err(Failure::Refused(Refusal::Taken(e))) => {
@@ -519,17 +521,10 @@ impl Naming {
     }
 
     async fn read(self, name: &str) -> Fetch {
-        let listed = match self.saved.listing() {
-            Listing::Read(l) => l,
-            _ => saved::read_list().await.unwrap_or_default(),
-        };
-        let id = entry_for(&listed, name).map_or_else(|| slug(name), |e| e.id.clone());
-        match saved::get_doc(&saved::address_of(&id)).await {
-            Ok(Some(t)) => match filter_line(&t.body) {
-                Some(text) => Fetch::Text(text.to_string()),
-                None => Fetch::Failed("its doc holds no `filter:` line".into()),
-            },
-            Ok(None) => default_text(name).map_or(Fetch::Missing, |d| Fetch::Text(d.to_string())),
+        // The server answers Needs you's default too, until one is saved.
+        match saved::fetch_row(name).await {
+            Ok(Some(row)) => Fetch::Text(row.filter),
+            Ok(None) => Fetch::Missing,
             Err(why) => Fetch::Failed(why),
         }
     }
@@ -613,12 +608,12 @@ mod tests {
         assert_eq!(plan(Some(&bound), "Mine or Plexus"), Plan::Nothing);
         assert_eq!(plan(Some(&bound), ""), Plan::Unlist("mine-or-plexus".into()));
         assert_eq!(plan(Some(&bound), "Theirs"), Plan::Rename { id: "mine-or-plexus".into(), name: "Theirs".into() });
-        // The path stays through a rename; the line and the doc are saved.rs's.
-        assert_eq!(saved::plan_rename(&[Entry::new("mine-or-plexus", "Mine or Plexus")], "mine-or-plexus", "Theirs"), Ok(Entry::new("mine-or-plexus", "Theirs")));
+        // A rename's entry is found by the new name's slug (the server matches by it).
+        assert_eq!(saved::plan_rename(&[Entry::new("mine-or-plexus", "Mine or Plexus")], "mine-or-plexus", "Theirs"), Ok(Entry::new("theirs", "Theirs")));
         // A name another filter holds: Save as…'s refusal, which offers replace.
-        let listed = [Entry::new("plexus-readyu", "Plexus-Ready")];
+        let listed = [Entry::new("plexus-ready", "Plexus-Ready")];
         assert_eq!(saved::plan_save(&listed, "plexus ready", false), Err(Refusal::Taken(listed[0].clone())));
-        assert_eq!(saved::plan_save(&listed, "plexus ready", true), Ok(saved::Plan::Replace(Entry::new("plexus-readyu", "plexus ready"))));
+        assert_eq!(saved::plan_save(&listed, "plexus ready", true), Ok(saved::Plan::Replace(Entry::new("plexus-ready", "plexus ready"))));
         assert_eq!(saved::plan_save(&listed, "Mine or Plexus", false), Ok(saved::Plan::New(Entry::new("mine-or-plexus", "Mine or Plexus"))));
     }
 
@@ -639,7 +634,7 @@ mod tests {
         assert_eq!(r, strs(&["b", "A"]));
         let many: Vec<String> = (0..20).map(|i| i.to_string()).collect();
         assert_eq!(with_recent(&many, "x").len(), RECENT_MAX);
-        assert_eq!(entry_for(&[Entry::new("plexus-readyu", "Plexus-Ready")], "plexus ready").map(|e| e.id.as_str()), Some("plexus-readyu"));
+        assert_eq!(entry_for(&[Entry::new("plexus-ready", "Plexus-Ready")], "plexus ready").map(|e| e.id.as_str()), Some("plexus-ready"));
         assert_eq!(entry_for(&[Entry::new("old-name", "New Name")], "Old Name").map(|e| e.id.as_str()), Some("old-name"), "by its path, renamed");
         assert_eq!(saved_text_of("Needs you"), "saved \"Needs you\"");
         assert_eq!(saved_text_of("Plexus-Ready"), "saved Plexus-Ready");

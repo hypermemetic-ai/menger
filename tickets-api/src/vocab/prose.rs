@@ -184,6 +184,37 @@ impl FilterText {
     }
 }
 
+fn filter_source(text: &str) -> Result<String, String> {
+    crate::limits::check_filter(text)?;
+    Ok(text.to_string())
+}
+
+text_type!(
+    /// FILTER-46: a filter's text, not yet read — at most
+    /// [`crate::limits::FILTER_MAX`] bytes. What `filters save` and `check`
+    /// take: the language's refusal comes back in band, naming the chunk and
+    /// where it stands, where [`FilterText`] would refuse the parameter.
+    FilterSource,
+    filter_source
+);
+
+fn filter_name(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    match (crate::saved_filters::slug(t).is_empty(), t.chars().count() > crate::saved_filters::NAME_MAX) {
+        (true, _) => Err("a saved filter's name needs a letter or a digit".into()),
+        (_, true) => Err(format!("a saved filter's name is at most {} characters", crate::saved_filters::NAME_MAX)),
+        _ => Ok(t.to_string()),
+    }
+}
+
+text_type!(
+    /// FILTER-46: a saved filter's name — trimmed, with a letter or a digit,
+    /// at most [`crate::saved_filters::NAME_MAX`] characters. Matched by its
+    /// slug (`Open Builds` is `open-builds`).
+    FilterName,
+    filter_name
+);
+
 fn zone(text: &str) -> Result<String, String> {
     let t = text.trim();
     let refused = || not_a(t, "a time zone", "an IANA name (Europe/Berlin), UTC, or an offset (+02:00, -0530)");

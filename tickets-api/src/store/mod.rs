@@ -759,6 +759,8 @@ impl Walk {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Change {
+    /// FILTER-46: a saved filter saved, renamed or deleted.
+    Filters(FilterChange),
     Created { ticket: Ticket },
     StatusChanged { ticket: Ticket, previous: Status },
     /// SDLC-13: a ticket's kind changed (`set_kind`) — and its status with
@@ -929,6 +931,7 @@ impl Change {
             | Self::ParentChanged { ticket, .. } => Some(&ticket.shortcode),
             Self::ChildrenChanged { shortcode, .. } | Self::ChildRemoved { shortcode, .. } => Some(shortcode),
             Self::GroupChanged { group } => Some(&group.shortcode),
+            Self::Filters(_) => None,
             // WAVE-6: one per change, not per event — see `in_epic`.
             Self::PlacementsChanged { .. } => None,
             // COMP-3: in no shortcode — see `in_epic`.
@@ -1912,10 +1915,9 @@ struct Cache {
     queue: queue::Queue,
     /// TICKETS-9: who holds each ticket, and the assignment history.
     assignments: assignees::Assignments,
-    /// FILTER-36: every saved filter's text, by its doc's id
-    /// ([`saved::SavedFilters`]) — read from the bodies at open, moved by a
-    /// body's write with the component registry.
-    saved: saved::SavedFilters,
+    /// FILTER-46: every saved filter ([`filters::SavedFilters`]) — read from
+    /// its table at open, moved by `tickets filters`' writes.
+    saved: filters::SavedFilters,
     /// CHAT-3: every chat, its participants' read marks and its messages.
     chats: chats::Chats,
     written: u64,
@@ -3168,6 +3170,8 @@ impl Store {
         search::migrate(&mut conn)?;
         // NOTE-2: a file without the notes table gains it, empty, here.
         notes::migrate(&mut conn)?;
+        // FILTER-46: and the saved filters' table.
+        filters::migrate(&mut conn)?;
         // COMMENT-5: and one without the media tables gains them, empty.
         media::migrate(&mut conn)?;
         // MENGER-13: and one without the transition log gains it, empty,
@@ -3316,8 +3320,8 @@ impl Store {
         cache.queue = queue::load(conn)?;
         // TICKETS-9: the assignment log, and the index from the rows.
         cache.assignments = assignees::load(conn, cache.order.values())?;
-        // FILTER-36: the saved filters, from their docs' bodies.
-        cache.saved = saved::load(conn)?;
+        // FILTER-46: the saved filters, as stored.
+        cache.saved = filters::load(conn)?;
         // CHAT-3: the chats, as stored.
         cache.chats = chats::load(conn)?;
         Ok(cache)
@@ -5458,8 +5462,11 @@ pub use lensed::{narrowing, narrowing_lens, narrowing_of, ready_and, MEMBER_MAX}
 /// and every filter a read, a count or a watch is asked resolved through
 /// them before it is compiled.
 mod saved;
+/// FILTER-46: the `saved_filters` table and `tickets filters`' writes.
+mod filters;
+pub use filters::FilterChange;
 #[cfg(test)]
-mod tests_saved;
+mod tests_filters;
 
 /// ORG-3: the shortcodes — each one's namespace, stored; the orgs; the pins;
 /// and the one resolver from what a reader writes to what the store keys on.

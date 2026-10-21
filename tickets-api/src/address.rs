@@ -676,8 +676,8 @@ mod tests {
     fn a_path_begins_at_its_underscore_with_an_org_or_without() {
         let a = Address::parse("PLEXUS/_MENGER/board").unwrap();
         assert_eq!((a.code.as_str(), &a.at), ("PLEXUS", &At::Path("_MENGER/board".into())));
-        let a = Address::parse("hypermemetic:MENGER/PLEXUS/_MENGER/view/x").unwrap();
-        assert_eq!((a.hosts.len(), a.code.as_str(), &a.at), (1, "PLEXUS", &At::Path("_MENGER/view/x".into())));
+        let a = Address::parse("hypermemetic:MENGER/PLEXUS/_MENGER/board/x").unwrap();
+        assert_eq!((a.hosts.len(), a.code.as_str(), &a.at), (1, "PLEXUS", &At::Path("_MENGER/board/x".into())));
         assert!(Address::parse("_MENGER/board").is_err());
         assert!(Address::parse("PLEXUS/_").is_err());
     }
