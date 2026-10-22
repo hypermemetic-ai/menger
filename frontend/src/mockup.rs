@@ -135,6 +135,9 @@ pub(crate) enum Source {
     Inline(String),
     /// Another ticket's whole-document body, by id.
     Ref(String),
+    /// APP-110: the live test app at a route (`env`: none, or `test`) — a
+    /// `live` block, the element form's `<m-live>`.
+    Live { route: String, env: Option<String> },
 }
 
 /// `<m-mockup ref source>` as posted, as a [`Source`] — or why not, which
@@ -144,7 +147,10 @@ pub(crate) fn parse(reference: Option<&str>, source: Option<&str>) -> Result<Sou
     match (reference, source) {
         (Some(_), Some(_)) => Err("m-mockup: give ref=\"ID\" or a ```mockup fence's page, not both".into()),
         (None, None) => Err("m-mockup: name a page — write it inside the element, or ref=\"DESIGN-49\"".into()),
-        (None, Some(page)) => Ok(Source::Inline(page.to_string())),
+        (None, Some(page)) => Ok(match crate::testapp::read_source(page) {
+            Some((route, env)) => Source::Live { route, env },
+            None => Source::Inline(page.to_string()),
+        }),
         (Some(r), None) => {
             let id = r.to_ascii_uppercase();
             if cite::ticket_ok(&id) {
@@ -207,6 +213,11 @@ pub(crate) fn page_of(body: &str) -> Option<(String, Decl)> {
 pub(crate) fn resolve(source: &Source, fetched: Option<&Fetched>) -> Result<(String, Option<Decl>), State> {
     match (source, fetched) {
         (Source::Inline(page), _) => Ok((page.clone(), None)),
+        // APP-110: the address of the test app, or the line saying why none.
+        (Source::Live { route, env }, _) => match crate::testapp::resolve(route, env.as_deref(), crate::testapp::origin().as_deref()) {
+            Ok(page) => Ok((page, None)),
+            Err(why) => Err(State::Invalid(why)),
+        },
         (Source::Ref(_), None) => Err(State::Loading),
         (Source::Ref(_), Some(Fetched::NoTicket)) => Err(State::NoTicket),
         (Source::Ref(_), Some(Fetched::Unreadable)) => Err(State::Unreadable),
@@ -378,6 +389,11 @@ fn paint(e: &mut Entry) {
     let remember = body_ticket.as_ref().map(|t| format!("{t}#m{}", e.n));
     // APP-46: its bar's *pick this* (in a decision) and *comment*.
     let (actions, more) = mockpick::bar(key(&e.channel, e.n), body_ticket, e.posted.option.clone(), e.posted.title.clone());
+    // APP-110: a live view adds *Reload*, the release test runs, and *Open in a tab*.
+    let (actions, more) = match &e.source {
+        Ok(Source::Live { .. }) => crate::testapp::extras(key(&e.channel, e.n), e.html.clone(), actions, more),
+        _ => (actions, more),
+    };
     let handle = leptos::mount::mount_to(host, move || {
         let html = Signal::derive(move || html.get());
         let decl = Signal::derive(move || decl.get());
@@ -563,7 +579,7 @@ fn fetch_into(k: String) {
         e.asked = e.asked.wrapping_add(1);
         match e.source.as_ref().ok()? {
             Source::Ref(id) => Some((id.clone(), e.asked)),
-            Source::Inline(_) => None,
+            Source::Inline(_) | Source::Live { .. } => None,
         }
     }) else {
         return;
@@ -583,6 +599,16 @@ fn fetch_into(k: String) {
                 settle(e);
             }
         });
+    });
+}
+
+/// APP-110: the live view `k` loads its test app again (its frames' address
+/// changes by the reload count). Nothing for a box that is no live view.
+pub(crate) fn reload(k: &str) {
+    with_entry(k, |e| {
+        if let Some(next) = crate::testapp::reloaded(&e.html.get_untracked()) {
+            e.html.set(next);
+        }
     });
 }
 
@@ -785,6 +811,18 @@ mod tests {
             let err = parse(r, s).unwrap_err();
             assert!(err.starts_with("m-mockup: ") && err.contains(why), "{r:?}: {err}");
         }
+    }
+
+    /// APP-110: a source led by the live mark is the test app at a route —
+    /// not a page; a page that merely mentions "live" is still a page.
+    #[test]
+    fn a_live_source_is_the_test_app_not_a_page() {
+        let live = crate::testapp::source("#/components", None);
+        assert_eq!(parse(None, Some(&live)), Ok(Source::Live { route: "#/components".into(), env: None }));
+        let prod = crate::testapp::source("#/board", Some("prod"));
+        assert_eq!(parse(None, Some(&prod)), Ok(Source::Live { route: "#/board".into(), env: Some("prod".into()) }));
+        assert_eq!(parse(None, Some("<p>live\n#/x</p>")), Ok(Source::Inline("<p>live\n#/x</p>".into())));
+        assert!(parse(Some("A-1"), Some(&live)).is_err());
     }
 
     /// Inline: drawn at once, at the fence's widths or the defaults.

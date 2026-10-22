@@ -49,7 +49,7 @@ use wasm_bindgen::JsCast;
 
 use crate::bindings::{self, Context};
 use crate::dom;
-use crate::frame::{Emulate, Frame};
+use crate::frame::Emulate;
 use crate::present::{fit, parse_widths, Device, MAX_DEVICES};
 
 /// A standard device in the Size menu.
@@ -847,7 +847,7 @@ impl Sizer {
                 <div class="device-body">
                     <div class="device-screen" style=screen>
                         <div class="device-inner" style=inner>
-                            <Frame html ticket scope emulate fixed=true />
+                            <crate::testapp::Screen html ticket scope emulate />
                             {move || shape.get().map(|_| view! {
                                 <span class="device-cutout" aria-hidden="true"></span>
                                 <span class="device-home" aria-hidden="true"></span>

@@ -31,6 +31,8 @@
      (src/shell.rs), the same way it always has for web/index.html; served
      by anything else, the app falls back to menger's default WS port. -->
 <meta name="menger-ws-port" content="{{WS_PORT}}">
+<!-- APP-110: the test app a `live` block draws (--live-origin); empty when none -->
+<meta name="menger-live-origin" content="{{LIVE_ORIGIN}}">
 <link data-trunk rel="rust" />
 <!-- AGS-14: the vendored mermaid bundle rides into dist/vendor/ as a served
      file only. Deliberately NOT a <script> here: src/mermaid.rs injects one
@@ -51,10 +53,12 @@
      100–900; fonts/OFL.txt), self-hosted at /app/fonts/ — the token
      contract's face defaults name them; nothing is fetched from elsewhere. -->
 <link data-trunk rel="copy-dir" href="fonts" data-target-path="fonts" />
-<!-- AGS-17: stamp a stored theme choice before first paint, so a reload
+<!-- AGS-17: stamp a stored theme choice before first paint (APP-110: or
+     the one `?theme=light|dark` asks for — a live view in a ticket sets it,
+     and it is never stored), so a reload
      never flashes the system theme; src/theme.rs owns the key and
      re-applies it once mounted (a native test pins the two agree). -->
-<script>try{var t=localStorage.getItem("menger.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}try{var s=localStorage.getItem("menger.themes.site");if(s)document.documentElement.style.cssText=s}catch(e){}</script>
+<script>try{var q=/[?&]theme=(light|dark)(?:&|$)/.exec(location.search),t=q?q[1]:localStorage.getItem("menger.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}try{var s=localStorage.getItem("menger.themes.site");if(s)document.documentElement.style.cssText=s}catch(e){}</script>
 <style>
   /* THEME-2: every token menger draws with — colour, type, space, shape and
      motion — is named once, in the contract (tickets-api/src/tokens.toml),
@@ -1665,6 +1669,10 @@
   .framed-caption-text p { margin: 0 0 .4rem; }
   .framed.is-full .framed-caption { max-width: none; padding-bottom: .3rem; }
   .framed-note { color: var(--muted); font-style: italic; }
+  /* APP-110: a live view — the test app in each device's screen — and what its bar adds. */
+  .live-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--card); }
+  .live-release { color: var(--muted); font-size: calc(.78rem * var(--text-scale)); align-self: center; }
+  .live-open { text-decoration: none; }
   .device { margin: 0; flex: none; }
   .device.hidden { display: none; }
   .device-label { display: flex; gap: .5rem; font-size: calc(.72rem * var(--text-scale)); color: var(--muted); padding: 0 0 .3rem; }

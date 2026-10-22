@@ -189,6 +189,22 @@ struct Args {
     #[arg(long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
     allowed_origin: Vec<String>,
 
+    // APP-110.
+    /// An origin whose pages may frame this server's (repeatable): on the
+    /// test environment, the tracker's — `https://app.menger.sh` — so a
+    /// ticket body can draw the live app. Default none: nothing frames it.
+    /// In the env var, separated by `;`.
+    #[arg(long = "frame-ancestor", env = "MENGER_FRAME_ANCESTORS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    frame_ancestor: Vec<String>,
+
+    // APP-110.
+    /// The origin of the test app this server's ticket bodies draw in device
+    /// frames (`live` blocks), e.g. `https://app-test.menger.sh`. Default
+    /// none: a `live` block says no test app is configured. The test server
+    /// must name this one's origin with --frame-ancestor.
+    #[arg(long = "live-origin", env = "MENGER_LIVE_ORIGIN", value_name = "ORIGIN", help_heading = SIGN_IN, hide_short_help = true)]
+    live_origin: Option<String>,
+
     // ACCESS-25: DNS rebinding.
     /// Another `Host` menger answers to (repeatable; `host:port`, or `host`).
     /// `127.0.0.1`, `localhost` and --public-url's host always are; any other
@@ -564,6 +580,11 @@ async fn run(args: Args) -> anyhow::Result<()> {
             https,
             // RUN-9: RFC 9728's document on the public origin, behind https.
             metadata: wired.metadata_route(),
+            // APP-110: checked before anything opens, as the other origins are.
+            framing: shell::Framing {
+                ancestors: args.frame_ancestor.iter().map(|o| shell::check_origin(o)).collect::<Result<_, _>>().map_err(|e| anyhow::anyhow!("--frame-ancestor: {e}"))?,
+                live: args.live_origin.as_deref().map(shell::check_origin).transpose().map_err(|e| anyhow::anyhow!("--live-origin: {e}"))?,
+            },
         };
         // DIST-14: bound before the banner, so the link answers when printed.
         let at = std::net::SocketAddr::new(args.bind, shell_port);

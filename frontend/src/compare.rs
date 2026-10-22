@@ -61,7 +61,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::bindings::{self, Context};
 use crate::cite::{self, Fetched};
-use crate::frame::{Emulate, Frame, Scheme};
+use crate::frame::{Emulate, Scheme};
 use crate::mockup::{self, Posted, Source};
 use crate::present::{self, Caption, Device};
 use crate::{bridge, dom, md, mocksize, session};
@@ -635,6 +635,11 @@ pub(crate) fn resolve(item: &Item) -> Col {
         Err(why) => Col::Failed(Why::Invalid(why)),
         Ok(Source::Inline(page)) => Col::Shown { page, caption: own, scope: bridge::scope_of(Some(&item.ticket)).unwrap_or_default() },
         Ok(Source::Ref(id)) => whole(&id, own),
+        // APP-110: a live view of the test app, drawn as a mockup's page is.
+        Ok(Source::Live { route, env }) => match crate::testapp::resolve(&route, env.as_deref(), crate::testapp::origin().as_deref()) {
+            Ok(page) => Col::Shown { page, caption: own, scope: String::new() },
+            Err(why) => Col::Failed(Why::Invalid(why)),
+        },
     }
 }
 
@@ -1129,7 +1134,7 @@ fn column(item: Item, device: RwSignal<Device>, emulate: Signal<Emulate>, lay: M
                 view! {
                     <div class="cmp-screen" style=screen>
                         <div class="cmp-inner" style=inner>
-                            <Frame html ticket=None scope emulate fixed=true />
+                            <crate::testapp::Screen html ticket=None scope emulate />
                         </div>
                     </div>
                 }
