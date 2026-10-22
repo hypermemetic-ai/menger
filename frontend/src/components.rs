@@ -90,6 +90,22 @@ pub(crate) fn count_label(n: usize) -> String {
     }
 }
 
+/// COMP-17: how many reference chips a row draws before "show all".
+pub(crate) const REFS_FIRST: usize = 50;
+
+/// COMP-17: the search box's filter — every word of `q` in the name, the
+/// summary or the owner ("orphan" for none), case-insensitive. Empty: all.
+pub(crate) fn matches(row: &Row, q: &str) -> bool {
+    let hay = format!(
+        "{} {} {}",
+        row.name,
+        row.summary.as_deref().unwrap_or(""),
+        row.owner.as_deref().unwrap_or("orphan")
+    )
+    .to_lowercase();
+    q.to_lowercase().split_whitespace().all(|w| hay.contains(w))
+}
+
 /// The source's fold: "source · 18 lines".
 pub(crate) fn source_label(source: &str) -> String {
     let lines = source.trim_end_matches('\n').lines().count();
@@ -120,8 +136,12 @@ pub(crate) fn help_card(c: &Component) -> String {
 
 fn row_view(row: Row) -> impl IntoView {
     let Row { name, summary, owner, referrers, source, open } = row;
+    let expanded = RwSignal::new(false);
     let summary = match summary {
-        Some(s) if !s.is_empty() => view! { <div class="c-summary">{s}</div> }.into_any(),
+        Some(s) if !s.is_empty() => view! {
+            <div class="c-summary" class:open=move || expanded.get() on:click=move |_| expanded.update(|e| *e = !*e)>{s}</div>
+        }
+        .into_any(),
         Some(_) => ().into_any(),
         None => view! { <div class="c-summary none">"no docs yet"</div> }.into_any(),
     };
@@ -137,7 +157,33 @@ fn row_view(row: Row) -> impl IntoView {
         .into_any(),
     };
     let count = count_label(referrers.len());
-    let refs = referrers.into_iter().map(referrer_view).collect_view();
+    let total = referrers.len();
+    // COMP-17: the references are a count that opens into a wrapped chip
+    // list — the first REFS_FIRST, then "show all"; the summary clamps to
+    // two lines until tapped.
+    let all = RwSignal::new(false);
+    let refs_view = if total == 0 {
+        view! { <span class="count">{count}</span> }.into_any()
+    } else {
+        let chips = move || {
+            let n = if all.get() { total } else { REFS_FIRST };
+            referrers.iter().take(n).cloned().map(referrer_view).collect_view()
+        };
+        view! {
+            <details class="refs">
+                <summary class="count">{count}</summary>
+                <div class="chips">
+                    {chips}
+                    {(total > REFS_FIRST).then(|| view! {
+                        <button type="button" class="show-all" class:gone=move || all.get() on:click=move |_| all.set(true)>
+                            {format!("show all {total}")}
+                        </button>
+                    })}
+                </div>
+            </details>
+        }
+        .into_any()
+    };
     let fold = source_label(&source);
     let src_code = NodeRef::<leptos::html::Code>::new();
     src_code.on_load(|el: web_sys::HtmlElement| {
@@ -146,21 +192,18 @@ fn row_view(row: Row) -> impl IntoView {
         }
     });
     view! {
-        <tr class="comp" class:orphaned=owner.is_none() data-component=name.clone()>
-            <td class="c-name"><a class="tag" href=href>{format!("<{name}>")}</a>{summary}</td>
-            <td class="c-owner">{owner_view}</td>
-            <td class="c-refs"><span class="count">{count}</span>" "{refs}</td>
-        </tr>
-        <tr class="src" data-component=name>
-            <td colspan="3">
+        <div class="comp" class:orphaned=owner.is_none() data-component=name.clone()>
+            <div class="c-name"><a class="tag" href=href>{format!("<{name}>")}</a><span class="c-owner">{owner_view}</span>{summary}</div>
+            <div class="c-refs">{refs_view}</div>
+            <div class="src" data-component=name.clone()>
                 <details open=open>
                     <summary>{fold}</summary>
                     // MENGER-22: a component's source is HTML (its template,
                     // style and script), highlighted as such.
                     <pre><code class="language-html" node_ref=src_code>{source}</code></pre>
                 </details>
-            </td>
-        </tr>
+            </div>
+        </div>
     }
 }
 
@@ -173,6 +216,12 @@ pub(crate) fn ComponentsPage(only: Option<String>) -> impl IntoView {
     let reg_card = reg.clone();
     let reg_owner = reg.clone();
     let rows = Memo::new(move |_| reg.with(|r| r.as_ref().map(|r| rows(&r.list(), one.as_deref()))));
+    // COMP-17: the search box (the list page only) narrows by name, summary, owner.
+    let query = RwSignal::new(String::new());
+    let shown = Memo::new(move |_| {
+        let q = query.get();
+        rows.get().map(|l| l.into_iter().filter(|r| matches(r, &q)).collect::<Vec<_>>())
+    });
     let title = match &only {
         Some(name) => format!("<{name}>"),
         None => "Components".to_string(),
@@ -210,6 +259,14 @@ pub(crate) fn ComponentsPage(only: Option<String>) -> impl IntoView {
             view! { <div class="help-card"><Frame html ticket=None scope /></div> }
         })
     };
+    let search = only.is_none().then(|| {
+        view! {
+            <input type="search" class="comp-search" placeholder="search components, summaries, owners"
+                aria-label="search components" prop:value=move || query.get()
+                on:input=move |ev| query.set(event_target_value(&ev)) />
+        }
+    });
+    let search = StoredValue::new(search);
     view! {
         <section id="components" data-only=only.clone()>
             <h2>{title}</h2>
@@ -222,18 +279,15 @@ pub(crate) fn ComponentsPage(only: Option<String>) -> impl IntoView {
                     None => view! { <p class="none empty">"No components yet."</p> }.into_any(),
                 },
                 Some(_) => view! {
-                    <table class="comps">
-                        <thead>
-                            <tr><th class="c-name">"component"</th><th class="c-owner">"owner"</th><th>"references"</th></tr>
-                        </thead>
-                        <tbody>
-                            <For
-                                each=move || rows.get().unwrap_or_default()
-                                key=|row| row.clone()
-                                children=row_view
-                            />
-                        </tbody>
-                    </table>
+                    {move || search.get_value()}
+                    <div class="comps">
+                        <For
+                            each=move || shown.get().unwrap_or_default()
+                            key=|row| row.clone()
+                            children=row_view
+                        />
+                    </div>
+                    {move || shown.get().is_some_and(|l| l.is_empty()).then(|| view! { <p class="none nomatch">"No component matches."</p> })}
                 }
                 .into_any(),
             }}
@@ -372,6 +426,16 @@ mod tests {
         assert!(html.contains("data-menger-card=\"m-wave-summary\"") && html.contains("Wave 1, counted."), "{html}");
         assert!(!html.contains("mc-refs") && !html.contains("mc-source"), "{html}");
         assert!(help_card(&fixture()[0]).contains("no docs yet"));
+    }
+
+    /// COMP-17: the search matches name, summary and owner, every word.
+    #[test]
+    fn search_matches_name_summary_owner() {
+        let r = rows(&fixture(), None);
+        assert!(matches(&r[0], "") && matches(&r[0], "badge") && matches(&r[0], "demo-7"));
+        assert!(!matches(&r[0], "wave"));
+        assert!(matches(&r[1], "WAVE counted") && matches(&r[1], "orphan"));
+        assert!(!matches(&r[1], "wave nothere"));
     }
 
     #[test]
