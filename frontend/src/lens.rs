@@ -1106,6 +1106,11 @@ impl Lens {
         self.phone.get()
     }
 
+    /// FILTER-49: whether the viewport is the phone's, untracked.
+    pub(crate) fn phone_untracked(self) -> bool {
+        self.phone.get_untracked()
+    }
+
     /// FILTER-40: the level whose panel is open — one at a time. Tracked.
     pub(crate) fn open_level(self) -> Option<Level> {
         Level::ALL.into_iter().find(|l| self.pop(*l).open_tracked())
@@ -1135,9 +1140,8 @@ impl Lens {
         self.pops[level.index()]
     }
 
-    /// FILTER-39: `level`'s panel opened in its page's flow — on `c`'s
-    /// section when given (scrolled to and lit) — every other level's
-    /// folded.
+    /// FILTER-49: `level`'s menu opened over the page — on `c`'s category
+    /// when given — every other level's closed.
     pub(crate) fn open_panel(self, level: Level, c: Option<Cat>) {
         // FILTER-40: a tab changes which level the one panel edits; the
         // focus it was opened from stays where it was.
@@ -1161,8 +1165,8 @@ impl Lens {
 
     /// The keys, for the app's lifetime: `F` opens or folds the global
     /// panel anywhere unless typing (or in a dialog, a menu, an overlay);
-    /// `f` the route's surface's, where its bar is drawn (FILTER-39: the
-    /// panel is in the page's flow — a click elsewhere leaves it open).
+    /// `f` the route's surface's, where its bar is drawn (FILTER-49: the
+    /// menu is a popover — a press outside it closes it).
     pub(crate) fn install(self) {
         window_event_listener(leptos::ev::keydown, move |ev: web_sys::KeyboardEvent| {
             // AGS-28: `f` and `F` are the table's `filter.view` and
@@ -1191,6 +1195,19 @@ impl Lens {
                 self.close_panel(true);
             } else {
                 self.open_panel(level, None);
+            }
+        });
+        // FILTER-49: the menu is a popover again — a press outside it (and
+        // outside every filter's line, whose chips and buttons open it)
+        // closes it. A phone's sheet closes as a sheet does.
+        window_event_listener(leptos::ev::pointerdown, move |ev: web_sys::PointerEvent| {
+            if self.phone.get_untracked() || !Level::ALL.into_iter().any(|l| self.pop(l).is_open()) {
+                return;
+            }
+            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+            let inside = target.is_some_and(|t| t.closest(".fmenu, .fbar, [data-fopen], .overlay").ok().flatten().is_some() || !t.is_connected());
+            if !inside {
+                self.close_panel(false);
             }
         });
         // FILTER-40: the panel moves into the phone bar's sheet at phone
