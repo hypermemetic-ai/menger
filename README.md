@@ -608,7 +608,7 @@ live, and an id that is no ticket is left as written. A body without one
 renders byte for byte as before.
 
 **Filters** (FILTER-9) reach every view. There is one **global** filter
-(<kbd>F</kbd>, or the panel's ⌂ everywhere tab; a dashed chip on every
+(<kbd>F</kbd>, or the menu's ⌂ everywhere switch; a dashed chip on every
 surface and in the nav's head, and `n of N` in the header while it holds
 anything) and one per surface: the
 **board**, the **wave board**, the **nav** and the **inputs** page (each
@@ -617,7 +617,7 @@ admit — `global.and(own)`, which merges groups on the same field (lists
 intersect, exclusions unite) and names a contradiction under the bar. Every
 bar is the same component (WAVE-12's menu made generic, `src/lens.rs`):
 categories with counts (`facets`, Linear's: a category's counts ignore its
-own clause, never the global one), the filter panel (FILTER-39, below), a
+own clause, never the global one), the filter menu (FILTER-49, below), a
 text drawer in FILTER-3's language (FILTER-43), and the global filter
 shown as a dashed chip on each surface. The
 board windows over `counts` (FILTER-12); the nav shows each shortcode with
@@ -635,41 +635,55 @@ and a ticket page says when its ticket is outside and filters its children
 `f=` the surface's own — and the viewer's local storage, so global and nav
 filters survive navigation and reload.
 
-The panel builds a NOT (FILTER-19): each section's head has an `is` /
+The menu builds a NOT (FILTER-19): each category's head has an `is` /
 `is not` switch (Title's `contains` / `does not contain`). Set to `is
 not`, the selected group's clauses of that category turn, and values
 ticked under it are excluded — and-ed: Kind, `is not`, doc and spike is
 `not kind doc and not kind spike`. The flags share one switch: `is not`
 ticks `not ready`.
 
-**The filter panel** (FILTER-39, FILTER-38's mockups; `src/filter.rs`,
+**The filter menu** (FILTER-49; `src/filter.rs`,
 `src/ors.rs`) is every bar's one builder. Over each surface sits **the
 chips line** (FILTER-41): the `Filter` button (its badge the number of
 clauses), the global filter as a dashed chip, the surface's clauses as
 chips — the field muted, the value inked, × to take one out, a click to
-open its section — with **and** between them and **or** between the groups
+open the menu on its category — with **and** between them and **or** between the groups
 (each group boxed when there are two or more), the surface's own clauses
 (the wave board's, the inputs page's) as chips beside them, the count
-(*11 of 45*) and `save as…`. Empty, it says what is shown (*all 41
+(*11 of 45*), **+ or** (another group, the menu opened to tick into it)
+and `save as…`. Empty, it says what is shown (*all 41
 tickets*) and offers the saved filters the reader uses most (the recently
 used first), each counted — a click applies one, bound by its name (with
 none saved yet, three of FILTER-27's suggestions). The name field, `text`
-and `Saved ▾` are gone from it: text is the panel's foot, choosing is the
-panel's Saved section or a chip here. The button, <kbd>f</kbd>
-(<kbd>F</kbd> the global one) open the panel **in the page's flow** under the bar — the board moves down
-under it, nothing floats over it — and fold it again; Escape folds it.
+and `Saved ▾` are gone from it: text is the menu's foot, choosing is the
+menu's Saved category or a chip here. The button, <kbd>f</kbd>
+(<kbd>F</kbd> the global one) open **the menu**, a popover over the page
+hung under the button that opened it — the pre-FILTER-39 menu, back (the
+owner, 2026-10-22: *"compact, a popover not a panel"*): the board never
+moves under it, and Escape, × or a press outside closes it. Its head is the
+search (it narrows every value; with a category open, that one's) and the
+levels as a small switch; under it, once the filter has a group, which group
+a tick goes into (**+ or**, × on a group); then the categories as a short
+list — the saved filters first, Shortcode, Status, Kind, Severity, the flags
+together, Label, When, Deployed, Chats, People, a surface's own — with a dot
+on each the filter holds, and **one open at a time** beside it: its values,
+each counted (`facets`), `is` / `is not` in its head. Its foot: `edit as
+text`, `reset`, `save as…`, the clauses counted. With too little room for
+two panes (a column under 580 px) the open category takes the list's place
+behind a back row.
 
-**On a phone** (FILTER-44; APP-50's shape, up to 820 px): the panel is the
-phone bar's filter sheet — the bar's filter place opens it on ⌂ everywhere,
-a surface's own `Filter` on its tab. Its head (the search, the level tabs
-across it) stays at the sheet's top; rows are touch-sized (40 px); under
-640 px the sections are one column; `clear` (or `reset`) and **show N
-tickets** — N what the level shows, counting as you tick — are pinned at
-its foot, and *show* folds it and lowers the sheet. Closed, one row of
+**On a phone** (FILTER-44; APP-50's shape, up to 820 px): the same menu is
+the phone bar's filter sheet — the bar's filter place opens it on ⌂
+everywhere, a surface's own `Filter` on its level. Its head (the search, the
+level switch across it) stays at the sheet's top; rows are touch-sized
+(40 px); one pane — the list, or the open category behind a back row;
+`clear` (or `reset`) and **show N tickets** — N what the level shows,
+counting as you tick — are pinned at its foot, and *show* closes it and
+lowers the sheet. Closed, one row of
 chips is all that sits over the board (the line's chips clipped to it,
 nothing scrolling sideways).
 
-**The text drawer** (FILTER-43): the panel's foot's `edit as text` opens
+**The text drawer** (FILTER-43): the menu's foot's `edit as text` opens
 the level's filter as canonical text, edited in place. As you type, the
 language places each mistake ([`Mistake`], `tickets-api/src/filter.rs`: a
 refused chunk now carries where it starts and each mistake in it — where,
@@ -683,52 +697,48 @@ categories) and menger's fields, never the grammar's listing. Enter (or
 `apply`) applies the text once it reads; until then the level keeps the
 last filter that read and its chips line says so. Escape leaves the drawer.
 
-**One panel for every level** (FILTER-40): its head holds a tab per level —
+**One menu for every level** (FILTER-40): its head holds a switch with a level each —
 **⌂ everywhere**, **nav** (where the nav is drawn), and the route's surface
 (**this board**, **this wave board**, **the inputs**) — each with what that
 level shows counted (`global ∧ own`, `counts` asked again as it changes), so
-which filter is being edited is never a guess. It is drawn under the
-surface's line, under the header on a page with none (a ticket's), and in
-the phone bar's filter sheet at phone widths. The header's `Filter` and
+which filter is being edited is never a guess. It hangs from the
+surface's line, from under the header on a page with none (a ticket's), and
+is the phone bar's filter sheet at phone widths. The header's `Filter` and
 `Saved ▾`, the GLOBAL row and the nav's bar are gone: the global filter is a
 dashed, read-only chip at the head of each surface's line and of the nav's
-chips (a click opens its tab), the nav shows its own filter as chips in its
-head, and the panel's foot keeps `edit as text` and `reset` / `clear`. The wire is
+chips (a click opens its level), the nav shows its own filter as chips in its
+head, and the menu's foot keeps `edit as text` and `reset` / `clear`. The wire is
 unchanged (`global ∧ own`), and so is the URL's `g=` `n=` `f=`.
 
 The filter it builds is **groups joined by an explicit `or`, the clauses
 inside a group joined by `and`** (owner, 2026-10-17: *"ors should be
 explicit not any of. clauses between ors are anded"*) — no "any of", no
-"all of", no join to toggle. The panel draws the groups at its top, each a
-row of clauses with **and** between them and **or** between the groups;
-the selected group is lit, and the sections tick its clauses (a value
-another group holds says `in group 2`). × takes out a clause or a group,
-**+ or** starts a group. Under them every category is a section — the
-saved filters (each counted), Shortcode as its tree, Status (its groups as
-headings), Kind, Severity, the flags together, Label, When, Deployed,
-Chats, and a surface's own — flowing into as many columns as the width
-holds (four at 1440, one in the nav or on a phone), each value with its
-count; hovering one says what ticking it would leave (`→ 13`). Typing in
-the panel's search narrows every section at once; Enter ticks the first
-value left.
+"all of", no join to toggle. The chips line draws the groups, each
+its clauses with **and** between them and **or** between the groups; while
+the menu is open the selected group is lit there and in the menu's *ticks
+go into* row, and the categories tick its clauses (a value another group
+holds says `in group 2`). × takes out a clause (or, in the menu, a group);
+**+ or** starts a group. Each value is counted; hovering one says what
+ticking it would leave (`→ 13`). Typing in the menu's search narrows every
+category at once; Enter ticks the first value left.
 
 A tick goes into the selected group. A second value of a category a ticket
 holds one of — a second status, kind, severity or shortcode — is an
 alternative, so it makes **a group of its own** after the selected one, the
-group's other clauses kept in both, and the panel says so: with `kind build
+group's other clauses kept in both, and the menu says so: with `kind build
 and status Ready`, ticking gap makes `(kind build and status Ready) or (kind
 gap and status Ready)`. A shortcode that hosts others is ticked as `under`
 it (it and every shortcode hosted under it), the hosted ones marked covered.
 A saved filter ticked is a group by name (`saved "Hot gaps"`), filling the
-selected group while it is empty, and the panel shows what it holds beside
-it (`= kind gap and severity high`, read the first time it is shown).
+selected group while it is empty; the line says the filter **as evaluated**,
+its names expanded.
 FILTER-42: these groups are FILTER-36's groups in a group, one level deep,
 with no join to toggle — FILTER-37's tree and `src/anyof.rs` are gone. Any
 filter the language holds is drawn so, its lists spelled out and its
 negated groups turned (De Morgan) — `kind build and status in (Ready,
 Coding)` is two groups, `not (ready and blocked)` is `not ready` or `not
 blocked` — admitting the same tickets; one that would spell out into more
-than 32 groups is shown as its text, read-only in the panel and edited as
+than 32 groups is shown as its text, read-only in the menu and edited as
 text in its foot, never rewritten. The
 groups last edited are kept while the filter still says them, so a new empty
 group keeps its place. With names, a line under the bar says the filter **as
@@ -791,11 +801,11 @@ the ticket page, where an editor adds and removes them; the menus offer
 counts), and the palette takes `filter <text>` — `filter label needs-you`,
 `filter asking` — as the global filter.
 
-**Saved filters** (FILTER-6, FILTER-41): the panel's Saved section lists
+**Saved filters** (FILTER-6, FILTER-41): the menu's Saved category lists
 them by name, each counted (ticked, one joins the selected group by name,
 `saved "Name"`); an empty chips line offers the most used, and a click there
 applies its filter to that level (a surface's own categories cleared),
-bound by its name; `save as…` — on the line, or in the panel's foot for any
+bound by its name; `save as…` — on the line, or in the menu's foot for any
 level — keeps the level's filter under a name, and the bound name, clicked,
 renames it (emptied, it is deleted). They live in the tracker, so every browser and agent reads
 the same ones: **`tickets filters`** (FILTER-46), a child activation beside
@@ -5725,7 +5735,7 @@ scripts/shot.mjs       screenshots of the app once it is ready, signed in where
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
                        src/waves.rs the wave board (WAVE-5, WAVE-6),
-                       src/filter.rs the generic filter bar and its panel
+                       src/filter.rs the generic filter bar and its menu
                        (WAVE-12, FILTER-11, FILTER-39); src/ors.rs the
                        filter as groups joined by or (FILTER-39),
                        src/naming.rs naming saves, "as evaluated" and
