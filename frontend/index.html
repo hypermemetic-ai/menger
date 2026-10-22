@@ -2740,8 +2740,12 @@
   .ccompose .crow:has(.cup.failed) { flex-wrap: wrap; }
   .ccompose .crow .cattach:has(.cup.failed) { flex: 1 1 100%; min-width: 0; order: -1; }
   /* What the box says of its images on their way is for a screen reader:
-     the thumbnails show it. */
-  .cattach .cnote.cups { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+     the thumbnails show it. APP-112: held inside its own box. With no
+     positioned ancestor it was placed against the page itself, at its spot
+     far down a long ticket, outside .content's scroller, and the document
+     grew to reach it: the desktop window scrolled past its bottom. */
+  .cattach { position: relative; }
+  .cattach .cnote.cups { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .cup-acts { display: inline-flex; gap: .3rem; flex: none; }
   /* :is() with the ids: over the full-screen chat's button reset. */
   :is(#chatfull, #chatpane, body) .cup-acts button {
