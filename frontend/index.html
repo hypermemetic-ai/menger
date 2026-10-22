@@ -4424,6 +4424,46 @@
     font-family: var(--font-display); font-size: calc(16px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: -.01em; margin: 28px 0 8px;
   }
 
+  /* COMP-17: a component is a card (not a table row) — its tag and owner, its
+     summary clamped to two lines (tap to open), its references a count that
+     opens into a wrapped list; the source folded below. Above 820 the card
+     is a grid row: name | references. Nothing is wider than the viewport. */
+  #components { min-width: 0; }
+  #components .comp-search {
+    display: block; box-sizing: border-box; width: 100%; max-width: 28rem; margin: .5rem 0 .25rem; font: inherit; color: var(--ink);
+    background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius-md); padding: 8px 12px;
+    font-size: max(16px, calc(13px * var(--text-scale)));
+  }
+  #components .comps { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; min-width: 0; padding-bottom: var(--safe-bottom); }
+  #components .comp {
+    display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px 16px; min-width: 0;
+    background: var(--card); border: var(--border) solid var(--tree-line); border-radius: var(--radius); padding: 10px 12px;
+  }
+  #components .comp > * { min-width: 0; }
+  #components .c-name { overflow-wrap: anywhere; }
+  #components .c-owner { margin-left: .5rem; }
+  #components .c-summary {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; cursor: pointer;
+  }
+  #components .c-summary.open { display: block; overflow: visible; }
+  #components .refs > summary { cursor: pointer; list-style: none; }
+  #components .refs > summary::-webkit-details-marker { display: none; }
+  #components .refs > summary::after { content: " ›"; }
+  #components .refs[open] > summary::after { content: " ⌄"; }
+  #components .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; min-width: 0; }
+  #components .chips .code { margin-right: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  #components .show-all {
+    font: inherit; font-size: calc(11px * var(--text-scale)); color: var(--accent); background: none; cursor: pointer;
+    border: var(--border) solid var(--tree-line); border-radius: var(--radius-md); padding: 0 8px;
+  }
+  #components .show-all.gone { display: none; }
+  #components .comp .src { min-width: 0; }
+  #components .comp details pre { max-width: 100%; box-sizing: border-box; }
+  @media (min-width: 821px) {
+    #components .comp { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+    #components .comp .src { grid-column: 1 / -1; }
+  }
+
   /* Settings: each group the mockup's `.panel` — a card on the stronger
      hairline, 8px corners, its name the small upper-case head inside it. */
   #settings fieldset.group {
