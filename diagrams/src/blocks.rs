@@ -509,7 +509,8 @@ fn is_mermaid_fence(info: &str) -> bool {
     #[test]
     fn the_frame_draws_html_diagrams_through_md_rs() {
         assert!(MD_RS.contains("        if framed {\n            match &ev {\n                Event::Start(Tag::HtmlBlock) => {"));
-        assert!(MD_RS.contains("return Some(Event::Html(with_diagrams(&block, &mut diagrams).into()));"));
+        // APP-110: the block then goes through `lives` (a live view's placeholder); the diagrams first.
+        assert!(MD_RS.contains("return Some(Event::Html(lives(&with_diagrams(&block, &mut diagrams)).into_owned().into()));"));
         assert!(MD_RS.contains("let found = html_diagrams(block);"));
         // COMP-11: the blocks gathered are html_runs's, as here.
         assert!(MD_RS.contains("let read = framed.then(|| html_runs::read(src, opts));"));

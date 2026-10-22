@@ -258,6 +258,13 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.revisions.get", Today::Viewer, None),
     ("tickets.revisions.diff", Today::Viewer, None),
     ("tickets.revisions.restore", Today::Editor, Some("id")),
+    // FILTER-46: saved filters, the org's — read by a viewer, written by an editor.
+    ("tickets.filters.list", Today::Viewer, None),
+    ("tickets.filters.get", Today::Viewer, None),
+    ("tickets.filters.check", Today::Viewer, None),
+    ("tickets.filters.save", Today::Editor, None),
+    ("tickets.filters.rename", Today::Editor, None),
+    ("tickets.filters.delete", Today::Editor, None),
     // MENGER-12: an editor's, on the ticket it labels.
     ("tickets.label", Today::Editor, Some("id")),
     // TICKETS-9: an editor assigns.
