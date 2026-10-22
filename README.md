@@ -947,6 +947,46 @@ synapse -P 4455 menger tickets filters list                             # the li
 synapse -P 4455 menger tickets filters get --name "Open builds"        # one filter
 ```
 
+### The live test app in a ticket (APP-110)
+
+A body can draw **the test app itself** at a route — the "after" beside a
+mockup's "before" (owner, chat 6): a ` ```live ` fence, or its element `<m-live>`.
+It is a mockup whose devices hold an `<iframe>` of `<test origin>/#/route`, so
+it has the mockup's bar — the widths, Light / Dark, Full screen, *Compare*
+(a mockup and a live view side by side at one device and theme), *comment* —
+and adds **Reload**, **Open in a tab ↗** and the line *test runs <release>*
+(`deployments.environments`, the project `menger`'s `test`).
+
+````markdown
+```live route="#/components" widths=390,1440 title="#/components on test"
+```
+
+<m-live route="#/components" widths="390,1440"></m-live>
+````
+
+`route` is an app hash route (`#/…`, printable ASCII). `env=` may say `test`
+and nothing else: **prod is never drawn**, and a block that asks says so.
+There is one configured test app, `--live-origin` (`MENGER_LIVE_ORIGIN`) on
+the tracker, and a server given none says *no test app is configured* in the
+box. Two policies move, each by exactly that origin (`src/shell.rs`, `Framing`):
+
+| server | flag | `PAGE_CSP` |
+|---|---|---|
+| the tracker | `--live-origin https://app-test.menger.sh` | `frame-src 'self' <origin>` |
+| test | `--frame-ancestor https://app.menger.sh` (repeatable; `MENGER_FRAME_ANCESTORS`, `;`) | `frame-ancestors <origin>` in place of `'none'`, and no `X-Frame-Options: DENY` beside it |
+
+Neither flag, and a server is as it was: it frames only its own body frames
+and is framed by no one. **The sign-in pages stay unframeable** (plexus-login,
+`frame-ancestors 'none'`), and a session cookie is the origin's own
+(`__Host-`, host-only): a reader with no session on test signs in on it in a
+tab (*Open in a tab*), then *Reload*s. Light / Dark is asked of the app as
+`?theme=light|dark` (read before first paint, never stored); *Reduced motion*
+cannot cross origins and changes nothing in a live view. This machine's
+`deploy/env/{prod,test}.env` and the Linode's `app-{prod,test}.env` carry the
+two settings. `scripts/live-check.sh` is the check, on a throwaway tracker,
+test and a bare server (`scripts/live-check.mjs`; ports `--port`, never
+4450–4458).
+
 ### Screenshots (DEPLOY-7)
 
 `scripts/shot.mjs` is the one way to look at the app from a script — use it

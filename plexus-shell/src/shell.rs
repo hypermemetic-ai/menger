@@ -236,12 +236,25 @@ pub async fn serve_on(
 pub async fn harden(req: Request, next: axum::middleware::Next) -> Response {
     let mut r = next.run(req).await;
     let h = r.headers_mut();
+    // APP-110: a page whose policy names who may frame it says so in
+    // `frame-ancestors`; a `DENY` beside it would refuse those very frames
+    // in a browser that reads the header first.
+    let framed_by_policy = h
+        .get(header::CONTENT_SECURITY_POLICY)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|csp| csp.split(';').any(|d| d.trim().strip_prefix("frame-ancestors").is_some_and(|src| !matches!(src.trim(), "'none'" | "'self'"))));
+    if framed_by_policy {
+        h.remove(header::X_FRAME_OPTIONS);
+    }
     for (name, value) in [
         (header::X_FRAME_OPTIONS, "DENY"),
         (header::CONTENT_SECURITY_POLICY, "frame-ancestors 'none'"),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::REFERRER_POLICY, "same-origin"),
     ] {
+        if framed_by_policy && name == header::X_FRAME_OPTIONS {
+            continue;
+        }
         if !h.contains_key(&name) {
             h.insert(name, header::HeaderValue::from_static(value));
         }
@@ -375,5 +388,38 @@ mod tests {
         assert!(get(port, "/app/icon.png").await.contains("image/png"), "still under the mount");
         assert!(get(port, "/gone.png").await.contains(" 404 "), "named, not built");
         assert!(get(port, "/app.js").await.contains(" 404 "), "not named");
+    }
+
+    /// APP-110: a page whose policy names who may frame it goes out without
+    /// `X-Frame-Options: DENY` (which would refuse those frames); a page with
+    /// no policy, `'none'` or the frame document's `'self'` keeps its header.
+    #[tokio::test]
+    async fn a_policy_that_allows_framing_drops_deny() {
+        use axum::routing::get as route;
+        let page = |csp: &'static str, xfo: Option<&'static str>| {
+            route(move || async move {
+                let mut r = "page".into_response();
+                r.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(csp));
+                if let Some(x) = xfo {
+                    r.headers_mut().insert(header::X_FRAME_OPTIONS, HeaderValue::from_static(x));
+                }
+                r
+            })
+        };
+        let app = Router::new()
+            .route("/allowed", page("default-src 'self'; frame-ancestors https://app.menger.sh", None))
+            .route("/none", page("default-src 'self'; frame-ancestors 'none'", None))
+            .route("/own", page("connect-src 'none'; frame-ancestors 'self'", Some("SAMEORIGIN")))
+            .route("/bare", route(|| async { "x" }))
+            .layer(axum::middleware::from_fn(harden));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let allowed = get(port, "/allowed").await;
+        assert!(!allowed.contains("x-frame-options") && allowed.contains("frame-ancestors https://app.menger.sh"), "{allowed}");
+        assert!(get(port, "/none").await.contains("x-frame-options: deny"));
+        assert!(get(port, "/own").await.contains("x-frame-options: sameorigin"));
+        let bare = get(port, "/bare").await;
+        assert!(bare.contains("x-frame-options: deny") && bare.contains("content-security-policy: frame-ancestors 'none'"), "{bare}");
     }
 }

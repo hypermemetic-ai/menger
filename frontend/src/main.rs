@@ -317,6 +317,7 @@ mod menu;
 mod mock_anchor;
 mod mockpick;
 mod mockup;
+mod testapp;
 mod mocksize;
 mod nav;
 mod notes;

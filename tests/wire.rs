@@ -1076,6 +1076,7 @@ async fn shell_serves_the_page() {
             allowed_hosts: Vec::new(),
             https: false,
             metadata: None,
+            framing: Default::default(),
         })
         .await;
     });

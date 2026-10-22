@@ -117,7 +117,19 @@ fn storage() -> Option<web_sys::Storage> {
 }
 
 pub(crate) fn load() -> Theme {
-    Theme::parse(storage().and_then(|s| s.get_item(KEY).ok().flatten()).as_deref())
+    // APP-110: `?theme=` — a live view's box asking for one — wins, unstored.
+    let asked = dom::window().location().search().ok().and_then(|q| asked_in(&q));
+    asked.unwrap_or_else(|| Theme::parse(storage().and_then(|s| s.get_item(KEY).ok().flatten()).as_deref()))
+}
+
+/// APP-110: the theme a page's query asks for (`?theme=dark`, among others),
+/// as index.html's pre-paint script reads it.
+pub(crate) fn asked_in(search: &str) -> Option<Theme> {
+    search.trim_start_matches('?').split('&').find_map(|kv| match kv.split_once('=') {
+        Some(("theme", "light")) => Some(Theme::Light),
+        Some(("theme", "dark")) => Some(Theme::Dark),
+        _ => None,
+    })
 }
 
 pub(crate) fn save(t: Theme) {
@@ -267,5 +279,16 @@ mod tests {
         assert!(line.contains(&format!("setAttribute(\"{}\"", super::ATTR)), "{line}");
         assert!(line.contains("try{") && line.contains("catch(e){}"), "guarded: {line}");
         assert!(!line.contains("src="), "inline, not a fetched script: {line}");
+    }
+
+    /// APP-110: a query can ask for light or dark, nothing else.
+    #[test]
+    fn the_query_asks_for_light_or_dark() {
+        assert_eq!(super::asked_in("?theme=dark"), Some(Theme::Dark));
+        assert_eq!(super::asked_in("?reload=2&theme=light"), Some(Theme::Light));
+        assert_eq!(super::asked_in("theme=dark&x=1"), Some(Theme::Dark));
+        for no in ["", "?", "?theme=", "?theme=system", "?theme=DARK", "?themes=dark", "?x=theme=dark", "?theme=dark2"] {
+            assert_eq!(super::asked_in(no), None, "{no}");
+        }
     }
 }

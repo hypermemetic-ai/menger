@@ -53,6 +53,9 @@ options
                       over the socket and set as the shell's cookie; the
                       token stays in memory (APP-76)
   --session FILE      the same with a session token already minted (0600)
+  --also ORIGIN       sign in on this origin as well (repeatable): a ticket's
+                      live view frames another menger, e.g. https://app-test.menger.sh
+                      (APP-110); the same key or session as --key / --session
   --chat N            also put each shot into chat N (media.put, as the
                       key's agent) and print its media:<hash> (APP-76)
   --as USER           sign in through the dev sign-in (IDENTITY-35) as USER
@@ -96,6 +99,7 @@ try {
       origin: { type: 'string' },
       key: { type: 'string' },
       session: { type: 'string' },
+      also: { type: 'string', multiple: true },
       chat: { type: 'string' },
       page: { type: 'boolean', default: false },
       timeout: { type: 'string', default: '45' },
@@ -226,7 +230,9 @@ mkdirSync(outDir, { recursive: true });
 
 let chromium;
 try {
-  ({ chromium } = createRequire(new URL('../perf/', import.meta.url))('playwright'));
+  // PLAYWRIGHT_FROM: a node_modules directory, for a worktree that has no perf/node_modules
+  const from = process.env.PLAYWRIGHT_FROM;
+  ({ chromium } = (from ? createRequire(resolve(from, 'x')) : createRequire(new URL('../perf/', import.meta.url)))('playwright'));
 } catch {
   console.error('shot: Playwright is not installed here — run (cd perf && npm ci) first');
   process.exit(1);
@@ -587,7 +593,7 @@ try {
   const context = await browser.newContext({ deviceScaleFactor: 1 });
   await context.addInitScript(listen);
   if (login) {
-    for (const origin of new Set(targets.map((t) => t.origin).filter(Boolean))) {
+    for (const origin of new Set([...targets.map((t) => t.origin), ...(opt.also ?? []).map((o) => o.replace(/\/+$/, ''))].filter(Boolean))) {
       await context.addCookies(login.sessionCookies(origin, await tokenFor(origin)));
     }
   }

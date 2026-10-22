@@ -94,6 +94,9 @@ pub struct ShellConfig {
     /// only `/ws` reaches the socket's port, so the metadata its 401s name
     /// is answered here. Public: never behind a session.
     pub metadata: Option<Router>,
+    /// APP-110: who may frame this shell's pages, and whose pages it frames
+    /// ([`Framing`]) — nobody and nothing by default.
+    pub framing: Framing,
 }
 
 /// ACCESS-30: Strict-Transport-Security, a year, on every answer of a shell
@@ -155,6 +158,61 @@ style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; img-src '
 connect-src 'self' {{HUB}} ws://127.0.0.1:* ws://localhost:*; frame-src 'self'; \
 object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
+/// APP-110: **the live test app in a ticket.** The tracker draws test's app
+/// in device frames in a ticket body, so two policies move, each by one
+/// origin the operator names and nothing else:
+///
+/// - the tracker's `frame-src` gains `--live-origin` (the test app's origin);
+/// - test's `frame-ancestors` gains each `--frame-ancestor` (the tracker's
+///   origin) in place of `'none'`.
+///
+/// Both default to nothing: a server that is told neither is as it was —
+/// frames only its own body frames, and is framed by no one. The sign-in
+/// pages keep `frame-ancestors 'none'` (plexus-login), so a reader with no
+/// session on test signs in in a tab, not in the frame.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Framing {
+    /// Origins that may frame this server's pages (`--frame-ancestor`).
+    pub ancestors: Vec<String>,
+    /// The origin of the test app this server's bodies frame (`--live-origin`).
+    pub live: Option<String>,
+}
+
+/// APP-110: `s` as an origin — `http` or `https`, a host, an optional port,
+/// no path, query, fragment or credentials — written canonically
+/// (`https://app.menger.sh`). Nothing that could end a CSP source or start
+/// another directive gets through.
+pub fn check_origin(s: &str) -> Result<String, String> {
+    let bad = |why: &str| Err(format!("{s:?} is not an origin ({why}): write scheme://host[:port], e.g. https://app.menger.sh"));
+    let Ok(u) = url::Url::parse(s.trim()) else { return bad("not a URL") };
+    if !matches!(u.scheme(), "http" | "https") {
+        return bad("http or https only");
+    }
+    if u.host_str().is_none_or(str::is_empty) || !u.username().is_empty() || u.password().is_some() {
+        return bad("a host, no credentials");
+    }
+    if u.path() != "/" || u.query().is_some() || u.fragment().is_some() {
+        return bad("no path, query or fragment");
+    }
+    let origin = u.origin().ascii_serialization();
+    if origin.contains(['*', ' ', ';', ',', '\\']) {
+        return bad("no wildcard");
+    }
+    Ok(origin)
+}
+
+/// APP-110: [`PAGE_CSP`] under `framing`.
+pub fn page_csp(framing: &Framing) -> String {
+    let mut csp = PAGE_CSP.to_string();
+    if let Some(live) = &framing.live {
+        csp = csp.replace("frame-src 'self'", &format!("frame-src 'self' {live}"));
+    }
+    if !framing.ancestors.is_empty() {
+        csp = csp.replace("frame-ancestors 'none'", &format!("frame-ancestors {}", framing.ancestors.join(" ")));
+    }
+    csp
+}
+
 /// ACCESS-28: where a ticket body's frame starts ([`FRAME`]).
 pub const FRAME_PATH: &str = "/app/frame";
 
@@ -213,11 +271,19 @@ pub fn preferred_app() -> AppSource {
 /// the frame document and the login routes are added around it
 /// ([`favicon_routes`], [`frame_routes`], [`serve_on`]).
 pub fn app_shell(env: Option<&str>, app: AppSource) -> plexus_shell::ShellConfig {
+    app_shell_framed(env, app, &Framing::default())
+}
+
+/// [`app_shell`] under APP-110's [`Framing`]: the policy as [`page_csp`] says,
+/// and the app told which test app its bodies may draw (`{{LIVE_ORIGIN}}`,
+/// empty when none).
+pub fn app_shell_framed(env: Option<&str>, app: AppSource, framing: &Framing) -> plexus_shell::ShellConfig {
     let mut cfg = plexus_shell::ShellConfig::new(tab_title(env), app);
+    cfg.stamps.push(("{{LIVE_ORIGIN}}".into(), framing.live.clone().unwrap_or_default()));
     cfg.pages.push(("/vanilla".into(), VANILLA.into()));
     cfg.root_fallback = Some(VANILLA.into());
     cfg.not_built = Some(NOT_BUILT.into());
-    cfg.csp = PAGE_CSP.into();
+    cfg.csp = page_csp(framing);
     cfg.root_files = ROOT_FILES.iter().map(|f| f.to_string()).collect();
     cfg
 }
@@ -268,7 +334,7 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     // `/rest/{*}` pass-through to the REST port went: the app has spoken
     // the WebSocket since MFE-9, and nothing else called it. IDENTITY-19:
     // behind a session when login is required — no anonymous view.
-    let mut app = plexus_shell::router(app_shell(cfg.env.as_deref(), cfg.app), cfg.ws_port).await;
+    let mut app = plexus_shell::router(app_shell_framed(cfg.env.as_deref(), cfg.app, &cfg.framing), cfg.ws_port).await;
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
     }
@@ -501,6 +567,47 @@ mod tests {
         assert_eq!(font.headers().get("access-control-allow-origin").unwrap(), "*");
         let page = ask("/app/index.html").await.unwrap();
         assert!(page.headers().get("access-control-allow-origin").is_none());
+    }
+
+    /// APP-110: unconfigured, the policy is [`PAGE_CSP`] to the byte — frames
+    /// only its own, framed by no one. Configured, exactly two directives move,
+    /// each by the origins named, and nothing else changes.
+    #[test]
+    fn the_page_policy_moves_only_what_framing_names() {
+        assert_eq!(page_csp(&Framing::default()), PAGE_CSP);
+        assert!(page_csp(&Framing::default()).contains("frame-ancestors 'none'"));
+        let tracker = page_csp(&Framing { ancestors: vec![], live: Some("https://app-test.menger.sh".into()) });
+        assert!(tracker.contains("frame-src 'self' https://app-test.menger.sh;") && tracker.contains("frame-ancestors 'none'"), "{tracker}");
+        let test = page_csp(&Framing { ancestors: vec!["https://app.menger.sh".into(), "http://127.0.0.1:4456".into()], live: None });
+        assert!(test.contains("frame-ancestors https://app.menger.sh http://127.0.0.1:4456") && test.contains("frame-src 'self';"), "{test}");
+        // Nothing else moved.
+        assert_eq!(test.replace("frame-ancestors https://app.menger.sh http://127.0.0.1:4456", "frame-ancestors 'none'"), PAGE_CSP);
+        assert_eq!(tracker.replace("frame-src 'self' https://app-test.menger.sh", "frame-src 'self'"), PAGE_CSP);
+    }
+
+    /// APP-110: an origin is scheme, host and port — written canonically;
+    /// a path, a wildcard, a credential or another scheme is refused.
+    #[test]
+    fn an_origin_is_checked_before_it_reaches_a_policy() {
+        assert_eq!(check_origin("https://app.menger.sh"), Ok("https://app.menger.sh".into()));
+        assert_eq!(check_origin("https://App.Menger.sh/"), Ok("https://app.menger.sh".into()));
+        assert_eq!(check_origin(" http://127.0.0.1:4456 "), Ok("http://127.0.0.1:4456".into()));
+        assert_eq!(check_origin("https://app.menger.sh:443"), Ok("https://app.menger.sh".into()));
+        for bad in ["", "app.menger.sh", "*", "https://*.menger.sh", "https://app.menger.sh/x", "https://app.menger.sh?x", "https://app.menger.sh#x",
+            "https://u:p@app.menger.sh", "ftp://app.menger.sh", "https://app.menger.sh; script-src *", "'none'", "https://a.sh https://b.sh"] {
+            assert!(check_origin(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    /// APP-110: the stamp says which test app the app may draw — empty when
+    /// none — and the entrypoint carries its placeholder.
+    #[test]
+    fn the_app_is_told_the_live_origin() {
+        assert!(include_str!("../frontend/index.html").contains(r#"<meta name="menger-live-origin" content="{{LIVE_ORIGIN}}">"#));
+        let on = app_shell_framed(None, AppSource::Dir("/nowhere".into()), &Framing { ancestors: vec![], live: Some("https://t.example".into()) });
+        assert_eq!(plexus_shell::stamp("{{LIVE_ORIGIN}}", &on.stamps_for(4450)), "https://t.example");
+        assert_eq!(plexus_shell::stamp("[{{LIVE_ORIGIN}}]", &app_shell(None, AppSource::Dir("/nowhere".into())).stamps_for(4450)), "[]");
+        assert!(on.csp.contains("frame-src 'self' https://t.example"));
     }
 
     #[test]

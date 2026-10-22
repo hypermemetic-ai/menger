@@ -421,6 +421,103 @@ pub(crate) fn is_mockup_fence(info: &str) -> bool {
     info.split_whitespace().next() == Some("mockup")
 }
 
+/// APP-110: a fence that draws the live test app (` ```live route="#/components"
+/// widths=390,1440 `) — its content is ignored.
+pub(crate) fn is_live_fence(info: &str) -> bool {
+    info.split_whitespace().next() == Some("live")
+}
+
+/// APP-110: the placeholder a live block becomes — a mockup's, its `source`
+/// the live view ([`crate::testapp::source`]) so the host draws it in the
+/// mockup's box with the test app in each device.
+fn live_placeholder(route: &str, env: Option<&str>, widths: Option<&str>, title: Option<&str>, description: Option<&str>) -> String {
+    placeholder(&Placed { widths, title, description, reference: None }, Some(&crate::testapp::source(route, env)))
+}
+
+/// APP-110: each `<m-live route="…" widths="…" title="…" env="…">` in a stretch
+/// of raw HTML (one inline tag, or an HTML block) as the placeholder a
+/// ` ```live ` fence becomes, and every `</m-live>` dropped. The tag is the
+/// element form of the fence; nothing else of the HTML moves.
+fn lives(html: &str) -> std::borrow::Cow<'_, str> {
+    let lower = html.to_ascii_lowercase();
+    if !lower.contains("m-live") {
+        return html.into();
+    }
+    let mut out = String::with_capacity(html.len() + 128);
+    let mut at = 0;
+    while at < html.len() {
+        let Some(off) = lower[at..].find('<') else { break };
+        let lt = at + off;
+        let rest = &lower[lt..];
+        let close = rest.starts_with("</m-live") && rest[8..].chars().next().is_none_or(|c| c == '>' || c.is_ascii_whitespace());
+        let open = rest.starts_with("<m-live") && rest[7..].chars().next().is_none_or(|c| c == '>' || c == '/' || c.is_ascii_whitespace());
+        if close {
+            let end = html[lt..].find('>').map_or(html.len(), |j| lt + j + 1);
+            out.push_str(&html[at..lt]);
+            at = end;
+        } else if open {
+            let Some(end) = tag_end(html, lt + 7) else { break };
+            let attrs = tag_attrs(&html[lt + 7..end - 1]);
+            let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).filter(|v| !v.trim().is_empty());
+            out.push_str(&html[at..lt]);
+            out.push_str(&live_placeholder(get("route").unwrap_or(""), get("env"), get("widths"), get("title"), get("description")));
+            at = end;
+        } else {
+            out.push_str(&html[at..lt + 1]);
+            at = lt + 1;
+        }
+    }
+    out.push_str(&html[at..]);
+    out.into()
+}
+
+/// Just past the `>` that ends the open tag whose name ended at `from`,
+/// outside quoted values; `None` when nothing ends it.
+fn tag_end(s: &str, from: usize) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in s[from..].char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '>') => return Some(from + i + 1),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A tag's attributes (what follows its name, up to its `>`): `name="value"`,
+/// `name='value'`, `name=value`, bare `name` — names lowercased, the few
+/// entities an attribute holds decoded.
+fn tag_attrs(inside: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = inside;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '/');
+        if rest.is_empty() {
+            return out;
+        }
+        let end = rest.find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '/').unwrap_or(rest.len()).max(1);
+        let name = rest[..end].to_ascii_lowercase();
+        rest = rest[end..].trim_start();
+        let mut value = String::new();
+        if let Some(v) = rest.strip_prefix('=') {
+            let v = v.trim_start();
+            let (raw, tail) = match v.chars().next() {
+                Some(q @ ('"' | '\'')) => match v[1..].find(q) {
+                    Some(j) => (&v[1..1 + j], &v[2 + j..]),
+                    None => (&v[1..], ""),
+                },
+                _ => v.split_at(v.find(|c: char| c.is_ascii_whitespace()).unwrap_or(v.len())),
+            };
+            value = raw.replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&");
+            rest = tail;
+        }
+        out.push((name, value));
+    }
+}
+
 /// APP-29: the element a mockup is — the fence's placeholder, and the tag a
 /// body writes to show another ticket's page (`<m-mockup ref="DESIGN-49">`).
 pub(crate) const MOCKUP_TAG: &str = "m-mockup";
@@ -450,6 +547,15 @@ pub(crate) fn fence_widths(info: &str) -> Option<&str> {
 /// parsed or run in the body's frame. The page is the body's own text, so
 /// handing it to the host reveals nothing the body did not already hold.
 pub(crate) fn mockup_placeholder(info: &str, src: &str) -> String {
+    if is_live_fence(info) {
+        return live_placeholder(
+            mockups::info_attribute(info, "route").as_deref().unwrap_or(""),
+            mockups::info_attribute(info, "env").as_deref(),
+            fence_widths(info),
+            mockups::info_attribute(info, "title").as_deref(),
+            mockups::info_attribute(info, "description").as_deref(),
+        );
+    }
     let title = mockups::info_attribute(info, "title");
     let description = mockups::info_attribute(info, "description");
     placeholder(&Placed { widths: fence_widths(info), title: title.as_deref(), description: description.as_deref(), reference: None }, Some(src))
@@ -768,7 +874,7 @@ pub fn is_framed(src: &str) -> bool {
     if is_page(src) {
         return true;
     }
-    if !src.contains('<') && !src.contains("component") && !src.contains("theme") && !src.contains("mockup") {
+    if !src.contains('<') && !src.contains("component") && !src.contains("theme") && !src.contains("mockup") && !src.contains("live") {
         return false;
     }
     Parser::new_ext(src, options()).any(|ev| match ev {
@@ -777,7 +883,7 @@ pub fn is_framed(src: &str) -> bool {
         // and a theme block as its swatch sheet; APP-29: and a mockup fence
         // as the page it holds, in device chrome.
         Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
-            component_docs::definition(&info).is_some() || is_theme_fence(&info) || is_mockup_fence(&info)
+            component_docs::definition(&info).is_some() || is_theme_fence(&info) || is_mockup_fence(&info) || is_live_fence(&info)
         }
         _ => false,
     })
@@ -934,7 +1040,7 @@ fn render_as(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, frame
                 }
                 Event::End(TagEnd::HtmlBlock) => {
                     let block = html_block.take().unwrap_or_default();
-                    return Some(Event::Html(with_diagrams(&block, &mut diagrams).into()));
+                    return Some(Event::Html(lives(&with_diagrams(&block, &mut diagrams)).into_owned().into()));
                 }
                 _ => {}
             }
@@ -946,7 +1052,7 @@ fn render_as(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, frame
                 mermaid_src = Some(String::new());
                 None
             }
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info))) if framed && is_mockup_fence(info) => {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info))) if framed && (is_mockup_fence(info) || is_live_fence(info)) => {
                 mockup = Some((info.to_string(), String::new()));
                 None
             }
@@ -959,6 +1065,8 @@ fn render_as(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, frame
             // Raw HTML renders as inert, visible text (push_html escapes Text)
             // — unless the body is framed (COMP-4), where it is the point.
             Event::Html(s) | Event::InlineHtml(s) if !framed => Some(Event::Text(s)),
+            // APP-110 (framed): `<m-live …>` as the placeholder its fence is.
+            Event::InlineHtml(s) if lives(&s) != s.as_ref() => Some(Event::InlineHtml(lives(&s).into_owned().into())),
             // CHAT-66: `[↩](message:N)` names a chat message — a chip, which
             // a chat's turn jumps from (src/reply.rs); its words are the chip's.
             Event::Start(Tag::Link { ref dest_url, .. }) if menger_tickets_api::chat_reply::message_ref(dest_url).is_some() => {
@@ -2082,6 +2190,47 @@ A candidate language, drawn below.
         assert!(!is_framed("the word mockup in prose"));
         // Unframed (never, for such a body — but the plain renderer keeps it a code block).
         assert!(render_body("```mockup\n<b>x</b>\n```\n").html.contains("<pre><code class=\"language-mockup\">&lt;b&gt;x&lt;/b&gt;"));
+    }
+
+    // -- the live test app (APP-110) ---------------------------------------
+
+    /// A `live` fence becomes a mockup's placeholder whose source is the live
+    /// view — route, env, widths and caption as the fence wrote them — and
+    /// frames the body it is alone in.
+    #[test]
+    fn a_live_fence_becomes_a_placeholder_for_the_test_app() {
+        let src = "Before.\n\n```live route=\"#/components\" widths=390,1440 title=\"#/components on test\"\n```\n\nAfter.\n";
+        assert!(is_framed(src) && is_framed("```live route=\"#/board\"\n```\n") && !is_framed("```liver\n```\n"));
+        let r = render_body_framed(src, &|_| None);
+        assert_eq!(r.html.matches("<m-mockup").count(), 1, "{}", r.html);
+        assert!(r.html.contains("widths=\"390,1440\"") && r.html.contains("title=\"#/components on test\""), "{}", r.html);
+        assert_eq!(crate::testapp::read_source(&mock_source(&r.html)), Some(("#/components".into(), None)));
+        assert!(!r.html.contains("<pre") && !r.html.contains("language-live"), "{}", r.html);
+        assert!(r.html.contains("<p>Before.</p>") && r.html.contains("<p>After.</p>"), "{}", r.html);
+        // env, as written; a fence naming no route is still a placeholder (the host says why not).
+        let r = render_body_framed("```live route=\"#/board\" env=\"prod\"\n```\n```live\n```\n", &|_| None);
+        assert_eq!(r.html.matches("<m-mockup").count(), 2, "{}", r.html);
+        assert!(!is_live_fence("mockup") && is_live_fence("live") && is_live_fence("live route=x"));
+    }
+
+    /// The element form is the same placeholder — in an HTML block or among
+    /// prose — with its close tag gone; in a code span or a fence it is text.
+    #[test]
+    fn the_live_element_is_the_fence_written_as_a_tag() {
+        let block = render_body_framed("<m-live route=\"#/components\" widths=\"390,1440\" description=\"the page\"></m-live>\n", &|_| None).html;
+        assert_eq!(block.matches("<m-mockup").count(), 1, "{block}");
+        assert!(block.contains("widths=\"390,1440\"") && block.contains("description=\"the page\"") && !block.contains("m-live"), "{block}");
+        assert_eq!(crate::testapp::read_source(&mock_source(&block)), Some(("#/components".into(), None)));
+        let inline = render_body_framed("Look: <m-live route=\"#/board\" env=test></m-live> done.\n", &|_| None).html;
+        assert_eq!(inline.matches("<m-mockup").count(), 1, "{inline}");
+        assert!(!inline.contains("m-live") && inline.contains("Look:") && inline.contains("done."), "{inline}");
+        assert_eq!(crate::testapp::read_source(&mock_source(&inline)), Some(("#/board".into(), Some("test".into()))));
+        let code = render_body_framed("<b>x</b>\n\n`<m-live route=\"#/x\">`\n\n```\n<m-live route=\"#/y\"></m-live>\n```\n", &|_| None).html;
+        assert_eq!(code.matches("<m-mockup").count(), 0, "{code}");
+        assert!(code.contains("m-live"), "{code}");
+        // A tag with a quoted `>` in a value is one tag.
+        let q = render_body_framed("<m-live route=\"#/a?b>c\" title=\"x > y\"></m-live>\n", &|_| None).html;
+        assert_eq!(q.matches("<m-mockup").count(), 1, "{q}");
     }
 
     // -- mockups written in their element (APP-32) -----------------------
