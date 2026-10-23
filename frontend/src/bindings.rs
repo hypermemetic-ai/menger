@@ -316,7 +316,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("link.follow", &[C::Link], &["Click", "Mod+Click", "Shift+Click", "MiddleClick"], G::Open, "inside menger, go there; anywhere else, a dialog names the destination first"),
     b("menu.open", &[C::Ticket, C::Chip], &["RightClick", "ContextMenu", "Shift+F10"], G::Open, "the menu of what is under the pointer, or of the focused ticket: a ticket's actions, a chip's filters — a status, kind, severity or label chip's own values first"),
     // -- Status (ACT-10)
-    b("status.up", &[C::Ticket], &["]"], G::Status, "the focused ticket (or its selection, or the ticket page's) one status on along the line: Idea → Pending → Ready → Coding → In Review → Complete"),
+    b("status.up", &[C::Ticket], &["]"], G::Status, "the focused ticket (or its selection, or the ticket page's) one status on along the line: Draft → Pending → Ready → Coding → In Review → Complete"),
     b("status.down", &[C::Ticket], &["["], G::Status, "one status back along the line; off it (Blocked, Epic, Superseded, Canceled) or at an end, nothing changes and a note says why"),
     b("status.quick", &[C::Ticket], &["s"], G::Status, "the focused ticket's menu, opened at Set status, its current status focused — ↓/↑ and Enter set it"),
     // -- Select

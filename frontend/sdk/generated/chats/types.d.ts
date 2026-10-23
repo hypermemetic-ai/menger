@@ -576,7 +576,7 @@ export type Severity = "Critical" | "High" | "Medium" | "Low";
 /** A shortcode's identity, minted by the store: its code for a shortcode made before ORG-3, CODE.N for a namesake made after */
 export type ShortcodeId = string;
 /** A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case */
-export type Status = "Pending" | "Ready" | "Coding" | "In Review" | "Blocked" | "Complete" | "Idea" | "Epic" | "Superseded" | "Canceled" | "Doc";
+export type Status = "Pending" | "Ready" | "Coding" | "In Review" | "Blocked" | "Complete" | "Draft" | "Epic" | "Superseded" | "Canceled" | "Doc";
 /** ORG-3: a ticket's key — the immutable, opaque identity a ticket keeps
 for good (ORG-6 finding 1): today's id text for today's tickets,
 [`ShortcodeId::key`] for a newborn. What every row that names a ticket

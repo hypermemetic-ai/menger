@@ -11,7 +11,9 @@
 //!   — its default: the empty filter, except the wave board's, which opens
 //!   on its shortcode tree (WAVE-12), and the nav's, which leaves menger's own
 //!   documents out — `not menger doc` (FILTER-21, [`nav_default`]; `reset`
-//!   returns to it). What a level keeps is [`Kept`]: its
+//!   returns to it), and the table board's, which leaves out what is not
+//!   yet promoted and what is finished — `not status in (Draft, Complete)`
+//!   (TICKETS-13, [`board_default`]). What a level keeps is [`Kept`]: its
 //!   filter, and the surface's own (local) clauses — the wave board's Wave,
 //!   Readiness, Off-board blockers and Title, which the language does not
 //!   have (FILTER-9 decision 6).
@@ -568,6 +570,20 @@ pub(crate) fn nav_default() -> Kept {
     k
 }
 
+/// TICKETS-13: the board a viewer who chose nothing sees — what is not yet
+/// promoted and what is finished left out: `not status in (Draft,
+/// Complete)` (owner, 2026-10-23: "make the default filter exclude draft,
+/// complete"). Choosing every ticket is the empty filter, kept as `f=` like
+/// any choice; `reset` returns here.
+pub(crate) fn board_default() -> Kept {
+    let mut k = Kept::default();
+    k.set(Cat::Status, Op::Not, BOARD_HIDES.iter().map(|s| s.to_string()));
+    k
+}
+
+/// TICKETS-13: the statuses the board's default leaves out.
+pub(crate) const BOARD_HIDES: [&str; 2] = ["Draft", "Complete"];
+
 /// FILTER-26: the nav's own clauses — its groups, less each top-level
 /// group its default holds (`not menger doc`, FILTER-21): what the reader
 /// added, which is what Make global moves. A group the reader changed
@@ -734,7 +750,8 @@ impl Lens {
             })
         });
         let nav = Memo::new(|_| Some(nav_default()));
-        let defaults = [empty(), nav, empty(), waves, empty()];
+        let board = Memo::new(|_| Some(board_default()));
+        let defaults = [empty(), nav, board, waves, empty()];
         let filters: [Memo<Filter>; 5] = std::array::from_fn(|i| {
             Memo::new(move |_| {
                 chosen[i].with(|c| match c {
@@ -1795,6 +1812,45 @@ mod tests {
             Some(vec![("menger doc".to_string(), vec![Level::Global]), ("not menger doc".to_string(), vec![Level::Nav])])
         );
         assert_eq!(parsed("kind doc").and(&d.filter).format(), "kind doc and not menger doc");
+    }
+
+    /// TICKETS-13: the table board opens on `not status in (Draft,
+    /// Complete)` — a draft and a finished ticket out, everything else in; a
+    /// link that says the same reads as the default, the empty filter is a
+    /// choice kept as `f=`, and `status Draft` chosen shows the drafts.
+    #[test]
+    fn the_board_opens_without_drafts_or_complete() {
+        use menger_tickets_api::{Kind, Status};
+        let d = board_default();
+        assert_eq!(d.filter.format(), "not status in (Draft, Complete)");
+        assert_eq!(d.local, Clauses::default());
+        let ticket = |status: Status| menger_tickets_api::filter::Facts {
+            asking: false,
+            labels: Vec::new(),
+            archived: false,
+            frozen: false,
+            id: "PLEXUS-4".into(),
+            epic: "PLEXUS".into(),
+            title: String::new(),
+            status,
+            kind: Kind::Build,
+            severity: None,
+            blocked: false,
+            has_commits: false,
+            menger_doc: false,
+            lineage: vec!["PLEXUS-4".into(), "PLEXUS".into()],
+            history: Vec::new(),
+        };
+        for s in [Status::Draft, Status::Complete] {
+            assert!(!d.filter.matches(&ticket(s)), "{s}: out");
+        }
+        for s in [Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Epic, Status::Superseded, Status::Canceled] {
+            assert!(d.filter.matches(&ticket(s)), "{s}: in");
+        }
+        assert!(parsed("status Draft").matches(&ticket(Status::Draft)), "chosen, the drafts show");
+        assert_eq!(read(&join(&pairs_of(Level::Board, &d)), Level::Board), Some(Some(d.clone())));
+        assert_eq!(read("f=", Level::Board), Some(Some(Kept::default())));
+        assert_ne!(Kept::default(), d, "every ticket is not the board's default");
     }
 
     /// Acceptance 1: the contradiction notice names each clashing group's

@@ -97,7 +97,7 @@ impl WorkActivation {
     /// `waiting_on` is its unsatisfied direct blockers in the caller's
     /// reach, in `blocked_by` order, distinct (one out of reach holds it
     /// back, never named). Order: waves ascending, inside a wave Coding, In
-    /// Review, Ready, Pending, Blocked, Idea, Epic and then (epic, seq);
+    /// Review, Ready, Pending, Blocked, Draft, Epic and then (epic, seq);
     /// then the missing lane; then the done — each in (epic, seq). `epics`
     /// empty, or a kind outside the six, is one in-band `Error` and
     /// nothing else. WAVE-6: each placement is the one the store keeps on the

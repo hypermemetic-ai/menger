@@ -197,7 +197,7 @@ async fn record_test_then_prod_then_a_rollback() {
     assert_eq!(where_runs(&client, "MENGER-3").await, [format!("test since {test_at}"), "prod not".to_string()]);
     assert_eq!(where_runs(&client, "MENGER-2").await.len(), 2, "the old work still runs in both");
     let got = one(&client, "tickets.get", json!({"id": "MENGER-3"})).await;
-    assert_eq!(got["ticket"]["status"], "Pending", "a deployment never moves a status");
+    assert_eq!(got["ticket"]["status"], "Draft", "a deployment never moves a status");
 
     // deployments.watch heard each recorded deployment (not the retry), each
     // followed by its environment; the filtered tickets.watch heard MENGER-2

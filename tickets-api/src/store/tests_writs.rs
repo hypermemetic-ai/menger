@@ -73,7 +73,7 @@ async fn a_permit_writes_its_own_ticket_and_no_hidden_one_is_minted() {
         Change::StatusChanged { ticket, .. } => assert_eq!(ticket.id, "OPEN-2"),
         other => panic!("{other:?}"),
     }
-    assert_eq!(s.get(SYS, "SECRET-2").await.unwrap().status, Status::Pending);
+    assert_eq!(s.get(SYS, "SECRET-2").await.unwrap().status, Status::Draft);
 }
 
 /// ACCESS-3 #1: a birth's blockers are each a permit — a blocked_by the
@@ -180,7 +180,7 @@ async fn a_write_over_many_takes_a_permit_per_ticket() {
     // Proofs for one of the two selected: refused, nothing written.
     let e = s.update_many_by(Selection::Ids(vec!["OPEN-2".into(), "OPEN-3".into()]), ready.clone(), Act::default(), |_| Ok(vec![Updating::new(p("OPEN-2"), None, vec![])])).await.unwrap_err();
     assert!(mismatched(&e), "{e}");
-    assert_eq!(s.get(SYS, "OPEN-2").await.unwrap().status, Status::Pending);
+    assert_eq!(s.get(SYS, "OPEN-2").await.unwrap().status, Status::Draft);
     // `label` over ids labels exactly the tickets its permits are for.
     let changes = s.label_many(vec![p("OPEN-2"), p("OPEN-3")], vec!["x".into()], vec![]).await.unwrap();
     assert_eq!(changes.len(), 2);

@@ -100,7 +100,7 @@ async fn a_subtree_is_archived_whole_its_live_work_named_never_refused() {
     assert_eq!(written(&store), before + 1, "one write");
     assert_eq!(texts(&a.ids), ["K-1", "K-2", "K-3", "K-4", "K-5", "K-6", "K-7", "K-8"], "the root and its whole subtree, in the store's order");
     let live: Vec<(&str, Status)> = a.live.iter().map(|LiveTicket { id, status }| (id.as_str(), *status)).collect();
-    assert_eq!(live, [("K-1", Status::Pending), ("K-4", Status::InReview), ("K-6", Status::Pending), ("K-7", Status::Pending), ("K-8", Status::Ready)], "each not done, named");
+    assert_eq!(live, [("K-1", Status::Draft), ("K-4", Status::InReview), ("K-6", Status::Draft), ("K-7", Status::Draft), ("K-8", Status::Ready)], "each not done, named");
     assert!(!a.dry_run && a.mark.by == "owner" && a.mark.message.as_deref() == Some("first season fired") && a.mark.write > 0);
     // A mark apart from status: everything else as it was.
     let k4 = store.get(SYS, "K-4").await.unwrap();
@@ -149,9 +149,9 @@ async fn every_view_leaves_the_archive_out_unless_the_filter_names_it() {
     assert!(page.tickets.iter().all(|t| t.archived.is_none()));
     assert!(page_ids(&store.page(SYS, PageQuery { epic: Some("K"), ..PageQuery::default() }).unwrap()).is_empty());
     assert!(page_ids(&store.page(SYS, PageQuery { status: Some(Status::Complete), ..PageQuery::default() }).unwrap()).is_empty());
-    assert!(listed(&store, "status Pending").iter().all(|id| !id.starts_with("K-")), "a filter that says nothing about it");
+    assert!(listed(&store, "status Draft").iter().all(|id| !id.starts_with("K-")), "a filter that says nothing about it");
     // …and the archive, when asked for.
-    assert_eq!(listed(&store, "status Pending and archived"), ["K-1", "K-6", "K-7"]);
+    assert_eq!(listed(&store, "status Draft and archived"), ["K-1", "K-6", "K-7"]);
     assert_eq!(listed(&store, "archived").len(), 8);
     assert_eq!(listed(&store, "archived or in G"), ["G-1", "G-2", "G-3", "K-1", "K-2", "K-3", "K-4", "K-5", "K-6", "K-7", "K-8"]);
     assert!(listed(&store, "not archived").iter().all(|id| !id.starts_with("K-")));

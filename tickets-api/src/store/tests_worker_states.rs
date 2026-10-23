@@ -36,7 +36,7 @@ async fn all_nine_statuses_round_trip_through_the_database_and_filter() {
             let id = store.create(SYS, ticket("ST", Kind::Build, &[])).await.unwrap().id;
             match store.set_status(SYS.permit(&id), s).await.unwrap() {
                 Change::StatusChanged { ticket, previous } => {
-                    assert_eq!((ticket.status, previous), (s, Status::Pending), "{id}");
+                    assert_eq!((ticket.status, previous), (s, Status::Draft), "{id}");
                 }
                 other => panic!("expected StatusChanged, got {other:?}"),
             }

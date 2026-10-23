@@ -95,7 +95,7 @@ async fn only_complete_and_superseded_satisfy_a_blocker() {
     root(&store, "SAT").await;
     let a = build(&store, "SAT", &[]).await;
     let b = build(&store, "SAT", &[&a]).await;
-    for s in [Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Idea, Status::Epic] {
+    for s in [Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Draft, Status::Epic] {
         store.set_status(SYS.permit(&a), s).await.unwrap();
         assert_eq!(placements(&store, &["SAT"])[&b], wave(2), "{s} does not satisfy");
     }
@@ -229,7 +229,7 @@ async fn kinds_filter_what_is_yielded_not_what_is_followed() {
 }
 
 /// The yield order — waves ascending; inside one, Coding, In Review, Ready,
-/// Pending, Blocked, Idea, Epic, then the store's order across shortcodes;
+/// Pending, Blocked, Draft, Epic, then the store's order across shortcodes;
 /// then the missing lane; then the done, each in the store's order — and
 /// the tally that closes it.
 #[tokio::test]
@@ -242,7 +242,7 @@ async fn the_yield_order_and_the_tally() {
     let mut wave1 = Vec::new();
     for (epic, s) in [
         ("BB", Status::Epic),
-        ("AA", Status::Idea),
+        ("AA", Status::Draft),
         ("BB", Status::Blocked),
         ("AA", Status::Pending),
         ("BB", Status::Pending),
@@ -278,7 +278,7 @@ async fn the_yield_order_and_the_tally() {
         id(Status::Pending, "AA"),
         id(Status::Pending, "BB"),
         id(Status::Blocked, "BB"),
-        id(Status::Idea, "AA"),
+        id(Status::Draft, "AA"),
         id(Status::Epic, "BB"),
         w2_coding.as_str(),
         w2_ready.as_str(),

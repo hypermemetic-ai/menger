@@ -308,7 +308,7 @@ async fn a_caller_that_stays_is_answered_after_all_three_and_a_failed_commit_cha
     store.db.lock().unwrap().execute_batch("ALTER TABLE tickets RENAME TO gone").unwrap();
     let before = counts_agree(&store);
     assert!(matches!(store.set_status(SYS.permit("ST-1"), Status::Ready).await, Err(StoreError::Db(_))));
-    assert_eq!(store.row("ST-1").unwrap().0.status, Status::Pending, "the cache is untouched");
+    assert_eq!(store.row("ST-1").unwrap().0.status, Status::Draft, "the cache is untouched");
     assert_eq!(counts_agree(&store), before, "and the count given back");
     while let Ok(change) = rx.try_change() {
         panic!("a failed write said {change:?}");

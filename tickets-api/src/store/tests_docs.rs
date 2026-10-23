@@ -90,7 +90,7 @@ async fn a_doc_is_born_in_doc_and_may_root_a_shortcode() {
     let child = store.create(SYS, doc("MAN", None)).await.unwrap();
     assert_eq!((child.status, child.parent.as_deref()), (Status::Doc, Some("MAN-1")), "under the root");
     let w = store.create(SYS, work("MAN", None)).await.unwrap();
-    assert_eq!((w.status, w.parent.as_deref()), (Status::Pending, Some("MAN-1")), "work starts Pending");
+    assert_eq!((w.status, w.parent.as_deref()), (Status::Draft, Some("MAN-1")), "work starts Draft");
     assert_eq!((group(&store, "MAN").total, group(&store, "MAN").docs), (1, 2));
 
     // In a scope's shortcode a doc is any child.
@@ -284,7 +284,7 @@ async fn roll_ups_ignore_docs_and_count_them_apart() {
     store.create(SYS, work("P", Some("P-4"))).await.unwrap(); // P-6, work under a doc
     assert_eq!(
         group(&store, "P"),
-        Group { epic: "P".into(), shortcode: "P".into(), address: "hypermemetic:P".into(), total: 4, done: 0, docs: 2, archived: 0, root: Some("P-1".into()), root_row: Some(scope_row(Status::Pending)), host: None }
+        Group { epic: "P".into(), shortcode: "P".into(), address: "hypermemetic:P".into(), total: 4, done: 0, docs: 2, archived: 0, root: Some("P-1".into()), root_row: Some(scope_row(Status::Draft)), host: None }
     );
     assert_eq!(store.groups(SYS), tests::nav(&store));
 

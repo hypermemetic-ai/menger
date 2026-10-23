@@ -77,14 +77,14 @@ async fn a_save_replaces_a_rename_moves_and_a_delete_removes() {
     work(&store).await;
     let (first, _) = save(&store, "Plexus-Ready", "in PLEXUS and status Ready").await.unwrap();
     // the same name again replaces it (any case), keeping who first saved it and when.
-    let (again, replaced) = store.save_filter(on(), &org(), "plexus ready", "in PLEXUS and status Pending", "key:other".into()).await.unwrap();
+    let (again, replaced) = store.save_filter(on(), &org(), "plexus ready", "in PLEXUS and status Draft", "key:other".into()).await.unwrap();
     assert!(replaced);
     assert_eq!((again.saved_by.as_str(), again.saved_at, again.name.as_str()), ("key:test", first.saved_at, "plexus ready"));
     assert_eq!(ids(&store, "saved Plexus-Ready"), ["PLEXUS-1", "PLEXUS-4"]);
     assert_eq!(store.saved_filters(&org()).iter().filter(|f| f.name != "Needs you").count(), 1);
     // renamed: the new name finds it, the old one no longer does.
     let moved = store.rename_filter(on(), &org(), "Plexus-Ready", "Pending work").await.unwrap();
-    assert_eq!((moved.filter.as_str(), moved.saved_at), ("in PLEXUS and status Pending", first.saved_at));
+    assert_eq!((moved.filter.as_str(), moved.saved_at), ("in PLEXUS and status Draft", first.saved_at));
     assert_eq!(ids(&store, "saved \"Pending work\""), ["PLEXUS-1", "PLEXUS-4"]);
     assert!(refusal(&store, "saved Plexus-Ready").contains("no saved filter named \"Plexus-Ready\""));
     // a name another filter holds is refused; so is one that is not there.
@@ -158,8 +158,8 @@ async fn a_watch_naming_a_filter_hears_what_a_save_a_rename_and_a_delete_did() {
     let mut watcher = store.watcher_in(store.lens(text).unwrap(), None).naming(Some(&Filter::parse(text).unwrap()));
     assert!(watcher.names_saved());
     assert!(watcher.resaved(&store, None).unwrap().is_empty(), "nothing moved yet");
-    // Plexus-Ready now says Pending: PLEXUS-2 leaves, PLEXUS-1 enters; 3 and 4 stay, through Needs you.
-    save(&store, "Plexus-Ready", "in PLEXUS and status Pending").await.unwrap();
+    // Plexus-Ready now says Draft: PLEXUS-2 leaves, PLEXUS-1 enters; 3 and 4 stay, through Needs you.
+    save(&store, "Plexus-Ready", "in PLEXUS and status Draft").await.unwrap();
     let said = watcher.resaved(&store, None).unwrap();
     let sc = |id: &str| store.tickets.read().unwrap().at.get(id).cloned().expect("a ticket").shortcode;
     assert_eq!(

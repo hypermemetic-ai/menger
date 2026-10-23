@@ -417,7 +417,7 @@ async fn verify_derived_names_an_altered_cell_container_and_count() {
 
     let conn = rusqlite::Connection::open(&db).unwrap();
     let cell: u32 = conn
-        .query_row("SELECT id FROM cells WHERE state = 'Pending' AND kind = 'build' AND commits = 0", [], |r| r.get(0))
+        .query_row("SELECT id FROM cells WHERE state = 'Draft' AND kind = 'build' AND commits = 0", [], |r| r.get(0))
         .unwrap();
     // CEL-2 and CEL-4 are that cell's; the container is made to say CEL-2.
     conn.execute("UPDATE cell_bits SET card = 1, bits = x'0200' WHERE epic = 'CEL' AND cell = ?1", [cell]).unwrap();
@@ -427,7 +427,7 @@ async fn verify_derived_names_an_altered_cell_container_and_count() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(
         lines[0],
-        format!("cell_bits CEL cell {cell} (Pending, build, none, not blocked, no commits) container 0: stored 1 members [2]; a scan gives 2 members [2, 4]"),
+        format!("cell_bits CEL cell {cell} (Draft, build, none, not blocked, no commits) container 0: stored 1 members [2]; a scan gives 2 members [2, 4]"),
         "{out}"
     );
     assert!(lines[1].ends_with("1 difference(s) between the stored derived state and a scan"), "{out}");
@@ -440,7 +440,7 @@ async fn verify_derived_names_an_altered_cell_container_and_count() {
     assert_eq!(code, Some(1), "{out}");
     assert_eq!(
         out.lines().next().unwrap(),
-        format!("cell_counts CEL cell {cell} (Pending, build, none, not blocked, no commits): stored 9; a scan gives 2"),
+        format!("cell_counts CEL cell {cell} (Draft, build, none, not blocked, no commits): stored 9; a scan gives 2"),
         "{out}"
     );
 }

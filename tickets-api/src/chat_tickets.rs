@@ -242,7 +242,7 @@ impl MentionHow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChatStage {
-    /// Pending (or an Idea) until the owner promotes it, or any open work
+    /// Pending (or an Draft) until the owner promotes it, or any open work
     /// with an open input.
     WaitsOnYou,
     /// Ready, or Blocked: not started.
@@ -306,7 +306,7 @@ pub fn stage_of(kind: Kind, status: Status, asking: bool, staged: bool, running:
         _ if matches!(kind, Kind::Scope | Kind::Doc) => ChatStage::Other,
         Status::Epic | Status::Doc => ChatStage::Other,
         _ if asking && status != Status::Complete => ChatStage::WaitsOnYou,
-        Status::Pending | Status::Idea => ChatStage::WaitsOnYou,
+        Status::Pending | Status::Draft => ChatStage::WaitsOnYou,
         Status::Ready | Status::Blocked => ChatStage::Ready,
         Status::Coding => ChatStage::InProgress,
         Status::InReview if staged || running => ChatStage::OnTest,

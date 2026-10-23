@@ -205,10 +205,10 @@ async fn saved_names_over_the_wire_list_count_refuse_and_move_a_watch() {
     assert_eq!(ev["type"], "error", "{ev}");
 
     // A watch on the union: Plexus-Ready replaced moves it — PLEXUS-2
-    // leaves (Ready, needing no one), PLEXUS-1 (the root, Pending) enters.
+    // leaves (Ready, needing no one), PLEXUS-1 (the root, Draft) enters.
     let mut members = call(&client, "tickets.watch", json!({"filter": union, "membership": true})).await;
     let mut all = call(&client, "tickets.watch", json!({"filter": union})).await;
-    save(&client, "Plexus-Ready", "in PLEXUS and status Pending").await;
+    save(&client, "Plexus-Ready", "in PLEXUS and status Draft").await;
     let heard = watch_until(&mut all, "left").await;
     let kinds: Vec<&str> = heard.iter().map(|e| e["type"].as_str().unwrap()).collect();
     assert_eq!(&kinds[kinds.len() - 3..], ["filter_saved", "entered", "left"], "after the change that moved it: {kinds:?}");
@@ -221,7 +221,7 @@ async fn saved_names_over_the_wire_list_count_refuse_and_move_a_watch() {
         ]
     );
     assert_eq!(listed(&client, union).await.unwrap(), ["PLEXUS-1", "PLEXUS-3", "PLEXUS-4"]);
-    one(&client, "tickets.set_status", json!({"id": "PLEXUS-2", "status": "Pending"})).await;
+    one(&client, "tickets.set_status", json!({"id": "PLEXUS-2", "status": "Draft"})).await;
     let evs = watch_until(&mut members, "entered").await;
     assert_eq!(evs, [json!({"type": "entered", "id": "PLEXUS-2", "epic": "PLEXUS", "shortcode": "PLEXUS", "seq": 2})]);
 

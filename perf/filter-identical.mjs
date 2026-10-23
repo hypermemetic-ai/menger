@@ -66,7 +66,7 @@ const epics = extents.map((e) => [e.epic, e.last_seq]);
 const anyId = () => { const [e, n] = epics[rand(epics.length)]; return `${e}-${1 + rand(n)}`; };
 const small = epics.reduce((m, e) => (e[1] < m[1] ? e : m));
 const big = epics.reduce((m, e) => (e[1] > m[1] ? e : m));
-const statuses = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Doc"];
+const statuses = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Draft", "Epic", "Superseded", "Doc"];
 
 const calls = [];
 for (let i = 0; i < 1200; i++) {

@@ -332,7 +332,7 @@ async fn the_same_kind_and_no_status_changes_nothing() {
     let store = shortcode().await;
     let before = store.get(SYS, "K-2").await.unwrap();
     let mut rx = store.subscribe_filtered();
-    for status in [None, Some(Status::Pending)] {
+    for status in [None, Some(Status::Draft)] {
         let (t, previous) = kind_changed(store.set_kind(SYS.permit("K-2"), Kind::Build, status).await.unwrap());
         assert_eq!((t, previous), (before.clone(), Kind::Build));
     }
@@ -451,7 +451,7 @@ async fn every_pair_of_kinds_with_and_without_a_status() {
                         let want = match status {
                             Some(s) => s,
                             None if !to.has_lifecycle() => Status::Doc,
-                            None if from.has_lifecycle() => Status::Pending,
+                            None if from.has_lifecycle() => Status::Draft,
                             None if to == Kind::Scope => Status::Epic,
                             None => Status::Pending,
                         };

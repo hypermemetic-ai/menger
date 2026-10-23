@@ -543,7 +543,7 @@ fn reads_at_a_million() {
         "status in (Pending, Ready) and kind build",
         "ready",
         "blocked and severity critical",
-        "kind scope and status Idea and severity critical",
+        "kind scope and status Draft and severity critical",
         "category in (done, dropped)",
         "(status Blocked or blocked) and not kind doc",
         "not kind doc",

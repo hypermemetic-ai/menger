@@ -127,10 +127,10 @@ impl FromStr for Category {
 }
 
 /// The one table from a status to its category (FILTER-3 §1, open question
-/// 3: Blocked, Idea and Epic sit in `open` until SDLC-12 decides).
+/// 3: Blocked, Draft and Epic sit in `open` until SDLC-12 decides).
 pub const fn category_of(status: Status) -> Category {
     match status {
-        Status::Pending | Status::Blocked | Status::Idea | Status::Epic => Category::Open,
+        Status::Pending | Status::Blocked | Status::Draft | Status::Epic => Category::Open,
         Status::Ready => Category::Ready,
         Status::Coding => Category::Active,
         Status::InReview => Category::Review,

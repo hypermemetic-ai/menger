@@ -653,7 +653,7 @@ export type Severity = "Critical" | "High" | "Medium" | "Low";
 export type ShortcodeId = string;
 
 /** A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case */
-export type Status = "Pending" | "Ready" | "Coding" | "In Review" | "Blocked" | "Complete" | "Idea" | "Epic" | "Superseded" | "Canceled" | "Doc";
+export type Status = "Pending" | "Ready" | "Coding" | "In Review" | "Blocked" | "Complete" | "Draft" | "Epic" | "Superseded" | "Canceled" | "Doc";
 
 /** ORG-3: a ticket's key — the immutable, opaque identity a ticket keeps
 for good (ORG-6 finding 1): today's id text for today's tickets,

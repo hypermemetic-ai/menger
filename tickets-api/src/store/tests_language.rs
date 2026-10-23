@@ -289,7 +289,7 @@ async fn every_filter_3_filter_is_answered_as_the_evaluator_answers() {
         "status in (Pending, Ready) and kind build".into(),
         "ready".into(),
         "blocked and severity critical".into(),
-        "kind scope and status Idea and severity critical".into(),
+        "kind scope and status Draft and severity critical".into(),
         // §6.2's `category done or category dropped`, as the language
         // writes it.
         "category in (done, dropped)".into(),

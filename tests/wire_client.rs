@@ -247,7 +247,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     tokio::time::sleep(Duration::from_millis(250)).await;
 
     // -- create -------------------------------------------------------------
-    // wire.rs: created, WIRE-1, Pending. MNG-12: a prefix's first ticket is
+    // wire.rs: created, WIRE-1, Draft. MNG-12: a prefix's first ticket is
     // its scope; MNG-14: the root is top-level.
     let ticket = created(
         client
@@ -266,7 +266,7 @@ async fn the_wire_assertions_through_the_generated_client() {
             .expect("create"),
     );
     assert_eq!(ticket.id, "WIRE-1");
-    assert_eq!(ticket.status, Status::Pending);
+    assert_eq!(ticket.status, Status::Draft);
     assert_eq!(ticket.seq, 1);
     assert!(ticket.parent.is_none(), "the root is top-level");
     assert_eq!(ticket.child_count, 0, "and childless");
@@ -290,7 +290,7 @@ async fn the_wire_assertions_through_the_generated_client() {
             .expect("set_status"),
     ) {
         TicketsEvent::StatusChanged { ticket, previous } => {
-            assert_eq!(previous, Status::Pending);
+            assert_eq!(previous, Status::Draft);
             assert_eq!(ticket.status, Status::Ready);
         }
         other => panic!("expected `status_changed`, got {other:?}"),
@@ -326,7 +326,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- FILTER-15: find under a filter, and member -------------------------
     // WIRE-1 is Ready: a filter that does not admit it hides it from find.
     assert!(
-        rows(client.find_all(p(" OVER the "), None, None, Some(p("status Pending")), None).await.expect("find")).is_empty(),
+        rows(client.find_all(p(" OVER the "), None, None, Some(p("status Draft")), None).await.expect("find")).is_empty(),
         "the filter does not admit it"
     );
     assert_eq!(rows(client.find_all(p(" OVER the "), None, None, Some(p("ready")), None).await.expect("find")).len(), 1);
@@ -516,7 +516,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     ] {
         assert!(kinds.contains(&expected), "the watch mirror saw no `{expected}`: {kinds:?}");
     }
-    assert_eq!(first_transition, Some(Status::Pending));
+    assert_eq!(first_transition, Some(Status::Draft));
     assert_eq!(mirror["WIRE-1"].status, Status::Ready, "the watcher saw the promotion");
     assert_eq!(mirror["PA-1"].child_count, 1, "child_removed carried the ex-parent's count");
     assert_eq!(mirror["PA-2"].child_count, 1, "children_changed carried the parent's count");

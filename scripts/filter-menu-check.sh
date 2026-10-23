@@ -37,7 +37,7 @@ mk() { # epic kind status title
   local id
   id=$(synapse -P "$port" --token-file "$work/op.session" -j menger tickets create --epic "$1" --kind "$2" --title "$4" | grep -o '"id":"[A-Z]*-[0-9]*"' | head -1 | cut -d'"' -f4)
   [[ -n $id ]] || { echo "create $4 failed"; exit 1; }
-  [[ $3 == Pending || $3 == Doc ]] || S menger tickets set_status --id "$id" --status "$3"
+  [[ $3 == Draft || $3 == Doc ]] || S menger tickets set_status --id "$id" --status "$3"
 }
 mk ATLAS build Coding "Tile layer 1 renders at zoom 14"
 mk ATLAS build "In Review" "Tile layer 2 renders at zoom 14"

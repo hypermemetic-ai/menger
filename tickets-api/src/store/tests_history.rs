@@ -81,7 +81,7 @@ async fn every_change_of_a_status_or_a_kind_is_a_transition() {
     store.create(SYS, ticket("LG", "work", Kind::Build, None, "")).await.unwrap();
     let t = own(&store, "LG-1");
     assert_eq!(t.len(), 1);
-    assert_eq!((t[0].field, t[0].from.as_deref(), t[0].to.as_str()), (TransitionField::Status, None, "Pending"));
+    assert_eq!((t[0].field, t[0].from.as_deref(), t[0].to.as_str()), (TransitionField::Status, None, "Draft"));
     assert_eq!((t[0].actor.as_str(), t[0].source, t[0].cause), ("ada", TransitionSource::App, None));
     assert_eq!(own(&store, "LG-2")[0].actor, "anonymous", "login off: anonymous, from the api");
 
@@ -91,7 +91,7 @@ async fn every_change_of_a_status_or_a_kind_is_a_transition() {
     store.set_status_by(SYS.permit("LG-2"), Status::Coding, said, false).await.unwrap();
     let t = own(&store, "LG-2");
     assert_eq!(t.len(), 2, "the same status again is no transition: {t:?}");
-    assert_eq!((t[1].from.as_deref(), t[1].to.as_str()), (Some("Pending"), "Coding"));
+    assert_eq!((t[1].from.as_deref(), t[1].to.as_str()), (Some("Draft"), "Coding"));
     assert_eq!((t[1].actor.as_str(), t[1].name.as_deref(), t[1].message.as_deref()), ("idp:bob", Some("Bob"), Some("starting")));
 
     store.set_kind_by(SYS.permit("LG-2"), Kind::Gap, Some(Status::Complete), act("ada", TransitionSource::Pipeline)).await.unwrap();
@@ -145,7 +145,7 @@ async fn canceling_cascades_through_the_open_work_below() {
     let mut rx = store.subscribe();
     let ada = Act { name: Some("Ada".into()), message: Some("folded into R-8".into()), ..act("idp:ada", TransitionSource::App) };
     let answer = store.set_status_by(SYS.permit("R-2"), Status::Canceled, ada, false).await.unwrap();
-    assert!(matches!(&answer, Change::StatusChanged { ticket, previous: Status::Pending } if ticket.id == "R-2"), "{answer:?}");
+    assert!(matches!(&answer, Change::StatusChanged { ticket, previous: Status::Draft } if ticket.id == "R-2"), "{answer:?}");
 
     for (id, want) in [
         ("R-2", Status::Canceled),
@@ -154,14 +154,14 @@ async fn canceling_cascades_through_the_open_work_below() {
         ("R-5", Status::Complete),
         ("R-6", Status::Doc),
         ("R-7", Status::Canceled),
-        ("R-8", Status::Pending),
-        ("R-1", Status::Pending),
+        ("R-8", Status::Draft),
+        ("R-1", Status::Draft),
     ] {
         assert_eq!(status(&store, id), want, "{id}");
     }
     let cancel = own(&store, "R-2").pop().unwrap();
     assert_eq!((cancel.actor.as_str(), cancel.source, cancel.message.as_deref()), ("idp:ada", TransitionSource::App, Some("folded into R-8")));
-    for (id, from) in [("R-3", "Pending"), ("R-4", "Coding")] {
+    for (id, from) in [("R-3", "Draft"), ("R-4", "Coding")] {
         let t = own(&store, id).pop().unwrap();
         assert_eq!((t.from.as_deref(), t.to.as_str()), (Some(from), "Canceled"), "{id}");
         assert_eq!((t.actor.as_str(), t.source, t.cause), (SYSTEM_ACTOR, TransitionSource::Cascade, Some(cancel.id)), "{id}");
@@ -226,14 +226,14 @@ async fn restoring_brings_back_exactly_what_the_cancel_canceled() {
     assert_eq!(store.history(SYS, "R-2").unwrap().restorable, ["R-3"], "R-4 moved since");
     store.set_status_by(SYS.permit("R-2"), Status::Ready, act("idp:ada", TransitionSource::Api), true).await.unwrap();
     assert_eq!(status(&store, "R-2"), Status::Ready);
-    assert_eq!(status(&store, "R-3"), Status::Pending, "back to what it had");
+    assert_eq!(status(&store, "R-3"), Status::Draft, "back to what it had");
     assert_eq!(status(&store, "R-4"), Status::Ready, "moved since: as it was moved");
     assert_eq!(status(&store, "R-7"), Status::Canceled, "canceled on its own");
     let restore = own(&store, "R-2").pop().unwrap();
     let back = own(&store, "R-3").pop().unwrap();
-    assert_eq!((back.from.as_deref(), back.to.as_str(), back.cause), (Some("Canceled"), "Pending", Some(restore.id)));
+    assert_eq!((back.from.as_deref(), back.to.as_str(), back.cause), (Some("Canceled"), "Draft", Some(restore.id)));
     assert_eq!((back.actor.as_str(), back.source), (SYSTEM_ACTOR, TransitionSource::Cascade));
-    assert_eq!(back.message.as_deref(), Some("restored to Pending because R-2 was restored by idp:ada"));
+    assert_eq!(back.message.as_deref(), Some("restored to Draft because R-2 was restored by idp:ada"));
     assert_eq!(input_state(&store, "R-2", "own"), InputState::Open);
     assert_eq!(input_state(&store, "R-3", "ask"), InputState::Open);
     assert!(store.history(SYS, "R-2").unwrap().restorable.is_empty());
