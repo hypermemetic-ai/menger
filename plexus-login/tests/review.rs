@@ -501,8 +501,10 @@ async fn a_page_left_open_is_drawn_again_not_refused() {
     let r = c.post("/login/email", &[("csrf", &csrf), ("email", "later@example.test")]).await;
     assert_eq!(r.status, 200);
     assert!(r.body.contains("That page expired"));
-    // A forged token is still refused.
-    assert_eq!(c.post("/login/email", &[("csrf", "1.forged"), ("email", "x@example.test")]).await.status, 403);
+    // A forged token, with no live flow behind it, is the page again (ACCESS-60);
+    // the expired path above is unchanged.
+    let r = c.post("/login/email", &[("csrf", "1.forged"), ("email", "x@example.test")]).await;
+    assert!(r.status == 200 && r.body.contains("That page was old"), "{}", r.body);
 }
 
 #[tokio::test]
