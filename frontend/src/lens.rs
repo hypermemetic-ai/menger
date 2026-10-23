@@ -1907,9 +1907,9 @@ mod tests {
         // FILTER-30's clauses move intact: a negated time clause, `touched`.
         assert_eq!(
             up("status Ready", "not touched within 2w and not menger doc and not changed today"),
-            "status Ready and not touched within 2w and not changed today"
+            "status Ready and not changed within 2w and not changed today"
         );
-        assert_eq!(up("not changed today", "touched today"), "not changed today and touched today");
+        assert_eq!(up("not moved today", "touched today"), "not moved today and changed today");
         // A duplicate is dropped; one field's lists merge.
         assert_eq!(up("kind build", "kind build and not menger doc"), "kind build");
         assert_eq!(up("status in (Ready, Coding)", "status in (Coding, Pending)"), "status Coding");

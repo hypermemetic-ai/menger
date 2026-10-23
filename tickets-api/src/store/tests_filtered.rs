@@ -126,7 +126,7 @@ pub(super) struct Plain {
 /// MENGER-13: the history predicates the random filters draw on — windows
 /// that move only by hours, so a walk's reads agree with the rule however
 /// long it runs.
-pub(super) const HISTORY_VOCAB: [&str; 17] = [
+pub(super) const HISTORY_VOCAB: [&str; 22] = [
     // FILTER-30: last touches — every ticket of a walk is written within
     // the day.
     "touched within 1d",
@@ -147,6 +147,13 @@ pub(super) const HISTORY_VOCAB: [&str; 17] = [
     "changed by system",
     "left Canceled within 1w",
     "entered \"In Review\" within 12h",
+    "moved within 1h",
+    // FILTER-52: a rule with a time — it holds now, and became so last in
+    // the window; `changed` with a window is the last write.
+    "status Pending within 1d",
+    "status in (Ready, Coding) within 1h by system",
+    "kind gap within 1d",
+    "status left Pending within 1d",
     "changed within 1h",
 ];
 
@@ -177,6 +184,14 @@ pub(super) fn holds_of_row(
             let at = row.updated_unix.max(row.created_unix);
             lo.is_none_or(|l| at >= l) && hi.is_none_or(|h| at < h)
         }
+        // FILTER-52: a kind never moved became so at its birth, when it is
+        // one of them; the rest by its latest move ([`holds_by_rule`]).
+        Event::Became(crate::filter::Became::Kind(v)) if !own.iter().any(|t| t.field == TransitionField::Kind) => {
+            let Some((lo, hi)) = clock.bounds(pred.window.as_ref()) else { return false };
+            let birth = own.iter().find(|t| t.field == TransitionField::Status && t.from.is_none());
+            v.contains(&row.kind)
+                && birth.is_some_and(|t| who_is(pred, &t.actor, clock) && lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h))
+        }
         Event::Held(h) => {
             let since = match own.iter().rev().find(|t| t.field == TransitionField::Status) {
                 Some(t) => t.at_unix,
@@ -200,6 +215,18 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
     use crate::filter::{Event, Who};
     use crate::types::TransitionField;
     let Some((lo, hi)) = clock.bounds(pred.window.as_ref()) else { return false };
+    // FILTER-52: a rule with a time — its field's latest move is into one of
+    // its values (so it holds now), in the window, by its actor.
+    if let Event::Became(b) = &pred.event {
+        let (field, admits) = match b {
+            crate::filter::Became::Status(v) => (TransitionField::Status, Some(v.iter().map(|s| s.as_str()).collect::<Vec<_>>())),
+            crate::filter::Became::Kind(v) => (TransitionField::Kind, Some(v.iter().map(|k| k.as_str()).collect::<Vec<_>>())),
+        };
+        let admits = admits.unwrap_or_default();
+        return own.iter().rev().find(|t| t.field == field).is_some_and(|t| {
+            admits.contains(&t.to.as_str()) && who_is(pred, &t.actor, clock) && lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h)
+        });
+    }
     own.iter().any(|t| {
         let event = match &pred.event {
             Event::Entered(s) => t.field == TransitionField::Status && t.to == s.as_str(),
@@ -225,17 +252,23 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
             | Event::Asked
             | Event::InChat(_)
             | Event::Assigned(_)
-            | Event::Unassigned => false,
+            | Event::Unassigned
+            | Event::Became(_) => false,
         };
         let when = lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h);
-        let who = match &pred.by {
-            None => true,
-            Some(Who::Me) => t.actor == clock.me,
-            Some(Who::System) => t.actor == crate::types::SYSTEM_ACTOR,
-            Some(Who::Principal(p)) => t.actor == *p,
-        };
-        event && when && who
+        event && when && who_is(pred, &t.actor, clock)
     })
+}
+
+/// Whether `actor` is who `pred` names (anyone, when it names none).
+fn who_is(pred: &crate::filter::History, actor: &str, clock: &Clock) -> bool {
+    use crate::filter::Who;
+    match &pred.by {
+        None => true,
+        Some(Who::Me) => actor == clock.me,
+        Some(Who::System) => actor == crate::types::SYSTEM_ACTOR,
+        Some(Who::Principal(p)) => actor == *p,
+    }
 }
 
 impl Plain {

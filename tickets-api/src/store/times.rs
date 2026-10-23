@@ -33,7 +33,7 @@
 
 use super::history::Clock;
 use crate::filter::{Held, Window};
-use crate::types::{Status, TicketSummary};
+use crate::types::{Kind, Status, TicketSummary};
 use roaring::RoaringBitmap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -47,6 +47,9 @@ pub(crate) struct Timed {
     pub(crate) touched: i64,
     /// Its current status, as [`Status::ALL`]'s place.
     pub(crate) status: u8,
+    /// FILTER-52: its current kind, as [`Kind::ALL`]'s place — what a birth
+    /// made it, for a kind never changed (`kind K <time>`).
+    pub(crate) kind: u8,
     /// `since` is a transition's moment (not a pre-log bound).
     pub(crate) exact: bool,
 }
@@ -82,7 +85,8 @@ pub(crate) fn timed(row: &TicketSummary, latest: Option<i64>, began: Option<i64>
         }
     };
     let written = if row.updated_unix > 0 { row.updated_unix } else { row.created_unix };
-    Timed { born: row.created_unix, since, touched: written.max(row.created_unix), status: status_ix(row.status), exact }
+    let kind = Kind::ALL.iter().position(|k| *k == row.kind).expect("a kind") as u8;
+    Timed { born: row.created_unix, since, touched: written.max(row.created_unix), status: status_ix(row.status), kind, exact }
 }
 
 impl Times {

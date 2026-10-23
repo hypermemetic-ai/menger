@@ -430,9 +430,13 @@ fn the_kept_indexes_answer_as_a_scan() {
         }
         let windows = ["", " within 3h", " within 2d", " today", " yesterday", " this week", " since 2026-10-01", " before 2026-09-30T12:00", " between 2026-09-25 and 2026-10-03"];
         let bys = ["", " by system", " by idp:ada", " by me", " by nobody"];
-        for e in ["entered Canceled", "entered Ready", "left Pending", "left \"In Review\"", "changed"] {
+        for e in ["entered Canceled", "entered Ready", "left Pending", "left \"In Review\"", "moved", "status Ready", "status in (Ready, Canceled)", "kind gap", "status left Pending"] {
             for w in windows {
                 for by in bys {
+                    // FILTER-52: a rule with neither time nor `by` is no history.
+                    if (e.starts_with("status ") || e.starts_with("kind ")) && !e.contains("left") && w.is_empty() && by.is_empty() {
+                        continue;
+                    }
                     let p = pred(&format!("{e}{w}{by}"));
                     for zone in ["UTC", "Europe/Berlin"] {
                         let clock = Clock { me: "key:bob".into(), ..at(base + rng.below(5 * 86_400) as i64 - 86_400) }.zoned(Some(zone)).unwrap();
