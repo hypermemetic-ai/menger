@@ -277,6 +277,7 @@ mod components;
 mod counts;
 mod deploys;
 mod drafts;
+mod epics;
 mod thread;
 mod deploy_ask;
 mod deploy_view;
@@ -1071,7 +1072,7 @@ fn Board(
                                     // FILTER-22: the id, the kind, the status and
                                     // the severity are tags; the rest of the row
                                     // keeps the ticket menu.
-                                    <a href=format!("#/ticket/{href_id}") data-tag=tags::Tag::ticket(&href_id).attr()>{row_id.clone()}</a>
+                                    <a href=format!("#/ticket/{href_id}") data-tag=tags::Tag::ticket(&href_id).attr()>{crate::epics::shown_id(&row_id)}</a>
                                     // AGS-20: no `parent` column — just the
                                     // mark that this row decomposes, and how
                                     // far (the nav is where the tree is).
@@ -1283,7 +1284,7 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>, lensed: Option<U
                         <span class="glyph" title=kind aria-hidden="true" data-tag=move || t.with(|x| tags::Tag::kind(x.kind).attr())>
                             {move || nav::kind_glyph(kind())}
                         </span>
-                        <a class="code" href=href data-tag=tags::Tag::ticket(&id).attr()>{id.clone()}</a>
+                        <a class="code" href=href data-tag=tags::Tag::ticket(&id).attr()>{crate::epics::shown_id(&id)}</a>
                         <span class="btitle" title=move || t.with(|x| x.title.clone())>
                             {move || t.with(|x| x.title.clone())}
                         </span>
@@ -1304,7 +1305,7 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>, lensed: Option<U
                 }
                 None => {
                     let href = format!("#/ticket/{id}");
-                    view! { <a class="code" href=href data-tag=tags::Tag::ticket(&id).attr()>{id.clone()}</a> }.into_any()
+                    view! { <a class="code" href=href data-tag=tags::Tag::ticket(&id).attr()>{crate::epics::shown_id(&id)}</a> }.into_any()
                 }
             }}
         </li>

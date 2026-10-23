@@ -78,7 +78,11 @@ impl NavActivation {
     /// at the top for this caller).
     #[plexus_macros::method(group = "overview")]
     pub async fn groups(&self, #[from_auth(self.access.verify)] user: VerifiedUser) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        listed(&self.store, &user, |store, user| store.groups(user).into_iter().map(|group| TicketsEvent::Group { group }).collect())
+        // ORG-13: the shortcodes of the epic the caller is in.
+        let me = user.principal_text();
+        listed(&self.store, &user, move |store, user| {
+            store.groups(user).into_iter().filter(|g| store.in_current_era(&me, &g.shortcode)).map(|group| TicketsEvent::Group { group }).collect()
+        })
     }
 
     /// Each shortcode's last sequence (a deleted ticket's too: numbers are never reused) and the holes below it, in shortcode order — where each shortcode ends in the store's order.
@@ -98,8 +102,10 @@ impl NavActivation {
     /// `created` already carries the newborn's `epic` and `seq`.
     #[plexus_macros::method(group = "overview")]
     pub async fn extents(&self, #[from_auth(self.access.verify)] user: VerifiedUser) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        listed(&self.store, &user, |store, user| {
-            store.extents_holed(user).into_iter().map(|(shortcode, epic, last_seq, holes)| TicketsEvent::Extent { epic, shortcode, last_seq, holes }).collect()
+        let me = user.principal_text();
+        listed(&self.store, &user, move |store, user| {
+            let mine = store.extents_holed(user).into_iter().filter(|(sc, ..)| store.in_current_era(&me, sc));
+            mine.map(|(shortcode, epic, last_seq, holes)| TicketsEvent::Extent { epic, shortcode, last_seq, holes }).collect()
         })
     }
 
@@ -128,7 +134,7 @@ impl NavActivation {
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        counts_stream(self.store.clone(), user, filter, keep, tz)
+        crate::store::reading_as(user.principal_text(), counts_stream(self.store.clone(), user, filter, keep, tz))
     }
 
     /// Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value.
@@ -219,7 +225,8 @@ impl NavActivation {
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(tree_events(&self.store, &user, TreeAsk { parent, epic, filter, after, limit, matches_only, keep, tz }))
+        let me = user.principal_text();
+        futures::stream::iter(crate::store::reading_now(me, || tree_events(&self.store, &user, TreeAsk { parent, epic, filter, after, limit, matches_only, keep, tz })))
     }
 
     /// Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids.

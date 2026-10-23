@@ -271,6 +271,36 @@
         "project"
       ]
     },
+    "epics": {
+      "create": [
+        "name",
+        "org"
+      ],
+      "current": [
+        "org"
+      ],
+      "delete": [
+        "name",
+        "org"
+      ],
+      "get": [
+        "name",
+        "org"
+      ],
+      "list": [
+        "org"
+      ],
+      "rename": [
+        "name",
+        "org",
+        "to"
+      ],
+      "schema": [],
+      "switch": [
+        "name",
+        "org"
+      ]
+    },
     "media": {
       "get": [
         "hash",

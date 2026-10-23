@@ -105,8 +105,9 @@ pub(super) struct Plan {
     steps: Vec<Step>,
     /// A shortcode the write mints.
     minted: Option<Shortcode>,
-    /// `new_scope`'s root: its key, title and parent.
-    born: Option<(String, String, String)>,
+    /// `new_scope`'s root: its key, title and parent (ORG-13: none, at the
+    /// top of the epic `to` names).
+    born: Option<(String, String, Option<String>)>,
     /// Each child that stays, and the ticket it hangs under after.
     stays: Vec<(Row, Option<String>)>,
     /// A rename: the shortcode that was, and the one it is.
@@ -190,6 +191,11 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
         return Err(refuse(format!("to: {} names a ticket; name the shortcode they move into — nothing written", ask.to.trim())));
     }
     let root_of = |sc: &ShortcodeId| cache.rollups.root(sc).map(str::to_string);
+    // ORG-13: the epic `to` names (`org:epic:CODE`, or `org:CODE` for the
+    // org's first) — a move into another epic hangs at its top, or under a
+    // `parent` in it.
+    let to_era = to_era(cache, &to)?;
+    let era_of_row = |r: &Row| cache.shortcodes.era_of(&r.shortcode);
     // A shortcode's root: a rename, or refused.
     let roots: Vec<&Row> = given.iter().filter(|g| root_of(&g.shortcode).as_deref() == Some(g.id.as_str())).collect();
     if !roots.is_empty() {
@@ -205,7 +211,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
                 .collect();
             return Err(StoreError::RefusedMany { refusals: why });
         }
-        return rename(cache, &given[0], &to, ask);
+        return rename(cache, &given[0], &to, to_era, ask);
     }
     // Every ticket that moves, in the order it is numbered.
     let mut moving: Vec<Row> = Vec::new();
@@ -237,21 +243,26 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
     };
     // Where they go: the shortcode, its first number, and where a moved
     // ticket whose parent does not move hangs.
-    let (target, minted, born, mut next, home): (ShortcodeId, Option<Shortcode>, Option<(String, String, String)>, u32, Option<String>) =
+    let (target, minted, born, mut next, home): (ShortcodeId, Option<Shortcode>, Option<(String, String, Option<String>)>, u32, Option<String>) =
         if let Some(title) = ask.new_scope.as_deref() {
             let title = title.trim();
             if title.is_empty() {
                 return Err(refuse("new_scope: the new scope's title — nothing written".into()));
             }
-            let Some(p) = parent_row.as_ref() else {
-                return Err(refuse("new_scope makes a scope under --parent: name where it hangs — nothing written".into()));
-            };
-            // TICKETS-6: no new shortcode hosted under a frozen scope.
-            rules::frozen_refusal(cache, Some(&p.id), None)?;
-            match cache.target(&to, Some(p), true)? {
+            // ORG-13: into an epic the address names, it may root there, at
+            // the top.
+            if parent_row.is_none() && to_era.is_none() {
+                return Err(refuse("new_scope makes a scope under --parent: name where it hangs (or an epic, --to org:epic:CODE) — nothing written".into()));
+            }
+            if let Some(p) = parent_row.as_ref() {
+                in_era(to_era, era_of_row(p), &p.id)?;
+                // TICKETS-6: no new shortcode hosted under a frozen scope.
+                rules::frozen_refusal(cache, Some(&p.id), None)?;
+            }
+            match cache.target(&to, parent_row.as_ref(), true)? {
                 Target::Mint(sc) => {
                     let root = sc.id.key(1);
-                    (sc.id.clone(), Some(sc), Some((root.clone(), title.to_string(), p.id.to_string())), 2, Some(root))
+                    (sc.id.clone(), Some(sc), Some((root.clone(), title.to_string(), parent_row.as_ref().map(|p| p.id.to_string()))), 2, Some(root))
                 }
                 Target::In(there) => {
                     return Err(refuse(format!(
@@ -290,6 +301,12 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
                         )));
                     }
                     let hangs = parent_row.clone().or_else(|| first.parent.as_deref().and_then(|p| cache.get(p)).cloned());
+                    // ORG-13: into another epic, at its top — or under a
+                    // `parent` there.
+                    if let Some(p) = parent_row.as_ref() {
+                        in_era(to_era, era_of_row(p), &p.id)?;
+                    }
+                    let hangs = hangs.filter(|h| to_era.is_none_or(|e| era_of_row(h) == e));
                     rules::frozen_refusal(cache, hangs.as_ref().map(|h| h.id.as_str()), None)?;
                     match cache.target(&to, hangs.as_ref(), true)? {
                         Target::Mint(sc) => (sc.id.clone(), Some(sc.clone()), None, 1, Some(sc.id.key(1))),
@@ -344,7 +361,10 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
         s.parent = match s.row.parent.as_deref().and_then(|p| map.get(p)) {
             Some(p) => Some(p.clone()),
             // The new root keeps where it hangs, or hangs under --parent.
-            None if as_root && i == 0 => parent_row.as_ref().map(|p| p.id.to_string()).or_else(|| s.row.parent.clone().map(String::from)),
+            // ORG-13: but not across epics — at the new one's top.
+            None if as_root && i == 0 => parent_row.as_ref().map(|p| p.id.to_string()).or_else(|| {
+                s.row.parent.clone().map(String::from).filter(|p| to_era.is_none_or(|e| cache.get(p).is_some_and(|r| era_of_row(r) == e)))
+            }),
             None => home.clone(),
         };
         // WAVE-10: a path is unique in its shortcode.
@@ -418,7 +438,7 @@ pub(super) fn plan(cache: &Cache, ask: &Reshortcode) -> Result<Plan, StoreError>
 
 /// A shortcode's root moved with every ticket of it: the shortcode renamed
 /// `to`, in its namespace, every number kept.
-fn rename(cache: &Cache, root: &Row, to: &Address, ask: &Reshortcode) -> Result<Plan, StoreError> {
+fn rename(cache: &Cache, root: &Row, to: &Address, to_era: Option<i64>, ask: &Reshortcode) -> Result<Plan, StoreError> {
     if ask.new_scope.is_some() || ask.parent.as_deref().is_some_and(|p| !p.trim().is_empty()) {
         return Err(refuse(format!(
             "{} roots its shortcode: moving it renames the shortcode where it is — drop --new-scope and --parent (set_parent moves \
@@ -426,12 +446,18 @@ fn rename(cache: &Cache, root: &Row, to: &Address, ask: &Reshortcode) -> Result<
             root.id
         )));
     }
-    if !to.is_bare() {
-        return Err(refuse(format!("to: a rename names the new code alone, as {} — nothing written", to.code)));
+    if !to.hosts.is_empty() {
+        return Err(refuse(format!("to: a rename names the new code alone (or org:epic:CODE, ORG-13), as {} — nothing written", to.code)));
     }
     let old = root.shortcode.clone();
-    let ns = cache.shortcodes.get(&old).map(|s| s.ns.clone()).ok_or_else(|| StoreError::NoShortcode(old.to_string()))?;
-    if cache.shortcodes.code(&old) == to.code {
+    let mut ns = cache.shortcodes.get(&old).map(|s| s.ns.clone()).ok_or_else(|| StoreError::NoShortcode(old.to_string()))?;
+    // ORG-13: a whole shortcode moved into another epic — a root at its top,
+    // every number kept (they start at 1 there already).
+    let cross = to_era.is_some_and(|e| e != ns.era);
+    if cross {
+        (ns.era, ns.host) = (to_era.unwrap_or(ns.era), None);
+    }
+    if cache.shortcodes.code(&old) == to.code && !cross {
         return Err(refuse(format!("{} is already {} — nothing written", root.epic, to.code)));
     }
     let sc = cache.shortcodes.mint(ns, to.code.clone())?;
@@ -454,12 +480,47 @@ fn rename(cache: &Cache, root: &Row, to: &Address, ask: &Reshortcode) -> Result<
             key: sc.id.key(t.seq),
             shortcode: sc.id.clone(),
             seq: t.seq,
-            parent: t.parent.as_deref().map(|p| map.get(p).cloned().unwrap_or_else(|| p.to_string())),
+            parent: match cross && t.id == root.id {
+                true => None,
+                false => t.parent.as_deref().map(|p| map.get(p).cloned().unwrap_or_else(|| p.to_string())),
+            },
         })
         .collect();
+    // A shortcode one of them hosts stays hosted under it, by its new key
+    // (its root's parent rewritten), and follows its namespace.
+    let mut stays: Vec<(Row, Option<String>)> = Vec::new();
+    for t in &all {
+        for (csc, seq) in cache.children.of(&t.id) {
+            let Some(c) = cache.order.get(&OrderKey { shortcode: csc, seq }) else { continue };
+            if !map.contains_key(c.id.as_str()) {
+                stays.push((c.clone(), map.get(t.id.as_str()).cloned()));
+            }
+        }
+    }
     let mut asked: Vec<String> = all.iter().map(|t| t.id.to_string()).collect();
-    asked.extend(root.parent.clone().map(String::from));
-    Ok(Plan { steps, renamed: Some((old, sc.id.clone())), minted: Some(sc), born: None, stays: Vec::new(), asked })
+    asked.extend(root.parent.clone().map(String::from).filter(|_| !cross));
+    Ok(Plan { steps, renamed: Some((old, sc.id.clone())), minted: Some(sc), born: None, stays, asked })
+}
+
+/// ORG-13: the epic a move's `to` names — `org:epic:CODE` that one (refused
+/// when the org has none of that name), `org:CODE` the org's first; a short
+/// form names none (the move stays where its shortcode is).
+fn to_era(cache: &Cache, to: &Address) -> Result<Option<i64>, StoreError> {
+    let r = &cache.shortcodes;
+    let Some(org) = &to.org else { return Ok(None) };
+    let row = r.org_row(org).ok_or_else(|| StoreError::NoOrg(org.to_string()))?;
+    match &to.era {
+        Some(name) => r.era_named(row, name).map(Some).ok_or_else(|| refuse(format!("to: no epic `{name}` in {org} — nothing written"))),
+        None => Ok(r.first_era(row)),
+    }
+}
+
+/// ORG-13: a `parent` in the epic the move goes to, or the refusal.
+fn in_era(to_era: Option<i64>, parent_era: i64, parent: &str) -> Result<(), StoreError> {
+    match to_era.is_some_and(|e| e != parent_era) {
+        true => Err(refuse(format!("parent {parent} is in another epic than --to names: a moved ticket hangs in its epic — nothing written"))),
+        false => Ok(()),
+    }
 }
 
 /// `ids` (a JSON list) with every moved id renamed.
@@ -634,7 +695,7 @@ impl Store {
                 parent_hidden: false,
                 archived: None,
                 frozen: false,
-                parent: Some(crate::address::TicketId::new(parent.clone())),
+                parent: parent.clone().map(crate::address::TicketId::new),
                 child_count: 0,
                 commits: Vec::new(),
                 path: None,

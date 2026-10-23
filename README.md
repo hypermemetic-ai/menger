@@ -2938,6 +2938,48 @@ lens filters reads within it (`under acme:` ANDed into each level's
 effective filter: the board, the nav, the wave boards, the inputs page, the
 palette).
 
+### Epics (ORG-13)
+
+An **epic** is a level of the organization that holds shortcodes:
+organization → epic → shortcode → ticket. A new epic starts empty, and a
+shortcode's code is unique within (organization, epic, host), so `MENGER-1`
+can be born again in one, numbered from 1. Every organization starts with
+`genesis`, which holds everything made before epics (the store's first open
+by this build puts every shortcode there and writes nothing else); its
+addresses name no epic (`hypermemetic:MENGER/ORG-3`), every other epic's do
+(`hypermemetic:fresh:MENGER-1`). Inside the store the level is an *era*
+(`eras`, `era_choices`, `shortcodes.era`): `epic` already names a
+shortcode's letters and a scope's status.
+
+- **The `epics` activation**: `list`, `get --name`, `current`, `switch
+  --name` (a viewer's own setting: the epic it is in), and — admin on the
+  organization — `create`, `rename`, `delete` (only empty, never the first).
+  Each takes `--org` (default: your own).
+- **Which epic you are in**: your `switch`, else the organization's newest.
+  A short form (`MENGER-1`) resolves in it first, then as before (a pin,
+  then every match); an address with an org and no epic names the first.
+- **Reads**: once an organization holds two epics, every read that takes a
+  filter — and `list`, `counts`, `work ready`, `search`, `nav groups` /
+  `extents` without one — answers your epic unless the filter names one:
+  `epic fresh`, `epic hypermemetic:fresh`, `epic any`. A watch with a filter
+  likewise; an unfiltered watch hears everything. `get` answers any epic.
+- **Moving in by hand**: the address names the epic —
+  `tickets reshortcode --ids MENGER-7,MENGER-9 --to hypermemetic:fresh:MENGER`
+  (`--new-scope TITLE` mints its root at the epic's top first, no `--parent`
+  needed), `--with-children` on a root moves its whole shortcode keeping
+  its numbers, and `tickets create --epic hypermemetic:fresh:KILN`. Old ids
+  stay pinned to the moved tickets.
+- **The app**: the nav's head shows the epic with a switcher, when there are
+  two or more; switching reloads the page into it.
+
+```sh
+synapse -P 4455 menger epics create --name fresh
+synapse -P 4455 menger tickets create --epic hypermemetic:fresh:MENGER --title "menger, again" --kind scope
+synapse -P 4455 menger tickets reshortcode --ids MENGER-40 --to hypermemetic:fresh:MENGER
+synapse -P 4455 menger epics switch --name genesis
+synapse -P 4455 menger tickets list --filter 'epic any and kind build' --summary true
+```
+
 ### Search (SEARCH-2)
 
 `find` jumps to a ticket by its id or title; **`search`** looks inside

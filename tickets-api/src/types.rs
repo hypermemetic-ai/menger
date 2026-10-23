@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-pub use crate::address::{Address, At, Code, Namespace, OrgId, Shortcode, ShortcodeId, TicketId, TicketName};
+pub use crate::address::{Address, At, Code, EpicName, Namespace, OrgId, Shortcode, ShortcodeId, TicketId, TicketName};
 use crate::vocab::{CommitRef, Label};
 
 /// Lifecycle status. Serialized with frontmatter casing (`Pending`, `Ready`, …)

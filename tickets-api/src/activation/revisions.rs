@@ -105,7 +105,7 @@ impl Revisions {
         /// At most this many (optional; default 100, at most 500).
         limit: Option<u32>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        list_stream(self.store.clone(), user, id.into_string(), before, limit)
+        crate::store::reading_as(user.principal_text(), list_stream(self.store.clone(), user, id.into_string(), before, limit))
     }
 
     /// The ticket exactly as it was at a revision; yields revision_at { revision, ticket }.

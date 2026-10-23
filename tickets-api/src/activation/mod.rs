@@ -344,7 +344,7 @@ impl TicketsActivation {
         /// Ticket id, e.g. MNG-2 — or a path address, e.g. PLEXUS/_MENGER/board.
         id: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        get_stream(self.store.clone(), user, id.into_string())
+        crate::store::reading_as(user.principal_text(), get_stream(self.store.clone(), user, id.into_string()))
     }
 
     /// List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at.
@@ -414,7 +414,7 @@ impl TicketsActivation {
         /// The time zone a history filter's days are read in (today, yesterday, this week, a date): an IANA name, e.g. Europe/Berlin, UTC, or an offset, e.g. +02:00 (optional; default UTC).
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        list_stream(self.store.clone(), user, ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz })
+        crate::store::reading_as(user.principal_text(), list_stream(self.store.clone(), user, ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz }))
     }
 
     /// Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children).
@@ -1092,7 +1092,7 @@ impl TicketsActivation {
         /// Ticket id, e.g. MENGER-7.
         id: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        history_stream(self.store.clone(), user, id.into_string())
+        crate::store::reading_as(user.principal_text(), history_stream(self.store.clone(), user, id.into_string()))
     }
 
     /// Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why, with the inputs it asks (repeat --input; --blocking the one you are idle on) and views of mockups to look at (repeat --mockup); queued again it is raised, never lowered, and its inputs and views added; yields queued { entry, ticket, action }.

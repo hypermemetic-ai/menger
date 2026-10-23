@@ -203,10 +203,18 @@ impl Store {
             at: chrono::Utc::now().timestamp(),
         });
         let (name, stored, kept) = (org.clone(), grant.clone(), grant.clone());
+        // ORG-13: the row its first epic takes (ensure_eras inserts it next).
+        let era_born = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let id = cache.shortcodes.eras.keys().next_back().map_or(1, |l| l + 1);
+            Some((id, super::shortcodes::Era { org: row, name: crate::address::EpicName::genesis(), created: chrono::Utc::now().timestamp() }))
+        };
         self.write(
             serial,
             move |tx| {
                 tx.execute("INSERT INTO orgs (id, name) VALUES (?1, ?2)", params![row, name.as_str()])?;
+                // ORG-13: its first epic, empty.
+                super::shortcodes::ensure_eras(tx)?;
                 if let Some(g) = &stored {
                     members::store(tx, g)?;
                 }
@@ -214,6 +222,9 @@ impl Store {
             },
             move |cache, ()| {
                 cache.shortcodes.orgs.insert(row, org.clone());
+                if let Some((id, era)) = era_born.clone() {
+                    cache.shortcodes.eras.insert(id, era);
+                }
                 if let Some(g) = kept {
                     cache.members.put(g);
                 }
@@ -351,12 +362,17 @@ impl Store {
                     members::delete(tx, &g.principal, &g.scope)?;
                 }
                 tx.execute("DELETE FROM org_aliases WHERE org = ?1", [row])?;
+                // ORG-13: and its epics, and every choice of one.
+                tx.execute("DELETE FROM era_choices WHERE org = ?1", [row])?;
+                tx.execute("DELETE FROM eras WHERE org = ?1", [row])?;
                 tx.execute("DELETE FROM orgs WHERE id = ?1", [row])?;
                 Ok(())
             },
             move |cache, ()| {
                 cache.shortcodes.orgs.remove(&row);
                 cache.shortcodes.aliases.retain(|_, r| *r != row);
+                cache.shortcodes.eras.retain(|_, e| e.org != row);
+                cache.shortcodes.choices.retain(|(_, o), _| *o != row);
                 for g in gone {
                     cache.members.remove(&g.principal, &g.scope);
                 }

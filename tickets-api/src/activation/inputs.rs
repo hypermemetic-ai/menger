@@ -91,7 +91,7 @@ impl InputsActivation {
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(inputs_events(&self.store, &user, ticket, epic, state, filter, tz))
+        futures::stream::iter(crate::store::reading_now(user.principal_text(), || inputs_events(&self.store, &user, ticket, epic, state, filter, tz)))
     }
 
     /// File a question for the owner on a ticket: a new text input appended to its body (one write, one revision); yields input_changed with the input.

@@ -79,7 +79,7 @@ impl WorkActivation {
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        ready_stream(self.store.clone(), user, ReadyAsk { epic, after, limit, summary, filter, tz })
+        crate::store::reading_as(user.principal_text(), ready_stream(self.store.clone(), user, ReadyAsk { epic, after, limit, summary, filter, tz }))
     }
 
     /// The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts.
@@ -164,6 +164,6 @@ impl WorkActivation {
         /// Ticket id whose blockers to resolve, e.g. MNG-2.
         id: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        blockers_stream(self.store.clone(), user, id.into_string())
+        crate::store::reading_as(user.principal_text(), blockers_stream(self.store.clone(), user, id.into_string()))
     }
 }

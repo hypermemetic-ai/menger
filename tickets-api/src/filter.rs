@@ -215,6 +215,38 @@ pub enum Field {
     Saved(String),
 }
 
+/// ORG-13: what marks an `under` name as an epic's — `epic genesis` is
+/// `under ~genesis` inside, so the language's planner, the cells' compile
+/// and a watch's membership read it as the free truth an `under` is, and
+/// the store binds it to every shortcode of that epic (`~*`: of any). No
+/// address and no organization's name holds a `~`.
+pub const EPIC_MARK: char = '~';
+
+/// ORG-13: `epic any` as an `under` name.
+pub const EPIC_ANY: &str = "~*";
+
+/// ORG-13: `epic <value>` read — `any`, an epic's name, or `org:name`.
+fn epic_field(v: &str) -> Result<Field, String> {
+    let v = v.trim();
+    if v.eq_ignore_ascii_case("any") {
+        return Ok(Field::Under(EPIC_ANY.into()));
+    }
+    let (org, name) = match v.split_once(':') {
+        Some((o, n)) => (Some(o), n),
+        None => (None, v),
+    };
+    let bad = || format!("`epic` takes an epic's name, `org:name` or `any`, as `epic genesis` — not `{v}`");
+    if org.is_some_and(|o| crate::address::OrgId::new(o).is_err()) || crate::address::EpicName::new(name).is_err() {
+        return Err(bad());
+    }
+    Ok(Field::Under(format!("{EPIC_MARK}{v}")))
+}
+
+/// ORG-13: whether an `under` name is an epic's (`~…`).
+pub fn is_epic_name(under: &str) -> bool {
+    under.starts_with(EPIC_MARK)
+}
+
 /// ACCESS-21: the truth a `ticket <ID>` predicate is handed by, for the
 /// one ticket it names ([`Facts::history`] carries it, as a history
 /// predicate's): `ticket ID`, upper case.
@@ -224,8 +256,9 @@ pub fn ticket_truth(id: &str) -> String {
 
 impl Field {
     /// The field's name as a filter writes it: `status`, `has commits`, …
-    pub const fn name(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
+            Field::Under(x) if is_epic_name(x) => "epic",
             Field::Status(_) => "status",
             Field::Category(_) => "category",
             Field::Kind(_) => "kind",
@@ -258,6 +291,9 @@ impl Field {
             Field::Kind(k) => k.as_str().into(),
             Field::Severity(s) => severity_name(*s).into(),
             Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen => return None,
+            // ORG-13: an epic's `under` says its name back (`any` for `~*`).
+            Field::Under(x) if x == EPIC_ANY => "any".into(),
+            Field::Under(x) if is_epic_name(x) => x[EPIC_MARK.len_utf8()..].to_ascii_lowercase(),
             Field::In(x) | Field::Under(x) | Field::Ticket(x) | Field::Text(x) | Field::Label(x) | Field::Saved(x) => x.clone(),
             // FILTER-36: a nested group's value is its text.
             Field::Group(g) => g.format(),
@@ -839,6 +875,12 @@ impl Filter {
         self.leaves().iter().any(|p| matches!(&p.field, Field::Archived) || matches!(&p.field, Field::History(h) if h.event == Event::Archived))
     }
 
+    /// ORG-13: whether it names an epic (`epic …`, `epic any`) — which
+    /// lifts the default that reads a reader's current epic alone.
+    pub fn names_epic(&self) -> bool {
+        self.leaves().iter().any(|p| matches!(&p.field, Field::Under(x) if is_epic_name(x)))
+    }
+
     /// The lens's aggregation: the tickets both filters match, as one
     /// filter — `self`'s groups then `other`'s, normalized:
     ///
@@ -1235,7 +1277,7 @@ fn predicate_mistake(raw: &str, s: &str) -> Option<Mistake> {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 47] = [
+const NAMES: [&str; 48] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -1292,6 +1334,8 @@ const NAMES: [&str; 47] = [
     "ready",
     "depth",
     "kind",
+    // ORG-13: the epic a ticket's shortcode is in.
+    "epic",
     "text",
     "left",
     "tag",
@@ -1528,6 +1572,10 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "archived" if tail.is_empty() => Ok(Field::Archived),
         "archived" | "restored" => read_history(name, tail).map(Field::History),
         "label" => crate::labels::normalize(value()?).map(Field::Label),
+        // ORG-13: `epic <name>`, `epic <org>:<name>`, `epic any` — an
+        // `under` the store binds to every shortcode of the epic(s)
+        // ([`EPIC_MARK`]).
+        "epic" => epic_field(value()?),
         "text" => text(value()?),
         "status" => {
             let v = value()?;

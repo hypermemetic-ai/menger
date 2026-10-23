@@ -2358,6 +2358,11 @@
      of the matches below a row, and the last line: the shortcodes hidden. */
   #nav { overflow: visible; }
   #nav .nbar { padding: 6px 10px; border-bottom: var(--border) solid var(--line); font-size: calc(.85rem * var(--text-scale)); }
+  /* ORG-13: the epic the nav reads in — a line of its head, shown only with a choice. */
+  #nav .nepic { display: flex; align-items: center; gap: .4rem; padding: 6px 10px; border-bottom: var(--border) solid var(--line); font-size: calc(.8rem * var(--text-scale)); color: var(--muted); }
+  #nav .nepic-k { font-family: var(--mono); letter-spacing: .06em; text-transform: uppercase; font-size: calc(10.5px * var(--text-scale)); }
+  #nav .epic-switch { font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); padding: 1px .3rem; min-width: 0; max-width: 100%; }
+  #nav .epic-switch:hover, #nav .epic-switch:focus-visible { border-color: var(--accent); color: var(--accent); }
   #nav .nbar .fbar { gap: .3rem; }
   #nav .nbar .ftext { flex-basis: 100%; min-width: 0; }
   #nav .nbar .fclash { margin-top: .3rem; }

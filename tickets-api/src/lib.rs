@@ -41,7 +41,7 @@ pub mod vocab;
 /// [`ShortcodeId`], [`Namespace`], [`Shortcode`], [`TicketId`] — and
 /// [`Address::parse`], the one parser from text to an address. Wasm-safe.
 pub mod address;
-pub use address::{Address, At, Code, Namespace, OrgId, Shortcode, ShortcodeId, TicketId, TicketName};
+pub use address::{Address, At, Code, EpicName, Namespace, OrgId, Shortcode, ShortcodeId, TicketId, TicketName};
 /// COMP-8: a component's help — its source's `<docs>` and its block's
 /// preview line, parsed. Wasm-safe: the store reads definitions with it, and
 /// the app renders a definition's card (COMP-9) from the block it shows.
@@ -214,6 +214,14 @@ pub mod orgs_activation;
 pub use orgs_activation::OrgsClient;
 #[cfg(feature = "server")]
 pub use orgs_activation::OrgsActivation;
+
+// ORG-13: epics — a level of the organization above its shortcodes.
+pub mod epics;
+pub use epics::{Epic, EpicsEvent};
+pub mod epics_activation;
+pub use epics_activation::EpicsClient;
+#[cfg(feature = "server")]
+pub use epics_activation::EpicsActivation;
 
 pub mod session;
 pub use session::{ProviderKind, ProviderOffer, SessionEvent};
