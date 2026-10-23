@@ -253,12 +253,17 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   `set_status … Canceled` cancels the ticket's open descendants in the same
   write (and withdraws their open inputs); leaving `Canceled` with
   `--restore-children true` puts back what that cancel canceled. Filters
-  read the log: `entered <status> [window] [by who]`, `left …`, `changed
-  …`, `by …`; windows `within 12h`, `today`, `yesterday`, `this week`,
-  `since/before/between` (UTC unless `--tz Europe/Berlin`):
+  read the log: `entered <status> [window] [by who]`, `status left …`,
+  `moved …` (any transition), `by …`; windows `within 12h`, `today`,
+  `yesterday`, `this week`, `after/before/between` (`since` still reads;
+  UTC unless `--tz Europe/Berlin`). A time is a modifier on the rule it
+  follows (FILTER-52): `status Complete after 2026-10-01` is Complete now
+  and last became so then; `kind gap within 7d`; `created after M`;
+  `changed before 2w ago` is the last write (`touched` still reads). The
+  old `status S and entered S W` reads and prints as `status S W`:
 
   ```sh
-  synapse -P 4455 menger tickets list --filter 'status "In Review" and entered "In Review" within 12h' --summary true
+  synapse -P 4455 menger tickets list --filter 'status "In Review" within 12h' --summary true
   synapse -P 4455 menger tickets set_status --id MNG-7 --status Canceled --message "folded into MNG-9"
   ```
 

@@ -64,10 +64,11 @@ pub(crate) const NAME_MAX: usize = menger_tickets_api::saved_filters::NAME_MAX;
 /// store.
 pub(crate) const SUGGESTED: [(&str, &str); 4] = [
     ("New today", "created today"),
-    ("Moved today", "changed today"),
+    // FILTER-52: any transition is `moved`; `changed` is the last write.
+    ("Moved today", "moved today"),
     ("Stuck", "category in (ready, active, review) for over 1w"),
     // FILTER-30: open work nobody has touched in two weeks.
-    ("Untouched 2w", "not touched within 2w and not category done and not kind doc"),
+    ("Untouched 2w", "not changed within 2w and not category done and not kind doc"),
 ];
 
 /// A name as the server matches it (FILTER-36: the rule `saved "Name"` is

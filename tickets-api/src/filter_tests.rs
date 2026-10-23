@@ -1080,21 +1080,23 @@ fn admits_nothing_is_sound_on_random_tickets() {
 #[test]
 fn history_predicates_read_and_write_canonically() {
     for (text, canonical) in [
-        ("status \"In Review\" and entered \"In Review\" within 12h", "status \"In Review\" and entered \"In Review\" within 12h"),
+        // FILTER-52: a status and its entry over a window up to now print as
+        // the rule with a time.
+        ("status \"In Review\" and entered \"In Review\" within 12h", "status \"In Review\" within 12h"),
         ("entered Coding yesterday", "entered Coding yesterday"),
         ("changed within 1h and under SCAFFOLD-1", "changed within 1h and under SCAFFOLD-1"),
         ("entered Complete this week and kind build", "entered Complete this week and kind build"),
         ("entered Canceled within 1d by system", "entered Canceled within 1d by system"),
-        ("entered complete since 2026-10-10", "entered Complete since 2026-10-10"),
+        ("entered complete since 2026-10-10", "entered Complete after 2026-10-10"),
         ("entered in review within 12 hours", "entered \"In Review\" within 12h"),
-        ("left Pending before 2026-10-10 08:30", "left Pending before 2026-10-10T08:30"),
+        ("left Pending before 2026-10-10 08:30", "status left Pending before 2026-10-10T08:30"),
         ("changed between 2026-10-01 and 2026-10-05 and kind gap", "changed between 2026-10-01 and 2026-10-05 and kind gap"),
-        ("by me", "changed by me"),
-        ("by system today", "changed today by system"),
-        ("changed by idp:ada", "changed by idp:ada"),
+        ("by me", "moved by me"),
+        ("by system today", "moved today by system"),
+        ("changed by idp:ada", "moved by idp:ada"),
         ("not entered Ready within 30m", "not entered Ready within 30m"),
-        ("(entered Ready within 2w or left Coding within 1d)", "(entered Ready within 2w or left Coding within 1d)"),
-        ("changed", "changed"),
+        ("(entered Ready within 2w or left Coding within 1d)", "(entered Ready within 2w or status left Coding within 1d)"),
+        ("changed", "moved"),
     ] {
         let f = parsed(text);
         assert_eq!(f.format(), canonical, "{text}");
@@ -1104,7 +1106,7 @@ fn history_predicates_read_and_write_canonically() {
     assert_eq!(f.groups.len(), 2, "the window's `and` is not a group's");
     match &f.groups[0].preds[0].field {
         Field::History(h) => {
-            assert_eq!(h.event, Event::Changed);
+            assert_eq!(h.event, Event::Touched, "FILTER-52: `changed` with a window is the last write");
             assert!(matches!(h.window, Some(Window::Between(When::At(a), When::At(b))) if a.day == 1 && b.day == 5));
             assert!(!h.relative(), "fixed moments do not age");
         }
@@ -1146,7 +1148,7 @@ fn a_history_predicate_is_a_free_truth() {
     let mut x = facts("H-1", "", Status::Coding, Kind::Build);
     let f = parsed("status Coding and entered Coding within 12h");
     assert!(!f.matches(&x));
-    x.history = vec!["entered Coding within 12h".into()];
+    x.history = vec!["status Coding within 12h".into()];
     assert!(f.matches(&x));
 }
 
@@ -1165,15 +1167,15 @@ fn when_predicates_read_and_write_canonically() {
         ("created before 2w ago", "created before 2w ago"),
         ("created between 2026-10-01 and 2026-10-07", "created between 2026-10-01 and 2026-10-07"),
         ("entered Pending today", "entered Pending today"),
-        ("left Pending this week", "left Pending this week"),
+        ("left Pending this week", "status left Pending this week"),
         ("entered Ready within 2d by owner", "entered Ready within 2d by owner"),
         ("status Pending for over 2w", "status Pending for over 2w"),
         ("status \"In Review\" for over 3d", "status \"In Review\" for over 3d"),
         ("category active for under 1h", "category active for under 1h"),
         ("for over 2w", "for over 2w"),
         ("changed before 1w ago", "changed before 1w ago"),
-        ("changed since 12h ago", "changed since 12h ago"),
-        ("changed since 3 days ago", "changed since 3d ago"),
+        ("changed since 12h ago", "changed after 12h ago"),
+        ("changed since 3 days ago", "changed after 3d ago"),
         ("created between 3d ago and 1d ago and kind build", "created between 3d ago and 1d ago and kind build"),
         ("created between 2026-10-01T08:00 and 2w ago", "created between 2026-10-01T08:00 and 2w ago"),
         ("status in (Pending, Ready) for over 1w", "status in (Pending, Ready) for over 1w"),
@@ -1277,14 +1279,15 @@ fn touched_reads_and_writes_with_every_window() {
         for not in ["", "not "] {
             let text = format!("{not}touched {w}");
             let f = parsed(&text);
-            assert_eq!(f.format(), text, "{text}");
+            // FILTER-52: the last write prints as `changed`, `since` as `after`.
+            assert_eq!(f.format(), format!("{not}changed {}", w.replace("since", "after")), "{text}");
             assert_eq!(parsed(&f.format()), f, "{text} reads back");
             let p = &f.groups[0].preds[0];
             assert_eq!(p.not, !not.is_empty(), "{text}");
             match &p.field {
                 Field::History(h) => {
                     assert_eq!(h.event, Event::Touched, "{text}");
-                    assert_eq!(h.event.name(), "touched");
+                    assert_eq!(h.event.name(), "changed");
                     assert!(h.by.is_none());
                 }
                 other => panic!("{text}: {other:?}"),
@@ -1292,10 +1295,10 @@ fn touched_reads_and_writes_with_every_window() {
         }
     }
     for (text, canonical) in [
-        ("touched within 2 weeks", "touched within 2w"),
-        ("not touched within 2w and not category done and not kind doc", "not touched within 2w and not category done and not kind doc"),
-        ("not touched since 2026-10-01 and under THEME", "not touched since 2026-10-01 and under THEME"),
-        ("(touched today or created today)", "(touched today or created today)"),
+        ("touched within 2 weeks", "changed within 2w"),
+        ("not touched within 2w and not category done and not kind doc", "not changed within 2w and not category done and not kind doc"),
+        ("not touched since 2026-10-01 and under THEME", "not changed after 2026-10-01 and under THEME"),
+        ("(touched today or created today)", "(changed today or created today)"),
     ] {
         assert_eq!(parsed(text).format(), canonical, "{text}");
     }
@@ -1311,6 +1314,74 @@ fn malformed_touched_is_refused() {
         ("touched today by me", "`touched` takes no `by`"),
         ("touched within", "takes a length"),
         ("touched lately", "not understood"),
+    ] {
+        let e = refused(text).to_string();
+        assert!(e.contains(says), "{text}: {e}");
+    }
+}
+
+// -- FILTER-52: time is a modifier on the rule it qualifies --------------------------
+
+/// The grammar's forms read and print canonically, and every old form keeps
+/// reading — printed in the new form where it is the same truth.
+#[test]
+fn a_time_modifies_the_rule_it_follows() {
+    for (text, canonical) in [
+        ("status Complete after 2026-10-01", "status Complete after 2026-10-01"),
+        ("status complete since 2026-10-01", "status Complete after 2026-10-01"),
+        ("status in (Ready, Coding) within 3d", "status in (Ready, Coding) within 3d"),
+        ("status in review within 12h", "status \"In Review\" within 12h"),
+        ("status \"In Review\" today by system", "status \"In Review\" today by system"),
+        ("not status Complete after 2026-10-01", "not status Complete after 2026-10-01"),
+        ("status Coding for over 2w", "status Coding for over 2w"),
+        ("status left Ready before 1w ago by owner", "status left Ready before 1w ago by owner"),
+        ("left Ready before 1w ago by owner", "status left Ready before 1w ago by owner"),
+        ("kind gap within 7d", "kind gap within 7d"),
+        ("kind in (gap, spike) yesterday", "kind in (gap, spike) yesterday"),
+        ("created after 2026-10-01", "created after 2026-10-01"),
+        ("created since 2026-10-01", "created after 2026-10-01"),
+        ("changed before 2w ago", "changed before 2w ago"),
+        ("not touched within 2w", "not changed within 2w"),
+        ("moved today", "moved today"),
+        ("moved within 1h by system", "moved within 1h by system"),
+        // The old pair, as the rule with a time — either order, inside a group too.
+        ("status Complete and entered Complete since 2026-10-01", "status Complete after 2026-10-01"),
+        ("entered Coding within 3d and kind build and status Coding", "status Coding within 3d and kind build"),
+        ("status in (Ready, Coding) and (entered Ready within 3d or entered Coding within 3d)", "status in (Ready, Coding) within 3d"),
+        ("(kind gap or (status Ready and entered Ready today))", "(kind gap or status Ready today)"),
+        // Not the same truth — left as written.
+        ("status Complete and entered Complete before 2026-10-01", "status Complete and entered Complete before 2026-10-01"),
+        ("status Complete and entered Complete within 1d by system", "status Complete and entered Complete within 1d by system"),
+        ("status Complete and entered Coding today", "status Complete and entered Coding today"),
+        ("status Complete or entered Complete today", "(status Complete or entered Complete today)"),
+    ] {
+        let f = parsed(text);
+        assert_eq!(f.format(), canonical, "{text}");
+        assert_eq!(parsed(canonical), f, "{canonical} reads back");
+    }
+    match &parsed("status in (Ready, Coding) within 3d by me").groups[0].preds[0].field {
+        Field::History(History { event: Event::Became(Became::Status(v)), window: Some(Window::Within(3, Unit::Day)), by: Some(Who::Me) }) => {
+            assert_eq!(v, &[Status::Ready, Status::Coding]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(parsed("status Ready").groups[0].preds[0].field, Field::Status(Status::Ready), "no time: the plain rule");
+    assert_eq!(parsed("kind gap").groups[0].preds[0].field, Field::Kind(Kind::Gap));
+    assert!(matches!(&parsed("changed").groups[0].preds[0].field, Field::History(h) if h.event == Event::Changed), "bare `changed` is `moved`");
+    assert!(matches!(&parsed("changed today").groups[0].preds[0].field, Field::History(h) if h.event == Event::Touched));
+}
+
+/// What a rule with a time cannot be is named.
+#[test]
+fn a_malformed_time_on_a_rule_is_refused() {
+    for (text, says) in [
+        ("status Shipped today", "unknown status `Shipped`"),
+        ("status Complete lately", "is not understood here"),
+        ("status Complete after", "names a moment"),
+        ("kind blob within 1d", "unknown kind `blob`"),
+        ("kind gap within", "takes a length"),
+        ("status in () today", "lists no value"),
+        ("status Complete today by", "names who"),
     ] {
         let e = refused(text).to_string();
         assert!(e.contains(says), "{text}: {e}");

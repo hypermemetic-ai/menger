@@ -30,7 +30,7 @@
 use crate::address::ShortcodeId;
 use super::{Cache, OrderKey};
 use super::times::{self, Times};
-use crate::filter::{Event, History, Moment, When, Who, Window};
+use crate::filter::{Became, Event, History, Moment, When, Who, Window};
 use crate::types::{
     Kind, Status, TicketSummary, Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, ARCHIVE_ARCHIVED, ARCHIVE_LIVE, SYSTEM_ACTOR,
 };
@@ -205,6 +205,12 @@ pub(crate) struct Log {
     /// ARCHIVE-2: the archive marks, by `(at, id)` — `[0]` the restores
     /// (into live), `[1]` the archives.
     archive: [Vec<u32>; 2],
+    /// FILTER-52: per kind (in [`Kind::ALL`]'s order), the marks into it,
+    /// by `(at, id)` — what `kind K <time>` ranges over.
+    kinded: Vec<Vec<u32>>,
+    /// FILTER-52: the births — each ticket's first status mark (from
+    /// nothing), by `(at, id)`: when a kind never changed became so.
+    births: Vec<u32>,
     /// When the log began — `None` for a log nobody began (a test's).
     began: Option<i64>,
     /// FILTER-27: each ticket's birth and status-since, and their indexes
@@ -238,6 +244,7 @@ impl Log {
         Self {
             entered: vec![Vec::new(); Status::ALL.len()],
             left: vec![Vec::new(); Status::ALL.len()],
+            kinded: vec![Vec::new(); Kind::ALL.len()],
             began,
             ..Self::default()
         }
@@ -284,6 +291,9 @@ impl Log {
         if self.entered.is_empty() {
             self.entered = vec![Vec::new(); Status::ALL.len()];
             self.left = vec![Vec::new(); Status::ALL.len()];
+        }
+        if self.kinded.is_empty() {
+            self.kinded = vec![Vec::new(); Kind::ALL.len()];
         }
         let epic = self.intern_shortcode(&key.shortcode);
         let actor = Self::intern(&mut self.actor_ix, &mut self.actors, &t.actor);
@@ -332,9 +342,14 @@ impl Log {
         insert_sorted(self.by_actor.entry(actor).or_default(), &self.marks, pos);
         if t.field == TransitionField::Status {
             insert_sorted(&mut self.entered[to as usize], &self.marks, pos);
-            if let Some(f) = from {
-                insert_sorted(&mut self.left[f as usize], &self.marks, pos);
+            match from {
+                Some(f) => insert_sorted(&mut self.left[f as usize], &self.marks, pos),
+                // FILTER-52: a birth.
+                None => insert_sorted(&mut self.births, &self.marks, pos),
             }
+        }
+        if t.field == TransitionField::Kind {
+            insert_sorted(&mut self.kinded[to as usize], &self.marks, pos);
         }
         if t.field == TransitionField::Archive {
             insert_sorted(&mut self.archive[usize::from(to == 1)], &self.marks, pos);
@@ -480,6 +495,10 @@ impl Log {
             return out;
         }
         let actor = actor.flatten();
+        // FILTER-52: a rule with a time, from its own indexes.
+        if let Event::Became(b) = &pred.event {
+            return self.became(b, lo, hi, actor);
+        }
         let none: Vec<u32> = Vec::new();
         let (list, test_actor): (&[u32], bool) = match &pred.event {
             Event::Entered(s) => (self.entered.get(status_ix(*s) as usize).unwrap_or(&none), actor.is_some()),
@@ -506,7 +525,8 @@ impl Log {
             | Event::Asked
             | Event::InChat(_)
             | Event::Assigned(_)
-            | Event::Unassigned => return out,
+            | Event::Unassigned
+            | Event::Became(_) => return out,
         };
         let mut by_epic: HashMap<u32, RoaringBitmap> = HashMap::new();
         for &p in range(list, &self.marks, lo, hi) {
@@ -529,6 +549,61 @@ impl Log {
 }
 
 impl Log {
+    /// FILTER-52: the indexes `b` reads — each status's entries, or each
+    /// kind's and the births.
+    fn became_lists(&self, b: &Became) -> Vec<&[u32]> {
+        match b {
+            Became::Status(v) => v.iter().filter_map(|s| self.entered.get(status_ix(*s) as usize).map(Vec::as_slice)).collect(),
+            Became::Kind(v) => v
+                .iter()
+                .filter_map(|k| self.kinded.get(kind_ix(*k) as usize).map(Vec::as_slice))
+                .chain([self.births.as_slice()])
+                .collect(),
+        }
+    }
+
+    /// FILTER-52: the tickets `b` holds for now whose last becoming so is in
+    /// `[lo, hi)`, by `actor` when one is named — per shortcode. A status:
+    /// the marks into one of its statuses in the window that are their
+    /// ticket's latest status mark (so it is in that status now). A kind:
+    /// the marks into one of its kinds that are their ticket's latest kind
+    /// mark, and the births in the window of tickets whose kind never
+    /// changed and is one of them. Ranges of kept indexes, each mark in
+    /// them checked against its own ticket's latest — never a scan of the
+    /// tickets. A ticket the log says nothing of (one from before it) has no
+    /// such moment on record, and is in no window.
+    fn became(&self, b: &Became, lo: Option<i64>, hi: Option<i64>, actor: Option<u32>) -> BTreeMap<ShortcodeId, RoaringBitmap> {
+        let mut by_epic: HashMap<u32, RoaringBitmap> = HashMap::new();
+        let by = |m: &Mark| actor.is_none_or(|a| m.actor == a);
+        let (field, kinds): (TransitionField, Option<&[Kind]>) = match b {
+            Became::Status(_) => (TransitionField::Status, None),
+            Became::Kind(v) => (TransitionField::Kind, Some(v.as_slice())),
+        };
+        let lists = self.became_lists(b);
+        let (moves, births) = match kinds {
+            Some(_) => lists.split_at(lists.len() - 1),
+            None => (lists.as_slice(), &[][..]),
+        };
+        for list in moves {
+            for &p in range(list, &self.marks, lo, hi) {
+                let m = self.mark(p);
+                if by(m) && self.latest_at(m.epic, m.seq, field) == Some(p) {
+                    by_epic.entry(m.epic).or_default().insert(m.seq);
+                }
+            }
+        }
+        for list in births {
+            for &p in range(list, &self.marks, lo, hi) {
+                let m = self.mark(p);
+                let kind_now = self.times.get(m.epic, m.seq).map(|t| Kind::ALL[t.kind as usize]);
+                if by(m) && self.latest_at(m.epic, m.seq, TransitionField::Kind).is_none() && kind_now.is_some_and(|k| kinds.is_some_and(|v| v.contains(&k))) {
+                    by_epic.entry(m.epic).or_default().insert(m.seq);
+                }
+            }
+        }
+        by_epic.into_iter().map(|(e, bm)| (self.epics[e as usize].clone(), bm)).collect()
+    }
+
     /// FILTER-27: the next moment after the clock's now at which `pred`'s
     /// answer moves with no write — a ticket crossing a `for`'s length, a
     /// transition or a birth leaving (or entering) a relative window, a new
@@ -543,6 +618,10 @@ impl Log {
         let none: Vec<u32> = Vec::new();
         // The earliest moment at or after `from` the predicate's list holds.
         let first_from = |from: i64| -> Option<i64> {
+            // FILTER-52: the earliest over every index the rule reads.
+            if let Event::Became(b) = &pred.event {
+                return self.became_lists(b).into_iter().filter_map(|l| range(l, &self.marks, Some(from), None).first().map(|p| self.mark(*p).at)).min();
+            }
             let list: &[u32] = match &pred.event {
                 Event::Created => return self.times.first_born_from(from),
                 Event::Touched => return self.times.first_touched_from(from),
@@ -552,6 +631,7 @@ impl Log {
                 Event::Changed => &self.by_time,
                 Event::Archived => &self.archive[1],
                 Event::Restored => &self.archive[0],
+                Event::Became(_) => return None,
             };
             range(list, &self.marks, Some(from), None).first().map(|p| self.mark(*p).at)
         };

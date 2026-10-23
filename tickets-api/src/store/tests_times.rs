@@ -163,6 +163,15 @@ fn created_and_for_answer_as_the_rule() {
             "status \"In Review\" for under 2d",
             "category in (ready, active, review) for over 1w",
             "category done for under 1w",
+            // FILTER-52: a rule with a time, a kind's birth, the last write.
+            "status Complete after 2026-10-01",
+            "status Pending before 2026-10-11",
+            "status in (Ready, Coding) within 2d",
+            "status left Pending this week",
+            "kind build within 3d",
+            "kind in (gap, build) before 1w ago",
+            "changed within 3d",
+            "changed after 2026-10-10",
         ];
         for text in texts {
             let p = pred(text);
@@ -356,4 +365,50 @@ async fn crossing_a_length_moves_a_watch_with_no_write() {
     assert_eq!(store.next_boundary(&over), None, "nothing Draft is left to cross the hour");
     let ready = Lens::parse("kind scope and status Ready for over 1h").unwrap().with_clock(at(born));
     assert_eq!(store.next_boundary(&ready), Some(moved + 3_600 + 1));
+}
+
+/// FILTER-52 (FILTER-50's `time-now`): `status S <time>` is a ticket that is
+/// S now and whose **last** entry into S is in the window — a ticket that
+/// was S in it and left is out, and so is one whose current stint began
+/// outside it, however often it was S before; `entered S <time>` still reads
+/// any entry. `kind K <time>` is the kind's last move into K, or its birth
+/// when it never moved.
+#[test]
+fn a_rule_with_a_time_reads_the_last_time_it_became_so() {
+    let t0 = 1_791_799_200; // 2026-10-12T06:00Z
+    let mut log = Log::began_at(Some(t0 - DAY));
+    let key = |seq| OrderKey { shortcode: ShortcodeId::from("A"), seq };
+    // A-1: Complete on day 1, reopened on day 2, Complete again on day 4.
+    // A-2: Complete on day 1, still. A-3: Complete on day 1, Coding on day 4.
+    let mut id = 0u64;
+    let mut moves = |log: &mut Log, seq: u32, steps: &[(Option<Status>, Status, i64)]| {
+        for (from, to, day) in steps {
+            id += 1;
+            log.append(&transition(id, &format!("A-{seq}"), *from, *to, t0 + day * DAY), &key(seq));
+        }
+    };
+    moves(&mut log, 1, &[(None, Status::Ready, 0), (Some(Status::Ready), Status::Complete, 1), (Some(Status::Complete), Status::Coding, 2), (Some(Status::Coding), Status::Complete, 4)]);
+    moves(&mut log, 2, &[(None, Status::Ready, 0), (Some(Status::Ready), Status::Complete, 1)]);
+    moves(&mut log, 3, &[(None, Status::Ready, 0), (Some(Status::Ready), Status::Complete, 1), (Some(Status::Complete), Status::Coding, 4)]);
+    // A-4: born a gap, never moved; A-5: born a build, made a gap on day 3.
+    for (seq, kind) in [(4, Kind::Gap), (5, Kind::Gap)] {
+        let mut r = row("A", seq, Status::Pending, t0, t0);
+        r.kind = kind;
+        log.retime(&r);
+        moves(&mut log, seq, &[(None, Status::Pending, 0)]);
+    }
+    let k = Transition { field: TransitionField::Kind, from: Some("build".into()), to: "gap".into(), ..transition(99, "A-5", None, Status::Pending, t0 + 3 * DAY) };
+    log.append(&k, &key(5));
+    let now = at(t0 + 5 * DAY);
+    let got = |text: &str| -> Vec<u32> { log.holds(&pred(text), &now).get(&ShortcodeId::from("A")).map(|b| b.iter().collect()).unwrap_or_default() };
+    // After day 3: only A-1's current stint began then.
+    assert_eq!(got("status Complete after 2026-10-15"), [1]);
+    // Before day 3: A-2 alone — A-1's last entry is day 4, A-3 is no longer Complete.
+    assert_eq!(got("status Complete before 2026-10-15"), [2]);
+    assert_eq!(got("entered Complete before 2026-10-15"), [1, 2, 3], "`entered` reads any entry");
+    assert_eq!(got("status in (Complete, Coding) after 2026-10-15"), [1, 3]);
+    assert_eq!(got("status left Complete within 4d"), [1, 3]);
+    assert_eq!(got("kind gap after 2026-10-14"), [5], "A-5 was made a gap on day 3");
+    assert_eq!(got("kind gap before 2026-10-13"), [4], "A-4 was born one");
+    assert_eq!(got("kind gap by anonymous"), [4, 5]);
 }

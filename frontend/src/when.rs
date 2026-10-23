@@ -137,6 +137,10 @@ impl Kind {
             Event::Assigned(_) | Event::Unassigned => Kind::People,
             Event::Archived => Kind::Archived,
             Event::Restored => Kind::Restored,
+            // FILTER-52: a rule with a time — until FILTER-54 draws it on
+            // its rule, a status's is Moved into's pill, a kind's Changed's.
+            Event::Became(menger_tickets_api::filter::Became::Status(_)) => Kind::Into,
+            Event::Became(menger_tickets_api::filter::Became::Kind(_)) => Kind::Changed,
         }
     }
 
@@ -147,7 +151,8 @@ impl Kind {
             Kind::Into => "Moved into",
             Kind::OutOf => "Moved out of",
             Kind::Held => "In status for",
-            Kind::Changed => "Changed",
+            // FILTER-52: any transition is `moved`; `changed` is a ticket's last write.
+            Kind::Changed => "Moved",
             Kind::Untouched => "Hasn't changed",
             Kind::Deployed => "Deployed to",
             Kind::NotDeployed => "Not deployed to",
@@ -296,7 +301,7 @@ pub(crate) const CATEGORIES: [Category; 6] =
 /// A window as the language reads it (`today`, `within 3d`, `before 2w
 /// ago`) — `None` when it is none.
 pub(crate) fn window_of(text: &str) -> Option<Window> {
-    let f = Filter::parse(&format!("changed {text}")).ok()?;
+    let f = Filter::parse(&format!("moved {text}")).ok()?;
     match &f.groups.first()?.preds.first()?.field {
         Field::History(h) if f.groups.len() == 1 => h.window.clone(),
         _ => None,
@@ -585,7 +590,7 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
     match &t.h.event {
         Event::Created => out.push((None, "created".into())),
         Event::Touched if untouched => out.push((None, "hasn't changed".into())),
-        Event::Touched => out.push((None, "touched".into())),
+        Event::Touched => out.push((None, "changed".into())),
         Event::Entered(s) => {
             out.push((None, "moved into".into()));
             out.push((Some(Part::Status), s.as_str().into()));
@@ -594,7 +599,7 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
             out.push((None, "moved out of".into()));
             out.push((Some(Part::Status), s.as_str().into()));
         }
-        Event::Changed => out.push((None, "changed".into())),
+        Event::Changed => out.push((None, "moved".into())),
         Event::Deployed(env) => {
             out.push((None, "deployed to".into()));
             out.push((Some(Part::Env), env.clone()));
@@ -622,6 +627,8 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
         }
         Event::Archived => out.push((None, "archived".into())),
         Event::Restored => out.push((None, "restored".into())),
+        // FILTER-52: "became status Complete", then its window and who.
+        Event::Became(b) => out.push((None, format!("became {}", b.format()))),
         Event::Chatting => out.push((None, "chatting".into())),
         Event::Unread => out.push((None, "unread".into())),
         Event::Asked => out.push((None, "asked".into())),
@@ -718,20 +725,22 @@ mod tests {
             ("status \"In Review\" for over 3d", "In Review for over 3 days"),
             ("category active for under 1h", "active for under 1 hour"),
             ("for over 2w", "in any status for over 2 weeks"),
+            // FILTER-52: `changed <window>` is the last write; `moved` any transition.
             ("changed before 1w ago", "changed before 1 week ago"),
-            ("changed within 1h", "changed in the last hour"),
-            ("changed today by me", "changed today by me"),
+            ("moved within 1h", "moved in the last hour"),
+            ("changed today by me", "moved today by me"),
             ("entered Canceled by system", "moved into Canceled by the system"),
             ("category in (ready, active, review) for over 1w", "ready, active or review for over 1 week"),
             ("not created today", "not created today"),
-            ("changed between 2026-10-01T08:00 and 2026-10-02T17:30", "changed between Oct 1, 2026, 08:00 and Oct 2, 2026, 17:30"),
+            ("moved between 2026-10-01T08:00 and 2026-10-02T17:30", "moved between Oct 1, 2026, 08:00 and Oct 2, 2026, 17:30"),
+            ("status Complete after 2026-10-01", "became status Complete since Oct 1, 2026"),
         ] {
             let t = timed(text);
             let back = Filter { groups: vec![group(&t)], display: Default::default() };
             assert_eq!(back.format(), Filter::parse(text).unwrap().format(), "{text}");
             assert_eq!(words(&t, false), said, "{text}");
         }
-        assert_eq!(words(&timed("changed since 2026-10-01T14:05"), true), "changed since Oct 1, 2026, 2:05 pm");
+        assert_eq!(words(&timed("moved since 2026-10-01T14:05"), true), "moved since Oct 1, 2026, 2:05 pm");
     }
 
     /// A pill's segments: each part reopens its own part of the menu.
@@ -787,10 +796,10 @@ mod tests {
         assert_eq!(text(&with_scope(&with_length(&held, true, 1, Unit::Week), of)), "category in (ready, active, review) for over 1w");
         assert_eq!(text(&with_length(&held, false, 1, Unit::Hour)), "for under 1h");
         let changed = new_clause(Kind::Changed, None, window_of("before 1w ago")).unwrap();
-        assert_eq!(text(&changed), "changed before 1w ago");
+        assert_eq!(text(&changed), "moved before 1w ago");
         assert!(new_clause(Kind::Into, None, None).is_none(), "moved into names a status");
-        assert!(has_window(&timed("changed today"), "today") && !custom_window(&timed("changed today")));
-        assert!(custom_window(&timed("changed since 3d ago")));
+        assert!(has_window(&timed("moved today"), "today") && !custom_window(&timed("moved today")));
+        assert!(custom_window(&timed("moved since 3d ago")));
     }
 
     /// FILTER-30: Hasn't changed builds `not touched <window>` from its
@@ -802,33 +811,33 @@ mod tests {
         let text = |t: &Timed| Filter { groups: vec![group(t)], display: Default::default() }.format();
         assert!(Kind::ALL.contains(&Kind::Untouched) && Kind::Untouched.label() == "Hasn't changed");
         let t = new_clause(Kind::Untouched, None, window_of("within 2w")).unwrap();
-        assert_eq!(text(&t), "not touched within 2w");
+        assert_eq!(text(&t), "not changed within 2w");
         assert_eq!(words(&t, false), "hasn't changed in 2 weeks");
         assert_eq!(new_clause(Kind::Untouched, None, None), Some(t.clone()), "two weeks unless told");
         let parts: Vec<_> = segments(&t, false).into_iter().map(|(p, w)| (p.map(Part::key), w)).collect();
         assert_eq!(parts, [(None, "hasn't changed".to_string()), (Some("window"), "in 2 weeks".to_string())]);
         for p in UNTOUCHED_PRESETS {
             let t = new_clause(Kind::Untouched, None, window_of(p)).unwrap();
-            assert_eq!(text(&t), format!("not touched {p}"));
+            assert_eq!(text(&t), format!("not changed {p}"));
             assert!(has_window(&t, p) && !custom_window(&t), "{p}");
         }
         assert_eq!(Kind::Untouched.preset_words(&window_of("within 3d").unwrap(), false), "3 days");
         let since = with_window(&t, window_of("since 2026-10-01"));
-        assert_eq!(text(&since), "not touched since 2026-10-01");
+        assert_eq!(text(&since), "not changed after 2026-10-01");
         assert_eq!(words(&since, false), "hasn't changed since Oct 1, 2026");
         assert!(custom_window(&since));
-        assert_eq!(text(&with_window(&t, None)), "not touched within 2w", "a touch keeps a window");
-        assert_eq!(text(&with_by(&t, Some(Who::Me))), "not touched within 2w", "a touch names no one");
+        assert_eq!(text(&with_window(&t, None)), "not changed within 2w", "a touch keeps a window");
+        assert_eq!(text(&with_by(&t, Some(Who::Me))), "not changed within 2w", "a touch names no one");
         assert!(!Kind::Untouched.has_ever() && !Kind::Untouched.has_who() && Kind::Untouched.windowed());
         // Negate: every time pill turns around, and back.
         for s in [
             "created today",
             "entered Ready within 2d by owner",
-            "left Pending this week",
+            "status left Pending this week",
             "status Pending for over 2w",
             "changed before 1w ago",
-            "touched today",
-            "not touched within 2w",
+            "moved today",
+            "not changed within 2w",
         ] {
             let t = timed(s);
             let n = negate(&t);
@@ -836,8 +845,8 @@ mod tests {
             assert_eq!(negate(&n), t, "{s} and back");
         }
         assert_eq!(words(&negate(&timed("created today")), false), "not created today");
-        assert_eq!(words(&negate(&t), false), "touched in the last 2 weeks");
-        assert_eq!(words(&timed("touched today"), false), "touched today");
+        assert_eq!(words(&negate(&t), false), "changed in the last 2 weeks");
+        assert_eq!(words(&timed("touched today"), false), "changed today");
         // The saved suggestion reads back as the same pill (FILTER-6).
         let f = Filter::parse("not touched within 2w and not category done and not kind doc").unwrap();
         assert_eq!(of_group(&f.groups[0]), Some(t));

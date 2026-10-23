@@ -925,13 +925,13 @@ PageUp / PageDown, Home / End, Enter; hours and minutes typed or stepped
 with ↑ ↓ in the reader's 12- or 24-hour clock), drawn from the theme's
 tokens, never the browser's date input; `#/components` shows them live
 under "The app's own" (the registry above them is the tickets'
-components). **Hasn't changed** (FILTER-30) builds `not touched <window>`
+components). **Hasn't changed** (FILTER-30) builds `not changed <window>` (`not touched …` still reads)
 — within 1d · 3d · 1w · 2w · 1mo, or Custom… for since a day — a pill
 reading "hasn't changed in 2 weeks"; any time pill has **negate**
 (`created today` ⇄ `not created today`), wherever it sits. An empty chips line suggests three of four filters while
 no filter is saved — **New today** (`created today`), **Moved today**
-(`changed today`), **Stuck** (`category in (ready, active, review) for over
-1w`), **Untouched 2w** (`not touched within 2w and not category done and
+(`moved today`), **Stuck** (`category in (ready, active, review) for over
+1w`), **Untouched 2w** (`not changed within 2w and not category done and
 not kind doc`) —
 each applied by a click (the app offers them; nothing is written into the
 tracker until one is saved with `save as…`). A ticket's History says since when it has held its status — "since
@@ -3338,12 +3338,38 @@ scan of tickets), composable with every other:
 | predicate | holds when some transition of the ticket's … |
 |---|---|
 | `entered <status> [window] [by who]` | went into the status |
-| `left <status> [window] [by who]` | went out of it |
-| `changed [window] [by who]` | is any change (a birth, a kind) |
-| `by <who> [window]` | is anyone's (`changed … by who`) |
+| `status left <status> [window] [by who]` (`left …` still reads) | went out of it |
+| `moved [window] [by who]` | is any change (a birth, a kind); `changed` without a window, or with `by`, still reads as this |
+| `by <who> [window]` | is anyone's (`moved … by who`) |
+
+**Time is a modifier on the rule it qualifies** (FILTER-52, FILTER-50's
+grammar): a time written after a rule's values narrows the rule, never
+changes what it says — the rule holds **now**, and the **last** time it
+became so (the start of its current stint) is in the window (the owner,
+decision `time-now`: *"the last time it became complete and still is
+now"*):
+
+| written | holds when the ticket … |
+|---|---|
+| `status Complete after 2026-10-01` | is Complete, and last entered Complete after 1 Oct |
+| `status in (Ready, Coding) within 3d [by who]` | is Ready or Coding, and its current status began in the last 3 days |
+| `not status Complete after 2026-10-01` | is not that (`not` negates the whole rule) |
+| `kind gap within 7d` | is a gap, made one in the window (its last kind change into it; born one, its birth) |
+| `status Coding for over 2w` | has been Coding for more than two weeks (as before) |
+| `created after 2026-10-01` | was born then |
+| `changed before 2w ago` | was last written then — `changed <window>` is the last write, what `touched` reads (`touched …` still reads, and prints as `changed`) |
+
+Answered from the log's kept indexes — each status's entries and each
+kind's, and the births — every mark in the window checked against its own
+ticket's latest, never a scan of tickets. A ticket the log says nothing of
+has no such moment on record and is in no window. The old pair `status S
+and entered S W`, W running up to now (`within`, `today`, `this week`,
+`since`), is the same truth and prints as `status S W`; `label L W` waits
+for a label's time to be kept (no write records when a label was added).
 
 A window is `within <n>{m,h,d,w,mo}` (a month is 30 days), `today`,
-`yesterday`, `this week` (from Monday), `since <moment>`, `before <moment>`
+`yesterday`, `this week` (from Monday), `after <moment>` (`since` still
+reads), `before <moment>`
 or `between <moment> and <moment>` — a moment a date `2026-10-10`, a date
 and a time `2026-10-10T08:00` (a date ends a `between` whole), or
 (FILTER-27) a length back from now, `2w ago`, `12h ago`, `1mo ago`; none is
@@ -3362,7 +3388,7 @@ and since when it has held its status — sorted, so a window is a range):
 | `created <window>` | was born in the window (its `created_unix`; no `by`) |
 | `for over <length>` / `for under <length>` | has held its current status longer than the length, or not |
 | `status S for over D`, `category C for over D` | is in S (or C) and held it that long — sugar for `status S and for over D`, a list too (`category in (ready, active, review) for over 1w`); the canonical form prints the sugar |
-| `touched <window>` (FILTER-30) | was last touched in the window — any write to its own row (title, body, status, kind, severity, parent, labels, blockers — the blocker's `unlocks` too —, commits), a comment left on it, or an answer to or a clear of one of its inputs; no `by`. `not touched within 2w` is "hasn't changed in 2 weeks" |
+| `changed <window>` (FILTER-30's `touched`, FILTER-52) | was last touched in the window — any write to its own row (title, body, status, kind, severity, parent, labels, blockers — the blocker's `unlocks` too —, commits), a comment left on it, or an answer to or a clear of one of its inputs; no `by`. `not changed within 2w` is "hasn't changed in 2 weeks" |
 
 Since when a ticket holds its status is its latest status transition's
 moment (a birth's, for one born since the log began). A ticket the log says
@@ -3381,8 +3407,9 @@ does: a roll-up, a child's count, a placement leave it — and its last
 **activity**, a comment anchored to it or an answer to (or a clear of) one of
 its inputs, which writes no row. Activity is kept beside the times and read
 back at open from the comments and the inputs' histories; a close, a reopen,
-a withdrawal and a resolve are not touches. `changed` keeps meaning a
-transition. A write that touches a ticket without moving its cell (a body, a
+a withdrawal and a resolve are not touches. `changed` means a
+transition only with no window or with `by` (FILTER-52: `moved` is the
+transition's word; `changed <window>` is the last touch). A write that touches a ticket without moving its cell (a body, a
 comment, an answer) still moves an open `watch` asking `touched`: the write
 works out that watch's `entered` / `left` for it, as it does for `under`.
 
@@ -3394,7 +3421,8 @@ says `entered` / `left` for what crossed — no write needed.
 
 ```sh
 synapse -P 4455 menger tickets list --filter 'created today' --tz Europe/Berlin --summary true
-synapse -P 4455 menger tickets list --filter 'left Pending this week' --summary true
+synapse -P 4455 menger tickets list --filter 'status left Pending this week' --summary true
+synapse -P 4455 menger tickets list --filter 'status Complete after 2026-10-01' --summary true
 synapse -P 4455 menger tickets list --filter 'status Pending for over 2w' --summary true
 synapse -P 4455 menger tickets nav counts --filter 'category in (ready, active, review) for over 1w'
 synapse -P 4455 menger tickets list --filter 'created between 3w ago and 1w ago and kind build' --summary true

@@ -829,7 +829,7 @@ impl Filter {
             }
         }
         match bad.is_empty() {
-            true => Ok(Filter { groups, display }),
+            true => Ok(Filter { groups: fold_top(groups), display }),
             false => Err(FilterError { chunks: bad, unresolved: false }),
         }
     }
@@ -988,6 +988,111 @@ impl Filter {
             false => Err(FilterError { chunks: bad, unresolved: true }),
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// FILTER-52: an old status-and-entered pair, read as the rule with a time
+
+/// Whether a window runs up to now — inside it, a ticket that is S now and
+/// entered S in it entered S last in it, so `status S and entered S W` is
+/// `status S W`. A window that ends before now (`before`, `between`,
+/// `yesterday`) is not: the ticket may have entered S again since.
+fn open_to_now(w: &Window) -> bool {
+    matches!(w, Window::Within(..) | Window::Today | Window::ThisWeek | Window::Since(_))
+}
+
+/// The statuses a predicate says a ticket is in now — `status S` or a list
+/// of them, not negated.
+fn status_rule(p: &Predicate) -> Option<Vec<Status>> {
+    if p.not {
+        return None;
+    }
+    match &p.field {
+        Field::Status(s) => Some(vec![*s]),
+        Field::Group(g) if g.conj == Conj::Any => g.preds.iter().map(|q| match (&q.field, q.not) {
+            (Field::Status(s), false) => Some(*s),
+            _ => None,
+        }).collect(),
+        _ => None,
+    }
+}
+
+/// The statuses and the window a predicate says were entered — `entered S
+/// W` or an `or` of them over one window, not negated, with no `by`, the
+/// window running up to now.
+fn entered_rule(p: &Predicate) -> Option<(Vec<Status>, Window)> {
+    let one = |p: &Predicate| match (&p.field, p.not) {
+        (Field::History(History { event: Event::Entered(s), window: Some(w), by: None }), false) if open_to_now(w) => Some((*s, w.clone())),
+        _ => None,
+    };
+    if let Some((s, w)) = one(p) {
+        return Some((vec![s], w));
+    }
+    let Field::Group(g) = &p.field else { return None };
+    if p.not || g.conj != Conj::Any {
+        return None;
+    }
+    let all: Vec<(Status, Window)> = g.preds.iter().map(one).collect::<Option<_>>()?;
+    let w = all.first()?.1.clone();
+    all.iter().all(|(_, x)| *x == w).then(|| (all.into_iter().map(|(s, _)| s).collect(), w))
+}
+
+/// `items`, joined by `and`, with each pair of a status rule and the
+/// entries into the same statuses over a window up to now made one rule
+/// with a time, where the first of them stood.
+fn fold_and(mut items: Vec<Predicate>) -> Vec<Predicate> {
+    let mut i = 0;
+    while i < items.len() {
+        if let Some(statuses) = status_rule(&items[i]) {
+            let same = |a: &[Status], b: &[Status]| a.len() == b.len() && a.iter().all(|s| b.contains(s));
+            let pair = items.iter().position(|q| entered_rule(q).is_some_and(|(e, _)| same(&statuses, &e)));
+            if let Some(j) = pair {
+                let (_, window) = entered_rule(&items[j]).expect("found");
+                let became = History { event: Event::Became(Became::Status(statuses)), window: Some(window), by: None };
+                let (first, last) = (i.min(j), i.max(j));
+                items[first] = Predicate::is(Field::History(became));
+                items.remove(last);
+                i = first;
+            }
+        }
+        i += 1;
+    }
+    items
+}
+
+/// `g` with every `and` in it, at any depth, folded ([`fold_and`]).
+fn fold_group(g: Group) -> Group {
+    let preds: Vec<Predicate> = g
+        .preds
+        .into_iter()
+        .map(|p| match p.field {
+            Field::Group(inner) => fold_group(*inner).nested(p.not),
+            field => Predicate { field, not: p.not },
+        })
+        .collect();
+    let preds = if g.conj == Conj::All { fold_and(preds) } else { preds };
+    Group::of(g.conj, preds)
+}
+
+/// A filter's groups folded — each inside, then across them: a group of one
+/// item is that item, any other one item in its own right. A filter with no
+/// entry to fold is kept as it was read.
+fn fold_top(groups: Vec<Group>) -> Vec<Group> {
+    fn any_entry(g: &Group) -> bool {
+        g.preds.iter().any(|p| entered_rule(p).is_some() || matches!(&p.field, Field::Group(inner) if any_entry(inner)))
+    }
+    if !groups.iter().any(any_entry) {
+        return groups;
+    }
+    let items: Vec<Predicate> = groups
+        .into_iter()
+        .map(fold_group)
+        .map(|mut g| match g.preds.len() {
+            1 => g.preds.pop().expect("one"),
+            _ => g.nested(false),
+        })
+        .collect();
+    fold_and(items).into_iter().map(|p| Group::of(Conj::All, vec![p])).collect()
 }
 
 /// FILTER-36: how deep saved filters may name saved filters — a backstop
@@ -1277,7 +1382,7 @@ fn predicate_mistake(raw: &str, s: &str) -> Option<Mistake> {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 48] = [
+const NAMES: [&str; 49] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -1329,6 +1434,8 @@ const NAMES: [&str; 48] = [
     "lowest",
     // FILTER-36: a saved filter by name.
     "saved",
+    // FILTER-52: any transition — what `changed` was.
+    "moved",
     "under",
     "label",
     "ready",
@@ -1352,7 +1459,7 @@ const MIXED: &str = "`or` and `and` do not mix inside one pair of parentheses: a
 const UNBALANCED: &str = "a group's parentheses close where they open: `(a or (b and c))`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
                               `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
-                              `entered`, `left`, `changed`, `by`, `created`, `for`, `deployed`, `behind`, `waiting`, \
+                              `entered`, `left`, `moved`, `changed`, `by`, `created`, `for`, `deployed`, `behind`, `waiting`, \
                               `deploying`, `ready for`, `failed`, `requested`, `queued` or \
                               `saved`, a group in parentheses, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
@@ -1578,20 +1685,15 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "epic" => epic_field(value()?),
         "text" => text(value()?),
         "status" => {
-            let v = value()?;
-            v.parse().map(Field::Status).map_err(|_| {
-                format!(
-                    "unknown status `{v}` — the statuses are {} (`active` is Coding, `in review` is In Review)",
-                    Status::ALL.map(Status::as_str).join(", ")
-                )
-            })
+            let v = value_or_timed(name, tail)?;
+            let plain = v.and_then(|v| v.parse().ok().map(Field::Status));
+            plain.map_or_else(|| read_ruled(name, tail), Ok)
         }
         "category" => value()?.parse().map(Field::Category),
         "kind" => {
-            let v = value()?;
-            v.parse().map(Field::Kind).map_err(|_| {
-                format!("unknown kind `{v}` — the kinds are {}", Kind::ALL.map(Kind::as_str).join(", "))
-            })
+            let v = value_or_timed(name, tail)?;
+            let plain = v.and_then(|v| v.parse().ok().map(Field::Kind));
+            plain.map_or_else(|| read_ruled(name, tail), Ok)
         }
         "severity" => {
             let v = value()?;
@@ -1637,7 +1739,7 @@ fn read_field(rest: &str) -> Result<Field, String> {
             }
         }
         // MENGER-13: the transition log.
-        "entered" | "left" | "changed" | "by" => read_history(name, tail).map(Field::History),
+        "entered" | "left" | "changed" | "moved" | "by" => read_history(name, tail).map(Field::History),
         // FILTER-27: births, over their own index.
         "created" => read_history(name, tail).map(Field::History),
         // FILTER-30: the last touch, over its own index.
@@ -1671,6 +1773,126 @@ fn read_field(rest: &str) -> Result<Field, String> {
         )),
         _ => Err(no_data(name)),
     }
+}
+
+/// FILTER-52: a `status` or `kind` rule's whole tail as one value, when it
+/// is one (quoted whole, or holding no quote) — `None` when it holds a
+/// quoted value and more (`"In Review" within 12h`), which only a rule
+/// with a time does.
+fn value_or_timed<'a>(name: &str, tail: &'a str) -> Result<Option<&'a str>, String> {
+    if tail.is_empty() {
+        return Err(format!("`{name}` needs a value"));
+    }
+    Ok(unquote(tail).ok())
+}
+
+/// FILTER-52: why a status or a kind does not read — the vocabulary's
+/// words, as the plain rule has always said them.
+fn unknown_value(name: &str, v: &str) -> String {
+    match name {
+        "status" => format!(
+            "unknown status `{v}` — the statuses are {} (`active` is Coding, `in review` is In Review)",
+            Status::ALL.map(Status::as_str).join(", ")
+        ),
+        _ => format!("unknown kind `{v}` — the kinds are {}", Kind::ALL.map(Kind::as_str).join(", ")),
+    }
+}
+
+/// FILTER-52: a rule with a time — `status S <time> [by who]`, `status in
+/// (A, B) <time>`, `kind K <time> [by who]`, and `status left S <time> [by
+/// who]` (the grammar's `left`: it stopped being S, in the window) — or why
+/// not. `tail` is what follows the field's name and is no value by itself.
+fn read_ruled(name: &str, tail: &str) -> Result<Field, String> {
+    let lead = tail.split_ascii_whitespace().next().unwrap_or("");
+    if name == "status" && lead.eq_ignore_ascii_case("left") {
+        return read_history("left", tail[lead.len()..].trim_start()).map(Field::History);
+    }
+    // `in (a, b) <time>`: the list, then its time.
+    let (values, rest): (Vec<String>, Vec<String>) = match lead_list(tail) {
+        Some((inner, rest)) => (parts(split_top(inner, ",")).into_iter().map(|v| unquote(v).map(str::to_string)).collect::<Result<_, _>>()?, words(rest)?),
+        None => {
+            let w = words(tail)?;
+            let take = |n: usize| (n <= w.len()).then(|| w[..n].join(" "));
+            // A status may be two words unquoted (`in review`); a kind is one.
+            let two = (name == "status").then(|| take(2)).flatten().filter(|v| v.parse::<Status>().is_ok() && w[0].parse::<Status>().is_err());
+            match two {
+                Some(v) => (vec![v], w[2..].to_vec()),
+                None => (vec![w[0].clone()], w[1..].to_vec()),
+            }
+        }
+    };
+    if values.is_empty() {
+        return Err(format!("`{name} in ()` lists no value"));
+    }
+    let became = match name {
+        "status" => {
+            let mut v: Vec<Status> = Vec::new();
+            for x in &values {
+                let s: Status = x.parse().map_err(|_| unknown_value(name, x))?;
+                if !v.contains(&s) {
+                    v.push(s);
+                }
+            }
+            Became::Status(v)
+        }
+        _ => {
+            let mut v: Vec<Kind> = Vec::new();
+            for x in &values {
+                let k: Kind = x.parse().map_err(|_| unknown_value(name, x))?;
+                if !v.contains(&k) {
+                    v.push(k);
+                }
+            }
+            Became::Kind(v)
+        }
+    };
+    let mut i = 0;
+    let window = read_window(&rest, &mut i)?;
+    let mut by = None;
+    if rest.get(i).is_some_and(|t| t.eq_ignore_ascii_case("by")) {
+        by = Some(Who::read(rest.get(i + 1).ok_or("`by` names who: `me`, `system` or a principal")?));
+        i += 2;
+    }
+    match rest.get(i) {
+        Some(extra) => Err(format!(
+            "`{extra}` is not understood here — after `{}` comes a time: `after 2026-10-01`, `before 2w ago`, `between … and …`, \
+             `within 3d`, `today`, `yesterday`, `this week` or `for over 2w`, then `by <who>`",
+            became.format()
+        )),
+        None => Ok(Field::History(History { event: Event::Became(became), window, by })),
+    }
+}
+
+/// `in (…) rest` at the head of `s` — what the parentheses hold, and what
+/// follows them.
+fn lead_list(s: &str) -> Option<(&str, &str)> {
+    let b = s.as_bytes();
+    if !(b.len() > 2 && b[..2].eq_ignore_ascii_case(b"in")) {
+        return None;
+    }
+    let after = s[2..].trim_start();
+    if !after.starts_with('(') {
+        return None;
+    }
+    let (mut depth, mut quoted) = (0usize, false);
+    for (i, c) in after.char_indices() {
+        if quoted {
+            quoted = c != '"';
+            continue;
+        }
+        match c {
+            '"' => quoted = true,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&after[1..i], &after[i + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn text(value: &str) -> Result<Field, String> {
@@ -1887,18 +2109,54 @@ pub enum Event {
     /// ticket's (its own, a chain's, a create's under it) was in the
     /// window, by that actor.
     Restored,
+    /// FILTER-52: a rule with a time — `status S <time> [by who]`, `status
+    /// in (A, B) <time>`, `kind K <time> [by who]`: the rule holds **now**,
+    /// and the last time it became so (the start of its current stint: its
+    /// latest status — or kind — transition, into the value it holds) is in
+    /// the window, by that actor (FILTER-50, decision `time-now`). A kind
+    /// never changed became so at its birth. Answered from the log's kept
+    /// indexes, never by testing a ticket.
+    Became(Became),
+}
+
+/// FILTER-52: the rule a time qualifies — the field, and the values it is
+/// one of now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Became {
+    Status(Vec<Status>),
+    Kind(Vec<Kind>),
+}
+
+impl Became {
+    /// The rule as written, without its time: `status Complete`, `status in
+    /// (Ready, Coding)`, `kind gap`.
+    pub fn format(&self) -> String {
+        let (name, values): (&str, Vec<String>) = match self {
+            Became::Status(v) => ("status", v.iter().map(|s| quoted(s.as_str())).collect()),
+            Became::Kind(v) => ("kind", v.iter().map(|k| k.as_str().to_string()).collect()),
+        };
+        match values.as_slice() {
+            [one] => format!("{name} {one}"),
+            _ => format!("{name} in ({})", values.join(", ")),
+        }
+    }
 }
 
 impl Event {
-    /// The predicate's name: `entered`, `left`, `changed`, `created`,
-    /// `for` (a `status … for …` is still `for`'s).
+    /// The predicate's name: `entered`, `status left`, `moved`, `created`,
+    /// `changed`, `for` (a `status … for …` is still `for`'s) — FILTER-52:
+    /// `status left` is `left`'s, `moved` is what `changed` was (any
+    /// transition), `changed` is the last write (`touched`'s), and a rule
+    /// with a time is its field's.
     pub const fn name(&self) -> &'static str {
         match self {
             Event::Entered(_) => "entered",
-            Event::Left(_) => "left",
-            Event::Changed => "changed",
+            Event::Left(_) => "status left",
+            Event::Changed => "moved",
             Event::Created => "created",
-            Event::Touched => "touched",
+            Event::Touched => "changed",
+            Event::Became(Became::Status(_)) => "status",
+            Event::Became(Became::Kind(_)) => "kind",
             Event::Held(_) => "for",
             Event::Deployed(_) => "deployed",
             Event::Behind(_) => "behind",
@@ -2133,7 +2391,8 @@ impl Window {
             Window::Today => "today".into(),
             Window::Yesterday => "yesterday".into(),
             Window::ThisWeek => "this week".into(),
-            Window::Since(m) => format!("since {}", m.format()),
+            // FILTER-52: `after` is the grammar's word; `since` still reads.
+            Window::Since(m) => format!("after {}", m.format()),
             Window::Before(m) => format!("before {}", m.format()),
             Window::Between(a, b) => format!("between {} and {}", a.format(), b.format()),
         }
@@ -2214,10 +2473,14 @@ impl History {
     pub fn format(&self) -> String {
         let mut out = match &self.event {
             Event::Entered(s) => format!("entered {}", quoted(s.as_str())),
-            Event::Left(s) => format!("left {}", quoted(s.as_str())),
-            Event::Changed => "changed".to_string(),
+            // FILTER-52: `left` reads as before and prints as the grammar's
+            // `status left`; `changed` (any transition) as `moved`; the
+            // last touch as `changed`.
+            Event::Left(s) => format!("status left {}", quoted(s.as_str())),
+            Event::Changed => "moved".to_string(),
             Event::Created => "created".to_string(),
-            Event::Touched => "touched".to_string(),
+            Event::Touched => "changed".to_string(),
+            Event::Became(b) => b.format(),
             Event::Deployed(env) => format!("deployed {}", quoted(env)),
             Event::Behind(env) => format!("behind {}", quoted(env)),
             Event::Stage(s, env) => format!("{s} {}", quoted(env)),
@@ -2286,10 +2549,10 @@ fn words(s: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-const HISTORY_HELP: &str = "a history predicate is `entered <status>`, `left <status>`, `changed`, `by <who>`, \
-                            `created`, `touched` or `deployed <environment>`, then a window — `within 12h` (m, h, d, w, mo), `today`, `yesterday`, `this \
-                            week`, `since 2026-10-10`, `before 2w ago`, `between … and …` — and (not for `created` or `touched`) \
-                            `by me`, `by system` or `by <principal>`; or `[status S | category C] for over|under 2w`";
+const HISTORY_HELP: &str = "a time follows its rule — `status S`, `status in (…)`, `kind K`, `status left S`, `entered S`, \
+                            `moved`, `by <who>`, `created`, `changed` or `deployed <environment>` — as a window: `within 12h` (m, h, d, w, mo), \
+                            `today`, `yesterday`, `this week`, `after 2026-10-10`, `before 2w ago`, `between … and …` — and (not for \
+                            `created` or `changed`) `by me`, `by system` or `by <principal>`; or `[status S | category C] for over|under 2w`";
 
 /// One history predicate's words after its name ([`History`]), strictly:
 /// every word read, or why not.
@@ -2316,7 +2579,9 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
     let (event, mut by) = match name {
         "entered" => (Event::Entered(status(&w, &mut i)?), None),
         "left" => (Event::Left(status(&w, &mut i)?), None),
-        "changed" => (Event::Changed, None),
+        // FILTER-52: `moved` is any transition — what `changed` read before;
+        // `changed` with a window (and no `by`) is the last write, below.
+        "changed" | "moved" => (Event::Changed, None),
         "created" => (Event::Created, None),
         "touched" => (Event::Touched, None),
         "archived" => (Event::Archived, None),
@@ -2406,6 +2671,13 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
     if let Some(extra) = w.get(i) {
         return Err(format!("`{extra}` is not understood here — {HISTORY_HELP}"));
     }
+    // FILTER-52: `changed <window>` is a ticket's own date — its last write
+    // (what `touched` reads). Without a window, or with `by`, it is read as
+    // before: any transition, `moved`'s.
+    let event = match (name, &window, &by) {
+        ("changed", Some(_), None) => Event::Touched,
+        _ => event,
+    };
     Ok(History { event, window, by })
 }
 
@@ -2503,9 +2775,9 @@ fn read_window(w: &[String], i: &mut usize) -> Result<Option<Window>, String> {
             *i += 2;
             Window::ThisWeek
         }
-        "since" => {
+        "since" | "after" => {
             *i += 1;
-            Window::Since(read_when(w, i, "since")?)
+            Window::Since(read_when(w, i, "after")?)
         }
         "before" => {
             *i += 1;
