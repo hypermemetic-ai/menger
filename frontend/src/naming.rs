@@ -520,6 +520,17 @@ impl Naming {
         });
     }
 
+    /// FILTER-53: `name`'s text read again — it was saved anew.
+    pub(crate) fn refetch(self, name: &str) {
+        self.texts.update(|m| {
+            m.remove(&slug(name));
+        });
+        self.counts.update(|m| {
+            m.remove(&slug(name));
+        });
+        self.fetch(name);
+    }
+
     async fn read(self, name: &str) -> Fetch {
         // The server answers Needs you's default too, until one is saved.
         match saved::fetch_row(name).await {

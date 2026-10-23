@@ -287,6 +287,7 @@ mod to_test;
 mod data;
 mod dom;
 mod draw;
+mod fcard;
 mod filter;
 mod flight;
 mod flat;
@@ -323,6 +324,7 @@ mod mocksize;
 mod nav;
 mod notes;
 mod ors;
+mod parts;
 mod present;
 mod promote;
 mod queue;
@@ -2278,6 +2280,8 @@ fn App() -> impl IntoView {
     let saved_filters = saved::Saved::new(lens);
     // FILTER-37: naming saves — a name at the top of a tree is its save.
     naming::Naming::new(lens, saved_filters);
+    // FILTER-53: the card on a saved chip.
+    fcard::Card::new(lens);
     // MENGER-12: Needs you — its saved filter and its live count, for the
     // header's link; MENGER-43: `g n` puts it on the nav.
     needs::NeedsYou::install();
@@ -2662,6 +2666,9 @@ fn App() -> impl IntoView {
             {move || can_view.get().then(|| view! { <queue::Tray /> })}
             // APP-84: the header's panel of every open question.
             {move || can_view.get().then(|| view! { <questions::Panel /> })}
+            // FILTER-53: the card on a saved chip, over the page (a sheet on
+            // a phone — never inside the lens bar's own sheet).
+            {move || can_view.get().then(|| view! { <fcard::CardHost /> })}
             // APP-50: the phone nav — a bar along the bottom edge (≤ 820).
             {move || can_view.get().then(|| view! { <phonebar::Bar route overlay tree /> })}
             // CHAT-4: the route and the chat shown, in step — the chat itself
