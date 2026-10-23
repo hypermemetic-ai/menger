@@ -1,28 +1,49 @@
 #!/usr/bin/env bash
 # DEPLOY-2: menger's deployment pipeline (DEPLOY-1 defines it; deploy/README.md
-# explains it). Build once from a commit, gate, release, deploy to test,
-# promote to prod — test and prod both running locally under systemd --user.
+# explains it). Build once from a commit, a release; its image; test is
+# app-test.menger.sh, prod app.menger.sh, both on the Linode through
+# hypermemetic-infra (RUN-11). DEPLOY-52 (owner, 2026-10-22/23: "we need to work
+# directly against the test deployment", "we run the tests after the deployment
+# to test", "we need to remove the non remote environments"): this machine runs
+# no environment any more — the suite runs here after the deploy to test,
+# against the release's own tree, and a release whose suite is red never
+# reaches prod.
 #
-#   deploy/pipeline install                 units + env files; enable both envs
-#                                           (ACCESS-27: the templated half only —
-#                                           <env>.local.env and <env>.smoke.env
-#                                           are made once, from the old file, and
-#                                           never rewritten)
-#   deploy/pipeline build [REV]             gate + release (default REV: main); refused up
-#                                           front on a low disk (CI-2: scripts/disk-check.sh —
-#                                           under 50 GB free or 90% used)
-#   deploy/pipeline deploy test [RELEASE]   prod data → test; switch; restart; smoke
-#   deploy/pipeline sync test               prod data → test, same release; restart; smoke
-#   deploy/pipeline promote [RELEASE] [--adopt]
-#                                           a TESTED release to prod; smoke;
-#                                           automatic rollback on failure
-#   deploy/pipeline rollback ENV [--restore BACKUP]
-#   deploy/pipeline smoke ENV               the smoke checks, on their own
-#   deploy/pipeline status                  what each env runs, and how it is;
-#                                           the last deployment record of each;
-#                                           how full the disk is (CI-2)
-#   deploy/pipeline releases                every release: tested? where?
-#   deploy/pipeline logs ENV [journalctl args…]
+#   deploy/pipeline build [REV] [--no-gate] gate + release (default REV: main); --no-gate: the
+#                                           release alone, the suite to run after the deploy
+#                                           (DEPLOY-52); refused up front on a low disk (CI-2:
+#                                           scripts/disk-check.sh — under 50 GB free or 90% used)
+#   deploy/pipeline suite RELEASE           DEPLOY-52: the full suite (cargo test --workspace +
+#                                           the frontend's) at RELEASE's commit, in its own
+#                                           checkout (../menger-suite); marks the release
+#                                           `suite running`, then `passed` or `failed` (its SUITE)
+#   deploy/pipeline suite --status RELEASE  `suite: passed|failed|running|none` — what remote prod reads
+#   deploy/pipeline image [RELEASE]         RUN-10: a release (default: the newest) as an image —
+#                                           IMAGE_STORE=local (default): menger:<release> in this
+#                                           machine's Docker; ghcr: ghcr.io/hypermemetic-ai/menger:<release>
+#                                           + :latest, pushed. Prints image=… and release=… (and
+#                                           appends them to $HF_OUTPUTS when set)
+#   deploy/pipeline remote test --image IMAGE
+#                                           app-test.menger.sh through infra's app.yml, then the smoke
+#                                           against https://app-test.menger.sh; recorded as `test`
+#                                           (DEPLOY-52: test is app-test); passing marks it TESTED
+#   deploy/pipeline remote prod             app.menger.sh through infra's promote.yml: what test runs,
+#                                           refused unless that release's suite passed (DEPLOY-52)
+#   deploy/pipeline smoke test|prod         the smoke against app-test / app.menger.sh, on its own
+#   deploy/pipeline local --image IMAGE     RUN-25: IMAGE here as the container menger-app-local
+#                                           (127.0.0.1:4470 WebSocket, :4471 shell, volume
+#                                           menger-app-local-data) — a CI throwaway, not an
+#                                           environment; replaced when run again; prints url=…
+#   deploy/pipeline remote-secret test|prod [--check] [--from FILE]
+#                                           IDENTITY-45: the WorkOS API key on app-test / app.menger.sh
+#                                           (infra's secret.yml: a 0400 file the container reads, then
+#                                           health; the old key back if unhealthy). The value from
+#                                           $WORKOS_API_KEY (ledger-secret run workos-prod WORKOS_API_KEY
+#                                           -- deploy/pipeline remote-secret prod), --from FILE, or stdin;
+#                                           never an argument, never printed
+#   deploy/pipeline status                  what test and prod run, their health, their suites, the
+#                                           last deployment record of each; the runner; the disk (CI-2)
+#   deploy/pipeline releases                every release: its suite, tested?, where it runs
 #   deploy/pipeline backfill                deployments.log → menger's deployments
 #                                           (idempotent: a record kept is not kept twice)
 #   deploy/pipeline landing [REV] [--check] DEPLOY-17: landing/ at REV (default main) → gate →
@@ -31,42 +52,25 @@
 #                                           (--check: the gate and infra's dry run, nothing written)
 #   deploy/pipeline media [RELEASE]         landing/media regenerated from a release's own binary
 #                                           (default: what prod runs); the worker commits them
-#   deploy/pipeline image [RELEASE]         RUN-10: a TESTED release (default: the one test last
-#                                           passed) as an image — IMAGE_STORE=local (default):
-#                                           menger:<release> in this machine's Docker; ghcr:
-#                                           ghcr.io/hypermemetic-ai/menger:<release> + :latest, pushed.
-#                                           Prints image=… and release=… (and appends them to
-#                                           $HF_OUTPUTS when set)
-#   deploy/pipeline local --image IMAGE     RUN-25: IMAGE here as the container menger-app-local
-#                                           (127.0.0.1:4470 WebSocket, :4471 shell, volume
-#                                           menger-app-local-data); replaced when run again; waits
-#                                           for health; prints url=… (and to $HF_OUTPUTS)
-#   deploy/pipeline remote test --image IMAGE
-#   deploy/pipeline remote prod             RUN-25: app-test.menger.sh / app.menger.sh through
-#                                           hypermemetic-infra (app.yml; promote.yml for prod),
-#                                           driven by deploy/app.yml (RUN-11)
-#   deploy/pipeline remote-secret test|prod [--check] [--from FILE]
-#                                           IDENTITY-45: the WorkOS API key on app-test / app.menger.sh
-#                                           (infra's secret.yml: a 0400 file the container reads, then
-#                                           health; the old key back if unhealthy). The value from
-#                                           $WORKOS_API_KEY (ledger-secret run workos-prod WORKOS_API_KEY
-#                                           -- deploy/pipeline remote-secret prod), --from FILE, or stdin;
-#                                           never an argument, never printed
 #
-# DEPLOY-12: deploy test, sync, promote and rollback each tell menger what they
-# did — a deployment record (deploy/record → deployments.record): `started`
-# before it begins, then `succeeded`, `failed` or `rolled_back`. Every record
-# goes through the outbox, oldest first; one the tracker does not take waits
-# there for the next run. A record never fails a deploy, nor holds one up
-# longer than a bounded send. Where:
+# Retired by DEPLOY-52 (this machine's test and prod, :4450–4458): install,
+# deploy test, sync, promote, rollback, logs — each says so and exits 2. Their
+# data stays where it was (~/.local/share/menger/tickets.db and backups/,
+# ~/.local/share/menger-test/); deploy/README.md "The local environments, retired".
+#
+# DEPLOY-12: remote test and remote prod each tell menger what they did — a
+# deployment record (deploy/record → deployments.record): `started` before it
+# begins, then `succeeded` or `failed`. Every record goes through the outbox,
+# oldest first; one the tracker does not take waits there for the next run. A
+# record never fails a deploy, nor holds one up longer than a bounded send. Where:
 #   MENGER_DEPLOY_TRACKER_URL (wss://app.menger.sh/ws) — DEPLOY-28: the tracker since RUN-13,
-#   reached as the pipeline's key; `local`: this machine's tracker, as before RUN-13 —
+#   reached as the pipeline's key; `local`: a tracker on this machine —
 #   MENGER_DEPLOY_TRACKER_PORT (4455) · MENGER_DEPLOY_TRACKER_HOST · MENGER_DEPLOY_TRACKER_TOKEN
 #   MENGER_DEPLOY_OUTBOX (~/.local/share/menger-deploy/outbox) · MENGER_DEPLOY_RECORD_TIMEOUT (10 s a send)
 #   MENGER_DEPLOY_KEY_FILE (~/.plexus/keys/pipeline.key; `none`: no key) — ACCESS-47:
 #   the pipeline's own key; where the file is, records go over the socket
 #   signed in as it (deploy/menger-call.mjs reads the file — the seed is never
-#   in an environment or an argv) and `status` reads health as it
+#   in an environment or an argv), and status and the smoke read health as it
 #   MENGER_DEPLOY_COMPLETE_KEY_FILE (~/.plexus/keys/builder.key; `none`: no completion) —
 #   DEPLOY-28: a succeeded record to test, once kept, sets Complete on the In Review
 #   tickets it carried that now run their current version there (DEPLOY-22), as this
@@ -85,10 +89,14 @@ LOG=$HOME_DIR/deployments.log
 # a red run is marked (<stamp>.red) so the sweep keeps its logs past the 60 days it keeps the green ones.
 LOGS=${MENGER_DEPLOY_LOGS:-$HOME/.local/state/menger-deploy/logs}
 LOG_STAMP="" LOG_SHA=""
-CONFIG=$HOME/.config/menger
-UNITS=$HOME/.config/systemd/user
-BACKUPS=$HOME/.local/share/menger/backups
 KEEP_RELEASES=10
+# DEPLOY-52: the suite's own checkout, a sibling (the plexus paths resolve) apart from the
+# build's, so a suite running after one deploy never holds up the next build.
+SUITE_CHECKOUT=${MENGER_SUITE_CHECKOUT:-$(dirname "$REPO")/menger-suite}
+# DEPLOY-52: test is app-test.menger.sh, prod app.menger.sh (MENGER_APP_TEST_URL, MENGER_APP_URL)
+APP_TEST_URL=${MENGER_APP_TEST_URL:-https://app-test.menger.sh}
+APP_URL=${MENGER_APP_URL:-https://app.menger.sh}
+APP_TEST_URL=${APP_TEST_URL%/} APP_URL=${APP_URL%/}
 RECORD=$REPO/deploy/record
 TRACKER_PORT=${MENGER_DEPLOY_TRACKER_PORT:-4455}
 TRACKER_HOST=${MENGER_DEPLOY_TRACKER_HOST:-}
@@ -133,47 +141,25 @@ log_path() { # step → a new file in $LOGS for this run (the run's stamp; its s
   : > "$f"; printf '%s\n' "$f"
 }
 red_run() { mkdir -p "$LOGS"; : > "$LOGS/$LOG_STAMP.red"; } # this run's logs are kept whatever their age
+GATE_ON_RED="" # DEPLOY-52: what a red gate does before it dies (the suite marks its release)
 gate_red() { # LABEL LOGFILE SHORT — the gate failed: marked, recorded, every failing test named, the log said
   local label=$1 f=$2
-  red_run; record build test "$3" "gate failed"
+  red_run
+  if [[ -n $GATE_ON_RED ]]; then "$GATE_ON_RED" "$label" "$f"; else record build test "$3" "gate failed"; fi
   grep -E '^test .* \.\.\. FAILED$' "$f" | sort -u | sed 's/^test \(.*\) \.\.\. FAILED$/FAILED \1/' >&2 || true
   die "$label gate failed — $f"
 }
 need() { command -v "$1" >/dev/null || die "needs $1 on PATH"; }
-
-# ACCESS-27: an environment's settings are three files in $CONFIG.
-#   <env>.env        the templated half (deploy/env/<env>.env): ports, database,
-#                    registry, MENGER_EXPECT_LOGIN — rewritten by every install
-#   <env>.local.env  menger's login and secrets, 0600, never templated; the
-#                    unit loads it after <env>.env
-#   <env>.smoke.env  the smoke account (MENGER_SMOKE_*), 0600, read by the
-#                    smoke alone — never in menger's environment
-env_file()   { echo "$CONFIG/$1.env"; }
-local_file() { echo "$CONFIG/$1.local.env"; }
-smoke_file() { echo "$CONFIG/$1.smoke.env"; }
-load_env() { # ENV → exports the templated half; reads the local half without exporting it
-  local f l v; f=$(env_file "$1"); l=$(local_file "$1")
-  [[ -f $f ]] || die "no $f — run: deploy/pipeline install"
-  # Each load starts clean: one env's login settings never linger into the next's.
-  for v in $(compgen -v MENGER_); do [[ $v == MENGER_DEPLOY_* ]] || unset "$v"; done
-  set -a; # shellcheck disable=SC1090
-  source "$f"; set +a
-  # The local half is read (the smoke asks what login it configures), never
-  # exported: menger's secrets stay out of every command the pipeline runs.
-  # shellcheck disable=SC1090
-  if [[ -f $l ]]; then source "$l"; fi
-}
-check_env() { [[ $1 == prod || $1 == test ]] || die "unknown environment '$1' (prod or test)"; }
-envdir() { echo "$HOME_DIR/envs/$1"; }
-running_release() { local l; l=$(envdir "$1")/current; [[ -L $l ]] && basename "$(readlink -f "$l")" || true; }
-previous_release() { local l; l=$(envdir "$1")/previous; [[ -L $l ]] && basename "$(readlink -f "$l")" || true; }
 # DEPLOY-23: the release ENV last ran with its smoke passed — where a record's
 # commits start, so a failed run's commits ride with the next run that passes.
-# Read from deployments.log, the last of: a run that ended ok (deploy, sync,
-# promote: its release; rollback: the release it returned to), or a promote
-# whose automatic rollback passed (the release it returned to). A failed run,
-# a run that died, a rollback whose smoke failed is never the start. ENV with
-# no run in the log yet: what it runs.
+# Read from deployments.log, the last of: a run that ended ok (remote's `run`,
+# and the retired local deploy, sync, promote: its release; rollback: the
+# release it returned to), or a promote whose automatic rollback passed (the
+# release it returned to). A failed run, a run that died, a rollback whose
+# smoke failed is never the start. ENV with no run in the log yet: none.
+# DEPLOY-52: `test` is app-test.menger.sh from the first `remote test` on; the
+# lines before it are this machine's test, retired — its last good release is
+# where the first remote test's commits start.
 last_good() {
   local runs='$2 == e && $3 ~ /^(deploy|sync|promote|rollback|run)$/'
   if [[ -f $LOG ]] && awk -F'\t' -v e="$1" "$runs {f = 1} END {exit !f}" "$LOG"; then
@@ -181,7 +167,12 @@ last_good() {
       if ($4 == "-") next
       if ($5 == "ok" || ($3 == "run" && $5 ~ /^ok /)) g = $4; else if (match($5, /rolled back to [^ ]+$/)) g = substr($5, RSTART + 15) }
       END { if (g != "") print g }' "$LOG"
-  else running_release "$1"; fi
+  fi
+}
+ran_before() { # ENV → the release it ran ok before its last good one (a rollback's target), or empty
+  [[ -f $LOG ]] || return 0
+  awk -F'\t' -v e="$1" '$2 == e && $3 ~ /^(deploy|sync|promote|rollback|run)$/ && $4 != "-" && ($5 == "ok" || ($3 == "run" && $5 ~ /^ok /)) {
+      if ($4 != g) { p = g; g = $4 } } END { if (p != "") print p }' "$LOG"
 }
 resolve_release() { # NAME or empty → a release directory name that exists
   local r=${1:-}
@@ -192,7 +183,6 @@ resolve_release() { # NAME or empty → a release directory name that exists
   [[ -d $RELEASES/$r && -f $RELEASES/$r/RELEASE ]] || die "no release '$r' (see: deploy/pipeline releases)"
   echo "$r"
 }
-units_of() { echo "menger@$1.service menger-diagrams@$1.service"; }
 
 # ── the deployment record (DEPLOY-12) ───────────────────────────────────────
 # A run that changes what an environment runs tells menger (DEPLOY-11) what it
@@ -208,6 +198,9 @@ on_exit() {
   [[ ${#PENDING[@]} -eq 3 ]] && tell "${PENDING[0]}" failed "${PENDING[1]}" "${PENDING[2]}"
   [[ -n $LANDING_EXPORT && -d $LANDING_EXPORT ]] && rm -rf "$LANDING_EXPORT"
   [[ -n ${IMAGE_CONTEXT:-} && -d $IMAGE_CONTEXT ]] && { chmod -R u+w "$IMAGE_CONTEXT"; rm -rf "$IMAGE_CONTEXT"; }
+  # what the run said goes through tee into its log: close our ends and let the tees finish,
+  # or the last lines (a die's) can be lost to whoever reads the output
+  if [[ -n ${_l:-} ]]; then exec 1>&- 2>&-; wait 2>/dev/null || true; fi
   return 0
 }
 trap on_exit EXIT
@@ -220,10 +213,11 @@ tell() {
   if [[ $2 == started ]]; then PENDING=("$1" "$3" "${4:-}"); else PENDING=(); fi
   ( set +e; tell_ "$@" ) || true
 }
-# DEPLOY-21: the environment ENV promotes from — prod from test; test and the
-# landing page's edge from none (each its own track). DEPLOY-28: app-test
-# runs the image of the release test passed, app-prod what app-test runs.
-promotes_from() { case $1 in prod|app-test) echo test ;; app-prod) echo app-test ;; esac; }
+# DEPLOY-21: the environment ENV promotes from — test and the landing page's
+# edge from none (each its own track). DEPLOY-52: test is app-test.menger.sh, and
+# app-prod (app.menger.sh) promotes from it — the record's `from` moves app-prod's
+# source from the retired app-test environment to test.
+promotes_from() { case $1 in app-prod) echo test ;; esac; }
 tell_() {
   local env=$1 state=$2 rel=$3 prev=${4:-} rev p at rec="" from
   rev=$(sha_of "$rel"); p=$(sha_of "$prev")
@@ -322,130 +316,46 @@ flush_outbox() {
   return 0
 }
 
-# ── install ─────────────────────────────────────────────────────────────────
-# ACCESS-27 (ACCESS-4 H3): install rewrites only the templated half. Where an
-# environment has no <env>.local.env yet, it is made — once, 0600 — from what
-# the old <env>.env held beyond its template (login, admins, secrets, and the
-# notes beside them), the smoke account's MENGER_SMOKE_* going to
-# <env>.smoke.env; the old file is kept as <env>.env.before-local (0600).
-# Values are never printed, only names. A later install leaves both alone, and
-# refuses — changing nothing — if <env>.env has since gained a setting its
-# template lacks (it would be dropped): move it into the local half.
-assign_re='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)='
-keys_of() { sed -nE "s/$assign_re.*/\2/p" "$1" | sort -u; }
-extras_of() { # OLD TEMPLATE → the keys OLD sets that TEMPLATE does not
-  comm -23 <(keys_of "$1") <(keys_of "$2")
-}
-render_env() { # ENV NODE → deploy/env/ENV.env, filled in
-  sed -e "s|@HOME@|$HOME|g" -e "s|@NODE@|$2|g" "$REPO/deploy/env/$1.env"
-}
-# split_old OLD TEMPLATE LOCAL SMOKE — the lines of OLD beyond TEMPLATE into
-# LOCAL (MENGER_SMOKE_* into SMOKE). Comments go with them, except the header
-# before the first setting (the template's, whichever version wrote it) and
-# lines the template itself has.
-split_old() {
-  local old=$1 tpl=$2 lo=$3 sm=$4 line key seen=0
-  while IFS= read -r line || [[ -n $line ]]; do
-    if [[ $line =~ $assign_re ]]; then
-      seen=1; key=${BASH_REMATCH[2]}
-      grep -qxF -- "$key" <(keys_of "$tpl") && continue
-      if [[ $key == MENGER_SMOKE_* ]]; then printf '%s\n' "$line" >>"$sm"; else printf '%s\n' "$line" >>"$lo"; fi
-    elif [[ $seen == 1 && -n ${line// /} ]] && ! grep -qxF -- "$line" "$tpl"; then
-      printf '%s\n' "$line" >>"$lo"
-    fi
-  done <"$old"
-}
-local_header() { # ENV WHAT
-  printf '# ACCESS-27: %s for %s — never templated. `deploy/pipeline install` makes\n' "$2" "$1"
-  printf '# this file once (0600) and never rewrites it; deploy/README.md "Settings".\n'
-}
-
-cmd_install() {
-  need systemctl; need sqlite3; need node
-  # Node by its real path: the diagrams unit sees no home but what it binds.
-  local node; node=$(readlink -f "$(command -v node)")
-  mkdir -p "$CONFIG" "$UNITS" "$HOME_DIR/envs/prod" "$HOME_DIR/envs/test" "$RELEASES" "$BACKUPS" \
-           "$HOME/.local/share/menger-test"
-  chmod 0700 "$CONFIG"
-  local e cur lo sm new x
-  # First every check, then every write: a refusal changes nothing.
-  for e in prod test; do
-    cur=$(env_file $e) lo=$(local_file $e) sm=$(smoke_file $e) new=$CONFIG/.$e.env.new
-    ( umask 077; render_env $e "$node" >"$new" )
-    [[ -f $cur ]] || continue
-    x=$(extras_of "$cur" "$new" | paste -sd' ')
-    if [[ -f $lo && -n $x ]]; then
-      rm -f "$CONFIG"/.*.env.new
-      die "$cur sets what its template does not ($x) and $lo exists already — move them into $lo (or ${sm##*/} for MENGER_SMOKE_*), then install again; nothing was changed"
-    fi
-    if [[ ! -f $lo && -f $sm ]] && grep -qE '^[[:space:]]*(export[[:space:]]+)?MENGER_SMOKE_' "$cur"; then
-      rm -f "$CONFIG"/.*.env.new
-      die "$cur sets MENGER_SMOKE_* and $sm exists already — merge them by hand, then install again; nothing was changed"
-    fi
-  done
-  for e in prod test; do
-    cur=$(env_file $e) lo=$(local_file $e) sm=$(smoke_file $e) new=$CONFIG/.$e.env.new
-    if [[ ! -f $lo ]]; then
-      ( umask 077
-        local_header $e "menger's login and secrets" >"$lo.tmp"
-        if [[ -f $cur ]]; then
-          [[ -e $cur.before-local ]] || cp "$cur" "$cur.before-local"
-          chmod 0600 "$cur.before-local"
-          [[ -f $sm ]] || local_header $e "the smoke account (MENGER_SMOKE_*), read by the smoke alone," >"$sm.tmp"
-          split_old "$cur" "$new" "$lo.tmp" "$sm.tmp"
-        fi )
-      chmod 0600 "$lo.tmp"; mv "$lo.tmp" "$lo"
-      local moved smoked; moved=$(keys_of "$lo" | paste -sd' ')
-      if [[ -f $sm.tmp ]] && [[ -n $(keys_of "$sm.tmp") ]]; then
-        smoked=$(keys_of "$sm.tmp" | paste -sd' '); chmod 0600 "$sm.tmp"; mv "$sm.tmp" "$sm"
-      else smoked=""; rm -f "$sm.tmp"; fi
-      say "$e: made ${lo##*/} (0600)${moved:+ with $moved}${smoked:+; ${sm##*/} (0600) with $smoked}${moved:+ — the old file is ${cur##*/}.before-local (0600)}"
-    fi
-    if [[ -f $cur ]]; then
-      x=$(comm -12 <(keys_of "$cur") <(keys_of "$new") | while read -r k; do
-            [[ $(grep -E "^[[:space:]]*(export[[:space:]]+)?$k=" "$cur" | tail -n 1) == "$(grep -E "^$k=" "$new" | tail -n 1)" ]] || echo "$k"
-          done | paste -sd' ')
-      [[ -n $x ]] && say "$e: the template's $x replace(s) the old file's"
-    fi
-    mv "$new" "$cur"
-    # The unit's writable path and the diagrams unit's view of Node, per
-    # environment (unit drop-ins; deploy/README.md "Hardening").
-    local db; db=$(set -a; source "$cur"; echo "$MENGER_DB_PATH")
-    mkdir -p "$(dirname "$db")"
-    mkdir -p "$UNITS/menger@$e.service.d" "$UNITS/menger-diagrams@$e.service.d"
-    printf '# ACCESS-27: written by deploy/pipeline install — the one place menger@%s writes.\n[Service]\nReadWritePaths=%s\n' \
-      "$e" "$(dirname "$db")" >"$UNITS/menger@$e.service.d/50-data.conf"
-    printf '# ACCESS-27: written by deploy/pipeline install — the Node menger-diagrams@%s runs.\n[Service]\nBindReadOnlyPaths=%s\n' \
-      "$e" "$(dirname "$(dirname "$node")")" >"$UNITS/menger-diagrams@$e.service.d/50-paths.conf"
-  done
-  install -m 0644 "$REPO/deploy/systemd/menger@.service" "$REPO/deploy/systemd/menger-diagrams@.service" "$UNITS/"
-  install -m 0644 "$REPO/deploy/README.md" "$HOME_DIR/README.md"
-  systemctl --user daemon-reload
-  # Enabled means started at boot (lingering is on); an env with no release
-  # yet is enabled but not started.
-  systemctl --user enable menger@prod menger-diagrams@prod menger@test menger-diagrams@test >/dev/null 2>&1
-  say "installed: $CONFIG/{prod,test}.env (+ .local.env, .smoke.env kept), $UNITS/menger{,-diagrams}@.service and their drop-ins; enabled for prod and test"
-}
-
 # ── build: commit → gate → release ──────────────────────────────────────────
+# checkout DIR SHA — DIR (a sibling worktree, so menger's relative plexus paths
+# resolve) at SHA, clean but for build outputs and installed node modules.
+checkout() {
+  local dir=$1 sha=$2
+  if [[ ! -d $dir/.git && ! -f $dir/.git ]]; then
+    git -C "$REPO" worktree add --detach "$dir" "$sha" >/dev/null
+  else
+    git -C "$dir" checkout --quiet --detach --force "$sha"
+  fi
+  git -C "$dir" clean -ffdxq -e /target/ -e /frontend/target/ -e /perf/node_modules/ -e /diagrams/node/node_modules/
+}
+# run_gate DIR SHORT — the suite: cargo test --workspace and the frontend's tests in
+# DIR, each log a file of its own; red dies through gate_red. GATE_WS / GATE_FE say it.
+GATE_WS="" GATE_FE=""
+run_gate() {
+  local dir=$1 short=$2 lw lf
+  step "gate: cargo test --workspace --no-fail-fast"
+  lw=$(log_path gate-workspace); say "log: $lw"
+  GATE_WS=$(cd "$dir" && CARGO_TARGET_DIR=$dir/target cargo test --workspace --no-fail-fast 2>&1 | tee "$lw" | grep -E '^test result' \
+            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') || gate_red workspace "$lw" "$short"
+  grep -q '^test result: FAILED' "$lw" && gate_red workspace "$lw" "$short"
+  step "gate: frontend tests"
+  lf=$(log_path gate-frontend); say "log: $lf"
+  GATE_FE=$(cd "$dir/frontend" && CARGO_TARGET_DIR=$dir/frontend/target cargo test --no-fail-fast 2>&1 | tee "$lf" | grep -E '^test result' \
+            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') || gate_red frontend "$lf" "$short"
+  grep -q '^test result: FAILED' "$lf" && gate_red frontend "$lf" "$short"
+  say "gate: workspace $GATE_WS; frontend $GATE_FE"
+}
 cmd_build() {
-  need cargo; need trunk; need npm; need sqlite3; need node   # DEPLOY-41: the deploy after the build needs them; fail now, not after the gate
-  local rev=${1:-main} sha short id stage disk
+  need cargo; need trunk; need npm; need node   # DEPLOY-41: what the build needs; fail now, not half-way
+  local rev=main gated=1 a sha short id stage disk
+  for a in "$@"; do case $a in --no-gate) gated=0 ;; -*) die "unknown flag $a" ;; *) rev=$a ;; esac; done
   # CI-2: a low disk refuses up front, not half-way through the gate
   disk=$("$REPO/scripts/disk-check.sh" --path "$HOME") || die "refused — $disk"
   say "$disk"
   sha=$(git -C "$REPO" rev-parse --verify "$rev^{commit}") || die "no commit '$rev'"
   short=${sha:0:7}
   step "build $short — $(git -C "$REPO" log -1 --format=%s "$sha")"
-
-  if [[ ! -d $BUILD/.git && ! -f $BUILD/.git ]]; then
-    git -C "$REPO" worktree add --detach "$BUILD" "$sha" >/dev/null
-  else
-    git -C "$BUILD" checkout --quiet --detach --force "$sha"
-  fi
-  # A clean tree at the commit; build outputs and installed node modules stay
-  # so a build is incremental.
-  git -C "$BUILD" clean -ffdxq -e /target/ -e /frontend/target/ -e /perf/node_modules/ -e /diagrams/node/node_modules/
+  checkout "$BUILD" "$sha"
   # The build compiles in its own targets, never a shared CARGO_TARGET_DIR: with
   # one set (this machine sets ~/.cache/cargo-target/menger for every
   # worktree), cargo wrote the release elsewhere and the copy below took a
@@ -454,18 +364,14 @@ cmd_build() {
   export CARGO_TARGET_DIR=$BUILD/target
 
   LOG_SHA=$short
-  step "gate: cargo test --workspace --no-fail-fast"
-  local gate_ws gate_fe lw lf lr
-  lw=$(log_path gate-workspace); say "log: $lw"
-  gate_ws=$(cd "$BUILD" && cargo test --workspace --no-fail-fast 2>&1 | tee "$lw" | grep -E '^test result' \
-            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') || gate_red workspace "$lw" "$short"
-  grep -q '^test result: FAILED' "$lw" && gate_red workspace "$lw" "$short"
-  step "gate: frontend tests"
-  lf=$(log_path gate-frontend); say "log: $lf"
-  gate_fe=$(cd "$BUILD/frontend" && CARGO_TARGET_DIR=$BUILD/frontend/target cargo test --no-fail-fast 2>&1 | tee "$lf" | grep -E '^test result' \
-            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') || gate_red frontend "$lf" "$short"
-  grep -q '^test result: FAILED' "$lf" && gate_red frontend "$lf" "$short"
-  say "gate: workspace $gate_ws; frontend $gate_fe"
+  local gate lr
+  if [[ $gated == 1 ]]; then
+    run_gate "$BUILD" "$short"; gate="workspace $GATE_WS; frontend $GATE_FE"
+  else
+    # DEPLOY-52: the suite runs after the deploy to test (deploy/pipeline suite RELEASE)
+    gate="none — the suite runs after the deploy (DEPLOY-52: deploy/pipeline suite)"
+    say "gate: none (--no-gate) — the suite runs after the deploy to test"
+  fi
 
   step "release build"
   lr=$(log_path build-release); say "log: $lr"
@@ -498,7 +404,7 @@ cmd_build() {
     echo "subject:   $(git -C "$REPO" log -1 --format=%s "$sha")"
     echo "built:     $(date -u +%FT%TZ)"
     echo "rustc:     $(rustc --version)"
-    echo "gate:      workspace $gate_ws; frontend $gate_fe"
+    echo "gate:      $gate"
   } > "$stage/RELEASE"
   chmod -R a-w "$stage"
   mv "$stage" "$RELEASES/$id"
@@ -508,351 +414,12 @@ cmd_build() {
   echo "$id"
 }
 
-prune() { # keep what an env runs or can roll back to, and the newest few
-  local keep; keep=$( { for e in prod test; do running_release $e; previous_release $e; done; \
+prune() { # keep what test and prod run (and ran last before it), and the newest few
+  local keep; keep=$( { for e in test app-prod; do last_good "$e"; ran_before "$e"; done; \
                         ls -1 "$RELEASES" | grep -v '\.tmp$' | sort | tail -n $KEEP_RELEASES; } | sort -u)
   for r in $(ls -1 "$RELEASES" | grep -v '\.tmp$'); do
     grep -qx "$r" <<<"$keep" || { chmod -R u+w "$RELEASES/$r"; rm -rf "${RELEASES:?}/$r"; say "pruned $r"; }
   done
-}
-
-# ── switching and services ──────────────────────────────────────────────────
-switch_to() { # ENV RELEASE — current becomes previous
-  local d; d=$(envdir "$1"); mkdir -p "$d"
-  local cur; cur=$(running_release "$1")
-  if [[ -n $cur && $cur != "$2" ]]; then ln -sfn "$RELEASES/$cur" "$d/previous"; fi
-  ln -sfn "$RELEASES/$2" "$d/current"
-}
-restart() { systemctl --user enable $(units_of "$1") >/dev/null 2>&1 || true; systemctl --user restart $(units_of "$1"); }
-stop()    { systemctl --user stop $(units_of "$1") 2>/dev/null || true; }
-
-backup_db() { # ENV LABEL → path of the backup (empty when there is no db)
-  load_env "$1"
-  [[ -f $MENGER_DB_PATH ]] || { echo ""; return; }
-  local dir; [[ $1 == prod ]] && dir=$BACKUPS || dir=$(dirname "$MENGER_DB_PATH")/backups
-  mkdir -p "$dir"
-  local out=$dir/tickets.db.$(date -u +%Y%m%dT%H%M%SZ)-$2
-  sqlite3 "$MENGER_DB_PATH" ".backup '$out'"
-  echo "$out"
-}
-restore_db() { # ENV BACKUP — the env's services must be stopped
-  load_env "$1"
-  rm -f "$MENGER_DB_PATH" "$MENGER_DB_PATH-wal" "$MENGER_DB_PATH-shm"
-  cp "$2" "$MENGER_DB_PATH"
-}
-
-# ── smoke ───────────────────────────────────────────────────────────────────
-cmd_smoke() {
-  local env=$1; check_env "$env"; load_env "$env"
-  local rel; rel=$(running_release "$env"); [[ -n $rel ]] || { say "smoke $env: no release"; return 1; }
-  local bin=$RELEASES/$rel/bin fail=0
-  step "smoke $env ($rel)"
-  # A drill: DEPLOY_SMOKE_FAIL=ENV fails the first smoke of ENV in this run
-  # (so a promote rolls back), and only the first (so the rollback can pass).
-  if [[ ${DEPLOY_SMOKE_FAIL:-} == "$env" && -z ${SMOKE_DRILLED:-} ]]; then
-    SMOKE_DRILLED=1; say "smoke: DEPLOY_SMOKE_FAIL=$env — failing on purpose (a drill)"; return 1
-  fi
-  for u in $(units_of "$env"); do
-    systemctl --user is-active --quiet "$u" && say "ok   $u active" || { say "FAIL $u not active"; fail=1; }
-  done
-  local h="" login="" mode="" expect=${MENGER_EXPECT_LOGIN:-} lo sm
-  lo=$(local_file "$env") sm=$(smoke_file "$env")
-  # ACCESS-27: the settings' secrets are 0600 files, the local half there.
-  if [[ ! -f $lo ]]; then say "FAIL no $lo — run: deploy/pipeline install"; fail=1
-  elif [[ $(stat -c %a "$lo") != [46]00 ]]; then say "FAIL $lo is readable by others ($(stat -c %a "$lo"); 0600)"; fail=1
-  else say "ok   ${lo##*/} is the owner's alone"; fi
-  if [[ -f $sm ]]; then
-    if [[ $(stat -c %a "$sm") != [46]00 ]]; then say "FAIL $sm is readable by others ($(stat -c %a "$sm"); 0600)"; fail=1; fi
-    # shellcheck disable=SC1090
-    source "$sm" # not exported: the smoke hands each value to the one command that needs it
-  fi
-  # ACCESS-27 (ACCESS-4 H3): the login mode this environment must be in is
-  # its templated half's MENGER_EXPECT_LOGIN — not the local half, which is
-  # what an install could once lose. The settings must configure it, and the
-  # server must be in it; the checks below follow it, never the server.
-  case $expect in
-    off|on|required) ;;
-    *) say "FAIL MENGER_EXPECT_LOGIN is '${expect}' in $(env_file "$env") — off, on or required (run: deploy/pipeline install)"; fail=1; expect=off ;;
-  esac
-  local configured=off
-  [[ -n ${MENGER_AUTH_PROVIDERS:-}${MENGER_IDENTITY:-} ]] && configured=on
-  [[ ${MENGER_REQUIRE_LOGIN:-} =~ ^(1|true|yes)$ ]] && configured=required
-  # ACCESS-24: a release with no open mode requires login whenever a
-  # provider is configured (`--require-login` is its only mode) — it says so
-  # with `--help`'s lack of the flag.
-  if [[ $configured == on ]] && ! "$bin/menger" --help 2>/dev/null | grep -q -e --require-login; then configured=required; fi
-  if [[ $configured == "$expect" ]]; then say "ok   the settings configure login: $expect, as MENGER_EXPECT_LOGIN says"
-  else say "FAIL the settings configure login: $configured, but MENGER_EXPECT_LOGIN says $expect — is ${lo##*/} the one $env had?"; fail=1; fi
-  for _ in $(seq 1 60); do
-    mode=$(timeout 12 node "$REPO/deploy/smoke-mode.mjs" "$MENGER_WS_PORT" "$MENGER_SHELL_PORT" 2>/dev/null | grep -E '^login: ' || true)
-    [[ -n $mode ]] && break; sleep 0.5
-  done
-  if [[ $mode == "login: $expect" ]]; then say "ok   the server on :$MENGER_WS_PORT is in login: $expect"
-  else say "FAIL the server on :$MENGER_WS_PORT says ${mode:-nothing}, but MENGER_EXPECT_LOGIN says $expect"; fail=1; fi
-  # IDENTITY-23: an environment that requires login is checked as a person
-  # would meet it — signed in as the smoke account (AUTH-7: which needs
-  # tickets.health, viewer somewhere), and without it: AUTH-7 admits that
-  # upgrade into the anonymous view, which reaches nothing but the auth door.
-  [[ $expect == required ]] && login=1
-  if [[ -n $login ]]; then
-    local token=""
-    # ACCESS-27 (L3): the password and the token never ride in argv — the
-    # form goes to curl on stdin, the token to smoke-health.mjs on stdin.
-    token=$(printf '%s\n%s\n%s' "${MENGER_SMOKE_USER:-}" "${MENGER_SMOKE_PASSWORD:-}" "${MENGER_SMOKE_AUDIENCE:-}" \
-              | jq -jRs 'split("\n") as [$u, $p, $a] | "grant_type=password&username=\($u|@uri)&password=\($p|@uri)&audience=\($a // "" | @uri)"' \
-              | curl -fsS -m 5 -X POST "${MENGER_SMOKE_TOKEN_URL:-}" --data-binary @- 2>/dev/null | jq -r '.access_token // empty' || true)
-    [[ -n $token ]] && say "ok   the smoke account signs in" || { say "FAIL the smoke account signs in (MENGER_SMOKE_* in ${sm##*/})"; fail=1; }
-    for _ in $(seq 1 60); do
-      h=$(timeout 12 node "$REPO/deploy/smoke-health.mjs" "$MENGER_WS_PORT" - <<<"$token" 2>/dev/null | grep -E 'ticket_count' || true)
-      [[ -n $h ]] && break; sleep 0.5
-    done
-    if node "$REPO/deploy/smoke-health.mjs" "$MENGER_WS_PORT" >/dev/null 2>&1; then
-      say "ok   an anonymous socket on :$MENGER_WS_PORT sees only the auth door and reaches nothing"
-    else
-      say "FAIL an anonymous socket on :$MENGER_WS_PORT reaches past the auth door"; fail=1
-    fi
-  else
-    for _ in $(seq 1 60); do
-      h=$(timeout 5 synapse -P "$MENGER_WS_PORT" menger tickets health 2>/dev/null | grep -E 'ticket_count' || true)
-      [[ -n $h ]] && break; sleep 0.5
-    done
-  fi
-  [[ -n $h ]] && say "ok   tickets.health on :$MENGER_WS_PORT —${h#*:} tickets" || { say "FAIL tickets.health on :$MENGER_WS_PORT"; fail=1; }
-  if "$bin/menger" --verify-derived --db-path "$MENGER_DB_PATH" >/dev/null 2>&1; then
-    say "ok   --verify-derived consistent"
-  else
-    say "FAIL --verify-derived"; fail=1
-  fi
-  # DEPLOY-6: grep reads the whole page (no -q): under pipefail, a grep that
-  # quits at its first match makes curl's next write fail (exit 23).
-  if [[ -n $login ]]; then
-    # IDENTITY-23: the app is behind the login page.
-    local to; to=$(curl -s -o /dev/null -m 5 -w '%{redirect_url}' "http://127.0.0.1:$MENGER_SHELL_PORT/")
-    if [[ $to == */login?next=* ]] && curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/login" | grep '<h1>Sign in</h1>' >/dev/null; then
-      say "ok   app on :$MENGER_SHELL_PORT behind its login page"
-    else
-      say "FAIL app on :$MENGER_SHELL_PORT: not behind its login page ($to)"; fail=1
-    fi
-  elif curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/" | grep "name=\"menger-ws-port\" content=\"$MENGER_WS_PORT\"" >/dev/null; then
-    say "ok   app on :$MENGER_SHELL_PORT, stamped with :$MENGER_WS_PORT"
-  else
-    say "FAIL app on :$MENGER_SHELL_PORT"; fail=1
-  fi
-  local d=""
-  for _ in $(seq 1 20); do
-    d=$(timeout 10 synapse -P "$MENGER_DIAGRAMS_PORT" diagrams mermaid parse --source 'graph LR; a-->b' 2>/dev/null | grep -E 'diagram_type' || true)
-    [[ -n $d ]] && break; sleep 0.5
-  done
-  [[ -n $d ]] && say "ok   diagrams on :$MENGER_DIAGRAMS_PORT parses" || { say "FAIL diagrams on :$MENGER_DIAGRAMS_PORT"; fail=1; }
-  # ACCESS-25: every port answers only its own names — a page that rebinds
-  # its name to 127.0.0.1 is refused 421 before anything routes. A release
-  # from before ACCESS-25 answers any name (a rollback to one still passes):
-  # checked where the release's menger knows --allowed-host.
-  if "$bin/menger" --help 2>/dev/null | grep -e --allowed-host >/dev/null; then
-    local p code ports="$MENGER_WS_PORT $MENGER_SHELL_PORT $MENGER_DIAGRAMS_PORT"
-    # ACCESS-24: a release with no REST bridge has no --rest-port.
-    [[ ${MENGER_NO_REST:-} =~ ^(1|true|yes)$ ]] || ! "$bin/menger" --help 2>/dev/null | grep -q -e --rest-port || ports="$ports $MENGER_REST_PORT"
-    for p in $ports; do
-      code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -H 'Host: evil.example' "http://127.0.0.1:$p/" || true)
-      [[ $code == 421 ]] && say "ok   :$p refuses Host: evil.example (421)" || { say "FAIL :$p answers Host: evil.example ($code)"; fail=1; }
-    done
-  fi
-  [[ -d $REPO/perf/node_modules/playwright ]] || (cd "$REPO/perf" && npm ci --silent >/dev/null)
-  # The smoke account reaches the browser through its environment, never argv.
-  if MENGER_SMOKE_USER=${MENGER_SMOKE_USER:-} MENGER_SMOKE_PASSWORD=${MENGER_SMOKE_PASSWORD:-} \
-       node "$REPO/deploy/smoke-browser.mjs" "http://127.0.0.1:$MENGER_SHELL_PORT/" >&2; then :; else fail=1; fi
-  # IDENTITY-38: where the dev sign-in lets the smoke be anyone (test), it
-  # plays the login's known attacks against the live server; any that
-  # works fails the smoke, so no release reaches prod with one open.
-  if [[ $env == test && -n ${MENGER_DEV_LOGIN:-} && -n $login ]]; then
-    if timeout 120 node "$REPO/deploy/probe-auth.mjs" "$MENGER_WS_PORT" "$MENGER_SHELL_PORT" >&2; then :; else fail=1; fi
-  fi
-  return $fail
-}
-
-# ── deploy test ─────────────────────────────────────────────────────────────
-# Test's database becomes a live snapshot of prod's: SQLite's online backup,
-# consistent while prod keeps running. Test's services must be stopped.
-# `deploy test` and `sync test` both take it here.
-snapshot_prod_into_test() {
-  load_env test; local test_db=$MENGER_DB_PATH
-  load_env prod; local prod_db=$MENGER_DB_PATH
-  mkdir -p "$(dirname "$test_db")"
-  rm -f "$test_db" "$test_db-wal" "$test_db-shm"
-  if [[ -f $prod_db ]]; then
-    sqlite3 "$prod_db" ".backup '$test_db'"
-    say "test data: a snapshot of prod's ($(sqlite3 "$test_db" 'select count(*) from tickets') tickets)"
-  else
-    say "test data: prod has no database yet; test starts empty"
-  fi
-}
-
-cmd_deploy() {
-  [[ ${1:-} == test ]] || die "only 'deploy test' — production changes through 'promote'"
-  local rel; rel=$(resolve_release "${2:-}")
-  local good; good=$(last_good test) # DEPLOY-23: the range starts at the last run that passed
-  begin_run deploy
-  step "deploy $rel to test"
-  tell test started "$rel" "$good"
-  stop test
-  snapshot_prod_into_test
-  switch_to test "$rel"
-  restart test
-  if cmd_smoke test; then
-    chmod u+w "$RELEASES/$rel"; date -u +%FT%TZ > "$RELEASES/$rel/TESTED"; chmod a-w "$RELEASES/$rel"
-    record test deploy "$rel" ok
-    tell test succeeded "$rel" "$good"
-    say "test runs $rel — smoke passed; the release is TESTED"
-  else
-    record test deploy "$rel" "smoke failed"
-    tell test failed "$rel" "$good"
-    die "test runs $rel and its smoke FAILED — prod untouched; see: deploy/pipeline logs test"
-  fi
-}
-
-# ── sync ────────────────────────────────────────────────────────────────────
-# DEPLOY-4: test's data refreshed from prod on demand — the snapshot `deploy
-# test` takes, keeping the release test runs. One way only: a sync never
-# writes prod. Test's previous data is backed up first (the newest few kept).
-SYNC_BACKUPS_KEPT=5
-cmd_sync() {
-  [[ ${1:-} == test ]] || die "only 'sync test' — prod's data is never overwritten by a sync"
-  local rel; rel=$(running_release test)
-  [[ -n $rel ]] || die "test runs no release yet — 'deploy/pipeline deploy test' first"
-  # DEPLOY-23: a sync that passes on a release whose deploy failed is the
-  # first run of it that passed — it carries that deploy's commits.
-  local good; good=$(last_good test)
-  begin_run sync
-  step "sync test from prod's data (test keeps $rel)"
-  tell test started "$rel" "$good"
-  stop test
-  local backup; backup=$(backup_db test before-sync)
-  if [[ -n $backup ]]; then
-    say "test's previous data: $backup"
-    ls -1t "$(dirname "$backup")"/tickets.db.*-before-sync 2>/dev/null \
-      | tail -n +$((SYNC_BACKUPS_KEPT + 1)) | xargs -r rm -f
-  fi
-  snapshot_prod_into_test
-  restart test
-  if cmd_smoke test; then
-    record test sync "$rel" ok
-    tell test succeeded "$rel" "$good"
-    say "test runs $rel on a fresh snapshot of prod's data — smoke passed"
-  else
-    record test sync "$rel" "smoke failed"
-    tell test failed "$rel" "$good"
-    die "test's smoke FAILED after the sync — prod untouched; previous data: ${backup:-none}; see: deploy/pipeline logs test"
-  fi
-}
-
-# ── promote ─────────────────────────────────────────────────────────────────
-# Moves an environment (prod; `--to test` exists for the rollback drill) to a
-# tested release, rolling back by itself if the smoke checks fail.
-# RUN-13: prod's data moved to app.menger.sh. While $HOME_DIR/prod.moved
-# exists, this machine's prod is the move's rollback, stopped with its
-# database untouched: promote and rollback would start it beside the live
-# tracker, so they refuse. The rollback itself (RUN-13) removes the mark.
-moved_guard() {
-  [[ $1 == prod && -f $HOME_DIR/prod.moved ]] || return 0
-  die "prod moved to app.menger.sh ($(head -n1 "$HOME_DIR/prod.moved")); this machine's prod is the rollback, kept stopped — see RUN-13"
-}
-
-cmd_promote() {
-  local rel="" adopt=0 to=prod
-  while [[ $# -gt 0 ]]; do
-    case $1 in
-      --adopt) adopt=1 ;;
-      --to) to=$2; shift ;;
-      -*) die "unknown flag $1" ;;
-      *) rel=$1 ;;
-    esac; shift
-  done
-  check_env "$to"
-  moved_guard "$to"
-  [[ -n $rel ]] || rel=$(running_release test)
-  rel=$(resolve_release "$rel")
-  [[ -f $RELEASES/$rel/TESTED ]] || die "$rel has not passed the test environment — run: deploy/pipeline deploy test $rel"
-  load_env "$to"
-
-  # Whatever holds the env's ports must be the env's own services, unless
-  # adopting: the one-time retirement of a hand-started menger (DEPLOY-3).
-  local holders; holders=$(foreign_holders "$to")
-  if [[ -n $holders ]]; then
-    [[ $adopt == 1 ]] || die "ports held by processes outside systemd: $holders — pass --adopt to stop them"
-    for p in $holders; do
-      local comm; comm=$(ps -o comm= -p "$p")
-      [[ $comm == menger || $comm == menger-diagram* ]] || die "pid $p ($comm) holds a port and is not menger — not stopping it"
-      say "adopting: stopping pid $p ($comm, $(readlink -f /proc/$p/exe))"
-      kill -TERM "$p"; for _ in $(seq 1 40); do kill -0 "$p" 2>/dev/null || break; sleep 0.25; done
-      kill -0 "$p" 2>/dev/null && die "pid $p did not stop"
-    done
-  fi
-
-  local was; was=$(running_release "$to")
-  local good; good=$(last_good "$to") # DEPLOY-23: the range starts at the last run that passed
-  begin_run promote
-  step "promote $rel to $to (was: ${was:-none})"
-  tell "$to" started "$rel" "$good"
-  local backup; backup=$(backup_db "$to" "before-$rel")
-  [[ -n $backup ]] && say "backup: $backup"
-  switch_to "$to" "$rel"
-  restart "$to"
-  if cmd_smoke "$to"; then
-    record "$to" promote "$rel" ok
-    tell "$to" succeeded "$rel" "$good"
-    say "$to runs $rel — smoke passed"
-    return 0
-  fi
-  tell "$to" failed "$rel" "$good"
-  say "smoke FAILED on $to — rolling back"
-  stop "$to"
-  [[ -n $backup ]] && restore_db "$to" "$backup" && say "restored $backup"
-  if [[ -n $was ]]; then
-    ln -sfn "$RELEASES/$was" "$(envdir "$to")/current"
-    restart "$to"
-    if cmd_smoke "$to"; then
-      record "$to" promote "$rel" "smoke failed; rolled back to $was"
-      tell "$to" rolled_back "$was" "$rel"
-      die "$to is back on $was (smoke passed); $rel was not promoted"
-    fi
-    record "$to" promote "$rel" "smoke failed; rollback to $was ALSO failed"
-    die "$to rollback to $was failed its smoke too — see: deploy/pipeline logs $to"
-  fi
-  record "$to" promote "$rel" "smoke failed; no previous release; $to stopped"
-  die "$to had no previous release to return to; its services are stopped and its database restored"
-}
-foreign_holders() { # ENV → pids listening on the env's ports that are not its units' main pids
-  load_env "$1"
-  local mine=" " p
-  for u in $(units_of "$1"); do mine+="$(systemctl --user show -p MainPID --value "$u" 2>/dev/null) "; done
-  for port in "$MENGER_WS_PORT" "$MENGER_SHELL_PORT" "$MENGER_REST_PORT" "$MENGER_DIAGRAMS_PORT"; do
-    # RUN-19: only a listener prod's bind (127.0.0.1) collides with — loopback
-    # or a wildcard; one on another address (menger-lan's proxies) is not in the way
-    for p in $(ss -ltnpH sport = :"$port" 2>/dev/null \
-        | awk '$4 ~ /^(127\.[0-9.]+|0\.0\.0\.0|\*|\[::\]|\[::1\]|\[::ffff:127\.[0-9.]+\]):[0-9]+$/' \
-        | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
-      [[ $mine == *" $p "* ]] || echo "$p"
-    done
-  done | sort -u | tr '\n' ' ' | sed 's/ $//'
-}
-
-# ── rollback ────────────────────────────────────────────────────────────────
-cmd_rollback() {
-  local env=${1:-}; shift || true; check_env "$env"
-  moved_guard "$env"
-  local restore=""
-  [[ ${1:-} == --restore ]] && { restore=${2:-}; [[ -f $restore ]] || die "no backup '$restore'"; }
-  local prev; prev=$(previous_release "$env"); [[ -n $prev ]] || die "$env has no previous release"
-  local cur; cur=$(running_release "$env")
-  begin_run rollback
-  step "rollback $env: $cur → $prev"
-  tell "$env" started "$prev" "$cur"
-  stop "$env"
-  [[ -n $restore ]] && { restore_db "$env" "$restore"; say "restored $restore"; }
-  switch_to "$env" "$prev"
-  restart "$env"
-  if cmd_smoke "$env"; then record "$env" rollback "$prev" ok; tell "$env" rolled_back "$prev" "$cur"; say "$env runs $prev"
-  else record "$env" rollback "$prev" "smoke failed"; tell "$env" failed "$prev" "$cur"; die "$env runs $prev but its smoke FAILED"; fi
 }
 
 # ── backfill ────────────────────────────────────────────────────────────────
@@ -875,7 +442,7 @@ cmd_backfill() {
 }
 
 # ── the image (RUN-10) ──────────────────────────────────────────────────────
-# menger as a container image, built from a TESTED release's own bytes (its
+# menger as a container image, built from a release's own bytes (its
 # bin/menger, bin/run-menger, app/ and RELEASE, staged beside
 # deploy/image/Dockerfile) — never from a checkout. IMAGE_STORE says where it
 # is kept: `local` (default) tags menger:<release> in this machine's Docker;
@@ -885,20 +452,9 @@ cmd_backfill() {
 IMAGE_LOCAL=${MENGER_IMAGE_LOCAL:-menger}
 IMAGE_GHCR=${MENGER_IMAGE_GHCR:-ghcr.io/hypermemetic-ai/menger}
 IMAGE_CONTEXT="" # the staged context an image run made, removed on exit
-# The release test last passed, as deployments.log says (a deploy or sync of
-# test that ended ok), whose directory is still here and marked TESTED; with
-# no such line, the newest TESTED release by name.
-newest_tested() {
-  local r rels=()
-  [[ -f $LOG ]] && mapfile -t rels < <(awk -F'\t' '$2 == "test" && ($3 == "deploy" || $3 == "sync") && $5 == "ok" {print $4}' "$LOG")
-  for ((i = ${#rels[@]} - 1; i >= 0; i--)); do
-    r=${rels[i]}; [[ -n $r && -f $RELEASES/$r/RELEASE && -f $RELEASES/$r/TESTED ]] && { echo "$r"; return 0; }
-  done
-  for r in $(ls -1 "$RELEASES" 2>/dev/null | grep -v '\.tmp$' | sort -r); do
-    [[ -f $RELEASES/$r/RELEASE && -f $RELEASES/$r/TESTED ]] && { echo "$r"; return 0; }
-  done
-  return 1
-}
+# DEPLOY-52: the image comes before the test: any release built here may be
+# imaged (the newest, unless named); the release test passed, and whose suite
+# passed, is what `remote prod` alone requires.
 cmd_image() {
   local rel="" store=${IMAGE_STORE:-local}
   while [[ $# -gt 0 ]]; do
@@ -908,11 +464,7 @@ cmd_image() {
     esac; shift
   done
   case $store in local|ghcr) ;; *) die "IMAGE_STORE '$store' — local or ghcr" ;; esac
-  if [[ -z $rel ]]; then
-    rel=$(newest_tested) || die "no TESTED release — run: deploy/pipeline build, then deploy/pipeline deploy test"
-  fi
   rel=$(resolve_release "$rel")
-  [[ -f $RELEASES/$rel/TESTED ]] || die "$rel has not passed the test environment — run: deploy/pipeline deploy test $rel"
   local r=$RELEASES/$rel
   [[ -x $r/bin/menger && -f $r/bin/run-menger && -f $r/app/index.html ]] || die "$rel lacks bin/menger, bin/run-menger or app/index.html"
   # The image binds 0.0.0.0 inside the container: a menger from before RUN-8
@@ -920,7 +472,7 @@ cmd_image() {
   # DEPLOY-50: since DIST-14 --help is the short list and --bind is in
   # --help-all; a release before it has no --help-all. Read both.
   { "$r/bin/menger" --help-all; "$r/bin/menger" --help; } 2>/dev/null | grep -e '--bind' >/dev/null \
-    || die "$rel's menger has no --bind (RUN-8, c2b5723): an image of it could not be reached — deploy test a newer release first"
+    || die "$rel's menger has no --bind (RUN-8, c2b5723): an image of it could not be reached — build a newer release"
   need docker
   local sha subject ref tags=()
   sha=$(sed -n 's/^commit: *//p' "$r/RELEASE" | head -n 1)
@@ -1052,11 +604,11 @@ cmd_local() {
 # passed (infra's rule). Without deploy/app.yml each refuses, naming RUN-11,
 # before it touches anything.
 APP_YML=${MENGER_APP_YML:-$REPO/deploy/app.yml}
+app_url() { case $1 in test) echo "$APP_TEST_URL" ;; prod) echo "$APP_URL" ;; esac; }
 cmd_remote() {
   local env=${1:-}; shift || true
   case $env in
-    test) local host=app-test.menger.sh url=${MENGER_APP_TEST_URL:-https://app-test.menger.sh/} ;;
-    prod) local host=app.menger.sh url=${MENGER_APP_URL:-https://app.menger.sh/} ;;
+    test|prod) local url host; url=$(app_url "$env")/; host=${url#https://}; host=${host%%/*} ;;
     *) die "usage: deploy/pipeline remote test --image IMAGE | remote prod" ;;
   esac
   local img; img=$(image_arg "$@")
@@ -1074,27 +626,163 @@ cmd_remote() {
     if [[ $img != "$ref" ]] && ! docker image inspect "$ref" >/dev/null 2>&1; then
       docker tag "$img" "$ref" || die "could not tag $img as $ref (is $img in this machine's Docker?)"
     fi
-    local good; good=$(last_good app-test)
+    # DEPLOY-52: test is app-test.menger.sh — its records are `test`'s, and so is its line in the log
+    local good; good=$(last_good test)
     begin_run remote-test
     step "remote test: $ref → $host (bin/infra app.yml -e env=test -e sha=$rel)"
-    tell app-test started "$rel" "$good"
+    tell test started "$rel" "$good"
     "$INFRA/bin/infra" app.yml -e "app_dir=$src" -e env=test -e "sha=$rel" >&2 \
-      || { record app-test run "$rel" "infra failed"; tell app-test failed "$rel" "$good"; die "infra did not deploy $img to $host"; }
-    record app-test run "$rel" "ok $img"
-    tell app-test succeeded "$rel" "$good"
+      || { record test run "$rel" "infra failed"; tell test failed "$rel" "$good"; die "infra did not deploy $img to $host"; }
+    if ! smoke_remote test "$rel"; then
+      record test run "$rel" "smoke failed"; tell test failed "$rel" "$good"
+      die "$host runs $rel and its smoke FAILED — prod untouched"
+    fi
+    mark_release "$rel" TESTED "$(date -u +%FT%TZ)"
+    record test run "$rel" "ok $img"
+    tell test succeeded "$rel" "$good"
+    say "test ($host) runs $rel — smoke passed; its suite runs next (deploy/pipeline suite $rel)"
   else
-    # DEPLOY-28: promote.yml ships the image app-test runs — the release app-test last ran ok
-    local rel good; rel=$(last_good app-test); good=$(last_good app-prod)
+    # promote.yml ships the image test (app-test) runs — the release test last ran ok (DEPLOY-28),
+    # and only once that release's suite has passed (DEPLOY-52)
+    local rel good s; rel=$(last_good test); good=$(last_good app-prod)
+    [[ -n $rel ]] || die "test runs no release this log knows — nothing to promote (deploy/pipeline remote test first)"
+    s=$(suite_of "$rel")
+    case $s in
+      passed) ;;
+      failed) die "$rel's suite FAILED ($(suite_line "$rel")) — a release whose suite is red never reaches prod; fix forward, then remote test the fix" ;;
+      running) die "$rel's suite is still running ($(suite_line "$rel")) — promote once it has passed" ;;
+      *) die "$rel has no suite result here — run: deploy/pipeline suite $rel, then promote once it has passed" ;;
+    esac
     begin_run remote-prod
-    step "remote prod: test's image${rel:+ ($rel)} → $host (bin/infra promote.yml)"
-    [[ -n $rel ]] && tell app-prod started "$rel" "$good"
+    step "remote prod: test's image ($rel, suite passed) → $host (bin/infra promote.yml)"
+    tell app-prod started "$rel" "$good"
     "$INFRA/bin/infra" promote.yml -e "app_dir=$src" >&2 \
-      || { record app-prod run "${rel:--}" "infra failed"; [[ -n $rel ]] && tell app-prod failed "$rel" "$good"; die "infra did not promote to $host (it rolls prod back by itself)"; }
-    record app-prod run "${rel:--}" ok
-    if [[ -n $rel ]]; then tell app-prod succeeded "$rel" "$good"
-    else say "record: app-test has no release in $LOG — app-prod not recorded"; fi
+      || { record app-prod run "$rel" "infra failed"; tell app-prod failed "$rel" "$good"; die "infra did not promote to $host (it rolls prod back by itself)"; }
+    if ! smoke_remote prod "$rel"; then
+      record app-prod run "$rel" "smoke failed"; tell app-prod failed "$rel" "$good"
+      die "$host runs $rel and its smoke FAILED — bin/infra rollback.yml returns it (deploy/README.md \"On the Linode\")"
+    fi
+    record app-prod run "$rel" ok
+    tell app-prod succeeded "$rel" "$good"
   fi
   hf_output "url=$url"
+}
+
+# ── the smoke, against the deployment (DEPLOY-52) ───────────────────────────
+# smoke_remote test|prod [RELEASE] — from outside, as a person or an agent meets
+# it, reading only: http → https; the app behind its login page with HSTS; the
+# login page; RUN-9's protected-resource metadata; a socket from another origin
+# refused; tickets.health as the pipeline's key; an anonymous socket refused;
+# and, when the release is here, its own app (its menger-app-*.js) served. It
+# writes nothing: no probe tickets, no grants, nothing in the tracker it checks.
+SMOKE_WAIT=${MENGER_SMOKE_WAIT:-60} # seconds for health to answer after a restart
+smoke_remote() {
+  local env=$1 rel=${2:-} base host fail=0 code to h js
+  base=$(app_url "$env"); host=${base#https://}; host=${host%%/*}
+  step "smoke $env ($host${rel:+, $rel})"
+  # A drill: DEPLOY_SMOKE_FAIL=ENV fails the smoke of ENV on purpose
+  if [[ ${DEPLOY_SMOKE_FAIL:-} == "$env" ]]; then say "smoke: DEPLOY_SMOKE_FAIL=$env — failing on purpose (a drill)"; return 1; fi
+  to=$(curl -s -o /dev/null -m 10 -w '%{http_code} %{redirect_url}' "http://$host/" || true)
+  [[ $to == "308 https://$host/" || $to == "301 https://$host/" ]] && say "ok   http://$host/ → https" || { say "FAIL http://$host/ answers '$to', not a redirect to https://$host/"; fail=1; }
+  # grep reads the whole answer (DEPLOY-6: no -q under pipefail)
+  h=$(curl -s -o /dev/null -D - -m 10 "$base/" 2>/dev/null | tr -d '\r' || true)
+  if grep -iE '^location: /login' <<<"$h" >/dev/null && grep -i '^strict-transport-security: max-age=31536000' <<<"$h" >/dev/null; then
+    say "ok   $base/ behind its login page, with HSTS"
+  else say "FAIL $base/ is not behind its login page with HSTS"; fail=1; fi
+  if curl -fsS -m 10 "$base/login" 2>/dev/null | grep '<h1>Sign in</h1>' >/dev/null; then say "ok   $base/login is the sign-in page"
+  else say "FAIL $base/login is not the sign-in page"; fail=1; fi
+  if curl -fsS -m 10 "$base/.well-known/oauth-protected-resource/ws" 2>/dev/null | grep "\"resource\":\"$base/ws\"" >/dev/null; then
+    say "ok   the socket's protected-resource metadata names $base/ws"
+  else say "FAIL no protected-resource metadata for $base/ws"; fail=1; fi
+  code=$(curl -s -o /dev/null -m 10 --http1.1 -w '%{http_code}' -H 'Origin: https://evil.example' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+           -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$base/ws" || true)
+  [[ $code == 403 ]] && say "ok   a socket from another origin is refused (403)" || { say "FAIL a socket from https://evil.example answers $code"; fail=1; }
+  local n="" until=$((SECONDS + SMOKE_WAIT)) wss=wss://$host/ws
+  if [[ -n $DEPLOY_KEY_FILE ]]; then
+    while :; do
+      n=$(health_of "$wss"); [[ $n =~ ^[0-9]+$ || $SECONDS -ge $until ]] && break; sleep 2
+    done
+    [[ $n =~ ^[0-9]+$ ]] && say "ok   tickets.health on $wss — $n tickets (as the pipeline key)" || { say "FAIL tickets.health on $wss${n:+ ($n)}"; fail=1; }
+  else
+    say "FAIL no pipeline key (MENGER_DEPLOY_KEY_FILE) to read tickets.health on $wss"; fail=1
+  fi
+  # menger-call exits 3 on the refusal this wants: its answer is read whole, never through a pipe's status
+  local anon; anon=$(env -u MENGER_DEPLOY_KEY -u MENGER_DEPLOY_KEY_FILE timeout 15 node "$CALL_JS" --url "$wss" --timeout 10 tickets.health --params '{}' 2>/dev/null || true)
+  if grep -E '"error_kind":"(unauthenticated|forbidden)"' <<<"$anon" >/dev/null; then
+    say "ok   an anonymous socket reaches nothing"
+  else say "FAIL an anonymous socket on $wss reaches past the auth door"; fail=1; fi
+  if [[ -n $rel && -d $RELEASES/$rel/app ]]; then
+    js=$(cd "$RELEASES/$rel/app" && ls -1 menger-app-*.js 2>/dev/null | head -n 1)
+    if [[ -z $js ]]; then say "ok   (the release's app names no menger-app-*.js to look for)"
+    elif [[ $(curl -s -o /dev/null -m 10 -w '%{http_code}' "$base/app/$js" || true) == 200 ]]; then say "ok   $host serves $rel's app ($js)"
+    else say "FAIL $host does not serve $rel's app ($js)"; fail=1; fi
+  fi
+  return $fail
+}
+cmd_smoke() {
+  case ${1:-} in test|prod) ;; *) die "usage: deploy/pipeline smoke test|prod  (app-test.menger.sh / app.menger.sh; the local environments are retired, DEPLOY-52)" ;; esac
+  local rel; if [[ $1 == test ]]; then rel=$(last_good test); else rel=$(last_good app-prod); fi
+  smoke_remote "$1" "$rel"
+}
+
+# ── the suite, after the deploy (DEPLOY-52) ─────────────────────────────────
+# `suite RELEASE`: cargo test --workspace and the frontend's tests at the
+# release's commit — its own tree, in ../menger-suite (MENGER_SUITE_CHECKOUT),
+# never against a deployment — one suite at a time (a lock). The release's
+# SUITE says `running`, then `passed` or `failed` with the counts and the log;
+# a line in deployments.log (`suite test RELEASE passed|failed`, no deployment).
+# `remote prod` refuses a release whose suite is not `passed`. A release built
+# with the gate (before DEPLOY-52) counts as passed: its gate was the suite.
+# mark_release REL NAME TEXT — a mark in the read-only release (TESTED, SUITE)
+mark_release() {
+  local r=$RELEASES/$1
+  [[ -d $r ]] || return 0
+  chmod u+w "$r"; [[ -e $r/$2 ]] && chmod u+w "$r/$2"
+  printf '%s\n' "$3" >"$r/$2"; chmod a-w "$r/$2" "$r"
+}
+suite_of() { # REL → passed | failed | running | none
+  local r=$RELEASES/$1 g
+  if [[ -f $r/SUITE ]]; then sed -n 's/^\(passed\|failed\|running\)\b.*/\1/p' "$r/SUITE" | head -n 1; return; fi
+  g=$(sed -n 's/^gate: *//p' "$r/RELEASE" 2>/dev/null | head -n 1)
+  if [[ $g == workspace*", 0 failed; frontend "*", 0 failed" ]]; then echo passed; else echo none; fi
+}
+suite_line() { # REL → what its SUITE says, one line
+  local r=$RELEASES/$1
+  if [[ -f $r/SUITE ]]; then head -n 1 "$r/SUITE"; else sed -n 's/^gate: */gate at build: /p' "$r/RELEASE" 2>/dev/null | head -n 1; fi
+}
+SUITE_REL=""
+suite_red() { # LABEL LOGFILE — gate_red's hook: the release marked failed, the log line written
+  mark_release "$SUITE_REL" SUITE "failed $(date -u +%FT%TZ) — $1 red; log $2"
+  record suite test "$SUITE_REL" "failed $1"
+}
+cmd_suite() {
+  if [[ ${1:-} == --status ]]; then
+    [[ -n ${2:-} ]] || die "usage: deploy/pipeline suite --status RELEASE"
+    local r; r=$(resolve_release "$2"); printf 'suite: %s\n' "$(suite_of "$r")"; return 0
+  fi
+  [[ -n ${1:-} ]] || die "usage: deploy/pipeline suite RELEASE"
+  need cargo; need git
+  local rel sha short disk lock
+  rel=$(resolve_release "$1")
+  sha=$(sed -n 's/^commit: *//p' "$RELEASES/$rel/RELEASE" | head -n 1)
+  [[ -n $sha ]] || die "$rel names no commit"
+  short=${sha:0:7} LOG_SHA=${sha:0:7}
+  disk=$("$REPO/scripts/disk-check.sh" --path "$HOME") || die "refused — $disk"
+  say "$disk"
+  mkdir -p "$HOME_DIR"
+  exec {lock}>>"$HOME_DIR/.suite.lock"
+  flock -n "$lock" || { say "suite: another suite is running — waiting for it"; flock "$lock"; }
+  step "suite $rel — $(sed -n 's/^subject: *//p' "$RELEASES/$rel/RELEASE" | cut -c1-70)"
+  mark_release "$rel" SUITE "running $(date -u +%FT%TZ) — deploy/pipeline suite (pid $$)"
+  SUITE_REL=$rel GATE_ON_RED=suite_red
+  # a suite killed half-way is not a pass: whatever ends the run, a `running` mark left becomes `failed`
+  trap 'rc=$?; [[ $(suite_of "$SUITE_REL") == running ]] && mark_release "$SUITE_REL" SUITE "failed $(date -u +%FT%TZ) — the suite did not finish (exit $rc)"; on_exit' EXIT
+  git -C "$REPO" cat-file -e "$sha^{commit}" 2>/dev/null || die "$rel's commit $short is not in $REPO"
+  checkout "$SUITE_CHECKOUT" "$sha"
+  run_gate "$SUITE_CHECKOUT" "$short"
+  mark_release "$rel" SUITE "passed $(date -u +%FT%TZ) — workspace $GATE_WS; frontend $GATE_FE"
+  record suite test "$rel" "passed"
+  say "suite $rel: passed — workspace $GATE_WS; frontend $GATE_FE"
 }
 
 # `remote-secret test|prod` (IDENTITY-45) — the WorkOS environment's API key
@@ -1246,7 +934,7 @@ cmd_landing() {
   say "menger.sh serves $short"
 }
 cmd_media() {
-  local rel; rel=$(resolve_release "${1:-$(running_release prod)}")
+  local rel; rel=$(resolve_release "${1:-$(last_good app-prod)}")
   step "media from $rel — $(sed -n 's/^subject: *//p' "$RELEASES/$rel/RELEASE" | cut -c1-70)"
   MENGER_BIN=$RELEASES/$rel/bin/menger MENGER_APP_DIST=$RELEASES/$rel/app PLAYWRIGHT_FROM=$REPO/perf \
     "$REPO/scripts/landing-media.sh" all || die "scripts/landing-media.sh failed"
@@ -1275,26 +963,27 @@ edge_status() {
 }
 
 cmd_status() {
-  for env in prod test; do
-    [[ -f $(env_file $env) ]] || { say "$env: not installed"; continue; }
-    load_env "$env"
-    local rel; rel=$(running_release "$env")
-    printf '%s\n' "$env"
-    printf '  release   %s%s\n' "${rel:-none}" "$([[ -n $rel && -f $RELEASES/$rel/TESTED ]] && echo '  (tested)')"
-    [[ -n $rel ]] && printf '  commit    %s\n' "$(sed -n 's/^subject: *//p' "$RELEASES/$rel/RELEASE" | cut -c1-90)"
-    printf '  previous  %s\n' "$(previous_release "$env" || true)"
-    for u in $(units_of "$env"); do
-      printf '  %-28s %s since %s\n' "$u" "$(systemctl --user is-active "$u" 2>/dev/null || true)" \
-        "$(systemctl --user show -p ActiveEnterTimestamp --value "$u" 2>/dev/null)"
-    done
-    # a refused or silent health (test behind its login) is a line, never the end of status
-    local h; h=$(health_of "$MENGER_WS_PORT")
-    if [[ $h =~ ^[0-9]+$ ]]; then printf '  health    %s tickets on :%s%s\n' "$h" "$MENGER_WS_PORT" "${DEPLOY_KEY_FILE:+ (signed in as the pipeline key)}"
-    else printf '  health    no answer on :%s%s\n' "$MENGER_WS_PORT" "${h:+ ($h)}"; fi
-    printf '  app       http://127.0.0.1:%s/\n' "$MENGER_SHELL_PORT"
-    local f; f=$(foreign_holders "$env"); [[ -n $f ]] && printf '  outside   pids %s hold its ports outside systemd\n' "$f"
-    record_status "$env"
+  # DEPLOY-52: test is app-test.menger.sh, prod app.menger.sh — what each runs as
+  # deployments.log says (the last run that passed), its suite, its health from outside
+  local env name rel url h
+  for env in test prod; do
+    if [[ $env == test ]]; then name=test; else name=app-prod; fi
+    url=$(app_url "$env"); rel=$(last_good "$name")
+    printf '%s  %s\n' "$env" "$url/"
+    printf '  release   %s%s\n' "${rel:-none in $LOG}" "$([[ -n $rel && -f $RELEASES/$rel/TESTED ]] && echo '  (tested)')"
+    if [[ -n $rel && -f $RELEASES/$rel/RELEASE ]]; then
+      printf '  commit    %s\n' "$(sed -n 's/^subject: *//p' "$RELEASES/$rel/RELEASE" | cut -c1-90)"
+      printf '  suite     %s\n' "$(suite_of "$rel")$([[ $(suite_of "$rel") != none ]] && printf ' — %s' "$(suite_line "$rel")")"
+    fi
+    printf '  before    %s\n' "$(ran_before "$name")"
+    h=$(health_of "wss://${url#https://}/ws")
+    if [[ $h =~ ^[0-9]+$ ]]; then printf '  health    %s tickets%s\n' "$h" "${DEPLOY_KEY_FILE:+ (signed in as the pipeline key)}"
+    else printf '  health    no answer from %s/ws%s\n' "${url/https/wss}" "${h:+ ($h)}"; fi
+    record_status "$name"
   done
+  # DEPLOY-52: the newest suite and where it stands
+  local sl; sl=$(awk -F'\t' '$2 == "suite"' "$LOG" 2>/dev/null | tail -n 1)
+  [[ -n $sl ]] && printf 'suite      %s %s at %s\n' "$(cut -f4 <<<"$sl")" "$(cut -f5 <<<"$sl")" "$(cut -f1 <<<"$sl")"
   edge_status
   runner_status
   # CI-2: how full the disk is; a low one is said, the build would refuse it
@@ -1314,25 +1003,25 @@ runner_status() {
   unit=$(systemctl --user is-active menger-deploy-runner.service 2>/dev/null || true)
   on=$(sed -n 's/^MENGER_RUNNER_AUTO_TEST=//p' "$envf" | tail -n 1)
   if [[ $on == 0 ]]; then printf 'auto-test  off (MENGER_RUNNER_AUTO_TEST=0 in %s)\n' "$envf"; return 0; fi
-  printf 'auto-test  on — a ticket entering In Review deploys test; the runner is %s\n' "${unit:-unknown}"
+  printf 'auto-test  on — a ticket entering In Review deploys test (app-test.menger.sh), the suite after it; the runner is %s\n' "${unit:-unknown}"
   [[ -f $state ]] || { printf '  pending   none\n'; return 0; }
   jq -r '(select(.running) | "  running   request \(.running.request) for \(.running.tickets | join(", "))"),
     "  pending   \(if .pending then "request \(.pending.request) for \(.pending.tickets | join(", "))" else "none" end)",
     (select((.waiting // []) | length > 0) | "  waiting   \(.waiting | join(", ")) (the debounce; filed or folded \(if .due_at then "at \(.due_at / 1000 | floor | todate)" else "soon" end))"),
-    (select(.last) | "  last      request \(.last.request) \(.last.outcome) for \(.last.tickets | join(", ")) at \(.last.at)")' "$state" 2>/dev/null \
+    (select(.last) | "  last      request \(.last.request) \(.last.outcome) for \(.last.tickets | join(", ")) at \(.last.at)"),
+    (select(.suite.running) | "  suite     \(.suite.running.release) running (request \(.suite.running.request))"),
+    (select(.suite.pending) | "  suite     \(.suite.pending.release) waiting (request \(.suite.pending.request))"),
+    (select(.suite.last) | "  suite     last: \(.suite.last.release) \(.suite.last.outcome) at \(.suite.last.at)")' "$state" 2>/dev/null \
     || printf '  pending   ? (%s unreadable)\n' "$state"
 }
-# ACCESS-47: tickets.health on PORT — its ticket count, or why not (a gate's
-# refusal, the key not granted there); signed in as the pipeline's key where
-# it has one, else anonymous through synapse (login off answers it).
+# ACCESS-47: tickets.health at URL (ws:// or wss://) — its ticket count, or why
+# not (a gate's refusal, the key not granted there; `no key`); signed in as the
+# pipeline's key — app-test and app.menger.sh require login.
 health_of() {
-  if [[ -n $DEPLOY_KEY_FILE ]]; then
-    env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE" timeout 8 node "$CALL_JS" \
-        --url "ws://127.0.0.1:$1" --agent pipeline --timeout 5 tickets.health --params '{}' 2>/dev/null \
-      | jq -rs 'map(select(.type == "health") | .ticket_count) + map(select(.type == "error") | .error_kind // .message) | .[0] // empty' 2>/dev/null || true
-  else
-    timeout 5 synapse -P "$1" menger tickets health 2>/dev/null | sed -n 's/^ *ticket_count: *//p' || true
-  fi
+  [[ -n $DEPLOY_KEY_FILE ]] || { echo "no key"; return 0; }
+  env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE" timeout 15 node "$CALL_JS" \
+      --url "$1" --agent pipeline --timeout 10 tickets.health --params '{}' 2>/dev/null \
+    | jq -rs 'map(select(.type == "health") | .ticket_count) + map(select(.type == "error") | .error_kind // .message) | .[0] // empty' 2>/dev/null || true
 }
 record_status() { # ENV → its last deployment record sent (DEPLOY-12), and what waits to be
   local f=$SENT/${1//\//_}.json n=0 q
@@ -1348,35 +1037,37 @@ record_status() { # ENV → its last deployment record sent (DEPLOY-12), and wha
   return 0
 }
 cmd_releases() {
+  local t p
+  t=$(last_good test); p=$(last_good app-prod)
   for r in $(ls -1 "$RELEASES" 2>/dev/null | grep -v '\.tmp$' | sort); do
     local where=""
-    for e in prod test; do [[ $(running_release $e) == "$r" ]] && where+=" $e"; [[ $(previous_release $e) == "$r" ]] && where+=" $e(previous)"; done
-    printf '%s  %-6s %-22s %s\n' "$r" "$([[ -f $RELEASES/$r/TESTED ]] && echo tested || echo -)" "${where# }" \
+    [[ $r == "$t" ]] && where+=" test"; [[ $r == "$p" ]] && where+=" prod"
+    printf '%s  %-7s %-6s %-10s %s\n' "$r" "$(suite_of "$r")" "$([[ -f $RELEASES/$r/TESTED ]] && echo tested || echo -)" "${where# }" \
       "$(sed -n 's/^subject: *//p' "$RELEASES/$r/RELEASE" | cut -c1-70)"
   done
 }
-cmd_logs() { local env=${1:-}; check_env "$env"; shift; journalctl --user -u "menger@$env" -u "menger-diagrams@$env" "$@"; }
 
 # ── dispatch ────────────────────────────────────────────────────────────────
 cmd=${1:-}; shift || true
 # CI-6: what a long command says is also kept, in a file of its own (build also keeps each gate's).
 case $cmd in
-  build|deploy|sync|promote|rollback|smoke|landing|media|image|local|remote)
+  build|smoke|suite|landing|media|image|local|remote)
     LOG_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
     _l=$(log_path "$cmd${1:+-${1//[^A-Za-z0-9._-]/_}}"); say "log: $_l"
     exec > >(tee -a "$_l") 2> >(tee -a "$_l" >&2) ;;
 esac
 case $cmd in
-  install)  cmd_install "$@" ;;
+  install|deploy|sync|promote|rollback|logs)
+    # DEPLOY-52: this machine's test and prod are retired; their data stays where it was
+    say "pipeline: '$cmd' is retired (DEPLOY-52) — this machine runs no environment; test is app-test.menger.sh, prod app.menger.sh:"
+    say "  deploy/pipeline build --no-gate → image <release> → remote test --image … (→ suite <release>) → remote prod"
+    say "  the local data stays untouched (~/.local/share/menger/tickets.db, its backups/, ~/.local/share/menger-test/); deploy/README.md \"The local environments, retired\""
+    exit 2 ;;
   build)    cmd_build "$@" ;;
-  deploy)   cmd_deploy "$@" ;;
-  sync)     cmd_sync "$@" ;;
-  promote)  cmd_promote "$@" ;;
-  rollback) cmd_rollback "$@" ;;
+  suite)    cmd_suite "$@" ;;
   smoke)    cmd_smoke "$@" ;;
   status)   cmd_status ;;
   releases) cmd_releases ;;
-  logs)     cmd_logs "$@" ;;
   backfill) cmd_backfill ;;
   landing)  cmd_landing "$@" ;;
   media)    cmd_media "$@" ;;

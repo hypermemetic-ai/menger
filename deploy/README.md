@@ -1,148 +1,165 @@
 # Deploying menger
 
-menger runs in two environments on this machine, **prod** and **test**, both
-under `systemd --user` (lingering is on: they start at boot and restart on
-failure). Production changes only through this pipeline (DEPLOY-1).
+menger runs in two environments, **test** (https://app-test.menger.sh) and
+**prod** (https://app.menger.sh), both on the Linode as containers of one
+image, through hypermemetic-infra ("On the Linode", below). This machine
+builds the releases and their images, runs the suite, and runs no
+environment (DEPLOY-52, owner 2026-10-22/23: *"we need to work directly
+against the test deployment and there should be no tests running on that
+deployment"*, *"we run the tests after the deployment to test"*, *"we need to
+remove the non remote environments"*). Production changes only through this
+pipeline (DEPLOY-1).
 
 ```
-commit on main → build → gate → release → deploy test → smoke → promote → smoke → live
-                           ↓ red            (prod data          ↓ red              ↓ red
-                       no release            snapshot)     prod untouched     automatic rollback
+commit on main → build (no gate) → release → image (GHCR) → remote test → smoke → live on app-test.menger.sh
+                                                                  ↓ red                 ↓
+                                                          prod untouched     the suite, on this machine, at the release's commit
+                                                                                        ↓ green: the release may go to prod
+                                                                                        ↓ red: marked; remote prod refuses it
+                                                         remote prod (the owner's) → smoke → live on app.menger.sh
 ```
 
 ## The environments
 
-| | prod | test |
+| | test | prod |
 |---|---|---|
-| menger WebSocket / app / REST | 4455 / 4456 / 4457 | 4450 / 4451 / 4452 |
-| diagrams | 4458 | 4453 |
-| app | http://127.0.0.1:4456/ | http://127.0.0.1:4451/ |
-| database | `~/.local/share/menger/tickets.db` | `~/.local/share/menger-test/tickets.db` — prod's, copied at each deploy |
-| units | `menger@prod`, `menger-diagrams@prod` | `menger@test`, `menger-diagrams@test` |
-| settings | `~/.config/menger/prod.env` + `prod.local.env` | `~/.config/menger/test.env` (`PLEXUS_NO_REGISTRY=1`) + `test.local.env` + `test.smoke.env` |
-| login the smoke requires | `MENGER_EXPECT_LOGIN=required` (since ACCESS-47, 2026-10-17) | `MENGER_EXPECT_LOGIN=required` |
+| where | https://app-test.menger.sh (`wss://app-test.menger.sh/ws`) | https://app.menger.sh (`wss://app.menger.sh/ws`) |
+| deployed by | `deploy/pipeline remote test --image …` (infra's `app.yml`) | `deploy/pipeline remote prod` (infra's `promote.yml`: what test runs) |
+| recorded as | `test` (DEPLOY-52; it was `app-test`) | `app-prod`, promoting from `test` |
+| its data | its own tracker, in the box's volume | the tracker since RUN-13 |
+| settings | `deploy/env/app-test.env` | `deploy/env/app-prod.env` |
 
-## Settings (ACCESS-27)
+**Check work on test, signed in as your key there** — once per machine (a
+session is the host's own), then as usual:
 
-An environment's settings are three files in `~/.config/menger/`; the names
-are stable (ACCESS-24 and ACCESS-7 read them):
+```sh
+synapse --url wss://app-test.menger.sh/ws _login menger --key builder --as builder
+synapse --url wss://app-test.menger.sh/ws --as builder menger tickets health
+scripts/shot.mjs '#/board' --env test --width 390     # the builder's key by default
+```
 
-| file | holds | written by | mode | read by |
-|---|---|---|---|---|
-| `<env>.env` | ports, database, registry, `MENGER_EXPECT_LOGIN` — `deploy/env/<env>.env` filled in | **every** `pipeline install` | 0600 | both units; the pipeline |
-| `<env>.local.env` | menger's login and secrets: `MENGER_AUTH_PROVIDERS` (ACCESS-24: required — a release refuses to start without one), `MENGER_REQUIRE_LOGIN`, `MENGER_NO_REST` (both the only mode from ACCESS-24 on, kept for older releases), `MENGER_ADMINS`, `MENGER_LOGIN_*`, `MENGER_DEV_*`, `MENGER_PUBLIC_URL` … | you, by hand (made once by `install`) | 0600 | `menger@<env>` (after `<env>.env`, so it wins); the smoke reads it, never exports it |
-| `<env>.smoke.env` | the smoke account: `MENGER_SMOKE_USER`, `MENGER_SMOKE_PASSWORD`, `MENGER_SMOKE_TOKEN_URL`, `MENGER_SMOKE_AUDIENCE` | you, by hand (made once by `install`) | 0600 | the smoke alone — never in menger's environment |
+Test is where people and agents work against a deploy; the suite never
+does: it runs on this machine, against the release's own tree, and writes
+nothing into app-test's tracker. `deploy/pipeline local` (RUN-25's
+`menger-app-local` on 127.0.0.1:4470/4471) stays — a CI throwaway for
+hyperforge's `deploy-local` stage, not an environment.
 
-- **`install` never rewrites the local halves.** Where `<env>.local.env` does
-  not exist, it is made from what the old `<env>.env` held beyond its
-  template — each setting verbatim, the notes beside it — the
-  `MENGER_SMOKE_*` going to `<env>.smoke.env`, and the old file kept as
-  `<env>.env.before-local` (0600). It says what moved by name, never a value.
-  A second `install` leaves both alone. If `<env>.env` has since gained a
-  setting its template lacks, `install` refuses and changes nothing, naming
-  it: move it into the local half (ACCESS-4 H3 was an install silently
-  dropping test's login).
-- **`menger@<env>` requires its local half**: without the file the unit does
-  not start — never starts without its login. `menger-diagrams@<env>` reads
-  only `<env>.env`.
-- **The mode the smoke requires** is `MENGER_EXPECT_LOGIN` (`off`, `on` or
-  `required`) in the templated half, so losing the local half cannot also
-  lose the expectation. The smoke fails when the settings configure another
-  mode, and when the server is in another (`deploy/smoke-mode.mjs`, below).
-- **No secret in argv.** The smoke's password reaches curl on stdin, its
-  token reaches `deploy/smoke-health.mjs` on stdin (`-`), the browser check
-  gets the account through its environment; the smoke fails if
-  `<env>.local.env` or `<env>.smoke.env` is readable by anyone but you.
+## The local environments, retired (DEPLOY-52)
+
+This machine's test (`menger@test`, `menger-diagrams@test`, :4450–4453) and
+prod (`menger@prod`, `menger-diagrams@prod`, :4455–4458, stopped since
+RUN-13) were stopped, disabled and their units uninstalled on 2026-10-23,
+with the LAN proxies in front of prod (`menger-lan@4455/4456`, RUN-19).
+`deploy/pipeline install`, `deploy test`, `sync`, `promote`, `rollback` and
+`logs` say so and exit 2.
+
+**Their data stays where it was, untouched** — retiring a service is
+reversible, deleting a tracker is not:
+
+| what | where |
+|---|---|
+| prod's database (the move's source, RUN-13) | `~/.local/share/menger/tickets.db` (+ `-wal`, `-shm`) |
+| prod's backups, the move's own among them | `~/.local/share/menger/backups/` (`tickets.db.<when>-move-RUN-13`) |
+| test's copy and its backups | `~/.local/share/menger-test/` |
+| their settings | `~/.config/menger/{prod,test}{,.local,.smoke}.env` |
+| what each ran | `~/.local/share/menger-deploy/envs/{prod,test}/` |
+| the releases | `~/.local/share/menger-deploy/releases/` |
+| the move's mark | `~/.local/share/menger-deploy/prod.moved` |
+
+The unit files, the settings templates and the local smoke's scripts stay
+in the repository (`deploy/systemd/`, `deploy/env/{prod,test}.env`,
+`deploy/smoke-*.mjs`, `deploy/probe-auth.mjs`; "Hardening" below) — the way
+back, should one ever be wanted, is `git show <before DEPLOY-52>:deploy/pipeline`
+and its `install`. Nothing on this machine reads them now.
 
 ## The pipeline
 
 ```sh
-deploy/pipeline install              # once, and after a change to deploy/: units + env files, enable both envs
-deploy/pipeline build                # main's tip → gate → release (prints its name)
-deploy/pipeline deploy test          # the newest release → test, with a fresh copy of prod's data
-deploy/pipeline sync test            # test's data refreshed from prod; test keeps its release
-deploy/pipeline promote              # the release test runs → prod
-deploy/pipeline status               # what each env runs, whether it is up, its health, its last record
-deploy/pipeline backfill             # deployments.log → menger's deployments (idempotent)
-deploy/pipeline landing              # main's landing/ → gate → the edge (menger.sh); recorded as env `edge`
-deploy/pipeline landing --check      # the gate and infra's dry run, nothing written
-deploy/pipeline media                # landing/media regenerated from the release prod runs
-deploy/pipeline image [RELEASE]      # RUN-10: a TESTED release as an image (menger:<release> here; IMAGE_STORE=ghcr pushes)
-deploy/pipeline local --image IMG    # RUN-25: the image here as menger-app-local, 127.0.0.1:4470/4471
-deploy/pipeline remote test|prod     # RUN-25: app-test / app.menger.sh through infra (deploy/app.yml, RUN-11)
+deploy/pipeline build [REV] [--no-gate]   # a commit → a release (prints its name); --no-gate: the suite comes after
+deploy/pipeline image [RELEASE]           # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes it to GHCR)
+deploy/pipeline remote test --image IMG   # app-test.menger.sh through infra, then the smoke; recorded as test
+deploy/pipeline suite RELEASE             # DEPLOY-52: the full suite at the release's commit; marks the release
+deploy/pipeline suite --status RELEASE    # suite: passed | failed | running | none
+deploy/pipeline remote prod               # what test runs → app.menger.sh, only once its suite passed
+deploy/pipeline smoke test|prod           # the smoke against app-test / app.menger.sh, on its own
+deploy/pipeline status                    # what test and prod run, their suites, health, last records; the runner; the disk
+deploy/pipeline releases                  # every release: its suite, tested?, where it runs
+deploy/pipeline backfill                  # deployments.log → menger's deployments (idempotent)
+deploy/pipeline landing                   # main's landing/ → gate → the edge (menger.sh); recorded as env `edge`
+deploy/pipeline landing --check           # the gate and infra's dry run, nothing written
+deploy/pipeline media                     # landing/media regenerated from the release prod runs
+deploy/pipeline local --image IMG         # RUN-25: the image here as menger-app-local, 127.0.0.1:4470/4471 (a CI throwaway)
 deploy/pipeline remote-secret test|prod   # IDENTITY-45: the WorkOS API key on the box, from a pipe ("The WorkOS key on the box")
 ```
 
-1. **Build** (`build [REV]`, default `main`). A commit, never a working
-   tree: `../menger-build` — a sibling checkout, so menger's relative plexus
-   dependencies resolve — is moved to the commit and cleaned, keeping only
-   build outputs. A low disk refuses it before anything runs (CI-2:
+The deploy runner does the first four by itself for every merge set In
+Review ("Automatic test", below); prod is the owner's.
+
+1. **Build** (`build [REV] [--no-gate]`, default `main`). A commit, never a
+   working tree: `../menger-build` — a sibling checkout, so menger's relative
+   plexus dependencies resolve — is moved to the commit and cleaned, keeping
+   only build outputs. A low disk refuses it before anything runs (CI-2:
    `scripts/disk-check.sh` — under 50 GB free or 90% used, `DISK_MIN_FREE_GB`
    / `DISK_MAX_USED_PCT`); `status` says the disk on its last line.
-2. **Gate.** `cargo test --workspace` and the frontend's native tests at that
-   commit. Red: no release.
+2. **Gate** — only without `--no-gate`: `cargo test --workspace` and the
+   frontend's native tests at that commit. Red: no release. The runner builds
+   with `--no-gate` (DEPLOY-52): the suite runs after the deploy (step 5).
 3. **Release.** `cargo build --release` (menger, menger-diagrams), `trunk
    build --release`, `npm ci` for the diagrams Node program, assembled into
    `~/.local/share/menger-deploy/releases/<UTC time>-<sha>/` — `bin/` (the two
    binaries and their launchers), `app/`, `diagrams-node/`, and `RELEASE`
-   (commit, subject, build time, toolchain, gate results). Read-only; never
-   rebuilt. Prod runs exactly the bytes test ran. The newest ten, and any an
-   environment runs or can roll back to, are kept.
-4. **Deploy to test** (`deploy test [RELEASE]`). Test stops, its database is
-   replaced by a live snapshot of prod's (every data upgrade is rehearsed on
-   real data before prod sees it), test switches to the release, restarts and
-   must pass the smoke checks. Passing marks the release `TESTED`.
-5. **Promote** (`promote [RELEASE]`, default: what test runs). Only a
-   `TESTED` release. Prod's database is backed up to
-   `~/.local/share/menger/backups/`, prod switches (the release it ran becomes
-   `previous`), restarts and must pass the smoke checks. A failure stops prod,
-   restores that backup, switches back and restarts — by itself.
-**Sync** (`sync test`, DEPLOY-4). Test's data refreshed from prod on demand,
-between deploys: test stops, its current database is backed up to test's
-`backups/` (`…-before-sync`, the newest five kept), and it becomes a live
-snapshot of prod's — the same `.backup` step 4 takes — then test restarts on
-the release it already runs and must pass the smoke checks. One way only:
-`sync prod` is refused, and a sync never stops or writes prod.
+   (commit, subject, build time, toolchain, `gate:` — the counts, or `none`
+   when the suite comes after). Read-only; never rebuilt. Prod runs exactly
+   the bytes test ran. The newest ten, and those test and prod run (and ran
+   last before), are kept.
+4. **Image and deploy to test.** `IMAGE_STORE=ghcr deploy/pipeline image
+   <release>` (RUN-10, below), then `deploy/pipeline remote test --image
+   ghcr.io/hypermemetic-ai/menger:<release>`: infra's `app.yml` deploys it to
+   app-test.menger.sh, then the smoke (below). Passing marks the release
+   `TESTED` and records `test succeeded` — which sets Complete on the In
+   Review work it carries (DEPLOY-22/28).
+5. **The suite** (`suite RELEASE`, DEPLOY-52). `cargo test --workspace` and
+   the frontend's tests at the release's commit, in its own sibling checkout
+   `../menger-suite` (`MENGER_SUITE_CHECKOUT`; its own `target/`), so a suite
+   under way never holds up the next build; one suite at a time (a lock). It
+   never touches a deployment: nothing writes test data into app-test's
+   tracker. The release's `SUITE` file says `running …`, then `passed …` with
+   the counts or `failed …` with the red log (a suite killed half-way is
+   `failed`), and `deployments.log` gets `suite test <release> passed|failed`
+   (no deployment). Each gate log is a file of its own (CI-6), as the build's.
+   A release built with the gate (every one before DEPLOY-52) counts as
+   passed: its gate was the suite.
+6. **Promote** (`remote prod`). infra's `promote.yml` ships the image test
+   runs — the release `deployments.log` last shows test running `ok` — and
+   only when that release's suite `passed`: `failed`, `running` or no result
+   is refused before infra is asked, naming why. Then the smoke against
+   app.menger.sh; recorded as `app-prod` (from `test`). A failed smoke is
+   recorded `failed`; `bin/infra rollback.yml -e app_dir=<checkout>` puts prod
+   back on its previous image ("On the Linode").
 
-6. **Rollback** (`rollback ENV [--restore BACKUP]`). Back to `previous`. A
-   data upgrade can be one-way — an older build cannot always read what a
-   newer one wrote (SDLC-11's docs did that) — so a rollback across one needs
-   `--restore` with the backup taken before the promote.
-
-**Smoke checks** (`smoke ENV`): both units active; the local half is
-there and 0600 (the smoke account's file too); the login mode — the settings
-configure `MENGER_EXPECT_LOGIN`'s, and the server is in it, as
-`deploy/smoke-mode.mjs` reads it from outside (`off`: an anonymous `_info`
-is the whole hub; `on`: it is AUTH-7's anonymous view; `required`: that, and
-the app behind its login page), a mismatch failing the smoke; then the
-checks for that mode (behind the login: the smoke account signs in, and an
-anonymous socket reaches nothing); `tickets.health` answers on
-the env's port; `--verify-derived` is consistent; the app is served stamped
-with the env's WebSocket port; `diagrams` parses a diagram; a headless browser
-loads the app to `live · WS` with the nav drawn and no page errors, its page
-under its Content-Security-Policy and nothing refused by one (ACCESS-28); every port
-(WebSocket, shell, REST unless `MENGER_NO_REST` or the release has none — ACCESS-24, diagrams) refuses a request
-naming `Host: evil.example` with 421 (ACCESS-25; skipped for a release whose
-menger predates `--allowed-host`, so a rollback to one still passes). On test,
-behind the login with the dev sign-in, `deploy/probe-auth.mjs` then plays the
-login's known attacks against the live server (IDENTITY-38): foreign and
-anonymous sockets, framing, reads and writes across shortcodes, a blocker in a
-shortcode the caller cannot see, a watch after its grant is revoked, sign-out —
-any that works fails the smoke. It writes probe tickets and a grant to test's
-database, which the next `deploy test` or `sync test` replaces. Run it alone:
-`node deploy/probe-auth.mjs 4450 4451`.
-
-**Drills.** `DEPLOY_SMOKE_FAIL=test deploy/pipeline promote --to test` fails
-the first smoke on purpose, so the automatic rollback can be watched on test.
+**Smoke checks** (`smoke test|prod`; `remote` runs them after infra): from
+outside, as a person or an agent meets the deployment, reading only — `http://`
+redirects to `https://`; `/` is behind the login page (303 to `/login`) with
+HSTS (`max-age=31536000`); `/login` is the sign-in page; RUN-9's
+`/.well-known/oauth-protected-resource/ws` names the host's `/ws`; a socket
+upgrade from another origin is refused (403); `tickets.health` answers on
+`wss://<host>/ws` signed in as the pipeline key (retried for
+`MENGER_SMOKE_WAIT`, 60 s, after a restart; no key: the smoke fails); an
+anonymous socket reaches nothing (`unauthenticated`); and, when the release is
+here, the host serves that release's own app (its `menger-app-*.js`). It
+writes nothing — no probe tickets, no grants (the local smoke's
+`probe-auth.mjs` wrote to test's tracker; DEPLOY-52 keeps that off app-test).
+`DEPLOY_SMOKE_FAIL=test|prod` fails it on purpose (a drill).
 
 ### Logs (CI-6)
 
 Every log a run writes is a file of its own, never overwritten:
 `~/.local/state/menger-deploy/logs/<UTC yyyymmddThhmmssZ>-<short sha>-<step>.log`
 (`MENGER_DEPLOY_LOGS` moves the directory). `build` keeps `gate-workspace`,
-`gate-frontend`, `build-release` and `build-trunk` apart; `build`, `deploy`,
-`sync`, `promote`, `rollback`, `smoke`, `landing`, `media`, `image`, `local` and
-`remote` also keep everything they said as `<stamp>-<command>[-<arg>].log`. Each
+`gate-frontend`, `build-release` and `build-trunk` apart (`suite` keeps its own
+two gate logs the same way); `build`, `suite`, `smoke`, `landing`, `media`,
+`image`, `local` and `remote` also keep everything they said as
+`<stamp>-<command>[-<arg>].log`. Each
 says `log: <path>` as it opens one, and a `die` names the file. The gate runs
 `cargo test --workspace --no-fail-fast`, so one red shows every failing test,
 and a red gate prints `FAILED <test>` for each. A run that fails is marked
@@ -244,24 +261,23 @@ whether a crawler came, and what it was answered, can be read there.
 
 ## The image (RUN-10)
 
-menger as a container image, made from a release test passed — the very
-bytes `deploy test` ran, never a build from a checkout. `deploy/pipeline
+menger as a container image, made from a release's own bytes, never a build
+from a checkout — the image comes before the test (DEPLOY-52), so what test
+runs and prod is promoted to is that very image. `deploy/pipeline
 image [RELEASE]` stages the release's `bin/menger`, `bin/run-menger` (its
 own launcher), `app/` and `RELEASE` beside `deploy/image/Dockerfile` and
 builds it; RUN-25's `build` stage is this command.
 
 ```sh
-deploy/pipeline image                      # the release test last passed → menger:<release> in this machine's Docker
-deploy/pipeline image 20261017T054109Z-9501b9f   # a named one (it must be TESTED)
-IMAGE_STORE=ghcr deploy/pipeline image     # ghcr.io/hypermemetic-ai/menger:<release> and :latest, pushed
+deploy/pipeline image                      # the newest release → menger:<release> in this machine's Docker
+deploy/pipeline image 20261017T054109Z-9501b9f   # a named one
+IMAGE_STORE=ghcr deploy/pipeline image R   # ghcr.io/hypermemetic-ai/menger:<release> and :latest, pushed
 ```
 
-- **Which release.** Without one named, the release `deployments.log` last
-  shows test passing (a `deploy` or `sync` of test that ended `ok`) whose
-  directory is still here and marked `TESTED`; with no such line, the newest
-  `TESTED` release. A named release that has not passed test is refused, and
-  so is one whose menger predates `--bind` (RUN-8): bound to loopback inside
-  a container, it could not be reached.
+- **Which release.** The one named, else the newest built (DEPLOY-52: any
+  release may be imaged; what guards prod is `remote prod`'s suite check). A
+  release whose menger predates `--bind` (RUN-8) is refused: bound to
+  loopback inside a container, it could not be reached.
 - **Where it is kept** is `IMAGE_STORE`: `local` (the default) tags
   `menger:<release>` (`MENGER_IMAGE_LOCAL` names the repository); `ghcr`
   tags `ghcr.io/hypermemetic-ai/menger:<release>` and `:latest`
@@ -350,14 +366,16 @@ synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage depl
   bind mount is used (SELinux is enforcing here; a volume needs no label).
   Each run is a line in `deployments.log` (`app-local  run  RELEASE  ok
   IMAGE`), not a deployment record.
-- **`remote test --image IMAGE`** deploys to `app-test.menger.sh` through
+- **`remote test --image IMAGE`** deploys to `app-test.menger.sh` (test,
+  DEPLOY-52) through
   hypermemetic-infra's Plexus app role: `bin/infra app.yml -e
   app_dir=<the main checkout> -e env=test -e sha=<the release>` — the tag
   infra deploys is the release's name on `ghcr.io/hypermemetic-ai/menger`
   (deploy/app.yml's image), so a local `menger:<release>` is tagged that
-  way first for infra to ship. **`remote prod`** is `bin/infra promote.yml
-  -e app_dir=…` only: prod takes the image test runs and passed, by infra's
-  rule. Both are driven by menger's own `deploy/app.yml` (RUN-11, below);
+  way first for infra to ship; then the smoke, and passing marks the
+  release `TESTED`. **`remote prod`** is `bin/infra promote.yml -e app_dir=…`
+  only: prod takes the image test runs and passed, by infra's rule — and only
+  once that release's suite passed (DEPLOY-52). Both are driven by menger's own `deploy/app.yml` (RUN-11, below);
   without it each refuses before touching anything.
 - **The stages' environment.** A stage inherits hyperforge's (its unit's
   `PATH` holds `~/.local/bin`, where `synapse` and `node` are, and
@@ -366,8 +384,8 @@ synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage depl
   `env` value is taken literally, never expanded. `IMAGE_STORE` is the
   pipeline's `env`: `ghcr` there makes `build` push and the deploys take the
   registry's ref — a change to the file, not to hyperforge.
-- None of this touches the 4450–4458 environments: `deploy test` and
-  `promote` are unchanged, and `build` reads the releases they made.
+- `deploy-local` is a CI throwaway on this machine, not an environment
+  (DEPLOY-52 keeps it); hyperforge's `build` stage images the newest release.
 
 ## On the Linode (RUN-11)
 
@@ -386,13 +404,13 @@ pinned address, SCAFFOLD-22) over `app.env`.
 
 | environment | host | settings (copied to the box as `app.env`) | state |
 |---|---|---|---|
-| test | `app-test.menger.sh` | `deploy/env/app-test.env` | live since 2026-10-17, its own empty tracker |
+| test | `app-test.menger.sh` | `deploy/env/app-test.env` | live since 2026-10-17, its own tracker; since DEPLOY-52 (2026-10-23) **the** test environment — every merge set In Review lands here, recorded as `test` |
 | prod | `app.menger.sh` | `deploy/env/app-prod.env` | live since 2026-10-17, prod's data moved there (RUN-13); WorkOS production, the GitHub button through WorkOS's API with the key on the box (IDENTITY-45) |
 
 The settings are menger's own (README "Bind", "Trusted proxies", "Behind
 https", Login): `MENGER_PUBLIC_URL=https://<host>`, `MENGER_BIND=0.0.0.0`,
 `MENGER_AUTH_PROVIDERS` = WorkOS (AuthKit — no secret on the box; test uses
-the staging client, as this machine's prod and test do) and
+the staging client, as this machine's retired prod and test did) and
 `key=wss://<host>/ws` for agents, `MENGER_LOGIN_EMAIL=workos:authkit`, the
 four provider buttons, `MENGER_REQUIRE_LOGIN`, `MENGER_NO_REST`, and
 `MENGER_ADMINS` = the owner's WorkOS principal and the `operator` key —
@@ -418,12 +436,30 @@ local prod stopped (`systemctl --user stop menger@prod`), a `sqlite3
 seeded by infra (`bin/infra seed.yml -e app_dir=. -e env=prod -e
 seed=<backup> -e '{"seed_verify":["/opt/menger/bin/menger","--verify-derived","--db-path","/data/tickets.db"]}'`
 — the volume's old file moved aside, never deleted), then `deploy/pipeline
-remote prod`. `~/.local/share/menger-deploy/prod.moved` makes `promote` and
-`rollback prod` refuse: local prod is the rollback, and two trackers must
-not run at once. The rollback: `systemctl --user start menger@prod`, remove
-`prod.moved`, agents back to `-P 4455` — what was written on app.menger.sh
-since the move is only there (copy it back the same way first, if it
-matters).
+remote prod`. `~/.local/share/menger-deploy/prod.moved` marks it.
+
+**The rollback (since DEPLOY-52, 2026-10-23).** This machine's prod is
+retired — its unit uninstalled, nothing to start — so going back is no
+longer a local start: it is **a restore of that file onto the Linode**,
+through the same seed. The file is where the move left it, untouched:
+`~/.local/share/menger/tickets.db` (the database as it stood when prod
+stopped) and its `.backup`, `~/.local/share/menger/backups/tickets.db.<when>-move-RUN-13`.
+
+```sh
+B=~/.local/share/menger/backups/tickets.db.<when>-move-RUN-13      # or a newer copy taken from the box
+../hypermemetic-infra/bin/infra seed.yml -e app_dir=. -e env=prod -e seed=$B --check      # what would be done
+../hypermemetic-infra/bin/infra seed.yml -e app_dir=. -e env=prod -e seed=$B \
+  -e '{"seed_verify":["/opt/menger/bin/menger","--verify-derived","--db-path","/data/tickets.db"]}'
+../hypermemetic-infra/bin/infra promote.yml -e app_dir=.          # health, as after any seed
+```
+
+The seed moves the volume's current file aside (`tickets.db.before-seed-<when>`,
+never deleted), copies the file in as the container's user, checks its
+sha256 and `--verify-derived`, and starts menger again; a failed check puts
+the old file back. What was written on app.menger.sh since the move lives
+only in that moved-aside file: a restore of the RUN-13 file loses it, so take
+a fresh copy from the box first when it matters. The same restore onto test
+is `-e env=test`. A seed is the owner's: it replaces a live tracker.
 
 ### The WorkOS key on the box (IDENTITY-45)
 
@@ -487,6 +523,10 @@ and 403 from another. The login page has its own policy (`connect-src
 after a sign-in.
 
 ## Hardening (ACCESS-27)
+
+> DEPLOY-52: this machine's units are retired (uninstalled 2026-10-23); the
+> files stay in `deploy/systemd/` as the reference below, for a host that
+> runs menger as a service rather than the image.
 
 Both units run with the least the OS gives a service, `systemd --user` as on
 this machine (user namespaces do the mounts; no root):
@@ -624,34 +664,36 @@ it has TLS.
 
 ## Recording deployments
 
-Every `deploy test`, `sync test`, `promote` and `rollback` tells menger what
-it did (DEPLOY-12), in the deployment record below, made and sent by
+Every `remote test` and `remote prod` (and, before DEPLOY-52, every local
+`deploy test`, `sync test`, `promote` and `rollback`) tells menger what it did
+(DEPLOY-12), in the deployment record below, made and sent by
 `deploy/record` to `deployments.record` (DEPLOY-11) — so each ticket shows
 where its work runs:
 
 | the run | records (environment, revision) |
 |---|---|
 | begins | `started` — the release it moves to (`previous`: the release the environment last ran with its smoke passed) |
-| smoke passed | `succeeded` (a rollback: `rolled_back` to the release it returned to) |
-| smoke failed | `failed` |
-| promote's automatic rollback, smoke passed | `failed`, then `rolled_back` to what ran before |
-| dies after `started` (a unit will not restart …) | `failed`, on its way out |
+| infra deployed it, smoke passed | `succeeded` |
+| infra failed, or the smoke failed | `failed` |
+| dies after `started` (its log unwritable …) | `failed`, on its way out |
 
 - **The commits** are `git log previous..revision` in the build checkout
   (`../menger-build`, else the repository), oldest first, when a run moves
   forward; a rollback carries none. Without them menger works from what it
   has seen.
 - **The range starts at the last run that passed** (DEPLOY-23): `previous`
-  of a deploy test, sync or promote is the release `deployments.log` last
+  of a remote test or remote prod (and of the retired deploy test, sync and
+  promote) is the release `deployments.log` last
   shows the environment running with its smoke passed — a run that ended
   `ok`, or the release a promote's automatic rollback returned to — never a
   failed run, one that died, or a rollback whose smoke failed. So a deploy
   that fails its smoke does not lose its commits: the next one that passes
-  (a sync on the same release too) carries them. An environment with no run
-  in the log yet starts at what it runs. `backfill` reads the log the same
+  carries them. An environment with no run in the log yet has none. The
+  first `remote test` after DEPLOY-52 starts at the retired local test's last
+  good release: `test`'s range runs on through the switch. `backfill` reads the log the same
   way; a rollback's `previous` stays the release it took out.
 - **One run, one id.** Each run's records carry `source.run` =
-  `promote@<when it began>#<pid>`, and so does the end of its line in
+  `remote-test@<when it began>#<pid>`, and so does the end of its line in
   `deployments.log`. `backfill` makes from that line the record the run sent
   (same environment, state, revision and run), which menger already keeps.
 - **Never in the way.** Every record goes through the outbox
@@ -668,8 +710,9 @@ where its work runs:
   RUN-13: `MENGER_DEPLOY_TRACKER_PORT` (4455), `MENGER_DEPLOY_TRACKER_HOST`,
   `MENGER_DEPLOY_TRACKER_TOKEN` (a token, through synapse — argv; prefer the key).
 - **Complete on test** (DEPLOY-28, DEPLOY-22's rule: Complete means running
-  on the lowest environment). A `succeeded` record to `test` — a deploy test,
-  or a sync that first passes a release — once menger keeps it (or kept it
+  on the lowest environment — app-test.menger.sh since DEPLOY-52). A
+  `succeeded` record to `test` — a `remote test` whose smoke passed — once
+  menger keeps it (or kept it
   already, so a drained outbox completes too), sets **Complete** on each
   ticket it `carried` that is In Review and runs its current version there:
   `deploy/record --complete` asks `tickets.nav.member` with `status "In
@@ -680,13 +723,13 @@ where its work runs:
   (default `~/.plexus/keys/builder.key`, an editor's; its agent the file's
   name; `none`: records only). A refused completion is said, and the record
   stands; nothing else (prod, a failure, a rollback) moves a status.
-- **app.menger.sh** (DEPLOY-28): `remote test` records `app-test` (from
-  `test`: the image of the release test passed) and `remote prod` records
-  `app-prod` (from `app-test`), each `started` then `succeeded` / `failed`,
+- **app-test and app.menger.sh** (DEPLOY-28, DEPLOY-52): `remote test`
+  records `test` (it recorded `app-test` until DEPLOY-52, when app-test became
+  test) and `remote prod` records `app-prod` (from `test`; the record's `from`
+  moved app-prod's source from `app-test`), each `started` then `succeeded` / `failed`,
   so a ticket's Running and `#/deployments` show where app.menger.sh runs
-  it. `remote prod` ships the image app-test runs: its release is the one
-  `deployments.log` last shows app-test running `ok`, and its log line names
-  it (it was `-`).
+  it. `remote prod` ships the image test runs: its release is the one
+  `deployments.log` last shows test running `ok`, and its log line names it.
 - **Signed in as the pipeline's key** (ACCESS-47; prod requires login).
   Where `MENGER_DEPLOY_KEY_FILE` (default `~/.plexus/keys/pipeline.key`,
   `synapse _key new pipeline --store file`; `none`: no key) is a file, every
@@ -694,19 +737,21 @@ where its work runs:
   $MENGER_DEPLOY_TRACKER_URL --agent pipeline` (`local`: `ws://127.0.0.1:$MENGER_DEPLOY_TRACKER_PORT`), whose
   `deploy/menger-call.mjs` reads the seed from the file (0600, or it is
   refused) and signs a key proof; the seed is in no environment and no argv.
-  The key holds `viewer` on `*` and `deployer` on `MENGER` on prod and on
-  app.menger.sh (the
-  operator granted them at the switch; test's database is prod's copy, so
-  test has them from its next `deploy test` / `sync test`). A gate's refusal
+  The key holds `viewer` on `*` and `deployer` on `MENGER` on app.menger.sh
+  (the operator granted them at the switch), and reads `tickets.health` on
+  app-test — the smoke's. A gate's refusal
   (the key not granted, or not admitted) is the tracker's setup, not the
   record's: the record waits in the outbox, said, and is never moved to
   `refused/`. No key file: synapse, anonymous, as before.
 - **`status`** shows each environment's last record sent (`sent/<env>.json`)
   and how many wait in the outbox, and reads `tickets.health` signed in as
-  the pipeline's key (ACCESS-47) — `health    no answer on :4450 (forbidden)`
+  the pipeline's key (ACCESS-47) on `wss://app-test.menger.sh/ws` and
+  `wss://app.menger.sh/ws` — `health    no answer from wss://… (forbidden)`
   names a gate's refusal (the key not granted there yet).
 - **`backfill`** replays `deployments.log` (`deploy/record --from
-  pipeline-log`, each with its commits from git) through the outbox.
+  pipeline-log`, each with its commits from git) through the outbox — the
+  remote `run` lines too (DEPLOY-52; never `app-local`'s, an image's or a
+  suite's).
   Idempotent: run it again and menger answers each record `duplicate`.
 
 ```sh
@@ -716,12 +761,12 @@ synapse -P 4455 menger deployments for_ticket --id MENGER-34
 ```
 
 Tests: `deploy/tests/pipeline` runs the pipeline itself on a throwaway root —
-`HOME` a scratch directory, `systemctl`, `synapse` and the rest stand-ins —
-through every row above, a tracker down, hung and refusing, `status` and
-`backfill`; and (ACCESS-27) `install`'s split of an old test file (login
-kept, nothing printed, a second install a no-op, a hand-added setting
-refused) and the smoke's login mode (a mismatch either way fails, the local
-half lost fails, no secret in any argv); `cargo test` runs it.
+`HOME` a scratch directory, hypermemetic-infra, the deployments as curl and
+`deploy/menger-call.mjs` meet them, `synapse`, `docker` and `gh` stand-ins —
+through every row above, the smoke (each check failing on its own), a tracker
+down, hung, refusing and refusing the key, `remote prod`'s suite check, the
+suite green and red in its own checkout, `build --no-gate`, `status`,
+`backfill` and the retired commands; `cargo test` runs it.
 
 ## The deployment record
 
@@ -1115,15 +1160,26 @@ executor resolves the tip, and its records carry the real revision.
 
 
 `deploy/runner.mjs` is menger's own executor: it takes a request to `test`
-(and to `app-prod`, below)
-and runs `deploy/pipeline build <the branch's tip>`, then `deploy/pipeline
-deploy test`, reporting each as a step, as the `pipeline` key
-(`MENGER_DEPLOY_KEY_FILE`). The deploy's own records name the request
-(`MENGER_REQUEST`, so that deploy sets its tickets Complete as any deploy
-test does); a build that fails or is canceled, the runner records
-`failed` itself. One request at a time; a build is stopped on a cancel, a
-deploy that began runs to its end. Each step's output is in
-`~/.local/state/menger-deploy-runner/runs/<request>/<step>.log`.
+(and to `app-prod`, below) and runs test's plan (DEPLOY-52), each a step
+reported as the `pipeline` key (`MENGER_DEPLOY_KEY_FILE`):
+
+1. `build` — `deploy/pipeline build <the branch's tip> --no-gate` (stopped on a cancel);
+2. `image` — `IMAGE_STORE=ghcr deploy/pipeline image <the release it built>` (stopped on a cancel);
+3. `deploy` — `deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>`:
+   app-test.menger.sh, then the smoke; its records name the request
+   (`MENGER_REQUEST`), so it sets its tickets Complete as any deploy to test
+   does, and it runs to its end once begun.
+
+A build that fails or is canceled, the runner records `failed` itself. Then,
+**apart from the request** (it ended with the deploy), **the suite**:
+`deploy/pipeline suite <release>` on this machine, one at a time, the newest
+release waiting (one passed over before it began never runs: `remote prod`
+refuses it, and the newer one carries its commits). Red: the release is
+marked `failed`, and the failing lines go to the triggering ticket's chat
+with a gap blocking it, as a red run's do (below); green: one line in that
+ticket's own chat. One request at a time; each step's output is in
+`~/.local/state/menger-deploy-runner/runs/<request>/<step>.log`, the suite's
+in `…/runs/<request>/suite.log`.
 
 It takes requests two ways:
 
@@ -1178,12 +1234,18 @@ grant) — **for test only**; prod stays the owner's (below).
   test request is already pending — queued here or on the tracker (a
   `→ test`) — the triggers fold into it; it resolves main's tip when it
   starts. The request under way is never folded into.
-- **Plan:** test's, as → test runs it (build with the full gate → deploy
-  test); the deploy sets Complete (DEPLOY-22/28) as any does.
-- **Red:** the request is recorded `failed`; the failing lines (cargo's
-  `FAILED` / `panicked`, else the tail) are posted to the open chat of the
-  first triggering ticket, else `MENGER_RUNNER_CHAT` (6), and a gap is filed
-  under it blocking every triggering ticket — both as the editor key
+- **Plan:** test's, as → test runs it (DEPLOY-52: build without the gate →
+  image → app-test.menger.sh and its smoke), so a merge set In Review is live
+  on app-test within minutes, the suite in nobody's way; the deploy sets
+  Complete (DEPLOY-22/28) as any does, and the suite's result arrives after
+  it — on the release (`SUITE`, `deploy/pipeline releases`), in the ticket's
+  chat, and in `deploy/pipeline status`.
+- **Red:** a red build, image or deploy is recorded `failed`; a red suite
+  marks the release (the deploy stands: test runs it). Either way the failing
+  lines (cargo's `FAILED` / `panicked`, else the tail) are posted to the open
+  chat of the first triggering ticket, else `MENGER_RUNNER_CHAT` (6), and a
+  gap is filed under it blocking every triggering ticket (`suite red:
+  <release> …` for a suite) — both as the editor key
   (`MENGER_RUNNER_EDITOR_KEY_FILE`, `~/.plexus/keys/builder.key`; `none`:
   neither).
 - **Off:** `MENGER_RUNNER_AUTO_TEST=0` in `~/.config/menger/deploy-runner.env`
@@ -1191,19 +1253,21 @@ grant) — **for test only**; prod stays the owner's (below).
   menger-deploy-runner`. `deploy/pipeline status` says `auto-test on|off`
   and, from `~/.local/state/menger-deploy-runner/auto.json`, the request
   running, the one pending (and for which tickets), what waits out the
-  debounce and the last run.
+  debounce, the last run, and the suite running, waiting and last.
 - **Tracking:** a ticket's work is its branch's commits; merges are
   `--no-ff`, so each stays in main with its hash and "is X on test" is "is
   X's newest linked commit an ancestor of what test runs" (DEPLOY-46).
   Never squash or rebase on merge.
 
 Its tests are in `deploy/tests/runner.test.mjs` (trigger, debounce,
-coalesce, re-entering review, the off switch, a red run) and
+coalesce, re-entering review, the off switch, a red run; DEPLOY-52: the plan
+with no gate, a build naming no release, the suite after a green deploy —
+green and red — one suite at a time) and
 `deploy/tests/pipeline` (the status lines).
 
 **→ prod** (DEPLOY-40) promotes the release test passed to the page's
-destination — `app-prod` (app.menger.sh) since RUN-13; the local prod is
-stopped and `promote` refuses while `prod.moved` exists. It is shown to an
+destination — `app-prod` (app.menger.sh) since RUN-13; this machine's prod is
+retired (DEPLOY-52). It is shown to an
 admin or a holder of `deployer` on the project, labelled `→ prod ·
 <release>` (what test runs), and off with its reason when test has nothing
 newer than the destination, test's last deploy did not succeed, or a
@@ -1222,8 +1286,10 @@ A failed step stops the plan, the rest skipped: app-prod keeps what it ran.
 should be triggered by me"): the runner takes it only when its requester is
 one of `MENGER_RUNNER_OWNERS` (comma-separated principals, in
 `~/.config/menger/deploy-runner.env`; `--owner` on the command line) and
-never a `key:` or `agent:` principal, whatever that says, and only for a
-release with a `succeeded` record to test. Otherwise its first step fails
+never a `key:` or `agent:` principal, whatever that says, only for a
+release with a `succeeded` record to test, and only when its suite passed
+(DEPLOY-52: `deploy/pipeline suite --status`; red, running or none is
+refused, and `remote prod` refuses it again). Otherwise its first step fails
 with the refusal (`refused: key:… is a key — …`) and nothing runs. With
 `MENGER_RUNNER_OWNERS` empty every app-prod request is refused — **turning
 it on** is that line set to the owner's principal (the WorkOS one in
@@ -1250,13 +1316,14 @@ changes.
 
 ## Where things are
 
-- releases: `~/.local/share/menger-deploy/releases/`
-- what each env runs: `~/.local/share/menger-deploy/envs/{prod,test}/{current,previous}`
-- every build, deploy, promote and rollback: `~/.local/share/menger-deploy/deployments.log`
+- releases: `~/.local/share/menger-deploy/releases/` (each with its `SUITE` once one ran, `TESTED` once test passed it)
+- the suite's checkout: `../menger-suite` (DEPLOY-52); the build's: `../menger-build`
+- every build, image, remote run, suite and secret: `~/.local/share/menger-deploy/deployments.log`
 - deployment records waiting for menger: `~/.local/share/menger-deploy/outbox/`
   (refused: `outbox/refused/`); the last sent per env: `…/menger-deploy/sent/`
-- logs: `deploy/pipeline logs prod` (`journalctl --user -u menger@prod -u menger-diagrams@prod`)
-- prod backups: `~/.local/share/menger/backups/`
+- logs: `~/.local/state/menger-deploy/logs/`; the runner's `~/.local/state/menger-deploy-runner/runs/`;
+  the boxes': `../hypermemetic-infra/bin/infra status.yml`
+- the retired local environments' data, untouched: "The local environments, retired" above
 - the build-output sweep (CI-2): `menger-sweep.timer`, hourly, from
   `~/.local/share/menger-sweep` (`scripts/sweep/install.sh --start`); what it
   removed in `~/.local/state/menger/cleanup-gate.log`, the run in
@@ -1264,9 +1331,10 @@ changes.
 
 ## Rules
 
-- Production changes only through `promote`. Nothing runs production from a
+- Production changes only through `remote prod`. Nothing runs production from a
   development checkout; `cargo build` or `trunk build` in `menger/` changes
   nothing that is serving.
-- Work is checked on the test environment or on a throwaway server — never on
-  prod.
-- A release that failed test is never promoted; fix forward with a new commit.
+- Work is checked on test (https://app-test.menger.sh) or on a throwaway
+  server — never on prod. The suite never runs against a deployment.
+- A release that failed test, or whose suite failed, is never promoted; fix
+  forward with a new commit.

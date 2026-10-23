@@ -30,8 +30,10 @@ TARGET is one of
   page.html                 a local file (no app checks)
 
 options
-  --env NAME          prod (:4456) or test (:4451): the port and the sign-in
-                      account come from ~/.config/menger/NAME.env  [prod]
+  --env NAME          test (https://app-test.menger.sh) or prod (https://app.menger.sh),
+                      signed in as ~/.plexus/keys/builder.key unless --key or
+                      --session says otherwise (DEPLOY-52: this machine's test and
+                      prod are retired)                              [prod]
   --port N            the app on 127.0.0.1:N instead of --env
   --theme T           light, dark or both                          [light]
   --width W[,W...]    viewport widths in px, comma-separated       [1440]
@@ -117,6 +119,17 @@ if (opt.help) {
 }
 if (!parsed.positionals.length) usage('no target: give a route (#/board), a URL or an .html file');
 if (opt.env && opt.port) usage('--env and --port both given: pick one');
+// DEPLOY-52: test is app-test.menger.sh, prod app.menger.sh — an --env (or none of --env,
+// --port, --origin: prod) is that origin, signed in as the builder's key unless told otherwise.
+const REMOTE = { prod: 'https://app.menger.sh', test: 'https://app-test.menger.sh' };
+if (!opt.port && !opt.origin) {
+  const name = opt.env ?? 'prod';
+  if (!(name in REMOTE)) usage(`--env ${name}: prod or test`);
+  opt.origin = REMOTE[name];
+  opt.env = undefined;
+  const builder = join(homedir(), '.plexus', 'keys', 'builder.key');
+  if (!opt.key && !opt.session && existsSync(builder)) opt.key = builder;
+}
 if (opt.origin && (opt.env || opt.port)) usage('--origin with --env or --port: pick one');
 if (opt.origin && !/^https?:\/\/[^/]+\/?$/i.test(opt.origin)) usage(`--origin ${opt.origin}: http(s)://host[:port], nothing after it`);
 if (opt.key && opt.session) usage('--key and --session both given: pick one');

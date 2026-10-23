@@ -2,11 +2,15 @@
 # DEPLOY-40: a stand-in for deploy/pipeline, for deploy/tests/runner.test.mjs —
 # it runs nothing: each call appends `IMAGE_STORE|MENGER_REQUEST|argv` to
 # $FAKE_PIPELINE_LOG and exits 0, or 1 when its first two words are
-# $FAKE_PIPELINE_FAIL (e.g. `remote test`).
+# $FAKE_PIPELINE_FAIL (e.g. `remote test`). DEPLOY-52: `suite --status REL` is a
+# read, not logged: `suite: $FAKE_SUITE` (default passed); `build` names
+# $FAKE_PIPELINE_RELEASE as the pipeline does (`release <id>`).
 set -u
+if [[ ${1:-} == suite && ${2:-} == --status ]]; then echo "suite: ${FAKE_SUITE:-passed}"; exit 0; fi
 printf '%s|%s|%s\n' "${IMAGE_STORE:-}" "${MENGER_REQUEST:-}" "$*" >>"${FAKE_PIPELINE_LOG:?}"
 echo "fake pipeline: $*"
-[[ -n ${FAKE_PIPELINE_RELEASE:-} && ${1:-} == deploy ]] && echo "test runs $FAKE_PIPELINE_RELEASE — smoke passed"
+[[ -n ${FAKE_PIPELINE_RELEASE:-} && ${1:-} == build ]] && echo "release $FAKE_PIPELINE_RELEASE"
+[[ -n ${FAKE_PIPELINE_RELEASE:-} && ${1:-} == remote && ${2:-} == test ]] && echo "test (app-test.menger.sh) runs $FAKE_PIPELINE_RELEASE — smoke passed"
 # CI-6: a log of its own, said as the pipeline says it (`log: <path>`)
 if [[ -n ${FAKE_PIPELINE_KEEP_LOG:-} ]]; then
   printf 'test a::one ... FAILED\ntest b::two ... FAILED\n' >"$FAKE_PIPELINE_KEEP_LOG"
