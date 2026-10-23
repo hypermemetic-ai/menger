@@ -1439,13 +1439,21 @@ fn edit_chips(lens: Lens, level: Level) -> AnyView {
                         let left = untrack(|| lens.ors(level)).map_or(1, |o| o.groups.len().max(1));
                         pop.sel.update(|s| *s = (*s).min(left - 1));
                     };
-                    view! {
-                        {(ii > 0).then(|| view! { <span class="fw">"and"</span> })}
-                        <span class="fchip" class:saved=saved data-group=gi data-item=ii>
+                    // FILTER-53: a saved chip opens its card — what it is made of.
+                    let face = match &p.field {
+                        menger_tickets_api::filter::Field::Saved(n) => saved_face(n, level, field.clone(), value.clone()).into_any(),
+                        _ => view! {
                             <button type="button" class="fchip-b" title=format!("{words} \u{2014} open its section") on:click=open>
                                 {(!field.is_empty()).then(|| view! { <span class="fchip-f">{field.clone()}</span> })}
                                 <span class="fchip-v">{value.clone()}</span>
                             </button>
+                        }
+                        .into_any(),
+                    };
+                    view! {
+                        {(ii > 0).then(|| view! { <span class="fw">"and"</span> })}
+                        <span class="fchip" class:saved=saved data-group=gi data-item=ii>
+                            {face}
                             <button type="button" class="p-x" title=format!("remove {words}") aria-label=format!("remove {words}") on:click=remove>"\u{d7}"</button>
                         </span>
                     }
@@ -1484,6 +1492,31 @@ fn add_or(lens: Lens, level: Level) -> impl IntoView {
             }
         >
             "+ or"
+        </button>
+    }
+}
+
+/// FILTER-53: a saved chip's face — `⌗ Name · 4 rules ⌄`, *edited* while
+/// the card holds a change of it; a hover opens its card, a press pins it.
+fn saved_face(name: &str, level: Level, field: String, value: String) -> impl IntoView {
+    let (enter, leave, press) = crate::fcard::chip_on(name, level);
+    let (n1, n2, n3) = (name.to_string(), name.to_string(), name.to_string());
+    let open = move || crate::fcard::hook().is_some_and(|c| c.is_on(&crate::fcard::Subject::Saved(n3.clone())));
+    view! {
+        <button
+            type="button"
+            class="fchip-b"
+            data-fcard=name.to_string()
+            title=format!("what {name} is made of")
+            aria-expanded=move || open().to_string()
+            on:pointerenter=enter
+            on:pointerleave=leave
+            on:click=press
+        >
+            <span class="fchip-f">{field}</span>
+            <span class="fchip-v">{value}</span>
+            {move || crate::fcard::is_edited(&n1).then(|| view! { <i class="fchip-ed">"edited"</i> })}
+            <span class="fchip-info">{move || crate::fcard::rules_words(&n2).map(|w| format!("{w} \u{2304}")).unwrap_or_else(|| "\u{2304}".into())}</span>
         </button>
     }
 }
@@ -1582,24 +1615,25 @@ fn empty_line(level: Level, shown: RwSignal<Option<usize>>) -> impl IntoView {
                 let count = move || naming.count(&name).flatten().map(|n| n.to_string()).unwrap_or_default();
                 let title = format!("apply \u{201c}{}\u{201d}", e.name);
                 let label = e.name.clone();
+                // FILTER-53: an offer opens its card, read only — its switch applies it.
+                let _ = (title, saved);
+                let (enter, leave, press) = crate::fcard::chip_on(&e.name, level);
                 view! {
-                    <button type="button" class="fchip fchip-sug" title=title on:click=move |_| {
-                        if let Some(s) = saved {
-                            naming.touch(&e.name);
-                            s.choose(level, e.clone());
-                        }
-                    }>
+                    <button type="button" class="fchip fchip-sug" data-fcard=e.name.clone() title=format!("what {} is made of \u{2014} its card applies it", e.name) on:pointerenter=enter on:pointerleave=leave on:click=press>
                         <span class="fchip-f">"\u{2317}"</span>
                         <span class="fchip-v">{label}</span>
                         <span class="fchip-n">{count}</span>
+                        <span class="fchip-info">"\u{2304}"</span>
                     </button>
                 }
             })
             .collect_view()
             .into_any()
     };
+    let lens = lens::use_lens();
     view! {
         <span class="fchips-empty">{words}</span>
+        <button type="button" class="fline-first" data-first=level.name() title="the filter menu, on its saved filters" on:click=move |_| lens.open_panel(level, None)>"+ add a filter"</button>
         <span class="fw fline-saved">"saved:"</span>
         {chips}
     }
@@ -1703,9 +1737,17 @@ pub(crate) fn chips_view(lens: Lens, level: Level, empty: &'static str) -> impl 
                             .iter()
                             .enumerate()
                             .map(|(ii, p)| {
+                                let chip = match &p.field {
+                                    // FILTER-53: the nav's head opens the card too.
+                                    menger_tickets_api::filter::Field::Saved(n) => {
+                                        let (f, v) = chip_words(p);
+                                        view! { <span class="fchip saved">{saved_face(n, level, f, v)}</span> }.into_any()
+                                    }
+                                    _ => view! { <span class="fchip">{crate::ors::words(p)}</span> }.into_any(),
+                                };
                                 view! {
                                     {(ii > 0).then(|| view! { <span class="fw">"and"</span> })}
-                                    <span class="fchip" class:saved=matches!(p.field, menger_tickets_api::filter::Field::Saved(_))>{crate::ors::words(p)}</span>
+                                    {chip}
                                 }
                             })
                             .collect_view();
@@ -2200,7 +2242,9 @@ fn saved_row(lens: Lens, pop: Pop, name: String) -> impl IntoView {
             pop.check_saved(lens, &name)
         }
     };
+    let (_, _, peek) = crate::fcard::chip_on(&name, level);
     view! {
+        <span class="fv-wrap">
         <button
             type="button"
             class="fv fv-saved"
@@ -2214,6 +2258,8 @@ fn saved_row(lens: Lens, pop: Pop, name: String) -> impl IntoView {
             <span class="flabel"><span>{name.clone()}</span>{elsewhere}</span>
             <span class="fcount">{count}</span>
         </button>
+        <button type="button" class="fv-info" data-fcard=name.clone() title=format!("what {name} is made of") aria-label=format!("what {name} is made of") on:click=peek>"\u{24d8}"</button>
+        </span>
     }
 }
 
@@ -2290,13 +2336,18 @@ pub(crate) fn host_of(phone: bool, surface_line: bool) -> Host {
 /// surface's line and in the nav's head; a click opens the menu on its ⌂
 /// everywhere tab.
 pub(crate) fn global_chip(lens: Lens, text: String) -> impl IntoView {
+    // FILTER-53: it opens ⌂'s card, read only; the card changes it in the menu.
+    let _ = lens;
+    let (enter, leave, press) = crate::fcard::chip_on(crate::fcard::HOME, Level::Global);
     view! {
         <button
             type="button"
             class="fchip-g"
-            data-fopen="global"
+            data-fcard=crate::fcard::HOME
             title=format!("the filter everywhere \u{2014} every view shows what it admits: {text}")
-            on:click=move |_| lens.open_panel(Level::Global, None)
+            on:pointerenter=enter
+            on:pointerleave=leave
+            on:click=press
         >
             <span class="fchip-g-h" aria-hidden="true">"\u{2302}"</span>
             <span class="fchip-g-w">{text.clone()}</span>

@@ -481,6 +481,11 @@ impl Saved {
         })
     }
 
+    /// FILTER-53: the list's names, untracked (read once when unread).
+    pub(crate) fn listed_untracked(self) -> Vec<Entry> {
+        untrack(|| self.listed())
+    }
+
     /// The collection read again; the list shown meanwhile is kept.
     pub(crate) fn refresh(self) {
         if !matches!(self.list.get_untracked(), Listing::Read(_)) {
