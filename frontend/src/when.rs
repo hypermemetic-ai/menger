@@ -282,7 +282,7 @@ pub(crate) const STATUSES: [Status; 11] = [
     Status::InReview,
     Status::Complete,
     Status::Blocked,
-    Status::Idea,
+    Status::Draft,
     Status::Epic,
     Status::Superseded,
     Status::Canceled,

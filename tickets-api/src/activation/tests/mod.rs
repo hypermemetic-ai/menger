@@ -56,7 +56,7 @@ async fn create_allocates_sequential_ids() {
     match ev {
         TicketsEvent::Created { ticket } => {
             assert_eq!(ticket.id, "MNG-1");
-            assert_eq!(ticket.status, Status::Pending);
+            assert_eq!(ticket.status, Status::Draft);
         }
         other => panic!("expected Created, got {other:?}"),
     }
@@ -178,7 +178,7 @@ async fn set_status_reports_previous() {
     match one(hub.set_status(operator(), "MNG-1".into(), "ready".into(), None, None, None).await).await {
         TicketsEvent::StatusChanged { ticket, previous } => {
             assert_eq!(ticket.status, Status::Ready);
-            assert_eq!(previous, Status::Pending);
+            assert_eq!(previous, Status::Draft);
         }
         other => panic!("expected StatusChanged, got {other:?}"),
     }
@@ -238,8 +238,8 @@ async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
     one(hub.create(operator(), "WK".into(), "b".into(), None, None, None, None, None, None, None, None).await).await;
 
     for (id, spelling, want, previous) in [
-        ("WK-2", "Coding", Status::Coding, Status::Pending),
-        ("WK-3", "active", Status::Coding, Status::Pending),
+        ("WK-2", "Coding", Status::Coding, Status::Draft),
+        ("WK-3", "active", Status::Coding, Status::Draft),
         ("WK-3", "In Review", Status::InReview, Status::Coding),
     ] {
         match one(hub.set_status(operator(), id.into(), spelling.into(), None, None, None).await).await {
@@ -334,7 +334,7 @@ async fn watch_sees_creations_and_status_changes() {
     // MENGER-13: its first status, a transition from nothing, right after.
     match watch.next().await.expect("change") {
         TicketsEvent::Transition { transition } => {
-            assert_eq!((transition.ticket.as_str(), transition.from.as_deref(), transition.to.as_str()), ("MNG-1", None, "Pending"));
+            assert_eq!((transition.ticket.as_str(), transition.from.as_deref(), transition.to.as_str()), ("MNG-1", None, "Draft"));
             assert_eq!((transition.actor.as_str(), transition.source), (crate::access::TEST_ADMIN, crate::types::TransitionSource::Api));
         }
         other => panic!("expected Transition, got {other:?}"),
@@ -347,12 +347,12 @@ async fn watch_sees_creations_and_status_changes() {
 
     one(hub.set_status(operator(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
     match watch.next().await.expect("change") {
-        TicketsEvent::StatusChanged { previous, .. } => assert_eq!(previous, Status::Pending),
+        TicketsEvent::StatusChanged { previous, .. } => assert_eq!(previous, Status::Draft),
         other => panic!("expected StatusChanged, got {other:?}"),
     }
     match watch.next().await.expect("change") {
         TicketsEvent::Transition { transition } => {
-            assert_eq!((transition.from.as_deref(), transition.to.as_str(), transition.cause), (Some("Pending"), "Ready", None));
+            assert_eq!((transition.from.as_deref(), transition.to.as_str(), transition.cause), (Some("Draft"), "Ready", None));
         }
         other => panic!("expected Transition, got {other:?}"),
     }

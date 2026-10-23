@@ -818,7 +818,7 @@ async fn reopen_round_trips_every_field_and_continues_seq() {
             .unwrap();
         let parent = match store.set_status(SYS.permit("RT-1"), Status::Ready).await.unwrap() {
             Change::StatusChanged { ticket, previous } => {
-                assert_eq!(previous, Status::Pending);
+                assert_eq!(previous, Status::Draft);
                 ticket
             }
             other => panic!("expected StatusChanged, got {other:?}"),
@@ -923,7 +923,7 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
         Status::Ready,
         Status::Blocked,
         Status::Complete,
-        Status::Idea,
+        Status::Draft,
         Status::Epic,
         Status::Superseded,
     ] {
@@ -1585,8 +1585,8 @@ async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
         .unwrap(); // SUB-1, hosted under HOST-2
     let row = |title: &str, status| Some(RootRow { title: title.into(), status, kind: Kind::Scope, frozen: false });
     let by = |epic: &str| store.groups(SYS).into_iter().find(|g| g.epic == epic).unwrap();
-    assert_eq!(by("HOST").root_row, row("the host", Status::Pending));
-    assert_eq!(by("SUB").root_row, row("the sub", Status::Pending));
+    assert_eq!(by("HOST").root_row, row("the host", Status::Draft));
+    assert_eq!(by("SUB").root_row, row("the sub", Status::Draft));
     assert_eq!(store.groups(SYS), nav(&store));
     let mut rx = store.subscribe();
 
@@ -1607,7 +1607,7 @@ async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
     let moved = group_changes(&mut rx);
     assert_eq!(moved.iter().map(|g| g.epic.as_str()).collect::<Vec<_>>(), ["SUB", "HOST"], "innermost first");
     assert_eq!(moved[0].root_row, row("the sub", Status::Complete));
-    assert_eq!(moved[1].root_row, row("the host", Status::Pending));
+    assert_eq!(moved[1].root_row, row("the host", Status::Draft));
 
     // The status it already has: the ticket event, no group.
     store.set_status(SYS.permit("SUB-1"), Status::Complete).await.unwrap();
@@ -1618,7 +1618,7 @@ async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
     store.amend(SYS.permit("HOST-1"), Some("the host, renamed".into()), None).await.unwrap();
     assert!(matches!(rx.try_change().unwrap(), Change::Amended { .. }));
     match rx.try_change().unwrap() {
-        Change::GroupChanged { group } => assert_eq!(group.root_row, row("the host, renamed", Status::Pending)),
+        Change::GroupChanged { group } => assert_eq!(group.root_row, row("the host, renamed", Status::Draft)),
         other => panic!("expected GroupChanged, got {other:?}"),
     }
     assert!(rx.try_change().is_err());

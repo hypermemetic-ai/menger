@@ -106,7 +106,7 @@ async fn a_succeeded_record_runs_its_tickets_from_at() {
     let envs = store.environments(Some("menger"), None).unwrap();
     assert_eq!(envs.len(), 1);
     assert_eq!((envs[0].revision.as_deref(), envs[0].since, envs[0].tickets), (Some("bbbbbbb"), Some(T0), 3));
-    assert_eq!(store.row("MENGER-2").unwrap().0.status, Status::Pending, "a deployment is a fact beside the status");
+    assert_eq!(store.row("MENGER-2").unwrap().0.status, Status::Draft, "a deployment is a fact beside the status");
 }
 
 /// A commit linked after it was deployed counts wherever it runs; one

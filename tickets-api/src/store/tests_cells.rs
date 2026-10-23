@@ -233,7 +233,7 @@ async fn exactly_the_writes_that_change_a_cell_move_one() {
     // A status change of the ticket itself.
     store.set_status(SYS.permit("MV-3"), Status::Ready).await.unwrap();
     let moved = announced(&mut rx, &store);
-    assert_eq!(moved.into_iter().collect::<Vec<_>>(), [(OrderKey { shortcode: ShortcodeId::from("MV"), seq: 3 }, key(Status::Pending, true, false), key(Status::Ready, true, false).unwrap())]);
+    assert_eq!(moved.into_iter().collect::<Vec<_>>(), [(OrderKey { shortcode: ShortcodeId::from("MV"), seq: 3 }, key(Status::Draft, true, false), key(Status::Ready, true, false).unwrap())]);
     // To itself: a write, and no move.
     store.set_status(SYS.permit("MV-3"), Status::Ready).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "a status set to itself moves no cell");
@@ -583,9 +583,9 @@ async fn verify_names_an_altered_container_and_an_altered_count() {
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 4, cells: 3, bitmaps: 3, .. }));
     let conn = Connection::open(&path).unwrap();
     let pending: u32 = conn
-        .query_row("SELECT id FROM cells WHERE state = 'Pending' AND kind = 'build'", [], |r| r.get(0))
+        .query_row("SELECT id FROM cells WHERE state = 'Draft' AND kind = 'build'", [], |r| r.get(0))
         .unwrap();
-    // VC-2 and VC-4 are Pending builds; the container says VC-2 alone.
+    // VC-2 and VC-4 are Draft builds; the container says VC-2 alone.
     conn.execute(
         "UPDATE cell_bits SET card = 1, bits = ?2 WHERE epic = 'VC' AND cell = ?1",
         rusqlite::params![pending, cells::encode(&[2])],
@@ -599,8 +599,8 @@ async fn verify_names_an_altered_container_and_an_altered_count() {
     assert_eq!(
         found,
         [
-            format!("cell_bits VC cell {pending} (Pending, build, none, not blocked, no commits) container 0: stored 1 members [2]; a scan gives 2 members [2, 4]"),
-            format!("cell_counts VC cell {pending} (Pending, build, none, not blocked, no commits): stored 7; a scan gives 2"),
+            format!("cell_bits VC cell {pending} (Draft, build, none, not blocked, no commits) container 0: stored 1 members [2]; a scan gives 2 members [2, 4]"),
+            format!("cell_counts VC cell {pending} (Draft, build, none, not blocked, no commits): stored 7; a scan gives 2"),
         ],
         "{found:#?}"
     );
@@ -614,7 +614,7 @@ async fn verify_names_an_altered_container_and_an_altered_count() {
     .unwrap();
     drop(conn);
     let Verdict::Differs(found) = Store::verify_derived(&path).unwrap() else { unreachable!() };
-    assert!(found.contains(&format!("cells {pending} and 98: both are (Pending, build, none, not blocked, no commits)")), "{found:#?}");
+    assert!(found.contains(&format!("cells {pending} and 98: both are (Draft, build, none, not blocked, no commits)")), "{found:#?}");
     assert!(found.contains(&"cell_bits VC cell 99, which the cell table does not hold, container 0: stored 1 members".to_string()), "{found:#?}");
 }
 

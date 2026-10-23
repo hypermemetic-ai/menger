@@ -22,7 +22,7 @@
 //!   `Coding`, `In Review` — then `Done`, collapsed.
 //!
 //! A column keeps the order the server yields (Coding, In Review, Ready,
-//! Pending, Blocked, Idea, Epic, then the store's order). A card is its id,
+//! Pending, Blocked, Draft, Epic, then the store's order). A card is its id,
 //! title, kind, status, severity when set, a marker when its status is
 //! `Blocked`, and a chip for each ticket it waits on that this board does
 //! not show (an **off-board blocker**); the card and every chip link to the
@@ -213,7 +213,7 @@ const STAGES: [Status; 4] = [Status::Pending, Status::Ready, Status::Coding, Sta
 /// always. `Blocked` holds every card in wave 2 or later, every missing one
 /// and every wave-1 card whose status is `Blocked`, each badged with its
 /// wave (`w3`, or `missing`); the other wave-1 cards go to their status's
-/// column — and an `Idea` or an `Epic`, which has no stage of its own, to
+/// column — and an `Draft` or an `Epic`, which has no stage of its own, to
 /// `Pending`, so no card is ever left off.
 pub(crate) fn columns(cards: &[Card], layout: Layout) -> Vec<Column> {
     let plain = |c: &Card| Placed { card: c.clone(), badge: None };
@@ -315,7 +315,7 @@ fn rank(status: Status) -> u8 {
         Status::Ready => 2,
         Status::Pending => 3,
         Status::Blocked => 4,
-        Status::Idea => 5,
+        Status::Draft => 5,
         Status::Epic => 6,
         Status::Complete | Status::Superseded | Status::Canceled | Status::Doc => 7,
     }
@@ -1638,7 +1638,7 @@ mod tests {
     }
 
     /// As `waves` yields them: wave 1 (Coding, Ready, Pending, Blocked,
-    /// Idea), wave 3 — wave 2 holds nothing of this board's — wave 4, the
+    /// Draft), wave 3 — wave 2 holds nothing of this board's — wave 4, the
     /// missing lane, then the done.
     fn placed() -> Vec<Card> {
         use Placement::{Done, MissingBlocker, Wave};
@@ -1647,7 +1647,7 @@ mod tests {
             card("A-3", Status::Ready, Wave { n: 1 }, &[]),
             card("A-4", Status::Pending, Wave { n: 1 }, &[]),
             card("A-5", Status::Blocked, Wave { n: 1 }, &[]),
-            card("A-6", Status::Idea, Wave { n: 1 }, &[]),
+            card("A-6", Status::Draft, Wave { n: 1 }, &[]),
             card("A-7", Status::InReview, Wave { n: 3 }, &["X-9"]),
             card("A-8", Status::Pending, Wave { n: 3 }, &["X-9", "A-2"]),
             card("A-9", Status::Pending, Wave { n: 4 }, &["A-8"]),
@@ -1691,7 +1691,7 @@ mod tests {
 
     /// Acceptance 1, stages: Blocked holds every card in wave 2 or later and
     /// every missing one, badged with its wave, after the wave-1 card whose
-    /// status is Blocked; the wave-1 cards by status (an Idea with Pending);
+    /// status is Blocked; the wave-1 cards by status (an Draft with Pending);
     /// Done last; every column present, empty or not.
     #[test]
     fn the_stages_layout_puts_waves_two_and_up_in_blocked_with_badges() {

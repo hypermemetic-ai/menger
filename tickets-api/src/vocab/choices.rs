@@ -38,7 +38,7 @@ lenient!(CallerSource, InputSource, DeleteChildren, AmendedField, CommentIntent,
 
 closed_schema!(Status, "A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case", [
     Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Complete,
-    Status::Idea, Status::Epic, Status::Superseded, Status::Canceled, Status::Doc,
+    Status::Draft, Status::Epic, Status::Superseded, Status::Canceled, Status::Doc,
 ]);
 closed_schema!(Kind, "What shape of work a ticket is — the owner's five, and doc (any case)", [
     Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike, Kind::Doc,

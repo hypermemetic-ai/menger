@@ -218,7 +218,7 @@ async fn commits_inputs_comments_history_and_the_queue_move_by_identity() {
     let c = store.comment(SYS, c.id.get()).unwrap();
     assert_eq!((c.anchor.ticket.as_deref(), c.anchor.route.as_str()), (Some("N-3"), "#/ticket/N-3"));
     let h = store.history(SYS, "N-3").unwrap();
-    assert_eq!(h.own.iter().map(|t| t.to.as_str()).collect::<Vec<_>>(), ["Pending", "Ready"], "its history, kept");
+    assert_eq!(h.own.iter().map(|t| t.to.as_str()).collect::<Vec<_>>(), ["Draft", "Ready"], "its history, kept");
     assert!(store.queued(SYS, true, 0).iter().any(|(e, _)| e.ticket == "N-3"), "still queued, as N-3");
     assert_kept(&store, "the records");
 }

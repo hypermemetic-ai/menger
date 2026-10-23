@@ -826,7 +826,7 @@ async fn every_address_of_a_nested_seed_answers_as_the_rule_does() {
             "status in (Pending, Ready) and kind build",
             "ready",
             "blocked and severity critical",
-            "kind scope and status Idea and severity critical",
+            "kind scope and status Draft and severity critical",
             "category in (done, dropped)",
             "(status Blocked or blocked) and not kind doc",
             "not kind doc",
@@ -968,7 +968,10 @@ async fn only_matches_move_up_to_the_nearest_match_or_the_shortcodes_top() {
     ] {
         store.create(SYS, mk(epic, kind, parent)).await.unwrap();
     }
-    store.set_status(SYS.permit("RETURNS-1"), Status::Pending).await.unwrap();
+    // TICKETS-13: born Draft; RETURNS's are Pending here.
+    for id in ["RETURNS-1", "RETURNS-2", "RETURNS-4", "RETURNS-5"] {
+        store.set_status(SYS.permit(id), Status::Pending).await.unwrap();
+    }
     store.set_status(SYS.permit("RETURNS-3"), Status::Ready).await.unwrap();
     let ask = |text: &str, parent: Option<&str>, epic: Option<&str>| -> Vec<(String, bool, u64)> {
         let filter = Filter::parse(text).unwrap();

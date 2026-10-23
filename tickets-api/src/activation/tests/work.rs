@@ -95,7 +95,7 @@ async fn blockers_resolve_to_current_statuses_in_order() {
     match &evs[1] {
         TicketsEvent::Blocker { ticket } => {
             assert_eq!(ticket.id, "DAG-2");
-            assert_eq!(ticket.status, Status::Pending);
+            assert_eq!(ticket.status, Status::Draft);
         }
         other => panic!("expected Blocker, got {other:?}"),
     }
@@ -163,7 +163,7 @@ async fn placed_and_counts(
 
 /// WAVE-4 acceptance 2: the yield order exactly as specified — waves
 /// ascending; inside a wave Coding, In Review, Ready, Pending, Blocked,
-/// Idea, Epic, then (epic, seq); then the missing lane; then the done,
+/// Draft, Epic, then (epic, seq); then the missing lane; then the done,
 /// each in (epic, seq) — with the default kinds (the scope roots are not
 /// work), a blocker followed into a shortcode not asked for, and the
 /// tally after the rows, exactly once.
@@ -186,7 +186,9 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
     }
     create("ELSE", None, &[]).await; // ELSE-2, wave 1 — not asked for
     create("WA", None, &["ELSE-2"]).await; // WA-2: wave 2, Pending
+    status("WA-2", "Pending").await; // TICKETS-13: born Draft
     create("WB", Some("spike"), &[]).await; // WB-2: wave 1, Pending
+    status("WB-2", "Pending").await;
     create("WA", Some("gap"), &[]).await; // WA-3: wave 1, Ready
     status("WA-3", "Ready").await;
     create("WB", None, &[]).await; // WB-3: wave 1, Coding

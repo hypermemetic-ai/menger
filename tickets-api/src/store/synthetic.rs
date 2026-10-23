@@ -51,7 +51,7 @@ const STATUSES: [(Status, u32); 7] = [
     (Status::Ready, 18),
     (Status::Blocked, 8),
     (Status::Complete, 34),
-    (Status::Idea, 6),
+    (Status::Draft, 6),
     (Status::Superseded, 4),
     (Status::Epic, 2),
 ];

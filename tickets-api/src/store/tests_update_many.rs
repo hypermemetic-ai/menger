@@ -115,7 +115,7 @@ async fn any_refusal_writes_nothing_and_names_each_refused_id() {
     let said = err.to_string();
     assert!(said.starts_with("2 tickets refused, nothing written") && said.contains("M-7: ") && said.contains("M-40: "), "{said}");
     assert_eq!(written(&store), before, "nothing written");
-    assert_eq!(status_of(&store, "M-2").await, Status::Pending, "not even the one that would land");
+    assert_eq!(status_of(&store, "M-2").await, Status::Draft, "not even the one that would land");
     // Several reasons for one ticket are each named.
     let u = Update { status: Some(Status::Doc), block: vec!["M-7".into()], ..Update::default() };
     match store.update_many(SYS, ids(&["M-2"]), u).await.unwrap_err() {
@@ -221,7 +221,7 @@ async fn may_is_asked_of_the_whole_selection_and_refuses_it() {
     assert!(err.to_string().contains("N-2"), "{err}");
     assert_eq!(*asked.lock().unwrap(), ["M-2", "N-2"]);
     assert_eq!(written(&store), before);
-    assert_eq!(status_of(&store, "M-2").await, Status::Pending);
+    assert_eq!(status_of(&store, "M-2").await, Status::Draft);
 }
 
 #[tokio::test]

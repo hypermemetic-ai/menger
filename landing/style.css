@@ -28,7 +28,7 @@
 .st-in-review  { --st-bg: #cdeef4; --st-fg: #0b5b6b; --tone: var(--review); }
 .st-blocked    { --st-bg: #fdecec; --st-fg: #a02030; }
 .st-complete   { --st-bg: #cfe9c9; --st-fg: #256b1a; --tone: var(--complete); }
-.st-idea       { --st-bg: #efe9e0; --st-fg: #72644c; }
+.st-draft       { --st-bg: #efe9e0; --st-fg: #72644c; }
 .st-epic       { --st-bg: #e6dcf5; --st-fg: #5b3a8c; --tone: var(--epic); }
 .st-superseded { --st-bg: #f3d9d9; --st-fg: #9a1f1f; --st-deco: line-through; }
 .st-canceled   { --st-bg: #ecebe7; --st-fg: #5f5d57; --st-deco: line-through; }
@@ -48,7 +48,7 @@
   .st-in-review  { --st-bg: #10343b; --st-fg: #85d2df; }
   .st-blocked    { --st-bg: #3d1a1c; --st-fg: #f09a9a; }
   .st-complete   { --st-bg: #16341f; --st-fg: #8fd39a; }
-  .st-idea       { --st-bg: #2b2721; --st-fg: #c9b99a; }
+  .st-draft       { --st-bg: #2b2721; --st-fg: #c9b99a; }
   .st-epic       { --st-bg: #2e2143; --st-fg: #cdb4f2; }
   .st-superseded { --st-bg: #3b2224; --st-fg: #dea3a3; }
   .st-canceled   { --st-bg: #2c2b28; --st-fg: #b9b6ae; }

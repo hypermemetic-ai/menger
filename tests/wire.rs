@@ -170,7 +170,7 @@ async fn health_create_list_watch_over_the_wire() {
     let ev = content(sub.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "created");
     assert_eq!(ev["ticket"]["id"], "WIRE-1");
-    assert_eq!(ev["ticket"]["status"], "Pending");
+    assert_eq!(ev["ticket"]["status"], "Draft");
 
     // the watch subscriber saw it pushed, unprompted
     let ev = content(watch.next().await.unwrap().unwrap());
@@ -181,7 +181,7 @@ async fn health_create_list_watch_over_the_wire() {
     assert_eq!(ev["type"], "transition");
     assert_eq!(
         (ev["transition"]["ticket"].as_str(), ev["transition"]["field"].as_str(), ev["transition"]["to"].as_str()),
-        (Some("WIRE-1"), Some("status"), Some("Pending"))
+        (Some("WIRE-1"), Some("status"), Some("Draft"))
     );
     assert_eq!((ev["transition"]["from"].clone(), ev["transition"]["actor"].as_str(), ev["transition"]["source"].as_str()), (Value::Null, Some(support::admin().as_str()), Some("api")));
     // …and, after it, the new shortcode's row (MNG-10)
@@ -192,12 +192,12 @@ async fn health_create_list_watch_over_the_wire() {
         json!({
             "epic": "WIRE", "shortcode": "WIRE", "address": "hypermemetic:WIRE", "total": 1, "done": 0, "docs": 0, "root": "WIRE-1",
             // AGS-23: the root's own row, which the nav draws at the top
-            "root_row": {"title": "first over the wire", "status": "Pending", "kind": "scope"},
+            "root_row": {"title": "first over the wire", "status": "Draft", "kind": "scope"},
             "host": null
         })
     );
 
-    // set_status → watch sees the transition too (Pending → Ready moves no
+    // set_status → watch sees the transition too (Draft → Ready moves no
     // count — AGS-23: but WIRE-1 is its shortcode's root, whose status is on
     // the group's row, so the group follows it)
     let mut sub = call(
@@ -208,14 +208,14 @@ async fn health_create_list_watch_over_the_wire() {
     .await;
     let ev = content(sub.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "status_changed");
-    assert_eq!(ev["previous"], "Pending");
+    assert_eq!(ev["previous"], "Draft");
 
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "status_changed");
     assert_eq!(ev["ticket"]["status"], "Ready");
     // MENGER-13: the transition, right after it.
     let ev = content(watch.next().await.unwrap().unwrap());
-    assert_eq!((ev["type"].as_str(), ev["transition"]["from"].as_str(), ev["transition"]["to"].as_str()), (Some("transition"), Some("Pending"), Some("Ready")));
+    assert_eq!((ev["type"].as_str(), ev["transition"]["from"].as_str(), ev["transition"]["to"].as_str()), (Some("transition"), Some("Draft"), Some("Ready")));
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
     assert_eq!(ev["group"]["root_row"]["status"], "Ready");
@@ -651,7 +651,7 @@ async fn list_pages_over_the_wire() {
     assert_eq!(row["id"], "PGA-1");
     assert_eq!(row["epic"], "PGA");
     assert_eq!(row["seq"], 1);
-    assert_eq!(row["status"], "Pending");
+    assert_eq!(row["status"], "Draft");
     assert_eq!(row["kind"], "scope");
     assert!(row["severity"].is_null());
     assert!(row["parent"].is_null(), "the root is top-level");
@@ -862,8 +862,8 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
 
     // `collect` reads to the stream's `done` and refuses any other item
     // type, so this is the whole answer: group items, then done.
-    // AGS-23: each with its root's row — every root here a Pending scope.
-    let root_row = |title: &str| json!({"title": title, "status": "Pending", "kind": "scope"});
+    // AGS-23: each with its root's row — every root here a Draft scope.
+    let root_row = |title: &str| json!({"title": title, "status": "Draft", "kind": "scope"});
     let items = collect(call(&client, "tickets.nav.groups", json!({})).await).await;
     assert!(items.iter().all(|ev| ev["type"] == "group"), "only groups: {items:?}");
     let groups: Vec<Value> = items.into_iter().map(|ev| ev["group"].clone()).collect();
@@ -1383,7 +1383,7 @@ async fn docs_root_a_shortcode_refuse_set_status_in_band_and_are_never_ready() {
         [
             (json!("MANIFEST-1"), json!("doc"), json!("Doc"), Value::Null),
             (json!("MANIFEST-2"), json!("doc"), json!("Doc"), json!("MANIFEST-1")),
-            (json!("MANIFEST-3"), json!("build"), json!("Pending"), json!("MANIFEST-2")),
+            (json!("MANIFEST-3"), json!("build"), json!("Draft"), json!("MANIFEST-2")),
         ]
     );
     let ev = content(watch.next().await.unwrap().unwrap());
@@ -2003,7 +2003,7 @@ async fn watch_filter_says_entered_and_left_last() {
     let client = connect(port).await;
     answer(&client, "tickets.create", json!({"epic": "WF", "title": "root", "kind": "scope"})).await;
     answer(&client, "tickets.create", json!({"epic": "OTH", "title": "other root", "kind": "scope"})).await;
-    let filter = "status Pending and kind build";
+    let filter = "status Draft and kind build";
     let mut plain = call(&client, "tickets.watch", json!({})).await;
     let mut filtered = call(&client, "tickets.watch", json!({"filter": filter})).await;
     let mut members = call(&client, "tickets.watch", json!({"filter": filter, "membership": true})).await;
@@ -2461,7 +2461,7 @@ async fn counts_facets_and_filtered_pages_over_the_wire() {
     let none = collect(call(&client, "tickets.nav.counts", json!({"filter": "category active"})).await).await;
     assert!(none.is_empty(), "a shortcode with no match has no count");
 
-    let facets = collect(call(&client, "tickets.nav.facets", json!({"filter": "severity high and status Pending"})).await).await;
+    let facets = collect(call(&client, "tickets.nav.facets", json!({"filter": "severity high and status Draft"})).await).await;
     let of = |field: &str| -> Vec<(String, u64)> {
         facets
             .iter()
@@ -2469,14 +2469,14 @@ async fn counts_facets_and_filtered_pages_over_the_wire() {
             .map(|f| (f["value"].as_str().unwrap().to_string(), f["held"].as_u64().unwrap()))
             .collect()
     };
-    // severity's menu: every Pending ticket's severity (FW-1 has none;
+    // severity's menu: every Draft ticket's severity (FW-1 has none;
     // FW-2, 4, 6 are high; FW-5, 7 low — FW-3 is Ready); status's: every
-    // high ticket's status (all three Pending); the rest: both groups.
+    // high ticket's status (all three Draft); the rest: both groups.
     assert_eq!(of("severity"), [("high".to_string(), 3), ("low".to_string(), 2), ("none".to_string(), 1)]);
-    assert_eq!(of("status"), [("Pending".to_string(), 3)]);
+    assert_eq!(of("status"), [("Draft".to_string(), 3)]);
     assert_eq!(of("in"), [("FW".to_string(), 3)]);
     assert_eq!(of("blocked"), [("no".to_string(), 3)]);
-    assert_eq!(facets[0], json!({"type": "facet", "field": "status", "value": "Pending", "held": 3}));
+    assert_eq!(facets[0], json!({"type": "facet", "field": "status", "value": "Draft", "held": 3}));
     let base = collect(call(&client, "tickets.nav.facets", json!({"base": "status Ready"})).await).await;
     assert!(base.iter().filter(|f| f["field"] == "status").all(|f| f["value"] == "Ready"), "base is never set aside: {base:?}");
 }

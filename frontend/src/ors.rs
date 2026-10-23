@@ -466,7 +466,7 @@ pub(crate) mod tests {
     /// Past [`MOST`] groups a filter is not drawn.
     #[test]
     fn a_filter_too_wide_is_not_drawn() {
-        let six = "status in (Ready, Coding, Pending, Blocked, Idea, Epic)";
+        let six = "status in (Ready, Coding, Pending, Blocked, Draft, Epic)";
         assert!(Ors::of_filter(&f(&format!("{six} and kind in (build, gap, spike, scope, execution, doc)"))).is_none());
         assert!(Ors::of_filter(&f(&format!("{six} and kind in (build, gap, spike, scope, execution)"))).is_some());
     }

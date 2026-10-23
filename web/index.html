@@ -87,7 +87,7 @@
 const WS_PORT = "{{WS_PORT}}";
 // The lifecycle — what a status control offers. SDLC-11: a doc has none; its
 // one status, Doc, is shown, never offered.
-const STATUSES = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled"];
+const STATUSES = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Draft", "Epic", "Superseded", "Canceled"];
 // ACCESS-30: over https the socket is on the page's own origin, at /ws.
 const ws = new WebSocket(location.protocol === "https:"
   ? `wss://${location.host}/ws`

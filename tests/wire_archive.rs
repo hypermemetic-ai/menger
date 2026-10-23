@@ -139,7 +139,7 @@ async fn archive_and_restore_over_the_wire() {
     // The dry run: what would go, and what is live — nothing written.
     let dry = one(&client, "tickets.archive", json!({"ids": ["arc-3"], "dry_run": true})).await;
     assert_eq!((dry["type"].clone(), dry["dry_run"].clone(), dry["ids"].clone()), (json!("archived"), json!(true), json!(["ARC-3", "ARC-4"])), "{dry}");
-    assert_eq!(dry["live"], json!([{"id": "ARC-3", "status": "Pending"}, {"id": "ARC-4", "status": "Ready"}]));
+    assert_eq!(dry["live"], json!([{"id": "ARC-3", "status": "Draft"}, {"id": "ARC-4", "status": "Ready"}]));
     assert!(one(&client, "tickets.get", json!({"id": "ARC-4"})).await["ticket"].get("archived").is_none());
 
     // The whole subtree, live work named, never refused.
@@ -155,7 +155,7 @@ async fn archive_and_restore_over_the_wire() {
     // Every view leaves it out, unless the filter names it.
     let listed = |evs: Vec<Value>| evs.into_iter().filter(|e| e["type"] == "summary").map(|e| e["summary"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
     assert!(listed(collect(call(&client, "tickets.list", json!({"epic": "ARC", "summary": true})).await).await).is_empty());
-    assert!(listed(collect(call(&client, "tickets.list", json!({"filter": "status Pending", "summary": true})).await).await).is_empty());
+    assert!(listed(collect(call(&client, "tickets.list", json!({"filter": "status Draft", "summary": true})).await).await).is_empty());
     assert_eq!(listed(collect(call(&client, "tickets.list", json!({"filter": "archived and in ARC", "summary": true})).await).await), ["ARC-1", "ARC-2", "ARC-3", "ARC-4"]);
     assert_eq!(listed(collect(call(&client, "tickets.list", json!({"filter": "archived within 1d", "summary": true})).await).await).len(), 4);
     let health = one(&client, "tickets.health", json!({})).await;

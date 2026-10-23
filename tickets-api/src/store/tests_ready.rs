@@ -1039,7 +1039,7 @@ async fn verify_names_each_altered_number_of_the_ready_state() {
         .unwrap()
         .execute_batch(
             "UPDATE tickets SET unsatisfied = 0 WHERE id = 'VR-2';
-             UPDATE status_counts SET held = 9 WHERE epic = 'VR' AND status = 'Pending';",
+             UPDATE status_counts SET held = 9 WHERE epic = 'VR' AND status = 'Draft';",
         )
         .unwrap();
     let Verdict::Differs(found) = Store::verify_derived(&path).unwrap() else {
@@ -1049,7 +1049,7 @@ async fn verify_names_each_altered_number_of_the_ready_state() {
         found,
         [
             "unsatisfied blockers of VR-2: none stored; a scan gives 1",
-            "status count VR Pending: stored 9; a scan gives 1",
+            "status count VR Draft: stored 9; a scan gives 1",
             "ready set VR-2: the index holds it; a scan does not",
         ],
         "{found:#?}"

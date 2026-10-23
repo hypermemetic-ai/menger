@@ -1163,9 +1163,11 @@ and `view: mockup` + `widths:` makes a whole body one.
   the ticket that generated it (`parent:` in frontmatter; typed once
   AGS-19 lands), not as a file in the repository.
 - Planning: in the tracker (`synapse -P 4455 menger tickets …`) per the
-  ticketing skill. Tickets are `Pending`
-  until the human promotes them to `Ready`; implementation does not begin
-  on `Pending` tickets.
+  ticketing skill. Tickets are born `Draft` (TICKETS-13, owner
+  2026-10-23; it was `Idea`, which still reads as it) and stay `Draft` or
+  `Pending` until the human promotes them to `Ready`; implementation does
+  not begin on a `Draft` or `Pending` ticket. The table board's default
+  filter is `not status in (Draft, Complete)`.
 - **A scope roots its own shortcode** (ORG-5): a new area under a ticket is
   `create --kind scope --epic NEW --parent X` (NEW-1, hosted under X) — a
   scope with X's own shortcode is refused, and so is `set_kind` / `update
@@ -1189,7 +1191,7 @@ and `view: mockup` + `widths:` makes a whole body one.
 - Ticketing follows **menger-skills** (`../menger-skills`, the house
   methodology — its `ticketing/`, `planning/`, `asking/`, `building/`
   skills; `ought` is retired, owner 2026-10-14). Its lifecycle is
-  `Pending → Ready → Coding → In Review → Complete` (+ `Superseded` /
+  `Draft → Pending → Ready → Coding → In Review → Complete` (+ `Superseded` /
   `Canceled`). Workers move their ticket across it (owner,
   2026-09-06): mark `active` the moment work starts (so no leaf is
   double-claimed) and record the branch on the ticket (`tickets.amend`

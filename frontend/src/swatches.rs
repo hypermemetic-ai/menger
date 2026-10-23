@@ -30,7 +30,7 @@ const STATUSES: [(&str, &str); 11] = [
     ("in-review", "In Review"),
     ("blocked", "Blocked"),
     ("complete", "Complete"),
-    ("idea", "Idea"),
+    ("draft", "Draft"),
     ("epic", "Epic"),
     ("superseded", "Superseded"),
     ("canceled", "Canceled"),

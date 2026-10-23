@@ -57,7 +57,7 @@ pub enum Status {
     InReview,
     Blocked,
     Complete,
-    Idea,
+    Draft,
     Epic,
     Superseded,
     /// SDLC-15: work that will not be done and that nothing replaced —
@@ -80,7 +80,7 @@ impl Status {
         Status::InReview,
         Status::Blocked,
         Status::Complete,
-        Status::Idea,
+        Status::Draft,
         Status::Epic,
         Status::Superseded,
         Status::Canceled,
@@ -101,18 +101,18 @@ impl Status {
         Status::InReview,
         Status::Blocked,
         Status::Complete,
-        Status::Idea,
+        Status::Draft,
         Status::Epic,
         Status::Superseded,
         Status::Canceled,
     ];
 
-    /// ACT-10: **the worker line** — the order a ticket's work walks, Idea →
+    /// ACT-10: **the worker line** — the order a ticket's work walks, Draft →
     /// Pending → Ready → Coding → In Review → Complete. What the app's `]`
     /// and `[` step along ([`Status::next`], [`Status::prev`]); Blocked,
     /// Epic, Superseded, Canceled and Doc are off it, reached by choosing.
     pub const LINE: [Status; 6] = [
-        Status::Idea,
+        Status::Draft,
         Status::Pending,
         Status::Ready,
         Status::Coding,
@@ -123,7 +123,7 @@ impl Status {
     /// ACT-10: where this status sits on [`Status::LINE`], if it is on it.
     pub const fn on_line(self) -> Option<usize> {
         match self {
-            Status::Idea => Some(0),
+            Status::Draft => Some(0),
             Status::Pending => Some(1),
             Status::Ready => Some(2),
             Status::Coding => Some(3),
@@ -143,7 +143,7 @@ impl Status {
     }
 
     /// ACT-10: the previous status on [`Status::LINE`] — `None` off it and
-    /// at its start (Idea).
+    /// at its start (Draft).
     pub const fn prev(self) -> Option<Status> {
         match self.on_line() {
             Some(i) if i > 0 => Some(Status::LINE[i - 1]),
@@ -160,7 +160,7 @@ impl Status {
             Status::InReview => "In Review",
             Status::Blocked => "Blocked",
             Status::Complete => "Complete",
-            Status::Idea => "Idea",
+            Status::Draft => "Draft",
             Status::Epic => "Epic",
             Status::Superseded => "Superseded",
             Status::Canceled => "Canceled",
@@ -169,11 +169,12 @@ impl Status {
     }
 
     /// The status a ticket of `kind` is born in (SDLC-11): a doc in `Doc`,
-    /// which it never leaves; anything else in `Pending`, which only a human
-    /// moves on (to `Ready`).
+    /// which it never leaves; anything else in `Draft` (TICKETS-13, owner
+    /// 2026-10-23: "the default state that a ticket enters into draft
+    /// mode"), which only a human moves on (to `Pending` or `Ready`).
     pub const fn at_birth(kind: Kind) -> Status {
         if kind.has_lifecycle() {
-            Status::Pending
+            Status::Draft
         } else {
             Status::Doc
         }
@@ -205,14 +206,15 @@ impl FromStr for Status {
             "in review" | "in_review" | "in-review" | "inreview" => Ok(Self::InReview),
             "blocked" => Ok(Self::Blocked),
             "complete" => Ok(Self::Complete),
-            "idea" => Ok(Self::Idea),
+            // TICKETS-13: `Idea` was its name; the old spelling still reads.
+            "draft" | "idea" => Ok(Self::Draft),
             "epic" => Ok(Self::Epic),
             "superseded" => Ok(Self::Superseded),
             "canceled" | "cancelled" => Ok(Self::Canceled),
             "doc" => Ok(Self::Doc),
             other => Err(format!(
                 "unknown status '{other}' (expected Pending, Ready, Coding, In Review, Blocked, \
-                 Complete, Idea, Epic, Superseded or Canceled — or Doc, a doc's own)"
+                 Complete, Draft, Epic, Superseded or Canceled — or Doc, a doc's own)"
             )),
         }
     }
@@ -2242,6 +2244,13 @@ mod tests {
         for spelling in ["Canceled", "canceled", "CANCELED", "cancelled", "Cancelled"] {
             assert_eq!(spelling.parse::<Status>(), Ok(Status::Canceled), "{spelling}");
         }
+        // TICKETS-13: `Idea` is `Draft`; the old name still reads, and writes
+        // the new one.
+        for spelling in ["Draft", "draft", "DRAFT", "Idea", "idea", "IDEA"] {
+            assert_eq!(spelling.parse::<Status>(), Ok(Status::Draft), "{spelling}");
+        }
+        assert_eq!(serde_json::from_str::<Status>("\"Idea\"").unwrap(), Status::Draft);
+        assert_eq!(serde_json::to_string(&Status::Draft).unwrap(), "\"Draft\"");
         // ACCESS-8: serde reads as `FromStr` does (a parameter takes every
         // spelling), and writes the canonical one.
         assert_eq!(serde_json::from_str::<Status>("\"InReview\"").unwrap(), Status::InReview);
@@ -2260,7 +2269,7 @@ mod tests {
     fn the_worker_line_steps_up_and_down() {
         assert_eq!(
             Status::LINE,
-            [Status::Idea, Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Complete]
+            [Status::Draft, Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Complete]
         );
         for w in Status::LINE.windows(2) {
             assert_eq!(w[0].next(), Some(w[1]), "{:?}", w[0]);
@@ -2269,7 +2278,7 @@ mod tests {
         assert_eq!(Status::Ready.next(), Some(Status::Coding));
         assert_eq!(Status::Coding.prev(), Some(Status::Ready));
         assert_eq!(Status::Complete.next(), None, "the end");
-        assert_eq!(Status::Idea.prev(), None, "the start");
+        assert_eq!(Status::Draft.prev(), None, "the start");
         for off in [Status::Blocked, Status::Epic, Status::Superseded, Status::Canceled, Status::Doc] {
             assert_eq!((off.on_line(), off.next(), off.prev()), (None, None, None), "{off:?}");
         }
@@ -2300,7 +2309,7 @@ mod tests {
             assert_eq!(spelling.parse::<Status>(), Ok(Status::Doc), "{spelling}");
         }
         for k in Kind::ALL {
-            let want = if k == Kind::Doc { Status::Doc } else { Status::Pending };
+            let want = if k == Kind::Doc { Status::Doc } else { Status::Draft };
             assert_eq!(Status::at_birth(k), want, "{k:?}");
             assert_eq!(k.has_lifecycle(), k != Kind::Doc, "{k:?}");
             assert_eq!(k.roots_a_shortcode(), matches!(k, Kind::Scope | Kind::Doc), "{k:?}");

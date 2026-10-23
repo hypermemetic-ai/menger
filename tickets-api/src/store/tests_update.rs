@@ -137,7 +137,7 @@ async fn each_field_alone_moves_it_and_sends_its_own_event() {
     assert_eq!(types(&drained(&mut rx)), ["amended"]);
 
     let u = store.update(SYS.updating("U-2"), Update { kind: Some(Kind::Gap), ..Update::default() }).await.unwrap();
-    assert_eq!((u.changed, u.ticket.kind, u.ticket.status), (vec!["kind".to_string()], Kind::Gap, Status::Pending));
+    assert_eq!((u.changed, u.ticket.kind, u.ticket.status), (vec!["kind".to_string()], Kind::Gap, Status::Draft));
     assert_eq!(types(&drained(&mut rx)), ["kind_changed", "transition", "cells_moved"]);
     assert_kept(&store, "a kind");
 

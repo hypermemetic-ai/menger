@@ -138,7 +138,7 @@ async fn the_cell_in_chat_n_answers_a_chat_s_tickets_for_a_reader_in_it() {
     };
     assert_eq!(admitted(ADA, "in chat 1"), ["KILN-3", "KILN-5", "KILN-7"]);
     store.set_status(SYS.permit("KILN-5"), Status::Ready).await.unwrap();
-    assert_eq!(admitted(BUILDER, "in chat 1 and not status Pending"), ["KILN-5"]);
+    assert_eq!(admitted(BUILDER, "in chat 1 and not status Draft"), ["KILN-5"]);
     assert!(admitted(RUI, "in chat 1").is_empty(), "rui is not in it");
     assert!(admitted(ADA, "in chat 2").is_empty());
     assert_eq!(admitted(ADA, "in KILN and not in chat 1").len(), 4);

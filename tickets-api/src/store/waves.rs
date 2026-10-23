@@ -64,7 +64,7 @@ fn rank(status: Status) -> u8 {
         Status::Ready => 2,
         Status::Pending => 3,
         Status::Blocked => 4,
-        Status::Idea => 5,
+        Status::Draft => 5,
         Status::Epic => 6,
         Status::Complete | Status::Superseded | Status::Canceled | Status::Doc => 7,
     }

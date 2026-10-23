@@ -122,12 +122,12 @@ pub(crate) const DEFAULT_KINDS: [&str; 3] = ["build", "spike", "gap"];
 pub(crate) const STATUS_GROUPS: [(&str, &[&str]); 5] = [
     ("in progress", &["Coding", "In Review"]),
     ("ready", &["Ready"]),
-    ("not started", &["Pending", "Blocked", "Idea", "Epic"]),
+    ("not started", &["Pending", "Blocked", "Draft", "Epic"]),
     ("done", &["Complete", "Superseded", "Canceled"]),
     ("docs", &["Doc"]),
 ];
 
-const STATUSES: [&str; 11] = ["Coding", "In Review", "Ready", "Pending", "Blocked", "Idea", "Epic", "Complete", "Superseded", "Canceled", "Doc"];
+const STATUSES: [&str; 11] = ["Coding", "In Review", "Ready", "Pending", "Blocked", "Draft", "Epic", "Complete", "Superseded", "Canceled", "Doc"];
 
 /// Severity's values — the language's spelling.
 pub(crate) const SEVERITIES: [&str; 5] = ["critical", "high", "medium", "low", "none"];

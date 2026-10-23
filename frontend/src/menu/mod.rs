@@ -111,7 +111,7 @@
 //! label chip's right-click puts that chip's chooser first, flat
 //! (src/menu/model.rs's `chooser`); `]` and `[` on the focused ticket — or
 //! the selection it is in, or the ticket page's own — step its status along
-//! the worker line (`Status::LINE`: Idea → Pending → Ready → Coding → In
+//! the worker line (`Status::LINE`: Draft → Pending → Ready → Coding → In
 //! Review → Complete) through the menu's own write ([`step_focused`]), a
 //! toast saying why when nothing is written ([`toast`]); and `s` opens this
 //! menu on it with Set status already expanded, focus on the current status.

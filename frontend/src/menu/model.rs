@@ -1011,7 +1011,7 @@ mod tests {
         assert_eq!(step_status(&one, &r(Status::Epic), true), Err("Epic has no next status: pick one from the menu".into()));
         assert_eq!(step_status(&one, &r(Status::Canceled), false), Err("Canceled has no previous status: pick one from the menu".into()));
         assert_eq!(step_status(&one, &r(Status::Complete), true), Err("Complete is the last status on the line".into()));
-        assert_eq!(step_status(&one, &r(Status::Idea), false), Err("Idea is the first status on the line".into()));
+        assert_eq!(step_status(&one, &r(Status::Draft), false), Err("Draft is the first status on the line".into()));
         assert_eq!(step_status(&one, &[], true), Err("A-1 is not loaded yet: try again in a moment".into()));
         let doc = vec![row("A-1", Status::Doc, Kind::Doc)];
         assert_eq!(step_status(&one, &doc, true), Err("A-1 is a doc: it has no status to step".into()));

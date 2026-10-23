@@ -171,7 +171,7 @@ async fn requested_never_runs_or_completes_a_ticket() {
     let prod: Vec<DeploymentsEvent> = store.for_ticket("MENGER-3", None).unwrap();
     assert!(prod.iter().any(|e| matches!(e, DeploymentsEvent::NotRunning { environment, .. } if environment == "prod")), "{prod:?}");
     assert!(prod.iter().any(|e| matches!(e, DeploymentsEvent::Requested { environment, request, .. } if environment == "prod" && *request == d.id)), "{prod:?}");
-    assert_eq!(store.row("MENGER-3").unwrap().0.status, Status::Pending);
+    assert_eq!(store.row("MENGER-3").unwrap().0.status, Status::Draft);
     assert_eq!(store.row("MENGER-2").unwrap().0.status, Status::Complete);
     assert!(admitted(&store, "deployed prod").contains(&"MENGER-2".to_string()) && !admitted(&store, "deployed prod").contains(&"MENGER-3".to_string()));
     assert_eq!(admitted(&store, "requested prod"), ["MENGER-3"]);

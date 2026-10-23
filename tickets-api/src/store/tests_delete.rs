@@ -379,7 +379,7 @@ async fn a_deleted_tickets_history_is_kept() {
     store.set_status(SYS.permit("M-5"), Status::Ready).await.unwrap();
     store.delete(SYS, ids(&["M-5"]), Deletion::default(), None).await.unwrap();
     let h = store.history(SYS, "M-5").unwrap();
-    assert_eq!(h.own.iter().map(|t| t.to.as_str()).collect::<Vec<_>>(), ["Pending", "Ready"]);
+    assert_eq!(h.own.iter().map(|t| t.to.as_str()).collect::<Vec<_>>(), ["Draft", "Ready"]);
     // And a history filter does not count it.
     assert!(store.counts_text(&Lens::parse("entered Ready").unwrap()).iter().all(|(_, n)| *n == 0));
 }

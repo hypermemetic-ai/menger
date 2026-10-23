@@ -213,7 +213,7 @@ async fn acknowledged_mutations_survive_sigkill() {
     )
     .await;
     assert_eq!(ev["type"], "status_changed");
-    assert_eq!(ev["previous"], "Pending");
+    assert_eq!(ev["previous"], "Draft");
     let dur1_acked = ev["ticket"].clone();
     assert!(
         dur1_acked["updated_unix"].as_i64() > dur1_acked["created_unix"].as_i64(),
@@ -669,9 +669,13 @@ async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkil
         t["commits"] = json!([]);
         // MENGER-12: and its labels — none, here.
         t["labels"] = json!([]);
+        // TICKETS-13: `Idea` is `Draft` now — the stored spelling reads as it.
+        if t["status"] == "Idea" {
+            t["status"] = json!("Draft");
+        }
     }
     let statuses: Vec<&str> = expected.iter().map(|t| t["status"].as_str().unwrap()).collect();
-    for s in ["Pending", "Ready", "Blocked", "Complete", "Idea", "Epic", "Superseded"] {
+    for s in ["Pending", "Ready", "Blocked", "Complete", "Draft", "Epic", "Superseded"] {
         assert!(statuses.contains(&s), "the fixture holds a {s} ticket: {statuses:?}");
     }
 

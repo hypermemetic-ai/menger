@@ -385,7 +385,7 @@ impl TicketsActivation {
     /// without a filter, it changes nothing.
     #[plexus_macros::method(
         group = "read",
-        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"]),
+        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Draft", "Epic", "Superseded", "Canceled", "Doc"]),
         example(note = "a shortcode's tickets, summary rows, 20 at a time", params = r#"{"epic": "MENGER", "summary": true, "limit": 20}"#),
         example(note = "the ready build work in SCALE", params = r#"{"filter": "ready and kind build and in SCALE", "summary": true}"#),
         example(note = "in review, and got there in the last 12 hours", params = r#"{"filter": "status \"In Review\" and entered \"In Review\" within 12h", "summary": true}"#)
@@ -395,7 +395,7 @@ impl TicketsActivation {
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// Epic prefix filter (optional).
         epic: Option<ShortcodeRef>,
-        /// Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled | Doc (optional).
+        /// Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Draft | Epic | Superseded | Canceled | Doc (optional).
         status: Option<Status>,
         /// Only this ticket's children, e.g. PERF-3 (optional).
         parent: Option<TicketRef>,
@@ -439,7 +439,7 @@ impl TicketsActivation {
     #[plexus_macros::method(
         group = "write",
         target = "id",
-        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled"], source = ["app", "api", "pipeline"]),
+        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Draft", "Epic", "Superseded", "Canceled"], source = ["app", "api", "pipeline"]),
         example(note = "start work on MENGER-40", params = r#"{"id": "MENGER-40", "status": "Coding"}"#),
         example(note = "hand it to review", params = r#"{"id": "MENGER-40", "status": "In Review"}"#),
         example(note = "cancel a scope and everything open under it", params = r#"{"id": "MENGER-7", "status": "Canceled", "message": "folded into MENGER-9"}"#),
@@ -450,7 +450,7 @@ impl TicketsActivation {
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// Ticket id, e.g. MNG-2.
         id: TicketRef,
-        /// New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled (the canonical spelling; through -p, the app or REST any case, `active` is Coding; never Doc, a doc's own).
+        /// New status: Pending | Ready | Coding | In Review | Blocked | Complete | Draft | Epic | Superseded | Canceled (the canonical spelling; through -p, the app or REST any case, `active` is Coding; never Doc, a doc's own).
         status: Status,
         /// Leaving Canceled: also put back, to the statuses they had, the descendants its cancel canceled and nothing has moved since (optional, default false; history's history_end names them).
         restore_children: Option<bool>,
@@ -490,7 +490,7 @@ impl TicketsActivation {
     #[plexus_macros::method(
         group = "write",
         target = "id",
-        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"], source = ["app", "api", "pipeline"]),
+        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Draft", "Epic", "Superseded", "Canceled", "Doc"], source = ["app", "api", "pipeline"]),
         example(note = "make a ticket a scope", params = r#"{"id": "IDENTITY-1", "kind": "scope"}"#),
         example(note = "make it a gap, ready to start", params = r#"{"id": "MENGER-40", "kind": "gap", "status": "Ready"}"#)
     )]
@@ -501,7 +501,7 @@ impl TicketsActivation {
         id: TicketRef,
         /// New kind: scope | execution | build | gap | spike | doc (case-insensitive).
         kind: Kind,
-        /// Its status with the new kind (optional): Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled — or Doc, the only one a doc takes; omitted, a doc becomes Doc, a doc becoming work becomes Epic (a scope) or Pending, and work keeps its own.
+        /// Its status with the new kind (optional): Pending | Ready | Coding | In Review | Blocked | Complete | Draft | Epic | Superseded | Canceled — or Doc, the only one a doc takes; omitted, a doc becomes Doc, a doc becoming work becomes Epic (a scope) or Pending, and work keeps its own.
         status: Option<Status>,
         /// Where the change comes from: app | api | pipeline (optional, default api) — kept in the transitions.
         source: Option<CallerSource>,
@@ -715,7 +715,7 @@ impl TicketsActivation {
     #[plexus_macros::method(
         group = "write",
         target = "id",
-        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"], severity = ["Critical", "High", "Medium", "Low", "none"], source = ["app", "api", "pipeline"]),
+        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Draft", "Epic", "Superseded", "Canceled", "Doc"], severity = ["Critical", "High", "Medium", "Low", "none"], source = ["app", "api", "pipeline"]),
         example(note = "add a blocker after filing", params = r#"{"id": "THEME-4", "block": ["THEME-7"]}"#),
         example(note = "swap a blocker and set the severity", params = r#"{"id": "THEME-4", "unblock": ["THEME-3"], "severity": "High"}"#),
         example(note = "several aspects at once", params = r#"{"id": "MENGER-40", "title": "Board loses focus on reload", "kind": "gap", "status": "Ready", "parent": "MENGER-2"}"#)
@@ -769,7 +769,7 @@ impl TicketsActivation {
     #[plexus_macros::method(
         group = "write",
         target = "ids",
-        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"], severity = ["Critical", "High", "Medium", "Low", "none"], source = ["app", "api", "pipeline"]),
+        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Draft", "Epic", "Superseded", "Canceled", "Doc"], severity = ["Critical", "High", "Medium", "Low", "none"], source = ["app", "api", "pipeline"]),
         example(note = "promote three tickets", params = r#"{"ids": ["THEME-9", "THEME-10", "THEME-11"], "status": "Ready"}"#),
         example(note = "sweep by a filter", params = r#"{"filter": "label stale and not category done", "status": "Canceled", "message": "swept"}"#)
     )]
