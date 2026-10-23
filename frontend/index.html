@@ -2235,6 +2235,27 @@
   .fcard .fc-rule.ro { grid-template-columns: minmax(7rem, auto) minmax(6rem, auto) minmax(0, 1fr) auto; }
   .fcard .fc-rule.ro.time { grid-template-columns: minmax(7rem, auto) minmax(0, 1fr) auto; }
   .fcard .fc-tnote { grid-column: 1 / -1; order: 4; }
+  /* FILTER-54: a rule's time — ◷ at its value's end, a set time its own line under the rule, its menu */
+  .fcard .fc-rule.bare { grid-template-columns: 14px minmax(6rem, auto) minmax(0, 1fr) auto auto; }
+  .fcard .fc-rule.ro.bare { grid-template-columns: minmax(7rem, auto) minmax(0, 1fr) auto; }
+  .fcard .fc-trow { grid-column: 1 / -1; order: 5; display: flex; align-items: center; gap: 8px; padding-left: 22px; min-width: 0; }
+  .fcard .fc-rule.ro .fc-trow { padding-left: 0; }
+  .fcard .fc-tl { color: var(--muted); font-size: calc(11.5px * var(--text-scale)); white-space: nowrap; }
+  .fcard .fc-tw { position: relative; display: inline-flex; align-items: center; }
+  .fcard .fc-tadd { width: 26px; height: 26px; border: var(--border) dashed var(--line); border-radius: 50%; background: none; color: var(--muted); cursor: pointer; padding: 0; font-size: calc(13px * var(--text-scale)); }
+  .fcard .fc-tadd:hover, .fcard .fc-tadd[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+  .fcard .fc-tsel { border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); color: var(--ink); padding: 3px 9px; min-height: 28px; font: calc(12px * var(--text-scale)) var(--mono); white-space: nowrap; display: inline-flex; align-items: center; }
+  .fcard .fc-tsel.on { color: var(--accent); border-color: var(--chip-line); background: var(--sel); }
+  .fcard button.fc-tsel { cursor: pointer; }
+  .fcard .fc-tx { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: calc(15px * var(--text-scale)); }
+  .fcard .fc-tx:hover { color: var(--err-fg); }
+  .fcard .fc-tm { position: fixed; z-index: 50; min-width: 16rem; max-height: 24rem; overflow: auto; display: flex; flex-direction: column; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-xl); box-shadow: 0 10px 30px var(--shadow); padding: 4px; text-align: left; }
+  .fcard .fc-tmh { color: var(--muted); font-size: calc(11px * var(--text-scale)); padding: 6px 8px 2px; }
+  .fcard .fc-tmi { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: none; border: 0; color: var(--ink); text-align: left; padding: 5px 8px; border-radius: var(--radius-lg); cursor: pointer; font: calc(12px * var(--text-scale)) var(--mono); white-space: nowrap; }
+  .fcard .fc-tmi:hover { background: var(--hover); }
+  .fcard .fc-tmi[aria-checked="true"] { color: var(--accent); font-weight: var(--weight-strong); }
+  .fcard .fc-tcus { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-top: var(--border) solid var(--line); margin-top: 4px; }
+  .fcard .fc-tcus select, .fcard .fc-tcus input { font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius-md); padding: 2px 4px; min-height: 26px; }
   .fcard .fc-grip { color: var(--muted); cursor: grab; user-select: none; }
   .fcard .fc-sel { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); padding: 3px 9px; cursor: pointer; white-space: nowrap; min-width: 0; }
   .fcard button.fc-sel::after { content: "\2304"; color: var(--muted); line-height: 0; transform: translateY(-3px); }
@@ -2320,6 +2341,10 @@
     .fcard .fc-rule .fc-vw { grid-column: 2 / -1; }
     .fcard .fc-rule.ro, .fcard .fc-rule.ro.time { grid-template-columns: minmax(0, 1fr) auto auto; }
     .fcard .fc-rule.ro .fc-vw { grid-column: 1 / -1; }
+    .fcard .fc-rule.bare { grid-template-columns: 10px minmax(0, 1fr) auto auto; }
+    .fcard .fc-trow { padding-left: 16px; flex-wrap: wrap; }
+    .fcard .fc-tm { position: fixed; z-index: 960; left: 0; right: 0; bottom: 0; top: auto; min-width: 0; max-height: 70%; border-radius: var(--radius-device) var(--radius-device) 0 0; padding-bottom: max(var(--safe-bottom), 8px); }
+    .fcard .fc-tmi { min-height: 36px; }
     .fcard .fc-nr { padding-top: 6px; padding-bottom: 6px; }
     .fcard .fc-pk { left: 0; right: 0; bottom: 0; top: auto; transform: none; width: auto; max-height: 75%; border-radius: var(--radius-device) var(--radius-device) 0 0; padding-bottom: var(--safe-bottom); }
     .fcard .fc-pkb { grid-template-columns: 1fr; }

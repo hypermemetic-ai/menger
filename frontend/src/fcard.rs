@@ -36,14 +36,14 @@
 use std::collections::{HashMap, HashSet};
 
 use leptos::prelude::*;
-use menger_tickets_api::filter::{Conj, Display, Field, Filter, Predicate};
+use menger_tickets_api::filter::{Conj, Display, Field, Filter, Predicate, Unit};
 use menger_tickets_api::TicketsEvent;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::bindings::{self, Context};
 use crate::lens::{Lens, Level};
-use crate::parts::{self, Got, Inner, Node, Part, Shape};
+use crate::parts::{self, At, Got, Inner, Node, Part, Shape, Time, TimeOf};
 use crate::saved::{self, slug, Entry};
 use crate::{dom, session, st_class};
 
@@ -86,10 +86,12 @@ pub(crate) enum PCat {
     Shortcode,
     Flags,
     Label,
+    /// FILTER-54: Created and Changed, fields whose value is a time.
+    Dates,
 }
 
 impl PCat {
-    pub(crate) const ALL: [PCat; 7] = [PCat::Saved, PCat::Status, PCat::Kind, PCat::Severity, PCat::Shortcode, PCat::Flags, PCat::Label];
+    pub(crate) const ALL: [PCat; 8] = [PCat::Saved, PCat::Status, PCat::Kind, PCat::Severity, PCat::Shortcode, PCat::Flags, PCat::Label, PCat::Dates];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -100,6 +102,7 @@ impl PCat {
             PCat::Shortcode => "Shortcode",
             PCat::Flags => "Flags",
             PCat::Label => "Label",
+            PCat::Dates => "Dates",
         }
     }
 
@@ -112,6 +115,7 @@ impl PCat {
             "Severity" => PCat::Severity,
             "Shortcode" | "Under" => PCat::Shortcode,
             "Label" => PCat::Label,
+            "Created" | "Changed" => PCat::Dates,
             _ => PCat::Flags,
         }
     }
@@ -139,7 +143,41 @@ pub(crate) fn values(c: PCat, codes: &[String], saved: &[String]) -> Vec<(String
         PCat::Shortcode => codes.iter().map(|c| (c.clone(), format!("in {c}"))).collect(),
         PCat::Flags => FLAGS.iter().map(|(w, t)| (w.to_string(), t.to_string())).collect(),
         PCat::Label => Vec::new(),
+        PCat::Dates => vec![("Created".into(), "created this week".into()), ("Changed".into(), "changed this week".into())],
     }
+}
+
+/// FILTER-54: the times a rule's ◷ offers — what each says and the time
+/// (`None`: any time). A date field's (`date`) has no *any time*; a status's
+/// (`held`) adds how long it has been so. `today` names the reader's day,
+/// for the dates of this month and the last.
+pub(crate) fn time_choices(date: bool, held: bool, today: crate::calendar::Day) -> (Vec<(String, Option<Time>)>, Vec<(String, Time)>) {
+    let month = crate::calendar::Day::new(today.y, today.m, 1);
+    let last = month.plus_months(-1);
+    let iso = |d: crate::calendar::Day| format!("{:04}-{:02}-{:02}", d.y, d.m, d.d);
+    let mut became: Vec<(String, Option<Time>)> = if date { Vec::new() } else { vec![("any time".into(), None)] };
+    let windows = [
+        "today".to_string(),
+        "this week".into(),
+        "within 3d".into(),
+        "within 2w".into(),
+        "within 30d".into(),
+        "after 2w ago".into(),
+        "before 1w ago".into(),
+        format!("after {}", iso(month)),
+        format!("before {}", iso(month)),
+        format!("between {} and {}", iso(last), iso(month.plus_days(-1))),
+    ];
+    became.extend(windows.into_iter().filter_map(|w| crate::when::window_of(&w).map(|win| (w, Some(Time::Became(win))))));
+    let lengths = if held {
+        [(true, 3, Unit::Day), (true, 1, Unit::Week), (true, 2, Unit::Week), (false, 3, Unit::Day)]
+            .into_iter()
+            .map(|(over, n, unit)| (format!("for {} {n}{}", if over { "over" } else { "under" }, unit.suffix()), Time::Held { over, n, unit }))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (became, lengths)
 }
 
 /// A label typed, as its clause — `None` for nothing typed.
@@ -339,6 +377,12 @@ pub(crate) struct Card {
     groups: RwSignal<Option<Vec<menger_tickets_api::Group>>>,
     hover: StoredValue<u32>,
     busy: RwSignal<bool>,
+    /// FILTER-54: the rule whose time menu is open — its owner and path.
+    tm: RwSignal<Option<(String, Vec<usize>)>>,
+    /// The time menu's own date: after or before, and the day.
+    tm_own: StoredValue<(bool, String)>,
+    /// Where the time menu hangs: its button's box (left, top, bottom).
+    tm_at: StoredValue<(f64, f64, f64)>,
 }
 
 thread_local! {
@@ -391,6 +435,9 @@ impl Card {
             groups: RwSignal::new(None),
             hover: StoredValue::new(0),
             busy: RwSignal::new(false),
+            tm: RwSignal::new(None),
+            tm_own: StoredValue::new((true, String::new())),
+            tm_at: StoredValue::new((0.0, 0.0, 0.0)),
         };
         window_event_listener(leptos::ev::pointerdown, move |ev: web_sys::PointerEvent| {
             if c.open.with_untracked(Option::is_none) {
@@ -399,6 +446,9 @@ impl Card {
             let ev: &web_sys::Event = ev.as_ref();
             if c.menu.get_untracked() && !inside(ev, ".fc-menu, .fc-mb") {
                 c.menu.set(false);
+            }
+            if c.tm.with_untracked(Option::is_some) && !inside(ev, ".fc-tm, [data-fc=\"time\"], [data-fc=\"time-add\"]") {
+                c.tm.set(None);
             }
             if !inside(ev, ".fcard, [data-fcard], .fmenu") {
                 c.close();
@@ -410,7 +460,9 @@ impl Card {
             }
             ev.prevent_default();
             ev.stop_propagation();
-            if c.pick.get_untracked().is_some() {
+            if c.tm.with_untracked(Option::is_some) {
+                c.tm.set(None);
+            } else if c.pick.get_untracked().is_some() {
                 c.pick.set(None);
             } else if c.menu.get_untracked() {
                 c.menu.set(false);
@@ -453,6 +505,7 @@ impl Card {
         self.menu.set(false);
         self.naming.set(None);
         self.copying.set(None);
+        self.tm.set(None);
     }
 
     /// A press on a chip: pinned open, or — pinned already on it — closed.
@@ -785,7 +838,7 @@ impl Card {
         let Some(node) = node_of(text, p.not) else { return };
         let path = p.path.clone();
         match p.mode {
-            Mode::Replace => self.edit(&p.owner, path.clone(), |t| parts::replace(t, &path, node)),
+            Mode::Replace => self.edit(&p.owner, path.clone(), |t| keep_time(t, &path, node)),
             Mode::Add { group } => {
                 let item = if group { Node::Group { conj: parts::other(p.conj), not: false, items: vec![node] } } else { node };
                 let at = untrack(|| self.owner_node(&p.owner)).and_then(|mut t| parts::add(&mut t, &path, item.clone()));
@@ -803,11 +856,39 @@ impl Card {
         let node = node_of(text, p.not)?;
         let mut t = self.owner_node(&p.owner)?;
         let ok = match p.mode {
-            Mode::Replace => parts::replace(&mut t, &p.path, node),
+            Mode::Replace => keep_time(&mut t, &p.path, node),
             Mode::Add { group: false } => parts::add(&mut t, &p.path, node).is_some(),
             Mode::Add { group: true } => parts::add(&mut t, &p.path, Node::Group { conj: parts::other(p.conj), not: false, items: vec![node] }).is_some(),
         };
         ok.then(|| self.wire(s, &self.top(s), Some((&p.owner, &t))))
+    }
+}
+
+/// The node at `path` replaced by `with`, keeping the time it had when
+/// `with` takes one (a value changed keeps *became so within 3d*).
+fn keep_time(t: &mut Node, path: &[usize], with: Node) -> bool {
+    let had = parts::get(t, path).and_then(parts::time_of);
+    if !parts::replace(t, path, with) {
+        return false;
+    }
+    if let Some(time) = had {
+        parts::set_time(t, path, Some(time));
+    }
+    true
+}
+
+impl Card {
+    /// FILTER-54: the rule at `owner`/`path` with time `t` (`None`: off).
+    fn set_time(self, owner: &str, path: Vec<usize>, t: Option<Time>) {
+        let at = path.clone();
+        self.edit(owner, path, |n| parts::set_time(n, &at, t));
+        self.tm.set(None);
+    }
+
+    /// What the card's filter would admit with that time — the wire text.
+    fn would_time(self, s: &Subject, owner: &str, path: &[usize], t: Option<Time>) -> Option<String> {
+        let mut n = self.owner_node(owner)?;
+        parts::set_time(&mut n, path, t).then(|| self.wire(s, &self.top(s), Some((owner, &n))))
     }
 }
 
@@ -974,7 +1055,7 @@ fn card_view(card: Card, s: Subject, level: Level) -> AnyView {
             style=style
             on:pointerenter=move |_| card.stay()
             on:pointerleave=move |_| {
-                if !phone && card.pick.get_untracked().is_none() {
+                if !phone && card.pick.get_untracked().is_none() && card.tm.with_untracked(Option::is_none) {
                     card.leave();
                 }
             }
@@ -1274,6 +1355,132 @@ fn bin(card: Card, p: &Part, words: String) -> impl IntoView {
     }
 }
 
+/// What a rule's time line leads with.
+fn lead(a: &At) -> &'static str {
+    match a.of {
+        TimeOf::HasBeen => "has been so",
+        _ => "became so",
+    }
+}
+
+/// Whether the time menu is open on this part — and the press that opens
+/// or closes it.
+fn tm_key(p: &Part) -> (String, Vec<usize>) {
+    (p.owner.clone(), p.path.clone())
+}
+
+fn tm_toggle(card: Card, key: (String, Vec<usize>), ev: &web_sys::Event) {
+    card.tm_at.set_value(rect_of(ev));
+    card.tm.update(|t| *t = if t.as_ref() == Some(&key) { None } else { Some(key) });
+}
+
+/// Where the time menu hangs over the page — under its button, or above it
+/// when there is more room there; on a phone it is a sheet (the stylesheet's).
+fn tm_place(at: (f64, f64, f64), phone: bool) -> String {
+    if phone {
+        return String::new();
+    }
+    let win = dom::window();
+    let vw = win.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1280.0);
+    let vh = win.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(800.0);
+    let left = at.0.clamp(8.0, (vw - 280.0).max(8.0));
+    let below = vh - at.2 - 12.0;
+    let above = at.1 - 12.0;
+    if below >= 320.0 || below >= above {
+        format!("left:{left:.0}px;top:{:.0}px;max-height:{:.0}px", at.2 + 4.0, below.min(420.0))
+    } else {
+        format!("left:{left:.0}px;bottom:{:.0}px;max-height:{:.0}px", vh - at.1 + 4.0, above.min(420.0))
+    }
+}
+
+/// The small ◷ at a rule's value's end: add a time.
+fn time_add(card: Card, s: &Subject, p: &Part, r: &parts::Rule) -> impl IntoView {
+    let key = tm_key(p);
+    let k2 = key.clone();
+    let open = move || card.tm.with(|t| t.as_ref() == Some(&k2));
+    let menu = time_menu(card, s.clone(), key.clone(), r.field.clone(), None);
+    view! {
+        <span class="fc-tw">
+            <button type="button" class="fc-tadd" data-fc="time-add" aria-expanded=move || open().to_string() aria-label="add a time" title="add a time: when it became so, or how long it has been" on:click=move |ev| tm_toggle(card, key.clone(), &ev)>"\u{25f7}"</button>
+            {menu}
+        </span>
+    }
+}
+
+/// A set time: `◷ within 3d ⌄`, its menu under it.
+fn time_button(card: Card, s: &Subject, p: &Part, r: &parts::Rule, a: &At) -> impl IntoView {
+    let key = tm_key(p);
+    let k2 = key.clone();
+    let open = move || card.tm.with(|t| t.as_ref() == Some(&k2));
+    let menu = time_menu(card, s.clone(), key.clone(), r.field.clone(), Some(a.words.clone()));
+    view! {
+        <span class="fc-tw">
+            <button type="button" class="fc-tsel on" data-fc="time" aria-expanded=move || open().to_string() title="change the time" on:click=move |ev| tm_toggle(card, key.clone(), &ev)>"\u{25f7} "{a.words.clone()}" \u{2304}"</button>
+            {menu}
+        </span>
+    }
+}
+
+/// The time menu: when it became so (a date field: its window), and for a
+/// status how long it has been so — each with the count it would leave;
+/// then a date of the reader's own.
+fn time_menu(card: Card, s: Subject, key: (String, Vec<usize>), field: String, current: Option<String>) -> impl IntoView {
+    move || {
+        if card.tm.with(|t| t.as_ref() != Some(&key)) {
+            return None;
+        }
+        let date = matches!(field.as_str(), "Created" | "Changed");
+        let today = crate::calendar::today();
+        let (became, lengths) = time_choices(date, field == "Status", today);
+        let (owner, path) = key.clone();
+        let item = |words: String, t: Option<Time>| {
+            let on = current.as_deref() == Some(words.as_str()) || (current.is_none() && t.is_none());
+            let wire = untrack(|| card.would_time(&s, &owner, &path, t.clone()).unwrap_or_else(|| card.wire(&s, &card.top(&s), None)));
+            let n = move || card.count(wire.clone()).map_or("\u{2026}".to_string(), |n| n.to_string());
+            let (o, at) = (owner.clone(), path.clone());
+            view! {
+                <button type="button" role="menuitemradio" class="fc-tmi" aria-checked=on.to_string() data-tm=words.clone() on:click=move |_| card.set_time(&o, at.clone(), t.clone())>
+                    <span>{words.clone()}</span>
+                    <span class="fc-pkn">"\u{2192} "{n}</span>
+                </button>
+            }
+        };
+        let head = if date { format!("{field}\u{2026}") } else { "Became so\u{2026}".to_string() };
+        let rows = became.into_iter().map(|(w, t)| item(w, t)).collect_view();
+        let held = (!lengths.is_empty()).then(|| {
+            let rows = lengths.into_iter().map(|(w, t)| item(w, Some(t))).collect_view();
+            view! { <div class="fc-tmh">"Has been so\u{2026}"</div>{rows} }
+        });
+        let max = format!("{:04}-{:02}-{:02}", today.y, today.m, today.d);
+        let (o, at) = (owner.clone(), path.clone());
+        let own = view! {
+            <div class="fc-tcus">
+                <select aria-label="after or before" on:change=move |ev| card.tm_own.update_value(|v| v.0 = event_target_value(&ev) == "after")>
+                    <option value="after" selected=move || card.tm_own.get_value().0>"after"</option>
+                    <option value="before" selected=move || !card.tm_own.get_value().0>"before"</option>
+                </select>
+                <input type="date" aria-label="the date" max=max on:input=move |ev| card.tm_own.update_value(|v| v.1 = event_target_value(&ev)) />
+                <button type="button" class="fc-bt sm" data-fc="time-own" on:click=move |_| {
+                    let (after, day) = card.tm_own.get_value();
+                    let w = crate::when::window_of(&format!("{} {day}", if after { "after" } else { "before" }));
+                    if let Some(w) = w {
+                        card.set_time(&o, at.clone(), Some(Time::Became(w)));
+                    }
+                }>"Apply"</button>
+            </div>
+        };
+        let style = tm_place(card.tm_at.get_value(), card.lens.phone_untracked());
+        Some(view! {
+            <div class="fc-tm" role="menu" style=style>
+                <div class="fc-tmh">{head}</div>
+                {rows}
+                {own}
+                {held}
+            </div>
+        })
+    }
+}
+
 fn part_view(card: Card, s: &Subject, p: &Part, ro: bool) -> AnyView {
     let node = node_at(card, p);
     let count = node.as_ref().map(|n| count_pill(card, s, n).into_any()).unwrap_or_else(|| ().into_any());
@@ -1295,14 +1502,23 @@ fn part_view(card: Card, s: &Subject, p: &Part, ro: bool) -> AnyView {
                 }
             });
             let ro = ro || r.time;
+            let date = r.at.as_ref().is_some_and(|a| a.of == TimeOf::Date);
             if ro {
+                let val = match &r.at {
+                    Some(a) if date => view! { <span class="fc-tsel on">"\u{25f7} "{a.words.clone()}</span> }.into_any(),
+                    _ => view! { <span class="fc-val">{toks}</span>{more} }.into_any(),
+                };
+                let line = r.at.clone().filter(|_| !date).map(|a| {
+                    view! { <div class="fc-trow"><span class="fc-tl">{lead(&a)}</span><span class="fc-tsel on">"\u{25f7} "{a.words}</span></div> }
+                });
                 return view! {
-                    <div class="fc-rule ro" class:time=r.time data-rule=r.text.clone()>
+                    <div class="fc-rule ro" class:time=r.time class:bare=date && r.op.is_empty() data-rule=r.text.clone()>
                         <span class="fc-sel">{r.field.clone()}</span>
                         {(!r.op.is_empty()).then(|| view! { <span class="fc-sel" class:neg=r.not>{r.op.clone()}</span> })}
                         {count}
-                        <div class="fc-vw"><span class="fc-val">{toks}</span>{more}</div>
-                        {r.time.then(|| view! { <span class="fc-sm fc-tnote">"a time \u{2014} read only for now"</span> })}
+                        <div class="fc-vw">{val}</div>
+                        {line}
+                        {r.time.then(|| view! { <span class="fc-sm fc-tnote">"a time the card does not change \u{2014} as text"</span> })}
                     </div>
                 }
                 .into_any();
@@ -1310,20 +1526,45 @@ fn part_view(card: Card, s: &Subject, p: &Part, ro: bool) -> AnyView {
             let cat = PCat::of_field(&r.field);
             let (o1, p1, o2, p2, o3, p3) = (p.owner.clone(), p.path.clone(), p.owner.clone(), p.path.clone(), p.owner.clone(), p.path.clone());
             let not = r.not;
-            view! {
-                <div class="fc-rule" class:new=new data-rule=r.text.clone()>
-                    <span class="fc-grip" aria-hidden="true">"\u{283f}"</span>
-                    <button type="button" class="fc-sel" data-fc="field" title="change the field" on:click=move |_| open_pick(card, o1.clone(), p1.clone(), Mode::Replace, Conj::All, cat, not)>{r.field.clone()}</button>
+            let neg = (!date || r.not).then(|| {
+                view! {
                     <button type="button" class="fc-sel" class:neg=r.not data-fc="neg" title=if r.not { "press for is" } else { "press for is not" } on:click=move |_| {
                         let at = p2.clone();
                         card.edit(&o2, p2.clone(), |t| parts::negate(t, &at));
-                    }>{r.op.clone()}</button>
-                    {count}
-                    {bin(card, p, r.text.clone())}
-                    <div class="fc-vw">
+                    }>{if r.op.is_empty() { "is".to_string() } else { r.op.clone() }}</button>
+                }
+            });
+            let val = match &r.at {
+                Some(a) if date => time_button(card, s, p, r, a).into_any(),
+                _ => {
+                    let add = (r.timeable && r.at.is_none()).then(|| time_add(card, s, p, r));
+                    view! {
                         <button type="button" class="fc-val" data-fc="value" title="change the value" on:click=move |_| open_pick(card, o3.clone(), p3.clone(), Mode::Replace, Conj::All, cat, not)>{toks}</button>
                         {more}
+                        {add}
+                    }
+                    .into_any()
+                }
+            };
+            let line = r.at.as_ref().filter(|_| !date).map(|a| {
+                let (o, at) = (p.owner.clone(), p.path.clone());
+                view! {
+                    <div class="fc-trow">
+                        <span class="fc-tl">{lead(a)}</span>
+                        {time_button(card, s, p, r, a)}
+                        <button type="button" class="fc-tx" data-fc="time-off" aria-label="take the time off" title="take the time off" on:click=move |_| card.set_time(&o, at.clone(), None)>"\u{d7}"</button>
                     </div>
+                }
+            });
+            view! {
+                <div class="fc-rule" class:new=new class:bare=date && !r.not data-rule=r.text.clone()>
+                    <span class="fc-grip" aria-hidden="true">"\u{283f}"</span>
+                    <button type="button" class="fc-sel" data-fc="field" title="change the field" on:click=move |_| open_pick(card, o1.clone(), p1.clone(), Mode::Replace, Conj::All, cat, not)>{r.field.clone()}</button>
+                    {neg}
+                    {count}
+                    {bin(card, p, r.text.clone())}
+                    <div class="fc-vw">{val}</div>
+                    {line}
                 </div>
             }
             .into_any()
@@ -1893,5 +2134,22 @@ mod tests {
         assert_eq!(m.iter().map(|(_, w)| w.as_str()).collect::<String>(), "saved Plexus-Ready and (saved \"Needs you\" or not kind gap)");
         assert!(!marked("label \"a and b\"").iter().any(|(b, _)| *b), "a quoted and is no joiner");
         assert_eq!(who_words("key:54a9677a1234"), "key:54a9677a\u{2026}");
+    }
+
+    #[test]
+    fn the_time_menu_offers_what_the_rule_takes() {
+        let day = crate::calendar::Day::new(2026, 10, 23);
+        let (became, held) = time_choices(false, true, day);
+        let words: Vec<&str> = became.iter().map(|(w, _)| w.as_str()).collect();
+        assert_eq!(words[..3], ["any time", "today", "this week"]);
+        assert!(became[0].1.is_none() && became[1..].iter().all(|(_, t)| matches!(t, Some(Time::Became(_)))), "each reads as a window");
+        assert!(words.contains(&"after 2026-10-01") && words.contains(&"between 2026-09-01 and 2026-09-30"), "{words:?}");
+        assert_eq!(held.iter().map(|(w, _)| w.as_str()).collect::<Vec<_>>(), ["for over 3d", "for over 1w", "for over 2w", "for under 3d"]);
+        // A kind: no has been so; a date field: no any time.
+        assert!(time_choices(false, false, day).1.is_empty());
+        let (dates, none) = time_choices(true, false, day);
+        assert!(none.is_empty() && dates[0].0 == "today");
+        assert_eq!(PCat::of_field("Created"), PCat::Dates);
+        assert_eq!(values(PCat::Dates, &[], &[]).iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["created this week", "changed this week"]);
     }
 }

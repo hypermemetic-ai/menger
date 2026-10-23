@@ -145,6 +145,78 @@ const swapped = await pickFirst("Severity");
 ok(await page.locator(kind).count() === 0 && await page.locator(`${card} .fc-rule[data-rule="${swapped}"]`).count() >= 1, `${tag}: changing the field replaces the rule (kind gap → ${swapped})`);
 await undoAll();
 
+// FILTER-54: a rule's time — ◷ at a status or kind value's end opens Became
+// so… (a status also Has been so…), each choice counted; a set time is its
+// own line (change it, × takes it off); Created / Changed are fields whose
+// value is the time; a date of the reader's own; as text says the new form.
+const tm = `${card} .fc-tm`;
+await page.click(`${kind} [data-fc="time-add"]`);
+await page.waitForSelector(tm);
+await settle(600);
+const heads = await page.locator(`${tm} .fc-tmh`).allInnerTexts();
+ok(heads.length === 1 && /Became so/.test(heads[0]), `${tag}: a kind's ◷ opens Became so… alone (${heads.join(" / ")})`);
+const counted = await page.locator(`${tm} .fc-tmi .fc-pkn`).allInnerTexts();
+ok(counted.some((t) => /\d/.test(t)), `${tag}: each time counted (${counted.slice(0, 3).join(",")})`);
+await shot("08-time-menu");
+await page.keyboard.press("Escape");
+await settle(300);
+ok(await page.locator(tm).count() === 0 && await isOpen(top), `${tag}: Escape closes the time menu, the card stays`);
+await page.click(`${kind} [data-fc="time-add"]`);
+await page.click(`${tm} .fc-tmi[data-tm="within 3d"]`);
+await settle(700);
+const timed = `${card} .fc-rule[data-rule="kind gap within 3d"]`;
+ok(await page.locator(timed).count() === 1, `${tag}: within 3d is the rule's time`);
+ok(/became so/.test(await page.locator(`${timed} .fc-trow`).innerText().catch(() => "")), `${tag}: said on its own line, became so`);
+ok(await edited() === 1, `${tag}: a draft, counted`);
+await page.click(`${card} [data-fc="as-text"]`);
+await settle(300);
+ok(/kind gap within 3d/.test(await page.locator(`${card} .fc-txt`).innerText().catch(() => "")), `${tag}: as text says the new form`);
+await page.click(`${card} [data-fc="as-text"]`);
+await page.click(`${timed} [data-fc="time"]`);
+await page.click(`${tm} .fc-tmi[data-tm="today"]`);
+await settle(600);
+ok(await page.locator(`${card} .fc-rule[data-rule="kind gap today"]`).count() === 1, `${tag}: the time changes`);
+await shot("09-timed");
+await page.click(`${card} .fc-rule[data-rule="kind gap today"] [data-fc="time-off"]`);
+await settle(600);
+ok(await page.locator(kind).count() === 1 && await edited() === 0, `${tag}: × takes the time off (the draft with it)`);
+// A date of the reader's own.
+await page.click(`${kind} [data-fc="time-add"]`);
+await page.waitForSelector(tm);
+await page.selectOption(`${tm} .fc-tcus select`, "before");
+await page.fill(`${tm} .fc-tcus input[type="date"]`, "2026-10-01");
+await page.click(`${tm} [data-fc="time-own"]`);
+await settle(600);
+ok(await page.locator(`${card} .fc-rule[data-rule="kind gap before 2026-10-01"]`).count() === 1, `${tag}: a date of one's own`);
+await undoAll();
+// A status: has been so.
+await page.click(`${card} .fc-rule.named[data-named="Plexus-Ready"] [data-fc="unfold"]`);
+await settle(800);
+const st = `${card} .fc-sbox[data-sbox="Plexus-Ready"] .fc-rule[data-rule="not status Complete"]`;
+await page.click(`${st} [data-fc="time-add"]`);
+await page.waitForSelector(tm);
+ok((await page.locator(`${tm} .fc-tmh`).allInnerTexts()).some((t) => /Has been so/.test(t)), `${tag}: a status's ◷ also offers Has been so…`);
+await page.click(`${tm} .fc-tmi[data-tm="for over 1w"]`);
+await settle(700);
+const held = `${card} .fc-rule[data-rule="not status Complete for over 1w"]`;
+ok(await page.locator(held).count() === 1 && /has been so/.test(await page.locator(`${held} .fc-trow`).innerText().catch(() => "")), `${tag}: has been so, for over 1w`);
+ok(await page.locator(`${card} .fc-edrow[data-edited="Plexus-Ready"]`).count() === 1, `${tag}: an edit of the name it lands in`);
+await undoAll();
+await page.click(`${card} .fc-rule.named[data-named="Plexus-Ready"] [data-fc="unfold"]`);
+await settle(300);
+// Created: a field whose value is the time.
+await page.click(`${card} [data-fc="add-rule"]`);
+const date = await pickFirst("Dates");
+ok(date === "created this week" && await page.locator(`${card} .fc-rule[data-rule="created this week"] [data-fc="time"]`).count() === 1, `${tag}: Dates adds Created, its value the time (${date})`);
+await page.click(`${card} .fc-rule[data-rule="created this week"] [data-fc="time"]`);
+await page.waitForSelector(tm);
+const dateHead = await page.locator(`${tm} .fc-tmh`).first().innerText();
+ok(/Created/.test(dateHead) && await page.locator(`${tm} .fc-tmi[data-tm="any time"]`).count() === 0, `${tag}: its menu is Created…, no any time`);
+await page.click(`${tm} .fc-tmi[data-tm="today"]`);
+await settle(600);
+ok(await page.locator(`${card} .fc-rule[data-rule="created today"]`).count() === 1, `${tag}: its window changes`);
+await undoAll();
+
 // Name a group: a taken name is refused, a free one saves and the holder names it.
 await page.locator(`${card} [data-fc="name-group"]`).first().click();
 await settle(300);
@@ -227,6 +299,8 @@ await settle(400);
 await page.click(".fline [data-first]");
 await settle(500);
 ok(await page.locator(".fmenu").count() === 1, `${tag}: + add a filter opens the menu`);
+
+ok(await page.locator('.fmenu .frow.cat[data-sec="when"]').count() === 0 && await page.locator(".fmenu .frow.cat").count() > 0, `${tag}: the menu has no When category`);
 
 ok(errs.length === 0, `${tag}: no page errors (${errs.join(" | ")})`);
 await browser.close();

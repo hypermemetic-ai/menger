@@ -24,8 +24,14 @@
 //!   server reads only what is saved.
 //! - **Would it name itself** ([`names_itself`]): a saved filter offered as a
 //!   rule of another is refused when it reaches it.
+//! - **A rule's time** (FILTER-54, [`Time`]): a status or a kind rule may say
+//!   when it became so (`status Complete after 2026-10-01`) or, a status, how
+//!   long it has been so (`status Coding for over 2w`); Created and Changed
+//!   are fields whose value is a time. [`set_time`] puts one on, changes it
+//!   or takes it off; [`time_of`] reads it back.
 
-use menger_tickets_api::filter::{Conj, Display, Event, Field, Filter, Group, History, Predicate, SAVED_DEPTH};
+use menger_tickets_api::filter::{Became, Conj, Display, Event, Field, Filter, Group, Held, HeldOf, History, Predicate, Unit, Window, SAVED_DEPTH};
+use menger_tickets_api::{Kind, Status};
 
 use crate::saved::slug;
 
@@ -300,11 +306,41 @@ pub(crate) struct Rule {
     pub(crate) not: bool,
     /// Its values, as tokens.
     pub(crate) values: Vec<String>,
-    /// A time clause (FILTER-54 makes it a rule's time): drawn as its text,
-    /// read only.
+    /// A time clause the card does not edit (`entered`, `moved`, a `by`):
+    /// drawn as its text, read only.
     pub(crate) time: bool,
+    /// FILTER-54: the rule's own time, when it has one.
+    pub(crate) at: Option<At>,
+    /// Whether it may take a time (a status or a kind rule — ◷).
+    pub(crate) timeable: bool,
     /// The rule in the language.
     pub(crate) text: String,
+}
+
+/// What a rule's time says: when it became so, how long it has been so, or
+/// a date field's own window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TimeOf {
+    Became,
+    HasBeen,
+    Date,
+}
+
+/// A rule's time as the card draws it: what it is, and its words
+/// (`within 3d`, `for over 2w`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct At {
+    pub(crate) of: TimeOf,
+    pub(crate) words: String,
+}
+
+/// A rule's time, as the card sets it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Time {
+    /// When it became so (a date field: its window).
+    Became(Window),
+    /// How long it has been so — a status's.
+    Held { over: bool, n: u32, unit: Unit },
 }
 
 /// What a name names, resolved.
@@ -376,12 +412,130 @@ pub(crate) fn rule_of(p: &Predicate) -> Rule {
         Field::Group(g) => ("Group", vec![g.format()], false),
         f => ("Flag", vec![f.name().to_string()], false),
     };
+    if let Some(r) = timed_rule(p) {
+        return r;
+    }
     let op = match &p.field {
         Field::Text(_) => if p.not { "lacks" } else { "contains" }.to_string(),
         Field::History(h) if timed(h) => if p.not { "not" } else { "" }.to_string(),
         _ => is(false).to_string(),
     };
-    Rule { field: field.into(), op, not: p.not, values, time, text: p.format() }
+    let timeable = matches!(p.field, Field::Status(_) | Field::Kind(_));
+    Rule { field: field.into(), op, not: p.not, values, time, at: None, timeable, text: p.format() }
+}
+
+/// A clause with a time the card edits: a status or a kind with when it
+/// became so, a status with how long it has been so, `created` / `changed`
+/// with a window — none with a `by`.
+fn timed_rule(p: &Predicate) -> Option<Rule> {
+    let Field::History(h) = &p.field else { return None };
+    if h.by.is_some() {
+        return None;
+    }
+    let is = |many: bool| match (p.not, many) {
+        (false, false) => "is",
+        (true, false) => "is not",
+        (false, true) => "is any of",
+        (true, true) => "is none of",
+    };
+    let (field, values, at): (&str, Vec<String>, At) = match (&h.event, &h.window) {
+        (Event::Became(Became::Status(v)), Some(w)) => ("Status", v.iter().map(|s| s.as_str().to_string()).collect(), At { of: TimeOf::Became, words: w.format() }),
+        (Event::Became(Became::Kind(v)), Some(w)) => ("Kind", v.iter().map(|k| k.as_str().to_string()).collect(), At { of: TimeOf::Became, words: w.format() }),
+        (Event::Held(held @ Held { of: HeldOf::Statuses(v), .. }), None) => {
+            ("Status", v.iter().map(|s| s.as_str().to_string()).collect(), At { of: TimeOf::HasBeen, words: format!("for {}", held.length()) })
+        }
+        (Event::Created, Some(w)) => ("Created", Vec::new(), At { of: TimeOf::Date, words: w.format() }),
+        (Event::Touched, Some(w)) => ("Changed", Vec::new(), At { of: TimeOf::Date, words: w.format() }),
+        _ => return None,
+    };
+    let op = if at.of == TimeOf::Date { if p.not { "not" } else { "" }.to_string() } else { is(values.len() > 1).to_string() };
+    Some(Rule { field: field.into(), op, not: p.not, values, time: false, timeable: at.of != TimeOf::Date, at: Some(at), text: p.format() })
+}
+
+/// A status or a kind rule's values, whatever its time.
+enum Vals {
+    Status(Vec<Status>),
+    Kind(Vec<Kind>),
+    /// `created` (`true`) or `changed`, with its window.
+    Date(bool),
+}
+
+/// What a rule at a node is made of, for a time: its values, whether
+/// negated, and its time.
+fn timeable(n: &Node) -> Option<(Vals, bool, Option<Time>)> {
+    let one = |p: &Predicate| -> Option<(Vals, Option<Time>)> {
+        Some(match &p.field {
+            Field::Status(s) => (Vals::Status(vec![*s]), None),
+            Field::Kind(k) => (Vals::Kind(vec![*k]), None),
+            Field::History(h) if h.by.is_none() => match (&h.event, &h.window) {
+                (Event::Became(Became::Status(v)), Some(w)) => (Vals::Status(v.clone()), Some(Time::Became(w.clone()))),
+                (Event::Became(Became::Kind(v)), Some(w)) => (Vals::Kind(v.clone()), Some(Time::Became(w.clone()))),
+                (Event::Held(Held { of: HeldOf::Statuses(v), over, n, unit }), None) => (Vals::Status(v.clone()), Some(Time::Held { over: *over, n: *n, unit: *unit })),
+                (Event::Created, Some(w)) => (Vals::Date(true), Some(Time::Became(w.clone()))),
+                (Event::Touched, Some(w)) => (Vals::Date(false), Some(Time::Became(w.clone()))),
+                _ => return None,
+            },
+            _ => return None,
+        })
+    };
+    match n {
+        Node::Leaf(p) => one(p).map(|(v, t)| (v, p.not, t)),
+        g => {
+            let (field, not, _) = list_of(g)?;
+            let leaves = g.items().iter().filter_map(|i| if let Node::Leaf(p) = i { Some(&p.field) } else { None });
+            let vals = match field {
+                Field::Status(_) => Vals::Status(leaves.filter_map(|f| if let Field::Status(s) = f { Some(*s) } else { None }).collect()),
+                Field::Kind(_) => Vals::Kind(leaves.filter_map(|f| if let Field::Kind(k) = f { Some(*k) } else { None }).collect()),
+                _ => return None,
+            };
+            Some((vals, not, None))
+        }
+    }
+}
+
+/// The time of the rule at a node, if it has one.
+pub(crate) fn time_of(n: &Node) -> Option<Time> {
+    timeable(n).and_then(|(_, _, t)| t)
+}
+
+/// The rule at `path` with time `t` — `None` takes it off (a date field
+/// keeps its own). `false`: no rule there that takes it (a kind has no
+/// *has been so*).
+pub(crate) fn set_time(n: &mut Node, path: &[usize], t: Option<Time>) -> bool {
+    let Some(at) = get_mut(n, path) else { return false };
+    let Some((vals, not, _)) = timeable(at) else { return false };
+    let leaf = |field: Field| Node::Leaf(Predicate { field, not });
+    let history = |event: Event, window: Option<Window>| Field::History(History { event, window, by: None });
+    let next = match (vals, t) {
+        (Vals::Date(_), None) | (Vals::Kind(_), Some(Time::Held { .. })) | (Vals::Date(_), Some(Time::Held { .. })) => return false,
+        (Vals::Date(created), Some(Time::Became(w))) => leaf(history(if created { Event::Created } else { Event::Touched }, Some(w))),
+        (Vals::Status(v), Some(Time::Became(w))) => leaf(history(Event::Became(Became::Status(v)), Some(w))),
+        (Vals::Kind(v), Some(Time::Became(w))) => leaf(history(Event::Became(Became::Kind(v)), Some(w))),
+        (Vals::Status(v), Some(Time::Held { over, n, unit })) => leaf(history(Event::Held(Held { of: HeldOf::Statuses(v), over, n, unit }), None)),
+        (Vals::Status(v), None) => plain(v.into_iter().map(Field::Status).collect(), not),
+        (Vals::Kind(v), None) => plain(v.into_iter().map(Field::Kind).collect(), not),
+    };
+    if *at == next {
+        return false;
+    }
+    *at = next;
+    true
+}
+
+/// One field's values with no time: a clause, or a list (`status in (A, B)`).
+fn plain(mut fields: Vec<Field>, not: bool) -> Node {
+    if fields.len() == 1 {
+        return Node::Leaf(Predicate { field: fields.remove(0), not });
+    }
+    let conj = if not { Conj::All } else { Conj::Any };
+    Node::Group { conj, not: false, items: fields.into_iter().map(|field| Node::Leaf(Predicate { field, not })).collect() }
+}
+
+/// A date field's rule — `created` or `changed`, this week.
+#[cfg(test)]
+pub(crate) fn date_rule(created: bool) -> Node {
+    let event = if created { Event::Created } else { Event::Touched };
+    Node::Leaf(Predicate { field: Field::History(History { event, window: Some(Window::ThisWeek), by: None }), not: false })
 }
 
 /// Whether a history clause is a time (FILTER-54 makes it a rule's): a
@@ -567,16 +721,72 @@ mod tests {
         }
     }
 
+    fn leaf_rule(text: &str) -> Rule {
+        let (n, _) = of_text(text).expect(text);
+        let Node::Group { items, .. } = &n else { panic!("{text}: {n:?}") };
+        let [Node::Leaf(p)] = items.as_slice() else { panic!("{text}: one clause, {n:?}") };
+        rule_of(p)
+    }
+
     #[test]
-    fn a_rule_with_its_time_is_a_read_only_time_row() {
-        // FILTER-52's `status S <time>`: the time is FILTER-54's to edit.
-        for text in ["status Ready within 12h", "status in (Ready, Coding) today", "kind gap this week"] {
-            let (n, _) = of_text(text).expect(text);
-            let Node::Group { items, .. } = &n else { panic!("{text}: {n:?}") };
-            let [Node::Leaf(p)] = items.as_slice() else { panic!("{text}: one clause, {n:?}") };
-            let r = rule_of(p);
-            assert!(r.time && r.field == "When", "{text}: {r:?}");
+    fn a_rule_says_its_time() {
+        // FILTER-52's `status S <time>`: the rule, then its time.
+        let r = leaf_rule("status Ready within 12h");
+        assert_eq!((r.field.as_str(), r.op.as_str(), r.values.clone()), ("Status", "is", vec!["Ready".to_string()]));
+        assert_eq!(r.at, Some(At { of: TimeOf::Became, words: "within 12h".into() }));
+        assert!(!r.time && r.timeable);
+        let r = leaf_rule("not status in (Ready, Coding) today");
+        assert_eq!((r.op.as_str(), r.values.len()), ("is none of", 2));
+        assert_eq!(r.at.map(|a| a.words), Some("today".into()));
+        assert_eq!(leaf_rule("kind gap this week").field, "Kind");
+        let r = leaf_rule("status Coding for over 2w");
+        assert_eq!(r.at, Some(At { of: TimeOf::HasBeen, words: "for over 2w".into() }));
+        // Created and Changed: fields whose value is the time.
+        let r = leaf_rule("created this week");
+        assert_eq!((r.field.as_str(), r.at.map(|a| a.of)), ("Created", Some(TimeOf::Date)));
+        assert_eq!(leaf_rule("changed within 2w").field, "Changed");
+        // A plain rule takes one; what the card does not edit stays text.
+        assert!(leaf_rule("status Ready").timeable && leaf_rule("kind gap").timeable);
+        assert!(!leaf_rule("severity high").timeable && !leaf_rule("label x").timeable);
+        for text in ["moved today", "entered Ready today by me", "status left Ready before 1w ago"] {
+            let r = leaf_rule(text);
+            assert!(r.time && r.at.is_none() && r.field == "When", "{text}: {r:?}");
         }
+    }
+
+    #[test]
+    fn a_time_goes_on_changes_and_comes_off() {
+        let w = |t: &str| Time::Became(crate::when::window_of(t).expect(t));
+        let said = |n: &Node| to_filter(n, &Display::default()).format();
+        let (mut n, _) = of_text("kind build and status in (Ready, Coding)").unwrap();
+        assert_eq!(time_of(get(&n, &[1]).unwrap()), None);
+        assert!(set_time(&mut n, &[1], Some(w("within 3d"))));
+        assert_eq!(said(&n), "kind build and status in (Ready, Coding) within 3d");
+        assert_eq!(time_of(get(&n, &[1]).unwrap()), Some(w("within 3d")));
+        assert!(set_time(&mut n, &[1], Some(Time::Held { over: true, n: 2, unit: Unit::Week })));
+        assert_eq!(said(&n), "kind build and status in (Ready, Coding) for over 2w");
+        assert!(set_time(&mut n, &[1], None));
+        assert_eq!(said(&n), "kind build and status in (Ready, Coding)", "off: the list again");
+        assert!(!set_time(&mut n, &[1], None), "nothing to take off");
+        // A kind became so, never has been so; a negated rule keeps its not.
+        assert!(!set_time(&mut n, &[0], Some(Time::Held { over: true, n: 1, unit: Unit::Day })));
+        assert!(set_time(&mut n, &[0], Some(w("today"))));
+        assert_eq!(said(&n), "kind build today and status in (Ready, Coding)");
+        let (mut n, _) = of_text("ready and not status Complete").unwrap();
+        assert!(set_time(&mut n, &[1], Some(w("after 2026-10-01"))));
+        assert!(said(&n).ends_with("not status Complete after 2026-10-01"), "{}", said(&n));
+        assert!(set_time(&mut n, &[1], None));
+        assert_eq!(said(&n), "ready and not status Complete");
+        // A date field: its window changes, never comes off.
+        let mut n = Node::Group { conj: Conj::All, not: false, items: vec![date_rule(true), date_rule(false)] };
+        assert_eq!(said(&n), "created this week and changed this week");
+        assert!(set_time(&mut n, &[0], Some(w("today"))));
+        assert!(!set_time(&mut n, &[1], None));
+        assert!(!set_time(&mut n, &[1], Some(Time::Held { over: true, n: 1, unit: Unit::Day })));
+        assert_eq!(said(&n), "created today and changed this week");
+        // Not a rule that takes one.
+        let (mut n, _) = of_text("ready and severity high").unwrap();
+        assert!(!set_time(&mut n, &[1], Some(w("today"))));
     }
 
     fn rule(p: &Part) -> &Rule {
@@ -619,10 +829,10 @@ mod tests {
         // Needs you's clauses are flags, not times.
         assert!(items(inner(&ny)).iter().map(rule).all(|r| !r.time && r.op == "is"), "queued, asking, asked, a label");
         assert_eq!(rule(&items(inner(&ny))[0]).values, ["queued"]);
-        // Created-Active-Weekly's time clause: read only, its text.
+        // Created-Active-Weekly's time clause: a Created rule, its window the value.
         let caw = resolve("Created-Active-Weekly", &look);
-        let t = items(inner(&caw)).iter().map(rule).find(|r| r.time).expect("a time rule");
-        assert_eq!(t.values, ["created this week"]);
+        let t = items(inner(&caw)).iter().map(rule).find(|r| r.field == "Created").expect("a date rule");
+        assert_eq!(t.at.as_ref().map(|a| a.words.as_str()), Some("this week"));
         // Plexus-Attention: a name, then an or-group holding a name and an and-group.
         let pa = resolve("Plexus-Attention", &look);
         let top = inner(&pa);
