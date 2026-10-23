@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# DEPLOY-12: deploy/pipeline's deployment records, on a throwaway environment
-# root — HOME is a scratch directory (the env files, the releases, what each
-# env runs, the log, the outbox) and systemctl, ss, node, npm, curl, sqlite3
-# and synapse are stand-ins, so a whole deploy test, sync, promote (with the
-# drill's automatic rollback), rollback and backfill run in seconds and touch
-# nothing real: no unit, no port, no database, no tracker. The stand-in
-# synapse keeps what it is sent and answers as DEPLOY-11 does — a record it
-# already has (project, environment, state, revision, run) is `duplicate`.
-# ACCESS-27: and `install`'s split of the settings into their templated and
-# local halves, and the smoke's login-mode assertion (STUB_MODE is the
-# server's mode), with no secret in any argv.
+# DEPLOY-12: deploy/pipeline's deployment records, on a throwaway root — HOME
+# is a scratch directory (the releases, the log, the outbox) and node, curl,
+# synapse, docker, gh and hypermemetic-infra are stand-ins, so a whole remote
+# test (infra, then the smoke from outside), remote prod, the suite after the
+# deploy, backfill and status run in seconds and touch nothing real: no unit,
+# no port, no deployment, no tracker. The stand-in tracker (deploy/menger-call.mjs
+# as node, and synapse) keeps what it is sent and answers as DEPLOY-11 does — a
+# record it already has (project, environment, state, revision, run) is
+# `duplicate`. DEPLOY-52: test is app-test.menger.sh and prod app.menger.sh;
+# this machine's environments are retired, so their commands say so and exit 2.
 # `cargo test` runs it (tests/deploy_record.rs).
 #
 #   deploy/tests/pipeline       exit 1 if any check failed
@@ -27,45 +26,50 @@ has()  { [[ $2 == *"$3"* ]] && ok || bad "$1: wanted '$3' in: $2"; }
 
 # ── the throwaway root ──────────────────────────────────────────────────────
 export HOME=$SCRATCH/home
-unset MENGER_DEPLOY_HOME MENGER_DEPLOY_OUTBOX MENGER_DEPLOY_TRACKER_HOST MENGER_DEPLOY_TRACKER_TOKEN DEPLOY_SMOKE_FAIL SMOKE_DRILLED MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE MENGER_CALL
+unset MENGER_DEPLOY_HOME MENGER_DEPLOY_OUTBOX MENGER_DEPLOY_TRACKER_HOST MENGER_DEPLOY_TRACKER_TOKEN DEPLOY_SMOKE_FAIL MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE MENGER_CALL \
+  MENGER_APP_TEST_URL MENGER_APP_URL MENGER_SUITE_CHECKOUT MENGER_APP_YML IMAGE_STORE
 export MENGER_DEPLOY_TRACKER_PORT=4769
 # DEPLOY-28: the tracker is app.menger.sh by default; `local` is :4769, the stand-ins
 # below (DEPLOY-28's own checks unset it, and dial app.menger.sh's stand-in)
-export MENGER_DEPLOY_TRACKER_URL=local
+export MENGER_DEPLOY_TRACKER_URL=local MENGER_SMOKE_WAIT=1
 unset MENGER_DEPLOY_COMPLETE_KEY_FILE
 # Belt and braces: even a real systemctl --user would find no bus.
 export XDG_RUNTIME_DIR=$SCRATCH/no-runtime DBUS_SESSION_BUS_ADDRESS=unix:path=$SCRATCH/no-bus
 D=$HOME/.local/share/menger-deploy
 OUT=$D/outbox
 mkdir -p "$SCRATCH/bin" "$HOME/.config/menger" "$D/releases"
-for e in prod test; do
-  printf 'MENGER_DB_PATH=%s\nMENGER_WS_PORT=1\nMENGER_SHELL_PORT=2\nMENGER_REST_PORT=3\nMENGER_DIAGRAMS_PORT=4\nMENGER_EXPECT_LOGIN=off\n' \
-    "$SCRATCH/data/$e/tickets.db" >"$HOME/.config/menger/$e.env"
-  ( umask 077; echo '# the local half (ACCESS-27)' >"$HOME/.config/menger/$e.local.env" )
-done
+# the pipeline's key, a file (ACCESS-47): the smoke reads health as it, records go as it
+K=$HOME/.plexus/keys/pipeline.key; mkdir -p "${K%/*}"
+export STUB_SECRET=s3cret-Pw-7f3a
+( umask 077; echo "seed-$STUB_SECRET" >"$K" )
 
 stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$SCRATCH/bin/$1"; chmod +x "$SCRATCH/bin/$1"; }
-stub systemctl '[[ ${STUB_RESTART_FAILS:-} == 1 && " $* " == *" restart "* ]] && exit 1
-[[ " $* " == *" is-active "* ]] && { [[ " $* " == *" --quiet "* ]] || echo active; }; exit 0'
-for t in ss npm sqlite3; do stub $t 'exit 0'; done
-# ACCESS-27: node answers the smoke's mode probe as STUB_MODE says (the
-# server's login mode), and health for a token read from stdin; curl signs the
-# smoke account in (its form read from stdin) and serves the login page. Both
-# keep their argv in $STUB_ARGV, and curl its stdin in $STUB_STDIN, so a
-# check can say no secret rode in argv.
-# ACCESS-47: and deploy/menger-call.mjs as the tracker under login answers
-# the pipeline's key (STUB_TRACKER: gate — the key refused; refuse — in band),
-# keeping the key's file and any key in the environment in $STUB_ARGV.
+stub systemctl 'echo "systemctl $*" >>"$STUB_SYSTEMCTL"; [[ " $* " == *" is-active "* ]] && echo active; exit 0'
+# node: deploy/menger-call.mjs as the tracker under login. health ({} params) for a key,
+# `unauthenticated` for none (STUB_HEALTH: down — no answer; gate — forbidden); a record
+# kept and answered as DEPLOY-11 does (STUB_TRACKER: down, hang, gate — the key refused,
+# refuse — in band). It keeps its argv, the key's file and any key in the environment in
+# $STUB_ARGV, so a check can say no secret rode in argv.
 stub node 'echo "node $*" >>"$STUB_ARGV"
 case " $* " in
-  *smoke-mode.mjs*) echo "login: ${STUB_MODE:-off}" ;;
-  *smoke-health.mjs*" - "*) read -r t; [[ -n $t ]] && echo "ticket_count: 3" ;;
   *menger-call.mjs*)
     echo "keyfile=${MENGER_DEPLOY_KEY_FILE:-} key=${MENGER_DEPLOY_KEY:-}" >>"$STUB_ARGV"
     all=" $* "
     while [[ $# -gt 0 ]]; do [[ $1 == --params ]] && rec=$2; shift; done
-    [[ ${STUB_TRACKER:-up} == gate ]] && { echo "{\"code\":\"-32003\",\"error_kind\":\"forbidden\",\"message\":\"needs deployments.record\",\"type\":\"error\"}"; exit 3; }
-    case " $* " in *" tickets.health "*) ;; esac
+    if [[ $rec == "{}" ]]; then
+      # STUB_HEALTH=anon: an anonymous socket reaches past the auth door (what the smoke must catch)
+      [[ -z ${MENGER_DEPLOY_KEY_FILE:-}${MENGER_DEPLOY_KEY:-} && ${STUB_HEALTH:-up} != anon ]] && { echo "{\"error_kind\":\"unauthenticated\",\"message\":\"sign in first\",\"type\":\"error\"}"; exit 3; }
+      case ${STUB_HEALTH:-up} in
+        down) exit 1 ;;
+        gate) echo "{\"error_kind\":\"forbidden\",\"message\":\"needs tickets.health\",\"type\":\"error\"}"; exit 3 ;;
+      esac
+      echo "{\"ticket_count\":3,\"type\":\"health\"}"; exit 0
+    fi
+    case ${STUB_TRACKER:-up} in
+      down) exit 1 ;;
+      hang) sleep 30; exit 1 ;;
+      gate) echo "{\"code\":\"-32003\",\"error_kind\":\"forbidden\",\"message\":\"needs deployments.record\",\"type\":\"error\"}"; exit 3 ;;
+    esac
     # DEPLOY-28: which carried tickets are In Review there (STUB_INREVIEW), and the completion
     case $all in
       *" tickets.nav.member "*) echo "member $rec" >>"$STUB_ARGV"
@@ -74,25 +78,29 @@ case " $* " in
         [[ ${STUB_COMPLETE:-} == refuse ]] && { echo "{\"code\":\"-32003\",\"error_kind\":\"forbidden\",\"message\":\"needs tickets.update_many on MENGER-7\",\"type\":\"error\"}"; exit 3; }
         echo "{\"type\":\"updated_many\"}"; exit 0 ;;
     esac
-    if [[ $rec == "{}" ]]; then echo "{\"ticket_count\":3,\"type\":\"health\"}"; exit 0; fi
     [[ ${STUB_TRACKER:-up} == refuse ]] && { echo "{\"message\":\"no shortcode MENGER\",\"type\":\"error\"}"; exit 3; }
     key=$(jq -c "[.project, .environment, .state, .revision, (.source.run // .at)]" <<<"$rec")
     grep -qxF -- "$key" "$STUB_KEYS" 2>/dev/null && dup=true || { dup=false; echo "$key" >>"$STUB_KEYS"; echo "$rec" >>"$STUB_SENT"; }
     echo "{\"type\":\"deployed\",\"deployment\":{\"id\":1},\"carried\":${STUB_CARRIED:-[]},\"duplicate\":$dup}" ;;
 esac; exit 0'
-stub curl '[[ " $* " == *"Host: evil.example"* ]] && { printf %s "${STUB_HOST_CODE:-421}"; exit 0; }
-echo "curl $*" >>"$STUB_ARGV"
-case " $* " in
-  *" -X POST "*) cat >>"$STUB_STDIN"; echo "{\"access_token\":\"tok-$STUB_SECRET\"}" ;;
-  *redirect_url*) printf "http://127.0.0.1:2/login?next=%%2F" ;;
-  */login" "*) echo "<h1>Sign in</h1>" ;;
-  *) echo "<meta name=\"menger-ws-port\" content=\"${STUB_WS_PORT:-1}\">" ;;
-esac'
-# synapse: the smoke's reads answered; deployments.record kept in $SCRATCH/sent.ndjson
-# and answered as DEPLOY-11 does, or as STUB_TRACKER says (down, refuse, hang).
+# curl: app-test / app.menger.sh as the smoke meets them from outside (STUB_SMOKE=fail: the
+# login page is not menger'"'"'s), and the local app'"'"'s page on loopback.
+stub curl 'echo "curl $*" >>"$STUB_ARGV"
+url=""; for a in "$@"; do [[ $a == http://* || $a == https://* ]] && url=$a; done
+host=${url#*://}; host=${host%%/*}
+case $url in
+  http://127.0.0.1:*) echo "<meta name=\"menger-ws-port\" content=\"${STUB_WS_PORT:-1}\">" ;;
+  http://*) printf "308 https://%s/" "$host" ;;
+  */.well-known/oauth-protected-resource/ws) printf "{\"resource\":\"https://%s/ws\"}" "$host" ;;
+  */ws) printf 403 ;;
+  */login) [[ ${STUB_SMOKE:-ok} == fail ]] && { echo "<h1>Not found</h1>"; exit 0; }; echo "<h1>Sign in</h1>" ;;
+  */app/*) printf "%s" "${STUB_APP_CODE:-200}" ;;
+  */) printf "HTTP/2 303\r\nlocation: /login?next=%%2F\r\nstrict-transport-security: max-age=31536000\r\n\r\n" ;;
+esac; exit 0'
+# synapse: deployments.record kept in $SCRATCH/sent.ndjson and answered as DEPLOY-11
+# does, or as STUB_TRACKER says (down, refuse, hang) — the way with no key.
 stub synapse 'args=" $* "
 echo "synapse $*" >>"${STUB_SYNAPSE_ARGV:-/dev/null}"
-[[ $args == *" diagrams "* ]] && { echo "diagram_type: flowchart"; exit 0; }
 [[ $args == *" health "* ]] && { [[ ${STUB_HEALTH:-up} == down ]] && exit 1; echo "ticket_count: 3"; exit 0; }
 case ${STUB_TRACKER:-up} in
   down) echo "Protocol handshake failed" >&2; exit 1 ;;
@@ -104,23 +112,39 @@ key=$(jq -c "[.project, .environment, .state, .revision, (.source.run // .at)]" 
 grep -qxF -- "$key" "$STUB_KEYS" 2>/dev/null && dup=true || { dup=false; echo "$key" >>"$STUB_KEYS"; echo "$rec" >>"$STUB_SENT"; }
 printf "deployment: \n  id: 1\nduplicate: %s\ntype: deployed\n" "$dup"'
 export PATH=$SCRATCH/bin:$PATH STUB_SENT=$SCRATCH/sent.ndjson STUB_KEYS=$SCRATCH/keys STUB_COMPLETED=$SCRATCH/completed \
-  STUB_ARGV=$SCRATCH/argv STUB_STDIN=$SCRATCH/stdin STUB_SECRET=s3cret-Pw-7f3a
-[[ $(command -v systemctl) == "$SCRATCH/bin/systemctl" && $(command -v synapse) == "$SCRATCH/bin/synapse" ]] \
+  STUB_ARGV=$SCRATCH/argv STUB_SYSTEMCTL=$SCRATCH/systemctl
+[[ $(command -v node) == "$SCRATCH/bin/node" && $(command -v synapse) == "$SCRATCH/bin/synapse" && $(command -v curl) == "$SCRATCH/bin/curl" ]] \
   || { echo "the stand-ins are not first on PATH — refusing to run the pipeline" >&2; exit 1; }
+
+# hypermemetic-infra, a stand-in: it keeps every call; STUB_INFRA=fail fails one (never a
+# --check); STUB_INFRA=readonly-log makes deployments.log unwritable (a run that dies half-way).
+INFRA=$SCRATCH/infra; mkdir -p "$INFRA/bin" "$INFRA/inventory/group_vars/all"
+cat >"$INFRA/bin/infra" <<'INF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_INFRA_LOG"
+[[ ${STUB_INFRA:-ok} == fail && " $* " != *" --check "* ]] && exit 1
+[[ ${STUB_INFRA:-ok} == readonly-log ]] && chmod a-w "$HOME/.local/share/menger-deploy/deployments.log"
+exit 0
+INF
+chmod +x "$INFRA/bin/infra"
+export MENGER_INFRA_DIR=$INFRA MENGER_LANDING_URL=none STUB_INFRA_LOG=$SCRATCH/infra.log
+: >"$STUB_INFRA_LOG"
 
 # Three releases at three real commits, so --commits-from-git has something to list.
 mapfile -t C < <(git -C "$REPO" log --first-parent --format=%H -3 HEAD | tac)
 [[ ${#C[@]} == 3 ]] || { echo "needs three commits in $REPO" >&2; exit 1; }
 release() { # N → a release directory at commit C[N]
   local id=2026100${1}T100000Z-${C[$1]:0:7} r
-  r=$D/releases/$id; mkdir -p "$r/bin"
-  printf 'release:   %s\ncommit:    %s\nsubject:   r%s\n' "$id" "${C[$1]}" "$1" >"$r/RELEASE"
-  # ACCESS-25: a release's menger knows --allowed-host, so the smoke asks every port
-  printf '#!/usr/bin/env bash\n[[ ${1:-} == --help ]] && echo "--allowed-host <HOST> --rest-port <PORT>"\nexit 0\n' >"$r/bin/menger"; chmod +x "$r/bin/menger"
-  echo "$id"
+  r=$D/releases/$id; mkdir -p "$r/bin" "$r/app"
+  printf 'release:   %s\ncommit:    %s\nsubject:   r%s\ngate:      none — the suite runs after the deploy (DEPLOY-52: deploy/pipeline suite)\n' "$id" "${C[$1]}" "$1" >"$r/RELEASE"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$r/bin/menger"; chmod +x "$r/bin/menger"
+  echo "// r$1" >"$r/app/menger-app-r$1.js"
+  chmod -R a-w "$r"; echo "$id"
 }
 R0=$(release 0) R1=$(release 1) R2=$(release 2)
 S0=${C[0]:0:7} S1=${C[1]:0:7} S2=${C[2]:0:7}
+G=ghcr.io/hypermemetic-ai/menger
+suite_mark() { chmod u+w "$D/releases/$1"; printf '%s\n' "$2" >"$D/releases/$1/SUITE"; chmod a-w "$D/releases/$1"; }
 
 P=$DEPLOY/pipeline
 run() { "$P" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
@@ -128,79 +152,172 @@ sent() { jq -c "$1" "$STUB_SENT" 2>/dev/null | tail -n "${2:-+1}" | paste -sd' '
 : >"$STUB_SENT"
 mark() { wc -l <"$STUB_SENT"; }
 since() { tail -n +$(($1 + 1)) "$STUB_SENT" | jq -c "$2" | paste -sd' '; }
+rt() { run remote test --image "$G:$1"; } # remote test of a release, by its GHCR image
 
-# ── deploy test: started, then succeeded; the first has no previous ────────
-m=$(mark); run deploy test "$R0"
-same "deploy test exits 0" "$code" 0
-same "deploy test: started, succeeded" "$(since "$m" '[.environment, .state, .revision, .previous]')" \
-  "[\"test\",\"started\",\"$S0\",null] [\"test\",\"succeeded\",\"$S0\",null]"
+# ── DEPLOY-52: the local environments are retired ───────────────────────────
+for c in install "deploy test" "sync test" promote "rollback prod" "logs prod"; do
+  # shellcheck disable=SC2086
+  run $c
+  same "retired: $c exits 2" "$code" 2
+  has "retired: $c says so" "$err" "is retired (DEPLOY-52)"
+  has "retired: $c says its data stays" "$err" "the local data stays untouched"
+done
+same "retired: nothing asked of systemd" "$(cat "$STUB_SYSTEMCTL" 2>/dev/null)" ""
+run smoke staging
+same "smoke: only test or prod" "$code" 1
+has "smoke: the retired ones named" "$err" "the local environments are retired"
+
+# ── remote test: infra, the smoke from outside, recorded as test ───────────
+m=$(mark); rt "$R0"
+same "remote test exits 0" "$code" 0
+has "remote test: infra's app.yml, env test, the release" "$(<"$STUB_INFRA_LOG")" "app.yml -e app_dir=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)") -e env=test -e sha=$R0"
+same "remote test: started, succeeded as test, the first with no previous" "$(since "$m" '[.environment, .state, .revision, .previous, .from]')" \
+  "[\"test\",\"started\",\"$S0\",null,null] [\"test\",\"succeeded\",\"$S0\",null,null]"
 runs=$(since "$m" .source.run | tr -d '"')
-[[ $runs =~ ^deploy@[0-9TZ:-]+#[0-9]+\ deploy@[0-9TZ:-]+#[0-9]+$ && ${runs% *} == "${runs#* }" ]] && ok || bad "one run id on both records: $runs"
-same "the log line ends with the run id" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5,6)" $'test\tdeploy\tok\t'"${runs% *}"
-has "deploy test says it sent" "$err" "record: test succeeded $S0 → menger :4769 (sent)"
+[[ $runs =~ ^remote-test@[0-9TZ:-]+#[0-9]+\ remote-test@[0-9TZ:-]+#[0-9]+$ && ${runs% *} == "${runs#* }" ]] && ok || bad "one run id on both records: $runs"
+same "the log line: test run, ok, the run id" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,4,6)" $'test\trun\t'"$R0"$'\t'"${runs% *}"
+has "remote test says it sent" "$err" "record: test succeeded $S0 → menger :4769 (sent)"
 same "outbox empty" "$(ls "$OUT" | grep -c json)" 0
+[[ -f $D/releases/$R0/TESTED ]] && ok || bad "remote test: the release is marked TESTED"
+for s in "http://app-test.menger.sh/ → https" "https://app-test.menger.sh/ behind its login page, with HSTS" "https://app-test.menger.sh/login is the sign-in page" \
+         "the socket's protected-resource metadata names https://app-test.menger.sh/ws" "a socket from another origin is refused (403)" \
+         "tickets.health on wss://app-test.menger.sh/ws — 3 tickets (as the pipeline key)" "an anonymous socket reaches nothing" \
+         "app-test.menger.sh serves $R0's app (menger-app-r0.js)"; do
+  has "smoke: $s" "$err" "ok   $s"
+done
+[[ $err != *FAIL* ]] && ok || bad "a green smoke said FAIL: $err"
+has "remote test: the suite is next" "$err" "its suite runs next (deploy/pipeline suite $R0)"
+same "remote test: url" "$(<"$SCRATCH/out")" "url=https://app-test.menger.sh/"
+[[ $(<"$STUB_ARGV") != *"seed-$STUB_SECRET"* ]] && ok || bad "the pipeline's key rode in argv"
+has "the smoke reads health as the pipeline, from its file" "$(<"$STUB_ARGV")" "keyfile=$K key="$'\n'
 
-# ── deploy test again: previous, and its commits from git ──────────────────
-m=$(mark); run deploy test "$R2"
+# ── remote test again: previous, and its commits from git ──────────────────
+m=$(mark); rt "$R2"
 n=$(git -C "$REPO" rev-list --count "${C[0]}..${C[2]}")
-same "second deploy: previous and commits (git log previous..revision)" \
+same "second remote test: previous and commits (git log previous..revision)" \
   "$(since "$m" "[.state, .previous, (.commits | length), (.commits | index(\"${C[2]}\") != null)]")" \
   "[\"started\",\"$S0\",$n,true] [\"succeeded\",\"$S0\",$n,true]"
 
-# ── the drill: promote --to test fails its smoke and rolls back by itself ──
-m=$(mark); DEPLOY_SMOKE_FAIL=test run promote "$R0" --to test
-same "drill exits 1 (not promoted)" "$code" 1
-same "drill: started, failed, rolled_back" "$(since "$m" '[.state, .revision, .previous]')" \
-  "[\"started\",\"$S0\",\"$S2\"] [\"failed\",\"$S0\",\"$S2\"] [\"rolled_back\",\"$S2\",\"$S0\"]"
-same "drill: the rollback carries no commits" "$(since "$m" '.commits // "none"' | cut -d' ' -f3)" '"none"'
+# ── the smoke fails: failed, recorded, not TESTED, exit 1 ──────────────────
+m=$(mark); STUB_SMOKE=fail rt "$R1"
+same "smoke fails: exits 1" "$code" 1
+same "smoke fails: started, failed" "$(since "$m" '[.state, .revision]')" "[\"started\",\"$S1\"] [\"failed\",\"$S1\"]"
+has "smoke fails: named" "$err" "FAIL https://app-test.menger.sh/login is not the sign-in page"
+same "smoke fails: the log says so" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'test\trun\tsmoke failed'
+[[ ! -f $D/releases/$R1/TESTED ]] && ok || bad "a release whose smoke failed is marked TESTED"
+m=$(mark); STUB_APP_CODE=404 rt "$R2"
+same "another release's app served: exits 1" "$code" 1
+has "another release's app served: named" "$err" "FAIL app-test.menger.sh does not serve $R2's app"
+m=$(mark); STUB_HEALTH=down rt "$R2"
+same "no health: exits 1" "$code" 1
+has "no health: named" "$err" "FAIL tickets.health on wss://app-test.menger.sh/ws"
+m=$(mark); STUB_HEALTH=anon rt "$R2"
+same "an anonymous socket answered: exits 1" "$code" 1
+has "an anonymous socket answered: named" "$err" "FAIL an anonymous socket on wss://app-test.menger.sh/ws reaches past the auth door"
+m=$(mark); STUB_INFRA=fail rt "$R2"
+same "infra fails: exits 1" "$code" 1
+same "infra fails: started, failed" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","failed"]'
+same "infra fails: logged" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'test\trun\tinfra failed'
+DEPLOY_SMOKE_FAIL=test run smoke test
+same "the drill fails the smoke" "$code" 1
 
-# ── promote to prod; then rollback prod ────────────────────────────────────
-m=$(mark); run promote "$R0"; same "promote prod exits 0" "$code" 0
-m2=$(mark); run promote "$R2"; same "second promote exits 0" "$code" 0
-m3=$(mark); run rollback prod; same "rollback exits 0" "$code" 0
-same "promote prod: started, succeeded" "$(since "$m" '[.environment, .state, .revision]' | cut -d' ' -f1,2)" \
-  "[\"prod\",\"started\",\"$S0\"] [\"prod\",\"succeeded\",\"$S0\"]"
-# DEPLOY-21: prod promotes from test — every prod record says so; test's none.
-same "promote prod: from test" "$(since "$m" '.from // "none"' | cut -d' ' -f1,2)" '"test" "test"'
-same "deploy test: from none" "$(jq -c 'select(.environment == "test") | .from // "none"' "$STUB_SENT" | sort -u | paste -sd' ')" '"none"'
-same "rollback: started, rolled_back to the previous" "$(since "$m3" '[.state, .revision, .previous, .source.run[0:9]]')" \
-  "[\"started\",\"$S0\",\"$S2\",\"rollback@\"] [\"rolled_back\",\"$S0\",\"$S2\",\"rollback@\"]"
+# ── a run that dies after started sends failed on its way out ───────────────
+m=$(mark); STUB_INFRA=readonly-log rt "$R2"
+[[ $code != 0 ]] && ok || bad "a run that cannot write its log fails"
+same "died: started, then failed" "$(since "$m" .state)" '"started" "failed"'
+chmod u+w "$D/deployments.log"
+
+# ── DEPLOY-23: a record's commits start at the last run that passed ────────
+range() { git -C "$REPO" rev-list --count "${C[$1]}..${C[$2]}"; }
+holds() { echo "(.commits // [] | index(\"${C[$1]}\") != null)"; }
+rt "$R0"; same "back on R0" "$code" 0
+m=$(mark); STUB_SMOKE=fail rt "$R1"
+same "fail: started, failed, from R0" "$(since "$m" "[.state, .revision, .previous, (.commits | length)]")" \
+  "[\"started\",\"$S1\",\"$S0\",$(range 0 1)] [\"failed\",\"$S1\",\"$S0\",$(range 0 1)]"
+m=$(mark); rt "$R2"
+same "then succeed: previous the last that passed (R0), not the failed R1" \
+  "$(since "$m" "[.state, .revision, .previous, (.commits | length), $(holds 1), $(holds 2)]")" \
+  "[\"started\",\"$S2\",\"$S0\",$(range 0 2),true,true] [\"succeeded\",\"$S2\",\"$S0\",$(range 0 2),true,true]"
 
 # ── the tracker is down: the deploy is unharmed, the records wait ──────────
-m=$(mark); STUB_TRACKER=down run deploy test "$R1"
-same "tracker down: deploy test exits 0" "$code" 0
+m=$(mark); STUB_TRACKER=down rt "$R1"
+same "tracker down: remote test exits 0" "$code" 0
 same "tracker down: nothing sent" "$(mark)" "$m"
 same "tracker down: two records in the outbox" "$(ls "$OUT" | grep -c '\.json$')" 2
 has "tracker down: said" "$err" "2 record(s) wait in $OUT"
 run status
 has "status: the outbox per env" "$(<"$SCRATCH/out")" "outbox    2 record(s) waiting for menger on :4769"
 # a hung tracker: each send is cut at MENGER_DEPLOY_RECORD_TIMEOUT
-t0=$SECONDS; STUB_TRACKER=hang MENGER_DEPLOY_RECORD_TIMEOUT=1 run sync test; t=$((SECONDS - t0))
-same "tracker hung: sync exits 0" "$code" 0
-[[ $t -lt 15 ]] && ok || bad "tracker hung: sync took ${t}s"
+t0=$SECONDS; STUB_TRACKER=hang MENGER_DEPLOY_RECORD_TIMEOUT=1 rt "$R1"; t=$((SECONDS - t0))
+same "tracker hung: remote test exits 0" "$code" 0
+[[ $t -lt 20 ]] && ok || bad "tracker hung: remote test took ${t}s"
 same "tracker hung: four records wait" "$(ls "$OUT" | grep -c '\.json$')" 4
 # … and the next run sends them first, oldest first
-m=$(mark); run sync test
-same "next run: the outbox first, then its own" "$(since "$m" '[.state, .source.run[0:5]]')" \
-  '["started","deplo"] ["succeeded","deplo"] ["started","sync@"] ["succeeded","sync@"] ["started","sync@"] ["succeeded","sync@"]'
+m=$(mark); rt "$R1"
+same "next run: the outbox first, then its own" "$(since "$m" '.state' | paste -sd' ')" '"started" "succeeded" "started" "succeeded" "started" "succeeded"'
 same "next run: outbox empty" "$(ls "$OUT" | grep -c '\.json$')" 0
 
 # ── refused: kept aside, said, never retried; the deploy unharmed ───────────
-STUB_TRACKER=refuse run sync test
-same "refused: sync exits 0" "$code" 0
+STUB_TRACKER=refuse rt "$R1"
+same "refused: remote test exits 0" "$code" 0
 same "refused: both in refused/" "$(ls "$OUT/refused" | grep -c '\.json$')" 2
 has "refused: said" "$err" "menger refused test started $S1: no shortcode MENGER"
+# the key refused at the gate (not yet granted): the records wait, said; never refused/
+nref=$(ls "$OUT/refused" | grep -c '\.json$')
+m=$(mark); STUB_TRACKER=gate rt "$R1"
+same "the key refused: remote test exits 0" "$code" 0
+same "the key refused: two wait in the outbox" "$(ls "$OUT" | grep -c '\.json$')" 2
+same "the key refused: none refused" "$(ls "$OUT/refused" | grep -c '\.json$')" "$nref"
+has "the key refused: said" "$err" "refused the pipeline's key (forbidden: needs deployments.record)"
+m=$(mark); rt "$R1"
+same "granted: the outbox first, then its own" "$(since "$m" '.state' | paste -sd' ')" '"started" "succeeded" "started" "succeeded"'
+has "the key: over the socket, as the pipeline" "$(<"$STUB_ARGV")" "--url ws://127.0.0.1:4769 --agent pipeline deployments.record"
 
-# ── a run that dies after started sends failed on its way out ───────────────
-m=$(mark); STUB_RESTART_FAILS=1 run deploy test "$R2"
-[[ $code != 0 ]] && ok || bad "a failing restart fails the deploy"
-same "died: started, then failed" "$(since "$m" .state)" '"started" "failed"'
+# ── remote prod: what test runs, only once its suite passed ────────────────
+# test last passed R1 (the runs above); its RELEASE says the gate was none
+: >"$STUB_INFRA_LOG"; m=$(mark); run remote prod
+same "remote prod, no suite result: exits 1" "$code" 1
+has "remote prod, no suite result: said" "$err" "$R1 has no suite result here — run: deploy/pipeline suite $R1"
+same "remote prod, no suite result: infra never asked" "$(<"$STUB_INFRA_LOG")" ""
+same "remote prod, no suite result: nothing recorded" "$(mark)" "$m"
+suite_mark "$R1" "running 2026-10-23T06:00:00Z — deploy/pipeline suite (pid 1)"
+run remote prod
+same "remote prod, suite running: exits 1" "$code" 1
+has "remote prod, suite running: said" "$err" "$R1's suite is still running"
+suite_mark "$R1" "failed 2026-10-23T06:30:00Z — workspace red; log /x.log"
+run remote prod
+same "remote prod, suite red: exits 1" "$code" 1
+has "remote prod, suite red: said" "$err" "$R1's suite FAILED (failed 2026-10-23T06:30:00Z — workspace red; log /x.log) — a release whose suite is red never reaches prod"
+same "remote prod, refused: infra never asked" "$(<"$STUB_INFRA_LOG")" ""
+suite_mark "$R1" "passed 2026-10-23T06:30:00Z — workspace 3 passed, 0 failed; frontend 1 passed, 0 failed"
+m=$(mark); run remote prod
+same "remote prod, suite passed: exits 0" "$code" 0
+same "remote prod: promote.yml only" "$(<"$STUB_INFRA_LOG")" "promote.yml -e app_dir=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")"
+same "remote prod: recorded as app-prod, from test, test's release" "$(since "$m" '[.environment, .state, .revision, .release, .from]')" \
+  "[\"app-prod\",\"started\",\"$S1\",\"$R1\",\"test\"] [\"app-prod\",\"succeeded\",\"$S1\",\"$R1\",\"test\"]"
+has "remote prod: smoked from outside" "$err" "ok   tickets.health on wss://app.menger.sh/ws"
+same "remote prod: the log names the release" "$(tail -n 1 "$D/deployments.log" | cut -f2-5)" $'app-prod\trun\t'"$R1"$'\tok'
+same "remote prod: url" "$(<"$SCRATCH/out")" "url=https://app.menger.sh/"
+# a release built with the gate (before DEPLOY-52) counts as passed: its gate was the suite
+OLDG=$(id=20261001T000000Z-${C[0]:0:7}; r=$D/releases/$id; mkdir -p "$r/app"
+  printf 'release:   %s\ncommit:    %s\ngate:      workspace 9 passed, 0 failed; frontend 2 passed, 0 failed\n' "$id" "${C[0]}" >"$r/RELEASE"; chmod -R a-w "$r"; echo "$id")
+run suite --status "$OLDG"; same "a gated release: suite passed" "$(<"$SCRATCH/out")" "suite: passed"
+run suite --status "$R0"; same "an ungated release with no suite: none" "$(<"$SCRATCH/out")" "suite: none"
+run suite --status "$R1"; same "suite --status reads SUITE" "$(<"$SCRATCH/out")" "suite: passed"
 
-# ── status: the last record sent per environment ───────────────────────────
+# ── status: test and prod, as the log and the deployments say ──────────────
 run status
 out=$(<"$SCRATCH/out")
-has "status: prod's last record" "$out" "record    rolled_back $S0 ($R0) at "
-has "status: test's last record" "$out" "record    failed $S2 ($R2) at "
+has "status: test is app-test" "$out" "test  https://app-test.menger.sh/"
+has "status: prod is app.menger.sh" "$out" "prod  https://app.menger.sh/"
+has "status: what test runs" "$out" "release   $R1  (tested)"
+has "status: its suite" "$out" "suite     passed — passed 2026-10-23T06:30:00Z"
+has "status: health as the pipeline key" "$out" "health    3 tickets (signed in as the pipeline key)"
+has "status: test's last record" "$out" "record    succeeded $S1 ($R1) at "
+has "status: prod's last record" "$(sed -n '/^prod /,/^edge\|^auto/p' <<<"$out")" "record    succeeded $S1 ($R1)"
+STUB_HEALTH=gate run status
+has "status: the gate's refusal named" "$(<"$SCRATCH/out")" "health    no answer from wss://app-test.menger.sh/ws (forbidden)"
+same "status: no unit asked of systemd" "$(cat "$STUB_SYSTEMCTL" 2>/dev/null | grep -c 'menger@' || true)" 0
 
 # ── CI-2: the disk — status says it, build refuses a low one up front ──────
 has "status: the disk" "$out" "disk: "
@@ -213,15 +330,17 @@ run status
 has "status: no runner, auto-test off" "$(<"$SCRATCH/out")" "auto-test  off — the deploy runner is not installed"
 printf 'MENGER_RUNNER_MODE=--watch\n' >"$HOME/.config/menger/deploy-runner.env"
 mkdir -p "$HOME/.local/state/menger-deploy-runner"
-printf '%s\n' '{"on":true,"waiting":["CHAT-60"],"due_at":1792470666000,"running":{"request":13,"tickets":["DEPLOY-47"]},"pending":{"request":12,"tickets":["CHAT-58","CHAT-59"]},"last":{"request":11,"outcome":"failed","tickets":["DEPLOY-47"],"at":"2026-10-19T22:00:00Z"}}' \
+printf '%s\n' '{"on":true,"waiting":["CHAT-60"],"due_at":1792470666000,"running":{"request":13,"tickets":["DEPLOY-47"]},"pending":{"request":12,"tickets":["CHAT-58","CHAT-59"]},"last":{"request":11,"outcome":"failed","tickets":["DEPLOY-47"],"at":"2026-10-19T22:00:00Z"},"suite":{"running":{"request":10,"release":"20261019T000000Z-abcdef0","tickets":[]},"pending":null,"last":{"request":9,"release":"20261018T000000Z-1234567","outcome":"failed","at":"2026-10-19T21:00:00Z"}}}' \
   >"$HOME/.local/state/menger-deploy-runner/auto.json"
 run status
 out=$(<"$SCRATCH/out")
-has "status: auto-test on by default" "$out" "auto-test  on — a ticket entering In Review deploys test; the runner is active"
+has "status: auto-test on by default" "$out" "auto-test  on — a ticket entering In Review deploys test (app-test.menger.sh), the suite after it; the runner is active"
 has "status: the running request" "$out" "running   request 13 for DEPLOY-47"
 has "status: the pending request" "$out" "pending   request 12 for CHAT-58, CHAT-59"
 has "status: the debounce" "$out" "waiting   CHAT-60 (the debounce"
 has "status: the last run" "$out" "last      request 11 failed for DEPLOY-47"
+has "status: the suite running" "$out" "suite     20261019T000000Z-abcdef0 running (request 10)"
+has "status: the last suite" "$out" "suite     last: 20261018T000000Z-1234567 failed"
 printf 'MENGER_RUNNER_AUTO_TEST=0\n' >>"$HOME/.config/menger/deploy-runner.env"
 run status
 has "status: the off switch" "$(<"$SCRATCH/out")" "auto-test  off (MENGER_RUNNER_AUTO_TEST=0 in "
@@ -233,80 +352,84 @@ same "build, a full disk: refused" "$code" 1
 has "build, a full disk: why" "$err" "refused — disk: "
 has "build, a full disk: the percent" "$err" "90% used or more"
 [[ ! -e $SCRATCH/built ]] && ok || bad "build on a full disk ran nothing: $(cat "$SCRATCH/built")"
+PATH=$SCRATCH/bin-build:$PATH DISK_CHECK_USED_PCT=93 DISK_CHECK_AVAIL_GB=120 run suite "$R0"
+same "suite, a full disk: refused" "$code" 1
+has "suite, a full disk: why" "$err" "refused — disk: "
 
 # ── backfill: the log replayed; a run's own line is the record it sent ─────
+run backfill # what the runs above left (refused ones too) goes first
 legacy=$(printf '2026-09-30T10:00:00Z\ttest\tdeploy\t%s\tok\n2026-09-30T10:01:00Z\tprod\tpromote\t%s\tok\n' "$R0" "$R0")
 { echo "$legacy"; cat "$D/deployments.log"; } >"$SCRATCH/log" && cp "$SCRATCH/log" "$D/deployments.log"
 m=$(mark); run backfill
 same "backfill exits 0" "$code" 0
-# new: the two older lines, and the sync whose records menger refused
-has "backfill: only what menger has not kept is new" "$err" "record: 3 sent, "
-same "backfill: the older lines' records" "$(since "$m" '[.environment, .state, .source.run]' | cut -d' ' -f1,2)" \
+has "backfill: only the older lines are new" "$err" "record: 2 sent, "
+same "backfill: the older lines' records" "$(since "$m" '[.environment, .state, .source.run]')" \
   '["test","succeeded","deploy@2026-09-30T10:00:00Z"] ["prod","succeeded","promote@2026-09-30T10:01:00Z"]'
 m=$(mark); run backfill
 has "backfill again: nothing new" "$err" "record: 0 sent, "
 same "backfill again: nothing sent" "$(mark)" "$m"
+# DEPLOY-52: a remote run's line is a record too; app-local's, an image's, a suite's are not
+same "backfill: remote runs are records" "$("$REPO/deploy/record" --from pipeline-log "$D/deployments.log" -c | jq -s 'map(select(.environment == "app-prod")) | length')" 1
 STUB_TRACKER=down run backfill
 same "backfill, tracker down: exits 0" "$code" 0
-has "backfill, tracker down: queued" "$err" "wait in $OUT"
+# no pipeline key (none): synapse, as before
+: >"$STUB_ARGV"; MENGER_DEPLOY_KEY_FILE=none run backfill
+has "no key (none): synapse sends what waited" "$err" "record: "
+[[ $(<"$STUB_ARGV") != *menger-call.mjs* ]] && ok || bad "MENGER_DEPLOY_KEY_FILE=none still used the key"
 
-# ── DEPLOY-23: a record's commits start at the last run that passed ────────
-# A failed run's commits ride with the next run that passes — never lost
-# because the range began at the failed (or rolled-back) one.
-run backfill # the outbox drained: what follows is only these runs' records
-has "backfill drains the outbox" "$err" "record: 0 sent, "
-range() { git -C "$REPO" rev-list --count "${C[$1]}..${C[$2]}"; }
-holds() { echo "(.commits // [] | index(\"${C[$1]}\") != null)"; }
-# test died on R2 above (no log line): the last run that passed ran R1
-m=$(mark); run deploy test "$R0"
-same "after a run that died: previous the last that passed" "$(since "$m" '[.state, .previous]')" \
-  "[\"started\",\"$S1\"] [\"succeeded\",\"$S1\"]"
-# fail, then succeed: the success carries both ranges
-m=$(mark); DEPLOY_SMOKE_FAIL=test run deploy test "$R1"
-same "fail: exits 1" "$code" 1
-same "fail: started, failed, from R0" "$(since "$m" "[.state, .revision, .previous, (.commits | length)]")" \
-  "[\"started\",\"$S1\",\"$S0\",$(range 0 1)] [\"failed\",\"$S1\",\"$S0\",$(range 0 1)]"
-m=$(mark); run deploy test "$R2"
-same "then succeed: exits 0" "$code" 0
-same "then succeed: previous the last that passed (R0), not the failed R1" \
-  "$(since "$m" "[.state, .revision, .previous, (.commits | length), $(holds 1), $(holds 2)]")" \
-  "[\"started\",\"$S2\",\"$S0\",$(range 0 2),true,true] [\"succeeded\",\"$S2\",\"$S0\",$(range 0 2),true,true]"
-# a sync that passes on a release whose deploy failed carries that deploy's commits
-run deploy test "$R0"; same "back on R0" "$code" 0
-DEPLOY_SMOKE_FAIL=test run deploy test "$R1"; same "R1 fails" "$code" 1
-m=$(mark); run sync test
-same "sync after a failed deploy: exits 0" "$code" 0
-same "sync after a failed deploy: R1 from R0, its commits" "$(since "$m" "[.state, .revision, .previous, (.commits | length), $(holds 1)]")" \
-  "[\"started\",\"$S1\",\"$S0\",$(range 0 1),true] [\"succeeded\",\"$S1\",\"$S0\",$(range 0 1),true]"
-m=$(mark); run sync test
-same "sync again: nothing new" "$(since "$m" '[.previous, (.commits // [] | length)]')" "[\"$S1\",0] [\"$S1\",0]"
-# promote: rolled back by itself, then succeed — from the release it returned to
-same "prod runs R0" "$(basename "$(readlink -f "$D/envs/prod/current")")" "$R0"
-m=$(mark); DEPLOY_SMOKE_FAIL=prod run promote "$R1"
-same "promote rolled back: exits 1" "$code" 1
-same "promote rolled back: started, failed from R0; rolled_back to R0" "$(since "$m" '[.state, .revision, .previous]')" \
-  "[\"started\",\"$S1\",\"$S0\"] [\"failed\",\"$S1\",\"$S0\"] [\"rolled_back\",\"$S0\",\"$S1\"]"
-m=$(mark); run promote "$R2"
-same "then promote: exits 0" "$code" 0
-same "then promote: from R0, both ranges" "$(since "$m" "[.state, .previous, (.commits | length), $(holds 1), $(holds 2)]")" \
-  "[\"started\",\"$S0\",$(range 0 2),true,true] [\"succeeded\",\"$S0\",$(range 0 2),true,true]"
-# a rollback whose smoke failed is no start: prod runs R0, last passed on R2
-DEPLOY_SMOKE_FAIL=prod run rollback prod; same "a failed rollback exits 1" "$code" 1
-same "the failed rollback left prod on R0" "$(basename "$(readlink -f "$D/envs/prod/current")")" "$R0"
-m=$(mark); run promote "$R1"
-same "promote after a failed rollback: exits 0" "$code" 0
-same "promote after a failed rollback: from R2, the last that passed" "$(since "$m" '[.state, .previous, (.commits // [] | length)]')" \
-  "[\"started\",\"$S2\",$(range 2 1)] [\"succeeded\",\"$S2\",$(range 2 1)]"
+# ── DEPLOY-28: app.menger.sh as the pipeline key; a remote test sets Complete ──
+CK=$HOME/.plexus/keys/builder.key; ( umask 077; echo "seed-b-$STUB_SECRET" >"$CK" )
+apprun() { MENGER_DEPLOY_TRACKER_URL= "$@"; } # unset: the default, app.menger.sh
+: >"$STUB_ARGV"; : >"$STUB_COMPLETED"; m=$(mark)
+STUB_CARRIED='["MENGER-7","MENGER-8"]' STUB_INREVIEW="MENGER-7" apprun rt "$R2"
+same "app.menger.sh: remote test exits 0" "$code" 0
+same "app.menger.sh: started, succeeded sent" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
+has "app.menger.sh: by default, over wss as the pipeline" "$(<"$STUB_ARGV")" "--url wss://app.menger.sh/ws --agent pipeline deployments.record"
+has "app.menger.sh: said as sent there" "$err" "record: test succeeded $S2 → menger app.menger.sh (sent)"
+has "complete: which carried tickets are In Review and run their current version on test" "$(<"$STUB_ARGV")" \
+  'member {"ids":["MENGER-7","MENGER-8"],"filter":"status \"In Review\" and deployed menger/test and not behind menger/test"}'
+same "complete: once, the In Review one, Complete, saying the deploy" "$(jq -c '[.ids, .status, (.message | test("^deploy menger/test '"$R2"' carries its work"))]' "$STUB_COMPLETED")" \
+  '[["MENGER-7"],"Complete",true]'
+has "complete: as the builder's key, an editor's" "$(<"$STUB_ARGV")" "--url wss://app.menger.sh/ws --agent builder tickets.update_many"
+has "complete: the builder's key from its file" "$(<"$STUB_ARGV")" "keyfile=$CK key="$'\n'
+[[ $(<"$STUB_ARGV") != *"seed-b-$STUB_SECRET"* ]] && ok || bad "the builder's key rode in argv"
+has "complete: said" "$err" "record: complete: MENGER-7 → Complete (deploy menger/test $R2 carries its work (DEPLOY-22))"
+# a promote to prod completes nothing
+suite_mark "$R2" "passed 2026-10-23T07:00:00Z — workspace 3 passed, 0 failed; frontend 1 passed, 0 failed"
+: >"$STUB_COMPLETED"; STUB_CARRIED='["MENGER-7"]' STUB_INREVIEW="MENGER-7" apprun run remote prod
+same "complete: remote prod exits 0" "$code" 0
+same "complete: a promote to prod moves nothing" "$(wc -l <"$STUB_COMPLETED")" 0
+# none In Review there: nothing written
+: >"$STUB_COMPLETED"; STUB_CARRIED='["MENGER-8"]' STUB_INREVIEW="" apprun rt "$R2"
+same "complete: none In Review, nothing written" "$(wc -l <"$STUB_COMPLETED")" 0
+has "complete: none In Review, said" "$err" "none of MENGER-8 is In Review"
+# refused (the key no editor): the deploy unharmed, the record kept, said
+: >"$STUB_COMPLETED"; STUB_COMPLETE=refuse STUB_CARRIED='["MENGER-7"]' STUB_INREVIEW="MENGER-7" apprun rt "$R2"
+same "complete refused: remote test exits 0" "$code" 0
+same "complete refused: the record left the outbox" "$(ls "$OUT" | grep -c '\.json$')" 0
+has "complete refused: said" "$err" "record: complete: menger refused MENGER-7 → Complete: needs tickets.update_many on MENGER-7"
+# MENGER_DEPLOY_COMPLETE_KEY_FILE=none: records only
+: >"$STUB_COMPLETED"; MENGER_DEPLOY_COMPLETE_KEY_FILE=none STUB_CARRIED='["MENGER-7"]' STUB_INREVIEW="MENGER-7" apprun rt "$R2"
+same "no completer (none): nothing written" "$(wc -l <"$STUB_COMPLETED")" 0
+# no pipeline key: app.menger.sh needs one — the records wait, said (and the smoke fails: health needs it)
+m=$(mark); MENGER_DEPLOY_KEY_FILE=none apprun rt "$R2"
+same "app.menger.sh, no key: the smoke fails without it" "$code" 1
+has "app.menger.sh, no key: the smoke says why" "$err" "FAIL no pipeline key (MENGER_DEPLOY_KEY_FILE)"
+same "app.menger.sh, no key: nothing sent" "$(mark)" "$m"
+has "app.menger.sh, no key: said" "$err" "record: no key for app.menger.sh"
+same "app.menger.sh, no key: two wait" "$(ls "$OUT" | grep -c '\.json$')" 2
+apprun run status
+has "status: the outbox waits for app.menger.sh" "$(<"$SCRATCH/out")" "outbox    2 record(s) waiting for menger on app.menger.sh"
+m=$(mark); apprun rt "$R2"
+same "app.menger.sh, the key back: the outbox first" "$(since "$m" .state)" '"started" "failed" "started" "succeeded"'
+MENGER_DEPLOY_TRACKER_URL=https://app.menger.sh run status
+same "a tracker URL that is no WebSocket: refused" "$code" 1
+rm -f "$CK"
 
 # ── DEPLOY-17: the landing page — infra a stand-in, the export of landing/ real ──
-INFRA=$SCRATCH/infra; mkdir -p "$INFRA/bin" "$INFRA/inventory/group_vars/all"
 printf '# pins\nmenger_landing_commit: %s\nedge_www: []\n' "${C[0]}" >"$INFRA/inventory/group_vars/all/main.yml"
-# the stand-in infra keeps every call; STUB_INFRA=fail fails an apply (never a --check)
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$STUB_INFRA_LOG"\n[[ ${STUB_INFRA:-ok} == fail && " $* " != *" --check "* ]] && exit 1\nexit 0\n' >"$INFRA/bin/infra"
-chmod +x "$INFRA/bin/infra"
 export GIT_AUTHOR_NAME=pipeline-test GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=pipeline-test GIT_COMMITTER_EMAIL=t@t
 git -C "$INFRA" init -q && git -C "$INFRA" add -A && git -C "$INFRA" commit -qm "the pins"
-export MENGER_INFRA_DIR=$INFRA MENGER_LANDING_URL=none STUB_INFRA_LOG=$SCRATCH/infra.log
 pin() { sed -n 's/^menger_landing_commit: *//p' "$INFRA/inventory/group_vars/all/main.yml"; }
 : >"$STUB_INFRA_LOG"
 
@@ -352,177 +475,8 @@ out=$(<"$SCRATCH/out")
 has "status: the edge's pin" "$out" "landing   $S2"
 has "status: the edge's last record" "$out" "record    failed $S1"
 
-# ── ACCESS-47: under login the pipeline signs in with its key, a file ─────
-K=$HOME/.plexus/keys/pipeline.key; mkdir -p "${K%/*}"
-( umask 077; echo "seed-$STUB_SECRET" >"$K" )
-: >"$STUB_ARGV"; m=$(mark); MENGER_DEPLOY_KEY=from-env run sync test
-same "the key: sync exits 0" "$code" 0
-same "the key: started, succeeded sent" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
-has "the key: over the socket, as the pipeline" "$(<"$STUB_ARGV")" "--url ws://127.0.0.1:4769 --agent pipeline deployments.record"
-has "the key: menger-call reads its file, no key in its environment" "$(<"$STUB_ARGV")" "keyfile=$K key="$'\n'
-[[ $(<"$STUB_ARGV") != *"seed-$STUB_SECRET"* ]] && ok || bad "the pipeline's key rode in argv"
-has "the key: said as sent" "$err" "record: test succeeded $S1 → menger :4769 (sent)"
-run status
-has "status: health signed in as the pipeline key" "$(<"$SCRATCH/out")" "health    3 tickets on :1 (signed in as the pipeline key)"
-STUB_TRACKER=gate run status
-has "status: the gate's refusal named" "$(<"$SCRATCH/out")" "health    no answer on :1 (forbidden)"
-# the key refused at the gate (not yet granted): the records wait, said; never refused/
-nref=$(ls "$OUT/refused" | grep -c '\.json$')
-m=$(mark); STUB_TRACKER=gate run sync test
-same "the key refused: sync exits 0" "$code" 0
-same "the key refused: two wait in the outbox" "$(ls "$OUT" | grep -c '\.json$')" 2
-same "the key refused: none refused" "$(ls "$OUT/refused" | grep -c '\.json$')" "$nref"
-has "the key refused: said" "$err" "refused the pipeline's key (forbidden: needs deployments.record)"
-m=$(mark); run sync test
-same "granted: the outbox first, then its own" "$(since "$m" '.state' | paste -sd' ')" '"started" "succeeded" "started" "succeeded"'
-STUB_TRACKER=refuse run sync test
-same "in band refused under the key: kept aside" "$(ls "$OUT/refused" | grep -c '\.json$')" "$((nref + 2))"
-has "in band refused under the key: said" "$err" "menger refused test started $S1: no shortcode MENGER"
-: >"$STUB_ARGV"; m=$(mark); MENGER_DEPLOY_KEY_FILE=none run sync test
-same "no key (none): synapse, as before" "$(since "$m" .state)" '"started" "succeeded"'
-[[ $(<"$STUB_ARGV") != *menger-call.mjs* ]] && ok || bad "MENGER_DEPLOY_KEY_FILE=none still used the key"
-
-# ── DEPLOY-28: app.menger.sh as the pipeline key; deploy test sets Complete ──
-CK=$HOME/.plexus/keys/builder.key; ( umask 077; echo "seed-b-$STUB_SECRET" >"$CK" )
-apprun() { MENGER_DEPLOY_TRACKER_URL= run "$@"; } # unset: the default, app.menger.sh
-: >"$STUB_ARGV"; : >"$STUB_COMPLETED"; m=$(mark)
-STUB_CARRIED='["MENGER-7","MENGER-8"]' STUB_INREVIEW="MENGER-7" apprun deploy test "$R1"
-same "app.menger.sh: deploy test exits 0" "$code" 0
-same "app.menger.sh: started, succeeded sent" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
-has "app.menger.sh: by default, over wss as the pipeline" "$(<"$STUB_ARGV")" "--url wss://app.menger.sh/ws --agent pipeline deployments.record"
-has "app.menger.sh: said as sent there" "$err" "record: test succeeded $S1 → menger app.menger.sh (sent)"
-has "complete: which carried tickets are In Review and run their current version on test" "$(<"$STUB_ARGV")" \
-  'member {"ids":["MENGER-7","MENGER-8"],"filter":"status \"In Review\" and deployed menger/test and not behind menger/test"}'
-same "complete: once, the In Review one, Complete, saying the deploy" "$(jq -c '[.ids, .status, (.message | test("^deploy menger/test '"$R1"' carries its work"))]' "$STUB_COMPLETED")" \
-  '[["MENGER-7"],"Complete",true]'
-has "complete: as the builder's key, an editor's" "$(<"$STUB_ARGV")" "--url wss://app.menger.sh/ws --agent builder tickets.update_many"
-has "complete: the builder's key from its file" "$(<"$STUB_ARGV")" "keyfile=$CK key="$'\n'
-[[ $(<"$STUB_ARGV") != *"seed-b-$STUB_SECRET"* ]] && ok || bad "the builder's key rode in argv"
-has "complete: said" "$err" "record: complete: MENGER-7 → Complete (deploy menger/test $R1 carries its work (DEPLOY-22))"
-# a promote to prod, and a sync none carried, complete nothing
-: >"$STUB_COMPLETED"; STUB_CARRIED='["MENGER-7"]' STUB_INREVIEW="MENGER-7" apprun promote "$R1"
-same "complete: a promote to prod moves nothing" "$(wc -l <"$STUB_COMPLETED")" 0
-: >"$STUB_COMPLETED"; STUB_INREVIEW="MENGER-7" apprun sync test
-same "complete: a deploy that carried none moves nothing" "$(wc -l <"$STUB_COMPLETED")" 0
-# none In Review there: nothing written
-: >"$STUB_COMPLETED"; STUB_CARRIED='["MENGER-8"]' STUB_INREVIEW="" apprun sync test
-same "complete: none In Review, nothing written" "$(wc -l <"$STUB_COMPLETED")" 0
-has "complete: none In Review, said" "$err" "none of MENGER-8 is In Review"
-# refused (the key no editor): the deploy unharmed, the record kept, said
-: >"$STUB_COMPLETED"; STUB_COMPLETE=refuse STUB_CARRIED='["MENGER-7"]' STUB_INREVIEW="MENGER-7" apprun sync test
-same "complete refused: sync exits 0" "$code" 0
-same "complete refused: the record left the outbox" "$(ls "$OUT" | grep -c '\.json$')" 0
-has "complete refused: said" "$err" "record: complete: menger refused MENGER-7 → Complete: needs tickets.update_many on MENGER-7"
-# MENGER_DEPLOY_COMPLETE_KEY_FILE=none: records only
-: >"$STUB_COMPLETED"; MENGER_DEPLOY_COMPLETE_KEY_FILE=none STUB_CARRIED='["MENGER-7"]' STUB_INREVIEW="MENGER-7" apprun sync test
-same "no completer (none): nothing written" "$(wc -l <"$STUB_COMPLETED")" 0
-# no pipeline key: app.menger.sh needs one — the records wait, said; the next run sends them
-m=$(mark); MENGER_DEPLOY_KEY_FILE=none apprun sync test
-same "app.menger.sh, no key: sync exits 0" "$code" 0
-same "app.menger.sh, no key: nothing sent" "$(mark)" "$m"
-has "app.menger.sh, no key: said" "$err" "record: no key for app.menger.sh"
-same "app.menger.sh, no key: two wait" "$(ls "$OUT" | grep -c '\.json$')" 2
-apprun status
-has "status: the outbox waits for app.menger.sh" "$(<"$SCRATCH/out")" "outbox    2 record(s) waiting for menger on app.menger.sh"
-m=$(mark); apprun sync test
-same "app.menger.sh, the key back: the outbox first" "$(since "$m" .state)" '"started" "succeeded" "started" "succeeded"'
-MENGER_DEPLOY_TRACKER_URL=https://app.menger.sh run status
-same "a tracker URL that is no WebSocket: refused" "$code" 1
-rm -f "$CK"
-mv "$K" "$K.off"
-
-# ── ACCESS-25: the smoke asks every port for evil.example ──────────────────
-run smoke test
-same "smoke exits 0" "$code" 0
-same "smoke: every port refuses another host" "$(grep -c 'refuses Host: evil.example (421)' <<<"$err")" 4
-STUB_HOST_CODE=200 run smoke test
-same "a port answering evil.example fails the smoke" "$code" 1
-has "smoke: names the port" "$err" "FAIL :1 answers Host: evil.example (200)"
-
-# ── ACCESS-27: the smoke asserts the login mode the env expects ────────────
-C=$HOME/.config/menger
-cp "$C/test.env" "$SCRATCH/test.env.keep"
-run smoke test
-same "smoke, off as expected: exits 0" "$code" 0
-has "smoke: the local half is 0600" "$err" "ok   test.local.env is the owner's alone"
-has "smoke: the server's mode read" "$err" "ok   the server on :1 is in login: off"
-STUB_MODE=required run smoke test
-same "smoke, the server requires login, off expected: exits 1" "$code" 1
-has "smoke: the mismatch said" "$err" "FAIL the server on :1 says login: required, but MENGER_EXPECT_LOGIN says off"
-# test as it is meant to be: behind its login, the smoke account in its own file
-sed -i 's/^MENGER_EXPECT_LOGIN=.*/MENGER_EXPECT_LOGIN=required/' "$C/test.env"
-printf 'MENGER_AUTH_PROVIDERS=key\nMENGER_REQUIRE_LOGIN=1\nMENGER_NO_REST=1\n' >>"$C/test.local.env"
-( umask 077; printf 'MENGER_SMOKE_USER=smoke\nMENGER_SMOKE_PASSWORD=%s\nMENGER_SMOKE_TOKEN_URL=http://127.0.0.1:9/token\nMENGER_SMOKE_AUDIENCE=menger\n' \
-    "$STUB_SECRET" >"$C/test.smoke.env" )
-: >"$STUB_ARGV"; : >"$STUB_STDIN"
-STUB_MODE=required run smoke test
-same "smoke, login required as expected: exits 0" "$code" 0
-has "smoke: the settings agree" "$err" "ok   the settings configure login: required, as MENGER_EXPECT_LOGIN says"
-has "smoke: signed in" "$err" "ok   the smoke account signs in"
-has "smoke: health with the token" "$err" "ok   tickets.health on :1 — 3 tickets"
-has "smoke: behind the login page" "$err" "ok   app on :2 behind its login page"
-[[ $(<"$STUB_ARGV") != *"$STUB_SECRET"* ]] && ok || bad "the smoke password or token rode in argv: $(grep -- "$STUB_SECRET" "$STUB_ARGV")"
-has "the password went to curl on stdin" "$(<"$STUB_STDIN")" "password=$STUB_SECRET"
-# ACCESS-42: the body ends at its last field — a trailing newline would be
-# sent by --data-binary and read by the issuer into the audience.
-[[ $(tail -c 1 "$STUB_STDIN" | od -An -tx1 | tr -d ' \n') != 0a ]] && ok || bad "the form to curl ends with a newline: the issuer reads it into the last field"
-has "the token went to smoke-health on stdin" "$(<"$STUB_ARGV")" "smoke-health.mjs 1 -"
-# … and with its local half lost (the H3 install): the smoke fails
-cp "$C/test.local.env" "$SCRATCH/local.keep"; echo '# lost' >"$C/test.local.env"
-STUB_MODE=off run smoke test
-same "smoke, the local half lost: exits 1" "$code" 1
-has "smoke: the settings disagree" "$err" "FAIL the settings configure login: off, but MENGER_EXPECT_LOGIN says required"
-has "smoke: the open server caught" "$err" "FAIL the server on :1 says login: off, but MENGER_EXPECT_LOGIN says required"
-cp "$SCRATCH/local.keep" "$C/test.local.env"
-chmod 0644 "$C/test.smoke.env"; STUB_MODE=required run smoke test
-same "smoke, the smoke account readable by others: exits 1" "$code" 1
-has "smoke: its mode said" "$err" "FAIL $C/test.smoke.env is readable by others (644; 0600)"
-rm "$C/test.local.env"; STUB_MODE=required run smoke test
-has "smoke, no local half: said" "$err" "FAIL no $C/test.local.env — run: deploy/pipeline install"
-sed -i '/^MENGER_EXPECT_LOGIN=/d' "$C/test.env"; run smoke test
-has "smoke, no MENGER_EXPECT_LOGIN: said" "$err" "FAIL MENGER_EXPECT_LOGIN is '' in $C/test.env"
-cp "$SCRATCH/test.env.keep" "$C/test.env"; rm -f "$C/test.smoke.env"; cp "$SCRATCH/local.keep" "$C/test.local.env"
-
-# ── ACCESS-27: install keeps the local half — the lossless split ────────────
-H2=$SCRATCH/home2; C2=$H2/.config/menger; mkdir -p "$C2"
-node2=$(readlink -f "$SCRATCH/bin/node")
-# test's file as an install before ACCESS-27 left it, then edited by hand:
-# the template, then login, admins, secrets and the notes beside them.
-{ sed -e "s|@HOME@|$H2|g" -e "s|@NODE@|$node2|g" -e '/^# ACCESS-27/,$d' "$REPO/deploy/env/test.env"
-  printf '# IDENTITY-18: test behind login.\nMENGER_AUTH_PROVIDERS=key\nMENGER_REQUIRE_LOGIN=1\nMENGER_NO_REST=1\n'
-  printf '# the dev sign-in\nMENGER_DEV_LOGIN=plexus-idp\nMENGER_DEV_PASSWORD=%s\n' "$STUB_SECRET"
-  printf 'MENGER_SMOKE_USER=smoke\nMENGER_SMOKE_PASSWORD=%s\n' "$STUB_SECRET"
-} >"$C2/test.env"
-sed -e "s|@HOME@|$H2|g" -e "s|@NODE@|$node2|g" -e '/^# ACCESS-27/,$d' "$REPO/deploy/env/prod.env" >"$C2/prod.env"
-chmod 0600 "$C2/test.env"; cp "$C2/test.env" "$SCRATCH/test.env.orig"
-HOME=$H2 run install
-same "install (migrating): exits 0" "$code" 0
-[[ "$(<"$SCRATCH/out")$err" != *"$STUB_SECRET"* ]] && ok || bad "install printed a secret: $err"
-has "install: says what moved, by name" "$err" "test: made test.local.env (0600) with MENGER_AUTH_PROVIDERS MENGER_DEV_LOGIN MENGER_DEV_PASSWORD MENGER_NO_REST MENGER_REQUIRE_LOGIN; test.smoke.env (0600) with MENGER_SMOKE_PASSWORD MENGER_SMOKE_USER"
-same "the local half is 0600" "$(stat -c %a "$C2/test.local.env") $(stat -c %a "$C2/test.smoke.env") $(stat -c %a "$C2/test.env.before-local")" "600 600 600"
-has "the local half: login, verbatim" "$(<"$C2/test.local.env")" $'MENGER_AUTH_PROVIDERS=key\nMENGER_REQUIRE_LOGIN=1\nMENGER_NO_REST=1'
-has "the local half: the secret, verbatim, with its note" "$(<"$C2/test.local.env")" $'# the dev sign-in\nMENGER_DEV_LOGIN=plexus-idp\nMENGER_DEV_PASSWORD='"$STUB_SECRET"
-has "the smoke half" "$(<"$C2/test.smoke.env")" $'MENGER_SMOKE_USER=smoke\nMENGER_SMOKE_PASSWORD='"$STUB_SECRET"
-[[ $(<"$C2/test.env") != *REQUIRE_LOGIN* && $(<"$C2/test.env") != *"$STUB_SECRET"* ]] && ok || bad "the templated half kept login or a secret"
-same "the templated half is the template" "$(<"$C2/test.env")" "$(sed -e "s|@HOME@|$H2|g" -e "s|@NODE@|$node2|g" "$REPO/deploy/env/test.env")"
-cmp -s "$C2/test.env.before-local" "$SCRATCH/test.env.orig" && ok || bad "the old file is not kept as it was"
-same "the merged env keeps login on (test)" "$(set -a; . "$C2/test.env"; . "$C2/test.local.env"; echo "$MENGER_REQUIRE_LOGIN $MENGER_EXPECT_LOGIN")" "1 required"
-U2=$H2/.config/systemd/user
-same "the unit's writable path: the database's directory" "$(grep ReadWritePaths "$U2/menger@test.service.d/50-data.conf")" "ReadWritePaths=$H2/.local/share/menger-test"
-same "diagrams sees Node" "$(grep BindReadOnlyPaths "$U2/menger-diagrams@test.service.d/50-paths.conf")" "BindReadOnlyPaths=$SCRATCH"
-has "the unit loads the local half" "$(<"$U2/menger@.service")" 'EnvironmentFile=%h/.config/menger/%i.local.env'
-[[ $(grep ^EnvironmentFile "$U2/menger-diagrams@.service") != *local.env* ]] && ok || bad "diagrams loads the local half"
-sums() { (cd "$C2" && md5sum -- * .[!.]* 2>/dev/null | sort -k2); }
-before=$(sums); HOME=$H2 run install
-same "install again: exits 0" "$code" 0
-same "install again: nothing changes" "$(sums)" "$before"
-echo 'MENGER_PUBLIC_URL=https://example.test' >>"$C2/test.env"; before=$(sums)
-HOME=$H2 run install
-same "install, a hand-added setting in the templated half: refused" "$code" 1
-has "install: the setting named" "$err" "sets what its template does not (MENGER_PUBLIC_URL)"
-same "install, refused: nothing changes" "$(sums)" "$before"
-
-# ── RUN-10: image — a TESTED release as menger:<release>, never a checkout ──
+# ── RUN-10: image — a release as menger:<release>, never a checkout ────────
+# (DEPLOY-52: the image comes before the test — any release, the newest unless named)
 # docker and gh are stand-ins: docker keeps its argv and, for a build, the
 # file list of the context it was handed; gh answers a user and a token.
 # (C was reused above for the config dir: the commits again, as IC)
@@ -552,13 +506,15 @@ irun() { HOME=$H3 TMPDIR=$SCRATCH/tmp run "$@"; }
 : >"$STUB_DOCKER"
 irun image
 same "image, no release: exits 1" "$code" 1
-has "image, no release: said" "$err" "no TESTED release"
+has "image, no release: said" "$err" "no releases yet"
 I0=$(irelease 0 1 1) I1=$(irelease 1 1 1) I2=$(irelease 2 0 1)
-# test passed I1 last (I0 before it; I2 failed its smoke): the log decides, not the name
+irun image
+same "image, no release named: the newest" "$(sed -n 's/^release=//p' "$SCRATCH/out")" "$I2"
+# test passed I1 last (I0 before it; I2 failed its smoke) — the log remote prod reads
 printf '2026-10-10T10:00:00Z\ttest\tdeploy\t%s\tok\n2026-10-11T10:00:00Z\ttest\tdeploy\t%s\tok\n2026-10-11T11:00:00Z\ttest\tsync\t%s\tok\n2026-10-12T10:00:00Z\ttest\tdeploy\t%s\tsmoke failed\n' \
   "$I0" "$I1" "$I1" "$I2" >"$D3/deployments.log"
 HF=$SCRATCH/hf-outputs; : >"$HF"
-HF_OUTPUTS=$HF irun image
+: >"$STUB_DOCKER"; HF_OUTPUTS=$HF irun image "$I1"
 same "image (local): exits 0" "$code" 0
 same "image (local): image= and release= on stdout" "$(<"$SCRATCH/out")" $'image=menger:'"$I1"$'\nrelease='"$I1"
 same "image (local): the same lines in \$HF_OUTPUTS" "$(<"$HF")" $'image=menger:'"$I1"$'\nrelease='"$I1"
@@ -577,8 +533,7 @@ same "image: the log line is no deployment" "$("$REPO/deploy/record" --from pipe
 same "image RELEASE: exits 0" "$code" 0
 has "image RELEASE: that one" "$(<"$SCRATCH/out")" "image=menger:$I0"
 irun image "$I2"
-same "image, an untested release: exits 1" "$code" 1
-has "image, an untested release: said" "$err" "$I2 has not passed the test environment — run: deploy/pipeline deploy test $I2"
+same "image, a release test has not passed: imaged all the same (DEPLOY-52)" "$code" 0
 irun image nonesuch
 same "image, no such release: exits 1" "$code" 1
 # a tested release from before RUN-8: no --bind, no image
@@ -602,13 +557,13 @@ IMAGE_STORE=s3 irun image
 same "image, an unknown store: exits 1" "$code" 1
 has "image, an unknown store: said" "$err" "IMAGE_STORE 's3' — local or ghcr"
 # the build fails: no outputs, the log says so
-: >"$HF"; STUB_DOCKER_FAIL=build HF_OUTPUTS=$HF irun image
+: >"$HF"; STUB_DOCKER_FAIL=build HF_OUTPUTS=$HF irun image "$I1"
 same "image, docker build fails: exits 1" "$code" 1
 same "image, docker build fails: no outputs" "$(<"$SCRATCH/out")$(<"$HF")" ""
 same "image, docker build fails: logged" "$(tail -n 1 "$D3/deployments.log" | cut -f2-)" $'image\tlocal\t'"$I1"$'\tbuild failed'
 same "image, docker build fails: the context removed" "$(ls -A "$SCRATCH/tmp")" ""
 # ghcr: :<release> and :latest, both pushed, signed in with gh's token on stdin
-: >"$STUB_DOCKER"; : >"$HF"; IMAGE_STORE=ghcr HF_OUTPUTS=$HF irun image
+: >"$STUB_DOCKER"; : >"$HF"; IMAGE_STORE=ghcr HF_OUTPUTS=$HF irun image "$I1"
 same "image (ghcr): exits 0" "$code" 0
 same "image (ghcr): outputs" "$(<"$HF")" $'image=ghcr.io/hypermemetic-ai/menger:'"$I1"$'\nrelease='"$I1"
 has "image (ghcr): both tags built" "$(grep '^docker build' "$STUB_DOCKER")" "-t ghcr.io/hypermemetic-ai/menger:$I1 -t ghcr.io/hypermemetic-ai/menger:latest"
@@ -690,7 +645,9 @@ has "local, docker run fails: said" "$err" "docker run $LI failed"
 # ── RUN-25: remote test / prod — refused without deploy/app.yml (RUN-11) ────
 INF=$SCRATCH/infra; mkdir -p "$INF/bin"
 printf '#!/usr/bin/env bash\necho "infra $*" >>"%s"\n' "$SCRATCH/infra.argv" >"$INF/bin/infra"; chmod +x "$INF/bin/infra"
-rrun() { : >"$STUB_DOCKER"; : >"$SCRATCH/infra.argv"; : >"$HF"; HOME=$H3 MENGER_INFRA_DIR=$INF HF_OUTPUTS=$HF run "$@"; }
+rrun() { : >"$STUB_DOCKER"; : >"$SCRATCH/infra.argv"; : >"$HF"; HOME=$H3 MENGER_DEPLOY_KEY_FILE=$K MENGER_INFRA_DIR=$INF HF_OUTPUTS=$HF run "$@"; }
+# remote prod promotes what test runs, once its suite passed: I1's
+chmod u+w "$D3/releases/$I1"; echo "passed 2026-10-23T06:00:00Z — workspace 3 passed, 0 failed; frontend 1 passed, 0 failed" >"$D3/releases/$I1/SUITE"; chmod a-w "$D3/releases/$I1"
 MENGER_APP_YML=$SCRATCH/none.yml rrun remote test --image "$LI"
 same "remote test, no app.yml: exits 1" "$code" 1
 has "remote test, no app.yml: RUN-11 named" "$err" "app-test.menger.sh is not declared yet (RUN-11): menger has no deploy/app.yml"
@@ -730,20 +687,20 @@ MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
 same "remote prod: exits 0" "$code" 0
 has "remote prod: promote.yml only" "$(<"$SCRATCH/infra.argv")" "infra promote.yml -e app_dir="
 same "remote prod: url" "$(<"$HF")" "url=https://app.menger.sh/"
-# DEPLOY-28: each tells menger, as env app-test / app-prod — app-test promotes from test,
-# app-prod from app-test, and app-prod runs the release app-test last ran
+# DEPLOY-28, DEPLOY-52: each tells menger — app-test.menger.sh as test (from none),
+# app.menger.sh as app-prod from test, running the release test last ran
 ISHA=$(sed -E 's/.*-//' <<<"$I1")
 m=$(mark); MENGER_APP_YML=$SCRATCH/app.yml rrun remote test --image "$LI"
-same "remote test: recorded as app-test" "$(since "$m" '[.environment, .state, .revision, .release, .from]')" \
-  "[\"app-test\",\"started\",\"$ISHA\",\"$I1\",\"test\"] [\"app-test\",\"succeeded\",\"$ISHA\",\"$I1\",\"test\"]"
+same "remote test: recorded as test" "$(since "$m" '[.environment, .state, .revision, .release, .from]')" \
+  "[\"test\",\"started\",\"$ISHA\",\"$I1\",null] [\"test\",\"succeeded\",\"$ISHA\",\"$I1\",null]"
 m=$(mark); MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
-same "remote prod: recorded as app-prod, app-test's release" "$(since "$m" '[.environment, .state, .revision, .release, .from]')" \
-  "[\"app-prod\",\"started\",\"$ISHA\",\"$I1\",\"app-test\"] [\"app-prod\",\"succeeded\",\"$ISHA\",\"$I1\",\"app-test\"]"
+same "remote prod: recorded as app-prod, test's release" "$(since "$m" '[.environment, .state, .revision, .release, .from]')" \
+  "[\"app-prod\",\"started\",\"$ISHA\",\"$I1\",\"test\"] [\"app-prod\",\"succeeded\",\"$ISHA\",\"$I1\",\"test\"]"
 same "remote prod: the log names the release" "$(tail -n 1 "$D3/deployments.log" | cut -f2-5)" $'app-prod\trun\t'"$I1"$'\tok'
 INF2=$SCRATCH/infra-fails; mkdir -p "$INF2/bin"; printf '#!/usr/bin/env bash\nexit 2\n' >"$INF2/bin/infra"; chmod +x "$INF2/bin/infra"
 m=$(mark); HOME=$H3 MENGER_INFRA_DIR=$INF2 MENGER_APP_YML=$SCRATCH/app.yml run remote test --image "$LI"
 same "remote test, infra fails: exits 1" "$code" 1
-same "remote test, infra fails: started, failed" "$(since "$m" '[.environment, .state]')" '["app-test","started"] ["app-test","failed"]'
+same "remote test, infra fails: started, failed" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","failed"]'
 
 # ── IDENTITY-45: remote-secret — the WorkOS key through infra's secret.yml, on a pipe ──
 INS=$SCRATCH/infra-secret; mkdir -p "$INS/bin"; : >"$INS/secret.yml"
@@ -818,6 +775,34 @@ has "ci6: the red log holds both" "$(<"$g3")" "test b::two ... FAILED"
 [[ -e $LOGD/$(basename "$g3" | cut -d- -f1).red ]] && ok || bad "ci6: a red run is marked"
 has "ci6: status names the newest log" "$("$CR/deploy/pipeline" status 2>/dev/null | grep '^log ')" "$LOGD/"
 n=$(ls "$LOGD"/*-build.log | wc -l); same "ci6: each run keeps what it said, in a file of its own (the full-disk refusal above is the fourth)" "$n" 4
+
+# ── DEPLOY-52: build --no-gate; the suite after the deploy, in its own checkout ──
+: >"$SCRATCH/ci6/cargo-args"; sleep 1.2
+ci6 build --no-gate
+same "no-gate: the release build is reached (and fails, in the stand-in)" "$code" 1
+has "no-gate: said" "$err" "gate: none (--no-gate) — the suite runs after the deploy to test"
+same "no-gate: no test ran" "$(<"$SCRATCH/ci6/cargo-args")" ""
+CSHA=$(git -C "$CR" rev-parse HEAD)
+SR=$(id=20261023T000000Z-${CSHA:0:7}; r=$D/releases/$id; mkdir -p "$r/app"
+  printf 'release:   %s\ncommit:    %s\nsubject:   ci6\ngate:      none — the suite runs after the deploy\n' "$id" "$CSHA" >"$r/RELEASE"; chmod -R a-w "$r"; echo "$id")
+ci6 suite "$SR"
+same "suite: green exits 0" "$code" 0
+has "suite: in its own checkout, beside the repository" "$(git -C "$SCRATCH/ci6/menger-suite" rev-parse HEAD 2>/dev/null)" "$CSHA"
+[[ ! -e $SCRATCH/ci6/menger-build/.git || $(git -C "$SCRATCH/ci6/menger-build" rev-parse HEAD) != "$CSHA" || true ]] && ok
+has "suite: the whole workspace" "$(<"$SCRATCH/ci6/cargo-args")" "test --workspace --no-fail-fast"
+has "suite: the release marked passed" "$(<"$D/releases/$SR/SUITE")" "passed "
+has "suite: with the counts" "$(<"$D/releases/$SR/SUITE")" "workspace 3 passed, 0 failed"
+same "suite: a line in the log, no deployment" "$(tail -n 1 "$D/deployments.log" | cut -f2-5)" $'suite\ttest\t'"$SR"$'\tpassed'
+ci6 suite --status "$SR"; same "suite --status: passed" "$(<"$SCRATCH/out")" "suite: passed"
+STUB_CARGO_RED=1 ci6 suite "$SR"
+same "suite: red exits 1" "$code" 1
+has "suite: red names the failing tests" "$err" "FAILED a::one"
+has "suite: the release marked failed" "$(<"$D/releases/$SR/SUITE")" "failed "
+same "suite: red, its line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'suite\ttest\tfailed workspace'
+ci6 suite --status "$SR"; same "suite --status: failed" "$(<"$SCRATCH/out")" "suite: failed"
+[[ $(grep -c $'\tbuild\ttest\t' "$D/deployments.log") == 0 || $(tail -n 1 "$D/deployments.log") != *$'build\ttest'* ]] && ok || bad "a red suite logged as a build's gate"
+ci6 suite nonesuch
+same "suite: no such release" "$code" 1
 
 printf 'deploy/pipeline records: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]

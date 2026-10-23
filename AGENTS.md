@@ -70,46 +70,57 @@ other peer is ignored (README "Run" → Trusted proxies).
 
 > **2026-10-17 (RUN-13): the tracker moved to https://app.menger.sh.** Prod's
 > data moved there (ACCESS-47 `move`); this machine's prod (`:4455`–`:4458`)
-> is stopped, its database untouched — it is the move's rollback, and
-> `deploy/pipeline promote` / `rollback prod` refuse while
-> `~/.local/share/menger-deploy/prod.moved` exists. Agents reach the tracker
+> is retired (DEPLOY-52, 2026-10-23: unit uninstalled, its database
+> untouched at `~/.local/share/menger/tickets.db`). Agents reach the tracker
 > as `synapse --url wss://app.menger.sh/ws --as <agent> menger …` (once:
 > `synapse --url wss://app.menger.sh/ws _login menger --key <agent> --as
 > <agent>`; `builder`, `pipeline`, `operator` keep their grants). Read every
 > `synapse -P 4455 menger …` below as that. People sign in at
 > https://app.menger.sh/ through WorkOS production. Deployment records go
 > to app.menger.sh as the `pipeline` key (DEPLOY-28,
-> `MENGER_DEPLOY_TRACKER_URL`). The rollback is on RUN-13.
+> `MENGER_DEPLOY_TRACKER_URL`). The rollback is a restore of that file onto
+> the Linode through infra's `seed.yml` (deploy/README "On the Linode" → The
+> rollback; RUN-13).
 
 ## Deploying
 
-menger runs in two environments on this machine, **prod** (4455–4458) and
-**test** (4450–4453), both under `systemd --user`, both from immutable
-releases — never from a checkout. `deploy/README.md` defines the pipeline
-(DEPLOY-1); in short:
+menger runs in two environments, both on the Linode as one image through
+hypermemetic-infra: **test** is https://app-test.menger.sh and **prod**
+https://app.menger.sh (DEPLOY-52, owner 2026-10-22/23: "we need to work
+directly against the test deployment and there should be no tests running on
+that deployment", "we run the tests after the deployment to test", "we need
+to remove the non remote environments"). This machine builds the releases
+and images and runs the suite; it runs no environment — its old test
+(4450–4453) and prod (4455–4458) are retired, their units uninstalled, their
+data untouched (deploy/README "The local environments, retired").
+`deploy/README.md` defines the pipeline (DEPLOY-1); in short:
 
 ```sh
-deploy/pipeline build          # main's tip → gate (cargo test --workspace + frontend tests) → release
-deploy/pipeline deploy test    # the release → test, on a fresh copy of prod's data; smoke checks
-deploy/pipeline sync test      # test's data refreshed from prod, same release (DEPLOY-4)
-deploy/pipeline promote        # the release test passed → prod; smoke; automatic rollback on failure
-deploy/pipeline status         # what each env runs, whether it is healthy, its last deployment record
-deploy/pipeline backfill       # deployments.log → menger's deployments (DEPLOY-12; idempotent)
-deploy/pipeline landing        # DEPLOY-17: main's landing/ → gate → menger.sh (infra's pin moved, the
-                               # edge applied, the live page verified, recorded as env `edge`)
+deploy/pipeline build --no-gate  # main's tip → a release, no suite (the runner's; `build` alone gates first)
+deploy/pipeline image R          # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes :R + :latest)
+deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:R
+                                 # app-test.menger.sh through infra (deploy/app.yml), then the smoke from
+                                 # outside; recorded as `test`; Complete for the work it carries (DEPLOY-22)
+deploy/pipeline suite R          # DEPLOY-52: the full suite (workspace + frontend) at R's commit, on this
+                                 # machine, never against a deployment; marks R passed / failed
+deploy/pipeline remote prod      # what test runs → app.menger.sh (infra's promote.yml) — refused unless
+                                 # its suite passed; the owner's
+deploy/pipeline status           # what test and prod run, their suites, health, last records; the runner
+deploy/pipeline releases         # every release: its suite, tested?, where it runs
+deploy/pipeline backfill         # deployments.log → menger's deployments (DEPLOY-12; idempotent)
+deploy/pipeline landing          # DEPLOY-17: main's landing/ → gate → menger.sh (infra's pin moved, the
+                                 # edge applied, the live page verified, recorded as env `edge`)
 deploy/pipeline landing --check  # the gate and infra's dry run, nothing written
-deploy/pipeline media          # landing/media regenerated from the release prod runs; then commit
-deploy/pipeline image          # RUN-10: the release test last passed → menger:<release> in local Docker
-                               # (IMAGE_STORE=ghcr pushes :<release> + :latest); prints image= / release=
-deploy/pipeline local --image menger:<release>  # RUN-25: the image as menger-app-local on 127.0.0.1:4470/4471;
-                               # hyperforge's `ci menger-app` (.hyperforge/pipelines.toml) runs it, and `remote test|prod`
-deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
-                               # RUN-11: app-test.menger.sh on the Linode through hypermemetic-infra (deploy/app.yml;
-                               # prod app.menger.sh only through `remote prod` = infra's promote.yml) — deploy/README "On the Linode"
+deploy/pipeline media            # landing/media regenerated from the release prod runs; then commit
+deploy/pipeline local --image menger:R  # RUN-25: the image as menger-app-local on 127.0.0.1:4470/4471 —
+                                 # a CI throwaway (hyperforge's `ci menger-app`), not an environment
 ```
 
-- **Every deploy test, sync, promote and rollback records itself in menger**
-  (DEPLOY-12): `started`, then `succeeded` / `failed` / `rolled_back`, sent
+`install`, `deploy test`, `sync`, `promote`, `rollback` and `logs` are
+retired: they say so and exit 2.
+
+- **Every remote test and remote prod records itself in menger**
+  (DEPLOY-12): `started`, then `succeeded` / `failed`, sent
   to the tracker (`MENGER_DEPLOY_TRACKER_URL`, `wss://app.menger.sh/ws`, as the
   `pipeline` key; DEPLOY-28) through
   `deploy/record`. A record the tracker does not take waits in
@@ -121,12 +132,12 @@ deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
   never by editing infra's pin or running `bin/infra` by hand. It deploys a
   commit on main, so merge first; a change to the app's look is followed by
   `deploy/pipeline media`, its files committed, then `landing`.
-- **Production changes only through `promote`**, and only to a release that
-  passed the test environment. A `cargo build` or `trunk build` in a checkout
+- **Production changes only through `remote prod`**, and only to a release
+  that passed test and whose suite passed (DEPLOY-52). A `cargo build` or `trunk build` in a checkout
   changes nothing that is serving.
 - Merging to main is not deploying, and **Complete means deployed to the
   lowest environment** (owner, 2026-10-17; DEPLOY-22): the merge links its
-  commit and leaves the ticket In Review; the `deploy test` that carries it
+  commit and leaves the ticket In Review; the deploy to test (app-test.menger.sh) that carries it
   sets Complete by itself (DEPLOY-28: `deploy/record --complete`, as the
   builder's key); it reaches users when its release is promoted — say which
   release in the ticket when it matters. Work in a repository with no
@@ -138,19 +149,27 @@ deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
   **In Review**, or a commit linked to one while it is there, files a test
   request for main's tip by itself — debounced 60 s, one run at a time and
   at most one pending request (a burst of merges is one more run; the
-  pending one takes main's tip when it starts). A ticket moved back to
-  Coding triggers nothing until it re-enters review. A red run records
-  `failed`, posts the failing lines to the ticket's chat (else chat 6) and
-  files a gap blocking the triggering tickets (CI-3). So a builder merges
+  pending one takes main's tip when it starts). The run is build without
+  the gate → image → app-test.menger.sh and its smoke — live within minutes
+  — and **then the suite**, on this machine against the release's tree
+  (DEPLOY-52). A ticket moved back to Coding triggers nothing until it
+  re-enters review. A red run records `failed`; a red suite marks the
+  release `suite failed` (`remote prod` refuses it); either posts the
+  failing lines to the ticket's chat (else chat 6) and files a gap blocking
+  the triggering tickets (CI-3); a green suite says so in the ticket's chat. So a builder merges
   `--no-ff`, links, sets In Review — and runs no deploy; never squash or
   rebase on merge (a ticket's branch commits are how "is it on test" is
   answered). Off: `MENGER_RUNNER_AUTO_TEST=0` in
   `~/.config/menger/deploy-runner.env`, then restart the runner;
   `deploy/pipeline status` says `auto-test on|off` and what is running and
   pending. deploy/README "The deploy runner" → Automatic test.
-- Check work on the test environment (http://127.0.0.1:4451/) or a throwaway
-  server — never on prod. The tracker itself is prod: `synapse -P 4455` is
-  still how tickets are read and written.
+- Check work on test, **https://app-test.menger.sh**, signed in as your
+  agent's key there (once: `synapse --url wss://app-test.menger.sh/ws _login
+  menger --key builder --as builder`; then `synapse --url
+  wss://app-test.menger.sh/ws --as builder menger …`, and
+  `scripts/shot.mjs '#/…' --env test`), or on a throwaway server — never on
+  prod. The tracker itself is prod (app.menger.sh): that is how tickets are
+  read and written.
 
 ## Reaching the backend
 
@@ -1245,9 +1264,9 @@ and `view: mockup` + `widths:` makes a whole body one.
   it touches (`cargo test -p <crate> <filter>`, the one wire test, the
   frontend file) — never `cargo test --workspace` per ticket; its step on
   the ticket shows that selection. Merges queue up on main, and the full
-  suite runs once against the batch, in `deploy/pipeline build`'s gate
-  (whole workspace + frontend tests) before `deploy test`. A red there is
-  the batch's: find the commit (the failing test's area, else bisect the
+  suite runs once against the batch — since DEPLOY-52 right after the
+  batch's deploy to app-test (`deploy/pipeline suite`, the runner's), and a
+  red one keeps the release from prod. A red there is the batch's: find the commit (the failing test's area, else bisect the
   batch), file a gap that blocks its ticket, fix or revert, build again.
 - **Builds clean up after themselves** (CI-2, owner 2026-10-18: "our test
   runner automatically cleans up their builds"): the `systemd --user` timer

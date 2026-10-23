@@ -1,6 +1,7 @@
 # DEPLOY-37: the deploy runner — the executor behind the deploy page's
 # "→ test" and "→ prod" (DEPLOY-40: image → app-test → app-prod, the owner's only): it takes each deploy request (the webhook on loopback, or by
-# dialling out to the tracker) and runs deploy/pipeline build → deploy test,
+# dialling out to the tracker) and runs deploy/pipeline build --no-gate → image →
+# remote test (app-test.menger.sh, DEPLOY-52), then the suite on this machine,
 # reporting each step back against the request. Installed by
 # scripts/deploy-runner/install.sh as ~/.config/systemd/user/menger-deploy-runner.service,
 # running the installed copy in ~/.local/share/menger-deploy-runner. The

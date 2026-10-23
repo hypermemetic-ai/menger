@@ -24,12 +24,23 @@
 // The plan, per environment (`test` and `app-prod`: a request to another is
 // refused 422 — the webhook says why — or, watching, left for its own executor):
 //
-//   test
-//   build   deploy/pipeline build <sha>   the branch's tip (the request's revision, else
-//                                         `git rev-parse <branch>`) → the full suite → a release;
-//                                         stopped when the request is canceled
-//   deploy  deploy/pipeline deploy test   the release → test, smoke checks; its records name the
-//                                         request (MENGER_REQUEST); runs to its end once begun
+//   test (DEPLOY-52: test is app-test.menger.sh; the suite runs after the deploy, never before it)
+//   build   deploy/pipeline build <sha> --no-gate      the branch's tip (the request's revision, else
+//                                                      `git rev-parse <branch>`) → a release, no suite;
+//                                                      stopped when the request is canceled
+//   image   IMAGE_STORE=ghcr deploy/pipeline image <release>   pushed to GHCR; stopped on a cancel
+//   deploy  deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<release>
+//                                                      app-test.menger.sh through infra, then the smoke
+//                                                      from outside; its records name the request
+//                                                      (MENGER_REQUEST) and set Complete (DEPLOY-22/28)
+//   then, apart from the request (it has ended), the suite:
+//   suite   deploy/pipeline suite <release>            cargo test --workspace + the frontend's on this
+//                                                      machine, at the release's commit, never against the
+//                                                      deployment; one at a time, the newest waiting (a
+//                                                      release passed over is never promoted). Red: the
+//                                                      release is marked `failed` (remote prod refuses it),
+//                                                      the failing lines in the triggering ticket's chat and
+//                                                      a gap blocking it (CI-3); green: a line in its chat.
 //
 //   app-prod (DEPLOY-40: #/deploy's → prod — app.menger.sh since RUN-13; the local
 //            prod is stopped and `promote` refuses while prod.moved exists)
@@ -41,7 +52,8 @@
 // A request to app-prod is the owner's (owner, 2026-10-19: "Deployments should be
 // triggered by me"): taken only when its requester is one of --owner
 // (MENGER_RUNNER_OWNERS, comma-separated principals) and never a key or an agent,
-// and only for a release test passed (a `succeeded` record to test naming it).
+// and only for a release test passed (a `succeeded` record to test naming it) whose
+// suite passed (DEPLOY-52: `deploy/pipeline suite --status`).
 // Otherwise its first step is failed with the refusal, the rest skipped, and
 // nothing runs. A failed step stops the plan: what app-prod runs stays.
 //
@@ -99,8 +111,9 @@ export const IMAGE_GHCR = "ghcr.io/hypermemetic-ai/menger";
  * to the request's environment may. `env`: the step's environment. */
 export const PLANS = {
   test: [
-    { name: "build", argv: (job) => ["build", job.sha], interruptible: true },
-    { name: "deploy", argv: () => ["deploy", "test"], records: true },
+    { name: "build", argv: (job) => ["build", job.sha, "--no-gate"], interruptible: true },
+    { name: "image", argv: (job) => ["image", job.release], env: { IMAGE_STORE: "ghcr" }, interruptible: true, release: true },
+    { name: "deploy", argv: (job) => ["remote", "test", "--image", `${IMAGE_GHCR}:${job.release}`], records: true, release: true },
   ],
   "app-prod": [
     { name: "image", argv: (job) => ["image", job.release], env: { IMAGE_STORE: "ghcr" }, interruptible: true },
@@ -109,10 +122,17 @@ export const PLANS = {
   ],
 };
 
-/** DEPLOY-40: what a request to an environment needs beyond its plan. */
+/** DEPLOY-40: what a request to an environment needs beyond its plan. DEPLOY-52: `suite`,
+ * the release's suite passed. */
 export const GUARDS = {
-  "app-prod": { owner: true, tested: "test" },
+  "app-prod": { owner: true, tested: "test", suite: true },
 };
+
+/** DEPLOY-52: the suite after a deploy to test — not a step of the request, which has ended. */
+export const SUITE = { name: "suite", argv: (s) => ["suite", s.release] };
+
+/** DEPLOY-52: what `deploy/pipeline suite --status` says of a release: passed, failed, running, none. */
+export const suiteIn = (text) => /^suite: (passed|failed|running|none)\b/m.exec(String(text || ""))?.[1] ?? null;
 
 /** Whether a principal is a key or an agent — never the owner, whatever the config says. */
 export const keyish = (p) => /^(key|agent):/.test(String(p || ""));
@@ -246,8 +266,10 @@ export class Runner {
     this.seed = text ? seedOf(text) : null;
     // DEPLOY-48: the auto-test state — tickets waiting out the debounce, and each request's triggering tickets.
     this.auto = { waiting: new Map(), timer: null, triggers: {}, pending: null, last: null };
+    // DEPLOY-52: the suites — one running, the newest waiting
+    this.suites = { busy: false, running: null, pending: null, last: null };
     this.autoFile = path.join(o.stateDir, "auto.json");
-    try { this.auto.triggers = JSON.parse(fs.readFileSync(this.autoFile, "utf8")).triggers || {}; } catch {}
+    try { const a = JSON.parse(fs.readFileSync(this.autoFile, "utf8")); this.auto.triggers = a.triggers || {}; this.suites.last = a.suite?.last || null; } catch {}
   }
 
   headers(seed = this.seed, agent = this.o.agent) {
@@ -326,6 +348,7 @@ export class Runner {
         if (job.environment === "test") this.autoStarted(job);
         try { await this.run(job); } finally { this.current = null; }
         if (job.environment === "test") await this.autoEnded(job, job.outcome || "failed");
+        if (job.environment === "test" && job.outcome === "succeeded" && job.release) this.queueSuite(job);
       }
     } finally { this.busy = false; }
   }
@@ -346,7 +369,16 @@ export class Runner {
     try { rows = await this.menger("deployments.list", { project: job.project, environment: g.tested, state: "succeeded", limit: 1000 }); }
     catch (e) { return `refused: could not ask ${this.o.url} what ${g.tested} passed — ${e.message}`; }
     const passed = rows.some((r) => r?.deployment?.release === job.release);
-    return passed ? null : `refused: ${job.release} never passed ${g.tested} — promote only a release ${g.tested} passed`;
+    if (!passed) return `refused: ${job.release} never passed ${g.tested} — promote only a release ${g.tested} passed`;
+    if (!g.suite || this.o.fake) return null;
+    let said = "";
+    try { said = execFileSync(this.o.pipeline, ["suite", "--status", job.release], { cwd: this.o.repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+    catch (e) { said = `${e.stdout || ""}${e.stderr || ""}`; }
+    const st = suiteIn(said);
+    if (st === "passed") return null;
+    if (st === "failed") return `refused: ${job.release}'s suite FAILED — a release whose suite is red never reaches prod (DEPLOY-52)`;
+    if (st === "running") return `refused: ${job.release}'s suite is still running — promote once it has passed (DEPLOY-52)`;
+    return `refused: ${job.release} has no suite result on this machine (deploy/pipeline suite ${job.release}) — promote once it has passed (DEPLOY-52)`;
   }
 
   async run(job) {
@@ -371,6 +403,12 @@ export class Runner {
     }
     for (; i < plan.length; i++) {
       const s = plan[i];
+      if (s.release && !job.release) {
+        // DEPLOY-52: the image and the deploy take the release the build named
+        outcome = "failed"; job.red = { step: s.name, out: "the build named no release" };
+        await this.step(job, s.name, "failed", { detail: `${s.name}: the build named no release (deploy/pipeline build prints \`release <id>\`)` });
+        break;
+      }
       const cmd = `${Object.entries(s.env || {}).map(([k, v]) => `${k}=${v} `).join("")}deploy/pipeline ${s.argv(job).join(" ")}`;
       const begun = await this.step(job, s.name, "started", { detail: cmd, url: this.urlOf(job, s) });
       if (begun.refused || begun.request?.cancel_asked_at) {
@@ -404,8 +442,10 @@ export class Runner {
   saveAuto() {
     const triggers = Object.fromEntries(Object.entries(this.auto.triggers).slice(-50));
     this.auto.triggers = triggers;
+    const sv = ({ request, release, tickets }) => ({ request, release, tickets });
+    const suite = { running: this.suites.running && sv(this.suites.running), pending: this.suites.pending && sv(this.suites.pending), last: this.suites.last };
     const doc = { on: !!this.o.autoTest, waiting: [...this.auto.waiting.keys()], due_at: this.auto.due ?? null,
-      running: this.auto.running ?? null, pending: this.auto.pending, last: this.auto.last, triggers, at: new Date().toISOString() };
+      running: this.auto.running ?? null, pending: this.auto.pending, last: this.auto.last, suite, triggers, at: new Date().toISOString() };
     try { fs.writeFileSync(this.autoFile, JSON.stringify(doc, null, 1) + "\n"); } catch (e) { this.log(`auto-test: ${this.autoFile}: ${e.message}`); }
   }
 
@@ -489,11 +529,16 @@ export class Runner {
     if (!this.editor()) return this.log(`auto-test: request ${job.request} red — no editor key (MENGER_RUNNER_EDITOR_KEY_FILE), nothing posted or filed`);
     const lines = failingLines(job.red.out, 80);
     const fence = "```";
-    const body = `Auto-test request ${job.request} (main at ${String(job.sha || "").slice(0, 7)}) went red in \`${job.red.step}\`.\n\n${fence}text\n${lines}\n${fence}\n\nTriggered by ${tickets.join(", ")}. The red is the batch's (CI-3): find the commit, fix or revert; the next ticket entering In Review deploys test again. Log: ${this.o.stateDir}/runs/${job.request}/${job.red.step}.log${(job.red.logs || []).map((l) => `\nTest output: ${this.o.stateDir}/runs/${job.request}/${l.name} (kept at ${l.from})`).join("")}`;
+    const suite = job.red.step === "suite";
+    const head = suite
+      ? `The suite of ${job.release} (main at ${String(job.sha || "").slice(0, 7)}, deployed to test by request ${job.request}) went red. The release is marked \`suite failed\`: \`remote prod\` refuses it (DEPLOY-52).`
+      : `Auto-test request ${job.request} (main at ${String(job.sha || "").slice(0, 7)}) went red in \`${job.red.step}\`.`;
+    const body = `${head}\n\n${fence}text\n${lines}\n${fence}\n\n${tickets.length ? `Triggered by ${tickets.join(", ")}. ` : ""}The red is the batch's (CI-3): find the commit, fix or revert; the next ticket entering In Review deploys test again. Log: ${this.o.stateDir}/runs/${job.request}/${job.red.step}.log${(job.red.logs || []).map((l) => `\nTest output: ${this.o.stateDir}/runs/${job.request}/${l.name} (kept at ${l.from})`).join("")}`;
     let gap = null;
-    try {
+    if (tickets.length) try {
       const [ev] = await this.menger("tickets.create", { epic: tickets[0].replace(/-\d+$/, ""), parent: tickets[0], kind: "gap",
-        title: `test deploy red: request ${job.request} (${job.red.step}) — main at ${String(job.sha || "").slice(0, 7)}`, body }, "editor");
+        title: suite ? `suite red: ${job.release} (request ${job.request}) — main at ${String(job.sha || "").slice(0, 7)}`
+          : `test deploy red: request ${job.request} (${job.red.step}) — main at ${String(job.sha || "").slice(0, 7)}`, body }, "editor");
       if (ev?.type === "error") throw new Error(ev.message);
       gap = ev?.ticket?.id || null;
       if (gap) for (const t of tickets) {
@@ -504,8 +549,7 @@ export class Runner {
         catch (e) { this.log(`auto-test: ${gap} could not block ${t} — ${e.message}`); }
       }
     } catch (e) { this.log(`auto-test: no gap filed for request ${job.request} — ${e.message}`); }
-    let chat = null;
-    try { chat = (await this.menger("chats.list", { ticket: tickets[0], state: "open", limit: 1 }, "editor")).find((c) => c?.type === "chat")?.chat?.id ?? null; } catch {}
+    let chat = tickets.length ? await this.chatOf(tickets[0]) : null;
     chat ||= this.o.chat;
     try {
       const [p] = await this.menger("chats.post", { chat, body: `${body}${gap ? `\n\nFiled ${gap}, blocking ${tickets.join(", ")}.` : ""}` }, "editor");
@@ -514,6 +558,61 @@ export class Runner {
     catch (e) { this.log(`auto-test: could not post to chat ${chat} — ${e.message}`); }
     this.log(`auto-test: request ${job.request} red — ${gap ? `${gap} filed` : "no gap"}, chat ${chat}`);
     return { gap, chat };
+  }
+
+  /** The open chat of `ticket`, or null. */
+  async chatOf(ticket) {
+    try { return (await this.menger("chats.list", { ticket, state: "open", limit: 1 }, "editor")).find((c) => c?.type === "chat")?.chat?.id ?? null; } catch { return null; }
+  }
+
+  // ── DEPLOY-52: the suite runs after the deploy to test ──────────────────
+
+  /** A deploy to test succeeded: its release's suite waits its turn — the newest only. */
+  queueSuite(job) {
+    const s = { request: job.request, release: job.release, sha: job.sha, tickets: this.auto.triggers[job.request] || [] };
+    const was = this.suites.pending;
+    if (was) this.log(`suite: ${was.release} passed over for ${s.release} before it began — its suite never runs (remote prod refuses it)`);
+    this.suites.pending = s;
+    this.log(`suite: ${s.release} waits${this.suites.running ? ` for ${this.suites.running.release}'s` : ""} (request ${s.request})`);
+    this.saveAuto();
+    queueMicrotask(() => this.drainSuites());
+    return s;
+  }
+
+  async drainSuites() {
+    if (this.suites.busy) return;
+    this.suites.busy = true;
+    try {
+      while (this.suites.pending) {
+        const s = this.suites.running = this.suites.pending;
+        this.suites.pending = null;
+        this.saveAuto();
+        try { await this.runSuite(s); } finally { this.suites.running = null; this.saveAuto(); }
+      }
+    } finally { this.suites.busy = false; }
+  }
+
+  /** One suite: `deploy/pipeline suite <release>`, its log beside the request's; red is reported as a red run is. */
+  async runSuite(s) {
+    const dir = path.join(this.o.stateDir, "runs", String(s.request));
+    fs.mkdirSync(dir, { recursive: true });
+    this.log(`suite: ${s.release} — running (request ${s.request})`);
+    const res = await this.exec({ request: s.request }, { ...SUITE, argv: () => SUITE.argv(s) }, path.join(dir, "suite.log"));
+    this.keepLogs(s, SUITE, dir, res);
+    const outcome = res.code === 0 ? "passed" : "failed";
+    this.suites.last = { request: s.request, release: s.release, outcome, tickets: s.tickets, at: new Date().toISOString() };
+    this.log(`suite: ${s.release} — ${outcome}`);
+    this.saveAuto();
+    if (outcome === "failed") {
+      await this.reportRed({ request: s.request, sha: s.sha, release: s.release, red: { step: "suite", out: res.out, logs: res.logs } }, s.tickets);
+    } else if (s.tickets.length && this.editor()) {
+      const chat = await this.chatOf(s.tickets[0]);
+      if (chat) {
+        try { await this.menger("chats.post", { chat, body: `The suite of ${s.release} (deployed to test by request ${s.request}) passed: it may go to prod (DEPLOY-52).` }, "editor"); }
+        catch (e) { this.log(`suite: could not post to chat ${chat} — ${e.message}`); }
+      }
+    }
+    return outcome;
   }
 
   /** --watch's or --listen's companion: `tickets.watch`, each trigger debounced; again after a dropped socket. */

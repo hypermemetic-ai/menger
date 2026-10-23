@@ -269,7 +269,9 @@ form_json() {
 # deploy/pipeline's log: at, env, action, release, result[, run] — tab-separated;
 # the run is `action@when[#pid]` (DEPLOY-12: a run's line ends with its id; an older
 # line's is made from it), so one line is one deployment and a re-read keeps it one.
-# Builds are not deployments. What runs on each env is followed down the log,
+# Builds are not deployments; nor is an image, a suite, a secret or the local
+# CI throwaway (app-local). DEPLOY-52: a remote `run` line (remote test / prod:
+# `ok IMAGE`, `infra failed`, `smoke failed`) is. What runs on each env is followed down the log,
 # and what it last ran with its smoke passed: a record's previous — the start
 # of its commits — is that last good release, never a failed run's (DEPLOY-23);
 # a rollback's is what it took out, what the env ran when it began.
@@ -287,8 +289,8 @@ form_pipeline_log() {
        | .good[$l.env] as $good
        | (if $l.action == "rollback" then $was else $good end) as $from
        | .emit = null
-       | if $l.env == "build" or ($l.action | IN("deploy", "sync", "promote", "rollback") | not) then .
-         elif $l.result == "ok" then
+       | if $l.env == "build" or $l.env == "app-local" or ($l.action | IN("deploy", "sync", "promote", "rollback", "run") | not) then .
+         elif $l.result == "ok" or ($l.action == "run" and ($l.result | startswith("ok "))) then
            .emit = rec($l; if $l.action == "rollback" then "rolled_back" else "succeeded" end; $l.release; $from)
            | .runs[$l.env] = $l.release | .good[$l.env] = $l.release
          elif ($l.result | test("rolled back to \\S+$")) then

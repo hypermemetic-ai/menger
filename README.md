@@ -4298,7 +4298,8 @@ so `deploy/record --send` passes the record as the params object. Three
 tables a file gains, empty, on open: `deployments`, `deployment_commits` and
 `deploy_environments` (what each environment runs — derived, written
 through, checked by `--verify-derived`). menger's own pipeline records every
-deploy test, sync, promote and rollback as it runs, and `deploy/pipeline
+remote test (app-test.menger.sh, as `test`) and remote prod (`app-prod`) as it
+runs (DEPLOY-52), and `deploy/pipeline
 backfill` replays what it logged before (DEPLOY-12; `deploy/README.md`
 "Recording deployments").
 

@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { GUARDS, PLANS, Runner, failingLines, ofProject, options, releaseIn, shaOf, signed, stepLog, tail, triggerOf, unowned } from "../runner.mjs";
+import { GUARDS, PLANS, Runner, SUITE, failingLines, ofProject, options, releaseIn, shaOf, signed, stepLog, suiteIn, tail, triggerOf, unowned } from "../runner.mjs";
 
 const SECRET = "runner-test-secret-0123456789";
 const sign = (body) => "sha256=" + crypto.createHmac("sha256", SECRET).update(body).digest("hex");
@@ -49,10 +49,19 @@ test("DEPLOY-47: an ended step's detail is its command and its last 40 lines, at
   assert.equal(stepLog("x", ""), "$ x");
 });
 
-test("test's plan: build the tip, then deploy test naming the request", () => {
+test("DEPLOY-52: test's plan — build the tip without the gate, its image, app-test naming the request; the suite after", () => {
   assert.deepEqual(Object.keys(PLANS), ["test", "app-prod"]);
-  assert.deepEqual(PLANS.test.map((s) => [s.name, s.argv({ sha: "abc1234" })]), [["build", ["build", "abc1234"]], ["deploy", ["deploy", "test"]]]);
-  assert.ok(PLANS.test[0].interruptible && !PLANS.test[1].interruptible && PLANS.test[1].records);
+  const job = { sha: "abc1234", release: "20261023T060000Z-abc1234" };
+  assert.deepEqual(PLANS.test.map((s) => [s.name, s.argv(job), s.env ?? null, !!s.records]), [
+    ["build", ["build", "abc1234", "--no-gate"], null, false],
+    ["image", ["image", job.release], { IMAGE_STORE: "ghcr" }, false],
+    ["deploy", ["remote", "test", "--image", `ghcr.io/hypermemetic-ai/menger:${job.release}`], null, true],
+  ]);
+  assert.ok(PLANS.test[0].interruptible && PLANS.test[1].interruptible && !PLANS.test[2].interruptible);
+  assert.ok(!PLANS.test.some((s) => /suite|gate/.test(s.argv(job).join(" ")) && s.argv(job)[0] !== "build"), "no suite in the deploy's way");
+  assert.deepEqual(SUITE.argv(job), ["suite", job.release]);
+  assert.equal(suiteIn("x\nsuite: failed\n"), "failed");
+  assert.equal(suiteIn("nothing"), null);
 });
 
 test("what it takes: its project's requests to a planned environment, once each", () => {
@@ -102,7 +111,7 @@ test("app-prod's plan: the image of the release test passed, app-test, then app-
     ["app-test", ["remote", "test", "--image", `ghcr.io/hypermemetic-ai/menger:${REL}`], null, false],
     ["app-prod", ["remote", "prod"], null, true],
   ]);
-  assert.deepEqual(GUARDS["app-prod"], { owner: true, tested: "test" });
+  assert.deepEqual(GUARDS["app-prod"], { owner: true, tested: "test", suite: true });
   assert.equal(shaOf(REL), "8cb79df");
 });
 
@@ -176,6 +185,19 @@ test("a release test never passed is refused, and nothing runs", async () => {
   assert.ok(r.calls.some(([m, p]) => m === "deployments.list" && p.environment === "test" && p.state === "succeeded"));
 });
 
+test("DEPLOY-52: a release whose suite is red, running or unknown is refused, and nothing runs", async () => {
+  for (const [st, why] of [["failed", /suite FAILED/], ["running", /still running/], ["none", /no suite result/]]) {
+    const r = prodRunner();
+    process.env.FAKE_SUITE = st;
+    await r.run(job());
+    delete process.env.FAKE_SUITE;
+    assert.deepEqual(r.ran(), [], st);
+    assert.deepEqual(r.steps(), ["image:failed", "app-test:skipped", "app-prod:skipped"], st);
+    assert.match(r.calls.find(([m]) => m === "deployments.step").at(1).detail, why);
+    assert.deepEqual(r.records(), ["app-prod:failed"]);
+  }
+});
+
 test("a watched request to app-prod carries its release and its requester", () => {
   const r = runner({ owners: [OWNER] });
   r.consider({ id: 30, project: "MENGER", environment: "app-prod", revision: "8cb79df", release: REL, recorded_by: OWNER, requested: { state: "pending", steps: [] } });
@@ -191,6 +213,10 @@ test("DEPLOY-42: a runner-carried deploy test names its release in the runner's 
   r.standing = async () => ({ state: "started" }); // the pipeline's own record never landed
   await r.run(job({ environment: "test", revision: "HEAD", release: "" }));
   delete process.env.FAKE_PIPELINE_RELEASE;
+  // DEPLOY-52: build without the gate, the image of the release it named, app-test naming the request
+  const sha = r.ran()[0].split("|")[2].split(" ")[1];
+  assert.deepEqual(r.ran(), [`||build ${sha} --no-gate`, `ghcr||image ${REL}`, `|21|remote test --image ghcr.io/hypermemetic-ai/menger:${REL}`]);
+  assert.deepEqual(r.steps(), ["build:started", "build:succeeded", "image:started", "image:succeeded", "deploy:started", "deploy:succeeded"]);
   assert.equal(recs.length, 1);
   assert.equal(recs[0].environment, "test");
   assert.equal(recs[0].release, REL);
@@ -355,4 +381,80 @@ test("a red auto-test with no editor key posts and files nothing", async () => {
   r.editorSeed = null;
   await r.reportRed({ request: 5, sha: "abc1234", red: { step: "build", out: "x" } }, ["CHAT-58"]);
   assert.deepEqual(r.calls, []);
+});
+
+// ── DEPLOY-52: the suite runs after the deploy to test ─────────────────────
+test("DEPLOY-52: a build that names no release stops the plan before the image", async () => {
+  const r = prodRunner();
+  r.standing = async () => ({ state: "started" });
+  await r.run(job({ environment: "test", revision: "HEAD", release: "" }));
+  assert.equal(r.ran().length, 1, "the build alone ran");
+  assert.deepEqual(r.steps(), ["build:started", "build:succeeded", "image:failed", "deploy:skipped"]);
+  assert.deepEqual(r.records(), ["test:failed"]);
+});
+
+/** An auto runner over the fake pipeline, its test request 101 queued for CHAT-58. */
+function suiteRunner() {
+  const r = autoRunner({ extra: { fake: false, pipeline: path.join(import.meta.dirname, "fake-pipeline") } });
+  process.env.FAKE_PIPELINE_LOG = path.join(r.o.stateDir, "pipeline.log");
+  process.env.FAKE_PIPELINE_RELEASE = REL;
+  r.auto.triggers[101] = ["CHAT-58"];
+  r.standing = async () => ({ state: "succeeded" });
+  r.ran = () => fs.readFileSync(process.env.FAKE_PIPELINE_LOG, "utf8").trim().split("\n").map((l) => l.split("|")[2].split(" ").slice(0, 2).join(" "));
+  delete r.drain;
+  return r;
+}
+const until = async (f, ms = 3000) => { const end = Date.now() + ms; while (!f() && Date.now() < end) await sleep(20); };
+
+test("DEPLOY-52: a green deploy to test, then its suite apart from the request — green, a line in the ticket's chat", async () => {
+  const r = suiteRunner();
+  r.queue.push({ request: 101, project: "MENGER", environment: "test", revision: "", branch: "HEAD", release: "", requestedBy: "key:0ca8" });
+  await r.drain();
+  await until(() => r.suites.last);
+  delete process.env.FAKE_PIPELINE_RELEASE;
+  assert.deepEqual(r.ran(), ["build " + r.ran()[0].split(" ")[1], `image ${REL}`, "remote test", `suite ${REL}`]);
+  assert.deepEqual([r.suites.last.release, r.suites.last.outcome, r.suites.last.tickets], [REL, "passed", ["CHAT-58"]]);
+  assert.equal(r.auto.last.outcome, "succeeded", "the request ended at the deploy, before the suite");
+  assert.ok(!r.calls.some(([m, p]) => m === "deployments.step" && p.name === "suite"), "the suite is no step of the ended request");
+  const [[, post]] = r.calls.filter(([m]) => m === "chats.post");
+  assert.equal(post.chat, 41);
+  assert.match(post.body, new RegExp(`suite of ${REL} .* passed`));
+  assert.equal(r.calls.filter(([m]) => m === "tickets.create").length, 0);
+  const doc = JSON.parse(fs.readFileSync(path.join(r.o.stateDir, "auto.json"), "utf8"));
+  assert.deepEqual([doc.suite.last.outcome, doc.suite.running, doc.suite.pending], ["passed", null, null]);
+});
+
+test("DEPLOY-52: a red suite — a gap blocking the triggering ticket, the failing lines in its chat, the release named", async () => {
+  const r = suiteRunner();
+  process.env.FAKE_PIPELINE_FAIL = "suite";
+  r.queue.push({ request: 101, project: "MENGER", environment: "test", revision: "", branch: "HEAD", release: "", requestedBy: "key:0ca8" });
+  await r.drain();
+  await until(() => r.suites.last && r.calls.some(([m]) => m === "chats.post"));
+  process.env.FAKE_PIPELINE_FAIL = ""; delete process.env.FAKE_PIPELINE_RELEASE;
+  assert.equal(r.auto.last.outcome, "succeeded", "the deploy stands: test runs it");
+  assert.equal(r.suites.last.outcome, "failed");
+  const [[, gap]] = r.calls.filter(([m]) => m === "tickets.create");
+  assert.match(gap.title, new RegExp(`^suite red: ${REL} \\(request 101\\)`));
+  assert.deepEqual(r.calls.filter(([m]) => m === "tickets.update").map(([, p]) => [p.id, p.block]), [["CHAT-58", ["CHAT-60"]]]);
+  const [[, post]] = r.calls.filter(([m]) => m === "chats.post");
+  assert.match(post.body, /remote prod` refuses it/);
+  assert.match(post.body, /suite .* FAILED: the fake's failure/);
+});
+
+test("DEPLOY-52: one suite at a time — the newest waits, one passed over never runs", async () => {
+  const r = suiteRunner();
+  let release;
+  const gate = new Promise((ok) => { release = ok; });
+  r.runSuite = async (s) => { r.started = [...(r.started || []), s.release]; await gate; r.suites.last = { release: s.release, outcome: "passed" }; };
+  r.queueSuite({ request: 1, release: "20261023T010000Z-aaaaaaa", sha: "aaaaaaa" });
+  await sleep(10);
+  r.queueSuite({ request: 2, release: "20261023T020000Z-bbbbbbb", sha: "bbbbbbb" });
+  r.queueSuite({ request: 3, release: "20261023T030000Z-ccccccc", sha: "ccccccc" });
+  assert.deepEqual(r.started, ["20261023T010000Z-aaaaaaa"]);
+  assert.equal(r.suites.pending.release, "20261023T030000Z-ccccccc");
+  release();
+  await until(() => (r.started || []).length === 2);
+  await sleep(20);
+  delete process.env.FAKE_PIPELINE_RELEASE;
+  assert.deepEqual(r.started, ["20261023T010000Z-aaaaaaa", "20261023T030000Z-ccccccc"], "b was passed over");
 });
