@@ -65,6 +65,7 @@ reversible, deleting a tracker is not:
 | what each ran | `~/.local/share/menger-deploy/envs/{prod,test}/` |
 | the releases | `~/.local/share/menger-deploy/releases/` |
 | the move's mark | `~/.local/share/menger-deploy/prod.moved` |
+| the uninstalled unit files (and their drop-ins, the LAN proxies') | `~/.local/share/menger-deploy/retired-units/DEPLOY-52-2026-10-23/` — moved out of `~/.config/systemd/user`, not deleted |
 
 The unit files, the settings templates and the local smoke's scripts stay
 in the repository (`deploy/systemd/`, `deploy/env/{prod,test}.env`,
