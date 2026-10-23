@@ -184,7 +184,7 @@ impl Cat {
 
     /// The server-backed categories, offered at every level, in the menu's
     /// order.
-    pub(crate) const SERVER: [Cat; 14] = [
+    pub(crate) const SERVER: [Cat; 13] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -195,7 +195,6 @@ impl Cat {
         Cat::MengerDocs,
         Cat::Asking,
         Cat::Label,
-        Cat::When,
         Cat::Deployed,
         Cat::Chats,
         Cat::People,
@@ -224,7 +223,7 @@ impl Cat {
     /// FILTER-16: the inputs page's categories, in its menu's order — its
     /// own (State, Removed) first, then the server-backed ones, which filter
     /// the inputs' tickets.
-    pub(crate) const INPUTS: [Cat; 16] = [
+    pub(crate) const INPUTS: [Cat; 15] = [
         Cat::State,
         Cat::Removed,
         Cat::Shortcode,
@@ -237,7 +236,6 @@ impl Cat {
         Cat::MengerDocs,
         Cat::Asking,
         Cat::Label,
-        Cat::When,
         Cat::Deployed,
         Cat::Chats,
         Cat::People,
@@ -2360,7 +2358,10 @@ pub(crate) fn global_chip(lens: Lens, text: String) -> impl IntoView {
 /// pre-FILTER-39 menu opened on its list).
 pub(crate) fn open_on(level: Level, cats: &[Cat], cat: Option<Cat>) -> Option<Section> {
     let c = cat?;
-    sections(level, cats).into_iter().find(|s| s.holds(c))
+    // FILTER-54: When is no longer a category of the menu's (a time is a
+    // rule's, set in the card), but a time pill already on the line still
+    // opens its own pane.
+    sections(level, cats).into_iter().find(|s| s.holds(c)).or_else(|| (c == Cat::When).then_some(Section::Time(Cat::When)))
 }
 
 /// FILTER-49: the search's placeholder — the open category's name, else
@@ -3449,7 +3450,8 @@ pub(crate) mod tests {
 
         // The global menu: the server's categories, no Title to offer.
         let g = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        assert_eq!(found("", &g).len(), 14, "FILTER-27: When among them; DEPLOY-13: Deployed; CHAT-4: Chats; TICKETS-9: People");
+        assert_eq!(found("", &g).len(), 13, "DEPLOY-13: Deployed; CHAT-4: Chats; TICKETS-9: People");
+        assert!(!Cat::SERVER.contains(&Cat::When) && !Cat::INPUTS.contains(&Cat::When), "FILTER-54: a time is a rule's, set in the card");
         // TICKETS-9: People — its own pane of three cells, found by them.
         assert!(offered(Cat::People, &g).is_empty());
         assert!(found("assigned", &g).contains(&Cat::People) && found("people", &g).contains(&Cat::People));
@@ -3474,8 +3476,7 @@ pub(crate) mod tests {
         let dep = crate::when::new_deployed("prod", false, None).unwrap();
         assert_eq!(time_cat(&dep), Cat::Deployed);
         assert_eq!(time_cat(&crate::when::new_clause(crate::when::Kind::Changed, None, None).unwrap()), Cat::When);
-        assert!(found("created", &g).contains(&Cat::When), "FILTER-27: found by what it builds");
-        assert!(found("moved", &g).contains(&Cat::When));
+        assert!(!found("created", &g).contains(&Cat::When), "FILTER-54: the When category is gone");
         // FILTER-21: typing finds Menger docs, by its name.
         assert!(found("menger", &g).contains(&Cat::MengerDocs));
         assert_eq!(offered(Cat::MengerDocs, &g), [val(Cat::MengerDocs, "yes"), val(Cat::MengerDocs, "no")]);
@@ -3633,7 +3634,6 @@ pub(crate) mod tests {
                 Section::Values(Cat::Severity),
                 Section::Flags,
                 Section::Values(Cat::Label),
-                Section::Time(Cat::When),
                 Section::Time(Cat::Deployed),
                 Section::Time(Cat::Chats),
                 Section::Time(Cat::People),
@@ -3719,11 +3719,11 @@ pub(crate) mod tests {
             assert!(secs.iter().all(|s| !s.label().is_empty() && !s.key().is_empty()));
         }
         assert_eq!(sections(Level::Global, &Cat::SERVER)[0], Section::Saved, "saved filters first");
-        assert_eq!(sections(Level::Board, &Cat::SERVER).len(), 11, "compact: the flags are one row");
+        assert_eq!(sections(Level::Board, &Cat::SERVER).len(), 10, "compact: the flags are one row");
         assert_eq!(open_on(Level::Board, &Cat::SERVER, None), None, "opened on its list");
         assert_eq!(open_on(Level::Board, &Cat::SERVER, Some(Cat::Status)), Some(Section::Values(Cat::Status)));
         assert_eq!(open_on(Level::Board, &Cat::SERVER, Some(Cat::Blocked)), Some(Section::Flags));
-        assert_eq!(open_on(Level::Board, &Cat::SERVER, Some(Cat::When)), Some(Section::Time(Cat::When)));
+        assert_eq!(open_on(Level::Board, &Cat::SERVER, Some(Cat::When)), Some(Section::Time(Cat::When)), "FILTER-54: a time pill on the line opens its pane, unlisted");
         assert_eq!(open_on(Level::Board, &Cat::SERVER, Some(Cat::Wave)), None, "not the board's");
         assert_eq!(open_on(Level::Waves, &Cat::WAVES, Some(Cat::Title)), Some(Section::Title));
         assert_eq!(placeholder(Level::Global, None), "Filter everything\u{2026}");

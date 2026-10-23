@@ -10,7 +10,9 @@
 # and a group; flip; negate; change a field; bin; name a group into a saved
 # filter (a taken name refused); save back and undo; the switch; the nav
 # under it, tree and flat; the empty line's offers; ⌂'s card; document height
-# = viewport.
+# = viewport. FILTER-54: a rule's time — ◷ on a kind and a status (Became so…,
+# Has been so…), changed and taken off, a date of one's own, Created under
+# Dates, as text in the new form; the menu has no When category.
 #   scripts/filter-card-check.sh [--port 4462] [--db /tmp/menger-NAME.db] [--shots DIR] [--serve]
 # --serve: seed, print the origin and the session file, and keep serving
 # (Ctrl-C stops it). Needs a built menger (CARGO_TARGET_DIR's debug binary),
