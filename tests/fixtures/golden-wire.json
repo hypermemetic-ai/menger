@@ -89,7 +89,7 @@
           },
           "seq": 1,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the root",
           "unlocks": [],
           "updated_unix": 0
@@ -125,7 +125,7 @@
           },
           "seq": 2,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "asks",
           "unlocks": [],
           "updated_unix": 0
@@ -164,7 +164,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap",
           "unlocks": [],
           "updated_unix": 0
@@ -238,7 +238,7 @@
           },
           "seq": 5,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -273,7 +273,7 @@
           },
           "seq": 1,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the platform",
           "unlocks": [],
           "updated_unix": 0
@@ -309,7 +309,7 @@
           },
           "seq": 2,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [],
           "updated_unix": 0
@@ -326,7 +326,7 @@
     "call": "tickets.set_status",
     "items": [
       {
-        "previous": "Pending",
+        "previous": "Draft",
         "ticket": {
           "address": "hypermemetic:GOLD-2",
           "blocked_by": [],
@@ -422,7 +422,7 @@
           },
           "seq": 5,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -461,7 +461,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap",
           "unlocks": [],
           "updated_unix": 0
@@ -502,7 +502,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -639,7 +639,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -686,7 +686,7 @@
           },
           "seq": 3,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -741,7 +741,7 @@
             },
             "seq": 3,
             "shortcode": "GOLD",
-            "status": "Pending",
+            "status": "Draft",
             "title": "a gap, retitled",
             "unlocks": [],
             "updated_unix": 0
@@ -766,7 +766,7 @@
             },
             "seq": 2,
             "shortcode": "PLAT",
-            "status": "Pending",
+            "status": "Draft",
             "title": "work",
             "unlocks": [
               "GOLD-3"
@@ -1250,7 +1250,7 @@
           },
           "seq": 6,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a mistake",
           "unlocks": [],
           "updated_unix": 0
@@ -1314,7 +1314,7 @@
             "parent": "GOLD-1",
             "seq": 6,
             "shortcode": "GOLD",
-            "status": "Pending",
+            "status": "Draft",
             "title": "a mistake",
             "unlocks": [],
             "updated_unix": 0
@@ -1358,7 +1358,7 @@
             },
             "seq": 3,
             "shortcode": "PLAT",
-            "status": "Pending",
+            "status": "Draft",
             "title": "a mistake",
             "unlocks": [],
             "updated_unix": 0
@@ -1466,7 +1466,7 @@
           },
           "seq": 3,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a mistake",
           "unlocks": [],
           "updated_unix": 0
@@ -1499,7 +1499,7 @@
           },
           "seq": 1,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the root",
           "unlocks": [],
           "updated_unix": 0
@@ -1559,7 +1559,7 @@
           },
           "seq": 3,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -1608,7 +1608,7 @@
           },
           "seq": 5,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -1647,7 +1647,7 @@
           "seq": 1,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the root",
           "unlocks": [],
           "updated_unix": 0
@@ -1707,7 +1707,7 @@
           "seq": 3,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -1781,7 +1781,7 @@
           "seq": 3,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -1807,7 +1807,7 @@
           "seq": 5,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -1833,7 +1833,7 @@
           "seq": 1,
           "severity": null,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the platform",
           "unlocks": [],
           "updated_unix": 0
@@ -1861,7 +1861,7 @@
           "seq": 2,
           "severity": null,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -1889,7 +1889,7 @@
           "seq": 3,
           "severity": null,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a mistake",
           "unlocks": [],
           "updated_unix": 0
@@ -1950,7 +1950,7 @@
           "seq": 3,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -1991,7 +1991,7 @@
           "seq": 1,
           "severity": null,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the platform",
           "unlocks": [],
           "updated_unix": 0
@@ -2059,7 +2059,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -2077,7 +2077,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -2220,15 +2220,15 @@
     "items": [
       {
         "field": "status",
-        "held": 2,
-        "type": "facet",
-        "value": "Pending"
-      },
-      {
-        "field": "status",
         "held": 1,
         "type": "facet",
         "value": "Coding"
+      },
+      {
+        "field": "status",
+        "held": 2,
+        "type": "facet",
+        "value": "Draft"
       },
       {
         "field": "category",
@@ -2367,7 +2367,7 @@
           "seq": 1,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the root",
           "unlocks": [],
           "updated_unix": 0
@@ -2444,7 +2444,7 @@
           "seq": 5,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -2477,7 +2477,7 @@
           "seq": 2,
           "severity": null,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -2510,7 +2510,7 @@
           "seq": 3,
           "severity": null,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a mistake",
           "unlocks": [],
           "updated_unix": 0
@@ -2547,7 +2547,7 @@
           "seq": 3,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -2633,7 +2633,7 @@
           "seq": 5,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -2670,7 +2670,7 @@
           "seq": 3,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -2722,7 +2722,7 @@
           "seq": 2,
           "severity": null,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -2761,7 +2761,7 @@
           "seq": 3,
           "severity": null,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -2809,7 +2809,7 @@
           },
           "seq": 2,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -2839,7 +2839,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -2850,7 +2850,7 @@
           "cause": null,
           "cause_ticket": null,
           "field": "status",
-          "from": "Pending",
+          "from": "Draft",
           "id": 8,
           "message": null,
           "name": "test",
@@ -3657,15 +3657,15 @@
         "live": [
           {
             "id": "PLAT-1",
-            "status": "Pending"
+            "status": "Draft"
           },
           {
             "id": "PLAT-2",
-            "status": "Pending"
+            "status": "Draft"
           },
           {
             "id": "PLAT-3",
-            "status": "Pending"
+            "status": "Draft"
           }
         ],
         "mark": {
@@ -3695,7 +3695,7 @@
         "live": [
           {
             "id": "PLAT-2",
-            "status": "Pending"
+            "status": "Draft"
           }
         ],
         "mark": {
@@ -3745,7 +3745,7 @@
           "seq": 2,
           "severity": null,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -3796,7 +3796,7 @@
           },
           "seq": 2,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -3854,7 +3854,7 @@
           },
           "seq": 1,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the root",
           "unlocks": [],
           "updated_unix": 0
@@ -3888,7 +3888,7 @@
           },
           "seq": 1,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the root",
           "unlocks": [],
           "updated_unix": 0
@@ -3908,7 +3908,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-1",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -3922,7 +3922,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -3949,7 +3949,7 @@
           },
           "seq": 2,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "asks",
           "unlocks": [],
           "updated_unix": 0
@@ -3969,7 +3969,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -3989,7 +3989,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -4045,7 +4045,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap",
           "unlocks": [],
           "updated_unix": 0
@@ -4065,7 +4065,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-3",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -4095,7 +4095,7 @@
           },
           "seq": 2,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "asks",
           "unlocks": [
             "GOLD-3"
@@ -4114,7 +4114,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -4178,7 +4178,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -4205,7 +4205,7 @@
           },
           "seq": 5,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -4225,7 +4225,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-5",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -4245,7 +4245,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -4282,7 +4282,7 @@
           },
           "seq": 1,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the platform",
           "unlocks": [],
           "updated_unix": 0
@@ -4302,7 +4302,7 @@
           "name": "test",
           "source": "api",
           "ticket": "PLAT-1",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -4316,7 +4316,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -4343,7 +4343,7 @@
           },
           "seq": 2,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [],
           "updated_unix": 0
@@ -4363,7 +4363,7 @@
           "name": "test",
           "source": "api",
           "ticket": "PLAT-2",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -4383,7 +4383,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -4392,7 +4392,7 @@
         "type": "group_changed"
       },
       {
-        "previous": "Pending",
+        "previous": "Draft",
         "ticket": {
           "address": "hypermemetic:GOLD-2",
           "blocked_by": [],
@@ -4427,7 +4427,7 @@
           "cause": null,
           "cause_ticket": null,
           "field": "status",
-          "from": "Pending",
+          "from": "Draft",
           "id": 8,
           "message": null,
           "name": "test",
@@ -4503,7 +4503,7 @@
           },
           "seq": 5,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -4550,7 +4550,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap",
           "unlocks": [],
           "updated_unix": 0
@@ -4594,7 +4594,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -4699,7 +4699,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -4737,7 +4737,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -4764,7 +4764,7 @@
           },
           "seq": 2,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -4827,7 +4827,7 @@
           },
           "seq": 3,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -4875,7 +4875,7 @@
           },
           "seq": 3,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -4907,7 +4907,7 @@
           },
           "seq": 2,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -5266,7 +5266,7 @@
           },
           "seq": 6,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a mistake",
           "unlocks": [],
           "updated_unix": 0
@@ -5286,7 +5286,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-6",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -5306,7 +5306,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -5348,7 +5348,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -5375,7 +5375,7 @@
             "parent": "GOLD-1",
             "seq": 6,
             "shortcode": "GOLD",
-            "status": "Pending",
+            "status": "Draft",
             "title": "a mistake",
             "unlocks": [],
             "updated_unix": 0
@@ -5399,7 +5399,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -5445,7 +5445,7 @@
             },
             "seq": 3,
             "shortcode": "PLAT",
-            "status": "Pending",
+            "status": "Draft",
             "title": "a mistake",
             "unlocks": [],
             "updated_unix": 0
@@ -5463,7 +5463,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -5481,7 +5481,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -5520,7 +5520,7 @@
           },
           "seq": 7,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "watch drops events",
           "unlocks": [],
           "updated_unix": 0
@@ -5540,7 +5540,7 @@
           "name": null,
           "source": "api",
           "ticket": "GOLD-7",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -5560,7 +5560,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -5596,7 +5596,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -5612,7 +5612,7 @@
         "live": [
           {
             "id": "PLAT-2",
-            "status": "Pending"
+            "status": "Draft"
           }
         ],
         "mark": {
@@ -5651,7 +5651,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -5690,7 +5690,7 @@
           },
           "seq": 1,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the root",
           "unlocks": [],
           "updated_unix": 0
@@ -5720,7 +5720,7 @@
           },
           "seq": 1,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the root",
           "unlocks": [],
           "updated_unix": 0
@@ -5740,7 +5740,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-1",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -5754,7 +5754,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -5788,7 +5788,7 @@
           },
           "seq": 2,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "asks",
           "unlocks": [],
           "updated_unix": 0
@@ -5808,7 +5808,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-2",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -5828,7 +5828,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -5891,7 +5891,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap",
           "unlocks": [],
           "updated_unix": 0
@@ -5911,7 +5911,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-3",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -5941,7 +5941,7 @@
           },
           "seq": 2,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "asks",
           "unlocks": [
             "GOLD-3"
@@ -5960,7 +5960,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -6031,7 +6031,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -6058,7 +6058,7 @@
           },
           "seq": 5,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -6078,7 +6078,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-5",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -6098,7 +6098,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -6142,7 +6142,7 @@
           },
           "seq": 1,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the platform",
           "unlocks": [],
           "updated_unix": 0
@@ -6162,7 +6162,7 @@
           "name": "test",
           "source": "api",
           "ticket": "PLAT-1",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -6176,7 +6176,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -6210,7 +6210,7 @@
           },
           "seq": 2,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [],
           "updated_unix": 0
@@ -6230,7 +6230,7 @@
           "name": "test",
           "source": "api",
           "ticket": "PLAT-2",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -6250,7 +6250,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -6266,7 +6266,7 @@
         "type": "entered"
       },
       {
-        "previous": "Pending",
+        "previous": "Draft",
         "ticket": {
           "address": "hypermemetic:GOLD-2",
           "blocked_by": [],
@@ -6301,7 +6301,7 @@
           "cause": null,
           "cause_ticket": null,
           "field": "status",
-          "from": "Pending",
+          "from": "Draft",
           "id": 8,
           "message": null,
           "name": "test",
@@ -6377,7 +6377,7 @@
           },
           "seq": 5,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "defines",
           "unlocks": [],
           "updated_unix": 0
@@ -6424,7 +6424,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap",
           "unlocks": [],
           "updated_unix": 0
@@ -6468,7 +6468,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -6573,7 +6573,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -6611,7 +6611,7 @@
           "seq": 3,
           "severity": "High",
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -6638,7 +6638,7 @@
           },
           "seq": 2,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -6701,7 +6701,7 @@
           },
           "seq": 3,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -6749,7 +6749,7 @@
           },
           "seq": 3,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a gap, retitled",
           "unlocks": [],
           "updated_unix": 0
@@ -6781,7 +6781,7 @@
           },
           "seq": 2,
           "shortcode": "PLAT",
-          "status": "Pending",
+          "status": "Draft",
           "title": "work",
           "unlocks": [
             "GOLD-3"
@@ -7140,7 +7140,7 @@
           },
           "seq": 6,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "a mistake",
           "unlocks": [],
           "updated_unix": 0
@@ -7160,7 +7160,7 @@
           "name": "test",
           "source": "api",
           "ticket": "GOLD-6",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -7180,7 +7180,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -7229,7 +7229,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -7263,7 +7263,7 @@
             "parent": "GOLD-1",
             "seq": 6,
             "shortcode": "GOLD",
-            "status": "Pending",
+            "status": "Draft",
             "title": "a mistake",
             "unlocks": [],
             "updated_unix": 0
@@ -7287,7 +7287,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -7340,7 +7340,7 @@
             },
             "seq": 3,
             "shortcode": "PLAT",
-            "status": "Pending",
+            "status": "Draft",
             "title": "a mistake",
             "unlocks": [],
             "updated_unix": 0
@@ -7358,7 +7358,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -7376,7 +7376,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -7429,7 +7429,7 @@
           },
           "seq": 7,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "watch drops events",
           "unlocks": [],
           "updated_unix": 0
@@ -7449,7 +7449,7 @@
           "name": null,
           "source": "api",
           "ticket": "GOLD-7",
-          "to": "Pending"
+          "to": "Draft"
         },
         "type": "transition"
       },
@@ -7469,7 +7469,7 @@
           "root": "GOLD-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the root"
           },
           "shortcode": "GOLD",
@@ -7512,7 +7512,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -7528,7 +7528,7 @@
         "live": [
           {
             "id": "PLAT-2",
-            "status": "Pending"
+            "status": "Draft"
           }
         ],
         "mark": {
@@ -7574,7 +7574,7 @@
           "root": "PLAT-1",
           "root_row": {
             "kind": "scope",
-            "status": "Pending",
+            "status": "Draft",
             "title": "the platform"
           },
           "shortcode": "PLAT",
@@ -7620,7 +7620,7 @@
           },
           "seq": 1,
           "shortcode": "GOLD",
-          "status": "Pending",
+          "status": "Draft",
           "title": "the root",
           "unlocks": [],
           "updated_unix": 0
