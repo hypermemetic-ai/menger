@@ -14,7 +14,7 @@
 #![cfg(feature = "server")]
 
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, MediaActivation, MembersActivation, NavActivation, NotesActivation, OrgsActivation, SessionActivation, Store, ThemesActivation, TicketsActivation};
+use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, EpicsActivation, MediaActivation, MembersActivation, NavActivation, NotesActivation, OrgsActivation, SessionActivation, Store, ThemesActivation, TicketsActivation};
 // (`Nav` is `tickets`' child, ACCESS-16.)
 use plexus_core::plexus::{Activation, MethodRole, PluginSchema};
 use std::collections::BTreeMap;
@@ -80,6 +80,9 @@ fn activation() -> Surface {
     // THEME-8: and themes.
     // ORG-4: and orgs.
     let orgs = OrgsActivation::new(Arc::clone(&store)).plugin_schema();
+    // ORG-13: and epics.
+    let epics = EpicsActivation::new(Arc::clone(&store)).plugin_schema();
+    assert_eq!(epics.namespace, "epics");
     // COMMENT-5: and media.
     let media = MediaActivation::new(Arc::clone(&store)).plugin_schema();
     assert_eq!(media.namespace, "media");
@@ -105,6 +108,7 @@ fn activation() -> Surface {
     out.extend(surface(session));
     out.extend(surface(members));
     out.extend(surface(orgs));
+    out.extend(surface(epics));
     children.into_iter().chain(member_children).chain(deployment_children).chain(chat_children).for_each(|c| out.extend(c));
     out.extend(surface(media));
     out

@@ -168,6 +168,76 @@ impl fmt::Display for OrgId {
     }
 }
 
+/// ORG-13: an **epic**'s name — a level of the organization above its
+/// shortcodes (organization → epic → shortcode → ticket). Lower-case ASCII
+/// letters, digits and `-`, 1 to 63, not starting or ending with `-`, as an
+/// organization's name; unique within its organization. Every organization
+/// starts with one, [`EpicName::GENESIS`], which holds everything made
+/// before epics; a new one starts empty, its shortcodes numbered from 1.
+///
+/// Internally the store calls the level an *era* (`Namespace::era`, the
+/// `eras` table): `epic` already names a shortcode's letters on the wire
+/// (`--epic MNG`, `Ticket.epic`) and a scope's status (`Epic`) — ORG-13's
+/// `naming` input asks the owner which word moves.
+///
+/// ACCESS-8: deserializing one checks it ([`EpicName::new`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct EpicName(String);
+
+impl<'de> Deserialize<'de> for EpicName {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::new(&String::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl std::ops::Deref for EpicName {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::str::FromStr for EpicName {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        Self::new(s.trim())
+    }
+}
+
+impl EpicName {
+    /// The epic every organization starts with — today's tracker's.
+    pub const GENESIS: &'static str = "genesis";
+
+    /// `name` as an epic's name, or why it is not one.
+    pub fn new(name: &str) -> Result<Self, String> {
+        let ok = !name.is_empty()
+            && name.len() <= 63
+            && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !name.starts_with('-')
+            && !name.ends_with('-');
+        match ok {
+            true => Ok(Self(name.to_string())),
+            false => Err(format!("`{name}` is not an epic's name: lower-case letters, digits and `-`, as `genesis`")),
+        }
+    }
+
+    /// [`EpicName::GENESIS`].
+    pub fn genesis() -> Self {
+        Self(Self::GENESIS.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for EpicName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// ORG-3: a shortcode's letters — ASCII letters and digits, upper case (a
 /// code is read case-blind and kept upper case), 1 to [`CODE_MAX`]. ORG-9:
 /// in hyphen-separated segments (`SYNAPSE-CC`) — [`is_code`]'s rule.
@@ -335,6 +405,12 @@ impl JsonSchema for ShortcodeId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Namespace {
     pub org: OrgId,
+    /// ORG-13: the epic it is in — the `eras` table's row (0: none read yet,
+    /// a namespace from before ORG-13). A root's is its own; a hosted
+    /// shortcode's is its host's: a shortcode lives in one epic with
+    /// everything it hosts.
+    #[serde(default)]
+    pub era: i64,
     pub host: Option<ShortcodeId>,
 }
 
@@ -539,6 +615,11 @@ pub enum At {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Address {
     pub org: Option<OrgId>,
+    /// ORG-13: the epic it names — `org:epic:ROOT/…/SC-N`, only after an
+    /// org. An address that names its org and no epic names the org's
+    /// first epic (every address written before ORG-13 keeps its meaning);
+    /// one that names no org is read in the reader's current epic first.
+    pub era: Option<EpicName>,
     pub hosts: Vec<Code>,
     pub code: Code,
     pub at: At,
@@ -561,6 +642,11 @@ impl Address {
             Some((o, rest)) => (Some(OrgId::new(o)?), rest),
             None => (None, t),
         };
+        // ORG-13: `org:epic:…` — an epic's name, before any `/`.
+        let (era, rest) = match (&org, rest.split_once(':')) {
+            (Some(_), Some((e, r))) if !e.contains('/') => (Some(EpicName::new(e)?), r),
+            _ => (None, rest),
+        };
         let segments: Vec<&str> = rest.split('/').collect();
         let path_at = segments.iter().position(|s| s.starts_with('_'));
         let (names, path) = match path_at {
@@ -575,7 +661,7 @@ impl Address {
             if path.len() <= "_".len() || path.ends_with('/') {
                 return Err(format!("`{t}`: a path names something after its `_`, as _MENGER/board"));
             }
-            return Ok(Self { org, hosts, code: Code::parse(last)?, at: At::Path(path) });
+            return Ok(Self { org, era, hosts, code: Code::parse(last)?, at: At::Path(path) });
         }
         // ORG-9: a code may hold hyphens; only the last `-N`, digits, is a
         // ticket's number — and no code ends in a segment of digits, so
@@ -583,13 +669,13 @@ impl Address {
         if let Some((code, n)) = last.rsplit_once('-') {
             if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) {
                 let seq = n.parse::<u32>().map_err(|_| format!("`{t}`: {n} is past the last number a ticket can have"))?;
-                return Ok(Self { org, hosts, code: Code::parse(code)?, at: At::Seq(seq) });
+                return Ok(Self { org, era, hosts, code: Code::parse(code)?, at: At::Seq(seq) });
             }
             if !is_code(last.trim()) {
                 return Err(format!("`{t}` is not an address: a ticket is SC-N, its number digits"));
             }
         }
-        Ok(Self { org, hosts, code: Code::parse(last)?, at: At::Shortcode })
+        Ok(Self { org, era, hosts, code: Code::parse(last)?, at: At::Shortcode })
     }
 
     /// Whether this is the bare `SC-N` or `SC` a reader typed before ORG-3 —
@@ -609,6 +695,9 @@ impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(org) = &self.org {
             write!(f, "{org}:")?;
+        }
+        if let Some(era) = self.era.as_ref().filter(|_| self.org.is_some()) {
+            write!(f, "{era}:")?;
         }
         for h in &self.hosts {
             write!(f, "{h}/")?;
@@ -640,6 +729,15 @@ pub fn shortcode_address(org: &OrgId, chain: &[&str]) -> String {
     format!("{org}:{}", chain.join("/"))
 }
 
+/// ORG-13: [`shortcode_address`] in an epic — `org:epic:ROOT/…/SC`; `None`
+/// for the org's first epic, whose addresses are written as before.
+pub fn shortcode_address_in(org: &OrgId, era: Option<&EpicName>, chain: &[&str]) -> String {
+    match era {
+        Some(e) => format!("{org}:{e}:{}", chain.join("/")),
+        None => shortcode_address(org, chain),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -651,7 +749,7 @@ mod tests {
     #[test]
     fn a_bare_id_is_a_code_and_a_number() {
         let a = Address::parse("theme-3").unwrap();
-        assert_eq!(a, Address { org: None, hosts: vec![], code: code("THEME"), at: At::Seq(3) });
+        assert_eq!(a, Address { org: None, era: None, hosts: vec![], code: code("THEME"), at: At::Seq(3) });
         assert!(a.is_bare() && a.names_ticket());
         assert_eq!(a.to_string(), "THEME-3");
     }

@@ -25,7 +25,7 @@
 
 use super::rollup::Rollups;
 use super::{Cache, Rows, StoreError};
-use crate::address::{shortcode_address, Address, At, Code, Namespace, OrgId, Shortcode, ShortcodeId, TicketName};
+use crate::address::{shortcode_address_in, Address, At, Code, EpicName, Namespace, OrgId, Shortcode, ShortcodeId, TicketName};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeMap, HashMap};
 
@@ -42,9 +42,9 @@ pub(super) const TABLES: &str = "
             org    INTEGER NOT NULL REFERENCES orgs (id),
             host   TEXT,
             code   TEXT NOT NULL,
-            pinned INTEGER NOT NULL DEFAULT 0
+            pinned INTEGER NOT NULL DEFAULT 0,
+            era    INTEGER
         ) WITHOUT ROWID;
-        CREATE UNIQUE INDEX IF NOT EXISTS shortcodes_ns ON shortcodes (org, ifnull(host, ''), code);
         CREATE TABLE IF NOT EXISTS pins (
             text   TEXT PRIMARY KEY,
             ticket TEXT NOT NULL
@@ -54,6 +54,68 @@ pub(super) const TABLES: &str = "
             org  INTEGER NOT NULL REFERENCES orgs (id)
         ) WITHOUT ROWID;
     ";
+
+/// ORG-13: the epics' tables — each organization's epics (its first holds
+/// everything made before epics), and each principal's current one per
+/// organization. Additive: an older build never reads them. The namespace
+/// index gains the epic ([`ensure_eras`]), so one code may be a root in two
+/// epics of one organization.
+pub(super) const ERA_TABLES: &str = "
+        CREATE TABLE IF NOT EXISTS eras (
+            id           INTEGER PRIMARY KEY,
+            org          INTEGER NOT NULL REFERENCES orgs (id),
+            name         TEXT NOT NULL,
+            created_unix INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS eras_name ON eras (org, name);
+        CREATE TABLE IF NOT EXISTS era_choices (
+            principal TEXT NOT NULL,
+            org       INTEGER NOT NULL,
+            era       INTEGER NOT NULL,
+            PRIMARY KEY (principal, org)
+        ) WITHOUT ROWID;
+    ";
+
+/// ORG-13: the epics made to cover the file — idempotent, in the caller's
+/// transaction, after the shortcodes' tables and the organizations are
+/// there: the epics' tables; the shortcodes' `era` column (a file from
+/// before ORG-13 gains it, every row NULL); every organization without an
+/// epic given its first, `genesis`; every shortcode without an epic of its
+/// organization put in that organization's first; and the namespace index
+/// made `(org, era, host, code)` — ORG-3's `(org, host, code)` index
+/// dropped. Writes nothing else: no ticket, no pin, no address. Returns how
+/// many shortcodes it placed.
+pub(super) fn ensure_eras(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute_batch(ERA_TABLES)?;
+    let has_era: i64 = conn.query_row("SELECT count(*) FROM pragma_table_info('shortcodes') WHERE name = 'era'", [], |r| r.get(0))?;
+    if has_era == 0 {
+        conn.execute_batch("ALTER TABLE shortcodes ADD COLUMN era INTEGER")?;
+    }
+    conn.execute(
+        "INSERT INTO eras (org, name, created_unix) SELECT id, ?1, CAST(strftime('%s', 'now') AS INTEGER) FROM orgs
+             WHERE id NOT IN (SELECT org FROM eras) ORDER BY id",
+        [EpicName::GENESIS],
+    )?;
+    let placed = conn.execute(
+        "UPDATE shortcodes SET era = (SELECT min(e.id) FROM eras e WHERE e.org = shortcodes.org)
+             WHERE era IS NULL OR era NOT IN (SELECT e.id FROM eras e WHERE e.org = shortcodes.org)",
+        [],
+    )?;
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS shortcodes_ns;
+         CREATE UNIQUE INDEX IF NOT EXISTS shortcodes_ns_era ON shortcodes (org, ifnull(era, 0), ifnull(host, ''), code);",
+    )?;
+    Ok(placed)
+}
+
+/// ORG-13: one epic as the registry keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Era {
+    /// Its organization's row.
+    pub(super) org: i64,
+    pub(super) name: EpicName,
+    pub(super) created: i64,
+}
 
 /// Which organizations a read may resolve in — ORG-4: a caller's, the
 /// organizations it holds a role in (`All` for `*`, and with login off).
@@ -119,6 +181,12 @@ pub(super) struct Registry {
     /// next ticket of it is born past it, as past a deleted one's: an old id
     /// keeps naming the ticket that moved.
     moved_last: HashMap<ShortcodeId, u32>,
+    /// ORG-13: every epic, by its row (the `eras` table).
+    pub(super) eras: BTreeMap<i64, Era>,
+    /// ORG-13: each principal's current epic in each organization (the
+    /// `era_choices` table) — `(principal, org row) → era row`; one with
+    /// none is in its organization's newest.
+    pub(super) choices: HashMap<(String, i64), i64>,
 }
 
 impl Registry {
@@ -142,9 +210,68 @@ impl Registry {
         self.entries.get(id).map_or_else(|| Code::stored(id.as_str()), |e| e.sc.code.clone())
     }
 
-    /// `id`'s full address, `org:ROOT/…/SC`.
+    /// `id`'s full address, `org:ROOT/…/SC` — ORG-13: `org:epic:ROOT/…/SC`
+    /// past its organization's first epic.
     pub(super) fn address(&self, id: &ShortcodeId) -> String {
         self.entries.get(id).map_or_else(|| format!("{}:{}", self.first_org(), id.as_str()), |e| e.address.clone())
+    }
+
+    /// ORG-13: the first epic of the organization `org` (its row) — the one
+    /// everything before epics is in, whose addresses name no epic.
+    pub(super) fn first_era(&self, org: i64) -> Option<i64> {
+        self.eras.iter().find(|(_, e)| e.org == org).map(|(id, _)| *id)
+    }
+
+    /// ORG-13: `org`'s newest epic — where a principal who chose none is.
+    pub(super) fn newest_era(&self, org: i64) -> Option<i64> {
+        self.eras.iter().rev().find(|(_, e)| e.org == org).map(|(id, _)| *id)
+    }
+
+    /// ORG-13: `org`'s epic called `name`.
+    pub(super) fn era_named(&self, org: i64, name: &str) -> Option<i64> {
+        self.eras.iter().find(|(_, e)| e.org == org && e.name.as_str() == name.trim()).map(|(id, _)| *id)
+    }
+
+    /// ORG-13: the epic `id` is in (0 when the registry places it nowhere).
+    pub(super) fn era_of(&self, id: &ShortcodeId) -> i64 {
+        self.entries.get(id).map_or(0, |e| e.sc.ns.era)
+    }
+
+    /// ORG-13: an epic's name as an address writes it — `None` for its
+    /// organization's first (and for none).
+    fn era_label(&self, era: i64) -> Option<&EpicName> {
+        let e = self.eras.get(&era)?;
+        (self.first_era(e.org) != Some(era)).then_some(&e.name)
+    }
+
+    /// ORG-13: whether some organization holds more than one epic — until
+    /// one does, nothing reads differently.
+    pub(super) fn several_eras(&self) -> bool {
+        let mut orgs = std::collections::HashSet::new();
+        self.eras.values().any(|e| !orgs.insert(e.org))
+    }
+
+    /// ORG-13: `principal`'s current epic in `org` — its choice, else the
+    /// newest.
+    pub(super) fn current_era(&self, principal: &str, org: i64) -> Option<i64> {
+        self.choices.get(&(principal.to_string(), org)).copied().filter(|e| self.eras.contains_key(e)).or_else(|| self.newest_era(org))
+    }
+
+    /// ORG-13: the epics a call is read in first — its caller's current one
+    /// in each organization (the call's act names the caller); none outside
+    /// a call, or while no organization holds more than one.
+    pub(super) fn preferred_now(&self) -> Vec<i64> {
+        if !self.several_eras() {
+            return Vec::new();
+        }
+        let Some(me) = super::eras::reader_now() else { return Vec::new() };
+        self.orgs.keys().filter_map(|o| self.current_era(&me, *o)).collect()
+    }
+
+    /// ORG-13: `ids` narrowed to the epics `pref` names — `None` when none
+    /// of them is there.
+    fn in_eras<'i>(&self, ids: impl IntoIterator<Item = &'i ShortcodeId>, pref: &[i64]) -> Vec<ShortcodeId> {
+        ids.into_iter().filter(|id| pref.contains(&self.era_of(id))).cloned().collect()
     }
 
     /// The full address of `id`'s ticket numbered `seq`.
@@ -196,7 +323,8 @@ impl Registry {
             .keys()
             .map(|id| {
                 let chain: Vec<&str> = self.chain(id).into_iter().map(|c| self.entries[c].sc.code.as_str()).collect();
-                (id.clone(), shortcode_address(&self.entries[id].sc.ns.org, &chain))
+                let ns = &self.entries[id].sc.ns;
+                (id.clone(), shortcode_address_in(&ns.org, self.era_label(ns.era), &chain))
             })
             .collect();
         let mut moved = Vec::new();
@@ -270,6 +398,17 @@ impl Registry {
                 if !reach.holds(&e.sc.ns.org) || a.org.as_ref().is_some_and(|o| self.canonical(o) != Some(&e.sc.ns.org)) {
                     return false;
                 }
+                // ORG-13: an address that names its org names an epic — the
+                // one it names, else the org's first.
+                if a.org.is_some() {
+                    let ok = match &a.era {
+                        Some(name) => self.era_named(e.org, name) == Some(e.sc.ns.era),
+                        None => e.sc.ns.era == 0 || self.first_era(e.org).is_none_or(|f| f == e.sc.ns.era),
+                    };
+                    if !ok {
+                        return false;
+                    }
+                }
                 // The hosts named, in order, among the chain above it.
                 let chain = self.chain(id);
                 let above = &chain[..chain.len().saturating_sub(1)];
@@ -299,13 +438,24 @@ impl Registry {
         if a.names_ticket() {
             return Found::None;
         }
-        if a.is_bare() {
-            let plain = ShortcodeId::new(a.code.as_str());
-            if self.entries.get(&plain).is_some_and(|e| e.pinned && reach.holds(&e.sc.ns.org)) {
-                return Found::One(plain);
+        // ORG-13: the caller's current epic first — a pin there, then a
+        // match there — then the pin, then every match.
+        let pref = self.preferred_now();
+        let pinned = Some(ShortcodeId::new(a.code.as_str()))
+            .filter(|plain| a.is_bare() && self.entries.get(plain).is_some_and(|e| e.pinned && reach.holds(&e.sc.ns.org)));
+        if let Some(p) = pinned.as_ref().filter(|p| pref.is_empty() || pref.contains(&self.era_of(p))) {
+            return Found::One(p.clone());
+        }
+        let mut ids = self.matching(&a, reach);
+        if a.org.is_none() && !pref.is_empty() {
+            let mine = self.in_eras(&ids, &pref);
+            match (mine.is_empty(), pinned) {
+                (false, _) => ids = mine,
+                (true, Some(p)) => return Found::One(p),
+                (true, None) => {}
             }
         }
-        self.found(self.matching(&a, reach))
+        self.found(ids)
     }
 
     /// Every shortcode's id.
@@ -423,7 +573,29 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Registry> {
             .map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, e.into()))?;
         r.orgs.insert(row.get(0)?, org);
     }
-    let mut stmt = conn.prepare("SELECT id, org, host, code, pinned FROM shortcodes")?;
+    // ORG-13: the epics, and each shortcode's (a file from before ORG-13
+    // has neither: every shortcode is then in no epic until the next open).
+    let has_era: i64 = conn.query_row("SELECT count(*) FROM pragma_table_info('shortcodes') WHERE name = 'era'", [], |r| r.get(0))?;
+    let eras: i64 = conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('eras', 'era_choices')", [], |r| r.get(0))?;
+    if eras == 2 {
+        let mut stmt = conn.prepare("SELECT id, org, name, created_unix FROM eras ORDER BY id")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(2)?;
+            let name = EpicName::new(&name).map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, e.into()))?;
+            r.eras.insert(row.get(0)?, Era { org: row.get(1)?, name, created: row.get(3)? });
+        }
+        let mut stmt = conn.prepare("SELECT principal, org, era FROM era_choices")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            r.choices.insert((row.get(0)?, row.get(1)?), row.get(2)?);
+        }
+    }
+    let sql = match has_era {
+        0 => "SELECT id, org, host, code, pinned, 0 FROM shortcodes",
+        _ => "SELECT id, org, host, code, pinned, ifnull(era, 0) FROM shortcodes",
+    };
+    let mut stmt = conn.prepare(sql)?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let org: i64 = row.get(1)?;
@@ -440,7 +612,7 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Registry> {
         r.insert(Entry {
             sc: Shortcode {
                 id: ShortcodeId::new(&id),
-                ns: Namespace { org: org_name, host: host.as_deref().map(ShortcodeId::new) },
+                ns: Namespace { org: org_name, era: row.get(5)?, host: host.as_deref().map(ShortcodeId::new) },
                 code: Code::stored(&code),
             },
             org,
@@ -473,11 +645,18 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Registry> {
 pub(super) fn put(conn: &Connection, r: &Registry, id: &ShortcodeId) -> rusqlite::Result<()> {
     let e = &r.entries[id];
     conn.prepare_cached(
-        "INSERT INTO shortcodes (id, org, host, code, pinned) VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO shortcodes (id, org, host, code, pinned, era) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (id) DO UPDATE SET org = excluded.org, host = excluded.host, code = excluded.code,
-                 pinned = excluded.pinned",
+                 pinned = excluded.pinned, era = excluded.era",
     )?
-    .execute(params![e.sc.id.as_str(), e.org, e.sc.ns.host.as_ref().map(ShortcodeId::as_str), e.sc.code.as_str(), e.pinned])?;
+    .execute(params![
+        e.sc.id.as_str(),
+        e.org,
+        e.sc.ns.host.as_ref().map(ShortcodeId::as_str),
+        e.sc.code.as_str(),
+        e.pinned,
+        (e.sc.ns.era != 0).then_some(e.sc.ns.era)
+    ])?;
     Ok(())
 }
 
@@ -546,6 +725,26 @@ impl Cache {
                 if !written.contains(sc) {
                     written.push(sc.clone());
                 }
+            }
+        }
+        // ORG-13: a hosted shortcode is in its host's epic — settled down
+        // every chain of hosts.
+        for _ in 0..ids.len().max(1) {
+            let mut moved = false;
+            for sc in &ids {
+                let Some(h) = next.entries[sc].sc.ns.host.clone() else { continue };
+                let era = next.era_of(&h);
+                let e = next.entries.get_mut(sc).expect("listed");
+                if era != 0 && e.sc.ns.era != era {
+                    e.sc.ns.era = era;
+                    moved = true;
+                    if !written.contains(sc) {
+                        written.push(sc.clone());
+                    }
+                }
+            }
+            if !moved {
+                break;
             }
         }
         if written.is_empty() {
@@ -636,12 +835,18 @@ impl Cache {
             OrgReach::All => true,
             OrgReach::Only(_) => self.get(key).and_then(|r| self.shortcodes.org(&r.shortcode)).is_some_and(|o| reach.holds(o)),
         };
-        if let Some(key) = self.shortcodes.pin(t).filter(|k| held(k) && reachable(k)) {
-            return Found::One(key.to_string());
+        // ORG-13: the caller's current epic first — a pin there, then a
+        // match there — then the pin, then every match.
+        let pref = self.shortcodes.preferred_now();
+        let in_pref = |key: &str| self.get(key).is_some_and(|r| pref.contains(&self.shortcodes.era_of(&r.shortcode)));
+        let pinned = self.shortcodes.pin(t).filter(|k| held(k) && reachable(k)).map(str::to_string);
+        if let Some(key) = pinned.as_ref().filter(|k| pref.is_empty() || in_pref(k)) {
+            return Found::One(key.clone());
         }
         let a = match Address::parse(t) {
             Ok(a) => a,
             // Not an address: a key as the store minted it, or nothing.
+            Err(_) if pinned.is_some() => return Found::One(pinned.unwrap_or_default()),
             Err(_) => return if self.at.contains_key(t) { Found::One(t.to_string()) } else { Found::None },
         };
         let mut keys: Vec<String> = Vec::new();
@@ -661,6 +866,16 @@ impl Cache {
                 },
             };
             keys.push(key);
+        }
+        if a.org.is_none() && !pref.is_empty() {
+            let mine: Vec<String> = keys.iter().filter(|k| in_pref(k)).cloned().collect();
+            match (mine.is_empty(), &pinned) {
+                (false, _) => keys = mine,
+                (true, Some(p)) => return Found::One(p.clone()),
+                (true, None) => {}
+            }
+        } else if let Some(p) = pinned {
+            return Found::One(p);
         }
         // A shortcode the registry does not hold yet (a hand edit's): its
         // bare id is still its key, as before ORG-3.
@@ -691,7 +906,8 @@ impl Cache {
         let At::Seq(n) = a.at else { return Ok(TicketName::new(t)) };
         if a.is_bare() {
             let plain = ShortcodeId::new(a.code.as_str());
-            if self.shortcodes.entries.get(&plain).is_some_and(|e| e.pinned) {
+            let pref = self.shortcodes.preferred_now();
+            if self.shortcodes.entries.get(&plain).is_some_and(|e| e.pinned && (pref.is_empty() || pref.contains(&e.sc.ns.era))) {
                 return Ok(TicketName::new(plain.key(n)));
             }
         }
@@ -740,6 +956,11 @@ pub(super) fn settle(conn: &mut Connection, cache: &mut Cache) -> anyhow::Result
     if first {
         tx.execute("INSERT INTO orgs (id, name) VALUES (1, ?1)", [OrgId::HYPERMEMETIC])?;
     }
+    // ORG-13: every organization its first epic, every shortcode in one.
+    let placed = ensure_eras(&tx)?;
+    if placed > 0 && !first {
+        tracing::warn!("ORG-13: put {placed} shortcode(s) into their organization's first epic ({}), durably; nothing else moved", EpicName::GENESIS);
+    }
     let mut r = load(&tx)?;
     let adopted = adopt(&mut r, cache, first)?;
     for sc in &adopted {
@@ -783,6 +1004,8 @@ fn adopt(r: &mut Registry, cache: &Cache, pinned: bool) -> anyhow::Result<Vec<Sh
     // ORG-4: the first organization, whatever it is called now.
     let org = r.first_org();
     let org_row = r.org_row(&org).ok_or_else(|| anyhow::anyhow!("no organization {org}"))?;
+    // ORG-13: into the organization's first epic.
+    let era = r.first_era(org_row).unwrap_or(0);
     let mut named: Vec<ShortcodeId> = cache.ids.last_seqs().map(|(sc, _)| sc.clone()).collect();
     named.extend(cache.tombstones.shortcodes());
     named.sort();
@@ -793,7 +1016,7 @@ fn adopt(r: &mut Registry, cache: &Cache, pinned: bool) -> anyhow::Result<Vec<Sh
     for sc in fresh {
         let host = derived_host(rows, &cache.rollups, &sc);
         let code = Code::stored(sc.as_str().split('.').next().unwrap_or(sc.as_str()));
-        r.insert(Entry { sc: Shortcode { id: sc.clone(), ns: Namespace { org: org.clone(), host }, code }, org: org_row, pinned, address: String::new() });
+        r.insert(Entry { sc: Shortcode { id: sc.clone(), ns: Namespace { org: org.clone(), era, host }, code }, org: org_row, pinned, address: String::new() });
         adopted.push(sc);
     }
     r.readdress();
@@ -808,6 +1031,10 @@ impl Cache {
         let mut r = std::mem::take(&mut self.shortcodes);
         if r.orgs.is_empty() {
             r.orgs.insert(1, OrgId::hypermemetic());
+        }
+        // ORG-13: and its first epic, as [`ensure_eras`] will store it.
+        if r.first_era(1).is_none() && r.eras.is_empty() {
+            r.eras.insert(1, Era { org: 1, name: EpicName::genesis(), created: 0 });
         }
         let adopted = adopt(&mut r, self, false).unwrap_or_default();
         self.shortcodes = r;
@@ -839,12 +1066,12 @@ pub(super) fn check(conn: &Connection, scanned: &Cache) -> rusqlite::Result<Opti
         }
     }
     let mut stmt = conn.prepare(
-        "SELECT org, ifnull(host, ''), code, count(*) FROM shortcodes GROUP BY org, ifnull(host, ''), code HAVING count(*) > 1",
+        "SELECT org, ifnull(host, ''), code, count(*) FROM shortcodes GROUP BY org, ifnull(era, 0), ifnull(host, ''), code HAVING count(*) > 1",
     )?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let (org, host, code, n): (i64, String, String, i64) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
-        out.push(format!("shortcodes: {n} rows hold {code} in org {org}, host '{host}' — a code is unique in its namespace"));
+        out.push(format!("shortcodes: {n} rows hold {code} in org {org}, one epic, host '{host}' — a code is unique in its namespace"));
     }
     let rows = scanned.rows();
     for e in r.entries.values() {
@@ -923,6 +1150,21 @@ impl rusqlite::types::FromSql for ShortcodeId {
     }
 }
 
+impl Cache {
+    /// ORG-13: the epic a new root shortcode of `org` is born in — the one
+    /// `asked` names (refused when `org` has none of that name), else the
+    /// caller's current one, else the organization's first.
+    pub(super) fn era_to_mint(&self, org: &OrgId, asked: &Address) -> Result<i64, StoreError> {
+        let r = &self.shortcodes;
+        let Some(row) = r.org_row(org) else { return Ok(0) };
+        if let Some(name) = &asked.era {
+            return r.era_named(row, name).ok_or_else(|| StoreError::Invalid(format!("no epic `{name}` in {org} (nothing was written)")));
+        }
+        let me = super::eras::reader_now();
+        Ok(me.and_then(|p| r.current_era(&p, row)).or_else(|| r.first_era(row)).unwrap_or(0))
+    }
+}
+
 /// ORG-3: where a `create` (or a note's upgrade) files its ticket — a
 /// shortcode there is, or one the write mints with it.
 #[derive(Debug, Clone)]
@@ -973,7 +1215,8 @@ impl Cache {
                 ))),
                 Found::None => {
                     let org = asked_org.unwrap_or_else(|| r.first_org());
-                    Ok(Target::Mint(r.mint(Namespace { org, host: None }, asked.code.clone())?))
+                    let era = self.era_to_mint(&org, asked)?;
+                    Ok(Target::Mint(r.mint(Namespace { org, era, host: None }, asked.code.clone())?))
                 }
             };
         };
@@ -988,7 +1231,15 @@ impl Cache {
         if r.code(psc) == asked.code && (asked.hosts.is_empty() || r.matching(asked, OrgReach::All).contains(psc)) {
             return Ok(Target::In(psc.clone()));
         }
-        let ns = Namespace { org, host: Some(psc.clone()) };
+        // ORG-13: under a parent, in its epic — an address naming another is
+        // refused.
+        let era = r.era_of(psc);
+        if let Some(name) = &asked.era {
+            if r.org_row(&org).and_then(|o| r.era_named(o, name)) != Some(era) {
+                return Err(StoreError::Invalid(format!("{} is not in the epic {name}: a ticket is filed in its parent's epic (nothing was created)", p.id)));
+            }
+        }
+        let ns = Namespace { org, era, host: Some(psc.clone()) };
         if let Some(there) = r.in_namespace(&ns, &asked.code) {
             if roots && self.ids.held(there) > 0 {
                 return Err(r.taken(there, &ns, &asked.code, None));

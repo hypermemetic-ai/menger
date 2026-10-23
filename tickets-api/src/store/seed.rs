@@ -195,6 +195,8 @@ impl Store {
             if tx.query_row("SELECT count(*) FROM orgs", [], |r| r.get::<_, i64>(0))? == 0 {
                 tx.execute("INSERT INTO orgs (id, name) VALUES (1, ?1)", [crate::address::OrgId::HYPERMEMETIC])?;
             }
+            // ORG-13: and its first epic, which the seed's shortcodes are in.
+            shortcodes::ensure_eras(&tx)?;
             for sc in &minted {
                 shortcodes::put(&tx, &registry, sc)?;
             }

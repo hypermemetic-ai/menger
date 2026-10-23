@@ -233,7 +233,8 @@ async fn a_file_from_before_org_3_gains_its_shortcodes_once_and_answers_as_befor
     drop(store);
     rusqlite::Connection::open(&path)
         .unwrap()
-        .execute_batch("DROP TABLE shortcodes; DROP TABLE pins; DROP TABLE orgs; UPDATE derived_state SET form = 10;")
+        // ORG-13: nor the epics' tables, which reference the orgs.
+        .execute_batch("DROP TABLE era_choices; DROP TABLE eras; DROP TABLE shortcodes; DROP TABLE pins; DROP TABLE orgs; UPDATE derived_state SET form = 10;")
         .unwrap();
     let store = Store::open(&path).unwrap();
     assert_eq!(store.page(SYS, PageQuery::default()).unwrap().tickets, before, "every ticket as before");

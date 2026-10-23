@@ -835,6 +835,12 @@ pub(crate) fn orgs_client() -> Option<menger_tickets_api::OrgsClient<Rc<WsTransp
     TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::OrgsClient::new)
 }
 
+/// ORG-13: the `epics` activation's typed client, over the same connection
+/// — the nav head's epic switcher.
+pub(crate) fn epics_client() -> Option<menger_tickets_api::EpicsClient<Rc<WsTransport>>> {
+    TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::EpicsClient::new)
+}
+
 /// IDENTITY-22: the `members` activation's typed client, over the same
 /// connection.
 pub(crate) fn members_client() -> Option<menger_tickets_api::MembersClient<Rc<WsTransport>>> {
@@ -971,6 +977,8 @@ async fn session(
     // ORG-4: the organizations the reader holds a role in — the header's
     // switcher, on every connection.
     crate::orgs::refresh();
+    // ORG-13: and its epics — the nav head's switcher.
+    crate::epics::refresh();
     // APP-94: on a reconnect, every view's own read asked again, in place.
     if again {
         crate::data::resync();

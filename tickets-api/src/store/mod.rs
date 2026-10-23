@@ -5399,6 +5399,7 @@ mod versions;
 // TICKETS-7: every change keeps a revision.
 pub(crate) mod revisions;
 pub use revisions::{acting, say_act, DiffView, RevisionPage, Restoring};
+pub use eras::{reading_as, reading_now};
 mod queue;
 pub use queue::{QueueAsk, QueueChange};
 /// TICKETS-9: the assignees and their history.
@@ -5476,6 +5477,10 @@ mod shortcodes;
 mod orgs;
 #[cfg(test)]
 mod tests_orgs;
+// ORG-13: epics — made, renamed, deleted, chosen; the read a reader is in.
+mod eras;
+#[cfg(test)]
+mod tests_epics;
 #[cfg(test)]
 mod tests_teams;
 // The create write, in a module of its own (MENGER-29).

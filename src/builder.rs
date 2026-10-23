@@ -1,5 +1,5 @@
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, MediaActivation, MembersActivation, NotesActivation, OrgsActivation, ProviderOffer, SessionActivation, ThemesActivation, TicketsActivation};
+use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, EpicsActivation, MediaActivation, MembersActivation, NotesActivation, OrgsActivation, ProviderOffer, SessionActivation, ThemesActivation, TicketsActivation};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
@@ -214,6 +214,8 @@ pub async fn build_rpc_login(
         .register(DeploymentsActivation::with_access(Arc::clone(&store), access.clone()))
         // ORG-4: `orgs` beside `members` — the organizations, and their making.
         .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
+        // ORG-13: `epics` beside `orgs` — the level that holds shortcodes.
+        .register(EpicsActivation::with_access(Arc::clone(&store), access.clone()))
         .register(MembersActivation::new(store, access.clone()))
         // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
         .register(SessionActivation::offering(offers, access.clone()));

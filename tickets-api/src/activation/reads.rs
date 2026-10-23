@@ -102,7 +102,7 @@ pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk)
     stream! {
         // ACCESS-10: the caller's own filter; the store answers it within
         // the caller's reach.
-        let filter = match asked(filter.as_deref()) {
+        let filter = match asked(&store, &caller, filter.as_deref()) {
             Ok(v) => v,
             Err(message) => {
                 yield TicketsEvent::Error { message };
@@ -181,7 +181,7 @@ pub(super) fn ready_stream(store: Arc<Store>, caller: VerifiedUser, ask: ReadyAs
     let ReadyAsk { epic, after, limit, summary, filter, tz } = ask;
     let epic = epic.map(String::from);
     stream! {
-        let filter = match asked(filter.as_deref()) {
+        let filter = match asked(&store, &caller, filter.as_deref()) {
             Ok(v) => v,
             Err(message) => {
                 yield TicketsEvent::Error { message };
@@ -246,7 +246,7 @@ pub(super) fn find_stream(
     tz: Option<Zone>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     let limit = Some(limit.unwrap_or(FIND_LIMIT));
-    let page = asked(filter.as_deref()).map_err(StoreError::Filter).and_then(|filter| match zoned_lens(&store, &caller, filter.as_ref(), tz.as_deref())? {
+    let page = asked(&store, &caller, filter.as_deref()).map_err(StoreError::Filter).and_then(|filter| match zoned_lens(&store, &caller, filter.as_ref(), tz.as_deref())? {
         // FILTER-15: the candidates the cells admit.
         Some(lens) => store.find_filtered(&caller, &query, &lens, after.as_deref(), limit),
         None => store.find_page(&caller, &query, after.as_deref(), limit),
@@ -267,7 +267,7 @@ pub(super) fn search_stream(
     stream! {
         // IDENTITY-21: only what this caller can see — its filter ANDed
         // with the shortcodes it holds a role on, as `find`'s is.
-        let filter = match asked(filter.as_deref()) {
+        let filter = match asked(&store, &caller, filter.as_deref()) {
             Ok(v) => v,
             Err(message) => {
                 yield TicketsEvent::Error { message };
@@ -298,7 +298,7 @@ pub(super) fn search_stream(
 pub(super) fn member_events(store: &Store, caller: &VerifiedUser, named: Vec<TicketRef>, filter: FilterText, tz: Option<Zone>) -> Vec<TicketsEvent> {
     // ACCESS-48: each echoed as asked, a `TicketRef`.
     let ids = texts(named.clone());
-    let filter = match asked(Some(&filter)) {
+    let filter = match asked(&store, &caller, Some(&filter)) {
         Ok(v) => v.unwrap_or_default(),
         Err(message) => return vec![TicketsEvent::Error { message }],
     };
@@ -324,7 +324,7 @@ pub(super) fn inputs_events(
     filter: Option<FilterText>,
     tz: Option<Zone>,
 ) -> Vec<TicketsEvent> {
-    let filter = match asked(filter.as_deref()) {
+    let filter = match asked(&store, &caller, filter.as_deref()) {
         Ok(v) => v,
         Err(message) => return vec![TicketsEvent::Error { message }],
     };
@@ -356,7 +356,7 @@ pub(super) struct TreeAsk {
 /// `tree` — the nav under a filter, from the kept tree.
 pub(super) fn tree_events(store: &Store, caller: &VerifiedUser, ask: TreeAsk) -> Vec<TicketsEvent> {
     let TreeAsk { parent, epic, filter, after, limit, matches_only, keep, tz } = ask;
-    let filter = match asked(Some(&filter)) {
+    let filter = match asked(&store, &caller, Some(&filter)) {
         Ok(v) => v.unwrap_or_default(),
         Err(message) => return vec![TicketsEvent::Error { message }],
     };

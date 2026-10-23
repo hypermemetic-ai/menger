@@ -181,6 +181,17 @@ impl Bound {
     pub(super) fn of(cache: &Cache, lens: &Lens, strict: bool) -> Result<Self, StoreError> {
         let mut names = Vec::new();
         for u in lens.unders() {
+            // ORG-13: `epic <name>` (`under ~NAME`) is every ticket of the
+            // epic(s) it names — bound to each of their shortcodes; one
+            // naming none holds nowhere.
+            if crate::filter::is_epic_name(u) {
+                let ids = cache.shortcodes.in_epic_named(u);
+                match ids.is_empty() {
+                    true => names.push((u.trim().to_ascii_uppercase(), u.clone())),
+                    false => names.extend(ids.into_iter().map(|id| (id.as_str().to_string(), u.clone()))),
+                }
+                continue;
+            }
             // ORG-4: `under acme:` is every ticket in the organization — bound
             // to each of its roots (every shortcode in it is one, or hosted
             // under one); an org with none, or no org, holds nowhere.

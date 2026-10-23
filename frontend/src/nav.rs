@@ -3050,6 +3050,9 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     "‹"
                 </button>
             </div>
+            // ORG-13: the epic the nav (and every filtered read) is in —
+            // when the organization holds more than one.
+            <crate::epics::EpicSwitcher />
             // FILTER-14: the nav's filter — FILTER-40: as chips in its head,
             // the global's dashed; the server-backed categories and the
             // panel's counts from `facets`.
@@ -4324,7 +4327,7 @@ fn leaf_row(
             <span class="toggle kind" title=move || kind.get() data-tag=move || crate::tags::Tag::kind(ticket.with(|t| t.kind)).attr()>
                 {move || kind_glyph(kind.get())}
             </span>
-            <span class="code" data-tag=crate::tags::Tag::ticket(&id).attr()>{id.clone()}</span>
+            <span class="code" data-tag=crate::tags::Tag::ticket(&id).attr()>{crate::epics::shown_id(&id)}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
             // FILTER-24: why a ticket the filter excludes is here.
             {move || {
