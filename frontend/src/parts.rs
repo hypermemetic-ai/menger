@@ -388,7 +388,7 @@ pub(crate) fn rule_of(p: &Predicate) -> Rule {
 /// window, or a transition, a birth, a touch or a hold — never `queued`,
 /// `asked` or a delivery stage without one, which read as flags.
 fn timed(h: &History) -> bool {
-    h.window.is_some() || matches!(h.event, Event::Entered(_) | Event::Left(_) | Event::Changed | Event::Created | Event::Touched | Event::Held(_))
+    h.window.is_some() || matches!(h.event, Event::Entered(_) | Event::Left(_) | Event::Changed | Event::Created | Event::Touched | Event::Held(_) | Event::Became(_))
 }
 
 fn rule_of_list(field: &Field, not: bool, values: Vec<String>, n: &Node) -> Rule {
@@ -564,6 +564,18 @@ mod tests {
         match &p.shape {
             Shape::Group { items, .. } => items,
             s => panic!("not a group: {s:?}"),
+        }
+    }
+
+    #[test]
+    fn a_rule_with_its_time_is_a_read_only_time_row() {
+        // FILTER-52's `status S <time>`: the time is FILTER-54's to edit.
+        for text in ["status Ready within 12h", "status in (Ready, Coding) today", "kind gap this week"] {
+            let (n, _) = of_text(text).expect(text);
+            let Node::Group { items, .. } = &n else { panic!("{text}: {n:?}") };
+            let [Node::Leaf(p)] = items.as_slice() else { panic!("{text}: one clause, {n:?}") };
+            let r = rule_of(p);
+            assert!(r.time && r.field == "When", "{text}: {r:?}");
         }
     }
 
