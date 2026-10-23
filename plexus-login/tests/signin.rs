@@ -249,7 +249,8 @@ async fn a_social_button_goes_out_and_back_bound_to_this_browser() {
         let c = Browser::new(&a);
         assert_eq!(c.social("myspace", "/").await.status, 404);
         assert_eq!(c.get("/login/social?provider=google").await.status, 405);
-        assert_eq!(c.post("/login/social", &[("provider", "google")]).await.status, 403);
+        let bare = c.post("/login/social", &[("provider", "google")]).await;
+        assert!(bare.status == 200 && bare.location.is_none() && bare.body.contains("That page was old"), "starts nothing, draws the page again: {}", bare.body);
     }
 }
 
@@ -449,24 +450,93 @@ async fn a_wrong_api_key_is_the_operator_s_problem_never_the_person_s() {
 
 // ── the safety list ─────────────────────────────────────────────────────
 
+/// ACCESS-60: a form of our own origin whose flow is gone is answered with
+/// the sign-in page on a fresh flow, keeping `next`.
+fn assert_drawn_again(r: &Resp, next: &str) {
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.body.contains("That page was old. Sign in again."), "{}", r.body);
+    assert!(r.body.contains(r#"action="/login/email""#) && r.body.contains(&format!(r#"name="next" value="{next}""#)), "{}", r.body);
+    assert!(r.headers.get_all("set-cookie").iter().count() >= 1, "a new flow cookie");
+    r.csrf();
+}
+
+#[tokio::test]
+async fn a_form_with_no_flow_cookie_draws_the_sign_in_page_again() {
+    let a = app(Under::memory()).await;
+    let b = Browser::new(&a);
+    let r = b.post("/login/email", &[("csrf", "1.stale"), ("email", "a@example.test"), ("next", "/ticket/ACCESS-60")]).await;
+    assert_drawn_again(&r, "/ticket/ACCESS-60");
+    // The fresh page's form works.
+    let sent = b.post("/login/email", &[("csrf", &r.csrf()), ("email", "a@example.test")]).await;
+    assert_eq!(sent.status, 200);
+    assert!(sent.body.contains("Check your email"), "{}", sent.body);
+}
+
+#[tokio::test]
+async fn a_form_after_the_store_forgot_the_flow_draws_the_sign_in_page_again() {
+    let a = app(Under::memory()).await;
+    let b = Browser::new(&a);
+    let csrf = b.csrf().await;
+    // A restart: the browser keeps a well-formed cookie for a flow nobody knows.
+    for v in b.jar.lock().unwrap().values_mut() {
+        *v = "f".repeat(43);
+    }
+    let r = b.post("/login/email", &[("csrf", &csrf), ("email", "a@example.test"), ("next", "/x")]).await;
+    assert_drawn_again(&r, "/x");
+    for (path, form) in [("/login/code", vec![("code", "123456")]), ("/login/resend", vec![]), ("/login/password", vec![("username", "u"), ("password", "p")])] {
+        for v in b.jar.lock().unwrap().values_mut() {
+            *v = "e".repeat(43);
+        }
+        let mut f = vec![("csrf", csrf.as_str())];
+        f.extend(form);
+        assert_drawn_again(&b.post(path, &f).await, "/");
+    }
+}
+
+#[tokio::test]
+async fn a_refused_form_is_the_styled_page_with_the_way_back() {
+    let a = app(Under::memory()).await;
+    let b = Browser::new(&a);
+    let csrf = b.csrf().await;
+    let mut evil = Browser::new(&a);
+    evil.origin = Some("https://evil.example".into());
+    for (k, v) in b.jar.lock().unwrap().iter() {
+        evil.jar.lock().unwrap().insert(k.clone(), v.clone());
+    }
+    let r = evil.post("/login/email", &[("csrf", &csrf), ("email", "a@example.test"), ("next", "/ticket/ACCESS-60")]).await;
+    assert_eq!(r.status, 403);
+    assert!(r.body.contains("Back to sign in") && r.body.contains(r#"href="/login?next=%2Fticket%2FACCESS-60""#), "{}", r.body);
+    // A wrong token for a live flow (one the table holds), too.
+    let live = b.post("/login/email", &[("csrf", &csrf), ("email", "a@example.test")]).await;
+    assert_eq!(live.status, 200);
+    let r = b.post("/login/email", &[("csrf", "1.forged"), ("email", "a@example.test")]).await;
+    assert_eq!(r.status, 403);
+    assert!(r.body.contains(r#"href="/login""#) && r.body.contains("<style"), "{}", r.body);
+}
+
 #[tokio::test]
 async fn a_form_without_this_browser_s_csrf_token_or_from_another_origin_is_refused() {
     let under = Under::memory();
     let a = app(under.clone()).await;
     let b = Browser::new(&a);
     let csrf = b.csrf().await;
-    assert_eq!(b.post("/login/email", &[("email", "a@example.test")]).await.status, 403, "no token");
-    assert_eq!(b.post("/login/email", &[("csrf", "forged"), ("email", "a@example.test")]).await.status, 403, "a forged token");
-    let other = Browser::new(&a);
-    let theirs = other.csrf().await;
-    assert_eq!(b.post("/login/email", &[("csrf", &theirs), ("email", "a@example.test")]).await.status, 403, "another browser's token");
     let mut evil = Browser::new(&a);
     evil.origin = Some("https://evil.example".into());
     for (k, v) in b.jar.lock().unwrap().iter() {
         evil.jar.lock().unwrap().insert(k.clone(), v.clone());
     }
     assert_eq!(evil.post("/login/email", &[("csrf", &csrf), ("email", "a@example.test")]).await.status, 403, "another origin");
+    // A token that is nobody's, where no flow is live, is a page from before
+    // a restart: drawn again (ACCESS-60), and nothing is done.
+    assert_eq!(b.post("/login/email", &[("email", "a@example.test")]).await.status, 200, "no token, no live flow");
+    let csrf = b.csrf().await;
     assert_eq!(b.post("/login/email", &[("csrf", &csrf), ("email", "a@example.test")]).await.status, 200);
+    // The flow is live now: a wrong token for it is refused.
+    assert_eq!(b.post("/login/email", &[("email", "a@example.test")]).await.status, 403, "no token");
+    assert_eq!(b.post("/login/email", &[("csrf", "forged"), ("email", "a@example.test")]).await.status, 403, "a forged token");
+    let other = Browser::new(&a);
+    let theirs = other.csrf().await;
+    assert_eq!(b.post("/login/email", &[("csrf", &theirs), ("email", "a@example.test")]).await.status, 403, "another browser's token");
     for path in ["/login/code", "/login/continue", "/login/choose", "/login/resend", "/login/account/totp", "/login/account/totp/confirm", "/login/account/totp/remove"] {
         assert_eq!(b.post(path, &[("code", "123456")]).await.status, 403, "{path}");
     }

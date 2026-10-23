@@ -80,13 +80,8 @@ pub struct PageQuery {
     next: Option<String>,
 }
 
-/// A refused form: another site's `Origin`, or no (or a wrong) CSRF token.
-fn forbidden() -> Response {
-    page::respond(
-        StatusCode::FORBIDDEN,
-        page::Page::plain("<!doctype html><title>Forbidden</title><p>Forbidden: that form did not come from this sign-in page. Go back to the sign-in page and start again.</p>".into()),
-    )
-}
+/// ACCESS-60: said on the sign-in page drawn again for a form whose flow is gone.
+const OLD_PAGE: &str = "That page was old. Sign in again.";
 
 const WRONG: &str = "That code didn't work. Check it and try again.";
 /// IDENTITY-45: an emailed verification code that did not work — a typo,
@@ -178,20 +173,46 @@ impl SignInPage {
     }
 
     /// The flow id of a POST whose origin and CSRF token check out.
+    ///
+    /// ACCESS-60: a form of our own origin whose flow is gone (no cookie,
+    /// or the table forgot it — a restart, a sweep) draws the sign-in page
+    /// again on a fresh flow, keeping `next`; a foreign origin, or a token
+    /// that is wrong for a live flow (one in the table), is the styled 403.
     #[allow(clippy::result_large_err)]
-    fn posted(&self, headers: &HeaderMap, peer: &Peer, csrf: &str) -> Result<(Req, String), Response> {
+    fn posted(&self, headers: &HeaderMap, peer: &Peer, csrf: &str, next: Option<&str>) -> Result<(Req, String), Response> {
         let r = self.req(headers, peer);
         if !r.foreign && self.csrf_state(r.flow_id.as_deref(), csrf) == Csrf::Expired {
             let id = r.flow_id.clone().expect("an expired token names its flow");
             tracing::info!("a sign-in page past its token's life was drawn again");
             return Err(self.expired_page(&id));
         }
+        let next = self.cfg.return_to.check(next);
+        // A token that is no cookie's here and a flow nobody holds: a page
+        // from before a restart (the key is per process), or no cookie at all.
+        if !r.foreign && self.csrf_state(r.flow_id.as_deref(), csrf) == Csrf::Bad && !self.flow_known(r.flow_id.as_deref()) {
+            tracing::info!("a sign-in form whose flow is gone was answered with the page again");
+            return Err(match self.fresh_flow(None, next.clone(), &r) {
+                Ok((id, set)) => with_cookie(self.restart(&id, &next, OLD_PAGE, StatusCode::OK), Some(set)),
+                Err(resp) => resp,
+            });
+        }
         if r.foreign || !self.csrf_ok(r.flow_id.as_deref(), csrf) {
             tracing::warn!(foreign = r.foreign, "a sign-in form was refused: another origin, or no CSRF token of this browser's");
-            return Err(forbidden());
+            return Err(self.forbidden_page(&next));
         }
         let id = r.flow_id.clone().expect("csrf_ok needs a flow id");
         Ok((r, id))
+    }
+
+    fn flow_known(&self, id: Option<&str>) -> bool {
+        id.is_some_and(|i| self.with_flow(i, |_| ()).is_some())
+    }
+
+    /// A refused form (403), drawn like the rest, with the way back.
+    fn forbidden_page(&self, next: &str) -> Response {
+        let href = if next == "/" { "/login".to_string() } else { format!("/login?next={}", url::form_urlencoded::byte_serialize(next.as_bytes()).collect::<String>()) };
+        let main = format!(r#"<p class="note"><a href="{}" id="back-to-sign-in">Back to sign in</a></p>"#, esc(&href));
+        self.step_page("Sign in", "to continue", Some("That form did not come from this sign-in page."), main, StatusCode::FORBIDDEN)
     }
 
     /// What a backend's answer does to the attempt reserved for it
@@ -236,7 +257,7 @@ async fn callback(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Pe
 /// `POST /login/email`: an SSO domain goes to its IdP; any other address
 /// is sent a code, and every address gets the same page.
 async fn email(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<EmailForm>) -> Response {
-    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf, f.next.as_deref()) {
         Ok(x) => x,
         Err(resp) => return resp,
     };
@@ -304,7 +325,7 @@ fn send_and_ask(p: &Arc<SignInPage>, id: &str, address: String, info: RequestInf
 
 /// `POST /login/resend`: another code to the flow's address.
 async fn resend(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<CsrfForm>) -> Response {
-    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf, None) {
         Ok(x) => x,
         Err(resp) => return resp,
     };
@@ -321,7 +342,7 @@ async fn resend(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer
 
 /// `POST /login/code`: the emailed code, for the flow's address.
 async fn code(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<CodeForm>) -> Response {
-    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf, None) {
         Ok(x) => x,
         Err(resp) => return resp,
     };
@@ -380,7 +401,7 @@ async fn code(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, 
 
 /// `POST /login/password`: a username and password.
 async fn password(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<PasswordForm>) -> Response {
-    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf, f.next.as_deref()) {
         Ok(x) => x,
         Err(resp) => return resp,
     };
@@ -410,7 +431,7 @@ async fn password(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Pe
 /// `POST /login/continue`: a code a step waits for — a TOTP code, a factor
 /// enrolled at sign-in, an emailed verification or extra-check code.
 async fn continue_code(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<CodeForm>) -> Response {
-    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf, None) {
         Ok(x) => x,
         Err(resp) => return resp,
     };
@@ -444,7 +465,7 @@ async fn continue_code(State(p): State<Arc<SignInPage>>, headers: HeaderMap, pee
 /// a step waits to verify, throttled as code sends are (per address and
 /// client).
 async fn resend_step(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<CsrfForm>) -> Response {
-    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf, None) {
         Ok(x) => x,
         Err(resp) => return resp,
     };
@@ -473,7 +494,7 @@ async fn resend_step(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer:
 
 /// `POST /login/choose`: the organization picked.
 async fn choose(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<ChooseForm>) -> Response {
-    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf, None) {
         Ok(x) => x,
         Err(resp) => return resp,
     };
@@ -490,7 +511,7 @@ async fn choose(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer
 /// `POST /login/social` (`provider=google`): out to the provider. A form
 /// of this page's, with its CSRF token (AUTH-24 #4).
 async fn social(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<SocialForm>) -> Response {
-    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf, f.next.as_deref()) {
         Ok(x) => x,
         Err(resp) => return resp,
     };
@@ -580,7 +601,11 @@ impl SignInPage {
         if !r.foreign && self.csrf_state(r.flow_id.as_deref(), csrf) == Csrf::Expired {
             return Err((StatusCode::SEE_OTHER, [(header::LOCATION, "/login/account".to_string()), (header::CACHE_CONTROL, "no-store".into())]).into_response());
         }
-        let (r, id) = self.posted(headers, peer, csrf)?;
+        // Its flow gone (a restart): the account page again, not a sign-in.
+        if !r.foreign && self.csrf_state(r.flow_id.as_deref(), csrf) == Csrf::Bad && !self.flow_known(r.flow_id.as_deref()) {
+            return Err((StatusCode::SEE_OTHER, [(header::LOCATION, "/login/account".to_string()), (header::CACHE_CONTROL, "no-store".into())]).into_response());
+        }
+        let (r, id) = self.posted(headers, peer, csrf, None)?;
         Ok((r, id, self.holder(headers)?))
     }
 
