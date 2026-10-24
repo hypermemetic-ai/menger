@@ -9,9 +9,10 @@
 //!
 //! **On the frame** (ACCESS-13): `auth = "required"`, `request =
 //! MengerRequest`, every method's caller a [`VerifiedUser`], every
-//! description a `///` doc. `list`, `get`, `current` and `switch` are a
-//! viewer's — `switch` writes the caller's own setting, held on the
-//! organization; `create`, `rename` and `delete` are unlisted, so admin's,
+//! description a `///` doc. `list`, `get`, `current`, `switch`, `dismiss`
+//! and `watch` are a viewer's — `switch` and `dismiss` write the caller's
+//! own setting, held on the organization; `create`, `rename`, `delete`,
+//! `archive`, `restore` and `set_default` (ORG-23) are unlisted, so admin's,
 //! on the organization (or `*`). Every method reads in `org` — the
 //! caller's organization when it names none; one it holds no role in is
 //! `not_found`.
@@ -57,26 +58,29 @@ impl EpicsActivation {
 }
 
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
-/// Epics: a level of the organization that holds shortcodes; a new one starts fresh, its shortcodes numbered from 1. List, choose yours, and (admin) create, rename, delete.
+/// Epics: a level of the organization that holds shortcodes; a new one starts fresh, its shortcodes numbered from 1. Each person stays on their own epic (the org's default until they switch); list, choose yours, and (admin) create, rename, archive, restore, delete.
 #[plexus_macros::activation(
     auth = "required",
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["list", "get", "current", "switch"],
+        viewer = ["list", "get", "current", "switch", "dismiss", "watch"],
         editor = [viewer],
     )
 )]
 impl EpicsActivation {
-    /// The organization's epics, oldest first: one `epic { org, name, first, current, shortcodes, tickets, created_unix }` each.
+    /// The organization's live epics, oldest first: one `epic { org, name, first, default, current, members_on, shortcodes, tickets, created_unix, archived? }` each (--archived true: the archived ones too).
     #[plexus_macros::method(group = "read")]
     pub async fn list(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// The organization, e.g. hypermemetic (optional: your own).
         org: Option<OrgId>,
+        /// List the archived epics too (optional; default false).
+        archived: Option<bool>,
     ) -> impl Stream<Item = EpicsEvent> + Send + 'static {
-        streams::read(self.store.clone(), user, org, |store, org, me| Ok(store.epics(org, me)?.into_iter().map(|epic| EpicsEvent::Epic { epic }).collect()))
+        let all = archived.unwrap_or(false);
+        streams::read(self.store.clone(), user, org, move |store, org, me| Ok(store.epics(org, me, all)?.into_iter().map(|epic| EpicsEvent::Epic { epic }).collect()))
     }
 
     /// One epic of the organization by name; `not_found` when it has none of that name.
@@ -92,7 +96,7 @@ impl EpicsActivation {
         streams::read(self.store.clone(), user, org, move |store, org, me| Ok(vec![EpicsEvent::Epic { epic: store.epic(org, &name, me)? }]))
     }
 
-    /// The epic you are in, in the organization — your choice (switch), else its newest; yields current { epic }. A filtered read answers there unless its filter names epic (epic any: every one).
+    /// The epic you are in, in the organization — your choice (switch), else its default; yields current { epic, moved? } (moved: an archive moved you here, until dismiss). A filtered read answers there unless its filter names epic (epic any: every live one).
     #[plexus_macros::method(group = "read")]
     pub async fn current(
         &self,
@@ -100,7 +104,7 @@ impl EpicsActivation {
         /// The organization, e.g. hypermemetic (optional: your own).
         org: Option<OrgId>,
     ) -> impl Stream<Item = EpicsEvent> + Send + 'static {
-        streams::read(self.store.clone(), user, org, |store, org, me| Ok(vec![EpicsEvent::Current { epic: store.current_epic(org, me)? }]))
+        streams::read(self.store.clone(), user, org, |store, org, me| Ok(vec![EpicsEvent::Current { epic: store.current_epic(org, me)?, moved: store.epic_move(org, me) }]))
     }
 
     /// Be in another epic of the organization (your own setting): short forms resolve there first, and filtered reads answer there. Yields current { epic }.
@@ -148,7 +152,7 @@ impl EpicsActivation {
         })
     }
 
-    /// Delete an empty epic (admin on its organization, or on *) — never the organization's first; whoever was in it is in the newest again. Yields deleted { org, name }.
+    /// Delete an empty epic (admin on its organization, or on *) — never the organization's first; whoever was in it is on the default again. Yields deleted { org, name }.
     #[plexus_macros::method(group = "admin")]
     pub async fn delete(
         &self,
@@ -161,5 +165,71 @@ impl EpicsActivation {
         streams::admin(self.store.clone(), user, org, move |store, by, org, _| async move {
             store.delete_epic(by, &org, &name).await.map(|(org, name)| EpicsEvent::Deleted { org, name })
         })
+    }
+
+    /// Archive an epic (admin on its organization, or on *), in one write: everyone on it moves to the next newer epic (else the next older), the default too if it was this one; its tickets leave every view unless a filter names the epic or archived. The last live epic is refused. Yields archived { epic, moved, to, tickets, dry_run }.
+    #[plexus_macros::method(group = "admin", example(note = "what archiving spring would do", params = r#"{"name": "spring", "dry_run": true}"#))]
+    pub async fn archive(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The epic, e.g. spring.
+        name: EpicName,
+        /// Answer what it would do and write nothing (optional; default false).
+        dry_run: Option<bool>,
+        /// The organization, e.g. hypermemetic (optional: your own).
+        org: Option<OrgId>,
+    ) -> impl Stream<Item = EpicsEvent> + Send + 'static {
+        let dry = dry_run.unwrap_or(false);
+        streams::admin(self.store.clone(), user, org, move |store, by, org, me| async move {
+            let a = store.archive_epic(by, &org, &name, dry, &me).await?;
+            Ok(EpicsEvent::Archived { epic: a.epic, moved: a.moved, to: a.to, tickets: a.tickets, dry_run: dry })
+        })
+    }
+
+    /// Restore an archived epic (admin on its organization, or on *): back in the picker and the views; nobody moves. Yields restored { epic }.
+    #[plexus_macros::method(group = "admin")]
+    pub async fn restore(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The epic, e.g. spring.
+        name: EpicName,
+        /// The organization, e.g. hypermemetic (optional: your own).
+        org: Option<OrgId>,
+    ) -> impl Stream<Item = EpicsEvent> + Send + 'static {
+        streams::admin(self.store.clone(), user, org, move |store, by, org, me| async move {
+            store.restore_epic(by, &org, &name, &me).await.map(|epic| EpicsEvent::Restored { epic })
+        })
+    }
+
+    /// Make an epic the organization's default (admin on it, or on *) — where everyone who never switched is. Yields default_set { epic }.
+    #[plexus_macros::method(group = "admin")]
+    pub async fn set_default(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The epic, e.g. fresh.
+        name: EpicName,
+        /// The organization, e.g. hypermemetic (optional: your own).
+        org: Option<OrgId>,
+    ) -> impl Stream<Item = EpicsEvent> + Send + 'static {
+        streams::admin(self.store.clone(), user, org, move |store, by, org, me| async move {
+            store.set_default_epic(by, &org, &name, &me).await.map(|epic| EpicsEvent::DefaultSet { epic })
+        })
+    }
+
+    /// Dismiss the notice that an archive moved you (your own setting): current stops carrying moved. Yields dismissed { org }.
+    #[plexus_macros::method(group = "write")]
+    pub async fn dismiss(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The organization, e.g. hypermemetic (optional: your own).
+        org: Option<OrgId>,
+    ) -> impl Stream<Item = EpicsEvent> + Send + 'static {
+        streams::dismiss(self.store.clone(), user, org)
+    }
+
+    /// Follow your organizations' epics, open-ended: epic_changed { org, name, what } (created, renamed, deleted, archived, restored, default_moved), and moved { org, moved } when an archive moves you; lagged { missed }; watch_closed { reason, message } when your grants end it.
+    #[plexus_macros::method(group = "read", streaming)]
+    pub async fn watch(&self, #[from_auth(self.access.verify)] user: VerifiedUser) -> impl Stream<Item = EpicsEvent> + Send + 'static {
+        streams::watch(self.access.clone(), self.store.clone(), user)
     }
 }

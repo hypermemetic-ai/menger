@@ -207,7 +207,7 @@ impl Store {
         let era_born = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let id = cache.shortcodes.eras.keys().next_back().map_or(1, |l| l + 1);
-            Some((id, super::shortcodes::Era { org: row, name: crate::address::EpicName::genesis(), created: chrono::Utc::now().timestamp() }))
+            Some((id, super::shortcodes::Era::new(row, crate::address::EpicName::genesis(), chrono::Utc::now().timestamp())))
         };
         self.write(
             serial,

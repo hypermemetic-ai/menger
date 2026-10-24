@@ -198,10 +198,13 @@ impl Store {
             let key = seen.sees(&cache).resolve(id)?;
             let row = cache.get(&key).cloned().ok_or_else(|| StoreError::NotFound(id.trim().to_string()))?;
             let moved_from = cache.shortcodes.moved_from(&row.id);
-            (row, cache.written, moved_from)
+            // ORG-23: and its epic's archive mark.
+            let mark = cache.shortcodes.epic_mark(&row.shortcode);
+            (row, cache.written, (moved_from, mark))
         };
+        let (moved_from, mark) = moved_from;
         let mut ticket = self.full_one(row, written).await?;
-        ticket.moved_from = moved_from;
+        (ticket.moved_from, ticket.epic_archived) = (moved_from, mark);
         if !seen.all() {
             let cache = self.tickets.read().expect("store lock poisoned");
             let sees = seen.sees(&cache);

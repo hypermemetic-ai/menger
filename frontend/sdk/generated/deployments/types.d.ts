@@ -1,4 +1,4 @@
-import type { WatchEnd } from '../chats/types';
+import type { WatchEnd } from '../epics/types';
 /** DEPLOY-37: a branch whose tip a request deploys —
 [`crate::deployments::branch_of`]. */
 export type Branch = string;

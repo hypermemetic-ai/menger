@@ -397,6 +397,19 @@ fn entry_view(e: Entry, ctx: &Ctx) -> AnyView {
             }
             .into_any()
         }
+        // ORG-23: the move between epics asks in its own dialog (src/epics_move.rs).
+        Entry::MoveEpic(n) => {
+            let ids = ctx.ids.clone();
+            view! {
+                <button class="item" role="menuitem" data-act="move-epic" on:click=move |_| {
+                    close();
+                    crate::epics_move::ask(ids.to_vec());
+                }>
+                    {if n == 1 { "Move to epic…".to_string() } else { format!("Move {n} to epic…") }}
+                </button>
+            }
+            .into_any()
+        }
         Entry::Delete(n) => {
             let (ids, rows, confirm) = (ctx.ids.clone(), ctx.rows, ctx.confirm);
             view! {

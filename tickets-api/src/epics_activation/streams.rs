@@ -1,7 +1,7 @@
 //! ORG-13: what the `epics` methods do, beside the activation (its `impl`
 //! keeps only the methods — MENGER-29, ACCESS-13's frame).
 
-use crate::access::{AdminOf, VerifiedUser, Viewer};
+use crate::access::{Access, AdminOf, Following, VerifiedUser, Viewer};
 use crate::address::{EpicName, OrgId};
 use crate::epics::EpicsEvent;
 use crate::members::Scope;
@@ -55,7 +55,7 @@ pub(super) fn switch(store: Arc<Store>, user: VerifiedUser, org: Option<OrgId>, 
             Ok((on, org))
         });
         yield match proof {
-            Ok((on, org)) => store.switch_epic(on, &org, &name, &user.principal_text()).await.map(|epic| EpicsEvent::Current { epic }).unwrap_or_else(refused),
+            Ok((on, org)) => store.switch_epic(on, &org, &name, &user.principal_text()).await.map(|epic| EpicsEvent::Current { epic, moved: None }).unwrap_or_else(refused),
             Err(ev) => ev,
         };
     }
@@ -79,5 +79,60 @@ where
             Ok((by, org)) => f(store.clone(), by, org, user.principal_text()).await.unwrap_or_else(refused),
             Err(ev) => ev,
         };
+    }
+}
+
+/// ORG-23: `dismiss` — the caller's own move notice gone, a viewer's
+/// setting on the organization (as `switch`).
+pub(super) fn dismiss(store: Arc<Store>, user: VerifiedUser, org: Option<OrgId>) -> impl Stream<Item = EpicsEvent> + Send + 'static {
+    async_stream::stream! {
+        let proof = org_of(&store, &user, org).and_then(|org| {
+            let on = user.on::<Viewer>(&Scope::Org(org.clone()), &store).map_err(|r| EpicsEvent::Error { message: r.to_string() })?;
+            Ok((on, org))
+        });
+        yield match proof {
+            Ok((on, org)) => store.dismiss_epic_move(on, &org, &user.principal_text()).await.map(|org| EpicsEvent::Dismissed { org }).unwrap_or_else(refused),
+            Err(ev) => ev,
+        };
+    }
+}
+
+/// ORG-23: `watch` — every change of an organization the caller holds a
+/// role in, and each move made of the caller's own epic; verified again
+/// when the grants move (ACCESS-12), as `comments.watch` is.
+pub(super) fn watch(access: Access, store: Arc<Store>, user: VerifiedUser) -> impl Stream<Item = EpicsEvent> + Send + 'static {
+    let mut rx = store.subscribe_epics();
+    let opened = user.read_filter().and_then(|_| Following::of(&access, &store, user));
+    async_stream::stream! {
+        let mut following = match opened {
+            Ok(f) => f,
+            Err(message) => {
+                yield EpicsEvent::Error { message };
+                return;
+            }
+        };
+        loop {
+            let next = tokio::select! {
+                biased;
+                () = following.changed() => None,
+                r = rx.recv() => Some(r),
+            };
+            if let Err(closed) = following.again() {
+                yield EpicsEvent::WatchClosed { reason: closed.reason, message: closed.message };
+                return;
+            }
+            let Some(next) = next else { continue };
+            match next {
+                Ok(signal) => {
+                    let me = following.user();
+                    let held = me.orgs().is_none_or(|orgs| orgs.contains(&signal.org));
+                    if held && signal.to.as_ref().is_none_or(|p| *p == me.principal_text()) {
+                        yield signal.event;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => yield EpicsEvent::Lagged { missed },
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
     }
 }

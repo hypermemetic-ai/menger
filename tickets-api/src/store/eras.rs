@@ -21,7 +21,8 @@
 //!
 //! **Which epic a reader is in** ([`Registry::current_era`]): its choice in
 //! each organization (`epics switch`, the `era_choices` table), else the
-//! newest. A short form resolves there first, then as before (pins, then
+//! organization's default (ORG-23, [`super::era_archive`]: never the
+//! newest, so making an epic moves nobody). A short form resolves there first, then as before (pins, then
 //! every match) — read from the call's act ([`Registry::preferred_now`]).
 //! A filtered read answers there unless its filter names `epic`
 //! ([`Store::era_filter`]); while no organization holds two epics nothing
@@ -44,8 +45,9 @@ impl Registry {
     /// `~*`) binds to — every one in each epic it names, in the store's order.
     pub(super) fn in_epic_named(&self, under: &str) -> Vec<ShortcodeId> {
         let u = under.trim();
+        // ORG-23: `epic any` is every live epic; an archived one is named.
         if u == EPIC_ANY {
-            return self.entries.keys().cloned().collect();
+            return self.entries.iter().filter(|(_, e)| !self.era_archived(e.sc.ns.era)).map(|(id, _)| id.clone()).collect();
         }
         let rest = u.trim_start_matches(EPIC_MARK).to_ascii_lowercase();
         let (org, name) = match rest.split_once(':') {
@@ -55,23 +57,24 @@ impl Registry {
         if rest.contains(':') && org.is_none() {
             return Vec::new();
         }
-        let eras: Vec<i64> = self.eras.iter().filter(|(_, e)| e.name.as_str() == name && org.is_none_or(|o| e.org == o)).map(|(id, _)| *id).collect();
+        // ORG-23: an old name a rename left names its epic still.
+        let eras: Vec<i64> = self.orgs.keys().filter(|o| org.is_none_or(|x| x == **o)).filter_map(|o| self.era_named(*o, &name)).collect();
         self.entries.iter().filter(|(_, e)| eras.contains(&e.sc.ns.era)).map(|(id, _)| id.clone()).collect()
     }
 }
 
 /// `org`'s row and its name now, or [`StoreError::NoOrg`].
-fn org_row(r: &Registry, org: &OrgId) -> Result<(i64, OrgId), StoreError> {
+pub(super) fn org_row(r: &Registry, org: &OrgId) -> Result<(i64, OrgId), StoreError> {
     r.org_named(org.as_str()).map(|(row, o)| (row, o.clone())).ok_or_else(|| StoreError::NoOrg(org.to_string()))
 }
 
 /// `org`'s epic `name`, or not found by its name.
-fn era_in(r: &Registry, org: i64, name: &str) -> Result<i64, StoreError> {
+pub(super) fn era_in(r: &Registry, org: i64, name: &str) -> Result<i64, StoreError> {
     r.era_named(org, name).ok_or_else(|| StoreError::NotFound(name.trim().to_string()))
 }
 
 /// One epic as [`Epic`] says it, for `principal`.
-fn card(cache: &Cache, era: i64, principal: &str) -> Option<Epic> {
+pub(super) fn card(cache: &Cache, era: i64, principal: &str) -> Option<Epic> {
     let r = &cache.shortcodes;
     let e = r.eras.get(&era)?;
     let org = r.orgs.get(&e.org)?.clone();
@@ -88,21 +91,26 @@ fn card(cache: &Cache, era: i64, principal: &str) -> Option<Epic> {
         shortcodes,
         tickets: tickets.min(u64::from(u32::MAX)) as u32,
         created_unix: e.created,
+        default: r.default_era(e.org) == Some(era),
+        members_on: super::era_archive::members_on(cache, era),
+        archived: e.archived.clone().map(|(at_unix, by)| crate::epics::EpicArchived { name: e.name.clone(), at_unix, by }),
     })
 }
 
 /// ACCESS-11: whether `by` administers `org`: admin on it, or on `*`.
-fn org_admin(by: &Authority, org: &OrgId) -> Result<(), StoreError> {
+pub(super) fn org_admin(by: &Authority, org: &OrgId) -> Result<(), StoreError> {
     let what = "an epic's making, name and end need admin on its organization (or on *)";
     by.admin_on(&Scope::Org(org.clone()), what).or_else(|_| by.admin_on(&Scope::Everywhere, what))
 }
 
 impl Store {
-    /// ORG-13: `org`'s epics, oldest first, as `principal` sees them.
-    pub fn epics(&self, org: &OrgId, principal: &str) -> Result<Vec<Epic>, StoreError> {
+    /// ORG-13: `org`'s epics, oldest first, as `principal` sees them —
+    /// ORG-23: the archived ones only with `archived`.
+    pub fn epics(&self, org: &OrgId, principal: &str, archived: bool) -> Result<Vec<Epic>, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let (row, _) = org_row(&cache.shortcodes, org)?;
-        Ok(cache.shortcodes.eras.iter().filter(|(_, e)| e.org == row).filter_map(|(id, _)| card(&cache, *id, principal)).collect())
+        let shown = |e: &Era| e.org == row && (archived || e.archived.is_none());
+        Ok(cache.shortcodes.eras.iter().filter(|(_, e)| shown(e)).filter_map(|(id, _)| card(&cache, *id, principal)).collect())
     }
 
     /// ORG-13: `org`'s epic `name` — not found by its name when there is none.
@@ -113,7 +121,8 @@ impl Store {
         card(&cache, era, principal).ok_or_else(|| StoreError::NotFound(name.to_string()))
     }
 
-    /// ORG-13: `principal`'s current epic in `org` — its choice, else the newest.
+    /// ORG-13: `principal`'s current epic in `org` — its choice, else
+    /// (ORG-23) the organization's default.
     pub fn current_epic(&self, org: &OrgId, principal: &str) -> Result<Epic, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let (row, _) = org_row(&cache.shortcodes, org)?;
@@ -134,12 +143,14 @@ impl Store {
         if !r.several_eras() {
             return None;
         }
-        let names: Vec<String> = r
-            .orgs
-            .iter()
-            .filter(|(_, o)| orgs.is_none_or(|held| held.contains(o)))
-            .filter_map(|(row, o)| r.current_era(principal, *row).and_then(|e| r.eras.get(&e)).map(|e| format!("epic {o}:{}", e.name)))
-            .collect();
+        // ORG-23: a filter naming `archived` reads the archived epics too.
+        let archived = asked.names_archived();
+        let mut names: Vec<String> = Vec::new();
+        for (row, o) in r.orgs.iter().filter(|(_, o)| orgs.is_none_or(|held| held.contains(o))) {
+            let mine = r.current_era(principal, *row);
+            let held = r.eras.iter().filter(|(id, e)| e.org == *row && (mine == Some(**id) || (archived && e.archived.is_some())));
+            names.extend(held.map(|(_, e)| format!("epic {o}:{}", e.name)));
+        }
         match names.is_empty() {
             true => None,
             false => Filter::parse(&names.join(" or ")).ok(),
@@ -170,10 +181,14 @@ impl Store {
                 Ok(())
             },
             move |cache, ()| {
-                cache.shortcodes.eras.insert(id, Era { org: row, name: kept, created: now });
+                cache.shortcodes.eras.insert(id, Era::new(row, kept, now));
                 card(cache, id, &who)
             },
-            move |(), epic, _| epic.ok_or_else(|| StoreError::Invalid("the epic was not kept".into())),
+            move |(), epic, tx| {
+                let epic = epic.ok_or_else(|| StoreError::Invalid("the epic was not kept".into()))?;
+                super::era_archive::said(tx, &epic.org, &epic.name, crate::epics::EpicChange::Created);
+                Ok(epic)
+            },
         )
         .await?
     }
@@ -193,16 +208,22 @@ impl Store {
             if r.era_named(row, to).is_some_and(|e| e != era) {
                 return Err(StoreError::Invalid(format!("{o} has an epic `{to}` already (nothing was changed)")));
             }
-            era
+            (era, row, r.eras[&era].name.clone())
         };
-        let (stored, kept, who) = (to.clone(), to.clone(), principal.to_string());
+        let (era, row, old) = era;
+        let (stored, kept, who, was) = (to.clone(), to.clone(), principal.to_string(), old.clone());
         self.write(
             serial,
             move |tx| {
                 tx.execute("UPDATE eras SET name = ?2 WHERE id = ?1", params![era, stored.as_str()])?;
+                // ORG-23: the old name stays an alias; the new is a name, not one.
+                tx.execute("DELETE FROM era_aliases WHERE org = ?1 AND name = ?2", params![row, stored.as_str()])?;
+                tx.execute("INSERT OR REPLACE INTO era_aliases (org, name, era) VALUES (?1, ?2, ?3)", params![row, was.as_str(), era])?;
                 Ok(())
             },
             move |cache, ()| {
+                cache.shortcodes.era_aliases.remove(&(row, kept.as_str().to_string()));
+                cache.shortcodes.era_aliases.insert((row, old.as_str().to_string()), era);
                 if let Some(e) = cache.shortcodes.eras.get_mut(&era) {
                     e.name = kept;
                 }
@@ -215,7 +236,9 @@ impl Store {
             },
             move |(), (epic, groups), tx| {
                 broadcast_groups(tx, groups);
-                epic.ok_or_else(|| StoreError::Invalid("the epic was not kept".into()))
+                let epic = epic.ok_or_else(|| StoreError::Invalid("the epic was not kept".into()))?;
+                super::era_archive::said(tx, &epic.org, &epic.name, crate::epics::EpicChange::Renamed);
+                Ok(epic)
             },
         )
         .await?
@@ -224,7 +247,8 @@ impl Store {
     /// ORG-13: deletes `org`'s epic `name` — refused for its organization's
     /// first and while any shortcode is in it (a ticket, or one moved out,
     /// whose numbers it keeps). Every choice of it goes with it: those
-    /// readers are in the newest again. Needs admin on `org` (or `*`).
+    /// readers are on the default again (ORG-23), as are its aliases and
+    /// the move notices that name it. Needs admin on `org` (or `*`).
     pub async fn delete_epic(&self, by: impl Into<Authority>, org: &OrgId, name: &str) -> Result<(OrgId, EpicName), StoreError> {
         let by = by.into();
         let serial = self.serial().await;
@@ -247,14 +271,22 @@ impl Store {
             serial,
             move |tx| {
                 tx.execute("DELETE FROM era_choices WHERE era = ?1", [era])?;
+                tx.execute("DELETE FROM era_aliases WHERE era = ?1", [era])?;
+                tx.execute("DELETE FROM era_moves WHERE from_era = ?1 OR to_era = ?1", [era])?;
                 tx.execute("DELETE FROM eras WHERE id = ?1", [era])?;
                 Ok(())
             },
             move |cache, ()| {
-                cache.shortcodes.eras.remove(&era);
-                cache.shortcodes.choices.retain(|_, e| *e != era);
+                let r = &mut cache.shortcodes;
+                r.eras.remove(&era);
+                r.choices.retain(|_, e| *e != era);
+                r.era_aliases.retain(|_, e| *e != era);
+                r.moves.retain(|_, m| m.from != era && m.to != era);
             },
-            move |(), (), _| (o, gone),
+            move |(), (), tx| {
+                super::era_archive::said(tx, &o, &gone, crate::epics::EpicChange::Deleted);
+                (o, gone)
+            },
         )
         .await
     }
@@ -270,7 +302,10 @@ impl Store {
             if on.scope() != &Scope::Org(o.clone()) {
                 return Err(StoreError::Invalid(format!("the proof is for {}, not {o}: (nothing was changed)", on.scope())));
             }
-            (row, era_in(r, row, name)?)
+            let era = era_in(r, row, name)?;
+            // ORG-23: never onto an archived epic.
+            r.live_era(era, "switching to it")?;
+            (row, era)
         };
         let (who, kept) = (principal.to_string(), principal.to_string());
         self.write(

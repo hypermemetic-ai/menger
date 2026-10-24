@@ -376,6 +376,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
             created_unix: created,
             updated_unix: updated,
             moved_from: Vec::new(),
+            epic_archived: None,
         });
     }
     out

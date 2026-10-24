@@ -899,6 +899,7 @@ fn as_it_was(cache: &Cache, key: &str, kept: &Kept_, body: String) -> Ticket {
                 created_unix: kept.revision.at_unix,
                 updated_unix: kept.revision.at_unix,
                 moved_from: Vec::new(),
+                epic_archived: None,
             }
         }
     };

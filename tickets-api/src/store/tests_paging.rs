@@ -95,6 +95,7 @@ pub(super) fn write_runs(path: &Path, rows: &[(&str, u32)]) {
                 created_unix: 0,
                 updated_unix: 0,
                 moved_from: Vec::new(),
+                epic_archived: None,
             },
         )
         .unwrap();

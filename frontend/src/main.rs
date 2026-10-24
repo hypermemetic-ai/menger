@@ -278,6 +278,8 @@ mod counts;
 mod deploys;
 mod drafts;
 mod epics;
+mod epics_move;
+mod epics_page;
 mod thread;
 mod deploy_ask;
 mod deploy_view;
@@ -481,6 +483,8 @@ pub(crate) enum Route {
     /// it will land; `#/deploy/<SHORTCODE>` one project's (held upper case).
     /// `?to=<env>` (the destination) is the page's.
     Deploy(Option<String>),
+    /// ORG-23: `#/epics` — the organization's epics, and an admin's keeping of them.
+    Epics,
 }
 
 fn parse_route(hash: &str) -> Route {
@@ -506,6 +510,7 @@ fn parse_route(hash: &str) -> Route {
         _ if path.trim_end_matches('/') == "settings" => Route::Settings,
         _ if path.trim_end_matches('/') == "comments" => Route::Comments,
         _ if path.trim_end_matches('/') == "members" => Route::Members,
+        _ if path.trim_end_matches('/') == "epics" => Route::Epics,
         _ if path.trim_end_matches('/') == "pair" => Route::Pair,
         Some(("chats", rest)) => Route::Chats(chats_page::pick_of(rest)),
         _ if path.trim_end_matches('/') == "chats" => Route::Chats(chats_page::Pick::List),
@@ -539,6 +544,7 @@ pub(crate) fn route_text(route: &Route) -> String {
         Route::Settings => "#/settings".to_string(),
         Route::Comments => "#/comments".to_string(),
         Route::Members => "#/members".to_string(),
+        Route::Epics => "#/epics".to_string(),
         Route::Pair => "#/pair".to_string(),
         Route::Chats(chats_page::Pick::List) => "#/chats".to_string(),
         Route::Chats(chats_page::Pick::New) => "#/chats/new".to_string(),
@@ -1643,7 +1649,7 @@ fn ticket_view(
     view! {
         <article class="ticket">
             <h2 data-ticket-id=header_id node_ref=head>
-                <span class="id code" data-tag=move || ticket.with(|t| tags::Tag::ticket(&t.id).attr())>{move || ticket.with(|t| t.id.to_string())}</span>
+                <span class="id code" data-tag=move || ticket.with(|t| tags::Tag::ticket(&t.id).attr())>{move || ticket.with(|t| crate::epics::shown_id(&t.id))}</span>
                 <span class="t">{move || ticket.with(|t| t.title.clone())}</span>
                 // TICKETS-6: a frozen scope's ❄.
                 {labels::frozen_mark(move || ticket.with(|t| t.frozen))}
@@ -1721,7 +1727,7 @@ fn ticket_view(
                                 // FILTER-22: the parent is a tag — its shortcode,
                                 // or `under` it.
                                 let tag = tags::Tag::ticket(&p).attr();
-                                view! { <a class="crumb code" data-ticket-id=p data-tag=tag href=href>{code}</a> }
+                                view! { <a class="crumb code" data-ticket-id=p data-tag=tag href=href>{crate::epics::shown_id(&code)}</a> }
                                     .into_any()
                             }
                             None => view! { "—" }.into_any(),
@@ -2186,7 +2192,7 @@ fn TicketPage(
                     let (href, code) = (format!("#/ticket/{a}"), a.clone());
                     view! {
                         <span class="sep" aria-hidden="true">" / "</span>
-                        <a class="crumb" data-ticket-id=a href=href>{code}</a>
+                        <a class="crumb" data-ticket-id=a href=href>{crate::epics::shown_id(&code)}</a>
                     }
                 })
                 .collect_view()
@@ -2199,6 +2205,7 @@ fn TicketPage(
         // page has no filter of its own.
         <div id="ticket-page" data-tag-level="global">
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
+            <crate::epics::ArchivedMark id=id_view.clone() />
             {move || match ticket.get() {
                 // TICKETS-7: a revision open (`?rev=N`) is drawn as the page, read-only.
                 Some(t) => match revisions::viewing().get() {
@@ -2525,6 +2532,9 @@ fn App() -> impl IntoView {
                     >
                         "deployments"
                     </a>
+                    // ORG-23: the epics — everyone sees them; an admin keeps them.
+                    <a class="hlink" id="epics-link" href="#/epics"
+                        aria-current=move || matches!(route.get(), Route::Epics).then_some("page")>"epics"</a>
                     // IDENTITY-22: an admin's members page.
                     {move || signin::account().with(|a| a.is_admin()).then(|| view! {
                         <a class="hlink" id="members-link" href="#/members"
@@ -2592,6 +2602,8 @@ fn App() -> impl IntoView {
                 <lens::LensBar applies=Signal::derive(move || lens::applies(&route.get())) />
                 </div>
                 <main>
+                    // ORG-23: a move an archive made, said once over every page.
+                    {move || can_view.get().then(|| view! { <epics::EpicNotice /> })}
                     // DESIGN-38: the page's name sits on the health line (the
                     // mock's crumb), which keeps the bar to one line.
                     <div id="health">
@@ -2607,6 +2619,7 @@ fn App() -> impl IntoView {
                                 Route::Settings => "settings (MFE-21)",
                                 Route::Comments => "comments (COMMENT-3)",
                                 Route::Members => "members (IDENTITY-22)",
+                                Route::Epics => "epics (ORG-23)",
                                 Route::Pair => "pair a machine (TETHER-11)",
                                 Route::Chats(_) => "chats (CHAT-14)",
                                 Route::Deployments(_) => "deployments (DEPLOY-13)",
@@ -2650,6 +2663,7 @@ fn App() -> impl IntoView {
                         Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
                         Route::Comments => view! { <comments_page::CommentsPage /> }.into_any(),
                         Route::Members => view! { <members_page::MembersPage /> }.into_any(),
+                        Route::Epics => view! { <epics_page::EpicsPage /> }.into_any(),
                         Route::Pair => view! { <pair_page::PairPage /> }.into_any(),
                         Route::Chats(p) => view! { <chats_page::ChatsPage pick=p /> }.into_any(),
                         Route::Deployments(project) => view! { <deploys_page::DeploymentsPage project /> }.into_any(),
@@ -2675,6 +2689,9 @@ fn App() -> impl IntoView {
             // AGS-16: mounted once, outside every ticket element, so a
             // right-click inside the menu itself never re-targets it.
             <menu::TicketMenu last_error />
+            // ORG-23: Move to epic…'s dialog.
+            <epics_move::MoveHost />
+            <epics::EpicSheet />
             // FILTER-22: the tag menu — a right-click on any tag the app
             // draws builds a filter from it; mounted once, as the ticket
             // menu is.

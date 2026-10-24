@@ -313,7 +313,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.reshortcode` on the scope of `ids`
      */
-    reshortcode(ids: TicketRef[], to: ShortcodeRef, message?: Message | null, newScope?: Title | null, parent?: TicketRef | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
+    reshortcode(ids: TicketRef[], to: ShortcodeRef, dryRun?: boolean | null, message?: Message | null, newScope?: Title | null, parent?: TicketRef | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
     /**
      * Restore archived tickets — each named (or a filter's archived ones) back in every view with its archived ancestors; with_children, the subtree archived with it; yields restored { ids, ancestors, still_archived, by, dry_run }.
   

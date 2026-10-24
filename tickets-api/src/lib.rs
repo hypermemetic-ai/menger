@@ -217,7 +217,7 @@ pub use orgs_activation::OrgsActivation;
 
 // ORG-13: epics — a level of the organization above its shortcodes.
 pub mod epics;
-pub use epics::{Epic, EpicsEvent};
+pub use epics::{Epic, EpicArchived, EpicChange, EpicMove, EpicsEvent};
 pub mod epics_activation;
 pub use epics_activation::EpicsClient;
 #[cfg(feature = "server")]

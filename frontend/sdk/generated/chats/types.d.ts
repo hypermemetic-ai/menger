@@ -1,3 +1,4 @@
+import type { WatchEnd } from '../epics/types';
 import type { ChatId } from '../media/types';
 import type { Kind } from '../notes/types';
 /** CHAT-18: one item of a participant's live work in a chat — never a
@@ -654,8 +655,3 @@ export interface TicketSummary {
     unlocks: TicketName[];
     updatedUnix: number;
 }
-/** ACCESS-12: why an open watch ended — its caller verified again when the
-grants moved (or its sign-in ended), and refused. Every watch (`tickets`,
-`comments`, `themes`, `deployments`) ends with one `watch_closed { reason,
-message }` and nothing after it. */
-export type WatchEnd = "signed_out" | "expired" | "revoked" | "refused";

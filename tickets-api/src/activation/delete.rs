@@ -108,7 +108,9 @@ pub(super) fn reshortcode_stream(
         let (gate, at) = (Arc::clone(&caller), store.clone());
         // ACCESS-11: an editor's permit for every ticket the move names.
         let may = move |ids: &[String]| permits::<crate::access::Editor>(&at, &gate, ids);
+        let dry = ask.dry_run;
         match store.reshortcode_by(ask, act, may).await {
+            Ok(Reshortcoded { moves, tickets }) if dry => yield TicketsEvent::Reshortcoded { moves, tickets },
             Ok(Reshortcoded { moves, tickets }) => {
                 let n = moves.len();
                 yield TicketsEvent::Reshortcoded { moves, tickets };

@@ -103,14 +103,16 @@ pub(crate) fn shortcode_of(id: &str) -> String {
 /// The tree place's label: the open ticket's shortcode, else the last one
 /// opened, else `tree`.
 pub(crate) fn tree_label(ticket: Option<&str>, last: Option<&str>) -> String {
-    ticket.map(shortcode_of).or_else(|| last.map(str::to_string)).unwrap_or_else(|| "tree".into())
+    let code = ticket.map(shortcode_of).or_else(|| last.map(str::to_string)).unwrap_or_else(|| "tree".into());
+    // ORG-23: a namesake's code as its letters (`MENGER.3` is `MENGER`).
+    crate::epics::shown_code(&code)
 }
 
 /// The head's page words.
 pub(crate) fn page_words(r: &Route) -> String {
     match r {
         Route::Board => "the board".into(),
-        Route::Ticket(id) => id.clone(),
+        Route::Ticket(id) => crate::epics::shown_id(id),
         Route::Waves(s) if s.is_empty() => "waves".into(),
         Route::Waves(s) => format!("waves · {s}"),
         Route::WavesOf(_) => "waves".into(),
@@ -119,6 +121,7 @@ pub(crate) fn page_words(r: &Route) -> String {
         Route::Settings => "settings".into(),
         Route::Comments => "comments".into(),
         Route::Members => "members".into(),
+        Route::Epics => "epics".into(),
         Route::Pair => "pair a machine".into(),
         Route::Chats(_) => "chats".into(),
         Route::Deployments(_) => "deployments".into(),
@@ -301,6 +304,8 @@ pub(crate) fn Head(route: RwSignal<Route>, #[prop(into)] conn_class: Signal<Stri
             </span>
             // ORG-4: the organization switch (FILTER-55: the header is off a phone).
             <crate::orgs::OrgSwitcher />
+            // ORG-23: the epic you read in, always — its list a sheet.
+            <crate::epics::EpicPicker phone=true />
             <span class=move || format!("pconn {}", conn_class.get())><i class="cell" aria-hidden="true"></i>{move || conn_words.get()}</span>
             // APP-84: every open question — the bar has no fifth place.
             <crate::questions::PhoneCount />
@@ -486,6 +491,7 @@ pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
                 <a href="#/chats" aria-current=cur(|r| matches!(r, Route::Chats(_)))>"chats"</a>
                 <a href="#/deployments" aria-current=cur(|r| matches!(r, Route::Deployments(_)))>"deployments"</a>
                 <a href="#/components" aria-current=cur(|r| matches!(r, Route::Components(_)))>"components"</a>
+                <a href="#/epics" aria-current=cur(|r| matches!(r, Route::Epics))>"epics"</a>
                 {move || admin.get().then(|| view! { <a href="#/members" aria-current=cur(|r| matches!(r, Route::Members))>"members"</a> })}
                 {move || admin.get().then(|| view! { <a href="#/pair" aria-current=cur(|r| matches!(r, Route::Pair))>"pair a machine"</a> })}
                 <a href="#/settings" aria-current=cur(|r| matches!(r, Route::Settings))>"settings"</a>
@@ -601,6 +607,8 @@ mod tests {
         assert_eq!(tree_label(Some("KILN-4"), Some("APP")), "KILN");
         assert_eq!(tree_label(None, Some("APP")), "APP");
         assert_eq!(tree_label(None, None), "tree");
+        assert_eq!(tree_label(Some("MENGER.3-4"), None), "MENGER", "ORG-23: a namesake's letters");
+        assert_eq!(page_words(&Route::Ticket("MENGER.3-4".into())), "MENGER-4");
         assert_eq!(page_words(&Route::Board), "the board");
         assert_eq!(page_words(&Route::Ticket("KILN-4".into())), "KILN-4");
         assert_eq!(page_words(&Route::Waves(String::new())), "waves");

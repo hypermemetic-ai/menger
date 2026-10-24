@@ -3050,9 +3050,9 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     "‹"
                 </button>
             </div>
-            // ORG-13: the epic the nav (and every filtered read) is in —
-            // when the organization holds more than one.
-            <crate::epics::EpicSwitcher />
+            // ORG-13 / ORG-23: the epic the nav (and every filtered read) is
+            // in — always shown.
+            <crate::epics::EpicPicker />
             // FILTER-14: the nav's filter — FILTER-40: as chips in its head,
             // the global's dashed; the server-backed categories and the
             // panel's counts from `facets`.
