@@ -16,35 +16,19 @@
 //!   ticket outside the global filter); a surface's own clauses are pills
 //!   under its bar ([`Clause`]: an operator and canonical values; a flag's
 //!   is one value, `is yes` or `is no`).
-//! - **The bar** ([`FilterBar`]; FILTER-41): one line — the `Filter`
-//!   button (its badge the clauses), the global filter as a dashed chip,
-//!   the level's groups as chips (**and** inside a group, **or** between
-//!   them; × on a clause; a click opens the menu on its category, its group
-//!   selected), `+ or` (another group, FILTER-42), the count and `save as…`;
-//!   under it naming's prompts, "as evaluated" and, while there is one,
-//!   "Nothing can match" with the clashing groups.
-//! - **The menu** (FILTER-49 — the pre-FILTER-39 popover, back; the owner,
-//!   2026-10-22: "compact, a popover not a menu"): `f`, the Filter button
-//!   or a chip opens it **over the page** — nothing under it moves — and
-//!   Escape, × or a press outside closes it. Its head: the search (it
-//!   filters every value; with a category open, that one's), the levels as
-//!   a small switch (FILTER-40), ×. Then which group a tick goes into once
-//!   there is one (FILTER-42, `+ or`), the categories as a short list ([`sections`]:
-//!   the saved filters first, Shortcode as its tree, Status, Kind,
-//!   Severity, the flags together, Label, When, Deployed, Chats, People, a
-//!   surface's own) and **one open at a time** beside it: its values with
-//!   their counts (the level's [`CountsProvider`]) and FILTER-19's `is / is
-//!   not` in its head. A tick goes into the selected group — a second value
-//!   of one category is an alternative, so a group of its own, and the menu
-//!   says so; hovering a value says what ticking it would leave. The foot:
-//!   *edit as text* (FILTER-43's drawer), reset, save as…, the clauses
-//!   counted. Where there is no room for two panes — a narrow column, and a
-//!   phone, where the menu is APP-50's filter sheet (FILTER-44) — the open
-//!   category takes the list's place behind a back row.
+//! - **The bar** ([`FilterBar`]; FILTER-41, FILTER-55): one line — the
+//!   `Filter` button (its badge the rules), ⌂'s chip, and the filter's
+//!   name when it has one (a saved filter, or the level's default); its
+//!   rules are spelled out only in the builder (src/fcard.rs), which the
+//!   button, the line and `f` open. Under it naming's prompts and, while
+//!   there is one, "Nothing can match" with the clashing groups.
+//! - **The menu is gone** (FILTER-55, the owner, comment 42: "we don't
+//!   need to show the full break down other than inside the actual filter
+//!   builder"): what stays here is what the builder reads — the
+//!   categories, their values ([`offered`]) and counts.
 
 //! Everything that decides — the categories and their values, a clause's
-//! edits, the shortcode tree, the menu's sections and rows, a pill's
-//! words — is a pure function here, pinned by native tests; the pills ⇄
+//! edits, the shortcode tree, a pill's words — is a pure function here, pinned by native tests; the pills ⇄
 //! groups of the language are src/lens.rs's, the groups joined by `or`
 //! src/ors.rs's.
 
@@ -52,14 +36,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use leptos::prelude::*;
 use menger_tickets_api::{Group, Status};
-use wasm_bindgen::JsCast;
-
-use crate::bindings::{self, Context};
-use crate::keys::palette_match;
 use crate::lens::{self, Lens, Level};
-use crate::nav::kind_glyph;
 use crate::waves::epic_of;
-use crate::{dom, keys, st_class};
 
 // ---------------------------------------------------------------------
 // The categories
@@ -200,26 +178,7 @@ impl Cat {
         Cat::People,
     ];
 
-    /// The wave board's categories, in its menu's order: WAVE-12's, with the
-    /// server's flags after Severity. MENGER-12: Label, which a card's row
-    /// carries — not Asking, which the board evaluates on its cards and a
-    /// card does not say.
-    pub(crate) const WAVES: [Cat; 13] = [
-        Cat::Shortcode,
-        Cat::Status,
-        Cat::Wave,
-        Cat::Kind,
-        Cat::Severity,
-        Cat::Ready,
-        Cat::Blocked,
-        Cat::Commits,
-        Cat::MengerDocs,
-        Cat::Label,
-        Cat::Readiness,
-        Cat::OffBoard,
-        Cat::Title,
-    ];
-
+    #[cfg(test)]
     /// FILTER-16: the inputs page's categories, in its menu's order — its
     /// own (State, Removed) first, then the server-backed ones, which filter
     /// the inputs' tickets.
@@ -309,54 +268,6 @@ impl Cat {
             Cat::Removed => "Removed",
         }
     }
-
-    /// FILTER-27: words a menu search finds the category by, beside its
-    /// name.
-    pub(crate) fn keywords(self) -> &'static str {
-        match self {
-            Cat::When => "created moved changed recently in status for since before between today",
-            Cat::Deployed => "deploy deployment environment running released prod test staging waiting",
-            Cat::Chats => "chat chatting unread messages conversation",
-            Cat::People => "people person assigned assignee assignees unassigned me who agent",
-            _ => "",
-        }
-    }
-
-    /// FILTER-49: the category's glyph in the menu's list (the
-    /// pre-FILTER-39 menu's).
-    pub(crate) fn glyph(self) -> &'static str {
-        match self {
-            Cat::Shortcode => "#",
-            Cat::Status => "\u{25d0}",
-            Cat::Kind => "\u{25c7}",
-            Cat::Severity => "!",
-            Cat::Ready => "\u{2713}",
-            Cat::Blocked => "\u{2298}",
-            Cat::Commits => "\u{2442}",
-            Cat::MengerDocs => "\u{a7}",
-            Cat::Asking => "\u{2047}",
-            Cat::Label => "\u{2317}",
-            Cat::When => "\u{25f7}",
-            Cat::Deployed => "\u{21e1}",
-            Cat::Chats => "@",
-            Cat::People => "\u{263a}",
-            Cat::Wave => "\u{224b}",
-            Cat::Readiness => "\u{25b8}",
-            Cat::OffBoard => "\u{29d6}",
-            Cat::Title => "T",
-            Cat::State => "?",
-            Cat::Removed => "\u{232b}",
-        }
-    }
-
-    /// The category's row in the menu.
-    pub(crate) fn menu_label(self) -> &'static str {
-        match self {
-            Cat::Title => "Title contains…",
-            c => c.label(),
-        }
-    }
-
 
     /// The values this category always offers, in the menu's order —
     /// Shortcode's and Wave's come from the data, Title's is text.
@@ -489,14 +400,6 @@ pub(crate) fn time_cat(t: &crate::when::Timed) -> Cat {
     } else {
         Cat::When
     }
-}
-
-/// FILTER-19: the words of the operator switch heading `c`'s values in the
-/// menu — `is` / `is not`, Title's `contains` / `does not contain` (a
-/// pill's, for one value); a flag has none: its `yes` / `no` is already the
-/// negation (nor When and Deployed: a time pill's parts are its own).
-pub(crate) fn switch_words(c: Cat) -> Option<(&'static str, &'static str)> {
-    (!c.is_flag() && !matches!(c, Cat::When | Cat::Deployed | Cat::Chats | Cat::People)).then(|| (op_label(c, Op::Is, 1), op_label(c, Op::Not, 1)))
 }
 
 /// One category's clause: its operator and its values — canonical, in the
@@ -986,9 +889,6 @@ pub(crate) enum Row {
 
 /// What the menu needs to know to list values.
 pub(crate) struct MenuFacts<'a> {
-    /// The level's categories, in its menu's order.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) cats: &'a [Cat],
     /// The route's shortcode — its tree first in Shortcode's values.
     pub(crate) route: Option<&'a str>,
     pub(crate) tree: Option<&'a ScTree>,
@@ -1047,84 +947,32 @@ pub(crate) fn label_values(k: &MenuFacts) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------
-// The view: the menu's state
+// A level's bar
 
-/// A level's menu — its state, every handle `Copy`. The lens holds one per
-/// level for the app's lifetime (so `F`, a tag's Filter, a chip, can open a
-/// menu another view draws); the view drawing it says what it offers
-/// ([`Pop::configure`]).
+/// What a level's bar offers — its categories and its counts — while a view
+/// draws it, every handle `Copy`. The lens holds one per level for the app's
+/// lifetime; the view drawing the bar says what it offers
+/// ([`Pop::configure`]). FILTER-55: the builder (src/fcard.rs) reads a
+/// surface's own categories' values and counts from here.
 #[derive(Clone, Copy)]
 pub(crate) struct Pop {
-    pub(crate) level: Level,
-    open: RwSignal<bool>,
-    query: RwSignal<String>,
-    /// FILTER-19: each section's switch, `is` until it is set.
-    ops: RwSignal<BTreeMap<Cat, Op>>,
-    /// FILTER-39: the group the menu edits (its categories tick its clauses).
-    pub(crate) sel: RwSignal<usize>,
-    /// FILTER-39: what the last tick said — a second value of one category
-    /// made a group of its own.
-    note: RwSignal<Option<String>>,
-    /// What the level's bar offers: its categories and its counts — set by
-    /// the view that draws it; `mounted` while it does.
-    cats: RwSignal<Vec<Cat>>,
     counts: RwSignal<CountsProvider>,
     mounted: RwSignal<u32>,
-    /// FILTER-27: which time section's pane is where (When, Deployed or
-    /// Chats; another section's is at its rows), and whether its window
-    /// editor (Custom…) is open.
-    pub(crate) when: RwSignal<(Cat, crate::when_view::Step)>,
-    pub(crate) custom: RwSignal<bool>,
-    /// Why the last edit was refused (what the language refuses).
-    pub(crate) refusal: RwSignal<Option<String>>,
-    /// FILTER-49: the category open in the menu — one at a time (a tag's
-    /// Filter, a chip, a click on its row); none, the list alone.
-    pub(crate) cat: RwSignal<Option<Section>>,
-    /// FILTER-49: too little room for two panes (a phone's sheet, a narrow
-    /// column) — the open category's values take the list's place.
-    narrow: RwSignal<bool>,
-    /// FILTER-39: the value hovered and what ticking it would leave — its
-    /// key, and the count once it is in.
-    hover: RwSignal<Option<(String, Option<usize>)>>,
-    /// FILTER-43: the text drawer is open, and what it holds does not read
-    /// — the level keeps the last filter that read, and its chips say so.
-    pub(crate) drawer: RwSignal<bool>,
-    pub(crate) stale: RwSignal<bool>,
 }
 
 impl Pop {
-    pub(crate) fn new(level: Level) -> Self {
-        Pop {
-            level,
-            open: RwSignal::new(false),
-            query: RwSignal::new(String::new()),
-            ops: RwSignal::new(BTreeMap::new()),
-            sel: RwSignal::new(0),
-            note: RwSignal::new(None),
-            cats: RwSignal::new(Cat::SERVER.to_vec()),
-            counts: RwSignal::new(CountsProvider::none()),
-            mounted: RwSignal::new(0),
-            when: RwSignal::new((Cat::When, crate::when_view::Step::Root)),
-            custom: RwSignal::new(false),
-            refusal: RwSignal::new(None),
-            cat: RwSignal::new(None),
-            narrow: RwSignal::new(false),
-            hover: RwSignal::new(None),
-            drawer: RwSignal::new(false),
-            stale: RwSignal::new(false),
-        }
+    pub(crate) fn new(_: Level) -> Self {
+        Pop { counts: RwSignal::new(CountsProvider::none()), mounted: RwSignal::new(0) }
     }
 
     /// The view drawing this level's bar says what it offers, for as long
     /// as it is mounted.
-    pub(crate) fn configure(self, cats: &[Cat], counts: CountsProvider) {
-        self.cats.set(cats.to_vec());
+    pub(crate) fn configure(self, counts: CountsProvider) {
         self.counts.set(counts);
         self.mounted.update(|n| *n += 1);
         on_cleanup(move || {
             self.mounted.try_update(|n| *n = n.saturating_sub(1));
             if self.mounted.try_get_untracked() == Some(0) {
-                self.close(false);
                 self.counts.try_set(CountsProvider::none());
             }
         });
@@ -1134,159 +982,12 @@ impl Pop {
         self.mounted.get_untracked() > 0
     }
 
-    /// FILTER-40: whether a view draws this level's line (tracked).
-    pub(crate) fn mounted_tracked(self) -> bool {
-        self.mounted.get() > 0
-    }
-
-    pub(crate) fn is_open(self) -> bool {
-        self.open.get_untracked()
-    }
-
-    /// FILTER-12: whether it is open (tracked) — when a server-backed
-    /// level's counts are asked.
-    pub(crate) fn open_tracked(self) -> bool {
-        self.open.get()
-    }
-
-    /// Opened — on `cat`'s category when given (FILTER-49: else the list
-    /// alone); FILTER-40: `switched`: from another level's switch, the
-    /// focus to give back already remembered.
-    pub(crate) fn show_from(self, cat: Option<Cat>, switched: bool) {
-        let sec = untrack(|| open_on(self.level, &self.cats.get(), cat));
-        if !self.open.get_untracked() || sec.is_some() {
-            self.cat.set(sec);
-        }
-        if !self.open.get_untracked() {
-            if !switched {
-                keys::remember_focus();
-            }
-            if let Some(n) = crate::naming::hook() {
-                n.fresh_counts();
-            }
-            self.query.set(String::new());
-            self.note.set(None);
-            self.refusal.set(None);
-            self.custom.set(false);
-        }
-        self.open.set(true);
-    }
-
-    /// FILTER-40: closed because another level's tab took the menu — the
-    /// focus to give back stays remembered.
-    pub(crate) fn hand_over(self) {
-        if self.open.try_get_untracked().unwrap_or(false) {
-            self.open.set(false);
-            self.query.set(String::new());
-            self.hover.set(None);
-            self.cat.set(None);
-        }
-    }
-
-    /// Folded — focus handed back where it was (`restore`: a key closed
-    /// it), or left where a click put it.
-    pub(crate) fn close(self, restore: bool) {
-        if !self.open.try_get_untracked().unwrap_or(false) {
-            return;
-        }
-        self.open.set(false);
-        self.query.set(String::new());
-        self.hover.set(None);
-        self.cat.set(None);
-        self.when.set((Cat::When, crate::when_view::Step::Root));
-        if restore {
-            keys::restore_focus();
-        } else {
-            keys::forget_focus();
-        }
-    }
-
-    /// `c`'s switch. Tracked.
-    fn op(self, c: Cat) -> Op {
-        self.ops.with(|o| o.get(&c).copied().unwrap_or(Op::Is))
-    }
-
-    /// FILTER-19: `c`'s switch set — the selected group's clauses of `c`
-    /// turned to it (a local category's clause too), and the next tick
-    /// under it.
-    fn set_op(self, lens: Lens, c: Cat, op: Op) {
-        self.ops.update(|o| {
-            o.insert(c, op);
-        });
-        if c.is_local() {
-            lens.edit(self.level, |k| k.set_op(c, op));
-            return;
-        }
-        let sel = self.sel.get_untracked();
-        let turns = untrack(|| lens.ors(self.level)).and_then(|o| o.groups.get(sel).cloned()).is_some_and(|g| {
-            g.iter().any(|p| crate::ors::cat_of(p) == Some(c) && p.not != (op == Op::Not) && !c.is_flag())
-        });
-        if turns {
-            let r = lens.edit_ors(self.level, |o| {
-                if let Some(g) = o.groups.get_mut(sel) {
-                    for p in g.iter_mut().filter(|p| crate::ors::cat_of(p) == Some(c)) {
-                        p.not = op == Op::Not;
-                    }
-                }
-                Ok(())
-            });
-            self.answer(r);
-        }
-    }
-
-    fn answer<T>(self, r: Result<T, String>) {
-        match r {
-            Ok(_) => self.refusal.set(None),
-            Err(why) => self.refusal.set(Some(why)),
-        }
-    }
-
-    /// A value ticked: into the selected group (a second value of one
-    /// category, a group of its own — said); a surface's own category, its
-    /// clause beside the groups.
-    fn check(self, lens: Lens, c: Cat, token: &str) {
-        let op = untrack(|| self.op(c));
-        self.hover.set(None);
-        if c.is_local() {
-            lens.edit(self.level, |k| k.edit_as(c, op, |k| k.toggle(c, token)));
-            return;
-        }
-        let tree = lens.sctree().get_untracked();
-        let sel = self.sel.get_untracked();
-        let r = lens.edit_ors(self.level, |o| o.pick(sel, c, token, op, tree.as_ref()));
-        if let Ok(p) = &r {
-            self.sel.set(p.sel);
-            self.note.set(p.note.clone());
-        }
-        self.answer(r);
-    }
-
-    /// A saved filter ticked: a group by name.
-    fn check_saved(self, lens: Lens, name: &str) {
-        let sel = self.sel.get_untracked();
-        let r = lens.edit_ors(self.level, |o| Ok(o.pick_saved(sel, name)));
-        if let Ok(p) = &r {
-            self.sel.set(p.sel);
-            self.note.set(p.note.clone());
-        }
-        self.answer(r);
-    }
-
     /// The level's counts provider. Tracked.
-    fn counts(self) -> CountsProvider {
+    pub(crate) fn counts(self) -> CountsProvider {
         self.counts.get()
     }
 }
 
-/// The menu's DOM id for a level.
-pub(crate) fn pop_id(level: Level) -> String {
-    format!("fmenu-{}", level.name())
-}
-
-
-fn document() -> Option<web_sys::Document> {
-    dom::window().document()
-}
 
 // ---------------------------------------------------------------------
 // The view: the bar
@@ -1305,40 +1006,36 @@ fn document() -> Option<web_sys::Document> {
 /// menu (FILTER-49, over the page), and the contradiction notice.
 /// `cats`: the level's categories, server-backed and local, in its menu's
 /// order; `counts`: what the menu's values count.
+/// FILTER-55: the board's line (a level the builder edits, src/fcard.rs's
+/// `builds`) draws no chips — the global chip, the filter's name when it has
+/// one ([`line_summary`]), the count; its Filter button opens the builder.
 #[component]
 pub(crate) fn FilterBar(
     level: Level,
-    #[prop(into)] cats: Vec<Cat>,
     counts: CountsProvider,
     /// What the line's Filter button says when hovered.
     #[prop(optional, into)]
     hint: Option<String>,
 ) -> impl IntoView {
     let lens = lens::use_lens();
-    let pop = lens.pop(level);
-    pop.configure(&cats, counts);
+    lens.pop(level).configure(counts);
     let hint = hint.unwrap_or_else(|| "Filter (f)".into());
     let shown = tab_count(lens, level);
     let all = total_count();
     view! {
-        <div class="fbar fline" data-fbar=level.name() data-level=level.name() class:open=move || pop.open_tracked() on:keydown=move |ev| fold_key(pop, ev)>
+        <div class="fbar fline" data-fbar=level.name() data-level=level.name()>
             <div class="fline-row">
                 <FilterButton level hint badge=true />
-                <span class="fline-chips">{line_chips(lens, level, shown)}</span>
+                <span class="fline-chips">{line_summary(lens, level, Some(shown))}</span>
                 <span class="fline-end">
                     <span class="fline-n" title="tickets this surface shows, of every ticket" aria-live="polite">
                         <b>{move || shown.get().map_or_else(|| "\u{2026}".to_string(), |n| n.to_string())}</b>
                         <span class="fline-of">{move || all.get().map(|n| format!(" of {n}")).unwrap_or_default()}</span>
                     </span>
-                    <SaveAs level />
                     {flash_view(level)}
                 </span>
-                {move || pop.stale.get().then(|| view! {
-                    <span class="fstale" role="status" title="the text being edited does not read yet; the line shows the last filter that did">"\u{26a0} the last filter that read"</span>
-                })}
             </div>
             <LineNotes level />
-            <PanelHost host=Host::Surface />
         </div>
         <Clash level />
     }
@@ -1364,133 +1061,55 @@ pub(crate) fn flash_view(level: Level) -> impl IntoView {
     move || crate::saved::hook().and_then(|s| s.flash_for(level)).map(|w| view! { <span class="sflash" role="status">{w}</span> })
 }
 
-/// FILTER-41: the line's chips — the global filter's dashed chip; the
-/// level's groups, each clause a chip with ×, **and** inside a group and
-/// **or** between them (boxed when there are two or more); the surface's
-/// own clauses; empty, what is shown and the saved filters most used.
-fn line_chips(lens: Lens, level: Level, shown: RwSignal<Option<usize>>) -> impl IntoView {
+/// FILTER-55: a line the builder edits says only what its filter is (the
+/// owner, 2026-10-24: *"just show the filter name if available, and the
+/// filter button should open to it"*) — the global filter's dashed chip, then
+/// the filter's name when it has one (a press opens the builder on it), and
+/// empty, what is shown and the saved filters most used. The rules are the
+/// builder's; the Filter button's badge counts them.
+fn line_summary(lens: Lens, level: Level, shown: Option<RwSignal<Option<usize>>>) -> impl IntoView {
+    let naming = crate::naming::use_naming();
     move || {
         let global = lens.filter(Level::Global).with(|f| f.format());
-        let own = lens.filter(level).with(|f| !f.groups.is_empty());
-        let local = lens.kept(level).map(|k| k.local).unwrap_or_default();
-        let any = own || local.iter().next().is_some();
+        let f = lens.filter(level).get();
+        let bound = naming.bound(level).map(|b| b.name);
+        // A surface's own clauses (the wave board's Wave, the inputs' State)
+        // are rules too: with any, the line names nothing.
+        let local = lens.kept(level).is_some_and(|k| k.local.iter().next().is_some());
+        let name = (!local).then(|| crate::fcard::line_name(&f, bound.as_deref())).flatten();
+        let single = bound.is_none() && name.is_some();
+        let empty = f.groups.is_empty() && !local;
+        let more = empty || name.is_some();
         view! {
             {(!global.is_empty()).then(|| view! {
                 {global_chip(lens, global.clone())}
-                <span class="fw">"and"</span>
+                {more.then(|| view! { <span class="fw">"and"</span> })}
             })}
-            {if any {
-                view! {
-                    {own.then(|| edit_chips(lens, level))}
-                    {local_chips(lens, level, local, own)}
-                    {(own && lens.ors(level).is_some()).then(|| add_or(lens, level))}
+            {match (empty, name) {
+                (true, _) => match shown {
+                    Some(shown) => empty_line(level, shown).into_any(),
+                    None => view! { <span class="fchips-empty">"every ticket"</span> }.into_any(),
+                },
+                (false, Some(n)) => {
+                    let n2 = n.clone();
+                    let open = move || crate::fcard::hook().is_some_and(|c| c.is_on(&crate::fcard::Subject::Line(level)));
+                    view! {
+                        <button type="button" class="fchip saved fsum" data-fline-name=level.name() data-fcard=format!("line:{}", level.name()) title=format!("{} \u{2014} open the filter builder", crate::fcard::line_words(level)) aria-expanded=move || open().to_string() on:click=move |ev| {
+                            if let Some(c) = crate::fcard::hook() {
+                                ev.stop_propagation();
+                                c.press_line(level, ev.as_ref(), single.then(|| n2.clone()));
+                            }
+                        }>
+                            <span class="fchip-f">"\u{2317}"</span>
+                            <span class="fchip-v">{n.clone()}</span>
+                            {move || crate::fcard::is_edited(&n).then(|| view! { <i class="fchip-ed">"edited"</i> })}
+                        </button>
+                    }
+                    .into_any()
                 }
-                .into_any()
-            } else {
-                empty_line(level, shown).into_any()
+                (false, None) => ().into_any(),
             }}
         }
-    }
-}
-
-/// FILTER-41: the level's groups as chips to edit — × takes a clause out
-/// (a group left empty goes); a click on one opens the menu on its
-/// section, its group selected (a time clause: its pane, on that clause).
-fn edit_chips(lens: Lens, level: Level) -> AnyView {
-    let pop = lens.pop(level);
-    let Some(o) = lens.ors(level) else {
-        let text = lens.filter(level).with(|f| f.format());
-        return view! {
-            <button type="button" class="fchip fchip-text" title="deeper than groups joined by or \u{2014} edit it as text in the menu" on:click=move |_| lens.open_panel(level, None)>{text}</button>
-        }
-        .into_any();
-    };
-    let many = o.live().count() > 1;
-    o.groups
-        .iter()
-        .enumerate()
-        .filter(|(_, g)| !g.is_empty())
-        .enumerate()
-        .map(|(k, (gi, g))| {
-            let items = g
-                .iter()
-                .enumerate()
-                .map(|(ii, p)| {
-                    let (field, value) = chip_words(p);
-                    let words = crate::ors::words(p);
-                    let cat = crate::ors::cat_of(p);
-                    let slot = crate::ors::Slot { group: gi, item: ii };
-                    let saved = matches!(p.field, menger_tickets_api::filter::Field::Saved(_));
-                    let open = move |_| {
-                        pop.sel.set(gi);
-                        if let Some(c) = cat.filter(|c| matches!(c, Cat::When | Cat::Deployed | Cat::Chats | Cat::People)) {
-                            pop.when.set((c, crate::when_view::Step::Edit { at: slot, only: None }));
-                        }
-                        lens.open_panel(level, cat);
-                    };
-                    let remove = move |_| {
-                        let r = lens.edit_ors(level, |o| {
-                            o.remove(slot);
-                            Ok(())
-                        });
-                        pop.answer(r);
-                        let left = untrack(|| lens.ors(level)).map_or(1, |o| o.groups.len().max(1));
-                        pop.sel.update(|s| *s = (*s).min(left - 1));
-                    };
-                    // FILTER-53: a saved chip opens its card — what it is made of.
-                    let face = match &p.field {
-                        menger_tickets_api::filter::Field::Saved(n) => saved_face(n, level, field.clone(), value.clone()).into_any(),
-                        _ => view! {
-                            <button type="button" class="fchip-b" title=format!("{words} \u{2014} open its section") on:click=open>
-                                {(!field.is_empty()).then(|| view! { <span class="fchip-f">{field.clone()}</span> })}
-                                <span class="fchip-v">{value.clone()}</span>
-                            </button>
-                        }
-                        .into_any(),
-                    };
-                    view! {
-                        {(ii > 0).then(|| view! { <span class="fw">"and"</span> })}
-                        <span class="fchip" class:saved=saved data-group=gi data-item=ii>
-                            {face}
-                            <button type="button" class="p-x" title=format!("remove {words}") aria-label=format!("remove {words}") on:click=remove>"\u{d7}"</button>
-                        </span>
-                    }
-                })
-                .collect_view();
-            // FILTER-49: while the menu is open, the group its ticks go into is lit.
-            let lit = move || many && pop.open_tracked() && pop.sel.get() == gi;
-            view! {
-                {(k > 0).then(|| view! { <span class="for">"or"</span> })}
-                <span class="fchips-g" class:boxed=many class:sel=lit data-group=gi>{items}</span>
-            }
-        })
-        .collect_view()
-        .into_any()
-}
-
-/// FILTER-49: `+ or` at the end of the line's groups (FILTER-42's, edited
-/// from the line as before FILTER-39) — another group, joined by or, and the
-/// menu opened to tick into it.
-fn add_or(lens: Lens, level: Level) -> impl IntoView {
-    let pop = lens.pop(level);
-    view! {
-        <button
-            type="button"
-            class="fline-addor"
-            data-addor=level.name()
-            title="start another group, joined by or \u{2014} the menu opens to tick into it"
-            on:click=move |_| {
-                pop.note.set(None);
-                let r = lens.edit_ors(level, |o| Ok(o.add_group()));
-                if let Ok(at) = &r {
-                    pop.sel.set(*at);
-                }
-                pop.answer(r);
-                lens.open_panel(level, None);
-            }
-        >
-            "+ or"
-        </button>
     }
 }
 
@@ -1543,34 +1162,6 @@ pub(crate) fn chip_words(p: &menger_tickets_api::filter::Predicate) -> (String, 
             (None, _) => (String::new(), p.format()),
         },
     }
-}
-
-/// FILTER-41: the surface's own clauses as chips — beside the groups,
-/// and-ed with every one: its values joined by **or** (`is`) or **and not**
-/// (`is not`), × taking it out; a click opens its section.
-fn local_chips(lens: Lens, level: Level, local: Clauses, after: bool) -> impl IntoView {
-    local
-        .iter()
-        .map(|(c, cl)| (c, cl.clone()))
-        .collect::<Vec<_>>()
-        .into_iter()
-        .enumerate()
-        .map(|(i, (c, cl))| {
-            let joiner = if cl.op == Op::Is { " or " } else { " and not " };
-            let values = cl.values.iter().map(|v| c.value_label(v)).collect::<Vec<_>>().join(joiner);
-            let field = format!("{}{}", c.label().to_ascii_lowercase(), if cl.op == Op::Not && !c.is_flag() { " not" } else { "" });
-            view! {
-                {(after || i > 0).then(|| view! { <span class="fw">"and"</span> })}
-                <span class="fchip fchip-local" data-cat=c.key() title=format!("{} \u{2014} beside the groups, and-ed with every one", crate::saved::surface_words(level))>
-                    <button type="button" class="fchip-b" on:click=move |_| lens.open_panel(level, Some(c))>
-                        <span class="fchip-f">{field}</span>
-                        <span class="fchip-v">{values.clone()}</span>
-                    </button>
-                    <button type="button" class="p-x" title=format!("remove the {} filter", c.label()) aria-label=format!("remove the {} filter", c.label()) on:click=move |_| lens.edit(level, |k| k.remove(c))>"\u{d7}"</button>
-                </span>
-            }
-        })
-        .collect_view()
 }
 
 /// FILTER-41: an empty line — what is shown (*all 39 tickets*), then the
@@ -1628,89 +1219,16 @@ fn empty_line(level: Level, shown: RwSignal<Option<usize>>) -> impl IntoView {
             .collect_view()
             .into_any()
     };
-    let lens = lens::use_lens();
     view! {
         <span class="fchips-empty">{words}</span>
-        <button type="button" class="fline-first" data-first=level.name() title="the filter menu, on its saved filters" on:click=move |_| lens.open_panel(level, None)>"+ add a filter"</button>
+        <button type="button" class="fline-first" data-first=level.name() data-fcard=format!("line:{}", level.name()) title="add a rule" on:click=move |ev| {
+            if let Some(c) = crate::fcard::hook() {
+                ev.stop_propagation();
+                c.open_line(level, true);
+            }
+        }>"+ add a filter"</button>
         <span class="fw fline-saved">"saved:"</span>
         {chips}
-    }
-}
-
-/// FILTER-41: `save as…` — FILTER-37's naming behind a button: a name
-/// saves the level's filter and binds it (every edit after amends its
-/// doc); bound, the name shows (`⌗ open builds`), and a click renames it
-/// (emptied, it is unlisted, its doc kept).
-#[component]
-pub(crate) fn SaveAs(level: Level) -> impl IntoView {
-    let lens = lens::use_lens();
-    let naming = crate::naming::use_naming();
-    let editing = RwSignal::new(false);
-    let field = NodeRef::<leptos::html::Input>::new();
-    focus_each_load(field);
-    let bound = Memo::new(move |_| naming.bound(level).map(|b| b.name));
-    let pending = Memo::new(move |_| naming.pending(level));
-    let empty = Memo::new(move |_| lens.filter(level).with(|f| f.groups.is_empty()));
-    let done = move |v: Option<String>| {
-        editing.set(false);
-        if let Some(v) = v {
-            naming.name(level, &v);
-        }
-    };
-    move || {
-        if editing.get() {
-            let seed = untrack(|| bound.get().or_else(|| pending.get())).unwrap_or_default();
-            return view! {
-                <span class="fsave">
-                    <input
-                        class="fsave-in"
-                        node_ref=field
-                        type="text"
-                        autocomplete="off"
-                        spellcheck="false"
-                        maxlength=crate::saved::NAME_MAX.to_string()
-                        placeholder="a name"
-                        aria-label=format!("save the {} filter as", level.name())
-                        value=seed
-                        on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
-                            Some("form.submit") => {
-                                ev.prevent_default();
-                                done(Some(event_target_value(&ev)));
-                            }
-                            Some("form.cancel") => {
-                                ev.prevent_default();
-                                ev.stop_propagation();
-                                done(None);
-                            }
-                            _ => {}
-                        }
-                    />
-                    <span class="fhint">"Enter saves \u{00b7} Esc"</span>
-                </span>
-            }
-            .into_any();
-        }
-        match bound.get() {
-            Some(name) => view! {
-                <button
-                    type="button"
-                    class="fsaved"
-                    data-saved-as=level.name()
-                    title=format!("saved as \u{201c}{name}\u{201d} \u{2014} every edit keeps it saved; click to rename it, or empty the name to unlist it")
-                    on:click=move |_| editing.set(true)
-                >
-                    "\u{2317} "{name.clone()}
-                </button>
-            }
-            .into_any(),
-            None => (!empty.get() || pending.get().is_some())
-                .then(|| view! {
-                    <button type="button" class="fsave-b" data-save-as=level.name() title="save this filter under a name" on:click=move |_| editing.set(true)>
-                        {move || pending.get().map_or_else(|| "save as\u{2026}".to_string(), |p| format!("saved with its first clause: \u{201c}{p}\u{201d}"))}
-                    </button>
-                })
-                .into_any(),
-        }
     }
 }
 
@@ -1766,56 +1284,38 @@ pub(crate) fn chips_view(lens: Lens, level: Level, empty: &'static str) -> impl 
 /// `Filter` button opens the one menu on the nav's tab. The nav's bar is
 /// gone: its name, text and `Saved ▾` are the menu's.
 #[component]
-pub(crate) fn NavChips(#[prop(into)] cats: Vec<Cat>, counts: CountsProvider) -> impl IntoView {
+pub(crate) fn NavChips(counts: CountsProvider) -> impl IntoView {
     let lens = lens::use_lens();
-    let pop = lens.pop(Level::Nav);
-    pop.configure(&cats, counts);
-    let global = Memo::new(move |_| lens.filter(Level::Global).with(|f| f.format()));
+    lens.pop(Level::Nav).configure(counts);
     view! {
         <div class="fbar nchips" data-fbar="nav" data-level="nav">
-            <FilterButton level=Level::Nav hint="Filter the nav (f — on a ticket page, f filters it to that ticket and its children)" />
-            {move || {
-                let g = global.get();
-                (!g.is_empty()).then(|| view! { {global_chip(lens, g)}<span class="fw">"and"</span> })
-            }}
-            {chips_view(lens, Level::Nav, "every ticket")}
-            <Reset level=Level::Nav />
+            <FilterButton level=Level::Nav hint="Filter the nav (f — on a ticket page, f filters it to that ticket and its children)" badge=true />
+            {line_summary(lens, Level::Nav, None)}
             {flash_view(Level::Nav)}
         </div>
         <Clash level=Level::Nav />
     }
 }
 
-/// FILTER-39: Escape anywhere in the bar while its menu is open — but a
-/// field that keeps its own — closes the menu (`app.escape`'s row).
-pub(crate) fn fold_key(pop: Pop, ev: web_sys::KeyboardEvent) {
-    if ev.default_prevented() || !pop.is_open() || !bindings::is(&ev, Context::Global, "app.escape") {
-        return;
-    }
-    ev.prevent_default();
-    ev.stop_propagation();
-    pop.close(true);
-}
-
 /// A level's `Filter` button: it opens the level's menu, or closes it.
 #[component]
 pub(crate) fn FilterButton(level: Level, #[prop(into)] hint: String, #[prop(optional)] badge: bool) -> impl IntoView {
     let lens = lens::use_lens();
-    let pop = lens.pop(level);
-    let count = move || lens.clause_count(level);
+    // FILTER-55: it counts the filter's rules, as the builder draws them.
+    let count = move || crate::fcard::line_rules(lens, level);
+    let line = crate::fcard::Subject::Line(level);
     view! {
         <button
             class="fbtn"
             data-fbtn=level.name()
-            data-fopen=level.name()
+            data-fcard=format!("line:{}", level.name())
             title=hint
-            aria-controls=pop_id(level)
-            aria-expanded=move || pop.open_tracked().to_string()
-            on:click=move |_| {
-                if pop.is_open() {
-                    lens.close_panel(true);
-                } else {
-                    lens.open_panel(level, None);
+            aria-haspopup="dialog"
+            aria-expanded=move || crate::fcard::hook().is_some_and(|c| c.is_on(&line)).to_string()
+            on:click=move |ev| {
+                if let Some(c) = crate::fcard::hook() {
+                    ev.stop_propagation();
+                    c.press_line(level, ev.as_ref(), None);
                 }
             }
         >
@@ -1823,18 +1323,16 @@ pub(crate) fn FilterButton(level: Level, #[prop(into)] hint: String, #[prop(opti
                 <path d="M2 3.5h12l-4.6 5.4v4.1l-2.8-1.3V8.9z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
             </svg>
             "Filter"
-            {move || (badge && count() > 0).then(|| view! { <span class="fbadge" title="clauses in this filter">{count}</span> })}
+            {move || (badge && count() > 0).then(|| view! { <span class="fbadge" title="rules in this filter">{count}</span> })}
         </button>
     }
 }
 
 /// Under the line — naming's prompt (a name already saved: replace it,
-/// or another) and its note; with saved names, "as evaluated"; an edit
-/// refused while the menu is closed.
+/// or another — the builder's name field) and its note. FILTER-55: the line
+/// spells out nothing ("as evaluated" is gone).
 #[component]
 pub(crate) fn LineNotes(level: Level) -> impl IntoView {
-    let lens = lens::use_lens();
-    let pop = lens.pop(level);
     let naming = crate::naming::use_naming();
     view! {
         {move || naming.taken(level).map(|(typed, e)| view! {
@@ -1843,8 +1341,8 @@ pub(crate) fn LineNotes(level: Level) -> impl IntoView {
                 <button class="primary" data-act="replace" disabled=move || naming.busy(level) on:click=move |_| naming.replace(level)>"Replace it"</button>
                 <button data-act="another" on:click=move |_| {
                     naming.another(level);
-                    if let Some(el) = document().and_then(|d| d.query_selector(&format!("[data-save-as=\"{}\"], [data-saved-as=\"{}\"]", level.name(), level.name())).ok().flatten()).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
-                        el.click();
+                    if let Some(c) = crate::fcard::hook() {
+                        c.name_line(level);
                     }
                 }>"Choose another name"</button>
             </div>
@@ -1855,239 +1353,6 @@ pub(crate) fn LineNotes(level: Level) -> impl IntoView {
                 <button class="p-x" title="dismiss" aria-label="dismiss" on:click=move |_| naming.dismiss(level)>"\u{d7}"</button>
             </div>
         })}
-        {evaluated_view(lens, level)}
-        {refused_view(pop)}
-    }
-}
-
-/// FILTER-37: "as evaluated" — the level's filter with its saved names
-/// expanded ([`crate::naming::evaluated`]), "…" until every name's text is in.
-fn evaluated_view(lens: Lens, level: Level) -> impl IntoView {
-    let naming = crate::naming::use_naming();
-    // FILTER-42: the names are fetched as the filter names them — an
-    // effect of the filter alone, so a text arriving never asks again (the
-    // view below only reads; drawing it fetched, it re-drew itself without
-    // end once the line drew it unfolded).
-    Effect::new(move |_| {
-        let names: Vec<String> = lens.filter(level).with(|f| f.saved_names().into_iter().map(str::to_string).collect());
-        untrack(|| {
-            for n in &names {
-                naming.fetch(n);
-            }
-        });
-    });
-    move || {
-        let f = lens.filter(level).get();
-        if f.saved_names().is_empty() {
-            return None;
-        }
-        let said = match crate::naming::evaluated(&f, &|n| naming.lookup(n)) {
-            Err(_) => "\u{2026}".to_string(),
-            Ok(Ok(text)) => text,
-            Ok(Err(why)) => why,
-        };
-        Some(view! {
-            <div class="qeval" data-qeval=level.name()>
-                <span class="qeval-l">"as evaluated: "</span>
-                <code>{said}</code>
-            </div>
-        })
-    }
-}
-
-/// An edit refused, under the bar while the menu is closed (the menu
-/// shows it while open).
-fn refused_view(pop: Pop) -> impl IntoView {
-    move || {
-        (!pop.open_tracked()).then(|| pop.refusal.get()).flatten().map(|why| {
-            view! {
-                <span class="frefused" role="alert">
-                    {why}
-                    <button class="p-x" title="dismiss" aria-label="dismiss" on:click=move |_| pop.refusal.set(None)>"\u{d7}"</button>
-                </span>
-            }
-        })
-    }
-}
-
-/// `reset` (a surface) or `clear` (global): back to the level's default,
-/// shown while the level differs from it.
-#[component]
-pub(crate) fn Reset(level: Level) -> impl IntoView {
-    let lens = lens::use_lens();
-    let (word, title) = if level == Level::Global {
-        ("clear", "clear the global filter")
-    } else {
-        ("reset", "back to this view's default")
-    };
-    move || {
-        lens.differs(level).then(|| {
-            view! {
-                <button class="reset" title=title on:click=move |_| {
-                    lens.reset(level);
-                    lens.pop(level).sel.set(0);
-                }>
-                    {word}
-                </button>
-            }
-        })
-    }
-}
-
-/// Focus `field` each time it is drawn. FILTER-6: `NodeRef::on_load` runs
-/// its callback once and panics (`Option::unwrap` on `None`) when the same
-/// ref is drawn again — the text mode opened a second time on one bar, the
-/// search drawn again after Title's field.
-fn focus_each_load(field: NodeRef<leptos::html::Input>) {
-    Effect::new(move |_| {
-        if let Some(el) = field.get() {
-            let _ = el.focus();
-        }
-    });
-}
-
-/// FILTER-43: what a fix says on its button — `use build`, `close it`,
-/// `remove it`.
-pub(crate) fn fix_words(fix: &str) -> String {
-    match fix {
-        "" => "remove it".into(),
-        f if f.chars().all(|c| c == ')') => "close it".into(),
-        f => format!("use {f}"),
-    }
-}
-
-/// FILTER-43: the text with each mistake marked — the runs between them
-/// plain, each mistake's span (a caret where something is missing) marked;
-/// overlapping marks after the first dropped.
-pub(crate) fn marked(text: &str, mistakes: &[menger_tickets_api::filter::Mistake]) -> Vec<(bool, String)> {
-    let mut ms: Vec<&menger_tickets_api::filter::Mistake> = mistakes.iter().filter(|m| m.at + m.len <= text.len()).collect();
-    ms.sort_by_key(|m| m.at);
-    let (mut out, mut at) = (Vec::new(), 0usize);
-    for m in ms {
-        if m.at < at || !text.is_char_boundary(m.at) || !text.is_char_boundary(m.at + m.len) {
-            continue;
-        }
-        if m.at > at {
-            out.push((false, text[at..m.at].to_string()));
-        }
-        out.push((true, if m.len == 0 { "\u{2038}".to_string() } else { text[m.at..m.at + m.len].to_string() }));
-        at = m.at + m.len;
-    }
-    if at < text.len() {
-        out.push((false, text[at..].to_string()));
-    }
-    out
-}
-
-/// FILTER-43: the text drawer at the menu's foot — the level's filter as
-/// canonical text, edited in place. As you type, each mistake is
-/// underlined where it is and listed once, with its fix (`use build`,
-/// `close it`; a click puts it in) — the language's placed mistakes, never
-/// its grammar. Enter (or apply) applies the text once it reads; until
-/// then the level keeps the last filter that read, and its chips say so.
-/// Escape leaves the drawer.
-#[component]
-pub(crate) fn TextDrawer(level: Level) -> impl IntoView {
-    let lens = lens::use_lens();
-    let pop = lens.pop(level);
-    let draft = RwSignal::new(untrack(|| lens.text(level)));
-    let field = NodeRef::<leptos::html::Textarea>::new();
-    Effect::new(move |_| {
-        if let Some(el) = field.get() {
-            let _ = el.focus();
-        }
-    });
-    let read = Memo::new(move |_| draft.with(|t| menger_tickets_api::filter::Filter::parse(t).err()));
-    // The chips line follows: stale while the draft does not read.
-    Effect::new(move |_| pop.stale.set(read.with(Option::is_some)));
-    on_cleanup(move || {
-        pop.stale.try_set(false);
-    });
-    let apply = move || {
-        if read.with_untracked(Option::is_some) {
-            return;
-        }
-        if lens.apply_text(level, &draft.get_untracked()).is_ok() {
-            pop.sel.set(0);
-            draft.set(untrack(|| lens.text(level)));
-        }
-    };
-    let fix = move |at: usize, len: usize, with: String| {
-        draft.update(|t| {
-            if at + len <= t.len() && t.is_char_boundary(at) && t.is_char_boundary(at + len) {
-                t.replace_range(at..at + len, &with);
-            }
-        });
-        if let Some(el) = field.get_untracked() {
-            let _ = el.focus();
-        }
-    };
-    view! {
-        <div class="fp-drawer" data-level=level.name()>
-            <textarea
-                class="fdraft"
-                class:bad=move || read.with(Option::is_some)
-                node_ref=field
-                rows="2"
-                spellcheck="false"
-                aria-label=format!("the {} filter as text", level.name())
-                placeholder="(kind build and status Ready) or kind gap"
-                prop:value=move || draft.get()
-                on:input=move |ev| draft.set(event_target_value(&ev))
-                on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
-                    Some("form.submit") => {
-                        ev.prevent_default();
-                        apply();
-                    }
-                    Some("form.cancel") => {
-                        ev.prevent_default();
-                        ev.stop_propagation();
-                        pop.drawer.set(false);
-                    }
-                    _ => {}
-                }
-            ></textarea>
-            {move || read.get().map(|e| {
-                let text = draft.get();
-                let all: Vec<menger_tickets_api::filter::Mistake> = e.chunks.iter().flat_map(|c| c.mistakes.iter().cloned()).collect();
-                let runs = marked(&text, &all);
-                let lines = e
-                    .chunks
-                    .iter()
-                    .flat_map(|c| {
-                        if c.mistakes.is_empty() {
-                            // A chunk read no closer: its own words, shortened.
-                            let why = if c.why.starts_with("not understood: a predicate is") { "not understood".to_string() } else { c.why.clone() };
-                            vec![(format!("`{}` \u{2014} {why}", c.text), None)]
-                        } else {
-                            c.mistakes.iter().map(|m| (m.words.clone(), m.fix.clone().map(|f| (m.at, m.len, f)))).collect()
-                        }
-                    })
-                    .map(|(words, f)| {
-                        let parts: Vec<(bool, String)> = words.split('`').enumerate().map(|(i, p)| (i % 2 == 1, p.to_string())).collect();
-                        view! {
-                            <li>
-                                {parts.into_iter().map(|(code, p)| if code { view! { <b>{p}</b> }.into_any() } else { view! { <span>{p}</span> }.into_any() }).collect_view()}
-                                {f.map(|(at, len, with)| {
-                                    let label = fix_words(&with);
-                                    view! { <button type="button" class="ffix" on:click=move |_| fix(at, len, with.clone())>{label}</button> }
-                                })}
-                            </li>
-                        }
-                    })
-                    .collect_view();
-                view! {
-                    <div class="fmarked" aria-hidden="true">
-                        {runs.into_iter().map(|(bad, t)| if bad { view! { <span class="fbad">{t}</span> }.into_any() } else { view! { <span>{t}</span> }.into_any() }).collect_view()}
-                    </div>
-                    <ul class="fmistakes" role="alert">{lines}</ul>
-                }
-            })}
-            <div class="fp-drawer-foot">
-                <button type="button" class="fapply" disabled=move || read.with(Option::is_some) on:click=move |_| apply()>"apply"</button>
-                <span class="fhint">"Enter applies \u{00b7} the chips keep the last filter that read"</span>
-            </div>
-        </div>
     }
 }
 
@@ -2116,420 +1381,34 @@ pub(crate) fn Clash(level: Level) -> impl IntoView {
     }
 }
 
-// ---------------------------------------------------------------------
-// The view: the menu (FILTER-49)
-
-/// A section of the menu: a category with values, the flags together,
-/// a time category's pane, or Title's field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Section {
-    /// The saved filters, by name — each a group (FILTER-38's mockups).
-    Saved,
-    Values(Cat),
-    Flags,
-    Time(Cat),
-    Title,
-}
-
-impl Section {
-    /// Its key, as the DOM's `data-sec` says it.
-    pub(crate) fn key(self) -> &'static str {
-        match self {
-            Section::Values(c) | Section::Time(c) => c.key(),
-            Section::Flags => "flags",
-            Section::Title => "q",
-            Section::Saved => "saved",
-        }
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Section::Values(c) | Section::Time(c) => c.label(),
-            Section::Flags => "Flags",
-            Section::Title => "Title contains",
-            Section::Saved => "Saved",
-        }
-    }
-
-    /// FILTER-49: its glyph in the menu's list (the pre-FILTER-39 menu's).
-    pub(crate) fn glyph(self) -> &'static str {
-        match self {
-            Section::Saved => "\u{2605}",
-            Section::Flags => "\u{2713}",
-            Section::Title => "T",
-            Section::Values(c) | Section::Time(c) => c.glyph(),
-        }
-    }
-
-    /// Whether `c`'s values are in it.
-    pub(crate) fn holds(self, c: Cat) -> bool {
-        match self {
-            Section::Values(x) | Section::Time(x) => x == c,
-            Section::Flags => c.is_flag() && !c.is_local(),
-            Section::Title => c == Cat::Title,
-            Section::Saved => false,
-        }
-    }
-}
-
-/// The menu's sections for a level's categories, in their order — the
-/// saved filters first where the server reads them (`saved` resolves
-/// there): each category with values its own, the server's flags gathered into one
-/// (where the first of them stands), When, Deployed and Chats their panes,
-/// Title its field.
-pub(crate) fn sections(level: Level, cats: &[Cat]) -> Vec<Section> {
-    let mut out = Vec::new();
-    if matches!(level, Level::Global | Level::Nav | Level::Board) {
-        out.push(Section::Saved);
-    }
-    for &c in cats {
-        let s = match c {
-            Cat::When | Cat::Deployed | Cat::Chats | Cat::People => Section::Time(c),
-            Cat::Title => Section::Title,
-            c if c.is_flag() && !c.is_local() => Section::Flags,
-            c => Section::Values(c),
-        };
-        if !out.contains(&s) {
-            out.push(s);
-        }
-    }
-    out
-}
-
-/// A saved filter's row: ticked, it is a group by name (it fills the
-/// selected group while that is empty).
-fn saved_row(lens: Lens, pop: Pop, name: String) -> impl IntoView {
-    let level = pop.level;
-    let on = {
-        let name = name.clone();
-        Memo::new(move |_| {
-            let sel = pop.sel.get();
-            lens.ors(level).and_then(|o| o.groups.get(sel).cloned()).is_some_and(|g| {
-                g.iter().any(|p| matches!(&p.field, menger_tickets_api::filter::Field::Saved(n) if crate::saved::slug(n) == crate::saved::slug(&name)))
+/// FILTER-40: the global filter as a dashed chip — on every surface's line
+/// and in the nav's head. FILTER-55: it says the filter's name (else how
+/// many rules), never its rules; a press opens the builder on it.
+pub(crate) fn global_chip(lens: Lens, text: String) -> impl IntoView {
+    let naming = crate::naming::hook();
+    let face = move || {
+        let bound = naming.and_then(|n| n.bound(Level::Global)).map(|b| b.name);
+        lens.filter(Level::Global).with(|f| {
+            crate::fcard::line_name(f, bound.as_deref()).map(|n| format!("\u{2317} {n}")).unwrap_or_else(|| {
+                let n = crate::fcard::rules_of(f);
+                format!("{n} rule{}", if n == 1 { "" } else { "s" })
             })
         })
     };
-    let elsewhere = {
-        let name = name.clone();
-        move || {
-            let sel = pop.sel.get();
-            let gs: Vec<String> = lens
-                .ors(level)
-                .map(|o| {
-                    o.groups
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, g)| *i != sel && g.iter().any(|p| matches!(&p.field, menger_tickets_api::filter::Field::Saved(n) if crate::saved::slug(n) == crate::saved::slug(&name))))
-                        .map(|(i, _)| (i + 1).to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            (!gs.is_empty()).then(|| view! { <span class="fv-in">{format!("in group {}", gs.join(", "))}</span> })
-        }
-    };
-    let naming = crate::naming::use_naming();
-    untrack(|| naming.ask_count(&name));
-    let count = {
-        let name = name.clone();
-        move || naming.count(&name).flatten().map(|n| n.to_string()).unwrap_or_default()
-    };
-    let click = {
-        let name = name.clone();
-        move |_| {
-            naming.touch(&name);
-            pop.check_saved(lens, &name)
-        }
-    };
-    let (_, _, peek) = crate::fcard::chip_on(&name, level);
-    view! {
-        <span class="fv-wrap">
-        <button
-            type="button"
-            class="fv fv-saved"
-            data-cat="saved"
-            data-value=name.clone()
-            data-mark=move || if on.get() { "on" } else { "off" }
-            aria-pressed=move || on.get().to_string()
-            on:click=click
-        >
-            <span class="box round" data-state=move || if on.get() { "on" } else { "off" } aria-hidden="true"></span>
-            <span class="flabel"><span>{name.clone()}</span>{elsewhere}</span>
-            <span class="fcount">{count}</span>
-        </button>
-        <button type="button" class="fv-info" data-fcard=name.clone() title=format!("what {name} is made of") aria-label=format!("what {name} is made of") on:click=peek>"\u{24d8}"</button>
-        </span>
-    }
-}
-
-/// A flag's row in the Flags section: what it says when it holds.
-pub(crate) fn flag_words(c: Cat) -> &'static str {
-    match c {
-        Cat::Ready => "ready",
-        Cat::Blocked => "blocked",
-        Cat::Commits => "has commits",
-        Cat::MengerDocs => "menger doc",
-        Cat::Asking => "asking",
-        Cat::Removed => "removed shown",
-        _ => c.label(),
-    }
-}
-
-/// A row of a section, as the menu draws it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PanelRow {
-    /// A value to tick — `depth` indents a shortcode under its host.
-    Value { cat: Cat, token: String, depth: usize },
-    /// A heading over values (Status's groups, Shortcode's "other boards").
-    Heading(&'static str),
-}
-
-/// The rows a value section offers, narrowed by what is typed (the
-/// headings go while it narrows): the menu's own values ([`offered`]),
-/// Status's groups as headings.
-pub(crate) fn section_rows(c: Cat, k: &MenuFacts, q: &str) -> Vec<PanelRow> {
-    let q = q.trim();
-    let by_name = !q.is_empty() && palette_match(c.menu_label(), c.keywords(), q);
-    offered(c, k)
-        .into_iter()
-        .filter_map(|r| match r {
-            Row::Value { cat, token, depth, .. } if q.is_empty() || by_name || palette_match(&token, &cat.value_label(&token), q) => {
-                Some(PanelRow::Value { cat, token, depth: if q.is_empty() { depth } else { 0 } })
-            }
-            Row::Group { label, .. } if q.is_empty() => Some(PanelRow::Heading(label)),
-            Row::Heading(h) if q.is_empty() => Some(PanelRow::Heading(h)),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The flags a level offers, narrowed by what is typed.
-pub(crate) fn flag_rows(cats: &[Cat], q: &str) -> Vec<Cat> {
-    let q = q.trim();
-    cats.iter()
-        .copied()
-        .filter(|c| c.is_flag() && !c.is_local())
-        .filter(|c| q.is_empty() || palette_match(flag_words(*c), c.label(), q) || palette_match("flags", "", q))
-        .collect()
-}
-
-/// FILTER-40: where the one menu is drawn — under the route's surface
-/// line (the board's, a wave board's, the inputs page's), or under the
-/// header (a page with no line; at phone widths always: the filter sheet).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Host {
-    Top,
-    Surface,
-}
-
-/// FILTER-40: the menu's host: the phone's sheet, else the surface's line
-/// where the route draws one, else under the header.
-pub(crate) fn host_of(phone: bool, surface_line: bool) -> Host {
-    match (phone, surface_line) {
-        (false, true) => Host::Surface,
-        _ => Host::Top,
-    }
-}
-
-/// FILTER-40: the global filter as a dashed chip, read-only — on every
-/// surface's line and in the nav's head; a click opens the menu on its ⌂
-/// everywhere tab.
-pub(crate) fn global_chip(lens: Lens, text: String) -> impl IntoView {
-    // FILTER-53: it opens ⌂'s card, read only; the card changes it in the menu.
-    let _ = lens;
     let (enter, leave, press) = crate::fcard::chip_on(crate::fcard::HOME, Level::Global);
     view! {
         <button
             type="button"
             class="fchip-g"
-            data-fcard=crate::fcard::HOME
+            data-fcard=crate::fcard::key_of(&crate::fcard::Subject::Line(Level::Global))
             title=format!("the filter everywhere \u{2014} every view shows what it admits: {text}")
             on:pointerenter=enter
             on:pointerleave=leave
             on:click=press
         >
             <span class="fchip-g-h" aria-hidden="true">"\u{2302}"</span>
-            <span class="fchip-g-w">{text.clone()}</span>
+            <span class="fchip-g-w">{face}</span>
         </button>
-    }
-}
-
-/// FILTER-49: the section a menu opens on — `cat`'s, when one is asked for
-/// (a tag's Filter, a chip); else none, the categories alone (the
-/// pre-FILTER-39 menu opened on its list).
-pub(crate) fn open_on(level: Level, cats: &[Cat], cat: Option<Cat>) -> Option<Section> {
-    let c = cat?;
-    // FILTER-54: When is no longer a category of the menu's (a time is a
-    // rule's, set in the card), but a time pill already on the line still
-    // opens its own pane.
-    sections(level, cats).into_iter().find(|s| s.holds(c)).or_else(|| (c == Cat::When).then_some(Section::Time(Cat::When)))
-}
-
-/// FILTER-49: the search's placeholder — the open category's name, else
-/// what the menu filters.
-pub(crate) fn placeholder(level: Level, open: Option<Section>) -> String {
-    match (open, level) {
-        (Some(s), _) => format!("{}\u{2026}", s.label()),
-        (None, Level::Global) => "Filter everything\u{2026}".into(),
-        (None, _) => "Filter\u{2026}".into(),
-    }
-}
-
-/// The width the categories and a category's values need side by side;
-/// with less room the values take the categories' place, behind a back row.
-pub(crate) const SIDE_BY_SIDE_PX: f64 = 580.0;
-
-/// FILTER-49: where the menu hangs, from its anchor's box and its
-/// positioned parent's (both in the viewport), the column it may use
-/// (`col_x`, `col_w`), its own width and the viewport's height: `(left,
-/// top, max_height)` in the parent's coordinates — under the anchor, kept
-/// inside the column (the ticket menu's [`crate::menu::clamp`] over the
-/// column), never above the parent, as tall as the viewport leaves below it.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn hang(anchor_left: f64, anchor_bottom: f64, parent_left: f64, parent_top: f64, col_x: f64, col_w: f64, width: f64, vh: f64) -> (f64, f64, f64) {
-    let top = (anchor_bottom + 4.0).max(parent_top);
-    let (left, _) = crate::menu::clamp(anchor_left - col_x, top, width, 0.0, col_w, vh);
-    (col_x + left - parent_left, top - parent_top, (vh - top - 12.0).max(220.0))
-}
-
-thread_local! {
-    /// FILTER-49: what the open menu hangs from — the control that opened
-    /// it, kept while the level switch changes which filter it edits.
-    static ANCHOR: std::cell::RefCell<Option<web_sys::Element>> = const { std::cell::RefCell::new(None) };
-}
-
-/// The control the menu was opened from: the focused one when it is a
-/// filter's (its Filter button, a chip, `+ or`), else the level's Filter
-/// button where one is drawn.
-fn anchor_of(level: Level) -> Option<web_sys::Element> {
-    let doc = document()?;
-    let opener = ".fbtn, .fchip-b, .fchip-g, .fline-addor, [data-fopen], [data-fbtn]";
-    let visible = |e: &web_sys::Element| e.dyn_ref::<web_sys::HtmlElement>().is_some_and(|h| h.offset_parent().is_some());
-    doc.active_element()
-        .filter(|e| e.closest(".fmenu").ok().flatten().is_none() && e.closest(opener).ok().flatten().is_some() && visible(e))
-        .or_else(|| {
-            let list = doc.query_selector_all(&format!("[data-fbtn=\"{}\"]", level.name())).ok()?;
-            (0..list.length()).filter_map(|i| list.item(i)).filter_map(|n| n.dyn_into::<web_sys::Element>().ok()).find(visible)
-        })
-}
-
-/// FILTER-49: place a level's menu under its anchor (absolute, from its
-/// positioned parent, so it scrolls with the page and nothing under it
-/// moves), and say whether it has room for two panes. A phone's sheet lays
-/// it flat: nothing placed, one pane.
-fn place(lens: Lens, pop: Pop) {
-    let Some(doc) = document() else { return };
-    let Some(menu) = doc.get_element_by_id(&pop_id(pop.level)).and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) else { return };
-    let style = menu.style();
-    if lens.phone_untracked() {
-        for p in ["left", "top", "max-height", "max-width"] {
-            let _ = style.remove_property(p);
-        }
-        pop.narrow.set(true);
-        return;
-    }
-    let win = dom::window();
-    let dim = |v: Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>| v.ok().and_then(|v| v.as_f64()).unwrap_or(1440.0);
-    let (vw, vh) = (dim(win.inner_width()), dim(win.inner_height()));
-    let Some(parent) = menu.offset_parent() else { return };
-    let (cx, cw) = parent.closest(".content").ok().flatten().map_or((0.0, vw), |c| {
-        let r = c.get_bounding_client_rect();
-        let left = r.left().max(0.0);
-        (left, r.right().min(vw) - left)
-    });
-    let narrow = cw < SIDE_BY_SIDE_PX;
-    if pop.narrow.get_untracked() != narrow {
-        pop.narrow.set(narrow);
-    }
-    let _ = style.set_property("max-width", &format!("{}px", (cw - 8.0).max(160.0)));
-    let pr = parent.get_bounding_client_rect();
-    let at = ANCHOR.with(|a| a.borrow().clone()).filter(|a| a.is_connected()).map(|a| a.get_bounding_client_rect());
-    let (al, ab) = at.map_or((pr.left(), pr.top() - 4.0), |r| (r.left(), r.bottom()));
-    let (left, top, max_h) = hang(al, ab, pr.left(), pr.top(), cx, cw, menu.get_bounding_client_rect().width(), vh);
-    let _ = style.set_property("left", &format!("{left}px"));
-    let _ = style.set_property("top", &format!("{top}px"));
-    let _ = style.set_property("max-height", &format!("{max_h}px"));
-}
-
-/// FILTER-40, FILTER-49: the one menu, drawn here while `host` is where it
-/// goes — a popover over the page (a phone: laid flat in the filter
-/// sheet), editing the level its switch has lit.
-#[component]
-pub(crate) fn PanelHost(host: Host) -> impl IntoView {
-    let lens = lens::use_lens();
-    let here = Memo::new(move |_| (lens.host() == host).then(|| lens.open_level()).flatten());
-    let was = StoredValue::new(None::<Level>);
-    // Placed — and its search focused — as it opens, as the switch changes
-    // the level it edits, and as a category opens or closes.
-    Effect::new(move |_| {
-        let Some(level) = here.get() else {
-            was.set_value(None);
-            return;
-        };
-        let pop = lens.pop(level);
-        pop.cat.track();
-        pop.drawer.track();
-        lens.phone();
-        if was.get_value().is_none() {
-            let a = anchor_of(level);
-            ANCHOR.with(|s| *s.borrow_mut() = a);
-        }
-        let fresh = was.get_value() != Some(level);
-        was.set_value(Some(level));
-        request_animation_frame(move || {
-            place(lens, pop);
-            if !fresh {
-                return;
-            }
-            let Some(doc) = document() else { return };
-            let id = pop_id(level);
-            if let Some(el) = doc.query_selector(&format!("#{id} input.fsearch")).ok().flatten().and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
-                let _ = el.focus();
-            }
-        });
-    });
-    move || here.get().map(|level| menu(lens, lens.pop(level)))
-}
-
-/// FILTER-40: a level as its switch says it.
-pub(crate) fn tab_words(level: Level) -> &'static str {
-    match level {
-        Level::Global => "everywhere",
-        Level::Nav => "nav",
-        Level::Board => "this board",
-        Level::Waves => "this wave board",
-        Level::Inputs => "the inputs",
-    }
-}
-
-/// FILTER-40, FILTER-49: the levels as a small switch in the menu's head —
-/// each with what it shows, counted; the open one lit. One level, no switch.
-fn levels_view(lens: Lens, open: Level) -> impl IntoView {
-    move || {
-        let tabs = lens.tabs();
-        (tabs.len() > 1).then(|| {
-            view! {
-                <span class="flv" role="tablist" aria-label="which filter the menu edits">
-                    {tabs.into_iter().map(|l| {
-                        let n = tab_count(lens, l);
-                        view! {
-                            <button
-                                type="button"
-                                class:on=l == open
-                                role="tab"
-                                data-tab=l.name()
-                                aria-selected=(l == open).to_string()
-                                title=format!("edit the filter {}", if l == Level::Global { "every view shows".to_string() } else { format!("of {}", tab_words(l)) })
-                                on:click=move |_| if l != open { lens.open_panel(l, None) }
-                            >
-                                {(l == Level::Global).then(|| view! { <span class="fp-home" aria-hidden="true">"\u{2302}"</span> })}
-                                {tab_words(l)}
-                                <b>{move || n.get().map(|n| n.to_string()).unwrap_or_default()}</b>
-                            </button>
-                        }
-                    }).collect_view()}
-                </span>
-            }
-        })
     }
 }
 
@@ -2555,556 +1434,6 @@ pub(crate) fn tab_count(lens: Lens, level: Level) -> RwSignal<Option<usize>> {
         }
     });
     n
-}
-
-/// FILTER-49: the menu — the pre-FILTER-39 popover. Its head: the search
-/// (it filters every value; with a category open, that category's), the
-/// level switch, ×. Then which group a tick goes into (FILTER-42, once
-/// there is one), the categories as a short list — the saved filters first
-/// — and the one open beside it (a narrow column, a phone: in its place,
-/// behind a back row), its head saying is / is not. The foot: edit as text
-/// (FILTER-43), reset, save as…, the clauses counted.
-fn menu(lens: Lens, pop: Pop) -> impl IntoView {
-    let level = pop.level;
-    let label = if level == Level::Global { "Filter every view".to_string() } else { format!("Filter the {}", level.name()) };
-    let secs = Memo::new(move |_| sections(level, &pop.cats.get()));
-    let searching = Memo::new(move |_| pop.cat.with(Option::is_none) && pop.query.with(|q| !q.trim().is_empty()));
-    view! {
-        <div
-            id=pop_id(level)
-            class="fmenu"
-            data-level=level.name()
-            role="dialog"
-            aria-label=label
-            class:narrow=move || pop.narrow.get() || lens.phone()
-            class:has-sub=move || pop.cat.with(Option::is_some)
-            class:searching=move || searching.get()
-            on:keydown=move |ev: web_sys::KeyboardEvent| {
-                if bindings::is(&ev, Context::Menu, "dialog.close") && !ev.default_prevented() {
-                    ev.prevent_default();
-                    ev.stop_propagation();
-                    lens.close_panel(true);
-                }
-            }
-        >
-            <div class="fm-head">
-                <input
-                    class="fsearch"
-                    type="text"
-                    autocomplete="off"
-                    spellcheck="false"
-                    aria-label="filter the categories and their values"
-                    placeholder=move || placeholder(level, pop.cat.get())
-                    prop:value=move || pop.query.get()
-                    on:input=move |ev| {
-                        // FILTER-49: the search filters every value — typing
-                        // leaves the open category for the results.
-                        let q = event_target_value(&ev);
-                        if !q.trim().is_empty() && pop.cat.get_untracked().is_some() {
-                            pop.cat.set(None);
-                        }
-                        pop.query.set(q);
-                    }
-                    on:keydown=move |ev: web_sys::KeyboardEvent| {
-                        // Enter ticks the first value the search leaves.
-                        if bindings::is(&ev, Context::Field, "form.submit") {
-                            ev.prevent_default();
-                            let first = document().and_then(|d| d.query_selector(&format!("#{} .fv", pop_id(level))).ok().flatten());
-                            if let Some(el) = first.and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()) {
-                                el.click();
-                            }
-                        } else if bindings::is(&ev, Context::Menu, "menu.out") && event_target_value(&ev).is_empty() && pop.cat.get_untracked().is_some() {
-                            // Back from a category's values to the list.
-                            ev.prevent_default();
-                            pop.cat.set(None);
-                        }
-                    }
-                />
-                {levels_view(lens, level)}
-                <button type="button" class="fm-x" title="close (Escape)" aria-label="close the filter menu" on:click=move |_| lens.close_panel(true)>"\u{d7}"</button>
-            </div>
-            {(level == Level::Nav).then(|| view! { <crate::promote::MakeGlobal menu=true /> })}
-            {into_view(lens, pop)}
-            {move || pop.note.get().map(|w| view! { <div class="fp-note" role="status">{w}</div> })}
-            {move || pop.refusal.get().map(|w| view! { <div class="frefused" role="alert">{w}</div> })}
-            <div class="panes">
-                <div class="fpane fmain" role="menu" aria-label="categories">
-                    {move || {
-                        if searching.get() {
-                            let found: Vec<AnyView> = secs.get().into_iter().filter_map(|s| section_view(lens, pop, s)).collect();
-                            if found.is_empty() {
-                                return view! { <div class="fempty">"no match"</div> }.into_any();
-                            }
-                            return found.into_iter().collect_view().into_any();
-                        }
-                        secs.get().into_iter().map(|s| cat_row(lens, pop, s)).collect_view().into_any()
-                    }}
-                </div>
-                {move || pop.cat.get().map(|s| view! {
-                    <div class="fpane fsub" role=if matches!(s, Section::Time(_)) { "group" } else { "menu" } aria-label=format!("{} values", s.label()) data-sec=s.key()>
-                        <button type="button" class="frow back" on:mousedown=|ev| ev.prevent_default() on:click=move |_| pop.cat.set(None)>
-                            <span class="glyph">"\u{2039}"</span>
-                            <span class="flabel">{s.label()}</span>
-                        </button>
-                        {move || section_view(lens, pop, s).unwrap_or_else(|| view! { <div class="fempty">"no match"</div> }.into_any())}
-                    </div>
-                })}
-            </div>
-            <div class="fm-foot">
-                <button
-                    type="button"
-                    class="fp-text"
-                    data-ftext=level.name()
-                    aria-expanded=move || pop.drawer.get().to_string()
-                    title="the filter as text, in FILTER-3's language"
-                    on:click=move |_| pop.drawer.update(|d| *d = !*d)
-                >
-                    {move || if pop.drawer.get() { "\u{25be} edit as text" } else { "\u{25b8} edit as text" }}
-                </button>
-                <Reset level />
-                <SaveAs level />
-                <span class="fm-count">{move || foot_words(lens, level)}</span>
-            </div>
-            {move || pop.drawer.get().then(|| view! { <TextDrawer level /> })}
-            // FILTER-44: on a phone, pinned at the sheet's foot: reset, and
-            // show N tickets — counting as you tick — which lowers it.
-            {move || lens.phone().then(|| show_bar(lens, level))}
-        </div>
-    }
-}
-
-/// FILTER-49: a category's row in the menu's list — its glyph, its name, a
-/// dot while the filter holds it, `›`; a click opens it (one at a time).
-fn cat_row(lens: Lens, pop: Pop, s: Section) -> impl IntoView {
-    let on = Memo::new(move |_| pop.holds(lens, s));
-    let open = move || pop.cat.get() == Some(s);
-    view! {
-        <button
-            type="button"
-            class="frow cat"
-            class:open=open
-            role="menuitem"
-            data-sec=s.key()
-            aria-haspopup="true"
-            aria-expanded=move || open().to_string()
-            on:click=move |_| {
-                pop.query.set(String::new());
-                pop.cat.set(Some(s));
-            }
-        >
-            <span class="glyph" aria-hidden="true">{s.glyph()}</span>
-            <span class="flabel">{s.label()}</span>
-            {move || on.get().then(|| view! { <span class="dot" title="in the filter"></span> })}
-            <span class="arrow" aria-hidden="true">"\u{203a}"</span>
-        </button>
-    }
-}
-
-/// FILTER-42 inside the menu: which group a tick goes into — each group by
-/// its number, the one lit, and `+ or` — once the filter has a group; past
-/// what groups draw, that the filter is its text (edited at the foot).
-fn into_view(lens: Lens, pop: Pop) -> impl IntoView {
-    let level = pop.level;
-    move || {
-        let Some(o) = lens.ors(level) else {
-            let text = lens.filter(level).with(|f| f.format());
-            return Some(view! {
-                <div class="finto deep" role="note">
-                    <span>"Deeper than groups joined by or \u{2014} edit it as text, at the foot:"</span>
-                    <code>{text}</code>
-                </div>
-            }.into_any());
-        };
-        if o.clauses() == 0 && o.groups.len() <= 1 {
-            return None;
-        }
-        let n = o.groups.len().max(1);
-        let sel = pop.sel.get().min(n - 1);
-        let add = move |_| {
-            pop.note.set(None);
-            let r = lens.edit_ors(level, |o| Ok(o.add_group()));
-            if let Ok(at) = &r {
-                pop.sel.set(*at);
-            }
-            pop.answer(r);
-        };
-        Some(view! {
-            <div class="finto" role="group" aria-label="the group a tick goes into">
-                <span>"ticks go into"</span>
-                {(0..n).map(|gi| view! {
-                    <button
-                        type="button"
-                        class:on=gi == sel
-                        data-group=gi
-                        aria-pressed=(gi == sel).to_string()
-                        title=format!("tick values into group {} (groups are joined by or)", gi + 1)
-                        on:click=move |_| {
-                            pop.sel.set(gi);
-                            pop.note.set(None);
-                        }
-                    >
-                        {format!("group {}", gi + 1)}
-                    </button>
-                    {(n > 1).then(|| view! {
-                        <button type="button" class="fm-gx" title=format!("remove group {}", gi + 1) aria-label=format!("remove group {}", gi + 1) on:click=move |_| {
-                            pop.note.set(None);
-                            let r = lens.edit_ors(level, |o| {
-                                o.remove_group(gi);
-                                Ok(())
-                            });
-                            pop.answer(r);
-                            pop.sel.update(|s| *s = s.saturating_sub(usize::from(*s >= gi && *s > 0)));
-                        }>"\u{d7}"</button>
-                    })}
-                }).collect_view()}
-                <button type="button" class="fm-addor" title="start another group, joined by or" on:click=add>"+ or"</button>
-            </div>
-        }.into_any())
-    }
-}
-
-/// FILTER-44: the phone's pinned foot — `reset` (the level back to its
-/// default) and `show N tickets`, N what the level shows now, which closes
-/// the menu and lowers the sheet.
-fn show_bar(lens: Lens, level: Level) -> impl IntoView {
-    let n = tab_count(lens, level);
-    view! {
-        <div class="fp-showbar">
-            <button type="button" class="fp-clear" disabled=move || !lens.differs(level) on:click=move |_| {
-                lens.reset(level);
-                lens.pop(level).sel.set(0);
-            }>
-                {if level == Level::Global { "clear" } else { "reset" }}
-            </button>
-            <button type="button" class="fp-show" on:click=move |_| {
-                lens.close_panel(false);
-                crate::phonebar::open(None);
-            }>
-                {move || match n.get() {
-                    Some(n) => format!("show {n} ticket{}", if n == 1 { "" } else { "s" }),
-                    None => "show tickets".to_string(),
-                }}
-            </button>
-        </div>
-    }
-}
-
-/// The foot's words: how many clauses, in how many groups.
-fn foot_words(lens: Lens, level: Level) -> String {
-    match lens.ors(level) {
-        None => "deeper than groups joined by or \u{2014} edit it as text".into(),
-        Some(o) => {
-            let groups = o.live().count();
-            match (o.clauses(), groups) {
-                (0, _) => "no clause \u{2014} every ticket".into(),
-                (n, 1) => format!("{n} clause{}", if n == 1 { "" } else { "s" }),
-                (n, g) => format!("{n} clauses in {g} groups joined by or"),
-            }
-        }
-    }
-}
-
-/// A category's values: its head (its name; `is / is not` where it has
-/// values to negate) and its rows — none while the search leaves it none.
-/// The open category's pane, and each of the search's results.
-fn section_view(lens: Lens, pop: Pop, s: Section) -> Option<AnyView> {
-    let level = pop.level;
-    let q = pop.query.get();
-    let body = match s {
-        Section::Saved => {
-            let naming = crate::naming::use_naming();
-            let recent = naming.recent();
-            let mut names: Vec<String> = crate::saved::hook().map(|h| h.listed().into_iter().map(|e| e.name).collect()).unwrap_or_default();
-            // The ones used lately first, then the rest in the list's order.
-            names.sort_by_key(|n| recent.iter().position(|r| crate::saved::slug(r) == crate::saved::slug(n)).unwrap_or(usize::MAX));
-            let by_name = palette_match("saved", "filters", &q);
-            let names: Vec<String> = names.into_iter().filter(|n| q.trim().is_empty() || by_name || palette_match(n, "saved", &q)).collect();
-            if names.is_empty() {
-                if !q.trim().is_empty() {
-                    return None;
-                }
-                view! { <div class="fempty">"none saved yet \u{2014} save as\u{2026} at the foot names this filter"</div> }.into_any()
-            } else {
-                names.into_iter().map(|n| saved_row(lens, pop, n)).collect_view().into_any()
-            }
-        }
-        Section::Values(c) => {
-            let rows = pop.facts(lens, |k| section_rows(c, k, &q));
-            if rows.iter().all(|r| matches!(r, PanelRow::Heading(_))) {
-                return None;
-            }
-            rows.into_iter().map(|r| row_view(lens, pop, r)).collect_view().into_any()
-        }
-        Section::Flags => {
-            let flags = pop.cats.with(|cs| flag_rows(cs, &q));
-            if flags.is_empty() {
-                return None;
-            }
-            flags.into_iter().map(|c| flag_view(lens, pop, c)).collect_view().into_any()
-        }
-        Section::Time(c) => {
-            if !q.trim().is_empty() && !palette_match(c.menu_label(), c.keywords(), &q) {
-                return None;
-            }
-            crate::when_view::pane(lens, pop, c).into_any()
-        }
-        Section::Title => {
-            if !q.trim().is_empty() && !palette_match("title", "contains text", &q) {
-                return None;
-            }
-            title_view(lens, pop).into_any()
-        }
-    };
-    let switch = match s {
-        Section::Values(c) => switch_words(c).map(|w| (c, w)),
-        Section::Flags => Some((Cat::Ready, ("is", "is not"))),
-        Section::Title => Some((Cat::Title, (op_label(Cat::Title, Op::Is, 1), op_label(Cat::Title, Op::Not, 1)))),
-        Section::Time(_) | Section::Saved => None,
-    };
-    let flags = s == Section::Flags;
-    Some(
-        view! {
-            <div class="fsec" data-sec=s.key() data-level=level.name()>
-                <h5 class="fsec-h">
-                    <span>{s.label()}</span>
-                    {switch.map(|(c, (is, not))| {
-                        // The Flags section's switch is one for every flag.
-                        let op = move || pop.op(c);
-                        let set = move |o: Op| {
-                            if flags {
-                                pop.ops.update(|m| {
-                                    m.insert(Cat::Ready, o);
-                                });
-                            } else {
-                                pop.set_op(lens, c, o);
-                            }
-                        };
-                        view! {
-                            <span class="fop" role="group" aria-label=format!("{}: {is} or {not}", s.label()) data-cat=c.key()>
-                                <button type="button" class:on=move || op() == Op::Is aria-pressed=move || (op() == Op::Is).to_string() on:click=move |_| set(Op::Is)>{is}</button>
-                                <button type="button" class:on=move || op() == Op::Not aria-pressed=move || (op() == Op::Not).to_string() on:click=move |_| set(Op::Not)>{not}</button>
-                            </span>
-                        }
-                    })}
-                </h5>
-                {body}
-            </div>
-        }
-        .into_any(),
-    )
-}
-
-impl Pop {
-    /// The menu's facts, read (and tracked) for `f`: the level's own
-    /// categories, the route's shortcode, the counts, and — what is
-    /// checked, for a value no group knows — every clause the groups hold.
-    fn facts<T>(self, lens: Lens, f: impl FnOnce(&MenuFacts) -> T) -> T {
-        let route = lens.route_sc(self.level);
-        let counts = self.counts().get();
-        let clauses = lens.clauses(self.level);
-        let cats = self.cats.get();
-        lens.sctree().with(|tree| f(&MenuFacts { cats: &cats, route: route.as_deref(), tree: tree.as_ref(), clauses: &clauses, counts: &counts }))
-    }
-
-    /// FILTER-49: whether the level's filter holds anything of section `s`
-    /// — its row's dot in the menu's list. Tracked.
-    fn holds(self, lens: Lens, s: Section) -> bool {
-        if s == Section::Saved {
-            return lens.filter(self.level).with(|f| !f.saved_names().is_empty());
-        }
-        let in_groups = lens.ors(self.level).is_some_and(|o| o.groups.iter().flatten().any(|p| crate::ors::cat_of(p).is_some_and(|c| s.holds(c))));
-        in_groups || lens.clauses(self.level).iter().any(|(c, _)| s.holds(c))
-    }
-
-    /// FILTER-39: what ticking `c`'s `token` would leave on the surface —
-    /// asked once per value hovered (a server-backed level's).
-    fn hovered(self, lens: Lens, c: Cat, token: &str) {
-        if !matches!(self.level, Level::Global | Level::Nav | Level::Board) || c.is_local() {
-            return;
-        }
-        let key = format!("{}:{token}", c.key());
-        if self.hover.with_untracked(|h| h.as_ref().is_some_and(|(k, _)| *k == key)) {
-            return;
-        }
-        let tree = lens.sctree().get_untracked();
-        let sel = self.sel.get_untracked();
-        let op = self.op(c);
-        let text = lens.would_be(self.level, |o| o.pick(sel, c, token, op, tree.as_ref()).map(|_| ()));
-        self.hover.set(Some((key.clone(), None)));
-        let Some(text) = text else { return };
-        wasm_bindgen_futures::spawn_local(async move {
-            let n = crate::counts::count_once(text).await;
-            if self.hover.try_with_untracked(|h| h.as_ref().is_some_and(|(k, _)| *k == key)) == Some(true) {
-                self.hover.try_set(Some((key, n)));
-            }
-        });
-    }
-
-    /// The count a value's row shows: what ticking it would leave while it
-    /// is hovered (once in), else its count. Tracked.
-    fn shown_count(self, c: Cat, token: &str) -> (String, bool) {
-        let key = format!("{}:{token}", c.key());
-        if let Some(Some(n)) = self.hover.with(|h| h.as_ref().filter(|(k, _)| *k == key).map(|(_, n)| *n)) {
-            return (format!("\u{2192} {n}"), true);
-        }
-        (self.counts().count(c, token).map(|n| n.to_string()).unwrap_or_default(), false)
-    }
-
-    /// `c`'s `token`'s box in the selected group (a surface's own: its
-    /// clause's). Tracked.
-    fn mark(self, lens: Lens, c: Cat, token: &str) -> crate::ors::Mark {
-        use crate::ors::Mark;
-        if c.is_local() {
-            return match lens.clauses(self.level).get(c) {
-                Some(cl) if cl.values.iter().any(|v| v == token) => {
-                    if cl.op == Op::Is || c.is_flag() {
-                        Mark::On
-                    } else {
-                        Mark::Not
-                    }
-                }
-                _ => Mark::Off,
-            };
-        }
-        let sel = self.sel.get();
-        lens.sctree().with(|t| lens.ors(self.level).map_or(Mark::Off, |o| o.state(sel, c, token, t.as_ref())))
-    }
-
-    /// The other groups holding `c`'s `token`. Tracked.
-    fn elsewhere(self, lens: Lens, c: Cat, token: &str) -> Vec<usize> {
-        if c.is_local() {
-            return Vec::new();
-        }
-        let sel = self.sel.get();
-        lens.sctree().with(|t| lens.ors(self.level).map(|o| o.elsewhere(sel, c, token, t.as_ref())).unwrap_or_default())
-    }
-}
-
-/// A value's row: its box, its face, the other groups that hold it, its
-/// count (what ticking it would leave, while hovered).
-fn row_view(lens: Lens, pop: Pop, row: PanelRow) -> AnyView {
-    match row {
-        PanelRow::Heading(h) => view! { <div class="fsec-sub">{h}</div> }.into_any(),
-        PanelRow::Value { cat: c, token, depth } => {
-            let mark = {
-                let token = token.clone();
-                Memo::new(move |_| pop.mark(lens, c, &token))
-            };
-            let elsewhere = {
-                let token = token.clone();
-                move || {
-                    let gs = pop.elsewhere(lens, c, &token);
-                    (!gs.is_empty()).then(|| {
-                        let n = gs.iter().map(usize::to_string).collect::<Vec<_>>().join(", ");
-                        view! { <span class="fv-in">{format!("in group {n}")}</span> }
-                    })
-                }
-            };
-            let count = {
-                let token = token.clone();
-                Memo::new(move |_| pop.shown_count(c, &token))
-            };
-            let click = {
-                let token = token.clone();
-                move |_| pop.check(lens, c, &token)
-            };
-            let enter = {
-                let token = token.clone();
-                move |_| pop.hovered(lens, c, &token)
-            };
-            let pad = format!("padding-left: {}px", 4 + depth * 14);
-            view! {
-                <button
-                    type="button"
-                    class="fv"
-                    data-cat=c.key()
-                    data-value=token.clone()
-                    data-mark=move || mark.get().as_str()
-                    aria-pressed=move || (mark.get() != crate::ors::Mark::Off).to_string()
-                    style=pad
-                    on:click=click
-                    on:mouseenter=enter
-                    on:mouseleave=move |_| pop.hover.set(None)
-                >
-                    <span class="box" data-state=move || mark.get().as_str() aria-hidden="true"></span>
-                    <span class="flabel">{value_face(c, &token)}{elsewhere}</span>
-                    <span class="fcount" class:delta=move || count.get().1>{move || count.get().0}</span>
-                </button>
-            }
-            .into_any()
-        }
-    }
-}
-
-/// A flag's row in the Flags section: ticked, it holds (`is`) or does not
-/// (`is not`, the section's switch).
-fn flag_view(lens: Lens, pop: Pop, c: Cat) -> impl IntoView {
-    use crate::ors::Mark;
-    let mark = Memo::new(move |_| match (pop.mark(lens, c, "yes"), pop.mark(lens, c, "no")) {
-        (Mark::On, _) => Mark::On,
-        (_, Mark::On) => Mark::Not,
-        _ => Mark::Off,
-    });
-    let token = move || if pop.op(Cat::Ready) == Op::Not { "no" } else { "yes" };
-    let count = Memo::new(move |_| pop.shown_count(c, token()));
-    view! {
-        <button
-            type="button"
-            class="fv"
-            data-cat=c.key()
-            data-value=move || token()
-            data-mark=move || mark.get().as_str()
-            aria-pressed=move || (mark.get() != Mark::Off).to_string()
-            on:click=move |_| pop.check(lens, c, untrack(token))
-            on:mouseenter=move |_| pop.hovered(lens, c, untrack(token))
-            on:mouseleave=move |_| pop.hover.set(None)
-        >
-            <span class="box" data-state=move || mark.get().as_str() aria-hidden="true"></span>
-            <span class="flabel">{flag_words(c)}</span>
-            <span class="fcount" class:delta=move || count.get().1>{move || count.get().0}</span>
-        </button>
-    }
-}
-
-/// Title's section (the wave board's): its text, matched as you type —
-/// under the section's switch (FILTER-19).
-fn title_view(lens: Lens, pop: Pop) -> impl IntoView {
-    let level = pop.level;
-    let seed = untrack(|| lens.clauses(level).get(Cat::Title).map(|cl| cl.values[0].clone()).unwrap_or_default());
-    view! {
-        <div class="ftitle">
-            <input
-                class="ftitle-in"
-                type="text"
-                autocomplete="off"
-                spellcheck="false"
-                aria-label="title or id contains"
-                placeholder="title or id\u{2026}"
-                value=seed
-                on:input=move |ev| {
-                    let text = event_target_value(&ev);
-                    let op = untrack(|| pop.op(Cat::Title));
-                    lens.edit(level, |k| k.set(Cat::Title, op, [text].into_iter().filter(|t| !t.trim().is_empty())));
-                }
-            />
-            <span class="fhint">"case-insensitive"</span>
-        </div>
-    }
-}
-
-/// A value as the menu draws it: a shortcode as its chip, a status as its
-/// chip, a kind with its glyph.
-fn value_face(c: Cat, token: &str) -> AnyView {
-    let label = c.value_label(token);
-    match c {
-        Cat::Shortcode => view! { <span class="code">{label}</span> }.into_any(),
-        Cat::Status => view! { <span class=format!("tag {}", st_class(token))>{label}</span> }.into_any(),
-        Cat::Kind => {
-            let kind = token.to_string();
-            view! { <span class="kind" data-kind=kind.clone()><span class="kglyph">{kind_glyph(&kind)}</span>" "{label}</span> }.into_any()
-        }
-        _ => view! { <span>{label}</span> }.into_any(),
-    }
 }
 
 #[cfg(test)]
@@ -3149,14 +1478,6 @@ pub(crate) mod tests {
         ]
         .into_iter()
         .collect();
-        ScTree::of(&g)
-    }
-
-    /// FILTER-38's mockups' shortcodes: KILN hosts GLAZE; PANTRY and
-    /// ATLAS are boards of their own.
-    pub(crate) fn kiln_tree() -> ScTree {
-        let g: BTreeMap<String, Group> =
-            [group("KILN", None), group("GLAZE", Some("KILN-1")), group("PANTRY", None), group("ATLAS", None)].into_iter().collect();
         ScTree::of(&g)
     }
 
@@ -3389,45 +1710,11 @@ pub(crate) mod tests {
     /// narrows its values.
     #[test]
     fn the_menu_lists_categories_values_and_search() {
-        // FILTER-42: what the menu's search leaves — the categories whose
-        // section still shows (a time section by its name and keywords,
-        // a value section by a value or its name, Title by its name).
-        fn found(q: &str, k: &MenuFacts) -> Vec<Cat> {
-            k.cats
-                .iter()
-                .copied()
-                .filter(|c| match c {
-                    Cat::When | Cat::Deployed | Cat::Chats | Cat::People => q.trim().is_empty() || palette_match(c.menu_label(), c.keywords(), q),
-                    Cat::Title => q.trim().is_empty() || palette_match("title", "contains text", q),
-                    c if c.is_flag() && !c.is_local() => flag_rows(&[*c], q).contains(c) || palette_match(c.label(), "", q),
-                    c => section_rows(*c, k, q).iter().any(|r| matches!(r, PanelRow::Value { .. })),
-                })
-                .collect()
-        }
         let t = platform();
         let clauses = Clauses::default().with(Cat::Shortcode, Op::Is, t.subtree("PLEXUS"));
         let mut counts: Counts = HashMap::new();
         counts.insert(Cat::Wave, [("1", 3), ("2", 1), ("4", 1), ("9", 0)].into_iter().map(|(k, v)| (k.to_string(), v)).collect());
-        let k = MenuFacts { cats: &Cat::WAVES, route: Some("PLEXUS"), tree: Some(&t), clauses: &clauses, counts: &counts };
-        assert_eq!(found("", &k), Cat::WAVES.to_vec(), "FILTER-42: the menu lists every category");
-        assert_eq!(
-            Cat::WAVES.map(Cat::menu_label),
-            [
-                "Shortcode",
-                "Status",
-                "Wave",
-                "Kind",
-                "Severity",
-                "Ready",
-                "Blocked",
-                "Commits",
-                "Menger docs",
-                "Label",
-                "Readiness",
-                "Off-board blockers",
-                "Title contains…"
-            ]
-        );
+        let k = MenuFacts { route: Some("PLEXUS"), tree: Some(&t), clauses: &clauses, counts: &counts };
         let val = |c: Cat, t: &str| Row::Value { cat: c, token: t.into(), depth: 0, scoped: false };
         let status = offered(Cat::Status, &k);
         assert_eq!(status[0], Row::Group { cat: Cat::Status, label: "in progress", tokens: &["Coding", "In Review"] });
@@ -3439,58 +1726,37 @@ pub(crate) mod tests {
         assert_eq!(offered(Cat::Kind, &k).len(), 6);
         assert_eq!(offered(Cat::Ready, &k), [val(Cat::Ready, "yes"), val(Cat::Ready, "no")]);
 
-        let pv = |c: Cat, t: &str| PanelRow::Value { cat: c, token: t.into(), depth: 0 };
-        assert!(section_rows(Cat::Shortcode, &k, "ret").contains(&pv(Cat::Shortcode, "RETURNS")));
-        assert!(found("sta", &k).contains(&Cat::Status), "a category by its name");
-        assert!(section_rows(Cat::Status, &k, "review").contains(&pv(Cat::Status, "In Review")));
-        assert_eq!(section_rows(Cat::Shortcode, &k, "gen"), [pv(Cat::Shortcode, "CODEGEN"), pv(Cat::Shortcode, "GEN")]);
-        assert_eq!(section_rows(Cat::Readiness, &k, "now"), [pv(Cat::Readiness, "workable")]);
-        assert_eq!(flag_rows(&Cat::WAVES, "has"), [Cat::Commits]);
         assert!(offered(Cat::Title, &k).is_empty());
 
         // The global menu: the server's categories, no Title to offer.
-        let g = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        assert_eq!(found("", &g).len(), 13, "DEPLOY-13: Deployed; CHAT-4: Chats; TICKETS-9: People");
+        let g = MenuFacts { route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
         assert!(!Cat::SERVER.contains(&Cat::When) && !Cat::INPUTS.contains(&Cat::When), "FILTER-54: a time is a rule's, set in the card");
         // TICKETS-9: People — its own pane of three cells, found by them.
         assert!(offered(Cat::People, &g).is_empty());
-        assert!(found("assigned", &g).contains(&Cat::People) && found("people", &g).contains(&Cat::People));
-        assert_eq!(switch_words(Cat::People), None);
         assert_eq!(time_cat(&crate::when::new_people(None, true)), Cat::People);
         assert_eq!(crate::when::group(&crate::when::new_people(Some(menger_tickets_api::filter::Who::Me), false)).format(), "assigned me");
         assert_eq!(crate::when::group(&crate::when::new_people(None, true)).format(), "unassigned");
         // CHAT-4: Chats — its own pane of two cells, found by them, and the
         // pills it builds drawn under it.
         assert!(offered(Cat::Chats, &g).is_empty());
-        assert!(found("unread", &g).contains(&Cat::Chats));
-        assert!(found("chat", &g).contains(&Cat::Chats));
-        assert_eq!(switch_words(Cat::Chats), None);
         assert_eq!(time_cat(&crate::when::new_chats(false)), Cat::Chats);
         assert_eq!(crate::when::group(&crate::when::new_chats(true)).format(), "unread");
         assert_eq!(crate::when::group(&crate::when::new_chats(false)).format(), "chatting");
         assert!(offered(Cat::When, &g).is_empty(), "When draws its own pane");
         assert!(offered(Cat::Deployed, &g).is_empty(), "DEPLOY-13: and Deployed, When's pane");
-        assert!(found("deploy", &g).contains(&Cat::Deployed));
-        assert!(found("prod", &g).contains(&Cat::Deployed), "found by what it builds");
-        assert_eq!(switch_words(Cat::Deployed), None);
         let dep = crate::when::new_deployed("prod", false, None).unwrap();
         assert_eq!(time_cat(&dep), Cat::Deployed);
         assert_eq!(time_cat(&crate::when::new_clause(crate::when::Kind::Changed, None, None).unwrap()), Cat::When);
-        assert!(!found("created", &g).contains(&Cat::When), "FILTER-54: the When category is gone");
         // FILTER-21: typing finds Menger docs, by its name.
-        assert!(found("menger", &g).contains(&Cat::MengerDocs));
         assert_eq!(offered(Cat::MengerDocs, &g), [val(Cat::MengerDocs, "yes"), val(Cat::MengerDocs, "no")]);
-        assert!(!found("ret", &g).contains(&Cat::Title));
-        assert!(!found("wave", &g).contains(&Cat::Wave));
         // MENGER-12: Asking is a flag; Label offers `needs-you`, every label
         // the counts name and the clause's own, in name order.
-        assert!(found("asking", &g).contains(&Cat::Asking));
         assert_eq!(offered(Cat::Asking, &g), [val(Cat::Asking, "yes"), val(Cat::Asking, "no")]);
         assert_eq!(offered(Cat::Label, &g), [val(Cat::Label, "needs-you")]);
         let mut counts = HashMap::new();
         counts.insert(Cat::Label, [("blocked-on-ci", 2), ("needs-you", 3)].into_iter().map(|(k, v)| (k.to_string(), v)).collect());
         let clauses = Clauses::default().with(Cat::Label, Op::Is, strs(&["zz-mine"]));
-        let l = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &clauses, counts: &counts };
+        let l = MenuFacts { route: None, tree: Some(&t), clauses: &clauses, counts: &counts };
         assert_eq!(
             offered(Cat::Label, &l),
             [val(Cat::Label, "blocked-on-ci"), val(Cat::Label, "needs-you"), val(Cat::Label, "zz-mine")]
@@ -3530,25 +1796,6 @@ pub(crate) mod tests {
         assert_ne!(f, d);
         assert_eq!(d.local(), Clauses::default());
         assert_eq!(d.server(), d);
-    }
-
-    /// FILTER-19: a category's values open with an operator switch — `is` /
-    /// `is not` on every category with values, the surface's own included;
-    /// Title's `contains` / `does not contain`; none on a flag. It shows the
-    /// clause's operator, or — no clause — the pane's (`is` for a new one).
-    #[test]
-    fn a_categorys_values_open_with_an_operator_switch() {
-        for c in [Cat::Shortcode, Cat::Status, Cat::Kind, Cat::Severity, Cat::Wave, Cat::Readiness, Cat::OffBoard, Cat::State] {
-            assert_eq!(switch_words(c), Some(("is", "is not")), "{c:?}");
-        }
-        assert_eq!(switch_words(Cat::Title), Some(("contains", "does not contain")));
-        for c in [Cat::Ready, Cat::Blocked, Cat::Commits, Cat::MengerDocs, Cat::Asking, Cat::Removed] {
-            assert_eq!(switch_words(c), None, "{c:?}: its yes / no is the negation");
-        }
-        assert_eq!(switch_words(Cat::Label), Some(("is", "is not")));
-        assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 10, "every category but the flags and When");
-        assert_eq!(switch_words(Cat::When), None, "FILTER-27: a time pill's parts are its own");
-
     }
 
     /// FILTER-19: the switch set to `is not` is a pill's toggle — the same
@@ -3606,7 +1853,7 @@ pub(crate) mod tests {
         let mut q = Clauses::default().with(Cat::Title, Op::Is, strs(&["envelope"]));
         q.set_op(Cat::Title, Op::Not);
         let title = q.get(Cat::Title).unwrap();
-        assert_eq!(op_label(Cat::Title, title.op, 1), switch_words(Cat::Title).unwrap().1);
+        assert_eq!(op_label(Cat::Title, title.op, 1), "does not contain");
         assert_eq!(q.to_pairs(), [lens::Pair::new("q", Some("not:envelope".into()))]);
 
         // A flag: no switch — nothing to set; its value is the negation.
@@ -3615,140 +1862,5 @@ pub(crate) mod tests {
         assert_eq!(g.get(Cat::Ready), Some(&Clause { op: Op::Is, values: strs(&["yes"]) }));
         g.edit_as(Cat::Blocked, Op::Not, |k| k.toggle(Cat::Blocked, "yes"));
         assert_eq!(g.get(Cat::Blocked), Some(&Clause { op: Op::Is, values: strs(&["yes"]) }), "not turned over");
-    }
-
-    /// FILTER-39, FILTER-49: the menu's categories — the saved filters first where the
-    /// server reads them, each category with values its own, the flags
-    /// gathered where the first stands, the time categories their panes,
-    /// Title its field; every category and value the menu offered is in one.
-    #[test]
-    fn the_menu_has_a_category_for_every_one() {
-        let board = sections(Level::Board, &Cat::SERVER);
-        assert_eq!(
-            board,
-            [
-                Section::Saved,
-                Section::Values(Cat::Shortcode),
-                Section::Values(Cat::Status),
-                Section::Values(Cat::Kind),
-                Section::Values(Cat::Severity),
-                Section::Flags,
-                Section::Values(Cat::Label),
-                Section::Time(Cat::Deployed),
-                Section::Time(Cat::Chats),
-                Section::Time(Cat::People),
-            ]
-        );
-        for c in Cat::SERVER {
-            assert!(board.iter().any(|s| s.holds(c)), "{c:?} has a section");
-        }
-        let waves = sections(Level::Waves, &Cat::WAVES);
-        assert!(!waves.contains(&Section::Saved), "a wave board reads its filter on its cards — no saved names");
-        assert!(waves.contains(&Section::Values(Cat::Wave)) && waves.contains(&Section::Title));
-        for c in Cat::WAVES {
-            assert!(waves.iter().any(|s| s.holds(c)), "{c:?} has a section");
-        }
-        let inputs = sections(Level::Inputs, &Cat::INPUTS);
-        assert_eq!(inputs[..3], [Section::Values(Cat::State), Section::Values(Cat::Removed), Section::Values(Cat::Shortcode)]);
-        assert_eq!(flag_words(Cat::Commits), "has commits");
-    }
-
-    /// FILTER-39: a section's rows are the menu's values, Status's groups
-    /// as headings, the tree indented; typing narrows every section at once
-    /// (a section found by its name keeps all its values), headings gone.
-    #[test]
-    fn a_sections_rows_narrow_as_you_type() {
-        let t = platform();
-        let k = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        let status = section_rows(Cat::Status, &k, "");
-        assert_eq!(status[0], PanelRow::Heading("in progress"));
-        assert_eq!(status.iter().filter(|r| matches!(r, PanelRow::Value { .. })).count(), 11, "every status");
-        assert!(section_rows(Cat::Shortcode, &k, "").contains(&PanelRow::Value { cat: Cat::Shortcode, token: "GEN".into(), depth: 3 }));
-        assert_eq!(section_rows(Cat::Status, &k, "review"), [PanelRow::Value { cat: Cat::Status, token: "In Review".into(), depth: 0 }]);
-        assert!(section_rows(Cat::Kind, &k, "review").is_empty());
-        assert_eq!(section_rows(Cat::Kind, &k, "kind").len(), KINDS.len(), "found by its name: all of it");
-        assert_eq!(section_rows(Cat::Shortcode, &k, "gen"), [
-            PanelRow::Value { cat: Cat::Shortcode, token: "CODEGEN".into(), depth: 0 },
-            PanelRow::Value { cat: Cat::Shortcode, token: "GEN".into(), depth: 0 },
-        ]);
-        assert_eq!(flag_rows(&Cat::SERVER, ""), [Cat::Ready, Cat::Blocked, Cat::Commits, Cat::MengerDocs, Cat::Asking]);
-        assert_eq!(flag_rows(&Cat::SERVER, "commits"), [Cat::Commits]);
-        assert_eq!(flag_rows(&Cat::SERVER, "flags").len(), 5);
-        assert_eq!(flag_rows(&Cat::INPUTS, ""), [Cat::Ready, Cat::Blocked, Cat::Commits, Cat::MengerDocs, Cat::Asking], "Removed is the page's own");
-    }
-
-    /// FILTER-40: one menu — under the route's surface line on a wide
-    /// window, under the header where there is none, and in the phone
-    /// bar's filter sheet at phone widths; each level its tab.
-    #[test]
-    fn the_one_menu_is_drawn_in_one_place() {
-        assert_eq!(host_of(false, true), Host::Surface);
-        assert_eq!(host_of(false, false), Host::Top);
-        assert_eq!(host_of(true, true), Host::Top, "the phone's sheet");
-        assert_eq!(host_of(true, false), Host::Top);
-        assert_eq!(Level::ALL.map(tab_words), ["everywhere", "nav", "this board", "this wave board", "the inputs"]);
-    }
-
-    /// FILTER-43: the drawer marks each mistake where it is (a caret where
-    /// something is missing) and says each fix in two words.
-    #[test]
-    fn the_drawer_marks_each_mistake_and_says_its_fix() {
-        let text = "(kind build and status Ready) or (kind bild and severity hgh";
-        let e = menger_tickets_api::filter::Filter::parse(text).unwrap_err();
-        let ms: Vec<_> = e.chunks.iter().flat_map(|c| c.mistakes.iter().cloned()).collect();
-        let runs = marked(text, &ms);
-        assert_eq!(runs.iter().filter(|(bad, _)| *bad).map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["bild", "hgh", "\u{2038}"]);
-        assert_eq!(runs.iter().map(|(_, t)| t.as_str()).filter(|t| *t != "\u{2038}").collect::<String>(), text, "every run as written");
-        assert_eq!(ms.iter().map(|m| fix_words(m.fix.as_deref().unwrap())).collect::<Vec<_>>(), ["use build", "use high", "close it"]);
-        assert_eq!(fix_words(""), "remove it");
-        // Nothing marked past the text's end.
-        assert_eq!(marked("ready", &[]), [(false, "ready".to_string())]);
-    }
-
-    /// FILTER-49: the menu's list — every category a row with its own
-    /// glyph and name, the saved filters first where the server reads
-    /// them; it opens on the list alone, or on the category a chip or a
-    /// tag asks for (a flag: the flags together); the search says what it
-    /// searches.
-    #[test]
-    fn the_menu_lists_its_categories_and_opens_one_at_a_time() {
-        for (level, cats) in [(Level::Board, &Cat::SERVER[..]), (Level::Waves, &Cat::WAVES[..]), (Level::Inputs, &Cat::INPUTS[..])] {
-            let secs = sections(level, cats);
-            let glyphs: BTreeSet<&str> = secs.iter().map(|s| s.glyph()).collect();
-            assert_eq!(glyphs.len(), secs.len(), "{level:?}: a glyph per row");
-            assert!(secs.iter().all(|s| !s.label().is_empty() && !s.key().is_empty()));
-        }
-        assert_eq!(sections(Level::Global, &Cat::SERVER)[0], Section::Saved, "saved filters first");
-        assert_eq!(sections(Level::Board, &Cat::SERVER).len(), 10, "compact: the flags are one row");
-        assert_eq!(open_on(Level::Board, &Cat::SERVER, None), None, "opened on its list");
-        assert_eq!(open_on(Level::Board, &Cat::SERVER, Some(Cat::Status)), Some(Section::Values(Cat::Status)));
-        assert_eq!(open_on(Level::Board, &Cat::SERVER, Some(Cat::Blocked)), Some(Section::Flags));
-        assert_eq!(open_on(Level::Board, &Cat::SERVER, Some(Cat::When)), Some(Section::Time(Cat::When)), "FILTER-54: a time pill on the line opens its pane, unlisted");
-        assert_eq!(open_on(Level::Board, &Cat::SERVER, Some(Cat::Wave)), None, "not the board's");
-        assert_eq!(open_on(Level::Waves, &Cat::WAVES, Some(Cat::Title)), Some(Section::Title));
-        assert_eq!(placeholder(Level::Global, None), "Filter everything\u{2026}");
-        assert_eq!(placeholder(Level::Board, None), "Filter\u{2026}");
-        assert_eq!(placeholder(Level::Board, Some(Section::Values(Cat::Status))), "Status\u{2026}");
-    }
-
-    /// FILTER-49: the popover hangs under its anchor, kept inside its
-    /// column, never above its parent, as tall as the viewport leaves.
-    #[test]
-    fn the_menu_hangs_under_its_button_inside_its_column() {
-        // The board's Filter button at (388, 132) in a column 360..1440; the
-        // line (the menu's parent) at (388, 110).
-        let (left, top, h) = hang(388.0, 132.0, 388.0, 110.0, 360.0, 1080.0, 560.0, 900.0);
-        assert_eq!((left, top), (0.0, 26.0));
-        assert_eq!(h, 900.0 - 136.0 - 12.0);
-        // A button near the column's right edge: the menu pulled back inside.
-        let (left, _, _) = hang(1300.0, 132.0, 388.0, 110.0, 360.0, 1080.0, 560.0, 900.0);
-        assert!(388.0 + left + 560.0 <= 1440.0, "inside the column: {left}");
-        // An anchor above the parent (the nav's button, the header's host):
-        // at the parent's top, never over what is above it.
-        let (_, top, _) = hang(10.0, 40.0, 360.0, 120.0, 360.0, 1080.0, 560.0, 900.0);
-        assert_eq!(top, 0.0);
-        // Short viewports still get a usable menu.
-        assert_eq!(hang(0.0, 700.0, 0.0, 0.0, 0.0, 800.0, 300.0, 720.0).2, 220.0);
-        assert!(SIDE_BY_SIDE_PX > 15.0 * 16.0 + 18.0 * 16.0 - 20.0, "two panes need the list and a category side by side");
     }
 }

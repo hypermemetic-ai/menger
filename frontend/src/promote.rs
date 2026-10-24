@@ -56,11 +56,13 @@ thread_local! {
     static TOAST: Cell<Option<(RwSignal<Option<Shown>>, StoredValue<u32>)>> = const { Cell::new(None) };
 }
 
-/// FILTER-26: Make global, from the bar, the menu or the palette — the
-/// nav's menu closed, the toast with its Undo shown. Nothing, while the nav
-/// has nothing to move.
+/// FILTER-26: Make global, from the bar or the palette — the nav's builder
+/// closed, the toast with its Undo shown. Nothing, while the nav has nothing
+/// to move.
 pub(crate) fn make_global(lens: Lens) {
-    lens.pop(Level::Nav).close(false);
+    if let Some(c) = crate::fcard::hook().filter(|c| untrack(|| c.is_on(&crate::fcard::Subject::Line(Level::Nav)))) {
+        c.close();
+    }
     let Some(before) = lens.promote() else { return };
     let text = toast_words(&lens.text(Level::Global));
     if let Some((toast, gen)) = TOAST.with(Cell::get) {
@@ -73,43 +75,6 @@ pub(crate) fn make_global(lens: Lens) {
                 toast.try_set(None);
             }
         });
-    }
-}
-
-/// FILTER-26: **Make global** — in the nav's filter bar (`menu` false) or
-/// at the top of its filter menu (`menu` true); drawn while the nav holds a
-/// clause the reader added.
-#[component]
-pub(crate) fn MakeGlobal(#[prop(optional)] menu: bool) -> impl IntoView {
-    let lens = crate::lens::use_lens();
-    let title = "the global filter becomes the global filter and the nav's; the nav goes back to its default";
-    move || {
-        lens.can_promote().then(|| {
-            if menu {
-                view! {
-                    <div class="fpromote">
-                        <button
-                            type="button"
-                            data-act="make-global"
-                            title=title
-                            on:mousedown=|ev| ev.prevent_default()
-                            on:click=move |_| make_global(lens)
-                        >
-                            "Make global"
-                        </button>
-                        <span class="fpromote-hint">"every view shows what the nav shows"</span>
-                    </div>
-                }
-                .into_any()
-            } else {
-                view! {
-                    <button class="reset promote" type="button" data-act="make-global" title=title on:click=move |_| make_global(lens)>
-                        "Make global"
-                    </button>
-                }
-                .into_any()
-            }
-        })
     }
 }
 

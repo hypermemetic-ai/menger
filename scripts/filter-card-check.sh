@@ -12,7 +12,14 @@
 # under it, tree and flat; the empty line's offers; ⌂'s card; document height
 # = viewport. FILTER-54: a rule's time — ◷ on a kind and a status (Became so…,
 # Has been so…), changed and taken off, a date of one's own, Created under
-# Dates, as text in the new form; the menu has no When category.
+# Dates, as text in the new form. FILTER-55: the board's line says only its
+# filter's name; its Filter button, the name, `f` and + add a filter open the
+# builder on the board's own filter (a change applies at once); every segment
+# a dropdown (field, is / is not, values ticked and counted), a ghost row for
+# a new part; More's Save as filter… and Reset. And (the owner's `now`) ⌂'s
+# chip, F and the phone bar's Filter open the builder on ⌂, editable; the wave
+# board's and the inputs' own rules come from This page, each a row with its
+# operator and its bin. WIDTHS / THEMES narrow the runs.
 #   scripts/filter-card-check.sh [--port 4462] [--db /tmp/menger-NAME.db] [--shots DIR] [--serve]
 # --serve: seed, print the origin and the session file, and keep serving
 # (Ctrl-C stops it). Needs a built menger (CARGO_TARGET_DIR's debug binary),
@@ -86,7 +93,7 @@ if [[ $serve -eq 1 ]]; then
 fi
 failed=0 total=0
 [[ -n $shots ]] && mkdir -p "$shots"
-for width in 390 1440; do for theme in ${THEMES:-light dark}; do
+for width in ${WIDTHS:-390 1440}; do for theme in ${THEMES:-light dark}; do
   log "$width $theme"
   total=$((total + 1))
   node "$here/scripts/filter-card-check.mjs" "http://127.0.0.1:$shell" "$work/op.session" "$width" "$theme" $shots >"$work/check.out" 2>&1

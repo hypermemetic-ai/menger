@@ -795,12 +795,6 @@ pub(crate) fn remember_focus() {
     FOCUS_BEFORE_OVERLAY.with(|c| *c.borrow_mut() = el);
 }
 
-/// WAVE-12: let go of what [`remember_focus`] kept — the board's filter
-/// closed by a click, which put focus where it wanted it.
-pub(crate) fn forget_focus() {
-    FOCUS_BEFORE_OVERLAY.with(|c| *c.borrow_mut() = None);
-}
-
 /// Hand focus back, a tick later — the dialog (or menu) has to leave the
 /// DOM first, or the browser's own "focus fell out of a removed subtree"
 /// fixup lands on `<body>` after us. A no-op when nothing was remembered.
