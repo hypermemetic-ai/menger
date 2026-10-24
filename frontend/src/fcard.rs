@@ -23,9 +23,16 @@
 //!   holds the part — the one on the board, or one it names — and is held
 //!   by the card (counted, and asked of the nav, inlined: the server reads
 //!   only what is saved) until **Save back**, **Save as…** or **Undo**.
-//! - **One picker** for every add and change: its head says where the part
-//!   lands and what joins it; categories, then values, each with the count
-//!   the card's filter would then have.
+//! - **Dropdowns** (FILTER-55, src/fcard/drop.rs) for every add and change:
+//!   a rule's field, its operator, its values ticked — each choice with the
+//!   count the card's filter would then have; a part being added is a ghost
+//!   row until its first choice.
+//! - **The builder** (FILTER-55): the board's and the nav's own filter
+//!   ([`Subject::Line`]) opened from their line's Filter button, its name or
+//!   `f` — a change is the level's filter at once (no draft; a change inside
+//!   a saved filter it names is that one's draft, as anywhere); More holds
+//!   as text, Save as filter… (FILTER-37's naming), Reset. The line says no
+//!   more than the filter's name (the owner, 2026-10-24).
 //! - **The nav under it**: `nav tree` with the card's filter, drawn as the
 //!   nav draws a row (the kind's mark, the id, the title, the matches below,
 //!   the status; a holder dimmed), ▸ / ▾, *tree / flat*.
@@ -47,6 +54,8 @@ use crate::parts::{self, At, Got, Inner, Node, Part, Shape, Time, TimeOf};
 use crate::saved::{self, slug, Entry};
 use crate::{dom, session, st_class};
 
+mod drop;
+
 /// How long a hover waits before the card opens, and a leave before it closes.
 const HOVER_MS: i32 = 300;
 const LEAVE_MS: i32 = 250;
@@ -64,16 +73,138 @@ pub(crate) enum Subject {
     Saved(String),
     /// ⌂ everywhere's filter — read only.
     Global,
+    /// FILTER-55: a surface's own filter — the board's, the nav's — edited
+    /// in place: a change is the level's filter at once.
+    Line(Level),
 }
 
-/// What the picker does.
+/// FILTER-55: the levels whose filter the builder edits, its line only a
+/// summary of it.
+pub(crate) fn builds(level: Level) -> bool {
+    matches!(level, Level::Board | Level::Nav)
+}
+
+/// The owner a line's own parts say they are in (no saved filter's name:
+/// one cannot begin with ▦).
+fn line_owner(level: Level) -> String {
+    format!("\u{25a6} {}", level.name())
+}
+
+fn line_of(owner: &str) -> Option<Level> {
+    [Level::Board, Level::Nav].into_iter().find(|l| line_owner(*l) == owner)
+}
+
+/// What the builder's head and the line call a level's own filter.
+pub(crate) fn line_words(level: Level) -> &'static str {
+    match level {
+        Level::Nav => "The nav's filter",
+        _ => "This board's filter",
+    }
+}
+
+/// FILTER-55: what the line says of its filter (the owner, 2026-10-24: *"just
+/// show the filter name if available"*) — the name it is saved under, else
+/// the one saved filter it is; nothing for any other.
+pub(crate) fn line_name(f: &Filter, bound: Option<&str>) -> Option<String> {
+    if let Some(b) = bound.filter(|b| !b.is_empty()) {
+        return Some(b.to_string());
+    }
+    match f.groups.as_slice() {
+        [g] => match g.preds.as_slice() {
+            [Predicate { field: Field::Saved(n), not: false }] => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// How many rules a filter holds, as the builder draws them (a list one
+/// rule, a saved filter one) — the Filter button's badge.
+pub(crate) fn rules_of(f: &Filter) -> usize {
+    if f.groups.is_empty() {
+        return 0;
+    }
+    parts::resolve_node("", &parts::of_filter(f), &|_| Got::Unknown).rules()
+}
+
+/// FILTER-55: where a dropdown's choice lands.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Mode {
-    /// A part added at the end of the group at the path — `group`: as the
-    /// first part of a new inner group.
+pub(crate) enum Target {
+    /// A new part at the end of the group at the path (its row a ghost until
+    /// a choice is made) — `group`: as the first part of a new inner group.
     Add { group: bool },
-    /// The part at the path changed.
-    Replace,
+    /// The part at the path.
+    At,
+}
+
+/// FILTER-55: which dropdown — a rule's field, its operator, its values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum What {
+    Field,
+    Op,
+    Values(PCat),
+}
+
+/// The fields whose value is ticked from a list (or, a label, typed).
+pub(crate) const LISTED: [PCat; 5] = [PCat::Status, PCat::Kind, PCat::Severity, PCat::Shortcode, PCat::Label];
+
+/// The field a category's rules say (`Status`), and the language's word.
+pub(crate) fn field_of(c: PCat) -> (&'static str, &'static str) {
+    match c {
+        PCat::Status => ("Status", "status"),
+        PCat::Kind => ("Kind", "kind"),
+        PCat::Severity => ("Severity", "severity"),
+        PCat::Shortcode => ("Shortcode", "in"),
+        PCat::Label => ("Label", "label"),
+        PCat::Saved => ("Saved filter", "saved"),
+        PCat::Flags => ("Flag", ""),
+        PCat::Dates => ("Created", "created"),
+    }
+}
+
+/// A rule's field as the language's word — `None` for one not ticked.
+pub(crate) fn word_of(field: &str) -> Option<&'static str> {
+    Some(match field {
+        "Status" => "status",
+        "Category" => "category",
+        "Kind" => "kind",
+        "Severity" => "severity",
+        "Shortcode" => "in",
+        "Under" => "under",
+        "Label" => "label",
+        _ => return None,
+    })
+}
+
+/// The values a ticked field offers.
+pub(crate) fn raw_values(c: PCat, codes: &[String]) -> Vec<String> {
+    match c {
+        PCat::Status => crate::filter::STATUS_GROUPS.iter().flat_map(|(_, ss)| ss.iter()).map(|s| s.to_string()).collect(),
+        PCat::Kind => crate::filter::KINDS.iter().map(|k| k.to_string()).collect(),
+        PCat::Severity => crate::filter::SEVERITIES.iter().map(|s| s.to_string()).collect(),
+        PCat::Shortcode => codes.to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+/// A value ticked or unticked on a rule: the rule's word and its values
+/// after — the rule's own when it is of the field (`Under` is Shortcode's),
+/// else the field's word and that value alone. Values compare ignoring case.
+pub(crate) fn ticked(rule: Option<(&str, &[String])>, c: PCat, v: &str) -> (&'static str, Vec<String>) {
+    let (field, word) = field_of(c);
+    match rule {
+        Some((f, values)) if f == field || (c == PCat::Shortcode && f == "Under") => {
+            let mut out: Vec<String> = values.to_vec();
+            match out.iter().position(|x| x.eq_ignore_ascii_case(v)) {
+                Some(i) => {
+                    out.remove(i);
+                }
+                None => out.push(v.to_string()),
+            }
+            (word_of(f).unwrap_or(word), out)
+        }
+        _ => (word, vec![v.to_string()]),
+    }
 }
 
 /// The picker's categories.
@@ -92,19 +223,6 @@ pub(crate) enum PCat {
 
 impl PCat {
     pub(crate) const ALL: [PCat; 8] = [PCat::Saved, PCat::Status, PCat::Kind, PCat::Severity, PCat::Shortcode, PCat::Flags, PCat::Label, PCat::Dates];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            PCat::Saved => "Saved",
-            PCat::Status => "Status",
-            PCat::Kind => "Kind",
-            PCat::Severity => "Severity",
-            PCat::Shortcode => "Shortcode",
-            PCat::Flags => "Flags",
-            PCat::Label => "Label",
-            PCat::Dates => "Dates",
-        }
-    }
 
     /// The category a rule's field is changed in.
     pub(crate) fn of_field(field: &str) -> PCat {
@@ -202,27 +320,23 @@ pub(crate) fn node_of(text: &str, not: bool) -> Option<Node> {
     Some(n)
 }
 
-/// The picker's head: where the part lands and what joins it.
-pub(crate) fn where_words(mode: &Mode, conj: Conj, owner: &str, subject: &str) -> String {
-    let (of, by) = match conj {
-        Conj::All => ("all of", "and"),
-        Conj::Any => ("any of", "or"),
-    };
-    let inside = if owner == subject {
-        format!("inside \u{2317} {owner} itself")
-    } else {
-        format!("inside \u{2317} {owner} itself: it says edited until you save back, save as\u{2026} or undo")
-    };
-    match mode {
-        Mode::Add { group: false } => format!("Adds to this {of} group, joined by {by}, {inside}"),
-        Mode::Add { group: true } => {
-            let own = match parts::other(conj) {
-                Conj::All => "and",
-                Conj::Any => "or",
-            };
-            format!("Starts a new group inside this {of} (joined to it by {by}); its parts join by {own}, {inside}")
-        }
-        Mode::Replace => format!("Changes this part, {inside}"),
+/// FILTER-55: one field's values as a rule's node — one value its clause,
+/// several a list (`any of`; negated, `none of`: each negated, joined by and).
+pub(crate) fn list_node(word: &str, values: &[String], not: bool) -> Option<Node> {
+    let mut items: Vec<Node> = values.iter().map(|v| node_of(&parts::clause_text(word, std::slice::from_ref(v)), not)).collect::<Option<_>>()?;
+    match items.len() {
+        0 => None,
+        1 => items.pop(),
+        _ => Some(Node::Group { conj: if not { Conj::All } else { Conj::Any }, not: false, items }),
+    }
+}
+
+/// The key a card's subject is known by on the page (`data-fcard`).
+pub(crate) fn key_of(s: &Subject) -> String {
+    match s {
+        Subject::Saved(n) => n.clone(),
+        Subject::Global => HOME.to_string(),
+        Subject::Line(l) => format!("line:{}", l.name()),
     }
 }
 
@@ -322,15 +436,20 @@ struct Open {
     at: (f64, f64, f64),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Pick {
+/// FILTER-55: an open dropdown — the part it changes (its owner and path;
+/// a ghost row's group), what it is, and the control it hangs from.
+#[derive(Clone, Debug, PartialEq)]
+struct Dd {
     owner: String,
     path: Vec<usize>,
-    mode: Mode,
-    /// The joiner of the group it lands in.
+    target: Target,
+    /// The joiner of the group a new part lands in.
     conj: Conj,
-    cat: PCat,
+    /// A ghost row's operator.
     not: bool,
+    what: What,
+    /// The control's box: left, top, bottom, width.
+    at: (f64, f64, f64, f64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -367,7 +486,9 @@ pub(crate) struct Card {
     text: RwSignal<bool>,
     menu: RwSignal<bool>,
     tab: RwSignal<Tab>,
-    pick: RwSignal<Option<Pick>>,
+    /// FILTER-55: the dropdown open, and its search.
+    dd: RwSignal<Option<Dd>>,
+    dq: RwSignal<String>,
     label: StoredValue<String>,
     last: RwSignal<Option<(String, Vec<usize>)>>,
     counts: RwSignal<HashMap<String, Option<usize>>>,
@@ -425,7 +546,8 @@ impl Card {
             text: RwSignal::new(false),
             menu: RwSignal::new(false),
             tab: RwSignal::new(Tab::Rules),
-            pick: RwSignal::new(None),
+            dd: RwSignal::new(None),
+            dq: RwSignal::new(String::new()),
             label: StoredValue::new(String::new()),
             last: RwSignal::new(None),
             counts: RwSignal::new(HashMap::new()),
@@ -450,6 +572,9 @@ impl Card {
             if c.tm.with_untracked(Option::is_some) && !inside(ev, ".fc-tm, [data-fc=\"time\"], [data-fc=\"time-add\"]") {
                 c.tm.set(None);
             }
+            if c.dd.with_untracked(Option::is_some) && !inside(ev, drop::INSIDE) {
+                c.dd.set(None);
+            }
             if !inside(ev, ".fcard, [data-fcard], .fmenu") {
                 c.close();
             }
@@ -462,8 +587,8 @@ impl Card {
             ev.stop_propagation();
             if c.tm.with_untracked(Option::is_some) {
                 c.tm.set(None);
-            } else if c.pick.get_untracked().is_some() {
-                c.pick.set(None);
+            } else if c.dd.with_untracked(Option::is_some) {
+                c.dd.set(None);
             } else if c.menu.get_untracked() {
                 c.menu.set(false);
             } else {
@@ -485,8 +610,9 @@ impl Card {
         let same = self.open.with_untracked(|o| o.as_ref().is_some_and(|o| o.subject == subject));
         if !same {
             self.menu.set(false);
-            self.pick.set(None);
+            self.dd.set(None);
             self.naming.set(None);
+            self.copying.set(None);
             self.tab.set(Tab::Rules);
             self.note.set(None);
         }
@@ -501,7 +627,7 @@ impl Card {
     pub(crate) fn close(self) {
         self.hover.update_value(|n| *n += 1);
         self.open.set(None);
-        self.pick.set(None);
+        self.dd.set(None);
         self.menu.set(false);
         self.naming.set(None);
         self.copying.set(None);
@@ -621,6 +747,9 @@ impl Card {
 
     /// What the parts read for `name`: an edit held, else its saved tree.
     fn lookup(self, name: &str) -> Got {
+        if let Some(l) = line_of(name) {
+            return Got::Node(self.lens.filter(l).with(parts::of_filter));
+        }
         match self.draft(name) {
             Some(n) => Got::Node(n),
             None => self.saved_got(name),
@@ -639,6 +768,7 @@ impl Card {
         match s {
             Subject::Saved(n) => Node::Leaf(Predicate::is(Field::Saved(n.clone()))),
             Subject::Global => self.lens.filter(Level::Global).with(parts::of_filter),
+            Subject::Line(l) => self.lens.filter(*l).with(parts::of_filter),
         }
     }
 
@@ -646,6 +776,7 @@ impl Card {
         match s {
             Subject::Saved(n) => parts::resolve(n, &|m| self.lookup(m)),
             Subject::Global => parts::resolve_node(HOME, &self.top(s), &|m| self.lookup(m)),
+            Subject::Line(l) => parts::resolve_node(&line_owner(*l), &self.top(s), &|m| self.lookup(m)),
         }
     }
 
@@ -656,10 +787,15 @@ impl Card {
             Some((o, d)) if slug(o) == slug(name) => Some(d.clone()),
             _ => self.draft(name),
         };
+        // A line's own tree swapped is the tree itself.
+        let n = match (s, swap) {
+            (Subject::Line(l), Some((o, d))) if o == line_owner(*l) => d,
+            _ => n,
+        };
         let own = parts::to_filter(&parts::inlined(n, &drafted), &Display::default());
         let eff = match s {
             Subject::Global => own,
-            Subject::Saved(_) => self.lens.filter(Level::Global).with(|g| g.and(&own)),
+            Subject::Saved(_) | Subject::Line(_) => self.lens.filter(Level::Global).with(|g| g.and(&own)),
         };
         let eff = self.lens.org().with(|o| crate::orgs::within(o.as_deref(), &eff));
         crate::counts::wire_text(&eff)
@@ -690,6 +826,14 @@ impl Card {
     fn edit(self, owner: &str, at: Vec<usize>, f: impl FnOnce(&mut Node) -> bool) {
         let Some(mut n) = untrack(|| self.owner_node(owner)) else { return };
         if !f(&mut n) {
+            return;
+        }
+        // FILTER-55: a line's own tree is its level's filter, at once.
+        if let Some(l) = line_of(owner) {
+            let display = self.lens.filter(l).with_untracked(|f| f.display.clone());
+            self.lens.set(l, parts::to_filter(&n, &display));
+            self.last.set(Some((owner.to_string(), at)));
+            self.note.set(None);
             return;
         }
         let saved = untrack(|| match self.saved_got(owner) {
@@ -833,34 +977,199 @@ impl Card {
         self.lens.set(level, next);
     }
 
-    /// The picker's choice applied.
-    fn apply(self, p: &Pick, text: &str) {
-        let Some(node) = node_of(text, p.not) else { return };
-        let path = p.path.clone();
-        match p.mode {
-            Mode::Replace => self.edit(&p.owner, path.clone(), |t| keep_time(t, &path, node)),
-            Mode::Add { group } => {
-                let item = if group { Node::Group { conj: parts::other(p.conj), not: false, items: vec![node] } } else { node };
-                let at = untrack(|| self.owner_node(&p.owner)).and_then(|mut t| parts::add(&mut t, &path, item.clone()));
-                if let Some(at) = at {
-                    self.edit(&p.owner, at, |t| parts::add(t, &path, item).is_some());
-                }
-            }
-        }
-        self.pick.set(None);
+    /// FILTER-55: `owner`'s tree with `text`'s clause put where the dropdown
+    /// says — the rule at its path changed (its time kept), or a new part at
+    /// its group's end (in a new inner group) — and the new part's path.
+    fn placed(self, d: &Dd, text: &str) -> Option<(Node, Vec<usize>)> {
+        self.placed_node(d, node_of(text, d.not)?)
     }
 
-    /// What the card's filter would admit with the picker's choice — the
-    /// wire text, `None` when it cannot be said.
-    fn would(self, s: &Subject, p: &Pick, text: &str) -> Option<String> {
-        let node = node_of(text, p.not)?;
-        let mut t = self.owner_node(&p.owner)?;
-        let ok = match p.mode {
-            Mode::Replace => keep_time(&mut t, &p.path, node),
-            Mode::Add { group: false } => parts::add(&mut t, &p.path, node).is_some(),
-            Mode::Add { group: true } => parts::add(&mut t, &p.path, Node::Group { conj: parts::other(p.conj), not: false, items: vec![node] }).is_some(),
-        };
-        ok.then(|| self.wire(s, &self.top(s), Some((&p.owner, &t))))
+    fn placed_node(self, d: &Dd, node: Node) -> Option<(Node, Vec<usize>)> {
+        let mut t = self.owner_node(&d.owner)?;
+        match d.target {
+            Target::At => keep_time(&mut t, &d.path, node).then(|| (t, d.path.clone())),
+            Target::Add { group } => {
+                let item = if group { Node::Group { conj: parts::other(d.conj), not: false, items: vec![node] } } else { node };
+                let at = parts::add(&mut t, &d.path, item)?;
+                let at = if group { at.into_iter().chain([0]).collect() } else { at };
+                Some((t, at))
+            }
+        }
+    }
+
+    /// FILTER-55: a value ticked on the dropdown's rule — the owner's tree
+    /// after and the rule's path (`None`: the rule is gone, its last value
+    /// unticked).
+    fn ticked_tree(self, d: &Dd, c: PCat, v: &str) -> Option<(Node, Option<Vec<usize>>)> {
+        if d.target != Target::At {
+            let (word, vals) = ticked(None, c, v);
+            return self.placed_node(d, list_node(word, &vals, d.not)?).map(|(t, at)| (t, Some(at)));
+        }
+        let t = self.owner_node(&d.owner)?;
+        let rule = parts::get(&t, &d.path).and_then(parts::rule_at);
+        let (word, vals) = ticked(rule.as_ref().map(|r| (r.field.as_str(), r.values.as_slice())), c, v);
+        if vals.is_empty() {
+            let mut t = t;
+            return parts::remove(&mut t, &d.path).then_some((t, None));
+        }
+        let not = rule.as_ref().map_or(d.not, |r| r.not);
+        let node = list_node(word, &vals, not)?;
+        let mut t = t;
+        keep_time(&mut t, &d.path, node).then_some((t, Some(d.path.clone())))
+    }
+
+    /// A choice that is the whole part (a flag, a date, a saved filter):
+    /// put in, the dropdown closed.
+    fn choose(self, d: &Dd, text: &str) {
+        if let Some((t, at)) = untrack(|| self.placed(d, text)) {
+            self.edit(&d.owner, at, |n| {
+                *n = t;
+                true
+            });
+        }
+        self.dd.set(None);
+    }
+
+    /// A value ticked: the rule follows at once; a ghost row becomes the rule.
+    fn tick(self, d: &Dd, c: PCat, v: &str) {
+        let Some((t, at)) = untrack(|| self.ticked_tree(d, c, v)) else { return };
+        self.edit(&d.owner, at.clone().unwrap_or_default(), |n| {
+            *n = t;
+            true
+        });
+        match at {
+            None => self.dd.set(None),
+            Some(at) => self.dd.update(|o| {
+                if let Some(o) = o {
+                    o.target = Target::At;
+                    o.path = at;
+                }
+            }),
+        }
+    }
+
+    /// The operator chosen: the rule negated when it differs (a ghost row:
+    /// what its first choice will be).
+    fn set_not(self, d: &Dd, not: bool) {
+        if d.target == Target::At {
+            let now = untrack(|| self.owner_node(&d.owner)).and_then(|t| parts::get(&t, &d.path).map(|n| match n {
+                Node::Leaf(p) => p.not,
+                g => parts::list_of(g).is_some_and(|(_, n, _)| n),
+            }));
+            if now.is_some_and(|n| n != not) {
+                let at = d.path.clone();
+                self.edit(&d.owner, at.clone(), |t| parts::negate(t, &at));
+            }
+            self.dd.set(None);
+        } else {
+            self.dd.update(|o| {
+                if let Some(o) = o {
+                    o.not = not;
+                    o.what = What::Field;
+                }
+            });
+        }
+    }
+
+    /// What the card's filter would admit with `t` as `owner`'s tree — the
+    /// wire text.
+    fn would_tree(self, s: &Subject, owner: &str, t: &Node) -> String {
+        self.wire(s, &self.top(s), Some((owner, t)))
+    }
+
+    /// A dropdown opened from `ev`'s control.
+    #[allow(clippy::too_many_arguments)]
+    fn open_dd(self, owner: String, path: Vec<usize>, target: Target, conj: Conj, not: bool, what: What, ev: &web_sys::Event) {
+        let (l, t, b) = rect_of(ev);
+        let w = ev.current_target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).map_or(180.0, |e| e.get_bounding_client_rect().width());
+        self.set_dd(owner, path, target, conj, not, what, (l, t, b, w));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_dd(self, owner: String, path: Vec<usize>, target: Target, conj: Conj, not: bool, what: What, at: (f64, f64, f64, f64)) {
+        self.tm.set(None);
+        self.dq.set(String::new());
+        self.label.set_value(String::new());
+        let ghost = matches!(target, Target::Add { .. });
+        self.dd.set(Some(Dd { owner, path, target, conj, not, what, at }));
+        if ghost {
+            self.ghost_at();
+        }
+    }
+
+    /// The dropdown hung from the ghost row, once that is drawn.
+    fn ghost_at(self) {
+        {
+            spawn_local(async move {
+                dom::sleep_ms(30).await;
+                let Some(el) = dom::window().document().and_then(|d| d.query_selector(".fcard .fc-rule.ghost").ok().flatten()) else { return };
+                let r = el.get_bounding_client_rect();
+                self.dd.try_update(|o| {
+                    if let Some(o) = o {
+                        o.at = (r.left(), r.top(), r.bottom(), r.width().min(320.0));
+                    }
+                });
+            });
+        }
+    }
+}
+
+impl Card {
+    /// FILTER-55: the builder on `level`'s own filter, hung from its Filter
+    /// button — an empty filter opens on a new rule's fields (`add`: always).
+    pub(crate) fn open_line(self, level: Level, add: bool) {
+        self.stay();
+        let doc = dom::window().document();
+        let at = doc
+            .and_then(|d| d.query_selector(&format!("[data-fbtn=\"{}\"]", level.name())).ok().flatten())
+            .map(|el| {
+                let r = el.get_bounding_client_rect();
+                (r.left(), r.top(), r.bottom())
+            })
+            .unwrap_or((12.0, 0.0, 56.0));
+        self.show(Subject::Line(level), level, true, at);
+        self.first_rule(level, add);
+    }
+
+    /// Open on the line, or — open on it already — closed (the `f` key).
+    pub(crate) fn toggle_line(self, level: Level) {
+        if self.open.with_untracked(|o| o.as_ref().is_some_and(|o| o.subject == Subject::Line(level))) {
+            self.close();
+        } else {
+            self.open_line(level, false);
+        }
+    }
+
+    /// A press on the line's Filter button or its name: the builder pinned
+    /// open (`unfold`: that saved filter's row opened in place), or — open
+    /// already and nothing to unfold — closed.
+    pub(crate) fn press_line(self, level: Level, ev: &web_sys::Event, unfold: Option<String>) {
+        self.stay();
+        let s = Subject::Line(level);
+        let here = self.open.with_untracked(|o| o.as_ref().is_some_and(|o| o.subject == s));
+        if here && unfold.is_none() {
+            self.close();
+            return;
+        }
+        if let Some(n) = unfold {
+            self.unfolded.update(|u| {
+                u.insert(format!("{}/{:?}/{}", line_owner(level), vec![0usize], slug(&n)));
+            });
+        }
+        self.show(s, level, true, rect_of(ev));
+        self.first_rule(level, false);
+    }
+
+    fn first_rule(self, level: Level, add: bool) {
+        let empty = self.lens.filter(level).with_untracked(|f| f.groups.is_empty());
+        if add || empty {
+            let conj = match self.top(&Subject::Line(level)) {
+                Node::Group { conj, .. } => conj,
+                _ => Conj::All,
+            };
+            self.set_dd(line_owner(level), Vec::new(), Target::Add { group: false }, conj, false, What::Field, (12.0, 0.0, 56.0, 260.0));
+            self.ghost_at();
+        }
     }
 }
 
@@ -890,10 +1199,6 @@ impl Card {
         let mut n = self.owner_node(owner)?;
         parts::set_time(&mut n, path, t).then(|| self.wire(s, &self.top(s), Some((owner, &n))))
     }
-}
-
-fn group_of(m: &Mode) -> bool {
-    matches!(m, Mode::Add { group: true })
 }
 
 fn failure_words(name: &str, e: saved::Failure) -> String {
@@ -1016,14 +1321,12 @@ fn place(at: (f64, f64, f64), phone: bool) -> String {
 
 fn card_view(card: Card, s: Subject, level: Level) -> AnyView {
     let lens = card.lens;
-    let name = match &s {
-        Subject::Saved(n) => n.clone(),
-        Subject::Global => HOME.to_string(),
-    };
+    let name = key_of(&s);
     let ro = {
         let (s, name) = (s.clone(), name.clone());
         Memo::new(move |_| match &s {
             Subject::Global => true,
+            Subject::Line(_) => false,
             Subject::Saved(_) => !lens.filter(level).with(|f| on_board(f, &name)),
         })
     };
@@ -1049,13 +1352,13 @@ fn card_view(card: Card, s: Subject, level: Level) -> AnyView {
             class="fcard"
             class:sheet=phone
             role="dialog"
-            aria-label=format!("what {name} is made of")
+            aria-label=match &s { Subject::Line(l) => line_words(*l).to_string(), _ => format!("what {name} is made of") }
             data-fcard-open=name.clone()
             data-ro=move || ro.get().to_string()
             style=style
             on:pointerenter=move |_| card.stay()
             on:pointerleave=move |_| {
-                if !phone && card.pick.get_untracked().is_none() && card.tm.with_untracked(Option::is_none) {
+                if !phone && card.dd.with_untracked(Option::is_none) && card.tm.with_untracked(Option::is_none) {
                     card.leave();
                 }
             }
@@ -1073,7 +1376,7 @@ fn card_view(card: Card, s: Subject, level: Level) -> AnyView {
                 {rules}
                 {nav}
             </div>
-            {move || card.pick.get().map(|p| picker_view(card, s.clone(), p))}
+            {drop::view(card, s.clone())}
         </div>
     }
     .into_any()
@@ -1082,6 +1385,9 @@ fn card_view(card: Card, s: Subject, level: Level) -> AnyView {
 fn head_view(card: Card, s: Subject, level: Level, ro: Memo<bool>) -> AnyView {
     let lens = card.lens;
     let close = view! { <button type="button" class="fc-x" aria-label="close" title="close (Esc)" on:click=move |_| card.close()>"\u{d7}"</button> };
+    if let Subject::Line(l) = s {
+        return line_head(card, l, close.into_any());
+    }
     let Subject::Saved(name) = s else {
         return view! {
             <div class="fc-head">
@@ -1164,11 +1470,117 @@ fn head_view(card: Card, s: Subject, level: Level, ro: Memo<bool>) -> AnyView {
     .into_any()
 }
 
+/// FILTER-55: a line's builder's head — whose filter, its rules and what
+/// it admits, its name when saved; **More ⌄**: as text, Save as filter… (or
+/// rename it), Reset, Keep open.
+fn line_head(card: Card, level: Level, close: AnyView) -> AnyView {
+    let lens = card.lens;
+    let naming = crate::naming::hook();
+    let bound = move || naming.and_then(|n| n.bound(level)).map(|b| b.name);
+    let s = Subject::Line(level);
+    let who = move || {
+        let n = lens.filter(level).with(rules_of);
+        let m = card.count(card.wire(&s, &card.top(&s), None)).map_or("\u{2026}".to_string(), |m| m.to_string());
+        format!("{n} rule{} \u{00b7} {m} match", if n == 1 { "" } else { "s" })
+    };
+    let owner = line_owner(level);
+    view! {
+        <div class="fc-head">
+            <span class="fc-nm">{line_words(level)}</span>
+            {move || bound().map(|b| view! { <span class="fc-tok sv" title="saved under this name \u{2014} every edit keeps it saved">"\u{2317} "{b}</span> })}
+            <span class="fc-who">{who}</span>
+            <span class="fc-sp"></span>
+            <span class="fc-mw">
+                <button type="button" class="fc-hb fc-mb" aria-expanded=move || card.menu.get().to_string() on:click=move |_| card.menu.update(|m| *m = !*m)>"More \u{2304}"</button>
+                {move || card.menu.get().then(|| {
+                    let owner = owner.clone();
+                    view! {
+                        <div class="fc-menu" role="menu">
+                            <button type="button" role="menuitem" data-fc="text" on:click=move |_| {
+                                card.text.update(|t| *t = !*t);
+                                card.menu.set(false);
+                            }>{move || if card.text.get() { "Hide as text" } else { "Show as text" }}</button>
+                            <button type="button" role="menuitem" data-fc="save-line" on:click=move |_| {
+                                card.menu.set(false);
+                                card.copying.set(Some(owner.clone()));
+                            }>{move || if bound().is_some() { "Rename\u{2026}" } else { "Save as filter\u{2026}" }}</button>
+                            {move || lens.differs(level).then(|| view! {
+                                <button type="button" role="menuitem" data-fc="reset" title="back to this view's default" on:click=move |_| {
+                                    card.menu.set(false);
+                                    card.dd.set(None);
+                                    lens.reset(level);
+                                }>"Reset"</button>
+                            })}
+                            <button type="button" role="menuitem" data-fc="pin" on:click=move |_| {
+                                card.open.update(|o| {
+                                    if let Some(o) = o {
+                                        o.pinned = !o.pinned;
+                                    }
+                                });
+                                card.menu.set(false);
+                            }>{move || if card.open.with(|o| o.as_ref().is_some_and(|o| o.pinned)) { "Unpin" } else { "Keep open" }}</button>
+                        </div>
+                    }
+                })}
+            </span>
+            {close}
+        </div>
+    }
+    .into_any()
+}
+
+/// FILTER-55: a line's name field (Save as filter…, Rename…) and naming's
+/// prompt and note — a name binds the level's filter (src/naming.rs): every
+/// edit after keeps it saved.
+fn line_name_view(card: Card, level: Level) -> impl IntoView {
+    let naming = crate::naming::hook();
+    let owner = line_owner(level);
+    move || {
+        let naming = naming?;
+        let editing = card.copying.with(|c| c.as_deref() == Some(owner.as_str()));
+        let field = NodeRef::<leptos::html::Input>::new();
+        Effect::new(move |_| {
+            if let Some(el) = field.get() {
+                let _ = el.focus();
+            }
+        });
+        let seed = untrack(|| naming.bound(level).map(|b| b.name)).unwrap_or_default();
+        let input = editing.then(|| view! {
+            <div class="fc-edrow" data-line-name=level.name()>
+                <input class="fc-gin" node_ref=field type="text" autocomplete="off" spellcheck="false" maxlength=saved::NAME_MAX.to_string() placeholder="a name \u{2014} every edit after keeps it saved" aria-label="save this filter as" value=seed on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
+                    Some("form.submit") => {
+                        ev.prevent_default();
+                        naming.name(level, &event_target_value(&ev));
+                        card.copying.set(None);
+                    }
+                    Some("form.cancel") => {
+                        ev.prevent_default();
+                        ev.stop_propagation();
+                        card.copying.set(None);
+                    }
+                    _ => {}
+                } />
+                <button type="button" class="fc-lnk" on:click=move |_| card.copying.set(None)>"Cancel"</button>
+            </div>
+        });
+        let taken = naming.taken(level).map(|(typed, e)| view! {
+            <div class="fc-note bad" role="alert">
+                {saved::taken_words(&typed, &e)}" "
+                <button type="button" class="fc-bt sm pri" data-act="replace" on:click=move |_| naming.replace(level)>"Replace it"</button>
+                <button type="button" class="fc-bt sm" data-act="another" on:click=move |_| naming.another(level)>"Choose another name"</button>
+            </div>
+        });
+        let note = naming.note(level).map(|(bad, w)| view! { <div class="fc-note" class:bad=bad role="status">{w}</div> });
+        Some(view! { {input}{taken}{note} })
+    }
+}
+
 fn rules_view(card: Card, s: Subject, ro: Memo<bool>) -> AnyView {
     let intro = {
         let s = s.clone();
         move || match (&s, ro.get()) {
             (Subject::Global, _) => "read only".to_string(),
+            (Subject::Line(l), _) => format!("every part of {} \u{2014} a change applies at once", line_words(*l).to_lowercase()),
             (_, true) => "read only \u{2014} turn on on this board to use and edit it".to_string(),
             (_, false) => "a change inside a saved filter edits it".to_string(),
         }
@@ -1203,10 +1615,10 @@ fn rules_view(card: Card, s: Subject, ro: Memo<bool>) -> AnyView {
                 };
                 let (o1, o2) = (t.owner.clone(), t.owner.clone());
                 view! {
-                    <button type="button" class="fc-bt" data-fc="add-rule" on:click=move |_| open_pick(card, o1.clone(), Vec::new(), Mode::Add { group: false }, conj, PCat::Status, false)>
+                    <button type="button" class="fc-bt" data-fc="add-rule" on:click=move |ev| card.open_dd(o1.clone(), Vec::new(), Target::Add { group: false }, conj, false, What::Field, ev.as_ref())>
                         <span class="fc-ic">"+"</span>"Add rule"
                     </button>
-                    <button type="button" class="fc-bt fc-ln" data-fc="add-group" on:click=move |_| open_pick(card, o2.clone(), Vec::new(), Mode::Add { group: true }, conj, PCat::Status, false)>
+                    <button type="button" class="fc-bt fc-ln" data-fc="add-group" on:click=move |ev| card.open_dd(o2.clone(), Vec::new(), Target::Add { group: true }, conj, false, What::Field, ev.as_ref())>
                         <span class="fc-ic sq">"+"</span>"Add inner group"
                     </button>
                 }
@@ -1221,7 +1633,7 @@ fn rules_view(card: Card, s: Subject, ro: Memo<bool>) -> AnyView {
                 let t = parts::to_filter(&parts::inlined(&card.top(&s), &|_| None), &Display::default());
                 let t = match &s {
                     Subject::Saved(n) => card.owner_node(n).map(|n| parts::to_filter(&n, &Display::default()).format()).unwrap_or_else(|| t.format()),
-                    Subject::Global => t.format(),
+                    _ => t.format(),
                 };
                 let words = marked(&t).into_iter().map(|(m, w)| if m { view! { <b>{w}</b> }.into_any() } else { view! { <span>{w}</span> }.into_any() }).collect_view();
                 view! { <div class="fc-txt" data-fc-text="">{words}</div> }
@@ -1231,6 +1643,10 @@ fn rules_view(card: Card, s: Subject, ro: Memo<bool>) -> AnyView {
     let drafts = {
         let s = s.clone();
         move || (!ro.get()).then(|| drafts_view(card, s.clone()))
+    };
+    let line = match &s {
+        Subject::Line(l) => Some(line_name_view(card, *l)),
+        _ => None,
     };
     let note = move || card.note.get().map(|(bad, w)| view! {
         <div class="fc-note" class:bad=bad role=if bad { "alert" } else { "status" }>
@@ -1251,6 +1667,7 @@ fn rules_view(card: Card, s: Subject, ro: Memo<bool>) -> AnyView {
             </div>
             {text}
             {note}
+            {line}
             {drafts}
         </div>
     }
@@ -1269,14 +1686,10 @@ fn inner_note(inner: &Inner, name: &str) -> impl IntoView {
     view! { <span class="fc-inote" class:bad=!matches!(inner, Inner::Loading)>{w}</span> }
 }
 
-fn open_pick(card: Card, owner: String, path: Vec<usize>, mode: Mode, conj: Conj, cat: PCat, not: bool) {
-    card.label.set_value(String::new());
-    card.pick.set(Some(Pick { owner, path, mode, conj, cat, not }));
-}
 
 fn count_pill(card: Card, s: &Subject, n: &Node) -> impl IntoView {
     let text = card.wire(s, n, None);
-    let global = matches!(s, Subject::Saved(_)) && card.lens.filter(Level::Global).with(|g| !g.groups.is_empty());
+    let global = !matches!(s, Subject::Global) && card.lens.filter(Level::Global).with(|g| !g.groups.is_empty());
     move || {
         let n = card.count(text.clone());
         let title = format!("{} tickets match this part alone{}", n.map_or("\u{2026}".into(), |n| n.to_string()), if global { ", within the global filter" } else { "" });
@@ -1299,6 +1712,24 @@ fn group_view(card: Card, s: &Subject, g: &Part, ro: bool, top: bool) -> AnyView
     let (conj, not) = (*conj, *not);
     let rows = items.iter().map(|i| part_view(card, s, i, ro)).collect_view();
     let (owner, path) = (g.owner.clone(), g.path.clone());
+    // FILTER-55: a part being added is a ghost row until its first choice.
+    let ghost = card.dd.with(|d| d.as_ref().is_some_and(|d| matches!(d.target, Target::Add { .. }) && d.owner == owner && d.path == path)).then(|| {
+        let picking = card.dd.with(|d| d.as_ref().map(|d| d.what));
+        let field = match picking {
+            Some(What::Values(c)) => field_of(c).0.to_string(),
+            _ => "Choose a field".to_string(),
+        };
+        let (o, p) = (owner.clone(), path.clone());
+        view! {
+            <div class="fc-rule ghost" data-fc-ghost="">
+                <span class="fc-grip" aria-hidden="true">"\u{283f}"</span>
+                <button type="button" class="fc-sel pick" data-fc="ghost-field" on:click=move |ev| {
+                    let (target, not) = card.dd.with_untracked(|d| d.as_ref().map_or((Target::Add { group: false }, false), |d| (d.target.clone(), d.not)));
+                    card.open_dd(o.clone(), p.clone(), target, conj, not, What::Field, ev.as_ref());
+                }>{field}</button>
+            </div>
+        }
+    });
     let word = if conj == Conj::All { "And" } else { "Or" };
     let pill = if items.is_empty() {
         ().into_any()
@@ -1321,8 +1752,8 @@ fn group_view(card: Card, s: &Subject, g: &Part, ro: bool, top: bool) -> AnyView
         let (o1, p1, o2, p2) = (owner.clone(), path.clone(), owner.clone(), path.clone());
         view! {
             <div class="fc-gadd">
-                <button type="button" class="fc-lnk" data-fc="add-condition" on:click=move |_| open_pick(card, o1.clone(), p1.clone(), Mode::Add { group: false }, conj, PCat::Status, false)>"+ Add condition"</button>
-                <button type="button" class="fc-lnk" data-fc="add-subgroup" on:click=move |_| open_pick(card, o2.clone(), p2.clone(), Mode::Add { group: true }, conj, PCat::Status, false)>"+ Add group"</button>
+                <button type="button" class="fc-lnk" data-fc="add-condition" on:click=move |ev| card.open_dd(o1.clone(), p1.clone(), Target::Add { group: false }, conj, false, What::Field, ev.as_ref())>"+ Add condition"</button>
+                <button type="button" class="fc-lnk" data-fc="add-subgroup" on:click=move |ev| card.open_dd(o2.clone(), p2.clone(), Target::Add { group: true }, conj, false, What::Field, ev.as_ref())>"+ Add group"</button>
             </div>
         }
     });
@@ -1331,12 +1762,17 @@ fn group_view(card: Card, s: &Subject, g: &Part, ro: bool, top: bool) -> AnyView
             <div class="fc-rail">{pill}</div>
             <div class="fc-gb">
                 {rows}
-                {items.is_empty().then(|| view! { <span class="fc-sm">"no parts yet"</span> })}
+                {ghost}
+                {(items.is_empty() && ghost_none(card, &g.owner, &g.path)).then(|| view! { <span class="fc-sm">"no parts yet"</span> })}
                 {adds}
             </div>
         </div>
     }
     .into_any()
+}
+
+fn ghost_none(card: Card, owner: &str, path: &[usize]) -> bool {
+    card.dd.with(|d| !d.as_ref().is_some_and(|d| matches!(d.target, Target::Add { .. }) && d.owner == owner && d.path == path))
 }
 
 fn is_last(card: Card, p: &Part) -> bool {
@@ -1528,10 +1964,7 @@ fn part_view(card: Card, s: &Subject, p: &Part, ro: bool) -> AnyView {
             let not = r.not;
             let neg = (!date || r.not).then(|| {
                 view! {
-                    <button type="button" class="fc-sel" class:neg=r.not data-fc="neg" title=if r.not { "press for is" } else { "press for is not" } on:click=move |_| {
-                        let at = p2.clone();
-                        card.edit(&o2, p2.clone(), |t| parts::negate(t, &at));
-                    }>{if r.op.is_empty() { "is".to_string() } else { r.op.clone() }}</button>
+                    <button type="button" class="fc-sel" class:neg=r.not data-fc="neg" title="is, or is not" on:click=move |ev| card.open_dd(o2.clone(), p2.clone(), Target::At, Conj::All, not, What::Op, ev.as_ref())>{if r.op.is_empty() { "is".to_string() } else { r.op.clone() }}</button>
                 }
             });
             let val = match &r.at {
@@ -1539,7 +1972,7 @@ fn part_view(card: Card, s: &Subject, p: &Part, ro: bool) -> AnyView {
                 _ => {
                     let add = (r.timeable && r.at.is_none()).then(|| time_add(card, s, p, r));
                     view! {
-                        <button type="button" class="fc-val" data-fc="value" title="change the value" on:click=move |_| open_pick(card, o3.clone(), p3.clone(), Mode::Replace, Conj::All, cat, not)>{toks}</button>
+                        <button type="button" class="fc-val" data-fc="value" title="change the value" on:click=move |ev| card.open_dd(o3.clone(), p3.clone(), Target::At, Conj::All, not, if LISTED.contains(&cat) { What::Values(cat) } else { What::Field }, ev.as_ref())>{toks}</button>
                         {more}
                         {add}
                     }
@@ -1559,7 +1992,7 @@ fn part_view(card: Card, s: &Subject, p: &Part, ro: bool) -> AnyView {
             view! {
                 <div class="fc-rule" class:new=new class:bare=date && !r.not data-rule=r.text.clone()>
                     <span class="fc-grip" aria-hidden="true">"\u{283f}"</span>
-                    <button type="button" class="fc-sel" data-fc="field" title="change the field" on:click=move |_| open_pick(card, o1.clone(), p1.clone(), Mode::Replace, Conj::All, cat, not)>{r.field.clone()}</button>
+                    <button type="button" class="fc-sel" data-fc="field" title="change the field" on:click=move |ev| card.open_dd(o1.clone(), p1.clone(), Target::At, Conj::All, not, What::Field, ev.as_ref())>{r.field.clone()}</button>
                     {neg}
                     {count}
                     {bin(card, p, r.text.clone())}
@@ -1607,15 +2040,12 @@ fn part_view(card: Card, s: &Subject, p: &Part, ro: bool) -> AnyView {
                 view! {
                     <div class="fc-rule named" class:new=new data-named=name.clone()>
                         <span class="fc-grip" aria-hidden="true">"\u{283f}"</span>
-                        <button type="button" class="fc-sel" data-fc="field" title="change the field" on:click=move |_| open_pick(card, o1.clone(), p1.clone(), Mode::Replace, Conj::All, PCat::Saved, not)>"Saved filter"</button>
-                        <button type="button" class="fc-sel" class:neg=not data-fc="neg" title=if not { "press for matches" } else { "press for does not match" } on:click=move |_| {
-                            let at = p2.clone();
-                            card.edit(&o2, p2.clone(), |t| parts::negate(t, &at));
-                        }>{op}</button>
+                        <button type="button" class="fc-sel" data-fc="field" title="change the field" on:click=move |ev| card.open_dd(o1.clone(), p1.clone(), Target::At, Conj::All, not, What::Field, ev.as_ref())>"Saved filter"</button>
+                        <button type="button" class="fc-sel" class:neg=not data-fc="neg" title="matches, or does not match" on:click=move |ev| card.open_dd(o2.clone(), p2.clone(), Target::At, Conj::All, not, What::Op, ev.as_ref())>{op}</button>
                         {count}
                         {bin(card, p, format!("saved {name}"))}
                         <div class="fc-vw">
-                            <button type="button" class="fc-val" data-fc="value" title="pick another saved filter" on:click=move |_| open_pick(card, o3.clone(), p3.clone(), Mode::Replace, Conj::All, PCat::Saved, not)>{val}</button>
+                            <button type="button" class="fc-val" data-fc="value" title="pick another saved filter" on:click=move |ev| card.open_dd(o3.clone(), p3.clone(), Target::At, Conj::All, not, What::Field, ev.as_ref())>{val}</button>
                             {unf}
                             {refused}
                         </div>
@@ -1719,7 +2149,7 @@ fn drafts_view(card: Card, s: Subject) -> impl IntoView {
                     let own = parts::to_filter(&saved, &Display::default());
                     let eff = match &s {
                         Subject::Global => own,
-                        Subject::Saved(_) => card.lens.filter(Level::Global).with(|g| g.and(&own)),
+                        Subject::Saved(_) | Subject::Line(_) => card.lens.filter(Level::Global).with(|g| g.and(&own)),
                     };
                     crate::counts::wire_text(&card.lens.org().with(|o| crate::orgs::within(o.as_deref(), &eff)))
                 };
@@ -1773,118 +2203,6 @@ fn drafts_view(card: Card, s: Subject) -> impl IntoView {
     }
 }
 
-fn picker_view(card: Card, s: Subject, p: Pick) -> AnyView {
-    let subject = match &s {
-        Subject::Saved(n) => n.clone(),
-        Subject::Global => HOME.to_string(),
-    };
-    let head = where_words(&p.mode, p.conj, &p.owner, &subject);
-    let cats = PCat::ALL
-        .into_iter()
-        .map(|c| {
-            view! {
-                <button type="button" class="fc-pkc" data-pkcat=c.label() aria-pressed=(p.cat == c).to_string() on:click=move |_| card.pick.update(|x| {
-                    if let Some(x) = x {
-                        x.cat = c;
-                    }
-                })>{c.label()}</button>
-            }
-        })
-        .collect_view();
-    let not = p.not;
-    let is_saved = p.cat == PCat::Saved;
-    let toggles = view! {
-        <span class="fc-seg">
-            <button type="button" aria-pressed=(!not).to_string() data-pkop="is" on:click=move |_| card.pick.update(|x| if let Some(x) = x { x.not = false })>{if is_saved { "matches" } else { "is" }}</button>
-            <button type="button" aria-pressed=not.to_string() data-pkop="not" on:click=move |_| card.pick.update(|x| if let Some(x) = x { x.not = true })>{if is_saved { "does not match" } else { "is not" }}</button>
-        </span>
-    };
-    let shape = matches!(p.mode, Mode::Add { .. }).then(|| {
-        let g = group_of(&p.mode);
-        view! {
-            <span class="fc-seg">
-                <button type="button" aria-pressed=(!g).to_string() data-pkshape="part" on:click=move |_| card.pick.update(|x| if let Some(x) = x { x.mode = Mode::Add { group: false } })>"a part"</button>
-                <button type="button" aria-pressed=g.to_string() data-pkshape="group" on:click=move |_| card.pick.update(|x| if let Some(x) = x { x.mode = Mode::Add { group: true } })>"a new group"</button>
-            </span>
-        }
-    });
-    let codes: Vec<String> = {
-        let mut c: Vec<String> = card.groups.with_untracked(|g| g.as_ref().map(|g| g.iter().map(|g| g.epic.to_string()).collect()).unwrap_or_default());
-        c.sort();
-        c.dedup();
-        c
-    };
-    let listed: Vec<String> = saved::hook().map(|s| s.listed_untracked()).unwrap_or_default().into_iter().map(|e| e.name).collect();
-    let rows = if p.cat == PCat::Label {
-        let p2 = p.clone();
-        let field = NodeRef::<leptos::html::Input>::new();
-        view! {
-            <div class="fc-pkl">
-                <input class="fc-gin" node_ref=field type="text" placeholder="a label, e.g. needs-you" aria-label="the label" on:input=move |ev| card.label.set_value(event_target_value(&ev)) on:keydown=move |ev: web_sys::KeyboardEvent| {
-                    if bindings::hit(&ev, Context::Field) == Some("form.submit") {
-                        ev.prevent_default();
-                        if let Some(t) = label_clause(&event_target_value(&ev)) {
-                            card.apply(&p2, &t);
-                        }
-                    }
-                } />
-                <button type="button" class="fc-bt pri sm" data-fc="label-ok" on:click={
-                    let p3 = p.clone();
-                    move |_| {
-                        if let Some(t) = label_clause(&card.label.get_value()) {
-                            card.apply(&p3, &t);
-                        }
-                    }
-                }>"Add"</button>
-            </div>
-        }
-        .into_any()
-    } else {
-        values(p.cat, &codes, &listed)
-            .into_iter()
-            .map(|(words, text)| {
-                let me = matches!(&s, Subject::Saved(_)) && p.cat == PCat::Saved && {
-                    let cand = words.trim_start_matches('\u{2317}').trim().to_string();
-                    parts::names_itself(&p.owner, &cand, &|m| card.lookup(m))
-                };
-                if me {
-                    return view! { <div class="fc-pkv off" title="not offered: it would name itself"><span>{words}</span><span class="fc-pkn">"not offered: it would name itself"</span></div> }.into_any();
-                }
-                let would = card.would(&s, &p, &text);
-                let n = move || would.clone().and_then(|w| card.count(w));
-                let p2 = p.clone();
-                let n2 = n.clone();
-                view! {
-                    <button type="button" class="fc-pkv" data-pkv=text.clone() on:click=move |_| card.apply(&p2, &text)>
-                        <span>{words}</span>
-                        <span class="fc-pkn" class:z=move || n2() == Some(0)>{move || match n() {
-                            Some(0) => "\u{2192} 0 \u{00b7} nothing".to_string(),
-                            Some(n) => format!("\u{2192} {n}"),
-                            None => "\u{2192} \u{2026}".to_string(),
-                        }}</span>
-                    </button>
-                }
-                .into_any()
-            })
-            .collect_view()
-            .into_any()
-    };
-    view! {
-        <div class="fc-pk" role="dialog" aria-label="add or change a part">
-            <div class="fc-pkh">
-                <span class="fc-pkw">{head}</span>
-                <button type="button" class="fc-x" aria-label="close the picker" on:click=move |_| card.pick.set(None)>"\u{d7}"</button>
-            </div>
-            <div class="fc-pkt">{toggles}{shape}</div>
-            <div class="fc-pkb">
-                <div class="fc-pkcs">{cats}</div>
-                <div class="fc-pkvs">{rows}</div>
-            </div>
-        </div>
-    }
-    .into_any()
-}
-
 // ---------------------------------------------------------------------
 // The nav under it
 
@@ -1893,7 +2211,7 @@ fn nav_section(card: Card, s: Subject) -> AnyView {
         let s = s.clone();
         Memo::new(move |_| card.wire(&s, &card.top(&s), None))
     };
-    let within = matches!(s, Subject::Saved(_)) && card.lens.filter(Level::Global).with_untracked(|g| !g.groups.is_empty());
+    let within = !matches!(s, Subject::Global) && card.lens.filter(Level::Global).with_untracked(|g| !g.groups.is_empty());
     let n = move || card.count(text.get()).map_or_else(|| "\u{2026}".to_string(), |n| n.to_string());
     view! {
         <div class="fc-sec fc-nav">
@@ -2061,21 +2379,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_picker_says_where_a_part_lands() {
-        assert_eq!(
-            where_words(&Mode::Add { group: false }, Conj::All, "Plexus-Attention", "Plexus-Attention"),
-            "Adds to this all of group, joined by and, inside \u{2317} Plexus-Attention itself"
-        );
-        assert_eq!(
-            where_words(&Mode::Add { group: true }, Conj::Any, "Plexus-Attention", "Plexus-Attention"),
-            "Starts a new group inside this any of (joined to it by or); its parts join by and, inside \u{2317} Plexus-Attention itself"
-        );
-        let w = where_words(&Mode::Replace, Conj::All, "Needs you", "Plexus-Attention");
-        assert!(w.starts_with("Changes this part, inside \u{2317} Needs you itself"), "{w}");
-        assert!(w.contains("save back"), "a part of a named filter says it edits that filter");
-    }
-
-    #[test]
     fn values_past_four_fold_into_plus_n() {
         let v: Vec<String> = ["A", "B", "C", "D"].map(String::from).to_vec();
         assert_eq!(shown(&v, false), (v.clone(), None));
@@ -2151,5 +2454,41 @@ mod tests {
         assert!(none.is_empty() && dates[0].0 == "today");
         assert_eq!(PCat::of_field("Created"), PCat::Dates);
         assert_eq!(values(PCat::Dates, &[], &[]).iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["created this week", "changed this week"]);
+    }
+
+    #[test]
+    fn a_tick_adds_or_takes_a_value_and_a_list_is_one_rule() {
+        let vals: Vec<String> = vec!["Ready".into()];
+        assert_eq!(ticked(Some(("Status", &vals)), PCat::Status, "Coding"), ("status", vec!["Ready".to_string(), "Coding".to_string()]));
+        assert_eq!(ticked(Some(("Status", &vals)), PCat::Status, "ready"), ("status", Vec::<String>::new()), "case ignored");
+        assert_eq!(ticked(Some(("Kind", &vals)), PCat::Status, "Coding"), ("status", vec!["Coding".to_string()]), "another field: replaced");
+        let under: Vec<String> = vec!["FILTER".into()];
+        assert_eq!(ticked(Some(("Under", &under)), PCat::Shortcode, "APP").0, "under", "under keeps its word");
+        // A list reads back as one rule, negated or not.
+        for not in [false, true] {
+            let n = list_node("kind", &["build".into(), "gap".into()], not).unwrap();
+            let r = parts::rule_at(&n).expect("one rule");
+            assert_eq!((r.field.as_str(), r.not, r.values.len()), ("Kind", not, 2));
+            let f = parts::to_filter(&n, &Display::default());
+            assert!(Filter::parse(&f.format()).is_ok(), "{}", f.format());
+        }
+        assert!(list_node("in", &["FILTER".into()], false).is_some());
+        assert_eq!(list_node("kind", &[], false), None);
+    }
+
+    #[test]
+    fn the_line_says_a_name_and_the_button_counts_rules() {
+        let one = Filter::parse("saved \"Needs you\"").unwrap();
+        assert_eq!(line_name(&one, None).as_deref(), Some("Needs you"));
+        assert_eq!(line_name(&Filter::parse("not saved X").unwrap(), None), None, "negated: no name");
+        let more = Filter::parse("kind build and status Ready").unwrap();
+        assert_eq!(line_name(&more, None), None, "rules only: nothing but the badge");
+        assert_eq!(line_name(&more, Some("open builds")).as_deref(), Some("open builds"), "the name it is saved under");
+        assert_eq!(rules_of(&more), 2);
+        assert_eq!(rules_of(&Filter::parse("status in (Ready, Coding) and saved X").unwrap()), 2, "a list one rule, a name one");
+        assert_eq!(rules_of(&Filter::default()), 0);
+        assert!(builds(Level::Board) && builds(Level::Nav) && !builds(Level::Waves) && !builds(Level::Global));
+        assert_eq!(line_of(&line_owner(Level::Nav)), Some(Level::Nav));
+        assert_eq!(key_of(&Subject::Line(Level::Board)), "line:board");
     }
 }

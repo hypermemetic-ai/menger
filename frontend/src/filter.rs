@@ -1305,6 +1305,9 @@ fn document() -> Option<web_sys::Document> {
 /// menu (FILTER-49, over the page), and the contradiction notice.
 /// `cats`: the level's categories, server-backed and local, in its menu's
 /// order; `counts`: what the menu's values count.
+/// FILTER-55: the board's line (a level the builder edits, src/fcard.rs's
+/// `builds`) draws no chips — the global chip, the filter's name when it has
+/// one ([`line_summary`]), the count; its Filter button opens the builder.
 #[component]
 pub(crate) fn FilterBar(
     level: Level,
@@ -1324,13 +1327,13 @@ pub(crate) fn FilterBar(
         <div class="fbar fline" data-fbar=level.name() data-level=level.name() class:open=move || pop.open_tracked() on:keydown=move |ev| fold_key(pop, ev)>
             <div class="fline-row">
                 <FilterButton level hint badge=true />
-                <span class="fline-chips">{line_chips(lens, level, shown)}</span>
+                <span class="fline-chips">{move || if crate::fcard::builds(level) { line_summary(lens, level, Some(shown)).into_any() } else { line_chips(lens, level, shown).into_any() }}</span>
                 <span class="fline-end">
                     <span class="fline-n" title="tickets this surface shows, of every ticket" aria-live="polite">
                         <b>{move || shown.get().map_or_else(|| "\u{2026}".to_string(), |n| n.to_string())}</b>
                         <span class="fline-of">{move || all.get().map(|n| format!(" of {n}")).unwrap_or_default()}</span>
                     </span>
-                    <SaveAs level />
+                    {(!crate::fcard::builds(level)).then(|| view! { <SaveAs level /> })}
                     {flash_view(level)}
                 </span>
                 {move || pop.stale.get().then(|| view! {
@@ -1362,6 +1365,54 @@ fn total_count() -> RwSignal<Option<usize>> {
 /// — for a moment, beside its line.
 pub(crate) fn flash_view(level: Level) -> impl IntoView {
     move || crate::saved::hook().and_then(|s| s.flash_for(level)).map(|w| view! { <span class="sflash" role="status">{w}</span> })
+}
+
+/// FILTER-55: a line the builder edits says only what its filter is (the
+/// owner, 2026-10-24: *"just show the filter name if available, and the
+/// filter button should open to it"*) — the global filter's dashed chip, then
+/// the filter's name when it has one (a press opens the builder on it), and
+/// empty, what is shown and the saved filters most used. The rules are the
+/// builder's; the Filter button's badge counts them.
+fn line_summary(lens: Lens, level: Level, shown: Option<RwSignal<Option<usize>>>) -> impl IntoView {
+    let naming = crate::naming::use_naming();
+    move || {
+        let global = lens.filter(Level::Global).with(|f| f.format());
+        let f = lens.filter(level).get();
+        let bound = naming.bound(level).map(|b| b.name);
+        let name = crate::fcard::line_name(&f, bound.as_deref());
+        let single = bound.is_none() && name.is_some();
+        let more = f.groups.is_empty() || name.is_some();
+        view! {
+            {(!global.is_empty()).then(|| view! {
+                {global_chip(lens, global.clone())}
+                {more.then(|| view! { <span class="fw">"and"</span> })}
+            })}
+            {match (f.groups.is_empty(), name) {
+                (true, _) => match shown {
+                    Some(shown) => empty_line(level, shown).into_any(),
+                    None => view! { <span class="fchips-empty">"every ticket"</span> }.into_any(),
+                },
+                (false, Some(n)) => {
+                    let n2 = n.clone();
+                    let open = move || crate::fcard::hook().is_some_and(|c| c.is_on(&crate::fcard::Subject::Line(level)));
+                    view! {
+                        <button type="button" class="fchip saved fsum" data-fline-name=level.name() data-fcard=format!("line:{}", level.name()) title=format!("{} \u{2014} open the filter builder", crate::fcard::line_words(level)) aria-expanded=move || open().to_string() on:click=move |ev| {
+                            if let Some(c) = crate::fcard::hook() {
+                                ev.stop_propagation();
+                                c.press_line(level, ev.as_ref(), single.then(|| n2.clone()));
+                            }
+                        }>
+                            <span class="fchip-f">"\u{2317}"</span>
+                            <span class="fchip-v">{n.clone()}</span>
+                            {move || crate::fcard::is_edited(&n).then(|| view! { <i class="fchip-ed">"edited"</i> })}
+                        </button>
+                    }
+                    .into_any()
+                }
+                (false, None) => ().into_any(),
+            }}
+        }
+    }
 }
 
 /// FILTER-41: the line's chips — the global filter's dashed chip; the
@@ -1631,7 +1682,15 @@ fn empty_line(level: Level, shown: RwSignal<Option<usize>>) -> impl IntoView {
     let lens = lens::use_lens();
     view! {
         <span class="fchips-empty">{words}</span>
-        <button type="button" class="fline-first" data-first=level.name() title="the filter menu, on its saved filters" on:click=move |_| lens.open_panel(level, None)>"+ add a filter"</button>
+        <button type="button" class="fline-first" data-first=level.name() data-fcard=crate::fcard::builds(level).then(|| format!("line:{}", level.name())) title="add a rule" on:click=move |ev| {
+            match crate::fcard::hook().filter(|_| crate::fcard::builds(level)) {
+                Some(c) => {
+                    ev.stop_propagation();
+                    c.open_line(level, true);
+                }
+                None => lens.open_panel(level, None),
+            }
+        }>"+ add a filter"</button>
         <span class="fw fline-saved">"saved:"</span>
         {chips}
     }
@@ -1770,16 +1829,10 @@ pub(crate) fn NavChips(#[prop(into)] cats: Vec<Cat>, counts: CountsProvider) -> 
     let lens = lens::use_lens();
     let pop = lens.pop(Level::Nav);
     pop.configure(&cats, counts);
-    let global = Memo::new(move |_| lens.filter(Level::Global).with(|f| f.format()));
     view! {
         <div class="fbar nchips" data-fbar="nav" data-level="nav">
-            <FilterButton level=Level::Nav hint="Filter the nav (f — on a ticket page, f filters it to that ticket and its children)" />
-            {move || {
-                let g = global.get();
-                (!g.is_empty()).then(|| view! { {global_chip(lens, g)}<span class="fw">"and"</span> })
-            }}
-            {chips_view(lens, Level::Nav, "every ticket")}
-            <Reset level=Level::Nav />
+            <FilterButton level=Level::Nav hint="Filter the nav (f — on a ticket page, f filters it to that ticket and its children)" badge=true />
+            {line_summary(lens, Level::Nav, None)}
             {flash_view(Level::Nav)}
         </div>
         <Clash level=Level::Nav />
@@ -1802,17 +1855,27 @@ pub(crate) fn fold_key(pop: Pop, ev: web_sys::KeyboardEvent) {
 pub(crate) fn FilterButton(level: Level, #[prop(into)] hint: String, #[prop(optional)] badge: bool) -> impl IntoView {
     let lens = lens::use_lens();
     let pop = lens.pop(level);
-    let count = move || lens.clause_count(level);
+    let builds = crate::fcard::builds(level);
+    // FILTER-55: a line the builder edits counts its rules, as the builder draws them.
+    let count = move || if builds { lens.filter(level).with(crate::fcard::rules_of) } else { lens.clause_count(level) };
+    let line = crate::fcard::Subject::Line(level);
     view! {
         <button
             class="fbtn"
             data-fbtn=level.name()
             data-fopen=level.name()
+            data-fcard=builds.then(|| format!("line:{}", level.name()))
             title=hint
-            aria-controls=pop_id(level)
-            aria-expanded=move || pop.open_tracked().to_string()
-            on:click=move |_| {
-                if pop.is_open() {
+            aria-controls=(!builds).then(|| pop_id(level))
+            aria-haspopup=builds.then_some("dialog")
+            aria-expanded=move || if builds { crate::fcard::hook().is_some_and(|c| c.is_on(&line)) } else { pop.open_tracked() }.to_string()
+            on:click=move |ev| {
+                if builds {
+                    if let Some(c) = crate::fcard::hook() {
+                        ev.stop_propagation();
+                        c.press_line(level, ev.as_ref(), None);
+                    }
+                } else if pop.is_open() {
                     lens.close_panel(true);
                 } else {
                     lens.open_panel(level, None);
@@ -1823,13 +1886,14 @@ pub(crate) fn FilterButton(level: Level, #[prop(into)] hint: String, #[prop(opti
                 <path d="M2 3.5h12l-4.6 5.4v4.1l-2.8-1.3V8.9z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
             </svg>
             "Filter"
-            {move || (badge && count() > 0).then(|| view! { <span class="fbadge" title="clauses in this filter">{count}</span> })}
+            {move || (badge && count() > 0).then(|| view! { <span class="fbadge" title=if builds { "rules in this filter" } else { "clauses in this filter" }>{count}</span> })}
         </button>
     }
 }
 
 /// Under the line — naming's prompt (a name already saved: replace it,
-/// or another) and its note; with saved names, "as evaluated"; an edit
+/// or another) and its note; with saved names, "as evaluated" (not under a
+/// line the builder edits, FILTER-55: the line spells out nothing); an edit
 /// refused while the menu is closed.
 #[component]
 pub(crate) fn LineNotes(level: Level) -> impl IntoView {
@@ -1855,7 +1919,7 @@ pub(crate) fn LineNotes(level: Level) -> impl IntoView {
                 <button class="p-x" title="dismiss" aria-label="dismiss" on:click=move |_| naming.dismiss(level)>"\u{d7}"</button>
             </div>
         })}
-        {evaluated_view(lens, level)}
+        {(!crate::fcard::builds(level)).then(|| evaluated_view(lens, level))}
         {refused_view(pop)}
     }
 }

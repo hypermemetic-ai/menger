@@ -2124,6 +2124,7 @@
   .fbar.nchips { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; padding: .35rem .6rem; font-size: calc(11.5px * var(--text-scale)); }
   .fbar .fchip { display: inline-flex; align-items: center; padding: 0 .45rem; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); white-space: nowrap; }
   .fbar .fchip.saved { border-color: var(--accent); }
+  .fbar .fsum .fchip-v { color: var(--accent); }
   .fbar .fchip-text { white-space: normal; }
   .fbar .fchips-g { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
   .fbar .fchips-g.boxed { padding: 2px 4px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
@@ -2279,26 +2280,27 @@
   .fcard .fc-sbox { border: var(--border) dashed var(--accent); border-radius: var(--radius-xl); background: var(--sel); padding: 8px 10px 6px; margin-left: 22px; display: flex; flex-direction: column; gap: 6px; }
   .fcard .fc-sbh { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: calc(12px * var(--text-scale)); color: var(--muted); }
   .fcard .fc-sbh b { color: var(--accent); font-family: var(--mono); }
-  /* The picker: over the card, its head saying where the part lands. */
-  .fcard .fc-pk { position: absolute; z-index: 4; left: 50%; top: 52px; transform: translateX(-50%); width: min(36rem, calc(100% - 24px)); max-height: calc(100% - 64px); display: flex; flex-direction: column; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-xl); box-shadow: 0 10px 30px var(--shadow); overflow: hidden; }
-  .fcard .fc-pkh { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-bottom: var(--border) solid var(--line); background: var(--panel); }
-  .fcard .fc-pkw { flex: 1; font-size: calc(12px * var(--text-scale)); }
-  .fcard .fc-pkt { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 10px; border-bottom: var(--border) solid var(--line); }
-  .fcard .fc-seg { display: inline-flex; border: var(--border) solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
-  .fcard .fc-seg button { background: none; border: 0; padding: 2px 9px; cursor: pointer; color: var(--muted); }
-  .fcard .fc-seg button + button { border-left: var(--border) solid var(--line); }
-  .fcard .fc-seg button[aria-pressed="true"] { background: var(--sel); color: var(--accent); }
-  .fcard .fc-pkb { flex: 1; min-height: 0; display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); }
-  .fcard .fc-pkcs { display: flex; flex-direction: column; border-right: var(--border) solid var(--line); padding: 4px; overflow: auto; }
-  .fcard .fc-pkc { background: none; border: 0; text-align: left; padding: 5px 8px; border-radius: var(--radius-lg); cursor: pointer; }
-  .fcard .fc-pkc[aria-pressed="true"] { background: var(--sel); color: var(--accent); font-weight: var(--weight-strong); }
-  .fcard .fc-pkvs { overflow: auto; padding: 4px; display: flex; flex-direction: column; }
-  .fcard .fc-pkv { display: flex; align-items: center; gap: 8px; background: none; border: 0; text-align: left; padding: 5px 8px; border-radius: var(--radius-lg); cursor: pointer; font-family: var(--mono); }
-  .fcard button.fc-pkv:hover { background: var(--hover); }
-  .fcard .fc-pkv.off { color: var(--muted); cursor: default; }
-  .fcard .fc-pkn { margin-left: auto; color: var(--muted); font-size: calc(11px * var(--text-scale)); white-space: nowrap; }
+  /* FILTER-55: the dropdowns — under the control pressed, as tall as the window allows; a phone's a sheet. */
+  .fcard .fc-dd { position: fixed; z-index: 50; display: flex; flex-direction: column; min-width: 220px; max-width: min(24rem, calc(100vw - 16px)); max-height: 26rem; background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius-xl); box-shadow: 0 14px 36px var(--shadow); overflow: hidden; text-align: left; }
+  .fcard .fc-dds { display: none; }
+  .fcard .fc-ddq { flex: none; padding: 8px; border-bottom: var(--border) solid var(--line); }
+  .fcard .fc-ddq.fc-lbl { display: flex; gap: 6px; }
+  .fcard .fc-ddq input { width: 100%; box-sizing: border-box; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card); color: var(--ink); font: inherit; padding: 5px 9px; }
+  .fcard .fc-ddq input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .fcard .fc-ddl { flex: 1; min-height: 0; overflow: auto; padding: 4px; display: flex; flex-direction: column; }
+  .fcard .fc-ddm { padding: 8px 9px 4px; font: var(--weight-strong) calc(10.5px * var(--text-scale)) var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .fcard .fc-ddl button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; padding: 6px 9px; border-radius: var(--radius-lg); cursor: pointer; white-space: nowrap; }
+  .fcard .fc-ddl button:hover, .fcard .fc-ddl button:focus-visible { background: var(--sel); }
+  .fcard .fc-ddl button[aria-checked="true"] { color: var(--accent); font-weight: var(--weight-strong); }
+  .fcard .fc-pkn { margin-left: auto; color: var(--muted); font: var(--weight-normal) calc(11px * var(--text-scale)) var(--mono); white-space: nowrap; }
   .fcard .fc-pkn.z { color: var(--err-fg); }
-  .fcard .fc-pkl { display: flex; gap: 6px; padding: 6px; }
+  .fcard .fc-ck { flex: none; width: 16px; height: 16px; border: var(--border) solid var(--line); border-radius: var(--radius-sm); display: inline-grid; place-items: center; font-size: 11px; color: var(--accent); }
+  .fcard .fc-ddl button[aria-checked="true"] .fc-ck { border-color: var(--accent); background: var(--sel); }
+  .fcard .fc-ddno { padding: 8px 9px; color: var(--muted); }
+  .fcard .fc-ddf { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border-top: var(--border) solid var(--line); color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+  .fcard .fc-ddh { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 6px; }
+  .fcard .fc-sel.pick { border-style: dashed; color: var(--muted); }
+  .fcard .fc-rule.ghost { border-style: dashed; }
   /* The nav under it: the nav's row, by depth. */
   .fcard .fc-nvb { padding: 4px 0; gap: 0; }
   .fcard .fc-nvm { display: inline-flex; border: var(--border) solid var(--line); border-radius: var(--radius-lg); overflow: hidden; font-weight: var(--weight-normal); }
@@ -2346,10 +2348,9 @@
     .fcard .fc-tm { position: fixed; z-index: 960; left: 0; right: 0; bottom: 0; top: auto; min-width: 0; max-height: 70%; border-radius: var(--radius-device) var(--radius-device) 0 0; padding-bottom: max(var(--safe-bottom), 8px); }
     .fcard .fc-tmi { min-height: 36px; }
     .fcard .fc-nr { padding-top: 6px; padding-bottom: 6px; }
-    .fcard .fc-pk { left: 0; right: 0; bottom: 0; top: auto; transform: none; width: auto; max-height: 75%; border-radius: var(--radius-device) var(--radius-device) 0 0; padding-bottom: var(--safe-bottom); }
-    .fcard .fc-pkb { grid-template-columns: 1fr; }
-    .fcard .fc-pkcs { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: var(--border) solid var(--line); }
-    .fcard .fc-pkv, .fcard .fc-pkc { min-height: 34px; }
+    .fcard .fc-dd { z-index: 961; left: 0 !important; right: 0; bottom: 0 !important; top: auto !important; width: auto; min-width: 0 !important; max-width: none; max-height: 72vh !important; border-radius: var(--radius-device) var(--radius-device) 0 0; padding-bottom: max(var(--safe-bottom), 8px); }
+    .fcard .fc-dds { display: block; position: fixed; inset: 0; z-index: 960; background: var(--scrim); }
+    .fcard .fc-ddl button { min-height: 40px; }
   }
   .fbar .fsave-b, .fbar .fsaved { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; white-space: nowrap; }
   .fbar .fsaved { color: var(--ink); border-bottom: 2px solid var(--live); }

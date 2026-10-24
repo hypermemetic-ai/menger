@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// FILTER-49: the filter menu is a popover (a sheet on a phone) — Filter
-// opens it over the board without moving it, its categories open one at a
+// FILTER-49: the filter menu is a popover (a sheet on a phone) — since
+// FILTER-55 the global filter's (the board's and the nav's are the builder's,
+// scripts/filter-card-check.mjs): F opens it over the board without moving it, its categories open one at a
 // time with counts and is / is not, the search narrows every value, Escape
 // and a press outside close it, `f` opens it again, edit as text is at its
 // foot. Against a throwaway (scripts/filter-menu-check.sh); screenshots of
@@ -49,12 +50,13 @@ const menu = ".fmenu";
 const boardTop = () => page.evaluate(() => document.querySelector("table")?.getBoundingClientRect().top ?? -1);
 const isOpen = () => page.locator(menu).count().then((n) => n > 0);
 
-// Opened from Filter: over the board, nothing moved.
+// Opened by F: over the board, nothing moved.
 const before = await boardTop();
-await page.click(btn);
+await page.keyboard.press("Shift+F");
 await page.waitForSelector(menu);
 await page.waitForTimeout(400);
-ok(await isOpen(), `${tag}: Filter opens the menu`);
+ok(await isOpen(), `${tag}: F opens the global filter's menu`);
+ok(await page.locator(`${menu} [data-tab="board"], ${menu} [data-tab="nav"]`).count() === 0, `${tag}: no tab for the board or the nav (the builder edits them)`);
 ok(Math.abs((await boardTop()) - before) < 1, `${tag}: the board does not move under it (${before} → ${await boardTop()})`);
 if (phone) {
   ok(await page.locator(`#lens-top ${menu}`).count() === 1, `${tag}: on a phone the menu is the filter sheet's`);
@@ -62,8 +64,6 @@ if (phone) {
 } else {
   const pos = await page.$eval(menu, (m) => getComputedStyle(m).position);
   ok(pos === "absolute", `${tag}: a popover (position ${pos})`);
-  const [mb, bb] = await Promise.all([page.$eval(menu, (m) => m.getBoundingClientRect().toJSON()), page.$eval(btn, (b) => b.getBoundingClientRect().toJSON())]);
-  ok(mb.top >= bb.bottom && mb.top - bb.bottom < 12, `${tag}: it hangs under its button (${Math.round(mb.top)} vs ${Math.round(bb.bottom)})`);
 }
 const rows = await page.locator(`${menu} .fmain .frow.cat`).allInnerTexts();
 ok(rows.length >= 8 && rows.length <= 14, `${tag}: a short list of categories (${rows.length})`);
@@ -92,7 +92,7 @@ ok(await page.locator(`${menu} .fsub [data-cat="status"]`).count() === 0, `${tag
 // A tick: the line's chip, the board still where it was.
 await page.click(`${menu} .fsub .fv[data-value="build"]`);
 await page.waitForTimeout(500);
-ok(await page.locator(".fline .fchip").count() >= 1, `${tag}: a tick is a chip on the line`);
+ok(await page.locator(".fline .fchip-g").count() >= 1, `${tag}: a tick is the global filter's chip on the line`);
 ok(await page.locator(`${menu} .finto`).count() === 1, `${tag}: which group a tick goes into, once there is one`);
 if (phone) await page.click(`${menu} .fsub .frow.back`);
 
@@ -109,9 +109,9 @@ await page.keyboard.press("Escape");
 await page.waitForTimeout(300);
 ok(!(await isOpen()), `${tag}: Escape closes it`);
 await page.evaluate(() => document.activeElement?.blur());
-await page.keyboard.press("f");
+await page.keyboard.press("Shift+F");
 await page.waitForTimeout(400);
-ok(await isOpen(), `${tag}: f opens it`);
+ok(await isOpen(), `${tag}: F opens it again`);
 if (!phone) {
   await page.mouse.click(width - 40, 860);
   await page.waitForTimeout(300);

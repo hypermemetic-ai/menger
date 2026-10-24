@@ -3,7 +3,8 @@
 # It starts menger on 127.0.0.1:$PORT/$((PORT+1)) with its own database and a
 # scratch key as --admin, files synthetic tickets (four shortcodes, every
 # kind, several statuses, a label, two saved filters), then runs
-# scripts/filter-menu-check.mjs at 390 and 1440, light and dark: Filter opens
+# scripts/filter-menu-check.mjs at 390 and 1440, light and dark: F (the global
+# filter's; FILTER-55: the board's and the nav's are the builder's) opens
 # the popover (the sheet at 390), the board does not move under it, a
 # category opens one at a time, the search narrows every value, Escape and a
 # press outside close it, `f` opens it again.

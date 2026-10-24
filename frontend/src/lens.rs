@@ -1143,11 +1143,9 @@ impl Lens {
     /// FILTER-40: the levels the panel's tabs offer — everywhere; the nav,
     /// where it is drawn; the route's surface, where its line is. Tracked.
     pub(crate) fn tabs(self) -> Vec<Level> {
+        // FILTER-55: the board's and the nav's are the builder's, not a tab.
         let mut out = vec![Level::Global];
-        if self.pop(Level::Nav).mounted_tracked() {
-            out.push(Level::Nav);
-        }
-        if let Some(l) = self.surface.get().filter(|l| self.pop(*l).mounted_tracked()) {
+        if let Some(l) = self.surface.get().filter(|l| self.pop(*l).mounted_tracked() && !crate::fcard::builds(*l)) {
             out.push(l);
         }
         out
@@ -1160,6 +1158,15 @@ impl Lens {
     /// FILTER-49: `level`'s menu opened over the page — on `c`'s category
     /// when given — every other level's closed.
     pub(crate) fn open_panel(self, level: Level, c: Option<Cat>) {
+        // FILTER-55: the board's and the nav's filters are the builder's.
+        if crate::fcard::builds(level) {
+            if let Some(card) = crate::fcard::hook() {
+                let _ = c;
+                self.close_panel(false);
+                card.open_line(level, false);
+                return;
+            }
+        }
         // FILTER-40: a tab changes which level the one panel edits; the
         // focus it was opened from stays where it was.
         let was = Level::ALL.into_iter().find(|l| self.pop(*l).is_open());
@@ -1208,7 +1215,10 @@ impl Lens {
                 }
             };
             ev.prevent_default();
-            if self.pop(level).is_open() {
+            if let Some(card) = crate::fcard::hook().filter(|_| crate::fcard::builds(level)) {
+                self.close_panel(false);
+                card.toggle_line(level);
+            } else if self.pop(level).is_open() {
                 self.close_panel(true);
             } else {
                 self.open_panel(level, None);

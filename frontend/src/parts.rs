@@ -545,6 +545,26 @@ fn timed(h: &History) -> bool {
     h.window.is_some() || matches!(h.event, Event::Entered(_) | Event::Left(_) | Event::Changed | Event::Created | Event::Touched | Event::Held(_) | Event::Became(_))
 }
 
+/// FILTER-55: the rule a node is, as its row says it — a clause, or a group
+/// that lists one field's values; `None` for a name or any other group.
+pub(crate) fn rule_at(n: &Node) -> Option<Rule> {
+    match n {
+        Node::Leaf(Predicate { field: Field::Saved(_), .. }) => None,
+        Node::Leaf(p) => Some(rule_of(p)),
+        g => list_of(g).map(|(field, not, values)| rule_of_list(&field, not, values, g)),
+    }
+}
+
+/// FILTER-55: one field's values as a clause — `status Ready`, `kind in
+/// (build, gap)`, `status "In Review"`; `word` the language's field word.
+pub(crate) fn clause_text(word: &str, values: &[String]) -> String {
+    let q = |v: &String| if v.contains(' ') { format!("\"{v}\"") } else { v.clone() };
+    match values {
+        [one] => format!("{word} {}", q(one)),
+        many => format!("{word} in ({})", many.iter().map(q).collect::<Vec<_>>().join(", ")),
+    }
+}
+
 fn rule_of_list(field: &Field, not: bool, values: Vec<String>, n: &Node) -> Rule {
     let r = rule_of(&Predicate { field: field.clone(), not });
     let op = if not { "is none of" } else { "is any of" };
@@ -995,5 +1015,20 @@ mod tests {
         // A draft that names itself stays a name.
         let me = |name: &str| (slug(name) == "b").then(|| of_text("saved B or ready").unwrap().0);
         assert_eq!(to_filter(&inlined(&n, &me), &d).format(), "saved A and not (saved B or ready)");
+    }
+
+    #[test]
+    fn a_rule_at_a_node_and_its_values_as_a_clause() {
+        let (n, _) = of_text("status in (Ready, \"In Review\") and kind gap and saved X").unwrap();
+        let rows: Vec<Option<Rule>> = n.items().iter().map(rule_at).collect();
+        let first = rows[0].as_ref().expect("a list is a rule");
+        assert_eq!((first.field.as_str(), first.values.clone()), ("Status", vec!["Ready".to_string(), "In Review".to_string()]));
+        assert_eq!(rows[1].as_ref().map(|r| r.text.clone()), Some("kind gap".into()));
+        assert!(rows[2].is_none(), "a name is no rule");
+        assert_eq!(clause_text("status", &["In Review".into()]), "status \"In Review\"");
+        assert_eq!(clause_text("kind", &["build".into(), "gap".into()]), "kind in (build, gap)");
+        for t in [clause_text("status", &["Ready".into(), "In Review".into()]), clause_text("in", &["FILTER".into(), "APP".into()]), clause_text("label", &["needs-you".into(), "stale".into()]), clause_text("severity", &["high".into()])] {
+            assert!(Filter::parse(&t).is_ok(), "{t}");
+        }
     }
 }
