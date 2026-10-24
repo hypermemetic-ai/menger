@@ -161,7 +161,7 @@ export interface MengerTheme {
 }
 
 export interface Menger {
-  /** "2.7.0". */
+  /** "2.8.0". */
   readonly version: string;
 
   /**
@@ -254,6 +254,17 @@ export interface Menger {
 
   /** INPUT-4, INPUT-9: the two writes — this frame's ticket's inputs, answered and cleared. */
   readonly input: MengerInput;
+
+  /**
+   * TICKETS-23 (2.8): a task's sheet. `open(id)` asks the app to open this
+   * ticket's `<m-task id>` in a sheet that is a full ticket body (the
+   * ticket page's renderer), only inside a viewer's gesture, and returns
+   * whether it asked — false with no ticket (a draft, a help card), in a
+   * chat message's frame, a cited window, or a task's own sheet (`sheet`,
+   * its id: one level); the row then folds in place. The app reads the
+   * task from the stored body, not from this frame.
+   */
+  readonly task: { readonly sheet: string | null; open(id: string): boolean };
 }
 
 /**

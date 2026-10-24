@@ -953,8 +953,9 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
     let used = match bindings::hit(ev, Context::Global) {
         // COMMENT-3: Esc closes what annotation mode has open, then leaves
         // it; MENGER-15: then full screen (the overlay; the browser's own
-        // full screen takes its Esc itself); ACT-3: then the selection.
-        Some("app.escape") => crate::questions::escape() || annotate::escape() || present::escape() || selection::clear(),
+        // full screen takes its Esc itself); TICKETS-23: then a task's
+        // sheet; ACT-3: then the selection.
+        Some("app.escape") => crate::questions::escape() || annotate::escape() || present::escape() || crate::tasks::escape() || selection::clear(),
         // The first key of a `g …` sequence: swallowed, the table armed.
         Some(bindings::PREFIX) => true,
         Some("go.board") => {

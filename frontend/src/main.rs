@@ -358,6 +358,7 @@ mod signin;
 mod members_page;
 mod pair_page;
 mod tags;
+mod tasks;
 mod theme;
 #[cfg(test)]
 mod tokens_lint;
@@ -1590,29 +1591,19 @@ fn ticket_view(
     // ticket that genuinely has no body. A memo, so a change to the body
     // re-renders the body and not this choice (COMP-4: a framed body's frame
     // re-renders in place, without a flash).
-    let body_state = Memo::new(move |_| {
-        body_raw.with(|b| match b.as_deref() {
-            None => None,
-            Some(raw) => Some(!raw.trim().is_empty()),
-        })
-    });
     // INPUT-4: the body is this ticket's stored one — a click in its frame
     // may answer this ticket's inputs, and only them.
-    let body_ticket = ticket.with_untracked(|t| t.id.clone());
-    let body = move || match body_state.get() {
-        None => view! { <p class="loading">"loading body…"</p> }.into_any(),
-        Some(false) => view! { <p class="none">"(no body)"</p> }.into_any(),
-        // AGS-14: the frontmatter folded, the markdown through `md.rs`, its
-        // mermaid placeholders handed to the renderer once the div is in the
-        // DOM — a body re-render makes a new div (and a new hook), so
-        // navigation never re-renders a stale one. WAVE-11: and each
-        // `{wave: ID}` placed from the named ticket's row (`refs`), live as
-        // its placement moves; a body with none renders as it always did.
-        // COMP-4: a body that holds HTML renders in a sandboxed frame.
-        Some(true) => view! {
-            <notes::BodyView body=Signal::derive(move || body_raw.get().unwrap_or_default()) refs=Some(refs) ticket=Some(body_ticket.to_string()) title=Signal::derive(move || ticket.with(|t| t.title.clone())) />
-        }
-        .into_any(),
+    let body_ticket = ticket.with_untracked(|t| t.id.to_string());
+    // AGS-14: the frontmatter folded, the markdown through `md.rs`, its
+    // mermaid placeholders handed to the renderer once the div is in the
+    // DOM — a body re-render makes a new div (and a new hook), so
+    // navigation never re-renders a stale one. WAVE-11: and each
+    // `{wave: ID}` placed from the named ticket's row (`refs`), live as
+    // its placement moves; a body with none renders as it always did.
+    // COMP-4: a body that holds HTML renders in a sandboxed frame.
+    // TICKETS-23: through the unit a task's sheet draws with too.
+    let body = view! {
+        <notes::TicketBody body=body_raw refs=Some(refs) ticket=body_ticket title=Signal::derive(move || ticket.with(|t| t.title.clone())) />
     };
 
     // The id never changes for a row's lifetime (see `Row`), so the
@@ -2200,6 +2191,8 @@ fn TicketPage(
     };
 
     let id_view = id.clone();
+    // TICKETS-23: the sheet's frame is stamped with the ticket's own id.
+    let sheet_ticket = Memo::new(move |_| ticket.get().map(|t| t.with(|x| x.id.to_string())));
     view! {
         // FILTER-22: a tag on the ticket page builds the global filter — the
         // page has no filter of its own.
@@ -2235,6 +2228,9 @@ fn TicketPage(
                 }
             }}
         </div>
+        // TICKETS-23: a task's sheet, over the page and outside it — the
+        // page's body, read by the task's id, through the page's renderer.
+        {move || sheet_ticket.get().map(|ticket| view! { <tasks::TaskSheet ticket body refs /> })}
     }
 }
 

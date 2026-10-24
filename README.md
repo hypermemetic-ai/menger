@@ -2061,6 +2061,22 @@ source, open.
   unframed note. COMP-14: a ticket route may name a section instead —
   `#/ticket/<id>?field=<name>` or `?anchor=<id>` — which the frame showing
   that ticket scrolls to and flashes.
+- **`menger.task.open(id)`** (SDK 2.8, TICKETS-23) opens the task `id`
+  of the ticket page's body in the **task sheet**: a side sheet at 1440, a
+  bottom sheet on a phone (≤ 820), over the page and outside
+  `#ticket-page`. The sheet draws the task's direction as a full ticket
+  body with the page's own renderer (`notes::TicketBody`), so markdown,
+  code, house components, mockups, `media:` images, chips and inputs all
+  work there. The host reads that source from the stored body
+  (`tickets_api::tasks::find`), never from the frame's DOM. The SDK sends
+  the call only inside a gesture, and the host takes it only from the
+  ticket page's own body frame. The route is `#/ticket/T?task=ID`; Esc, the
+  scrim or a swipe down closes it, and ‹ › step through the body's tasks.
+  An input inside a task is the ticket's. Sheets nest one level:
+  `menger.task.sheet` is the open task's id inside the sheet's frame, and
+  there `open` returns `false`, so a task inside a task folds in place.
+  `m-task`'s row calls it. `scripts/task-sheet-check.sh` checks the sheet
+  on a throwaway.
 
 **Links** (MENGER-14). Every link people write — a markdown link, a bare
 `http(s)://` URL (autolinked by md.rs, as GitHub does), an `<a href>` in an

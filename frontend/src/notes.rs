@@ -237,6 +237,37 @@ pub(crate) fn BodyView(
     }
 }
 
+/// TICKETS-23: a ticket's stored body as the ticket page draws it — not
+/// fetched yet, none, or [`BodyView`] — the one unit the ticket page and a
+/// task's sheet (src/tasks.rs) both call, so a task's direction is drawn by
+/// the page's renderer whole. `body` is `None` until it arrives; `ticket`
+/// is the ticket it is the stored body of (its inputs answer there);
+/// `title` makes it the page's own box (`z`, `?view=full`).
+#[component]
+pub(crate) fn TicketBody(
+    #[prop(into)] body: Signal<Option<String>>,
+    refs: Option<Refs>,
+    ticket: String,
+    #[prop(optional)] title: Option<Signal<String>>,
+) -> impl IntoView {
+    // MFE-9: a memo, so a change to the body re-renders the body and not
+    // this choice (COMP-4: a framed body's frame re-renders in place,
+    // without a flash).
+    let state = Memo::new(move |_| body.with(|b| b.as_deref().map(|raw| !raw.trim().is_empty())));
+    move || match state.get() {
+        None => view! { <p class="loading">"loading body…"</p> }.into_any(),
+        Some(false) => view! { <p class="none">"(no body)"</p> }.into_any(),
+        Some(true) => {
+            let body = Signal::derive(move || body.get().unwrap_or_default());
+            let ticket = Some(ticket.clone());
+            match title {
+                Some(title) => view! { <BodyView body refs ticket title /> }.into_any(),
+                None => view! { <BodyView body refs ticket /> }.into_any(),
+            }
+        }
+    }
+}
+
 /// A framed body: the frontmatter fold, then the frame. Reads `body` only
 /// inside its own reactive children, so the caller's closure re-runs only
 /// when the body stops being framed. MENGER-15: a whole document is the

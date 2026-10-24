@@ -63,6 +63,10 @@ pub mod mockups;
 /// body, and an answer's value checked against them. Wasm-safe, like
 /// `fields`, whose scan it reads with.
 pub mod inputs;
+/// TICKETS-23: a body's tasks — `<m-task id>` blocks (TICKETS-10) — read
+/// as its inputs are, each with its direction as markdown: the app opens one
+/// in a sheet from the stored body. Wasm-safe, like `inputs`.
+pub mod tasks;
 /// FILTER-10: the filter language — manifest's view syntax with menger's
 /// fields: parse, format, the lens's `and`, contradiction, and the
 /// reference evaluator. Wasm-safe, with no feature gate: the server
