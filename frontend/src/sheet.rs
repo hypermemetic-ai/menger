@@ -391,6 +391,13 @@ fn lock(on: bool) {
     }
 }
 
+/// TICKETS-23: a layer that holds the page at every width (the task sheet,
+/// a side sheet above 820): the document locked and its scroll held, as a
+/// phone sheet holds it — counted with them.
+pub(crate) fn hold_page(on: bool) {
+    lock(on);
+}
+
 /// Once, at the app's start: the listeners every sheet's gesture runs on.
 pub(crate) fn install() {
     let w = dom::window();

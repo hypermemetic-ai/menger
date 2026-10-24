@@ -229,8 +229,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, held, highlight
 /// decision whose options hold mockups draws its chosen option first.
 /// COMMENT-10's 2.5 draws a body's `media:` images: `menger:media { hash }`
 /// asked of the host, answered held to the frame's `data-media` ticket;
-/// `menger:zoom` shows one full screen.
-pub(crate) const SDK_VERSION: &str = "2.7.0";
+/// `menger:zoom` shows one full screen. TICKETS-23's 2.8 adds `menger.task`:
+/// `open(id)` posts `menger:task { id }` (a task's sheet, src/tasks.rs), and
+/// `task` in the init block tells a sheet's frame it is one.
+pub(crate) const SDK_VERSION: &str = "2.8.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -471,6 +473,10 @@ pub(crate) struct Shell<'a> {
     /// COMP-14: a cited window's frame — the section of the body it shows
     /// (the SDK hides the rest); `None` for every other frame.
     pub(crate) cite: Option<&'a cite::Section>,
+    /// TICKETS-23: a task's sheet's frame — the task it shows
+    /// (`menger.task.sheet`): its `m-task` rows fold in place and open no
+    /// second sheet. `None` for every other frame.
+    pub(crate) task: Option<&'a str>,
     /// MENGER-15: the preferences emulated — a mockup's (the page shim is
     /// inlined), or a whole document's (always inlined); `None` in any
     /// other frame, which gets no shim.
@@ -534,6 +540,8 @@ pub(crate) fn init_json(shell: &Shell) -> String {
             cite::Section::Field(n) => serde_json::json!({ "field": n }),
             cite::Section::Id(n) => serde_json::json!({ "anchor": n }),
         }),
+        // TICKETS-23: a task's sheet's frame opens no second sheet.
+        "task": shell.task,
         // MENGER-15: what the page shim emulates (a mockup's frames).
         "emulate": shell.emulate.map(Emulate::json),
         // DESIGN-40: the Motion setting, and a re-render's "already shown".
@@ -745,6 +753,9 @@ pub(crate) enum Msg {
     /// APP-83: a field that takes typing gained (`on`) or lost focus in the
     /// body — the keyboard's to know, since the app sees only the iframe.
     Field,
+    /// TICKETS-23: an `m-task`'s row asks for its sheet (`menger.task.open`)
+    /// — its `id`, read from the ticket the host stamped on the frame.
+    Task,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -775,6 +786,7 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:media" => Some(Msg::Media),
         "menger:zoom" => Some(Msg::Zoom),
         "menger:field" => Some(Msg::Field),
+        "menger:task" => Some(Msg::Task),
         "menger:extent" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Extent { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32 })
@@ -1636,9 +1648,10 @@ fn on_message(ev: web_sys::MessageEvent) {
                         }
                     }
                     // What annotation mode has open first, then full screen.
+                    // TICKETS-23: then a task's sheet.
                     Some("app.escape") => {
-                        if !annotate::escape() {
-                            present::escape();
+                        if !annotate::escape() && !present::escape() {
+                            crate::tasks::escape();
                         }
                     }
                     Some("annotate.toggle") => annotate::frame_toggle(),
@@ -1770,6 +1783,22 @@ fn on_message(ev: web_sys::MessageEvent) {
         Some(Msg::Extent { height }) => {
             if frame.has_attribute("data-fixed") {
                 present::extent(&frame, height);
+            }
+        }
+        // TICKETS-23: a task's row asks for its sheet — only the ticket
+        // page's own body frame, for the ticket the host stamped on it.
+        Some(Msg::Task) => {
+            let body = frame.closest("#ticket-page").ok().flatten().is_some()
+                && !frame.has_attribute("data-cite-key")
+                && !frame.has_attribute("data-page")
+                && !annotate::is_on()
+                // A viewer's own gesture in this frame: a body's script
+                // cannot cover the page with a sheet.
+                && gesture::live_in(&frame);
+            let ticket = frame.get_attribute("data-ticket").filter(|t| !t.is_empty());
+            if let (true, Some(ticket), Some(id)) = (body, ticket, field("id").and_then(|v| v.as_string())) {
+                present::escape();
+                crate::tasks::open_from_frame(&ticket, &id);
             }
         }
         Some(Msg::Scrolled) => annotate::frame_changed(&channel),
@@ -2089,6 +2118,8 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     let motion = host_motion();
     let typing = host_typing();
     let entered = container.query_selector(":scope > iframe:not([data-state=\"pending\"])").ok().flatten().is_some();
+    // TICKETS-23: a frame inside a task's sheet is told so (one level).
+    let task = crate::tasks::sheet_of(container);
     // ACCESS-26: the registry as this frame is handed it — what its ticket
     // could show: its reach's, and what its own markup names.
     let names = held::names_in(body_html);
@@ -2115,6 +2146,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
             components: components.as_deref(),
             ticket: init_ticket,
             cite: cite.map(|(section, _, _)| section),
+            task: task.as_deref(),
             emulate,
         },
     );
@@ -2299,7 +2331,7 @@ mod tests {
     fn the_csp_comes_first_and_closes_connections_and_forms() {
         assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f9", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: None, ticket: Some("A-1"), cite: None, emulate: None };
+        let shell = Shell { channel: "f9", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: None, ticket: Some("A-1"), cite: None, task: None, emulate: None };
         let doc = srcdoc("<script>fetch('https://x')</script><form action=\"https://x\"></form>", &shell);
         let head = "<!doctype html><html lang=\"en\" data-theme=\"light\"><head>";
         assert!(
@@ -2343,7 +2375,7 @@ mod tests {
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", highlight_url: "http://h:1/app/vendor/hl.js", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, typing: Typing::Normal, entered: true, components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", highlight_url: "http://h:1/app/vendor/hl.js", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, typing: Typing::Normal, entered: true, components: None, ticket: None, cite: None, task: None, emulate: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
         assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta http-equiv=\"Content-Security-Policy\""), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
@@ -2362,7 +2394,7 @@ mod tests {
     #[test]
     fn a_frame_declares_the_house_faces_and_wears_the_motion_setting() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, typing: Typing::Normal, entered: true, components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, typing: Typing::Normal, entered: true, components: None, ticket: None, cite: None, task: None, emulate: None };
         let doc = srcdoc("<p>x</p>", &shell);
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
         assert!(at("<base target=\"_blank\">") < at("<style id=\"menger-fonts\">"));
@@ -2391,7 +2423,7 @@ mod tests {
     #[test]
     fn a_frame_is_told_the_typed_text_setting() {
         let tokens = shell_tokens();
-        let shell = |typing| Shell { channel: "f8", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Calm, typing, entered: false, components: None, ticket: None, cite: None, emulate: None };
+        let shell = |typing| Shell { channel: "f8", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Calm, typing, entered: false, components: None, ticket: None, cite: None, task: None, emulate: None };
         let v: serde_json::Value = serde_json::from_str(&init_json(&shell(Typing::Fast))).unwrap();
         assert_eq!((v["motion"].as_str(), v["typing"].as_str()), (Some("calm"), Some("fast")));
         for t in Typing::ALL {
@@ -2406,7 +2438,7 @@ mod tests {
     #[test]
     fn the_init_block_is_json_that_cannot_close_its_script() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f1", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", highlight_url: "http://h/hl.js", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f1", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", highlight_url: "http://h/hl.js", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: None, ticket: None, cite: None, task: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2451,6 +2483,7 @@ mod tests {
             components: None,
             ticket: Some("AUTH-10"),
             cite: Some(&field),
+            task: None,
             emulate: None,
         };
         let doc = srcdoc("<m-field data-field=\"findings\">x</m-field>", &shell);
@@ -2466,6 +2499,10 @@ mod tests {
         assert_eq!(v["cite"], serde_json::json!({ "anchor": "t" }));
         let v: serde_json::Value = serde_json::from_str(&init_json(&Shell { cite: None, ..shell })).unwrap();
         assert!(v["cite"].is_null());
+        // TICKETS-23: a task's sheet's frame is told which task it shows.
+        assert!(v["task"].is_null());
+        let v: serde_json::Value = serde_json::from_str(&init_json(&Shell { task: Some("sheet-lock"), ..shell })).unwrap();
+        assert_eq!(v["task"], "sheet-lock");
     }
 
     /// COMP-14: in the SDK, `<m-cite>` is built in and defined before the
@@ -2534,7 +2571,7 @@ mod tests {
             Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()], docs: None, preview: vec![] },
             Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()], docs: None, preview: vec![] },
         ];
-        let shell = Shell { channel: "f2", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: Some(&components), ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f2", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: Some(&components), ticket: None, cite: None, task: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2593,6 +2630,7 @@ mod tests {
         assert_eq!(parse_msg("menger:extent", Some(f64::NAN), None), None);
         assert_eq!(parse_msg("menger:extent", None, None), None);
         assert_eq!(parse_msg("menger:call", None, None), Some(Msg::Call));
+        assert_eq!(parse_msg("menger:task", None, None), Some(Msg::Task), "TICKETS-23: a task's row asks for its sheet");
         assert_eq!(parse_msg("menger:media", None, None), Some(Msg::Media));
         assert_eq!(parse_msg("menger:zoom", None, None), Some(Msg::Zoom));
         assert_eq!(parse_msg("menger:navigate", None, None), Some(Msg::Navigate));
@@ -2645,10 +2683,19 @@ mod tests {
         let dts = include_str!("../sdk/menger.d.ts");
         assert!(dts.contains("on(kind: 'theme', listener: (theme: MengerTheme) => void): () => void;") && dts.contains("readonly theme: MengerTheme;"), "typed");
         assert!(
-            SDK_JS.contains("var api = { version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input };")
+            SDK_JS.contains("var api = { version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input, task: task };")
                 && SDK_JS.contains("api = Object.freeze(api);"),
-            "window.menger = {{ version, tickets, call, on, navigate, input, theme }}, frozen"
+            "window.menger = {{ version, tickets, call, on, navigate, input, task, theme }}, frozen"
         );
+        // TICKETS-23 (2.8): `menger.task` — open a task's sheet, refused
+        // where none opens (no ticket, a message, a cited window, a sheet).
+        assert!(SDK_JS.contains("var task = Object.freeze({ sheet: taskSheet, open: openTask });"), "menger.task, frozen");
+        assert!(
+            SDK_JS.contains(r#"if (!ticket || /^message:/.test(ticket) || citeTarget || taskSheet || !activated()) return false;"#)
+                && SDK_JS.contains(r#"post("menger:task", { id: id.trim() });"#),
+            "menger.task.open posts only where a sheet opens, inside a gesture"
+        );
+        assert!(dts.contains("readonly task: { readonly sheet: string | null; open(id: string): boolean };"), "typed");
         // INPUT-4: `menger.input` is frozen too, with its writes (INPUT-9: clear).
         assert!(
             SDK_JS.contains("var input = Object.freeze({ ticket: ticket, submit: submit, clear: clear, displayOnly: !!citeTarget });"),
@@ -2824,7 +2871,7 @@ mod tests {
     }
 
     fn page_shell(tokens: &[(String, String)], emulate: Option<Emulate>) -> Shell<'_> {
-        Shell { channel: "f5", scheme: Scheme::Dark, theme: "default", tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: None, ticket: Some("MENGER-16"), cite: None, emulate }
+        Shell { channel: "f5", scheme: Scheme::Dark, theme: "default", tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: None, ticket: Some("MENGER-16"), cite: None, task: None, emulate }
     }
 
     /// MENGER-15: a whole document renders as itself — its own head, styles

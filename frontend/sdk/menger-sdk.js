@@ -310,6 +310,12 @@
  *                 keyboard path in the mode: `start`, `next`, `prev`, `in`,
  *                 `out` (answered as menger:hover) or `pick` (as
  *                 menger:pick)
+ *   frame → host  menger:task { id }                     (2.8, TICKETS-23)
+ *                 an `m-task`'s row asks for its sheet (`menger.task.open`,
+ *                 inside a gesture): the host opens the ticket's task `id`,
+ *                 read from the stored body of the ticket it stamped on this
+ *                 frame, drawn by the ticket page's renderer; init `task`
+ *                 (a task's sheet's frame: its id) makes open() refuse
  *   frame → host  menger:field { on }                     (2.6, APP-83) a
  *                 field that takes typing gained (`on: true`) or lost focus
  *                 in this document, shadow roots included — the host sees
@@ -350,7 +356,7 @@
  *                 n-th item of the last menger:sections, once
  *
  * The init block (#menger-init, JSON) carries
- * `{ channel, version, scheme, theme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite, motion, entered, typing }`
+ * `{ channel, version, scheme, theme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite, task, motion, entered, typing }`
  * — (1.18) `motion` the app's Motion setting and `entered` true on a
  * re-render, worn as html[data-motion] and html[data-entered]; (1.19)
  * `typing` the app's Typed text setting, worn as html[data-typing]; and
@@ -366,7 +372,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "2.7.0";
+  var VERSION = "2.8.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -1285,9 +1291,26 @@
 
   var input = Object.freeze({ ticket: ticket, submit: submit, clear: clear, displayOnly: !!citeTarget });
 
+  // -- menger.task: a task's sheet (TICKETS-23, 2.8) -------------------------
+  // `open(id)` asks the host to open the ticket's task `id` (an `<m-task
+  // id>` of its stored body) in a sheet drawn by the ticket page's own
+  // renderer — `menger:task { id }`, only inside a viewer's gesture — and
+  // says whether it asked: false where no sheet opens (no ticket: a draft's
+  // preview, a help card; a chat message's frame; a cited window; a task's
+  // own sheet, `sheet` its id: one level), and the row folds in place.
+  // The host reads the task out of the stored body, never out of this frame.
+  var taskSheet = typeof init.task === "string" && init.task ? init.task : null;
+  function openTask(id) {
+    if (typeof id !== "string" || !id.trim()) return false;
+    if (!ticket || /^message:/.test(ticket) || citeTarget || taskSheet || !activated()) return false;
+    post("menger:task", { id: id.trim() });
+    return true;
+  }
+  var task = Object.freeze({ sheet: taskSheet, open: openTask });
+
   // -- window.menger ------------------------------------------------------
 
-  var api = { version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input };
+  var api = { version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input, task: task };
   // THEME-7: what the frame wears now — a fresh copy each read.
   Object.defineProperty(api, "theme", { enumerable: true, get: function () { return worn(); } });
   // DESIGN-40 (1.18): what moves now — "full", "calm" or "none".

@@ -6184,6 +6184,51 @@
     #deploy-page .sheet { top: auto; left: 0; bottom: var(--pbar-h, 0px); width: auto; max-height: 78dvh; border-left: 0; border-top: var(--border) solid var(--tree-line); border-radius: var(--radius-2xl) var(--radius-2xl) 0 0; transform: translateY(105%); box-shadow: 0 -6px 24px var(--shadow); }
     #deploy-page .sheet .sfoot { padding-bottom: calc(10px + var(--safe-bottom)); }
   }
+  /* ── TICKETS-23: a task's sheet (src/tasks.rs) — an m-task's direction as
+     a full ticket body, through the ticket page's own renderer. A side
+     sheet beside the page; a bottom sheet on a phone (below), its handle
+     and head dragging it down (src/sheet.rs). The page behind is held. */
+  .tsheet-scrim { position: fixed; inset: 0; z-index: 946; background: var(--scrim); animation: menger-fade-in .16s ease-out; }
+  .tsheet {
+    position: fixed; z-index: 947; top: 0; right: 0; bottom: 0; width: min(820px, 64vw); box-sizing: border-box;
+    display: flex; flex-direction: column; min-width: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    border-left: var(--border) solid var(--line); box-shadow: -10px 0 30px var(--shadow);
+    padding: var(--safe-top) var(--safe-right) var(--safe-bottom) 0; animation: menger-tsheet-in .22s cubic-bezier(.2, .9, .3, 1);
+  }
+  .tsheet .tgrab { display: none; }
+  .tshead {
+    display: flex; align-items: center; gap: 8px; flex: none; min-width: 0; padding: 10px 14px 10px 18px;
+    background: var(--panel); border-bottom: var(--border) solid var(--line); font-size: calc(12px * var(--text-scale));
+  }
+  .tshead .tsid { font-family: var(--mono); color: var(--accent); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tshead .st { flex: none; padding: 1px 7px; border-radius: var(--radius-pill); background: var(--st-bg); color: var(--st-fg); font-size: calc(11px * var(--text-scale)); white-space: nowrap; }
+  .tshead .tsnav { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; flex: none; color: var(--muted); font-family: var(--mono); }
+  .tshead .tsplace { padding: 0 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tshead button { font: inherit; color: var(--muted); background: none; border: var(--border) solid transparent; border-radius: var(--radius-md); cursor: pointer; min-width: 32px; min-height: 32px; font-size: calc(16px * var(--text-scale)); line-height: 1; }
+  .tshead button:hover:not(:disabled) { color: var(--ink); background: var(--hover); }
+  .tshead button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .tshead button:disabled { opacity: .35; cursor: default; }
+  .tshead .tsx { flex: none; font-size: calc(20px * var(--text-scale)); }
+  .tsscroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 22px 28px; }
+  .tsscroll .tstitle { margin: 0 0 8px; font-family: var(--font-display); font-size: calc(19px * var(--text-scale)); line-height: 1.3; overflow-wrap: anywhere; }
+  .tsscroll .tstitle.missing { color: var(--muted); }
+  .tsparams { display: flex; flex-wrap: wrap; gap: 5px; margin: 0 0 14px; }
+  .tsparams:empty { display: none; }
+  .tsp { display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; padding: 2px 7px; border: var(--border) solid var(--chip-line); border-radius: var(--radius-md); background: var(--chip-bg); color: var(--chip-fg); font: calc(11px * var(--text-scale))/1.45 var(--mono); overflow-wrap: anywhere; }
+  .tsp b { font: var(--weight-medium) calc(10px * var(--text-scale))/1.45 var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .tsbody { min-width: 0; }
+  @keyframes menger-tsheet-in { from { transform: translateX(24px); opacity: 0; } }
+  @media (max-width: 820px) {
+    .tsheet {
+      top: auto; left: 0; width: auto; height: 88vh; height: 88dvh; padding: 0 var(--safe-right) var(--safe-bottom) var(--safe-left);
+      border-left: 0; border-top: var(--border) solid var(--tree-line); border-radius: var(--radius-device) var(--radius-device) 0 0;
+      box-shadow: 0 -8px 26px var(--shadow); animation-name: menger-tsheet-up;
+    }
+    .tsheet .tgrab { display: block; flex: none; width: 36px; height: 4px; border-radius: var(--radius-xs); background: var(--tree-line); margin: 8px auto 0; }
+    .tshead { padding: 4px 8px 8px 16px; background: var(--bg); border-radius: var(--radius-device) var(--radius-device) 0 0; touch-action: none; }
+    .tsscroll { padding: 12px 16px 24px; }
+  }
+  @keyframes menger-tsheet-up { from { transform: translateY(40%); opacity: .4; } }
 </style>
 </head>
 <body>
