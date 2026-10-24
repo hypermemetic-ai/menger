@@ -324,7 +324,7 @@ pub(crate) fn lens_hash(hash: &str, g: Option<&str>, n: Option<&str>, surface: O
 /// comments page, which has filters of its own; (DEPLOY-13) the deployments
 /// page, whose waiting list is its own clause.
 pub(crate) fn applies(route: &Route) -> bool {
-    !matches!(route, Route::Components(_) | Route::Settings | Route::Comments | Route::Deployments(_) | Route::Deploy(_))
+    !matches!(route, Route::Components(_) | Route::Settings | Route::Comments | Route::Deployments(_) | Route::Deploy(_) | Route::Epics)
 }
 
 // ---------------------------------------------------------------------

@@ -13,7 +13,7 @@
 //! Open · Open in new tab · Chat ▸ · Wave board for P · Waves to X · Wave board · Copy code (one ticket)
 //! Copy codes                                                                         (a selection)
 //! ─────────
-//! Set status ▸ · Set kind ▸ · Set severity ▸ · Labels ▸ · Assign to… · Move under… · Blocked by…
+//! Set status ▸ · Set kind ▸ · Set severity ▸ · Labels ▸ · Assign to… · Move under… · Move to epic… · Blocked by…
 //! Unblock ▸ (when one waits on something) · Rename… · Link commits…                   (one ticket)
 //! ─────────
 //! the chip's filter items (a status, kind, severity or label chip) · the ticket's
@@ -295,6 +295,8 @@ pub(crate) enum Entry {
     Filter(tags::Item),
     /// Delete… — how many.
     Delete(usize),
+    /// ORG-23: Move to epic… — how many.
+    MoveEpic(usize),
     /// CHAT-5: Chat (or Chat ▸).
     Chat(ChatItem),
     Rule,
@@ -375,7 +377,7 @@ pub(crate) fn entries(f: &Facts) -> Vec<Entry> {
             updates.push(Entry::Sub(Sub::Status));
         }
         updates.extend([Entry::Sub(Sub::Kind), Entry::Sub(Sub::Severity), Entry::Sub(Sub::Labels), Entry::Form(Form::Assign)]);
-        updates.extend([Entry::Form(Form::MoveUnder), Entry::Form(Form::BlockedBy)]);
+        updates.extend([Entry::Form(Form::MoveUnder), Entry::MoveEpic(f.ids.len()), Entry::Form(Form::BlockedBy)]);
         if f.rows.iter().any(|r| !r.blocked_by.is_empty()) {
             updates.push(Entry::Sub(Sub::Unblock));
         }
@@ -856,6 +858,7 @@ mod tests {
                 Entry::Form(f) => f.words().into(),
                 Entry::Filter(i) => i.words.clone(),
                 Entry::Delete(n) => delete_words(*n),
+                Entry::MoveEpic(_) => "Move to epic…".into(),
                 Entry::Chat(c) => match &c.does {
                     ChatDoes::Choose(_) => format!("Chat ▸ {}", c.unread),
                     ChatDoes::Refused(why) => format!("Chat (off: {why})"),
@@ -878,7 +881,7 @@ mod tests {
             said(&entries(&facts(&i, &rows, ALL))),
             [
                 "Open", "Open in new tab", "Wave board for DEMAND-1", "Waves to DEMAND-4", "Copy code", "—",
-                "Set status ▸", "Set kind ▸", "Set severity ▸", "Labels ▸", "Assign to…", "Move under…", "Blocked by…", "Unblock ▸", "Rename…", "Link commits…", "—",
+                "Set status ▸", "Set kind ▸", "Set severity ▸", "Labels ▸", "Assign to…", "Move under…", "Move to epic…", "Blocked by…", "Unblock ▸", "Rename…", "Link commits…", "—",
                 "Filter DEMAND", "Filter under DEMAND-4", "Add DEMAND to the filter", "Build a filter from DEMAND…", "—",
                 "Delete…",
             ]
@@ -898,7 +901,7 @@ mod tests {
             said(&es),
             [
                 "Copy codes", "—",
-                "Set status ▸", "Set kind ▸", "Set severity ▸", "Labels ▸", "Assign to…", "Move under…", "Blocked by…", "—",
+                "Set status ▸", "Set kind ▸", "Set severity ▸", "Labels ▸", "Assign to…", "Move under…", "Move to epic…", "Blocked by…", "—",
                 "Filter DEMAND, MNG", "Filter under each of 3", "Add DEMAND, MNG to the filter", "Build a filter from DEMAND, MNG…", "—",
                 "Delete 3…",
             ]

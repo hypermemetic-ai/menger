@@ -78,6 +78,9 @@ pub struct Reshortcode {
     /// `to` and `parent` are read (a short form fitting two refused, as
     /// ORG-4's resolver does); `None`: every one.
     pub orgs: Option<Vec<crate::address::OrgId>>,
+    /// ORG-23: answer the moves it would make — each old key and the key it
+    /// would take, in order — and write nothing (the app's preview).
+    pub dry_run: bool,
 }
 
 /// ACT-6: a `reshortcode`'s answer — each move in the order numbered, and
@@ -510,7 +513,12 @@ fn to_era(cache: &Cache, to: &Address) -> Result<Option<i64>, StoreError> {
     let Some(org) = &to.org else { return Ok(None) };
     let row = r.org_row(org).ok_or_else(|| StoreError::NoOrg(org.to_string()))?;
     match &to.era {
-        Some(name) => r.era_named(row, name).map(Some).ok_or_else(|| refuse(format!("to: no epic `{name}` in {org} — nothing written"))),
+        Some(name) => {
+            let era = r.era_named(row, name).ok_or_else(|| refuse(format!("to: no epic `{name}` in {org} — nothing written")))?;
+            // ORG-23: nothing moves into an archived epic.
+            r.live_era(era, "moving into it")?;
+            Ok(Some(era))
+        }
         None => Ok(r.first_era(row)),
     }
 }
@@ -644,6 +652,10 @@ impl Store {
         // ACCESS-11: an editor's permit for every ticket the move names.
         let permits = may(&p.asked).map_err(StoreError::Invalid)?;
         writs::covers_exactly(&self.tickets.read().expect("store lock poisoned"), &permits, &p.asked)?;
+        if ask.dry_run {
+            let moves = p.steps.iter().map(|s| ShortcodeMove { from: s.row.id.to_string(), to: s.key.clone() }).collect();
+            return Ok(Reshortcoded { moves, tickets: Vec::new() });
+        }
         self.in_one_write(serial, move |conn, cache, unders| {
             super::revisions::act(&act);
             Self::reshortcoding(conn, cache, unders, p, act)
@@ -706,6 +718,7 @@ impl Store {
                 created_unix: now,
                 updated_unix: now,
                 moved_from: Vec::new(),
+                epic_archived: None,
             };
             db::upsert(&txn, &t)?;
             search::put(&txn, &t.id, &t.title, &t.body)?;

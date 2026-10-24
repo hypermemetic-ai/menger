@@ -2950,7 +2950,7 @@ lens filters reads within it (`under acme:` ANDed into each level's
 effective filter: the board, the nav, the wave boards, the inputs page, the
 palette).
 
-### Epics (ORG-13)
+### Epics (ORG-13, ORG-23)
 
 An **epic** is a level of the organization that holds shortcodes:
 organization → epic → shortcode → ticket. A new epic starts empty, and a
@@ -2963,13 +2963,35 @@ addresses name no epic (`hypermemetic:MENGER/ORG-3`), every other epic's do
 (`eras`, `era_choices`, `shortcodes.era`): `epic` already names a
 shortcode's letters and a scope's status.
 
-- **The `epics` activation**: `list`, `get --name`, `current`, `switch
-  --name` (a viewer's own setting: the epic it is in), and — admin on the
-  organization — `create`, `rename`, `delete` (only empty, never the first).
-  Each takes `--org` (default: your own).
-- **Which epic you are in**: your `switch`, else the organization's newest.
-  A short form (`MENGER-1`) resolves in it first, then as before (a pin,
-  then every match); an address with an org and no epic names the first.
+- **The `epics` activation**: `list` (`--archived true` the archived too),
+  `get --name`, `current` (with `moved`: a move an archive made for you that
+  you have not dismissed), `switch --name` (a viewer's own setting: the epic
+  it is in), `dismiss` (the move's notice, gone on every device) and
+  `watch` (`epic_changed` for a create, rename, archive, restore or default
+  move in your organizations; `moved` to the one an archive moved) — and,
+  admin on the organization, `create`, `rename` (the old name stays an
+  alias: filters, addresses and `switch` that name it still work),
+  `delete` (only empty, never the first), `set_default`, `archive` and
+  `restore`. Each takes `--org` (default: your own). `epics list` says per
+  epic `default`, `members_on` (the principals reading in it) and
+  `archived { at_unix, by }`.
+- **Which epic you are in** (ORG-23): your `switch`, else the
+  organization's **default** — `genesis` until an admin moves it
+  (`set_default`). Creating an epic moves nobody. A short form (`MENGER-1`)
+  resolves in your epic first, then as before (a pin, then every match); an
+  address with an org and no epic names the first.
+- **Archive** (ORG-23, admin): `epics archive --name spring` — one write:
+  the epic is marked archived, everyone on it (by choice, or by default)
+  moves to the **next newer** live epic, or the next older when it was the
+  newest, the default moves the same way when it was the default, and each
+  person moved is told once (`current`'s `moved`, `watch`'s `moved`; the
+  app's notice). `--dry-run true` answers the same `archived { moved, to,
+  tickets }` and writes nothing. The last live epic is refused, in band.
+  Nothing switches to, is made in or moves into an archived epic. Its
+  tickets leave every view — `epic any` is the live epics — unless the
+  filter names it (`epic spring`) or `archived`; `get` and links still
+  answer them, with `epic_archived { name, at_unix, by }`. `restore` brings
+  it back and moves nobody back.
 - **Reads**: once an organization holds two epics, every read that takes a
   filter — and `list`, `counts`, `work ready`, `search`, `nav groups` /
   `extents` without one — answers your epic unless the filter names one:
@@ -2980,9 +3002,21 @@ shortcode's letters and a scope's status.
   (`--new-scope TITLE` mints its root at the epic's top first, no `--parent`
   needed), `--with-children` on a root moves its whole shortcode keeping
   its numbers, and `tickets create --epic hypermemetic:fresh:KILN`. Old ids
-  stay pinned to the moved tickets.
-- **The app**: the nav's head shows the epic with a switcher, when there are
-  two or more; switching reloads the page into it.
+  stay pinned to the moved tickets. `--dry-run true` answers the moves (old
+  id → new key) and writes nothing.
+- **The app** (ORG-23): the nav's head (and a phone's head line) always
+  shows your epic, *yours*: its list has every live epic (*· default*, each
+  with its tickets), **+ new epic…** for an admin and **manage epics →**;
+  on a phone it is a sheet. Choosing one reloads the page into it, and a
+  toast says only you moved. `#/epics` is the table — tickets, shortcodes,
+  created, people — with rename, make default and archive (asked first,
+  from the dry run: who moves where, how many tickets leave the views), the
+  archived folded under it with restore. **Move to epic…** in a ticket's
+  or a selection's menu previews the new keys (`reshortcode --dry-run`)
+  before it moves them. A move an archive made is a notice over every page
+  until *got it*; a ticket in an archived epic says so on its page. A
+  namesake's key shows as its letters and number (`MENGER-3`), and
+  `epic:CODE-N` where the epic is not yours.
 
 ```sh
 synapse -P 4455 menger epics create --name fresh
@@ -2990,6 +3024,12 @@ synapse -P 4455 menger tickets create --epic hypermemetic:fresh:MENGER --title "
 synapse -P 4455 menger tickets reshortcode --ids MENGER-40 --to hypermemetic:fresh:MENGER
 synapse -P 4455 menger epics switch --name genesis
 synapse -P 4455 menger tickets list --filter 'epic any and kind build' --summary true
+synapse -P 4455 menger epics archive --name spring --dry-run true    # who moves where; nothing written
+synapse -P 4455 menger epics archive --name spring
+synapse -P 4455 menger epics list --archived true
+synapse -P 4455 menger epics restore --name spring                   # nobody moves back
+synapse -P 4455 menger epics set_default --name fresh
+synapse -P 4455 menger tickets list --filter 'epic spring' --summary true   # an archived epic, by name
 ```
 
 ### Search (SEARCH-2)

@@ -1,4 +1,4 @@
-import type { WatchEnd } from '../chats/types';
+import type { WatchEnd } from '../epics/types';
 /** Everything the levels say for one ticket, the reader aside — what
 [`resolve`] decides from. */
 export interface Levels {

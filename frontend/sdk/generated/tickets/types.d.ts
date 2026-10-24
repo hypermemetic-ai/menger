@@ -1,4 +1,5 @@
-import type { Answer, Archived, Code, CommitRef, InputHistoryEntry, InputId, InputKind, InputOption, InputState, Label, Placement, Severity, ShortcodeId, Status, TicketId, TicketName, TicketSummary, WatchEnd } from '../chats/types';
+import type { Answer, Archived, Code, CommitRef, InputHistoryEntry, InputId, InputKind, InputOption, InputState, Label, Placement, Severity, ShortcodeId, Status, TicketId, TicketName, TicketSummary } from '../chats/types';
+import type { EpicArchived, WatchEnd } from '../epics/types';
 import type { Kind, TicketRef } from '../notes/types';
 /** MNG-16: what an `amend` moved — its title, its body. */
 export type AmendedField = "title" | "body";
@@ -592,6 +593,10 @@ export interface Ticket {
   shows — two shortcodes of one code are told apart by `shortcode`
   and `address`, never by this. */
     epic: Code;
+    /** ORG-23: its epic's archive mark, when its epic is archived — the
+  ticket is in no view, and still answers by name. Filled by `get`
+  alone; omitted on the wire for a live epic's. */
+    epicArchived?: EpicArchived | null;
     /** TICKETS-6: a frozen scope takes no new children, and — when it roots
   its shortcode — the shortcode takes no new numbers, until it is
   unfrozen. Moved by `tickets.freeze` / `tickets.unfreeze` alone (admin),

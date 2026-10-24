@@ -2349,6 +2349,7 @@ pub(crate) mod tests {
             created_unix: 0,
             updated_unix: 0,
             moved_from: Vec::new(),
+            epic_archived: None,
         };
         let heard = vec![queued("A-2", Urgency::Now, 3), TicketsEvent::Amended { ticket: renamed, changed: vec![menger_tickets_api::vocab::AmendedField::Title] }];
         let q = settle(answer, &heard);

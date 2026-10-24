@@ -490,6 +490,11 @@ pub struct Ticket {
     /// fields).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub moved_from: Vec<String>,
+    /// ORG-23: its epic's archive mark, when its epic is archived — the
+    /// ticket is in no view, and still answers by name. Filled by `get`
+    /// alone; omitted on the wire for a live epic's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epic_archived: Option<crate::epics::EpicArchived>,
 }
 
 /// ACCESS-10: a count of hidden ids that is none — omitted on the wire.
@@ -2464,6 +2469,7 @@ mod tests {
             created_unix: 1,
             updated_unix: 2,
             moved_from: vec!["OLD-9".into()],
+            epic_archived: None,
         };
         let summary = TicketSummary::from(ticket.clone());
 

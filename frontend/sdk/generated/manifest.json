@@ -272,6 +272,11 @@
       ]
     },
     "epics": {
+      "archive": [
+        "dry_run",
+        "name",
+        "org"
+      ],
       "create": [
         "name",
         "org"
@@ -283,11 +288,15 @@
         "name",
         "org"
       ],
+      "dismiss": [
+        "org"
+      ],
       "get": [
         "name",
         "org"
       ],
       "list": [
+        "archived",
         "org"
       ],
       "rename": [
@@ -295,11 +304,20 @@
         "org",
         "to"
       ],
+      "restore": [
+        "name",
+        "org"
+      ],
       "schema": [],
+      "set_default": [
+        "name",
+        "org"
+      ],
       "switch": [
         "name",
         "org"
-      ]
+      ],
+      "watch": []
     },
     "media": {
       "get": [
@@ -540,6 +558,7 @@
         "source"
       ],
       "reshortcode": [
+        "dry_run",
         "ids",
         "message",
         "new_scope",

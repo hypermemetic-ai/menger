@@ -87,6 +87,8 @@ pub(super) const ERA_TABLES: &str = "
 /// many shortcodes it placed.
 pub(super) fn ensure_eras(conn: &Connection) -> rusqlite::Result<usize> {
     conn.execute_batch(ERA_TABLES)?;
+    // ORG-23: the archive's columns and tables, additive.
+    super::era_archive::ensure(conn)?;
     let has_era: i64 = conn.query_row("SELECT count(*) FROM pragma_table_info('shortcodes') WHERE name = 'era'", [], |r| r.get(0))?;
     if has_era == 0 {
         conn.execute_batch("ALTER TABLE shortcodes ADD COLUMN era INTEGER")?;
@@ -115,6 +117,17 @@ pub(super) struct Era {
     pub(super) org: i64,
     pub(super) name: EpicName,
     pub(super) created: i64,
+    /// ORG-23: its organization's default (`eras.is_default`).
+    pub(super) default: bool,
+    /// ORG-23: archived — when, by whom (`eras.archived_at`, `archived_by`).
+    pub(super) archived: Option<(i64, String)>,
+}
+
+impl Era {
+    /// A live epic, not the default.
+    pub(super) fn new(org: i64, name: EpicName, created: i64) -> Self {
+        Self { org, name, created, default: false, archived: None }
+    }
 }
 
 /// Which organizations a read may resolve in — ORG-4: a caller's, the
@@ -185,8 +198,14 @@ pub(super) struct Registry {
     pub(super) eras: BTreeMap<i64, Era>,
     /// ORG-13: each principal's current epic in each organization (the
     /// `era_choices` table) — `(principal, org row) → era row`; one with
-    /// none is in its organization's newest.
+    /// none is in its organization's default (ORG-23).
     pub(super) choices: HashMap<(String, i64), i64>,
+    /// ORG-23: each move an archive made of a principal's current epic, not
+    /// yet dismissed — `(principal, org row) → the move` (`era_moves`).
+    pub(super) moves: HashMap<(String, i64), super::era_archive::MoveRec>,
+    /// ORG-23: each old name a rename left, as an alias — `(org row, name)
+    /// → era row` (`era_aliases`).
+    pub(super) era_aliases: HashMap<(i64, String), i64>,
 }
 
 impl Registry {
@@ -222,14 +241,28 @@ impl Registry {
         self.eras.iter().find(|(_, e)| e.org == org).map(|(id, _)| *id)
     }
 
-    /// ORG-13: `org`'s newest epic — where a principal who chose none is.
-    pub(super) fn newest_era(&self, org: i64) -> Option<i64> {
-        self.eras.iter().rev().find(|(_, e)| e.org == org).map(|(id, _)| *id)
+    /// ORG-23: `org`'s default epic — where a principal who chose none is:
+    /// the one marked default and live, else its first live one (never the
+    /// newest: making an epic moves nobody).
+    pub(super) fn default_era(&self, org: i64) -> Option<i64> {
+        let live = || self.eras.iter().filter(|(_, e)| e.org == org && e.archived.is_none());
+        live().find(|(_, e)| e.default).or_else(|| live().next()).map(|(id, _)| *id).or_else(|| self.first_era(org))
     }
 
-    /// ORG-13: `org`'s epic called `name`.
+    /// ORG-23: whether the epic `era` is archived.
+    pub(super) fn era_archived(&self, era: i64) -> bool {
+        self.eras.get(&era).is_some_and(|e| e.archived.is_some())
+    }
+
+    /// ORG-13: `org`'s epic called `name` — ORG-23: or an old name a rename
+    /// left as its alias.
     pub(super) fn era_named(&self, org: i64, name: &str) -> Option<i64> {
-        self.eras.iter().find(|(_, e)| e.org == org && e.name.as_str() == name.trim()).map(|(id, _)| *id)
+        let n = name.trim();
+        self.eras
+            .iter()
+            .find(|(_, e)| e.org == org && e.name.as_str() == n)
+            .map(|(id, _)| *id)
+            .or_else(|| self.era_aliases.get(&(org, n.to_string())).copied().filter(|e| self.eras.contains_key(e)))
     }
 
     /// ORG-13: the epic `id` is in (0 when the registry places it nowhere).
@@ -251,10 +284,14 @@ impl Registry {
         self.eras.values().any(|e| !orgs.insert(e.org))
     }
 
-    /// ORG-13: `principal`'s current epic in `org` — its choice, else the
-    /// newest.
+    /// ORG-13: `principal`'s current epic in `org` — its choice, else
+    /// (ORG-23) the organization's default. An archived epic is no one's.
     pub(super) fn current_era(&self, principal: &str, org: i64) -> Option<i64> {
-        self.choices.get(&(principal.to_string(), org)).copied().filter(|e| self.eras.contains_key(e)).or_else(|| self.newest_era(org))
+        self.choices
+            .get(&(principal.to_string(), org))
+            .copied()
+            .filter(|e| self.eras.get(e).is_some_and(|x| x.archived.is_none()))
+            .or_else(|| self.default_era(org))
     }
 
     /// ORG-13: the epics a call is read in first — its caller's current one
@@ -583,13 +620,15 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Registry> {
         while let Some(row) = rows.next()? {
             let name: String = row.get(2)?;
             let name = EpicName::new(&name).map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, e.into()))?;
-            r.eras.insert(row.get(0)?, Era { org: row.get(1)?, name, created: row.get(3)? });
+            r.eras.insert(row.get(0)?, Era::new(row.get(1)?, name, row.get(3)?));
         }
         let mut stmt = conn.prepare("SELECT principal, org, era FROM era_choices")?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             r.choices.insert((row.get(0)?, row.get(1)?), row.get(2)?);
         }
+        // ORG-23: the archive's marks, the default, the moves and the aliases.
+        super::era_archive::load(conn, &mut r)?;
     }
     let sql = match has_era {
         0 => "SELECT id, org, host, code, pinned, 0 FROM shortcodes",
@@ -1034,7 +1073,7 @@ impl Cache {
         }
         // ORG-13: and its first epic, as [`ensure_eras`] will store it.
         if r.first_era(1).is_none() && r.eras.is_empty() {
-            r.eras.insert(1, Era { org: 1, name: EpicName::genesis(), created: 0 });
+            r.eras.insert(1, Era::new(1, EpicName::genesis(), 0));
         }
         let adopted = adopt(&mut r, self, false).unwrap_or_default();
         self.shortcodes = r;
@@ -1158,7 +1197,9 @@ impl Cache {
         let r = &self.shortcodes;
         let Some(row) = r.org_row(org) else { return Ok(0) };
         if let Some(name) = &asked.era {
-            return r.era_named(row, name).ok_or_else(|| StoreError::Invalid(format!("no epic `{name}` in {org} (nothing was written)")));
+            let era = r.era_named(row, name).ok_or_else(|| StoreError::Invalid(format!("no epic `{name}` in {org} (nothing was written)")))?;
+            r.live_era(era, "making a ticket in it")?;
+            return Ok(era);
         }
         let me = super::eras::reader_now();
         Ok(me.and_then(|p| r.current_era(&p, row)).or_else(|| r.first_era(row)).unwrap_or(0))
@@ -1194,7 +1235,19 @@ impl Cache {
     /// scope or a doc) — only such a ticket can be a second root there; any
     /// other files into the shortcode it names, and the parent rule says why
     /// its parent is outside it.
+    ///
+    /// ORG-23: refused when the shortcode is in an archived epic.
     pub(super) fn target(&self, asked: &Address, parent: Option<&super::Row>, roots: bool) -> Result<Target, StoreError> {
+        let t = self.target_any(asked, parent, roots)?;
+        let era = match &t {
+            Target::In(sc) => self.shortcodes.era_of(sc),
+            Target::Mint(sc) => sc.ns.era,
+        };
+        self.shortcodes.live_era(era, "making a ticket in it")?;
+        Ok(t)
+    }
+
+    fn target_any(&self, asked: &Address, parent: Option<&super::Row>, roots: bool) -> Result<Target, StoreError> {
         let r = &self.shortcodes;
         // ORG-4: an org named by a name it had before a rename is that org.
         let asked_org = match &asked.org {

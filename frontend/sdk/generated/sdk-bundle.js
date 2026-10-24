@@ -449,8 +449,8 @@
       const stream = this.rpc.call("tickets.request_changes", { body, id, source });
       yield* extractData(stream);
     }
-    async* reshortcode(ids, to, message, newScope, parent, withChildren) {
-      const stream = this.rpc.call("tickets.reshortcode", { ids, message, new_scope: newScope, parent, to, with_children: withChildren });
+    async* reshortcode(ids, to, dryRun, message, newScope, parent, withChildren) {
+      const stream = this.rpc.call("tickets.reshortcode", { dry_run: dryRun, ids, message, new_scope: newScope, parent, to, with_children: withChildren });
       yield* extractData(stream);
     }
     async* restore(dryRun, filter, ids, max, message, tz, withChildren) {

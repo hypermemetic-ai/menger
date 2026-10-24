@@ -956,9 +956,12 @@ impl TicketsActivation {
         with_children: Option<bool>,
         /// Why (optional).
         message: Option<Message>,
+        /// Answer the moves it would make (old id → new key, in order; no tickets) and write nothing (optional; default false).
+        dry_run: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let (ids, to, new_scope, parent) = (texts(ids), to.into_string(), new_scope.map(String::from), parent.map(String::from));
-        let ask = crate::store::Reshortcode { ids, to, new_scope, parent, with_children: with_children.unwrap_or(false), orgs: None };
+        let (with_children, dry_run) = (with_children.unwrap_or(false), dry_run.unwrap_or(false));
+        let ask = crate::store::Reshortcode { ids, to, new_scope, parent, with_children, orgs: None, dry_run };
         reshortcode_stream(self.store.clone(), user, ask, message)
     }
 

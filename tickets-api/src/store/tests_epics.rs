@@ -65,7 +65,7 @@ async fn key_of(store: &Store, text: &str) -> String {
 async fn a_store_has_genesis_and_reads_as_before() {
     let store = Store::new();
     fixture(&store).await;
-    let epics = store.epics(&hm(), ADA).unwrap();
+    let epics = store.epics(&hm(), ADA, false).unwrap();
     assert_eq!(epics.len(), 1);
     let g = &epics[0];
     assert_eq!((g.name.as_str(), g.first, g.current, g.shortcodes, g.tickets), ("genesis", true, true, 2, 5));
@@ -84,7 +84,9 @@ async fn a_new_epic_starts_fresh_and_menger_1_is_born_again() {
     let store = Store::new();
     fixture(&store).await;
     let fresh = store.create_epic(SYS, &hm(), &name("fresh"), ADA).await.unwrap();
-    assert_eq!((fresh.first, fresh.current, fresh.shortcodes, fresh.tickets), (false, true, 0, 0), "empty; the newest is where a reader is");
+    assert_eq!((fresh.first, fresh.current, fresh.shortcodes, fresh.tickets), (false, false, 0, 0), "empty; ORG-23: making it moves nobody");
+    assert_eq!(store.current_epic(&hm(), ADA).unwrap().name.as_str(), "genesis", "ADA is on the default still");
+    store.switch_epic(On::for_tests(Scope::Org(hm())), &hm(), "fresh", ADA).await.unwrap();
     assert!(store.create_epic(SYS, &hm(), &name("fresh"), ADA).await.is_err(), "a name is unique in its org");
     let root = store.create(SYS, new("hypermemetic:fresh:MENGER", "menger again", Kind::Scope, None)).await.unwrap();
     assert_eq!((root.seq, root.epic.as_str(), root.address.as_str()), (1, "MENGER", "hypermemetic:fresh:MENGER-1"));
@@ -101,7 +103,7 @@ async fn a_new_epic_starts_fresh_and_menger_1_is_born_again() {
         Err(StoreError::Ambiguous { candidates, .. }) => assert_eq!(candidates, ["hypermemetic:MENGER-1", "hypermemetic:fresh:MENGER-1"]),
         other => panic!("expected ambiguous, got {other:?}"),
     }
-    // ADA is in fresh (the newest): its bare MENGER-1 is fresh's; MENGER-3,
+    // ADA is in fresh (she switched): its bare MENGER-1 is fresh's; MENGER-3,
     // which fresh has not, is genesis's by its pin.
     assert_eq!(as_(ADA, store.get(SYS, "MENGER-1")).await.unwrap().title, "menger again");
     assert_eq!(as_(ADA, store.get(SYS, "MENGER-3")).await.unwrap().title, "three");
@@ -114,7 +116,7 @@ async fn a_new_epic_starts_fresh_and_menger_1_is_born_again() {
     assert_eq!(as_(BO, store.get(SYS, "MENGER-1")).await.unwrap().title, "menger");
     assert_eq!(store.current_epic(&hm(), BO).unwrap().name.as_str(), "genesis");
     assert_eq!(store.current_epic(&hm(), ADA).unwrap().name.as_str(), "fresh");
-    let counted: Vec<(String, u32)> = store.epics(&hm(), ADA).unwrap().into_iter().map(|e| (e.name.to_string(), e.tickets)).collect();
+    let counted: Vec<(String, u32)> = store.epics(&hm(), ADA, false).unwrap().into_iter().map(|e| (e.name.to_string(), e.tickets)).collect();
     assert_eq!(counted, [("genesis".to_string(), 5), ("fresh".to_string(), 3)]);
 }
 
@@ -169,6 +171,7 @@ async fn a_readers_filter_is_held_to_its_epic_unless_it_names_one() {
     fixture(&store).await;
     store.create_epic(SYS, &hm(), &name("fresh"), ADA).await.unwrap();
     store.create(SYS, new("hypermemetic:fresh:MENGER", "m", Kind::Scope, None)).await.unwrap();
+    store.switch_epic(On::for_tests(Scope::Org(hm())), &hm(), "fresh", ADA).await.unwrap();
     let asked = crate::filter::Filter::parse("kind scope").unwrap();
     let era = store.era_filter(ADA, None, &asked).unwrap();
     assert_eq!(era.format(), "epic hypermemetic:fresh");
@@ -201,7 +204,7 @@ async fn an_epic_is_renamed_readdressing_and_deleted_only_empty_never_the_first(
     store.switch_epic(On::for_tests(Scope::Org(hm())), &hm(), "empty", BO).await.unwrap();
     let (org, gone) = store.delete_epic(SYS, &hm(), "empty").await.unwrap();
     assert_eq!((org.as_str(), gone.as_str()), ("hypermemetic", "empty"));
-    assert_eq!(store.current_epic(&hm(), BO).unwrap().name.as_str(), "second", "its readers are in the newest again");
+    assert_eq!(store.current_epic(&hm(), BO).unwrap().name.as_str(), "genesis", "its readers are on the default again");
     assert!(matches!(store.epic(&hm(), "empty", BO), Err(StoreError::NotFound(_))));
 }
 
@@ -211,7 +214,7 @@ async fn a_new_org_starts_with_its_own_genesis() {
     fixture(&store).await;
     store.create_org(SYS, "acme", None).await.unwrap();
     let acme = OrgId::new("acme").unwrap();
-    let epics = store.epics(&acme, ADA).unwrap();
+    let epics = store.epics(&acme, ADA, false).unwrap();
     assert_eq!(epics.iter().map(|e| (e.name.as_str(), e.first)).collect::<Vec<_>>(), [("genesis", true)]);
     let t = store.create(SYS, new("acme:MENGER", "acme's", Kind::Scope, None)).await.unwrap();
     assert_eq!(t.address, "acme:MENGER-1");
@@ -270,7 +273,7 @@ async fn a_file_from_before_epics_gains_genesis_on_a_copy_and_nothing_else_moves
     let before = rows_of(&copy);
     {
         let store = Store::open(&copy).unwrap();
-        let epics = store.epics(&hm(), ADA).unwrap();
+        let epics = store.epics(&hm(), ADA, false).unwrap();
         assert_eq!(epics.iter().map(|e| (e.name.as_str(), e.first, e.tickets)).collect::<Vec<_>>(), [("genesis", true, 7)]);
         assert_eq!(resolved(&store), was, "every name resolves as it did");
         assert_eq!(store.get(SYS, "MENGER-3").await.unwrap().address, "hypermemetic:MENGER/IDENTITY-3", "a move's pin still answers");
@@ -280,7 +283,7 @@ async fn a_file_from_before_epics_gains_genesis_on_a_copy_and_nothing_else_moves
     assert!(matches!(Store::verify_derived(&copy).unwrap(), Verdict::Consistent { .. }));
     // Opened again: the same, nothing to do.
     let store = Store::open(&copy).unwrap();
-    assert_eq!(store.epics(&hm(), ADA).unwrap().len(), 1);
+    assert_eq!(store.epics(&hm(), ADA, false).unwrap().len(), 1);
     let conn = rusqlite::Connection::open(&copy).unwrap();
     let unplaced: i64 = conn.query_row("SELECT count(*) FROM shortcodes WHERE era IS NULL", [], |r| r.get(0)).unwrap();
     assert_eq!(unplaced, 0);
@@ -302,6 +305,7 @@ async fn a_pinned_id_is_its_ticket_outside_a_call_and_the_current_epic_wins_insi
     let store = Store::open(&path).unwrap();
     store.create_epic(SYS, &hm(), &name("fresh"), ADA).await.unwrap();
     store.create(SYS, new("hypermemetic:fresh:MENGER", "menger again", Kind::Scope, None)).await.unwrap();
+    store.switch_epic(On::for_tests(Scope::Org(hm())), &hm(), "fresh", ADA).await.unwrap();
     assert_eq!(store.get(SYS, "MENGER-1").await.unwrap().title, "menger", "the pin, outside a call");
     assert_eq!(as_(ADA, store.get(SYS, "MENGER-1")).await.unwrap().title, "menger again", "ADA's epic first");
     store.switch_epic(On::for_tests(Scope::Org(hm())), &hm(), "genesis", ADA).await.unwrap();

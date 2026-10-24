@@ -248,6 +248,7 @@ fn whole(row: Row, body: String) -> Ticket {
         created_unix,
         updated_unix,
         moved_from: Vec::new(),
+        epic_archived: None,
     }
 }
 
@@ -299,6 +300,8 @@ pub(crate) struct Broadcast {
     chats: broadcast::Sender<chats::ChatChange>,
     /// TICKETS-7: the revisions writes keep — `watch { revisions }`'s.
     revisions: broadcast::Sender<Change>,
+    /// ORG-23: `epics.watch`'s — an epic's change, a principal moved.
+    pub(super) epics: broadcast::Sender<era_archive::EpicSignal>,
     /// ACCESS-12: the grants generation, as the last write left it — what
     /// wakes an open watch to verify its caller again (never a value it
     /// trusts: it reads [`Store::grants_generation`]).
@@ -317,6 +320,7 @@ impl Broadcast {
             deployments: broadcast::channel(BROADCAST_CAPACITY).0,
             chats: broadcast::channel(BROADCAST_CAPACITY).0,
             revisions: broadcast::channel(BROADCAST_CAPACITY).0,
+            epics: broadcast::channel(BROADCAST_CAPACITY).0,
             grants: Arc::new(tokio::sync::watch::channel(0).0),
         }
     }
@@ -3656,9 +3660,12 @@ impl Store {
     async fn get_unscoped(&self, id: &str) -> Result<Ticket, StoreError> {
         let (row, written) = self.addressed(id)?;
         // ACT-6: and the ids it had, when a move named it anew.
-        let moved_from = self.tickets.read().expect("store lock poisoned").shortcodes.moved_from(&row.id);
+        let (moved_from, mark) = {
+            let r = &self.tickets.read().expect("store lock poisoned").shortcodes;
+            (r.moved_from(&row.id), r.epic_mark(&row.shortcode))
+        };
         let mut ticket = self.full_one(row, written).await?;
-        ticket.moved_from = moved_from;
+        (ticket.moved_from, ticket.epic_archived) = (moved_from, mark);
         Ok(ticket)
     }
 
@@ -4795,7 +4802,10 @@ impl Store {
         if parsed.as_ref().is_none_or(Address::names_ticket) {
             match cache.find_ticket(t, shortcodes::OrgReach::All) {
                 shortcodes::Found::One(key) => return ticket_chain(&key),
-                shortcodes::Found::Many(_) => return None,
+                // ORG-23: a key a namesake's short form shares (genesis's
+                // `MENGER-2` beside spring's `MENGER.3-2`) is that key, as
+                // `locate` reads it — a permit for it is not refused.
+                shortcodes::Found::Many(_) => return cache.at.contains_key(t).then(|| ticket_chain(t)).flatten(),
                 shortcodes::Found::None => {}
             }
         }
@@ -5479,8 +5489,12 @@ mod orgs;
 mod tests_orgs;
 // ORG-13: epics — made, renamed, deleted, chosen; the read a reader is in.
 mod eras;
+mod era_archive;
+pub use era_archive::{EpicArchive, EpicSignal};
 #[cfg(test)]
 mod tests_epics;
+#[cfg(test)]
+mod tests_epics_archive;
 #[cfg(test)]
 mod tests_teams;
 // The create write, in a module of its own (MENGER-29).

@@ -1363,6 +1363,7 @@ pub(crate) fn load_ticket(
                             follow(&ticket.id);
                         }
                         TicketsEvent::Ticket { ticket } => {
+                            crate::epics::note_archived(&ticket.id, ticket.epic_archived.clone());
                             body.try_set(Some(ticket.body.clone()));
                             holder.hold(TicketSummary::from(&ticket));
                         }
@@ -1665,6 +1666,7 @@ mod tests {
             created_unix: 0,
             updated_unix: 0,
             moved_from: Vec::new(),
+            epic_archived: None,
         }
     }
 

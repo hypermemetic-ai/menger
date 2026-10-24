@@ -1287,7 +1287,7 @@
     border: var(--border) solid var(--line); border-radius: var(--radius-md);
   }
   #tmenu .mgo:hover { color: var(--accent); border-color: var(--accent); }
-  #tmenu .merr, #delete .merr { margin: 2px 10px 4px; color: var(--err-fg); white-space: normal; }
+  #tmenu .merr, :is(#delete, #epic-archive, #epic-move, #epic-rename) .merr { margin: 2px 10px 4px; color: var(--err-fg); white-space: normal; }
   #tmenu .pick { display: flex; gap: 6px; align-items: baseline; max-width: 22rem; }
   #tmenu .pick .tag { flex: none; font-size: calc(10px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-lg); }
   #tmenu .pick .ptitle { overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
@@ -1336,24 +1336,24 @@
     :is(#tmenu, #tagmenu, #dmenu)[data-sheet] .sub .item { padding-left: 22px; }
   }
   /* ACT-4: Delete…'s confirmation — every ticket, and what moves. */
-  #delete { width: 34rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .6rem; }
-  #delete h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0; }
-  #delete p { margin: 0; font-size: calc(.85rem * var(--text-scale)); }
-  #delete .dlist { margin: 0; padding: 0; list-style: none; max-height: 40vh; overflow: auto; font-size: calc(.85rem * var(--text-scale)); }
-  #delete .dlist li { display: flex; gap: .4rem; align-items: baseline; padding: 1px 0; }
-  #delete .dlist .code { font-family: var(--mono); font-size: calc(11.5px * var(--text-scale)); color: var(--accent); flex: none; }
-  #delete .dtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #delete .dnote { flex: none; color: var(--muted); font-size: calc(.8rem * var(--text-scale)); }
-  #delete .dchildren { border: var(--border) solid var(--line); border-radius: var(--radius-md); font-size: calc(.85rem * var(--text-scale)); display: flex; flex-direction: column; gap: .2rem; }
-  #delete .sacts { display: flex; gap: .5rem; justify-content: flex-end; flex-wrap: wrap; }
-  #delete .sacts button {
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) { width: 34rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .6rem; }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0; }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) p { margin: 0; font-size: calc(.85rem * var(--text-scale)); }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .dlist { margin: 0; padding: 0; list-style: none; max-height: 40vh; overflow: auto; font-size: calc(.85rem * var(--text-scale)); }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .dlist li { display: flex; gap: .4rem; align-items: baseline; padding: 1px 0; }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .dlist .code { font-family: var(--mono); font-size: calc(11.5px * var(--text-scale)); color: var(--accent); flex: none; }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .dtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .dnote { flex: none; color: var(--muted); font-size: calc(.8rem * var(--text-scale)); }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .dchildren { border: var(--border) solid var(--line); border-radius: var(--radius-md); font-size: calc(.85rem * var(--text-scale)); display: flex; flex-direction: column; gap: .2rem; }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts { display: flex; gap: .5rem; justify-content: flex-end; flex-wrap: wrap; }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts button {
     font: inherit; font-size: calc(.85rem * var(--text-scale)); padding: .25rem .8rem; cursor: pointer;
     background: none; color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius);
   }
-  #delete .sacts button:hover { border-color: var(--accent); color: var(--accent); }
-  #delete .sacts button.danger { background: var(--err-fg); border-color: var(--err-fg); color: var(--bg); }
-  #delete .sacts button:disabled { opacity: .5; cursor: default; }
-  #delete .sacts button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts button:hover { border-color: var(--accent); color: var(--accent); }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts button.danger { background: var(--err-fg); border-color: var(--err-fg); color: var(--bg); }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts button:disabled { opacity: .5; cursor: default; }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* The copy confirmation. The manual fallback shows the id selected in
      a field; the banner idiom's left edge marks it as a notice. */
   #toast {
@@ -2355,10 +2355,67 @@
   #nav { overflow: visible; }
   #nav .nbar { padding: 6px 10px; border-bottom: var(--border) solid var(--line); font-size: calc(.85rem * var(--text-scale)); }
   /* ORG-13: the epic the nav reads in — a line of its head, shown only with a choice. */
-  #nav .nepic { display: flex; align-items: center; gap: .4rem; padding: 6px 10px; border-bottom: var(--border) solid var(--line); font-size: calc(.8rem * var(--text-scale)); color: var(--muted); }
+  /* ORG-23: the epic picker — always in the nav's head; a sheet on a phone. */
+  #nav .nepic { display: flex; align-items: center; gap: .5rem; padding: 6px 10px; border-bottom: var(--border) solid var(--line); font-size: calc(.8rem * var(--text-scale)); color: var(--muted); position: relative; }
   #nav .nepic-k { font-family: var(--mono); letter-spacing: .06em; text-transform: uppercase; font-size: calc(10.5px * var(--text-scale)); }
-  #nav .epic-switch { font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); padding: 1px .3rem; min-width: 0; max-width: 100%; }
-  #nav .epic-switch:hover, #nav .epic-switch:focus-visible { border-color: var(--accent); color: var(--accent); }
+  #phead .nepic.pepic { margin-left: auto; display: flex; align-items: center; padding: 0; border: 0; min-width: 0; flex: 0 1 auto; font-size: calc(.8rem * var(--text-scale)); color: var(--muted); }
+  #phead .nepic.pepic .nepic-k { font-family: var(--mono); letter-spacing: .06em; text-transform: uppercase; font-size: calc(10px * var(--text-scale)); color: var(--muted); }
+  #phead .nepic.pepic { flex: none; }
+  #phead .nepic.pepic .epick { max-width: 9.5rem; }
+  #phead .nepic.pepic .epick-n { max-width: 5.5rem; }
+  #phead .pepic + .pconn { margin-left: 0; }
+  .epic-sheet .epop-scrim { z-index: 990; } .epic-sheet .epop { z-index: 991; }
+  .epick { display: inline-flex; align-items: center; gap: 6px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); padding: 2px 8px; min-width: 0; cursor: pointer; }
+  .epick:hover, .epick:focus-visible { border-color: var(--accent); }
+  .epick-n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .epick .caret { color: var(--muted); font-size: 10px; }
+  .you { font-size: calc(10.5px * var(--text-scale)); padding: 0 6px; border-radius: var(--radius-pill); background: var(--sel); color: var(--accent); border: var(--border) solid var(--line); white-space: nowrap; }
+  .epop-scrim { position: fixed; inset: 0; z-index: 39; }
+  .epop { position: absolute; top: calc(100% - 2px); left: 52px; z-index: 40; width: min(280px, calc(100vw - 32px)); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 8px 28px var(--shadow); padding: 6px; color: var(--ink); }
+  .epop .ehint { display: none; color: var(--muted); padding: 4px 8px 8px; }
+  .eopt { display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 6px; width: 100%; text-align: left; font: inherit; color: var(--ink); background: none; border: 0; border-radius: var(--radius); padding: 6px 8px; cursor: pointer; }
+  .eopt:hover, .eopt:focus-visible { background: var(--hover); outline: none; }
+  .eopt .en { font-weight: 600; } .eopt .ec, .epop .ec { color: var(--muted); font-size: 12px; }
+  .eopt.cur .etick { color: var(--accent); }
+  .esep { height: 1px; background: var(--line); margin: 6px 2px; }
+  .eact { display: block; width: 100%; text-align: left; font: inherit; background: none; border: 0; border-radius: var(--radius); padding: 6px 8px; color: var(--accent); cursor: pointer; text-decoration: none; box-sizing: border-box; }
+  .eact:hover { background: var(--hover); }
+  .enew { display: flex; gap: 6px; padding: 4px 8px; align-items: center; }
+  .enew input { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); padding: 3px 6px; }
+  @media (max-width: 820px) {
+    .epop { position: fixed; left: 0; right: 0; top: auto; bottom: 0; width: auto; border-radius: var(--radius-device) var(--radius-device) 0 0; padding-bottom: max(10px, calc(var(--safe-bottom) + 8px)); }
+    .epop .ehint { display: block; }
+    .epop-scrim { background: var(--scrim); }
+  }
+  /* ORG-23: the notice of a move an archive made. */
+  #epic-notice { display: flex; gap: 12px; align-items: flex-start; background: var(--ask-bg); border: var(--border) solid var(--ask-line); color: var(--ink); border-radius: var(--radius-lg); padding: 10px 14px; margin: 0 0 14px; font-family: var(--sans); }
+  #epic-notice .enote-k { color: var(--ask); font-weight: 700; }
+  #epic-notice .enote-t { flex: 1; min-width: 0; }
+  #epic-notice .enote-acts { margin-top: 6px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .lnk { font: inherit; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-decoration: none; }
+  .lnk:hover { text-decoration: underline; } .lnk:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }
+  .enote-ok { font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); padding: 3px 10px; cursor: pointer; }
+  /* ORG-23: #/epics. */
+  #epics-page .muted { color: var(--muted); }
+  #epics-page .mono, #epic-archive .mono, #epic-move .mono, #epic-notice .mono, .earchived .mono { font-family: var(--mono); }
+  #epics-page { padding: 4px 0; }
+  #epics-page .ehead { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  #epics-page .ebtn { margin-left: auto; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); padding: 3px 10px; cursor: pointer; }
+  .etab { width: 100%; border-collapse: collapse; }
+  .etab th, .etab td { text-align: left; padding: 7px 8px; border-bottom: var(--border) solid var(--line); vertical-align: baseline; }
+  .etab th { font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  .etab .en { font-weight: 600; } .etab .eon { font-variant-numeric: tabular-nums; }
+  .etab .eacts { text-align: right; white-space: nowrap; }
+  .earch { margin-top: 14px; } .earch summary { cursor: pointer; } .earch .etab { margin-top: 8px; }
+  .efacts { margin: 10px 0; padding-left: 1.2em; } .efacts li { margin: 3px 0; }
+  .earchived { background: var(--hover); border: var(--border) solid var(--line); border-radius: var(--radius); padding: 6px 10px; color: var(--muted); }
+  .earchived a { color: var(--accent); }
+  #epic-move .emove-pick { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  #epic-rename input { width: 100%; box-sizing: border-box; }
+  #epic-move select, #epic-move input, #epic-rename input { font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); padding: 2px 6px; }
+  .emove-pv { margin-top: 12px; border-collapse: collapse; } .emove-pv th, .emove-pv td { text-align: left; padding: 3px 10px 3px 0; }
+  .emove-pv th { color: var(--muted); font-weight: 500; }
+  @media (max-width: 820px) { #epics-page .hide-s, .etab .hide-s { display: none; } .etab .eacts .lnk { display: block; margin-left: auto; padding: 2px 0; } .etab .eacts .muted { display: none; } }
   #nav .nbar .fbar { gap: .3rem; }
   #nav .nbar .ftext { flex-basis: 100%; min-width: 0; }
   #nav .nbar .fclash { margin-top: .3rem; }
@@ -3293,26 +3350,26 @@
      shadow; the title in the display face; the buttons on a panel foot. */
   .overlay { background: var(--scrim); }
   .dialog { background: var(--card); border-color: var(--tree-line); box-shadow: 0 18px 50px var(--shadow); }
-  #delete, #save-as, #leave { padding: 22px 26px 0; gap: 10px; font-family: var(--sans); }
-  #delete h2, #save-as h2, #leave h2 {
+  :is(#delete, #epic-archive, #epic-move, #epic-rename), #save-as, #leave { padding: 22px 26px 0; gap: 10px; font-family: var(--sans); }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) h2, #save-as h2, #leave h2 {
     font-family: var(--font-display); font-size: calc(21px * var(--text-scale)); font-weight: var(--weight-strong);
     letter-spacing: -.015em; line-height: 1.25;
   }
-  #delete p, #save-as p, #leave p { color: var(--muted); font-size: calc(13.5px * var(--text-scale)); }
-  #delete .sacts, #save-as .sacts, #leave .sacts {
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) p, #save-as p, #leave p { color: var(--muted); font-size: calc(13.5px * var(--text-scale)); }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts, #save-as .sacts, #leave .sacts {
     justify-content: flex-start; margin: 8px -26px 0; padding: 12px 26px;
     border-top: var(--border) solid var(--line); background: var(--panel);
   }
   /* The button: mono, upper case, an ink hairline; the one that acts filled. */
-  #delete .sacts button, #save-as .sacts button, #leave .sacts button, #toast button, #ftoast button {
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts button, #save-as .sacts button, #leave .sacts button, #toast button, #ftoast button {
     font-family: var(--mono); font-size: calc(11px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase;
     padding: 6px 12px; background: transparent; color: var(--ink); border: var(--border) solid var(--ink); border-radius: var(--radius);
     transition: transform var(--motion-fast) var(--ease);
   }
-  #delete .sacts button:hover, #save-as .sacts button:hover, #leave .sacts button:hover { transform: translateY(-1px); color: var(--ink); border-color: var(--ink); }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts button:hover, #save-as .sacts button:hover, #leave .sacts button:hover { transform: translateY(-1px); color: var(--ink); border-color: var(--ink); }
   #save-as .sacts button.primary, #leave .sacts button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   #save-as .sacts button.primary:hover, #leave .sacts button.primary:hover { color: var(--bg); border-color: var(--accent); }
-  #delete .sacts button.danger, #delete .sacts button.danger:hover { background: var(--err-fg); border-color: var(--err-fg); color: var(--bg); }
+  :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts button.danger, :is(#delete, #epic-archive, #epic-move, #epic-rename) .sacts button.danger:hover { background: var(--err-fg); border-color: var(--err-fg); color: var(--bg); }
 
   /* Toasts: ink, the page's colour for their words, its buttons ruled in it. */
   #toast, #ftoast {
@@ -5478,7 +5535,7 @@
      above; the dialogs (save as, leaving for a link, delete) grow in. */
   .overlay { animation: menger-fade-in .14s ease-out; }
   .overlay > :is(#palette, #cheats) { animation: menger-drop-in .16s cubic-bezier(.2, .8, .2, 1); }
-  :is(#save-as, #leave, #delete) { animation: menger-menu-in .16s cubic-bezier(.2, .8, .2, 1); }
+  :is(#save-as, #leave, :is(#delete, #epic-archive, #epic-move, #epic-rename)) { animation: menger-menu-in .16s cubic-bezier(.2, .8, .2, 1); }
   #palette-list li { transition: background-color .1s ease-out, box-shadow .1s ease-out; }
   /* Menus: the tag menu as the ticket menu (APP-34; its origin is placed
      by menu::place); the filter and saved-filter menus drop from their bar;

@@ -1670,6 +1670,7 @@ pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)])
                 created_unix: 0,
                 updated_unix: 0,
                 moved_from: Vec::new(),
+                epic_archived: None,
             }
         })
         .collect();
@@ -2053,6 +2054,7 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
                 created_unix: 0,
                 updated_unix: 0,
                 moved_from: Vec::new(),
+                epic_archived: None,
             },
         )
         .unwrap();

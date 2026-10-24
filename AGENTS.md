@@ -574,6 +574,25 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   for the last one), the filter menu's Deployed and the palette's
   `deployed …` — all live on `deployments.watch`.
 
+  **Epics** (ORG-13, ORG-23) are the `epics` activation: an organization's
+  levels of shortcodes (`hypermemetic:fresh:MENGER-1`). Each principal
+  reads in its own epic — its `switch`, else the organization's default
+  (`set_default`; `genesis` until moved) — and creating one moves nobody.
+  An admin `archive`s one in one write (`--dry-run true` first): its people
+  move to the next newer live epic, else the next older, and each is told
+  once (`current`'s `moved`; `dismiss`); the last live epic is refused. An
+  archived epic's tickets are in no view unless the filter names it
+  (`epic spring`) or `archived`; `restore` moves nobody back; a renamed
+  epic answers to its old name. `tickets reshortcode --to org:epic:CODE`
+  moves tickets between epics (`--dry-run true` previews the keys). README
+  "Epics":
+
+  ```sh
+  synapse -P 4455 menger epics list --archived true
+  synapse -P 4455 menger epics archive --name spring --dry-run true
+  synapse -P 4455 menger tickets reshortcode --ids MENGER-40 --to hypermemetic:fresh:MENGER --dry-run true
+  ```
+
   **Themes** (THEME-8) are the `themes` activation: a theme is a name and
   token overrides for light and dark — written as a ticket's ` ```theme
   name [extends=parent] ` block (THEME-3: owned by that ticket as a

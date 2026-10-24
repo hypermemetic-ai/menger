@@ -3,7 +3,8 @@
 //! envelope (wire_freeze.rs's harness).
 //!
 //! The admin makes `fresh`; an editor cannot. Ada (an editor of the org)
-//! lists both and is in `fresh`, the newest; she files `MENGER-1` there
+//! lists both and is still on `genesis`, the default (ORG-23: making an
+//! epic moves nobody); she switches to `fresh` and files `MENGER-1` there
 //! (`--epic hypermemetic:fresh:MENGER`), and her bare `MENGER-1` is that
 //! one; a filtered list answers her epic unless it names `epic`; the nav's
 //! groups are hers; a move in renumbers and the old id still answers; she
@@ -151,7 +152,9 @@ async fn a_new_epic_starts_fresh_and_a_reader_reads_in_hers() {
     assert_eq!((made["type"].as_str(), made["epic"]["tickets"].as_u64()), (Some("created"), Some(0)), "{made}");
     let listed = call(&ada, "epics.list", json!({})).await;
     let names: Vec<(&str, bool)> = listed.iter().map(|e| (e["epic"]["name"].as_str().unwrap(), e["epic"]["current"].as_bool().unwrap())).collect();
-    assert_eq!(names, [("genesis", false), ("fresh", true)], "{listed:?}");
+    assert_eq!(names, [("genesis", true), ("fresh", false)], "ORG-23: nobody moved: {listed:?}");
+    let now = one(&ada, "epics.switch", json!({ "name": "fresh" })).await;
+    assert_eq!(now["epic"]["name"], "fresh", "{now}");
 
     // MENGER-1, born again in fresh.
     let root = one(&ada, "tickets.create", json!({ "epic": "hypermemetic:fresh:MENGER", "title": "menger again", "kind": "scope" })).await;
@@ -195,3 +198,64 @@ async fn next(s: &mut Subscription<Value>) -> Value {
         }
     }
 }
+
+/// ORG-23: an admin archives `spring` — the dry run names who moves and
+/// where, writes nothing; the archive moves Ada (on spring) to `fresh`, the
+/// next newer, and her open `epics watch` hears `moved` at once; `list`
+/// leaves spring out unless `--archived true`; `current` carries the move
+/// until `dismiss`; `restore` moves nobody back.
+#[tokio::test]
+async fn an_archive_moves_its_people_to_the_next_epic_and_tells_them() {
+    let port = start().await;
+    let boss = as_key(port, &BOSS, "boss").await;
+    let g = one(&boss, "members.grant", json!({ "principal": principal(&ADA), "scope": "hypermemetic:", "role": "editor" })).await;
+    assert_ne!(g["type"], "error", "{g}");
+    for e in ["spring", "fresh"] {
+        assert_eq!(one(&boss, "epics.create", json!({ "name": e })).await["type"], "created");
+    }
+    let ada = as_key(port, &ADA, "ada").await;
+    assert_eq!(one(&ada, "epics.switch", json!({ "name": "spring" })).await["epic"]["name"], "spring");
+    let mut watch = subscribe(&ada, "epics.watch", json!({})).await;
+
+    // Only an admin archives; the dry run writes nothing.
+    let refused = call(&ada, "epics.archive", json!({ "name": "spring" })).await;
+    assert!(refused.last().unwrap().to_string().contains("forbidden"), "{refused:?}");
+    let dry = one(&boss, "epics.archive", json!({ "name": "spring", "dry_run": true })).await;
+    assert_eq!((dry["type"].as_str(), dry["to"].as_str(), dry["dry_run"].as_bool()), (Some("archived"), Some("fresh"), Some(true)), "{dry}");
+    assert_eq!(dry["moved"], json!([principal(&ADA)]), "{dry}");
+    assert_eq!(one(&ada, "epics.current", json!({})).await["epic"]["name"], "spring", "nothing written");
+
+    // The archive.
+    let done = one(&boss, "epics.archive", json!({ "name": "spring" })).await;
+    assert_eq!((done["type"].as_str(), done["dry_run"].as_bool()), (Some("archived"), Some(false)), "{done}");
+    assert!(done["epic"]["archived"]["at_unix"].as_i64().is_some(), "{done}");
+    // Ada's watch: the change, and her move.
+    let mut heard = Vec::new();
+    while !heard.iter().any(|e: &Value| e["type"] == "moved") {
+        heard.push(next(&mut watch).await);
+    }
+    let moved = heard.iter().find(|e| e["type"] == "moved").unwrap();
+    assert_eq!((moved["moved"]["from"].as_str(), moved["moved"]["to"].as_str()), (Some("spring"), Some("fresh")), "{heard:?}");
+    assert!(heard.iter().any(|e| e["type"] == "epic_changed" && e["what"] == "archived"), "{heard:?}");
+    let cur = one(&ada, "epics.current", json!({})).await;
+    assert_eq!((cur["epic"]["name"].as_str(), cur["moved"]["from"].as_str()), (Some("fresh"), Some("spring")), "{cur}");
+
+    // Listed only with --archived; the people counted where they are.
+    let live: Vec<String> = call(&ada, "epics.list", json!({})).await.iter().map(|e| e["epic"]["name"].as_str().unwrap().to_string()).collect();
+    assert_eq!(live, ["genesis", "fresh"]);
+    let all = call(&boss, "epics.list", json!({ "archived": true })).await;
+    let fresh = all.iter().find(|e| e["epic"]["name"] == "fresh").unwrap();
+    assert_eq!(fresh["epic"]["members_on"], 1, "{all:?}");
+    assert_eq!(all.len(), 3);
+    // Switching to it is refused in band.
+    let back = one(&ada, "epics.switch", json!({ "name": "spring" })).await;
+    assert!(back["message"].as_str().unwrap_or("").contains("restore it first"), "{back}");
+
+    // The notice dismissed; restore moves nobody.
+    assert_eq!(one(&ada, "epics.dismiss", json!({})).await["type"], "dismissed");
+    assert!(one(&ada, "epics.current", json!({})).await.get("moved").is_none());
+    let restored = one(&boss, "epics.restore", json!({ "name": "spring" })).await;
+    assert_eq!(restored["type"], "restored", "{restored}");
+    assert_eq!(one(&ada, "epics.current", json!({})).await["epic"]["name"], "fresh");
+}
+
