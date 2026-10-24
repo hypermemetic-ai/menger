@@ -218,19 +218,14 @@ pub(crate) fn open(to: Option<Place>) {
     let Some(h) = HUB.with(Cell::get) else { return };
     let own = OWN.with(Clone::clone);
     let was = own.get_untracked();
-    let mine = to.filter(|p| matches!(p, Place::Tree | Place::Filter));
+    // FILTER-55: the bar's Filter opens the builder on ⌂ everywhere's
+    // filter — a sheet of its own; no sheet of the bar's is raised for it.
+    let mine = to.filter(|p| matches!(p, Place::Tree));
     if was != mine {
         own.set(mine);
     }
-    // FILTER-40: the filter's sheet holds the one panel — the global
-    // filter's unless a tab is already open.
-    let any = Level::ALL.into_iter().any(|l| h.lens.pop(l).is_open());
     if to == Some(Place::Filter) {
-        if !any {
-            h.lens.open_panel(Level::Global, None);
-        }
-    } else if was == Some(Place::Filter) && any {
-        h.lens.close_panel(false);
+        h.lens.open_panel(Level::Global, None);
     }
     match (to == Some(Place::Find), h.overlay.get_untracked() == Overlay::Palette) {
         (true, false) => keys::open_overlay(h.overlay, Overlay::Palette),
@@ -304,6 +299,8 @@ pub(crate) fn Head(route: RwSignal<Route>, #[prop(into)] conn_class: Signal<Stri
                     }
                 }}
             </span>
+            // ORG-4: the organization switch (FILTER-55: the header is off a phone).
+            <crate::orgs::OrgSwitcher />
             <span class=move || format!("pconn {}", conn_class.get())><i class="cell" aria-hidden="true"></i>{move || conn_words.get()}</span>
             // APP-84: every open question — the bar has no fifth place.
             <crate::questions::PhoneCount />
@@ -380,12 +377,23 @@ pub(crate) fn Bar(route: RwSignal<Route>, overlay: RwSignal<Overlay>, tree: nav:
         }
     };
     let filter_place = move || {
-        let n = move || lens.group_count(Level::Global);
+        // FILTER-55: ⌂ everywhere's filter in the builder (its sheet), its
+        // rules counted; a press again closes it.
+        let n = move || crate::fcard::line_rules(lens, Level::Global);
+        let up = move || crate::fcard::hook().is_some_and(|c| c.is_on(&crate::fcard::Subject::Line(Level::Global)));
         view! {
-            <button type="button" class="pl pf" class:on=move || lit(Place::Filter) data-place="filter"
-                aria-expanded=move || lit(Place::Filter).to_string()
-                aria-label=move || match n() { 0 => "the filter".to_string(), n => format!("the filter — {n} group{}", if n == 1 { "" } else { "s" }) }
-                on:click=move |_| tap(Place::Filter)>
+            <button type="button" class="pl pf" class:on=up data-place="filter" data-fcard=""
+                aria-expanded=move || up().to_string()
+                aria-label=move || match n() { 0 => "the filter".to_string(), n => format!("the filter — {n} rule{}", if n == 1 { "" } else { "s" }) }
+                on:click=move |_| {
+                    if up() {
+                        if let Some(c) = crate::fcard::hook() {
+                            c.close();
+                        }
+                    } else {
+                        tap(Place::Filter);
+                    }
+                }>
                 {icon(Place::Filter)}
                 {move || (n() > 0).then(|| view! { <span class="bdg">{n()}</span> })}
                 <span class="sub">"filter"</span>
@@ -495,38 +503,6 @@ pub(crate) fn TreeFoot() -> impl IntoView {
                 {icon(Place::Find)}"go to a ticket…"
             </button>
         </div>
-    }
-}
-
-/// The filter's sheet's head (the header and the lens bar are its body at
-/// phone widths): *Filter*, close.
-#[component]
-pub(crate) fn FilterHead() -> impl IntoView {
-    let lens = lens::use_lens();
-    let own = RwSignal::from(OWN.with(Clone::clone));
-    // FILTER-40: the level the panel's tab edits.
-    let which = move || match lens.open_level() {
-        None | Some(Level::Global) => "every view",
-        Some(l) => crate::filter::tab_words(l),
-    };
-    view! {
-        <div class="psheet-head pfilter-head">
-            <crate::sheet::Grip target="lens-top" head=".pfilter-head" class="grab" open=Signal::derive(move || own.get() == Some(Place::Filter)) dismiss=Callback::new(move |_| open(None)) />
-            <div class="sh">
-                <h3>"Filter"</h3>
-                <span class="m">{which}</span>
-                <button type="button" class="pclose" on:click=move |_| open(None)>"close ▾"</button>
-            </div>
-        </div>
-    }
-}
-
-/// The filter's sheet's scrim — inside the page's column, as the sheet is.
-#[component]
-pub(crate) fn FilterScrim() -> impl IntoView {
-    let own = RwSignal::from(OWN.with(Clone::clone));
-    view! {
-        <div class="pscrim-in" class:on=move || own.get() == Some(Place::Filter) aria-hidden="true" on:click=move |_| open(None)></div>
     }
 }
 

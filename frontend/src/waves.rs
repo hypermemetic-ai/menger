@@ -993,7 +993,7 @@ pub(crate) fn WaveBoard(
         // FILTER-22: a tag on a card builds the wave board's filter.
         <section id="waves" data-shortcode=sc.clone() data-tag-level="waves" data-layout=move || layout.get().as_str()>
             <div class="wbar">
-                <FilterBar level=Level::Waves cats=Cat::WAVES.to_vec() counts />
+                <FilterBar level=Level::Waves counts />
                 <span class="layout" role="group" aria-label="layout">"[ "{seg(Layout::Waves)}" | "{seg(Layout::Stages)}" ]"</span>
                 <span class="tally">{move || shown.with(|a| a.as_ref().map(tally))}</span>
             </div>

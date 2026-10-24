@@ -113,10 +113,12 @@ impl Day {
     }
 
     /// The language's moment: this day, at `time` when given.
+    #[cfg(test)]
     pub(crate) fn moment(self, time: Option<(u8, u8)>) -> Moment {
         Moment { year: self.y as i16, month: self.m as u8, day: self.d as u8, time }
     }
 
+    #[cfg(test)]
     pub(crate) fn of_moment(m: &Moment) -> Self {
         Day::new(i32::from(m.year), u32::from(m.month), u32::from(m.day))
     }

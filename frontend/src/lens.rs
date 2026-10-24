@@ -37,9 +37,8 @@
 //!
 //! - FILTER-39: **the groups** of each level ([`Lens::ors`], src/ors.rs —
 //!   groups joined by an explicit `or`, clauses inside a group `and`) — the
-//!   groups last edited while the filter still says them (a draft group
-//!   `+ or` made), else the filter's own; [`Lens::edit_ors`] (the panel's
-//!   ticks) commits them as the level's filter. A filter applied from
+//!   filter's own; the builder (src/fcard.rs) commits its edits as the
+//!   level's filter. A filter applied from
 //!   outside the panel ([`Lens::apply`], a link's URL, Make global, `reset`)
 //!   moves the level's [`Lens::stamp`], and naming saves lets go of the
 //!   name.
@@ -57,7 +56,7 @@ use menger_tickets_api::filter::{Conj, Field, Filter, Group, Predicate};
 
 use crate::ors::Ors;
 
-use crate::filter::{fold_key, Cat, Clash, Clausal, Clause, Clauses, Host, Op, PanelHost, Pop, ScTree, DEFAULT_KINDS};
+use crate::filter::{Cat, Clash, Clausal, Clause, Clauses, Op, Pop, ScTree, DEFAULT_KINDS};
 use crate::{bindings, dom, keys, nav, Route};
 
 // ---------------------------------------------------------------------
@@ -434,6 +433,7 @@ impl Kept {
         self.filter.groups.iter().map(|g| clause_of(g).filter(|(c, _)| taken.insert(*c))).collect()
     }
 
+#[cfg(test)]
     /// Each category's clause (the menu's checked boxes).
     pub(crate) fn clauses(&self) -> Clauses {
         let mut out = self.local.clone();
@@ -443,6 +443,7 @@ impl Kept {
         out
     }
 
+#[cfg(test)]
     /// How many groups it holds — local clauses counted as groups.
     pub(crate) fn len(&self) -> usize {
         self.filter.groups.len() + self.local.iter().count()
@@ -712,10 +713,8 @@ pub(crate) struct Lens {
     /// every effective filter reads within it.
     org_choice: RwSignal<Option<String>>,
     org: Memo<Option<String>>,
-    /// FILTER-39: per level, the groups last edited (kept while the filter
-    /// is still what they say: a draft group), and the groups the panel
-    /// draws — `None` for a filter deeper than or-of-and.
-    drafts: [RwSignal<Option<Ors>>; 5],
+    /// FILTER-39: per level, the groups the builder draws — `None` for a
+    /// filter deeper than or-of-and.
     drawn: [Memo<Option<Ors>>; 5],
     /// FILTER-37: moves whenever a level's filter is changed from outside
     /// its bar (a link's URL, Make global and its undo, reset) — naming
@@ -774,17 +773,7 @@ impl Lens {
         let clashes = Level::ALL.map(|level| {
             Memo::new(move |_| filters[g].with(|gf| filters[level.index()].with(|own| clash_of(gf, own, level))))
         });
-        let drafts: [RwSignal<Option<Ors>>; 5] = std::array::from_fn(|_| RwSignal::new(None));
-        let drawn: [Memo<Option<Ors>>; 5] = std::array::from_fn(|i| {
-            Memo::new(move |_| {
-                filters[i].with(|f| {
-                    drafts[i].with(|d| match d {
-                        Some(o) if o.to_groups().is_ok_and(|g| g == f.groups) => Some(o.clone()),
-                        _ => Ors::of_filter(f),
-                    })
-                })
-            })
-        });
+        let drawn: [Memo<Option<Ors>>; 5] = std::array::from_fn(|i| Memo::new(move |_| filters[i].with(Ors::of_filter)));
         let lens = Lens {
             chosen,
             defaults,
@@ -799,7 +788,6 @@ impl Lens {
             clashes,
             org_choice,
             org,
-            drafts,
             drawn,
             stamps: std::array::from_fn(|_| RwSignal::new(0)),
         };
@@ -963,37 +951,6 @@ impl Lens {
         self.drawn[level.index()].get()
     }
 
-    /// FILTER-39: `level`'s groups changed by one of src/ors.rs's edits and
-    /// committed as its filter (its local clauses and display kept), the
-    /// groups kept as the draft the panel goes on drawing; what the
-    /// language refuses is refused, nothing committed.
-    pub(crate) fn edit_ors<T>(self, level: Level, f: impl FnOnce(&mut Ors) -> Result<T, String>) -> Result<T, String> {
-        let Some(mut next) = untrack(|| self.kept(level)) else { return Err("the filter is not known yet".into()) };
-        let Some(mut o) = untrack(|| self.ors(level)) else {
-            return Err("this filter nests deeper than groups joined by or \u{2014} edit it as text".into());
-        };
-        let out = f(&mut o)?;
-        next.filter.groups = o.to_groups()?;
-        self.drafts[level.index()].set(Some(o));
-        self.commit(level, Some(next));
-        Ok(out)
-    }
-
-    /// FILTER-39: what `level`'s surface would show were its groups changed
-    /// by `f` — the effective filter's wire text (`global ∧ own`, in the
-    /// chosen organization); `None` when it cannot be said.
-    pub(crate) fn would_be(self, level: Level, f: impl FnOnce(&mut Ors) -> Result<(), String>) -> Option<String> {
-        let mut o = untrack(|| self.ors(level))?;
-        f(&mut o).ok()?;
-        let own = Filter { groups: o.to_groups().ok()?, ..Filter::default() };
-        let eff = match level {
-            Level::Global => own,
-            _ => untrack(|| self.filters[Level::Global.index()].with(|g| g.and(&own))),
-        };
-        let eff = untrack(|| self.org.with(|org| crate::orgs::within(org.as_deref(), &eff)));
-        Some(crate::counts::wire_text(&eff))
-    }
-
     /// FILTER-26: Make global — the global filter becomes `global and nav`
     /// less the nav's default ([`promoted`]) and the nav goes back to its
     /// default. Answers what both were chosen as before, for the one undo
@@ -1041,25 +998,6 @@ impl Lens {
         self.chosen[level.index()].with(Option::is_some)
     }
 
-
-    /// `level`'s clauses, one per category (the menu's checked boxes).
-    /// Tracked.
-    pub(crate) fn clauses(self, level: Level) -> Clauses {
-        self.kept(level).map(|k| k.clauses()).unwrap_or_default()
-    }
-
-    /// FILTER-41: how many clauses `level` holds — its line's Filter badge:
-    /// every clause of its groups (a filter deeper than or-of-and, its
-    /// top-level groups), and its surface's own. Tracked.
-    pub(crate) fn clause_count(self, level: Level) -> usize {
-        let own = self.ors(level).map(|o| o.clauses()).unwrap_or_else(|| self.filter(level).with(|f| f.groups.len()));
-        own + self.kept(level).map_or(0, |k| k.local.iter().count())
-    }
-
-    /// How many groups `level` holds — the header button's badge. Tracked.
-    pub(crate) fn group_count(self, level: Level) -> usize {
-        self.kept(level).map_or(0, |k| k.len())
-    }
 
     /// `level`'s filter as canonical text.
     pub(crate) fn text(self, level: Level) -> String {
@@ -1128,69 +1066,24 @@ impl Lens {
         self.phone.get_untracked()
     }
 
-    /// FILTER-40: the level whose panel is open — one at a time. Tracked.
-    pub(crate) fn open_level(self) -> Option<Level> {
-        Level::ALL.into_iter().find(|l| self.pop(*l).open_tracked())
-    }
-
-    /// FILTER-40: where the one panel is drawn ([`crate::filter::host_of`]).
-    /// Tracked.
-    pub(crate) fn host(self) -> crate::filter::Host {
-        let line = self.surface.get().is_some_and(|l| self.pop(l).mounted_tracked());
-        crate::filter::host_of(self.phone.get(), line)
-    }
-
-    /// FILTER-40: the levels the panel's tabs offer — everywhere; the nav,
-    /// where it is drawn; the route's surface, where its line is. Tracked.
-    pub(crate) fn tabs(self) -> Vec<Level> {
-        // FILTER-55: the board's and the nav's are the builder's, not a tab.
-        let mut out = vec![Level::Global];
-        if let Some(l) = self.surface.get().filter(|l| self.pop(*l).mounted_tracked() && !crate::fcard::builds(*l)) {
-            out.push(l);
-        }
-        out
-    }
-
     pub(crate) fn pop(self, level: Level) -> Pop {
         self.pops[level.index()]
     }
 
-    /// FILTER-49: `level`'s menu opened over the page — on `c`'s category
-    /// when given — every other level's closed.
+    /// FILTER-55: `level`'s filter opened in the builder (a tag's Build, the
+    /// phone bar's Filter) — every filter is edited there; `c`, the category
+    /// the old menu opened on, names nothing the builder needs.
     pub(crate) fn open_panel(self, level: Level, c: Option<Cat>) {
-        // FILTER-55: the board's and the nav's filters are the builder's.
-        if crate::fcard::builds(level) {
-            if let Some(card) = crate::fcard::hook() {
-                let _ = c;
-                self.close_panel(false);
-                card.open_line(level, false);
-                return;
-            }
-        }
-        // FILTER-40: a tab changes which level the one panel edits; the
-        // focus it was opened from stays where it was.
-        let was = Level::ALL.into_iter().find(|l| self.pop(*l).is_open());
-        for l in Level::ALL.into_iter().filter(|l| *l != level) {
-            self.pop(l).hand_over();
-        }
-        self.pop(level).show_from(c, was.is_some());
-        // On a phone the panel is the filter sheet's: raise it.
-        if self.phone.get_untracked() {
-            crate::phonebar::open(Some(crate::phonebar::Place::Filter));
+        let _ = c;
+        if let Some(card) = crate::fcard::hook() {
+            card.open_line(level, false);
         }
     }
 
-    /// FILTER-40: the open panel folded, whichever level it edits.
-    pub(crate) fn close_panel(self, restore: bool) {
-        for l in Level::ALL {
-            self.pop(l).close(restore);
-        }
-    }
-
-    /// The keys, for the app's lifetime: `F` opens or folds the global
-    /// panel anywhere unless typing (or in a dialog, a menu, an overlay);
-    /// `f` the route's surface's, where its bar is drawn (FILTER-49: the
-    /// menu is a popover — a press outside it closes it).
+    /// The keys, for the app's lifetime: `F` opens or closes the builder
+    /// on ⌂ everywhere's filter anywhere unless typing (or in a dialog, a
+    /// menu, an overlay); `f` on the route's surface's, where its bar is
+    /// drawn (FILTER-55).
     pub(crate) fn install(self) {
         window_event_listener(leptos::ev::keydown, move |ev: web_sys::KeyboardEvent| {
             // AGS-28: `f` and `F` are the table's `filter.view` and
@@ -1215,30 +1108,11 @@ impl Lens {
                 }
             };
             ev.prevent_default();
-            if let Some(card) = crate::fcard::hook().filter(|_| crate::fcard::builds(level)) {
-                self.close_panel(false);
+            if let Some(card) = crate::fcard::hook() {
                 card.toggle_line(level);
-            } else if self.pop(level).is_open() {
-                self.close_panel(true);
-            } else {
-                self.open_panel(level, None);
             }
         });
-        // FILTER-49: the menu is a popover again — a press outside it (and
-        // outside every filter's line, whose chips and buttons open it)
-        // closes it. A phone's sheet closes as a sheet does.
-        window_event_listener(leptos::ev::pointerdown, move |ev: web_sys::PointerEvent| {
-            if self.phone.get_untracked() || !Level::ALL.into_iter().any(|l| self.pop(l).is_open()) {
-                return;
-            }
-            let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
-            let inside = target.is_some_and(|t| t.closest(".fmenu, .fbar, [data-fopen], .overlay").ok().flatten().is_some() || !t.is_connected());
-            if !inside {
-                self.close_panel(false);
-            }
-        });
-        // FILTER-40: the panel moves into the phone bar's sheet at phone
-        // widths, and back.
+        // FILTER-40: at phone widths the builder is a sheet.
         window_event_listener(leptos::ev::resize, move |_| {
             let phone = crate::phonebar::is_phone(dom::window().inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1440.0));
             if self.phone.get_untracked() != phone {
@@ -1270,19 +1144,12 @@ fn replace(win: &web_sys::Window, hash: &str, next: &str) {
 pub(crate) fn LensBar(#[prop(into)] applies: Signal<bool>) -> impl IntoView {
     let lens = use_lens();
     // FILTER-12: the global panel's counts are `facets { filter: global }`.
-    lens.pop(Level::Global).configure(&Cat::SERVER, crate::counts::provider(Level::Global));
+    lens.pop(Level::Global).configure(crate::counts::provider(Level::Global));
     let na = Memo::new(move |_| !applies.get() && lens.differs(Level::Global));
     view! {
         {move || na.get().then(|| view! {
             <div class="lens-na" role="note" title="this page shows no ticket">"The global filter doesn't apply here"</div>
         })}
-        <div class="ftop" on:keydown=move |ev| {
-            if let Some(l) = lens.open_level() {
-                fold_key(lens.pop(l), ev)
-            }
-        }>
-            <PanelHost host=Host::Top />
-        </div>
         <Clash level=Level::Global />
     }
 }
@@ -1548,10 +1415,10 @@ mod tests {
     /// FILTER-27 acceptance 3, re-pointed at FILTER-42's groups: every time
     /// clause of the language, typed in the text, is a clause of its group
     /// beside the categories' clauses, in the filter's order, and the groups
-    /// print the canonical text again; × takes one out.
+    /// print the canonical text again.
     #[test]
     fn time_clauses_are_clauses_of_a_group_and_round_trip() {
-        use crate::ors::{Ors, Slot};
+        use crate::ors::Ors;
         use menger_tickets_api::filter::Field;
         let forms = [
             "created today",
@@ -1578,12 +1445,8 @@ mod tests {
             assert_eq!(o.groups.len(), 1, "{form}");
             assert_eq!(o.groups[0].len(), 3, "{form}");
             assert!(matches!(o.groups[0][1].field, Field::History(_)), "{form}");
-            assert!(o.time_at(Slot { group: 0, item: 1 }).is_some(), "{form}");
             assert_eq!(Filter { groups: o.to_groups().unwrap(), ..Filter::default() }.format(), f.format(), "{form}");
         }
-        let mut o = Ors::of_filter(&parsed("created today and status Ready")).unwrap();
-        o.remove(Slot { group: 0, item: 0 });
-        assert_eq!(Filter { groups: o.to_groups().unwrap(), ..Filter::default() }.format(), "status Ready");
         // An `or` of time clauses is two groups.
         let o = Ors::of_filter(&parsed("(changed within 1h or changed yesterday)")).unwrap();
         assert_eq!(o.groups.len(), 2);

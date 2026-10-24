@@ -738,7 +738,7 @@ pub(crate) fn InputsPage() -> impl IntoView {
                 " — and its answer, live; what is waiting first."
             </p>
             <div class="ibar">
-                <FilterBar level=Level::Inputs cats=Cat::INPUTS.to_vec() counts=provider hint="Filter the inputs (f)" />
+                <FilterBar level=Level::Inputs counts=provider hint="Filter the inputs (f)" />
             </div>
             {move || l16.refused.get().map(|why| view! {
                 <p class="irefused" role="status">"The server did not take this filter: "<code>{why}</code></p>

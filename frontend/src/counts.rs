@@ -128,11 +128,11 @@ async fn ask_facets(filter: Option<String>, base: Option<String>, tree: Option<S
 /// lifetime (the view drawing the level's bar).
 pub(crate) fn menu_counts(level: Level) -> Signal<Counts> {
     let lens = use_lens();
-    let pop = lens.pop(level);
     let counts = RwSignal::new(Counts::new());
     let asked = StoredValue::new(0u64);
     Effect::new(move |_| {
-        if !pop.open_tracked() {
+        // FILTER-55: while the builder is open on the level.
+        if !crate::fcard::hook().is_some_and(|c| c.is_on(&crate::fcard::Subject::Line(level))) {
             return;
         }
         let (filter, base) = lens.filter(Level::Global).with(|g| lens.filter(level).with(|own| facets_ask(level, g, own)));

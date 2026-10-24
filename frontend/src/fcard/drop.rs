@@ -3,7 +3,9 @@
 //! **field** (searched; Fields, Dates, Flags, Saved filters), its
 //! **operator** (is / is not), its **values** (ticked, each counted, the
 //! rule following at once; a label typed). A part being added is a ghost row
-//! until its first choice.
+//! until its first choice. A surface's own rules (the wave board's, the
+//! inputs') are offered under **This page** and edited the same way, their
+//! values counted by the surface.
 
 use super::*;
 
@@ -16,6 +18,8 @@ fn title(w: What) -> &'static str {
         What::Field => "Choose a field",
         What::Op => "Operator",
         What::Values(c) => field_of(c).0,
+        What::Local(c) => c.label(),
+        What::LocalOp(_) => "Operator",
     }
 }
 
@@ -50,12 +54,15 @@ pub(super) fn view(card: Card, s: Subject) -> impl IntoView {
         let kind = match d.what {
             What::Field => "field",
             What::Op => "op",
-            What::Values(_) => "values",
+            What::Values(_) | What::Local(_) => "values",
+            What::LocalOp(_) => "op",
         };
         let body = match d.what {
             What::Field => fields(card, s.clone(), d.clone()).into_any(),
             What::Op => ops(card, s.clone(), d.clone()).into_any(),
             What::Values(c) => values_view(card, s.clone(), c).into_any(),
+            What::Local(c) => local_values(card, d.clone(), c).into_any(),
+            What::LocalOp(c) => local_ops(card, d.clone(), c).into_any(),
         };
         let head = phone.then(|| {
             view! {
@@ -152,11 +159,16 @@ fn fields(card: Card, s: Subject, d: Dd) -> impl IntoView {
             })
             .collect();
         let names: Vec<String> = saved::hook().map(|h| h.listed().into_iter().map(|e| e.name).collect()).unwrap_or_default();
+        // A line names itself through the saved filter it is bound to.
+        let me = match line_of(&d.owner) {
+            Some(l) => crate::naming::hook().and_then(|n| untrack(|| n.bound(l))).map(|b| b.name),
+            None => Some(d.owner.clone()),
+        };
         let named: Vec<_> = names
             .into_iter()
             .filter(|n| hits(&q, n))
             .map(|name| {
-                if slug(&name) == slug(&d.owner) {
+                if me.as_deref().is_some_and(|me| crate::parts::names_itself(me, &name, &|m| card.lookup(m))) {
                     return view! { <div class="fc-ddno">"\u{2317} "{name}" \u{2014} would name itself"</div> }.into_any();
                 }
                 let text = crate::naming::saved_text_of(&name);
@@ -166,9 +178,34 @@ fn fields(card: Card, s: Subject, d: Dd) -> impl IntoView {
                 view! { <button type="button" role="menuitemradio" aria-checked=on.to_string() data-dds=name.clone() on:click=move |_| card.choose(&d2, &text)>"\u{2317} "{name.clone()}{n}</button> }.into_any()
             })
             .collect();
-        any |= !listed.is_empty() || !dates.is_empty() || !flags.is_empty() || !named.is_empty();
+        // A surface's own fields — beside the rules, so only where a part is
+        // added at the top of the level's own filter (or one of them changed).
+        let here: Vec<Cat> = match (line_of(&d.owner), &d.target) {
+            (Some(l), Target::Add { group: false } | Target::Local(_)) if d.path.is_empty() => crate::lens::locals(l).to_vec(),
+            _ => Vec::new(),
+        };
+        let page: Vec<_> = here
+            .into_iter()
+            .filter(|c| hits(&q, c.label()))
+            .map(|c| {
+                let on = matches!(d.target, Target::Local(x) if x == c);
+                view! {
+                    <button type="button" role="menuitemradio" aria-checked=on.to_string() data-ddl=c.key() on:click=move |_| {
+                        card.dq.set(String::new());
+                        card.dd.update(|o| {
+                            if let Some(o) = o {
+                                o.what = What::Local(c);
+                            }
+                        });
+                    }>{c.label()}<span class="fc-pkn">"\u{203a}"</span></button>
+                }
+                .into_any()
+            })
+            .collect();
+        any |= !listed.is_empty() || !dates.is_empty() || !flags.is_empty() || !named.is_empty() || !page.is_empty();
         let sec = |h: &'static str, rows: Vec<AnyView>| (!rows.is_empty()).then(|| view! { <div class="fc-ddm">{h}</div>{rows} });
         view! {
+            {sec("This page", page)}
             {sec("Fields", listed.into_iter().map(IntoAny::into_any).collect())}
             {sec("Dates", dates.into_iter().map(IntoAny::into_any).collect())}
             {sec("Flags", flags.into_iter().map(IntoAny::into_any).collect())}
@@ -302,4 +339,91 @@ fn values_view(card: Card, s: Subject, c: PCat) -> impl IntoView {
             <button type="button" class="fc-bt pri sm" data-ddclose="" on:click=move |_| card.dd.set(None)>"Done"</button>
         </div>
     }
+}
+
+/// FILTER-55: a surface's own rule's values, ticked — its clause follows
+/// each tick at once; each counted by the surface (what it would show with
+/// that value alone). Title is typed.
+fn local_values(card: Card, d: Dd, c: Cat) -> impl IntoView {
+    let Some(level) = line_of(&d.owner) else { return ().into_any() };
+    let lens = card.lens;
+    let pop = lens.pop(level);
+    let clause = move || lens.kept(level).and_then(|k| k.local.clause(c));
+    if c == Cat::Title {
+        let typed = StoredValue::new(clause().filter(|_| d.target == Target::At).and_then(|cl| cl.values.first().cloned()).unwrap_or_default());
+        let field = NodeRef::<leptos::html::Input>::new();
+        Effect::new(move |_| {
+            if let Some(el) = field.get() {
+                let _ = el.focus();
+            }
+        });
+        let (d1, d2) = (d.clone(), d.clone());
+        return view! {
+            <div class="fc-ddq fc-lbl">
+                <input node_ref=field type="text" autocomplete="off" spellcheck="false" placeholder="words in the title" aria-label="the title contains" value=typed.get_value() on:input=move |ev| typed.set_value(event_target_value(&ev)) on:keydown=move |ev: web_sys::KeyboardEvent| {
+                    if bindings::hit(&ev, Context::Field) == Some("form.submit") {
+                        ev.prevent_default();
+                        card.title_local(&d1, &event_target_value(&ev));
+                    }
+                } />
+                <button type="button" class="fc-bt sm pri" data-fc="title-apply" on:click=move |_| card.title_local(&d2, &typed.get_value())>"Apply"</button>
+            </div>
+        }
+        .into_any();
+    }
+    let list = move || {
+        let Some(d) = card.dd.get() else { return ().into_any() };
+        let local = lens.kept(level).map(|k| k.local).unwrap_or_default();
+        let counts = pop.counts();
+        let all = counts.get();
+        let rows = crate::filter::offered(c, &crate::filter::MenuFacts { route: None, tree: None, clauses: &local, counts: &all })
+            .into_iter()
+            .filter_map(|r| match r {
+                crate::filter::Row::Value { token, .. } => Some(token),
+                _ => None,
+            })
+            .map(|v| {
+                let on = d.target == Target::At && local.has(c, &v);
+                let n = counts.count(c, &v);
+                let (d2, v2) = (d.clone(), v.clone());
+                view! {
+                    <button type="button" role="menuitemcheckbox" aria-checked=on.to_string() data-ddv=v.clone() on:click=move |_| card.tick_local(&d2, c, &v2)>
+                        <span class="fc-ck">{on.then_some("\u{2713}")}</span>
+                        {c.value_label(&v)}
+                        {n.map(|n| view! { <span class="fc-pkn" class:z=n == 0>{n.to_string()}</span> })}
+                    </button>
+                }
+            })
+            .collect_view();
+        rows.into_any()
+    };
+    let n = move || if card.dd.with(|o| o.as_ref().is_some_and(|o| o.target == Target::At)) { clause().map_or(0, |cl| cl.values.len()) } else { 0 };
+    view! {
+        <div class="fc-ddl">{list}</div>
+        <div class="fc-ddf">
+            <span>{move || format!("{} picked", n())}</span>
+            <button type="button" class="fc-bt pri sm" data-ddclose="" on:click=move |_| card.dd.set(None)>"Done"</button>
+        </div>
+    }
+    .into_any()
+}
+
+/// FILTER-55: a surface's own rule's operator — is / is not (Title's
+/// contains / does not contain).
+fn local_ops(card: Card, d: Dd, c: Cat) -> impl IntoView {
+    let Some(level) = line_of(&d.owner) else { return ().into_any() };
+    let lens = card.lens;
+    let now = lens.kept(level).and_then(|k| k.local.clause(c)).map_or(Op::Is, |cl| cl.op);
+    let rows = [Op::Is, Op::Not]
+        .into_iter()
+        .map(|op| {
+            view! {
+                <button type="button" role="menuitemradio" aria-checked=(op == now).to_string() data-ddop=if op == Op::Not { "1" } else { "0" } on:click=move |_| {
+                    lens.edit(level, |k| k.set_op(c, op));
+                    card.dd.set(None);
+                }>{crate::filter::op_label(c, op, 1)}</button>
+            }
+        })
+        .collect_view();
+    view! { <div class="fc-ddl">{rows}</div> }.into_any()
 }

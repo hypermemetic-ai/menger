@@ -10,8 +10,9 @@
 // rule and a group are added, a group's joiner flips, a rule negates, a field
 // changes, a part goes in the bin, a group is named into a saved filter (a
 // taken name refused), save back and undo, the switch takes it off the board
-// and back, the nav under it is a tree or flat, the empty line's offers and
-// ⌂'s chip open cards. Against a throwaway (scripts/filter-card-check.sh);
+// and back, the nav under it is a tree or flat, the empty line's offers open
+// cards. FILTER-55 (`now`): ⌂'s chip, F and the phone bar's Filter open the
+// builder on ⌂; the wave board's and the inputs' own rules are This page's. Against a throwaway (scripts/filter-card-check.sh);
 // screenshots when SHOTS is given.
 //
 //   node scripts/filter-card-check.mjs ORIGIN SESSION_FILE WIDTH THEME [SHOTS]
@@ -381,14 +382,70 @@ ok(await page.locator(line).count() === 1, `${tag}: f opens the builder`);
 await page.keyboard.press("f");
 await settle(500);
 ok(!(await isOpen()), `${tag}: f again closes it`);
-// ⌂'s chip.
-await page.locator('.fline .fchip-g[data-fcard="⌂"]').first().click();
+// FILTER-55 (the owner's answer `now`): ⌂ everywhere's filter is the
+// builder's too — its chip, F and (a phone) the bar's Filter open it, editable.
+const home = `${card}[data-fcard-open="line:global"]`;
+const homeChip = '.fline .fchip-g[data-fcard="line:global"]';
+ok(await page.locator(homeChip).count() >= 1 && !/not kind doc/.test(await page.locator(homeChip).first().innerText()), `${tag}: ⌂'s chip says no rules (${(await page.locator(homeChip).first().innerText().catch(() => "")).trim()})`);
+await page.locator(homeChip).first().click();
 await settle(900);
-ok(await isOpen("⌂") && (await page.getAttribute(card, "data-ro")) === "true", `${tag}: ⌂'s chip opens its card, read-only here`);
-await fits("⌂'s card");
+ok(await page.locator(home).count() === 1 && (await page.getAttribute(card, "data-ro")) !== "true", `${tag}: ⌂'s chip opens the builder on it, editable`);
+ok(/The filter everywhere/.test(await page.locator(`${home} .fc-head`).innerText().catch(() => "")), `${tag}: its head says whose`);
+ok(await page.locator(`${home} [data-fc="add-rule"]`).count() >= 1, `${tag}: rules can be added to it`);
+await fits("⌂'s builder");
 await shot("07-home");
 await page.keyboard.press("Escape");
 await settle(400);
+await page.keyboard.press("Shift+F");
+await settle(700);
+ok(await page.locator(home).count() === 1, `${tag}: F opens the builder on ⌂`);
+await page.keyboard.press("Escape");
+await settle(400);
+if (phone) {
+  await page.click('#pbar [data-place="filter"]');
+  await settle(800);
+  ok(await page.locator(home).count() === 1, `${tag}: the bar's Filter opens the builder on ⌂`);
+  await page.click(`${home} .fc-head .fc-x`);
+  await settle(400);
+}
+
+// A surface's own rules: This page in the field dropdown, a row of its own.
+const local = async (route, level, field, value, words) => {
+  await go(route);
+  const b = `.fline [data-fbtn="${level}"]`;
+  try { await page.waitForSelector(b, { timeout: 15000 }); } catch { ok(false, `${tag}: ${words}: its Filter button draws`); return; }
+  await page.click(b);
+  await settle(900);
+  const l = `${card}[data-fcard-open="line:${level}"]`;
+  ok(await page.locator(l).count() === 1, `${tag}: ${words}: the Filter button opens the builder`);
+  // (an empty filter opens on a new rule's fields already)
+  if (!(await page.locator(`${dd}[data-dd="field"]`).count())) await page.click(`${l} [data-fc="add-rule"]`);
+  await page.waitForSelector(`${dd}[data-dd="field"]`);
+  ok(await page.locator(`${dd} [data-ddl="${field}"]`).count() === 1, `${tag}: ${words}: the field dropdown offers This page`);
+  await page.click(`${dd} [data-ddl="${field}"]`);
+  await page.waitForSelector(`${dd}[data-dd="values"]`);
+  await page.click(`${dd} [data-ddv="${value}"]`);
+  await settle(700);
+  const row = `${l} .fc-local .fc-rule.local[data-local="${field}"]`;
+  ok(await page.locator(row).count() === 1, `${tag}: ${words}: the value ticked is a row of its own`);
+  ok(await page.locator(".fline .fline-chips .fchip-b, .fline .fchips-g").count() === 0 && /\d/.test(await page.locator(`${b} .fbadge`).innerText().catch(() => "")), `${tag}: ${words}: the line spells it out not, the badge counts it`);
+  if (await page.locator(`${dd} [data-ddclose]:not(.fc-x)`).count()) await page.click(`${dd} [data-ddclose]:not(.fc-x)`);
+  else await page.keyboard.press("Escape");
+  await settle(400);
+  await shot(`13-local-${level}`);
+  await page.click(`${row} [data-fc="neg"]`);
+  await page.waitForSelector(`${dd}[data-dd="op"]`);
+  await page.click(`${dd} [data-ddop="1"]`);
+  await settle(600);
+  ok(/not/.test(await page.locator(`${row} [data-fc="neg"]`).innerText().catch(() => "")), `${tag}: ${words}: its operator is a dropdown (is not)`);
+  await page.click(`${row} [data-fc="bin"]`);
+  await settle(600);
+  ok(await page.locator(row).count() === 0, `${tag}: ${words}: the bin takes it out`);
+  await page.keyboard.press("Escape");
+  await settle(400);
+};
+await local("waves/PLEXUS", "waves", "ready", "workable", "the wave board");
+await local("inputs", "inputs", "state", "answered", "the inputs");
 
 ok(errs.length === 0, `${tag}: no page errors (${errs.join(" | ")})`);
 await browser.close();

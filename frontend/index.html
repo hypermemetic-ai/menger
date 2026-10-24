@@ -1958,163 +1958,9 @@
 
   .app-comp-demo { display: inline-flex; flex-direction: column; gap: 6px; padding: 8px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--bg); }
   
-  .when-rows { display: flex; flex-direction: column; }
 
-  /* FILTER-49: the filter menu — a popover over the page again (the
-     pre-FILTER-39 menu): the search on top, the level switch, the
-     categories as a short list with one open at a time beside it (its
-     values, counts and is / is not in its head), edit as text at the foot.
-     src/filter.rs places it under its button; the page never moves. */
-  .fmenu {
-    position: absolute; z-index: 40; display: flex; flex-direction: column; width: max-content; max-width: calc(100vw - 16px);
-    background: var(--bg); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius-xl);
-    box-shadow: 0 10px 30px var(--shadow); font: calc(12.5px * var(--text-scale))/1.5 var(--mono); overflow: hidden; text-align: left;
-  }
-  .fmenu .fm-head { flex: none; display: flex; align-items: center; gap: .4rem; padding-right: .4rem; border-bottom: var(--border) solid var(--line); }
-  .fmenu input.fsearch {
-    flex: 1 1 auto; min-width: 6rem; font: inherit; padding: .45rem .75rem; border: 0; background: transparent; color: var(--ink); outline: none;
-  }
-  .fmenu input.fsearch::placeholder { color: var(--muted); }
-  .fmenu .flv { flex: none; display: inline-flex; border: var(--border) solid var(--line); border-radius: var(--radius-lg); overflow: hidden; font-size: calc(11px * var(--text-scale)); }
-  .fmenu .flv button { background: none; border: 0; font: inherit; padding: 1px 8px; color: var(--muted); cursor: pointer; white-space: nowrap; }
-  .fmenu .flv button + button { border-left: var(--border) solid var(--line); }
-  .fmenu .flv button:hover { color: var(--ink); }
-  .fmenu .flv button.on { background: var(--sel); color: var(--accent); }
-  .fmenu .flv b { margin-left: .3rem; font-weight: var(--weight-medium); color: var(--ink); font-variant-numeric: tabular-nums; }
-  .fmenu .fp-home, .fchip-g-h { margin-right: .3rem; font-family: var(--sans); }
-  .fmenu .fm-x { flex: none; background: none; border: 0; font: inherit; font-size: calc(15px * var(--text-scale)); color: var(--muted); cursor: pointer; padding: 0 .25rem; }
-  .fmenu .fm-x:hover, .fmenu .fm-x:focus-visible { color: var(--accent); }
-  .fmenu .fpromote { display: flex; align-items: baseline; gap: .5rem; padding: .3rem .6rem; border-bottom: var(--border) solid var(--line); }
-  .fmenu .fpromote button {
-    background: none; border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 .5rem;
-    font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--accent); cursor: pointer; white-space: nowrap; flex: none;
-  }
-  .fmenu .fpromote-hint { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
-  /* FILTER-42 inside the menu: which group a tick goes into, and + or. */
-  .fmenu .finto {
-    flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; padding: 4px 10px; border-bottom: var(--border) solid var(--line);
-    font-family: var(--sans); font-size: calc(11.5px * var(--text-scale)); color: var(--muted);
-  }
-  .fmenu .finto button {
-    background: none; font: inherit; font-family: var(--mono); padding: 0 .45rem; color: var(--muted); cursor: pointer;
-    border: var(--border) solid var(--line); border-radius: var(--radius);
-  }
-  .fmenu .finto button.on { border-color: var(--accent); color: var(--accent); background: var(--sel); }
-  .fmenu .finto button.fm-gx { border: 0; padding: 0 .2rem 0 0; margin-left: -.3rem; color: var(--muted); }
-  .fmenu .finto button.fm-gx:hover { color: var(--err-fg); }
-  .fmenu .finto .fm-addor { border-style: dashed; border-color: var(--accent); color: var(--accent); }
-  .fmenu .finto.deep code { flex-basis: 100%; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); font-family: var(--mono); }
-  .fmenu .fp-note { flex: none; padding: .3rem .75rem; background: var(--sel); border-bottom: var(--border) solid var(--line); font-size: calc(11.5px * var(--text-scale)); }
-  .fmenu .frefused { flex: none; order: 0; flex-basis: auto; margin: 4px 8px; }
-  .fmenu .panes { display: flex; min-height: 0; flex: 1 1 auto; }
-  .fmenu .fpane { overflow-y: auto; padding: 4px; min-height: 0; overscroll-behavior: contain; }
-  .fmenu .fmain { width: 15rem; flex: none; }
-  .fmenu .fsub { width: 18rem; flex: none; border-left: var(--border) solid var(--line); }
-  .fmenu .fsub[data-sec="when"], .fmenu .fsub[data-sec="deployed"], .fmenu .fsub[data-sec="chats"], .fmenu .fsub[data-sec="people"] { width: 20rem; }
-  .fmenu.searching .fmain { width: 18rem; }
-  .fmenu .frow {
-    display: flex; align-items: center; gap: .45rem; padding: 3px 8px; border-radius: var(--radius-md);
-    cursor: pointer; white-space: nowrap; user-select: none;
-  }
-  .fmenu .frow.cat.open { background: var(--sel); }
-  .fmenu .frow.cat.open .flabel { color: var(--accent); }
-  .fmenu .frow .flabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .fmenu .frow .glyph { width: 1.2em; flex: none; text-align: center; color: var(--muted); }
-  .fmenu .frow .arrow, .fmenu .frow .fmeta { color: var(--muted); }
-  .fmenu .frow .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-  .fmenu .frow:has(.fmeta) { flex-wrap: wrap; row-gap: 0; }
-  .fmenu .frow .fmeta { flex-basis: 100%; white-space: normal; font-size: calc(11px * var(--text-scale)); }
-  .fmenu .frow.back { display: none; color: var(--muted); border-bottom: var(--border) solid var(--line); border-radius: 0; margin-bottom: 4px; }
-  .fmenu button.frow, .fmenu button.wback { font: inherit; color: inherit; background: none; border: 0; text-align: left; width: 100%; }
-  .fmenu button.frow:hover, .fmenu button.frow:focus-visible { background: var(--hover); outline: none; }
-  .fmenu button.frow.cat.open:hover { background: var(--sel); }
-  .fmenu .fsec + .fsec { margin-top: 4px; }
-  .fmenu .fsec-h {
-    display: flex; align-items: center; gap: .5rem; margin: 0; padding: 6px 8px 4px; font: var(--weight-strong) calc(10.5px * var(--text-scale)) var(--sans);
-    letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
-  }
-  .fmenu .fsec-sub { padding: 6px 8px 2px; font: var(--weight-strong) calc(10px * var(--text-scale)) var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-  .fmenu .fsec-h + .fsec-sub { padding-top: 0; }
-  .fmenu .fop { margin-left: auto; display: inline-flex; border: var(--border) solid var(--line); border-radius: var(--radius-lg); overflow: hidden; text-transform: none; letter-spacing: 0; font: calc(11.5px * var(--text-scale)) var(--mono); }
-  .fmenu .fop button { background: var(--card); border: 0; font: inherit; padding: 0 .55rem; color: var(--muted); cursor: pointer; }
-  .fmenu .fop button + button { border-left: var(--border) solid var(--line); }
-  .fmenu .fop button.on { background: var(--sel); color: var(--accent); }
-  .fmenu .fv {
-    display: flex; align-items: center; gap: .45rem; width: 100%; padding: 3px 8px; margin: 0; font: inherit; color: inherit; text-align: left;
-    background: none; border: 0; border-radius: var(--radius-md); cursor: pointer; white-space: nowrap;
-  }
-  .fmenu .fv:hover, .fmenu .fv:focus-visible { background: var(--hover); outline: none; }
-  .fmenu .fv .flabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .fmenu .fv-in { margin-left: .4rem; color: var(--accent); font-size: calc(10.5px * var(--text-scale)); }
-  .fmenu .fcount { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; font-size: calc(11px * var(--text-scale)); }
-  .fmenu .fcount.delta { color: var(--accent); }
-  .fmenu .fempty { color: var(--muted); padding: 4px 8px; font-size: calc(11px * var(--text-scale)); }
-  .fmenu .box {
-    flex: none; width: 13px; height: 13px; border: var(--border) solid var(--muted); border-radius: var(--radius-sm); background: transparent;
-    display: inline-flex; align-items: center; justify-content: center; font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-bold); line-height: 1; color: var(--bg);
-  }
-  .fmenu .box.round { border-radius: 50%; }
-  .fmenu .box[data-state="on"] { background: var(--accent); border-color: var(--accent); }
-  .fmenu .box[data-state="on"]::after { content: "\2713"; }
-  .fmenu .box[data-state="not"] { background: var(--err-fg); border-color: var(--err-fg); }
-  .fmenu .box[data-state="not"]::after { content: "\2212"; }
-  .fmenu .fv[data-mark="not"] .flabel > :first-child { text-decoration: line-through; text-decoration-color: var(--err-fg); }
-  .fmenu .box[data-state="covered"] { border-color: var(--accent); }
-  .fmenu .box[data-state="covered"]::after { content: "\2013"; color: var(--accent); }
-  .fmenu .tag { font-size: calc(10.5px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-sm); }
-  .fmenu .kind .kglyph { color: var(--muted); }
-  .fmenu .kind[data-kind="scope"] .kglyph { color: var(--kind-scope); }
-  .fmenu .kind[data-kind="build"] .kglyph { color: var(--kind-build); }
-  .fmenu .kind[data-kind="execution"] .kglyph { color: var(--kind-execution); }
-  .fmenu .kind[data-kind="gap"] .kglyph { color: var(--kind-gap); }
-  .fmenu .kind[data-kind="spike"] .kglyph { color: var(--kind-spike); }
-  .fmenu .ftitle { padding: .3rem .5rem; display: flex; flex-direction: column; gap: .3rem; }
-  .fmenu .ftitle input {
-    font: inherit; padding: .2rem .45rem; background: var(--card); color: var(--ink);
-    border: var(--border) solid var(--line); border-radius: var(--radius); outline: none;
-  }
-  .fmenu .ftitle input:focus { border-color: var(--accent); }
-  .fmenu .fhint { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
-  .fmenu .fm-foot { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .75rem; padding: .3rem .75rem; border-top: var(--border) solid var(--line); font-size: calc(11.5px * var(--text-scale)); }
-  .fmenu .fm-foot .reset { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
-  .fmenu .fm-count { margin-left: auto; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
-  .fmenu .fsave-b, .fmenu .fsaved { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
-  .fmenu .fsaved { color: var(--ink); border-bottom: 2px solid var(--live); }
-  /* FILTER-43: the text drawer — each mistake underlined where it is,
-     listed once with its fix; the chips keep the last filter that read. */
-  .fmenu .fp-text { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
-  .fmenu .fp-drawer { flex: none; width: 0; min-width: 100%; box-sizing: border-box; padding: .45rem .75rem .6rem; border-top: var(--border) solid var(--line); }
-  .fmenu .fdraft {
-    display: block; width: 100%; box-sizing: border-box; resize: vertical; min-height: 3.2em; font: calc(12.5px * var(--text-scale))/1.6 var(--mono);
-    padding: .3rem .5rem; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); outline: none;
-  }
-  .fmenu .fdraft:focus { border-color: var(--accent); }
-  .fmenu .fdraft.bad { border-color: var(--err-fg); }
-  .fmenu .fmarked { margin-top: .3rem; white-space: pre-wrap; overflow-wrap: anywhere; font: calc(12px * var(--text-scale))/1.6 var(--mono); color: var(--muted); }
-  .fmenu .fbad { color: var(--err-fg); text-decoration: wavy underline var(--err-fg); text-underline-offset: 3px; }
-  .fmenu .fmistakes { margin: .25rem 0 0; padding: 0; list-style: none; color: var(--err-fg); font-size: calc(11.5px * var(--text-scale)); }
-  .fmenu .fmistakes li { margin: .1rem 0; }
-  .fmenu .fmistakes b { color: var(--ink); font-weight: var(--weight-medium); }
-  .fmenu .ffix { margin-left: .6rem; background: none; border: 0; border-bottom: 1px dotted var(--accent); padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
-  .fmenu .fp-drawer-foot { display: flex; align-items: center; gap: .6rem; margin-top: .4rem; }
-  .fmenu .fapply {
-    font: var(--weight-medium) calc(11px * var(--text-scale)) var(--mono); letter-spacing: .06em; text-transform: uppercase; padding: .25rem .8rem; cursor: pointer;
-    color: var(--bg); background: var(--accent); border: var(--border) solid var(--accent); border-radius: var(--radius);
-  }
-  .fmenu .fapply:disabled { opacity: .45; cursor: default; }
-  /* Too little room for two panes (src/filter.rs measures the column), and
-     a phone's sheet: one pane — the categories, or the open one's values
-     behind a back row. */
-  .fmenu.narrow .fpane { width: 18rem; max-width: 100%; flex: 0 1 auto; }
-  .fmenu.narrow.has-sub .fmain { display: none; }
-  .fmenu.narrow .fsub { border-left: 0; }
-  .fmenu.narrow .frow.back { display: flex; }
-  .fline .fstale { flex-basis: 100%; color: var(--err-fg); font-size: calc(11.5px * var(--text-scale)); }
   /* FILTER-42: the group a tick goes into, lit on the line while the menu is open. */
   .fline.open .fchips-g.sel { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
-  .fline-addor { background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--accent); cursor: pointer; white-space: nowrap; }
-  .fline-addor:hover { text-decoration: underline; }
-  .ftop { position: relative; }
   .fchip-g {
     display: inline-flex; align-items: center; max-width: 24rem; padding: 0 .5rem; font: inherit; font-size: calc(12px * var(--text-scale));
     color: var(--muted); cursor: pointer; background: transparent; border: var(--border) dashed var(--tree-line); border-radius: var(--radius);
@@ -2153,7 +1999,6 @@
   .fbar .fchip-sug .fchip-f { color: var(--accent); }
   .fbar .fchip .p-x { background: none; border: 0; font: inherit; color: var(--muted); cursor: pointer; padding: 0 .35rem; }
   .fbar .fchip .p-x:hover, .fbar .fchip .p-x:focus-visible { color: var(--err-fg); }
-  .fbar .fchip-local { border-style: dotted; }
   /* FILTER-53: the card on a saved chip (FILTER-50's B, the rule builder) —
      src/fcard.rs. Over the page under its chip; on a phone a sheet with
      Rules / Nav tabs. The rules beside the nav it would draw. */
@@ -2161,10 +2006,6 @@
   .fbar .fchip-ed, .fcard .fc-ed { margin-left: .3rem; font-style: italic; color: var(--err-fg); font-size: calc(11px * var(--text-scale)); }
   .fbar .fchip-b[aria-expanded="true"] .fchip-v { color: var(--accent); }
   .fbar .fline-first { background: none; border: var(--border) dashed var(--accent); border-radius: var(--radius); color: var(--accent); font: inherit; padding: 0 .5rem; cursor: pointer; white-space: nowrap; }
-  .fmenu .fv-wrap { display: flex; align-items: stretch; }
-  .fmenu .fv-wrap > .fv { flex: 1 1 auto; min-width: 0; }
-  .fmenu .fv-info { flex: none; background: none; border: 0; color: var(--muted); font: inherit; cursor: pointer; padding: 0 .5rem; }
-  .fmenu .fv-info:hover, .fmenu .fv-info:focus-visible { color: var(--accent); }
   .fc-scrim { position: fixed; inset: 0; z-index: 44; background: var(--scrim); }
   .fcard {
     position: fixed; z-index: 45; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
@@ -2301,6 +2142,13 @@
   .fcard .fc-ddh { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 6px; }
   .fcard .fc-sel.pick { border-style: dashed; color: var(--muted); }
   .fcard .fc-rule.ghost { border-style: dashed; }
+  /* FILTER-55: a surface's own rules, beside the rules; the filter as text, edited. */
+  .fcard .fc-local { margin: 0 12px 8px; padding-top: 8px; display: flex; flex-direction: column; gap: 6px; border-top: var(--border) dashed var(--line); }
+  .fcard .fc-rule.local { background: var(--panel); }
+  .fcard .fc-txt.edit { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+  .fcard .fc-tin { flex: 1 1 14rem; min-width: 0; box-sizing: border-box; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); padding: 5px 8px; resize: vertical; }
+  .fcard .fc-tin:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .fcard .fc-txt.edit .fc-note { flex-basis: 100%; margin: 0; }
   /* The nav under it: the nav's row, by depth. */
   .fcard .fc-nvb { padding: 4px 0; gap: 0; }
   .fcard .fc-nvm { display: inline-flex; border: var(--border) solid var(--line); border-radius: var(--radius-lg); overflow: hidden; font-weight: var(--weight-normal); }
@@ -2352,15 +2200,6 @@
     .fcard .fc-dds { display: block; position: fixed; inset: 0; z-index: 960; background: var(--scrim); }
     .fcard .fc-ddl button { min-height: 40px; }
   }
-  .fbar .fsave-b, .fbar .fsaved { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; white-space: nowrap; }
-  .fbar .fsaved { color: var(--ink); border-bottom: 2px solid var(--live); }
-  .fbar .fsave-b:hover, .fbar .fsaved:hover { text-decoration: underline; }
-  .fbar .fsave { display: inline-flex; align-items: center; gap: .4rem; }
-  .fbar .fsave-in, .fmenu .fsave-in {
-    font: inherit; width: 11rem; padding: .05rem .4rem; color: var(--ink); background: var(--card);
-    border: var(--border) solid var(--accent); border-radius: var(--radius); outline: none;
-  }
-  .fbar .fsave .fhint { color: var(--muted); font-size: calc(10.5px * var(--text-scale)); }
   .fline :is(.qtaken, .qnote, .qeval) { margin-top: .3rem; }
   .fline .fline-saved { margin-left: .4rem; }
   .bempty-pills.fbar, .tout-pills.fbar { display: inline-flex; flex-wrap: wrap; gap: .3rem; align-items: center; }
@@ -2374,30 +2213,6 @@
     .fline .fline-chips { flex-wrap: nowrap; overflow: hidden; -webkit-mask-image: linear-gradient(to right, var(--ink) 85%, transparent); mask-image: linear-gradient(to right, var(--ink) 85%, transparent); }
     .fline .fline-chips > * { flex-shrink: 0; }
   }
-  .wform .wback {
-    display: flex; align-items: center; gap: .45rem; padding: 3px 8px; cursor: pointer; color: var(--muted);
-    border-bottom: var(--border) solid var(--line) !important; margin-bottom: 4px;
-  }
-  .wform .wback:hover, .wform .wback:focus-visible { color: var(--accent); outline: none; }
-  .wform .when-pane { display: flex; flex-direction: column; gap: 2px; }
-  .wform .wsaid { padding: 2px 8px 4px; font-family: var(--sans); color: var(--ink); font-weight: var(--weight-medium); }
-  .wform .wsec { padding: 2px 6px 6px; border-top: var(--border) solid var(--line); }
-  .wform .wsec:first-of-type { border-top: 0; }
-  .wform .whead {
-    padding: 4px 2px 2px; font-family: var(--sans); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-strong);
-    letter-spacing: .06em; text-transform: uppercase; color: var(--chip-fg);
-  }
-  .wform .wchips { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 0; }
-  .wform .wchip, .wform .wbtn, .wform .wtab, .wform .wlink {
-    font: inherit; font-size: calc(11.5px * var(--text-scale)); line-height: 1.5; cursor: pointer;
-    background: var(--card); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius-md); padding: 0 .45rem;
-  }
-  .wform .wchip:hover, .wform .wbtn:hover, .wform .wtab:hover { border-color: var(--accent); color: var(--accent); }
-  .wform .wchip.on, .wform .wtab.on { background: var(--sel); border-color: var(--accent); color: var(--accent); }
-  .wform .wbtn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-  .wform .wbtn.primary:hover { color: var(--bg); }
-  .wform .wlink { background: none; border-color: transparent; color: var(--accent); padding: 0 .2rem; }
-  .wform .wlink:hover { text-decoration: underline; }
   .wform :is(.wchip, .wbtn, .wtab, .wlink, .cal-step, .cal-year, .cal-y, .tsel-ap):focus-visible,
   .wform .cal-day:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .wform .wrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 3px 0; }
@@ -2407,16 +2222,6 @@
     border: var(--border) solid var(--line); border-radius: var(--radius); outline: none;
   }
   .wform .win:focus, .wform .tsel input:focus { border-color: var(--accent); }
-  .wform .wnum { width: 4.5ch; text-align: right; }
-  .wform .wwho { flex: 1; min-width: 8rem; }
-  .wform .wunits { display: inline-flex; flex-wrap: wrap; gap: 3px; }
-  .wform .wcheck { display: inline-flex; align-items: center; gap: 4px; color: var(--chip-fg); font-size: calc(11px * var(--text-scale)); }
-  .wform .wcheck input { accent-color: var(--accent); }
-  .wform .weditor { margin-top: 4px; padding: 6px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
-  .wform .wtabs { display: flex; gap: 3px; margin-bottom: 6px; flex-wrap: wrap; }
-  .wform .wfoot { justify-content: space-between; border-top: var(--border) solid var(--line); margin-top: 4px; padding-top: 6px; }
-  .wform .werr { margin: 4px 0 0; color: var(--err-fg); font-size: calc(11px * var(--text-scale)); }
-  .wform .wdone { display: flex; justify-content: flex-end; padding: 6px; border-top: var(--border) solid var(--line); }
   /* FILTER-27: the calendar and the time selector (src/calendar.rs). */
   .cal { display: inline-flex; flex-direction: column; gap: 4px; position: relative; font-family: var(--sans); }
   .cal-head { display: flex; align-items: center; gap: 4px; }
@@ -2475,8 +2280,6 @@
     font: inherit; background: none; border: 0; padding: 0 .3rem; color: var(--muted); cursor: pointer;
   }
 
-  .fline .qeval { margin: .35rem 0 0; font: calc(11px * var(--text-scale))/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
-  .fline .qeval .qeval-l { font-family: var(--sans); }
 
   .fline .qtaken, .fline .qnote {
     display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .35rem 0 0; padding: .2rem .55rem;
@@ -2486,12 +2289,6 @@
   .fline .qtaken button.primary { border-color: var(--accent); color: var(--accent); }
   .fline .qnote.sproblem { background: var(--err-bg); color: var(--err-fg); border-color: var(--err-line); }
 
-  .fbar .frefused {
-    padding: .2rem .55rem; font-size: calc(12px * var(--text-scale)); font-family: var(--sans);
-    background: var(--err-bg); color: var(--err-fg); border: var(--border) solid var(--err-line); border-radius: var(--radius-lg);
-  }
-  .fbar .frefused { flex-basis: 100%; order: 9; }
-  .fbar .frefused .p-x { font: inherit; background: none; border: 0; color: var(--muted); cursor: pointer; }
 
   .fbar button.ftext-t {
     background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--muted); cursor: pointer;
@@ -3154,10 +2951,6 @@
   @keyframes menger-deploying { 50% { opacity: .45; } }
   html[data-motion="calm"] .envmark.deploying { animation: none; }
   /* The filter menu's delivery rows: a count that holds work in the accent. */
-  .when-rows .whead.wstages { margin: .45rem .5rem .1rem; }
-  .when-rows .stage-row .fcount { margin-left: auto; }
-  .when-rows .stage-row .fcount.some { color: var(--accent); font-weight: var(--weight-strong); }
-  .wchip .wn { color: var(--muted); font-variant-numeric: tabular-nums; }
   /* #/deployments' lanes: one per promotion edge, the ready count arriving
      as a state change (none stops it; calm keeps it). */
   .dlanes { display: flex; flex-direction: column; gap: .6rem; margin: 0 0 .9rem; }
@@ -5739,7 +5532,7 @@
      sits clear of the bar. Motion (LOOK-8): sheets rise in .32s eased out
      and leave in .2s, the lit place fades in .12s; calm stops the queue
      place's nudge; none moves nothing (the global rule). Tokens only. ── */
-  #phead, #pbar, #pscrim, .pscrim-in, .psheet-head, .psheet-foot { display: none; }
+  #phead, #pbar, #pscrim, .psheet-head, .psheet-foot { display: none; }
   @media (max-width: 820px) {
     /* APP-83: the nav floats, rounded, inset from the screen's edges and
        corners (--nav-b clears the home indicator); --pbar-h stays what it
@@ -5861,7 +5654,6 @@
       opacity: 0; pointer-events: none; transition: opacity .2s ease-in;
     }
     #pscrim { bottom: var(--pbar-h); }
-    .pscrim-in { bottom: var(--pbar-h); z-index: 59; }
     #pscrim.on, .pscrim-in.on { opacity: 1; pointer-events: auto; transition: opacity .32s ease-out; }
     /* The tree's sheet: the nav itself. */
     #nav, #app.nonav #nav {
@@ -5875,59 +5667,12 @@
     #app[data-sheet="tree"] #nav { transform: none; visibility: visible; transition: transform .32s cubic-bezier(.2, .9, .3, 1); }
     #nav .nav-hide { display: none; }
     #nav .row { height: 40px; }
-    /* The filter's sheet: the header (its foot) and the lens bar, the
-       global menu between them laid flat, above the bar; while up, the
-       page's column (which holds it) is lifted over the chat's sheet. */
-    #lens-top {
-      display: flex; flex-direction: column; position: fixed; left: 0; right: 0; bottom: var(--pbar-h); z-index: 60; margin: 0 auto; width: min(600px, 100%);
-      max-height: calc(88dvh - var(--pbar-h)); box-sizing: border-box; overflow: hidden;
-      background: var(--card); border: var(--border) solid var(--tree-line); border-bottom: 0;
-      border-radius: var(--radius-device) var(--radius-device) 0 0; box-shadow: 0 -12px 40px var(--shadow);
-      transform: translateY(calc(100% + var(--pbar-h) + 4px)); visibility: hidden;
-      transition: transform .2s cubic-bezier(.4, 0, 1, 1), visibility 0s linear .2s;
-    }
-    #app[data-sheet="filter"] #lens-top { transform: none; visibility: visible; transition: transform .32s cubic-bezier(.2, .9, .3, 1); }
-    #app:is([data-sheet="filter"], :has(#tdock-sheet.on)) .content { position: relative; z-index: 896; }
-    #lens-top > .pfilter-head { order: 0; }
-    
-    /* FILTER-49: the menu fills the sheet between the lens bar's line and
-       the foot, laid flat (not placed), and scrolls there: one pane, touch-
-       sized rows, the level switch across its head, reset and show N
-       tickets pinned at its foot (FILTER-44's). */
-    #lens-top > .ftop:has(.fmenu) { order: 1; flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
-    #lens-top .fmenu {
-      position: static; flex: 1 0 auto; width: auto; max-width: none; max-height: none; min-height: 200px; margin: 0;
-      border: 0; border-radius: 0; box-shadow: none; background: var(--card); overflow: visible;
-    }
-    #lens-top .fmenu .fm-head { position: sticky; top: 0; z-index: 2; flex-wrap: wrap; gap: 6px; padding: 6px 12px; background: var(--card); }
-    #lens-top .fmenu input.fsearch { padding: .35rem 0; font-size: calc(15px * var(--text-scale)); }
-    #lens-top .fmenu .flv { order: 5; flex-basis: 100%; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
-    #lens-top .fmenu .flv button { text-align: center; padding: 5px 0; }
-    #lens-top .fmenu .fm-x { display: none; }
-    #lens-top .fmenu .panes { flex: 1 0 auto; overflow: visible; }
-    #lens-top .fmenu .fpane { width: auto; flex: 1 1 auto; overflow: visible; padding: 4px 8px; }
-    #lens-top .fmenu :is(.frow, .fv) { min-height: 40px; padding: 4px 8px; font-size: calc(14px * var(--text-scale)); }
-    #lens-top .fmenu .box { width: 18px; height: 18px; font-size: calc(13px * var(--text-scale)); }
-    #lens-top .fmenu :is(.finto button, .fop button) { min-height: 32px; }
-    #lens-top .fmenu .fm-foot { padding: 8px 14px; }
-    #lens-top .fmenu .fp-showbar {
-      position: sticky; bottom: 0; z-index: 2; display: flex; gap: 8px; padding: 10px 12px 12px;
-      background: var(--card); border-top: var(--border) solid var(--line);
-    }
-    #lens-top .fmenu .fp-showbar button {
-      flex: 1; min-height: 44px; font: var(--weight-medium) calc(12px * var(--text-scale)) var(--mono); letter-spacing: .06em; text-transform: uppercase;
-      cursor: pointer; border-radius: var(--radius); border: var(--border) solid var(--ink); background: transparent; color: var(--ink);
-    }
-    #lens-top .fmenu .fp-showbar .fp-show { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-    #lens-top .fmenu .fp-showbar .fp-clear:disabled { opacity: .45; cursor: default; }
-    #lens-top > header {
-      order: 3; flex: none; flex-wrap: nowrap; align-items: center; gap: 8px; min-height: 0; padding: 10px 14px 12px;
-      background: var(--panel); border-top: var(--border) solid var(--line); border-bottom: 0;
-    }
-    #lens-top > header > :not(.org-switch) { display: none; }
-    #lens-top > header:not(:has(.org-switch)) { display: none; }
-    #lens-top > header button.fbtn { margin-left: 0; }
-    
+    /* FILTER-55: the filter is the builder's sheet (the bar's Filter opens
+       it on ⌂), so the lens bar's line and the header stay off a phone. */
+    #lens-top { display: none; }
+    #app:has(#tdock-sheet.on) .content { position: relative; z-index: 896; }
+    #phead .org-switch { flex: none; max-width: 8rem; font: inherit; color: var(--muted); background: transparent; border: 0; }
+
     .pbtn {
       font-family: var(--mono); font-size: calc(11px * var(--text-scale)); font-weight: var(--weight-medium); letter-spacing: .08em; text-transform: uppercase;
       padding: 9px 14px; cursor: pointer; background: transparent; color: var(--ink); border: var(--border) solid var(--ink); border-radius: var(--radius);

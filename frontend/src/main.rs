@@ -367,7 +367,6 @@ mod reply;
 mod typed;
 mod waves;
 mod when;
-mod when_view;
 
 use std::collections::HashSet;
 
@@ -962,7 +961,7 @@ fn Board(
         // board: the server-backed categories, the inherited global pills,
         // the menu's counts from `facets`.
         <div class="bbar">
-            <FilterBar level=lens::Level::Board cats=filter::Cat::SERVER.to_vec() counts=counts::provider(lens::Level::Board) hint="Filter the board (f)" />
+            <FilterBar level=lens::Level::Board counts=counts::provider(lens::Level::Board) hint="Filter the board (f)" />
         </div>
         // ARIA's virtualized-table contract: the table says how many rows
         // it has, each mounted row says which one it is (1 is the head).
@@ -2430,11 +2429,8 @@ fn App() -> impl IntoView {
                 // global menu hanging from both.
                 // APP-50: the phone's top line — where you are, and live.
                 <phonebar::Head route conn_class=phone_conn_class conn_words=phone_conn_words />
-                <phonebar::FilterScrim />
-                // APP-50: at phone widths this is the filter's sheet; while it
-                // is up a press inside it keeps the global menu open.
-                <div id="lens-top" data-fopen=move || (phone_sheet.get() == Some(phonebar::Place::Filter)).then_some("global")>
-                <phonebar::FilterHead />
+                // FILTER-55: off a phone, whose bar's Filter opens the builder.
+                <div id="lens-top">
                 <header>
                     {move || {
                         nav_hidden.get().then(|| view! {

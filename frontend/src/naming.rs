@@ -267,11 +267,6 @@ impl Naming {
         self.busy[level.index()].get()
     }
 
-    /// A name waiting for the tree's first clause. Tracked.
-    pub(crate) fn pending(self, level: Level) -> Option<String> {
-        self.pending[level.index()].get()
-    }
-
     pub(crate) fn dismiss(self, level: Level) {
         self.note[level.index()].set(None);
     }
@@ -492,16 +487,6 @@ impl Naming {
         self.texts.with(|m| m.get(&slug(name)).cloned())
     }
 
-    /// What [`evaluated`] reads: a name's text, `Some(None)`
-    /// for one nothing holds, `None` while not fetched. Tracked.
-    pub(crate) fn lookup(self, name: &str) -> Option<Option<String>> {
-        match self.text(name)? {
-            Fetch::Text(t) => Some(Some(t)),
-            Fetch::Missing | Fetch::Failed(_) => Some(None),
-            Fetch::Loading => None,
-        }
-    }
-
     /// `name`'s text read, once (again only when it failed).
     pub(crate) fn fetch(self, name: &str) {
         let key = slug(name);
@@ -540,11 +525,6 @@ impl Naming {
         }
     }
 
-    /// The panel opened (FILTER-39): its saved filters' counts asked again.
-    pub(crate) fn fresh_counts(self) {
-        self.counts.set(HashMap::new());
-    }
-
     /// `name`'s count in the panel's Saved section (`Some(None)`: asked). Tracked.
     pub(crate) fn count(self, name: &str) -> Option<Option<usize>> {
         self.counts.with(|m| m.get(&slug(name)).copied())
@@ -577,30 +557,6 @@ impl Naming {
             });
         });
     }
-}
-
-/// FILTER-37's "as evaluated": the filter with every name expanded by the
-/// texts known (`texts`: `Some(text)` a name's saved text, `Some(None)` no
-/// saved filter holds it, `None` not fetched yet) — or the names still to
-/// fetch, each once, while one is unknown. What the language refuses (a
-/// cycle, a name nothing holds) is the refusal, in its words.
-pub(crate) fn evaluated(f: &Filter, texts: &dyn Fn(&str) -> Option<Option<String>>) -> Result<Result<String, String>, Vec<String>> {
-    let mut missing: Vec<String> = Vec::new();
-    let mut lookup = |name: &str| match texts(name) {
-        Some(t) => t,
-        None => {
-            if !missing.iter().any(|m| crate::saved::slug(m) == crate::saved::slug(name)) {
-                missing.push(name.to_string());
-            }
-            // Something that reads, so the walk finds the rest.
-            Some("ready".to_string())
-        }
-    };
-    let out = f.resolve(&mut lookup);
-    if !missing.is_empty() {
-        return Err(missing);
-    }
-    Ok(out.map(|r| crate::counts::wire_text(&r)).map_err(|e| e.to_string()))
 }
 
 #[cfg(test)]
@@ -649,21 +605,6 @@ mod tests {
         assert_eq!(entry_for(&[Entry::new("old-name", "New Name")], "Old Name").map(|e| e.id.as_str()), Some("old-name"), "by its path, renamed");
         assert_eq!(saved_text_of("Needs you"), "saved \"Needs you\"");
         assert_eq!(saved_text_of("Plexus-Ready"), "saved Plexus-Ready");
-    }
-
-    #[test]
-    fn as_evaluated_expands_the_names_known() {
-        let f = Filter::parse("saved \"Needs you\" or saved Plexus-Ready").unwrap();
-        let none = |_: &str| None;
-        assert_eq!(evaluated(&f, &none), Err(vec!["Needs you".to_string(), "Plexus-Ready".to_string()]));
-        let known = |n: &str| match crate::saved::slug(n).as_str() {
-            "needs-you" => Some(Some("queued or asking".to_string())),
-            "plexus-ready" => Some(Some("in PLEXUS and not blocked".to_string())),
-            _ => Some(None),
-        };
-        assert_eq!(evaluated(&f, &known), Ok(Ok("(queued or asking or (in PLEXUS and not blocked))".to_string())));
-        let gone = Filter::parse("saved Nope and ready").unwrap();
-        assert!(evaluated(&gone, &known).unwrap().unwrap_err().contains("no saved filter named"));
     }
 
 }

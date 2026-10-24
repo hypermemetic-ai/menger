@@ -336,7 +336,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::bindings::{self, Context};
 use crate::counts::{wire_text, LiveCounts};
-use crate::filter::{Cat, ScTree};
+use crate::filter::ScTree;
 use crate::flat::{self, View};
 use crate::kids::key;
 use crate::lens::{use_lens, Lens, Level};
@@ -3057,7 +3057,7 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             // the global's dashed; the server-backed categories and the
             // panel's counts from `facets`.
             <div class="nbar">
-                <crate::filter::NavChips cats=Cat::SERVER.to_vec() counts=crate::counts::provider(Level::Nav) />
+                <crate::filter::NavChips counts=crate::counts::provider(Level::Nav) />
             </div>
             <div class="tree-scroll" on:scroll=move |_| tree.viewport.notify()>
                 <div
@@ -3221,9 +3221,7 @@ fn nav_f(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
         filter_to(&id, ctx, lens);
         return;
     }
-    if !lens.pop(Level::Nav).is_open() {
-        lens.open_panel(Level::Nav, None);
-    }
+    lens.open_panel(Level::Nav, None);
 }
 
 /// The `is last child` flags of a node's ancestors, outermost first —
