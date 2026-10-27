@@ -217,6 +217,7 @@ fn whole(row: Row, body: String) -> Ticket {
         assignees,
         archived,
         frozen,
+        hidden,
         created_unix,
         updated_unix,
     } = row;
@@ -244,6 +245,7 @@ fn whole(row: Row, body: String) -> Ticket {
         assignees,
         archived,
         frozen,
+        hidden,
         body,
         created_unix,
         updated_unix,
@@ -797,6 +799,9 @@ pub enum Change {
     /// TICKETS-6: a scope was frozen or unfrozen (`freeze` / `unfreeze`);
     /// only broadcast when it moved. Carries the full ticket.
     FrozenChanged { ticket: Ticket },
+    /// TICKETS-27: a ticket was hidden or shown (`update --hidden`).
+    /// Carries the full ticket.
+    HiddenChanged { ticket: Ticket },
     /// An existing ticket's `unlocks` gained `added` because a newly
     /// created ticket named it in `blocked_by`. Carries the full updated
     /// ticket so watch-only clients stay coherent.
@@ -928,6 +933,7 @@ impl Change {
             | Self::LabelsChanged { ticket, .. }
             | Self::AssigneesChanged { ticket, .. }
             | Self::FrozenChanged { ticket }
+            | Self::HiddenChanged { ticket }
             | Self::UnlocksChanged { ticket, .. }
             | Self::UnlocksRemoved { ticket, .. }
             | Self::BlockersChanged { ticket, .. }
@@ -3158,6 +3164,8 @@ impl Store {
         db::migrate_add_assignees(&mut conn)?;
         // TICKETS-6: and `frozen`, 0 for every ticket. No row is rewritten.
         db::migrate_add_frozen(&mut conn)?;
+        // TICKETS-27: and `hidden`, 0 for every ticket. No row is rewritten.
+        db::migrate_add_hidden(&mut conn)?;
         // COMP-3: a database written before COMP-3 — or a new one — gains the
         // `components` table here, once, durably, with the registry built
         // from every body; after it, every open reads the table.
@@ -5388,6 +5396,8 @@ mod archive;
 mod freeze;
 #[cfg(test)]
 mod tests_freeze;
+#[cfg(test)]
+mod tests_hidden;
 pub use archive::{ArchiveAnswer, RestoreAnswer};
 #[cfg(test)]
 mod tests_archive;

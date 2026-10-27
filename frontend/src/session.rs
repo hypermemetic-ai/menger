@@ -1134,7 +1134,9 @@ async fn session(
                 // TICKETS-9: and the assignees.
                 | TicketsEvent::AssigneesChanged { ticket, .. }
                 // TICKETS-6: and the frozen mark.
-                | TicketsEvent::FrozenChanged { ticket },
+                | TicketsEvent::FrozenChanged { ticket }
+                // TICKETS-27: and the hidden mark.
+                | TicketsEvent::HiddenChanged { ticket },
             ) => {
                 let summary = TicketSummary::from(&ticket);
                 remember(&summary);
@@ -1646,6 +1648,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             frozen: false,
+            hidden: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),

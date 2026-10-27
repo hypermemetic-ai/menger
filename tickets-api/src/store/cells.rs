@@ -143,6 +143,8 @@ pub struct Key {
     archived: bool,
     /// TICKETS-6: it is a frozen scope.
     frozen: bool,
+    /// TICKETS-27: it is hidden from the nav's views.
+    hidden: bool,
 }
 
 fn place<T: PartialEq>(all: &[T], v: &T) -> u8 {
@@ -162,6 +164,7 @@ impl Key {
             labels: LabelSet::NONE,
             archived: false,
             frozen: false,
+            hidden: false,
         }
     }
 
@@ -173,6 +176,11 @@ impl Key {
     /// TICKETS-6: this cell, frozen or not.
     pub(super) fn freezing(self, frozen: bool) -> Self {
         Self { frozen, ..self }
+    }
+
+    /// TICKETS-27: this cell, hidden or not.
+    pub(super) fn hiding(self, hidden: bool) -> Self {
+        Self { hidden, ..self }
     }
 
     /// MENGER-12: this cell, asking or not, holding `labels`.
@@ -197,6 +205,7 @@ impl Key {
         .with(asking, LabelSet::of(&t.labels))
         .archiving(t.archived.is_some())
         .freezing(t.frozen)
+        .hiding(t.hidden)
     }
 
     pub fn status(self) -> Status {
@@ -243,6 +252,11 @@ impl Key {
     pub fn frozen(self) -> bool {
         self.frozen
     }
+
+    /// TICKETS-27: whether it is hidden.
+    pub fn hidden(self) -> bool {
+        self.hidden
+    }
 }
 
 /// As `--verify-derived` names a cell: `(Ready, build, none, blocked, no
@@ -256,7 +270,7 @@ impl fmt::Display for Key {
         };
         write!(
             f,
-            "({}, {}, {}, {}, {}{}{}{}{}{})",
+            "({}, {}, {}, {}, {}{}{}{}{}{}{})",
             self.status(),
             self.kind(),
             self.severity().map_or("none".to_string(), |s| s.as_str().to_ascii_lowercase()),
@@ -267,6 +281,7 @@ impl fmt::Display for Key {
             labels,
             if self.archived { ", archived" } else { "" },
             if self.frozen { ", frozen" } else { "" },
+            if self.hidden { ", hidden" } else { "" },
         )
     }
 }
@@ -645,6 +660,18 @@ impl Cells {
     /// took before the archive.
     pub(super) fn archived(&self, sc: Option<&ShortcodeId>) -> u64 {
         let count = |held: &Held| held.iter().filter(|(id, _)| self.keys[*id as usize].archived()).map(|(_, b)| b.len()).sum::<u64>();
+        match sc {
+            Some(sc) => self.held.get(sc).map_or(0, count),
+            None => self.held.values().map(count).sum(),
+        }
+    }
+
+    /// TICKETS-27: how many tickets are hidden, of `sc` alone or of every
+    /// shortcode — a sum over the bitmaps of the hidden cells, never a walk.
+    /// A view asks it first: with none hidden (or archived) it takes the
+    /// unscoped path.
+    pub(super) fn hidden(&self, sc: Option<&ShortcodeId>) -> u64 {
+        let count = |held: &Held| held.iter().filter(|(id, _)| self.keys[*id as usize].hidden()).map(|(_, b)| b.len()).sum::<u64>();
         match sc {
             Some(sc) => self.held.get(sc).map_or(0, count),
             None => self.held.values().map(count).sum(),

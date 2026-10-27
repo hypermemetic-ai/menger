@@ -603,6 +603,12 @@ export interface Ticket {
   only ever true on a scope; asked by the filter cell `frozen`. Omitted
   on the wire when false. */
     frozen?: boolean;
+    /** TICKETS-27: a hidden ticket is in no nav view (`list`, `nav tree`,
+  `nav counts`, `nav groups`, the board) unless the filter names it
+  (the cell `hidden`) or the read is its parent's children; it is
+  otherwise a normal ticket — `get`, `search`, `find`, blockers, inputs
+  and chats reach it. Set by `create`/`update`. Omitted when false. */
+    hidden?: boolean;
     /** ACCESS-10: how many of `blocked_by` the reader may not see — dropped
   from the list and counted here, so readiness stays honest. Omitted
   (0) for a reader who sees them all. */
@@ -778,6 +784,13 @@ export interface TicketsEventLabelsChanged {
 its `frozen` as the write left it. */
 export interface TicketsEventFrozenChanged {
     type: 'frozen_changed';
+    ticket: Ticket;
+}
+/** TICKETS-27: a ticket was hidden from, or returned to, the nav's views
+(`update --hidden`; `watch` for every one that moved it). The whole
+ticket rides along, its `hidden` as the write left it. */
+export interface TicketsEventHiddenChanged {
+    type: 'hidden_changed';
     ticket: Ticket;
 }
 /** TICKETS-9: a ticket's assignees moved (yielded by `assign`, and by
@@ -1451,7 +1464,7 @@ export interface TicketsEventRevised {
     rev: number;
     ticket: TicketId;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventFrozenChanged | TicketsEventAssigneesChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventFilterSaved | TicketsEventFilterDeleted | TicketsEventFilterChecked | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventFrozen | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord | TicketsEventAssignRecord | TicketsEventRevision | TicketsEventRevisionsEnd | TicketsEventRevisionAt | TicketsEventRevisionDiff | TicketsEventRevisionRestored | TicketsEventRevised;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventFrozenChanged | TicketsEventHiddenChanged | TicketsEventAssigneesChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventArchived | TicketsEventRestored | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventWatchClosed | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventFilterSaved | TicketsEventFilterDeleted | TicketsEventFilterChecked | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventHiddenBlockers | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventFrozen | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord | TicketsEventAssignRecord | TicketsEventRevision | TicketsEventRevisionsEnd | TicketsEventRevisionAt | TicketsEventRevisionDiff | TicketsEventRevisionRestored | TicketsEventRevised;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -1464,6 +1477,7 @@ export declare function isTicketsEventCommitsLinked(e: TicketsEvent): e is Ticke
 export declare function isTicketsEventCommitsUnlinked(e: TicketsEvent): e is TicketsEventCommitsUnlinked;
 export declare function isTicketsEventLabelsChanged(e: TicketsEvent): e is TicketsEventLabelsChanged;
 export declare function isTicketsEventFrozenChanged(e: TicketsEvent): e is TicketsEventFrozenChanged;
+export declare function isTicketsEventHiddenChanged(e: TicketsEvent): e is TicketsEventHiddenChanged;
 export declare function isTicketsEventAssigneesChanged(e: TicketsEvent): e is TicketsEventAssigneesChanged;
 export declare function isTicketsEventUnlocksChanged(e: TicketsEvent): e is TicketsEventUnlocksChanged;
 export declare function isTicketsEventUnlocksRemoved(e: TicketsEvent): e is TicketsEventUnlocksRemoved;

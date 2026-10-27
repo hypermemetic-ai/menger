@@ -103,6 +103,7 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         Change::LabelsChanged { ticket, added, removed } => TicketsEvent::LabelsChanged { ticket, added, removed },
         Change::AssigneesChanged { ticket, added, removed } => TicketsEvent::AssigneesChanged { ticket, added, removed },
         Change::FrozenChanged { ticket } => TicketsEvent::FrozenChanged { ticket },
+        Change::HiddenChanged { ticket } => TicketsEvent::HiddenChanged { ticket },
         Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
         // MENGER-30: `update`'s.
         Change::UnlocksRemoved { ticket, removed } => TicketsEvent::UnlocksRemoved { ticket, removed },

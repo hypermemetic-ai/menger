@@ -589,6 +589,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::LabelsChanged { ref ticket, .. }
         | E::AssigneesChanged { ref ticket, .. }
         | E::FrozenChanged { ref ticket }
+        | E::HiddenChanged { ref ticket }
         | E::UnlocksChanged { ref ticket, .. }
         | E::UnlocksRemoved { ref ticket, .. }
         | E::BlockersChanged { ref ticket, .. }
@@ -1338,6 +1339,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             frozen: false,
+            hidden: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),

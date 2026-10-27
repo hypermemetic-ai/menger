@@ -704,6 +704,8 @@ the ticket page all have it without a `get`. */
   /** TICKETS-6: as on [`Ticket`] — on the row, so the nav, the board and
 the ticket page draw ❄ without a `get`. */
   frozen?: boolean;
+  /** TICKETS-27: as on [`Ticket`] — on the row. */
+  hidden?: boolean;
   /** ACCESS-10: as on [`Ticket`]. */
   hiddenBlockedBy?: number;
   /** ACCESS-10: as on [`Ticket`]. */

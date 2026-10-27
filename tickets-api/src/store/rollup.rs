@@ -33,6 +33,11 @@ impl Tally {
         if t.archived.is_some() {
             return Self { archived: 1, ..Self::default() };
         }
+        // TICKETS-27: a hidden ticket is counted nowhere — the nav's groups
+        // read their visible work, as an archived ticket's row does.
+        if t.hidden {
+            return Self::default();
+        }
         if t.kind.has_lifecycle() {
             Self {
                 total: 1,
@@ -503,7 +508,7 @@ impl Rollups {
         let gain = t.status == Status::Complete;
         // ARCHIVE-2: an archived ticket is counted in `archived` alone,
         // whatever its status: its completion moves nothing.
-        if !Self::crosses(previous, t.status) || t.archived.is_some() {
+        if !Self::crosses(previous, t.status) || t.archived.is_some() || t.hidden {
             return Vec::new();
         }
         let home = self.count(rows, t, Tally::DONE, gain);
@@ -586,6 +591,9 @@ impl Rollups {
         }
     }
 
+    /// TICKETS-27: and `t` hidden or shown, which moves its count the same
+    /// way (out of, or back into, what it counts live).
+    ///
     /// ARCHIVE-2: `t` archived or restored (already in `rows`, `was` its
     /// tally before): its count moves between `archived` and what it counts
     /// live, where its tree is kept and up every row it is drawn in.

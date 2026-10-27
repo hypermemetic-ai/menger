@@ -741,6 +741,8 @@ impl TicketsActivation {
         block: Option<Vec<TicketRef>>,
         /// Ticket ids it no longer waits on (optional; an id in both block and unblock is refused).
         unblock: Option<Vec<TicketRef>>,
+        /// Hide the ticket from the nav's views (list, nav tree, counts, groups, the board) or show it again (optional; TICKETS-27: a filter naming `hidden`, or its parent's children, still reach it).
+        hidden: Option<bool>,
         /// Where the change comes from: app | api | pipeline (optional, default api) — kept in its transitions.
         source: Option<CallerSource>,
         /// Why, kept in its transitions (optional).
@@ -748,7 +750,7 @@ impl TicketsActivation {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // AUTH-7: the gate held the grant on the target; a parent or a
         // blocker beyond it is proved here (`updating`, ACCESS-11).
-        let ask = update_of(title, body, kind, status, parent, severity, block, unblock);
+        let ask = crate::store::Update { hidden, ..update_of(title, body, kind, status, parent, severity, block, unblock) };
         // ARCHIVE-2: moved under an archived parent, its chain comes back after.
         answered_then!(store = self.store.clone(), user, Some(id.to_string()), then => {
             let at = updating(&store, &user, permit::<Editor>(&store, &user, &id)?, &ask)?;

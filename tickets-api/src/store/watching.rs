@@ -152,6 +152,7 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
         Change::LabelsChanged { ticket, added, removed } => sees.id(&ticket.id).then(|| Change::LabelsChanged { ticket: row(ticket), added, removed }),
         Change::AssigneesChanged { ticket, added, removed } => sees.id(&ticket.id).then(|| Change::AssigneesChanged { ticket: row(ticket), added, removed }),
         Change::FrozenChanged { ticket } => sees.id(&ticket.id).then(|| Change::FrozenChanged { ticket: row(ticket) }),
+        Change::HiddenChanged { ticket } => sees.id(&ticket.id).then(|| Change::HiddenChanged { ticket: row(ticket) }),
         Change::SeverityChanged { ticket, previous } => sees.id(&ticket.id).then(|| Change::SeverityChanged { ticket: row(ticket), previous }),
         // The waiter it gained or lost may be hidden: its row says so in
         // `hidden_unlocks`, and the name is blanked (ACCESS-3 #13).

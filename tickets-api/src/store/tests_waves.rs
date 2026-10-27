@@ -389,6 +389,7 @@ fn a_chain_longer_than_any_call_stack_is_placed() {
         parent_hidden: false,
         archived: None,
         frozen: false,
+        hidden: false,
         labels: Vec::new(),
         assignees: Vec::new(),
         id: format!("LONG-{seq}").into(),

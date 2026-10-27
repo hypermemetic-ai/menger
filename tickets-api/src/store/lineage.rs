@@ -1060,7 +1060,9 @@ impl Store {
                 return Ok(TreePage { nodes: Vec::new(), next: None, remaining: 0 });
             }
         }
-        let mut c = Compiled::read(&cache, &q.lens, None)?;
+        // TICKETS-27: a parent's children reach the hidden ones.
+        let lens = if parent.is_some() && !q.matches_only { q.lens.showing_hidden() } else { q.lens.clone() };
+        let mut c = Compiled::read(&cache, &lens, None)?;
         if let Some(id) = q.keep.as_deref().filter(|_| q.matches_only) {
             if sees.is_none_or(|s| filtered::keep_row(&cache, id).is_some_and(|t| s.sees_row(t))) {
                 c.keep(id);

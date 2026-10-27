@@ -363,6 +363,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
             parent_hidden: false,
             archived: None,
             frozen: false,
+            hidden: false,
             parent: parent.map(crate::address::TicketId::new),
             child_count: 0,
             // SDLC-9: none — a commit is linked after birth, as `create`

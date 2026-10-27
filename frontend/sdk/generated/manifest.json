@@ -619,6 +619,7 @@
       "update": [
         "block",
         "body",
+        "hidden",
         "id",
         "kind",
         "message",

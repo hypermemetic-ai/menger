@@ -605,6 +605,7 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         archived: s.archived.is_some(),
         // TICKETS-6: on its row.
         frozen: s.frozen,
+        hidden: s.hidden,
         id: s.id.to_string(),
         epic: s.epic.to_string(),
         title: s.title.clone(),
@@ -1609,6 +1610,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             frozen: false,
+            hidden: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
@@ -1737,6 +1739,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             frozen: false,
+            hidden: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: s.id,

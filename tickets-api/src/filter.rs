@@ -182,6 +182,10 @@ pub enum Field {
     /// `frozen` (TICKETS-6): a frozen scope — it takes no new children, and
     /// the shortcode it roots no new numbers, until it is unfrozen.
     Frozen,
+    /// `hidden` (TICKETS-27): the ticket is hidden from the nav's views. A
+    /// filter that does not name it admits no hidden ticket
+    /// ([`Filter::matches`]): `not hidden` is every filter's default.
+    Hidden,
     /// `in <SHORTCODE>`: its shortcode is the one named (upper case). ORG-3:
     /// by its letters — every shortcode with them, wherever hosted.
     In(String),
@@ -271,6 +275,7 @@ impl Field {
             Field::Label(_) => "label",
             Field::Archived => "archived",
             Field::Frozen => "frozen",
+            Field::Hidden => "hidden",
             Field::In(_) => "in",
             Field::Under(_) => "under",
             Field::Ticket(_) => "ticket",
@@ -290,7 +295,7 @@ impl Field {
             Field::Category(c) => c.as_str().into(),
             Field::Kind(k) => k.as_str().into(),
             Field::Severity(s) => severity_name(*s).into(),
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen => return None,
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen | Field::Hidden => return None,
             // ORG-13: an epic's `under` says its name back (`any` for `~*`).
             Field::Under(x) if x == EPIC_ANY => "any".into(),
             Field::Under(x) if is_epic_name(x) => x[EPIC_MARK.len_utf8()..].to_ascii_lowercase(),
@@ -348,7 +353,7 @@ impl Field {
             | Field::Ticket(_)
             | Field::Text(_)
             | Field::Label(_)
-            | Field::Archived | Field::Frozen
+            | Field::Archived | Field::Frozen | Field::Hidden
             | Field::History(_)
             | Field::Group(_)
             | Field::Saved(_) => return None,
@@ -369,6 +374,7 @@ impl Field {
             Field::Label(l) => f.labels.iter().any(|x| x.eq_ignore_ascii_case(l)),
             Field::Archived => f.archived,
             Field::Frozen => f.frozen,
+            Field::Hidden => f.hidden,
             // TICKETS-9: `unassigned` is `assigned`'s truth, negated.
             Field::History(h) if h.event == Event::Unassigned => !f.history.iter().any(|x| x == ASSIGNED),
             Field::History(h) => {
@@ -414,7 +420,7 @@ impl Predicate {
     pub fn format(&self) -> String {
         let head = if self.not { "not " } else { "" };
         match &self.field {
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen => {
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen | Field::Hidden => {
                 format!("{head}{}", self.field.name())
             }
             Field::Text(t) => format!("{head}text \"{t}\""),
@@ -785,6 +791,8 @@ pub struct Facts {
     pub archived: bool,
     /// TICKETS-6: it is a frozen scope.
     pub frozen: bool,
+    /// TICKETS-27: it is hidden from the nav's views.
+    pub hidden: bool,
     /// What `under` finds it under: its own id, its ancestors' ids, its
     /// shortcode and the shortcodes hosting it.
     pub lineage: Vec<String>,
@@ -855,8 +863,24 @@ impl Filter {
     /// every group. ARCHIVE-2: and — unless the filter names `archived`
     /// ([`Filter::names_archived`]) — whether it is live: `not archived` is
     /// every filter's default, the empty filter's included.
+    ///
+    /// TICKETS-27: and — unless the filter names `hidden`
+    /// ([`Filter::names_hidden`]) — whether it is not hidden from the nav's
+    /// views.
     pub fn matches(&self, facts: &Facts) -> bool {
+        (!facts.archived || self.names_archived()) && (!facts.hidden || self.names_hidden()) && self.matches_as_written(facts)
+    }
+
+    /// TICKETS-27: [`Filter::matches`] for a read that reaches the hidden —
+    /// a parent's children, `find`, `search`: the archive's default alone.
+    pub fn matches_showing_hidden(&self, facts: &Facts) -> bool {
         (!facts.archived || self.names_archived()) && self.matches_as_written(facts)
+    }
+
+    /// TICKETS-27: whether any of its predicates, at any depth, names
+    /// `hidden` — which lifts the default that admits no hidden ticket.
+    pub fn names_hidden(&self) -> bool {
+        self.leaves().iter().any(|p| matches!(&p.field, Field::Hidden))
     }
 
     /// ARCHIVE-2: [`Filter::matches`] without the archive's default — the
@@ -1382,7 +1406,7 @@ fn predicate_mistake(raw: &str, s: &str) -> Option<Mistake> {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 49] = [
+const NAMES: [&str; 50] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -1400,6 +1424,8 @@ const NAMES: [&str; 49] = [
     "archived",
     // TICKETS-6: a frozen scope.
     "frozen",
+    // TICKETS-27: hidden from the nav's views.
+    "hidden",
     // ARCHIVE-2: the archive's other end.
     "restored",
     // CHAT-3: the reader's chats.
@@ -1674,6 +1700,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "asking" => flag(Field::Asking),
         // TICKETS-6: the frozen mark (a cell).
         "frozen" => flag(Field::Frozen),
+        // TICKETS-27: the hidden mark (a cell).
+        "hidden" => flag(Field::Hidden),
         // ARCHIVE-2: the mark (a cell); with a window or `by`, the archive
         // write that set it (the transition log).
         "archived" if tail.is_empty() => Ok(Field::Archived),
@@ -3054,6 +3082,8 @@ enum Dim {
     Archived,
     /// TICKETS-6: whether it is frozen — free, as the archive's mark is.
     Frozen,
+    /// TICKETS-27: whether it is hidden — free, as the archive's mark is.
+    Hidden,
 }
 
 fn dims(field: &Field) -> Vec<Dim> {
@@ -3065,7 +3095,7 @@ fn dims(field: &Field) -> Vec<Dim> {
         Field::HasCommits => vec![Dim::Commits],
         Field::Asking => vec![Dim::Asking],
         Field::In(_) => vec![Dim::Epic],
-        Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen => {
+        Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen | Field::Hidden => {
             var(field).into_iter().collect()
         }
         // FILTER-36: what its leaves read.
@@ -3091,6 +3121,7 @@ fn var(field: &Field) -> Option<Dim> {
         Field::Saved(n) => Some(Dim::Saved(crate::saved_filters::slug(n))),
         Field::Archived => Some(Dim::Archived),
         Field::Frozen => Some(Dim::Frozen),
+        Field::Hidden => Some(Dim::Hidden),
         _ => None,
     }
 }
@@ -3159,7 +3190,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
                     epics.push(e);
                 }
             }
-            f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen) => {
+            f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen | Field::Hidden) => {
                 if let Some(v) = var(f).filter(|v| !vars.contains(v)) {
                     vars.push(v);
                 }
@@ -3189,7 +3220,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
             .map(|p| {
                 let lit = match &p.field {
                     Field::In(e) => Lit::Epic(epics.iter().position(|x| x.eq_ignore_ascii_case(e)).unwrap_or(usize::MAX)),
-                    f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen) => {
+                    f @ (Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen | Field::Hidden) => {
                         match var(f) {
                             Some(v) => Lit::Var(vars.iter().position(|x| *x == v).unwrap_or(usize::MAX)),
                             None => Lit::Always,
