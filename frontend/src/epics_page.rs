@@ -16,6 +16,7 @@
 //!
 //! Every change asks the server, which checks it; the page reads again.
 
+use crate::bindings::{self, Context};
 use leptos::prelude::*;
 use menger_tickets_api::{Epic, EpicsEvent};
 use wasm_bindgen_futures::spawn_local;
@@ -265,7 +266,7 @@ fn NewEpic(naming: RwSignal<bool>, reload: impl Fn() + Copy + Send + Sync + 'sta
         <div class="enew">
             <input placeholder="name" aria-label="new epic name" prop:value=move || name.get()
                 on:input=move |ev| name.set(event_target_value(&ev))
-                on:keydown=move |ev: web_sys::KeyboardEvent| if ev.key() == "Enter" { go() } />
+                on:keydown=move |ev: web_sys::KeyboardEvent| if bindings::hit(&ev, Context::Field) == Some("form.submit") { go() } />
             <button class="primary" on:click=move |_| go()>"create"</button>
             <button on:click=move |_| naming.set(false)>"cancel"</button>
         </div>
@@ -290,7 +291,7 @@ fn ArchiveDialog(c: Confirm, confirm: RwSignal<Option<Confirm>>, note: RwSignal<
         }
     };
     let on_key = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Escape" {
+        if bindings::hit(&ev, Context::Dialog) == Some("dialog.close") {
             close();
         }
     };
@@ -340,7 +341,11 @@ fn RenameDialog(name: String, renaming: RwSignal<Option<String>>, note: RwSignal
             <div id="epic-rename" class="dialog" role="dialog" aria-modal="true" on:click=|ev| ev.stop_propagation()>
                 <h2>"Rename "<span class="mono">{name.clone()}</span></h2>
                 <input aria-label="new name" prop:value=move || to.get() on:input=move |ev| to.set(event_target_value(&ev))
-                    on:keydown=move |ev: web_sys::KeyboardEvent| if ev.key() == "Enter" { go2() } else if ev.key() == "Escape" { close() } />
+                    on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
+                        Some("form.submit") => go2(),
+                        Some("form.cancel") => close(),
+                        _ => {}
+                    } />
                 <p class="hint">"The old name stays an alias, so filters and links that name it still work."</p>
                 <div class="sacts">
                     <button on:click=move |_| close()>"cancel"</button>

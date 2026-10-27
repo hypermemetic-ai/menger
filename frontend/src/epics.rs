@@ -30,6 +30,7 @@
 //! What decides — which epic is current, its line, the notice's words, a
 //! namesake's key — is pure here, pinned by native tests.
 
+use crate::bindings::{self, Context};
 use std::cell::RefCell;
 
 use futures::StreamExt;
@@ -383,7 +384,7 @@ fn list_view() -> impl IntoView {
     view! {
         <div class="epop-scrim" on:click=move |_| close()></div>
         <div class="epop" role="menu" aria-label="epics" on:click=|ev| ev.stop_propagation()
-            on:keydown=move |ev: web_sys::KeyboardEvent| if ev.key() == "Escape" { close() }>
+            on:keydown=move |ev: web_sys::KeyboardEvent| if bindings::hit(&ev, Context::Menu) == Some("dialog.close") { close() }>
             <div class="ehint">"your epic — only you move"</div>
             {options}
             <div class="esep"></div>
@@ -391,7 +392,7 @@ fn list_view() -> impl IntoView {
                 <div class="enew">
                     <input placeholder="name" aria-label="new epic name" prop:value=move || name.get()
                         on:input=move |ev| name.set(event_target_value(&ev))
-                        on:keydown=move |ev: web_sys::KeyboardEvent| if ev.key() == "Enter" { go() } />
+                        on:keydown=move |ev: web_sys::KeyboardEvent| if bindings::hit(&ev, Context::Field) == Some("form.submit") { go() } />
                     <button class="primary" on:click=move |_| go()>"create"</button>
                 </div>
             })}
