@@ -28,6 +28,7 @@ pub(super) const SCHEMA: &str = "
             archived     TEXT,
             assignees    TEXT NOT NULL DEFAULT '[]',
             frozen       INTEGER NOT NULL DEFAULT 0,
+            hidden       INTEGER NOT NULL DEFAULT 0,
             UNIQUE (epic, seq)
         );
     ";
@@ -519,6 +520,26 @@ pub(super) fn migrate_add_frozen(conn: &mut Connection) -> anyhow::Result<bool> 
     Ok(true)
 }
 
+/// The column TICKETS-27 adds: whether the ticket is hidden from the nav's
+/// views, 0 or 1.
+const HIDDEN_COLUMN: &str = "hidden";
+
+/// One-shot, durable migration of a database written before TICKETS-27: the
+/// `hidden` column, 0 for every ticket (none was hidden). A column with a
+/// constant default rewrites no row, so this is instant at any size; an
+/// older build names its columns and still opens the file.
+/// Returns whether the column was added.
+pub(super) fn migrate_add_hidden(conn: &mut Connection) -> anyhow::Result<bool> {
+    if has_column(conn, "tickets", HIDDEN_COLUMN)? {
+        return Ok(false);
+    }
+    let tx = conn.transaction()?;
+    tx.execute(&format!("ALTER TABLE tickets ADD COLUMN {HIDDEN_COLUMN} INTEGER NOT NULL DEFAULT 0"), [])?;
+    tx.commit()?;
+    tracing::info!("TICKETS-27: added the {HIDDEN_COLUMN} column, nothing hidden, durably");
+    Ok(true)
+}
+
 /// ARCHIVE-2: the mark as stored — JSON, or `NULL`.
 fn archived_text(a: &Option<crate::types::Archived>) -> Option<String> {
     a.as_ref().map(|a| serde_json::to_string(a).expect("serialize the archive's mark"))
@@ -566,8 +587,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits, child_count, path, labels, archived, assignees, frozen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                  created_unix, updated_unix, commits, child_count, path, labels, archived, assignees, frozen, hidden)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
              ON CONFLICT (id) DO UPDATE SET
                  epic = excluded.epic,
                  seq = excluded.seq,
@@ -587,7 +608,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
                  labels = excluded.labels,
                  archived = excluded.archived,
                  assignees = excluded.assignees,
-                 frozen = excluded.frozen",
+                 frozen = excluded.frozen,
+                 hidden = excluded.hidden",
         params![
             t.id,
             // ORG-3: the column holds the shortcode's identity — the code
@@ -611,6 +633,7 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
             archived_text(&t.archived),
             serde_json::to_string(&t.assignees).expect("serialize assignees"),
             t.frozen,
+            t.hidden,
         ],
     )?;
     Ok(())
@@ -629,8 +652,8 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits, child_count, unsatisfied, path, labels, archived, assignees, frozen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+                  created_unix, updated_unix, commits, child_count, unsatisfied, path, labels, archived, assignees, frozen, hidden)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
     )?;
     debug_assert_eq!(tickets.len(), open.len());
     for (t, open) in tickets.iter().zip(open) {
@@ -656,6 +679,7 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
             archived_text(&t.archived),
             serde_json::to_string(&t.assignees).expect("serialize assignees"),
             t.frozen,
+            t.hidden,
         ])?;
     }
     Ok(())
@@ -666,9 +690,9 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
 /// whole ticket is read back as. SDLC-9: `commits` at 12. SCALE-28:
 /// `child_count` at 13. WAVE-10: `path` at 14. MENGER-12: `labels` at 15.
 /// ARCHIVE-2: `archived` at 16. TICKETS-9: `assignees` at 17. TICKETS-6:
-/// `frozen` last, at 18.
+/// `frozen` at 18. TICKETS-27: `hidden` last, at 19.
 const ROW_COLUMNS: &str = "id, epic, seq, title, status, kind, severity,
-                    blocked_by, unlocks, created_unix, updated_unix, parent, commits, child_count, path, labels, archived, assignees, frozen";
+                    blocked_by, unlocks, created_unix, updated_unix, parent, commits, child_count, path, labels, archived, assignees, frozen, hidden";
 
 /// [`ROW_COLUMNS`] for a file that may be from before WAVE-10 — what
 /// `--verify-derived` reads, which runs no migration: `NULL` stands in for
@@ -693,6 +717,10 @@ fn row_columns(conn: &Connection) -> rusqlite::Result<String> {
     // TICKETS-6: and 0 for a `frozen` column it does not have yet.
     if !has_column(conn, "tickets", FROZEN_COLUMN)? {
         columns = columns.replace(", frozen", ", 0 AS frozen");
+    }
+    // TICKETS-27: and 0 for a `hidden` column it does not have yet.
+    if !has_column(conn, "tickets", HIDDEN_COLUMN)? {
+        columns = columns.replace(", hidden", ", 0 AS hidden");
     }
     Ok(columns)
 }
@@ -744,6 +772,8 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         assignees: parse_ids(17, &row.get::<_, String>(17)?)?,
         // TICKETS-6: moved by `freeze` / `unfreeze` alone.
         frozen: row.get(18)?,
+        // TICKETS-27: moved by `update` alone.
+        hidden: row.get(19)?,
     })
 }
 
@@ -770,7 +800,7 @@ pub(super) fn load_rows_counted(
     conn: &Connection,
 ) -> anyhow::Result<(HashMap<String, Row>, HashMap<String, u32>)> {
     let mut stmt = conn.prepare(&format!("SELECT {ROW_COLUMNS}, unsatisfied FROM tickets"))?;
-    let rows = stmt.query_map([], |r| Ok((read_row(r)?, r.get::<_, u32>(19)?)))?;
+    let rows = stmt.query_map([], |r| Ok((read_row(r)?, r.get::<_, u32>(20)?)))?;
     let (mut out, mut open) = (HashMap::new(), HashMap::new());
     for row in rows {
         let (row, n) = row?;
@@ -805,7 +835,7 @@ pub(super) fn row_unmigrated(conn: &Connection, id: &str) -> rusqlite::Result<Op
 /// statement, so from one snapshot (SCALE-28: its `child_count` too).
 pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Ticket>> {
     conn.prepare_cached(&format!("SELECT {ROW_COLUMNS}, body FROM tickets WHERE id = ?1"))?
-        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(19)?)))
+        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(20)?)))
         .optional()
 }
 
@@ -823,7 +853,7 @@ pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
         "UPDATE tickets SET
                  epic = ?2, seq = ?3, title = ?4, status = ?5, kind = ?6,
                  severity = ?7, blocked_by = ?8, unlocks = ?9, parent = ?10,
-                 created_unix = ?11, updated_unix = ?12, commits = ?13, labels = ?14, archived = ?15, assignees = ?16, frozen = ?17
+                 created_unix = ?11, updated_unix = ?12, commits = ?13, labels = ?14, archived = ?15, assignees = ?16, frozen = ?17, hidden = ?18
              WHERE id = ?1",
     )?
     .execute(params![
@@ -844,6 +874,7 @@ pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
         archived_text(&t.archived),
         serde_json::to_string(&t.assignees).expect("serialize assignees"),
         t.frozen,
+        t.hidden,
     ])?;
     match changed {
         1 => Ok(()),

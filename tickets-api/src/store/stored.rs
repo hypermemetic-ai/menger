@@ -111,7 +111,14 @@ use crate::address::{ShortcodeId, TicketId, TicketName};
 /// is form 14's as it is: it gains the column in place, once ([`upgrade`]).
 /// One way: an older build reads a form-14 file as its own; once anything
 /// is frozen, it would read a frozen scope's cell as its unfrozen twin's.
-const FORM: i64 = 14;
+///
+/// TICKETS-27 is form 15: a cell says whether its tickets are `hidden` — the
+/// column, 0 by default. A file in form 10 to 14 holds no hidden ticket (the
+/// tickets' `hidden` column is new with this form), so it gains the column
+/// in place, once ([`upgrade`]). One way: an older build reads a form-15
+/// file as its own; once anything is hidden, it would read a hidden
+/// ticket's cell as its visible twin's.
+const FORM: i64 = 15;
 
 /// COMMENT-2, IDENTITY-21, AUTH-7: the forms [`upgrade`] takes to [`FORM`]
 /// in place. MENGER-12: none — form 10 moves the cells, so every older form
@@ -119,7 +126,8 @@ const FORM: i64 = 14;
 /// ARCHIVE-2: and form 11, which gains the archive's columns (so does 10).
 /// ACCESS-22: and form 12, which gains the teams' tables (so do 10 and 11).
 /// TICKETS-6: and form 13, which gains the cells' `frozen` (so do 10 to 12).
-const UPGRADES_FROM: [i64; 4] = [10, 11, 12, 13];
+/// TICKETS-27: and form 14, which gains the cells' `hidden` (so do 10 to 13).
+const UPGRADES_FROM: [i64; 5] = [10, 11, 12, 13, 14];
 
 /// IDENTITY-21: what form 8 adds beside the tables — a comment's signer.
 fn add_comment_principal(conn: &Connection) -> rusqlite::Result<()> {
@@ -161,6 +169,18 @@ const ARCHIVE_COLUMNS: [(&str, &str); 5] = [
 
 /// TICKETS-6: the column form 14 adds, `(table, column)`.
 const FROZEN_COLUMN: (&str, &str) = ("cells", "frozen");
+
+/// TICKETS-27: the column form 15 adds, `(table, column)`.
+const HIDDEN_COLUMN: (&str, &str) = ("cells", "hidden");
+
+/// TICKETS-27: [`HIDDEN_COLUMN`] added where it is missing.
+fn add_hidden_column(conn: &Connection) -> rusqlite::Result<()> {
+    let (table, column) = HIDDEN_COLUMN;
+    if !db::has_column(conn, table, column)? {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"), [])?;
+    }
+    Ok(())
+}
 
 /// TICKETS-6: [`FROZEN_COLUMN`] added where it is missing.
 fn add_frozen_column(conn: &Connection) -> rusqlite::Result<()> {
@@ -314,7 +334,8 @@ const SCHEMA: &str = "
             asking   INTEGER NOT NULL DEFAULT 0,
             labels   TEXT NOT NULL DEFAULT '[]',
             archived INTEGER NOT NULL DEFAULT 0,
-            frozen   INTEGER NOT NULL DEFAULT 0
+            frozen   INTEGER NOT NULL DEFAULT 0,
+            hidden   INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS cell_bits (
             epic TEXT NOT NULL,
@@ -679,8 +700,8 @@ fn write_tree(conn: &Connection, t: &tree::Stored) -> rusqlite::Result<()> {
 /// FILTER-4: one cell of the table.
 fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO cells (id, state, kind, severity, blocked, commits, menger, asking, labels, archived, frozen)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO cells (id, state, kind, severity, blocked, commits, menger, asking, labels, archived, frozen, hidden)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )?
     .execute(params![
         id,
@@ -694,6 +715,7 @@ fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
         serde_json::to_string(&*key.labels().labels()).expect("serialize labels"),
         key.archived(),
         key.frozen(),
+        key.hidden(),
     ])?;
     Ok(())
 }
@@ -920,6 +942,8 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     add_archive_columns(&tx)?;
     // TICKETS-6: and from form 13 or older the cells' `frozen`.
     add_frozen_column(&tx)?;
+    // TICKETS-27: and from form 14 or older the cells' `hidden`.
+    add_hidden_column(&tx)?;
     create_children_index(&tx)?;
     drop_ready_index(&tx)?;
     // COMMENT-2: form 7's comments table — empty for a file that had none.
@@ -1001,10 +1025,12 @@ pub(super) fn upgrade(conn: &mut Connection, form: i64) -> anyhow::Result<bool> 
     tx.execute_batch(super::teams::TABLES)?;
     // TICKETS-6: form 14's column, 0 — nothing was frozen.
     add_frozen_column(&tx)?;
+    // TICKETS-27: form 15's column, 0 — nothing was hidden.
+    add_hidden_column(&tx)?;
     mark_stale(&tx, false)?;
     tx.commit()?;
     tracing::warn!(
-        "ORG-3, ARCHIVE-2, ACCESS-22, TICKETS-6: the file gained stored form {FORM} — the shortcodes, orgs and pins tables, the archive's columns, the teams' tables, the cells' frozen — in {:.1} ms, durably; \
+        "ORG-3, ARCHIVE-2, ACCESS-22, TICKETS-6, TICKETS-27: the file gained stored form {FORM} — the shortcodes, orgs and pins tables, the archive's columns, the teams' tables, the cells' frozen and hidden — in {:.1} ms, durably; \
          it was in form {form}, whose derived state is form {FORM}'s (every shortcode is named by its id already), \
          so nothing was built again; every later open reads it",
         started.elapsed().as_secs_f64() * 1000.0
@@ -1287,8 +1313,10 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
     let archived = if db::has_column(conn, "cells", "archived")? { "archived" } else { "0" };
     // TICKETS-6: and `frozen` as 0 in one from before form 14.
     let frozen = if db::has_column(conn, "cells", "frozen")? { "frozen" } else { "0" };
+    // TICKETS-27: and `hidden` as 0 in one from before form 15.
+    let hidden = if db::has_column(conn, "cells", "hidden")? { "hidden" } else { "0" };
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, state, kind, severity, blocked, commits, menger, asking, labels, {archived}, {frozen} FROM cells ORDER BY id"
+        "SELECT id, state, kind, severity, blocked, commits, menger, asking, labels, {archived}, {frozen}, {hidden} FROM cells ORDER BY id"
     ))?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
@@ -1309,7 +1337,7 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
             rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, e.to_string().into())
         })?;
         let labels: Vec<crate::vocab::Label> = labels.into_iter().map(crate::vocab::Label::stored).collect();
-        let key = key.with(r.get(7)?, cells::LabelSet::of(&labels)).archiving(r.get(9)?).freezing(r.get(10)?);
+        let key = key.with(r.get(7)?, cells::LabelSet::of(&labels)).archiving(r.get(9)?).freezing(r.get(10)?).hiding(r.get(11)?);
         out.insert(r.get(0)?, key);
     }
     Ok(out)

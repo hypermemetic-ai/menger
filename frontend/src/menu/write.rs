@@ -102,7 +102,7 @@ pub(crate) fn send(call: Call, change: Change, last_error: RwSignal<Option<Strin
             Ok::<_, String>(match call {
                 Call::Update(id, args) => {
                     let (title, kind, status, parent, severity, block, unblock, _, _) = typed_args(args)?;
-                    client.update_all(typed(&id)?, title, None, kind, status, parent, severity, block, unblock, source, None).await
+                    client.update_all(typed(&id)?, title, None, kind, status, parent, severity, block, unblock, None, source, None).await
                 }
                 Call::Many(ids, args) => {
                     let (_, kind, status, parent, severity, block, unblock, label, unlabel) = typed_args(args)?;

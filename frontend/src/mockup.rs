@@ -770,6 +770,7 @@ mod tests {
             assignees: Vec::new(),
             archived: None,
             frozen: false,
+            hidden: false,
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic),
             shortcode: menger_tickets_api::ShortcodeId::new(epic),

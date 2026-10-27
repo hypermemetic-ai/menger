@@ -176,6 +176,7 @@ pub(crate) mod tests {
                                 labels: if hi == 1 { vec!["needs-you".into()] } else { Vec::new() },
                                 archived: false,
                                 frozen: false,
+                                hidden: false,
                                 lineage: vec![format!("{epic}-{n}"), epic.into(), "PLEXUS-1".into()],
                                 history: h.iter().map(|s| s.to_string()).collect(),
                             });

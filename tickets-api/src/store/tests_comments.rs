@@ -537,7 +537,7 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     assert_eq!(read_state(&path), State::Older(6));
     assert!(!has_comments_table(&path));
     match Store::verify_derived(&path).unwrap() {
-        Verdict::NotStored(why) => assert!(why.contains("stored in form 6; this build reads 14") && why.contains("builds it again"), "{why}"),
+        Verdict::NotStored(why) => assert!(why.contains("stored in form 6; this build reads 15") && why.contains("builds it again"), "{why}"),
         other => panic!("a form-6 file is not this build's: {other:?}"),
     }
 
@@ -553,7 +553,7 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     // MENGER-12: a form-6 file is built again — a number stored by hand in
     // it is answered as built.
     let conn = Connection::open(&path).unwrap();
-    assert!(!stored::upgrade(&mut Connection::open(&path).unwrap(), 14).unwrap(), "form 14: nothing to upgrade");
+    assert!(!stored::upgrade(&mut Connection::open(&path).unwrap(), 15).unwrap(), "form 15: nothing to upgrade");
     assert!(!stored::upgrade(&mut Connection::open(&path).unwrap(), 6).unwrap(), "form 6: built again, not upgraded");
     conn.execute_batch("UPDATE rollup_groups SET total = total + 100 WHERE epic = 'SOLO'; UPDATE derived_state SET form = 6;").unwrap();
     drop(conn);
@@ -565,7 +565,7 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     drop(store);
     assert_eq!(read_state(&path), State::Current);
     let conn = Connection::open(&path).unwrap();
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 14);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 15);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 

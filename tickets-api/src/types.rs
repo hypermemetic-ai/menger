@@ -479,6 +479,13 @@ pub struct Ticket {
     /// on the wire when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub frozen: bool,
+    /// TICKETS-27: a hidden ticket is in no nav view (`list`, `nav tree`,
+    /// `nav counts`, `nav groups`, the board) unless the filter names it
+    /// (the cell `hidden`) or the read is its parent's children; it is
+    /// otherwise a normal ticket — `get`, `search`, `find`, blockers, inputs
+    /// and chats reach it. Set by `create`/`update`. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -605,6 +612,9 @@ pub struct TicketSummary {
     /// the ticket page draw ❄ without a `get`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub frozen: bool,
+    /// TICKETS-27: as on [`Ticket`] — on the row.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
     pub created_unix: i64,
     pub updated_unix: i64,
 }
@@ -635,6 +645,7 @@ impl From<Ticket> for TicketSummary {
             assignees: t.assignees,
             archived: t.archived,
             frozen: t.frozen,
+            hidden: t.hidden,
             created_unix: t.created_unix,
             updated_unix: t.updated_unix,
         }
@@ -1683,6 +1694,10 @@ pub enum TicketsEvent {
     /// `watch` for every one that moved it). The whole ticket rides along,
     /// its `frozen` as the write left it.
     FrozenChanged { ticket: Ticket },
+    /// TICKETS-27: a ticket was hidden from, or returned to, the nav's views
+    /// (`update --hidden`; `watch` for every one that moved it). The whole
+    /// ticket rides along, its `hidden` as the write left it.
+    HiddenChanged { ticket: Ticket },
     /// TICKETS-9: a ticket's assignees moved (yielded by `assign`, and by
     /// `watch` for every `assign` that changed something). `added` and
     /// `removed` are the principals that moved — both empty is `assign`'s
@@ -2369,6 +2384,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             frozen: false,
+            hidden: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: "W-2".into(),
@@ -2447,6 +2463,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             frozen: false,
+            hidden: false,
             id: "SUM-1".into(),
             epic: "SUM".into(),
             shortcode: "SUM".into(),

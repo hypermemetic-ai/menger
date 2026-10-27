@@ -493,7 +493,7 @@ module's. Yields exactly one event: `Updated { ticket, changed }`
    * @requiresAuth — resolver: self.access.verify
    * @requires `tickets.update` on the scope of `id`
    */
-  update(id: TicketRef, block?: TicketRef[] | null, body?: Body | null, kind?: Kind | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, title?: Title | null, unblock?: TicketRef[] | null): AsyncGenerator<TicketsEvent>;
+  update(id: TicketRef, block?: TicketRef[] | null, body?: Body | null, hidden?: boolean | null, kind?: Kind | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, title?: Title | null, unblock?: TicketRef[] | null): AsyncGenerator<TicketsEvent>;
   /**
    * The same update to many tickets in one write — kind, status, parent, severity, blockers, labels; by ids or a filter; all lands or none does; yields updated_many { ids, changed, tickets, unchanged }.
 
@@ -754,8 +754,8 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *update(id: TicketRef, block?: TicketRef[] | null, body?: Body | null, kind?: Kind | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, title?: Title | null, unblock?: TicketRef[] | null): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.update', { block, body, id, kind, message, parent, severity, source, status, title, unblock });
+  async *update(id: TicketRef, block?: TicketRef[] | null, body?: Body | null, hidden?: boolean | null, kind?: Kind | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, title?: Title | null, unblock?: TicketRef[] | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.update', { block, body, hidden, id, kind, message, parent, severity, source, status, title, unblock });
     yield* extractData<TicketsEvent>(stream);
   }
 

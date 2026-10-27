@@ -51,6 +51,10 @@ pub struct Lens {
     /// ([`Filter::matches`]). A reader's reach ([`Lens::reach`]) and
     /// [`Lens::all`] are: what may be read, never what a view shows.
     written: bool,
+    /// TICKETS-27: judged without the hidden default, which admits no hidden
+    /// ticket unless the filter names `hidden` ([`Filter::matches`]) — a read
+    /// that reaches the hidden: a parent's children, `find`, `search`.
+    hidden_ok: bool,
 }
 
 /// A lens's judge: a shortcode, a cell, the lineage's names that hold, and
@@ -75,6 +79,7 @@ impl Lens {
             judge: Arc::new(move |e, k, _, _| judge(e, k)),
             filter: None,
             written: true,
+            hidden_ok: false,
         }
     }
 
@@ -86,7 +91,7 @@ impl Lens {
         if let (Some(a), Some(b)) = (&self.filter, &reach.filter) {
             // ARCHIVE-2: judged as this lens is — a view's keeps the
             // archive's default, a reach's or `all`'s has none.
-            return Ok(Lens::compiled(&a.and(b), self.written)?.with_clock(self.clock.clone()));
+            return Ok(Lens::compiled(&a.and(b), self.written, self.hidden_ok)?.with_clock(self.clock.clone()));
         }
         let union = |a: &[String], b: &[String]| -> Vec<String> {
             let mut v: Vec<String> = a.iter().chain(b).cloned().collect();
@@ -111,6 +116,7 @@ impl Lens {
             judge: Arc::new(move |e, k, l, h| a(e, k, l, h) && b(e, k, l, h)),
             filter: None,
             written: self.written,
+            hidden_ok: self.hidden_ok,
         })
     }
 
@@ -191,7 +197,7 @@ impl Lens {
     /// ARCHIVE-2: a reader's reach — `filter` judged as written, so an
     /// archived ticket in reach is still reached by name.
     pub(super) fn reach(filter: &Filter) -> Result<Self, StoreError> {
-        Self::compiled(filter, true)
+        Self::compiled(filter, true, false)
     }
 
     /// A filter's text, read by the language (FILTER-10) and judged by its
@@ -209,11 +215,22 @@ impl Lens {
     /// `text` is refused ([`refuse`]). FILTER-13: `under` is answered — its
     /// names kept, and the evaluator handed the lineage they are tested on.
     pub fn of(filter: &Filter) -> Result<Self, StoreError> {
-        Self::compiled(filter, false)
+        Self::compiled(filter, false, false)
+    }
+
+    /// TICKETS-27: this lens for a read that reaches the hidden — a parent's
+    /// children, `find`, `search`, the ready set: the same filter, judged
+    /// without the default that leaves a hidden ticket out of a view. A lens
+    /// made of a judge alone has no default to lift.
+    pub fn showing_hidden(&self) -> Self {
+        match (&self.filter, self.hidden_ok) {
+            (Some(f), false) => Self::compiled(f, self.written, true).map(|l| l.with_clock(self.clock.clone())).unwrap_or_else(|_| self.clone()),
+            _ => self.clone(),
+        }
     }
 
     /// [`Lens::of`], or (`written`) [`Lens::reach`].
-    fn compiled(filter: &Filter, written: bool) -> Result<Self, StoreError> {
+    fn compiled(filter: &Filter, written: bool, hidden_ok: bool) -> Result<Self, StoreError> {
         refuse(filter)?;
         // FILTER-36: every leaf, a nested group's at any depth.
         let leaves = filter.leaves();
@@ -283,12 +300,15 @@ impl Lens {
                 let f = facts(epic, key, lineage, holds);
                 if written {
                     judged.matches_as_written(&f)
+                } else if hidden_ok {
+                    judged.matches_showing_hidden(&f)
                 } else {
                     judged.matches(&f)
                 }
             }),
             filter: Some(Arc::new(filter.clone())),
             written,
+            hidden_ok,
         })
     }
 
@@ -365,6 +385,7 @@ fn facts(letters: &str, key: Key, lineage: &[&str], holds: &[&str]) -> Facts {
         labels: key.labels().labels().iter().map(|l| l.to_string()).collect(),
         archived: key.archived(),
         frozen: key.frozen(),
+        hidden: key.hidden(),
         lineage: lineage.iter().map(|l| l.to_string()).collect(),
         history: holds.iter().map(|h| h.to_string()).collect(),
     }
@@ -445,13 +466,24 @@ impl PartialEq for Lens {
     /// ARCHIVE-2: and how it is judged — the empty filter as a view reads
     /// it ([`Lens::live`]) is not the empty filter as written ([`Lens::all`]).
     fn eq(&self, other: &Self) -> bool {
-        self.text == other.text && self.written == other.written
+        self.text == other.text && self.written == other.written && self.hidden_ok == other.hidden_ok
     }
 }
 
 impl std::fmt::Debug for Lens {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Lens({:?})", self.text)
+    }
+}
+
+impl Filtered {
+    /// TICKETS-27: the lens this read is answered under — a parent's page
+    /// reaches the hidden children, any other read leaves them out.
+    pub(super) fn reads(&self) -> Lens {
+        match self.parent {
+            Some(_) => self.lens.showing_hidden(),
+            None => self.lens.clone(),
+        }
     }
 }
 
@@ -510,7 +542,7 @@ pub struct Watcher {
 /// ORG-3: `q`'s `epic` and `parent` resolved first ([`Sugar::of`]) — a
 /// name that is ambiguous is refused, naming each.
 pub(super) fn view<'c>(cache: &'c Cache, q: &Filtered) -> Result<View<'c>, StoreError> {
-    view_of(cache, q, Sugar::of(cache, q)?, Compiled::read(cache, &q.lens, q.status)?)
+    view_of(cache, q, Sugar::of(cache, q)?, Compiled::read(cache, &q.reads(), q.status)?)
 }
 
 /// ORG-3: [`view`] for a reach's own question (a grant's lens, `member`
@@ -518,7 +550,7 @@ pub(super) fn view<'c>(cache: &'c Cache, q: &Filtered) -> Result<View<'c>, Store
 /// never refusing the read it narrows.
 pub(super) fn view_lenient<'c>(cache: &'c Cache, q: &Filtered) -> View<'c> {
     let sugar = Sugar::of(cache, q).unwrap_or(Sugar { epic: Some(ShortcodeId::new("")), parent: None });
-    view_of(cache, q, sugar, Compiled::new(cache, &q.lens, q.status)).expect("a lenient view refuses nothing")
+    view_of(cache, q, sugar, Compiled::new(cache, &q.reads(), q.status)).expect("a lenient view refuses nothing")
 }
 
 fn view_of<'c>(cache: &'c Cache, q: &Filtered, sugar: Sugar, c: Compiled<'c>) -> Result<View<'c>, StoreError> {

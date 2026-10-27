@@ -67,7 +67,8 @@ pub fn ready_and(filter: &Filter, epic: Option<String>) -> Result<Filtered, Stor
         display: Default::default(),
     };
     Ok(Filtered {
-        lens: Lens::of(&ready.and(filter))?,
+        // TICKETS-27: the ready set reaches the hidden.
+        lens: Lens::of(&ready.and(filter))?.showing_hidden(),
         epic,
         status: None,
         parent: None,

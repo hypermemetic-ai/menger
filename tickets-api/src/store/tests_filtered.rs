@@ -337,6 +337,7 @@ impl Plain {
             labels: t.labels.iter().map(|l| l.to_string()).collect(),
             archived: k.archived(),
             frozen: k.frozen(),
+            hidden: k.hidden(),
             id: t.id.to_string(),
             epic: t.epic.to_string(),
             title: t.title.clone(),

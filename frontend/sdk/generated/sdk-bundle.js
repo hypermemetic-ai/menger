@@ -497,8 +497,8 @@
       const stream = this.rpc.call("tickets.unqueue", { id, source });
       yield* extractData(stream);
     }
-    async* update(id, block, body, kind, message, parent, severity, source, status, title, unblock) {
-      const stream = this.rpc.call("tickets.update", { block, body, id, kind, message, parent, severity, source, status, title, unblock });
+    async* update(id, block, body, hidden, kind, message, parent, severity, source, status, title, unblock) {
+      const stream = this.rpc.call("tickets.update", { block, body, hidden, id, kind, message, parent, severity, source, status, title, unblock });
       yield* extractData(stream);
     }
     async* updateMany(assign, block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unassign, unblock, unlabel) {

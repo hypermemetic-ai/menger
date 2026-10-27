@@ -1915,6 +1915,7 @@ mod tests {
             parent_hidden: false,
             archived: None,
             frozen: false,
+            hidden: false,
             labels: Vec::new(),
             assignees: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),

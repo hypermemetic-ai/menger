@@ -52,6 +52,8 @@ impl Store {
                     match (t.archived.is_some(), t.kind.has_lifecycle()) {
                         // ARCHIVE-2: counted apart, as the roll-ups count it.
                         (true, _) => archived += 1,
+                        // TICKETS-27: and a hidden one nowhere.
+                        (false, _) if t.hidden => {}
                         (false, true) => (total, done) = (total + 1, done + u64::from(t.status == Status::Complete)),
                         (false, false) => docs += 1,
                     }
@@ -276,7 +278,7 @@ impl Store {
         // ARCHIVE-2: the live tickets in reach.
         match seen.views_all() {
             true => self.find_page_unscoped(query, after, limit),
-            false => self.find_seen(&seen, query, &seen.view_lens()?, after, limit),
+            false => self.find_seen(&seen, query, &seen.view_lens()?.showing_hidden(), after, limit),
         }
     }
 
@@ -284,7 +286,7 @@ impl Store {
     /// — `lens` within `who`'s reach.
     pub fn find_filtered(&self, who: &(impl Reader + ?Sized), query: &str, lens: &Lens, after: Option<&str>, limit: Option<u32>) -> Result<Page, StoreError> {
         let seen = Seen::of(who)?;
-        let lens = seen.within(lens)?;
+        let lens = seen.within(&lens.showing_hidden())?;
         self.find_seen(&seen, query, &lens, after, limit)
     }
 
@@ -628,6 +630,8 @@ impl Store {
             (None, Some(reach)) => Some(reach.clone()),
             (Some(l), Some(_)) => Some(seen.within(&l)?),
         };
+        // TICKETS-27: a search reaches the hidden.
+        let lens = lens.map(|l| l.showing_hidden());
         let mut page = self.search_unscoped(query, lens, limit, offset).await?;
         if !seen.all() {
             let cache = self.tickets.read().expect("store lock poisoned");

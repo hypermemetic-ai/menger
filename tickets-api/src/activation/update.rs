@@ -29,6 +29,7 @@ pub(super) fn update_of(
         status,
         parent: parent.map(String::from),
         severity: severity.map(SeverityChange::severity),
+        hidden: None,
         block: block.unwrap_or_default(),
         unblock: unblock.unwrap_or_default(),
         label: Vec::new(),

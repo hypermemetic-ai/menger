@@ -809,6 +809,7 @@ impl Store {
                 parent_hidden: false,
                 archived: None,
                 frozen: false,
+                hidden: false,
                 parent: parent.clone().map(crate::address::TicketId::new),
                 child_count: 0,
                 commits: Vec::new(),

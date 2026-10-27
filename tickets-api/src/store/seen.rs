@@ -186,7 +186,8 @@ impl Seen {
     /// summed: no walk). With none, a reader of everything takes the
     /// unscoped path, as before the archive.
     pub(super) fn viewing(mut self, cache: &Cache) -> Self {
-        self.archive = cache.cells.archived(None) > 0;
+        // TICKETS-27: and the hidden, which a view leaves out too.
+        self.archive = cache.cells.archived(None) > 0 || cache.cells.hidden(None) > 0;
         self
     }
 

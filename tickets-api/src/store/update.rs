@@ -51,6 +51,8 @@ pub struct Update {
     pub parent: Option<String>,
     /// `Some(None)` clears it.
     pub severity: Option<Option<Severity>>,
+    /// TICKETS-27: hide the ticket from the nav's views, or show it again.
+    pub hidden: Option<bool>,
     /// Ids it waits on from now on.
     pub block: Vec<crate::vocab::TicketRef>,
     /// Ids it no longer waits on.
@@ -72,7 +74,7 @@ pub struct Update {
 
 /// MENGER-30: an update's answer — the ticket as it left it, and the
 /// aspects that moved, in the order `changed` names them: `title`, `body`,
-/// `kind`, `status`, `parent`, `severity`, `blocked_by` — ACT-2: `labels`.
+/// `kind`, `status`, `parent`, `severity`, `blocked_by` — ACT-2: `labels` — TICKETS-27: `hidden`.
 #[derive(Debug, Clone)]
 pub struct Updated {
     pub ticket: Ticket,
@@ -92,6 +94,8 @@ pub(super) struct Plan {
     status: Option<Status>,
     parent: Option<String>,
     severity: Option<Option<Severity>>,
+    /// TICKETS-27: the new `hidden`, when it moves.
+    hidden: Option<bool>,
     added: Vec<TicketName>,
     removed: Vec<TicketName>,
     /// The ticket becomes a doc: it sheds its blockers before its kind.
@@ -235,7 +239,7 @@ pub(super) fn apply(
     now: i64,
     out: &mut Gathered,
 ) -> Result<(), StoreError> {
-    let Plan { id, title, body, registered, asked, kind, status, parent, severity, added, removed, blockers_first, labels, assignees, changed: _ } = plan;
+    let Plan { id, title, body, registered, asked, kind, status, parent, severity, hidden, added, removed, blockers_first, labels, assignees, changed: _ } = plan;
     let blockers = !added.is_empty() || !removed.is_empty();
     if title.is_some() || body.is_some() {
         amend_step(txn, cache, unders, &id, title, body, registered, asked, now, out)?;
@@ -264,6 +268,9 @@ pub(super) fn apply(
     }
     if let Some(severity) = severity {
         severity_step(txn, cache, unders, &id, severity, now, out)?;
+    }
+    if let Some(hidden) = hidden {
+        hidden_step(txn, cache, unders, &id, hidden, now, out)?;
     }
     if let Some(labels) = labels {
         labels_step(txn, cache, unders, &id, labels, now, out)?;
@@ -377,6 +384,11 @@ pub(super) fn plan(
     if severity.is_some() {
         changed.push("severity".into());
     }
+    // TICKETS-27: hidden's.
+    let hidden = u.hidden.filter(|h| *h != row.hidden);
+    if hidden.is_some() {
+        changed.push("hidden".into());
+    }
     // create's, for what it adds: a doc is never blocked and never blocks;
     // no cycle (itself included).
     if !added.is_empty() || !removed.is_empty() {
@@ -432,6 +444,7 @@ pub(super) fn plan(
         status,
         parent,
         severity,
+        hidden,
         added,
         removed,
         blockers_first: !final_kind.has_lifecycle(),
@@ -653,6 +666,46 @@ fn severity_step(
     row.severity = severity;
     row.updated_unix = now;
     cell_step(txn, cache, unders, row, out, |ticket| Change::SeverityChanged { ticket, previous })
+}
+
+/// TICKETS-27: a ticket hidden from the nav's views, or shown: the row and
+/// its cell (`hidden` is in it).
+fn hidden_step(
+    txn: &rusqlite::Transaction<'_>,
+    cache: &mut Cache,
+    unders: &lineage::UnderWatches,
+    id: &str,
+    hidden: bool,
+    now: i64,
+    out: &mut Gathered,
+) -> Result<(), StoreError> {
+    let old = cache.get(id).cloned().ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+    let mut row = old.clone();
+    row.hidden = hidden;
+    row.updated_unix = now;
+    // Its count moves out of, or back into, the roll-ups (as an archive's
+    // does), with its cell and the kept tree.
+    let derived = {
+        let rows = cache.rows().with(&row);
+        let mut rollups = cache.rollups.clone();
+        let groups = rollups.archive_moved(rows, &row, &old);
+        let derived = if groups.is_empty() { Derived::none() } else { Derived::rolled(cache, rollups, groups) };
+        let count = cache.ready.count(&row.id);
+        let (cells, tree) = cache.recell(rows, &row, false, &[(&row, count, count)], None);
+        derived.celled(cells).treed(tree)
+    };
+    let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(&row));
+    let announced = derived.announced();
+    let Derived { stored, moved } = derived;
+    db::update_row(txn, &row)?;
+    stored.write(txn)?;
+    let body = db::body(txn, &row.id)?.ok_or_else(|| missing(&row.id))?;
+    cache.insert(row.clone());
+    let groups = cache.take(moved);
+    out.tickets.push(Change::HiddenChanged { ticket: whole(row, body) });
+    out.groups(groups);
+    out.filtered(announced, under.and_then(|u| u.after_in(cache)));
+    Ok(())
 }
 
 /// ACT-2: `label`'s write, as a step: the row and its cell (`label <name>`).
