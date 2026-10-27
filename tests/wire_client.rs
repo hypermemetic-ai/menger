@@ -748,7 +748,7 @@ async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
     // A body that cites one of them by the id it has now.
     let citing = created(make("RS", "doc", None, Some(r#"See <m-ticket ref="RS-3"></m-ticket>."#)).await.expect("create"));
     let moved = client
-        .reshortcode_all(vec![p("RS-2"), p("RS-3"), p("RS-4")], p("TO"), None, None, None, Some(p("wire")))
+        .reshortcode_all(vec![p("RS-2"), p("RS-3"), p("RS-4")], p("TO"), None, None, None, Some(p("wire")), None)
         .await
         .expect("reshortcode");
     match one(moved) {
