@@ -5384,6 +5384,24 @@ synapse -P 4450 -t "$ADA" menger members grant --principal idp:c952acd3-… --sc
 synapse -P 4450 -t "$ADA" menger members requests
 ```
 
+**Profiles** (IDENTITY-46): what each principal's sign-in said of them is
+kept, one `principal_profiles` row each, at every connection's upgrade
+(`Access::notice`), written only when it says something new — provider,
+`method` (the provider's: `githuboauth`, `googleoauth`, `email_code`,
+`password`; else the credential's kind: `key`, `oidc`, `nip98`), the
+provider's `subject`, `email`, `email_verified`, `name`, `picture`, `org`,
+the last sign-in, first seen. An identity that says less (a minted
+session) keeps what is kept. Only these fields are kept, never the
+metadata whole. `members profiles list` (newest sign-in first) and `get
+--principal P` answer an admin of `*`, each with `holds_grant` — `false`
+is waiting for access, found again after a restart has emptied the
+waiting list:
+
+```sh
+synapse -P 4450 -t "$ADA" menger members profiles list
+synapse -P 4450 -t "$ADA" menger members profiles get --principal oidc:workos/user_01…
+```
+
 ### Agents (IDENTITY-40, IDENTITY-42)
 
 An agent logs in with an **Ed25519 key** it holds, then talks as itself

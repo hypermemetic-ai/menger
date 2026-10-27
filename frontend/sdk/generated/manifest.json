@@ -356,6 +356,13 @@
       ],
       "schema": []
     },
+    "members.profiles": {
+      "get": [
+        "principal"
+      ],
+      "list": [],
+      "schema": []
+    },
     "members.teams": {
       "add": [
         "principal",

@@ -68,6 +68,12 @@ export interface MembersEventTeamDeleted {
   team: TeamName;
 }
 
+/** IDENTITY-46: a principal's profile — `profiles.list`, `profiles.get`. */
+export interface MembersEventProfile {
+  type: 'profile';
+  profile: Profile;
+}
+
 /** A refusal, naming the problem; nothing was changed. */
 export interface MembersEventError {
   type: 'error';
@@ -75,7 +81,7 @@ export interface MembersEventError {
 }
 
 /** What the `members` activation's methods yield. */
-export type MembersEvent = MembersEventGrant | MembersEventRevoked | MembersEventWaiting | MembersEventMe | MembersEventTeam | MembersEventTeamMember | MembersEventTeamLeft | MembersEventTeamDeleted | MembersEventError;
+export type MembersEvent = MembersEventGrant | MembersEventRevoked | MembersEventWaiting | MembersEventMe | MembersEventTeam | MembersEventTeamMember | MembersEventTeamLeft | MembersEventTeamDeleted | MembersEventProfile | MembersEventError;
 
 export function isMembersEventGrant(e: MembersEvent): e is MembersEventGrant { return e.type === 'grant'; }
 export function isMembersEventRevoked(e: MembersEvent): e is MembersEventRevoked { return e.type === 'revoked'; }
@@ -85,11 +91,44 @@ export function isMembersEventTeam(e: MembersEvent): e is MembersEventTeam { ret
 export function isMembersEventTeamMember(e: MembersEvent): e is MembersEventTeamMember { return e.type === 'team_member'; }
 export function isMembersEventTeamLeft(e: MembersEvent): e is MembersEventTeamLeft { return e.type === 'team_left'; }
 export function isMembersEventTeamDeleted(e: MembersEvent): e is MembersEventTeamDeleted { return e.type === 'team_deleted'; }
+export function isMembersEventProfile(e: MembersEvent): e is MembersEventProfile { return e.type === 'profile'; }
 export function isMembersEventError(e: MembersEvent): e is MembersEventError { return e.type === 'error'; }
 
 /** TETHER-12: a machine's pairing code as a person types it, kept in
 its one spelling (`mmg4 2klg` is `MMG4-2KLG`). */
 export type PairingCode = string;
+
+/** IDENTITY-46: what a principal's sign-in told the server about them —
+kept per principal, the last sign-in's word on each field. A provider's
+fields are its own claims: shown to admins, never trusted for access. */
+export interface Profile {
+  /** The sign-in page's identity backend, when it signed them in. */
+  backend?: string | null;
+  email?: string | null;
+  emailVerified?: boolean | null;
+  /** First seen by this server, unix seconds. */
+  firstSeen: number;
+  /** Whether they hold a grant of their own — `false` is waiting for access. */
+  holdsGrant: boolean;
+  /** How they signed in: the provider's method (`githuboauth`,
+`googleoauth`, `email_code`, `password`, …), else the credential's
+kind (`key`, `oidc`, `nip98`). */
+  method?: string | null;
+  name?: string | null;
+  /** The provider's organization, when it named one. */
+  org?: string | null;
+  /** A picture's URL, as the provider gave it. */
+  picture?: string | null;
+  principal: string;
+  /** The login provider (`workos`, `key`, `plexus-idp`, `nostr`, …). */
+  provider?: string | null;
+  /** The last sign-in, unix seconds, when the identity says. */
+  signedInAt?: number | null;
+  /** The provider's own id for them. */
+  subject?: string | null;
+  /** Last changed, unix seconds. */
+  updated: number;
+}
 
 /** ORG-4: a scope as a call writes it (ACCESS-37's grammar) — `*`, an
 organization (`acme:`), or a shortcode in one by any short form of

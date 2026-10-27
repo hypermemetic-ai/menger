@@ -1159,3 +1159,39 @@ async fn access_57_everyone_s_grant_reaches_a_principal_holding_nothing_of_their
     assert_eq!((gone[0]["type"].clone(), gone[0]["existed"].clone()), (json!("revoked"), json!(true)), "{gone:?}");
     assert_eq!(call(&bob, "tickets.list", json!({})).await[0]["type"], "error", "nothing again");
 }
+
+/// IDENTITY-46: who signed in is kept with what their identity said —
+/// provider, the credential's method, name — and read by an admin of `*`
+/// alone, each with whether it holds a grant (false: waiting for one).
+#[tokio::test]
+async fn an_admin_reads_who_signed_in_and_how() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    let alice = as_(&w, ALICE, "alice").await;
+    assert_eq!(call(&alice, "tickets.list", json!({})).await[0]["type"], "error", "she signs in, holding nothing");
+    // Kept off the call: wait for the write.
+    let alice_p = format!("idp:{ALICE}");
+    let mut got = Vec::new();
+    for _ in 0..50 {
+        got = call(&ada, "members.profiles.get", json!({ "principal": alice_p })).await;
+        if got[0]["type"] == "profile" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let p = &got[0]["profile"];
+    assert_eq!((p["principal"].as_str(), p["name"].as_str(), p["holds_grant"].as_bool()), (Some(alice_p.as_str()), Some("alice"), Some(false)), "{got:?}");
+    assert_eq!(p["method"], "oidc", "{p}");
+    assert!(p["first_seen"].as_i64().unwrap() > 0);
+
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "viewer")).await;
+    let all = call(&ada, "members.profiles.list", json!({})).await;
+    let her = all.iter().find(|e| e["profile"]["principal"] == alice_p.as_str()).expect("listed");
+    assert_eq!(her["profile"]["holds_grant"], true);
+    assert!(all.iter().any(|e| e["profile"]["principal"] == format!("idp:{ADA}")), "{all:?}");
+
+    // Not an admin of *: refused, in band or by the gate.
+    let no = call(&alice, "members.profiles.list", json!({})).await;
+    assert_eq!(no[0]["type"], "error", "{no:?}");
+    assert_eq!(call(&ada, "members.profiles.get", json!({ "principal": "key:00" })).await[0]["type"], "error", "never signed in");
+}

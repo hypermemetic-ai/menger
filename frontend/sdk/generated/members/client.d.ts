@@ -1,9 +1,12 @@
 import type { RpcClient } from '../rpc';
 import type { MembersEvent, PairingCode, ScopeRef, TeamName } from './types';
 import type { Principal, Role } from '../orgs/types';
+import type { MembersProfilesClient } from '../members/profiles/client';
 import type { MembersTeamsClient } from '../members/teams/client';
 /** Typed client interface for members plugin */
 export interface MembersClient {
+    /** Profiles — what each principal's sign-in said of them (IDENTITY-46): `members.profiles.*`. */
+    readonly profiles: MembersProfilesClient;
     /** Teams — a named set of principals that holds grants (ACCESS-22): `members.teams.*`. */
     readonly teams: MembersTeamsClient;
     /**
