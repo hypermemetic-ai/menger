@@ -1149,6 +1149,9 @@ pub enum StoreError {
     /// SDLC-11: `set_status … Doc` on a ticket of another kind. `Doc` is a
     /// doc's own status and no other kind's. Nothing changed.
     DocStatusOnWork { id: String, kind: Kind },
+    /// TICKETS-30: `id` cannot be set `Complete` while the children in
+    /// `open` are not Complete, Canceled or Superseded. Nothing changed.
+    OpenChildren { id: String, open: Vec<String> },
     /// SDLC-13: `set_kind … doc` with a status other than `Doc` — a doc's
     /// status is `Doc`, whatever it was before. Nothing changed.
     DocStatusForDoc { id: String, status: Status },
@@ -1407,6 +1410,12 @@ impl std::fmt::Display for StoreError {
                 f,
                 "'{id}' is a doc: a doc has no lifecycle — it exists in its state, Doc, and no \
                  status is set on it (nothing changed)"
+            ),
+            Self::OpenChildren { id, open } => write!(
+                f,
+                "'{id}' cannot be Complete: {} {} not Complete (nothing changed)",
+                open.join(", "),
+                if open.len() == 1 { "is" } else { "are" }
             ),
             Self::DocStatusOnWork { id, kind } => write!(
                 f,
@@ -5801,6 +5810,9 @@ mod tests_revisions;
 /// ACT-2: `update_many`, and `label` / `link_commits` over many ids.
 #[cfg(test)]
 mod tests_update_many;
+/// TICKETS-30: Complete only when every child is.
+#[cfg(test)]
+mod tests_open_children;
 /// ACT-5: `delete`, `undelete`, the purge — every derived structure after.
 #[cfg(test)]
 mod tests_delete;

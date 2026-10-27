@@ -592,6 +592,8 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
                 // SDLC-11: a doc's status never moves; Doc is a doc's alone.
                 Err(StoreError::DocHasNoLifecycle { .. }) if row.kind == Kind::Doc => tally.others += 1,
                 Err(StoreError::DocStatusOnWork { .. }) if status == Status::Doc => tally.others += 1,
+                // TICKETS-30: Complete waits for the children.
+                Err(StoreError::OpenChildren { .. }) if status == Status::Complete => tally.others += 1,
                 Err(e) => panic!("set_status {id} {status}: {e}"),
             }
             format!("set_status {id} {} -> {status}", row.status)
@@ -800,22 +802,25 @@ async fn membership_moves_on_exactly_the_three_writes() {
     let store = Store::open(&path).unwrap();
     let ids = |store: &Store| -> Vec<String> { store.ready_page(SYS, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect() };
     let count = |store: &Store, id: &str| store.tickets.read().unwrap().ready.counts().get(id).copied().unwrap_or(0);
+    // TICKETS-30: TH-1 is the shortcode's root, so the tickets below it (TH-2
+    // on) have no children of their own to wait for.
     store.create(SYS, new_ticket("TH", Kind::Scope, None, vec![])).await.unwrap();
-    // TH-2 names TH-5 (not born) twice, and TH-1.
-    let t2 = store.create(SYS, new_ticket("TH", Kind::Build, None, vec!["TH-5".into(), "TH-1".into(), "TH-5".into()])).await.unwrap();
+    store.create(SYS, new_ticket("TH", Kind::Build, None, vec![])).await.unwrap();
+    // TH-3 names TH-6 (not born) twice, and TH-2.
+    let t2 = store.create(SYS, new_ticket("TH", Kind::Build, None, vec!["TH-6".into(), "TH-2".into(), "TH-6".into()])).await.unwrap();
     assert_eq!(count(&store, &t2.id), 2, "two distinct blockers, neither done; the unborn one counts once");
-    store.create(SYS, new_ticket("TH", Kind::Build, None, vec!["TH-1".into()])).await.unwrap();
+    store.create(SYS, new_ticket("TH", Kind::Build, None, vec!["TH-2".into()])).await.unwrap();
     store.create(SYS, new_ticket("TH", Kind::Build, None, vec![])).await.unwrap();
     assert_kept_is_a_scan(&store, Some(&path), "the setup");
 
     // The ticket itself.
+    store.set_status(SYS.permit("TH-5"), Status::Ready).await.unwrap();
+    assert_eq!(ids(&store), ["TH-5"]);
     store.set_status(SYS.permit("TH-4"), Status::Ready).await.unwrap();
-    assert_eq!(ids(&store), ["TH-4"]);
     store.set_status(SYS.permit("TH-3"), Status::Ready).await.unwrap();
-    store.set_status(SYS.permit("TH-2"), Status::Ready).await.unwrap();
-    assert_eq!(ids(&store), ["TH-4"], "TH-3 and TH-2 wait on TH-1");
+    assert_eq!(ids(&store), ["TH-5"], "TH-4 and TH-3 wait on TH-2");
 
-    // A blocker across the line: TH-1 unlocks TH-2 and TH-3.
+    // A blocker across the line: TH-2 unlocks TH-3 and TH-4.
     let fanned = |store: &Store, id: &str, status: Status| {
         let cache = store.tickets.read().unwrap();
         let mut row = cache.get(id).unwrap().clone();
@@ -823,34 +828,34 @@ async fn membership_moves_on_exactly_the_three_writes() {
         row.status = status;
         cache.ready.status_changed(cache.rows().with(&row), &row, previous).counts_moved()
     };
-    assert_eq!(fanned(&store, "TH-1", Status::Complete), 2, "a crossing moves each ticket that names it");
-    store.set_status(SYS.permit("TH-1"), Status::Complete).await.unwrap();
-    assert_eq!(ids(&store), ["TH-3", "TH-4"], "TH-2 still waits on TH-5, which is not born");
-    assert_eq!(count(&store, "TH-2"), 1);
-    assert_eq!(fanned(&store, "TH-1", Status::Superseded), 0, "Complete to Superseded is not a crossing");
-    store.set_status(SYS.permit("TH-1"), Status::Superseded).await.unwrap();
-    assert_eq!(ids(&store), ["TH-3", "TH-4"]);
+    assert_eq!(fanned(&store, "TH-2", Status::Complete), 2, "a crossing moves each ticket that names it");
+    store.set_status(SYS.permit("TH-2"), Status::Complete).await.unwrap();
+    assert_eq!(ids(&store), ["TH-4", "TH-5"], "TH-3 still waits on TH-6, which is not born");
+    assert_eq!(count(&store, "TH-3"), 1);
+    assert_eq!(fanned(&store, "TH-2", Status::Superseded), 0, "Complete to Superseded is not a crossing");
+    store.set_status(SYS.permit("TH-2"), Status::Superseded).await.unwrap();
+    assert_eq!(ids(&store), ["TH-4", "TH-5"]);
     assert_kept_is_a_scan(&store, Some(&path), "the crossings");
 
-    // A birth that resolves a forward reference: TH-5 is born `Pending`, so
-    // TH-2's count does not move — and the scan agrees.
-    let t5 = store.create(SYS, new_ticket("TH", Kind::Build, None, vec!["TH-4".into()])).await.unwrap();
-    assert_eq!(t5.unlocks, ["TH-2"]);
-    assert_eq!(count(&store, "TH-2"), 1, "the newborn is not done: TH-2 waits on it still");
-    assert_eq!(count(&store, "TH-5"), 1, "TH-4 is Ready, not done");
+    // A birth that resolves a forward reference: TH-6 is born `Pending`, so
+    // TH-3's count does not move — and the scan agrees.
+    let t5 = store.create(SYS, new_ticket("TH", Kind::Build, None, vec!["TH-5".into()])).await.unwrap();
+    assert_eq!(t5.unlocks, ["TH-3"]);
+    assert_eq!(count(&store, "TH-3"), 1, "the newborn is not done: TH-3 waits on it still");
+    assert_eq!(count(&store, "TH-6"), 1, "TH-5 is Ready, not done");
     assert_kept_is_a_scan(&store, Some(&path), "a birth that resolves a forward reference");
-    store.set_status(SYS.permit("TH-5"), Status::Complete).await.unwrap();
-    assert_eq!(ids(&store), ["TH-2", "TH-3", "TH-4"], "now it is");
-    assert_eq!(count(&store, "TH-2"), 0);
+    store.set_status(SYS.permit("TH-6"), Status::Complete).await.unwrap();
+    assert_eq!(ids(&store), ["TH-3", "TH-4", "TH-5"], "now it is");
+    assert_eq!(count(&store, "TH-3"), 0);
 
     // And back across the line.
-    store.set_status(SYS.permit("TH-1"), Status::Ready).await.unwrap();
-    assert_eq!(ids(&store), ["TH-1", "TH-4"]);
-    assert_eq!((count(&store, "TH-2"), count(&store, "TH-3")), (1, 1));
+    store.set_status(SYS.permit("TH-2"), Status::Ready).await.unwrap();
+    assert_eq!(ids(&store), ["TH-2", "TH-5"]);
+    assert_eq!((count(&store, "TH-3"), count(&store, "TH-4")), (1, 1));
     assert_kept_is_a_scan(&store, Some(&path), "back across the line");
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(ids(&store), ["TH-1", "TH-4"], "a reopen reads it");
+    assert_eq!(ids(&store), ["TH-2", "TH-5"], "a reopen reads it");
 }
 
 /// The fan-out: a ticket that blocks k others moves k counts in one write,

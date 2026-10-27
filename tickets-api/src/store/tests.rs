@@ -1883,6 +1883,8 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                     Ok(_) => writes += 1,
                     Err(StoreError::DocHasNoLifecycle { .. }) => assert_eq!(kind, Kind::Doc, "{id}"),
                     Err(StoreError::DocStatusOnWork { .. }) => assert_eq!(status, Status::Doc, "{id}"),
+                    // TICKETS-30: Complete waits for the children.
+                    Err(StoreError::OpenChildren { .. }) => assert_eq!(status, Status::Complete, "{id}"),
                     Err(e) => panic!("set_status {id} {status}: {e}"),
                 }
                 format!("set_status {id} {status}")
@@ -2244,6 +2246,8 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
     assert_kept_is_a_scan(&store, "set_parent");
     store.set_parent(SYS.moving("LATE-1", "WAIT-5")).await.unwrap();
     assert_kept_is_a_scan(&store, "set_parent of a root across shortcodes");
+    // TICKETS-30: WAIT-2 is Complete once its child WAIT-3 is.
+    store.set_status(SYS.permit("WAIT-3"), Status::Complete).await.unwrap();
     store.set_status(SYS.permit("WAIT-2"), Status::Complete).await.unwrap();
     assert_kept_is_a_scan(&store, "set_status");
 

@@ -264,7 +264,7 @@ impl Store {
         let id = on.id().as_str();
         let serial = self.serial().await;
         let (mut row, _) = self.row(id)?;
-        rules::status_refusal(&row, status)?;
+        rules::status_refusal(&self.tickets.read().expect("store lock poisoned"), &row, status)?;
         let previous = row.status;
         let now = chrono::Utc::now().timestamp();
         // Worked out under the write-serial lock, from the cache as it

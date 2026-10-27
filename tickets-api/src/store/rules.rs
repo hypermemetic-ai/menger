@@ -82,12 +82,30 @@ pub(super) fn kind_refusal(cache: &Cache, row: &Row, blocked_by: &[TicketName], 
 
 /// SDLC-11: whether `row` may be set to `status` — a doc has no lifecycle,
 /// and `Doc` is a doc's own.
-pub(super) fn status_refusal(row: &Row, status: Status) -> Result<(), StoreError> {
+///
+/// TICKETS-30: and a ticket comes to `Complete` only when every child is —
+/// the transition into it; a ticket already Complete is not asked again.
+/// Canceled and Superseded children never complete and do not hold it; a
+/// doc is not counted. The refusal names each open child.
+pub(super) fn status_refusal(cache: &Cache, row: &Row, status: Status) -> Result<(), StoreError> {
     if !row.kind.has_lifecycle() {
         return Err(StoreError::DocHasNoLifecycle { id: row.id.to_string() });
     }
     if !Status::LIFECYCLE.contains(&status) {
         return Err(StoreError::DocStatusOnWork { id: row.id.to_string(), kind: row.kind });
+    }
+    if status == Status::Complete && row.status != Status::Complete {
+        let open: Vec<String> = cache
+            .children
+            .of(&row.id)
+            .into_iter()
+            .filter_map(|(shortcode, seq)| cache.order.get(&OrderKey { shortcode, seq }))
+            .filter(|c| c.kind.has_lifecycle() && !matches!(c.status, Status::Complete | Status::Canceled | Status::Superseded))
+            .map(|c| c.id.to_string())
+            .collect();
+        if !open.is_empty() {
+            return Err(StoreError::OpenChildren { id: row.id.to_string(), open });
+        }
     }
     Ok(())
 }

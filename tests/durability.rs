@@ -270,19 +270,22 @@ async fn dag_edges_survive_sigkill() {
     let s1 = spawn_server(Some(&db), &[], dir.path(), "dag1").await;
     let c1 = connect(s1.port).await;
 
-    let ev = one(&c1, "tickets.create", json!({"epic": "EDGE", "title": "A", "kind": "scope"})).await;
-    assert_eq!(ev["ticket"]["id"], "EDGE-1");
+    // TICKETS-30: EDGE-1 roots the shortcode, so A and B have no children to
+    // wait for when A completes.
+    one(&c1, "tickets.create", json!({"epic": "EDGE", "title": "root", "kind": "scope"})).await;
+    let ev = one(&c1, "tickets.create", json!({"epic": "EDGE", "title": "A"})).await;
+    assert_eq!(ev["ticket"]["id"], "EDGE-2");
     let ev = one(
         &c1,
         "tickets.create",
-        json!({"epic": "EDGE", "title": "B", "blocked_by": ["EDGE-1"]}),
+        json!({"epic": "EDGE", "title": "B", "blocked_by": ["EDGE-2"]}),
     )
     .await;
-    assert_eq!(ev["ticket"]["id"], "EDGE-2");
+    assert_eq!(ev["ticket"]["id"], "EDGE-3");
 
     // The acknowledged symmetry: A's unlocks gained B.
-    let a_acked = one(&c1, "tickets.get", json!({"id": "EDGE-1"})).await["ticket"].clone();
-    assert_eq!(a_acked["unlocks"], json!(["EDGE-2"]));
+    let a_acked = one(&c1, "tickets.get", json!({"id": "EDGE-2"})).await["ticket"].clone();
+    assert_eq!(a_acked["unlocks"], json!(["EDGE-3"]));
 
     drop(c1);
     s1.kill9();
@@ -290,16 +293,16 @@ async fn dag_edges_survive_sigkill() {
     // Restart: both directions of the edge are back, A byte-identical.
     let s2 = spawn_server(Some(&db), &[], dir.path(), "dag2").await;
     let c2 = connect(s2.port).await;
-    let a = one(&c2, "tickets.get", json!({"id": "EDGE-1"})).await["ticket"].clone();
+    let a = one(&c2, "tickets.get", json!({"id": "EDGE-2"})).await["ticket"].clone();
     assert_eq!(a, a_acked, "A (with its unlocks edge) survived SIGKILL");
-    let b = one(&c2, "tickets.get", json!({"id": "EDGE-2"})).await["ticket"].clone();
-    assert_eq!(b["blocked_by"], json!(["EDGE-1"]));
+    let b = one(&c2, "tickets.get", json!({"id": "EDGE-3"})).await["ticket"].clone();
+    assert_eq!(b["blocked_by"], json!(["EDGE-2"]));
 
     // The persisted edges drive the ready set after the restart.
     let ev = one(
         &c2,
         "tickets.set_status",
-        json!({"id": "EDGE-2", "status": "Ready"}),
+        json!({"id": "EDGE-3", "status": "Ready"}),
     )
     .await;
     assert_eq!(ev["type"], "status_changed");
@@ -309,12 +312,12 @@ async fn dag_edges_survive_sigkill() {
     one(
         &c2,
         "tickets.set_status",
-        json!({"id": "EDGE-1", "status": "Complete"}),
+        json!({"id": "EDGE-2", "status": "Complete"}),
     )
     .await;
     let ready = drain(&c2, "tickets.work.ready", json!({"epic": "EDGE"})).await;
     assert_eq!(ready.len(), 1, "completing A unblocks B, got {ready:?}");
-    assert_eq!(ready[0]["ticket"]["id"], "EDGE-2");
+    assert_eq!(ready[0]["ticket"]["id"], "EDGE-3");
 }
 
 /// AGS-13 criterion 1, black-box: `tests/fixtures/pre-ags13.db` was
