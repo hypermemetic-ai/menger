@@ -294,6 +294,8 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
                 }
                 Err(StoreError::DocHasNoLifecycle { .. }) if kind == Kind::Doc => tally.refused += 1,
                 Err(StoreError::DocStatusOnWork { .. }) if status == Status::Doc => tally.refused += 1,
+                // TICKETS-30: Complete waits for the children.
+                Err(StoreError::OpenChildren { .. }) if status == Status::Complete => tally.refused += 1,
                 Err(e) => panic!("set_status {id} {status}: {e}"),
             }
             format!("set_status {id} {status}")
@@ -358,7 +360,7 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str
     assert!(
         tally.created > writes / 5
             && tally.refused > 0
-            && tally.crossings > writes / 30
+            && tally.crossings > writes / 40 // TICKETS-30: a parent waits for its children
             && tally.moves > writes / 40
             && tally.amends > 0
             && tally.links > 0
@@ -543,6 +545,8 @@ async fn verify_names_an_altered_number_and_writes_nothing() {
     for (epic, kind, parent) in [("VER", Kind::Scope, None), ("VER", Kind::Build, None), ("SUBV", Kind::Scope, Some("VER-2"))] {
         store.create(SYS, new_ticket(epic, kind, parent.map(Into::into), Vec::new())).await.unwrap();
     }
+    // TICKETS-30: VER-2 is Complete once its child SUBV-1 is.
+    store.set_status(SYS.permit("SUBV-1"), Status::Complete).await.unwrap();
     store.set_status(SYS.permit("VER-2"), Status::Complete).await.unwrap();
     let bytes = || -> Vec<Vec<u8>> {
         ["", "-wal"]
@@ -568,7 +572,7 @@ async fn verify_names_an_altered_number_and_writes_nothing() {
     };
     assert_eq!(found.len(), 1, "{found:#?}");
     assert!(found[0].starts_with("roll-up group SUBV: stored "), "{}", found[0]);
-    assert!(found[0].contains("roll: (1, 1, 0, 0)") && found[0].contains("roll: (1, 0, 0, 0)"), "{}", found[0]);
+    assert!(found[0].contains("roll: (1, 2, 0, 0)") && found[0].contains("roll: (1, 1, 0, 0)"), "{}", found[0]);
     assert_eq!(bytes(), altered, "verifying an inconsistent file wrote nothing either");
     drop(store);
 }
@@ -659,6 +663,10 @@ async fn a_write_whose_commit_fails_stores_no_derived_state_and_changes_no_cache
     let next = store.create(SYS, new_ticket("FX", Kind::Build, Some("FX-2".into()), Vec::new())).await.unwrap();
     assert_eq!(next.id, "FX-4", "the id no failed create took");
     store.set_parent(SYS.moving("FX-3", "FX-2")).await.unwrap();
+    // TICKETS-30: FX-2 is Complete once its children are.
+    for child in ["FX-3", "FX-4"] {
+        store.set_status(SYS.permit(child), Status::Complete).await.unwrap();
+    }
     store.set_status(SYS.permit("FX-2"), Status::Complete).await.unwrap();
     assert_stored_is_a_scan(&store, &path, "the same writes, succeeding");
 }

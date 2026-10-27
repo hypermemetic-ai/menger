@@ -250,7 +250,7 @@ pub(super) fn apply(
         let row = cache.get(&id).cloned().ok_or_else(|| StoreError::NotFound(id.clone()))?;
         // ACT-2: a cascade earlier in the write may have given it already.
         if row.status != status {
-            rules::status_refusal(&row, status)?;
+            rules::status_refusal(cache, &row, status)?;
             for step in status_steps(cache, &row, status, act, false, now) {
                 status_step(txn, cache, unders, step, now, out)?;
             }
@@ -346,7 +346,7 @@ pub(super) fn plan(
         None => {
             if let Some(s) = u.status.filter(|s| *s != row.status) {
                 changed.push("status".into());
-                if let Err(e) = rules::status_refusal(&row, s) {
+                if let Err(e) = rules::status_refusal(cache, &row, s) {
                     refusals.push(e);
                 }
                 status = Some(s);

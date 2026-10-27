@@ -7,18 +7,20 @@ use super::*;
 #[tokio::test]
 async fn ready_set_gates_on_blockers() {
     let hub = hub();
-    one(hub.create(operator(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None, None).await).await;
+    // TICKETS-30: DAG-1 is the root; the tickets below it have no children.
+    one(hub.create(operator(), "DAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "DAG".into(), "a".into(), None, None, None, None, None, None, None, None).await).await;
     one(hub
-        .create(operator(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None, None)
+        .create(operator(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-2".into()]), None, None, None, None, None)
         .await)
     .await;
-    one(hub.set_status(operator(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
     one(hub.set_status(operator(), "DAG-2".into(), "Ready".into(), None, None, None).await).await;
+    one(hub.set_status(operator(), "DAG-3".into(), "Ready".into(), None, None, None).await).await;
 
-    assert_eq!(ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await, vec!["DAG-1"]);
-
-    one(hub.set_status(operator(), "DAG-1".into(), "Complete".into(), None, None, None).await).await;
     assert_eq!(ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await, vec!["DAG-2"]);
+
+    one(hub.set_status(operator(), "DAG-2".into(), "Complete".into(), None, None, None).await).await;
+    assert_eq!(ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await, vec!["DAG-3"]);
 }
 
 #[tokio::test]
@@ -66,7 +68,9 @@ async fn dangling_blocker_excludes_from_ready_set_and_is_marked() {
 #[tokio::test]
 async fn blockers_resolve_to_current_statuses_in_order() {
     let hub = hub();
-    one(hub.create(operator(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None, None).await).await;
+    // TICKETS-30: DAG-1 is the root; the tickets below it have no children.
+    one(hub.create(operator(), "DAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "DAG".into(), "a".into(), None, None, None, None, None, None, None, None).await).await;
     one(hub.create(operator(), "DAG".into(), "b".into(), None, None, None, None, None, None, None, None).await).await;
     one(hub
         .create(operator(), 
@@ -74,27 +78,27 @@ async fn blockers_resolve_to_current_statuses_in_order() {
             "c".into(),
             None,
             None,
-            Some(vec!["DAG-1".into(), "DAG-2".into(), "DAG-99".into()]),
+            Some(vec!["DAG-2".into(), "DAG-3".into(), "DAG-99".into()]),
             None, None, None,
             None,
             None,
         )
         .await)
     .await;
-    one(hub.set_status(operator(), "DAG-1".into(), "Complete".into(), None, None, None).await).await;
+    one(hub.set_status(operator(), "DAG-2".into(), "Complete".into(), None, None, None).await).await;
 
-    let evs: Vec<_> = Box::pin(hub.work().blockers(operator(), "DAG-3".into()).await).collect().await;
+    let evs: Vec<_> = Box::pin(hub.work().blockers(operator(), "DAG-4".into()).await).collect().await;
     assert_eq!(evs.len(), 3);
     match &evs[0] {
         TicketsEvent::Blocker { ticket } => {
-            assert_eq!(ticket.id, "DAG-1");
+            assert_eq!(ticket.id, "DAG-2");
             assert_eq!(ticket.status, Status::Complete);
         }
         other => panic!("expected Blocker, got {other:?}"),
     }
     match &evs[1] {
         TicketsEvent::Blocker { ticket } => {
-            assert_eq!(ticket.id, "DAG-2");
+            assert_eq!(ticket.id, "DAG-3");
             assert_eq!(ticket.status, Status::Draft);
         }
         other => panic!("expected Blocker, got {other:?}"),
@@ -105,7 +109,7 @@ async fn blockers_resolve_to_current_statuses_in_order() {
     }
 
     assert!(matches!(
-        one(hub.work().blockers(operator(), "DAG-42".into()).await).await,
+        one(hub.work().blockers(operator(), "DAG-43".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }

@@ -394,8 +394,11 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
     let client = connect(port).await;
     let mut mirror = std::collections::HashMap::new();
 
+    // TICKETS-30: RS-1 roots the shortcode, so A (RS-2) and B (RS-3) have no
+    // children to wait for when A completes.
+    collect(call(&client, "tickets.create", json!({"epic": "RS", "title": "root", "kind": "scope"})).await).await;
     // A exists before the client arrives.
-    let evs = collect(call(&client, "tickets.create", json!({"epic": "RS", "title": "A", "kind": "scope"})).await).await;
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "RS", "title": "A"})).await).await;
     assert_eq!(evs[0]["type"], "created");
 
     // The client fetches the full set once...
@@ -404,41 +407,41 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
         let ticket = ev["ticket"].clone();
         mirror.insert(ticket["id"].as_str().unwrap().to_string(), ticket);
     }
-    assert_eq!(mirror.len(), 1);
+    assert_eq!(mirror.len(), 2);
 
     // ...then consumes only watch events.
     let mut watch = call(&client, "tickets.watch", json!({})).await;
 
     // create B blocked_by [A]; promote both to Ready.
     collect(call(&client, "tickets.create",
-        json!({"epic": "RS", "title": "B", "blocked_by": ["RS-1"]})).await).await;
-    collect(call(&client, "tickets.set_status", json!({"id": "RS-1", "status": "Ready"})).await).await;
+        json!({"epic": "RS", "title": "B", "blocked_by": ["RS-2"]})).await).await;
     collect(call(&client, "tickets.set_status", json!({"id": "RS-2", "status": "Ready"})).await).await;
+    collect(call(&client, "tickets.set_status", json!({"id": "RS-3", "status": "Ready"})).await).await;
 
-    // Watch delivered: created(RS-2), children_changed(RS-1) — RS-2 named
-    // no parent and hangs under the root (MNG-14) — unlocks_changed(RS-1),
+    // Watch delivered: created(RS-3), children_changed(RS-2) — RS-3 named
+    // no parent and hangs under the root (MNG-14) — unlocks_changed(RS-2),
     // group_changed(RS, now 2 tickets; MNG-10), 2x status_changed, and
-    // (AGS-23) after RS-1's, group_changed(RS): RS-1 roots RS, and its
+    // (AGS-23) after RS-2's, group_changed(RS): RS-2 roots RS, and its
     // status is on the group's row. MENGER-13: and a transition after the
     // created and after each status_changed.
-    for _ in 0..10 {
+    for _ in 0..9 {
         let ev = content(watch.next().await.unwrap().unwrap());
         apply(&mut mirror, &ev);
     }
-    assert_eq!(mirror["RS-1"]["unlocks"], json!(["RS-2"]));
+    assert_eq!(mirror["RS-2"]["unlocks"], json!(["RS-3"]));
 
     // Checkpoint 1: A is ready, B is not — server and mirror agree.
     let server = ready_ids(rows(call(&client, "tickets.work.ready", json!({})).await).await);
-    assert_eq!(server, vec!["RS-1"]);
+    assert_eq!(server, vec!["RS-2"]);
     assert_eq!(server, local_ready(&mirror));
 
     // A completes; B unblocks.
-    collect(call(&client, "tickets.set_status", json!({"id": "RS-1", "status": "Complete"})).await).await;
+    collect(call(&client, "tickets.set_status", json!({"id": "RS-2", "status": "Complete"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
     apply(&mut mirror, &ev);
 
     let server = ready_ids(rows(call(&client, "tickets.work.ready", json!({})).await).await);
-    assert_eq!(server, vec!["RS-2"]);
+    assert_eq!(server, vec!["RS-3"]);
     assert_eq!(server, local_ready(&mirror));
 }
 
@@ -847,7 +850,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
         json!({"epic": "HUB", "title": "under core", "parent": "HUB-2"}), // HUB-3
         json!({"epic": "SUB", "title": "hosted", "kind": "scope", "parent": "HUB-2"}), // SUB-1
         json!({"epic": "SUB", "title": "a"}),                         // SUB-2 → SUB-1
-        json!({"epic": "SUB", "title": "b", "parent": "SUB-2"}),      // SUB-3
+        json!({"epic": "SUB", "title": "b"}),                      // SUB-3 → SUB-1 (TICKETS-30: SUB-2 stays a leaf, so it can complete)
         json!({"epic": "DEEP", "title": "deeper", "kind": "scope", "parent": "SUB-3"}), // DEEP-1
         json!({"epic": "DEEP", "title": "c"}),                        // DEEP-2 → DEEP-1
         json!({"epic": "LONE", "title": "alone", "kind": "scope"}),   // LONE-1

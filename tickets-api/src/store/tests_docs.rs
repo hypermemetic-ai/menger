@@ -431,6 +431,8 @@ async fn a_file_in_form_2_gains_the_docs_columns_once_on_its_first_open() {
     store.create(SYS, new("OLD", Kind::Scope, None, &[])).await.unwrap(); // OLD-1
     store.create(SYS, work("OLD", None)).await.unwrap(); // OLD-2
     store.create(SYS, new("SUB", Kind::Scope, Some("OLD-2"), &[])).await.unwrap(); // SUB-1, a cross tree
+    // TICKETS-30: OLD-2 is Complete once its child SUB-1 is.
+    store.set_status(SYS.permit("SUB-1"), Status::Complete).await.unwrap();
     store.set_status(SYS.permit("OLD-2"), Status::Complete).await.unwrap();
     let groups = store.groups(SYS);
     drop(store);
