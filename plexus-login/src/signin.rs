@@ -770,6 +770,9 @@ impl SignInPage {
             meta.insert("auth_time".into(), Value::from(now()));
             meta.insert("identity_backend".into(), Value::String(backend.name().into()));
             meta.insert("subject".into(), Value::String(who.user.subject.clone()));
+            // IDENTITY-46: how they signed in (`githuboauth`, `email_code`, …)
+            // — the provider's word, which `auth_method` (the token's kind) is not.
+            meta.insert("sign_in_method".into(), Value::String(who.method.clone()));
             if let Some(e) = &who.user.email {
                 meta.entry("email").or_insert_with(|| Value::String(e.clone()));
             }

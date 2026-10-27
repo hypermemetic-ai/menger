@@ -1924,6 +1924,8 @@ struct Cache {
     saved: filters::SavedFilters,
     /// CHAT-3: every chat, its participants' read marks and its messages.
     chats: chats::Chats,
+    /// IDENTITY-46: what each principal's sign-in said of them.
+    profiles: HashMap<String, crate::members::Profile>,
     written: u64,
 }
 
@@ -2296,6 +2298,7 @@ impl Cache {
             assignments: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
+            profiles: Default::default(),
             chats: Default::default(),
             written: 0,
         }
@@ -2385,6 +2388,7 @@ impl Cache {
             assignments: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
+            profiles: Default::default(),
             chats: Default::default(),
             written: 0,
         }
@@ -3198,6 +3202,7 @@ impl Store {
         assignees::migrate(&mut conn)?;
         // CHAT-3: and one without the chats' tables gains them, empty.
         chats::migrate(&mut conn)?;
+        profiles::migrate(&conn)?;
         // APP-23: and comments without an intent, and queue records without
         // the comment that answered them, gain the columns.
         comments::migrate(&conn)?;
@@ -3328,6 +3333,7 @@ impl Store {
         cache.saved = filters::load(conn)?;
         // CHAT-3: the chats, as stored.
         cache.chats = chats::load(conn)?;
+        cache.profiles = profiles::load(conn)?;
         Ok(cache)
     }
 
@@ -5473,6 +5479,9 @@ pub use lensed::{narrowing, narrowing_lens, narrowing_of, ready_and, MEMBER_MAX}
 /// and every filter a read, a count or a watch is asked resolved through
 /// them before it is compiled.
 mod saved;
+mod profiles;
+#[cfg(test)]
+mod tests_profiles;
 /// FILTER-46: the `saved_filters` table and `tickets filters`' writes.
 mod filters;
 pub use filters::FilterChange;

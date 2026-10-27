@@ -10,6 +10,7 @@ export * as DeploymentsWebhook from './deployments/webhook';
 export * as Epics from './epics';
 export * as Media from './media';
 export * as Members from './members';
+export * as MembersProfiles from './members/profiles';
 export * as MembersTeams from './members/teams';
 export * as Notes from './notes';
 export * as Orgs from './orgs';

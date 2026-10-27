@@ -874,6 +874,14 @@ pub(crate) fn named_by(ctx: &mut AuthContext, provider: &str, response: &Value) 
     if let Some(email) = s("email") {
         meta.insert("email".into(), Value::String(email.to_string()));
     }
+    // IDENTITY-46: the rest of what the provider says of them, kept by the
+    // server's profile of the principal.
+    if let Some(picture) = s("profile_picture_url").or(s("picture")) {
+        meta.insert("picture".into(), Value::String(picture.to_string()));
+    }
+    if let Some(verified) = user.get("email_verified").and_then(Value::as_bool) {
+        meta.insert("email_verified".into(), Value::Bool(verified));
+    }
 }
 
 #[derive(Deserialize)]
@@ -1496,7 +1504,11 @@ mod tests {
         assert_eq!(c.get_metadata_string("name").as_deref(), Some("user_01ADA"), "another user's name is not taken");
         let mut c = ctx();
         named_by(&mut c, "workos", &json!({ "user": { "id": "user_01ADA", "email": "ada@example.com" } }));
-        assert_eq!(c.get_metadata_string("name").as_deref(), Some("ada@example.com"), "no name: the email");
+        assert_eq!(c.get_metadata_string("name").as_deref(), Some("ada@example.com"), "no name: the email");        // IDENTITY-46: the picture and whether the email is verified, kept.
+        let mut c = ctx();
+        named_by(&mut c, "workos", &json!({ "user": { "id": "user_01ADA", "profile_picture_url": "https://p.example/a.png", "email_verified": true } }));
+        assert_eq!(c.get_metadata_string("picture").as_deref(), Some("https://p.example/a.png"));
+        assert_eq!(c.metadata["email_verified"], json!(true));
     }
 
     #[test]

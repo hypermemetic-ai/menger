@@ -163,17 +163,35 @@ pub struct User {
     pub email: Option<String>,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
+    /// IDENTITY-46: the picture the provider holds for them.
+    pub profile_picture_url: Option<String>,
+    /// IDENTITY-46: whether WorkOS verified the email.
+    pub email_verified: Option<bool>,
 }
 
 impl User {
     fn from(v: &Value) -> Option<Self> {
         let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
-        Some(Self { id: s("id")?, email: s("email"), first_name: s("first_name"), last_name: s("last_name") })
+        Some(Self {
+            id: s("id")?,
+            email: s("email"),
+            first_name: s("first_name"),
+            last_name: s("last_name"),
+            profile_picture_url: s("profile_picture_url"),
+            email_verified: v.get("email_verified").and_then(Value::as_bool),
+        })
     }
 
     /// The whole `user` object, as the existing `named_by` reads it.
     pub fn json(&self) -> Value {
-        json!({ "id": self.id, "email": self.email, "first_name": self.first_name, "last_name": self.last_name })
+        json!({
+            "id": self.id,
+            "email": self.email,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "profile_picture_url": self.profile_picture_url,
+            "email_verified": self.email_verified,
+        })
     }
 }
 

@@ -561,6 +561,25 @@ impl Access {
         });
     }
 
+    /// IDENTITY-46: what `ctx`'s sign-in says of its principal, kept by the
+    /// store when it says something new ([`Store::note_profile`]) — once a
+    /// connection, at the upgrade ([`Access::notice`]); the write spawned,
+    /// as [`Access::note_name`]'s is.
+    fn note_profile(&self, principal: &str, ctx: &AuthContext) {
+        let (Some(store), Some(system)) = (self.book.store.get(), self.book.system.get()) else { return };
+        let heard = profile_of(principal, ctx);
+        if store.knows_profile(&heard) {
+            return;
+        }
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+        let (store, system) = (Arc::clone(store), Arc::clone(system));
+        rt.spawn(async move {
+            if let Err(e) = store.note_profile(&system, heard).await {
+                tracing::warn!("IDENTITY-46: the profile of a principal was not kept: {e:?}");
+            }
+        });
+    }
+
     /// AUTH-7: the roles, memberships and scopes the gate reads.
     pub fn book(&self) -> Arc<Book> {
         self.book.clone()
@@ -671,13 +690,16 @@ impl Access {
     }
 
     /// AUTH-7: a connection opened as `ctx` (at the upgrade): holding
-    /// nothing, it waits for an admin ([`Access::waiting`]). ACCESS-9: an
+    /// nothing, it waits for an admin ([`Access::waiting`]). IDENTITY-46:
+    /// its profile is kept either way ([`Access::note_profile`]). ACCESS-9: an
     /// identity naming no principal is no one to wait.
     pub fn notice(&self, ctx: &AuthContext) {
         if !ctx.is_authenticated() {
             return;
         }
         let Some(principal) = ctx.principal().map(|p| p.to_string()) else { return };
+        // IDENTITY-46: and what its sign-in says of it is kept, granted or not.
+        self.note_profile(&principal, ctx);
         if self.book.own_grants_of(&principal).is_empty() {
             self.book.wait(&principal, ctx.get_metadata_string("name"), ctx.get_metadata_string("provider"));
         }
@@ -916,3 +938,25 @@ pub struct Minted {
 
 #[cfg(test)]
 mod tests;
+
+/// IDENTITY-46: the [`Profile`](crate::members::Profile) `ctx`'s metadata
+/// names — its listed fields only, never the metadata whole (it carries
+/// the session's key). The method is the provider's (`sign_in_method`,
+/// plexus-login's), else the credential's kind (`auth_method`).
+pub(crate) fn profile_of(principal: &str, ctx: &AuthContext) -> crate::members::Profile {
+    let s = |k: &str| ctx.get_metadata_string(k);
+    crate::members::Profile {
+        principal: principal.to_string(),
+        provider: s("provider"),
+        backend: s("identity_backend"),
+        method: s("sign_in_method").or_else(|| s("auth_method")),
+        subject: s("subject"),
+        email: s("email"),
+        email_verified: ctx.metadata.get("email_verified").and_then(serde_json::Value::as_bool),
+        name: s("name"),
+        picture: s("picture"),
+        org: s("org_id"),
+        signed_in_at: ctx.metadata.get("auth_time").and_then(serde_json::Value::as_i64),
+        ..Default::default()
+    }
+}
