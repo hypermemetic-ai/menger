@@ -35,6 +35,7 @@
 //! What decides — the route's query, the step — is pure and pinned by
 //! native tests; the rest is DOM.
 
+use crate::bindings::{self, Context};
 use leptos::prelude::*;
 use menger_tickets_api::tasks::{self, Task};
 use wasm_bindgen::JsCast;
@@ -243,7 +244,7 @@ fn Sheet(ticket: String, task: String, body: RwSignal<Option<String>>, refs: not
     // map defers to a dialog (keys::defer_to_focus). Annotation mode and
     // full screen first, as on the page.
     let on_key = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Escape" && !ev.default_prevented() {
+        if bindings::hit(&ev, Context::Dialog) == Some("dialog.close") && !ev.default_prevented() {
             ev.prevent_default();
             ev.stop_propagation();
             if !crate::annotate::escape() && !crate::present::escape() {

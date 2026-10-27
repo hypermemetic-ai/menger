@@ -10,6 +10,7 @@
 //! server's words and **move N** stays off. Each old id stays pinned to its
 //! ticket, so links, chips and blockers follow it.
 
+use crate::bindings::{self, Context};
 use leptos::prelude::*;
 use menger_tickets_api::{ShortcodeMove, TicketsEvent};
 use wasm_bindgen_futures::spawn_local;
@@ -152,7 +153,7 @@ fn MoveDialog(ids: Vec<String>) -> impl IntoView {
         <div class="overlay" on:click=move |_| close()>
             <div id="epic-move" class="dialog" role="dialog" aria-modal="true" aria-labelledby="em-h" data-count=n
                 on:click=|ev| ev.stop_propagation()
-                on:keydown=move |ev: web_sys::KeyboardEvent| if ev.key() == "Escape" { close() }>
+                on:keydown=move |ev: web_sys::KeyboardEvent| if bindings::hit(&ev, Context::Dialog) == Some("dialog.close") { close() }>
                 <h2 id="em-h">{if n == 1 { "Move 1 ticket to another epic".to_string() } else { format!("Move {n} tickets to another epic") }}</h2>
                 {if none_else {
                     view! { <p class="hint">"There is no other live epic to move into. "<a class="lnk" href="#/epics" on:click=move |_| close()>"manage epics →"</a></p> }.into_any()
