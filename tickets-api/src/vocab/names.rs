@@ -17,7 +17,7 @@ fn minted(text: &str, seq: bool) -> Option<String> {
     let id = match seq {
         true => {
             let (id, n) = up.rsplit_once('-')?;
-            (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u32>().is_ok()).then_some(id)?
+            crate::address::split_sub(n).is_some().then_some(id)?
         }
         false => up.as_str(),
     };

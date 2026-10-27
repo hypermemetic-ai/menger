@@ -505,6 +505,74 @@ fn rename(cache: &Cache, root: &Row, to: &Address, to_era: Option<i64>, ask: &Re
     Ok(Plan { steps, renamed: Some((old, sc.id.clone())), minted: Some(sc), born: None, stays, asked })
 }
 
+/// TICKETS-26: what a `rename` is told.
+#[derive(Debug, Clone, Default)]
+pub struct Rename {
+    /// The ticket, by any short form.
+    pub id: String,
+    /// The id it takes: its parent's, `.`, a number — `TICKETS-10.1`, or
+    /// any short form of the parent's address with `.N` after it.
+    pub to: String,
+    /// ORG-4: the organizations the caller holds a role in.
+    pub orgs: Option<Vec<crate::address::OrgId>>,
+    /// Answer the move it would make and write nothing.
+    pub dry_run: bool,
+}
+
+/// TICKETS-26: the rule for a subtask id, said in every refusal of one.
+fn subtask_rule(why: String) -> StoreError {
+    refuse(format!(
+        "{why} — a subtask id is `<parent>.N`, only for a ticket whose parent is `<parent>` (in its own shortcode), N a number from 1 — nothing written"
+    ))
+}
+
+/// TICKETS-26: a ticket renamed into `<parent>.N` — every refusal, or the
+/// plan: one step that keeps the shortcode and the number and takes the new
+/// key, the ticket's children hanging under it by it. Pure: the cache as it
+/// stands.
+pub(super) fn plan_rename(cache: &Cache, ask: &Rename) -> Result<Plan, StoreError> {
+    let reach = match &ask.orgs {
+        Some(orgs) => shortcodes::OrgReach::Only(orgs),
+        None => shortcodes::OrgReach::All,
+    };
+    let key = cache.resolve_in(ask.id.trim(), reach)?;
+    let row = cache.get(&key).ok_or_else(|| refuse(format!("{key} is deleted — undelete it first")))?;
+    let to = ask.to.trim();
+    let Some(parent) = row.parent.as_deref().and_then(|p| cache.get(p)) else {
+        return Err(subtask_rule(format!("{} has no parent, so `{to}` cannot name it", row.id)));
+    };
+    if parent.shortcode != row.shortcode {
+        return Err(subtask_rule(format!("{}'s parent {} is in another shortcode, so `{to}` cannot name it", row.id, parent.id)));
+    }
+    let n = match to.rsplit_once('.') {
+        Some((stem, n)) if !stem.is_empty() && !n.starts_with('0') && n.bytes().all(|b| b.is_ascii_digit()) => n.parse::<u32>().ok().map(|n| (stem, n)),
+        _ => None,
+    };
+    let Some((stem, n)) = n else {
+        return Err(subtask_rule(format!("`{to}` is not {}.N", parent.id)));
+    };
+    // The stem is the parent, by any name it answers to.
+    match cache.resolve_in(stem, reach) {
+        Ok(k) if k == parent.id.as_str() => {}
+        _ => return Err(subtask_rule(format!("`{to}` is not {}.N: {} is {}'s parent", parent.id, parent.id, row.id))),
+    }
+    let new = format!("{}.{n}", parent.id);
+    if new == row.id.as_str() {
+        return Err(refuse(format!("{} is {new} already — nothing written", row.id)));
+    }
+    if cache.at.contains_key(&new) || cache.tombstones.get(&new).is_some() || cache.shortcodes.pin(&new).is_some() {
+        return Err(refuse(format!("{new} is taken — nothing written")));
+    }
+    let mut stays: Vec<(Row, Option<String>)> = Vec::new();
+    for (sc, seq) in cache.children.of(&row.id) {
+        if let Some(c) = cache.order.get(&OrderKey { shortcode: sc, seq }) {
+            stays.push((c.clone(), Some(new.clone())));
+        }
+    }
+    let step = Step { row: row.clone(), key: new, shortcode: row.shortcode.clone(), seq: row.seq, parent: Some(parent.id.to_string()) };
+    Ok(Plan { asked: vec![row.id.to_string()], steps: vec![step], minted: None, born: None, stays, renamed: None })
+}
+
 /// ORG-13: the epic a move's `to` names — `org:epic:CODE` that one (refused
 /// when the org has none of that name), `org:CODE` the org's first; a short
 /// form names none (the move stays where its shortcode is).
@@ -648,11 +716,45 @@ impl Store {
             let cache = self.tickets.read().expect("store lock poisoned");
             plan(&cache, &ask)
         };
-        let p = planned?;
+        self.moving(serial, planned?, ask.dry_run, act, may).await
+    }
+
+    /// [`Store::rename_by`] as nobody signed in, with every ticket allowed.
+    pub async fn rename(&self, sys: &System, ask: Rename) -> Result<Reshortcoded, StoreError> {
+        self.rename_by(ask, Act::default(), |ids| Ok(ids.iter().map(|id| sys.permit(id)).collect())).await
+    }
+
+    /// TICKETS-26: a ticket renamed into `<parent>.N` under its own parent —
+    /// the same write as a move (the module doc): its key rewritten wherever
+    /// a row names it, the old id pinned, nothing renumbered. All or none;
+    /// every refusal names the rule.
+    pub async fn rename_by(
+        &self,
+        ask: Rename,
+        act: Act,
+        may: impl FnOnce(&[String]) -> Result<Vec<Permit<Editor>>, String> + Send,
+    ) -> Result<Reshortcoded, StoreError> {
+        let serial = self.serial().await;
+        let planned = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            plan_rename(&cache, &ask)
+        };
+        self.moving(serial, planned?, ask.dry_run, act, may).await
+    }
+
+    /// A planned move, checked against the caller's permits and written.
+    async fn moving(
+        &self,
+        serial: OwnedMutexGuard<()>,
+        p: Plan,
+        dry_run: bool,
+        act: Act,
+        may: impl FnOnce(&[String]) -> Result<Vec<Permit<Editor>>, String> + Send,
+    ) -> Result<Reshortcoded, StoreError> {
         // ACCESS-11: an editor's permit for every ticket the move names.
         let permits = may(&p.asked).map_err(StoreError::Invalid)?;
         writs::covers_exactly(&self.tickets.read().expect("store lock poisoned"), &permits, &p.asked)?;
-        if ask.dry_run {
+        if dry_run {
             let moves = p.steps.iter().map(|s| ShortcodeMove { from: s.row.id.to_string(), to: s.key.clone() }).collect();
             return Ok(Reshortcoded { moves, tickets: Vec::new() });
         }

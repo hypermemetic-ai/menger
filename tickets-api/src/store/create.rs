@@ -324,7 +324,7 @@ impl Store {
             {
                 let registry = derived.moved.namespaces.as_ref().map_or(&tickets.shortcodes, |m| &m.after);
                 ticket.epic = registry.code(&ticket.shortcode);
-                ticket.address = registry.ticket_address(&ticket.shortcode, ticket.seq);
+                ticket.address = registry.ticket_address(&ticket.shortcode, ticket.seq, &ticket.id);
             }
             let newborn = Row::from(&ticket);
             // WAVE-6: born placed — `created` carries it.

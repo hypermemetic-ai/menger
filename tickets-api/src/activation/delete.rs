@@ -6,7 +6,7 @@
 //! file keeps only its methods (MENGER-29).
 
 use super::*;
-use crate::store::{Children, Deleted, Deletion, Reshortcode, Reshortcoded, Selection, Undeleted, UPDATE_MANY_MAX};
+use crate::store::{Children, Deleted, Deletion, Rename, Reshortcode, Reshortcoded, Selection, Undeleted, UPDATE_MANY_MAX};
 
 /// ACT-5: `delete` — what to delete, how, and the store's write.
 pub(super) fn delete_stream(
@@ -118,6 +118,33 @@ pub(super) fn reshortcode_stream(
                     yield ev;
                 }
             }
+            Err(e) => yield said(&store, &caller, e),
+        }
+    }
+}
+
+/// TICKETS-26: `rename` — who asks, the grant on the ticket, and the store's
+/// write; it answers as a move does.
+pub(super) fn rename_stream(
+    store: Arc<Store>,
+    caller: VerifiedUser,
+    mut ask: Rename,
+    message: Option<Message>,
+) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    stream! {
+        let act = match act_of(&caller, None, message) {
+            Ok(a) => a,
+            Err(message) => {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+        };
+        ask.orgs = caller.orgs();
+        let caller = Arc::new(caller);
+        let (gate, at) = (Arc::clone(&caller), store.clone());
+        let may = move |ids: &[String]| permits::<crate::access::Editor>(&at, &gate, ids);
+        match store.rename_by(ask, act, may).await {
+            Ok(Reshortcoded { moves, tickets }) => yield TicketsEvent::Reshortcoded { moves, tickets },
             Err(e) => yield said(&store, &caller, e),
         }
     }

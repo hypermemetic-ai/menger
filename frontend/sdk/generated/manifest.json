@@ -552,6 +552,12 @@
       "queued": [
         "snoozed"
       ],
+      "rename": [
+        "dry_run",
+        "id",
+        "message",
+        "to"
+      ],
       "request_changes": [
         "body",
         "id",

@@ -1034,6 +1034,10 @@
       const stream = this.rpc.call("tickets.queued", { snoozed });
       yield* extractData(stream);
     }
+    async* rename(id, to, dryRun, message) {
+      const stream = this.rpc.call("tickets.rename", { dry_run: dryRun, id, message, to });
+      yield* extractData(stream);
+    }
     async* requestChanges(body, id, source) {
       const stream = this.rpc.call("tickets.request_changes", { body, id, source });
       yield* extractData(stream);

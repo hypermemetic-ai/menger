@@ -234,7 +234,7 @@ pub use revisions::RevisionsClient;
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "label", "assign", "update", "update_many",
-            "queue", "unqueue", "snooze", "request_changes", "reshortcode", "archive", "restore"
+            "queue", "unqueue", "snooze", "request_changes", "reshortcode", "rename", "archive", "restore"
         ],
     )
 )]
@@ -963,6 +963,31 @@ impl TicketsActivation {
         let (with_children, dry_run) = (with_children.unwrap_or(false), dry_run.unwrap_or(false));
         let ask = crate::store::Reshortcode { ids, to, new_scope, parent, with_children, orgs: None, dry_run };
         reshortcode_stream(self.store.clone(), user, ask, message)
+    }
+
+    /// Rename a ticket into a subtask id, `<parent>.N` (TICKETS-10.1), only under its own parent; its old id keeps resolving (get says moved_from); refused in band, naming the rule, anywhere else; yields reshortcoded { moves, tickets }.
+    ///
+    /// TICKETS-26: the same write as a reshortcode (its key rewritten wherever
+    /// a row names it, the old id pinned), the number kept.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        example(note = "TICKETS-26, a child of TICKETS-10, becomes its first subtask", params = r#"{"id": "TICKETS-26", "to": "TICKETS-10.1"}"#)
+    )]
+    pub async fn rename(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The ticket to rename, e.g. TICKETS-26.
+        id: TicketRef,
+        /// Its new id: its parent's id, a dot and a number, e.g. TICKETS-10.1.
+        to: TicketRef,
+        /// Why (optional).
+        message: Option<Message>,
+        /// Answer the move it would make and write nothing (optional; default false).
+        dry_run: Option<bool>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let ask = crate::store::Rename { id: id.into(), to: to.into(), orgs: None, dry_run: dry_run.unwrap_or(false) };
+        rename_stream(self.store.clone(), user, ask, message)
     }
 
     /// Find tickets whose id or title contains the query (case-insensitive), optionally under a filter; summary rows, paged with after + limit.
