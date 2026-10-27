@@ -488,7 +488,10 @@ fn is_mermaid_fence(info: &str) -> bool {
     /// diagrams a body shows is unchanged.
     #[test]
     fn the_page_splits_the_frontmatter_first() {
-        assert!(APP_MAIN_RS.contains("<notes::BodyView body="));
+        // TICKETS-25: since TICKETS-23 the page draws `notes::TicketBody`,
+        // the unit the task sheet shares, which draws the same `BodyView`.
+        assert!(APP_MAIN_RS.contains("<notes::TicketBody body="));
+        assert!(APP_NOTES_RS.contains("view! { <BodyView body refs ticket"));
         assert!(APP_NOTES_RS.contains("md::is_framed(md::split_frontmatter(b).1)"));
         assert!(APP_NOTES_RS.contains("body.with(|b| body_view(b, refs, media.clone()))"));
         assert!(APP_NOTES_RS.contains("let (fm, md_src) = md::split_frontmatter(raw);"));
