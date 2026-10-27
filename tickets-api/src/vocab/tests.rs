@@ -40,6 +40,11 @@ fn mng_1_and_its_upper_case_are_one_ticket_ref() {
     assert_eq!(de::<TicketRef>("plexus/_MENGER/board").unwrap().as_str(), "PLEXUS/_MENGER/board");
     assert!("PLEXUS/_MENGER/board".parse::<TicketRef>().unwrap().is_path());
     assert_eq!("theme.62-3".parse::<TicketRef>().unwrap().as_str(), "THEME.62-3");
+    // TICKETS-26: a subtask's id, bare, as an address and as a namesake's.
+    assert_eq!("tickets-10.1".parse::<TicketRef>().unwrap().as_str(), "TICKETS-10.1");
+    assert_eq!("menger/tickets-10.1".parse::<TicketRef>().unwrap().as_str(), "MENGER/TICKETS-10.1");
+    assert_eq!("theme.62-3.1".parse::<TicketRef>().unwrap().as_str(), "THEME.62-3.1");
+    assert!("tickets-10.x".parse::<TicketRef>().is_err());
 }
 
 #[test]

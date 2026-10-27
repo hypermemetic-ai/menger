@@ -312,8 +312,8 @@ impl Registry {
     }
 
     /// The full address of `id`'s ticket numbered `seq`.
-    pub(super) fn ticket_address(&self, id: &ShortcodeId, seq: u32) -> String {
-        format!("{}-{seq}", self.address(id))
+    pub(super) fn ticket_address(&self, id: &ShortcodeId, seq: u32, key: &str) -> String {
+        format!("{}-{}", self.address(id), crate::address::number_of(key, seq))
     }
 
     /// The org a shortcode is in.
@@ -583,6 +583,7 @@ impl Registry {
         let a = Address::parse(t).ok().filter(|a| a.is_bare())?;
         let folded = match &a.at {
             At::Seq(n) => format!("{}-{n}", a.code.as_str()),
+            At::Sub(..) => format!("{}-{}", a.code.as_str(), a.at_number()),
             At::Path(p) => format!("{}/{p}", a.code.as_str()),
             At::Shortcode => return None,
         };
@@ -821,7 +822,7 @@ impl Cache {
         let address = self.shortcodes.address(sc);
         for (_, t) in self.order.range_mut((Included(from), Included(to))) {
             t.epic = code.clone();
-            t.address = format!("{address}-{}", t.seq);
+            t.address = format!("{address}-{}", crate::address::number_of(&t.id, t.seq));
         }
     }
 
@@ -837,7 +838,7 @@ impl Cache {
     /// and address from `r` (a write's registry, before or after).
     pub(super) fn dressed(r: &Registry, mut row: super::Row) -> super::Row {
         row.epic = r.code(&row.shortcode);
-        row.address = r.ticket_address(&row.shortcode, row.seq);
+        row.address = r.ticket_address(&row.shortcode, row.seq, &row.id);
         row
     }
 
@@ -897,6 +898,17 @@ impl Cache {
                     match self.order.get(&k) {
                         Some(row) => row.id.to_string(),
                         None => continue,
+                    }
+                }
+                // TICKETS-26: the subtask of the ticket numbered so — its key is
+                // that ticket's with the tail, in the same shortcode.
+                At::Sub(n, tail) => {
+                    let base = super::OrderKey { shortcode: sc.clone(), seq: *n };
+                    let Some(base) = self.order.get(&base) else { continue };
+                    let key = tail.iter().fold(base.id.to_string(), |k, t| format!("{k}.{t}"));
+                    match self.get(&key) {
+                        Some(row) if row.shortcode == sc => row.id.to_string(),
+                        _ => continue,
                     }
                 }
                 At::Path(p) => match self.paths.get(&(sc.clone(), p.clone())) {

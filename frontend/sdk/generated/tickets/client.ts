@@ -309,6 +309,16 @@ MENGER-39: the owner's queue, most urgent first, then the oldest.
    */
   queued(snoozed?: boolean | null): AsyncGenerator<TicketsEvent>;
   /**
+   * Rename a ticket into a subtask id, `<parent>.N` (TICKETS-10.1), only under its own parent; its old id keeps resolving (get says moved_from); refused in band, naming the rule, anywhere else; yields reshortcoded { moves, tickets }.
+
+TICKETS-26: the same write as a reshortcode (its key rewritten wherever
+a row names it, the old id pinned), the number kept.
+   * @server-derived auth
+   * @requiresAuth — resolver: self.access.verify
+   * @requires `tickets.rename` on the scope of `id`
+   */
+  rename(id: TicketRef, to: TicketRef, dryRun?: boolean | null, message?: Message | null): AsyncGenerator<TicketsEvent>;
+  /**
    * Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix }.
 
 APP-23: hands a queued ticket back — a comment (intent `changes`) on its conversation and the entry unqueued, one write.
@@ -679,6 +689,11 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
+  async *rename(id: TicketRef, to: TicketRef, dryRun?: boolean | null, message?: Message | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.rename', { dry_run: dryRun, id, message, to });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
   async *requestChanges(body: Body, id: TicketRef, source?: CallerSource | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.request_changes', { body, id, source });
     yield* extractData<TicketsEvent>(stream);
@@ -777,6 +792,7 @@ export const requires = {
   "tickets.list": { grant: "tickets.list", target: null },
   "tickets.queue": { grant: "tickets.queue", target: "id" },
   "tickets.queued": { grant: "tickets.queued", target: null },
+  "tickets.rename": { grant: "tickets.rename", target: "id" },
   "tickets.request_changes": { grant: "tickets.request_changes", target: "id" },
   "tickets.reshortcode": { grant: "tickets.reshortcode", target: "ids" },
   "tickets.restore": { grant: "tickets.restore", target: "ids" },

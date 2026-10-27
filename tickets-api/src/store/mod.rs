@@ -5402,7 +5402,7 @@ pub use delete::{Children, Deleted, Deletion, Undeleted, KEEP_BODY_FOR, PURGE_EV
 
 // ACT-6: tickets moved into another shortcode, renumbered, their old ids kept.
 mod reshortcode;
-pub use reshortcode::{Reshortcode, Reshortcoded};
+pub use reshortcode::{Rename, Reshortcode, Reshortcoded};
 /// THEME-8: the themes and what the site and each shortcode say.
 mod themes;
 pub use themes::ThemeChange;
@@ -5797,6 +5797,9 @@ mod tests_delete;
 /// ACT-6: `reshortcode` — a test per row of the ticket's table.
 #[cfg(test)]
 mod tests_reshortcode;
+/// TICKETS-26: a subtask's id, `<parent>.N` — a test per row.
+#[cfg(test)]
+mod tests_subtasks;
 /// ORG-5: a scope under a scope roots its own shortcode — a test per row.
 #[cfg(test)]
 mod tests_child_scopes;

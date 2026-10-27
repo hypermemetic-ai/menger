@@ -297,6 +297,16 @@ export interface TicketsClient {
      */
     queued(snoozed?: boolean | null): AsyncGenerator<TicketsEvent>;
     /**
+     * Rename a ticket into a subtask id, `<parent>.N` (TICKETS-10.1), only under its own parent; its old id keeps resolving (get says moved_from); refused in band, naming the rule, anywhere else; yields reshortcoded { moves, tickets }.
+  
+  TICKETS-26: the same write as a reshortcode (its key rewritten wherever
+  a row names it, the old id pinned), the number kept.
+     * @server-derived auth
+     * @requiresAuth — resolver: self.access.verify
+     * @requires `tickets.rename` on the scope of `id`
+     */
+    rename(id: TicketRef, to: TicketRef, dryRun?: boolean | null, message?: Message | null): AsyncGenerator<TicketsEvent>;
+    /**
      * Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix }.
   
   APP-23: hands a queued ticket back — a comment (intent `changes`) on its conversation and the entry unqueued, one write.
@@ -633,6 +643,10 @@ export declare const requires: {
     readonly "tickets.queued": {
         readonly grant: "tickets.queued";
         readonly target: null;
+    };
+    readonly "tickets.rename": {
+        readonly grant: "tickets.rename";
+        readonly target: "id";
     };
     readonly "tickets.request_changes": {
         readonly grant: "tickets.request_changes";

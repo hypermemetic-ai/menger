@@ -90,16 +90,35 @@ pub fn is_code(text: &str) -> bool {
 /// refuses (`.N` after it, for a namesake). Case is kept as written.
 pub fn split_key(id: &str) -> Option<(&str, u32)> {
     let (code, n) = id.rsplit_once('-')?;
-    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let n = n.parse::<u32>().ok()?;
+    // TICKETS-26: a subtask's key, `CODE-N.M…`, is its parent's with `.M`
+    // after it — its number here is the first, the base's.
+    let (n, _) = split_sub(n)?;
     let letters = match code.split_once('.') {
         Some((c, k)) if !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()) => c,
         Some(_) => return None,
         None => code,
     };
     is_code(letters).then_some((code, n))
+}
+
+/// TICKETS-26: a number with a subtask tail, `10` or `10.1.2` — the base
+/// number and the tail's numbers. `None` when any part is not digits (or is
+/// empty, or past `u32`).
+pub fn split_sub(text: &str) -> Option<(u32, Vec<u32>)> {
+    let mut parts = text.split('.');
+    let num = |p: &str| (!p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())).then(|| p.parse::<u32>().ok()).flatten();
+    let base = num(parts.next()?)?;
+    let tail = parts.map(num).collect::<Option<Vec<u32>>>()?;
+    Some((base, tail))
+}
+
+/// TICKETS-26: the number an address ends a ticket in — its sequence, or,
+/// for a subtask whose key is `CODE-N.M`, that `N.M`.
+pub fn number_of(key: &str, seq: u32) -> String {
+    match key.rsplit_once('-') {
+        Some((_, tail)) if tail.contains('.') && split_sub(tail).is_some() => tail.to_string(),
+        _ => seq.to_string(),
+    }
 }
 
 /// ORG-3: an organization's name — lower-case ASCII letters, digits and
@@ -597,6 +616,9 @@ pub enum At {
     Shortcode,
     /// Its ticket of this number: `MENGER/THEME-3`.
     Seq(u32),
+    /// TICKETS-26: a subtask of the ticket numbered so — `MENGER/TICKETS-10.1`
+    /// is `Sub(10, [1])`: the ticket whose key is its parent's with `.1`.
+    Sub(u32, Vec<u32>),
     /// WAVE-10: the ticket holding this path (`_MENGER/…`, exactly as
     /// written): `PLEXUS/_MENGER/board`.
     Path(String),
@@ -667,7 +689,10 @@ impl Address {
         // ticket's number — and no code ends in a segment of digits, so
         // `SYNAPSE-CC-1` is a ticket and `SYNAPSE-CC` a shortcode, one way.
         if let Some((code, n)) = last.rsplit_once('-') {
-            if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) {
+            if let Some((seq, tail)) = split_sub(n).filter(|(_, tail)| !tail.is_empty()) {
+                return Ok(Self { org, era, hosts, code: Code::parse(code)?, at: At::Sub(seq, tail) });
+            }
+            if !n.is_empty()&& n.bytes().all(|b| b.is_ascii_digit()) {
                 let seq = n.parse::<u32>().map_err(|_| format!("`{t}`: {n} is past the last number a ticket can have"))?;
                 return Ok(Self { org, era, hosts, code: Code::parse(code)?, at: At::Seq(seq) });
             }
@@ -676,6 +701,15 @@ impl Address {
             }
         }
         Ok(Self { org, era, hosts, code: Code::parse(last)?, at: At::Shortcode })
+    }
+
+    /// TICKETS-26: the number the address ends in — `10` or `10.1`.
+    pub fn at_number(&self) -> String {
+        match &self.at {
+            At::Seq(n) => n.to_string(),
+            At::Sub(n, tail) => tail.iter().fold(n.to_string(), |k, t| format!("{k}.{t}")),
+            _ => String::new(),
+        }
     }
 
     /// Whether this is the bare `SC-N` or `SC` a reader typed before ORG-3 —
@@ -706,6 +740,10 @@ impl fmt::Display for Address {
         match &self.at {
             At::Shortcode => Ok(()),
             At::Seq(n) => write!(f, "-{n}"),
+            At::Sub(n, tail) => {
+                write!(f, "-{n}")?;
+                tail.iter().try_for_each(|k| write!(f, ".{k}"))
+            }
             At::Path(p) => write!(f, "/{p}"),
         }
     }
@@ -784,6 +822,24 @@ mod tests {
     fn a_shortcode_address_has_no_number() {
         let a = Address::parse("menger/theme").unwrap();
         assert_eq!((a.hosts, a.code.as_str(), a.at), (vec![code("MENGER")], "THEME", At::Shortcode));
+    }
+
+    #[test]
+    fn a_subtask_id_reads_as_an_address_and_a_key() {
+        // TICKETS-26: `CODE-N.M…` — a number with a tail.
+        let a = Address::parse("menger/tickets-10.1").unwrap();
+        assert_eq!((a.hosts.len(), a.code.as_str(), &a.at), (1, "TICKETS", &At::Sub(10, vec![1])));
+        assert_eq!(a.to_string(), "MENGER/TICKETS-10.1");
+        assert_eq!(Address::parse("A-1.2.3").unwrap().at, At::Sub(1, vec![2, 3]));
+        assert_eq!(Address::parse("A-1.2").unwrap().at_number(), "1.2");
+        for bad in ["A-1.", "A-1..2", "A-.1", "A-1.x"] {
+            assert!(Address::parse(bad).is_err(), "{bad:?} parsed");
+        }
+        assert_eq!(split_key("TICKETS-10.1"), Some(("TICKETS", 10)));
+        assert_eq!(split_key("THEME.62-3.1"), Some(("THEME.62", 3)));
+        assert_eq!(split_key("TICKETS-10."), None);
+        assert_eq!(number_of("TICKETS-10.1", 26), "10.1");
+        assert_eq!(number_of("TICKETS-26", 26), "26");
     }
 
     #[test]
