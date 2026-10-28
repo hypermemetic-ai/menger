@@ -20,6 +20,8 @@ import type { TicketsNavClient } from '../tickets/nav/client';
 import { createTicketsNavClient } from '../tickets/nav/client';
 import type { TicketsRevisionsClient } from '../tickets/revisions/client';
 import { createTicketsRevisionsClient } from '../tickets/revisions/client';
+import type { TicketsSubtasksClient } from '../tickets/subtasks/client';
+import { createTicketsSubtasksClient } from '../tickets/subtasks/client';
 import type { TicketsWorkClient } from '../tickets/work/client';
 import { createTicketsWorkClient } from '../tickets/work/client';
 
@@ -37,6 +39,8 @@ export interface TicketsClient {
   readonly nav: TicketsNavClient;
   /** A ticket's revisions — `tickets revisions list | get | diff | restore` (TICKETS-7, activation/revisions.rs). */
   readonly revisions: TicketsRevisionsClient;
+  /** A ticket's subtasks — `tickets.subtasks.create` / `list` (TICKETS-28). */
+  readonly subtasks: TicketsSubtasksClient;
   /** The order of work — `tickets work ready | waves | waves_under | waves_to | blockers` (ACCESS-17, activation/work.rs). */
   readonly work: TicketsWorkClient;
   /**
@@ -602,6 +606,7 @@ class TicketsClientImpl implements TicketsClient {
   readonly inputs: TicketsInputsClient;
   readonly nav: TicketsNavClient;
   readonly revisions: TicketsRevisionsClient;
+  readonly subtasks: TicketsSubtasksClient;
   readonly work: TicketsWorkClient;
   constructor(rpc: RpcClient) {
     this.rpc = rpc;
@@ -611,6 +616,7 @@ class TicketsClientImpl implements TicketsClient {
     this.inputs = createTicketsInputsClient(rpc);
     this.nav = createTicketsNavClient(rpc);
     this.revisions = createTicketsRevisionsClient(rpc);
+    this.subtasks = createTicketsSubtasksClient(rpc);
     this.work = createTicketsWorkClient(rpc);
   }
 

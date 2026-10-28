@@ -10,7 +10,7 @@ impl Store {
     /// the ticket it became, in the same write.
     /// ACCESS-11: filed as `at` allows — checked under the write-serial
     /// lock, once the parent (or root) and the blockers are resolved.
-    pub(super) async fn create_from(&self, at: Filing, new: NewTicket, from: Option<u64>, act: Act) -> Result<(Ticket, Option<crate::notes::Note>), StoreError> {
+    pub(super) async fn create_from(&self, at: Filing, new: NewTicket, from: Option<u64>, act: Act, sub: bool) -> Result<(Ticket, Option<crate::notes::Note>), StoreError> {
         // ORG-3: the shortcode as the reader names it — its code, or any
         // short form of its address — parsed here; which shortcode it is (or
         // whether it mints one) is decided under the lock, the namespace
@@ -118,7 +118,16 @@ impl Store {
             // ACT-5: past every deleted number too — a number is never reused;
             // and the first of a shortcode is the one born into none held.
             let (seq, first) = (tickets.next_seq(&sc), tickets.ids.held(&sc) == 0);
-            let id = sc.key(seq);
+            // TICKETS-28: a subtask is born as `<parent>.N` — the next free
+            // number — and hidden; the shortcode's number is spent as a
+            // rename's is (the key and the seq are two things).
+            if sub && new.kind.roots_a_shortcode() {
+                return Err(StoreError::Invalid(format!("a subtask is work under its parent, not a {} that roots a shortcode — nothing written", new.kind.as_str())));
+            }
+            let id = match (sub, &parent_named) {
+                (true, Some(Ok(p))) => tickets.next_subtask(p),
+                _ => sc.key(seq),
+            };
 
             // MNG-12: every shortcode starts with a scope. `seq == 1` is
             // exactly "this prefix has no tickets yet" (ids are never
@@ -254,7 +263,7 @@ impl Store {
                 parent_hidden: false,
                 archived: None,
                 frozen: false,
-                hidden: false,
+                hidden: sub,
                 parent: parent.clone().map(crate::address::TicketId::new),
                 // SCALE-4: none, unless a hand-edited database already
                 // names this id as some ticket's parent — the index has

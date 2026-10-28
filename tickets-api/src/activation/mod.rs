@@ -204,6 +204,12 @@ mod work;
 #[cfg(feature = "server")]
 pub use work::WorkActivation;
 pub use work::WorkClient;
+// TICKETS-28: `tickets subtasks` — create the next `<parent>.N` (hidden), list. Not gated:
+// its attribute emits `SubtasksClient` for the client-only build too.
+mod subtasks;
+#[cfg(feature = "server")]
+pub use subtasks::SubtasksActivation;
+pub use subtasks::SubtasksClient;
 // TICKETS-7: `tickets revisions` — list, get, diff, restore. Not gated: its
 // attribute emits `RevisionsClient` for the client-only build too.
 mod revisions;
@@ -1083,6 +1089,12 @@ impl TicketsActivation {
     #[plexus_macros::child]
     fn filters(&self) -> FiltersActivation {
         FiltersActivation::new(self.store.clone(), self.access.clone())
+    }
+
+    /// A ticket's subtasks — `tickets.subtasks.create` / `list` (TICKETS-28).
+    #[plexus_macros::child]
+    pub fn subtasks(&self) -> SubtasksActivation {
+        SubtasksActivation { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 
     /// The component registry — `tickets.components.list` (COMP-3, ACCESS-18), through the caller's reach.

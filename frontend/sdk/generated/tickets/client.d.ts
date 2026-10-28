@@ -10,6 +10,7 @@ import type { TicketsFiltersClient } from '../tickets/filters/client';
 import type { TicketsInputsClient } from '../tickets/inputs/client';
 import type { TicketsNavClient } from '../tickets/nav/client';
 import type { TicketsRevisionsClient } from '../tickets/revisions/client';
+import type { TicketsSubtasksClient } from '../tickets/subtasks/client';
 import type { TicketsWorkClient } from '../tickets/work/client';
 /** Typed client interface for tickets plugin */
 export interface TicketsClient {
@@ -25,6 +26,8 @@ export interface TicketsClient {
     readonly nav: TicketsNavClient;
     /** A ticket's revisions — `tickets revisions list | get | diff | restore` (TICKETS-7, activation/revisions.rs). */
     readonly revisions: TicketsRevisionsClient;
+    /** A ticket's subtasks — `tickets.subtasks.create` / `list` (TICKETS-28). */
+    readonly subtasks: TicketsSubtasksClient;
     /** The order of work — `tickets work ready | waves | waves_under | waves_to | blockers` (ACCESS-17, activation/work.rs). */
     readonly work: TicketsWorkClient;
     /**

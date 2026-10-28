@@ -32,4 +32,5 @@ export * as TicketsFilters from './tickets/filters';
 export * as TicketsInputs from './tickets/inputs';
 export * as TicketsNav from './tickets/nav';
 export * as TicketsRevisions from './tickets/revisions';
+export * as TicketsSubtasks from './tickets/subtasks';
 export * as TicketsWork from './tickets/work';

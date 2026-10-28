@@ -330,6 +330,29 @@
     return new TicketsRevisionsClientImpl(rpc);
   }
 
+  // generated/tickets/subtasks/client.ts
+  class TicketsSubtasksClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* create(parent, title, blockedBy, body, kind) {
+      const stream = this.rpc.call("tickets.subtasks.create", { blocked_by: blockedBy, body, kind, parent, title });
+      yield* extractData(stream);
+    }
+    async* list(parent, after, limit) {
+      const stream = this.rpc.call("tickets.subtasks.list", { after, limit, parent });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.subtasks.schema", {});
+      return collectOne(stream);
+    }
+  }
+  function createTicketsSubtasksClient(rpc) {
+    return new TicketsSubtasksClientImpl(rpc);
+  }
+
   // generated/tickets/work/client.ts
   class TicketsWorkClientImpl {
     rpc;
@@ -374,6 +397,7 @@
     inputs;
     nav;
     revisions;
+    subtasks;
     work;
     constructor(rpc) {
       this.rpc = rpc;
@@ -383,6 +407,7 @@
       this.inputs = createTicketsInputsClient(rpc);
       this.nav = createTicketsNavClient(rpc);
       this.revisions = createTicketsRevisionsClient(rpc);
+      this.subtasks = createTicketsSubtasksClient(rpc);
       this.work = createTicketsWorkClient(rpc);
     }
     async* amend(id, body, title) {

@@ -3612,7 +3612,7 @@ impl Store {
     /// transition (from nothing), recorded in the birth's write and said
     /// right after its `Created`.
     pub async fn create_by(&self, at: impl Into<Filing>, new: NewTicket, act: Act) -> Result<Ticket, StoreError> {
-        self.create_from(at.into(), new, None, act).await.map(|(ticket, _)| ticket)
+        self.create_from(at.into(), new, None, act, false).await.map(|(ticket, _)| ticket)
     }
 
     /// NOTE-2: the note `id` made the ticket `new` — in one write: the
@@ -3630,7 +3630,7 @@ impl Store {
     /// MENGER-13: [`Store::upgrade_note`] by `act`. ACCESS-11: filed as
     /// `create` is ([`Filing`]).
     pub async fn upgrade_note_by(&self, at: impl Into<Filing>, id: u64, new: NewTicket, act: Act) -> Result<(Ticket, crate::notes::Note), StoreError> {
-        let (ticket, note) = self.create_from(at.into(), new, Some(id), act).await?;
+        let (ticket, note) = self.create_from(at.into(), new, Some(id), act, false).await?;
         Ok((ticket, note.expect("a note was named, so one was marked")))
     }
 
@@ -5421,6 +5421,8 @@ pub use delete::{Children, Deleted, Deletion, Undeleted, KEEP_BODY_FOR, PURGE_EV
 
 // ACT-6: tickets moved into another shortcode, renumbered, their old ids kept.
 mod reshortcode;
+/// TICKETS-28: a subtask born as `<parent>.N`, hidden.
+mod subtasks;
 pub use reshortcode::{Rename, Reshortcode, Reshortcoded};
 /// THEME-8: the themes and what the site and each shortcode say.
 mod themes;
@@ -5822,6 +5824,8 @@ mod tests_reshortcode;
 /// TICKETS-26: a subtask's id, `<parent>.N` — a test per row.
 #[cfg(test)]
 mod tests_subtasks;
+#[cfg(test)]
+mod tests_subtask_create;
 /// ORG-5: a scope under a scope roots its own shortcode — a test per row.
 #[cfg(test)]
 mod tests_child_scopes;

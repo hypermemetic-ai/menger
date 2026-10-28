@@ -171,3 +171,45 @@ async fn a_subtask_id_is_given_under_its_parent_and_read_everywhere() {
         assert_eq!(ids, ["THEME-2.1", "THEME-5"], "under {under}: {listed:?}");
     }
 }
+
+/// TICKETS-28: `tickets.subtasks.create` over the wire, as an editor of the
+/// shortcode: `.1 .2 .3`, hidden, absent from the nav's views, present in
+/// `subtasks.list` and `list --parent`; a missing parent refused in band.
+#[tokio::test]
+async fn subtasks_create_names_the_next_dot_n_and_hides_it() {
+    let port = start().await;
+    let boss = as_key(port, &BOSS, "boss").await;
+    for (title, extra) in [("the theme", json!({ "kind": "scope" })), ("area", json!({ "kind": "execution" }))] {
+        let mut p = json!({ "epic": "THEME", "title": title });
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        assert_eq!(call(&boss, "tickets.create", p).await[0]["type"], "created");
+    }
+    let g = one(&boss, "members.grant", json!({ "principal": principal(&ADA), "scope": "THEME", "role": "editor" })).await;
+    assert_ne!(g["type"], "error", "{g}");
+    let ada = as_key(port, &ADA, "ada").await;
+
+    let mut made = Vec::new();
+    for title in ["one", "two", "three"] {
+        let t = one(&ada, "tickets.subtasks.create", json!({ "parent": "THEME-2", "title": title, "body": format!("the body of {title}") })).await;
+        assert_eq!(t["type"], "created", "{t}");
+        made.push(t["ticket"].clone());
+    }
+    assert_eq!(made.iter().map(|t| t["id"].as_str().unwrap()).collect::<Vec<_>>(), ["THEME-2.1", "THEME-2.2", "THEME-2.3"]);
+    assert!(made.iter().all(|t| t["hidden"] == true && t["parent"] == "THEME-2"), "{made:?}");
+
+    // In the parent's subtasks, in order, and its children; in no nav view.
+    let subs = call(&ada, "tickets.subtasks.list", json!({ "parent": "THEME-2" })).await;
+    let ids = |evs: &[Value]| evs.iter().filter_map(|e| e["summary"]["id"].as_str().map(String::from)).collect::<Vec<_>>();
+    assert_eq!(ids(&subs), ["THEME-2.1", "THEME-2.2", "THEME-2.3"], "{subs:?}");
+    let kids = call(&ada, "tickets.list", json!({ "parent": "THEME-2", "summary": true })).await;
+    assert_eq!(ids(&kids), ["THEME-2.1", "THEME-2.2", "THEME-2.3"], "{kids:?}");
+    let top = call(&ada, "tickets.nav.tree", json!({ "epic": "THEME", "filter": "not category done", "matches_only": true })).await;
+    assert!(!top.is_empty() && !top.iter().any(|e| e.to_string().contains("THEME-2.")), "{top:?}");
+    let all = call(&ada, "tickets.list", json!({ "filter": "in THEME", "summary": true })).await;
+    assert_eq!(ids(&all), ["THEME-1", "THEME-2"], "{all:?}");
+
+    // A parent that is no ticket: refused in band, nothing written.
+    let e = one(&ada, "tickets.subtasks.create", json!({ "parent": "THEME-99", "title": "x" })).await;
+    assert_eq!(e["type"], "error", "{e}");
+    assert_eq!(one(&ada, "tickets.subtasks.create", json!({ "parent": "THEME-2", "title": "four" })).await["ticket"]["id"], "THEME-2.4");
+}
