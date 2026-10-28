@@ -8,9 +8,8 @@
 //! `roles(...)`: `list` is the viewer's, `create` the editor's (filed under
 //! the parent as `tickets.create` is, ACCESS-21).
 
-use crate::types::TicketsEvent;
-use crate::vocab::{Body, TicketRef, Title};
-use crate::store::Kind;
+use crate::types::{Kind, TicketsEvent};
+use crate::vocab::{Body, Cursor, TicketRef, Title};
 #[cfg(feature = "server")]
 use super::*;
 #[cfg(feature = "server")]
