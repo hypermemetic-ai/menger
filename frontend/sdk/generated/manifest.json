@@ -793,6 +793,21 @@
       ],
       "schema": []
     },
+    "tickets.subtasks": {
+      "create": [
+        "blocked_by",
+        "body",
+        "kind",
+        "parent",
+        "title"
+      ],
+      "list": [
+        "after",
+        "limit",
+        "parent"
+      ],
+      "schema": []
+    },
     "tickets.work": {
       "blockers": [
         "id"

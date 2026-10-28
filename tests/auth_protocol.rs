@@ -253,6 +253,9 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.amend", Today::Editor, Some("id")),
     ("tickets.commits.link", Today::Editor, Some("id")),
     ("tickets.commits.unlink", Today::Editor, Some("id")),
+    // TICKETS-28: a parent's subtasks — read as its children are; made like `create`, under it.
+    ("tickets.subtasks.list", Today::Viewer, None),
+    ("tickets.subtasks.create", Today::Editor, None),
     // TICKETS-7: a ticket's revisions — read as the ticket is; restored by an editor of it.
     ("tickets.revisions.list", Today::Viewer, None),
     ("tickets.revisions.get", Today::Viewer, None),
