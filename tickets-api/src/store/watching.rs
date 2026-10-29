@@ -65,7 +65,7 @@ impl Store {
         }
         let cache = self.tickets.read().expect("store lock poisoned");
         let sees = sight.seen.sees(&cache);
-        cut(&cache, &sees, change)
+        cut(&sees, change)
     }
 
     /// ACCESS-12: what a watch heard through `before` that it does not
@@ -129,9 +129,9 @@ impl Store {
 
 /// ACCESS-12: the one classification. **No `_` arm**: a new [`Change`]
 /// does not compile until it is placed here — about one ticket, several, a
-/// shortcode, a component, or the watch's own — and cut to the reach as a
+/// shortcode, or the watch's own — and cut to the reach as a
 /// read would answer it.
-fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
+fn cut(sees: &Sees<'_>, change: Change) -> Option<Change> {
     // One name the reach may hide, beside a row it shows: blanked.
     let name = |id: String| if sees.id(&id) { id } else { String::new() };
     // ACCESS-48: a blocker's name, the same way.
@@ -150,7 +150,6 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
         Change::CommitsLinked { ticket, added } => sees.id(&ticket.id).then(|| Change::CommitsLinked { ticket: row(ticket), added }),
         Change::CommitsUnlinked { ticket, removed } => sees.id(&ticket.id).then(|| Change::CommitsUnlinked { ticket: row(ticket), removed }),
         Change::LabelsChanged { ticket, added, removed } => sees.id(&ticket.id).then(|| Change::LabelsChanged { ticket: row(ticket), added, removed }),
-        Change::AssigneesChanged { ticket, added, removed } => sees.id(&ticket.id).then(|| Change::AssigneesChanged { ticket: row(ticket), added, removed }),
         Change::FrozenChanged { ticket } => sees.id(&ticket.id).then(|| Change::FrozenChanged { ticket: row(ticket) }),
         Change::HiddenChanged { ticket } => sees.id(&ticket.id).then(|| Change::HiddenChanged { ticket: row(ticket) }),
         Change::SeverityChanged { ticket, previous } => sees.id(&ticket.id).then(|| Change::SeverityChanged { ticket: row(ticket), previous }),
@@ -173,7 +172,6 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
         Change::ChildRemoved { id, shortcode, removed, child_count } => {
             sees.id(&id).then(|| Change::ChildRemoved { id, shortcode, removed: name(removed), child_count })
         }
-        Change::InputChanged { shortcode, input } => sees.id(input.ticket.as_str()).then_some(Change::InputChanged { shortcode, input }),
         // MENGER-13: a transition is its ticket's; the ticket that caused
         // it may be hidden.
         Change::Transition { shortcode, mut transition } => sees.id(transition.ticket.as_str()).then(|| {
@@ -185,23 +183,6 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
         // TICKETS-7: a revision is its ticket's; what it changed says nothing
         // of another.
         Change::Revised { shortcode, ticket, rev, fields } => sees.id(&ticket).then_some(Change::Revised { shortcode, ticket, rev, fields }),
-        // MENGER-39: a queue write is its ticket's; its row redacted.
-        Change::Queue { shortcode, change } => {
-            let change = match change {
-                queue::QueueChange::Queued { entry, mut ticket, action } => sees.id(&entry.ticket).then(|| {
-                    sees.row(&mut ticket);
-                    queue::QueueChange::Queued { entry, ticket, action }
-                }),
-                queue::QueueChange::Unqueued { id, entry, action, by, at_unix } => {
-                    sees.id(&entry.ticket).then_some(queue::QueueChange::Unqueued { id, entry, action, by, at_unix })
-                }
-                queue::QueueChange::Snoozed { entry, mut ticket } => sees.id(&entry.ticket).then(|| {
-                    sees.row(&mut ticket);
-                    queue::QueueChange::Snoozed { entry, ticket }
-                }),
-            }?;
-            Some(Change::Queue { shortcode, change })
-        }
 
         // ── About a saved filter (FILTER-46): the filters are the
         // organization's to read, heard by whoever may.
@@ -241,10 +222,10 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
             (!ids.is_empty()).then_some(Change::Undeleted { ids, tickets })
         }
         // ARCHIVE-2: of the tickets the reach holds.
-        Change::Archived { ids, live, unqueued, mark } => {
+        Change::Archived { ids, live, mark } => {
             let ids = sees.keep(ids);
             let live = live.into_iter().filter(|l| sees.id(&l.id)).collect();
-            (!ids.is_empty()).then(|| Change::Archived { ids, live, unqueued: sees.keep(unqueued), mark })
+            (!ids.is_empty()).then(|| Change::Archived { ids, live, mark })
         }
         Change::Restored { ids, ancestors, still_archived, by } => {
             let ids = sees.keep(ids);
@@ -268,21 +249,6 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
             }
             Some(Change::GroupChanged { group })
         }
-
-        // ── About a component: its owner's — references cut to what the
-        // reach admits; one it cannot see said as gone (the watch passes a
-        // removal on only of a component it had shown).
-        Change::ComponentChanged { mut component } => {
-            if !component.owner.as_deref().is_some_and(|o| sees.id(o)) {
-                return Some(Change::ComponentRemoved { name: component.name });
-            }
-            component.references.retain(|r| match cache.components.owner_of(r) {
-                Some(owner) => owner.is_some_and(|o| sees.id(o)),
-                None => sees.id(r),
-            });
-            Some(Change::ComponentChanged { component })
-        }
-        Change::ComponentRemoved { name } => Some(Change::ComponentRemoved { name }),
 
         // ── The watch's own: a write's cell moves, which a filtered watch's
         // watcher turns into membership under a lens that holds the reach.

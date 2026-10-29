@@ -153,13 +153,8 @@
 //! file in form 6 gains it, empty, in place, once, on first open
 //! (`stored::upgrade`).
 
-use crate::types::{
-    is_menger_path, Component, Input, InputState, Placement, PlacementChange, TicketSummary,
-    MENGER_PATH_PREFIX,
-};
-#[cfg(test)]
-use crate::types::{AnswerSource, InputValue};
-use crate::access::{Admin, Editor, Permit, Viewer};
+use crate::types::{is_menger_path, Placement, PlacementChange, TicketSummary, MENGER_PATH_PREFIX};
+use crate::access::{Admin, Editor, Permit};
 use crate::address::{Address, At, Shortcode, ShortcodeId, TicketId, TicketName};
 use crate::vocab::{CommitRef, Label};
 use rusqlite::{Connection, OpenFlags};
@@ -214,7 +209,6 @@ fn whole(row: Row, body: String) -> Ticket {
         path,
         placement,
         labels,
-        assignees,
         archived,
         frozen,
         hidden,
@@ -242,7 +236,6 @@ fn whole(row: Row, body: String) -> Ticket {
         path,
         placement,
         labels,
-        assignees,
         archived,
         frozen,
         hidden,
@@ -293,13 +286,6 @@ fn broadcast_groups(tx: &Broadcast, groups: Vec<Group>) {
 pub(crate) struct Broadcast {
     plain: broadcast::Sender<Change>,
     filtered: broadcast::Sender<Change>,
-    /// COMMENT-2: `comments.watch`'s — the comments' own changes, which no
-    /// ticket's `watch` carries.
-    comments: broadcast::Sender<CommentChange>,
-    /// DEPLOY-11: `deployments.watch`'s — `deployed`, `environment_changed`.
-    deployments: broadcast::Sender<crate::deployments::DeploymentsEvent>,
-    /// CHAT-3: `chats.watch`'s and `await_message`'s — the chats' changes.
-    chats: broadcast::Sender<chats::ChatChange>,
     /// TICKETS-7: the revisions writes keep — `watch { revisions }`'s.
     revisions: broadcast::Sender<Change>,
     /// ORG-23: `epics.watch`'s — an epic's change, a principal moved.
@@ -318,9 +304,6 @@ impl Broadcast {
         Self {
             plain: broadcast::channel(BROADCAST_CAPACITY).0,
             filtered: broadcast::channel(BROADCAST_CAPACITY).0,
-            comments: broadcast::channel(BROADCAST_CAPACITY).0,
-            deployments: broadcast::channel(BROADCAST_CAPACITY).0,
-            chats: broadcast::channel(BROADCAST_CAPACITY).0,
             revisions: broadcast::channel(BROADCAST_CAPACITY).0,
             epics: broadcast::channel(BROADCAST_CAPACITY).0,
             grants: Arc::new(tokio::sync::watch::channel(0).0),
@@ -331,21 +314,6 @@ impl Broadcast {
     /// watches woken when it moved.
     pub(super) fn grants_at(&self, generation: u64) {
         self.grants.send_if_modified(|g| std::mem::replace(g, generation) != generation);
-    }
-
-    /// COMMENT-2: a comment's change, to `comments.watch`.
-    fn comment(&self, change: CommentChange) {
-        let _ = self.comments.send(change);
-    }
-
-    /// DEPLOY-11: a deployment's event, to `deployments.watch`.
-    fn deployment(&self, event: crate::deployments::DeploymentsEvent) {
-        let _ = self.deployments.send(event);
-    }
-
-    /// CHAT-3: a chat's change, to `chats.watch` and `await_message`.
-    fn chat(&self, change: chats::ChatChange) {
-        let _ = self.chats.send(change);
     }
 
     /// Sends `change` to every subscriber it is for: a cell move to the
@@ -793,9 +761,6 @@ pub enum Change {
     /// are what moved, in the order given. Only broadcast when something
     /// did. Carries the full ticket.
     LabelsChanged { ticket: Ticket, added: Vec<Label>, removed: Vec<Label> },
-    /// TICKETS-9: a ticket's assignees moved (`assign`); `added` and
-    /// `removed` are the principals that moved. Carries the full ticket.
-    AssigneesChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
     /// TICKETS-6: a scope was frozen or unfrozen (`freeze` / `unfreeze`);
     /// only broadcast when it moved. Carries the full ticket.
     FrozenChanged { ticket: Ticket },
@@ -854,18 +819,6 @@ pub enum Change {
     /// wire) — broadcast last, after the write's other events, once per
     /// write that moved any.
     PlacementsChanged { changes: Vec<(ShortcodeId, PlacementChange)> },
-    /// COMP-3: a component a write registered or moved — its source, owner
-    /// or references — as the write leaves it; one per component, in name
-    /// order, after every other event of the write (placements included).
-    ComponentChanged { component: Component },
-    /// COMP-3: a component the write took out of the registry (an orphan
-    /// nothing live uses any more) — after the write's `ComponentChanged`.
-    ComponentRemoved { name: String },
-    /// INPUT-3: an input a write moved — answered, cleared, closed, reopened;
-    /// or declared, re-declared, removed or restored by a body — as it leaves
-    /// it, after every other event of the write. `shortcode` is its ticket's,
-    /// what `watch { epic }` filters by; it does not cross the wire.
-    InputChanged { shortcode: ShortcodeId, input: Input },
     /// MENGER-13: a transition the write made — right after the event of the
     /// change it records (`Created`, `StatusChanged`, `KindChanged`).
     /// `shortcode` is its ticket's, what `watch { epic }` filters by; it does
@@ -886,7 +839,7 @@ pub enum Change {
     /// ARCHIVE-2: an `archive` archived `ids` (each a transition before it),
     /// `live` those not done, `unqueued` those it took out of the queue,
     /// `mark` what each carries now ([`archive`]).
-    Archived { ids: Vec<TicketId>, live: Vec<crate::types::LiveTicket>, unqueued: Vec<TicketId>, mark: crate::types::Archived },
+    Archived { ids: Vec<TicketId>, live: Vec<crate::types::LiveTicket>, mark: crate::types::Archived },
     /// ARCHIVE-2: a `restore` (or a create's or move's chain) brought `ids`
     /// back — `ancestors` the chain among them, `still_archived` what it
     /// left in the archive below them.
@@ -908,9 +861,6 @@ pub enum Change {
     #[serde(skip)]
     #[schemars(skip)]
     UnderMoved { moves: std::sync::Arc<lineage::UnderMoves> },
-    /// MENGER-39: a queue write — `queued`, `unqueued`, `snoozed` on the
-    /// wire; `shortcode` is its ticket's (ORG-3: by identity), what `watch { epic }` filters by.
-    Queue { shortcode: ShortcodeId, change: queue::QueueChange },
     /// TICKETS-7: a revision a write kept — after the write's other events.
     Revised { shortcode: ShortcodeId, ticket: TicketId, rev: u32, fields: Vec<String> },
 }
@@ -931,7 +881,6 @@ impl Change {
             | Self::CommitsLinked { ticket, .. }
             | Self::CommitsUnlinked { ticket, .. }
             | Self::LabelsChanged { ticket, .. }
-            | Self::AssigneesChanged { ticket, .. }
             | Self::FrozenChanged { ticket }
             | Self::HiddenChanged { ticket }
             | Self::UnlocksChanged { ticket, .. }
@@ -944,12 +893,8 @@ impl Change {
             Self::Filters(_) => None,
             // WAVE-6: one per change, not per event — see `in_epic`.
             Self::PlacementsChanged { .. } => None,
-            // COMP-3: in no shortcode — see `in_epic`.
-            Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => None,
-            // INPUT-3: its ticket's.
-            Self::InputChanged { shortcode, .. } => Some(shortcode),
             // MENGER-13: its ticket's.
-            Self::Transition { shortcode, .. } | Self::Queue { shortcode, .. } | Self::Revised { shortcode, .. } => Some(shortcode),
+            Self::Transition { shortcode, .. } | Self::Revised { shortcode, .. } => Some(shortcode),
             // FILTER-4: one per write, its moves in any shortcode.
             Self::CellsMoved { .. } => None,
             // FILTER-13: one per write, each watch's events already in its epic.
@@ -976,7 +921,6 @@ impl Change {
                 let changes: Vec<_> = changes.into_iter().filter(|(e, _)| e == epic).collect();
                 (!changes.is_empty()).then_some(Self::PlacementsChanged { changes })
             }
-            Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => Some(self),
             Self::UpdatedMany { ids, changed } => update_many::in_epic(ids, changed, epic),
             Self::Deleted { .. } | Self::Undeleted { .. } => delete::in_epic(self, epic),
             Self::Reshortcoded { moves, tickets } => reshortcode::in_epic(moves, tickets, epic),
@@ -987,29 +931,6 @@ impl Change {
         }
     }
 
-    /// COMP-3: a write's component events, in the order they are sent —
-    /// the components it moved, then the ones it removed, each in name order.
-    fn components(plan: components::Plan) -> Vec<Change> {
-        plan.changed
-            .into_iter()
-            .map(|component| Self::ComponentChanged { component })
-            .chain(plan.removed.into_iter().map(|name| Self::ComponentRemoved { name }))
-            .collect()
-    }
-
-    /// INPUT-3: a write's input events, in the order they are sent — the
-    /// plan's: the body's inputs it moved, in the body's order, then the ones
-    /// it removed.
-    fn inputs(shortcode: &ShortcodeId, plan: inputs::Plan) -> Vec<Change> {
-        plan.changed
-            .into_iter()
-            .map(|input| Self::InputChanged {
-                shortcode: shortcode.clone(),
-                input,
-            })
-            .collect()
-    }
-
     /// WAVE-6: the `PlacementsChanged` a write's pass makes — `None` when it
     /// moved no placement.
     fn placed(replaced: &placements::Replaced) -> Option<Change> {
@@ -1017,16 +938,6 @@ impl Change {
             changes: replaced.shifts.iter().map(placements::Shift::change).collect(),
         })
     }
-}
-
-/// INPUT-3: what a write to one input did — `Changed`: the input as it
-/// leaves it, broadcast as `InputChanged`; `Unchanged`: nothing to do
-/// (closing a closed input, reopening one not closed, clearing one with no
-/// answer) — the input as it is, nothing written or broadcast.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InputWrite {
-    Changed(Input),
-    Unchanged(Input),
 }
 
 /// One entry of a ticket's `blocked_by`, resolved against current state.
@@ -1226,40 +1137,6 @@ pub enum StoreError {
     /// WAVE-10: `create { path }` with a path `holder` already holds in
     /// `epic`. Nothing was stored and no id was allocated.
     PathTaken { epic: String, path: String, holder: String },
-    /// COMP-3: the body holds a ` ```component ` block whose tag, `name`, is
-    /// not a component name ([`crate::component_docs::is_component_name`]; `""`: it
-    /// names none). `id` is the amended ticket — `None` for a `create`, which
-    /// stored nothing and allocated no id. Nothing changed.
-    ComponentName { id: Option<String>, name: String },
-    /// COMP-3: the body defines `name` in two blocks. Nothing changed.
-    ComponentTwice { id: Option<String>, name: String },
-    /// COMP-3: the body defines `name`, which `owner` already defines — a
-    /// component has one owner. Nothing changed.
-    ComponentOwned { id: Option<String>, name: String, owner: String },
-    /// COMP-8: the body's definition of `name` holds a malformed `<docs>` —
-    /// `problem` says what. Nothing changed.
-    ComponentDocs { id: Option<String>, name: String, problem: String },
-    /// INPUT-3: the body's input markup is refused — two inputs with one id,
-    /// a kind the element does not take, an option without a value or
-    /// declared twice, a text input with options ([`crate::inputs::Problem`],
-    /// which names the input). `id` as for a component's refusal. Nothing
-    /// changed.
-    InputMarkup { id: Option<String>, problem: crate::inputs::Problem },
-    /// INPUT-3: `ticket` declares no input `input` — `known` the ids it does
-    /// declare (removed ones included). Nothing changed.
-    InputUnknown { ticket: String, input: String, known: Vec<String> },
-    /// INPUT-3: the value does not answer the input — `reason` says why
-    /// ([`crate::inputs::check`]). Nothing changed.
-    InputInvalid { ticket: String, input: String, reason: String },
-    /// INPUT-3: the input is closed — an answer or a clear waits for
-    /// `reopen_input`. Nothing changed.
-    InputClosed { ticket: String, input: String },
-    /// INPUT-3: the input's body no longer declares it — it takes no change
-    /// until the body declares it again. Nothing changed.
-    InputRemoved { ticket: String, input: String },
-    /// MENGER-13: the input is withdrawn — its ticket is canceled, and it
-    /// asks no one until the ticket is not. Nothing changed.
-    InputWithdrawn { ticket: String, input: String },
     /// FILTER-4: a `list` given both `at` and `after` — two answers to where
     /// its page starts.
     AtAndAfter,
@@ -1269,34 +1146,6 @@ pub enum StoreError {
     /// FILTER-13: `tree` asked with both a `parent` and an `epic`, or with
     /// neither — it answers one address.
     TreeAddress,
-    /// COMMENT-2: `add` refused the comment — an empty body, a blank author,
-    /// a malformed anchor ([`crate::comments::Problem`], which names it).
-    /// Nothing was kept.
-    CommentRefused(crate::comments::Problem),
-    /// COMMENT-2: the anchor's `ticket` names no ticket. Nothing was kept.
-    CommentTicket { ticket: String },
-    /// COMMENT-2: `resolve` or `reopen` named no comment — `newest` the
-    /// newest id there is. Nothing changed.
-    CommentNotFound { id: u64, newest: Option<u64> },
-    /// COMMENT-2: `list`'s `after` names no comment, so there is no position
-    /// to resume from.
-    CommentCursor(u64),
-    /// NOTE-2: `add` refused the note — a blank or oversized body or author
-    /// ([`crate::notes::Problem`], which names it). Nothing was kept.
-    NoteRefused(crate::notes::Problem),
-    /// NOTE-2: an id that names no note — `newest` the newest id there is.
-    /// Nothing changed.
-    NoteNotFound { id: u64, newest: Option<u64> },
-    /// NOTE-2: `upgrade` of a note already a ticket. Nothing changed.
-    NoteUpgraded { id: u64, ticket: String },
-    /// NOTE-2: `list`'s `after` names no note.
-    NoteCursor(u64),
-    /// COMMENT-5: `media.put` refused the image — too large, not a kept
-    /// type by its bytes, not the type declared ([`crate::media::Problem`],
-    /// which names it). Nothing was kept.
-    MediaRefused(crate::media::Problem),
-    /// COMMENT-5: no image by this hash — or one the reader may not see.
-    MediaNotFound(String),
     /// MENGER-30: an `update`'s `block` / `unblock` named a blank id, or one
     /// id in both — `why` says which. Nothing was written.
     Blockers { id: String, why: String },
@@ -1325,29 +1174,6 @@ pub enum StoreError {
     /// one: `there`, its full address. `id` the ticket whose write it was.
     /// Nothing was written.
     ShortcodeTaken { id: Option<String>, code: String, namespace: String, there: String },
-}
-
-impl StoreError {
-    /// COMP-3: a body's refused ` ```component ` block, as the write that
-    /// carried it says so — `id` the amended ticket, `None` for a create.
-    fn component(id: Option<&str>, problem: components::Problem) -> Self {
-        let id = id.map(str::to_string);
-        match problem {
-            components::Problem::Name(name) => Self::ComponentName { id, name },
-            components::Problem::Twice(name) => Self::ComponentTwice { id, name },
-            components::Problem::Docs { name, problem } => Self::ComponentDocs { id, name, problem },
-            components::Problem::Theme { name, error } => Self::Invalid(format!("```theme {name}: {error} (nothing was written)")),
-            components::Problem::Mockup(problem) => Self::Invalid(format!("{problem} (nothing was written)")),
-        }
-    }
-}
-
-/// COMP-3: the end of a component refusal — what did not happen.
-fn nothing(id: &Option<String>) -> String {
-    match id {
-        Some(id) => format!("nothing changed for '{id}'"),
-        None => "nothing was created".to_string(),
-    }
 }
 
 impl std::fmt::Display for StoreError {
@@ -1540,62 +1366,6 @@ impl std::fmt::Display for StoreError {
                 "'{epic}/{path}' is taken: {holder} already holds the path '{path}' in {epic} (nothing \
                  was created)"
             ),
-            Self::ComponentName { id, name } if name.is_empty() => write!(
-                f,
-                "a ```component block names its tag — ```component m-name — and this one names none ({})",
-                nothing(id)
-            ),
-            Self::ComponentName { id, name } => write!(
-                f,
-                "'{name}' is not a component name: a component is a custom element, named in lowercase \
-                 ASCII, starting with a letter and holding a hyphen — e.g. m-chart ({})",
-                nothing(id)
-            ),
-            Self::ComponentTwice { id, name } => write!(
-                f,
-                "the body defines the component '{name}' twice: one ```component block per name ({})",
-                nothing(id)
-            ),
-            Self::ComponentOwned { id, name, owner } => write!(
-                f,
-                "the component '{name}' is defined by {owner}: a component has one owner — change it in \
-                 {owner}, or give this one another name ({})",
-                nothing(id)
-            ),
-            Self::ComponentDocs { id, name, problem } => write!(
-                f,
-                "the component '{name}' has a malformed <docs>: {problem} ({})",
-                nothing(id)
-            ),
-            Self::InputMarkup { id, problem } => write!(f, "{problem} ({})", nothing(id)),
-            Self::InputUnknown { ticket, input, known } if known.is_empty() => write!(
-                f,
-                "{ticket} declares no input '{input}' — its body holds none (an input is an <m-decision id> or an \
-                 <m-input id kind>; nothing changed)"
-            ),
-            Self::InputUnknown { ticket, input, known } => write!(
-                f,
-                "{ticket} declares no input '{input}' — its inputs are {} (nothing changed)",
-                known.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(", ")
-            ),
-            Self::InputInvalid { ticket, input, reason } => write!(
-                f,
-                "not an answer to {ticket}'s '{input}': {reason} (nothing changed)"
-            ),
-            Self::InputClosed { ticket, input } => write!(
-                f,
-                "{ticket}'s '{input}' is closed: its answer is frozen — reopen_input it first (nothing changed)"
-            ),
-            Self::InputRemoved { ticket, input } => write!(
-                f,
-                "{ticket}'s '{input}' was removed from its body: its history is kept, and it takes no change until \
-                 the body declares it again (nothing changed)"
-            ),
-            Self::InputWithdrawn { ticket, input } => write!(
-                f,
-                "{ticket}'s '{input}' is withdrawn: {ticket} is canceled, so it asks no one — it takes no change \
-                 until {ticket} is not canceled (nothing changed)"
-            ),
             Self::AtAndAfter => write!(
                 f,
                 "list: give `at` (a position among the matches) or `after` (a ticket id), not both — each says \
@@ -1606,25 +1376,6 @@ impl std::fmt::Display for StoreError {
                 f,
                 "tree: give `parent` (a ticket's children) or `epic` (a shortcode's top level), exactly one of them"
             ),
-            Self::CommentRefused(problem) => write!(f, "{problem} (nothing was kept)"),
-            Self::CommentTicket { ticket } => write!(
-                f,
-                "malformed anchor: ticket {ticket} names no ticket — leave it out when the element belongs to none \
-                 (nothing was kept)"
-            ),
-            Self::CommentNotFound { id, newest: None } => write!(f, "no comment {id}: there are no comments yet (nothing changed)"),
-            Self::CommentNotFound { id, newest: Some(n) } => write!(
-                f,
-                "no comment {id}: comment ids run from 1 to {n} (nothing changed)"
-            ),
-            Self::CommentCursor(id) => write!(f, "after: no comment {id} to resume after"),
-            Self::NoteRefused(problem) => write!(f, "{problem} (nothing was kept)"),
-            Self::NoteNotFound { id, newest: None } => write!(f, "no note {id}: there are no notes yet (nothing changed)"),
-            Self::NoteNotFound { id, newest: Some(n) } => write!(f, "no note {id}: note ids run from 1 to {n} (nothing changed)"),
-            Self::NoteUpgraded { id, ticket } => write!(f, "note {id} is already a ticket: {ticket} (nothing changed)"),
-            Self::NoteCursor(id) => write!(f, "after: no note {id} to resume after"),
-            Self::MediaRefused(problem) => write!(f, "{problem} (nothing was kept)"),
-            Self::MediaNotFound(hash) => write!(f, "no image {hash}"),
             Self::Ambiguous { text, candidates } => write!(
                 f,
                 "'{text}' names more than one: {} — name one in full, or by a short form only it has (nothing was read \
@@ -1886,27 +1637,10 @@ struct Cache {
     ids: ids::Ids,
     children: children::Children,
     ready: ready::Ready,
-    /// COMP-3: the component registry ([`components::Registry`]) — read from
-    /// its table at open, moved by a body's write in the same critical
-    /// section as the ticket's row.
-    components: components::Registry,
-    /// INPUT-3: every ticket's inputs, histories and all ([`inputs::Inputs`])
-    /// — read from their tables at open, moved by a body's write with its
-    /// row and by an answer's write alone.
-    inputs: inputs::Inputs,
     /// FILTER-4: the cell table and every shortcode's bitmap of each cell it
     /// holds ([`cells::Cells`]) — what a filter is compiled against and
     /// answered from. Moved and stored as SCALE-32's state is.
     cells: cells::Cells,
-    /// COMMENT-2: every comment ([`comments::Comments`]) — read from its
-    /// table at open, moved by a comment's own write and by nothing else.
-    comments: comments::Comments,
-    /// NOTE-2: every note ([`notes::Notes`]) — read at open, moved by `add`
-    /// and by the birth of the ticket a note becomes.
-    notes: notes::Notes,
-    /// COMMENT-5: every kept image, without its bytes ([`media::Media`]) —
-    /// read at open, moved by `put` alone.
-    media: media::Media,
     /// IDENTITY-21: every grant ([`members::Members`]) — read at open, moved
     /// by `grant` and `revoke` alone.
     members: members::Members,
@@ -1917,30 +1651,16 @@ struct Cache {
     /// ([`history::Log`]) — read at open, appended to by every write that
     /// changes a status or a kind, in the same critical section as its rows.
     log: history::Log,
-    /// THEME-8: every theme and what the site and each shortcode say.
-    themes: themes::Themes,
     /// ACT-5: every deleted ticket's tombstone ([`delete::Tombstones`]).
     tombstones: delete::Tombstones,
-    /// DEPLOY-11: every deployment, each environment and its kept cells
-    /// ([`deployments::Deploys`]) — read at open, moved by a record and by
-    /// every row written (its links).
-    deploys: deployments::Deploys,
     /// ORG-3: every shortcode with its namespace, the orgs and the pins
     /// ([`shortcodes::Registry`]) — read at open (made once, for a file from
     /// before ORG-3), moved by a write that mints a shortcode or moves a
     /// root, and the one place text becomes an identity.
     shortcodes: shortcodes::Registry,
-    /// MENGER-39: the queue and its history ([`queue::Queue`]).
-    queue: queue::Queue,
-    /// TICKETS-9: who holds each ticket, and the assignment history.
-    assignments: assignees::Assignments,
     /// FILTER-46: every saved filter ([`filters::SavedFilters`]) — read from
     /// its table at open, moved by `tickets filters`' writes.
     saved: filters::SavedFilters,
-    /// CHAT-3: every chat, its participants' read marks and its messages.
-    chats: chats::Chats,
-    /// IDENTITY-46: what each principal's sign-in said of them.
-    profiles: HashMap<String, crate::members::Profile>,
     written: u64,
 }
 
@@ -2196,16 +1916,13 @@ impl Cache {
     /// `--verify-derived` compares the stored state with: so it is a scan
     /// and nothing else, every count included — a row's stored
     /// `child_count` is set aside, and the count is the parents'.
-    ///
-    /// MENGER-12: with the inputs as stored — whether a ticket is `asking`
-    /// is in its cell, and the inputs say it, not the row.
-    fn new(loaded: HashMap<String, Row>, inputs: inputs::Inputs) -> Self {
-        Self::built(loaded, inputs, &[])
+    fn new(loaded: HashMap<String, Row>) -> Self {
+        Self::built(loaded, &[])
     }
 
     /// ACT-5: [`Cache::new`] with the cell ids `seed` interns kept — what a
     /// delete rebuilds with, so an open filter's compiled cells stay right.
-    fn built(loaded: HashMap<String, Row>, inputs: inputs::Inputs, seed: &[cells::Key]) -> Self {
+    fn built(loaded: HashMap<String, Row>, seed: &[cells::Key]) -> Self {
         let (mut order, at, paths) = ordered(loaded);
         for t in order.values_mut() {
             t.child_count = 0;
@@ -2253,7 +1970,7 @@ impl Cache {
             started.elapsed().as_secs_f64() * 1000.0
         );
         let started = std::time::Instant::now();
-        let cells = cells::Cells::build_seeded(seed, rows, |id| ready.count(id), |id| inputs.asking(id));
+        let cells = cells::Cells::build_seeded(seed, rows, |id| ready.count(id));
         tracing::info!(
             "interned {} cells and filled {} (shortcode, cell) bitmaps ({} bytes serialized) over {} \
              tickets in {:.1} ms",
@@ -2265,7 +1982,7 @@ impl Cache {
         );
         let mut children = children;
         let started = std::time::Instant::now();
-        let (tallies, holders) = Self::plant(&order, &at, &mut children, &cells, &ready, &inputs);
+        let (tallies, holders) = Self::plant(&order, &at, &mut children, &cells, &ready);
         tracing::info!(
             "kept the tree over {} tickets in {:.1} ms (FILTER-13): {tallies} tally entries over {} \
              parents, {holders} holder bitmaps",
@@ -2275,8 +1992,6 @@ impl Cache {
         );
         let mut log = history::Log::began_at(None);
         log.time_all(order.values());
-        // DEPLOY-11: no deployments yet; the rows' links, for when one comes.
-        let deploys = deployments::Deploys::linked(order.values());
         Self {
             order,
             at,
@@ -2286,43 +2001,25 @@ impl Cache {
             children,
             ready,
             cells,
-            // COMP-3: read beside the cache, never built from rows
-            // ([`Store::with_connection`]).
-            components: components::Registry::default(),
-            // INPUT-3: so are the inputs — MENGER-12: but a build reads
-            // them first, for the cells' `asking`.
-            inputs,
-            // COMMENT-2: and the comments.
-            comments: comments::Comments::default(),
-            // NOTE-2: and the notes.
-            notes: notes::Notes::default(),
-            // COMMENT-5: and the images.
-            media: media::Media::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
             roles: roles::RoleEdits::new(),
             // MENGER-13: and the transition log.
             log,
-            themes: themes::Themes::default(),
             tombstones: Default::default(),
-            deploys,
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
-            queue: Default::default(),
-            assignments: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
-            profiles: Default::default(),
-            chats: Default::default(),
             written: 0,
         }
     }
 
-    /// MENGER-12: `t`'s cell as the cache stands — its row, its count of
-    /// unsatisfied blockers and whether its inputs ask.
+    /// `t`'s cell as the cache stands — its row and its count of
+    /// unsatisfied blockers.
     fn key(&self, t: &Row) -> cells::Key {
-        cells::Key::of(t, self.ready.count(&t.id), self.inputs.asking(&t.id))
+        cells::Key::of(t, self.ready.count(&t.id))
     }
 
     /// FILTER-13: the kept tree's tallies and holders, built into `children`
@@ -2335,13 +2032,12 @@ impl Cache {
         children: &mut children::Children,
         cells: &cells::Cells,
         ready: &ready::Ready,
-        inputs: &inputs::Inputs,
     ) -> (usize, usize) {
         let none = children::Children::filling();
         let rows = Rows { order, at, children: &none, patch: None };
         tree::build(rows, children, |t| {
             cells
-                .id(cells::Key::of(t, ready.count(&t.id), inputs.asking(&t.id)))
+                .id(cells::Key::of(t, ready.count(&t.id)))
                 .expect("every ticket's cell is interned")
         });
         let tallies = children.every().map(|(_, k)| k.tally.len()).sum();
@@ -2366,8 +2062,6 @@ impl Cache {
         let (order, at, paths) = ordered(loaded);
         let mut log = history::Log::began_at(None);
         log.time_all(order.values());
-        // DEPLOY-11: no deployments yet; the rows' links, for when one comes.
-        let deploys = deployments::Deploys::linked(order.values());
         Self {
             order,
             at,
@@ -2377,34 +2071,17 @@ impl Cache {
             children,
             ready,
             cells,
-            // COMP-3: read beside the cache, never built from rows
-            // ([`Store::with_connection`]).
-            components: components::Registry::default(),
-            // INPUT-3: so are the inputs.
-            inputs: inputs::Inputs::default(),
-            // COMMENT-2: and the comments.
-            comments: comments::Comments::default(),
-            // NOTE-2: and the notes.
-            notes: notes::Notes::default(),
-            // COMMENT-5: and the images.
-            media: media::Media::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
             roles: roles::RoleEdits::new(),
             // MENGER-13: and the transition log.
             log,
-            themes: themes::Themes::default(),
             tombstones: Default::default(),
-            deploys,
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
-            queue: Default::default(),
-            assignments: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
-            profiles: Default::default(),
-            chats: Default::default(),
             written: 0,
         }
     }
@@ -2491,8 +2168,6 @@ impl Cache {
     /// mutation-shaped methods below, which call this.
     fn insert(&mut self, ticket: Row) {
         self.log.retime(&ticket);
-        // DEPLOY-11: the join is kept — its commits, wherever they run.
-        self.deploys.relink(&ticket.id, &ticket.commits);
         let key = OrderKey::of(&ticket);
         self.at.insert(ticket.id.to_string(), key.clone());
         self.order.insert(key, ticket);
@@ -2508,21 +2183,18 @@ impl Cache {
     /// placements of the tickets a forward reference to it held missing,
     /// and theirs ([`placements::replace`]).
     ///
-    /// MENGER-12: `asking` — whether the newborn's body asks (an input born
-    /// open): its cell says so from birth.
-    ///
     /// ORG-3: `minted`, the shortcode the newborn is the first ticket of
     /// when the write makes it — registered with its namespace in the same
     /// write ([`Cache::namespaces`], which refuses a root's host moving into
     /// a namespace that holds its code).
-    fn birth(&self, newborn: &Row, asking: bool, minted: Option<&Shortcode>) -> Result<Derived, StoreError> {
+    fn birth(&self, newborn: &Row, minted: Option<&Shortcode>) -> Result<Derived, StoreError> {
         let rows = self.rows().with(newborn);
         let birth = self.ids.birth(rows, newborn);
         let mut rollups = self.rollups.clone();
         let groups = rollups.created(rows, newborn);
         let namespaces = self.namespaces(rows, &rollups, minted, Some(&newborn.id))?;
         let (ready, touched) = self.ready.born_touching(rows, newborn);
-        let (cells, tree) = self.recell(rows, newborn, true, &touched, Some(asking));
+        let (cells, tree) = self.recell(rows, newborn, true, &touched);
         let mut derived =
             Derived::rolled(self, rollups, groups).readied(ready).celled(cells).treed(tree).namespaced(namespaces);
         birth.store(&mut derived.stored);
@@ -2589,15 +2261,7 @@ impl Cache {
     /// WAVE-6: and, across the satisfied line, its placement and every one
     /// downstream that moves with it ([`placements::replace`]) — on one side
     /// of the line, no placement moves.
-    #[cfg(test)]
     fn status_change(&self, row: &Row, previous: Status) -> Derived {
-        self.status_change_asking(row, previous, None)
-    }
-
-    /// MENGER-13: [`Cache::status_change`] with `asking` — whether the ticket
-    /// asks as the write leaves it, when the write moves its inputs (a
-    /// cancel withdraws them, leaving `Canceled` restores them).
-    fn status_change_asking(&self, row: &Row, previous: Status, asking: Option<bool>) -> Derived {
         let rows = self.rows().with(row);
         let derived = if rollup::Rollups::crosses(previous, row.status) {
             let mut rollups = self.rollups.clone();
@@ -2607,7 +2271,7 @@ impl Cache {
             Derived::none()
         };
         let (ready, touched) = self.ready.status_changed_touching(rows, row, previous);
-        let (cells, tree) = self.recell(rows, row, false, &touched, asking);
+        let (cells, tree) = self.recell(rows, row, false, &touched);
         let mut derived = derived.readied(ready).celled(cells).treed(tree);
         if satisfied(previous) != satisfied(row.status) {
             derived.moved.placed = Some(Self::replace(rows, row, false));
@@ -2628,30 +2292,21 @@ impl Cache {
     /// children — and, where a hand edit had named its id as a parent, its
     /// subtree's tally is counted in its ancestors too. `rows` are the rows
     /// as the write leaves them.
-    ///
-    /// MENGER-12: `asking` — whether the written ticket asks as the write
-    /// leaves it, when the write moves its inputs (`None`: as the cache's
-    /// inputs say, before and after). Every other ticket asks as it did.
     fn recell<'a>(
         &'a self,
         rows: Rows<'a>,
         written: &'a Row,
         born: bool,
         touched: &[ready::Touched<'a>],
-        asking: Option<bool>,
     ) -> (cells::Move, tree::Move) {
         let mut moves: Vec<(&'a Row, Option<cells::Key>, cells::Key)> = Vec::with_capacity(touched.len());
         for (t, was, now) in touched {
-            let asks = self.inputs.asking(&t.id);
             let (before, after) = if t.id != written.id {
-                (Some(cells::Key::of(t, *was, asks)), cells::Key::of(t, *now, asks))
+                (Some(cells::Key::of(t, *was)), cells::Key::of(t, *now))
             } else if born {
-                (None, cells::Key::of(t, *now, asking.unwrap_or(false)))
+                (None, cells::Key::of(t, *now))
             } else {
-                (
-                    self.get(&t.id).map(|old| cells::Key::of(old, *was, asks)),
-                    cells::Key::of(t, *now, asking.unwrap_or(asks)),
-                )
+                (self.get(&t.id).map(|old| cells::Key::of(old, *was)), cells::Key::of(t, *now))
             };
             moves.push((*t, before, after));
         }
@@ -2680,11 +2335,10 @@ impl Cache {
 
     /// FILTER-4 / MENGER-12: what a write that moves `row`'s cell and
     /// nothing else derived does, before it commits — a first commit or a
-    /// last, a label, or (`asking`: whether it asks as the write leaves it)
-    /// an input opened or settled. Nothing, unless the cell moves.
-    fn cell_change(&self, row: &Row, asking: Option<bool>) -> Derived {
+    /// last, a label, a mark. Nothing, unless the cell moves.
+    fn cell_change(&self, row: &Row) -> Derived {
         let count = self.ready.count(&row.id);
-        let (cells, tree) = self.recell(self.rows().with(row), row, false, &[(row, count, count)], asking);
+        let (cells, tree) = self.recell(self.rows().with(row), row, false, &[(row, count, count)]);
         Derived::none().celled(cells).treed(tree)
     }
 
@@ -2737,7 +2391,7 @@ impl Cache {
     /// ORG-3: a ticket that now roots its shortcode decides where the
     /// shortcode hangs, so its namespace may move — refused, naming the one
     /// there, into a namespace that holds its code ([`Cache::namespaces`]).
-    fn kind_change(&self, row: &Row, old: &Row, asking: Option<bool>) -> Result<Derived, StoreError> {
+    fn kind_change(&self, row: &Row, old: &Row) -> Result<Derived, StoreError> {
         let rows = self.rows().with(row);
         let mut rollups = self.rollups.clone();
         let derived = match rollups.kind_changed(rows, old, row) {
@@ -2748,7 +2402,7 @@ impl Cache {
             None => Derived::none(),
         };
         let (ready, touched) = self.ready.status_changed_touching(rows, row, old.status);
-        let (cells, tree) = self.recell(rows, row, false, &touched, asking);
+        let (cells, tree) = self.recell(rows, row, false, &touched);
         let mut derived = derived.readied(ready).celled(cells).treed(tree);
         if satisfied(old.status) != satisfied(row.status) || old.kind.has_lifecycle() != row.kind.has_lifecycle() {
             derived.moved.placed = Some(Self::replace(rows, row, false));
@@ -3179,53 +2833,23 @@ impl Store {
         db::migrate_add_frozen(&mut conn)?;
         // TICKETS-27: and `hidden`, 0 for every ticket. No row is rewritten.
         db::migrate_add_hidden(&mut conn)?;
-        // COMP-3: a database written before COMP-3 — or a new one — gains the
-        // `components` table here, once, durably, with the registry built
-        // from every body; after it, every open reads the table.
-        components::migrate(&mut conn)?;
-        // INPUT-3: a database written before INPUT-3 — or a new one — gains
-        // the `inputs` and `answers` tables here, once, durably, with every
-        // body's inputs read in; after it, every open reads them.
-        inputs::migrate(&mut conn)?;
-        // APP-84: and when each input was asked.
-        inputs::migrate_asked(&mut conn)?;
         // SEARCH-2: a database written before SEARCH-2 — or a new one — gains
         // the search index here, once, durably, every ticket's title and text
         // indexed; after it, every write that changes either keeps it.
         search::migrate(&mut conn)?;
-        // NOTE-2: a file without the notes table gains it, empty, here.
-        notes::migrate(&mut conn)?;
         // FILTER-46: and the saved filters' table.
         filters::migrate(&mut conn)?;
-        // COMMENT-5: and one without the media tables gains them, empty.
-        media::migrate(&mut conn)?;
         // MENGER-13: and one without the transition log gains it, empty,
         // with the moment it began — no ticket gets a history it never had.
         history::migrate(&mut conn)?;
-        // THEME-8: and one without the themes tables gains them, empty —
-        // THEME-3: with their owners and the frontmatter's references.
-        themes::migrate(&mut conn)?;
-        theme_registry::migrate(&mut conn)?;
         // ACT-5: and one without the tombstones table gains it, empty.
         delete::migrate(&mut conn)?;
-        // DEPLOY-11: and one without the deployments tables gains them, empty.
-        deployments::migrate(&mut conn)?;
-        // DEPLOY-20: and one without the commit-link record gains it, empty.
-        versions::migrate(&mut conn)?;
         // TICKETS-7: and one without the revisions gains them, empty.
         revisions::migrate(&mut conn)?;
-        // MENGER-39: and one without the queue's tables gains them, empty.
-        queue::migrate(&mut conn)?;
-        assignees::migrate(&mut conn)?;
-        // CHAT-3: and one without the chats' tables gains them, empty.
-        chats::migrate(&mut conn)?;
-        profiles::migrate(&conn)?;
-        // APP-23: and comments without an intent, and queue records without
-        // the comment that answered them, gain the columns.
-        comments::migrate(&conn)?;
-        queue::migrate_comment(&conn)?;
-        // APP-86: and queue entries naming one input gain the list.
-        queue::migrate_inputs(&conn)?;
+        // V2-4: the tables of the services that went (chats, comments,
+        // deployments, inputs, components, media, notes, themes, the queue,
+        // assignments, profiles) stay in a file that has them, unread; a new
+        // file never gains them.
         let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -3307,19 +2931,7 @@ impl Store {
         // none can be stale after a restart.
         let mut cache = cache;
         cache.place_all();
-        // COMP-3: the registry, as stored.
-        cache.components = components::load(conn)?;
-        // INPUT-3: the inputs and their histories, as stored — ACT-5: of the
-        // tickets there are (a deleted ticket's wait in the file for its undo).
-        cache.inputs = inputs::load(conn)?;
-        cache.inputs.retain(|t| cache.at.contains_key(t));
         cache.tombstones = delete::load(conn)?;
-        // COMMENT-2: the comments, as stored.
-        cache.comments = comments::load(conn)?;
-        // NOTE-2: the notes, as stored.
-        cache.notes = notes::load(conn)?;
-        // COMMENT-5: what each image is, as stored (its bytes stay there).
-        cache.media = media::load(conn)?;
         // IDENTITY-21: the members, as stored — ACCESS-48: their rows, read
         // as grants once ORG-4 has settled them (below).
         let grant_rows = members::rows(conn)?;
@@ -3327,13 +2939,6 @@ impl Store {
         cache.roles = roles::load(conn)?;
         // MENGER-13: the transition log and its kept indexes.
         cache.log = history::load(conn, &cache.at, cache.order.values())?;
-        // FILTER-30: and each ticket's last comment and answer, its touch.
-        let activity = history::activity(&cache.at, &cache.comments, &cache.inputs);
-        cache.log.touch_all(activity);
-        // THEME-8: the themes and settings, as stored.
-        themes::load(conn, &mut cache.themes)?;
-        // DEPLOY-11: the deployments, folded, over the rows' links.
-        cache.deploys.load(conn)?;
         // ORG-3: the shortcodes, their namespaces and the pins — made once,
         // for a file from before ORG-3 (stored form 11), from where each
         // root hangs; every row given its letters and its full address.
@@ -3342,15 +2947,8 @@ impl Store {
         cache.members = orgs::settle(conn, &cache, grant_rows)?;
         // ACCESS-22: the teams and who is in each, beside the grants.
         teams::load(conn, &mut cache.members)?;
-        // MENGER-39: the queue, as stored.
-        cache.queue = queue::load(conn)?;
-        // TICKETS-9: the assignment log, and the index from the rows.
-        cache.assignments = assignees::load(conn, cache.order.values())?;
         // FILTER-46: the saved filters, as stored.
         cache.saved = filters::load(conn)?;
-        // CHAT-3: the chats, as stored.
-        cache.chats = chats::load(conn)?;
-        cache.profiles = profiles::load(conn)?;
         Ok(cache)
     }
 
@@ -3612,26 +3210,7 @@ impl Store {
     /// transition (from nothing), recorded in the birth's write and said
     /// right after its `Created`.
     pub async fn create_by(&self, at: impl Into<Filing>, new: NewTicket, act: Act) -> Result<Ticket, StoreError> {
-        self.create_from(at.into(), new, None, act, false).await.map(|(ticket, _)| ticket)
-    }
-
-    /// NOTE-2: the note `id` made the ticket `new` — in one write: the
-    /// ticket born exactly as [`Store::create`] makes it, and the note marked
-    /// with its id and when, in the birth's own transaction, taken by the
-    /// cache with it. A note that is none ([`StoreError::NoteNotFound`]) or
-    /// already a ticket ([`StoreError::NoteUpgraded`]) is refused under the
-    /// write-serial lock, before anything is allocated; a ticket `create`
-    /// refuses leaves the note open, and spends no id. The ticket's events
-    /// are `create`'s; the note is returned with it.
-    pub async fn upgrade_note(&self, at: impl Into<Filing>, id: u64, new: NewTicket) -> Result<(Ticket, crate::notes::Note), StoreError> {
-        self.upgrade_note_by(at, id, new, Act::default()).await
-    }
-
-    /// MENGER-13: [`Store::upgrade_note`] by `act`. ACCESS-11: filed as
-    /// `create` is ([`Filing`]).
-    pub async fn upgrade_note_by(&self, at: impl Into<Filing>, id: u64, new: NewTicket, act: Act) -> Result<(Ticket, crate::notes::Note), StoreError> {
-        let (ticket, note) = self.create_from(at.into(), new, Some(id), act, false).await?;
-        Ok((ticket, note.expect("a note was named, so one was marked")))
+        self.create_from(at.into(), new, act, false).await
     }
 
     /// MNG-10: one roll-up per shortcode row the nav draws, in shortcode
@@ -4122,20 +3701,19 @@ impl Store {
                 previous,
             });
         }
-        let (derived, under, made, moved_inputs) = {
+        let (derived, under, made) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             rules::kind_refusal(&cache, &row, &row.blocked_by, kind)?;
             row.kind = kind;
             row.status = status;
             row.updated_unix = chrono::Utc::now().timestamp();
-            // MENGER-13: the kind's transition, then the status's, caused by
-            // it — and the inputs a crossing of `Canceled` moves.
-            let (made, moved_inputs) = update::kind_moves(&cache, &old, &row, &act);
+            // MENGER-13: the kind's transition, then the status's, caused by it.
+            let made = update::kind_moves(&cache, &old, &row, &act);
             // Everything kept by kind, and by status — worked out now, while
             // nothing has changed. FILTER-13: and what an open `watch { filter
             // }` asking `under` sees of it: the cells it moves, and — when it
             // re-roots a shortcode — every shortcode whose hosts that moves.
-            let derived = cache.kind_change(&row, &old, cache.inputs.asking_after(&row.id, &moved_inputs))?;
+            let derived = cache.kind_change(&row, &old)?;
             let under = self.under_before(&cache, || {
                 let mut t = lineage::Touched::of_moves(derived.announced().as_deref()).row(&row);
                 if let Some(after) = &derived.moved.rollups {
@@ -4148,7 +3726,7 @@ impl Store {
             if let Some(m) = &derived.moved.namespaces {
                 row = Cache::dressed(&m.after, row);
             }
-            (derived, under, made, moved_inputs)
+            (derived, under, made)
         };
         let announced = derived.announced();
         let Derived { stored, moved } = derived;
@@ -4164,7 +3742,6 @@ impl Store {
         let commit = Self::row_commit(row);
         let cache = Arc::clone(&self.tickets);
         let (logged, appended) = (made.clone(), made);
-        let kept_inputs = moved_inputs.clone();
         self.write(
             serial,
             move |tx| {
@@ -4173,9 +3750,6 @@ impl Store {
                 for t in &logged {
                     history::record(tx, t)?;
                 }
-                for (input, entry) in &moved_inputs {
-                    inputs::record(tx, input, entry)?;
-                }
                 Ok(out)
             },
             move |cache, (row, _)| {
@@ -4183,12 +3757,9 @@ impl Store {
                 for t in &appended {
                     cache.log.append(t, &key);
                 }
-                for (input, _) in &kept_inputs {
-                    cache.inputs.put(input.clone());
-                }
-                (groups, appended, kept_inputs)
+                (groups, appended)
             },
-            move |(row, body), (groups, made, kept_inputs), tx| {
+            move |(row, body), (groups, made), tx| {
                 let change = Change::KindChanged {
                     ticket: whole(row, body),
                     previous,
@@ -4200,9 +3771,6 @@ impl Store {
                 broadcast_groups(tx, groups);
                 if let Some(placed) = placed {
                     let _ = tx.send(placed);
-                }
-                for (input, _) in kept_inputs {
-                    let _ = tx.send(Change::InputChanged { shortcode: epic.clone(), input });
                 }
                 if let Some(moves) = announced {
                     let _ = tx.send(Change::CellsMoved { moves });
@@ -4391,8 +3959,7 @@ impl Store {
         self.amend_under(serial, on, title, body).await
     }
 
-    /// [`Store::amend`] with the write-serial lock already held — APP-90's
-    /// `ask` reads the body it appends to under it.
+    /// [`Store::amend`] with the write-serial lock already held.
     pub(super) async fn amend_under(&self, serial: OwnedMutexGuard<()>, on: Permit<Editor>, title: Option<String>, body: Option<String>) -> Result<Change, StoreError> {
         // ORG-3: as the store spells it — `get` below resolves it.
         let id = crate::address::folded(on.id());
@@ -4405,12 +3972,6 @@ impl Store {
         if let Some(body) = &body {
             self.check_body(Some(&id), body)?;
         }
-        // COMP-3: what a new body defines and references, read from the body
-        // in hand before the lock — and refused, if malformed, only once it
-        // is known to change the body (the same body again is still a no-op).
-        let uses = body.as_deref().map(components::read);
-        // INPUT-3: and the inputs it declares, the same way.
-        let declares = body.as_deref().map(crate::inputs::read);
         let mut ticket = self.get_unscoped(&id).await?;
         let mut changed = Vec::new();
         if let Some(title) = title.filter(|t| *t != ticket.title) {
@@ -4424,72 +3985,17 @@ impl Store {
         if changed.is_empty() {
             return Ok(Change::Amended { ticket, changed });
         }
-        // COMP-3: a new body moves the registry — the whole amend refused,
-        // title too, when a block is malformed or defines a name another
-        // ticket owns.
-        let mut registered = match uses.filter(|_| changed.contains(&crate::vocab::AmendedField::Body)) {
-            None => components::Plan::default(),
-            Some((uses, problems)) => {
-                if let Some(problem) = problems.into_iter().next() {
-                    return Err(StoreError::component(Some(&id), problem));
-                }
-                let cache = self.tickets.read().expect("store lock poisoned");
-                cache.plan_registry(&ticket.id, &uses, Some(&id))?
-            }
-        };
-        // INPUT-3: and its inputs — the whole amend refused, title too, when
-        // the markup is malformed.
-        let mut asked = match declares.filter(|_| changed.contains(&crate::vocab::AmendedField::Body)) {
-            None => inputs::Plan::default(),
-            Some((declared, problems)) => {
-                if let Some(problem) = problems.into_iter().next() {
-                    return Err(StoreError::InputMarkup {
-                        id: Some(id.clone()),
-                        problem,
-                    });
-                }
-                self.tickets.read().expect("store lock poisoned").inputs.plan(&ticket.id, declared)
-            }
-        };
         ticket.updated_unix = chrono::Utc::now().timestamp();
-        // MENGER-13: a canceled ticket asks no one — an input its new body
-        // would leave open is withdrawn as it is declared.
-        let withdrawn = if ticket.status == Status::Canceled {
-            let reason = format!("{} is canceled", ticket.id);
-            asked.withdraw_open(&reason, ticket.updated_unix)
-        } else {
-            Vec::new()
-        };
 
         let row = Row::from(&ticket);
         let body = changed.contains(&crate::vocab::AmendedField::Body).then(|| ticket.body.clone());
         let title_changed = changed.contains(&crate::vocab::AmendedField::Title);
         // SEARCH-2: the title and body the search index holds from now on.
         let indexed = (ticket.title.clone(), ticket.body.clone());
-        let registry_moves = std::mem::take(&mut registered.moves);
-        let registry_rows = registry_moves.clone();
-        let input_list = asked.list.take();
-        let input_rows = input_list.clone();
-        // MENGER-12: a body that opens its first input, or settles or drops
-        // its last open one, moves the ticket in or out of `asking` — its
-        // cell, in the same write.
-        let asks = input_list.as_deref().map(inputs::asking_in);
-        let was = self.tickets.read().expect("store lock poisoned").inputs.asking(&row.id);
-        let (derived, under) = match asks.filter(|a| *a != was) {
-            Some(a) => {
-                let (d, u) = self.cell_derived(&row, Some(a));
-                (Some(d), u)
-            }
-            // FILTER-30: no cell moves, but the ticket is touched.
-            None => {
-                let cache = self.tickets.read().expect("store lock poisoned");
-                (None, self.touch_before(&cache, &[(&row.shortcode, row.seq)]))
-            }
-        };
-        let announced = derived.as_ref().and_then(Derived::announced);
-        let (cells_stored, moved) = match derived {
-            Some(Derived { stored, moved }) => (Some(stored), Some(moved)),
-            None => (None, None),
+        // FILTER-30: no cell moves, but the ticket is touched.
+        let under = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            self.touch_before(&cache, &[(&row.shortcode, row.seq)])
         };
         let cache = Arc::clone(&self.tickets);
         self.write(
@@ -4500,49 +4006,16 @@ impl Store {
                     db::set_body(tx, &row.id, &body)?;
                 }
                 search::put(tx, &row.id, &indexed.0, &indexed.1)?;
-                components::store(tx, &registry_rows)?;
-                if let Some(list) = &input_rows {
-                    inputs::store(tx, &row.id, list)?;
-                }
-                for (input, entry) in &withdrawn {
-                    inputs::record(tx, input, entry)?;
-                }
-                if let Some(cells) = &cells_stored {
-                    cells.write(tx)?;
-                }
                 Ok(row)
             },
             // Rows only: what an amend changes is counted by no roll-up and
             // indexed by no id index (see above). AGS-23: a root's new title
-            // is its group's, though — one `GroupChanged` after it. COMP-3:
-            // and a new body's registry, beside the row. MENGER-12: and the
-            // cell an input opened or settled moves.
-            move |cache, row| {
-                let groups = cache.amended(row.clone(), title_changed);
-                cache.take_registry(registry_moves);
-                if let Some(list) = input_list {
-                    cache.inputs.take(&row.id, list);
-                }
-                if let Some(moved) = moved {
-                    let more = cache.take(moved);
-                    debug_assert!(more.is_empty(), "an input moves no roll-up");
-                }
-                groups
-            },
+            // is its group's, though — one `GroupChanged` after it.
+            move |cache, row| cache.amended(row.clone(), title_changed),
             move |_, groups, tx| {
-                let asked = Change::inputs(&ticket.shortcode, asked);
                 let change = Change::Amended { ticket, changed };
                 let _ = tx.send(change.clone());
                 broadcast_groups(tx, groups);
-                for change in Change::components(registered) {
-                    let _ = tx.send(change);
-                }
-                for change in asked {
-                    let _ = tx.send(change);
-                }
-                if let Some(moves) = announced {
-                    tx.send(Change::CellsMoved { moves });
-                }
                 if let Some(change) = under.and_then(|u| u.after(&cache)) {
                     tx.send(change);
                 }
@@ -4550,151 +4023,6 @@ impl Store {
             },
         )
         .await
-    }
-
-    /// COMP-3: every component in the registry, in name order — orphans
-    /// included (`owner: None`), waiting names not. From the cache alone.
-    fn components_unscoped(&self) -> Vec<Component> {
-        self.tickets.read().expect("store lock poisoned").components.components()
-    }
-
-    /// COMMENT-2: keeps a comment — `anchor` and `body` checked
-    /// ([`crate::comments::check`]: an empty body, a blank author and a
-    /// malformed anchor are each refused, naming the problem), `author`
-    /// `owner` when none is given; then, under the write-serial lock, the
-    /// anchor's `ticket` must name a ticket ([`StoreError::CommentTicket`])
-    /// and is kept as its id, with its `updated_unix` as `version`; the
-    /// comment takes the next id, state `open` and the time. One row
-    /// committed, the cache moved, `Added` broadcast; the comment as kept is
-    /// the answer. A refusal keeps nothing.
-    ///
-    /// ACCESS-11: as `at` allows ([`OnComment`]) — a viewer's permit on the
-    /// anchor's ticket, checked under the write-serial lock.
-    pub async fn add_comment(&self, at: impl Into<OnComment<Viewer>>, anchor: crate::comments::Anchor, body: String, author: Option<String>) -> Result<crate::comments::Comment, StoreError> {
-        self.add_comment_as(at, anchor, body, author, None).await
-    }
-
-    /// IDENTITY-21: [`Store::add_comment`], signed by `principal`.
-    pub async fn add_comment_as(
-        &self,
-        at: impl Into<OnComment<Viewer>>,
-        anchor: crate::comments::Anchor,
-        body: String,
-        author: Option<String>,
-        principal: Option<String>,
-    ) -> Result<crate::comments::Comment, StoreError> {
-        let at = at.into();
-        let (mut anchor, author) = crate::comments::check(anchor, &body, author.as_deref()).map_err(StoreError::CommentRefused)?;
-        let serial = self.serial().await;
-        let comment = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            if let Some(id) = anchor.ticket.take() {
-                // ORG-3: by any address; kept by its key.
-                let row = match cache.resolve(&id) {
-                    Ok(key) => cache.get(&key),
-                    Err(StoreError::Ambiguous { text, candidates }) => return Err(StoreError::Ambiguous { text, candidates }),
-                    Err(_) => None,
-                };
-                let row = row.ok_or_else(|| StoreError::CommentTicket { ticket: id.clone() })?;
-                anchor.ticket = Some(row.id.to_string());
-                anchor.version = Some(row.updated_unix);
-            }
-            at.check(&cache, anchor.ticket.as_deref())?;
-            crate::comments::Comment {
-                id: crate::vocab::CommentId::new(cache.comments.next_id()),
-                state: crate::comments::CommentState::Open,
-                author,
-                at: chrono::Utc::now().timestamp(),
-                anchor,
-                body,
-                principal,
-                intent: crate::comments::CommentIntent::Comment,
-                reply_to: None,
-            }
-        };
-        // FILTER-30: a comment on a ticket touches it.
-        let (on, under) = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            let on = comment.anchor.ticket.as_deref().and_then(|t| cache.at.get(t)).cloned();
-            let under = on.as_ref().and_then(|k| self.touch_before(&cache, &[(&k.shortcode, k.seq)]));
-            (on, under)
-        };
-        let (stored, kept) = (comment.clone(), comment.clone());
-        let cache = Arc::clone(&self.tickets);
-        self.write(
-            serial,
-            move |tx| Ok(comments::store(tx, &stored)?),
-            move |cache, _| {
-                if let Some(k) = &on {
-                    cache.log.touch(&k.shortcode, k.seq, kept.at);
-                }
-                cache.comments.put(kept);
-            },
-            move |(), (), tx| {
-                tx.comment(CommentChange::Added(comment.clone()));
-                if let Some(change) = under.and_then(|u| u.after(&cache)) {
-                    tx.send(change);
-                }
-                comment
-            },
-        )
-        .await
-    }
-
-    /// NOTE-2: keeps a note — its body as given, `author` (default
-    /// [`crate::notes::DEFAULT_AUTHOR`]), the signed-in `principal` when
-    /// login is on, the next id and the time — through the write path every
-    /// write takes. A blank or oversized body or author is
-    /// [`StoreError::NoteRefused`], with nothing kept.
-    pub async fn add_note_as(
-        &self,
-        body: String,
-        author: Option<String>,
-        principal: Option<String>,
-    ) -> Result<crate::notes::Note, StoreError> {
-        let author = crate::notes::check(&body, author.as_deref()).map_err(StoreError::NoteRefused)?;
-        let serial = self.serial().await;
-        let note = crate::notes::Note {
-            id: crate::vocab::NoteId::new(self.tickets.read().expect("store lock poisoned").notes.next_id()),
-            at: chrono::Utc::now().timestamp(),
-            author,
-            body,
-            ticket: None,
-            upgraded_at: None,
-            principal,
-        };
-        let (stored, kept) = (note.clone(), note.clone());
-        self.write(
-            serial,
-            move |tx| Ok(notes::store(tx, &stored)?),
-            move |cache, _| cache.notes.put(kept),
-            move |(), (), _| note,
-        )
-        .await
-    }
-
-    /// NOTE-2: one page of the notes `q` admits, newest first, from the
-    /// cache ([`notes::page`]).
-    pub fn notes(&self, q: &NoteQuery, after: Option<u64>, limit: Option<u32>) -> Result<NotePage, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        notes::page(&cache, q, after, limit)
-    }
-
-    /// NOTE-2: the note `id`, from the cache; [`StoreError::NoteNotFound`]
-    /// when it names none.
-    pub fn note(&self, id: u64) -> Result<crate::notes::Note, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        cache.notes.get(id).cloned().ok_or_else(|| StoreError::NoteNotFound {
-            id,
-            newest: cache.notes.next_id().checked_sub(1).filter(|n| *n > 0),
-        })
-    }
-
-    /// NOTE-2: the title and body a note gives the ticket it becomes —
-    /// its first line with words (else when it was taken), and its text
-    /// with a line saying when it was noted and which note it was.
-    pub fn note_ticket_text(note: &crate::notes::Note) -> (String, String) {
-        (notes::ticket_title(note), notes::ticket_body(note))
     }
 
     /// IDENTITY-21: a principal's grants, from the cache.
@@ -4842,59 +4170,6 @@ impl Store {
         }
     }
 
-    /// COMMENT-2: resolves the comment `id` — `resolved`, the row's state
-    /// committed, the cache moved, `Resolved` broadcast. One already
-    /// resolved is the answer as it is: nothing written, nothing said. An
-    /// id that names no comment is [`StoreError::CommentNotFound`].
-    ///
-    /// ACCESS-11: as `at` allows ([`OnComment`]) — an editor's permit on
-    /// the comment's ticket, checked under the write-serial lock.
-    pub async fn resolve_comment(&self, at: impl Into<OnComment<Editor>>, id: u64) -> Result<crate::comments::Comment, StoreError> {
-        self.comment_state(at.into(), id, crate::comments::CommentState::Resolved).await
-    }
-
-    /// COMMENT-2: reopens the comment `id` — `open` again; as
-    /// [`Store::resolve_comment`], the other way.
-    pub async fn reopen_comment(&self, at: impl Into<OnComment<Editor>>, id: u64) -> Result<crate::comments::Comment, StoreError> {
-        self.comment_state(at.into(), id, crate::comments::CommentState::Open).await
-    }
-
-    /// COMMENT-2: the comment `id` moved to `to`, through the write path
-    /// every write takes; a move to where it is writes and says nothing.
-    async fn comment_state(&self, at: OnComment<Editor>, id: u64, to: crate::comments::CommentState) -> Result<crate::comments::Comment, StoreError> {
-        let serial = self.serial().await;
-        let current = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            let c = cache.comments.get(id).cloned().ok_or(StoreError::CommentNotFound { id, newest: cache.comments.newest() })?;
-            at.check(&cache, c.anchor.ticket.as_deref())?;
-            c
-        };
-        if current.state == to {
-            return Ok(current);
-        }
-        let next = crate::comments::Comment { state: to, ..current };
-        let (stored, kept) = (next.clone(), next.clone());
-        self.write(
-            serial,
-            move |tx| Ok(comments::store(tx, &stored)?),
-            move |cache, _| cache.comments.put(kept),
-            move |(), (), tx| {
-                tx.comment(match to {
-                    crate::comments::CommentState::Resolved => CommentChange::Resolved(next.clone()),
-                    crate::comments::CommentState::Open => CommentChange::Reopened(next.clone()),
-                });
-                next
-            },
-        )
-        .await
-    }
-
-    /// COMMENT-2: `comments.watch`'s channel — every comment added, resolved
-    /// or reopened, in the order the writes were acknowledged.
-    pub fn subscribe_comments(&self) -> broadcast::Receiver<CommentChange> {
-        self.tx.comments.subscribe()
-    }
-
     /// SDLC-9: links `entries` to the ticket `id` — the record of which
     /// commits finished it. Every entry must be a commit reference
     /// ([`commits::reference`]); any that is not refuses the whole call,
@@ -4933,9 +4208,6 @@ impl Store {
         }
         row.commits.extend(added.iter().cloned());
         row.updated_unix = chrono::Utc::now().timestamp();
-        // DEPLOY-20: this call's commits are the ticket's next version.
-        let version = (self.tickets.read().expect("store lock poisoned").deploys.next_version(&id), row.updated_unix);
-        let (linked, kept) = ((id.clone(), added.clone()), added.clone());
         // FILTER-4: a first commit moves the ticket's cell.
         let (derived, under) = self.commits_derived(&row);
         let announced = derived.announced();
@@ -4948,13 +4220,9 @@ impl Store {
             move |tx| {
                 let out = commit(tx)?;
                 stored.write(tx)?;
-                versions::store(tx, &linked.0, &linked.1, version.0, version.1)?;
                 Ok(out)
             },
-            move |cache, (row, _)| {
-                cache.deploys.versioned(&row.id, &kept, version.0, version.1);
-                cache.commits_changed(row.clone(), moved)
-            },
+            move |cache, (row, _)| cache.commits_changed(row.clone(), moved),
             move |(row, body), (), tx| {
                 let change = Change::CommitsLinked {
                     ticket: whole(row, body),
@@ -4976,16 +4244,16 @@ impl Store {
     /// FILTER-4 / FILTER-13: what a link or an unlink does to the derived
     /// state, and what an open `watch { filter }` asking `under` sees of it.
     fn commits_derived(&self, row: &Row) -> (Derived, Option<lineage::UnderBefore>) {
-        self.cell_derived(row, None)
+        self.cell_derived(row)
     }
 
     /// FILTER-4 / MENGER-12: what a write that moves only `row`'s cell does
     /// to the derived state ([`Cache::cell_change`]; `asking`, when the
     /// write moves its inputs), and what an open `watch { filter }` asking
     /// `under` sees of it.
-    fn cell_derived(&self, row: &Row, asking: Option<bool>) -> (Derived, Option<lineage::UnderBefore>) {
+    fn cell_derived(&self, row: &Row) -> (Derived, Option<lineage::UnderBefore>) {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let derived = cache.cell_change(row, asking);
+        let derived = cache.cell_change(row);
         // FILTER-30: the row is touched whether or not its cell moves.
         let under = self.under_before(&cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(row));
         (derived, under)
@@ -5018,7 +4286,7 @@ impl Store {
         }
         row.labels = after;
         row.updated_unix = chrono::Utc::now().timestamp();
-        let (derived, under) = self.cell_derived(&row, None);
+        let (derived, under) = self.cell_derived(&row);
         let announced = derived.announced();
         let Derived { stored, moved } = derived;
         let commit = Self::row_commit(row);
@@ -5085,21 +4353,15 @@ impl Store {
         let Derived { stored, moved } = derived;
         let commit = Self::row_commit(row);
         let cache = Arc::clone(&self.tickets);
-        // DEPLOY-20: out of the link record too.
-        let (gone, kept) = ((id.clone(), removed.clone()), removed.clone());
 
         self.write(
             serial,
             move |tx| {
                 let out = commit(tx)?;
                 stored.write(tx)?;
-                versions::forget(tx, &gone.0, &gone.1)?;
                 Ok(out)
             },
-            move |cache, (row, _)| {
-                cache.deploys.unversioned(&row.id, &kept);
-                cache.commits_changed(row.clone(), moved)
-            },
+            move |cache, (row, _)| cache.commits_changed(row.clone(), moved),
             move |(row, body), (), tx| {
                 let change = Change::CommitsUnlinked {
                     ticket: whole(row, body),
@@ -5343,28 +4605,17 @@ mod db;
 /// COMP-3: the component registry — what a body defines and references, the
 /// registry the cache keeps, the plan a write makes of it, its table and the
 /// first open that builds it.
-mod components;
 /// INPUT-3: the inputs store — each ticket's inputs as its body declares
 /// them, their answers and state changes, the tables and the migration.
-mod inputs;
-pub use inputs::Who;
 // CHAT-20: a ticket input's writes, each saying who.
-mod input_writes;
 /// APP-90: `ask` — a text input appended to a ticket's body.
-mod ask;
 /// COMMENT-2: the comments store — a reader's comments on the app, kept
 /// beside the tickets, behind the cache.
-mod comments;
-pub use comments::{CommentChange, CommentPage, CommentQuery};
 /// NOTE-2: the notes store — every note, kept beside the tickets; a note
 /// made a ticket in the ticket's own write.
-mod notes;
 
 /// COMMENT-5: the images comments show — content-addressed, the bytes in
 /// the file, read through the reach of the ticket each was put for.
-mod media;
-pub use media::Put;
-pub use notes::{NotePage, NoteQuery};
 /// IDENTITY-21: the members store — every grant of a role on a scope, kept
 /// beside the tickets, behind the cache.
 mod members;
@@ -5381,7 +4632,7 @@ mod system;
 pub use system::System;
 // ACCESS-11: what a write takes.
 mod writs;
-pub use writs::{Authority, Blocker, Filing, Move, OnComment, OnMedia, Parenting, Rehost, Under, Updating};
+pub use writs::{Authority, Blocker, Filing, Move, Parenting, Rehost, Under, Updating};
 #[cfg(test)]
 pub(crate) use system::SYS;
 pub use members::Members;
@@ -5425,33 +4676,17 @@ mod reshortcode;
 mod subtasks;
 pub use reshortcode::{Rename, Reshortcode, Reshortcoded};
 /// THEME-8: the themes and what the site and each shortcode say.
-mod themes;
-pub use themes::ThemeChange;
 /// THEME-3: a theme is a ticket's block — owners, orphans, adoption.
-mod theme_registry;
 /// DEPLOY-11: every deployment, what each environment runs, and where each
 /// ticket's work runs — the `deployed` cells.
-mod deployments;
-mod versions;
 // TICKETS-7: every change keeps a revision.
 pub(crate) mod revisions;
 pub use revisions::{acting, say_act, DiffView, RevisionPage, Restoring};
 pub use eras::{reading_as, reading_now};
-mod queue;
-pub use queue::{QueueAsk, QueueChange};
 /// TICKETS-9: the assignees and their history.
-mod assignees;
 /// APP-23: a change request — a comment and an unqueue, one write.
-mod threads;
-mod changes;
-pub use changes::{conversation_anchor, CONVERSATION_PATH};
 /// APP-24: what answers an agent waiting on a ticket.
-mod replies;
-pub use replies::{comment_on, reply_key, Awaiting};
 /// CHAT-3: chats on a ticket among participants — opened, posted, read.
-mod chats;
-pub use chats::{AnswerWait, ChatChange, ChatError, ChatInputOp, ChatInputQuery, ChatInputWrite, ChatOn, ChatQuery, ChatRecord, ChatSeed, MessageDeletion, MessageWait, Paging, Pick, Seat, Signer, Standing};
-pub use deployments::{DeployPage, DeployQuery, Due, RequestAsk, StepReport};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring
@@ -5487,7 +4722,7 @@ pub use lineage::{Node, TreePage, TreeQuery, UnderMoves, UNDERS_MAX};
 /// (filter)`. Never a walk of the store.
 mod seen;
 use seen::Seen;
-pub use seen::{AppSight, Reader};
+pub use seen::Reader;
 /// ACCESS-12: what an open watch hears — every change classified, cut to
 /// the reach and redacted as a read is; a moved reach's entered and left.
 mod watching;
@@ -5500,9 +4735,6 @@ pub use lensed::{narrowing, narrowing_lens, narrowing_of, ready_and, MEMBER_MAX}
 /// and every filter a read, a count or a watch is asked resolved through
 /// them before it is compiled.
 mod saved;
-mod profiles;
-#[cfg(test)]
-mod tests_profiles;
 /// FILTER-46: the `saved_filters` table and `tickets filters`' writes.
 mod filters;
 pub use filters::FilterChange;
@@ -5541,7 +4773,7 @@ mod tests_shortcodes;
 /// compares with a scan.
 mod stored;
 
-pub use stored::Verdict;
+pub use stored::{Verdict, FORM};
 
 /// SEARCH-2: search inside tickets — the FTS5 index of every ticket's title
 /// and text beside them in the file, kept by every write that changes
@@ -5584,62 +4816,20 @@ mod tests_search;
 
 /// NOTE-2: the notes store — kept, listed, filtered and paged; an upgrade's
 /// one write and its refusals; across a reopen.
-#[cfg(test)]
-mod tests_notes;
 /// COMMENT-5: images — kept by hash, one row twice, read through a reach,
 /// refused naming why, across a reopen.
-#[cfg(test)]
-mod tests_media;
 /// DEPLOY-11: deployments — the fold, rollbacks, the kept join, the cells.
-#[cfg(test)]
-mod tests_deployments;
 /// DEPLOY-20: a ticket's version — behind, current, rolled back, named.
-#[cfg(test)]
-mod tests_behind;
 /// DEPLOY-21: delivery stages — waiting, deploying, ready for, failed.
-#[cfg(test)]
-mod tests_stages;
 /// DEPLOY-25: requests — kept, canceled, answered, never running; the webhook's deliveries.
-#[cfg(test)]
-mod tests_requests;
 /// DEPLOY-37: a request's steps, and a cancel asked of one under way.
-#[cfg(test)]
-mod tests_steps;
 /// THEME-8: define, set, theme_for (every row), refusals, a reopen.
-#[cfg(test)]
-mod tests_themes;
 /// MENGER-39: the queue.
-#[cfg(test)]
-mod tests_queue;
-#[cfg(test)]
-mod tests_queue_many;
-#[cfg(test)]
-mod tests_queue_views;
-#[cfg(test)]
-mod tests_assignees;
 /// APP-23: a change request.
-#[cfg(test)]
-mod tests_changes;
 /// APP-24: what answers a wait.
-#[cfg(test)]
-mod tests_replies;
 /// CHAT-3: CHAT-1's scenarios.
-#[cfg(test)]
-mod tests_chats;
-#[cfg(test)]
-mod tests_chats_outside;
-#[cfg(test)]
-mod tests_chats_grants;
-#[cfg(test)]
-mod tests_chats_deletes;
-#[cfg(test)]
-mod tests_chat_tickets;
 /// CHAT-20: a message's inputs.
-#[cfg(test)]
-mod tests_chat_inputs;
 /// CHAT-66: replies.
-#[cfg(test)]
-mod tests_chat_reply;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).
@@ -5727,20 +4917,12 @@ mod tests_placements;
 /// COMP-3: the component registry — a test per row of the ticket's table,
 /// the code examples that are not definitions, the code span that is not a
 /// reference, durability, events, and a database from before the table.
-#[cfg(test)]
-mod tests_components;
 /// THEME-5: documented parts registered, a part the template lacks refused,
 /// and (on demand) the house bodies checked.
-#[cfg(test)]
-mod tests_parts;
 /// INPUT-3: the inputs store — every row of the ticket's table: parsed on
 /// write (and refused), answered (and refused), cleared, closed, reopened,
 /// removed and restored; the query; the events and their place; durability;
 /// the tables added to an old file.
-#[cfg(test)]
-mod tests_inputs;
-#[cfg(test)]
-mod tests_ask;
 
 /// FILTER-4: the cells — every ticket's cell and every bitmap held to a scan
 /// after every write, in the cache and the file; each write's announced
@@ -5786,13 +4968,9 @@ mod tests_kinds;
 /// every filter and conjunction held to a reference (`under` to the filter
 /// language's own answer) over random comments on a moving tree, a comment's
 /// anchor kept through its ticket's writes, and the form 6 → 7 upgrade.
-#[cfg(test)]
-mod tests_comments;
 
 /// COMMENT-8: replies — the root's anchor, one level deep, a resolved root
 /// reopened, `list { thread }`, a reply seen as its root, refusals.
-#[cfg(test)]
-mod tests_threads;
 
 /// MENGER-13: the transition log (every write's transition, who, where
 /// from, why, caused by what; durable; `history`), cancellation cascades and

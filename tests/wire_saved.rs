@@ -151,9 +151,9 @@ async fn saved_names_over_the_wire_list_count_refuse_and_move_a_watch() {
     let port = start_server().await;
     let client = connect(port).await;
     // Two saved filters.
-    let saved = save(&client, "Needs you", "(asking or label needs-you)").await;
+    let saved = save(&client, "Needs you", "(blocked or label needs-you)").await;
     assert_eq!(saved["type"], "filter_saved", "{saved}");
-    assert_eq!(saved["filter"]["filter"], "(asking or label needs-you)");
+    assert_eq!(saved["filter"]["filter"], "(blocked or label needs-you)");
     save(&client, "Plexus-Ready", "in PLEXUS and status Ready").await;
     // The work they choose from: PLEXUS-2, 3 Ready; 3, 4 needing you.
     one(&client, "tickets.create", json!({"epic": "PLEXUS", "title": "the platform", "kind": "scope"})).await;
@@ -178,7 +178,7 @@ async fn saved_names_over_the_wire_list_count_refuse_and_move_a_watch() {
     // Each name is its filter; `or` is the union, `and` the intersection.
     let needs = listed(&client, "saved \"Needs you\"").await.unwrap();
     let ready = listed(&client, "saved Plexus-Ready").await.unwrap();
-    assert_eq!(needs, listed(&client, "(asking or label needs-you)").await.unwrap());
+    assert_eq!(needs, listed(&client, "(blocked or label needs-you)").await.unwrap());
     assert_eq!(ready, listed(&client, "in PLEXUS and status Ready").await.unwrap());
     assert_eq!((needs.clone(), ready.clone()), (vec!["PLEXUS-3".to_string(), "PLEXUS-4".into()], vec!["PLEXUS-2".to_string(), "PLEXUS-3".into()]));
     let union = "saved \"Needs you\" or saved Plexus-Ready";

@@ -1,18 +1,16 @@
 //! FILTER-30: `touched <window>` — a ticket's last touch: any write to its
-//! own row, a comment left on it, an answer to or a clear of one of its
-//! inputs. Each kind of edit touches; a roll-up, a child's count or a
+//! own row (V2-4: comments and answers went with their services). Each kind of edit touches; a roll-up, a child's count or a
 //! placement moving does not; the answer comes from the kept index, equal
 //! to the rule ticket by ticket, across a reopen and under
 //! `--verify-derived`; and an open `watch { filter }` asking `touched` hears
 //! a ticket leave `not touched within …` the moment it is touched — by a
-//! body, a comment or an answer, none of which moves a cell.
+//! body, which moves no cell.
 
 use super::filtered::Membership;
 use crate::address::ShortcodeId;
 use super::history::Clock;
 use super::*;
-use crate::comments::Anchor;
-use crate::types::{AnswerSource, InputValue, Severity};
+use crate::types::Severity;
 use std::collections::BTreeSet;
 
 const DAY: i64 = 86_400;
@@ -30,17 +28,6 @@ fn build(title: &str, parent: Option<&str>, body: &str) -> NewTicket {
     }
 }
 
-fn anchor(ticket: &str) -> Anchor {
-    Anchor {
-        route: format!("#/ticket/{ticket}"),
-        path: "[data-tag=\"body\"]".into(),
-        label: "Body".into(),
-        excerpt: String::new(),
-        ticket: Some(ticket.into()),
-        version: None,
-    }
-}
-
 const ASKS: &str = "<m-input id=\"notes\" kind=\"text\"><m-question>Anything else?</m-question></m-input>\n";
 
 /// The ids `text` admits, read now.
@@ -50,18 +37,12 @@ fn ids(store: &Store, text: &str) -> BTreeSet<String> {
     store.filtered_page(SYS, &q, None, None, Some(10_000)).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
 }
 
-/// The rule, ticket by ticket, from the rows, the comments and the inputs'
-/// histories — never the index: the later of a row's last write and its
-/// last comment or answer, in the last day.
+/// The rule, ticket by ticket, from the rows — never the index: a row's last
+/// write, in the last day.
 fn touched_by_rule(store: &Store) -> BTreeSet<String> {
     let since = chrono::Utc::now().timestamp() - DAY;
     let cache = store.tickets.read().unwrap();
-    let mut last: HashMap<String, i64> = cache.order.values().map(|r| (r.id.to_string(), r.updated_unix.max(r.created_unix))).collect();
-    for (id, at) in cache.comments.activity().chain(cache.inputs.activity()) {
-        if let Some(l) = last.get_mut(id) {
-            *l = (*l).max(at);
-        }
-    }
+    let last: HashMap<String, i64> = cache.order.values().map(|r| (r.id.to_string(), r.updated_unix.max(r.created_unix))).collect();
     last.into_iter().filter(|(_, at)| *at >= since).map(|(id, _)| id).collect()
 }
 
@@ -140,23 +121,10 @@ async fn each_kind_of_edit_touches_and_a_rollup_does_not() {
     // A child born: the newborn; its parent only counts it.
     store.create(SYS, build("newborn", Some("T-15"), "")).await.unwrap();
     step(&store, "a child born", &["T-21"]);
-    // A comment and an answer, neither of which writes the row.
-    let before = store.row("T-16").unwrap().0.updated_unix;
-    store.add_comment(SYS, anchor("T-16"), "still needed?".into(), None).await.unwrap();
-    assert_eq!(store.row("T-16").unwrap().0.updated_unix, before, "a comment writes no row");
-    step(&store, "a comment", &["T-16"]);
-    store.answer(SYS.permit("T-5"), "notes", InputValue::Text { text: "ship it".into() }, None, AnswerSource::Api).await.unwrap();
-    step(&store, "an answer", &["T-5"]);
-    // Closing an input is not the owner's word on it: no touch.
-    store.close_input(SYS.permit("T-5"), "notes").await.unwrap();
-    step(&store, "a close", &[]);
     // A cancel cascades: the parent's row and its open child's are written
     // (T-3 is done already and stays).
     store.set_status(SYS.permit("T-2"), Status::Canceled).await.unwrap();
     step(&store, "a cancel's cascade", &["T-2", "T-4"]);
-    // A comment on no ticket touches none.
-    store.add_comment(SYS, Anchor { ticket: None, route: "#/".into(), ..anchor("T-1") }, "the board".into(), None).await.unwrap();
-    step(&store, "a comment on the board", &[]);
 
     let fresh = |store: &Store| {
         let cache = store.tickets.read().unwrap();
@@ -175,8 +143,8 @@ async fn each_kind_of_edit_touches_and_a_rollup_does_not() {
 }
 
 /// An open `watch { filter: "kind build and not touched within 1d" }`
-/// hears each ticket leave as it is touched — a body, a comment, an answer
-/// (no cell moves for any of them), a label (one moves) — and only it.
+/// hears each ticket leave as it is touched — a body (no cell moves), a
+/// label (one moves) — and only it.
 #[tokio::test]
 async fn a_watch_hears_a_touched_ticket_leave() {
     let dir = tempfile::tempdir().unwrap();
@@ -197,10 +165,8 @@ async fn a_watch_hears_a_touched_ticket_leave() {
     let left = |id: &str| Membership::Left { id: id.into(), shortcode: ShortcodeId::from("T"), seq: id[2..].parse().unwrap() };
     store.amend(SYS.permit("T-6"), None, Some("rewritten".into())).await.unwrap();
     assert_eq!(heard(&mut rx), [left("T-6")], "a body");
-    store.add_comment(SYS, anchor("T-7"), "is this still wanted?".into(), None).await.unwrap();
-    assert_eq!(heard(&mut rx), [left("T-7")], "a comment");
-    store.answer(SYS.permit("T-5"), "notes", InputValue::Text { text: "yes".into() }, None, AnswerSource::App).await.unwrap();
-    assert_eq!(heard(&mut rx), [left("T-5")], "an answer");
+    store.amend(SYS.permit("T-7"), Some("retitled".into()), None).await.unwrap();
+    assert_eq!(heard(&mut rx), [left("T-7")], "a title");
     store.label(SYS.permit("T-8"), vec!["x".into()], Vec::new()).await.unwrap();
     assert_eq!(heard(&mut rx), [left("T-8")], "a label");
     store.amend(SYS.permit("T-6"), None, Some("again".into())).await.unwrap();

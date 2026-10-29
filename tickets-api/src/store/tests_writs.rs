@@ -5,7 +5,7 @@
 //! given a proof for one thing and asked of another writes nothing.
 
 use super::*;
-use crate::access::{Access, AdminOf, Held, Hidden, Permit, VerifiedUser};
+use crate::access::{Access, AdminOf, Held, Hidden, VerifiedUser};
 use crate::address::{OrgId, TicketId};
 use crate::members::{Role, Scope};
 
@@ -82,12 +82,12 @@ async fn a_permit_writes_its_own_ticket_and_no_hidden_one_is_minted() {
 async fn a_birth_records_only_the_blockers_its_permits_name() {
     let s = tracker().await;
     let editor = holding(Role::Editor, &["OPEN"]);
-    assert_eq!(editor.permit::<Viewer>(&t("SECRET-2"), &s).unwrap_err(), Hidden, "no viewer's permit for a hidden blocker");
+    assert_eq!(editor.permit::<crate::access::Viewer>(&t("SECRET-2"), &s).unwrap_err(), Hidden, "no viewer's permit for a hidden blocker");
     assert!(editor.forward("SECRET-99", &s).is_err(), "nor a forward reference where it would not see the ticket");
     assert!(editor.forward("OPEN-99", &s).is_ok(), "one in a shortcode it holds whole stands");
     let before = (written(&s), s.extents_text());
     let parent = editor.permit::<Editor>(&t("OPEN-1"), &s).unwrap();
-    let seen = editor.permit::<Viewer>(&t("OPEN-2"), &s).unwrap();
+    let seen = editor.permit::<crate::access::Viewer>(&t("OPEN-2"), &s).unwrap();
     let at = Filing::new(Under::Parent(parent), vec![Blocker::Seen(seen)]);
     let e = s.create(at, new("OPEN", Kind::Build, Some("OPEN-1"), &["OPEN-2", "SECRET-2"])).await.unwrap_err();
     assert!(mismatched(&e), "{e}");
@@ -205,20 +205,4 @@ async fn a_grant_takes_admin_on_its_scope() {
     let admin = holding(Role::Admin, &["OPEN"]).admin_of(&open, &s).unwrap();
     s.grant(admin, g(&open)).await.unwrap();
     assert_eq!(s.grants_of(SYS, SOMEONE).len(), 1);
-}
-
-/// A comment write takes a permit on the comment's ticket.
-#[tokio::test]
-async fn a_comment_write_takes_a_permit_on_its_ticket() {
-    let s = tracker().await;
-    let anchor = crate::comments::Anchor { route: "#/ticket/OPEN-3".into(), path: "p".into(), label: "l".into(), excerpt: String::new(), ticket: Some("OPEN-3".into()), version: None };
-    let viewer = holding(Role::Viewer, &["OPEN"]);
-    let wrong = OnComment::new(vec![viewer.permit(&t("OPEN-2"), &s).unwrap()]);
-    assert!(mismatched(&s.add_comment(wrong, anchor.clone(), "hi".into(), None).await.unwrap_err()));
-    let c = s.add_comment(OnComment::new(vec![viewer.permit(&t("OPEN-3"), &s).unwrap()]), anchor, "hi".into(), None).await.unwrap();
-    let editor = holding(Role::Editor, &["OPEN"]);
-    let other: Vec<Permit<Editor>> = vec![editor.permit(&t("OPEN-2"), &s).unwrap()];
-    assert!(mismatched(&s.resolve_comment(OnComment::new(other), c.id.get()).await.unwrap_err()));
-    let on = OnComment::new(vec![editor.permit(&t("OPEN-3"), &s).unwrap()]);
-    assert_eq!(s.resolve_comment(on, c.id.get()).await.unwrap().state, crate::comments::CommentState::Resolved);
 }

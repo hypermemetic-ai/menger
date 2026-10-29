@@ -42,31 +42,6 @@ pub mod vocab;
 /// [`Address::parse`], the one parser from text to an address. Wasm-safe.
 pub mod address;
 pub use address::{Address, At, Code, EpicName, Namespace, OrgId, Shortcode, ShortcodeId, TicketId, TicketName};
-/// COMP-8: a component's help — its source's `<docs>` and its block's
-/// preview line, parsed. Wasm-safe: the store reads definitions with it, and
-/// the app renders a definition's card (COMP-9) from the block it shows.
-pub mod component_docs;
-/// ART-5: a body's fields — its elements marked `data-field`, or a legacy
-/// body's `##` headings read through ought's field set — the piece COMPILE
-/// checks. Wasm-safe, like `component_docs`.
-pub mod fields;
-/// COMP-11: a blank line inside a body's HTML does not end it — an element
-/// opened in an HTML block runs to its close — read for the app's parser.
-/// Wasm-safe, like `component_docs`: the frame renders with it.
-pub mod html_runs;
-/// APP-32: a mockup written in its element — `<m-mockup>` … the page …
-/// `</m-mockup>` — found in a body, its page never the body's markup.
-/// Wasm-safe, like `html_runs`: the frame renders with it.
-pub mod mockups;
-/// INPUT-3: a body's inputs — `<m-decision id>` and `<m-input id kind>` with
-/// their options, question and recommendation — read as the app renders the
-/// body, and an answer's value checked against them. Wasm-safe, like
-/// `fields`, whose scan it reads with.
-pub mod inputs;
-/// TICKETS-23: a body's tasks — `<m-task id>` blocks (TICKETS-10) — read
-/// as its inputs are, each with its direction as markdown: the app opens one
-/// in a sheet from the stored body. Wasm-safe, like `inputs`.
-pub mod tasks;
 /// FILTER-10: the filter language — manifest's view syntax with menger's
 /// fields: parse, format, the lens's `and`, contradiction, and the
 /// reference evaluator. Wasm-safe, with no feature gate: the server
@@ -85,18 +60,9 @@ pub mod limits;
 /// MENGER-12: a ticket's labels — what a label is, and how `label` moves a
 /// ticket's set. Wasm-safe: the app checks what a reader types with it.
 pub mod labels;
-/// MENGER-39: the queue — a ticket put in front of the owner with an
-/// urgency. Wasm-safe: the store keeps it, the app's tray draws it.
-pub mod queue;
-/// TICKETS-9: a ticket's assignees — how `assign` moves the set, and the
-/// assignment history's records. Wasm-safe: the app draws them.
-pub mod assignees;
-pub use assignees::{AssignAction, AssignRecord};
-pub use queue::{Ending, MockupView, QueueAction, QueueEntry, QueueRecord, Reply, Urgency};
 pub use types::{
-    is_menger_doc, is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
-    InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, PartDoc, SlotDoc, Kind, Marked, Placement,
-    PlacementChange, RootRow, SearchWord, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
+    is_menger_doc, is_menger_path, path_address, Group, Kind, Marked, Placement, PlacementChange, RootRow, SearchWord, Severity, Status, Ticket,
+    TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
 // MENGER-13: the transition log's vocabulary.
 pub use types::{ShortcodeMove, Tombstone, WatchEnd, Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, SYSTEM_ACTOR};
@@ -125,79 +91,6 @@ pub use activation::FiltersClient;
 #[cfg(feature = "server")]
 pub use activation::{NavActivation, TicketsActivation};
 
-/// COMMENT-2: the comments vocabulary — [`Anchor`], [`Comment`],
-/// [`CommentState`], [`CommentsEvent`] — and the rules `add` keeps them by.
-/// Wasm-safe, like [`types`].
-pub mod comments;
-pub use comments::{Anchor, Comment, CommentIntent, CommentState, CommentsEvent};
-/// COMMENT-2: the `comments` activation, declared once as `tickets` is: the
-/// server's [`Comments`] and the browser's [`CommentsClient`].
-pub mod comments_activation;
-pub use comments_activation::CommentsClient;
-#[cfg(feature = "server")]
-pub use comments_activation::CommentsActivation;
-
-/// CHAT-3: the chats vocabulary — [`Chat`], [`Message`], [`ChatState`],
-/// [`ChatsEvent`]. Wasm-safe, like [`comments`].
-pub mod chats;
-// CHAT-55: a chat's tickets — the code rule, the stage, the row.
-pub mod chat_tickets;
-// CHAT-20: a message's inputs, the wire half.
-pub mod chat_inputs;
-// CHAT-66: a reply's token, read the one way.
-pub mod chat_reply;
-pub use chats::{Chat, ChatKind, ChatState, ChatsEvent, Message};
-/// CHAT-3: the `chats` activation, declared once: the server's [`Chats`]
-/// and the browser's [`ChatsClient`].
-pub mod chats_activation;
-pub use chats_activation::ChatsClient;
-#[cfg(feature = "server")]
-pub use chats_activation::ChatsActivation;
-
-/// COMMENT-5: the media vocabulary — [`MediaEvent`], the kept image types
-/// and the rule that reads an image's type and size from its bytes
-/// ([`media::check`]). Wasm-safe: the app refuses a file with it first.
-pub mod media;
-pub use media::{MediaEvent, MediaInfo};
-/// COMMENT-5: the `media` activation, declared once: the server's
-/// [`MediaActivation`] and the browser's [`MediaClient`].
-pub mod media_activation;
-pub use media_activation::MediaClient;
-#[cfg(feature = "server")]
-pub use media_activation::MediaActivation;
-
-/// NOTE-2: the notes vocabulary — [`Note`], [`NoteState`], [`NotesEvent`]
-/// — the rules `add` keeps a note by, and the title a note gives its
-/// ticket. Wasm-safe, like [`comments`].
-pub mod notes;
-pub use notes::{Note, NoteState, NotesEvent};
-/// NOTE-2: the `notes` activation, declared once: the server's [`Notes`]
-/// and the browser's [`NotesClient`].
-pub mod notes_activation;
-pub use notes_activation::NotesClient;
-#[cfg(feature = "server")]
-pub use notes_activation::NotesActivation;
-
-/// THEME-2: the token contract — every token menger draws with, its group
-/// and its defaults, read from `tokens.toml` ([`tokens::TOKENS`]), and
-/// index.html's `:root` blocks as it says them ([`tokens::root_css`]).
-pub mod tokens;
-/// THEME-8: the themes vocabulary — [`Theme`], the levels that adopt one,
-/// the tokens a theme may set ([`themes::TOKENS`]) and the rule that decides
-/// who wears what ([`themes::resolve`]). Wasm-safe: the app resolves with it.
-pub mod themes;
-pub use themes::{Theme, ThemesEvent};
-/// THEME-3: a theme is a ticket's ` ```theme ` block — read and validated
-/// here, wasm-safe: the server refuses a write whose block is not a theme,
-/// the app renders the block as its swatch sheet.
-pub mod theme_block;
-/// THEME-8: the `themes` activation, declared once: the server's [`Themes`]
-/// and the browser's [`ThemesClient`].
-pub mod themes_activation;
-pub use themes_activation::ThemesClient;
-#[cfg(feature = "server")]
-pub use themes_activation::ThemesActivation;
-
 /// IDENTITY-21: the members vocabulary — [`Role`], [`Grant`],
 /// [`MembersEvent`]. Wasm-safe, like [`comments`].
 pub mod members;
@@ -205,7 +98,7 @@ pub use members::{Grant, MembersEvent, Role};
 /// IDENTITY-21: the `members` activation, declared once: the server's
 /// [`Members`] and the browser's [`MembersClient`].
 pub mod members_activation;
-pub use members_activation::{MembersClient, ProfilesClient, TeamsClient};
+pub use members_activation::{MembersClient, TeamsClient};
 #[cfg(feature = "server")]
 pub use members_activation::MembersActivation;
 
@@ -236,14 +129,3 @@ pub use session_activation::SessionClient;
 #[cfg(feature = "server")]
 pub use session_activation::SessionActivation;
 
-/// DEPLOY-11: the deployments vocabulary — [`Record`](deployments::Record),
-/// [`Deployment`], [`Environment`], [`DeploymentsEvent`]. Wasm-safe, like
-/// [`notes`].
-pub mod deployments;
-pub use deployments::{DeployState, Deployment, DeploymentsEvent, Environment, RunningCell};
-/// DEPLOY-11: the `deployments` activation, declared once: the server's
-/// [`Deployments`] and the browser's [`DeploymentsClient`].
-pub mod deployments_activation;
-pub use deployments_activation::DeploymentsClient;
-#[cfg(feature = "server")]
-pub use deployments_activation::DeploymentsActivation;

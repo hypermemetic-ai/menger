@@ -79,13 +79,8 @@ async fn set_kind_to_a_scope_below_a_root_is_refused_naming_reshortcode() {
 }
 
 #[tokio::test]
-async fn notes_upgrade_and_update_follow_the_same_rule() {
+async fn update_follows_the_same_rule() {
     let store = store().await;
-    let n = store.add_note_as("an area of its own".into(), None, None).await.unwrap();
-    let e = store.upgrade_note(SYS, n.id.get(), new("A", "an area", Kind::Scope, Some("A-1"))).await.unwrap_err();
-    assert!(e.to_string().starts_with("a scope under A-1 roots its own shortcode"), "{e}");
-    let (t, note) = store.upgrade_note(SYS, n.id.get(), new("LOOK", "an area", Kind::Scope, Some("A-1"))).await.unwrap();
-    assert_eq!((t.id.as_str(), note.ticket.as_deref()), ("LOOK-1", Some("LOOK-1")));
     let e = store.update(SYS.updating("A-2"), Update { kind: Some(Kind::Scope), ..Update::default() }).await.unwrap_err();
     assert!(e.to_string().contains("a scope roots its own shortcode (ORG-5)"), "{e}");
     let e = store.update_many(SYS, Selection::Ids(vec!["A-2".into(), "A-3".into()]), Update { kind: Some(Kind::Scope), ..Update::default() }).await.unwrap_err();

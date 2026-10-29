@@ -35,9 +35,8 @@ fn random_field(rng: &mut Rng, field: usize, names: &[String]) -> Field {
         8 => Field::Under(names[rng.below(names.len())].to_ascii_uppercase()),
         // FILTER-21: `menger doc`.
         10 => Field::MengerDoc,
-        // MENGER-12: `asking`, and `label` — one the walk files, or one it
-        // never does.
-        11 => Field::Asking,
+        // MENGER-12: `label` — one the walk files, or one it never does.
+        11 => Field::Label(["needs-you", "p1", "later", "never"][rng.below(4)].into()),
         12 => Field::Label(["needs-you", "p1", "later", "never"][rng.below(4)].into()),
         _ => Field::HasCommits,
     }
@@ -146,7 +145,6 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
                 "ready" => yes(category_of(t.status) == Category::Ready && !k.blocked()),
                 "has commits" => yes(!t.commits.is_empty()),
                 "menger doc" => yes(t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"))),
-                "asking" => yes(k.asking()),
                 _ => t.epic.to_string(),
             });
         }

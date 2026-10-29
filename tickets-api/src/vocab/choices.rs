@@ -3,23 +3,10 @@
 //! that the vocabulary did not have: where a call comes from, what a
 //! severity change is, what becomes of a deleted ticket's children.
 
-use crate::chats::{ActivityState, ChatGrant, ChatState};
-use crate::comments::{CommentIntent, CommentState};
-use crate::deployments::{DeployState, StepState};
 use crate::members::Role;
-use crate::notes::NoteState;
-use crate::queue::Urgency;
-use crate::themes::{Takeover, ThemeReach};
-use crate::types::{AnswerSource, InputState, Kind, Severity, Status, TransitionSource};
+use crate::types::{Kind, Severity, Status, TransitionSource};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-impl InputSource {
-    /// The wire spelling.
-    pub const fn as_str(self) -> &'static str {
-        AnswerSource::from_input(self).as_str()
-    }
-}
 
 impl DeleteChildren {
     /// The wire spelling.
@@ -33,8 +20,8 @@ impl DeleteChildren {
 use std::fmt;
 use std::str::FromStr;
 
-lenient!(Status, Kind, Severity, InputState, AnswerSource, TransitionSource, Role, CommentState, NoteState, DeployState, StepState, Urgency, ThemeReach, Takeover);
-lenient!(CallerSource, InputSource, DeleteChildren, AmendedField, CommentIntent, ChatState, ChatGrant, RevisionField, ActivityState);
+lenient!(Status, Kind, Severity, TransitionSource, Role);
+lenient!(CallerSource, DeleteChildren, AmendedField, RevisionField);
 
 closed_schema!(Status, "A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case", [
     Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Complete,
@@ -44,29 +31,10 @@ closed_schema!(Kind, "What shape of work a ticket is — the owner's five, and d
     Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike, Kind::Doc,
 ]);
 closed_schema!(Severity, "How bad a gap is (any case)", [Severity::Critical, Severity::High, Severity::Medium, Severity::Low]);
-closed_schema!(InputState, "Where an input stands (any case)", [
-    InputState::Open, InputState::Answered, InputState::Closed, InputState::Removed, InputState::Withdrawn,
-]);
 closed_schema!(Role, "A role a grant gives (any case)", [Role::Chatter, Role::Viewer, Role::Deployer, Role::Editor, Role::Admin]);
-closed_schema!(ChatGrant, "CHAT-16: what an admin's add grants one who can't read the chat's ticket: ticket (view it) or chat (this chat only) (any case)", [ChatGrant::Ticket, ChatGrant::Chat]);
-closed_schema!(CommentIntent, "What a comment is: a comment, or a change request (any case)", [CommentIntent::Comment, CommentIntent::Changes]);
-closed_schema!(CommentState, "Where a comment stands (any case)", [CommentState::Open, CommentState::Resolved]);
-closed_schema!(ChatState, "Where a chat stands: open, or closed (read-only) (any case)", [ChatState::Open, ChatState::Closed]);
-closed_schema!(ActivityState, "CHAT-18: where a participant's live work stands: started, working, or ended (any case)", [ActivityState::Started, ActivityState::Working, ActivityState::Ended]);
-closed_schema!(NoteState, "Where a note stands: still a note, or made a ticket (any case)", [NoteState::Open, NoteState::Upgraded]);
-closed_schema!(DeployState, "What a deployment did, or (DEPLOY-25) requested: asked for, not yet done (any case; rolled-back too)", [
-    DeployState::Started, DeployState::Succeeded, DeployState::Failed, DeployState::RolledBack, DeployState::Requested,
-]);
-closed_schema!(StepState, "DEPLOY-37: where a step of a request's run stands: started, succeeded, failed, skipped or canceled (any case)", [
-    StepState::Started, StepState::Succeeded, StepState::Failed, StepState::Skipped, StepState::Canceled,
-]);
-closed_schema!(Urgency, "How urgently the owner should look (any case)", [Urgency::Whenever, Urgency::Today, Urgency::Now, Urgency::Blocking]);
-closed_schema!(ThemeReach, "How far a theme's adoption reaches (any case)", [ThemeReach::Frame, ThemeReach::Ticket, ThemeReach::Site]);
-closed_schema!(Takeover, "Whether a level takes the themes from above (any case; true/yes, false/no too)", [Takeover::On, Takeover::Off]);
 closed_schema!(CallerSource, "Where a write comes from: app, api (default) or pipeline (synapse is api, merge pipeline)", [
     CallerSource::App, CallerSource::Api, CallerSource::Pipeline,
 ]);
-closed_schema!(InputSource, "Who answers or clears an input: app (a viewer's click) or api (default)", [InputSource::App, InputSource::Api]);
 closed_schema!(DeleteChildren, "What becomes of a deleted ticket's children: reparent or delete", [DeleteChildren::Reparent, DeleteChildren::Delete]);
 closed_schema!(RevisionField, "A field a restore puts back: title, body, status, kind, severity, parent, blocked_by or labels", [
     RevisionField::Title, RevisionField::Body, RevisionField::Status, RevisionField::Kind,
@@ -177,50 +145,6 @@ impl FromStr for CallerSource {
             TransitionSource::Api => Ok(Self::Api),
             TransitionSource::Pipeline => Ok(Self::Pipeline),
             TransitionSource::Cascade => Err("source: `cascade` is the store's own — a call is app, api or pipeline".into()),
-        }
-    }
-}
-
-/// INPUT-3: who answers or clears an input — `app` (a viewer's click) or
-/// `api` (the default). `system` is the store's own (a withdrawal, a
-/// restore) and no caller's to say.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InputSource {
-    App,
-    #[default]
-    Api,
-}
-
-impl AnswerSource {
-    /// What an [`InputSource`] says, as the store keeps it.
-    pub const fn from_input(s: InputSource) -> Self {
-        match s {
-            InputSource::App => AnswerSource::App,
-            InputSource::Api => AnswerSource::Api,
-        }
-    }
-}
-
-impl From<InputSource> for AnswerSource {
-    fn from(s: InputSource) -> Self {
-        Self::from_input(s)
-    }
-}
-
-impl fmt::Display for InputSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for InputSource {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s.parse::<AnswerSource>()? {
-            AnswerSource::App => Ok(Self::App),
-            AnswerSource::Api => Ok(Self::Api),
-            AnswerSource::System => Err("unknown answer source 'system' (expected app or api: system is the store's own)".into()),
         }
     }
 }

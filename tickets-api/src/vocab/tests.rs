@@ -76,8 +76,6 @@ fn the_shortcode_rules_are_one() {
     ] {
         let code = Code::parse(text).is_ok();
         assert_eq!(text.parse::<ShortcodeRef>().is_ok() && !text.contains('.'), code, "ShortcodeRef {text:?}");
-        assert_eq!(text.parse::<Project>().is_ok(), code, "Project {text:?}");
-        assert_eq!(crate::deployments::project_of(text).is_ok(), code, "project_of {text:?}");
         // ACCESS-21: a scope is a ticket's too (`A-1`, `A-B-2`).
         let ticket = crate::address::Address::parse(text).is_ok_and(|a| a.names_ticket());
         assert_eq!(crate::members::scope_of(text).is_ok() && text.trim() != "*", code || ticket, "scope_of {text:?}");
@@ -112,72 +110,10 @@ fn a_label_is_the_label_rule() {
     assert_eq!("Needs-You".parse::<Label>().unwrap().as_str(), "needs-you");
 }
 
-/// APP-85: a view of a mockup — compare's name or APP-45's anchor, kept canonical.
-#[test]
-fn a_mockup_ref_is_a_name_or_an_anchor() {
-    holds::<MockupRef>(
-        &["KILN-7#m1", "kiln-7#M2", "KILN-7#m3@390", "mockup:KILN-7#2@1440", "mockup:APP-45#3=DESIGN-49@390", "DESIGN-49", "mockup:DESIGN-49@768"],
-        &["", "KILN-7#", "KILN-7#mx", "KILN-7#m0", "KILN-7@", "KILN-7@0", "KILN-7@wide", "#m1", "mockup:", "KILN"],
-    );
-    assert_eq!("mockup:kiln-7#2@390".parse::<MockupRef>().unwrap().as_str(), "KILN-7#m2@390");
-    assert_eq!("mockup:APP-45#3=DESIGN-49@390".parse::<MockupRef>().unwrap().as_str(), "APP-45#m3@390");
-    let v = "KILN-7#m2@390".parse::<MockupRef>().unwrap().view();
-    assert_eq!((v.ticket.as_str(), v.mock, v.width), ("KILN-7", Some(2), Some(390)));
-    let v = "DESIGN-49".parse::<MockupRef>().unwrap().view();
-    assert_eq!((v.ticket.as_str(), v.mock, v.width), ("DESIGN-49", None, None));
-}
-
-/// APP-86: a queue's inputs — a list, or (every caller before) one bare id.
-#[test]
-fn input_ids_are_a_list_or_one() {
-    let read = |v: serde_json::Value| serde_json::from_value::<InputIds>(v).map(InputIds::into_strings).map_err(|e| e.to_string());
-    assert_eq!(read(json!("landing")), Ok(vec!["landing".to_string()]));
-    assert_eq!(read(json!([" format ", "naming"])), Ok(vec!["format".to_string(), "naming".to_string()]));
-    assert_eq!(read(json!([])), Ok(vec![]));
-    assert!(read(json!(["a", ""])).is_err() && read(json!("")).is_err() && read(json!(7)).is_err());
-    let ids: InputIds = serde_json::from_value(json!(["a", "b"])).unwrap();
-    assert_eq!(serde_json::to_value(&ids).unwrap(), json!(["a", "b"]), "a list on the wire");
-    let schema = serde_json::to_value(schemars::schema_for!(InputIds)).unwrap();
-    assert_eq!(schema["type"], json!("array"), "synapse repeats the flag: {schema}");
-}
-
 #[test]
 fn the_small_names_hold_their_rules() {
-    holds::<InputId>(&["landing", " landing ", "a b"], &["", " "]);
-    holds::<MessageInput>(&["812/undated", " 812/undated "], &["", "undated", "0/a", "x/a", "812/", "812/a/b"]);
-    assert_eq!("812/undated".parse::<MessageInput>().unwrap().parts(), (812, "undated"));
-    holds::<ComponentName>(&["m-chart", "x-y.z"], &["", "chart", "M-chart", "1-a"]);
-    holds::<Referrer>(&["m-chart", "MNG-1"], &["", "chart"]);
-    assert!("m-chart".parse::<Referrer>().unwrap().is_component() && !"MNG-1".parse::<Referrer>().unwrap().is_component());
-    holds::<Route>(&["#/", "#/ticket/DEMAND-2"], &["", "/ticket", "ticket"]);
-    holds::<AnchorPath>(&["[data-tag=\"ticket DEMAND-1\"]"], &["", " "]);
     holds::<FacetField>(&["status", "has commits", "in"], &["", "colour", "Status"]);
-    holds::<EnvironmentName>(&["prod", "Prod", "review/pr-412"], &["", "-x", "a b"]);
-    holds::<Release>(&["20261012T220402Z-235ff62"], &["", "a b"]);
-    holds::<WebhookUrl>(&["https://ci.example.com/hook", "http://127.0.0.1:6091/"], &["", "http://ci.example.com/", "https://u:p@x/"]);
-    holds::<ThemeName>(&["ocean", "Ocean"], &["", "1x", "a b", &"a".repeat(41)]);
-    holds::<ThemeScope>(&["site", "SITE", "PANTRY", "pantry"], &["", "PANTRY-4"]);
-    assert!("Site".parse::<ThemeScope>().unwrap().is_site());
-    holds::<TokenName>(&["--accent", "accent"], &["", "---accent", "Accent", "--"]);
-    holds::<TokenValue>(&["#00796b", "1px solid red"], &["", "red;", "a{", &"a".repeat(201)]);
     holds::<Under>(&["FILTER", "FILTER-9", "menger/theme"], &["", "a b"]);
-}
-
-/// DEPLOY-25: a webhook secret is read by its rule and never said back —
-/// not by `Debug`, not by a refusal.
-#[test]
-fn a_webhook_secret_is_never_said() {
-    let secret = "s3cret-0123456789abcdef";
-    let s: WebhookSecret = secret.parse().unwrap();
-    assert_eq!(s.expose(), secret);
-    assert!(!format!("{s:?}").contains(secret));
-    let short = "short-s3cret";
-    let e = short.parse::<WebhookSecret>().unwrap_err();
-    assert!(!e.contains(short), "{e}");
-    let spaced = "a secret with spaces in it";
-    let e = serde_json::from_value::<WebhookSecret>(serde_json::json!(spaced)).unwrap_err().to_string();
-    assert!(!e.contains(spaced), "{e}");
-    assert_eq!(serde_json::to_value(&s).unwrap(), serde_json::json!(secret));
 }
 
 #[test]
@@ -257,12 +193,6 @@ fn prose_has_a_name_and_one_rule_each() {
     holds::<ActivityLine>(&["Read a.rs", ""], &[&"a".repeat(MESSAGE_MAX + 1)]);
     assert_eq!("Bash:\tls\n".parse::<ActivityLine>().unwrap().as_str(), "Bash: ls", "control characters are spaces, trimmed");
     holds::<Body>(&["", "# a body\n\nwith $ and `code`"], &[]);
-    // COMMENT-5: an image's hash, type and data.
-    let (hash, named, bad) = ("9f".repeat(32), format!("media:{}", "AB".repeat(32)), "g".repeat(64));
-    holds::<MediaHash>(&[hash.as_str(), named.as_str()], &["", "abc", bad.as_str()]);
-    assert_eq!(named.parse::<MediaHash>().unwrap().as_str(), "ab".repeat(32));
-    holds::<MediaType>(&["image/png", "IMAGE/JPEG", "image/svg+xml", "text/plain; charset=utf-8"], &["", "png", "image/", "/png", "image png"]);
-    holds::<MediaData>(&["", "iVBORw0KGgo="], &[]);
     holds::<Message>(&["folded into MNG-9", "", "  why  "], &["a\u{7}b"]);
     assert_eq!("  why  ".parse::<Message>().unwrap().given().as_deref(), Some("why"));
     assert_eq!("".parse::<Message>().unwrap().given(), None);
@@ -271,7 +201,6 @@ fn prose_has_a_name_and_one_rule_each() {
     holds::<Question>(&["Hold at cone 6 or 5?", "<b>&amp;</b> `x`"], &["", "  \n ", "a\u{7}b", &"x".repeat(QUESTION_MAX + 1)]);
     assert_eq!(" Hold at\n cone 6? ".parse::<Question>().unwrap().as_str(), "Hold at cone 6?");
     holds::<Query>(&["watch", "", "plcement wave"], &["a\u{0}b", &"a".repeat(QUERY_MAX + 1)]);
-    holds::<Author>(&["owner", " Ada "], &["", "  ", &"a".repeat(257)]);
 }
 
 #[test]
@@ -301,7 +230,6 @@ fn the_enums_read_every_alias_and_say_their_canonical_spelling() {
     assert_eq!(de::<CallerSource>("synapse"), Ok(CallerSource::Api));
     assert_eq!(de::<CallerSource>("merge"), Ok(CallerSource::Pipeline));
     assert!(de::<CallerSource>("cascade").unwrap_err().contains("the store's own"));
-    assert!(de::<InputSource>("system").unwrap_err().contains("the store's own"));
     assert_eq!(de::<SeverityChange>("None"), Ok(SeverityChange::Clear));
     assert_eq!(de::<SeverityChange>("low"), Ok(SeverityChange::Set(Severity::Low)));
     assert_eq!(serde_json::to_value(SeverityChange::Clear).unwrap(), json!("none"));
@@ -332,18 +260,8 @@ fn every_enum_a_method_takes_is_a_closed_enum_in_the_schema() {
     assert_eq!(closed::<Status>().len(), Status::ALL.len());
     assert_eq!(closed::<Kind>(), Kind::ALL.map(|k| k.as_str().to_string()));
     assert_eq!(closed::<Severity>(), ["Critical", "High", "Medium", "Low"]);
-    assert_eq!(closed::<crate::types::InputState>().len(), 5);
     assert_eq!(closed::<crate::members::Role>(), ["chatter", "viewer", "deployer", "editor", "admin"]);
-    assert_eq!(closed::<crate::chats::ChatGrant>(), ["ticket", "chat"]);
-    assert_eq!(closed::<crate::chats::ActivityState>(), ["started", "working", "ended"]);
-    assert_eq!(closed::<crate::comments::CommentState>(), ["open", "resolved"]);
-    assert_eq!(closed::<crate::notes::NoteState>(), ["open", "upgraded"]);
-    assert_eq!(closed::<crate::deployments::DeployState>(), ["started", "succeeded", "failed", "rolled_back", "requested"]);
-    assert_eq!(closed::<crate::queue::Urgency>(), ["whenever", "today", "now", "blocking"]);
-    assert_eq!(closed::<crate::themes::ThemeReach>(), ["frame", "ticket", "site"]);
-    assert_eq!(closed::<crate::themes::Takeover>(), ["on", "off"]);
     assert_eq!(closed::<CallerSource>(), ["app", "api", "pipeline"]);
-    assert_eq!(closed::<InputSource>(), ["app", "api"]);
     assert_eq!(closed::<DeleteChildren>(), ["reparent", "delete"]);
     assert_eq!(closed::<SeverityChange>(), ["Critical", "High", "Medium", "Low", "none"]);
 }
@@ -375,8 +293,6 @@ fn a_shortcode_may_hold_hyphens_and_a_ticket_splits_at_its_last() {
     let e = "A-1".parse::<ShortcodeRef>().unwrap_err();
     assert!(e.contains("names a ticket"), "{e}");
     holds::<Under>(&["SYNAPSE-CC", "SYNAPSE-CC-1"], &["A--B"]);
-    holds::<Project>(&["SYNAPSE-CC"], &["A-1", "A--B"]);
-    holds::<ThemeScope>(&["SYNAPSE-CC"], &["A-1"]);
     holds::<ScopeRef>(&["SYNAPSE-CC", "acme:SYNAPSE-CC", "SYNAPSE-CC-1", "under SYNAPSE-CC-1"], &["A--B", "under SYNAPSE-CC"]);
     holds::<Ceiling>(&["editor@SYNAPSE-CC", "tickets.get@SYNAPSE-CC-1"], &["editor@A--B"]);
     assert_eq!("viewer@synapse-cc-1".parse::<Ceiling>().unwrap().as_str(), "viewer@SYNAPSE-CC-1");

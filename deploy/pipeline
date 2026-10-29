@@ -403,6 +403,15 @@ build_v2() { # V2-7: cargo build on this machine, the bundle (and the compiler m
   lr=$(log_path build-release); say "log: $lr"
   (cd "$BUILD" && cargo build --release -p menger > "$lr" 2>&1) || { red_run; die "release build failed — $lr"; }
   [[ -s $CARGO_TARGET_DIR/release/menger ]] || die "release build: $CARGO_TARGET_DIR/release/menger is missing or empty"
+  # UI-6: what the bundle needs cargo for — the engine (wasm32) and the
+  # components compiled by UI-5's ui-compiler — on this machine, into
+  # dist/ui.d; the container then writes the manifest and the tar.
+  if [[ -d $BUILD/ui/src ]] && grep -q -- '--prebuild' "$BUILD/scripts/ui-build.sh" 2>/dev/null; then
+    step "ui-prebuild (scripts/ui-build.sh --prebuild: the engine and the components)"
+    lr=$(log_path build-ui-prebuild); say "log: $lr"
+    (cd "$BUILD" && scripts/ui-build.sh --prebuild) >"$lr" 2>&1 || { red_run; die "ui-prebuild failed — $lr"; }
+    V2_STEPS+=", ui-prebuild"
+  fi
   step "ui-build (scripts/ui-build.sh in $CODEGEN_IMAGE)"
   lr=$(log_path build-ui); say "log: $lr"
   [[ -x $BUILD/scripts/ui-build.sh ]] || die "ui-build: no scripts/ui-build.sh at $short"

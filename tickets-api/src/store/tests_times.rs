@@ -51,7 +51,6 @@ fn row(epic: &str, seq: u32, status: Status, created: i64, updated: i64) -> Row 
         path: None,
         placement: None,
         labels: Vec::new(),
-        assignees: Vec::new(),
         created_unix: created,
         updated_unix: updated,
     }

@@ -1068,8 +1068,7 @@ async fn shell_serves_the_page() {
     let app_dist = empty.path().to_path_buf();
     tokio::spawn(async move {
         // Same call, MFE-2 signature: config struct instead of two ports.
-        // An empty app dist — this test only cares that the vanilla page
-        // at `/` still serves, unchanged.
+        // An empty app dist — `/` serves v2's placeholder.
         let _ = menger::shell::serve(menger::shell::ShellConfig {
             port: shell_port,
             ws_port: 4455,
@@ -1099,9 +1098,10 @@ async fn shell_serves_the_page() {
         }
     }
     let text = String::from_utf8_lossy(&resp);
-    assert!(text.starts_with("HTTP/1.0 200") || text.starts_with("HTTP/1.1 200"));
-    assert!(text.contains("<main id=\"main\">"));
-    assert!(text.contains("menger.call"), "shell speaks the envelope");
+    assert!(text.starts_with("HTTP/1.0 200") || text.starts_with("HTTP/1.1 200"), "{text}");
+    // V2-3/V2-4: v2 has no frontend — `/` is the placeholder naming the
+    // service on the socket's port.
+    assert!(text.contains("<title>menger</title>") && text.contains("-P 4455"), "{text}");
 }
 
 /// MNG-2 criterion 5: reads are cache-first, observed black-box — after
@@ -1702,257 +1702,6 @@ async fn watch_until(watch: &mut Subscription<Value>, kind: &str) -> Vec<Value> 
             return seen;
         }
     }
-}
-
-/// COMP-3 acceptance 2: the component registry over the real protocol —
-/// define, reference, orphan, remove — each step seen by `components` and by
-/// `watch`: the component events end their write's events, carry the whole
-/// component, and reach a `watch { epic }` of another shortcode too. A second
-/// ticket defining the owned name is one in-band `error` naming the owner.
-#[tokio::test]
-async fn components_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    let created = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "root", "kind": "scope"})).await).await;
-    assert_eq!(created[0]["type"], "created");
-    let mut watch = call(&client, "tickets.watch", json!({})).await;
-    let mut elsewhere = call(&client, "tickets.watch", json!({"epic": "OTHER"})).await;
-    let components = || async { collect(call(&client, "tickets.components.list", json!({})).await).await };
-    assert_eq!(components().await, Vec::<Value>::new(), "an empty registry is an empty answer");
-
-    // Define.
-    let body = "Defines it.\n\n```component m-x\n<template><b>x</b></template>\n```\n";
-    let evs = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "owner", "body": body})).await).await;
-    assert_eq!((evs[0]["type"].as_str(), evs[0]["ticket"]["id"].as_str()), (Some("created"), Some("CMP-2")));
-    assert_eq!(evs[0]["ticket"]["body"], body, "stored as written");
-    let defined = json!({
-        "type": "component_changed",
-        "component": {"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": "CMP-2", "references": [], "docs": null, "preview": []}
-    });
-    let heard = watch_until(&mut watch, "component_changed").await;
-    assert_eq!(heard[0]["type"], "created", "{heard:?}");
-    assert_eq!(heard.last(), Some(&defined), "after the write's other events");
-    assert_eq!(content(elsewhere.next().await.unwrap().unwrap()), defined, "past the epic filter");
-    assert_eq!(components().await, vec![json!({"type": "component", "component": defined["component"]})]);
-
-    // Reference.
-    collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "user", "body": "uses <m-x></m-x> twice <m-x/>"})).await).await;
-    let heard = watch_until(&mut watch, "component_changed").await;
-    assert_eq!(heard[0]["ticket"]["id"], "CMP-3");
-    assert_eq!(heard.last().unwrap()["component"]["references"], json!(["CMP-3"]), "a ticket counts once");
-    assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["component"]["references"], json!(["CMP-3"]));
-
-    // A second owner is refused, naming the first; nothing allocated.
-    let evs = collect(
-        call(&client, "tickets.create", json!({"epic": "CMP", "title": "thief", "body": "```component m-x\n<template>mine</template>\n```\n"})).await,
-    )
-    .await;
-    assert_eq!(evs.len(), 1);
-    assert_eq!(evs[0]["type"], "error");
-    assert!(evs[0]["message"].as_str().unwrap().contains("CMP-2"), "names the owner: {}", evs[0]);
-
-    // Orphan: the owner's body loses the block; CMP-3 still uses it.
-    let evs = collect(call(&client, "tickets.amend", json!({"id": "CMP-2", "body": "no block now"})).await).await;
-    assert_eq!(evs[0]["type"], "amended");
-    let heard = watch_until(&mut watch, "component_changed").await;
-    assert_eq!(heard[0]["type"], "amended");
-    let orphan = json!({"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": null, "references": ["CMP-3"], "docs": null, "preview": []});
-    assert_eq!(heard.last().unwrap()["component"], orphan);
-    assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["component"], orphan);
-    assert_eq!(components().await, vec![json!({"type": "component", "component": orphan})]);
-
-    // Remove: the last reference goes, and the orphan with it.
-    collect(call(&client, "tickets.amend", json!({"id": "CMP-3", "body": "plain"})).await).await;
-    let heard = watch_until(&mut watch, "component_removed").await;
-    assert_eq!(heard[0]["type"], "amended");
-    assert_eq!(heard.last(), Some(&json!({"type": "component_removed", "name": "m-x"})));
-    assert_eq!(content(elsewhere.next().await.unwrap().unwrap()), json!({"type": "component_removed", "name": "m-x"}));
-    assert_eq!(components().await, Vec::<Value>::new());
-}
-
-/// COMP-8 acceptance 2: a component's docs and preview line on the wire —
-/// `components` and `component_changed` carry them (THEME-5: its parts too), typed attributes
-/// internally tagged; a malformed `<docs>` is one in-band `error` naming the
-/// problem, and nothing is allocated.
-#[tokio::test]
-async fn component_docs_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "root", "kind": "scope"})).await).await;
-    let body = "```component m-wave-summary board=RETURNS label=\"Platform team\"\n\
-                <template><b id=\"n\" part=\"count\"></b></template>\n\
-                <docs>\n\
-                  <summary>How many of a board's tickets are workable now.</summary>\n\
-                  <part name=\"count\">The number.</part>\n\
-                  <attr name=\"board\" type=\"shortcode\" required>The shortcode to count.</attr>\n\
-                  <attr name=\"size\" type=\"enum(s|m)\">How big.</attr>\n\
-                  <slot name=\"title\">Optional title markup.</slot>\n\
-                  <example><m-wave-summary board=\"RETURNS\"></m-wave-summary></example>\n\
-                  Longer help, as markdown prose.\n\
-                </docs>\n\
-                ```\n";
-    let mut watch = call(&client, "tickets.watch", json!({})).await;
-    let evs = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "owner", "body": body})).await).await;
-    assert_eq!(evs[0]["type"], "created", "{evs:?}");
-    let docs = json!({
-        "summary": "How many of a board's tickets are workable now.",
-        "attrs": [
-            {"name": "board", "kind": {"type": "shortcode"}, "required": true, "description": "The shortcode to count."},
-            {"name": "size", "kind": {"type": "enum", "values": ["s", "m"]}, "required": false, "description": "How big."}
-        ],
-        "slots": [{"name": "title", "description": "Optional title markup."}],
-        "parts": [{"name": "count", "scripted": false, "description": "The number."}],
-        "examples": ["<m-wave-summary board=\"RETURNS\"></m-wave-summary>"],
-        "help": "Longer help, as markdown prose."
-    });
-    let preview = json!([["board", "RETURNS"], ["label", "Platform team"]]);
-    let heard = watch_until(&mut watch, "component_changed").await;
-    let changed = &heard.last().unwrap()["component"];
-    assert_eq!((&changed["docs"], &changed["preview"]), (&docs, &preview));
-    let listed = collect(call(&client, "tickets.components.list", json!({})).await).await;
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0]["component"]["docs"], docs);
-    assert_eq!(listed[0]["component"]["preview"], preview);
-
-    // Malformed: one in-band error naming the problem; nothing allocated.
-    let bad = "```component m-bad\n<docs><attr type=\"number\">no name</attr></docs>\n```\n";
-    let evs = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "bad", "body": bad})).await).await;
-    assert_eq!(evs.len(), 1);
-    assert_eq!(evs[0]["type"], "error");
-    let message = evs[0]["message"].as_str().unwrap();
-    assert!(message.contains("'m-bad' has a malformed <docs>") && message.contains("an <attr> without a name"), "{message}");
-    let next = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "next"})).await).await;
-    assert_eq!(next[0]["ticket"]["id"], "CMP-3", "no id spent");
-}
-
-/// INPUT-3 acceptance 2: the inputs store over the real protocol — a body
-/// declares an input (heard as `input_changed`, after the `created`), an
-/// `answer` with a typed value is recorded, `inputs` shows it with its
-/// history, and `watch` hears it — a `watch { epic }` of the ticket's
-/// shortcode too, and not one of another. Then the refusals are one in-band
-/// `error` each, a no-op `close` answers `input`, and `list`'s filters
-/// hold. ACCESS-14: at their paths under `tickets.inputs`, and an answer's
-/// source is the server's (ACCESS-3 #12) — `api` for a call that proves no
-/// one, whatever the caller sends.
-#[tokio::test]
-async fn inputs_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    collect(call(&client, "tickets.create", json!({"epic": "ASK", "title": "root", "kind": "scope"})).await).await;
-    let mut watch = call(&client, "tickets.watch", json!({})).await;
-    let mut mine = call(&client, "tickets.watch", json!({"epic": "ask"})).await;
-    let mut elsewhere = call(&client, "tickets.watch", json!({"epic": "OTHER"})).await;
-    let inputs = |params: Value| {
-        let client = &client;
-        async move { collect(call(client, "tickets.inputs.list", params).await).await }
-    };
-
-    let body = "<m-decision data-field=\"decision\" id=\"landing\">\n\n\
-                <m-question data-field=\"question\">Archive or delete?</m-question>\n\n\
-                <m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n\
-                <m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n\
-                </m-decision>\n";
-    let evs = collect(call(&client, "tickets.create", json!({"epic": "ASK", "title": "asks", "body": body})).await).await;
-    assert_eq!((evs[0]["type"].as_str(), evs[0]["ticket"]["id"].as_str()), (Some("created"), Some("ASK-2")));
-    let mut declared = json!({
-        "ticket": "ASK-2", "id": "landing", "kind": "choice", "question": "Archive or delete?",
-        "options": [
-            {"value": "archive", "label": "Archive", "recommended": true},
-            {"value": "Delete", "label": "Delete", "recommended": false}
-        ],
-        "recommendation": "Archive", "state": "open", "answer": null, "history": []
-    });
-    let heard = watch_until(&mut watch, "input_changed").await;
-    assert_eq!(heard[0]["type"], "created", "{heard:?}");
-    // APP-84: when it was asked — the create's own time.
-    let asked = heard.last().unwrap()["input"]["asked_unix"].as_i64().expect("asked_unix on the wire");
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-    assert!((now - asked).abs() < 60, "asked now: {asked}");
-    declared["asked_unix"] = json!(asked);
-    assert_eq!(heard.last(), Some(&json!({"type": "input_changed", "input": declared})), "after the write's other events");
-    assert_eq!(inputs(json!({})).await, vec![json!({"type": "input", "input": declared})]);
-
-    // Answer: a typed value, recorded with its source and rationale — the
-    // source the server's: a caller's `source` is no parameter (ignored).
-    let value = json!({"type": "choice", "option": "archive"});
-    let evs = collect(
-        call(&client, "tickets.inputs.answer", json!({"ticket": "ask-2", "input": "landing", "value": value, "rationale": "holds are real", "source": "app"}))
-            .await,
-    )
-    .await;
-    assert_eq!(evs.len(), 1, "{evs:?}");
-    assert_eq!(evs[0]["type"], "input_changed");
-    let answered = evs[0]["input"].clone();
-    assert_eq!(answered["state"], "answered");
-    assert_eq!(answered["answer"]["value"], value);
-    assert_eq!((&answered["answer"]["rationale"], &answered["answer"]["source"]), (&json!("holds are real"), &json!("api")));
-    assert!(answered["answer"]["at_unix"].as_i64().unwrap() > 0);
-    assert_eq!(answered["history"].as_array().unwrap().len(), 1);
-    assert_eq!(answered["history"][0]["action"], "answered");
-
-    // `inputs` shows it; `watch` hears it — the ticket's shortcode too.
-    assert_eq!(inputs(json!({"ticket": "ASK-2"})).await, vec![json!({"type": "input", "input": answered})]);
-    let heard = watch_until(&mut watch, "input_changed").await;
-    assert_eq!(heard, vec![json!({"type": "input_changed", "input": answered})], "an answer is its one event");
-    assert_eq!(watch_until(&mut mine, "input_changed").await.last().unwrap()["input"]["state"], "open", "the declaration");
-    assert_eq!(watch_until(&mut mine, "input_changed").await, vec![json!({"type": "input_changed", "input": answered})]);
-
-    // INPUT-9: a clear is recorded in the history with its source — the
-    // server's (ACCESS-14), as an answer's.
-    let evs = collect(call(&client, "tickets.inputs.clear", json!({"ticket": "ASK-2", "input": "landing", "source": "app"})).await).await;
-    assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("input_changed")), "{evs:?}");
-    assert_eq!((&evs[0]["input"]["state"], &evs[0]["input"]["answer"]), (&json!("open"), &Value::Null));
-    assert_eq!((&evs[0]["input"]["history"][1]["action"], &evs[0]["input"]["history"][1]["source"]), (&json!("cleared"), &json!("api")));
-
-    // Close, then a no-op close answers `input`.
-    let evs = collect(call(&client, "tickets.inputs.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "Delete"}})).await).await;
-    assert_eq!(evs[0]["input"]["answer"]["source"], "api");
-    assert_eq!(collect(call(&client, "tickets.inputs.close", json!({"ticket": "ASK-2", "input": "landing"})).await).await[0]["type"], "input_changed");
-    let evs = collect(call(&client, "tickets.inputs.close", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
-    assert_eq!((evs.len(), evs[0]["type"].as_str(), evs[0]["input"]["state"].as_str()), (1, Some("input"), Some("closed")));
-
-    // Refusals: one in-band error each, naming why; a ticket that is none is not_found.
-    for (method, params, says) in [
-        ("tickets.inputs.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "archive"}}), "is closed"),
-        ("tickets.inputs.clear", json!({"ticket": "ASK-2", "input": "landing"}), "is closed"),
-        ("tickets.inputs.reopen", json!({"ticket": "ASK-2", "input": "nope"}), "declares no input 'nope'"),
-    ] {
-        let evs = collect(call(&client, method, params).await).await;
-        assert_eq!(evs.len(), 1, "{method}: {evs:?}");
-        assert_eq!(evs[0]["type"], "error", "{method}: {evs:?}");
-        assert!(evs[0]["message"].as_str().unwrap().contains(says), "{method}: {}", evs[0]);
-    }
-    // ACCESS-8: a state or a value that is none is refused at dispatch.
-    for (method, params, says) in [
-        ("tickets.inputs.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "robot"}}), "value: "),
-        ("tickets.inputs.list", json!({"state": "pending"}), "state: unknown input state 'pending'"),
-    ] {
-        let message = invalid(&client, method, params).await;
-        assert!(message.contains(says), "{method}: {message}");
-    }
-    collect(call(&client, "tickets.inputs.reopen", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
-    let evs = collect(call(&client, "tickets.inputs.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "text", "text": "x"}})).await).await;
-    assert!(evs[0]["message"].as_str().unwrap().contains("the input is a choice and the value a text"), "{evs:?}");
-    let evs = collect(call(&client, "tickets.inputs.answer", json!({"ticket": "ASK-99", "input": "landing", "value": value})).await).await;
-    assert_eq!(evs, vec![json!({"type": "not_found", "id": "ASK-99"})]);
-    assert_eq!(collect(call(&client, "tickets.inputs.list", json!({"ticket": "ASK-99"})).await).await, vec![json!({"type": "not_found", "id": "ASK-99"})]);
-
-    // Filters.
-    assert_eq!(inputs(json!({"state": "open"})).await, Vec::<Value>::new());
-    assert_eq!(inputs(json!({"state": "answered", "epic": "ask"})).await.len(), 1);
-    assert_eq!(inputs(json!({"epic": "OTHER"})).await, Vec::<Value>::new());
-    let history: Vec<String> = inputs(json!({})).await[0]["input"]["history"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e["action"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(history, ["answered", "cleared", "answered", "closed", "reopened"]);
-
-    // The other shortcode's watch heard none of it: its first event is the
-    // next one in OTHER.
-    collect(call(&client, "tickets.create", json!({"epic": "OTHER", "title": "root", "kind": "scope"})).await).await;
-    assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["type"], "created");
 }
 
 // ---------------------------------------------------------------------------
@@ -2574,13 +2323,12 @@ async fn menger_doc_is_a_filter_on_every_read_over_the_wire() {
 /// MENGER-12 over the real protocol: `tickets.label` moves a ticket's labels
 /// (normalized, sorted, each once; a no-op answers empty and writes
 /// nothing; a bad label is one in-band error), the row carries them, and
-/// `label <name>` and `asking` (an input in state `open`) are filters on
-/// every read — `list`, `counts`, `facets` (`asking` yes / no, `label` a
-/// count per label), `member` — and on `watch { filter }`, where a label
-/// added, an input opened, answered, cleared and closed each enter or leave
-/// the Home panel's default `asking or label needs-you`.
+/// `label <name>` is a filter on every read — `list`, `counts`, `facets`
+/// (`label` a count per label), `member` — and on `watch { filter }`, where
+/// a label added or removed enters or leaves the Home panel's default
+/// `label needs-you`.
 #[tokio::test]
-async fn labels_and_asking_are_filters_over_the_wire() {
+async fn labels_are_filters_over_the_wire() {
     let port = start_server().await;
     let client = connect(port).await;
     let ids = |rows: &[Value]| -> Vec<String> { rows.iter().map(|r| r["summary"]["id"].as_str().unwrap().to_string()).collect() };
@@ -2610,22 +2358,21 @@ async fn labels_and_asking_are_filters_over_the_wire() {
     assert_eq!(rows[2]["summary"]["labels"], json!(["needs-you"]), "on the row");
     assert_eq!(rows[3]["summary"]["labels"], json!([]), "none is []");
 
-    // The filters, on every read.
+    // The filters, on every read. V2-4: `asking` went with the inputs —
+    // refused by name (`a_dropped_cell_is_refused_over_the_wire`).
     for (filter, want) in [
         ("label needs-you", vec!["HOME-3"]),
-        ("asking", vec!["HOME-2"]),
-        ("asking or label needs-you", vec!["HOME-2", "HOME-3"]),
-        ("not asking and not label needs-you", vec!["HOME-1", "HOME-4"]),
+        ("not label needs-you", vec!["HOME-1", "HOME-2", "HOME-4"]),
         ("label in (p1, needs-you)", vec!["HOME-3"]),
     ] {
         let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": filter, "summary": true})).await).await;
         assert_eq!(ids(&rows), want, "{filter}");
     }
-    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "asking or label needs-you"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "shortcode": "HOME", "held": 2})]);
+    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "label needs-you"})).await).await;
+    assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "shortcode": "HOME", "held": 1})]);
     // FILTER-24: `keep` holds the open ticket in, under these cells too.
-    let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "asking or label needs-you", "keep": "HOME-4", "summary": true})).await).await;
-    assert_eq!(ids(&rows), ["HOME-2", "HOME-3", "HOME-4"], "kept beside the matches");
+    let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "label needs-you", "keep": "HOME-4", "summary": true})).await).await;
+    assert_eq!(ids(&rows), ["HOME-3", "HOME-4"], "kept beside the matches");
     let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "label needs-you", "keep": "HOME-4"})).await).await;
     assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "shortcode": "HOME", "held": 2})]);
     let menu = |facets: &[Value], field: &str| -> Vec<(String, u64)> {
@@ -2636,28 +2383,20 @@ async fn labels_and_asking_are_filters_over_the_wire() {
             .collect()
     };
     let facets = collect(call(&client, "tickets.nav.facets", json!({})).await).await;
-    assert_eq!(menu(&facets, "asking"), [("yes".to_string(), 1), ("no".to_string(), 3)]);
     assert_eq!(menu(&facets, "label"), [("needs-you".to_string(), 1)]);
     let fields: Vec<&str> = facets.iter().map(|f| f["field"].as_str().unwrap()).collect();
     let at = |name: &str| fields.iter().position(|f| *f == name).unwrap();
-    assert!(at("menger doc") < at("asking") && at("asking") < at("label") && at("label") < at("in"), "{fields:?}");
-    let members = collect(call(&client, "tickets.nav.member", json!({"ids": ["HOME-2", "HOME-3", "HOME-4"], "filter": "asking or label needs-you"})).await).await;
+    assert!(!fields.contains(&"asking") && at("menger doc") < at("label") && at("label") < at("in"), "{fields:?}");
+    let members = collect(call(&client, "tickets.nav.member", json!({"ids": ["HOME-2", "HOME-3", "HOME-4"], "filter": "label needs-you"})).await).await;
     let matched: Vec<bool> = members.iter().map(|m| m["matched"].as_bool().unwrap()).collect();
-    assert_eq!(matched, [true, true, false]);
-    let open = collect(call(&client, "tickets.inputs.list", json!({"state": "open", "filter": "asking or label needs-you"})).await).await;
-    assert_eq!(open.len(), 1, "{open:?}");
-    assert_eq!((open[0]["input"]["ticket"].as_str(), open[0]["input"]["question"].as_str()), (Some("HOME-2"), Some("Anything else?")));
+    assert_eq!(matched, [false, true, false]);
 
     // watch { filter }: Home's panel, live.
-    let mut watch = call(&client, "tickets.watch", json!({"filter": "asking or label needs-you"})).await;
+    let mut watch = call(&client, "tickets.watch", json!({"filter": "label needs-you"})).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     answer(&client, "tickets.label", json!({"id": "HOME-4", "add": ["needs-you"]})).await; // enters
-    let answered = answer(&client, "tickets.inputs.answer", json!({"ticket": "HOME-2", "input": "notes", "value": {"type": "text", "text": "no"}})).await;
-    assert_eq!(answered["type"], "input_changed", "{answered}"); // leaves: answered, not open
-    answer(&client, "tickets.inputs.clear", json!({"ticket": "HOME-2", "input": "notes"})).await; // enters: open again
-    answer(&client, "tickets.inputs.close", json!({"ticket": "HOME-2", "input": "notes"})).await; // leaves: closed
     answer(&client, "tickets.label", json!({"id": "HOME-3", "remove": ["needs-you"]})).await; // leaves
-    answer(&client, "tickets.amend", json!({"id": "HOME-1", "body": asks})).await; // enters: its body asks
+    answer(&client, "tickets.amend", json!({"id": "HOME-1", "body": asks})).await; // a body moves no cell
     answer(&client, "tickets.amend", json!({"id": "HOME-4", "body": "marker"})).await;
     let mut evs: Vec<Value> = Vec::new();
     loop {
@@ -2673,22 +2412,12 @@ async fn labels_and_asking_are_filters_over_the_wire() {
         .filter(|e| e["type"] == "entered" || e["type"] == "left")
         .map(|e| (e["type"].as_str().unwrap().to_string(), e["id"].as_str().unwrap().to_string()))
         .collect();
-    let want: Vec<(String, String)> = [
-        ("entered", "HOME-4"),
-        ("left", "HOME-2"),
-        ("entered", "HOME-2"),
-        ("left", "HOME-2"),
-        ("left", "HOME-3"),
-        ("entered", "HOME-1"),
-    ]
-    .iter()
-    .map(|(a, b)| (a.to_string(), b.to_string()))
-    .collect();
+    let want: Vec<(String, String)> = [("entered", "HOME-4"), ("left", "HOME-3")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
     assert_eq!(moves, want, "{evs:#?}");
     let labelled = evs.iter().filter(|e| e["type"] == "labels_changed").count();
     assert_eq!(labelled, 2, "watch carries each label that moved something");
-    let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "asking or label needs-you", "summary": true})).await).await;
-    assert_eq!(ids(&rows), ["HOME-1", "HOME-4"]);
+    let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "label needs-you", "summary": true})).await).await;
+    assert_eq!(ids(&rows), ["HOME-4"]);
 }
 
 /// FILTER-15 over the real protocol: `find`, `ready_set` and `inputs` take a
@@ -2756,24 +2485,6 @@ async fn reads_take_the_lens_over_the_wire() {
     let (rows, _) = paged(call(&client, "tickets.work.ready", json!({"summary": true, "epic": "lx", "filter": "kind scope"})).await).await;
     assert_eq!(ids(&rows, "summary"), ["LX-1"]);
 
-    // inputs: of the tickets the filter admits — LN-2, LN-7 and LX-1 declare one.
-    let inputs = |params: Value| {
-        let client = &client;
-        async move {
-            collect(call(client, "tickets.inputs.list", params).await)
-                .await
-                .into_iter()
-                .map(|e| e["input"]["ticket"].as_str().unwrap().to_string())
-                .collect::<Vec<_>>()
-        }
-    };
-    assert_eq!(inputs(json!({})).await, ["LN-2", "LN-7", "LX-1"]);
-    assert_eq!(inputs(json!({"filter": "ready"})).await, ["LN-2", "LX-1"], "LN-7 waits on LN-5");
-    assert_eq!(inputs(json!({"filter": "kind build", "state": "open"})).await, ["LN-2", "LN-7"]);
-    assert_eq!(inputs(json!({"filter": "kind scope", "epic": "ln"})).await, Vec::<String>::new());
-    let missing = collect(call(&client, "tickets.inputs.list", json!({"ticket": "LN-99", "filter": "ready"})).await).await;
-    assert_eq!(missing, [json!({"type": "not_found", "id": "LN-99"})]);
-
     // member: one event per id, in the order asked, then done.
     let asked = json!(["LN-4", "LN-2", "NOPE-1", "ln-6", "LN-7", "LN-2"]);
     let members = collect(call(&client, "tickets.nav.member", json!({"ids": asked, "filter": "ready"})).await).await;
@@ -2808,7 +2519,6 @@ async fn reads_take_the_lens_over_the_wire() {
     for (method, params) in [
         ("tickets.find", json!({"query": "watch", "filter": "text \"watch\""})),
         ("tickets.work.ready", json!({"filter": "under LN-1 and text \"x\""})),
-        ("tickets.inputs.list", json!({"filter": "tag x and nonsense"})),
         ("tickets.nav.member", json!({"ids": ["LN-2"], "filter": "status Bogus"})),
         ("tickets.find", json!({"query": "x", "filter": "nonsense"})),
     ] {
@@ -2917,359 +2627,6 @@ async fn search_over_the_wire() {
     assert_eq!(refused, collect(call(&client, "tickets.list", json!({"filter": params["filter"]})).await).await);
 }
 
-// ---------------------------------------------------------------------------
-// NOTE-2: the `notes` activation over the real protocol
-// ---------------------------------------------------------------------------
-
-/// NOTE-2 over the real protocol: `notes.add` keeps a dated, untitled note
-/// and yields it; `list` yields them newest first, filtered and paged, then
-/// one `page`; `get` one; `upgrade` makes a ticket titled by the note's
-/// first line and yields the note pointing at it — once; a refused ticket
-/// leaves the note open; every refusal is one in-band `error`.
-#[tokio::test]
-async fn notes_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    answer(&client, "tickets.create", json!({"epic": "SR", "title": "the root", "kind": "scope"})).await;
-
-    let first = answer(&client, "notes.add", json!({"body": "## watch drops **events**\nseen twice"})).await;
-    assert_eq!((&first["type"], &first["id"], &first["author"]), (&json!("note"), &json!(1), &json!("test")), "{first}");
-    assert!(first["at"].as_i64().unwrap() > 0 && first["ticket"].is_null() && first["upgraded_at"].is_null(), "{first}");
-    assert!(first.get("title").is_none(), "a note has no title: {first}");
-    let second = answer(&client, "notes.add", json!({"body": "the palette should remember its query", "author": "ada"})).await;
-    // ACCESS-24: signed by the caller (the operator, `test`); the `author` sent is no parameter.
-    assert_eq!((&second["id"], &second["author"]), (&json!(2), &json!("test")));
-    let blank = collect(call(&client, "notes.add", json!({"body": "  "})).await).await;
-    assert_eq!((blank.len(), &blank[0]["type"]), (1, &json!("error")), "{blank:?}");
-
-    let listed = collect(call(&client, "notes.list", json!({})).await).await;
-    let ids: Vec<&Value> = listed.iter().map(|e| &e["id"]).collect();
-    assert_eq!(ids, [&json!(2), &json!(1), &Value::Null], "newest first, then the page");
-    assert_eq!(listed[2], json!({"type": "page", "next": null}));
-    let paged = collect(call(&client, "notes.list", json!({"limit": 1})).await).await;
-    assert_eq!((&paged[0]["id"], &paged[1]), (&json!(2), &json!({"type": "page", "next": 2})));
-    let by_ada = collect(call(&client, "notes.list", json!({"author": "test", "text": "PALETTE"})).await).await;
-    assert_eq!((by_ada.len(), &by_ada[0]["id"]), (2, &json!(2)));
-    assert!(invalid(&client, "notes.list", json!({"state": "closed"})).await.contains("state: unknown note state 'closed'"));
-    assert_eq!(answer(&client, "notes.get", json!({"id": 1})).await, first);
-    assert_eq!(answer(&client, "notes.get", json!({"id": 9})).await["type"], "error");
-
-    // Upgrade: the ticket, titled by the note; the note pointing at it.
-    let up = answer(&client, "notes.upgrade", json!({"id": 1, "epic": "SR"})).await;
-    assert_eq!((&up["type"], &up["id"], &up["ticket"]), (&json!("note"), &json!(1), &json!("SR-2")), "{up}");
-    assert!(up["upgraded_at"].as_i64().is_some());
-    let made = answer(&client, "tickets.get", json!({"id": "SR-2"})).await;
-    assert_eq!((&made["ticket"]["title"], &made["ticket"]["parent"]), (&json!("watch drops events"), &json!("SR-1")));
-    assert!(made["ticket"]["body"].as_str().unwrap().ends_with(" — note 1."), "{made}");
-    let again = answer(&client, "notes.upgrade", json!({"id": 1, "epic": "SR"})).await;
-    assert!(again["message"].as_str().unwrap().contains("already a ticket: SR-2"), "{again}");
-    let open = collect(call(&client, "notes.list", json!({"state": "open"})).await).await;
-    assert_eq!(open[0]["id"], 2, "only note 2 is still open");
-
-    // A ticket refused: the note stays open; a title given wins.
-    // ACCESS-8: an epic that is no shortcode is refused at dispatch; one
-    // the store refuses (a parent that is none) in band.
-    assert!(invalid(&client, "notes.upgrade", json!({"id": 2, "epic": "BAD EPIC"})).await.contains("epic: "));
-    let bad = answer(&client, "notes.upgrade", json!({"id": 2, "epic": "SR", "parent": "SR-99"})).await;
-    assert_eq!(bad["type"], "error", "{bad}");
-    assert!(answer(&client, "notes.get", json!({"id": 2})).await["ticket"].is_null());
-    let titled = answer(&client, "notes.upgrade", json!({"id": 2, "epic": "SR", "title": "Remember the query", "kind": "gap"})).await;
-    assert_eq!(titled["ticket"], "SR-3", "no id was spent on the refusal: {titled}");
-    let gap = answer(&client, "tickets.get", json!({"id": "SR-3"})).await;
-    assert_eq!((&gap["ticket"]["title"], &gap["ticket"]["kind"]), (&json!("Remember the query"), &json!("gap")));
-}
-
-// ---------------------------------------------------------------------------
-// COMMENT-2: the `comments` activation over the real protocol
-// ---------------------------------------------------------------------------
-
-/// COMMENT-2's anchor on the Parent chip of `ticket`'s page.
-fn chip(ticket: &str) -> Value {
-    json!({
-        "route": format!("#/ticket/{ticket}"),
-        "ticket": ticket,
-        "path": "[data-tag=\"ticket DEMAND-1\"]",
-        "label": "Parent chip",
-        "excerpt": "DEMAND-1"
-    })
-}
-
-/// The ids of a `comments.list` answer's rows, its `page` asserted last and
-/// alone.
-async fn comment_ids(client: &WsClient, params: Value) -> (Vec<u64>, Value) {
-    let (rows, page) = paged(call(client, "comments.list", params).await).await;
-    assert!(rows.iter().all(|r| r["type"] == "comment"), "{rows:?}");
-    (rows.iter().map(|r| r["id"].as_u64().unwrap()).collect(), page)
-}
-
-/// COMMENT-2's Example, exactly: `add` keeps the comment and answers it —
-/// its fields beside `type`: the id, `open`, `owner`, the time, the anchor
-/// (the ticket's `updated_unix` as `version`) and the body; `list { ticket,
-/// state }` answers it and one `page { next: null }`; `resolve` answers it
-/// resolved; and the last line's `list { under, state, text }`.
-#[tokio::test]
-async fn the_comments_example_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "demands", "kind": "scope"})).await;
-    let parent = answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "the parent chip"})).await;
-    let version = parent["ticket"]["updated_unix"].as_i64().unwrap();
-
-    let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-    let added = collect(
-        call(
-            &client,
-            "comments.add",
-            json!({"anchor": {"route":"#/ticket/DEMAND-2","ticket":"DEMAND-2","path":"[data-tag=\"ticket DEMAND-1\"]","label":"Parent chip","excerpt":"DEMAND-1"},"body":"show the parent's title too"}),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(added.len(), 1, "exactly one event: {added:?}");
-    let at = added[0]["at"].as_i64().unwrap();
-    assert!(at >= before, "the time it was added");
-    let comment = json!({
-        "type": "comment", "id": 1, "state": "open", "author": "test", "at": at, "principal": support::admin(),
-        "anchor": {
-            "route": "#/ticket/DEMAND-2", "ticket": "DEMAND-2", "path": "[data-tag=\"ticket DEMAND-1\"]",
-            "label": "Parent chip", "excerpt": "DEMAND-1", "version": version
-        },
-        "body": "show the parent's title too"
-    });
-    assert_eq!(added[0], comment);
-
-    let listed = collect(call(&client, "comments.list", json!({"ticket": "DEMAND-2", "state": "open"})).await).await;
-    assert_eq!(listed, [comment.clone(), json!({"type": "page", "next": null})]);
-
-    let resolved = collect(call(&client, "comments.resolve", json!({"id": 1})).await).await;
-    let mut want = comment.clone();
-    want["state"] = json!("resolved");
-    assert_eq!(resolved, [want.clone()]);
-
-    // `synapse … comments list --under DEMAND --state open --text title`:
-    // the one comment is resolved now; one open that says "title" is found.
-    assert_eq!(comment_ids(&client, json!({"under": "DEMAND", "state": "open", "text": "title"})).await.0, Vec::<u64>::new());
-    assert_eq!(comment_ids(&client, json!({"under": "DEMAND", "state": "resolved", "text": "title"})).await.0, [1]);
-    answer(&client, "comments.add", json!({"anchor": chip("DEMAND-2"), "body": "and its TITLE in bold"})).await;
-    assert_eq!(comment_ids(&client, json!({"under": "DEMAND", "state": "open", "text": "title"})).await.0, [2]);
-}
-
-/// COMMENT-2, `list`'s filters and paging: `ticket`, `under` (a ticket's
-/// subtree, a shortcode and the shortcodes it hosts), `route`, `path` (a
-/// prefix), `state`, `author`, `text` (body, label, excerpt), every one at
-/// once, a blank one as none; newest first, paged with `after` + `limit`;
-/// an unknown state and an `after` naming no comment each one error alone.
-#[tokio::test]
-async fn comments_list_filters_and_pages_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    for (epic, title, kind, parent) in [
-        ("TOP", "the top", "scope", None),
-        ("TOP", "a build", "build", None),
-        ("TOP", "an execution", "execution", None),
-        ("TOP", "under the execution", "build", Some("TOP-3")),
-        ("SUB", "hosted under TOP-3", "scope", Some("TOP-3")),
-        ("SUB", "a sub build", "build", None),
-        ("APART", "apart", "scope", None),
-    ] {
-        let ev = answer(&client, "tickets.create", json!({"epic": epic, "title": title, "kind": kind, "parent": parent})).await;
-        assert_eq!(ev["type"], "created", "{ev}");
-    }
-    // ACCESS-19: a comment is signed by its caller, never named by the call
-    // — with login off, every one is `owner`'s.
-    let add = |anchor: Value, body: &'static str| {
-        let client = &client;
-        async move {
-            let ev = answer(client, "comments.add", json!({"anchor": anchor, "body": body})).await;
-            assert_eq!(ev["type"], "comment", "{ev}");
-            ev["id"].as_u64().unwrap()
-        }
-    };
-    let on = |ticket: Option<&str>, route: &str, path: &str, label: &str, excerpt: &str| {
-        json!({"route": route, "path": path, "label": label, "excerpt": excerpt, "ticket": ticket})
-    };
-    let c1 = add(on(Some("TOP-4"), "#/ticket/TOP-4", "main > h1", "Title", "under the execution"), "rename it").await;
-    let c2 = add(on(Some("SUB-2"), "#/ticket/SUB-2", "main > h1 > span", "Status pill", "Pending"), "should be Ready").await;
-    let c3 = add(on(Some("APART-1"), "#/ticket/APART-1", "[data-tag=\"m-wave\"]", "Wave summary", "WAVE 2"), "numbers look off").await;
-    let c4 = add(on(Some("TOP-2"), "#/waves/TOP", "main > h1", "Title", "a TITLE"), "fine").await;
-    let c5 = add(on(None, "#/", "nav > ul", "Nav", ""), "the nav is slow").await;
-    assert_eq!(answer(&client, "comments.resolve", json!({"id": c2})).await["state"], "resolved");
-
-    let ids = |params: Value| {
-        let client = &client;
-        async move { comment_ids(client, params).await.0 }
-    };
-    assert_eq!(ids(json!({})).await, [c5, c4, c3, c2, c1], "newest first");
-    assert_eq!(ids(json!({"ticket": "sub-2"})).await, [c2]);
-    assert_eq!(ids(json!({"under": "TOP-3"})).await, [c2, c1], "TOP-3's subtree, SUB hosted in it");
-    assert_eq!(ids(json!({"under": "TOP"})).await, [c4, c2, c1], "the shortcode and the one it hosts");
-    assert_eq!(ids(json!({"under": "SUB"})).await, [c2]);
-    assert_eq!(ids(json!({"under": "APART-1"})).await, [c3]);
-    assert_eq!(ids(json!({"route": "#/waves/TOP"})).await, [c4]);
-    assert_eq!(ids(json!({"path": "main > h1"})).await, [c4, c2, c1], "a prefix");
-    assert_eq!(ids(json!({"path": "main > h1 > "})).await, [c2]);
-    assert_eq!(ids(json!({"state": "resolved"})).await, [c2]);
-    assert_eq!(ids(json!({"state": "Open"})).await, [c5, c4, c3, c1]);
-    assert_eq!(ids(json!({"author": "agent-1"})).await, Vec::<u64>::new(), "no call names its author");
-    assert_eq!(ids(json!({"author": "test"})).await, [c5, c4, c3, c2, c1]);
-    assert_eq!(ids(json!({"text": "TITLE"})).await, [c4, c1], "the label, the excerpt");
-    assert_eq!(ids(json!({"text": "slow"})).await, [c5], "the body");
-    assert_eq!(ids(json!({"text": "wave 2"})).await, [c3], "the excerpt");
-    assert_eq!(
-        ids(json!({"ticket": "TOP-4", "under": "TOP", "route": "#/ticket/TOP-4", "path": "main", "state": "open", "author": "test", "text": "rename"})).await,
-        [c1],
-        "every filter at once"
-    );
-    // ACCESS-8: a blank `text` is no filter; a blank ticket, shortcode,
-    // route, path, state or author is no value of its type — refused at
-    // dispatch, naming it (it was none).
-    assert_eq!(ids(json!({"text": ""})).await.len(), 5, "blank text is none");
-    for field in ["ticket", "under", "route", "path", "state", "author"] {
-        let message = invalid(&client, "comments.list", json!({field: " "})).await;
-        assert!(message.contains(&format!("{field}: ")), "{field}: {message}");
-    }
-
-    // Paging: newest first, `after` exclusive, `next` the page's last.
-    let (page_ids, page) = comment_ids(&client, json!({"limit": 2})).await;
-    assert_eq!((page_ids, page), (vec![c5, c4], json!({"type": "page", "next": c4})));
-    let (page_ids, page) = comment_ids(&client, json!({"limit": 2, "after": c4})).await;
-    assert_eq!((page_ids, page), (vec![c3, c2], json!({"type": "page", "next": c2})));
-    let (page_ids, page) = comment_ids(&client, json!({"limit": 2, "after": c2})).await;
-    assert_eq!((page_ids, page), (vec![c1], json!({"type": "page", "next": null})));
-    let (page_ids, page) = comment_ids(&client, json!({"limit": 1, "after": c5, "state": "open"})).await;
-    assert_eq!((page_ids, page), (vec![c4], json!({"type": "page", "next": c4})));
-
-    // Refusals: one error, nothing else — an unknown state at dispatch.
-    let message = invalid(&client, "comments.list", json!({"state": "closed"})).await;
-    assert!(message.contains("state: unknown comment state 'closed' (expected open or resolved)"), "{message}");
-    let evs = collect(call(&client, "comments.list", json!({"after": 99})).await).await;
-    assert_eq!(evs, [json!({"type": "error", "message": "after: no comment 99 to resume after"})]);
-}
-
-/// COMMENT-2, row 6 over the wire: an unknown id, an empty body and a
-/// malformed anchor — a field left out, a blank one, a route that is no app
-/// page, a ticket that is none, a blank author — are each one in-band
-/// `error` naming the problem, and keep nothing: the next comment kept is
-/// still 1, and `watch` heard only it.
-#[tokio::test]
-async fn comment_refusals_are_in_band_and_keep_nothing_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "demands", "kind": "scope"})).await;
-    let mut watch = call(&client, "comments.watch", json!({})).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let anchor_without = |field: &str| {
-        let mut a = chip("DEMAND-1");
-        a.as_object_mut().unwrap().remove(field);
-        a
-    };
-    let with = |field: &str, value: Value| {
-        let mut a = chip("DEMAND-1");
-        a[field] = value;
-        a
-    };
-    for (method, params, says) in [
-        ("comments.resolve", json!({"id": 1}), "no comment 1: there are no comments yet (nothing changed)"),
-        ("comments.reopen", json!({"id": 7}), "no comment 7: there are no comments yet (nothing changed)"),
-        ("comments.add", json!({"anchor": chip("DEMAND-1"), "body": ""}), "the comment's body is empty (nothing was kept)"),
-        ("comments.add", json!({"anchor": chip("DEMAND-1"), "body": " \n "}), "the comment's body is empty (nothing was kept)"),
-        ("comments.add", json!({"anchor": anchor_without("route"), "body": "x"}), "malformed anchor: route is missing or empty (nothing was kept)"),
-        ("comments.add", json!({"anchor": anchor_without("path"), "body": "x"}), "malformed anchor: path is missing or empty (nothing was kept)"),
-        ("comments.add", json!({"anchor": with("label", json!("  ")), "body": "x"}), "malformed anchor: label is missing or empty (nothing was kept)"),
-        (
-            "comments.add",
-            json!({"anchor": with("route", json!("/ticket/DEMAND-1")), "body": "x"}),
-            "malformed anchor: route '/ticket/DEMAND-1' is not an app page: a route begins #/ (e.g. #/ticket/DEMAND-2, or #/ for the board) (nothing was kept)",
-        ),
-        (
-            "comments.add",
-            json!({"anchor": with("ticket", json!("DEMAND-9")), "body": "x"}),
-            "malformed anchor: ticket DEMAND-9 names no ticket — leave it out when the element belongs to none (nothing was kept)",
-        ),
-    ] {
-        let evs = collect(call(&client, method, params.clone()).await).await;
-        assert_eq!(evs, [json!({"type": "error", "message": says})], "{method} {params}");
-    }
-    assert_eq!(comment_ids(&client, json!({})).await.0, Vec::<u64>::new(), "nothing kept");
-    let kept = answer(&client, "comments.add", json!({"anchor": anchor_without("excerpt"), "body": "an excerpt may be left out"})).await;
-    assert_eq!((kept["id"].as_u64(), kept["anchor"]["excerpt"].as_str()), (Some(1), Some("")));
-    let heard = next_events(&mut watch, 1).await;
-    assert_eq!((heard[0]["type"].as_str(), heard[0]["comment"]["id"].as_u64()), (Some("added"), Some(1)), "only the one kept");
-    let evs = collect(call(&client, "comments.resolve", json!({"id": 2})).await).await;
-    assert_eq!(evs, [json!({"type": "error", "message": "no comment 2: comment ids run from 1 to 1 (nothing changed)"})]);
-}
-
-/// COMMENT-2, row 7 over the wire: `watch` is `added`, `resolved` and
-/// `reopened`, each with the comment, in the order the writes were
-/// acknowledged — a resolve of what is resolved says nothing; and the two
-/// watches keep apart: `tickets.watch` hears no comment, `comments.watch` no
-/// ticket.
-#[tokio::test]
-async fn comments_watch_carries_added_resolved_reopened_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "demands", "kind": "scope"})).await;
-    answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "the parent chip"})).await;
-    let mut comments = call(&client, "comments.watch", json!({})).await;
-    let mut tickets = call(&client, "tickets.watch", json!({})).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let a = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-2"), "body": "first"})).await;
-    let b = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-1"), "body": "second"})).await;
-    let a_resolved = answer(&client, "comments.resolve", json!({"id": 1})).await;
-    assert_eq!(answer(&client, "comments.resolve", json!({"id": 1})).await, a_resolved, "resolved already: the same answer");
-    let a_reopened = answer(&client, "comments.reopen", json!({"id": 1})).await;
-    assert_eq!(a_reopened, a, "open again, as it was");
-    answer(&client, "tickets.amend", json!({"id": "DEMAND-2", "body": "marker"})).await;
-    let marker = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-2"), "body": "marker"})).await;
-
-    let strip = |ev: &Value| {
-        let mut ev = ev.clone();
-        ev.as_object_mut().unwrap().remove("type");
-        ev
-    };
-    let heard = next_events(&mut comments, 5).await;
-    assert_eq!(
-        heard,
-        [
-            json!({"type": "added", "comment": strip(&a)}),
-            json!({"type": "added", "comment": strip(&b)}),
-            json!({"type": "resolved", "comment": strip(&a_resolved)}),
-            json!({"type": "reopened", "comment": strip(&a_reopened)}),
-            json!({"type": "added", "comment": strip(&marker)}),
-        ],
-        "no second `resolved`, no ticket's change"
-    );
-    let evs = until_marker(&mut tickets).await;
-    assert_eq!(kinds(&evs), ["amended"], "no comment on tickets.watch: {evs:?}");
-}
-
-/// COMMENT-2, row 9 over the wire: the ticket a comment names is amended
-/// (title and body), moved and set to another status — the comment is
-/// answered exactly as it was left, `version` included; `under` follows the
-/// ticket to where it is now.
-#[tokio::test]
-async fn a_comment_keeps_its_anchor_when_its_ticket_changes_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    for (title, kind, parent) in [("demands", "scope", None), ("one", "execution", None), ("two", "execution", None), ("the chip", "build", Some("DEMAND-2"))] {
-        answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": title, "kind": kind, "parent": parent})).await;
-    }
-    let kept = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-4"), "body": "keep me"})).await;
-    assert_eq!(comment_ids(&client, json!({"under": "DEMAND-2"})).await.0, [1]);
-    tokio::time::sleep(Duration::from_millis(1100)).await;
-    answer(&client, "tickets.amend", json!({"id": "DEMAND-4", "title": "renamed", "body": "the element is gone"})).await;
-    let moved = answer(&client, "tickets.set_parent", json!({"id": "DEMAND-4", "parent": "DEMAND-3"})).await;
-    assert_eq!(moved["type"], "parent_changed", "{moved}");
-    answer(&client, "tickets.set_status", json!({"id": "DEMAND-4", "status": "Ready"})).await;
-    let ticket = answer(&client, "tickets.get", json!({"id": "DEMAND-4"})).await;
-    assert!(ticket["ticket"]["updated_unix"].as_i64() > kept["anchor"]["version"].as_i64(), "the ticket moved on");
-    let listed = collect(call(&client, "comments.list", json!({"ticket": "DEMAND-4"})).await).await;
-    assert_eq!(listed, [kept, json!({"type": "page", "next": null})], "the comment did not");
-    assert_eq!(comment_ids(&client, json!({"under": "DEMAND-2"})).await.0, Vec::<u64>::new());
-    assert_eq!(comment_ids(&client, json!({"under": "DEMAND-3"})).await.0, [1], "under where its ticket is now");
-}
-
 /// ACT-5 acceptance 2: `delete` over the real protocol — a delete of a ticket
 /// nothing points at, a refused delete naming its blocker and its children,
 /// a reparenting delete, `get` on a deleted id answering its tombstone, the
@@ -3325,293 +2682,6 @@ async fn delete_over_the_wire() {
     assert_eq!(answer(&client, "tickets.get", json!({"id": "DEL-3"})).await["ticket"]["parent"], "DEL-2", "back under it");
     let born = answer(&client, "tickets.create", json!({"epic": "DEL", "title": "after"})).await;
     assert_eq!(born["ticket"]["id"], "DEL-6", "DEL-5's number is not reused");
-}
-
-/// MENGER-39: the queue over the real protocol — `queue` answers `queued`
-/// and `watch` hears it; a requeue raises and never lowers; `queued` lists
-/// it most urgent first; a `watch { filter: "queued" }` hears it enter; a
-/// `inputs close` of the named input unqueues it — `watch` hears `unqueued`
-/// (action `closed`) and the filter's `left`; `snooze`, `unqueue`'s
-/// `not_queued`, the refusals, and `history`'s queue records.
-#[tokio::test]
-async fn the_queue_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    collect(call(&client, "tickets.create", json!({"epic": "QUE", "title": "root", "kind": "scope"})).await).await;
-    let body = "<m-decision data-field=\"decision\" id=\"landing\">\n\n\
-                <m-question data-field=\"question\">Archive or delete?</m-question>\n\n\
-                <m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n\
-                <m-option data-field=\"option\" name=\"Delete\" value=\"delete\"></m-option>\n\n\
-                </m-decision>\n";
-    collect(call(&client, "tickets.create", json!({"epic": "QUE", "title": "asks", "body": body})).await).await;
-    collect(call(&client, "tickets.create", json!({"epic": "QUE", "title": "a gap on prod"})).await).await;
-    let mut watch = call(&client, "tickets.watch", json!({})).await;
-    let mut queued = call(&client, "tickets.watch", json!({"filter": "queued", "membership": true})).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Blocking: the input that answers it.
-    let ev = answer(&client, "tickets.queue", json!({"id": "que-2", "urgency": "blocking", "reason": "the import waits on this", "input": "landing"})).await;
-    assert_eq!((ev["type"].as_str(), ev["action"].as_str()), (Some("queued"), Some("queued")), "{ev}");
-    assert_eq!(
-        (ev["entry"]["ticket"].as_str(), ev["entry"]["urgency"].as_str(), ev["entry"]["input"].as_str()),
-        (Some("QUE-2"), Some("blocking"), Some("landing"))
-    );
-    assert_eq!((ev["ticket"]["id"].as_str(), ev["ticket"]["title"].as_str()), (Some("QUE-2"), Some("asks")), "its row, for the tray");
-    let heard = watch_until(&mut watch, "queued").await;
-    assert_eq!(heard.last().unwrap()["entry"], ev["entry"], "watch hears it at once");
-    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "entered", "id": "QUE-2", "epic": "QUE", "shortcode": "QUE", "seq": 2})]);
-
-    // Today, then a lower requeue keeps it, a higher one raises it.
-    answer(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "today", "reason": "the promote rolled back", "source": "pipeline"})).await;
-    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "entered", "id": "QUE-3", "epic": "QUE", "shortcode": "QUE", "seq": 3})]);
-    let ev = answer(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "whenever", "reason": "still rolled back"})).await;
-    assert_eq!((ev["action"].as_str(), ev["entry"]["urgency"].as_str()), (Some("requeued"), Some("today")), "{ev}");
-    let ev = answer(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "now", "reason": "prod is down"})).await;
-    assert_eq!((ev["action"].as_str(), ev["entry"]["urgency"].as_str()), (Some("raised"), Some("now")), "{ev}");
-    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
-    let order: Vec<(&str, &str)> = rows
-        .iter()
-        .filter(|r| r["type"] == "queue_row")
-        .map(|r| (r["entry"]["ticket"].as_str().unwrap(), r["entry"]["urgency"].as_str().unwrap()))
-        .collect();
-    assert_eq!(order, [("QUE-2", "blocking"), ("QUE-3", "now")]);
-    assert_eq!((rows[2]["type"].as_str(), rows[2]["count"].as_u64(), rows[2]["snoozed"].as_u64()), (Some("queue_end"), Some(2), Some(0)));
-    let counts = collect(call(&client, "tickets.nav.counts", json!({"filter": "queued now or queued blocking"})).await).await;
-    assert_eq!(counts, [json!({"type": "count", "epic": "QUE", "shortcode": "QUE", "held": 2})]);
-
-    // Snooze: still queued, off the list without the snoozed.
-    let ev = answer(&client, "tickets.snooze", json!({"id": "QUE-3", "minutes": 10, "source": "app"})).await;
-    assert_eq!(ev["type"], "snoozed", "{ev}");
-    assert!(ev["entry"]["snoozed_until_unix"].as_i64().unwrap() > 0);
-    assert_eq!(watch_until(&mut watch, "snoozed").await.last().unwrap()["entry"]["ticket"], "QUE-3");
-    let rows = collect(call(&client, "tickets.queued", json!({"snoozed": false})).await).await;
-    assert_eq!((rows.len(), rows[0]["entry"]["ticket"].as_str()), (2, Some("QUE-2")), "{rows:?}");
-
-    // The answer alone does not unqueue; closing the named input does.
-    answer(&client, "tickets.inputs.answer", json!({"ticket": "QUE-2", "input": "landing", "value": {"type": "choice", "option": "archive"}})).await;
-    assert_eq!(collect(call(&client, "tickets.queued", json!({})).await).await.len(), 3, "answered, still queued");
-    answer(&client, "tickets.inputs.close", json!({"ticket": "QUE-2", "input": "landing"})).await;
-    let heard = watch_until(&mut watch, "unqueued").await;
-    let unq = heard.last().unwrap();
-    assert_eq!((unq["id"].as_str(), unq["action"].as_str(), unq["by"].as_str()), (Some("QUE-2"), Some("closed"), Some("system")), "{unq}");
-    assert!(heard.iter().any(|e| e["type"] == "input_changed" && e["input"]["state"] == "closed"), "{heard:?}");
-    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "left", "id": "QUE-2", "epic": "QUE", "shortcode": "QUE", "seq": 2})]);
-
-    // Unqueue; again: not_queued, nothing written.
-    let ev = answer(&client, "tickets.unqueue", json!({"id": "QUE-3", "source": "app"})).await;
-    assert_eq!((ev["type"].as_str(), ev["action"].as_str(), ev["id"].as_str()), (Some("unqueued"), Some("unqueued"), Some("QUE-3")), "{ev}");
-    assert_eq!(answer(&client, "tickets.unqueue", json!({"id": "QUE-3"})).await, json!({"type": "not_queued", "id": "QUE-3"}));
-    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
-    assert_eq!((rows.len(), rows[0]["type"].as_str(), rows[0]["count"].as_u64()), (1, Some("queue_end"), Some(0)));
-
-    // Refusals, one in-band event each.
-    for (method, params, says) in [
-        ("tickets.queue", json!({"id": "QUE-3", "urgency": "blocking", "reason": "idle"}), "names the input"),
-        ("tickets.queue", json!({"id": "QUE-2", "urgency": "blocking", "reason": "again", "input": "landing"}), "is closed"),
-        ("tickets.snooze", json!({"id": "QUE-3", "minutes": 10}), "not queued"),
-    ] {
-        let ev = answer(&client, method, params).await;
-        assert_eq!(ev["type"], "error", "{method}: {ev}");
-        assert!(ev["message"].as_str().unwrap().contains(says), "{method}: {ev}");
-    }
-    // ACCESS-8: an urgency that is none, a blank reason — at dispatch.
-    assert!(invalid(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "soon", "reason": "x"})).await.contains("urgency: unknown urgency"));
-    assert!(invalid(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "now", "reason": " "})).await.contains("reason: "));
-    assert_eq!(
-        answer(&client, "tickets.queue", json!({"id": "QUE-99", "urgency": "now", "reason": "x"})).await,
-        json!({"type": "not_found", "id": "QUE-99"})
-    );
-
-    // History: the queue's records after the transitions, before the end.
-    let evs = collect(call(&client, "tickets.history", json!({"id": "QUE-3"})).await).await;
-    let records: Vec<(&str, &str)> = evs
-        .iter()
-        .filter(|e| e["type"] == "queue_record")
-        .map(|e| (e["record"]["action"].as_str().unwrap(), e["record"]["urgency"].as_str().unwrap()))
-        .collect();
-    assert_eq!(records, [("queued", "today"), ("requeued", "today"), ("raised", "now"), ("snoozed", "now"), ("unqueued", "now")]);
-    let first = evs.iter().find(|e| e["type"] == "queue_record").unwrap();
-    assert_eq!((first["record"]["source"].as_str(), first["record"]["reason"].as_str()), (Some("pipeline"), Some("the promote rolled back")));
-    assert_eq!(evs.last().unwrap()["type"], "history_end");
-}
-
-/// APP-86: an entry with several questions over the real protocol —
-/// `input` a list (a bare string is still one), `blocking` among them and
-/// required at urgency `blocking` with several; a requeue adds; `queued`
-/// and `history` carry them; closing two of three is progress, the third
-/// unqueues; `await_reply` without `input` hears each answer.
-#[tokio::test]
-async fn several_questions_in_one_queue_entry() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    collect(call(&client, "tickets.create", json!({"epic": "GLZ", "title": "root", "kind": "scope"})).await).await;
-    let body = "<m-decision data-field=\"decision\" id=\"format\">\n<m-question data-field=\"question\">Which format?</m-question>\n\
-                <m-option data-field=\"option\" name=\"Card\" value=\"card\"></m-option>\n<m-option data-field=\"option\" name=\"Sheet\" value=\"sheet\"></m-option>\n</m-decision>\n\n\
-                <m-input id=\"fields\" kind=\"multi\"><m-question data-field=\"question\">Which fields?</m-question>\n<m-choice value=\"cone\">Cone</m-choice><m-choice value=\"photos\">Photos</m-choice></m-input>\n\n\
-                <m-input id=\"naming\" kind=\"text\"><m-question data-field=\"question\">What is it called?</m-question></m-input>\n";
-    collect(call(&client, "tickets.create", json!({"epic": "GLZ", "title": "a template", "body": body})).await).await;
-    let mut watch = call(&client, "tickets.watch", json!({})).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Several at blocking, none named: refused, nothing written.
-    let ev = answer(&client, "tickets.queue", json!({"id": "GLZ-2", "urgency": "blocking", "reason": "idle", "input": ["format", "naming"]})).await;
-    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("names the one the caller is idle on"), "{ev}");
-    let ev = answer(&client, "tickets.queue", json!({"id": "GLZ-2", "urgency": "now", "reason": "idle", "input": ["format"], "blocking": "naming"})).await;
-    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("not among the entry's inputs"), "{ev}");
-
-    let ev = answer(&client, "tickets.queue", json!({"id": "GLZ-2", "urgency": "blocking", "reason": "the import is idle", "input": ["format", "fields"], "blocking": "fields"})).await;
-    assert_eq!((ev["type"].as_str(), ev["entry"]["inputs"].clone(), ev["entry"]["blocking"].as_str(), ev["entry"]["input"].as_str()), (Some("queued"), json!(["format", "fields"]), Some("fields"), Some("fields")), "{ev}");
-    // Again, a bare string: added, the blocking one kept.
-    let ev = answer(&client, "tickets.queue", json!({"id": "GLZ-2", "urgency": "now", "reason": "and its name", "input": "naming"})).await;
-    assert_eq!((ev["action"].as_str(), ev["entry"]["inputs"].clone(), ev["entry"]["urgency"].as_str()), (Some("requeued"), json!(["format", "fields", "naming"]), Some("blocking")), "{ev}");
-    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
-    assert_eq!(rows[0]["entry"]["inputs"], json!(["format", "fields", "naming"]), "{rows:?}");
-
-    // An agent waits on any answer; the owner answers one.
-    let agent = connect(port).await;
-    let mut wait = call(&agent, "tickets.await_reply", json!({"id": "GLZ-2", "timeout_minutes": 1})).await;
-    assert_eq!(next_events(&mut wait, 1).await[0]["queued"]["inputs"], json!(["format", "fields", "naming"]));
-    answer(&client, "tickets.inputs.answer", json!({"ticket": "GLZ-2", "input": "naming", "value": {"type": "text", "text": "firing card"}})).await;
-    let replied = next_events(&mut wait, 1).await;
-    assert_eq!((replied[0]["reply"]["kind"].as_str(), replied[0]["reply"]["input"].as_str()), (Some("answered"), Some("naming")), "{replied:?}");
-
-    // Two of three closed: still queued. The third: out, one `unqueued`.
-    answer(&client, "tickets.inputs.close", json!({"ticket": "GLZ-2", "input": "naming"})).await;
-    answer(&client, "tickets.inputs.close", json!({"ticket": "GLZ-2", "input": "format"})).await;
-    assert_eq!(collect(call(&client, "tickets.queued", json!({})).await).await.len(), 2, "progress, not done");
-    answer(&client, "tickets.inputs.close", json!({"ticket": "GLZ-2", "input": "fields"})).await;
-    let heard = watch_until(&mut watch, "unqueued").await;
-    assert_eq!(heard.iter().filter(|e| e["type"] == "unqueued").count(), 1, "{heard:?}");
-    assert_eq!(heard.last().unwrap()["action"], "closed");
-    let evs = collect(call(&client, "tickets.history", json!({"id": "GLZ-2"})).await).await;
-    let records: Vec<&serde_json::Value> = evs.iter().filter(|e| e["type"] == "queue_record").map(|e| &e["record"]).collect();
-    assert_eq!(records.iter().map(|r| r["action"].as_str().unwrap()).collect::<Vec<_>>(), ["queued", "requeued", "closed"]);
-    assert_eq!((records[1]["inputs"].clone(), records[1]["blocking"].as_str()), (json!(["format", "fields", "naming"]), Some("fields")));
-}
-
-/// APP-85: an entry carries views of mockups over the real protocol —
-/// `mockup` a list of `T#mN` / `mockup:T#N@W`, kept canonical on the entry
-/// (`queued`, `watch`'s `queued`, `history`'s record); a view the body does
-/// not hold refused in band naming it, a malformed one at dispatch.
-#[tokio::test]
-async fn views_of_mockups_in_a_queue_entry() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    collect(call(&client, "tickets.create", json!({"epic": "KLN", "title": "root", "kind": "scope"})).await).await;
-    let page = "<!doctype html>\n<html><body><main>a look</main></body></html>\n";
-    let opt = |name: &str| format!("<m-option data-field=\"option\" name=\"{name}\" value=\"{}\">\n\n```mockup widths=390,1440 title=\"{name}\"\n{page}```\n\n</m-option>\n", name.to_lowercase());
-    let body = format!(
-        "<m-decision data-field=\"decision\" id=\"layout\">\n<m-question data-field=\"question\">Which layout?</m-question>\n\n{}{}{}</m-decision>\n",
-        opt("Grid"),
-        opt("Ring"),
-        opt("List")
-    );
-    collect(call(&client, "tickets.create", json!({"epic": "KLN", "title": "cone pack", "body": body})).await).await;
-    let mut watch = call(&client, "tickets.watch", json!({})).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let ev = answer(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "pick a look", "input": "layout", "mockup": ["KLN-2#m1", "mockup:kln-2#2@390", "KLN-2#m3"]})).await;
-    let views = json!([{"ticket": "KLN-2", "mock": 1}, {"ticket": "KLN-2", "mock": 2, "width": 390}, {"ticket": "KLN-2", "mock": 3}]);
-    assert_eq!((ev["type"].as_str(), &ev["entry"]["mockups"]), (Some("queued"), &views), "{ev}");
-    assert_eq!(watch_until(&mut watch, "queued").await.last().unwrap()["entry"]["mockups"], views, "watch's queued carries them");
-    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
-    assert_eq!(rows[0]["entry"]["mockups"], views);
-    let evs = collect(call(&client, "tickets.history", json!({"id": "KLN-2"})).await).await;
-    assert_eq!(evs.iter().find(|e| e["type"] == "queue_record").unwrap()["record"]["mockups"], views, "history's record carries them");
-
-    let ev = answer(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "x", "mockup": ["KLN-2#m4"]})).await;
-    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("mockup `KLN-2#m4`: KLN-2 holds 3 — no mockup 4"), "{ev}");
-    let ev = answer(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "x", "mockup": ["KLN-9#m1"]})).await;
-    assert!(ev["type"] == "error" && ev["message"].as_str().unwrap().contains("no ticket KLN-9 you can read"), "{ev}");
-    assert!(invalid(&client, "tickets.queue", json!({"id": "KLN-2", "urgency": "now", "reason": "x", "mockup": ["KLN-2#mx"]})).await.contains("mockup"));
-    // Nothing written by the refusals.
-    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
-    assert_eq!(rows[0]["entry"]["mockups"], views);
-}
-
-/// APP-24: `await_reply` over the real protocol — an agent queues a ticket
-/// and awaits; `waiting` comes at once; the owner answers from a second
-/// connection; the agent's stream yields one `replied` (kind `answered`)
-/// and ends. Then a second wait hears a change request as
-/// `changes_requested`.
-#[tokio::test]
-async fn await_reply_over_the_wire() {
-    let port = start_server().await;
-    let agent = connect(port).await;
-    let owner = connect(port).await;
-    collect(call(&agent, "tickets.create", json!({"epic": "AWR", "title": "root", "kind": "scope"})).await).await;
-    let body = "<m-decision data-field=\"decision\" id=\"agent-owner\">\n\n\
-                <m-question data-field=\"question\">Who owns an agent?</m-question>\n\n\
-                <m-option data-field=\"option\" name=\"The granter\" value=\"granter\"></m-option>\n\
-                <m-option data-field=\"option\" name=\"Its creator\" value=\"creator\"></m-option>\n\n\
-                </m-decision>\n";
-    collect(call(&agent, "tickets.create", json!({"epic": "AWR", "title": "asks", "body": body})).await).await;
-    answer(&agent, "tickets.queue", json!({"id": "AWR-2", "urgency": "blocking", "input": "agent-owner", "reason": "idle until decided"})).await;
-    let mut wait = call(&agent, "tickets.await_reply", json!({"id": "AWR-2", "timeout_minutes": 5})).await;
-    let first = next_events(&mut wait, 1).await.pop().unwrap();
-    assert_eq!((first["type"].as_str(), first["ticket"].as_str(), first["queued"]["urgency"].as_str()), (Some("waiting"), Some("AWR-2"), Some("blocking")), "{first}");
-    answer(&owner, "tickets.inputs.answer", json!({"ticket": "AWR-2", "input": "agent-owner", "value": {"type": "choice", "option": "granter"}})).await;
-    let replied = next_events(&mut wait, 1).await.pop().unwrap();
-    assert_eq!(replied["type"], "replied", "{replied}");
-    assert_eq!(
-        (replied["ticket"].as_str(), replied["reply"]["kind"].as_str(), replied["reply"]["input"].as_str(), replied["reply"]["value"]["option"].as_str()),
-        (Some("AWR-2"), Some("answered"), Some("agent-owner"), Some("granter")),
-        "{replied}"
-    );
-    let rest = collect(wait).await;
-    assert!(rest.iter().all(|e| e["type"] != "replied"), "one replied, then the end: {rest:?}");
-
-    // Queued again; the owner requests changes instead.
-    answer(&agent, "tickets.queue", json!({"id": "AWR-2", "urgency": "now", "reason": "reworked; look again"})).await;
-    let mut wait = call(&agent, "tickets.await_reply", json!({"id": "AWR-2", "input": "agent-owner"})).await;
-    assert_eq!(next_events(&mut wait, 1).await[0]["type"], "waiting");
-    answer(&owner, "tickets.request_changes", json!({"id": "AWR-2", "body": "neither: the agent's owner is whoever signs for it"})).await;
-    let replied = next_events(&mut wait, 1).await.pop().unwrap();
-    assert_eq!((replied["reply"]["kind"].as_str(), replied["reply"]["comment"]["intent"].as_str()), (Some("changes_requested"), Some("changes")), "{replied}");
-}
-
-/// APP-23: `request_changes` over the real protocol — one write: its answer
-/// `changes_requested` carries the comment (intent `changes`, on the
-/// ticket's conversation) and the entry; `watch` hears `unqueued` (action
-/// `changes_requested`), `comments.watch` the comment's `added`, and
-/// `comments.list { intent: changes }` lists it; the named input stays open;
-/// a ticket not queued is refused.
-#[tokio::test]
-async fn request_changes_over_the_wire() {
-    let port = start_server().await;
-    let client = connect(port).await;
-    collect(call(&client, "tickets.create", json!({"epic": "RQC", "title": "root", "kind": "scope"})).await).await;
-    let body = "<m-decision data-field=\"decision\" id=\"landing\">\n\n\
-                <m-question data-field=\"question\">Archive or delete?</m-question>\n\n\
-                <m-option data-field=\"option\" name=\"Archive\" value=\"archive\"></m-option>\n\n\
-                </m-decision>\n";
-    collect(call(&client, "tickets.create", json!({"epic": "RQC", "title": "asks", "body": body})).await).await;
-    answer(&client, "tickets.queue", json!({"id": "RQC-2", "urgency": "blocking", "reason": "idle", "input": "landing"})).await;
-    let mut watch = call(&client, "tickets.watch", json!({})).await;
-    let mut comments = call(&client, "comments.watch", json!({})).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let ev = answer(&client, "tickets.request_changes", json!({"id": "rqc-2", "body": "Neither: split it first.", "source": "app"})).await;
-    assert_eq!((ev["type"].as_str(), ev["id"].as_str(), ev["entry"]["input"].as_str()), (Some("changes_requested"), Some("RQC-2"), Some("landing")), "{ev}");
-    let c = &ev["comment"];
-    assert_eq!(
-        (c["intent"].as_str(), c["anchor"]["path"].as_str(), c["anchor"]["route"].as_str(), c["anchor"]["ticket"].as_str()),
-        (Some("changes"), Some("conversation"), Some("#/ticket/RQC-2"), Some("RQC-2")),
-        "{ev}"
-    );
-    let unq = watch_until(&mut watch, "unqueued").await.pop().unwrap();
-    assert_eq!((unq["id"].as_str(), unq["action"].as_str()), (Some("RQC-2"), Some("changes_requested")), "{unq}");
-    let added = next_events(&mut comments, 1).await.pop().unwrap();
-    assert_eq!((added["type"].as_str(), added["comment"]["id"].as_u64()), (Some("added"), c["id"].as_u64()), "{added}");
-    let listed = collect(call(&client, "comments.list", json!({"intent": "changes"})).await).await;
-    assert_eq!((listed.len(), listed[0]["id"].as_u64()), (2, c["id"].as_u64()), "{listed:?}");
-    assert_eq!(collect(call(&client, "comments.list", json!({"intent": "comment"})).await).await.len(), 1, "a page event alone");
-    let inputs = collect(call(&client, "tickets.inputs.list", json!({"ticket": "RQC-2"})).await).await;
-    assert_eq!(inputs[0]["input"]["state"], "open", "{inputs:?}");
-    assert_eq!(collect(call(&client, "tickets.queued", json!({})).await).await[0]["count"], 0);
-    let ev = answer(&client, "tickets.request_changes", json!({"id": "RQC-2", "body": "again"})).await;
-    assert_eq!(ev["type"], "error", "{ev}");
-    assert!(ev["message"].as_str().unwrap().contains("not queued"), "{ev}");
 }
 
 /// TICKETS-7 acceptance 2: revisions over the real protocol — amend twice,

@@ -92,8 +92,10 @@ pub(super) fn act_of(caller: &VerifiedUser, source: Option<CallerSource>, messag
 /// principal and name, from where the server reads it (`app` for a person
 /// signed in through a provider, `api` otherwise; ACCESS-14), no message.
 pub(super) fn caller_act(caller: &VerifiedUser) -> Act {
-    let source = match super::inputs::source_of(caller) {
-        AnswerSource::App => TransitionSource::App,
+    // ACCESS-14: `app` for a person signed in through a provider, `api`
+    // for an agent's key and every call that proves no one.
+    let source = match caller.context() {
+        Some(ctx) if ctx.is_authenticated() && ctx.get_metadata_string(crate::access::AGENT_KEY).is_none() => TransitionSource::App,
         _ => TransitionSource::Api,
     };
     Act {
@@ -109,20 +111,15 @@ pub(super) fn caller_act(caller: &VerifiedUser) -> Act {
 /// now — ACCESS-12: the caller followed ([`Following`]: verified again only
 /// when the grants generation moves, a sign-out or the expiry comes), its
 /// reach compiled once ([`WatchSight`]) and every change cut to it by the
-/// store ([`Store::heard`]), and the components it has been shown.
+/// store ([`Store::heard`]).
 pub(super) struct Sight {
     following: Following,
     sight: WatchSight,
-    /// The components this caller can see now (by name) — with a reach
-    /// that hides something only.
-    shown: std::collections::HashSet<String>,
 }
 
-/// What a moved reach did: the reach the watch heard through until now,
-/// and the components it no longer sees.
+/// What a moved reach did: the reach the watch heard through until now.
 pub(super) struct Moved {
     pub(super) was: WatchSight,
-    pub(super) gone: Vec<String>,
 }
 
 impl Sight {
@@ -131,15 +128,7 @@ impl Sight {
     pub(super) fn open(store: &Arc<Store>, access: &Access, user: VerifiedUser) -> Result<Self, String> {
         let following = Following::of(access, store, user)?;
         let sight = store.watch_sight(following.user()).map_err(|e| e.to_string())?;
-        let shown = Self::shown(store, &following, &sight);
-        Ok(Self { following, sight, shown })
-    }
-
-    fn shown(store: &Store, following: &Following, sight: &WatchSight) -> std::collections::HashSet<String> {
-        match sight.all() {
-            true => Default::default(),
-            false => store.components(following.user()).into_iter().map(|c| c.name).collect(),
-        }
+        Ok(Self { following, sight })
     }
 
     /// The caller, as it was last verified.
@@ -159,47 +148,24 @@ impl Sight {
 
     /// The caller as it stands: `Ok(None)` when what it hears is as it was;
     /// `Ok(Some(moved))` when its reach moved — the sight rebuilt, `moved`
-    /// the reach it had and the components it no longer sees; `Err` when it
+    /// the reach it had; `Err` when it
     /// is refused, or now sees nothing (the watch ends, saying why).
     pub(super) fn again(&mut self, store: &Store) -> Result<Option<Moved>, Closed> {
         match self.following.again()? {
             Followed::Same => Ok(None),
-            Followed::Moved { was } => {
+            Followed::Moved { .. } => {
                 let sight = store.watch_sight(self.following.user()).map_err(Closed::revoked)?;
-                let shown = Self::shown(store, &self.following, &sight);
-                let mut gone: Vec<String> = match (self.sight.all(), sight.all()) {
-                    (_, true) => Vec::new(),
-                    (true, false) => store.components(&was).into_iter().map(|c| c.name).filter(|n| !shown.contains(n)).collect(),
-                    (false, false) => self.shown.difference(&shown).cloned().collect(),
-                };
-                gone.sort();
                 let was = std::mem::replace(&mut self.sight, sight);
-                self.shown = shown;
-                Ok(Some(Moved { was, gone }))
+                Ok(Some(Moved { was }))
             }
         }
     }
 
     /// A change as this caller may hear it, as its one wire event, or
     /// nothing — cut to the reach by the store ([`Store::heard`]: every
-    /// change classified, rows redacted). A component's change reaches it
-    /// when it can view the component's owner; one it had been shown and
-    /// can no longer see is said as its removal, one it never saw not at all.
+    /// change classified, rows redacted).
     pub(super) fn relay(&mut self, store: &Store, change: Change) -> Option<TicketsEvent> {
         let change = store.heard(&self.sight, change)?;
-        if !self.sight.all() {
-            match &change {
-                Change::ComponentChanged { component } => {
-                    self.shown.insert(component.name.clone());
-                }
-                Change::ComponentRemoved { name } => {
-                    if !self.shown.remove(name) {
-                        return None;
-                    }
-                }
-                _ => {}
-            }
-        }
         wire_event(change)
     }
 }
@@ -246,7 +212,6 @@ fn redact(e: StoreError, sees: &dyn Fn(&str) -> bool) -> String {
         StoreError::DocInGraph { id, blocked_by, unlocks } => StoreError::DocInGraph { id, blocked_by: veiled(blocked_by), unlocks: veiled(unlocks) }.to_string(),
         StoreError::ParentCycle { id, path } => StoreError::ParentCycle { id, path: veil(path) }.to_string(),
         StoreError::ParentOutsideShortcode { id, parent } => StoreError::ParentOutsideShortcode { id: one(id), parent: one(parent) }.to_string(),
-        StoreError::ComponentOwned { id, name, owner } => StoreError::ComponentOwned { id, name, owner: one(owner) }.to_string(),
         StoreError::ScopeNotRoot { id, root, parent } => StoreError::ScopeNotRoot { id: one(id), root: one(root), parent: one(parent) }.to_string(),
         // TICKETS-6: the frozen scope, when it is out of reach.
         StoreError::Frozen { scope, numbers } => StoreError::Frozen { scope: one(scope), numbers }.to_string(),

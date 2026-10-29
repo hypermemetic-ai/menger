@@ -65,34 +65,8 @@ pub trait Reader: sealed::Sealed + Sync {
     /// nothing (held nowhere, or a reach no read can narrow to).
     fn reach(&self) -> Result<Option<Filter>, StoreError>;
 
-    /// ACCESS-19: which comments on the app (a comment naming no ticket)
-    /// it sees — every one, or only those its principal left.
-    fn app_comments(&self) -> AppSight;
-
     /// CHAT-14: who reads — `None` for the system, which reads everything.
     fn principal_of(&self) -> Option<String>;
-}
-
-/// ACCESS-19 (ACCESS-1's first question, as proposed): a comment on the app
-/// names no ticket, so no reach decides it — it is its author's and the
-/// admins' of `*`, and nobody else's.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppSight {
-    /// The system, login off, an admin of `*`: every one.
-    All,
-    /// A signed-in principal: the ones it left.
-    By(String),
-}
-
-impl AppSight {
-    /// Whether it sees the app comment left by `principal` (`None`: left
-    /// with login off, by no one in particular).
-    fn admits(&self, principal: Option<&str>) -> bool {
-        match self {
-            AppSight::All => true,
-            AppSight::By(p) => principal == Some(p.as_str()),
-        }
-    }
 }
 
 impl Reader for System {
@@ -102,10 +76,6 @@ impl Reader for System {
 
     fn principal_of(&self) -> Option<String> {
         None
-    }
-
-    fn app_comments(&self) -> AppSight {
-        AppSight::All
     }
 }
 
@@ -117,13 +87,6 @@ impl Reader for VerifiedUser {
     fn principal_of(&self) -> Option<String> {
         Some(self.principal_text())
     }
-
-    fn app_comments(&self) -> AppSight {
-        match self.administers("*") {
-            true => AppSight::All,
-            false => AppSight::By(self.principal_text()),
-        }
-    }
 }
 
 impl Reader for ReadingAs<'_> {
@@ -134,10 +97,6 @@ impl Reader for ReadingAs<'_> {
     fn principal_of(&self) -> Option<String> {
         Some(self.user().principal_text())
     }
-
-    fn app_comments(&self) -> AppSight {
-        self.user().app_comments()
-    }
 }
 
 /// A reader's reach, compiled once for a read: `None` everything; else the
@@ -145,8 +104,6 @@ impl Reader for ReadingAs<'_> {
 #[derive(Clone)]
 pub(super) struct Seen {
     reach: Option<(Filter, Lens)>,
-    /// ACCESS-19: the comments on the app it sees.
-    app: AppSight,
     /// ARCHIVE-2: the store holds archived tickets, which a view leaves out
     /// ([`Seen::viewing`]) — so a reader of everything reads a view under
     /// [`Lens::live`] rather than by today's unscoped path.
@@ -171,7 +128,7 @@ impl Seen {
                 Some((f, lens))
             }
         };
-        Ok(Self { reach, app: who.app_comments(), archive: false })
+        Ok(Self { reach, archive: false })
     }
 
     /// ACCESS-21: whether the reach holds a ticket alone (`ticket ID`) —
@@ -209,7 +166,7 @@ impl Seen {
     /// The system's sight: everything. What a walk whose reach could not
     /// be read holds beside its refusal (it reads nothing).
     pub(super) fn everything() -> Self {
-        Self { reach: None, app: AppSight::All, archive: false }
+        Self { reach: None, archive: false }
     }
 
     /// Everything: nothing is hidden.
@@ -271,7 +228,7 @@ impl Seen {
     /// ARCHIVE-2: [`Seen::sees`] for a view — the live tickets in reach.
     pub(super) fn view_sees<'c>(&self, cache: &'c Cache) -> Result<Sees<'c>, StoreError> {
         let q = Filtered { lens: self.view_lens()?, epic: None, status: None, parent: None, keep: None };
-        Ok(Sees { cache, view: Some(filtered::view_lenient(cache, &q)), app: self.app.clone(), open: self.open() })
+        Ok(Sees { cache, view: Some(filtered::view_lenient(cache, &q)), open: self.open() })
     }
 
     /// The reach's admitted bitmaps, under the read lock the caller holds.
@@ -280,7 +237,7 @@ impl Seen {
             let q = Filtered { lens: lens.clone(), epic: None, status: None, parent: None, keep: None };
             filtered::view_lenient(cache, &q)
         });
-        Sees { cache, view, app: self.app.clone(), open: self.open() }
+        Sees { cache, view, open: self.open() }
     }
 }
 
@@ -289,8 +246,6 @@ pub(super) struct Sees<'c> {
     cache: &'c Cache,
     /// `None`: everything.
     view: Option<View<'c>>,
-    /// ACCESS-19: the comments on the app it sees.
-    app: AppSight,
     /// ACCESS-21: the reach holds a ticket alone ([`Seen::open`]).
     open: bool,
 }
@@ -328,35 +283,6 @@ impl<'c> Sees<'c> {
             }
         }
         Some(out)
-    }
-
-    /// Whether the reach admits a comment (IDENTITY-37): every ticket it is
-    /// on — its anchor's, and the one whose page it was left on. ACCESS-19:
-    /// a comment on the app alone (naming no ticket), only its author and
-    /// the admins of `*` ([`AppSight`]) — no longer any reach at all.
-    ///
-    /// COMMENT-8: a reply is judged by its thread's root — seen by exactly
-    /// who sees the comment it answers.
-    pub(super) fn comment(&self, c: &crate::comments::Comment) -> bool {
-        let c = c.reply_to.and_then(|r| self.cache.comments.get(r.get())).unwrap_or(c);
-        let route = c.anchor.route.trim().strip_prefix("#/ticket/").map(|r| r.split(['?', '#']).next().unwrap_or(r).trim()).filter(|r| !r.is_empty());
-        let mut on = c.anchor.ticket.iter().map(String::as_str).chain(route).peekable();
-        if on.peek().is_none() {
-            return self.app.admits(c.principal.as_deref());
-        }
-        self.all() || on.all(|t| self.cache.resolve(t).is_ok_and(|k| self.id(&k)))
-    }
-
-    /// COMMENT-5: whether the reach admits an image — one of the tickets it
-    /// was put for (by its key then, read through the resolver), or, put on
-    /// the app, as a comment on the app is: its putter's and the admins'.
-    pub(super) fn media(&self, owners: &[super::media::Owner]) -> bool {
-        owners.iter().any(|o| match o {
-            super::media::Owner::Ticket(t) => self.all() || self.cache.resolve(t).is_ok_and(|k| self.id(&k)),
-            super::media::Owner::App(p) => self.app.admits(p.as_deref()),
-            // CHAT-14: a chat's image is its participants' ([`super::Store::media_info`]).
-            super::media::Owner::Chat(_) => false,
-        })
     }
 
     /// Whether the reach admits the ticket at `k`.

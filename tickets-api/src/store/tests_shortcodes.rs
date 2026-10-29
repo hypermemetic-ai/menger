@@ -117,16 +117,10 @@ async fn rehoming_a_root_into_a_namespace_that_holds_its_code_is_refused() {
 }
 
 #[tokio::test]
-async fn a_note_upgraded_and_a_ticket_undeleted_are_held_to_the_namespace() {
+async fn a_ticket_undeleted_is_held_to_the_namespace() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("t.db");
     let (store, second) = two_themes(&path).await;
-    // notes upgrade: a scope THEME under PLEXUS-2 — PLEXUS holds one.
-    let note = store.add_note_as("a theme for the platform".into(), None, None).await.unwrap();
-    let refused = store.upgrade_note(SYS, note.id.get(), new("THEME", Kind::Scope, Some("PLEXUS-2"))).await.unwrap_err();
-    taken(refused);
-    let (made, _) = store.upgrade_note(SYS, note.id.get(), new("THEME", Kind::Scope, Some("OUGHT-1"))).await.unwrap();
-    assert_eq!(made.address, "hypermemetic:OUGHT/THEME-1");
     // delete and undelete: the namesake's root and its build go and come
     // back with their addresses.
     let ids = vec![second.id.to_string(), format!("{}-2", second.shortcode.as_str())];

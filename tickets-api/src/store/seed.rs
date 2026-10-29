@@ -161,8 +161,7 @@ impl Store {
             let ready = ready::Ready::build(tickets.rows());
             tickets.ready = ready;
             // FILTER-4: and the cells, from the rows and those counts.
-            let cells =
-                cells::Cells::build(tickets.rows(), |id| tickets.ready.count(id), |id| tickets.inputs.asking(id));
+            let cells = cells::Cells::build(tickets.rows(), |id| tickets.ready.count(id));
             tickets.cells = cells;
             // FILTER-13: and the kept tree, from the rows, the children and
             // the cells.
@@ -172,7 +171,6 @@ impl Store {
                 &mut tickets.children,
                 &tickets.cells,
                 &tickets.ready,
-                &tickets.inputs,
             );
             // WAVE-6: and every placement, over the seeded store.
             tickets.place_all();

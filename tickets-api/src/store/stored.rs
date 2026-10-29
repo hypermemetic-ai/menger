@@ -118,7 +118,18 @@ use crate::address::{ShortcodeId, TicketId, TicketName};
 /// in place, once ([`upgrade`]). One way: an older build reads a form-15
 /// file as its own; once anything is hidden, it would read a hidden
 /// ticket's cell as its visible twin's.
-const FORM: i64 = 15;
+///
+/// V2-4 is form 16: a cell no longer says whether its tickets are `asking`
+/// — the inputs went with their service — so every cell id the derived
+/// state names may move, and a file in any older form is built again, once,
+/// on its first open. The file's tables of the services that went (chats,
+/// comments, deployments, inputs, components, media, notes, themes, the
+/// queue, assignments, profiles) stay in it, unread. One way: an older build
+/// reading a form-16 file would read every cell as not asking.
+///
+/// Public, so a test of the binary (`tests/derived.rs`) writes a file in the
+/// form before it and holds the open to building this one once.
+pub const FORM: i64 = 16;
 
 /// COMMENT-2, IDENTITY-21, AUTH-7: the forms [`upgrade`] takes to [`FORM`]
 /// in place. MENGER-12: none — form 10 moves the cells, so every older form
@@ -127,15 +138,11 @@ const FORM: i64 = 15;
 /// ACCESS-22: and form 12, which gains the teams' tables (so do 10 and 11).
 /// TICKETS-6: and form 13, which gains the cells' `frozen` (so do 10 to 12).
 /// TICKETS-27: and form 14, which gains the cells' `hidden` (so do 10 to 13).
-const UPGRADES_FROM: [i64; 5] = [10, 11, 12, 13, 14];
+/// V2-4: none again — form 16 moves the cells, so every older form is built
+/// again.
+const UPGRADES_FROM: [i64; 0] = [];
 
 /// IDENTITY-21: what form 8 adds beside the tables — a comment's signer.
-fn add_comment_principal(conn: &Connection) -> rusqlite::Result<()> {
-    if !db::has_column(conn, "comments", "principal")? {
-        conn.execute("ALTER TABLE comments ADD COLUMN principal TEXT", [])?;
-    }
-    Ok(())
-}
 
 /// SDLC-11: the columns form 3 adds to the roll-up tables, `(table,
 /// column)` — what a build gives a file from an older form, as it gives one
@@ -152,10 +159,9 @@ const DOCS_COLUMNS: [(&str, &str); 4] = [
 /// `docs`.
 const MENGER_COLUMN: (&str, &str) = ("cells", "menger");
 
-/// MENGER-12: the columns form 10 adds to the cell table, `(table, column,
-/// type and default)`.
-const ASKING_COLUMNS: [(&str, &str, &str); 2] =
-    [("cells", "asking", "INTEGER NOT NULL DEFAULT 0"), ("cells", "labels", "TEXT NOT NULL DEFAULT '[]'")];
+/// MENGER-12: the column form 10 adds to the cell table, `(table, column,
+/// type and default)` — V2-4: its `asking` went with the inputs.
+const LABELS_COLUMNS: [(&str, &str, &str); 1] = [("cells", "labels", "TEXT NOT NULL DEFAULT '[]'")];
 
 /// ARCHIVE-2: the columns form 12 adds, `(table, column)` — each `INTEGER
 /// NOT NULL DEFAULT 0`.
@@ -331,7 +337,6 @@ const SCHEMA: &str = "
             blocked  INTEGER NOT NULL,
             commits  INTEGER NOT NULL,
             menger   INTEGER NOT NULL DEFAULT 0,
-            asking   INTEGER NOT NULL DEFAULT 0,
             labels   TEXT NOT NULL DEFAULT '[]',
             archived INTEGER NOT NULL DEFAULT 0,
             frozen   INTEGER NOT NULL DEFAULT 0,
@@ -700,8 +705,8 @@ fn write_tree(conn: &Connection, t: &tree::Stored) -> rusqlite::Result<()> {
 /// FILTER-4: one cell of the table.
 fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO cells (id, state, kind, severity, blocked, commits, menger, asking, labels, archived, frozen, hidden)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT INTO cells (id, state, kind, severity, blocked, commits, menger, labels, archived, frozen, hidden)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?
     .execute(params![
         id,
@@ -711,7 +716,6 @@ fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
         key.blocked(),
         key.commits(),
         key.menger(),
-        key.asking(),
         serde_json::to_string(&*key.labels().labels()).expect("serialize labels"),
         key.archived(),
         key.frozen(),
@@ -932,8 +936,8 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
             tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"), [])?;
         }
     }
-    // MENGER-12: and from form 9 or older its `asking` and `labels`.
-    for (table, column, decl) in ASKING_COLUMNS {
+    // MENGER-12: and from form 9 or older its `labels`.
+    for (table, column, decl) in LABELS_COLUMNS {
         if !db::has_column(&tx, table, column)? {
             tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
         }
@@ -946,11 +950,8 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     add_hidden_column(&tx)?;
     create_children_index(&tx)?;
     drop_ready_index(&tx)?;
-    // COMMENT-2: form 7's comments table — empty for a file that had none.
-    tx.execute_batch(super::comments::TABLE)?;
-    // IDENTITY-21: form 8's members table and comment signers.
+    // IDENTITY-21: form 8's members table.
     tx.execute_batch(super::members::TABLE)?;
-    add_comment_principal(&tx)?;
     // AUTH-7: form 9's roles table.
     tx.execute_batch(super::roles::TABLE)?;
     // ORG-3: form 11's shortcodes, orgs and pins — empty; the open that
@@ -958,9 +959,7 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     tx.execute_batch(super::shortcodes::TABLES)?;
     // ACCESS-22: form 13's teams — empty for a file that had none.
     tx.execute_batch(super::teams::TABLES)?;
-    // MENGER-12: the inputs say which tickets are `asking` — read before
-    // the cells are built (`inputs::migrate` made the tables before this).
-    let cache = Cache::new(db::load_rows(&tx)?, super::inputs::load(&tx)?);
+    let cache = Cache::new(db::load_rows(&tx)?);
     let form = cache.form();
     write_all(&tx, &form)?;
     create_ready_index(&tx)?;
@@ -1013,9 +1012,7 @@ pub(super) fn upgrade(conn: &mut Connection, form: i64) -> anyhow::Result<bool> 
     }
     let started = std::time::Instant::now();
     let tx = conn.transaction()?;
-    tx.execute_batch(super::comments::TABLE)?;
     tx.execute_batch(super::members::TABLE)?;
-    add_comment_principal(&tx)?;
     tx.execute_batch(super::roles::TABLE)?;
     // ORG-3: form 11's tables, filled by the open's settle.
     tx.execute_batch(super::shortcodes::TABLES)?;
@@ -1316,7 +1313,7 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
     // TICKETS-27: and `hidden` as 0 in one from before form 15.
     let hidden = if db::has_column(conn, "cells", "hidden")? { "hidden" } else { "0" };
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, state, kind, severity, blocked, commits, menger, asking, labels, {archived}, {frozen}, {hidden} FROM cells ORDER BY id"
+        "SELECT id, state, kind, severity, blocked, commits, menger, labels, {archived}, {frozen}, {hidden} FROM cells ORDER BY id"
     ))?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
@@ -1333,11 +1330,11 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
             r.get(6)?,
         );
         // MENGER-12: the set as stored, interned again in this process.
-        let labels: Vec<String> = serde_json::from_str(r.get_ref(8)?.as_str()?).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, e.to_string().into())
+        let labels: Vec<String> = serde_json::from_str(r.get_ref(7)?.as_str()?).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, e.to_string().into())
         })?;
         let labels: Vec<crate::vocab::Label> = labels.into_iter().map(crate::vocab::Label::stored).collect();
-        let key = key.with(r.get(7)?, cells::LabelSet::of(&labels)).archiving(r.get(9)?).freezing(r.get(10)?).hiding(r.get(11)?);
+        let key = key.with(cells::LabelSet::of(&labels)).archiving(r.get(8)?).freezing(r.get(9)?).hiding(r.get(10)?);
         out.insert(r.get(0)?, key);
     }
     Ok(out)
@@ -1512,9 +1509,6 @@ pub enum Verdict {
         /// ACT-5: the tombstones the file holds — `None` when it has no
         /// table yet (the next open makes it).
         tombstones: Option<usize>,
-        /// DEPLOY-11: the deployments the file holds — `None` when it has
-        /// no table yet (the next open makes it).
-        deployments: Option<usize>,
         /// ORG-3: the shortcodes the file holds, their namespaces each the
         /// one its root's host gives it — `None` when it has no table yet.
         shortcodes: Option<usize>,
@@ -1574,8 +1568,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
             ))
         }
     }
-    // MENGER-12: the inputs say which tickets are `asking`.
-    let scanned = Cache::new(db::load_rows(&tx)?, super::inputs::load_if_any(&tx)?);
+    let scanned = Cache::new(db::load_rows(&tx)?);
     let stored = read(&tx)?;
     let stored_children = read_children(&tx)?;
     let stored_ready = read_ready(&tx)?;
@@ -1610,11 +1603,6 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         out.extend(differs);
         n
     });
-    // DEPLOY-11: the environments and the deployed cells.
-    let deployments = super::deployments::check(&tx, &scanned)?.map(|(n, differs)| {
-        out.extend(differs);
-        n
-    });
     // ORG-3: the shortcodes — the five checks.
     let shortcodes = super::shortcodes::check(&tx, &scanned)?.map(|(n, differs)| {
         out.extend(differs);
@@ -1644,7 +1632,6 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         indexed,
         transitions,
         tombstones,
-        deployments,
         shortcodes,
         revisions,
     })

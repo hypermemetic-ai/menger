@@ -156,23 +156,6 @@ impl Lens {
         self.history.iter().any(|h| h.event == crate::filter::Event::Touched)
     }
 
-    /// DEPLOY-11: whether it asks `deployed` (DEPLOY-20: or `behind`;
-    /// DEPLOY-21: or a stage) — what a recorded deployment can move.
-    pub fn asks_deployed(&self) -> bool {
-        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Deployed(_) | crate::filter::Event::Behind(_) | crate::filter::Event::Stage(..) | crate::filter::Event::Requested(_)))
-    }
-
-    /// MENGER-39: whether it asks `queued` — what a queue write can move.
-    pub fn asks_queued(&self) -> bool {
-        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Queued(_)))
-    }
-
-    /// CHAT-3: whether it asks `chatting` or `unread` — what a chat write
-    /// can move.
-    pub fn asks_chats(&self) -> bool {
-        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Chatting | crate::filter::Event::Unread | crate::filter::Event::Asked | crate::filter::Event::InChat(_)))
-    }
-
     /// MENGER-13: whether what it admits moves as time passes — a history
     /// predicate whose window is relative (`within`, `today`, `yesterday`,
     /// `this week`): a `watch` reads it again on a clock.
@@ -260,13 +243,6 @@ impl Lens {
                 if !history.iter().any(|x| x.format() == h.format()) {
                     history.push(h.clone());
                 }
-            }
-        }
-        // TICKETS-9: `unassigned` reads `assigned`'s truth.
-        if history.iter().any(|h| h.event == crate::filter::Event::Unassigned) {
-            let any = crate::filter::History { event: crate::filter::Event::Assigned(None), window: None, by: None };
-            if !history.contains(&any) {
-                history.push(any);
             }
         }
         if history.len() > HISTORY_MAX {
@@ -381,7 +357,6 @@ fn facts(letters: &str, key: Key, lineage: &[&str], holds: &[&str]) -> Facts {
         blocked: key.blocked(),
         has_commits: key.commits(),
         menger_doc: key.menger(),
-        asking: key.asking(),
         labels: key.labels().labels().iter().map(|l| l.to_string()).collect(),
         archived: key.archived(),
         frozen: key.frozen(),
@@ -457,7 +432,6 @@ fn slot(field: &str, k: Key) -> usize {
         "ready" => flag(crate::filter::category_of(k.status()) == Category::Ready && !k.blocked()),
         "has commits" => flag(k.commits()),
         "menger doc" => flag(k.menger()),
-        "asking" => flag(k.asking()),
         other => unreachable!("not a cell field: {other}"),
     }
 }
@@ -856,7 +830,7 @@ impl Store {
     /// none will move.
     pub fn next_boundary(&self, lens: &Lens) -> Option<i64> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        lens.history().iter().filter_map(|h| cache.next_boundary(h, lens.clock())).min()
+        lens.history().iter().filter_map(|h| cache.log.next_boundary(h, lens.clock())).min()
     }
 
     /// MENGER-13: what time did to a `watch { filter }` whose filter has a

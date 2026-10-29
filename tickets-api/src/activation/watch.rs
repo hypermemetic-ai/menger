@@ -127,11 +127,6 @@ pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser
                     for m in store.moved_between(before.as_ref(), after.as_ref(), epic.as_ref()) {
                         yield membership_event(&store, m);
                     }
-                    if !membership {
-                        for name in moved.gone {
-                            yield TicketsEvent::ComponentRemoved { name };
-                        }
-                    }
                 }
             }
             let next = match woke {

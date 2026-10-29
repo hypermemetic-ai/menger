@@ -19,4 +19,5 @@
 __pycache__/
 # UI-5: scripts/ui-compiler-wasm.sh builds the compiler as a wasm module here.
 # V2-7: the UI bundle (scripts/ui-build.sh) and the compiler module the pipeline builds
+# UI-6: and its staging directory (dist/ui.d) and the engine's build
 /dist

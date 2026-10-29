@@ -385,11 +385,6 @@ pub(super) struct Tally {
 }
 
 impl Tally {
-    /// FILTER-21: a walk that files board notes among its docs.
-    pub(super) fn filing_menger_docs() -> Self {
-        Self { file_menger_docs: true, ..Self::default() }
-    }
-
     /// MENGER-12: a walk that files board notes, asks and labels.
     pub(super) fn asking_and_labelling() -> Self {
         Self { file_menger_docs: true, ask_and_label: true, ..Self::default() }
@@ -402,46 +397,23 @@ impl Tally {
     }
 }
 
-/// MENGER-12: one write that moves `asking` or a label — on draws of its own
-/// (`own`), so the walk's draws stay the ones it had. A body that declares a
-/// text input and a decision, or one of them, or none; an answer, a clear, a
-/// close or a reopen of one of a ticket's inputs (a refusal — a closed or
-/// removed input — is a write too); a label added or removed.
+/// MENGER-12: one write that moves a label, or a body — on draws of its own
+/// (`own`), so the walk's draws stay the ones it had.
 pub(super) async fn random_ask_or_label(store: &Store, own: &mut Rng, all: &[Row], tally: &mut Tally) -> String {
     let id = all[own.below(all.len())].id.clone();
-    let text = "<m-input id=\"q\" kind=\"text\"><m-question>Anything else?</m-question></m-input>\n";
-    let decision = "<m-decision data-field=\"decision\" id=\"d\">\n\n<m-question data-field=\"question\">Which?</m-question>\n\n\
-                    <m-option data-field=\"option\" name=\"A\" value=\"a\"></m-option>\n\
-                    <m-option data-field=\"option\" name=\"B\" value=\"b\"></m-option>\n\n</m-decision>\n";
-    let held: Vec<String> = store.inputs(SYS, Some(&id), None, None).unwrap().into_iter().map(|i| i.id.into_string()).collect();
+    // V2-4: a body is text — what it holds moves no cell; an amend is a
+    // write all the same.
     match own.below(10) {
         0..=2 => {
             let body = match own.below(4) {
-                0 => format!("asks\n\n{text}\n{decision}"),
-                1 => format!("asks\n\n{text}"),
-                2 => format!("decides\n\n{decision}"),
+                0 => "asks\n\n<m-input id=\"q\" kind=\"text\"></m-input>".to_string(),
+                1 => "asks, in prose".to_string(),
+                2 => "decides".to_string(),
                 _ => "asks nothing".to_string(),
             };
             store.amend(SYS.permit(&id), None, Some(body)).await.unwrap();
             tally.asked += 1;
-            format!("amend {id}'s inputs")
-        }
-        3..=6 if !held.is_empty() => {
-            let input = held[own.below(held.len())].clone();
-            let done = match own.below(4) {
-                0 => {
-                    let value = match input.as_str() {
-                        "q" => InputValue::Text { text: "yes".into() },
-                        _ => InputValue::Choice { option: "a".into() },
-                    };
-                    store.answer(SYS.permit(&id), &input, value, None, crate::types::AnswerSource::Api).await
-                }
-                1 => store.clear_answer(SYS.permit(&id), &input, crate::types::AnswerSource::Api).await,
-                2 => store.close_input(SYS.permit(&id), &input).await,
-                _ => store.reopen_input(SYS.permit(&id), &input).await,
-            };
-            tally.asked += usize::from(matches!(done, Ok(InputWrite::Changed(_))));
-            format!("an input write to {id}'s {input}")
+            format!("amend {id}'s body")
         }
         _ => {
             let names = ["needs-you", "p1", "later"];

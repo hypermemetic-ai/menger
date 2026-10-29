@@ -3,7 +3,7 @@
 //! `activation.rs` as they were, so that file holds the methods alone.
 
 use super::*;
-use crate::store::{FilterChange, QueueChange};
+use crate::store::FilterChange;
 
 /// MNG-9: one page of the store, as the events that carry it — a row per
 /// ticket and then exactly one `page` event, which is what tells a client
@@ -101,7 +101,6 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
             TicketsEvent::CommitsUnlinked { ticket, removed }
         }
         Change::LabelsChanged { ticket, added, removed } => TicketsEvent::LabelsChanged { ticket, added, removed },
-        Change::AssigneesChanged { ticket, added, removed } => TicketsEvent::AssigneesChanged { ticket, added, removed },
         Change::FrozenChanged { ticket } => TicketsEvent::FrozenChanged { ticket },
         Change::HiddenChanged { ticket } => TicketsEvent::HiddenChanged { ticket },
         Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
@@ -114,7 +113,7 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         // ACT-5: a delete's and an undelete's, as their answers are.
         Change::Deleted { ids, tombstones } => TicketsEvent::Deleted { ids, tombstones },
         Change::Undeleted { ids, tickets } => TicketsEvent::Undeleted { ids, tickets },
-        Change::Archived { ids, live, unqueued, mark } => TicketsEvent::Archived { ids, live, unqueued, mark, dry_run: false },
+        Change::Archived { ids, live, mark } => TicketsEvent::Archived { ids, live, mark, dry_run: false },
         Change::Restored { ids, ancestors, still_archived, by } => TicketsEvent::Restored { ids, ancestors, still_archived, by, dry_run: false },
         // ACT-6: a reshortcode's, as its answer is.
         Change::Reshortcoded { moves, tickets } => TicketsEvent::Reshortcoded { moves, tickets },
@@ -149,24 +148,11 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         Change::PlacementsChanged { changes } => TicketsEvent::PlacementsChanged {
             changes: changes.into_iter().map(|(_, change)| change).collect(),
         },
-        // COMP-3: past any `epic` filter — a component is in no shortcode.
-        Change::ComponentChanged { component } => TicketsEvent::ComponentChanged { component },
-        Change::ComponentRemoved { name } => TicketsEvent::ComponentRemoved { name },
-        // INPUT-3: its ticket's shortcode filtered `watch { epic }` on the
-        // way here; the wire carries the input.
-        Change::InputChanged { input, .. } => TicketsEvent::InputChanged { input },
         // MENGER-13: its ticket's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the transition.
         Change::Transition { transition, .. } => TicketsEvent::Transition { transition },
         // TICKETS-7: a revision a write kept.
         Change::Revised { ticket, rev, fields, .. } => TicketsEvent::Revised { ticket, rev, fields },
-        // MENGER-39: its ticket's shortcode filtered `watch { epic }` on the
-        // way here; the wire carries the queue write.
-        Change::Queue { change, .. } => match change {
-            QueueChange::Queued { entry, ticket, action } => TicketsEvent::Queued { entry, ticket, action },
-            QueueChange::Unqueued { id, entry, action, by, at_unix } => TicketsEvent::Unqueued { id, entry, action, by, at_unix },
-            QueueChange::Snoozed { entry, ticket } => TicketsEvent::Snoozed { entry, ticket },
-        },
         Change::CellsMoved { .. } => return None,
         // FILTER-13: each `watch { filter }` asking `under` takes its own.
         Change::UnderMoved { .. } => return None,
@@ -230,18 +216,6 @@ fn frozen(scope: String, numbers: Option<String>) -> TicketsEvent {
 /// crosses the wire.
 pub(super) fn change_event(change: Change) -> TicketsEvent {
     wire_event(change).expect("a write answers with a change the wire carries")
-}
-
-/// INPUT-3: a write to one input, as its one event — `input_changed` for a
-/// change, `input` for one that changed nothing, `not_found` for a ticket
-/// that is none, an in-band `error` for every refusal.
-pub(super) fn input_event(written: Result<InputWrite, StoreError>, ticket: String) -> TicketsEvent {
-    match written {
-        Ok(InputWrite::Changed(input)) => TicketsEvent::InputChanged { input },
-        Ok(InputWrite::Unchanged(input)) => TicketsEvent::Input { input },
-        Err(StoreError::NotFound(_)) => TicketsEvent::NotFound { id: Asked::stored(ticket) },
-        Err(e) => refusal(e),
-    }
 }
 
 /// ACCESS-13: why a call answers other than with its event — the one shape

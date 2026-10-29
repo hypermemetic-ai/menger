@@ -338,13 +338,17 @@ async fn ui_app(State(ui): State<Arc<UiServe>>, req: Request, next: axum::middle
         let principal = ui.login.as_ref().and_then(|l| l.session(req.headers())).map(|ctx| ctx.principal().map(|p| p.to_string()).unwrap_or(ctx.user_id));
         let store = ui.store.clone();
         let entry = tokio::task::spawn_blocking(move || store.entry_for(principal.as_deref())).await;
-        let html = match entry {
-            Ok(Ok(Some((_, html)))) => String::from_utf8_lossy(&html).into_owned(),
-            Ok(Ok(None)) => PLACEHOLDER.to_string(),
+        let (html, version) = match entry {
+            Ok(Ok(Some((hash, html)))) => (String::from_utf8_lossy(&html).into_owned(), hash),
+            Ok(Ok(None)) => (PLACEHOLDER.to_string(), String::new()),
             Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
         };
-        return ui.page(plexus_shell::stamp(&html, &ui.stamps), req.headers());
+        // UI-6: `{{UI_VERSION}}` — the served version's hash, where the
+        // entrypoint loads the engine from (`/app/<hash>/engine.js`).
+        let mut stamps = ui.stamps.clone();
+        stamps.push(("{{UI_VERSION}}".to_string(), version));
+        return ui.page(plexus_shell::stamp(&html, &stamps), req.headers());
     }
     let Some((hash, file)) = path.strip_prefix("/app/").and_then(|rest| rest.split_once('/')) else { return next.run(req).await };
     if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) || file.is_empty() || file.split('/').any(|s| s == "..") {

@@ -1,0 +1,86 @@
+{
+  "abi": "engine/1",
+  "handlers": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "live": {
+    "rows": {
+      "changes": "tickets.watch",
+      "changes_params": {},
+      "key": "id",
+      "on": {
+        "amended": "upsert:ticket",
+        "created": "upsert:ticket",
+        "deleted": "remove:ids"
+      },
+      "params": {
+        "limit": 200,
+        "summary": true
+      },
+      "snapshot": "tickets.list"
+    }
+  },
+  "name": "hello-list",
+  "props": [],
+  "state": {},
+  "tree": [
+    {
+      "attrs": {
+        "class": "hello"
+      },
+      "children": [
+        {
+          "text": "Hello from v1"
+        }
+      ],
+      "el": "h1"
+    },
+    {
+      "attrs": {
+        "class": "status"
+      },
+      "children": [
+        {
+          "text": {
+            "expr": "rows.status"
+          }
+        }
+      ],
+      "el": "p"
+    },
+    {
+      "attrs": {
+        "class": "rows"
+      },
+      "children": [
+        {
+          "body": [
+            {
+              "attrs": {
+                "data-id": {
+                  "expr": "r.id"
+                }
+              },
+              "children": [
+                {
+                  "text": {
+                    "expr": "r.id + \" \" + r.title"
+                  }
+                }
+              ],
+              "el": "li"
+            }
+          ],
+          "each": {
+            "as": "r",
+            "expr": "rows.rows",
+            "key": "r.id"
+          }
+        }
+      ],
+      "el": "ul"
+    }
+  ],
+  "uses": [
+    "tickets.list",
+    "tickets.watch"
+  ]
+}

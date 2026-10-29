@@ -403,7 +403,6 @@ where
         backend,
         None,
         menger::store::BODY_MAX_DEFAULT,
-        vec![],
         ui,
         make,
     )

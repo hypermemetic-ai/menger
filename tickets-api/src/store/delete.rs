@@ -14,9 +14,7 @@
 //! - a ticket that waits on it — unless `unblock` (the block is dropped, and
 //!   the blocked ticket's history names the delete: `history`'s `deletions`);
 //! - its shortcode, when it is the root and the shortcode holds a ticket that
-//!   stays;
-//! - a component or a theme it defines; an input of its that is `open` or
-//!   `answered` (live: close it first).
+//!   stays.
 //!
 //! **Which tickets.** ACT-2's selection ([`Selection`]): named, or what a
 //! filter admits at the write; all of them or none.
@@ -25,8 +23,7 @@
 //! a file gains empty on open) with the whole ticket beside it, body and all,
 //! until it is [`KEEP_BODY_FOR`] old — then the purge ([`Store::purge`]: at
 //! start and every [`PURGE_EVERY`] inside the server) keeps the tombstone and
-//! drops the rest. The transition log is not touched; its inputs stay in the
-//! file (out of every read) for an undo. A number is never reused: the next
+//! drops the rest. The transition log is not touched. A number is never reused: the next
 //! ticket of the shortcode takes the number after its highest, deleted or
 //! not ([`Cache::next_seq`]); nothing may wait on a deleted id.
 //!
@@ -49,7 +46,7 @@
 //! child's `ParentChanged` (and its new parent's `ChildrenChanged`), each
 //! unblocked ticket's `BlockersChanged`, each surviving parent's
 //! `ChildRemoved`, each blocker's `UnlocksRemoved`; then [`Change::Deleted`];
-//! then the components, the groups and the placements that moved; then, for
+//! then the groups and the placements that moved; then, for
 //! `watch { filter }`, the cells ([`cells::GONE`]: a deleted ticket leaves
 //! every filter) and the lineage. `undelete` is the same write backwards
 //! ([`Change::Undeleted`] first).
@@ -60,7 +57,7 @@ use super::update_many::UPDATE_MANY_CEILING;
 use super::*;
 use crate::access::AdminOf;
 use crate::address::{ShortcodeId, TicketId, TicketName};
-use crate::types::{InputState, Tombstone};
+use crate::types::Tombstone;
 use rusqlite::OptionalExtension;
 use roaring::RoaringBitmap;
 use std::collections::BTreeSet;
@@ -393,20 +390,6 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
         }
     }
     let leaving = |id: &str| cache.at.get(id).is_some_and(|k| gone.contains_key(k));
-    let owners: HashMap<String, Vec<String>> = {
-        let mut by: HashMap<String, Vec<String>> = HashMap::new();
-        for c in cache.components.components() {
-            if let Some(o) = c.owner {
-                by.entry(o).or_default().push(format!("the component <{}>", c.name));
-            }
-        }
-        for th in cache.themes.by_name.values() {
-            if let Some(o) = &th.owner {
-                by.entry(o.clone()).or_default().push(format!("the theme `{}`", th.name));
-            }
-        }
-        by
-    };
     let mut held_gone: HashMap<&ShortcodeId, u64> = HashMap::new();
     for t in gone.values() {
         *held_gone.entry(&t.shortcode).or_default() += 1;
@@ -489,25 +472,6 @@ pub(super) fn plan(cache: &Cache, ids: &[String], how: Deletion) -> Result<Plan,
                 )));
             }
         }
-        if let Some(owned) = owners.get(t.id.as_str()) {
-            why.push(refuse(format!("{} defines {} — move the definition to another ticket first", t.id, owned.join(", "))));
-        }
-        let live: Vec<&str> = cache
-            .inputs
-            .of(&t.id)
-            .iter()
-            .filter(|i| matches!(i.state, InputState::Open | InputState::Answered))
-            .map(|i| i.id.as_str())
-            .collect();
-        if !live.is_empty() {
-            why.push(refuse(format!(
-                "{} asks the owner {} ({}) — close {} first (close_input)",
-                t.id,
-                plural(live.len(), "an input", "inputs"),
-                named(live.iter().copied()),
-                plural(live.len(), "it", "them"),
-            )));
-        }
         if !why.is_empty() {
             refusals.push((t.id.to_string(), why));
         }
@@ -562,10 +526,6 @@ fn unplan(cache: &Cache, found: Vec<(String, Option<Ticket>)>) -> Result<Vec<Bac
             if let Some(holder) = cache.paths.get(&(ticket.shortcode.clone(), path.clone())) {
                 why.push(StoreError::PathTaken { epic: ticket.epic.to_string(), path: path.clone(), holder: holder.clone() });
             }
-        }
-        let (uses, _) = components::read(&ticket.body);
-        if let Err(e) = cache.plan_registry(&id, &uses, Some(&id)) {
-            why.push(e);
         }
         if why.is_empty() {
             out.push((ticket, tomb.clone()));
@@ -684,19 +644,17 @@ impl Cache {
     }
 
     /// ACT-5: the derived state replaced by `built`'s — built by a scan of
-    /// the rows the write leaves ([`Cache::built`]) — with `inputs`; the
-    /// placements and the log's times from the rows again. Every record
-    /// beside the tickets (comments, notes, members, roles, themes and their
-    /// channel, the log's marks) stays as it is.
+    /// the rows the write leaves ([`Cache::built`]); the placements and the
+    /// log's times from the rows again. Every record beside the tickets
+    /// (members, roles, the log's marks) stays as it is.
     ///
     /// ORG-3: and the shortcodes as `built` has them — its rows dressed by
     /// them, a namespace a reparented root moved included ([`Cache::rebuilt`]).
-    fn rederive(&mut self, built: Cache, inputs: inputs::Inputs) {
+    fn rederive(&mut self, built: Cache) {
         let Cache { order, at, paths, rollups, ids, children, ready, cells, shortcodes, .. } = built;
         (self.order, self.at, self.paths, self.rollups, self.ids) = (order, at, paths, rollups, ids);
         self.shortcodes = shortcodes;
         (self.children, self.ready, self.cells) = (children, ready, cells);
-        self.inputs = inputs;
         self.place_all();
         self.log.time_all(self.order.values());
     }
@@ -847,15 +805,6 @@ impl Store {
         for r in rows.values() {
             db::update_row(&txn, r)?;
         }
-        // The registry: each deleted ticket's references dropped, as a body
-        // with none would drop them (it defines nothing: refused above).
-        let mut registry = Vec::new();
-        for t in &p.gone {
-            let plan = cache.plan_registry(&t.id, &components::Uses::default(), Some(&t.id))?;
-            components::store(&txn, &plan.moves)?;
-            cache.take_registry(plan.moves.clone());
-            registry.extend(Change::components(plan));
-        }
         // The tombstones, beside the whole tickets; the rows and the index out.
         let mut tombstones = Vec::with_capacity(p.gone.len());
         for t in &p.gone {
@@ -897,11 +846,7 @@ impl Store {
             tombstones.push(tomb);
         }
         // The derived state, built from the rows as the write leaves them.
-        let mut inputs = cache.inputs.clone();
-        for t in &p.gone {
-            inputs.take(&t.id, Vec::new());
-        }
-        let built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, inputs.clone(), cache.cells.keys());
+        let built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, cache.cells.keys());
         let built = cache.rebuilt(&txn, built)?;
         stored::write_all(&txn, &built.form())?;
         // The events of the tickets that stay and moved, as the write leaves them.
@@ -930,12 +875,11 @@ impl Store {
         }
         super::revisions::commit(txn)?;
         let ids: Vec<TicketId> = p.gone.iter().map(|t| t.id.clone()).collect();
-        cache.rederive(built, inputs);
+        cache.rederive(built);
         for (t, tomb) in p.gone.iter().zip(&tombstones) {
             cache.tombstones.put(tomb.clone(), t.shortcode.clone(), t.seq);
         }
         out.tickets.push(Change::Deleted { ids: ids.clone(), tombstones: tombstones.clone() });
-        out.components = registry;
         let cells = before.moved(cache, &touched, &mut out);
         out.filtered(cells, under.and_then(|u| u.after_in(cache)));
         Ok((Deleted { ids, tombstones }, out.finish()))
@@ -1075,23 +1019,6 @@ impl Store {
         for r in rows.values().filter(|r| !coming.contains(r.id.as_str())) {
             db::update_row(&txn, r)?;
         }
-        let mut registry = Vec::new();
-        for t in &tickets {
-            let (uses, _) = components::read(&t.body);
-            let plan = cache.plan_registry(&t.id, &uses, Some(&t.id))?;
-            components::store(&txn, &plan.moves)?;
-            cache.take_registry(plan.moves.clone());
-            registry.extend(Change::components(plan));
-        }
-        // Their inputs, as the file kept them.
-        let mut inputs = cache.inputs.clone();
-        let kept = inputs::load(&txn)?;
-        let mut input_events = Vec::new();
-        for t in &tickets {
-            let list = kept.of(&t.id).to_vec();
-            input_events.extend(list.iter().map(|input| Change::InputChanged { shortcode: t.shortcode.clone(), input: input.clone() }));
-            inputs.take(&t.id, list);
-        }
         let keys: Vec<OrderKey> = {
             let mut k: Vec<OrderKey> = tickets.iter().map(|t| OrderKey { shortcode: t.shortcode.clone(), seq: t.seq }).collect();
             k.extend(reblocked.iter().filter_map(|(x, _): &(TicketId, TicketId)| cache.at.get(x.as_str()).cloned()));
@@ -1101,7 +1028,7 @@ impl Store {
         };
         let under = under_of(unders, cache, &keys, &[]);
         let before = Before::of(cache, keys.iter().cloned());
-        let built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, inputs.clone(), cache.cells.keys());
+        let built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, cache.cells.keys());
         let built = cache.rebuilt(&txn, built)?;
         stored::write_all(&txn, &built.form())?;
         let mut out = Gathered::default();
@@ -1129,12 +1056,10 @@ impl Store {
             out.tickets.push(Change::UnlocksChanged { ticket: after(&txn, &built, &b)?, added: TicketName::from(added) });
         }
         super::revisions::commit(txn)?;
-        cache.rederive(built, inputs);
+        cache.rederive(built);
         for id in &ids {
             cache.tombstones.remove(id);
         }
-        out.components = registry;
-        out.inputs = input_events;
         let cells = before.moved(cache, &keys, &mut out);
         out.filtered(cells, under.and_then(|u| u.after_in(cache)));
         Ok((Undeleted { ids, tickets: whole }, out.finish()))

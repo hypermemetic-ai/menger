@@ -214,26 +214,6 @@ impl Store {
         })
     }
 
-    /// FILTER-15: `inputs { ticket, epic, state, filter }` — what
-    /// [`Store::inputs`] answers, of the tickets `lens` admits: each ticket
-    /// that declares an input is one lookup in the admitted bitmaps. The
-    /// same `NotFound` for a `ticket` naming no ticket.
-    pub(super) fn inputs_filtered_unscoped(
-        &self,
-        ticket: Option<&str>,
-        epic: Option<&str>,
-        state: Option<InputState>,
-        lens: &Lens,
-    ) -> Result<Vec<Input>, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        // ORG-3: as [`Store::inputs`] resolves them.
-        let ticket = ticket.map(|t| cache.resolve(t)).transpose()?;
-        let epic = epic.map(|e| span_shortcode(&cache, Some(e))).transpose()?.flatten();
-        let view = view(&cache, &everywhere(lens))?;
-        let admitted = |id: &str| cache.at.get(id).is_some_and(|k| view.contains(&k.shortcode, k.seq));
-        Ok(cache.inputs.query_where(ticket.as_deref(), epic.as_ref(), state, admitted))
-    }
-
     /// FILTER-15: `member { ids, filter }` — for each of `ids`, in the order
     /// given, whether `lens` admits it: its position, then a lookup in its
     /// shortcode's admitted bitmaps. An id that names no ticket is not

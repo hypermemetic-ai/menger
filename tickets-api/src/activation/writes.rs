@@ -215,27 +215,3 @@ pub(super) fn said(store: &Store, caller: &VerifiedUser, e: StoreError) -> Ticke
     TicketsEvent::Error { message: redacted(e, |id| everything || sees_id(store, &caller.sight(), id)) }
 }
 
-/// NOTE-2 / ACCESS-11: [`filing`] for a note's upgrade (`notes.upgrade`),
-/// its refusal in words.
-pub(crate) fn filing_text(store: &Store, caller: &VerifiedUser, epic: &str, parent: Option<&str>) -> Result<Filing, String> {
-    filing(store, caller, epic, parent, None).map_err(|ev| match ev {
-        TicketsEvent::Error { message } => message,
-        TicketsEvent::NotFound { id } => format!("no ticket {id}"),
-        TicketsEvent::Ambiguous { id, candidates } => format!("{id} names several tickets: {}", candidates.join(", ")),
-        other => format!("{other:?}"),
-    })
-}
-
-/// COMMENT-2 / ACCESS-11: a role `R` permit for each of `named` that names
-/// a ticket `caller` holds `R` on — what a comment write takes for the
-/// tickets it is on (one that names none the store refuses as it always
-/// did; one out of reach was refused before, by the call's grant).
-pub(crate) fn comment_permits<R: RoleMark>(store: &Store, caller: &VerifiedUser, named: &[&str]) -> Vec<Permit<R>> {
-    named.iter().filter_map(|n| store.ticket_id(n.trim())).filter_map(|k| caller.permit::<R>(&TicketId::new(k), store).ok()).collect()
-}
-
-/// ACCESS-11: the scope a shortcode (or `*`, or an organization) named by
-/// text is, as a grant on it is stored.
-pub(crate) fn scope_named(store: &Store, text: &str) -> Result<Scope, String> {
-    store.scope_named(text).map_err(|e| e.to_string())
-}

@@ -39,7 +39,7 @@ pub struct SavedFilter {
 /// you", the owner's queue, what asks and what is labelled so — and the
 /// text it holds until a filter of that name is saved: what `saved "Needs
 /// you"` means meanwhile, on the server as in the app.
-pub const NEEDS_YOU: (&str, &str) = ("Needs you", "queued or asking or asked or label needs-you");
+pub const NEEDS_YOU: (&str, &str) = ("Needs you", "label needs-you");
 
 /// The text a name means while none is saved ([`NEEDS_YOU`]'s), by slug.
 pub fn default_text(name: &str) -> Option<&'static str> {
@@ -84,7 +84,7 @@ mod tests {
         assert_eq!(slug("Needs you"), "needs-you");
         assert_eq!(slug("Über Läufe"), "über-läufe");
         assert_eq!(slug("--"), "");
-        assert_eq!(default_text("needs YOU"), Some("queued or asking or asked or label needs-you"));
+        assert_eq!(default_text("needs YOU"), Some("label needs-you"));
         assert_eq!(default_text("Plexus-Ready"), None);
     }
 }
