@@ -552,6 +552,7 @@ dependencies = [
  "castaway",
  "cfg-if",
  "itoa",
+ "serde",
  "static_assertions",
  "zmij",
 ]
@@ -2131,6 +2132,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "menger-ui-engine"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "js-sys",
+ "plexus-client",
+ "rhai",
+ "serde",
+ "serde_json",
+ "sha2",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "menger-ui-service"
 version = "0.1.0"
 dependencies = [
@@ -2411,6 +2428,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -2938,6 +2957,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "rhai_codegen",
+ "serde",
  "smallvec",
  "smartstring",
  "thin-vec",

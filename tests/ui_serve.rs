@@ -86,6 +86,7 @@ async fn a_hashed_path_is_immutable_and_the_entrypoint_is_not() {
     assert_eq!(cache(&entry).as_deref(), Some("no-store"), "the entrypoint is never kept");
     let body = entry.text().await.unwrap();
     assert!(body.contains(&format!("version 1 on {}", m.ws)), "the live entrypoint, stamped with the socket's port: {body}");
+    assert!(body.contains(&format!("at {hash}")), "UI-6: stamped with the served version's hash: {body}");
     assert!(!body.contains("{{"), "{body}");
 }
 
@@ -107,6 +108,7 @@ async fn a_preview_is_served_to_its_principal_alone() {
     let mine = support::mint_session(m.ws).await;
     let body = m.get("/app/", Some(&mine)).await.text().await.unwrap();
     assert!(body.contains("version 1 on"), "the admin's session gets its preview: {body}");
+    assert!(body.contains(&format!("at {one}")), "UI-6: the stamp names the version served, the preview's: {body}");
 
     // Anyone else — a session of a principal holding no preview — gets live.
     call(&admin, "auth.grant", json!({ "principal": support::principal_of(&SOMEONE), "role": "viewer", "scope": "*" })).await;

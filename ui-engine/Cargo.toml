@@ -1,0 +1,63 @@
+# UI-6: the engine — what `/app/` boots in the browser. It loads the live
+# version's manifest, mounts its routes' components (UI-4's compiled view
+# trees) against the DOM, runs their handlers as Rhai folds, binds them to
+# Plexus streams through `live()`, and swaps a component the moment its hash
+# changes, without a reload. One socket per page.
+#
+# Built natively for its tests (`cargo test -p menger-ui-engine`: the
+# recording renderer, a fake wire, a manual clock) and to
+# `wasm32-unknown-unknown` with `--features dom` by `scripts/ui-build.sh`
+# (wasm-bindgen-cli → engine.js / engine.wasm, abi `engine/1`).
+[package]
+name = "menger-ui-engine"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "menger's ui engine — signals, live() over Plexus streams, the view tree over a renderer, Rhai folds, sections, hot-swap"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# The DOM renderer (web-sys) and the wasm entry. Off natively: the tests
+# draw through the recording renderer.
+dom = ["dep:web-sys", "dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The folds and the template's expressions: one Engine per component, only
+# `call` and `navigate` registered; values cross as serde maps.
+# `no_time` and `no_module` as the compiler's (UI-4: never `wasm-bindgen`);
+# `internals` to walk a handler's AST for its `call`s.
+rhai = { version = "1.27", default-features = false, features = ["std", "serde", "no_time", "no_module", "internals"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }
+# A component's tree and handlers are named by the sha256 of their bytes.
+sha2 = "0.10"
+# The wire seam's envelope; the socket itself (ws-web) only on wasm32.
+plexus-client = { path = "../../plexus-macros/plexus-client", default-features = false }
+
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+  "Window",
+  "Document",
+  "Element",
+  "HtmlElement",
+  "Node",
+  "Text",
+  "Event",
+  "EventTarget",
+  "MouseEvent",
+  "KeyboardEvent",
+  "Location",
+  "HtmlMetaElement",
+  "Performance",
+  "Response",
+  "console",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+plexus-client = { path = "../../plexus-macros/plexus-client", default-features = false, features = ["ws-web"] }

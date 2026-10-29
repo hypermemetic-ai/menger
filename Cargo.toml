@@ -23,8 +23,10 @@
 # UI-3: `ui-service/` (`menger-ui-service`) — the ui activation and its own
 # file, `ui.db`.
 # UI-5: `ui-compiler/` (`menger-ui-compiler`) — the component compiler,
-# native and as a wasm module with no imports.
-members = [".", "tickets-api", "ui-service", "ui-compiler", "plexus-shell", "plexus-shell/toy", "plexus-login"]
+# native and as a wasm module with no imports. UI-6: `ui-engine/`
+# (`menger-ui-engine`) — the engine the bundle carries (native here for its
+# tests; wasm32 by scripts/ui-build.sh).
+members = [".", "tickets-api", "ui-service", "ui-compiler", "ui-engine", "plexus-shell", "plexus-shell/toy", "plexus-login"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{TITLE}}</title>
+<!-- UI-6: the shell stamps the socket's port and the version this page is
+     served for; the engine's files are that version's, immutable. -->
+<meta name="menger-ws-port" content="{{WS_PORT}}">
+<meta name="menger-ui-version" content="{{UI_VERSION}}">
+<script type="module">
+const version = document.querySelector('meta[name="menger-ui-version"]').content;
+const engine = await import(`/app/${version}/engine.js`);
+await engine.default({ module_or_path: `/app/${version}/engine.wasm` });
+engine.boot(version);
+</script>
+</head>
+<body></body>
+</html>
