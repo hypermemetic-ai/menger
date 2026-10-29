@@ -163,3 +163,88 @@ async fn the_root_serves_what_app_serves() {
     let anonymous = m.get("/", None).await;
     assert_eq!(anonymous.status(), 303, "no session: the login page");
 }
+
+/// A `<link …>`'s attributes: `name="value"`, `name='value'` or a bare `name`
+/// (its value empty), names lower-cased.
+fn link_attrs(tag: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = tag.trim_start_matches("<link").trim_end_matches('>').trim_end_matches('/');
+    loop {
+        rest = rest.trim_start();
+        let Some(end) = rest.find(|c: char| c == '=' || c.is_whitespace()).or((!rest.is_empty()).then_some(rest.len())) else { break };
+        let name = rest[..end].to_ascii_lowercase();
+        rest = &rest[end..];
+        if let Some(after) = rest.strip_prefix('=') {
+            let q = after.chars().next().unwrap_or(' ');
+            if q == '"' || q == '\'' {
+                let close = after[1..].find(q).map(|i| i + 1).unwrap_or(after.len());
+                out.push((name, after[1..close].to_string()));
+                rest = after.get(close + 1..).unwrap_or("");
+            } else {
+                let close = after.find(char::is_whitespace).unwrap_or(after.len());
+                out.push((name, after[..close].to_string()));
+                rest = &after[close..];
+            }
+        } else if !name.is_empty() {
+            out.push((name, String::new()));
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+/// FRAME-16: menger's entrypoint (`ui/index.html`, as a push carries it)
+/// names what the boot needs before its script runs, stamped with the
+/// version it is served for — `<link rel="modulepreload">` of engine.js and
+/// `<link rel="preload" as="fetch" crossorigin>` of engine.wasm and
+/// components.json (`crossorigin`: a `fetch()` is a CORS request, and a
+/// preload without it is not the one the fetch takes) — each before the
+/// script, each a file of that version.
+#[tokio::test]
+async fn the_entrypoint_preloads_the_boot() {
+    let m = start().await;
+    let admin = connect(m.ws).await;
+    let index = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/index.html")).unwrap();
+    let files = [
+        ("index.html", index.as_str()),
+        ("engine.js", "export default async function init() {}\nexport function boot() {}\n"),
+        ("engine.wasm", "\0asm\u{1}\0\0\0"),
+        ("host.js", "export function start() {}\n"),
+        ("manifest.json", "{}\n"),
+        ("components.json", "{}\n"),
+    ];
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, body) in files {
+        let mut h = tar::Header::new_gnu();
+        h.set_size(body.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, name, body.as_bytes()).unwrap();
+    }
+    let bytes = b.into_inner().unwrap();
+    let pushed = call(&admin, "ui.push", support::signed_params(&bytes, &support::json_manifest("c1", "a1"), 1)).await;
+    assert_eq!(pushed[0]["type"], "pushed", "{pushed:?}");
+    let hash = sha_hex(&bytes);
+    let token = support::mint_session(m.ws).await;
+    let body = m.get("/app/", Some(&token)).await.text().await.unwrap();
+
+    let script = body.find("<script").expect("the entrypoint has its script");
+    let links: Vec<(usize, Vec<(String, String)>)> = body.match_indices("<link").map(|(at, _)| (at, link_attrs(&body[at..at + body[at..].find('>').unwrap() + 1]))).collect();
+    let attr = |l: &[(String, String)], k: &str| l.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let shown: Vec<String> = links.iter().map(|(_, l)| format!("{l:?}")).collect();
+    for (rel, as_, file) in [("modulepreload", None, "engine.js"), ("preload", Some("fetch"), "engine.wasm"), ("preload", Some("fetch"), "components.json")] {
+        let href = format!("/app/{hash}/{file}");
+        let Some((at, l)) = links.iter().find(|(_, l)| attr(l, "rel").as_deref() == Some(rel) && attr(l, "href").as_deref() == Some(href.as_str())) else {
+            panic!("the entrypoint has no <link rel=\"{rel}\" href=\"{href}\">; its links: {shown:?}");
+        };
+        assert!(*at < script, "the {file} link comes before the script");
+        if let Some(a) = as_ {
+            assert_eq!(attr(l, "as").as_deref(), Some(a), "{file}'s preload is as=\"{a}\": {l:?}");
+            assert!(attr(l, "crossorigin").is_some(), "{file}'s preload carries crossorigin, as fetch() asks: {l:?}");
+        }
+        let r = m.get(&href, Some(&token)).await;
+        assert_eq!(r.status(), 200, "{href} is a file of the version served");
+    }
+    assert!(!body.contains("{{"), "every stamp filled: {body}");
+}
