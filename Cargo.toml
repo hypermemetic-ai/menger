@@ -5,20 +5,16 @@
 # out of it — its empty [workspace] table detaches it, so `cargo build` here
 # still never needs the wasm toolchain.
 #
-# SCAFFOLD-5: `plexus-shell/` is the shell and LocalServer lifted out of
-# menger as a crate of their own (published as `plexus-shell`), and
-# `plexus-shell/toy` its worked example — both members so the workspace
-# test run covers them.
-#
-# SCAFFOLD-9: `plexus-login/` is menger's login lifted out the same way
-# (published as `plexus-login`).
+# FRAME-4: the shell (`plexus-shell`, SCAFFOLD-5) and the login
+# (`plexus-login`, SCAFFOLD-9) are repositories of their own beside
+# plexus-core, taken by sibling path below — not members here.
 # UI-3: `ui-service/` (`menger-ui-service`) — the ui activation and its own
 # file, `ui.db`.
 # UI-5: `ui-compiler/` (`menger-ui-compiler`) — the component compiler,
 # native and as a wasm module with no imports. UI-6: `ui-engine/`
 # (`menger-ui-engine`) — the engine the bundle carries (native here for its
 # tests; wasm32 by scripts/ui-build.sh).
-members = [".", "tickets-api", "ui-service", "ui-compiler", "ui-engine", "plexus-shell", "plexus-shell/toy", "plexus-login"]
+members = [".", "tickets-api", "ui-service", "ui-compiler", "ui-engine"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]
@@ -64,9 +60,9 @@ menger-tickets-api = { path = "tickets-api", version = "0.6.2" }
 menger-ui-service = { path = "ui-service" }
 
 # SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
-# the local server (`menger::local`'s serving) — lifted out of menger into
-# plexus-shell, which menger consumes: one copy.
-plexus-shell = { path = "plexus-shell", version = "0.1.3" }
+# the local server (`menger::local`'s serving) — plexus-shell, a repository
+# of its own (FRAME-4), by sibling path as the plexus line is.
+plexus-shell = { path = "../plexus-shell", version = "0.1.3" }
 
 # MFE-10: the plexus 0.6 line — plexus-core 0.6.0, plexus-macros 0.6.0
 # (the `client` / `server_cfg` activation flags, MACRO-4) and
@@ -84,10 +80,10 @@ plexus-transport = { path = "../plexus-transport", version = "0.5.1", default-fe
 # Used only when an --auth-provider is given.
 plexus-auth-core = { path = "../plexus-auth-core", version = "0.2.1", features = ["adapters"] }
 # SCAFFOLD-3/SCAFFOLD-9: the login — providers, the page, sessions, the
-# gate, the auth backend, the wiring — its own crate (a workspace member,
-# published before menger); menger implements its `LoginAccess` over
+# gate, the auth backend, the wiring — its own crate and repository
+# (FRAME-4), by sibling path; menger implements its `LoginAccess` over
 # `Access` (src/login_access.rs) and `main` runs on its `Wiring`.
-plexus-login = { path = "plexus-login", version = "0.2.2" }
+plexus-login = { path = "../plexus-login", version = "0.2.2" }
 # IDENTITY-19: the login page — the shell asks the provider itself (discovery,
 # token endpoint), keeps sessions keyed by a random id (hashed), and runs the
 # code flow with PKCE. All already in the lock through plexus-auth-core.
