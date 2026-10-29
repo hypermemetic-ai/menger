@@ -277,7 +277,7 @@ test("debounce: a burst of triggers is one request, filed once the burst is quie
   assert.deepEqual([r.queue[0].request, r.queue[0].branch, r.queue[0].revision], [101, "main", ""]);
   assert.deepEqual(r.auto.triggers[101], ["CHAT-58", "CHAT-59"]);
   const doc = JSON.parse(fs.readFileSync(path.join(r.o.stateDir, "auto.json"), "utf8"));
-  assert.deepEqual([doc.on, doc.pending], [true, { request: 101, tickets: ["CHAT-58", "CHAT-59"] }]);
+  assert.deepEqual([doc.on, doc.pending], [true, { request: 101, tickets: ["CHAT-58", "CHAT-59"], branch: "main" }], "V2-7: each request's branch recorded");
 });
 
 test("coalesce: one pending request at most — triggers fold into the one queued here, or the tracker's", async () => {

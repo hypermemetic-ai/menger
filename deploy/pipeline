@@ -9,7 +9,9 @@
 # against the release's own tree, and a release whose suite is red never
 # reaches prod.
 #
-#   deploy/pipeline build [REV] [--no-gate] gate + release (default REV: main); --no-gate: the
+#   deploy/pipeline build [REV] [--branch B] [--no-gate]  gate + release (default REV: B, else main;
+#                                           V2-7: B named in the release; a tree with no frontend/ builds
+#                                           its UI in the plexus-codegen container); --no-gate: the
 #                                           release alone, the suite to run after the deploy
 #                                           (DEPLOY-52); refused up front on a low disk (CI-2:
 #                                           scripts/disk-check.sh — under 50 GB free or 90% used)
@@ -81,7 +83,8 @@ set -euo pipefail
 REPO=$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)
 # The build checkout is a sibling of the repo: menger's plexus dependencies are
 # relative paths (../plexus-core …), so a checkout anywhere else cannot build.
-BUILD=$(dirname "$REPO")/menger-build
+# V2-7: MENGER_BUILD_CHECKOUT names another sibling (a worktree's own build, beside the runner's)
+BUILD=${MENGER_BUILD_CHECKOUT:-$(dirname "$REPO")/menger-build}
 HOME_DIR=${MENGER_DEPLOY_HOME:-$HOME/.local/share/menger-deploy}
 RELEASES=$HOME_DIR/releases
 LOG=$HOME_DIR/deployments.log
@@ -345,6 +348,8 @@ run_gate() {
   GATE_WS=$(cd "$dir" && CARGO_TARGET_DIR=$dir/target cargo test --workspace --no-fail-fast 2>&1 | tee "$lw" | grep -E '^test result' \
             | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') || gate_red workspace "$lw" "$short"
   grep -q '^test result: FAILED' "$lw" && gate_red workspace "$lw" "$short"
+  # V2-7: a tree with no frontend/ (v2) has no frontend suite: the workspace is the whole of it
+  if [[ ! -d $dir/frontend ]]; then GATE_FE=""; say "gate: workspace $GATE_WS (no frontend/)"; return 0; fi
   step "gate: frontend tests"
   lf=$(log_path gate-frontend); say "log: $lf"
   GATE_FE=$(cd "$dir/frontend" && CARGO_TARGET_DIR=$dir/frontend/target cargo test --no-fail-fast 2>&1 | tee "$lf" | grep -E '^test result' \
@@ -352,34 +357,18 @@ run_gate() {
   grep -q '^test result: FAILED' "$lf" && gate_red frontend "$lf" "$short"
   say "gate: workspace $GATE_WS; frontend $GATE_FE"
 }
-cmd_build() {
-  need cargo; need trunk; need npm; need node   # DEPLOY-41: what the build needs; fail now, not half-way
-  local rev=main gated=1 a sha short id stage disk
-  for a in "$@"; do case $a in --no-gate) gated=0 ;; -*) die "unknown flag $a" ;; *) rev=$a ;; esac; done
-  # CI-2: a low disk refuses up front, not half-way through the gate
-  disk=$("$REPO/scripts/disk-check.sh" --path "$HOME") || die "refused — $disk"
-  say "$disk"
-  sha=$(git -C "$REPO" rev-parse --verify "$rev^{commit}") || die "no commit '$rev'"
-  short=${sha:0:7}
-  step "build $short — $(git -C "$REPO" log -1 --format=%s "$sha")"
-  checkout "$BUILD" "$sha"
-  # The build compiles in its own targets, never a shared CARGO_TARGET_DIR: with
-  # one set (this machine sets ~/.cache/cargo-target/menger for every
-  # worktree), cargo wrote the release elsewhere and the copy below took a
-  # stale $BUILD/target/release/menger, and trunk raced another checkout's
-  # build in the same target and shipped a 0-byte wasm.
-  export CARGO_TARGET_DIR=$BUILD/target
-
-  LOG_SHA=$short
-  local gate lr
-  if [[ $gated == 1 ]]; then
-    run_gate "$BUILD" "$short"; gate="workspace $GATE_WS; frontend $GATE_FE"
-  else
-    # DEPLOY-52: the suite runs after the deploy to test (deploy/pipeline suite RELEASE)
-    gate="none — the suite runs after the deploy (DEPLOY-52: deploy/pipeline suite)"
-    say "gate: none (--no-gate) — the suite runs after the deploy to test"
-  fi
-
+# V2-7: the codegen container a v2 build runs its browser-side steps in (scripts/ui-build.sh →
+# dist/ui.tar, scripts/ui-compiler-wasm.sh → dist/ui-compiler.wasm): the build checkout mounted
+# at /work, as this user (SELinux: label=disable for the bind mount).
+CODEGEN_IMAGE=${MENGER_CODEGEN_IMAGE:-plexus-codegen}
+codegen() { # LOG CMD… — CMD in the plexus-codegen container, in $BUILD
+  local lg=$1; shift
+  docker run --rm --security-opt label=disable --user "$(id -u):$(id -g)" -v "$BUILD:/work" -w /work \
+    "$CODEGEN_IMAGE" "$@" >"$lg" 2>&1
+}
+# build_legacy / build_v2 — the release's bytes from $BUILD into $stage (id and stage set by
+# them: id=<UTC>-<short>, stage=$RELEASES/$id.tmp); the caller writes RELEASE.
+build_legacy() {
   step "release build"
   lr=$(log_path build-release); say "log: $lr"
   (cd "$BUILD" && cargo build --release -p menger -p menger-diagrams > "$lr" 2>&1) \
@@ -405,12 +394,99 @@ cmd_build() {
   chmod 0755 "$stage/bin/"*
   cp -r "$BUILD/frontend/dist" "$stage/app"
   cp -r "$BUILD/diagrams/node/." "$stage/diagrams-node/"
+}
+V2_STEPS=""
+build_v2() { # V2-7: cargo build on this machine, the bundle (and the compiler module) in the container
+  local lr f
+  V2_STEPS="cargo build"
+  step "release build"
+  lr=$(log_path build-release); say "log: $lr"
+  (cd "$BUILD" && cargo build --release -p menger > "$lr" 2>&1) || { red_run; die "release build failed — $lr"; }
+  [[ -s $CARGO_TARGET_DIR/release/menger ]] || die "release build: $CARGO_TARGET_DIR/release/menger is missing or empty"
+  step "ui-build (scripts/ui-build.sh in $CODEGEN_IMAGE)"
+  lr=$(log_path build-ui); say "log: $lr"
+  [[ -x $BUILD/scripts/ui-build.sh ]] || die "ui-build: no scripts/ui-build.sh at $short"
+  codegen "$lr" scripts/ui-build.sh || { red_run; die "ui-build failed — $lr"; }
+  tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -qx 'index.html' || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
+  V2_STEPS+=", ui-build"
+  if [[ -f $BUILD/scripts/ui-compiler-wasm.sh ]]; then
+    step "ui-compiler-wasm (scripts/ui-compiler-wasm.sh in $CODEGEN_IMAGE)"
+    lr=$(log_path build-ui-compiler); say "log: $lr"
+    codegen "$lr" scripts/ui-compiler-wasm.sh || { red_run; die "ui-compiler-wasm failed — $lr"; }
+    [[ -s $BUILD/dist/ui-compiler.wasm ]] || die "ui-compiler-wasm: no $BUILD/dist/ui-compiler.wasm"
+    V2_STEPS+=", ui-compiler-wasm"
+  else
+    say "ui-compiler-wasm: no scripts/ui-compiler-wasm.sh at $short (UI-5) — the release holds no compiler module"
+  fi
+  id=$(date -u +%Y%m%dT%H%M%SZ)-$short
+  stage=$RELEASES/$id.tmp
+  mkdir -p "$stage/bin" "$stage/dist"
+  cp "$CARGO_TARGET_DIR/release/menger" "$REPO/deploy/launch/run-menger" "$stage/bin/"
+  chmod 0755 "$stage/bin/"*
+  cp "$BUILD/dist/ui.tar" "$stage/dist/"
+  [[ -f $BUILD/dist/ui-compiler.wasm ]] && cp "$BUILD/dist/ui-compiler.wasm" "$stage/dist/"
+  return 0
+}
+cmd_build() {
+  need cargo   # DEPLOY-41: what the build needs; fail now, not half-way (the rest once the tree is known)
+  local rev="" branch="" gated=1 a sha short id stage disk
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --no-gate) gated=0 ;;
+      --branch) [[ $# -ge 2 ]] || die "--branch needs a value"; branch=$2; shift ;;
+      --branch=*) branch=${1#--branch=} ;;
+      -*) die "unknown flag $1" ;;
+      *) [[ -z $rev ]] || die "one revision at most"; rev=$1 ;;
+    esac; shift
+  done
+  # V2-7: --branch names the branch the release is of (its RELEASE says it) and, with no REV,
+  # is the revision too: its tip. Neither: main.
+  branch=${branch:-main}; rev=${rev:-$branch}
+  # CI-2: a low disk refuses up front, not half-way through the gate
+  disk=$("$REPO/scripts/disk-check.sh" --path "$HOME") || die "refused — $disk"
+  say "$disk"
+  sha=$(git -C "$REPO" rev-parse --verify "$rev^{commit}") || die "no commit '$rev'"
+  short=${sha:0:7}
+  step "build $short — $(git -C "$REPO" log -1 --format=%s "$sha")"
+  checkout "$BUILD" "$sha"
+  # V2-7: a tree with frontend/ builds as before (trunk, npm); one without it (v2) has no
+  # browser toolchain on this machine — its bundle is built in the plexus-codegen container.
+  local legacy=0; [[ -d $BUILD/frontend ]] && legacy=1
+  if [[ $legacy == 1 ]]; then need trunk; need npm; need node; else need docker; fi
+  # The build compiles in its own targets, never a shared CARGO_TARGET_DIR: with
+  # one set (this machine sets ~/.cache/cargo-target/menger for every
+  # worktree), cargo wrote the release elsewhere and the copy below took a
+  # stale $BUILD/target/release/menger, and trunk raced another checkout's
+  # build in the same target and shipped a 0-byte wasm.
+  # V2-7: MENGER_BUILD_TARGET names another target, one only this build uses (never a shared one).
+  export CARGO_TARGET_DIR=${MENGER_BUILD_TARGET:-$BUILD/target}
+
+  LOG_SHA=$short
+  local gate lr
+  if [[ $gated == 1 ]]; then
+    run_gate "$BUILD" "$short"; gate="workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}"
+  else
+    # DEPLOY-52: the suite runs after the deploy to test (deploy/pipeline suite RELEASE)
+    gate="none — the suite runs after the deploy (DEPLOY-52: deploy/pipeline suite)"
+    say "gate: none (--no-gate) — the suite runs after the deploy to test"
+  fi
+
+  local steps
+  if [[ $legacy == 1 ]]; then
+    build_legacy
+    steps="cargo build, trunk build, npm ci"
+  else
+    build_v2
+    steps=$V2_STEPS
+  fi
   {
     echo "release:   $id"
     echo "commit:    $sha"
+    echo "branch:    $branch"
     echo "subject:   $(git -C "$REPO" log -1 --format=%s "$sha")"
     echo "built:     $(date -u +%FT%TZ)"
     echo "rustc:     $(rustc --version)"
+    echo "steps:     $steps"
     echo "gate:      $gate"
   } > "$stage/RELEASE"
   chmod -R a-w "$stage"
@@ -473,7 +549,9 @@ cmd_image() {
   case $store in local|ghcr) ;; *) die "IMAGE_STORE '$store' — local or ghcr" ;; esac
   rel=$(resolve_release "$rel")
   local r=$RELEASES/$rel
-  [[ -x $r/bin/menger && -f $r/bin/run-menger && -f $r/app/index.html ]] || die "$rel lacks bin/menger, bin/run-menger or app/index.html"
+  # V2-7: a release carries the Leptos app (app/index.html, before v2) or the UI's bundle (dist/ui.tar)
+  [[ -x $r/bin/menger && -f $r/bin/run-menger && ( -f $r/app/index.html || -f $r/dist/ui.tar ) ]] \
+    || die "$rel lacks bin/menger, bin/run-menger, or both app/index.html and dist/ui.tar"
   # The image binds 0.0.0.0 inside the container: a menger from before RUN-8
   # listens on loopback only and could not be reached through its ports.
   # DEPLOY-50: since DIST-14 --help is the short list and --bind is in
@@ -488,10 +566,12 @@ cmd_image() {
   else ref=$IMAGE_GHCR:$rel; tags=(-t "$ref" -t "$IMAGE_GHCR:latest"); fi
   step "image $rel ($store) — $subject"
   IMAGE_CONTEXT=$(mktemp -d "${TMPDIR:-/tmp}/menger-image.XXXXXX")
-  mkdir -p "$IMAGE_CONTEXT/release/bin"
+  # app/ and dist/ are both copied by the Dockerfile: whichever the release lacks is staged empty
+  mkdir -p "$IMAGE_CONTEXT/release/bin" "$IMAGE_CONTEXT/release/app" "$IMAGE_CONTEXT/release/dist"
   cp "$r/bin/menger" "$r/bin/run-menger" "$IMAGE_CONTEXT/release/bin/"
   cp "$r/RELEASE" "$IMAGE_CONTEXT/release/"
-  cp -r "$r/app" "$IMAGE_CONTEXT/release/app"
+  [[ -d $r/app ]] && cp -r "$r/app/." "$IMAGE_CONTEXT/release/app/"
+  [[ -d $r/dist ]] && cp -r "$r/dist/." "$IMAGE_CONTEXT/release/dist/"
   cp "$REPO/deploy/image/Dockerfile" "$IMAGE_CONTEXT/Dockerfile"
   chmod -R u+w "$IMAGE_CONTEXT"
   DOCKER_BUILDKIT=1 docker build --quiet --build-arg "MENGER_RELEASE=$rel" --build-arg "MENGER_COMMIT=${sha:-unknown}" \
@@ -521,6 +601,71 @@ cmd_image() {
 # The menger-app pipeline's deploy stages (.hyperforge/pipelines.toml, run by
 # hyperforge's ci): each a subcommand here, so the same step runs from a shell.
 #
+# ── the UI's bundle: pushed after a deploy's health, then seen (V2-7) ───────
+# A v2 release carries dist/ui.tar (scripts/ui-build.sh). After the deploy is
+# healthy the pipeline pushes it — `ui.push { bundle, manifest, signature,
+# commit }` through deploy/menger-call.mjs as the pipeline agent, its params on
+# stdin, signed by deploy/ui-sign.mjs over the bundle's sha256 with the pipeline
+# key's seed, read from its file (never argv) — and the smoke then asks
+# `ui.versions` for that version live and reads /app/ signed in (a session from
+# `auth.login`, its cookie in a 0600 header file, never argv), which must serve
+# the bundle's own index.html (its {{STAMPS}} filled). A push refused fails the
+# deploy, naming why; the pointer is never moved by hand (no ui.rollback): the
+# version live before stays live. A release before v2 (no dist/ui.tar) pushes
+# nothing.
+UI_WHY="" UI_PUSHED=""
+release_bundle() { [[ -n ${1:-} && -f $RELEASES/$1/dist/ui.tar ]]; }
+kcall() { # URL METHOD [ARGS…] — one call through menger-call as the pipeline key; stdin passes through
+  local u=$1 m=$2; shift 2
+  env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE" timeout 60 node "$CALL_JS" --url "$u" --agent pipeline --timeout 50 "$m" "$@"
+}
+ui_push() { # WS REL → 0 and UI_PUSHED (the version), or 1 and UI_WHY
+  local ws=$1 r=$RELEASES/$2 man commit out
+  UI_PUSHED="" UI_WHY=""
+  [[ -n $DEPLOY_KEY_FILE ]] || { UI_WHY="no pipeline key (MENGER_DEPLOY_KEY_FILE) to sign the push"; return 1; }
+  man=$(mktemp "${TMPDIR:-/tmp}/menger-manifest.XXXXXX")
+  if ! tar -xOf "$r/dist/ui.tar" manifest.json >"$man" 2>/dev/null; then rm -f "$man"; UI_WHY="the bundle holds no manifest.json"; return 1; fi
+  commit=$(sed -n 's/^commit: *//p' "$r/RELEASE" | head -n 1)
+  out=$(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE" node "$REPO/deploy/ui-sign.mjs" "$r/dist/ui.tar" "$man" "$commit" \
+          | kcall "$ws" ui.push 2>&1) || true
+  rm -f "$man"
+  UI_PUSHED=$(jq -rR 'fromjson? | select(.type == "pushed") | .version' <<<"$out" 2>/dev/null | head -n 1)
+  [[ -n $UI_PUSHED ]] && return 0
+  UI_WHY=$(jq -rR 'fromjson? | if .type == "refused" then "refused \(.reason) — \(.message)" elif .type == "error" then "error \(.error_kind // "") \(.message)" else empty end' <<<"$out" 2>/dev/null | head -n 1)
+  [[ -n $UI_WHY ]] || UI_WHY=$(head -c 200 <<<"$out")
+  UI_WHY=$(tr '\t\n' '  ' <<<"${UI_WHY:-no answer}"); UI_WHY=${UI_WHY% }
+  return 1
+}
+page_is() { # BUNDLE-PAGE SERVED — SERVED is the bundle's page, its {{STAMPS}} filled: each piece between them, in order
+  local piece rest=$2
+  [[ -n $2 ]] || return 1
+  while IFS= read -r piece; do
+    [[ -z $piece ]] && continue
+    [[ $rest == *"$piece"* ]] || return 1
+    rest=${rest#*"$piece"}
+  done < <(sed 's/{{[A-Z_]*}}/\n/g' <<<"$1")
+  return 0
+}
+ui_smoke() { # WS BASE REL — ui versions lists REL's bundle live; BASE/app/, signed in, serves its page
+  local ws=$1 base=$2 rel=$3 want live tok name hdr out code body fail=0
+  want=$(sha256sum "$RELEASES/$rel/dist/ui.tar" | cut -d' ' -f1)
+  live=$(kcall "$ws" ui.versions --params '{}' 2>/dev/null | jq -rR 'fromjson? | select(.type == "version" and .live) | .hash' 2>/dev/null | head -n 1)
+  if [[ $live == "$want" ]]; then say "ok   ui versions on $ws: ${want:0:12} live"
+  else say "FAIL ui versions on $ws: ${live:-nothing} live, not ${want:0:12}"; fail=1; fi
+  tok=$(kcall "$ws" auth.login --params '{"flow":{"session":{}}}' 2>/dev/null | jq -rR 'fromjson? | .token // empty' 2>/dev/null | head -n 1)
+  if [[ -z $tok ]]; then say "FAIL no session from $ws to read $base/app/ signed in"; return 1; fi
+  if [[ $base == https://* ]]; then name=__Host-menger_session; else name=menger_session_${base##*:}; fi
+  hdr=$(umask 077; mktemp "${TMPDIR:-/tmp}/menger-cookie.XXXXXX")
+  printf 'Cookie: %s=%s\n' "$name" "$tok" >"$hdr"
+  out=$(curl -sS -m 10 -H "@$hdr" -w '\n%{http_code}' "$base/app/" 2>/dev/null || true)
+  rm -f "$hdr"
+  code=${out##*$'\n'}; body=${out%$'\n'*}
+  if [[ $code == 200 ]] && page_is "$(tar -xOf "$RELEASES/$rel/dist/ui.tar" index.html 2>/dev/null)" "$body"; then
+    say "ok   $base/app/ (signed in) serves $rel's bundle"
+  else say "FAIL $base/app/ (signed in) answers ${code:-nothing}, not $rel's bundle${code:+ (the placeholder, or another version)}"; fail=1; fi
+  return $fail
+}
+
 # `local --image IMAGE` runs IMAGE on this machine as one container,
 # menger-app-local, with its own volume and its own ports (127.0.0.1:4470 the
 # WebSocket, :4471 the shell — never 4450–4462, prod's and test's and a dev
@@ -561,8 +706,13 @@ cmd_local() {
     (( p >= 4450 && p <= 4462 )) && die "port $p is prod's, test's or a dev server's (4450–4462) — the local app keeps to its own"
   done
   [[ $LOCAL_WS_PORT != "$LOCAL_SHELL_PORT" ]] || die "the WebSocket and the shell need two ports"
-  need docker; need synapse; need curl
+  need docker; need curl; need node
   docker image inspect "$img" >/dev/null 2>&1 || die "no image '$img' in this machine's Docker — run: deploy/pipeline image"
+  # V2-7: the container signs keys in, and the pipeline's key is its admin and its ui signer —
+  # so it starts (ACCESS-24: no open mode), answers health to it, and takes its push
+  [[ -n $DEPLOY_KEY_FILE ]] || die "local needs the pipeline's key (MENGER_DEPLOY_KEY_FILE, default ~/.plexus/keys/pipeline.key): the container's admin and its ui signer"
+  local principal; principal=$(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE" node "$CALL_JS" --principal 2>/dev/null || true)
+  [[ $principal =~ ^key:[0-9a-f]{64}$ ]] || die "the pipeline's key ($DEPLOY_KEY_FILE) names no principal"
   local rel; rel=$(docker image inspect -f '{{index .Config.Labels "sh.menger.release"}}' "$img" 2>/dev/null || true)
   [[ -n $rel && $rel != "<no value>" ]] || rel=${img##*:}
   step "local: $img as $LOCAL_CONTAINER on 127.0.0.1:$LOCAL_WS_PORT (WebSocket) and :$LOCAL_SHELL_PORT (shell)"
@@ -576,12 +726,13 @@ cmd_local() {
       --label sh.menger.deploy=local --label "sh.menger.release=$rel" \
       -v "$LOCAL_VOLUME:/data" \
       -e "MENGER_WS_PORT=$LOCAL_WS_PORT" -e "MENGER_SHELL_PORT=$LOCAL_SHELL_PORT" \
+      -e "MENGER_AUTH_PROVIDERS=key=ws://127.0.0.1:$LOCAL_WS_PORT" -e "MENGER_ADMINS=$principal" -e "MENGER_UI_SIGNERS=${principal#key:}" \
       -p "127.0.0.1:$LOCAL_WS_PORT:$LOCAL_WS_PORT" -p "127.0.0.1:$LOCAL_SHELL_PORT:$LOCAL_SHELL_PORT" \
       "$img" >/dev/null \
     || { record app-local run "$rel" "docker run failed"; die "docker run $img failed (is :$LOCAL_WS_PORT or :$LOCAL_SHELL_PORT held by something else?)"; }
   local h="" page="" until=$((SECONDS + LOCAL_WAIT))
   while (( SECONDS < until )); do
-    [[ -n $h ]] || h=$(timeout 5 synapse -P "$LOCAL_WS_PORT" menger tickets health 2>/dev/null | sed -n 's/^ *ticket_count: *//p' || true)
+    [[ -n $h ]] || { h=$(health_of "ws://127.0.0.1:$LOCAL_WS_PORT"); [[ $h =~ ^[0-9]+$ ]] || h=""; }
     # grep reads the whole page (DEPLOY-6: no -q under pipefail)
     [[ -n $page ]] || page=$(curl -fsS -m 5 "http://127.0.0.1:$LOCAL_SHELL_PORT/" 2>/dev/null \
                               | grep -o "name=\"menger-ws-port\" content=\"$LOCAL_WS_PORT\"" || true)
@@ -597,6 +748,18 @@ cmd_local() {
   fi
   say "ok   tickets.health on :$LOCAL_WS_PORT — $h tickets"
   say "ok   the app on :$LOCAL_SHELL_PORT, stamped with :$LOCAL_WS_PORT"
+  if release_bundle "$rel"; then
+    if ! ui_push "ws://127.0.0.1:$LOCAL_WS_PORT" "$rel"; then
+      record app-local run "$rel" "push failed: $UI_WHY"
+      die "the push to $LOCAL_CONTAINER was refused: $UI_WHY — the version live before stays live"
+    fi
+    say "ok   pushed $rel's bundle: ${UI_PUSHED:0:12} live"
+    if ! ui_smoke "ws://127.0.0.1:$LOCAL_WS_PORT" "http://127.0.0.1:$LOCAL_SHELL_PORT" "$rel"; then
+      record app-local run "$rel" "smoke failed"; die "$LOCAL_CONTAINER runs $rel and its /app/ smoke FAILED"
+    fi
+  else
+    say "local: $rel has no dist/ui.tar here (a release before v2, or not built on this machine) — nothing pushed"
+  fi
   record app-local run "$rel" "ok $img"
   hf_output "url=http://127.0.0.1:$LOCAL_SHELL_PORT/"
 }
@@ -640,6 +803,19 @@ cmd_remote() {
     tell test started "$rel" "$good"
     "$INFRA/bin/infra" app.yml -e "app_dir=$src" -e env=test -e "sha=$rel" >&2 \
       || { record test run "$rel" "infra failed"; tell test failed "$rel" "$good"; die "infra did not deploy $img to $host"; }
+    # V2-7: a v2 release's bundle, pushed once the deploy is healthy, before the smoke reads /app/
+    if release_bundle "$rel"; then
+      local n="" until=$((SECONDS + SMOKE_WAIT))
+      while :; do n=$(health_of "wss://$host/ws"); [[ $n =~ ^[0-9]+$ || $SECONDS -ge $until ]] && break; sleep 2; done
+      if [[ ! $n =~ ^[0-9]+$ ]]; then
+        record test run "$rel" "no health"; tell test failed "$rel" "$good"; die "$host answered no tickets.health (${n:-nothing}) — nothing pushed"
+      fi
+      if ! ui_push "wss://$host/ws" "$rel"; then
+        record test run "$rel" "push failed: $UI_WHY"; tell test failed "$rel" "$good"
+        die "the push to $host was refused: $UI_WHY — the version live before stays live"
+      fi
+      say "ok   pushed $rel's bundle to $host: ${UI_PUSHED:0:12} live"
+    fi
     if ! smoke_remote test "$rel"; then
       record test run "$rel" "smoke failed"; tell test failed "$rel" "$good"
       die "$host runs $rel and its smoke FAILED — prod untouched"
@@ -724,6 +900,8 @@ smoke_remote() {
     elif [[ $(curl -s -o /dev/null -m 10 -w '%{http_code}' "$base/app/$js" || true) == 200 ]]; then say "ok   $host serves $rel's app ($js)"
     else say "FAIL $host does not serve $rel's app ($js)"; fail=1; fi
   fi
+  # V2-7: on test, a v2 release's bundle is what /app/ serves, signed in, and live in ui versions
+  if [[ $env == test ]] && release_bundle "$rel"; then ui_smoke "$wss" "$base" "$rel" || fail=1; fi
   return $fail
 }
 cmd_smoke() {
@@ -751,7 +929,7 @@ suite_of() { # REL → passed | failed | running | none
   local r=$RELEASES/$1 g
   if [[ -f $r/SUITE ]]; then sed -n 's/^\(passed\|failed\|running\)\b.*/\1/p' "$r/SUITE" | head -n 1; return; fi
   g=$(sed -n 's/^gate: *//p' "$r/RELEASE" 2>/dev/null | head -n 1)
-  if [[ $g == workspace*", 0 failed; frontend "*", 0 failed" ]]; then echo passed; else echo none; fi
+  if [[ $g == workspace*", 0 failed; frontend "*", 0 failed" || $g =~ ^workspace\ [0-9]+\ passed,\ 0\ failed$ ]]; then echo passed; else echo none; fi
 }
 suite_line() { # REL → what its SUITE says, one line
   local r=$RELEASES/$1
@@ -787,9 +965,9 @@ cmd_suite() {
   git -C "$REPO" cat-file -e "$sha^{commit}" 2>/dev/null || die "$rel's commit $short is not in $REPO"
   checkout "$SUITE_CHECKOUT" "$sha"
   run_gate "$SUITE_CHECKOUT" "$short"
-  mark_release "$rel" SUITE "passed $(date -u +%FT%TZ) — workspace $GATE_WS; frontend $GATE_FE"
+  mark_release "$rel" SUITE "passed $(date -u +%FT%TZ) — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}"
   record suite test "$rel" "passed"
-  say "suite $rel: passed — workspace $GATE_WS; frontend $GATE_FE"
+  say "suite $rel: passed — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}"
 }
 
 # `remote-secret test|prod` (IDENTITY-45) — the WorkOS environment's API key
@@ -1001,7 +1179,7 @@ cmd_status() {
   printf 'log        %s\n' "${nl:-none yet ($LOGS)}"
 }
 # DEPLOY-48: whether a ticket entering In Review deploys test by itself (the deploy
-# runner's MENGER_RUNNER_AUTO_TEST), and what it holds — its auto.json: the pending
+# runner's MENGER_RUNNER_AUTO_TEST), from which branch (V2-7: MENGER_RUNNER_BRANCH), and what it holds — its auto.json: the pending
 # request and its tickets, the tickets waiting out the debounce, the last run.
 runner_status() {
   local envf=$HOME/.config/menger/deploy-runner.env unit on
@@ -1011,6 +1189,8 @@ runner_status() {
   on=$(sed -n 's/^MENGER_RUNNER_AUTO_TEST=//p' "$envf" | tail -n 1)
   if [[ $on == 0 ]]; then printf 'auto-test  off (MENGER_RUNNER_AUTO_TEST=0 in %s)\n' "$envf"; return 0; fi
   printf 'auto-test  on — a ticket entering In Review deploys test (app-test.menger.sh), the suite after it; the runner is %s\n' "${unit:-unknown}"
+  # V2-7: the branch whose tip it deploys — MENGER_RUNNER_BRANCH in the runner's env file, the one source
+  printf '  branch    %s\n' "$(sed -n 's/^MENGER_RUNNER_BRANCH=//p' "$envf" | tail -n 1 | grep . || echo main)"
   [[ -f $state ]] || { printf '  pending   none\n'; return 0; }
   jq -r '(select(.running) | "  running   request \(.running.request) for \(.running.tickets | join(", "))"),
     "  pending   \(if .pending then "request \(.pending.request) for \(.pending.tickets | join(", "))" else "none" end)",
