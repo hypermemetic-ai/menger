@@ -117,8 +117,8 @@ synapse -P 4460 menger ui watch          # open-ended
 ```
 
 **The UI's source** is `ui/` — `index.html`, `routes.json`, `slots.json`,
-`src/*.svelte` — compiled by `../plexus-ui`'s `plexus-ui-compiler`
-(UI-5: the component subset of Svelte → a view tree and Rhai handlers;
+`src/*.rhx` — compiled by `../plexus-ui`'s `plexus-ui-compiler`
+(UI-5: rhx, profile `rhx/1` → a view tree and Rhai handlers;
 native and as a wasm module with no imports) and drawn by its
 `plexus-ui-engine` (UI-6, UI-10: signals,
 `live()`, the DOM renderer, the Rhai folds, hot-swap on `ui.watch`,
@@ -142,17 +142,19 @@ plexus-ui-compiler --test golden` in `../plexus-ui`.
 
 ## Adding a component
 
-From an idea to a component on app-test, top to bottom. The subset is
-the framework's contract's, `../plexus-ui/CONTRACT.md` (it was UI-4): a `<script>` of Rhai — `prop()`,
+From an idea to a component on app-test, top to bottom. The dialect is
+rhx (Rhai in markup, `ui/src/<name>.rhx`, profile `rhx/1`), the
+framework's contract's, `../plexus-ui/CONTRACT.md` (it was UI-4): a `<script>` of Rhai — `prop()`,
 `state()`, `live()`, and handlers as folds `fn name(state, ev) { …; state }`
 — and a template of `{expr}`, `{#if}`, `{#each … as x (key)}`,
 `on:event={handler}`, another component as `<name prop={…}/>`, and in a
-layout `<slot name="…"/>`. `ui/src/*.svelte` are the worked examples.
+layout `<slot name="…"/>`. `ui/src/*.rhx` are the worked examples; a
+`.svelte` is real Svelte (`svelte/1`, FRAME-13) and refused.
 
-**1. Write it** — `ui/src/ticket-kids.svelte`, a ticket's children, live (a
+**1. Write it** — `ui/src/ticket-kids.rhx`, a ticket's children, live (a
 new child appears, a status moves, a delete goes):
 
-```svelte
+```rhx
 <script>
   prop("id");
   state(#{ open_only: false });
@@ -198,7 +200,7 @@ scripts/plexus-ui build --prebuild --engine dist/engine           # the engine (
 scripts/plexus-ui build ui --engine dist/engine -o dist/ui.tar    # the bundle; `--contract HASH` to stamp one
 ```
 
-A source the compiler refuses names its line (`ui/src/<name>.svelte:LINE:
+A source the compiler refuses names its line (`ui/src/<name>.rhx:LINE:
 …`), and nothing is written. `scripts/plexus-ui --help` documents every
 command.
 

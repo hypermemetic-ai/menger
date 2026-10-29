@@ -464,7 +464,7 @@ pub enum Tree {
     Absent,
 }
 
-/// One component of a bundle: `src/<name>.svelte`, its tree as [`Tree`]
+/// One component of a bundle: `src/<name>.rhx`, its tree as [`Tree`]
 /// says, and the `uses` its manifest entry names.
 #[derive(Debug, Clone)]
 pub struct Component {
@@ -550,7 +550,7 @@ pub fn compiled_manifest(n: u32, contract: &str, components: &[Component]) -> St
                 (_, Some(n)) => sha_hex(n.handlers.as_bytes()),
                 (_, None) => String::new(),
             };
-            (c.name.clone(), serde_json::json!({ "tree": tree, "handlers": handlers, "uses": c.uses }))
+            (c.name.clone(), serde_json::json!({ "profile": "rhx/1", "tree": tree, "handlers": handlers, "uses": c.uses }))
         })
         .collect();
     serde_json::json!({
@@ -563,12 +563,12 @@ pub fn compiled_manifest(n: u32, contract: &str, components: &[Component]) -> St
 }
 
 /// Version `n` holding `components`: `index.html`, `manifest.json`
-/// ([`compiled_manifest`]), each `src/<name>.svelte`, and the trees and
+/// ([`compiled_manifest`]), each `src/<name>.rhx`, and the trees and
 /// handlers each [`Tree`] says.
 pub fn compiled_bundle(n: u32, contract: &str, components: &[Component]) -> Vec<u8> {
     let mut files = vec![("index.html".to_string(), index_html(n)), ("manifest.json".to_string(), compiled_manifest(n, contract, components))];
     for c in components {
-        files.push((format!("src/{}.svelte", c.name), c.src.clone()));
+        files.push((format!("src/{}.rhx", c.name), c.src.clone()));
         let native = plexus_ui_compiler::compile(&c.name, &c.src).ok();
         match (&c.tree, native) {
             (Tree::Absent, _) => {}

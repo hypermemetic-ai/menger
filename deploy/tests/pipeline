@@ -1056,7 +1056,7 @@ B=$SCRATCH/v2b; BR=$B/menger; H5=$SCRATCH/home5; D5=$H5/.local/share/menger-depl
 mkdir -p "$BR/deploy/launch" "$BR/scripts" "$BR/src" "$B/bin" "$D5/releases"
 cp "$DEPLOY/pipeline" "$BR/deploy/pipeline"; cp "$REPO"/deploy/launch/* "$BR/deploy/launch/"; cp "$REPO/scripts/disk-check.sh" "$BR/scripts/"
 mkdir -p "$BR/ui/src" "$B/plexus-ui" && : >"$B/plexus-ui/Cargo.toml"
-printf '<!doctype html><title>{{TITLE}}</title><p>x</p>\n' >"$BR/ui/index.html"; printf '<p>x</p>\n' >"$BR/ui/src/x-row.svelte"
+printf '<!doctype html><title>{{TITLE}}</title><p>x</p>\n' >"$BR/ui/index.html"; printf '<p>x</p>\n' >"$BR/ui/src/x-row.rhx"
 gitf() { git -C "$BR" -c user.name=t -c user.email=t@t "$@"; }
 printf '[workspace]\nmembers = ["."]\n' >"$BR/Cargo.toml"
 gitf init -q -b main && gitf add -A && gitf commit -qm "main: v2's shape"

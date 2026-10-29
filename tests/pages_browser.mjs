@@ -9,7 +9,7 @@
 // (default 100,000), release build (`--debug` for the debug one). Two
 // bundles from plexus-ui build, signed with plexus-ui sign and pushed over
 // synapse: v1 is ui/ as it is; v2 the same with one line added to
-// board-rows.svelte (`<p class="board-newer">`), so the two differ in the
+// board-rows.rhx (`<p class="board-newer">`), so the two differ in the
 // board alone. v2 is pushed last, so it is live. Chromium from Playwright,
 // signed in with the shell's session cookie (scripts/throwaway-login.mjs).
 //
@@ -120,7 +120,7 @@ async function main() {
   const v1 = bundle(work, "v1");
   const v2 = bundle(work, "v2", {
     engine: v1.engine,
-    edit: (ui) => fs.appendFileSync(path.join(ui, "src", "board-rows.svelte"), '<p class="board-newer">the newer board</p>\n'),
+    edit: (ui) => fs.appendFileSync(path.join(ui, "src", "board-rows.rhx"), '<p class="board-newer">the newer board</p>\n'),
   });
   console.log(`v1 ${v1.version}\nv2 ${v2.version}`);
 

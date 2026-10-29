@@ -7,7 +7,8 @@ person reads in the browser and an agent reads with `synapse`, both over one
 signed-in WebSocket, every change pushed to every open page as it happens.
 v2 keeps v1's core — the tickets store, its filter language, its access
 rules — and replaces v1's browser app with a **ui service**: pages are
-components compiled from a Svelte subset, pushed as signed bundles,
+components written in rhx (Rhai in markup, `ui/src/<name>.rhx`, profile
+`rhx/1`; `../plexus-ui/CONTRACT.md`), pushed as signed bundles,
 versioned by content hash and drawn by a small engine.
 
 v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, media, notes, assignees, the owner's queue, inputs and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there.
@@ -653,7 +654,7 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   and a signature: Ed25519 over the bundle's sha256 by a key named with
   `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex public keys; none:
   every push is refused `no_signer`). Then, before the store's one
-  transaction: every `src/<name>.svelte` is compiled in the compiler module
+  transaction: every `src/<name>.rhx` is compiled in the compiler module
   (when `--ui-compiler` names one) and compared with the tree the bundle
   claims (filled in when absent);
   every component's `uses` is looked up in the service it names through the
@@ -709,15 +710,15 @@ this is its layout. A bundle is a tar:
 ```
 index.html                 the entrypoint (the shell stamps it)
 engine.js  engine.wasm     the engine, abi engine/1
-manifest.json              abi, contract, commit, routes, slots, components (hashes, uses)
+manifest.json              abi, contract, commit, routes, slots, components (profile rhx/1, hashes, uses)
 components/<name>.json     each component's view tree
 components/<name>.rhai     its handlers
-src/<name>.svelte          the sources, kept
+src/<name>.rhx             the sources (rhx), kept
 ```
 
-UI-4 pins the source subset (a `<script>` of Rhai and a Svelte-like
-template), the tree's schema, the `engine/1` host interface, sections, and
-the sanitizer's allow-list.
+UI-4 pins the source dialect, rhx (a `<script>` of Rhai and a template;
+a `.svelte` is real Svelte, `svelte/1`, FRAME-13), the tree's schema, the
+`engine/1` host interface, sections, and the sanitizer's allow-list.
 
 ### The compiler (UI-5)
 
@@ -765,7 +766,7 @@ with the stamped version.
 
 `ui/` is the UI's source: `index.html`, `routes.json` (`#/` and `#/f/:filter`
 → `board-layout`, `#/ticket/:id` → `ticket-page`), `slots.json` (the
-layouts' default sections), `src/*.svelte` (`board-layout`, `board-rows`,
+layouts' default sections), `src/*.rhx` (`board-layout`, `board-rows`,
 `filter-line`, `jump-palette`, `nav-tree`, `nav-flat`, `nav-children`,
 `ticket-page`, `ticket-chip`, `page-shell`, `hello-list`).
 `../plexus-ui`'s `plexus-ui` tool (FRAME-8; `scripts/plexus-ui` builds it

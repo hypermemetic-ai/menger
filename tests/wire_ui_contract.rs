@@ -90,7 +90,7 @@ fn fixture(dir: &Path) {
     write(&dir.join("ui/index.html"), "<!doctype html><title>contract</title>\n");
     write(&dir.join("ui/routes.json"), &json!({ "#/": X }).to_string());
     write(&dir.join("ui/slots.json"), "{}");
-    write(&dir.join(format!("ui/src/{X}.svelte")), "<script>\n  prop(\"id\");\n  fn open(state, ev) { call(\"tickets.list\", #{ id: ev.props.id }); state }\n</script>\n<p class=\"row\" on:click={open}>{id}</p>\n");
+    write(&dir.join(format!("ui/src/{X}.rhx")), "<script>\n  prop(\"id\");\n  fn open(state, ev) { call(\"tickets.list\", #{ id: ev.props.id }); state }\n</script>\n<p class=\"row\" on:click={open}>{id}</p>\n");
     write(&dir.join("engine/engine.js"), "export default function () {}\n");
     write(&dir.join("engine/engine.wasm"), "\0asm");
 }
