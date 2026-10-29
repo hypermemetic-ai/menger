@@ -251,3 +251,110 @@ fn the_binary_has_no_flag_for_them() {
         .collect();
     assert!(left.is_empty(), "V2-4: src/main.rs still names {left:?}");
 }
+
+/// V2-8, acceptance 1: the words of what went, which README and AGENTS.md
+/// must no longer say — v1's services, its queue, its browser toolchain and
+/// the old word for a service.
+const GONE_WORDS: &[&str] = &["chats", "comments", "deployments", "themes", "queue", "trunk", "Leptos", "sdk-codegen", "hub"];
+
+/// The tag of v1: the one line in each file that names what went and where
+/// it lives carries it.
+const V1_TAG: &str = "v0.0.1";
+
+/// Whether `word` occurs in `text` as a word of its own, ignoring case:
+/// `names()`'s identifier rule over lower-cased text (`Chats`, `the queue`
+/// and `trunk build` do; `GitHub`, `queued` and `leptos_dom` do not).
+fn says(text: &str, word: &str) -> bool {
+    names(&text.to_ascii_lowercase(), &word.to_ascii_lowercase())
+}
+
+/// The lines of the doc `file` (its text `text`) that still say a word of
+/// what went, each `file:line: the line`. Allowed: the first line carrying
+/// [`V1_TAG`] (the one that names what went; a second such line gets no
+/// allowance), and in AGENTS.md the owner's `## Naming` section, from its
+/// heading to the next `## ` heading or the end, which names the word it
+/// bans.
+fn stale(file: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut allowance_used = false;
+    let mut in_naming = false;
+    for (n, line) in text.lines().enumerate() {
+        if line.starts_with("## ") {
+            in_naming = file == "AGENTS.md" && line.starts_with("## Naming");
+        }
+        if in_naming {
+            continue;
+        }
+        if !GONE_WORDS.iter().any(|w| says(line, w)) {
+            continue;
+        }
+        if line.contains(V1_TAG) && !allowance_used {
+            allowance_used = true;
+            continue;
+        }
+        out.push(format!("{file}:{}: {line}", n + 1));
+    }
+    out
+}
+
+/// V2-8, acceptance 1: a grep of README.md and AGENTS.md for the words of
+/// what went finds nothing but the one line naming what went (tag v0.0.1),
+/// and AGENTS.md's naming rule.
+#[test]
+fn the_docs_say_what_v2_is() {
+    let root = root();
+    let mut left = Vec::new();
+    for file in ["README.md", "AGENTS.md"] {
+        let text = std::fs::read_to_string(root.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        left.extend(stale(file, &text));
+    }
+    assert!(
+        left.is_empty(),
+        "V2-8: {} line(s) of README.md / AGENTS.md still say what v2 is not ({}):\n  {}",
+        left.len(),
+        GONE_WORDS.join(", "),
+        left.join("\n  ")
+    );
+}
+
+/// The docs' check checks (V2-8, acceptance 1): a word of its own in any
+/// case matches, a word inside a longer one does not, the allowance line
+/// is one per file, and only AGENTS.md's naming section is let through.
+#[test]
+fn a_gone_word_is_found_only_as_a_word_of_its_own() {
+    for (text, word) in [
+        ("Chats are the `chats` activation", "chats"),
+        ("ask in the queue", "queue"),
+        ("run trunk build", "trunk"),
+        ("the Leptos app", "Leptos"),
+        ("a leptos crate", "Leptos"),
+        ("rerun scripts/sdk-codegen.sh", "sdk-codegen"),
+        ("a hub, a Hub", "hub"),
+        ("the hub-codegen generator", "hub"),
+        ("COMMENTS, DEPLOYMENTS", "comments"),
+    ] {
+        assert!(says(text, word), "{word:?} should be found in {text:?}");
+    }
+    for (text, word) in [
+        ("GitHub and github.com", "hub"),
+        ("ghcr.io/hypermemetic-ai/menger", "hub"),
+        ("HubTransport::as_", "hub"),
+        ("`queued` is a filter cell", "queue"),
+        ("leptos_dom", "Leptos"),
+        ("a chat of one", "chats"),
+        ("a sdk-codegenerator", "sdk-codegen"),
+    ] {
+        assert!(!says(text, word), "{word:?} should not be found in {text:?}");
+    }
+
+    let readme = "# menger\nv1 (tag v0.0.1) had chats, comments and a queue.\nNo hub here.\n";
+    assert_eq!(stale("README.md", readme), ["README.md:3: No hub here."]);
+    let twice = "Gone at v0.0.1: chats.\nAlso at v0.0.1: themes.\nOn GitHub.\n";
+    assert_eq!(stale("README.md", twice), ["README.md:2: Also at v0.0.1: themes."]);
+
+    let agents = "# menger\n## Naming: a Plexus backend is a service\nwe don't call them hubs; a hub is a service.\n### the sweep\nno hub.\n## Next\nthe queue\n";
+    assert_eq!(stale("AGENTS.md", agents), ["AGENTS.md:7: the queue"]);
+    assert_eq!(stale("README.md", agents).len(), 3, "the naming section is AGENTS.md's alone");
+    let last = "## Naming\na hub\n";
+    assert!(stale("AGENTS.md", last).is_empty(), "the section runs to the end of the file");
+}
