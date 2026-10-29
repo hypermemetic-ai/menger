@@ -4,7 +4,7 @@ use menger::login::{LoginButton, Provider};
 use menger::wiring::{LoginOptions, Wiring};
 use menger_tickets_api::access::Access;
 use menger::first_run::{self, Mode};
-use menger::{build_rpc_login, local, shell, MengerAccess};
+use menger::{build_rpc_ui, local, shell, MengerAccess};
 use plexus_transport::{ConnectionQuotas, TransportServer};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -60,6 +60,18 @@ struct Args {
     /// The database file (default <data-dir>/local.db; a new file starts empty)
     #[arg(long, env = "MENGER_DB_PATH", value_name = "PATH", help_heading = RUN)]
     db_path: Option<PathBuf>,
+
+    // UI-3: the ui service's own file, and who may sign a push.
+    /// The ui service's file (default: ui.db beside the database file)
+    #[arg(long, env = "MENGER_UI_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    ui_db_path: Option<PathBuf>,
+
+    /// A public key (64 hex digits, Ed25519) a `ui.push` may be signed by
+    ///
+    /// Repeatable; in the env var, separated by `;`. With none, every push is
+    /// refused (`no_signer`).
+    #[arg(long = "ui-signer", env = "MENGER_UI_SIGNERS", value_name = "HEX", value_delimiter = ';', help_heading = RUN, hide_short_help = true)]
+    ui_signer: Vec<String>,
 
     // RUN-8: names stay ACCESS-25's: a specific address adds its own literal
     // (and the shell's origin at it may open the socket); any other name is
@@ -512,7 +524,15 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let wired = wiring.finish(MengerAccess(access.clone()), dev)?;
     let offers = wired.offered().map(menger::offer).collect();
     let metadata = wired.metadata_url();
-    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, args.chat_member.clone()).await?;
+    // UI-3: the ui service's file (beside the tickets file unless named) and
+    // its signers, shared by the `ui` activation and the shell's `/app/*`.
+    let ui_db_path = args.ui_db_path.clone().unwrap_or_else(|| menger::default_ui_db_path(&db_path));
+    if ui_db_path == db_path {
+        anyhow::bail!("--ui-db-path {} is the database file: the ui service keeps a file of its own", ui_db_path.display());
+    }
+    let ui = menger::UiSetup::open(&ui_db_path, menger_ui_service::Signers::parse(&args.ui_signer).map_err(anyhow::Error::msg)?)?;
+    let ui_store = ui.store.clone();
+    let hub = build_rpc_ui(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, args.chat_member.clone(), ui).await?;
 
     local::log_activations(&hub);
 
@@ -579,6 +599,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // RUN-9: RFC 9728's document on the public origin, behind https.
             metadata: wired.metadata_route(),
             // APP-110: checked before anything opens, as the other origins are.
+            // UI-3: `/app/` and `/app/<hash>/…` from the ui service's store.
+            ui: Some(ui_store),
             framing: shell::Framing {
                 ancestors: args.frame_ancestor.iter().map(|o| shell::check_origin(o)).collect::<Result<_, _>>().map_err(|e| anyhow::anyhow!("--frame-ancestor: {e}"))?,
                 live: args.live_origin.as_deref().map(shell::check_origin).transpose().map_err(|e| anyhow::anyhow!("--live-origin: {e}"))?,

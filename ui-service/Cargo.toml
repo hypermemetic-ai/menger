@@ -1,0 +1,45 @@
+# UI-3: the ui service — a pushed UI is a row by content hash in its own
+# file (`ui.db`, never the tickets file), and `/app/*` serves whichever row
+# the live pointer names. The `ui` activation (`push`, `rollback`,
+# `versions`, `preview`) and the store it keeps; menger registers the
+# activation beside `tickets` and its shell serves the routes from the store.
+[package]
+name = "menger-ui-service"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "menger's ui service — UI versions by content hash, the live pointer, push as one transaction"
+publish = false
+
+[features]
+# The capabilities' test constructors, for the wire tests outside the crate.
+test-support = ["menger-tickets-api/test-support"]
+
+[dependencies]
+# The gate's caller and the frame's request — the admin grant is the one the
+# tickets service already runs (`Access::verify` → `VerifiedUser`).
+menger-tickets-api = { path = "../tickets-api" }
+plexus-core = { path = "../../plexus-core" }
+plexus-macros = { path = "../../plexus-macros" }
+plexus-client = { path = "../../plexus-macros/plexus-client", default-features = false }
+async-trait = "0.1"
+async-stream = "0.3"
+futures = "0.3"
+jsonrpsee = { version = "0.26", features = ["server", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.1", features = ["derive"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["full"] }
+# The file: the same rusqlite as the tickets store (one libsqlite3-sys).
+rusqlite = { version = "0.37", features = ["bundled"] }
+# A bundle's name is its sha256; its signature Ed25519 over that digest.
+sha2 = "0.10"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+base64 = "0.22"
+# A bundle is a tar archive whose `index.html` is the entrypoint.
+tar = { version = "0.4", default-features = false }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

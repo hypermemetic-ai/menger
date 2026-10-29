@@ -76,4 +76,4 @@ pub mod first_run;
 pub use menger_tickets_api::store;
 pub use menger_tickets_api::{ChatsActivation, ChatsClient, CommentsActivation, CommentsClient, MembersActivation, MembersClient, SessionActivation, SessionClient, TicketsActivation, TicketsClient};
 
-pub use builder::{build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_with, default_db_path, SIGNED_IN_GRANTS};
+pub use builder::{build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_ui, build_rpc_with, default_db_path, default_ui_db_path, UiSetup, SIGNED_IN_GRANTS};
