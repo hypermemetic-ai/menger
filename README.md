@@ -182,8 +182,8 @@ transactions — then serves them like any other. The shape is realistic
 blockers) and deterministic: the same `--seed-value` (default 1) gives the
 same tickets; `--seed-shape nested` hangs them in a tree (FILTER-13). A
 database that already holds tickets refuses the seed unless
-`--seed-into-existing`. The ladder in `perf/` (PERF-3) drives it per
-magnitude.
+`--seed-into-existing`. The probes in `perf/` (`perf/README.md`) drive it
+at each size.
 
 ```sh
 cargo run --release -- --db-path /tmp/scratch.db --seed-synthetic 100000 \
@@ -773,7 +773,7 @@ plexus-login/        the login as a crate
 tether/              menger's local side, its own workspace (TETHER-7)
 tests/               wire tests over the real socket, browser tests
 deploy/              the pipeline, the image, the runner (deploy/README.md)
-perf/                the probes and the magnitude ladder
+perf/                the probes (perf/README.md)
 scripts/             builds, cleanup-gate, disk-check, sweep, throwaways
 ```
 
