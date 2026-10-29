@@ -19,6 +19,13 @@ use std::time::Instant;
 /// data directory's `local.db` (`~/.local/share/menger/local.db` on Linux).
 /// DIST-14: never `tickets.db`, prod's file on a machine that runs it
 /// (prod, test and the image name theirs).
+static CHILDREN: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// POLYGLOT-4 (spike): the `--child` specs the hub mounts.
+pub fn set_children(specs: Vec<String>) {
+    let _ = CHILDREN.set(specs);
+}
+
 pub fn default_db_path() -> PathBuf {
     crate::first_run::default_data_dir().join(crate::first_run::DB_FILE)
 }
@@ -219,6 +226,13 @@ pub async fn build_rpc_login(
         .register(MembersActivation::new(store, access.clone()))
         // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
         .register(SessionActivation::offering(offers, access.clone()));
+    // POLYGLOT-4 (spike): each `--child`, connected and mounted like any activation.
+    for spec in CHILDREN.get().cloned().unwrap_or_default() {
+        let spec: plexus_core::plexus::remote_child::ChildSpec = spec.parse().map_err(|e| anyhow::anyhow!("--child {spec}: {e}"))?;
+        let opts = plexus_core::plexus::remote_child::ChildOptions { principal: "hub:menger".into(), ..Default::default() };
+        let child = plexus_core::plexus::remote_child::RemoteChild::connect(spec, opts).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        hub = hub.register(child);
+    }
     // AUTH-7: the gate reads the same book the methods ask; the roles the
     // activations declare are what a role holds until an admin edits it.
     let book = access.book();

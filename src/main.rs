@@ -106,6 +106,12 @@ struct Args {
     #[arg(long, help_heading = RUN, hide_short_help = true)]
     no_shell: bool,
 
+    /// POLYGLOT-4 (spike): an activation in another process, mounted under
+    /// NAME — `NAME=stdio:CMD ARGS…`; repeatable. Thrown away; POLYGLOT-5
+    /// builds the real `--child`.
+    #[arg(long = "child", env = "MENGER_CHILDREN", value_name = "NAME=stdio:CMD", value_delimiter = ';', help_heading = RUN, hide_short_help = true)]
+    child: Vec<String>,
+
     // CHAT-13.
     /// A member of every chat (repeatable; a principal, e.g. a chat bridge's
     /// key): added to every chat opened, and to every open chat at startup.
@@ -513,6 +519,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let wired = wiring.finish(MengerAccess(access.clone()), dev)?;
     let offers = wired.offered().map(menger::offer).collect();
     let metadata = wired.metadata_url();
+    menger::set_children(args.child.clone());
     let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, args.chat_member.clone()).await?;
 
     local::log_activations(&hub);
