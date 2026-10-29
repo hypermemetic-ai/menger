@@ -93,6 +93,8 @@ fn fixture(dir: &Path) {
     write(&dir.join(format!("ui/src/{X}.rhx")), "<script>\n  prop(\"id\");\n  fn open(state, ev) { call(\"tickets.list\", #{ id: ev.props.id }); state }\n</script>\n<p class=\"row\" on:click={open}>{id}</p>\n");
     write(&dir.join("engine/engine.js"), "export default function () {}\n");
     write(&dir.join("engine/engine.wasm"), "\0asm");
+    // FRAME-12: the engine is three files — host.js is the JS face the tool copies into the bundle.
+    write(&dir.join("engine/host.js"), "export {};\n");
 }
 
 /// `plexus-ui build` on the fixture with `args` after the fixture's own:
