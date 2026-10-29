@@ -152,6 +152,8 @@ fn too_many(ns: &str, max: usize) -> Value {
         message: format!("too many calls open on this connection (at most {max}): close one (a watch) or open another connection"),
         code: Some(TOO_MANY_CALLS.into()),
         recoverable: true,
+        // plexus-core 0.6.2 (POLYGLOT-5): a typed error carries fields; this one has none.
+        fields: Default::default(),
     };
     let mut v = serde_json::to_value(&item).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
