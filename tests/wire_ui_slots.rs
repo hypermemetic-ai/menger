@@ -266,3 +266,26 @@ async fn a_watch_is_held_to_its_caller() {
     assert_eq!((closed["type"].as_str(), closed["reason"].as_str()), (Some("watch_closed"), Some("revoked")), "{closed}");
     assert!(next_item(&mut watch, Duration::from_secs(2)).await.is_none(), "and then the end");
 }
+
+/// FRAME-5: menger's own grants (`members.grant` / `members.revoke`, its
+/// store's writes, not the protocol's `auth.*`) reach `ui.watch` — the
+/// framework's watch follows the gate's grants generation, so this holds
+/// only while menger hands its store's count to the gate.
+#[tokio::test]
+async fn a_members_revoke_ends_the_watch() {
+    let m = start().await;
+    let admin = connect(m.s.port).await;
+    let v2 = push(&admin, 2, V2).await;
+    let granted = call(&admin, "members.grant", json!({ "principal": support::principal_of(&EDITOR), "scope": "*", "role": "editor" })).await;
+    assert!(granted.first().is_some_and(|g| g["type"] != "error"), "editor on * through members: {granted:?}");
+    let editor = connect_as(&EDITOR, m.s.port).await;
+    let mut watch = open_watch(&editor, Some(&v2)).await;
+
+    let revoked = call(&admin, "members.revoke", json!({ "principal": support::principal_of(&EDITOR), "scope": "*" })).await;
+    assert!(revoked.first().is_some_and(|r| r["type"] != "error"), "revoked through members: {revoked:?}");
+    let closed = next_item(&mut watch, Duration::from_secs(5)).await.expect("the watch ends in band");
+    assert_eq!((closed["type"].as_str(), closed["reason"].as_str()), (Some("watch_closed"), Some("revoked")), "{closed}");
+    // The end: the protocol's `done` frame next (or the stream closed), never a timeout.
+    let end = tokio::time::timeout(Duration::from_secs(2), watch.next()).await;
+    assert!(matches!(&end, Ok(None)) || matches!(&end, Ok(Some(Ok(item))) if item["type"] == "done"), "and then the end: {end:?}");
+}

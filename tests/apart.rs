@@ -272,6 +272,37 @@ fn the_framework_is_a_sibling() {
     );
 }
 
+/// The lines of `text` that build `ui-sign` (cargo, `--bin ui-sign`): the
+/// binary moved with the service, so each must build it from the sibling —
+/// `--manifest-path` into `../plexus-ui` — as the engine is built.
+fn ui_sign_builds(text: &str) -> Vec<(usize, &str, bool)> {
+    text.lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains("cargo") && l.contains("ui-sign") && l.contains("--bin"))
+        .map(|(n, l)| (n + 1, l, l.contains("--manifest-path") && l.contains("plexus-ui/Cargo.toml") && l.contains("plexus-ui-service")))
+        .collect()
+}
+
+#[test]
+fn ui_sign_is_built_from_the_sibling() {
+    let root = root();
+    let files = readers(&root);
+    let mut builders = Vec::new();
+    let mut wrong = Vec::new();
+    for file in &files {
+        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        for (n, line, ok) in ui_sign_builds(&text) {
+            let at = format!("{}:{n}: {}", file.strip_prefix(&root).unwrap().display(), line.trim());
+            if !ok {
+                wrong.push(at.clone());
+            }
+            builders.push(at);
+        }
+    }
+    assert!(builders.len() >= 2, "the walk lost the builders of ui-sign (scripts/ui-throwaway.mjs, tests/engine_browser.mjs): {builders:?}");
+    assert!(wrong.is_empty(), "FRAME-5: ui-sign is plexus-ui-service's; these build it otherwise than with --manifest-path into ../plexus-ui:\n  {}", wrong.join("\n  "));
+}
+
 // ── the names and the paths ────────────────────────────────────────────────
 
 /// Every file under `dir`, but build output, dependencies, dot-directories
@@ -426,6 +457,11 @@ fn the_checks_read_what_they_are_given() {
     assert_eq!(engine_build_line(script).map(|(n, _)| n), Some(2));
     assert!(engine_build_line("cargo build -p plexus-ui-engine --lib\n").is_none());
     assert!(engine_build_line("cargo build --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-compiler\n").is_none());
+
+    // The builders of ui-sign.
+    let mjs = "  run(\"cargo\", [\"build\", \"--manifest-path\", path.join(REPO, \"../plexus-ui/Cargo.toml\"), \"-p\", \"plexus-ui-service\", \"--bin\", \"ui-sign\"]);\nx\n  run(\"cargo\", [\"build\", \"-p\", \"OLD\", \"--bin\", \"ui-sign\"]);\nnode deploy/ui-sign.mjs\n";
+    let found: Vec<(usize, bool)> = ui_sign_builds(mjs).into_iter().map(|(n, _, ok)| (n, ok)).collect();
+    assert_eq!(found, [(1, true), (3, false)]);
 
     // The moved paths: as a path, never inside a longer name.
     assert_eq!(moved_paths("cat ui-compiler/tests/golden/x.svelte"), ["ui-compiler/"]);
