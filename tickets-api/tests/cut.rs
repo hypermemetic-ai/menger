@@ -251,3 +251,158 @@ fn the_binary_has_no_flag_for_them() {
         .collect();
     assert!(left.is_empty(), "V2-4: src/main.rs still names {left:?}");
 }
+
+/// V2-8, acceptance 1: the words of what went, singular and plural, which
+/// README and AGENTS.md must no longer say — v1's services, its queue, its
+/// mockups, its browser toolchain and the old word for a service. Not
+/// `theme` (`data-theme` stays) and not `deployed` (the pipeline deploys).
+const GONE_WORDS: &[&str] = &[
+    "chats", "chat", "comments", "comment", "deployments", "deployment", "themes", "queue", "queues", "queued", "trunk",
+    "Leptos", "sdk-codegen", "hub", "hubs", "mockup", "mockups",
+];
+
+/// The tag of v1: the first line of each file that carries it is the one
+/// that names what went and where it lives.
+const V1_TAG: &str = "v0.0.1";
+
+/// The owner's naming rule in AGENTS.md (2026-10-29), which names the word
+/// it bans: its exact heading.
+const NAMING_HEADING: &str = "## Naming: a Plexus backend is a *service*, never a *hub*";
+
+/// Whether `word` occurs in `text` as a word of its own, ignoring case:
+/// `names()`'s identifier rule over lower-cased text (`Chats`, `the queue`
+/// and `trunk build` do; `GitHub`, `HubTransport` and `leptos_dom` do not).
+fn says(text: &str, word: &str) -> bool {
+    names(&text.to_ascii_lowercase(), &word.to_ascii_lowercase())
+}
+
+/// The lines of the doc `file` (its text `text`) that still say a word of
+/// what went, each `file:line: the line`. Allowed: the first line of the
+/// file that contains [`V1_TAG`], whatever it says (every later one is held
+/// to the rule), and in AGENTS.md alone the section under
+/// [`NAMING_HEADING`], once, through the next `## ` heading or the end.
+fn stale(file: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut tag_seen = false;
+    let mut naming_seen = false;
+    let mut in_naming = false;
+    for (n, line) in text.lines().enumerate() {
+        if line.starts_with("## ") {
+            in_naming = file == "AGENTS.md" && !naming_seen && line == NAMING_HEADING;
+            naming_seen |= in_naming;
+        }
+        if in_naming {
+            continue;
+        }
+        if line.contains(V1_TAG) && !tag_seen {
+            tag_seen = true;
+            continue;
+        }
+        if GONE_WORDS.iter().any(|w| says(line, w)) {
+            out.push(format!("{file}:{}: {line}", n + 1));
+        }
+    }
+    out
+}
+
+/// What is wrong with the doc `file`: empty, never naming [`V1_TAG`], or
+/// [`stale`] lines.
+fn failures(file: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if text.trim().is_empty() {
+        out.push(format!("{file} is empty"));
+    }
+    if !text.contains(V1_TAG) {
+        out.push(format!("{file} never names {V1_TAG}: say what went and where it lives"));
+    }
+    out.extend(stale(file, text));
+    out
+}
+
+/// V2-8, acceptance 1: a grep of README.md and AGENTS.md for the words of
+/// what went finds nothing but, in each file, the first line naming v1's tag
+/// (what went and where it lives), and AGENTS.md's naming rule. Each file
+/// must be there, hold text and name the tag: an empty file is no pass.
+#[test]
+fn the_docs_say_what_v2_is() {
+    let root = root();
+    let mut left = Vec::new();
+    for file in ["README.md", "AGENTS.md"] {
+        let text = std::fs::read_to_string(root.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        left.extend(failures(file, &text));
+    }
+    assert!(
+        left.is_empty(),
+        "V2-8: {} line(s) of README.md / AGENTS.md still say what v2 is not ({}):\n  {}",
+        left.len(),
+        GONE_WORDS.join(", "),
+        left.join("\n  ")
+    );
+}
+
+/// The docs' check checks (V2-8, acceptance 1): a word of its own in any
+/// case matches, a word inside a longer one does not; the allowance is the
+/// first `v0.0.1` line of each file, and only AGENTS.md's exact naming
+/// section is let through.
+#[test]
+fn a_gone_word_is_found_only_as_a_word_of_its_own() {
+    for (text, word) in [
+        ("Chats are the `chats` activation", "chats"),
+        ("a chat of one", "chat"),
+        ("ask in the queue", "queue"),
+        ("`queued` is a filter cell", "queued"),
+        ("run trunk build", "trunk"),
+        ("the Leptos app", "Leptos"),
+        ("a leptos crate", "Leptos"),
+        ("rerun scripts/sdk-codegen.sh", "sdk-codegen"),
+        ("a hub, a Hub", "hub"),
+        ("we don't call them hubs", "hubs"),
+        ("the hub-codegen generator", "hub"),
+        ("COMMENTS, DEPLOYMENTS", "comments"),
+        ("a Mockup of the board", "mockup"),
+    ] {
+        assert!(says(text, word), "{word:?} should be found in {text:?}");
+    }
+    for (text, word) in [
+        ("GitHub and github.com", "hub"),
+        ("GitHub's API", "hub"),
+        ("HubTransport::as_", "hub"),
+        ("HubTransport::as_", "hubs"),
+        ("leptos_dom", "Leptos"),
+        ("the data-theme attribute", "themes"),
+        ("deployed to test", "deployment"),
+        ("a sdk-codegenerator", "sdk-codegen"),
+        ("chatter", "chat"),
+    ] {
+        assert!(!says(text, word), "{word:?} should not be found in {text:?}");
+    }
+
+    // An empty file, or one that never names the tag, is no pass.
+    assert_eq!(failures("README.md", ""), ["README.md is empty", "README.md never names v0.0.1: say what went and where it lives"]);
+    assert_eq!(failures("AGENTS.md", "# menger\n"), ["AGENTS.md never names v0.0.1: say what went and where it lives"]);
+    assert!(failures("README.md", "# menger\nv1 is tag v0.0.1.\n").is_empty());
+
+    // The allowance is the first line with the tag, whatever it says.
+    let readme = "# menger\nv1 (tag v0.0.1) had chats, comments and a queue.\nNo hub here.\n";
+    assert_eq!(stale("README.md", readme), ["README.md:3: No hub here."]);
+    let twice = "Gone at v0.0.1: chats.\nAlso at v0.0.1: themes.\nOn GitHub.\n";
+    assert_eq!(stale("README.md", twice), ["README.md:2: Also at v0.0.1: themes."]);
+    let plain_first = "v1 is tag v0.0.1.\nWhat went at v0.0.1: chats.\n";
+    assert_eq!(stale("README.md", plain_first), ["README.md:2: What went at v0.0.1: chats."], "the first tag line spends the allowance");
+    // One allowance per file, not one across both.
+    assert!(stale("README.md", readme.lines().take(2).collect::<Vec<_>>().join("\n").as_str()).is_empty());
+    assert!(stale("AGENTS.md", "v0.0.1 had chats\n").is_empty());
+
+    // The naming section: AGENTS.md's exact heading, once, to the next `## `.
+    let agents = format!("# menger\n{NAMING_HEADING}\nwe don't call them hubs; a hub is a service.\n### the sweep\nno hub.\n## Next\nthe queue\n");
+    assert_eq!(stale("AGENTS.md", &agents), ["AGENTS.md:7: the queue"]);
+    assert_eq!(stale("README.md", &agents).len(), 4, "the naming section, its heading too, is AGENTS.md's alone");
+    assert_eq!(stale("AGENTS.md", "## Naming things\na hub\n"), ["AGENTS.md:2: a hub"], "only the exact heading");
+    let again = format!("{NAMING_HEADING}\na hub\n## Other\n{NAMING_HEADING}\nhubs\n");
+    assert_eq!(
+        stale("AGENTS.md", &again),
+        [format!("AGENTS.md:4: {NAMING_HEADING}"), "AGENTS.md:5: hubs".to_string()],
+        "the section is let through once"
+    );
+    assert!(stale("AGENTS.md", &format!("{NAMING_HEADING}\na hub\n")).is_empty(), "the section runs to the end of the file");
+}

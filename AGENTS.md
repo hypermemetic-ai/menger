@@ -1,1307 +1,663 @@
 # menger
 
-A plan is a program whose leaves are prose. Plexus RPC ticketing backend +
-the seed of a Plexus-native reactive web framework. Successor to
-`../menger-hs` (0.04, Haskell); its rule carries over: frontend and backend
-online from the first commit — every noun visible the day it is written.
+A plan is a program whose leaves are prose. menger is a Plexus RPC
+ticketing service and the seed of a Plexus-native reactive web framework.
+This is **v2**: the tickets service and the ui service, nothing else.
+
+v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, media, notes, assignees, the queue, inputs and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here.
+
+README.md is the reference: the services and their methods ("Surface"),
+the flags ("Run" → Every flag), the rules each ticket set down. This file is
+what an agent working in the repository needs on top of it.
 
 ## Commands
 
 ```sh
-cargo test         # unit tests + wire tests (tests/wire.rs speaks the real protocol, signed in)
+cargo test -p menger-tickets-api --test cut       # a selection: a crate and a filter, never the workspace per ticket
 # a development server: its own ports and its own database, never prod's —
 # and a login provider: menger has no open mode (ACCESS-24)
 PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
-  --auth-provider key --admin "$(synapse _key show builder)"
-synapse -P 4460 _login menger --key builder --as builder   # once per server start; then synapse -P 4460 … as usual
+  --ui-db-path /tmp/menger-dev-ui.db --auth-provider key --admin "$(synapse _key show builder)"
+synapse -P 4460 _login menger --key builder --as builder   # once per server start
+synapse -P 4460 menger tickets health
+synapse -P 4460 menger ui versions
+scripts/agents-commands.sh 4460   # every synapse command in this file, run against that server
 ```
 
 **There is no open mode** (ACCESS-24). `menger` with no flags (DIST-14)
 runs on loopback as its **local admin**: a key made in its data directory
 (`~/.local/share/menger/local.key`; the database `local.db`, never
 `tickets.db`) and a one-time sign-in link printed at start (`menger login`
-prints another; `--open` opens it). Beyond loopback (`--bind`, an off-machine
-`--public-url`) with no provider it refuses, naming the flag. A dev server
-still runs `key` with your key as `--admin` (above) — on its own ports and
-database, never the defaults on this machine. Login is always required
-(`--require-login` is gone: it is the only mode), there is no REST bridge
-(`--rest-port` is gone; `--no-rest` is accepted and changes nothing) and no
-`--stdio`. The tests run the same way: `tests/support` starts every server
-under `key` with a fixture key as `--admin`, and every client proves that
-key; `tests/first_run.rs` runs the no-flags start on a temp HOME. The first
-start of this build on a database purges the grants planted while it ran
-open (README "Login" → The purge).
+prints another; `--open` opens it). A dev server runs `key` with your key
+as `--admin` (above), on its own ports and database. The tests run the same
+way: `tests/support` starts every server under `key` with a fixture key as
+`--admin`; `tests/first_run.rs` runs the no-flags start on a temp HOME.
+
+Bare `cargo run` takes prod's ports (4455–4456, or the next free ones) and
+the default data directory, `~/.local/share/menger` — prod's directory on
+this machine; it writes `local.key`, `local.json` and `once/` beside prod's
+file. Never run it that way here. Give a dev server its own `--ui-db-path`
+too: the default is `ui.db` beside the database, and throwaways in `/tmp`
+would share one.
+
+**`scripts/agents-commands.sh PORT`** (V2-8) runs every `synapse` command
+in this file — each line of a fenced `sh` block, and each inline
+`synapse … menger …` span — against a throwaway, its address rewritten, and
+says `ok` or `FAIL` for each, then `N ok, M failed`. `--list` prints them.
+A command written here must run as written; one whose precondition a
+throwaway cannot meet is prose.
 
 **tether** (`tether/`, TETHER-7) is menger's local side as a Plexus RPC
-tool of its own (`synapse tether sessions …`), with substrate imported as
-a crate and called in memory (plexus-core's `HubTransport`, LOCAL-6). It is
-its **own cargo workspace** — substrate's sqlx and menger's rusqlite link
-two `libsqlite3-sys` — so `cargo test` here does not cover it: `cd tether
-&& cargo test`. Its README has how to run and reach it.
-
-Bare `cargo run` takes prod's ports (4455–4456, or the next free ones)
-and the default data directory, `~/.local/share/menger` — prod's directory
-on this machine. Since DIST-14 its database is `local.db`, not prod's
-`tickets.db`, but it still writes `local.key`, `local.json` and `once/`
-beside prod's file — never run it that way here.
+tool of its own, with substrate imported as a crate and called in memory
+(plexus-core's `HubTransport`, LOCAL-6). It is its **own cargo workspace**
+— substrate's sqlx and menger's rusqlite link two `libsqlite3-sys` — so
+`cargo test` here does not cover it: `cd tether && cargo test`.
 
 Every listener answers only its own names (ACCESS-25): `127.0.0.1:<port>`,
-`localhost:<port>`, `--public-url`'s host, and each `--allowed-host`
-(repeatable; `MENGER_ALLOWED_HOSTS`, `;`-separated); any other `Host` is
-refused 421 before routing — reach a server by those names (synapse, curl
-and the scripts do). README "Run" → Hosts.
+`localhost:<port>`, `--public-url`'s host, and each `--allowed-host`; any
+other `Host` is refused 421. Beyond loopback menger is one https origin
+(ACCESS-30): `--bind`, `--public-url https://…`, `--trusted-proxy` for the
+edge. README "Run".
 
-Beyond loopback, with login on, menger is one https origin (ACCESS-30): a
-proxy terminates TLS, `/ws` goes to the WebSocket and the rest to the
-shell, and `--public-url https://…` is required — the app then opens
-`wss://<host>/ws`, cookies are `Secure` / `__Host-`, every answer carries
-HSTS, and the provider's redirect URI is `<public-url>/login/callback`. An
-`http://` public URL on the LAN starts with a warning; any other is refused.
-README "Behind https"; the Caddy recipe and the checklist in
-`deploy/README.md`. Every listener binds loopback
-unless `--bind ADDR` (`MENGER_BIND`; `0.0.0.0`, `::`, one address) says
-otherwise (RUN-8, README "Run" → Bind); binding adds a specific address's
-literal to the names, never any other. The builder binds it
-(`TransportServerBuilder::bind`, TRANSPORT-7), so every check the builder
-keeps applies there. `--trusted-proxy` (`MENGER_TRUSTED_PROXIES`) names the
-edge: only its `X-Forwarded-For` is believed, by the login throttles and by
-the WebSocket's per-IP and anonymous quotas, and a forwarded header from any
-other peer is ignored (README "Run" → Trusted proxies).
+## What v2 is
 
-> **2026-10-17 (RUN-13): the tracker moved to https://app.menger.sh.** Prod's
-> data moved there (ACCESS-47 `move`); this machine's prod (`:4455`–`:4458`)
-> is retired (DEPLOY-52, 2026-10-23: unit uninstalled, its database
-> untouched at `~/.local/share/menger/tickets.db`). Agents reach the tracker
-> as `synapse --url wss://app.menger.sh/ws --as <agent> menger …` (once:
-> `synapse --url wss://app.menger.sh/ws _login menger --key <agent> --as
-> <agent>`; `builder`, `pipeline`, `operator` keep their grants). Read every
-> `synapse -P 4455 menger …` below as that. People sign in at
-> https://app.menger.sh/ through WorkOS production. Deployment records go
-> to app.menger.sh as the `pipeline` key (DEPLOY-28,
-> `MENGER_DEPLOY_TRACKER_URL`). The rollback is a restore of that file onto
-> the Linode through infra's `seed.yml` (deploy/README "On the Linode" → The
-> rollback; RUN-13).
+**The services registered** (`src/builder.rs`, one process): `tickets`
+(children `commits`, `filters`, `nav`, `revisions`, `subtasks`, `work`),
+`members` (child `teams`), `orgs`, `epics`, `session`, `auth`, and `ui`
+(child `slots`). A service reaches another as a client, through
+plexus-core's `HubTransport::as_(service, caller)` — the ui service's seam
+(`ui-service/src/seam.rs`) asks `tickets` as the server's own caller,
+through the same route and gate a socket reaches; it never opens the
+tickets file.
+
+**The tickets service** is v1's core and nothing else: the cache
+(`tickets-api/src/store/`), the cells and the lens over Roaring bitmaps, the
+kept tree, the stored derived state (form 16), FTS5 search, the filter
+language. `tickets-api/tests/cut.rs` holds the cut: no module of a service
+that went, no flag for one, and README and this file naming none of them.
+
+**The ui service** (`ui-service/`, UI-3, UI-7, UI-9) keeps the UI's
+versions by content hash in its own file and serves whichever the live
+pointer names at `/app/`:
+
+- `ui push` — a bundle (a tar, base64), its manifest and an Ed25519
+  signature over the bundle's sha256; compiled in the compiler module
+  (when `--ui-compiler` names one), each component's `uses` linted against the running tickets service, and
+  stored and made live in one transaction. `ui rollback --to <hash>`,
+  `ui versions`, `ui preview [--version]`, `ui watch`.
+- **Sections**: `ui slots list | set | clear` — what component fills each
+  slot of each layout, over the live manifest's defaults.
+- **Its flags**: `--ui-db-path` (`MENGER_UI_DB_PATH`; default `ui.db` beside
+  the database), `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex
+  public keys; none: every push refused `no_signer`), `--ui-compiler`
+  (`MENGER_UI_COMPILER`, `dist/ui-compiler.wasm`; without it a push stores
+  the trees as given and says `compiled: false`).
+- **Who may**: `versions`, `watch` and `slots list` a viewer's; `push` the
+  `deployer`'s (V2-7: the pipeline key); `rollback`, `preview`, `slots set`
+  and `slots clear` the admin's (`ui-service/src/activation.rs`).
+
+```sh
+synapse -P 4460 menger ui slots list --layout board-layout
+synapse -P 4460 menger ui slots set --layout board-layout --slot nav --component nav-flat
+synapse -P 4460 menger ui slots clear --layout board-layout --slot nav
+synapse -P 4460 menger ui preview
+synapse -P 4460 menger ui watch          # open-ended
+```
+
+**The UI's source** is `ui/` — `index.html`, `routes.json`, `slots.json`,
+`src/*.svelte`, `golden/` — compiled by `ui-compiler/` (UI-5: the component
+subset of Svelte → a view tree and Rhai handlers; native and as a wasm
+module with no imports) and drawn by `ui-engine/` (UI-6, UI-10: signals,
+`live()`, the DOM renderer, the Rhai folds, hot-swap on `ui.watch`,
+sections, the sanitized `{@html markdown()}`). The contract between them is
+ticket **UI-4** ("The component contract, v1") on the tracker; README "The
+component contract" has the bundle's layout.
+
+```sh
+scripts/ui-compiler-wasm.sh       # dist/ui-compiler.wasm (rustup's wasm32-unknown-unknown)
+scripts/ui-build.sh               # dist/ui.tar, the bundle a deploy pushes
+```
+
+A change to `ui/src` is checked in Chromium by `tests/pages_browser.mjs`
+(through `scripts/ui-throwaway.mjs`); a change to the engine by
+`tests/engine_browser.mjs`; the golden pairs by `cargo test -p
+menger-ui-compiler --test golden`.
+
+## Adding a component
+
+From an idea to a component on app-test, top to bottom. The subset is
+UI-4's (the contract, on the tracker): a `<script>` of Rhai — `prop()`,
+`state()`, `live()`, and handlers as folds `fn name(state, ev) { …; state }`
+— and a template of `{expr}`, `{#if}`, `{#each … as x (key)}`,
+`on:event={handler}`, another component as `<name prop={…}/>`, and in a
+layout `<slot name="…"/>`. `ui/src/*.svelte` are the worked examples.
+
+**1. Write it** — `ui/src/ticket-kids.svelte`, a ticket's children, live (a
+new child appears, a status moves, a delete goes):
+
+```svelte
+<script>
+  prop("id");
+  state(#{ open_only: false });
+  let kids = live(#{ snapshot: "tickets.list", params: #{ parent: id, summary: true, limit: 200 },
+                     changes: "tickets.watch", key: "id",
+                     on: #{ created: "upsert:ticket", status_changed: "upsert:ticket", deleted: "remove:ids" } });
+  fn toggle(state, ev) { state.open_only = !state.open_only; state }
+</script>
+
+<section class="ticket-kids">
+  <h2>{id}</h2>
+  <button on:click={toggle}>open only</button>
+  <ul>
+    {#each kids as c (c.id)}
+      {#if !state.open_only || c.status != "Complete"}<li><a href={"#/ticket/" + c.id}>{c.id + " " + c.title}</a> {c.status}</li>{/if}
+    {/each}
+  </ul>
+</section>
+```
+
+`live()` calls the snapshot once and folds the changes stream by `on`; an
+`upsert` keeps only rows that match the snapshot's params (`parent` here),
+so the list stays its own. Every method a component calls is its `uses`,
+and a push checks each against the running tickets service.
+
+**2. Put it on screen.** A route names a component — `ui/routes.json`,
+`"#/kids/:id": "ticket-kids"` (a `:name` segment is a prop) — and a layout's
+sections name their defaults — `ui/slots.json`, `layout → slot →
+component`. A section's assignment changes on the running service without a
+push: `ui slots set` (or the right-click menu on a section), which is how two
+versions of one component are swapped (`--version` names the other);
+`ui slots clear` puts the default back.
+
+**3. Build.** Once, the compiler module and the halves that need cargo; then
+the bundle, every time:
+
+```sh
+scripts/ui-compiler-wasm.sh                 # dist/ui-compiler.wasm
+scripts/ui-build.sh --prebuild              # the engine and the compiled components, into dist/ui.d
+scripts/ui-build.sh                         # dist/ui.tar, its manifest at dist/ui.d/manifest.json
+```
+
+A source the compiler refuses names its line.
+
+**4. See it.** A dev server in local mode — no `--auth-provider`, so it
+prints a one-time sign-in link for your browser — with your key as admin
+and as the signer (the signer is the public key: your principal without
+`key:`):
+
+```sh
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --data-dir /tmp/menger-dev \
+  --admin "$(synapse _key show builder)" --ui-signer "$(synapse _key show builder | sed 's/^key://')" \
+  --ui-compiler dist/ui-compiler.wasm
+synapse -P 4460 _login menger --key builder --as builder
+base64 -w0 dist/ui.tar > dist/ui.b64
+cargo run -p menger-ui-service --bin ui-sign -- ~/.plexus/keys/builder.key dist/ui.tar > dist/ui.sig
+synapse -P 4460 menger ui push --bundle @dist/ui.b64 --manifest @dist/ui.d/manifest.json --signature @dist/ui.sig
+```
+
+`ui-sign` reads the seed from the key's file (`~/.plexus/keys/<name>.key`,
+0600 — the path goes in argv, never the seed; a key synapse keeps in the
+keychain has no file: make one with `synapse _key new NAME --store file`).
+The push answers `pushed { version, live: true, compiled: true }`. Open the
+banner's link, then `http://127.0.0.1:4461/app/#/kids/KILN-1`; `cargo run --
+login --data-dir /tmp/menger-dev` prints another link (a local start also
+links `~/.plexus/keys/menger-local.key` to its own key when none is there).
+Every open page hot-swaps on the next push. `scripts/ui-throwaway.mjs` and `tests/pages_browser.mjs`
+do all of this from code.
+
+**5. Ship.** Commit the source (`ui/src`, `routes.json`, `slots.json`; `dist/`
+is never committed), merge to `v2` with `--no-ff`, and deploy to test: the
+runner deploys its branch's tip (`MENGER_RUNNER_BRANCH`; while it is `main`,
+run v2's by hand — `deploy/pipeline build --branch v2 --no-gate`, then
+`image`, then `remote test --image …`). The deploy builds the bundle and
+pushes it as the `pipeline` key, the only signer on app-test; every open page
+there hot-swaps to it.
 
 ## Deploying
 
 menger runs in two environments, both on the Linode as one image through
 hypermemetic-infra: **test** is https://app-test.menger.sh and **prod**
-https://app.menger.sh (DEPLOY-52, owner 2026-10-22/23: "we need to work
-directly against the test deployment and there should be no tests running on
-that deployment", "we run the tests after the deployment to test", "we need
-to remove the non remote environments"). This machine builds the releases
-and images and runs the suite; it runs no environment — its old test
-(4450–4453) and prod (4455–4458) are retired, their units uninstalled, their
-data untouched (deploy/README "The local environments, retired").
-`deploy/README.md` defines the pipeline (DEPLOY-1); in short:
+https://app.menger.sh (DEPLOY-52). This machine builds the releases and
+images and runs the suite; it runs no environment. `deploy/README.md`
+defines the pipeline (DEPLOY-1); its "v2: a release with no browser
+toolchain" (V2-7) is v2's path:
 
 ```sh
-deploy/pipeline build --no-gate  # main's tip → a release, no suite (the runner's; `build` alone gates first)
-deploy/pipeline image R          # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes :R + :latest)
+deploy/pipeline build --branch v2 --no-gate   # v2's tip → a release (RELEASE says `branch: v2`); no frontend/,
+                                              # so the workspace, the bundle in the codegen container, the
+                                              # compiler module on this machine
+deploy/pipeline image R                       # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes it)
 deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:R
-                                 # app-test.menger.sh through infra (deploy/app.yml), then the smoke from
-                                 # outside; recorded as `test`; Complete for the work it carries (DEPLOY-22)
-deploy/pipeline suite R          # DEPLOY-52: the full suite (workspace + frontend) at R's commit, on this
-                                 # machine, never against a deployment; marks R passed / failed
-deploy/pipeline remote prod      # what test runs → app.menger.sh (infra's promote.yml) — refused unless
-                                 # its suite passed; the owner's
-deploy/pipeline status           # what test and prod run, their suites, health, last records; the runner
-deploy/pipeline releases         # every release: its suite, tested?, where it runs
-deploy/pipeline backfill         # deployments.log → menger's deployments (DEPLOY-12; idempotent)
-deploy/pipeline landing          # DEPLOY-17: main's landing/ → gate → menger.sh (infra's pin moved, the
-                                 # edge applied, the live page verified, recorded as env `edge`)
-deploy/pipeline landing --check  # the gate and infra's dry run, nothing written
-deploy/pipeline media            # landing/media regenerated from the release prod runs; then commit
-deploy/pipeline local --image menger:R  # RUN-25: the image as menger-app-local on 127.0.0.1:4470/4471 —
-                                 # a CI throwaway (hyperforge's `ci menger-app`), not an environment
+                                              # app-test.menger.sh through infra, the bundle pushed through
+                                              # ui.push as the pipeline key, then the smoke
+deploy/pipeline suite R                       # the full suite at R's commit, on this machine; marks R passed / failed
+deploy/pipeline remote prod                   # what test runs → app.menger.sh, only once its suite passed; the owner's
+deploy/pipeline local --image menger:R        # RUN-25: the image on 127.0.0.1:4470/4471, a CI throwaway
+deploy/pipeline status                        # what test and prod run, their suites, the runner and its branch
+deploy/pipeline releases                      # every release: its suite, tested?, where it runs
 ```
 
-`install`, `deploy test`, `sync`, `promote`, `rollback` and `logs` are
-retired: they say so and exit 2.
-
-- **Every remote test and remote prod records itself in menger**
-  (DEPLOY-12): `started`, then `succeeded` / `failed`, sent
-  to the tracker (`MENGER_DEPLOY_TRACKER_URL`, `wss://app.menger.sh/ws`, as the
-  `pipeline` key; DEPLOY-28) through
-  `deploy/record`. A record the tracker does not take waits in
-  `~/.local/share/menger-deploy/outbox/` for the next run; it never fails a
-  deploy. A test of the pipeline runs it on a throwaway root
-  (`deploy/tests/pipeline`), never against the real environments.
-
-- **menger.sh changes only through `deploy/pipeline landing`** (DEPLOY-17):
-  never by editing infra's pin or running `bin/infra` by hand. It deploys a
-  commit on main, so merge first; a change to the app's look is followed by
-  `deploy/pipeline media`, its files committed, then `landing`.
+- **The release names its branch** (`build --branch B`: B's tip). A tree
+  with no `frontend/` builds `cargo build --release -p menger`, the bundle
+  (`scripts/ui-build.sh` → `dist/ui.tar`) in the `plexus-codegen`
+  container, and `dist/ui-compiler.wasm` on this machine. The image runs
+  with `--ui-db-path`, a `--ui-signer` per key of `MENGER_UI_SIGNERS` and
+  `--ui-compiler`.
+- **A deploy pushes the bundle**: after a healthy `remote test` (and
+  `local`), `ui.push` as the `pipeline` key (a `deployer`), signed by
+  `deploy/ui-sign.mjs`; the smoke wants that version live. A refused push
+  fails the deploy and leaves the version that was live.
+- **Every remote test and remote prod records itself on the tracker**
+  (DEPLOY-12, DEPLOY-28) as the `pipeline` key, through `deploy/record`; a
+  record the tracker does not take waits in
+  `~/.local/share/menger-deploy/outbox/` and never fails a deploy.
 - **Production changes only through `remote prod`**, and only to a release
-  that passed test and whose suite passed (DEPLOY-52). A `cargo build` or `trunk build` in a checkout
+  that passed test and whose suite passed. A `cargo build` in a checkout
   changes nothing that is serving.
-- Merging to main is not deploying, and **Complete means deployed to the
-  lowest environment** (owner, 2026-10-17; DEPLOY-22): the merge links its
-  commit and leaves the ticket In Review; the deploy to test (app-test.menger.sh) that carries it
-  sets Complete by itself (DEPLOY-28: `deploy/record --complete`, as the
-  builder's key); it reaches users when its release is promoted — say which
-  release in the ticket when it matters. Work in a repository with no
-  environment (`repo@hash` outside menger) is Complete at its merge.
-- **Test is automatic; prod is the owner's** (owner, 2026-10-19, DEPLOY-48:
-  "we always instantly deploy everything to test. we tolerate rollback").
-  The deploy runner (`deploy/runner.mjs`, `menger-deploy-runner`) watches
-  the tracker: a ticket of MENGER (or a shortcode hosted under it) entering
-  **In Review**, or a commit linked to one while it is there, files a test
-  request for main's tip by itself — debounced 60 s, one run at a time and
-  at most one pending request (a burst of merges is one more run; the
-  pending one takes main's tip when it starts). The run is build without
-  the gate → image → app-test.menger.sh and its smoke — live within minutes
-  — and **then the suite**, on this machine against the release's tree
-  (DEPLOY-52). A ticket moved back to Coding triggers nothing until it
-  re-enters review. A red run records `failed`; a red suite marks the
-  release `suite failed` (`remote prod` refuses it); either posts the
-  failing lines to the ticket's chat (else chat 6) and files a gap blocking
-  the triggering tickets (CI-3); a green suite says so in the ticket's chat. So a builder merges
-  `--no-ff`, links, sets In Review — and runs no deploy; never squash or
-  rebase on merge (a ticket's branch commits are how "is it on test" is
-  answered). Off: `MENGER_RUNNER_AUTO_TEST=0` in
-  `~/.config/menger/deploy-runner.env`, then restart the runner;
-  `deploy/pipeline status` says `auto-test on|off` and what is running and
-  pending. deploy/README "The deploy runner" → Automatic test.
-- Check work on test, **https://app-test.menger.sh**, signed in as your
-  agent's key there (once: `synapse --url wss://app-test.menger.sh/ws _login
-  menger --key builder --as builder`; then `synapse --url
-  wss://app-test.menger.sh/ws --as builder menger …`, and
-  `scripts/shot.mjs '#/…' --env test`), or on a throwaway server — never on
-  prod. The tracker itself is prod (app.menger.sh): that is how tickets are
-  read and written.
-
-## Reaching the backend
-
-Everything menger does is a Plexus RPC method on the `menger` hub
-(WebSocket :4455) — there is no side door, and nothing an agent needs is
-off the wire. The activation publishes its schema; every client below is
-derived from it or from the declaration that produces it. (Mermaid is
-checked by a separate service, `diagrams` on :4458 — `diagrams/`,
-COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
-
-- **`synapse`** (`../synapse`; on PATH) — the CLI over any Plexus backend.
-  This is how an agent, a worker or a shell script reads and writes
-  tickets (ACCESS-24: there is no REST bridge to curl).
-
-  **The paths moved** (ACCESS-14..18; every client, ACCESS-20): a ticket's
-  inputs, commits, nav reads, order of work and components are children of
-  `tickets` — `tickets inputs list|answer|clear|close|reopen`, `tickets
-  commits link|unlink`, `tickets nav groups|extents|tree|counts|facets|member`,
-  `tickets work ready|waves|waves_under|waves_to|blockers`, `tickets
-  components list` — and this file is written for them (so are
-  `members teams` and `--team`, ACCESS-22, and the ticket scopes of
-  ACCESS-21). Prod runs them since release
-  `20261016T170852Z-1a20db5` (promoted 2026-10-16); the old names —
-  `answer`, `close_input`, `link_commits`, `ready_set`, `groups`, `waves`,
-  … directly under `tickets` — are gone, and `synapse -P 4455 menger
-  tickets` lists what the running server has. README "The frame" has the table.
-  **Read `../menger-skills/reaching/SKILL.md` before issuing synapse
-  commands** — it is the house's invocation contract (where flags go, how to navigate
-  to a method, how to discover its parameters from the CLI itself); what
-  follows here is only what is particular to menger.
-
-  ```sh
-  synapse -P 4455 menger tickets health
-  synapse -P 4455 menger tickets list --epic MNG
-  synapse -P 4455 menger tickets set_status --id MNG-1 --status Ready
-  synapse -P 4455 menger tickets watch          # open-ended stream
-  ```
-
-  **Filters** (FILTER-4) are one quoted flag in FILTER-3's language —
-  `ready and kind build and in SCALE`, `status in (Pending, Ready)`,
-  `category in (active, review)`, `not category static`; answered from the
-  cells, never by testing a ticket. `under X` (FILTER-13) is X and its
-  descendants for a ticket, and a shortcode, its root and every shortcode
-  hosted under it for a shortcode — answered from the kept tree, on every
-  filtered read. `text` (the palette's `find`) is refused, as is any chunk
-  the language cannot read:
-
-  ```sh
-  synapse -P 4455 menger tickets nav counts --filter 'ready and kind build'    # per shortcode
-  synapse -P 4455 menger tickets list --filter 'blocked' --at 1000 --summary --limit 20
-  synapse -P 4455 menger tickets nav facets --filter 'status Ready and kind build'   # menu counts
-  synapse -P 4455 menger tickets watch --filter 'category in (active, review)'   # + entered/left
-  ```
-
-  Groups nest and saved filters are named (FILTER-36): `(a or (b and
-  c))` to any depth, and `saved "Name"` (`saved Name` without spaces) —
-  the saved filter of that name (`tickets filters`, FILTER-46: its own
-  table, written `tickets filters save --name N --filter F`, listed with
-  `list`, also `get | rename | delete | check`), expanded by the server
-  before the cells (a missing name or a cycle is the in-band error; a watch
-  re-says its membership when a named filter changes). README "Nesting and
-  names":
-
-  ```sh
-  synapse -P 4455 menger tickets list --filter 'saved "Needs you" or saved Plexus-Ready' --summary true
-  ```
-
-  The other reads take the same flag (FILTER-15) — `find`, `work ready`
-  and `inputs list` answer what they answered, of the tickets the filter
-  admits; `nav member` says which of up to 1,000 ids it admits:
-
-  ```sh
-  synapse -P 4455 menger tickets find --query watch --filter 'not category done'
-  synapse -P 4455 menger tickets work ready --filter 'kind build and in SCALE' --summary
-  synapse -P 4455 menger tickets inputs list --state open --filter 'kind build'
-  synapse -P 4455 menger tickets nav member --ids FILTER-4,FILTER-5 --filter 'status Ready'
-  ```
-
-  **History** (MENGER-13): every status and kind change is a transition —
-  who, from where, why, caused by what — read with `history --id X`.
-  `set_status … Canceled` cancels the ticket's open descendants in the same
-  write (and withdraws their open inputs); leaving `Canceled` with
-  `--restore-children true` puts back what that cancel canceled. Filters
-  read the log: `entered <status> [window] [by who]`, `status left …`,
-  `moved …` (any transition), `by …`; windows `within 12h`, `today`,
-  `yesterday`, `this week`, `after/before/between` (`since` still reads;
-  UTC unless `--tz Europe/Berlin`). A time is a modifier on the rule it
-  follows (FILTER-52): `status Complete after 2026-10-01` is Complete now
-  and last became so then; `kind gap within 7d`; `created after M`;
-  `changed before 2w ago` is the last write (`touched` still reads). The
-  old `status S and entered S W` reads and prints as `status S W`:
-
-  ```sh
-  synapse -P 4455 menger tickets list --filter 'status "In Review" within 12h' --summary true
-  synapse -P 4455 menger tickets set_status --id MNG-7 --status Canceled --message "folded into MNG-9"
-  ```
-
-  **The archive** (ARCHIVE-2) is a mark apart from status: `archive`
-  takes ids or a filter and archives each with its whole subtree, live work
-  included and named in the answer's `live` (never refused); `restore`
-  brings a ticket back with its archived ancestors (the chain only;
-  `--with-children` the subtree archived with it). An archived ticket keeps
-  its status and blockers and is in no view — list, tree, counts, search,
-  find, ready set, waves, inputs, queue, health — unless the filter names
-  `archived`; `get` still answers it, with `archived: {at, by}`. Cells
-  `archived [window] [by who]` and `restored …` read the log; `--dry-run
-  true` answers and writes nothing. A create or move under an archived
-  parent restores its chain. README "The archive":
-
-  ```sh
-  synapse -P 4455 menger tickets archive --ids KILN-1 --dry-run true --message "first season fired"
-  synapse -P 4455 menger tickets archive --filter 'category done and under KILN' --max 500
-  synapse -P 4455 menger tickets list --filter 'archived within 7d by owner' --summary true
-  synapse -P 4455 menger tickets restore --ids KILN-4 --with-children true
-  ```
-
-  **Addresses** (ORG-3): a shortcode is unique only within its namespace
-  (its org and the shortcode it is hosted under), so two THEMEs may exist
-  under different hosts. A ticket carries `epic` (the letters), `shortcode`
-  (the store's identity — the code itself for every shortcode older than
-  ORG-3, `CODE.N` for a namesake) and `address`
-  (`hypermemetic:MENGER/ACCESS/ORG-3`). Every `--id`, `--parent`,
-  `--blocked-by`, `--epic` and `under` takes any short form of the address
-  (`MENGER/ORG-3`, `ACCESS/ORG-3`, the bare id); every id older than ORG-3 is
-  pinned and keeps naming its ticket. A name that fits two is refused in-band
-  (`ambiguous { id, candidates }` — each by its full address; name one in
-  full). A create, rehome, kind change, note upgrade or undelete that would
-  put a second code into one namespace is refused, naming the one there.
-  `in THEME` matches the letters wherever hosted; `under X` binds one
-  shortcode (its identity first). README "Addresses and namespaces":
-
-  ```sh
-  synapse -P 4455 menger tickets get --id MENGER/ORG-3
-  synapse -P 4455 menger tickets create --epic PLEXUS/THEME --title "a build in PLEXUS's THEME"
-  ```
-
-  **Revisions** (TICKETS-7): every write that changes a ticket's own
-  fields keeps one, in its transaction (a cascade or a bulk write one per
-  ticket, each naming its cause) — `tickets revisions list|get|diff|restore`;
-  a restore is an `update` of a revision's fields and itself a revision;
-  `watch --revisions true` adds `revised`. A new write path that moves a
-  ticket's row goes through `db::upsert` / `update_row` / `set_body` inside
-  a write runner, or it keeps no revision (`store/revisions.rs`). README
-  "Revisions":
-
-  ```sh
-  synapse -P 4455 menger tickets revisions list --id DEPLOY-9
-  synapse -P 4455 menger tickets revisions diff --id DEPLOY-9 --from 3 --to 5
-  synapse -P 4455 menger tickets revisions restore --id DEPLOY-9 --rev 3 --fields body --message "why"
-  ```
-
-  **Assignees** (TICKETS-9): a ticket's people and agents — principals
-  that read it — moved by `tickets assign --id X --add P --remove P` (or
-  `--ids`; `update_many --assign / --unassign`); one who cannot read the
-  ticket is refused, naming why. Each move is an `assign_record` in
-  `history`; `watch` carries `assignees_changed`. Cells: `assigned
-  "<principal>"`, `assigned me`, `assigned`, `unassigned`. README
-  "Assignees":
-
-  ```sh
-  synapse -P 4455 menger tickets assign --id TICKETS-9 --add key:4b…
-  synapse -P 4455 menger tickets list --filter 'assigned me and not category done' --summary true
-  ```
-
-  **Search inside tickets** (SEARCH-2) is `search` — titles and bodies,
-  every word required, prefixes and typos too, best first; each `hit`
-  carries the passage that matched (`find` stays the jump by id or title).
-  It takes the same `--filter`, and pages with `--offset` / `--limit`:
-
-  ```sh
-  synapse -P 4455 menger tickets search --query 'plcement wave'
-  synapse -P 4455 menger tickets search --query 'set_status' --filter 'not category done' --limit 5
-  ```
-
-  **The nav under a filter** is `nav tree` (FILTER-13): a parent's children —
-  or a shortcode's top row (its root; a rootless shortcode's tickets) —
-  that match or hold a match, each a `node { summary, matched, below }`
-  (`below`: the matches strictly under it; `matched: false` a holder), then
-  a `page`, paged as `list`. The nav asks it with `--matches-only`
-  (FILTER-23): only matches — at a parent, the matches nearest below it (a
-  ticket that does not match is no row; the matches under it are answered
-  at its nearest matching ancestor, or at the shortcode's top), then the
-  hosted shortcodes whose row is drawn there, each its root's node
-  (`matched: false`: a heading); at `--epic`, the root if it matches, else
-  the shortcode's top. `--keep ID` (FILTER-24, the nav's open ticket)
-  answers as if that ticket matched — drawn where a match would be, its
-  matches under it, its node still `matched: false`; `list` (with a
-  filter) and `nav counts` take it too, and none of them keeps a ticket
-  outside the caller's reach:
-
-  ```sh
-  synapse -P 4455 menger tickets nav tree --epic FILTER --filter 'status Ready'
-  synapse -P 4455 menger tickets nav tree --parent FILTER-9 --filter 'not category done' --limit 50
-  synapse -P 4455 menger tickets nav tree --epic MENGER --filter 'kind build' --matches-only true
-  synapse -P 4455 menger tickets nav tree --parent FILTER-1 --filter 'not category done' --matches-only true --keep FILTER-23
-  synapse -P 4455 menger tickets nav counts --filter 'ready and under FILTER-9'
-  ```
-
-  **Comments** (COMMENT-2) are the `comments` activation beside `tickets`:
-  a reader's notes on the app and on ticket bodies, kept as records of
-  their own — `add { anchor, body }` (signed by the caller, ACCESS-19), `list` (newest first; `ticket`,
-  `under`, `route`, `path` prefix, `state` open/resolved, `author`, `text`;
-  `after` + `limit`), `resolve`, `reopen`, `watch`. The anchor goes as
-  `--anchor.route … --anchor.path …`; `list`'s `path` goes in `-p` (synapse
-  rewrites a `--path` flag into a file path). The app writes them in its
-  annotation mode (`a`, COMMENT-3) and lists them at `#/comments`; an anchor
-  inside a framed body is `iframe[…] >> <selector in the body>`. README
-  "Comments" has the rest:
-
-  ```sh
-  synapse -P 4455 menger comments list --under FILTER --state open --text title
-  ```
-
-  **Chats** (CHAT-3) are the `chats` activation: a conversation among
-  named participants, opened inside one ticket — `open { ticket, others,
-  title? }` (the same set's open chat there is answered again), `post`,
-  `add`, `list` (`--unread true`), `messages`, `read { chat, upto }`,
-  `close` / `reopen`, `watch`, and `await_message` — `waiting`, then one
-  message by someone else, then the end (`await_reply`'s shape; pass
-  `--after <last id>` after a dropped connection). Participants only; each
-  must read the ticket. `chatting` and `unread` are filter cells, for the
-  reader. README "Chats":
-
-  ```sh
-  synapse -P 4455 menger chats open --ticket KILN-7 --others key:4b…
-  synapse -P 4455 menger chats open --ticket KILN-7            # a chat of one (CHAT-6); add to it later
-  synapse -P 4455 -j menger chats await_message --chat 41 --timeout-minutes 240
-  ```
-
-  **Outside tickets** (CHAT-14): `open` with no `--ticket` is a direct
-  message (one other — the one the two have, when they have one) or a
-  group (several, `--title`); each must hold a grant in the caller's
-  organization, and only its participants read it (no ticket's reach, no
-  admin's). `remove` takes a group's member out (itself: it leaves); an
-  admin of the organization adds and removes without reading it.
-  `candidates` (no `--ticket`: who may be in one) names each principal as
-  the server knows it — the name it last signed in with, a synapse key's
-  name too (`--as builder`), kept in `principal_names` — with `agent: true`
-  for an `agent:` or `key:` principal or a standing chat member. The app's
-  `#/chats` lists every chat, unread first. A chat's images are `media.put
-  { chat, … }`, seen by its participants alone:
-
-  ```sh
-  synapse -P 4455 menger chats open --others key:54a9…                 # a direct message
-  synapse -P 4455 menger chats open --others idp:…,key:54a9… --title "the kiln crew"
-  synapse -P 4455 menger chats remove --chat 52 --principal key:54a9…
-  synapse -P 4455 menger chats candidates                                 # names, agents
-  ```
-
-  **A message's questions** (CHAT-20): an `<m-decision id>` / `<m-input
-  id kind>` in a message is an input of the message — `chats inputs
-  list|answer|clear|close|reopen` (`--chat --message --input`); a
-  participant answers, who answered clears, who asked closes; every answer
-  (a ticket's too) says `by`. `await_message` ends on an answer to your
-  message's input (`--input M/I`: that one alone); the cell `asked` puts its
-  ticket under Needs you for the others in the chat; `tickets queue
-  --message M --input I` queues it. README "Questions in a message":
-
-  ```sh
-  synapse -P 4455 menger chats inputs answer --chat 6 --message 812 --input fire --value.type choice --value.option yes
-  synapse -P 4455 -j menger chats await_message --chat 6 --input 812/fire --timeout-minutes 240
-  ```
-
-  **A message that carries components** (CHAT-21): a message whose body
-  would be framed as a ticket's draws in its own frame (made near the view,
-  no `data-ticket`, reads held to the chat's ticket), so a builder may post
-  `<m-stat>`, `<m-cases>` or an `<m-decision id>` and the reader answers it
-  with a click in the frame (`menger.input.ticket` is `message:<id>`,
-  SDK 2.7; the writes are `chats.inputs.*`). Post it with `--body @file`.
-  README "A message that carries components".
-
-  **A chat's tickets** (CHAT-55): every ticket its messages name, and
-  every ticket filed (`tickets create --chat N`) or linked (`chats link`)
-  from it — `chats tickets --chat N` (each with its stage: waits on you,
-  ready, in progress, in review, on test, shipped), the `in chat N` filter
-  cell; the app draws them as the strip under the chat's head. **File work
-  the owner asks for in a chat with `--chat N`**, so it shows there. README
-  "A chat's tickets":
-
-  ```sh
-  synapse -P 4455 menger tickets create --epic CHAT --title "the strip" --chat 6
-  synapse -P 4455 menger chats link --chat 6 --tickets CHAT-55,CHAT-56
-  synapse -P 4455 menger chats tickets --chat 6
-  ```
-
-  **A reply** (CHAT-66) is a token first in the body, as an image is:
-  `[↩](message:N)` — the stored body keeps only it. `chats.post` reads it
-  off and refuses an N outside the chat (in band, naming it); every message
-  is answered with `reply_to` and `quote { id, author, name, snippet,
-  deleted }`. The app draws a quoted header that jumps to N (*reply* in a
-  turn's menu, or a swipe right on a phone); elsewhere the token is a chip,
-  `↩ message N`. The chat bridge shows the agent "(replying to #N: …)":
-
-  ```sh
-  printf '[↩](message:512) archive — holds are real.\n' > reply.md
-  synapse -P 4455 menger chats post --chat 6 --body @reply.md
-  ```
-
-  **An admin adds anyone** (CHAT-16): an admin of a chat's ticket (or,
-  outside tickets, its organization) adds anyone, in the chat or not; one
-  who can't read it needs `--grant ticket` (viewer on that ticket alone)
-  or `--grant chat` (the `chatter` role: their chats there, nothing of the
-  ticket) — the add and the grant one write; without it the answer is
-  `needs_grant { choices }` and nothing is written, so nothing grants by
-  accident. `remove … --revoke true` takes the grant back with the seat.
-  README "An admin adds anyone":
-
-  ```sh
-  synapse -P 4455 menger chats add --chat 41 --principal key:5a… --grant chat
-  ```
-
-  **The chat bridge** (CHAT-11) answers the owner in chats: the user unit
-  `menger-chat-bridge` holds the builder's `chats watch` on `MENGER_URL`
-  (`~/.config/menger/chat-bridge.env`) and, for a message by a principal in
-  `~/.config/menger/chat-bridge.allow`, runs `claude -p` (Opus,
-  `bypassPermissions`, both in the unit) resuming that chat's session and
-  posts its answer. Stop it with `systemctl --user stop
-  menger-chat-bridge` (`disable --now` for good); switch the tracker by
-  editing `MENGER_URL` and `systemctl --user restart menger-chat-bridge`;
-  update it with `scripts/chat-bridge/install.sh --start` from main.
-  README "The chat bridge".
-
-  A comment shows **images** (COMMENT-5) as `![alt](media:<hash>)`: the
-  `media` activation keeps one for a ticket — `put { ticket, mime, data }`
-  (base64; PNG, JPEG, GIF or WebP by its bytes, never SVG, at most 7 MiB;
-  refused in band naming why) answers `stored { hash, … }`, `get { hash }`
-  its bytes, `not_found` to a reader who cannot see the ticket. The app
-  pastes, drops and picks them in every comment box. The data goes as a
-  file (`--data @shot.b64`) or stdin, never `"$(base64 …)"`. README
-  "Images in comments":
-
-  ```sh
-  base64 -w0 shot.png > shot.b64
-  synapse -P 4455 menger media put --ticket KILN-4 --mime image/png --data @shot.b64
-  ```
-
-  **Notes** (NOTE-2) are the `notes` activation: dated, untitled thoughts
-  kept in one place — `add { body }`, `list` (newest first; `state`
-  open/upgraded, `author`, `text`; `after` + `limit`), `get { id }`, and
-  `upgrade { id, epic, title?, kind?, parent? }`, which makes the note a
-  ticket (titled by its first line unless given) and keeps the ticket's id
-  on the note, in one write. README "Notes" has the rest:
-
-  ```sh
-  synapse -P 4455 menger notes add --body "the palette should remember its last query"
-  synapse -P 4455 menger notes upgrade --id 7 --epic MENGER --parent MENGER-2
-  ```
-
-  **Deployments** (DEPLOY-11) are the `deployments` activation: every
-  deploy any CI records (DEPLOY-10's record, its fields as `record`'s
-  params — `deploy/record --send` passes it whole), what each environment
-  runs, and where each ticket's work runs. A project is a shortcode
-  (`menger` is MENGER); an environment is a project's. A deploy's tickets
-  are those whose linked commits are among its `commits` and `revision`
-  (a hash prefix is the same commit — menger has no repository) plus the
-  ids it names; a rollback takes out what only the undone deploys carried;
-  `failed` and `started` run nothing; a deployment never moves a status.
-  `deployed <env> [window]` and `not deployed <env>` are filter cells.
-  DEPLOY-21: an environment may promote from another (`prod` from `test`:
-  a record's `from`, or `deployments promotes`, admin); a ticket short of
-  running its current version there is in one delivery stage per
-  environment — `deploying <env>`, `failed <env>`, `ready for <env>`,
-  `waiting <env>` (first that holds), each a filter cell; `ready for prod`
-  is what is moving in, and `running`'s cells carry `staged`.
-  DEPLOY-25: a deploy is **queued from menger** with `deployments
-  request` (a deployment in the state `requested`: what to deploy —
-  `--revision`, `--release`, else what the environment it promotes from
-  runs — and a note; it runs and completes nothing; `cancel_request`
-  while pending; a CI's `record --request <id>` closes it, and it says
-  that record's state); `requested <env>` is a filter cell. An admin sets
-  an environment's **webhook** (`deployments webhook set|clear|show`;
-  https, or http to loopback; the secret from a file, never argv, and
-  never said back): the server's worker POSTs each request to it,
-  `X-Menger-Signature: sha256=<HMAC-SHA256 of the body>`, retrying 1 s,
-  5 s, 30 s, 2 min, 10 min, then `failed`. Never set a webhook on prod
-  from a test. DEPLOY-37: an executor reports each step against a
-  request (`deployments step --request N --name build --state started`;
-  the first makes it `started`), a request may name `--branch main` for
-  the tip, and a cancel of one under way sets `cancel_asked_at` for the
-  executor to stop; `#/deploy`'s **→ test** files one and draws its steps;
-  `deploy/runner.mjs` is this machine's executor (deploy/README "The
-  deploy runner"; hyperforge later). `record`, `request`, `step` and
-  `cancel_request` are the `deployer` grant (a CI's key on the project's shortcode). README
-  "Deployments" → "Queue a deploy" has the rest:
-
-  ```sh
-  synapse -P 4455 menger deployments record --project menger --environment prod --state succeeded --revision 235ff62 --commits 824e943,235ff62
-  synapse -P 4455 menger deployments environments --project menger
-  synapse -P 4455 menger deployments list --environment prod --limit 20
-  synapse -P 4455 menger deployments for_ticket --id MENGER-34
-  synapse -P 4455 menger deployments running --project menger --environment prod   # the kept cells
-  synapse -P 4455 menger tickets list --filter 'category done and not deployed prod' --summary true
-  synapse -P 4455 menger tickets list --filter 'ready for prod' --summary true
-  synapse -P 4455 menger deployments promotes --project menger --environment prod --from test
-  synapse -P 4455 menger deployments request --project menger --environment prod --note "the week's work"
-  synapse -P 4455 -p @webhook.json menger deployments webhook set   # admin; {project, environment, url, secret}
-  ```
-
-  The app (DEPLOY-13) shows it: a ticket page's Running, a mark per
-  environment on board rows and wave cards, `#/deployments` (environments
-  as columns, each deploy and what it carried, the Complete work waiting
-  for the last one), the filter menu's Deployed and the palette's
-  `deployed …` — all live on `deployments.watch`.
-
-  **Epics** (ORG-13, ORG-23) are the `epics` activation: an organization's
-  levels of shortcodes (`hypermemetic:fresh:MENGER-1`). Each principal
-  reads in its own epic — its `switch`, else the organization's default
-  (`set_default`; `genesis` until moved) — and creating one moves nobody.
-  An admin `archive`s one in one write (`--dry-run true` first): its people
-  move to the next newer live epic, else the next older, and each is told
-  once (`current`'s `moved`; `dismiss`); the last live epic is refused. An
-  archived epic's tickets are in no view unless the filter names it
-  (`epic spring`) or `archived`; `restore` moves nobody back; a renamed
-  epic answers to its old name. `tickets reshortcode --to org:epic:CODE`
-  moves tickets between epics (`--dry-run true` previews the keys). README
-  "Epics":
-
-  ```sh
-  synapse -P 4455 menger epics list --archived true
-  synapse -P 4455 menger epics archive --name spring --dry-run true
-  synapse -P 4455 menger tickets reshortcode --ids MENGER-40 --to hypermemetic:fresh:MENGER --dry-run true
-  ```
-
-  **Themes** (THEME-8) are the `themes` activation: a theme is a name and
-  token overrides for light and dark — written as a ticket's ` ```theme
-  name [extends=parent] ` block (THEME-3: owned by that ticket as a
-  component is, orphaned and adopted the same way, validated on write —
-  tokens of the contract `tickets-api/src/tokens.toml` (THEME-2) in `:root`
-  / `:root[data-theme="dark"]`, `@font-face`, `@import url("https://…")`,
-  `m-*::part(…)`, looks only — a component's skinnable parts are the
-  `<part name>`s its `<docs>` declares (THEME-5; a documented part its
-  template lacks is refused); a refusal names the block's line), or with
-  `define` for admin and tests (the maps go through `-p`);
-  the site or a shortcode adopts one with `set` (`--reach frame|ticket|site`,
-  `--takeover off`; THEME-4: a hosted shortcode inherits its host's, and a
-  reader may turn project themes off in settings — `themes set --scope`
-  is the spelling, there is no `tickets set_theme`), a ticket in its frontmatter (`theme:`, `reach:`,
-  `takeover:`, `frame-theme:`, `frame-takeover:`); `theme_for` says who
-  wears what and from which level; `watch` says `theme_changed` /
-  `theme_removed`. PANTRY is the worked example (THEME-6). README "Themes
-  and their scopes", "A theme is a ticket", "Parts to skin":
-
-  ```sh
-  synapse -P 4455 -p '{"name":"ocean","light":{"--accent":"#00796b"},"dark":{"--accent":"#4db6ac"}}' menger themes define
-  synapse -P 4455 menger themes set --scope PANTRY --theme pantry --reach site
-  synapse -P 4455 menger themes theme_for --id PANTRY-4
-  ```
-
-  Every open page follows a theme change in place (THEME-7): one repaint
-  path in the app (`scopes::repaint`), `menger.on('theme')` in a frame for
-  a component that draws with colours in JS. A change that touches how
-  anything is painted is checked with the sweep test,
-  `scripts/theme-sweep.mjs`, on a throwaway server (README "On the fly").
-
-  **Login** (IDENTITY-14) is always on (ACCESS-24): `--auth-provider`
-  names at least one provider — `key` (agents), `idp=…`, `auth0=…`,
-  `oidc:<name>=…`, `workos=…` or `nostr=…` — or menger refuses to start.
-  Each becomes an adapter that turns its credential into a Plexus identity at
-  the WebSocket upgrade, and nothing past the upgrade knows the provider.
-  `session.whoami` reports the identity. README "Login" has the rest:
-
-  ```sh
-  synapse -P 4460 menger session whoami    # as the key you _login'd with
-  ```
-
-  **Prod requires login** (ACCESS-47, since 2026-10-17), as test does:
-  WorkOS (staging client) for people, plexus-idp for the smoke account,
-  and `key` for agents (`ws://127.0.0.1:4455` and the LAN's
-  `ws://192.168.8.117:4455`); `--require-login`, `--no-rest` (REST :4457
-  is gone), `--public-url http://192.168.8.117:4456` — all in
-  `prod.local.env` (from ACCESS-24's release on, login and no REST are
-  the only mode, whatever the file says). An anonymous socket reaches the anonymous view and
-  nothing else. This machine's agents sign in with Ed25519 keys kept by
-  synapse (`~/.plexus/keys/<name>.key`, 0600):
-
-  | key | principal | holds on prod |
-  |---|---|---|
-  | `builder` | `key:54a9677a…3b0d28` | `editor` on `*` — the machine's default agent; every `synapse -P 4455 menger …` line above runs as it |
-  | `pipeline` | `key:0ca8b6d1…227f60` | `viewer` on `*` + `deployer` on `MENGER` — `deploy/pipeline`'s records and status (deploy/README.md "Recording deployments") |
-  | `operator` | `key:ba720a3d…3974b8e` | `--admin` (in `MENGER_ADMINS`, with the owner's WorkOS principal) — grants and break-glass, by hand only |
-
-  **Exit 77 means sign in**, not a dead server: once per machine (and
-  after `~/.plexus/sessions` is lost), `synapse -P 4455 _login menger --key
-  builder --as builder`; synapse then re-mints the session from the key
-  after every restart or expiry by itself (≥ 3.14.10). Run `_login` for
-  another key with `--as` *and then* `_login` builder again last: an
-  agent login moves the default agent (SYNAPSE-16). A refused credential
-  shows as `Protocol handshake failed` (a 401). Never put a token or a
-  seed in argv or the environment. menger-skills `reaching` "Under login".
-
-  **Under login, menger speaks the AUTH protocol** (AUTH-7): every method
-  is its own grant, `viewer` / `editor` are explicit grant lists declared
-  with `roles(...)` on each activation (`admin` holds all), and plexus-core's
-  gate decides every call — a write by its target (`target = "id"`), a read
-  wherever its grant is held, answering only from there. An anonymous
-  connection is admitted into the anonymous view (`auth.providers`,
-  `auth.login`, `auth.signup`, nothing else); a refusal is typed
-  (`error_kind: forbidden`, `grant`, `scope`, `roles`, `held_on`). `auth.*`
-  (`whoami`, `requires`, `roles`, `role_set`, `grant`, `revoke`, `waiting`)
-  sits beside `session.*` and `members.*`, which stay for the app. A new
-  method gets a role by being listed in its activation's `roles(...)` —
-  unlisted, only admin holds it. README "The AUTH protocol" has the rest.
-  Beside the gate, a method verifies its caller into a capability —
-  `Access::verify` → `VerifiedUser` (its `Reach`), then `permit` /
-  `admin_of`; `Hidden` for not-found ≡ not-yours (ACCESS-9, README
-  "Capabilities"). Never build one by hand, and never read `ctx.user_id`.
-  Every public store read takes its reader — the `VerifiedUser`
-  (`user.sight()` to read as `tickets.get`), or the `System` for what acts
-  for no user — and answers only its reach, a hidden ticket not found and
-  never named in a visible row (ACCESS-10, README "Reads through a
-  reach"); store tests read as `SYS` or `tests_reach::viewer_of`. A
-  watch holds its caller (`access::Following`), is verified again when the
-  grants generation moves, a sign-out or the expiry comes, and ends with a
-  typed `watch_closed { reason }`; a moved reach says `entered` / `left`;
-  every change is cut by `Store::heard`, whose `match` has no `_` arm — a
-  new `Change` is classified there or does not compile (ACCESS-12, README
-  "Watches through a reach").
-  Every public store write takes the proof for what it writes — a
-  `Permit` for each ticket (it carries the id: the ticket checked is the
-  ticket written), `AdminOf` / `On<R>` for a scope, `System` for what acts
-  for no user — minted through the user in `activation/writes.rs`, checked
-  by the store under its write lock (ACCESS-11, README "Writes through a
-  permit"); store tests write as `SYS.permit(id)`, `SYS.moving(a, b)`,
-  `SYS.updating(id)`, or `SYS` where a bundle is taken.
-
-  **Organizations** (ORG-4) are the `orgs` activation: every ticket and
-  shortcode is in one (today's tracker is `hypermemetic`). `list` (the
-  caller's), `create --name N --admin P` (admin on `*`), `rename` (the old
-  name stays an alias), `delete` (only empty). A grant's scope is `*`,
-  `org:` (the whole org) or `org:SHORTCODE` (that shortcode and those
-  hosted under it); `members grant --scope IDENTITY` keeps it as
-  `hypermemetic:IDENTITY`. `tickets create --org acme` (or `--epic
-  acme:MENGER`); without it, the caller's only org. A reader sees only the
-  orgs it holds a role in — another org's tickets are `not_found`. A
-  grant's scope may also be one ticket (`--scope MNG-40`, it alone) or a
-  subtree (`--scope 'under MNG-40'`, ACCESS-21). README "Organizations"
-  has the rest:
-
-  ```sh
-  synapse -P 4455 menger orgs list
-  synapse -P 4455 menger members grant --principal key:4b… --scope acme: --role editor
-  ```
-
-  **Teams** (ACCESS-22) are members' child `members teams` (admin only):
-  `list`, `show`, `create`, `rename`, `delete`, `add` / `remove` a
-  principal; `members grant` / `revoke` take `--team` in place of
-  `--principal`, and each member holds what the team holds beside their
-  own grants. README "Members and roles" has the rules:
-
-  ```sh
-  synapse -P 4455 menger members teams create --name release-crew
-  synapse -P 4455 menger members grant --team release-crew --scope 'under MENGER-5' --role editor
-  synapse -P 4455 menger members teams add --team release-crew --principal key:4b…
-  ```
-
-  **Everyone** (ACCESS-57): `members grant --everyone true --scope DOCS
-  --role viewer` (`revoke --everyone true --scope DOCS`) grants every
-  signed-in principal — people and keys, one still waiting for access too,
-  never the anonymous socket — beside their own grants, within any ceiling;
-  never `admin`. README "Members and roles".
-
-  **Limits** (ACCESS-29): connections in all, per IP, per principal and
-  anonymous (`--max-connections` 1,024, `--max-connections-per-ip` 256,
-  `--max-connections-per-principal` 64, `--max-anonymous-connections` 128,
-  `--max-anonymous-connections-per-ip` 32 — 429 past them), calls open on one
-  connection (`--max-calls-per-connection` 256 — `error_kind:
-  too_many_calls`), a connection idle with none (`--idle-timeout-secs` 900),
-  a browser sign-in unused (`--session-idle-minutes` 120), the `/login/*`
-  routes and password guesses per client and account (AUTH-22's throttles,
-  429), titles (1 KiB), filters (4 KiB), and `list` / `comments list` pages
-  (1,000 / 500 unless `--limit`, at most 10,000 / 1,000 — page with the
-  `page` event's `next`). README "Limits and caps" has the table; a script
-  that wants everything pages:
-
-  ```sh
-  synapse -P 4455 menger tickets list --epic MENGER --summary true --limit 1000 --after MENGER-1000
-  ```
-
-  **Params are individual flags, not a JSON blob** — treat synapse as a
-  normal CLI: `--kebab-case-flag value` after the method path, and
-  `<method> --help` prints each parameter's name and type. **A list
-  parameter is its flag repeated, or commas**: `--blocked-by MNG-1
-  --blocked-by MNG-2` and `--blocked-by MNG-1,MNG-2` both send
-  `["MNG-1","MNG-2"]` (commas need synapse ≥ 3.14, SYNAPSE-2; on an
-  older binary `a,b` is silently one string). An
-  element that itself holds a comma is double-quoted inside the value, and
-  the shell must not eat the quotes: `'"a,b","c"'`. **A body is a file**:
-  `--body @body.md` sends the file's contents exactly, whatever it begins
-  with (frontmatter's `---` included) and whatever it holds (`$`,
-  backticks), and as large as menger takes (synapse ≥ 3.14.8, SYNAPSE-10;
-  this machine has it). `--body -` reads stdin, `@@text` is a literal
-  `@text`, and `-p @params.json` / `-p -` take a whole params object.
-  Don't use `--body "$(cat body.md)"`: Linux caps one argument at 128 KB.
-  A value may begin with dashes (synapse ≥ 3.14.2, SYNAPSE-4, SYNAPSE-6);
-  `--key=value` works too.
-
-  **Every parameter is a type** (ACCESS-8, `tickets-api/src/vocab/`): a
-  value its type refuses is `-32602 invalid_params` naming the parameter,
-  before the method runs (`id: \`x\` is not a ticket …`), where it was an
-  in-band `error`; domain refusals stay in band. An enum flag takes its
-  canonical spelling only — synapse checks it before sending, so `--status
-  active` is refused (`--status Coding`; `-p '{"status":"active"}'` still
-  reads), and `--kind` is lower case. A blank optional flag is refused, not
-  none. A new parameter gets a type in the vocabulary — every activation is
-  `typed_params` (MACRO-12) and `tickets-api/tests/param_types.rs` holds the
-  flag. README "Typed parameters".
-
-  Global options go **before** the backend name — after the path they are
-  read as a subcommand ("Method 'create' cannot have subcommands"). `-j`
-  prints the raw JSON stream items (for a script that parses the reply),
-  `-n` shows the request without sending it, `-s` fetches the schema, `-i`
-  emits the IR the code generators consume, and `-p '{…}'` passes the whole
-  params object at once — a script's convenience, never a requirement.
-  4455 is inside its `_self scan` range.
-- **The macro-emitted Rust client** — `TicketsClient<T>`, emitted by
-  `#[plexus_macros::activation]` from the activation's own
-  `impl TicketsActivation` in `tickets-api/` (MFE-11; the stem names the
-  namespace, the trait `Tickets` and the client, MACRO-13/MACRO-21); `CommentsClient<T>` the same way
-  (COMMENT-2). Compile-time and Rust-only: the
-  browser app takes the crate with `default-features = false` and a
-  renamed field or parameter fails its build. Nothing is generated or
-  checked in.
-- **`synapse-cc`** (`../synapse-cc`) — the compiler collection for every
-  other language: schema → IR → `hub-codegen` → an installed, compiled,
-  smoke-tested client. TypeScript and Rust targets today (`python` parses,
-  no generator yet). `synapse-cc build typescript <backend> -o DIR`, or a
-  `synapse.config.json` and plain `synapse-cc build`; `synapse-cc watch`
-  rebuilds on schema changes. A generated client is a snapshot of the
-  schema, so it is regenerated whenever the activation's surface changes —
-  a new method, parameter or event. Run it **in the `plexus-codegen`
-  container** (`../dockerfiles/plexus-codegen`, STARTER-2) rather than
-  from a host install; `../plexus-starter`'s `scripts/codegen.sh` is the
-  worked example of wiring that into `npm run build`, `cargo xtask` and
-  CI. `synapse-cc` 0.3.5 and `hub-codegen` 0.5.0 are also installed in
-  `~/.local/bin` (2026-10-16). menger's own use (COMP-10):
-  `scripts/sdk-codegen.sh` generates the frames' typed SDK
-  (`menger.tickets.*`) into `frontend/sdk/generated/` — rerun it whenever
-  the activation's surface changes; `tickets-api/tests/sdk_manifest.rs`
-  fails until it is.
-- **A new language target** is a new `hub-codegen` generator over the same
-  IR — never a hand-written client that mirrors the wire.
-- **No REST** (ACCESS-24): the REST + SSE bridge could not carry an
-  identity, and menger has no open mode, so it is not served. A script that
-  cannot run synapse signs in through `deploy/menger-call.mjs` (a key file,
-  the socket).
-
-## Inputs — asking the owner inside a ticket (INPUT)
-
-A ticket can ask the owner something and record the answer: a **decision**
-(pick one option), a **multi** (tick any) or a **text** reply. The reader
-answers in the ticket's own frame; every answer is stored with its history
-and is queryable. (INPUT-1; the house components are ART-9's.)
-
-**Declare an input** in a ticket body — an `id`, unique in that ticket, is
-what makes it an input (a decision without one is display only; a duplicate
-id refuses the write):
-
-```html
-<m-decision data-field="decision" id="landing">
-<m-question data-field="question">Expired events: archive or delete?</m-question>
-<m-option data-field="option" name="Archive" value="archive" recommended cost="a second store" benefit="holds honoured"></m-option>
-<m-option data-field="option" name="Delete" value="delete" cost="holds broken" benefit="nothing to run"></m-option>
-<m-recommendation data-field="recommendation">Archive: holds are real.</m-recommendation>
-</m-decision>
-
-<m-input id="checks" kind="multi"><m-question data-field="question">Which checks ran?</m-question>
-<m-choice value="unit">Unit tests</m-choice><m-choice value="wire">The wire test</m-choice></m-input>
-
-<m-input id="notes" kind="text"><m-question data-field="question">Anything else before this ships?</m-question></m-input>
-```
-
-An option's value is its `value`, else its `name`.
-
-**The owner answers; an agent doesn't** (menger-skills `asking`: an agent
-never answers its own decision). A reader's click records the answer — its source
-the server's, from the caller (ACCESS-14: `app` for a person signed in through a
-provider, `api` for a key); a reader may change or clear it
-until the input is closed.
-
-**Read what's waiting, act, then close:**
+- **Complete means deployed to the lowest environment** (owner,
+  2026-10-17; DEPLOY-22): the merge links its commit and leaves the ticket
+  In Review; the deploy to test that carries it sets Complete. Work in a
+  repository with no environment (`repo@hash`) is Complete at its merge.
+- **Test is automatic; prod is the owner's** (DEPLOY-48). The deploy
+  runner (`deploy/runner.mjs`) watches the tracker: a MENGER ticket entering
+  In Review, or a commit linked to one there, files a test request for the
+  tip of **the runner's branch** — `MENGER_RUNNER_BRANCH` in
+  `~/.config/menger/deploy-runner.env` (default `main`; V2-7) — debounced
+  60 s, one run at a time. The run is build → image → app-test.menger.sh →
+  the suite; a red one is posted on the tracker with a gap blocking the
+  triggering tickets (CI-3). So a builder merges `--no-ff`, links, sets In
+  Review, and runs no deploy; never squash or rebase on merge.
+  `MENGER_RUNNER_AUTO_TEST=0` turns it off.
+- 2026-10-29: test runs v2, release `20261029T114133Z-06aeff5`; prod runs
+  v1 and is the tracker.
+
+## Reaching the service
+
+Everything menger does is a Plexus RPC method on the `menger` service —
+there is no side door. **Read `../menger-skills/reaching/SKILL.md` before
+issuing synapse commands**: it is the house's invocation contract (global
+options before the service name, params as flags, a list as its flag
+repeated or comma-separated, a body as `--body @file.md`).
+
+**The tracker is prod** (RUN-13): https://app.menger.sh, reached as
+`synapse --url wss://app.menger.sh/ws --as builder menger tickets health`
+after one `_login` there. The tracker runs v1 until v2 is promoted, so
+it answers more than this file names; menger-skills `reaching` and `asking`
+are its surface. Check work on test as your key there, or on a throwaway —
+never on prod:
 
 ```sh
-synapse -P 4455 menger tickets inputs list --state open          # everything waiting, across tickets
-synapse -P 4455 menger tickets inputs list --ticket RETURNS-13   # one ticket's inputs, answers and history
-synapse -P 4455 menger tickets inputs close --ticket RETURNS-13 --input landing   # after acting on it
-synapse -P 4455 menger tickets inputs reopen --ticket RETURNS-13 --input landing  # if it must be asked again
+synapse --url wss://app.menger.sh/ws _login menger --key builder --as builder
+synapse --url wss://app.menger.sh/ws --as builder menger tickets get --id V2-8
+synapse --url wss://app-test.menger.sh/ws _login menger --key builder --as builder
+synapse --url wss://app-test.menger.sh/ws --as builder menger ui versions
 ```
 
-Act on an answer, then `inputs close` it: closing freezes it (the reader can
-no longer change or clear it) and the component shows DECIDED. States are
-`open` · `answered` · `closed` · `removed` (gone from the body, history
-kept). An answer can be cleared by the reader while open — read the state
-before acting. `watch` carries `input_changed` (the whole input) for anything
-that follows live; the app's `#/inputs` page lists them all.
+This machine's agents are Ed25519 keys kept by synapse
+(`~/.plexus/keys/<name>.key`, 0600):
 
-**Answering through synapse** (the owner from a shell; source `api`):
+| key | principal | holds |
+|---|---|---|
+| `builder` | `key:54a9677a…3b0d28` | `editor` on `*` — the machine's default agent |
+| `pipeline` | `key:0ca8b6d1…227f60` | `viewer` on `*` + `deployer` — the pipeline's records, and on test `ui.push` |
+| `operator` | `key:ba720a3d…3974b8e` | `--admin` — grants and break-glass, by hand only |
+
+**Exit 77 means sign in**, not a dead server: `_login` once per machine
+(and per server start for a throwaway); synapse re-mints the session from
+the key after a restart or expiry. Run `_login` for another key with `--as`
+and then `_login` builder again last (SYNAPSE-16). Never put a token or a
+seed in argv or the environment.
+
+### Reading and writing tickets
 
 ```sh
-synapse -P 4455 menger tickets inputs answer --ticket T --input landing --value.type choice --value.option archive --rationale "why"
-synapse -P 4455 menger tickets inputs answer --ticket T --input notes --value.type text --value.text "the reply"
-synapse -P 4455 -p '{"ticket":"T","input":"checks","value":{"type":"multi","options":["unit","wire"]}}' menger tickets inputs answer
-synapse -P 4455 menger tickets inputs clear --ticket T --input landing
+synapse -P 4460 menger tickets health
+synapse -P 4460 menger tickets get --id MENGER/ORG-3
+synapse -P 4460 menger tickets list --epic MNG --summary true
+synapse -P 4460 menger tickets list --filter 'blocked' --at 1000 --summary true --limit 20
+synapse -P 4460 menger tickets list --epic MENGER --summary true --limit 1000 --after MENGER-1000
+synapse -P 4460 menger tickets find --query watch --filter 'not category done'
+synapse -P 4460 menger tickets search --query 'plcement wave'
+synapse -P 4460 menger tickets search --query 'set_status' --filter 'not category done' --limit 5 --offset 0
+synapse -P 4460 menger tickets history --id MNG-7
+synapse -P 4460 menger tickets watch          # open-ended
+synapse -P 4460 menger tickets watch --filter 'category in (active, review)' --membership true
 ```
 
-A `multi` answer goes through `-p` for now — synapse sends a list inside a
-nested parameter as one string (SYNAPSE-9).
-
-**A question for the owner is filed, never asked only in chat** (owner,
-2026-10-12, MENGER-12). Put it on its ticket as an input — or, when it is
-not a choice or a reply, label the ticket `needs-you` with the reason in its
-body — and only then mention it in chat, with the ticket id. The nav under its
-Needs you filter (`queued or asking or asked or label needs-you` — `g n`, or the
-header's count) is where the owner looks; when it cannot wait, queue it too (below, MENGER-39);
-a question that lives only in a chat transcript is never seen. Whoever acts
-on a `needs-you` takes the label off:
+A body is a file (`--body @body.md`, its contents exactly), never
+`"$(cat …)"`:
 
 ```sh
-synapse -P 4455 menger tickets label --id MENGER-40 --add needs-you      # the reason is in the body
-synapse -P 4455 menger tickets list --filter 'asking or label needs-you' --summary
-synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once acted on
+synapse -P 4460 menger tickets create --epic KILN --kind scope --title "the kiln" --body @body.md
+synapse -P 4460 menger tickets create --epic KILN --title "a firing log" --kind build --parent KILN-1 --blocked-by KILN-5 --severity High
+synapse -P 4460 menger tickets amend --id KILN-3 --body @body.md
+synapse -P 4460 menger tickets set_status --id MNG-1 --status Ready
+synapse -P 4460 menger tickets set_status --id MNG-7 --status Canceled --message "folded into MNG-9"
+synapse -P 4460 menger tickets set_status --id MNG-7 --status Pending --restore-children true
+synapse -P 4460 menger tickets set_kind --id IDENTITY-1 --kind scope
+synapse -P 4460 menger tickets set_kind --id MNG-40 --kind gap --status Ready
+synapse -P 4460 menger tickets set_parent --id KILN-9 --parent KILN-2
+synapse -P 4460 menger tickets label --id MENGER-40 --add needs-you
+synapse -P 4460 menger tickets commits link --id MNG-10 --commits 77df9a0 --commits volt@1a2b3c4
+synapse -P 4460 menger tickets commits unlink --id MNG-10 --commits 77df9a0
 ```
 
-## Queue — asking the owner urgently (MENGER-39)
-
-An input or a `needs-you` label waits under Needs you until the owner looks. When it
-should not wait — an agent idle until it is answered, a promote that rolled
-back, a gap on prod — **queue the ticket**: it is put in front of the owner
-with an urgency and a reason, and every open app shows it at once as a tab
-in the tray along the bottom edge (`now` and `blocking` red, taller, and
-nudging until opened). The urgencies are `whenever` · `today` · `now` ·
-`blocking`; `blocking` means the caller is idle until the named `--input`
-(one on that ticket) is answered. A ticket is queued once: queueing it again
-raises the urgency, never lowers it. Closing the named input unqueues it;
-the owner answering in the tray takes it out too (the input stays yours to
-close, as always). Queue the question first — the input — then the ticket:
+**`update`** (MENGER-30) changes any part of a ticket in one write — all of
+it or none, each aspect by its own write's rules, a refusal naming every
+reason; it answers `updated { ticket, changed }`. It is how a blocker is
+added after filing, or a severity changed (`none` clears it).
+**`update_many`** (ACT-2) is the same to many — `--ids`, or `--filter` (at
+most `--max`, default 500) — plus `--label` / `--unlabel`:
 
 ```sh
-synapse -P 4455 menger tickets queue --id RETURNS-13 --urgency blocking --input landing --reason "the import is idle until this is decided"
-synapse -P 4455 menger tickets queue --id GLAZE-11 --urgency blocking --input format --input fields --input naming --blocking naming --reason "the import is idle"
-synapse -P 4455 menger tickets queue --id KILN-7 --urgency now --input layout --mockup KILN-7#m1 --mockup KILN-7#m2 --reason "pick a layout"
-synapse -P 4455 menger tickets queue --id MENGER-41 --urgency now --reason "the promote rolled back"
-synapse -P 4455 menger tickets queued                       # most urgent first, then oldest
-synapse -P 4455 menger tickets snooze --id MENGER-41 --minutes 30
-synapse -P 4455 menger tickets unqueue --id MENGER-41       # withdrawn, or done with
-synapse -P 4455 menger tickets list --filter 'queued now or queued blocking' --summary true
+synapse -P 4460 menger tickets update --id THEME-4 --block THEME-7
+synapse -P 4460 menger tickets update --id MENGER-30 --unblock MENGER-23 --block MENGER-29
+synapse -P 4460 menger tickets update --id MENGER-40 --kind gap --status Ready --severity High --hidden false
+synapse -P 4460 menger tickets update_many --ids THEME-9,THEME-10 --status Ready --message "promoted"
+synapse -P 4460 menger tickets update_many --filter 'label stale and not category done' --status Canceled
+synapse -P 4460 menger tickets label --ids A-1,A-2 --add needs-you
 ```
 
-**After queueing, listen** (owner, 2026-10-15, APP-24): run `tickets
-await_reply` on the ticket, in the background where the harness allows it.
-It yields `waiting` at once, then one `replied` when the owner responds, and
-ends. `reply.kind` is `answered` (an input; `--input` names which counts),
-`changes_requested` (the tray's *Request changes*, APP-23: the comment says
-what to change and the ticket is out of the queue), `commented`, `unqueued`
-(by someone else) or `ended` (canceled or deleted). Act on it, then close the
-input or queue again. A snooze is not a response. After a dropped connection,
-call again with `--since <unix>` and nothing is lost; `--timeout-minutes`
-ends with `timed_out`. An agent never queues and then just stops:
+**`delete`** (ACT-5, admin) removes tickets for good — refused while
+children or a waiting ticket point at one unless told what moves
+(`--children reparent|delete`, `--unblock true`); a tombstone stays, the
+body is kept 30 days for `undelete`, a number is never reused. Prefer
+`Canceled` or `Superseded` for work that is not done. **`reshortcode`**
+(ACT-6) moves tickets into another shortcode, renumbered, the old id pinned;
+**`rename`** (TICKETS-26) moves one into a subtask id under its own parent.
+**Subtasks** (TICKETS-28) are `<parent>.N`, hidden from the nav's views.
+**`freeze`** / **`unfreeze`** (TICKETS-6, admin) stop and restart a scope's
+growth:
 
 ```sh
-synapse -P 4455 -j menger tickets await_reply --id RETURNS-13 --input landing --timeout-minutes 240
-synapse -P 4455 menger tickets request_changes --id RETURNS-13 --body "neither: …"   # the owner, from a shell
+synapse -P 4460 menger tickets delete --ids MENGER-40 --message "filed twice"
+synapse -P 4460 menger tickets delete --ids THEME-12 --children reparent --unblock true
+synapse -P 4460 menger tickets undelete --ids MENGER-40
+synapse -P 4460 menger tickets reshortcode --ids THEME-9,THEME-10 --to LOOK
+synapse -P 4460 menger tickets reshortcode --ids MENGER-2 --to APP --with-children true --dry-run true
+synapse -P 4460 menger tickets reshortcode --ids KILN-4 --to KILN --new-scope "glazes" --parent KILN-1 --message "split out"
+synapse -P 4460 menger tickets rename --id KILN-5 --to KILN-2.1 --dry-run true
+synapse -P 4460 menger tickets subtasks create --parent KILN-2 --title "load the shelves"
+synapse -P 4460 menger tickets subtasks list --parent KILN-2
+synapse -P 4460 menger tickets freeze --id KILN-1
+synapse -P 4460 menger tickets unfreeze --id KILN-1
 ```
 
-**Several questions in one entry** (APP-86): repeat `--input` (in the
-order to ask them) and name the one you are idle on with `--blocking`
-(required at `blocking` with several). The entry leaves the queue when
-every input it names is closed — close each as you act on it; one closed is
-progress. Queueing again adds inputs and never lowers the urgency.
-`await_reply` without `--input` replies on each answer: call it again with
-`--since` for the next. The tray steps the owner through them (`1 of 3
-answered`).
+**The archive** (ARCHIVE-2) is a mark apart from status — a ticket with its
+whole subtree out of every view unless a filter names `archived`; `restore`
+brings it back with its archived ancestors:
 
-**Views of mockups in an entry** (APP-85): `--mockup T#mN` (repeat it; `T`
-for a whole-page body, or APP-45's `mockup:T#N@W`) queues what the owner
-answers looking at — checked against the body (a mockup it holds, else
-refused naming it). The tray shows them as thumbnails above the question
-(`▣ 3 views` on the row): a viewer at 390 / 1440, compare, and *pick this*
-for a mockup inside an option of the entry's decision (APP-46).
-
-`watch` carries `queued` / `unqueued` / `snoozed`; `history --id X` ends with
-the ticket's `queue_record`s (who queued it, why, at what urgency). `queued`
-and `queued <urgency>` are filter cells; the Needs you filter is `queued or
-asking or label needs-you`.
-
-**Every question shows; only the important are queued** (owner, 2026-10-17:
-"we don't want to overpopulate the queue with every question"): a filed input
-is always shown under Needs you; the queue is for what is important — what
-stops work the owner asked for, or cannot wait.
-
-**Work the owner told you to do is urgent** (owner, 2026-10-15): a question
-that stops it is filed and then queued at once — `blocking` with `--input`
-when you are idle until it is answered, `now` when you can carry on around
-it. Elsewhere ask at `now` or `blocking` only when it is so — a queue that
-is always loud is a queue the owner learns to ignore. menger-skills
-`asking` has the table.
-
-## Mockups — showing a page (APP-29, APP-42, APP-44..46)
-
-A frontend ticket shows the page it is about as a **mockup** in its body: a
-whole page drawn in device frames at its widths, with Light / Dark /
-Reduced motion and size controls. The host draws it in the app, outside the
-body's frame. README "Full screen, mockups and whole pages" has every rule;
-menger-skills `showing` has when to use one.
-
-**The pattern** (owner, 2026-10-16/17):
-
-- **One mockup is one view.** One screen at one state, sized to the
-  device's viewport, never a long page of figures that scrolls through
-  several screens (the bar says "one view per mockup — this page scrolls N
-  screens" past 3). Another view is **another mockup in its own section**
-  of the body.
-- **Interactive.** Its controls work: a menu opens, a sheet slides up, a
-  row collapses, a form submits. The states one view reaches are reached by
-  using it, not drawn again below.
-- **Its description is outside it, said once.** Say what it shows in
-  `title=` / `description=` (drawn above the devices) and why it is there
-  in a line of prose above it, never as a heading or intro inside the
-  mocked page. The prose and `description=` never repeat each other
-  (APP-60: on a phone the reader got the same sentence twice) — the prose
-  says why, the description what; or leave `description=` out.
-- **On a phone** (≤ 820, APP-60) it opens on its narrowest device at
-  about 100%, the other widths a tap away, the bar one row (the rest
-  under ⋯), Full screen at 100%; above 820 nothing changes.
-- **A phone is an iPhone's screen** (APP-66): its rounded corners clip
-  the page, the notch or island and the home indicator are drawn over it,
-  and the page gets the safe-area insets (`env(safe-area-inset-*)` and
-  `--sai-*`, top 47/59, bottom 34). Anything on an edge pads by them —
-  `max(env(safe-area-inset-bottom, 0px), var(--sai-bottom, 0px))`, the
-  app's `--safe-*` — or the mockup shows it clipped, as the phone would
-  (APP-65). *Screen shape* in the bar turns it off. A Playwright check of
-  the app sets `--sai-*` on its root and asserts nothing interactive sits
-  under a corner or the home indicator.
-- **Built from the app's own tokens and fonts** (`tickets-api/src/tokens.toml`),
-  light and dark, with synthetic data. It is checked in headless Chromium at
-  each width and theme (every control clicked, document height = viewport,
-  no page errors) before it is filed.
-
-````markdown
-The board with the filter panel open: two groups, joined by or.
-
-```mockup widths=390,1440 title="Panel open" description="Two groups joined by or; and inside each."
-<!doctype html>…one screen…
+```sh
+synapse -P 4460 menger tickets archive --ids KILN-1 --dry-run true --message "first season fired"
+synapse -P 4460 menger tickets archive --filter 'category done and under KILN' --max 500
+synapse -P 4460 menger tickets restore --ids KILN-4 --with-children true
 ```
-````
 
-`<m-mockup ref="FILTER-38">` draws another ticket's whole-page body; `<m-mockup
-widths="390" title="…" description="…">…</m-mockup>` is the element form,
-and `view: mockup` + `widths:` makes a whole body one.
+**Revisions** (TICKETS-7) — every write of a ticket's own fields keeps one;
+a restore is an `update`:
 
-**Using them:**
+```sh
+synapse -P 4460 menger tickets revisions list --id DEPLOY-9 --limit 20
+synapse -P 4460 menger tickets revisions get --id DEPLOY-9 --rev 3
+synapse -P 4460 menger tickets revisions diff --id DEPLOY-9 --from 3 --to 5 --text true
+synapse -P 4460 menger tickets revisions restore --id DEPLOY-9 --rev 3 --fields body --message "why"
+```
 
-- **Compare** (APP-44): *Compare* on a mockup's bar (`c`) adds it to the
-  page's set; the pill `compare N · open` lays the picked mockups side by
-  side at one device and theme, live; `?compare=T#m1,T#m3` links it.
-- **A decision between looks** (APP-46): put a mockup in each `<m-option>`;
-  the owner picks with *pick this* on its bar (the option's own answer path),
-  or opens *compare these*. menger-skills `asking` has the form.
-- **Feedback on a mockup**: *comment* on its bar (APP-46), or the
-  annotation mode (`a`) on an element inside it (APP-45). The anchor is
-  `mockup:<ticket>#<n>@<width> >> <selector>` and is found again at any width.
-- **Screenshots** of a ticket, mockups and all: `scripts/shot.mjs
-  '#/ticket/X' --origin https://app.menger.sh --key ~/.plexus/keys/builder.key
-  --width 390` (APP-76; `--chat N` puts the shots in a chat). README
-  "Screenshots".
+### Filters, the nav and the order of work
+
+A filter is one quoted flag in FILTER-3's language, answered from the
+cells: `ready and kind build and in SCALE`, `status in (Pending, Ready)`,
+`not category static`, `under X` (X and its descendants, or a shortcode
+and those hosted under it), groups nested to any depth, `saved "Name"`.
+History reads the log (MENGER-13): `entered <status> [window] [by who]`,
+`moved …`, `changed …`, `created …`, `archived …`; a time modifies the rule
+before it. README "Filters" has the words, and the words of the services
+v2 cut, which are refused by name:
+
+```sh
+synapse -P 4460 menger tickets list --filter 'status "In Review" within 12h' --summary true
+synapse -P 4460 menger tickets list --filter 'kind gap within 7d or created after 2026-10-01' --summary true
+synapse -P 4460 menger tickets list --filter 'entered Complete this week by owner' --tz Europe/Berlin --summary true
+synapse -P 4460 menger tickets list --filter 'archived within 7d' --summary true
+synapse -P 4460 menger tickets list --filter 'saved "Needs you" or label needs-you' --summary true
+synapse -P 4460 menger tickets filters save --name "Open builds" --filter 'kind build and not category done'
+synapse -P 4460 menger tickets filters list
+synapse -P 4460 menger tickets filters get --name "Open builds"
+synapse -P 4460 menger tickets filters check --filter 'saved "Open builds" and ready'
+synapse -P 4460 menger tickets filters rename --name "Open builds" --to "Builds"
+synapse -P 4460 menger tickets filters delete --name "Builds"
+synapse -P 4460 menger tickets nav groups
+synapse -P 4460 menger tickets nav extents
+synapse -P 4460 menger tickets nav counts --filter 'ready and kind build'
+synapse -P 4460 menger tickets nav facets --filter 'status Ready and kind build' --base 'not category done'
+synapse -P 4460 menger tickets nav member --ids FILTER-4,FILTER-5 --filter 'status Ready'
+synapse -P 4460 menger tickets nav tree --epic FILTER --filter 'status Ready'
+synapse -P 4460 menger tickets nav tree --parent FILTER-1 --filter 'not category done' --matches-only true --keep FILTER-23 --limit 50
+synapse -P 4460 menger tickets work ready --filter 'kind build and in SCALE' --summary true
+synapse -P 4460 menger tickets work waves --epics MENGER,TICKETS --kinds build,gap
+synapse -P 4460 menger tickets work waves_under --id MENGER-1
+synapse -P 4460 menger tickets work waves_to --id MENGER-30
+synapse -P 4460 menger tickets work blockers --id MENGER-30
+```
+
+### Addresses, organizations, epics, members
+
+A shortcode is unique within its namespace (ORG-3); every `--id`,
+`--parent`, `--blocked-by`, `--epic` and `under` takes any short form of a
+ticket's address (`MENGER/ORG-3`, `ACCESS/ORG-3`, the bare id); a name that
+fits two is refused in band, naming each candidate. A scope roots its own
+shortcode (ORG-5). Every ticket is in one organization (ORG-4) and one epic
+(ORG-13, ORG-23). A grant's scope is `*`, `org:`, a shortcode, a ticket
+alone or `under` a ticket (ACCESS-21); a team holds grants for its members
+(ACCESS-22); `--everyone true` grants every signed-in principal
+(ACCESS-57). README "Addresses", "Organizations", "Members and roles":
+
+```sh
+synapse -P 4460 menger tickets create --epic PLEXUS/THEME --title "a build in PLEXUS's THEME"
+synapse -P 4460 menger orgs list
+synapse -P 4460 menger orgs create --name acme --admin key:54a9677a62e4289ee5a2d0a4751a6f188abafd8b1f2b2d4019ec0768eb3b0d28
+synapse -P 4460 menger orgs rename --name acme --to acme-co
+synapse -P 4460 menger orgs delete --name acme-co
+synapse -P 4460 menger epics list --archived true
+synapse -P 4460 menger epics current
+synapse -P 4460 menger epics get --name genesis
+synapse -P 4460 menger epics create --name fresh
+synapse -P 4460 menger epics switch --name genesis
+synapse -P 4460 menger epics set_default --name genesis
+synapse -P 4460 menger epics rename --name fresh --to spring
+synapse -P 4460 menger epics archive --name spring --dry-run true
+synapse -P 4460 menger epics restore --name spring
+synapse -P 4460 menger epics delete --name spring
+synapse -P 4460 menger epics dismiss
+synapse -P 4460 menger epics watch          # open-ended
+synapse -P 4460 menger tickets reshortcode --ids MENGER-40 --to hypermemetic:fresh:MENGER --dry-run true
+synapse -P 4460 menger members mine
+synapse -P 4460 menger members list
+synapse -P 4460 menger members grant --principal key:54a9677a62e4289ee5a2d0a4751a6f188abafd8b1f2b2d4019ec0768eb3b0d28 --scope 'under MENGER-5' --role viewer
+synapse -P 4460 menger members revoke --principal key:54a9677a62e4289ee5a2d0a4751a6f188abafd8b1f2b2d4019ec0768eb3b0d28 --scope 'under MENGER-5'
+synapse -P 4460 menger members grant --everyone true --scope DOCS --role viewer
+synapse -P 4460 menger members revoke --everyone true --scope DOCS
+synapse -P 4460 menger members requests
+synapse -P 4460 menger members pairing --code ABCD-EFGH
+synapse -P 4460 menger members teams create --name release-crew
+synapse -P 4460 menger members teams list
+synapse -P 4460 menger members teams add --team release-crew --principal key:54a9677a62e4289ee5a2d0a4751a6f188abafd8b1f2b2d4019ec0768eb3b0d28
+synapse -P 4460 menger members grant --team release-crew --scope 'under MENGER-5' --role editor
+synapse -P 4460 menger members teams show --team release-crew
+synapse -P 4460 menger members teams remove --team release-crew --principal key:54a9677a62e4289ee5a2d0a4751a6f188abafd8b1f2b2d4019ec0768eb3b0d28
+synapse -P 4460 menger members teams rename --team release-crew --to ship-crew
+synapse -P 4460 menger members teams delete --team ship-crew
+```
+
+### Login and the AUTH protocol
+
+Login is always on (ACCESS-24): `--auth-provider` names at least one
+provider — `key` (agents), `idp=…`, `auth0=…`, `oidc:<name>=…`, `workos=…`
+or `nostr=…` — else menger runs as its local admin on loopback, or refuses
+beyond it. Each becomes an adapter at the WebSocket upgrade; nothing past
+the upgrade knows the provider. An anonymous connection reaches `auth`'s
+door and nothing else. **Every method is its own grant** (AUTH-7), a role is
+a list of grants declared with `roles(...)` on each activation (`admin`
+holds all), and plexus-core's gate decides every call — a write by its
+target, a read wherever its grant is held, answering only from there. A
+refusal is typed (`error_kind: forbidden`, `grant`, `scope`, `roles`,
+`held_on`). A new method gets a role by being listed in its activation's
+`roles(...)`; unlisted, only admin holds it. An agent's session may be
+minted with a ceiling (`role@SCOPE`). `auth role_set --role R --grants G,…`
+(admin on `*`) changes a role; `auth grant` / `auth revoke` take
+`--principal --role --scope`; `auth login --flow` and `auth signup [--via]`
+are the door's; `session login [--ttl-secs] [--scope]` mints an agent's
+session:
+
+```sh
+synapse -P 4460 menger session whoami
+synapse -P 4460 menger session providers
+synapse -P 4460 menger auth whoami
+synapse -P 4460 menger auth providers
+synapse -P 4460 menger auth roles
+synapse -P 4460 menger auth requires --method tickets.set_status
+synapse -P 4460 menger auth waiting
+```
+
+**Limits** (ACCESS-29): connections in all, per IP, per principal and
+anonymous (429 past them), calls open on one connection (`error_kind:
+too_many_calls`), an idle connection, an unused browser sign-in, titles
+(1 KiB), filters (4 KiB), bodies (8 MiB), `list` pages (1,000 unless
+`--limit`, at most 10,000 — page with `page.next`). README "Limits and
+caps".
+
+**Every parameter is a type** (ACCESS-8, `tickets-api/src/vocab/`): a value
+its type refuses is `-32602 invalid_params` naming the parameter, before the
+method runs; domain refusals stay in band. An enum flag takes its canonical
+spelling only (`--status Coding`, `--kind` lower case). A new parameter gets
+a type in the vocabulary — every activation is `typed_params` and
+`tickets-api/tests/param_types.rs` holds the flag.
+
+## Asking the owner
+
+A question for the owner is filed on its ticket, never asked only in
+conversation (owner, 2026-10-12, MENGER-12): label the ticket `needs-you`
+with the reason in its body, and mention the ticket id. Its saved filter,
+`Needs you`, is `label needs-you`; whoever acts on it takes the label off:
+
+```sh
+synapse -P 4460 menger tickets label --id MENGER-40 --add needs-you
+synapse -P 4460 menger tickets list --filter 'label needs-you' --summary true
+synapse -P 4460 menger tickets label --id MENGER-40 --remove needs-you
+```
+
+The tracker (prod, v1) has more ways to ask, and to ask urgently;
+menger-skills `asking` says when and how. An agent never answers its own
+question.
 
 ## Conventions
 
 - Plexus crates come from the **0.6 line by sibling path** (MFE-10):
-  `../plexus-core` 0.6.0, `../plexus-macros` 0.6.0, `../plexus-transport`
-  0.5.0, all on `main`, referencing each other the same way so the graph
-  resolves one of each. The line is unpublished and untagged — MACRO-8 is
-  that release — so a clone of menger alone does not build; the sibling
-  checkouts must be beside it. Same macro API as before
-  (`#[plexus_macros::activation]` + `#[plexus_macros::method]`); every
-  activation is `impl FooActivation` (MACRO-13's rule, MACRO-21): the stem
-  names the namespace, the trait and the client, so no `namespace`,
-  `client`, `server_cfg` or `crate_path` is written.
+  `../plexus-core`, `../plexus-macros`, `../plexus-transport`, all on
+  `main`, referencing each other the same way so the graph resolves one of
+  each. A clone of menger alone does not build; the sibling checkouts must
+  be beside it. Every activation is `impl FooActivation` (MACRO-13,
+  MACRO-21): the stem names the namespace, the trait and the client.
+- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `ui-service`,
+  `ui-compiler`, `ui-engine`, `plexus-shell`, `plexus-shell/toy`,
+  `plexus-login`; `tether/` is its own workspace.
 - The `tickets` activation lives ONCE, in `tickets-api/`
-  (`menger-tickets-api`, MFE-11): the vocabulary (`Ticket`, `Status`,
-  `Kind`, `Severity`, `TicketSummary`, `TicketsEvent`), the store, and
-  `activation/mod.rs`'s `#[activation]` on `impl TicketsActivation`
-  (its server half gated on the crate's `server` feature by default). The server takes the crate with `server` (default);
-  the browser app takes it with `default-features = false` and gets the
-  emitted `TicketsClient<T>` over wasm-safe crates. `menger::store`
-  re-exports the store, so `crate::store::Status` still resolves. A
-  renamed field OR parameter is a wasm compile error — there is no second
-  declaration. Don't re-declare a wire type or a method signature
-  anywhere else.
-- The browser app's data plane is the Plexus WebSocket, not the REST
-  bridge (MFE-9): one `WsTransport` for the app's lifetime, the typed
-  client from `tickets-api`'s `client` feature, `watch` opened before
-  anything else the session asks (SCALE-26: `health`, `groups`,
-  `extents` and one board window — no walk). There is no REST bridge
-  (ACCESS-24); the shell has no
-  `/rest` proxy (ACCESS-33) and serves only menger's pages and the app's
-  build, read into a table — never a request path on disk. `frontend/src`
-  must contain no `/rest/`, no hand-parsed SSE, and no `serde_json::Value`
-  on a wire path. Both halves are on the plexus 0.6 line (MFE-10), and the
-  client the app uses is emitted from the server's own activation (MFE-11).
+  (`menger-tickets-api`, MFE-11): the vocabulary, the store, and
+  `activation/mod.rs`'s `#[activation]` on `impl TicketsActivation` (its
+  server half behind the crate's default `server` feature). The macro emits
+  `TicketsClient<T>` from it. Don't re-declare a wire type or a method
+  signature anywhere else.
 - **Every page goes out under a Content-Security-Policy** (ACCESS-28,
-  `src/shell.rs`'s `PAGE_CSP`; README "Security headers"): the app runs no
-  inline script but its own blocks, hashed when the build is read, loads no
-  script and no image from another origin, and connects only to itself, its
-  hub and loopback. Something the app needs from elsewhere is a change to
-  that policy, made deliberately. A ticket body's frame starts as
-  `/app/frame` (`web/frame.html`), never a `srcdoc` — a srcdoc inherits the
-  app's policy, and a body's own scripts are the product.
-- Every RPC method returns `impl Stream<Item = TicketsEvent> + Send + 'static`;
+  `src/shell.rs`'s `PAGE_CSP`): no inline script but the page's own blocks,
+  hashed; nothing from another origin; connections only to itself, its
+  socket and loopback. Something a page needs from elsewhere is a change to
+  that policy, made deliberately.
+- Every RPC method returns `impl Stream<Item = …Event> + Send + 'static`;
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.
-- menger is DB-first: the database is the system of record — no plans/
-  directory integration, no file-based ticket store. The repository holds
-  the source and nothing of the store (owner, DEPLOY-5): no tickets, no
-  ticket artifacts, no snapshot of the live tracker as a fixture — test
-  data is synthetic, and `/plans/` is ignored. The status
-  vocabulary matches `skills/skills/ticketing/SKILL.md` (`Pending`, …);
-  the kind vocabulary is the owner's closed five (AGS-13): `scope`,
-  `execution`, `build`, `gap`, `spike` — and a sixth, `doc` (owner,
-  2026-10-02, SDLC-11), which is not work. Docs "are documents and are
-  thus connected to a different set of sdlc movements. namely, none":
-  a doc simply exists in its state, so it has no lifecycle — it is born
-  in the status `Doc`, which only a doc holds, and nothing moves it
-  (`set_status` on a doc is refused, and `Doc` on any other kind); it is
-  never blocked, never a blocker, never ready, and a roll-up's
-  `done/total` ignores it (`docs` counts it apart). File findings,
-  manifests and references as docs — a child of the ticket that
-  produced them, or under a doc collection's root (a doc may root a
-  shortcode, as a scope may) — not as work that will never close.
-  Don't invent a second vocabulary for either.
-- A kind changes only through **`tickets.set_kind`** (SDLC-13; owner,
-  2026-10-08: "identity is a scope") — never by editing a row — and
-  everything kept by kind moves in that one write (roll-ups, status
-  counts, the ready set, placements, the filter cells, the kept tree;
-  `--verify-derived` checks it). Its rules: to a `doc`, the status becomes
-  `Doc`, and a ticket that waits on a blocker or that a ticket waits on is
-  refused (both named); from a doc, the status becomes `--status` when
-  given (never `Doc`), else `Epic` for a scope and `Pending` otherwise;
-  between two kinds of work the status stays unless given. A shortcode's
-  root never becomes a kind that roots nothing (doc ↔ scope it may), a
-  path holder stays a doc, and a lower-seq ticket made a scope or a doc
-  becomes its shortcode's root. A kind and status it already has is a
-  no-op:
-
-  ```sh
-  synapse -P 4455 menger tickets set_kind --id IDENTITY-1 --kind scope
-  synapse -P 4455 menger tickets set_kind --id MNG-40 --kind gap --status Ready
-  ```
-- **`tickets.update`** (MENGER-30) changes any part of a ticket in one
-  write — `--title`, `--body`, `--kind`, `--status`, `--parent`,
-  `--severity` (`none` clears it), `--block` / `--unblock` (repeated or
-  comma-separated) — all of it or none, each by its own write's rules
-  (`amend`, `set_kind`, `set_status`, `set_parent`, `create`'s for
-  blockers), a refusal naming every reason. It answers `updated { ticket,
-  changed }`; `watch` carries each aspect's own event. The way to add a
-  blocker after filing, or to change a severity:
-
-  ```sh
-  synapse -P 4455 menger tickets update --id THEME-4 --block THEME-7
-  synapse -P 4455 menger tickets update --id MENGER-30 --unblock MENGER-23 --block MENGER-29
-  synapse -P 4455 menger tickets update --id MENGER-40 --kind gap --status Ready --severity High
-  ```
-
-  **`tickets.update_many`** (ACT-2) is the same update to many tickets in
-  one write, all or none — `--ids`, or `--filter` (at most `--max`, default
-  500); `update`'s fields but title and body, plus `--label` / `--unlabel`;
-  a refusal names each refused id. `label` and `commits link` take `--ids`
-  too:
-
-  ```sh
-  synapse -P 4455 menger tickets update_many --ids THEME-9,THEME-10 --status Ready --message "promoted"
-  synapse -P 4455 menger tickets update_many --filter 'label stale and not category done' --status Canceled
-  synapse -P 4455 menger tickets label --ids A-1,A-2 --add needs-you
-  ```
-
-  **`tickets.delete`** (ACT-5, admin only) removes tickets for good —
-  `--ids` or `--filter`, all or none — refused while something points at
-  one (children, a ticket waiting on it, a shortcode it roots, a component
-  or theme it defines, a live input) unless told what moves: `--children
-  reparent|delete`, `--unblock true`. A tombstone and the history stay;
-  `get` answers `deleted`; the body is kept 30 days for `undelete --ids`;
-  the number is never reused. Prefer `Canceled` / `Superseded` for work
-  that is not done — delete is for a mistake, a duplicate, a test row:
-
-  ```sh
-  synapse -P 4455 menger tickets delete --ids MENGER-40 --message "filed twice"
-  synapse -P 4455 menger tickets delete --ids THEME-12 --children reparent
-  synapse -P 4455 menger tickets undelete --ids MENGER-40
-  ```
-
-  **`tickets.reshortcode`** (ACT-6) moves tickets into another shortcode,
-  renumbered in the order given, all or none — into one there is (under
-  its root, or `--parent`), one `--new-scope TITLE --parent P` mints first,
-  or, for a scope moved into a code that does not exist, a shortcode it
-  roots itself; a root moves only with `--with-children` and its whole
-  shortcode (a rename). The old id is pinned to the new ticket — `get`,
-  blockers, filters, URLs and body chips follow it, `get` says
-  `moved_from` — and every record moves with it:
-
-  ```sh
-  synapse -P 4455 menger tickets reshortcode --ids THEME-9,THEME-10 --to LOOK
-  synapse -P 4455 menger tickets reshortcode --ids MENGER-2 --to APP --with-children true
-  ```
+- menger is DB-first: the database is the system of record. The repository
+  holds the source and nothing of the store (owner, DEPLOY-5): no tickets,
+  no snapshot of the live tracker as a fixture — test data is synthetic.
+  The kinds are the owner's closed five (AGS-13) — `scope`, `execution`,
+  `build`, `gap`, `spike` — and `doc` (SDLC-11), which is not work: born in
+  `Doc`, never moved, never blocked or a blocker. File findings and
+  references as docs, children of the ticket that produced them.
+- A kind changes only through **`tickets.set_kind`** (SDLC-13), which moves
+  everything kept by kind in one write; `--verify-derived` checks it.
 - Architecture (owner-pinned): a service-wide in-memory cache
-  (`src/store.rs`) is the ONLY interface the application has to tickets.
-  Reads hit the cache, never storage; reads are async-safe (no lock
-  across an await, no I/O on the read path); writes go through the cache
-  write-through to the database. Don't hand any other module a database
-  handle.
-- **An activation keeps only its methods** (owner, 2026-10-12, MENGER-29:
-  "make sure that the codebase activations aren't getting too huge"). A
-  method in an activation's `impl` is its attribute, the auth check and a
-  match on what the store answers; its logic lives in the store (a write
-  of any size in a module of its own under `tickets-api/src/store/`, its
-  tests in `store/tests_<topic>.rs`) or in a module beside the activation
-  (`tickets-api/src/activation/events.rs` — answers and changes as wire
-  events; `activation/sight.rs` — the caller's reach, clock and act;
-  `activation/tests.rs`). `tickets-api/tests/sizes.rs` holds every file
-  with an `#[plexus_macros::activation]`, and `store/mod.rs`, to a line
-  budget: over it, the test says what to move out and where. Raise a
-  budget only as a deliberate edit, never to make room for logic.
-- **The frame** (ACCESS-13; README "The frame"): `tickets` is declared
-  `auth = "required", request = MengerRequest, client, typed_params`;
-  every method takes `#[from_auth(self.access.verify)] user: VerifiedUser`
-  (never `auth: Option<&AuthContext>` / `reach: Reach`), its description
-  and each parameter's are `///` docs (no `description =`, no
-  `params(…)`), and its body is at most 15 lines — a permit or a scoped
-  read, then `answered!` or a `*_stream` beside it (`tests/sizes.rs`
-  holds both). A new activation, and comments / members / session in
-  ACCESS-19, take the same shape. A call with no identity is the
-  anonymous one (`menger::calls::caller`), which the gate holds to the
-  anonymous view — there is no open mode (ACCESS-24).
-- A ticket's outputs are tickets (owner, 2026-09-06): a report, spike
-  result, checkpoint, or evaluation memo is filed as a CHILD ticket of
-  the ticket that generated it (`parent:` in frontmatter; typed once
-  AGS-19 lands), not as a file in the repository.
-- Planning: in the tracker (`synapse -P 4455 menger tickets …`) per the
-  ticketing skill. Tickets are born `Draft` (TICKETS-13, owner
-  2026-10-23; it was `Idea`, which still reads as it) and stay `Draft` or
-  `Pending` until the human promotes them to `Ready`; implementation does
-  not begin on a `Draft` or `Pending` ticket. The table board's default
-  filter is `not status in (Draft, Complete)`.
+  (`tickets-api/src/store/`, re-exported as `menger::store`) is the ONLY
+  interface the application has to tickets. Reads hit the cache, never
+  storage, and are async-safe (no lock across an await, no I/O on the read
+  path); writes go through the cache to the database. Don't hand any other
+  module a database handle.
+- **An activation keeps only its methods** (owner, 2026-10-12, MENGER-29).
+  A method in an activation's `impl` is its attribute, the auth check and a
+  match on what the store answers; its logic lives in the store (a write in
+  a module of its own under `tickets-api/src/store/`, its tests in
+  `store/tests_<topic>.rs`) or beside the activation
+  (`activation/events.rs`, `activation/sight.rs`).
+  `tickets-api/tests/sizes.rs` holds every activation file, and
+  `store/mod.rs`, to a line budget; raise one only as a deliberate edit.
+- **The frame** (ACCESS-13; README "The frame"): every activation is
+  declared `auth = "required", request = MengerRequest, typed_params,
+  roles(…)`; every method takes `#[from_auth(self.access.verify)] user:
+  VerifiedUser` (never `auth: Option<&AuthContext>`, never `ctx.user_id`),
+  its description and each parameter's are `///` docs, and its body is at
+  most 15 lines — a permit or a scoped read, then `answered!` or a
+  `*_stream` beside it. A call with no identity is the anonymous one
+  (`menger::calls::caller`), which the gate holds to the anonymous view.
+- **Capabilities** (ACCESS-9..12; README "Capabilities, reads, watches and
+  writes"): `Access::verify` → `VerifiedUser`, then `permit` / `admin_of`;
+  never build one by hand. Every public store read takes its reader and
+  answers only its reach; every write takes the proof for what it writes,
+  minted in `activation/writes.rs`; every watch holds its caller. Store tests
+  read as `SYS` or `tests_reach::viewer_of` and write as `SYS.permit(id)`.
+- A ticket's outputs are tickets (owner, 2026-09-06): a report, a spike's
+  result or a finding is filed as a CHILD ticket of the ticket that made it,
+  not as a file in the repository.
+- Planning is in the tracker, per menger-skills (`../menger-skills`:
+  `ticketing`, `planning`, `asking`, `building`, `reaching`; `ought` is
+  retired). Tickets are born `Draft` (TICKETS-13) and stay `Draft` or
+  `Pending` until the owner promotes them to `Ready`; implementation does
+  not begin on a `Draft` or `Pending` ticket. The lifecycle is `Draft →
+  Pending → Ready → Coding → In Review → Complete` (+ `Superseded` /
+  `Canceled`): set **`Coding`** the moment work starts and record the branch
+  on the ticket; set **`In Review`** in the step that finishes it — gate
+  green, committed, **the commit linked** (SDLC-9: `tickets commits link
+  --id X --commits <hash>`, `repo@hash` outside menger); the deploy to test
+  sets `Complete`.
 - **A scope roots its own shortcode** (ORG-5): a new area under a ticket is
-  `create --kind scope --epic NEW --parent X` (NEW-1, hosted under X) — a
-  scope with X's own shortcode is refused, and so is `set_kind` / `update
-  --kind` to a scope below a root; a ticket that must become an area moves
-  out first (`tickets reshortcode`, ACT-6).
-- **Three roots** (owner, 2026-10-08: "we need fewer root scopes"): MENGER
-  (menger itself), PLEXUS (the platform) and OUGHT (the methodology). A new
-  shortcode never adds a root: create its root ticket with `--parent` set to
-  where it belongs. menger's areas are MENGER-2 *the app*, MENGER-3 *the
-  store and the server*, MENGER-4 *tickets*, MENGER-5 *running it* (ORG-5
-  moves them out to APP-1, STORE-1, TICKETS-1 and RUN-1, shortcodes of their
-  own hosted under MENGER-1; the old ids keep naming them); work on
-  the platform goes under PLEXUS-1. To move a shortcode, `set_parent` its
-  root; a hosted root can't return to the top level.
-- **Ask through the tracker** (owner, 2026-10-12, MENGER-12): a question
-  for the owner is an input on its ticket (or the `needs-you` label with
-  the reason in the body), and is mentioned in chat with the ticket id —
-  never asked only in chat. `asking` and `label <name>` are filter cells
-  (FILTER-3's language); the nav under its Needs you filter (`g n`,
-  or the header's count) shows `queued or asking or asked or label needs-you`. An urgent one is queued too (MENGER-39, "Queue").
-- Ticketing follows **menger-skills** (`../menger-skills`, the house
-  methodology — its `ticketing/`, `planning/`, `asking/`, `building/`
-  skills; `ought` is retired, owner 2026-10-14). Its lifecycle is
-  `Draft → Pending → Ready → Coding → In Review → Complete` (+ `Superseded` /
-  `Canceled`). Workers move their ticket across it (owner,
-  2026-09-06): mark `active` the moment work starts (so no leaf is
-  double-claimed) and record the branch on the ticket (`tickets.amend`
-  rewrites its body — MNG-16); flip to `in review` in the commit that
-  finishes the work — gate green, committed,
-  change linked (the commit message ends `— in review`); the **merge**
-  (the pipeline) lands it to `done`, so the merge hash is the completion
-  hash. Each flip is `tickets.set_status` on the running server (and the
-  ticket's frontmatter, where the worktree carries one), so the board
-  shows where the work is. The server holds both worker states (SDLC-7)
-  under menger's names: set **`Coding`** when work starts and **`In
-  Review`** in the commit that finishes it. `set_status` also takes
-  the legacy words — `active` is `Coding`, `in review` is `In Review` —
-  and stores the canonical spelling (through `-p` and the app;
-  synapse's own `--status` flag takes the canonical spelling only,
-  ACCESS-8). The deploy to test sets `Complete` (DEPLOY-22: the lowest
-  environment; a repository with no environment, its merge). **Link the commit** (SDLC-9): in the step that flips the
-  ticket to `In Review`, the worker links its commit(s) with
-  `tickets.commits.link` (`synapse -P 4455 menger tickets commits link
-  --id MNG-10 --commits 77df9a0`, the flag repeated per commit;
-  `repo@hash` for a commit outside menger); the merge links the merge
-  commit too if it differs, when it sets `Complete`.
-- `web/index.html` is dependency-free and embedded via `include_str!` —
-  no build step, keep it that way (MNG-5 hardens this into a contract).
-  Since MFE-4 it is served at `/vanilla`; `/` is the Leptos app, and
-  falls back to this page when `frontend/dist` holds no build.
-- Wire protocol notes (envelope, `menger.call` subscription) are in
-  README.md — `tests/wire.rs` is the executable reference.
-- Delegation (owner, 2026-09-06): implementation subagents run on Opus 5
+  `create --kind scope --epic NEW --parent X`. **Three roots** (owner,
+  2026-10-08): MENGER, PLEXUS and OUGHT; a new shortcode never adds a root.
+  menger's areas are hosted under MENGER-1 (APP, STORE, TICKETS, RUN, and V2
+  with UI under it); work on the platform goes under PLEXUS-1.
+- Wire protocol notes are in README "Surface" — `tests/wire.rs` is the
+  executable reference, `tests/v2_surface.rs` holds what v2 serves.
+- Delegation (owner, 2026-09-06): implementation subagents run on Opus
   (`model: opus`); worktree isolation; one commit per ticket. A worktree
-  builds into the shared `CARGO_TARGET_DIR=~/.cache/cargo-target/menger`
-  and is removed in the same pass as its merge (MENGER-41, owner
-  2026-10-15) — the building skill says how. **An agent cleans up with
-  `scripts/cleanup-gate.sh`, never a hand-written `rm -r`** (RUN-21, owner
-  2026-10-16: "not hit spooky rms"): `scripts/cleanup-gate.sh NAME` says
-  what the gate NAME left — its worktree and branch (`git worktree remove`,
-  `git branch -d`), the worktree's cargo build-dirs
-  (`~/.cache/cargo-build/XX/HASH`, CI-2), `~/.cache/cargo-target/NAME`,
+  builds into a target of its own (`CARGO_TARGET_DIR=~/.cache/cargo-target/<TICKET>`)
+  and is removed in the same pass as its merge (MENGER-41). **An agent
+  cleans up with `scripts/cleanup-gate.sh`, never a hand-written `rm -r`**
+  (RUN-21): `scripts/cleanup-gate.sh NAME` says what the gate NAME left —
+  its worktree and branch, its cargo build-dirs, `~/.cache/cargo-target/NAME`,
   `/tmp/menger-NAME.db*`, its session scratch — and `--yes` removes it and
-  logs it to `~/.local/state/menger/cleanup-gate.log`; `--path P` takes one
-  path by its shape, `--list` surveys every leftover and removes nothing. It
-  refuses `/`, `$HOME`, a main checkout, a shared target (`menger`, a
-  repository's name), `~/.local/share/menger`, a dirty worktree, anything
-  in use (a cargo holding its lock too), and any path with `..` — a refusal
-  is the answer, not a cue for `rm`. Its tests: `scripts/tests/cleanup-gate`
-  (under `cargo test`).
+  logs it; `--path P` takes one path by its shape, `--list` surveys every
+  leftover and removes nothing. It refuses `/`, `$HOME`, a main checkout, a
+  shared target, `~/.local/share/menger`, a dirty worktree and anything in
+  use — a refusal is the answer, not a cue for `rm`. Its tests:
+  `scripts/tests/cleanup-gate`.
 - **Tests per ticket are a selection; the suite runs per batch** (CI-3,
-  owner 2026-10-18: "when performing updates I only want you running the
-  new tests … the deployment should handle running all tests prior to
-  deployment"). A ticket's gate is the tests it adds and the nearest ones
-  it touches (`cargo test -p <crate> <filter>`, the one wire test, the
-  frontend file) — never `cargo test --workspace` per ticket; its step on
-  the ticket shows that selection. Merges queue up on main, and the full
-  suite runs once against the batch — since DEPLOY-52 right after the
-  batch's deploy to app-test (`deploy/pipeline suite`, the runner's), and a
-  red one keeps the release from prod. A red there is the batch's: find the commit (the failing test's area, else bisect the
-  batch), file a gap that blocks its ticket, fix or revert, build again.
-- **Builds clean up after themselves** (CI-2, owner 2026-10-18: "our test
-  runner automatically cleans up their builds"): the `systemd --user` timer
-  `menger-sweep.timer` (hourly; `scripts/sweep/install.sh --start` installs
-  it from main) runs `cleanup-gate.sh --sweep --yes` — every build-dir, every
-  non-shared cargo target and a shared target's stale `deps` / `incremental`
-  / `build` / `.fingerprint`, each when nothing in it changed for 6 h (1 h at
-  75% used, 15 min at 90%) and nothing holds it — then `scripts/disk-check.sh
-  --alert`, which files a gap under CI-1 and queues it `now` when `/var/home`
-  is still at 90% (once, until that ticket is done). `deploy/pipeline build`
-  refuses up front under 50 GB free or at 90% used; `status` says the disk.
+  owner 2026-10-18). A ticket's gate is the tests it adds and the nearest
+  ones it touches (`cargo test -p <crate> <filter>`, the one wire test, the
+  one browser test) — never `cargo test --workspace` per ticket. Merges
+  gather on the branch, and the full suite runs once against the batch,
+  right after its deploy to test (`deploy/pipeline suite`); a red one keeps
+  the release from prod. A red there is the batch's: find the commit, file a
+  gap that blocks its ticket, fix or revert, build again.
+- **Builds clean up after themselves** (CI-2): the `systemd --user` timer
+  `menger-sweep.timer` (hourly; `scripts/sweep/install.sh --start`) runs
+  `cleanup-gate.sh --sweep --yes`, then `scripts/disk-check.sh --alert`.
+  `deploy/pipeline build` refuses up front under 50 GB free or at 90% used.
   Before a long gate of your own, `scripts/disk-check.sh` (exit 3: low).
 
 ## Naming: a Plexus backend is a *service*, never a *hub*
