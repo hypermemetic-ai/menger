@@ -100,7 +100,7 @@ pub async fn build_rpc_offering(
     let providers: Vec<AuthProvider> =
         offers.iter().map(|o| AuthProvider { name: o.name.clone(), kind: AuthKind::Browser, label: None }).collect();
     let backend = Arc::new(MengerAuth::new(access.clone(), providers, None, crate::login_access::BRANDING.app));
-    build_rpc_login(db_path, seed, shape, offers, access, backend, None, menger_tickets_api::store::BODY_MAX_DEFAULT, Vec::new()).await
+    build_rpc_login(db_path, seed, shape, offers, access, backend, None, menger_tickets_api::store::BODY_MAX_DEFAULT, Vec::new(), Vec::new()).await
 }
 
 /// AUTH-7: the hub, the protocol's gate in front of every call and its
@@ -121,6 +121,7 @@ pub async fn build_rpc_login(
     resource_metadata: Option<String>,
     body_max: usize,
     chat_members: Vec<String>,
+    children: Vec<plexus_core::plexus::RemoteChild>,
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
@@ -219,6 +220,15 @@ pub async fn build_rpc_login(
         .register(MembersActivation::new(store, access.clone()))
         // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
         .register(SessionActivation::offering(offers, access.clone()));
+    // POLYGLOT-5: each `--child`, mounted like any activation — before the
+    // gate, so its roles are in `declared_roles` and the book seeds them.
+    for child in children {
+        let name = child.name().to_string();
+        if hub.list_activations_info().iter().any(|a| a.namespace == name) {
+            anyhow::bail!("--child {name}: `{name}` is one of menger's own activations; mount the child under another name");
+        }
+        hub = hub.register(child);
+    }
     // AUTH-7: the gate reads the same book the methods ask; the roles the
     // activations declare are what a role holds until an admin edits it.
     let book = access.book();

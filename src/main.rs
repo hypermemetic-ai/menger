@@ -122,6 +122,13 @@ struct Args {
     #[arg(long, help_heading = RUN, hide_short_help = true)]
     no_shell: bool,
 
+    // POLYGLOT-5: activations in other processes, mounted under a name —
+    // `--child NAME=stdio:CMD | NAME=ws://…`, `--child-timeout`,
+    // `--child-max-calls`, `--child-env`, `--child-key` (plexus-core's, so
+    // every service spells them the same).
+    #[command(flatten)]
+    children: plexus_core::plexus::ChildArgs,
+
     // CHAT-13.
     /// A member of every chat (repeatable; a principal, e.g. a chat bridge's
     /// key): added to every chat opened, and to every open chat at startup.
@@ -529,7 +536,17 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let wired = wiring.finish(MengerAccess(access.clone()), dev)?;
     let offers = wired.offered().map(menger::offer).collect();
     let metadata = wired.metadata_url();
-    let service = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, args.chat_member.clone()).await?;
+    // POLYGLOT-5: each `--child` started (or dialed) and its schema asked
+    // before anything is served; one that does not answer stops the start,
+    // named, exit 2.
+    let children = match args.children.connect_all("menger").await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("menger: --child refused: {e}");
+            std::process::exit(2);
+        }
+    };
+    let service = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, args.chat_member.clone(), children).await?;
 
     local::log_activations(&service);
 
