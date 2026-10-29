@@ -1775,3 +1775,142 @@ fn a_mistake_is_placed_with_its_fix() {
     assert_eq!(nearest("statu", ["status", "state", "kind"]), ["status", "state"]);
     assert!(nearest("xxxxxxxx", ["build"]).is_empty());
 }
+
+// -- V2-4: the cells on day one, and the cells that went ---------------------------
+
+/// V2-4, acceptance 3: each cell of a service that does not exist yet — the
+/// chats', the deployments', the assignments', the queue's, a message's
+/// questions' — is refused by the parser, in band, the one chunk named and
+/// its reason naming the word. (`me` is TICKETS-9's `assigned me`; `by me`
+/// is the transition log's, and stays.)
+#[test]
+fn a_dropped_cell_is_refused_by_name() {
+    for (text, word) in [
+        ("chatting", "chatting"),
+        ("unread", "unread"),
+        ("deployed prod", "deployed"),
+        ("deploying prod", "deploying"),
+        ("failed prod", "failed"),
+        ("ready for prod", "ready for"),
+        ("requested prod", "requested"),
+        ("waiting prod", "waiting"),
+        ("assigned", "assigned"),
+        ("assigned me", "assigned"),
+        ("unassigned", "unassigned"),
+        ("queued", "queued"),
+        ("queued now", "queued"),
+        ("asked", "asked"),
+        ("asking", "asking"),
+    ] {
+        let e = match Filter::parse(text) {
+            Ok(f) => panic!("V2-4: `{text}` names a cell of a service that does not exist yet, and is refused — but it parsed as {f:?}"),
+            Err(e) => e,
+        };
+        assert_eq!(e.chunks.len(), 1, "{text}: {e}");
+        assert_eq!(e.chunks[0].text, text, "{text}: {e}");
+        assert!(e.chunks[0].why.contains(&format!("`{word}`")), "{text}: the refusal names `{word}`: {}", e.chunks[0].why);
+        // …and beside a cell that stays, it is still the one named.
+        let e = refused(&format!("kind build and {text}"));
+        assert_eq!(e.chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), [text], "{text}: {e}");
+    }
+}
+
+/// V2-4: the store `the_day_one_cells_parse` answers over —
+///
+/// - `D-1` the root, a scope;
+/// - `D-2` a build under it: severity high, labelled `stale`, a commit
+///   linked, moved to Ready by `idp:ada`;
+/// - `D-3` a build under `D-2`, blocked by it;
+/// - `D-4` a gap under `D-1`;
+/// - `D-5` a build under `D-1`, hidden;
+/// - `D-6` a build under `D-1`, archived;
+/// - `E-1` another shortcode's root, `E-2` a build under it.
+#[cfg(feature = "server")]
+async fn day_one_store() -> crate::store::Store {
+    use crate::store::{Act, NewTicket, Selection, Store, Update, SYS};
+    use crate::types::TransitionSource;
+    use crate::vocab::{CommitRef, Label};
+    let new = |epic: &str, title: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]| NewTicket {
+        path: None,
+        epic: epic.into(),
+        title: title.into(),
+        kind,
+        severity: None,
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
+        parent: parent.map(Into::into),
+        body: String::new(),
+    };
+    let store = Store::new();
+    store.create(SYS, new("D", "the root", Kind::Scope, None, &[])).await.unwrap();
+    store.create(SYS, NewTicket { severity: Some(Severity::High), ..new("D", "two", Kind::Build, Some("D-1"), &[]) }).await.unwrap();
+    store.create(SYS, new("D", "three", Kind::Build, Some("D-2"), &["D-2"])).await.unwrap();
+    store.create(SYS, new("D", "four", Kind::Gap, Some("D-1"), &[])).await.unwrap();
+    store.create(SYS, new("D", "five", Kind::Build, Some("D-1"), &[])).await.unwrap();
+    store.create(SYS, new("D", "six", Kind::Build, Some("D-1"), &[])).await.unwrap();
+    store.create(SYS, new("E", "elsewhere", Kind::Scope, None, &[])).await.unwrap();
+    store.create(SYS, new("E", "e two", Kind::Build, Some("E-1"), &[])).await.unwrap();
+    store.label(SYS.permit("D-2"), vec![Label::from("stale")], vec![]).await.unwrap();
+    store.link_commits(SYS.permit("D-2"), vec![CommitRef::from("abc1234")]).await.unwrap();
+    let ada = Act { actor: "idp:ada".into(), name: None, source: TransitionSource::Api, message: None, cause: None };
+    store.set_status_by(SYS.permit("D-2"), Status::Ready, ada, false).await.unwrap();
+    store.update(SYS.updating("D-5"), Update { hidden: Some(true), ..Update::default() }).await.unwrap();
+    store.archive(SYS, Selection::Ids(vec!["D-6".into()]), false).await.unwrap();
+    store
+}
+
+/// V2-4, acceptance 3: every cell in "The cells on day one" — the row's
+/// `status`, `kind`, `severity`; the kept `blocked`; `has commits`;
+/// `label`; the times' `created <window>` and `for over|under <length>`;
+/// the log's `entered`, `left`, `moved`, `by`; the marks `archived`,
+/// `hidden`; and `in`, `under`, `tree` — parses, reads back canonically,
+/// and answers a filtered `list` on a seeded store with exactly the
+/// tickets it names.
+#[cfg(feature = "server")]
+#[tokio::test]
+async fn the_day_one_cells_parse() {
+    use crate::store::{Filtered, Lens, SYS};
+    let store = day_one_store().await;
+    let listed = |text: &str| -> Vec<String> {
+        let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
+        store.filtered_page(SYS, &q, None, None, None).unwrap_or_else(|e| panic!("{text}: {e}")).tickets.into_iter().map(|t| t.id.into_string()).collect()
+    };
+    let visible = ["D-1", "D-2", "D-3", "D-4", "E-1", "E-2"];
+    let cases: Vec<(&str, Vec<&str>)> = vec![
+        // The row.
+        ("status Ready", vec!["D-2"]),
+        ("kind gap", vec!["D-4"]),
+        ("kind scope", vec!["D-1", "E-1"]),
+        ("severity high", vec!["D-2"]),
+        ("not severity none", vec!["D-2"]),
+        // The kept count of unsatisfied blockers.
+        ("blocked", vec!["D-3"]),
+        // The row's commits.
+        ("has commits", vec!["D-2"]),
+        // The row's labels, interned.
+        ("label stale", vec!["D-2"]),
+        // The times kept beside the log.
+        ("created within 1d", visible.to_vec()),
+        ("created before 1d ago", vec![]),
+        ("for under 1d", visible.to_vec()),
+        ("for over 1d", vec![]),
+        // The transition log.
+        ("entered Ready", vec!["D-2"]),
+        ("left Draft", vec!["D-2"]),
+        ("moved by idp:ada", vec!["D-2"]),
+        ("by idp:ada", vec!["D-2"]),
+        // The row's marks.
+        ("archived", vec!["D-6"]),
+        ("hidden", vec!["D-5"]),
+        // The shortcode and the kept tree.
+        ("in E", vec!["E-1", "E-2"]),
+        ("under D-2", vec!["D-2", "D-3"]),
+        ("under E", vec!["E-1", "E-2"]),
+        ("in D · tree", vec!["D-1", "D-2", "D-3", "D-4"]),
+    ];
+    for (text, want) in cases {
+        let f = parsed(text);
+        assert_eq!(parsed(&f.format()), f, "{text}: reads back from {:?}", f.format());
+        assert_eq!(listed(text), want, "{text}");
+    }
+}

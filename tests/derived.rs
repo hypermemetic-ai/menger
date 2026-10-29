@@ -773,3 +773,66 @@ async fn a_form_6_file_gains_form_7_once_and_answers_as_before() {
     assert!(!log.contains("COMMENT-2: the file gained") && !log.contains("SCALE-28: stored"), "once: {log}");
     s.kill9();
 }
+
+/// V2-4: the cut gives the derived state a new form — the cells of the
+/// services that went are gone from it — and a file in the form before it
+/// (form 15, v1's last) is built in the new form once, on its first open,
+/// saying so; it then verifies `consistent`; and the next open reads it,
+/// building nothing. Written against the build's own [`FORM`]: it holds the
+/// moment the cut moves the number.
+#[tokio::test]
+async fn the_derived_state_is_rebuilt_in_the_new_form_once() {
+    use menger_tickets_api::store::FORM;
+    const BEFORE: i64 = 15;
+    assert!(FORM > BEFORE, "V2-4: the cut writes a new form of the derived state; this build still writes form {FORM}");
+
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    let s = spawn_server(&db, dir.path(), "made").await;
+    let c = connect(s.port).await;
+    for (epic, kind, parent) in [("NF", "scope", None), ("NF", "build", Some("NF-1")), ("NF", "build", Some("NF-2"))] {
+        let ev = one(&c, "tickets.create", json!({"epic": epic, "title": "t", "kind": kind, "parent": parent})).await.unwrap();
+        assert_eq!(ev["type"], "created", "{ev}");
+    }
+    one(&c, "tickets.set_status", json!({"id": "NF-3", "status": "Complete"})).await.unwrap();
+    one(&c, "tickets.label", json!({"id": "NF-2", "add": ["stale"]})).await.unwrap();
+    let answers = |c: WsClient| async move {
+        let mut out = Vec::new();
+        for filter in ["", "kind build", "under NF-2", "label stale", "status Complete"] {
+            out.push(all(&c, "tickets.nav.counts", json!({"filter": filter})).await);
+            out.push(all(&c, "tickets.list", json!({"filter": filter, "summary": true})).await);
+        }
+        out
+    };
+    let before = answers(c).await;
+    s.kill9();
+
+    // The file, as v1's last build left it.
+    rusqlite::Connection::open(&db).unwrap().execute("UPDATE derived_state SET form = ?1", [BEFORE]).unwrap();
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.contains(&format!("stored in form {BEFORE}; this build reads {FORM}")), "{out}");
+
+    // The first open builds it, once, and says so.
+    let s = spawn_server(&db, dir.path(), "first").await;
+    let after = answers(connect(s.port).await).await;
+    let log = s.log();
+    let said = format!("SCALE-28: stored the derived state again: it was stored in form {BEFORE}, this build writes {FORM}");
+    assert_eq!(log.matches(&said).count(), 1, "built once, saying so:\n{log}");
+    assert_eq!(log.matches("SCALE-28: stored").count(), 1, "nothing else built:\n{log}");
+    assert_eq!(after, before, "it answers as before");
+    s.kill9();
+    let (code, out, err) = verify(&db);
+    assert_eq!(code, Some(0), "{out}\n{err}");
+    assert!(out.starts_with("consistent: "), "{out}");
+    let form: i64 = rusqlite::Connection::open(&db).unwrap().query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
+    assert_eq!(form, FORM);
+
+    // The next open reads it: nothing built.
+    let s = spawn_server(&db, dir.path(), "second").await;
+    assert_eq!(answers(connect(s.port).await).await, before, "the next open answers the same");
+    let log = s.log();
+    assert!(!log.contains("SCALE-28: stored"), "built once:\n{log}");
+    assert!(log.contains("read the derived state from the database"), "{log}");
+    s.kill9();
+}

@@ -5541,7 +5541,7 @@ mod tests_shortcodes;
 /// compares with a scan.
 mod stored;
 
-pub use stored::Verdict;
+pub use stored::{Verdict, FORM};
 
 /// SEARCH-2: search inside tickets — the FTS5 index of every ticket's title
 /// and text beside them in the file, kept by every write that changes

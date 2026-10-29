@@ -118,7 +118,10 @@ use crate::address::{ShortcodeId, TicketId, TicketName};
 /// in place, once ([`upgrade`]). One way: an older build reads a form-15
 /// file as its own; once anything is hidden, it would read a hidden
 /// ticket's cell as its visible twin's.
-const FORM: i64 = 15;
+///
+/// V2-4: public, so a test of the binary (`tests/derived.rs`) writes a file
+/// in the form before it and holds the open to building this one once.
+pub const FORM: i64 = 15;
 
 /// COMMENT-2, IDENTITY-21, AUTH-7: the forms [`upgrade`] takes to [`FORM`]
 /// in place. MENGER-12: none — form 10 moves the cells, so every older form
