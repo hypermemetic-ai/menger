@@ -306,10 +306,15 @@ pub trait Renderer: Clone + 'static {
     /// `child` into `parent`, before `before` (none: last).
     fn insert(&self, parent: &Self::Node, child: &Self::Node, before: Option<&Self::Node>);
     fn remove(&self, parent: &Self::Node, child: &Self::Node);
-    /// Calls `handler` with the event's payload (`{ "value", "target" }`)
-    /// whenever `event` fires on `node`.
-    fn listen(&self, node: &Self::Node, event: &str, handler: Rc<dyn Fn(Value)>);
+    /// Calls `handler` with the event's payload whenever `event` fires on
+    /// `node` (`window-<event>`: on the window, while `node` is mounted).
+    /// UI-10: the answer takes the listener away again — the tree calls it
+    /// when the node's block goes, so no closure outlives its component.
+    fn listen(&self, node: &Self::Node, event: &str, handler: Rc<dyn Fn(Value)>) -> Unlisten;
 }
+
+/// What [`Renderer::listen`] answers: called once, it removes the listener.
+pub type Unlisten = Box<dyn FnOnce()>;
 
 /// The engine's side of a mount: fills a `component` or `slot` node's
 /// element, and empties it when the node goes.
@@ -439,13 +444,15 @@ type Env = Rc<Vec<(String, Signal<Value>)>>;
 struct Block<R: Renderer> {
     top: Vec<R::Node>,
     bindings: Vec<BindingId>,
+    /// The listeners its elements hold, taken away with it.
+    unlisten: Vec<Unlisten>,
     hosts: Vec<R::Node>,
     dyns: Vec<Rc<RefCell<Dyn<R>>>>,
 }
 
 impl<R: Renderer> Default for Block<R> {
     fn default() -> Self {
-        Self { top: Vec::new(), bindings: Vec::new(), hosts: Vec::new(), dyns: Vec::new() }
+        Self { top: Vec::new(), bindings: Vec::new(), unlisten: Vec::new(), hosts: Vec::new(), dyns: Vec::new() }
     }
 }
 
@@ -593,7 +600,7 @@ fn build_node<R: Renderer>(ctx: &Rc<Ctx<R>>, env: &Env, node: &Node, parent: &R:
             }
             for (event, handler) in on {
                 let (on_event, handler) = (ctx.scope.on_event.clone(), handler.clone());
-                r.listen(&e, event, Rc::new(move |payload: Value| on_event(&handler, payload)));
+                block.unlisten.push(r.listen(&e, event, Rc::new(move |payload: Value| on_event(&handler, payload))));
             }
             build(ctx, env, children, &e, None, block, false);
             place(ctx, parent, &e, before, block, top);
@@ -808,6 +815,9 @@ fn reconcile<R: Renderer>(ctx: &Rc<Ctx<R>>, env: &Env, d: &Rc<RefCell<Dyn<R>>>, 
 fn dispose<R: Renderer>(ctx: &Ctx<R>, block: Block<R>, parent: Option<&R::Node>) {
     for id in block.bindings {
         ctx.rt.dispose(id);
+    }
+    for off in block.unlisten {
+        off();
     }
     for d in block.dyns {
         let (rows, dparent, top) = {

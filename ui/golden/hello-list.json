@@ -1,6 +1,6 @@
 {
   "abi": "engine/1",
-  "handlers": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "handlers": "7ab29c35339e08ecb59ea10a351e550f2564c921dba890dc2f72a1a1ee9fcdbd",
   "live": {
     "rows": {
       "changes": "tickets.watch",
@@ -20,7 +20,9 @@
   },
   "name": "hello-list",
   "props": [],
-  "state": {},
+  "state": {
+    "seen": ""
+  },
   "tree": [
     {
       "attrs": {
@@ -48,7 +50,42 @@
     },
     {
       "attrs": {
-        "class": "rows"
+        "class": "seen"
+      },
+      "children": [
+        {
+          "text": {
+            "expr": "state.seen"
+          }
+        }
+      ],
+      "el": "p"
+    },
+    {
+      "attrs": {
+        "class": "keys"
+      },
+      "children": [],
+      "el": "input",
+      "on": {
+        "keydown": "keyed"
+      }
+    },
+    {
+      "attrs": {
+        "class": "tick",
+        "type": "checkbox"
+      },
+      "children": [],
+      "el": "input",
+      "on": {
+        "change": "ticked"
+      }
+    },
+    {
+      "attrs": {
+        "class": "rows",
+        "style": "max-height: 240px; overflow: auto; margin: 0"
       },
       "children": [
         {
@@ -76,7 +113,10 @@
           }
         }
       ],
-      "el": "ul"
+      "el": "ul",
+      "on": {
+        "scroll": "scrolled"
+      }
     }
   ],
   "uses": [

@@ -207,10 +207,19 @@ fn a_window_key_listener_lives_with_its_component() {
     r.fire_window("keydown", json!({ "key": "k" }));
     assert_eq!(*heard.borrow(), [("keyed".to_string(), json!({ "key": "k" }))], "the window's keydown reaches the handler");
 
+    assert_eq!(r.listeners(), 1, "one registration in all");
     m.unmount();
+    assert_eq!(r.window_listeners(), 0, "removed at unmount, no event needed");
+    assert_eq!(r.listeners(), 0, "nothing registered is left: no closure kept");
     r.fire_window("keydown", json!({ "key": "j" }));
     assert_eq!(heard.borrow().len(), 1, "never after unmount");
-    assert_eq!(r.window_listeners(), 0, "removed");
+
+    // Mounted and unmounted many times: the registrations do not pile up.
+    for _ in 0..50 {
+        let scope = Scope { props: Map::new(), state: State::new(&rt, &Map::new()), live: BTreeMap::new(), on_event: Rc::new(|_: &str, _: Value| {}) };
+        mount(&rt, &r, &tree, scope, &r.root(), Rc::new(Kids::default())).expect("mounts").unmount();
+    }
+    assert_eq!(r.listeners(), 0, "fifty mounts later: none kept");
 }
 
 /// UI-10: `{@html expr}` draws the expression's HTML through the
@@ -233,4 +242,29 @@ fn an_html_node_draws_the_sanitized_tree() {
     state.replace(&obj(json!({ "body": "<em>c</em> &amp; d" })));
     assert_eq!(r.html(0), "<article><em>c</em> & d</article><footer></footer>", "drawn again; an entity decoded into the text node (the recording draws text as it is)");
     assert_eq!(r.find_tag("footer"), [footer], "nothing else redrawn");
+}
+
+/// `{@html markdown(state.body)}` end to end: the markdown rendered, its raw
+/// `<script>` and its `javascript:` link gone, the rest drawn.
+#[test]
+fn markdown_in_html_is_drawn_sanitized() {
+    let rt = Runtime::new();
+    let r = Recording::new();
+    let tree = ComponentTree::parse(
+        r#"{ "name": "ticket-body", "abi": "engine/1", "props": [], "state": { "body": "" }, "live": {}, "uses": [], "handlers": "",
+             "tree": [ { "el": "article", "children": [ { "html": { "expr": "markdown(state.body)" } } ] } ] }"#,
+    )
+    .expect("parses");
+    let body = "# Kiln\n\nFire **hot**.\n\n<script>alert(1)</script>\n\n[ok](https://menger.sh) [bad](javascript:alert(2))\n";
+    let state = State::new(&rt, &obj(json!({ "body": body })));
+    let scope = Scope { props: Map::new(), state, live: BTreeMap::new(), on_event: Rc::new(|_: &str, _: Value| {}) };
+    let _m = mount(&rt, &r, &tree, scope, &r.root(), Rc::new(Kids::default())).expect("mounts");
+    let html = r.html(0);
+    for piece in ["<h1>Kiln</h1>", "<strong>hot</strong>", r#"<a href="https://menger.sh">ok</a>"#, "<a>bad</a>"] {
+        assert!(html.contains(piece), "`{piece}` drawn: {html}");
+    }
+    for gone in ["script", "alert", "javascript"] {
+        assert!(!html.contains(gone), "`{gone}` gone: {html}");
+    }
+    assert!(r.find_tag("script").is_empty(), "no script element made");
 }

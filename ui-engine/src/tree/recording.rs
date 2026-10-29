@@ -45,7 +45,9 @@ struct Drawn {
 struct Log {
     calls: Vec<Call>,
     nodes: Vec<Drawn>,
-    listeners: Vec<(u32, String, Rc<dyn Fn(Value)>)>,
+    /// Every registration held: its id, node, event and handler.
+    listeners: Vec<(u64, u32, String, Rc<dyn Fn(Value)>)>,
+    next_listener: u64,
 }
 
 /// The recording renderer: a handle; clones share one log.
@@ -127,35 +129,35 @@ impl Recording {
     /// Fires `event` on `node` with `payload`: each listener on it runs.
     pub fn fire(&self, node: u32, event: &str, payload: Value) {
         let hit: Vec<Rc<dyn Fn(Value)>> =
-            self.0.borrow().listeners.iter().filter(|(n, e, _)| *n == node && e == event).map(|(_, _, h)| h.clone()).collect();
+            self.0.borrow().listeners.iter().filter(|(_, n, e, _)| *n == node && e == event).map(|(_, _, _, h)| h.clone()).collect();
         assert!(!hit.is_empty(), "nothing listens for {event} on node {node}");
         for h in hit {
             h(payload.clone());
         }
     }
 
-    /// UI-10: a `window-<event>` listener is the window's while its node is
-    /// in the page (reachable from the root), as the DOM renderer holds it:
-    /// fires `event` on the window — each such listener whose node is drawn
-    /// runs; one whose node is gone is dropped.
+    /// UI-10: fires `event` on the window: each `window-<event>`
+    /// registration held runs (whose node is drawn, as the DOM renderer's
+    /// guard does).
     pub fn fire_window(&self, event: &str, payload: Value) {
         let name = format!("window-{event}");
         let drawn = self.under(0);
-        let hit: Vec<Rc<dyn Fn(Value)>> = {
-            let mut log = self.0.borrow_mut();
-            log.listeners.retain(|(n, e, _)| *e != name || drawn.contains(n));
-            log.listeners.iter().filter(|(_, e, _)| *e == name).map(|(_, _, h)| h.clone()).collect()
-        };
+        let hit: Vec<Rc<dyn Fn(Value)>> =
+            self.0.borrow().listeners.iter().filter(|(_, n, e, _)| *e == name && drawn.contains(n)).map(|(_, _, _, h)| h.clone()).collect();
         for h in hit {
             h(payload.clone());
         }
     }
 
-    /// The `window-*` listeners held now (after the last
-    /// [`Self::fire_window`] dropped those whose node was gone).
+    /// The `window-*` registrations held now — raw: one not taken away is
+    /// counted whether or not its node is drawn.
     pub fn window_listeners(&self) -> usize {
-        let drawn = self.under(0);
-        self.0.borrow().listeners.iter().filter(|(n, e, _)| e.starts_with("window-") && drawn.contains(n)).count()
+        self.0.borrow().listeners.iter().filter(|(_, _, e, _)| e.starts_with("window-")).count()
+    }
+
+    /// Every registration held now, raw (element and window).
+    pub fn listeners(&self) -> usize {
+        self.0.borrow().listeners.len()
     }
 
     fn push(&self, call: Call) {
@@ -236,8 +238,20 @@ impl Renderer for Recording {
         self.push(Call::Remove { parent: *parent, child: *child });
     }
 
-    fn listen(&self, node: &u32, event: &str, handler: Rc<dyn Fn(Value)>) {
-        self.0.borrow_mut().listeners.push((*node, event.into(), handler));
+    fn listen(&self, node: &u32, event: &str, handler: Rc<dyn Fn(Value)>) -> super::Unlisten {
+        let id = {
+            let mut log = self.0.borrow_mut();
+            log.next_listener += 1;
+            let id = log.next_listener;
+            log.listeners.push((id, *node, event.into(), handler));
+            id
+        };
         self.push(Call::Listen { node: *node, event: event.into() });
+        let log = Rc::downgrade(&self.0);
+        Box::new(move || {
+            if let Some(log) = log.upgrade() {
+                log.borrow_mut().listeners.retain(|(i, ..)| *i != id);
+            }
+        })
     }
 }
