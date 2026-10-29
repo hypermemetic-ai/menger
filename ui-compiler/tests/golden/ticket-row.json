@@ -1,0 +1,87 @@
+{
+  "abi": "engine/1",
+  "handlers": "7ea650b34412825b6ac44b3116d048bbe32ccadc76b9a9f716b28caa6efee961",
+  "live": {
+    "rows": {
+      "changes": "tickets.watch",
+      "key": "id",
+      "on": {
+        "amended": "upsert:ticket",
+        "created": "upsert:ticket",
+        "deleted": "remove:id"
+      },
+      "params": {
+        "limit": 200,
+        "parent": {
+          "expr": "id"
+        },
+        "summary": true
+      },
+      "snapshot": "tickets.list"
+    }
+  },
+  "props": [
+    "id"
+  ],
+  "state": {
+    "expanded": false
+  },
+  "tree": [
+    {
+      "attrs": {
+        "class": "row"
+      },
+      "children": [
+        {
+          "text": {
+            "expr": "title"
+          }
+        }
+      ],
+      "el": "div",
+      "on": {
+        "click": "toggle"
+      }
+    },
+    {
+      "else": [],
+      "if": {
+        "expr": "state.expanded"
+      },
+      "then": [
+        {
+          "children": [
+            {
+              "text": {
+                "expr": "body"
+              }
+            }
+          ],
+          "el": "p"
+        }
+      ]
+    },
+    {
+      "body": [
+        {
+          "component": "ticket-row",
+          "props": {
+            "id": {
+              "expr": "r.id"
+            }
+          }
+        }
+      ],
+      "each": {
+        "as": "r",
+        "expr": "rows.rows",
+        "key": "r.id"
+      }
+    }
+  ],
+  "uses": [
+    "tickets.list",
+    "tickets.update",
+    "tickets.watch"
+  ]
+}
