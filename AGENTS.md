@@ -1303,3 +1303,15 @@ and `view: mockup` + `widths:` makes a whole body one.
   is still at 90% (once, until that ticket is done). `deploy/pipeline build`
   refuses up front under 50 GB free or at 90% used; `status` says the disk.
   Before a long gate of your own, `scripts/disk-check.sh` (exit 3: low).
+
+## Naming: a Plexus backend is a *service*, never a *hub*
+
+**Owner, 2026-10-29: "we don't call them hubs anymore. we call them services."** Every
+name says service: `DynamicService`, `PlexusService`, `ServiceTransport`,
+`service-codegen`, "the Rust service", "service to service", `--service`.
+Any remnant of *hub* found anywhere — an identifier, a flag, a crate or
+binary name, a doc, a skill, a ticket body, a commit message — is renamed to
+*service* the moment it is seen (the sweep is tracked under PLEXUS-1; a
+builder renames what is inside its own scope and never writes a new *hub*).
+The only *hub* that stays is a foreign name we do not own (GitHub, a
+third-party crate's API).
