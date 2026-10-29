@@ -334,8 +334,9 @@ where
     // under its path (`tickets.commits.link`).
     book.seed(hub.declared_roles());
     let hub = Arc::new(hub);
-    // UI-7: the ui service calls the tickets service through this hub.
-    seam.attach(&hub);
+    // UI-7: the ui service calls the tickets service through this hub, as
+    // the server's own caller (its full view, whoever pushes).
+    seam.attach(&hub, access.system_caller());
     Ok(hub)
 }
 

@@ -56,14 +56,14 @@ fn a_push_stores_once_per_hash() {
     let path = dir.path().join(UI_DB_FILE);
     let s = UiStore::open(&path).unwrap();
     let first = s.push(version(1, 100)).unwrap();
-    assert_eq!(first, Pushed { version: sha(&bundle(1)), live: true, new: true });
+    assert_eq!(first, Pushed { version: sha(&bundle(1)), uploaded: sha(&bundle(1)), live: true, new: true });
     let row_one = rows(&path, "ui_versions").into_iter().find(|r| r[0] == Value::Text(first.version.clone())).unwrap();
     let second = s.push(version(2, 200)).unwrap();
-    assert_eq!(second, Pushed { version: sha(&bundle(2)), live: true, new: true });
+    assert_eq!(second, Pushed { version: sha(&bundle(2)), uploaded: sha(&bundle(2)), live: true, new: true });
     let mut later = version(1, 300);
     later.pushed_by = "key:someone-else".into();
     let again = s.push(later).unwrap();
-    assert_eq!(again, Pushed { version: sha(&bundle(1)), live: true, new: false }, "the same bytes are the same version");
+    assert_eq!(again, Pushed { version: sha(&bundle(1)), uploaded: sha(&bundle(1)), live: true, new: false }, "the same bytes are the same version");
     let all = rows(&path, "ui_versions");
     assert_eq!(all.len(), 2, "two rows");
     let row = all.iter().find(|r| r[0] == Value::Text(first.version.clone())).unwrap();

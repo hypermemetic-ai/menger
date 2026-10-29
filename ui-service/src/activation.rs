@@ -113,7 +113,7 @@ impl UiActivation {
         commit: Option<CommitRef>,
     ) -> impl Stream<Item = UiEvent> + Send + 'static {
         let (store, signers, steps) = (self.store.clone(), self.signers.clone(), self.steps.clone());
-        let p = Push { by: user.principal_text(), caller: user.context().cloned(), bundle, manifest, signature, commit };
+        let p = Push { by: user.principal_text(), bundle, manifest, signature, commit };
         futures::stream::once(crate::push::push(store, signers, steps, p))
     }
 

@@ -28,7 +28,7 @@ pub use store::{Assignment, ManifestDoc, NewVersion, Pointer, Pushed, Section, U
 
 // UI-7: the sealed compiler, the seam to the running service, the push's steps.
 pub mod compiler;
-pub use compiler::{CompileFailed, Compiled, Compiler, ModuleRefused};
+pub use compiler::{CompileFailed, Compiled, Compiler, ModuleRefused, Session};
 
 pub mod seam;
 pub use seam::Seam;

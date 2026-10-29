@@ -33,6 +33,10 @@ pub enum Reason {
     /// UI-7: `manifest.components.<name>.uses` names a `method` the running
     /// tickets service does not expose.
     UnknownMethod,
+    /// UI-7: the push's `manifest` or the bundle's `manifest.json` does not
+    /// say, for the component `name`, the `uses` and the `tree` / `handlers`
+    /// hashes of what compiled — the compiled tree is the truth.
+    ManifestMismatch,
 }
 
 /// Every event the `ui` activation sends (`{"type": …}`).
@@ -45,7 +49,10 @@ pub enum UiEvent {
     /// difference is said, never refused: the support policy's, PLEXUS-1);
     /// `compiled` — the server compiled every source (`false`: no
     /// `--ui-compiler`, the trees stored as given).
-    Pushed { version: String, live: bool, new: bool, contract_matches: bool, compiled: bool },
+    /// `uploaded` — the upload's sha256 (what the signature is over): the
+    /// `version` when stored exactly as signed, another when the server
+    /// filled in the trees.
+    Pushed { version: String, uploaded: String, live: bool, new: bool, contract_matches: bool, compiled: bool },
     /// `rollback`: the version the pointer names now. UI-9: and on
     /// `ui.watch` — first, the pointer as it stands (`null` when nothing is
     /// live), then on every pointer move (a push, a rollback).

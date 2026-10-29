@@ -449,3 +449,30 @@ async fn the_lint_reads_the_running_service_not_a_copy() {
     let (params, _) = compiled_push_params(1, "c1", &[search()]);
     pushed(&call(&admin, "ui.push", params).await);
 }
+
+/// Acceptance 2's measurement (not a gate: timings on a shared machine):
+/// ten components, sources only — UI-5's golden `ticket-row` under ten
+/// names — pushed in one call; the time from the call to `pushed`.
+/// `cargo test -p menger --test wire_ui_compile ten_components -- --ignored --nocapture`
+#[tokio::test]
+#[ignore]
+async fn ten_components_timing() {
+    let golden = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui-compiler/tests/golden/ticket-row.svelte")).expect("UI-5's golden");
+    let m = start().await;
+    let admin = connect(m.s.port).await;
+    let contract = tickets_hash(&admin).await;
+    let mut runs = Vec::new();
+    for n in 1..=5u32 {
+        // Each run its own sources (a comment differs), so each is a new version.
+        let components: Vec<Component> =
+            (0..10).map(|i| Component::compiled(&format!("row-{i}"), &format!("<!-- run {n} -->\n{golden}")).tree(Tree::Absent)).collect();
+        let (params, _) = compiled_push_params(n, &contract, &components);
+        let start = std::time::Instant::now();
+        let evs = call(&admin, "ui.push", params).await;
+        let took = start.elapsed();
+        let p = pushed(&evs);
+        assert_eq!((p["compiled"].as_bool(), p["contract_matches"].as_bool()), (Some(true), Some(true)), "{p}");
+        runs.push(took);
+    }
+    println!("ten components, sources only, call → pushed: {runs:?}");
+}

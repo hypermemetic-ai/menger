@@ -92,6 +92,10 @@ pub struct NewVersion {
 pub struct Pushed {
     /// The bundle's sha256, hex.
     pub version: String,
+    /// UI-7: the upload's sha256 — what the signature was checked over; the
+    /// version when the bundle is stored exactly as signed, another hash
+    /// when the server filled in its trees.
+    pub uploaded: String,
     /// The pointer is on it.
     pub live: bool,
     /// A row was inserted (false: the same bytes were kept already).
@@ -222,6 +226,11 @@ impl UiStore {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.execute_batch(SCHEMA)?;
+        // UI-7: the upload's hash beside the version's, on a file made before it.
+        let has_uploaded = conn.prepare("SELECT 1 FROM pragma_table_info('ui_versions') WHERE name = 'uploaded'")?.exists([])?;
+        if !has_uploaded {
+            conn.execute_batch("ALTER TABLE ui_versions ADD COLUMN uploaded TEXT")?;
+        }
         let (changes, _) = tokio::sync::broadcast::channel(CHANGES_CAPACITY);
         Ok(Self { path: path.to_path_buf(), conn: Mutex::new(conn), changes })
     }
@@ -240,7 +249,14 @@ impl UiStore {
     /// Keeps `v` (once per hash) and moves the live pointer onto it — one
     /// transaction.
     pub fn push(&self, v: NewVersion) -> Result<Pushed, UiError> {
-        self.push_with(v, |_| Ok(()))
+        let uploaded = hash_of(&v.bundle);
+        self.push_with(v, &uploaded, |_| Ok(()))
+    }
+
+    /// UI-7: [`Self::push`] of bytes the server made from an upload whose
+    /// sha256 is `uploaded` (its trees filled in) — kept beside the version.
+    pub fn push_uploaded(&self, v: NewVersion, uploaded: &str) -> Result<Pushed, UiError> {
+        self.push_with(v, uploaded, |_| Ok(()))
     }
 
     /// [`Self::push`], running `after_insert` inside the transaction after
@@ -252,13 +268,15 @@ impl UiStore {
         v: NewVersion,
         after_insert: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>,
     ) -> Result<Pushed, UiError> {
-        self.push_with(v, after_insert)
+        let uploaded = hash_of(&v.bundle);
+        self.push_with(v, &uploaded, after_insert)
     }
 
     /// The one push both [`Self::push`] and the tests' seam run.
     fn push_with(
         &self,
         v: NewVersion,
+        uploaded: &str,
         after_insert: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>,
     ) -> Result<Pushed, UiError> {
         let hash = hash_of(&v.bundle);
@@ -271,8 +289,8 @@ impl UiStore {
         let new = !kept(&tx, &hash)?;
         if new {
             tx.execute(
-                "INSERT INTO ui_versions (hash, bundle, manifest, commit_hash, contract, abi, pushed_by, pushed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![hash, v.bundle, v.manifest, v.commit, contract, abi, v.pushed_by, v.pushed_at],
+                "INSERT INTO ui_versions (hash, bundle, manifest, commit_hash, contract, abi, pushed_by, pushed_at, uploaded) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![hash, v.bundle, v.manifest, v.commit, contract, abi, v.pushed_by, v.pushed_at, uploaded],
             )?;
         }
         after_insert(&tx)?;
@@ -280,7 +298,7 @@ impl UiStore {
         tx.commit()?;
         // UI-9: the pointer moved — said to every watch.
         let _ = self.changes.send(UiChange::Live { version: hash.clone() });
-        Ok(Pushed { version: hash, live: true, new })
+        Ok(Pushed { version: hash, uploaded: uploaded.to_string(), live: true, new })
     }
 
     /// Moves the live pointer to `to`, a kept version; no other row changes.

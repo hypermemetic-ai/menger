@@ -195,6 +195,11 @@ pub struct Book {
     /// the access layer's own reads of the grants act as (ACCESS-10).
     system: OnceLock<Arc<System>>,
     admins: Vec<String>,
+    /// UI-7: the server's own principal ([`Access::system_caller`]) — a
+    /// `key:` whose subject is drawn at start from the OS's randomness, so
+    /// no one holds a key that proves it; admin on `*` in memory, never a
+    /// stored grant.
+    service: String,
     /// Each role's grants as the activations declare them
     /// (`roles(...)`, merged by name) — seeded once the hub is built
     /// ([`Book::seed`]).
@@ -218,9 +223,18 @@ impl WaitingList {
     }
 }
 
+/// UI-7: a `key:` principal no one can prove — 64 hex digits of the sha256
+/// of two v4 UUIDs (the OS's randomness), drawn once per process.
+fn service_principal() -> String {
+    use sha2::{Digest, Sha256};
+    let seed = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    let hex: String = Sha256::digest(seed.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    format!("key:{hex}")
+}
+
 impl Book {
     fn new(admins: Vec<String>) -> Self {
-        Self { store: OnceLock::new(), system: OnceLock::new(), admins, defaults: RwLock::new(BTreeMap::new()), waiting: Mutex::new(WaitingList::default()) }
+        Self { store: OnceLock::new(), system: OnceLock::new(), admins, service: service_principal(), defaults: RwLock::new(BTreeMap::new()), waiting: Mutex::new(WaitingList::default()) }
     }
 
     fn store(&self) -> Option<&Arc<Store>> {
@@ -282,7 +296,7 @@ impl Book {
                 grants.extend(self.stored_grants(&crate::vocab::Grantee::Team(team).to_string()));
             }
         }
-        if self.admins.iter().any(|a| a == principal) {
+        if self.admins.iter().any(|a| a == principal) || principal == self.service {
             // ACCESS-48: an operator's `--admin` is a principal (the command
             // line refuses one that is not), so it is one here.
             if let Ok(p) = principal.parse::<crate::vocab::Grantee>() {
@@ -635,6 +649,15 @@ impl Access {
     pub fn teams_of(&self, principal: &str) -> Vec<crate::members::Team> {
         let Some(store) = self.book.store() else { return Vec::new() };
         store.teams_of(principal).iter().filter_map(|t| self.team(t).map(|(team, _, _)| team)).collect()
+    }
+
+    /// UI-7: the server's own caller — what one service calls another as
+    /// through the seam when the answer must not depend on who asked (the
+    /// ui service reading `tickets`' schema): admin on `*`, held in memory
+    /// by a principal no key proves ([`Book`]'s `service`), never stored.
+    pub fn system_caller(&self) -> AuthContext {
+        let p = self.book.service.clone();
+        AuthContext::new(p.clone(), "system".into(), vec![], serde_json::json!({ "principal": p, "name": "menger" }))
     }
 
     /// The operator's `--admin` principals.
