@@ -78,11 +78,20 @@ const GOES: &[&str] = &[
     "scripts/prod-button-check.sh",
     // The chat bridge.
     "scripts/chat-bridge",
+    // The landing's media, made by running the app: its capture and its
+    // stills, and the landing inside the app's mockup view.
+    "scripts/landing-media.sh",
+    "scripts/landing-media.mjs",
+    "scripts/landing-mock.py",
+    // DIST-3's publish: the crate with v1's app built by trunk inside it.
+    "scripts/publish.sh",
     // The diagrams service and the ACCESS-6 spike.
     "diagrams",
     "spike",
-    // The probe of the chats activation.
+    // The probe of the chats activation, and the magnitude ladder (it
+    // drives the app and builds it).
     "perf/chat-probe.mjs",
+    "perf/magnitude.mjs",
 ];
 
 /// Words that name v1's app, its frames and its services: none is left in
@@ -127,13 +136,23 @@ fn nothing_left_names_the_app() {
     let root = root();
     let mut checked = Vec::new();
     files(&root.join("scripts"), &mut checked);
-    for entry in std::fs::read_dir(root.join("perf")).unwrap() {
+    let perf = root.join("perf");
+    for entry in std::fs::read_dir(&perf).unwrap_or_else(|e| panic!("{}: {e}", perf.display())) {
         let path = entry.unwrap().path();
+        // perf/notes.md records measurements made on v1's app: what it
+        // names there is history, kept as written.
+        if path.file_name().is_some_and(|n| n == "notes.md") {
+            continue;
+        }
         if path.is_file() && path.extension().is_some_and(|x| ["mjs", "py", "sh", "md"].iter().any(|e| x == *e)) {
             checked.push(path);
         }
     }
     checked.sort();
+    // It cannot pass over nothing: what stays is among what is read.
+    for must in ["scripts/ui-build.sh", "perf/pages-probe.mjs"] {
+        assert!(checked.contains(&root.join(must)), "V2-9: the word test does not read {must}");
+    }
     let mut named = Vec::new();
     for file in &checked {
         // A binary file is skipped: a read that is not UTF-8.
@@ -152,10 +171,11 @@ fn nothing_left_names_the_app() {
     );
 }
 
+/// `scripts/publish.sh` named it too; it goes (GOES), so it is not read here.
 #[test]
 fn nothing_names_diagrams() {
     let root = root();
-    let named: Vec<&str> = ["deploy/pipeline", "deploy/tests/pipeline", "Cargo.toml", "scripts/publish.sh"]
+    let named: Vec<&str> = ["deploy/pipeline", "deploy/tests/pipeline", "Cargo.toml"]
         .into_iter()
         .filter(|p| std::fs::read_to_string(root.join(p)).unwrap_or_else(|e| panic!("{p}: {e}")).contains("diagrams"))
         .collect();
@@ -163,9 +183,10 @@ fn nothing_names_diagrams() {
 }
 
 #[test]
-fn tether_names_no_chat_bridge() {
+fn tether_names_no_chat_bridge_nor_its_models() {
     let text = std::fs::read_to_string(root().join("tether/src/archetypes.rs")).unwrap();
-    assert!(!text.contains("chat-bridge"), "V2-9: tether/src/archetypes.rs still names chat-bridge");
+    let named: Vec<&str> = ["chat-bridge", "models.mjs"].into_iter().filter(|w| text.contains(w)).collect();
+    assert!(named.is_empty(), "V2-9: tether/src/archetypes.rs still names {named:?}");
 }
 
 /// The check checks: the identifier rule, case-insensitive, on what it must
