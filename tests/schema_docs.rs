@@ -389,7 +389,7 @@ async fn no_answer_carries_a_field_of_the_queue() {
 /// tickets service's reads name none. Both ways: each role here is checked
 /// against the roles the server declares (viewer if a viewer holds the
 /// grant, else deployer if a deployer does, else admin), so the table
-/// cannot drift from `ui-service/src/activation.rs`.
+/// cannot drift from the framework's (`../plexus-ui/service/src/activation.rs`).
 const UI_ROLES: &[(&str, &str, &str)] = &[
     ("ui", "push", "deployer"),
     ("ui", "rollback", "admin"),

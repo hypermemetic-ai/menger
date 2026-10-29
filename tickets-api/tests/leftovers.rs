@@ -245,7 +245,8 @@ fn every_manifest_path_exists() {
             }
         }
     }
-    assert!(manifests.len() > 3, "the workspace's members were not read: {manifests:?}");
+    // The root and its members (`.`, `tickets-api`; FRAME-5: `ui-service` went).
+    assert!(manifests.len() >= 3, "the workspace's members were not read: {manifests:?}");
     assert!(missing.is_empty(), "V2-12: {} manifest path(s) that do not exist:\n  {}", missing.len(), missing.join("\n  "));
 }
 

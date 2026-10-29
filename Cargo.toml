@@ -8,13 +8,13 @@
 # FRAME-4: the shell (`plexus-shell`, SCAFFOLD-5) and the login
 # (`plexus-login`, SCAFFOLD-9) are repositories of their own beside
 # plexus-core, taken by sibling path below — not members here.
-# UI-3: `ui-service/` (`menger-ui-service`) — the ui activation and its own
-# file, `ui.db`.
+# FRAME-5: the ui service (UI-3's activation and its own file, `ui.db`) is
+# `../plexus-ui`'s `plexus-ui-service`, by sibling path below.
 # FRAME-3: the component compiler and the engine (UI-5, UI-6) are
 # `../plexus-ui`'s (`plexus-ui-compiler`, `plexus-ui-engine`), by sibling
 # path: the compiler a dev-dependency below, the engine built into the
 # bundle by ../plexus-ui's plexus-ui tool (FRAME-8; scripts/plexus-ui).
-members = [".", "tickets-api", "ui-service"]
+members = [".", "tickets-api"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]
@@ -55,9 +55,10 @@ path = "src/main.rs"
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
 menger-tickets-api = { path = "tickets-api", version = "0.6.2" }
-# UI-3: the ui service — its activation registered beside `tickets`, its
-# store serving `/app/*` from the shell.
-menger-ui-service = { path = "ui-service" }
+# UI-3, FRAME-5: the ui service — the framework's (`../plexus-ui/service`):
+# its activation registered beside `tickets`, its routes mounted on the
+# shell, serving `/`, `/app/` and `/app/<hash>/…` from its store.
+plexus-ui-service = { path = "../plexus-ui/service" }
 
 # SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
 # the local server (`menger::local`'s serving) — plexus-shell, a repository

@@ -57,17 +57,18 @@ pub struct ShellConfig {
     /// APP-110: who may frame this shell's pages, and whose pages it frames
     /// ([`Framing`]) — nobody and nothing by default.
     pub framing: Framing,
-    /// UI-3: the ui service's store — `/app/` serves the live version's
-    /// entrypoint (a session's preview to that session), `/app/<hash>/…` a
-    /// version's files ([`ui_app`]). None: the build in [`Self::app`], as before.
-    pub ui: Option<Arc<menger_ui_service::UiStore>>,
+    /// UI-3: the ui service's store — `/` and `/app/` serve the live
+    /// version's entrypoint (a session's preview to that session),
+    /// `/app/<hash>/…` a version's files: the framework's routes
+    /// (FRAME-5, `plexus_ui_service::routes::UiRoutes`), mounted here with
+    /// menger's session, stamps, policy and [`PLACEHOLDER`]. None: the build
+    /// in [`Self::app`], as before.
+    pub ui: Option<Arc<plexus_ui_service::UiStore>>,
 }
 
-/// UI-3: a version's files never change under its hash — kept a year.
-pub const IMMUTABLE: &str = "public, max-age=31536000, immutable";
-
-/// UI-3: the entrypoint names whichever version is live — never kept.
-pub const NO_STORE: &str = "no-store";
+/// UI-3: a version's files never change under its hash — kept a year
+/// (the framework's, FRAME-5).
+pub use plexus_ui_service::routes::{IMMUTABLE, NO_STORE};
 
 /// ACCESS-30: Strict-Transport-Security, a year, on every answer of a shell
 /// reached over https. The host alone (no `includeSubDomains`): menger's
@@ -269,11 +270,17 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     let shell = app_shell_framed(cfg.env.as_deref(), cfg.app, &cfg.framing);
     let (stamps, csp) = (shell.stamps_for(cfg.ws_port), shell.csp.clone());
     let mut app = plexus_shell::router(shell, cfg.ws_port).await;
-    // UI-3: `/app/*` from the ui store — inside the session check (layered
-    // first, so it runs after it).
+    // UI-3, FRAME-5: `/`, `/app/` and `/app/*` from the ui store — the
+    // framework's routes, inside the session check (mounted first, so it
+    // runs after it). The login's session names whose preview to serve.
     if let Some(store) = cfg.ui.clone() {
-        let ui = Arc::new(UiServe { store, login: cfg.login.clone(), stamps, csp, ws_port: cfg.ws_port });
-        app = app.route_layer(axum::middleware::from_fn_with_state(ui, ui_app));
+        let login = cfg.login.clone();
+        let routes = plexus_ui_service::routes::UiRoutes::new(store, cfg.ws_port)
+            .session(move |headers| login.as_ref().and_then(|l| l.session(headers)))
+            .stamps(stamps)
+            .csp(csp)
+            .placeholder(PLACEHOLDER);
+        app = routes.mount(app);
     }
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
@@ -314,77 +321,6 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
         app.layer(axum::middleware::from_fn(hsts))
     } else {
         app
-    }
-}
-
-/// UI-3: what `/app/*` is served from — the store, the login (whose session
-/// names a preview's principal) and the entrypoint's stamps.
-struct UiServe {
-    store: Arc<menger_ui_service::UiStore>,
-    login: Option<Arc<crate::web_login::Login>>,
-    stamps: Vec<(String, String)>,
-    /// The pages' policy template ([`page_csp`]), filled per page.
-    csp: String,
-    ws_port: u16,
-}
-
-/// UI-3: `/app/<hash>/<path>` — that file of that version's bundle,
-/// [`IMMUTABLE`]; `/app/` and `/` (UI-13) — the entrypoint for the request's
-/// session (its preview, else live), stamped, [`NO_STORE`]; with no version
-/// live, [`PLACEHOLDER`]. Anything else goes on to the shell's own routes.
-async fn ui_app(State(ui): State<Arc<UiServe>>, req: Request, next: axum::middleware::Next) -> Response {
-    let path = req.uri().path().to_string();
-    // UI-13 (owner, 2026-10-29: "I need a frontend on test"): `/` is the app
-    // too — the same stamped entrypoint `/app/` serves (every asset it loads
-    // is absolute, `/app/<hash>/…`), so a sign-in that returns to `/` lands
-    // on the app and not on the placeholder.
-    if path == "/" || path == "/app" || path == "/app/" {
-        let principal = ui.login.as_ref().and_then(|l| l.session(req.headers())).map(|ctx| ctx.principal().map(|p| p.to_string()).unwrap_or(ctx.user_id));
-        let store = ui.store.clone();
-        let entry = tokio::task::spawn_blocking(move || store.entry_for(principal.as_deref())).await;
-        let (html, version) = match entry {
-            Ok(Ok(Some((hash, html)))) => (String::from_utf8_lossy(&html).into_owned(), hash),
-            Ok(Ok(None)) => (PLACEHOLDER.to_string(), String::new()),
-            Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
-        };
-        // UI-6: `{{UI_VERSION}}` — the served version's hash, where the
-        // entrypoint loads the engine from (`/app/<hash>/engine.js`).
-        let mut stamps = ui.stamps.clone();
-        stamps.push(("{{UI_VERSION}}".to_string(), version));
-        return ui.page(plexus_shell::stamp(&html, &stamps), req.headers());
-    }
-    let Some((hash, file)) = path.strip_prefix("/app/").and_then(|rest| rest.split_once('/')) else { return next.run(req).await };
-    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) || file.is_empty() || file.split('/').any(|s| s == "..") {
-        return next.run(req).await;
-    }
-    let (store, hash, file) = (ui.store.clone(), hash.to_ascii_lowercase(), file.to_string());
-    let key = file.clone();
-    match tokio::task::spawn_blocking(move || store.file(&hash, &file)).await {
-        Ok(Ok(Some(bytes))) => {
-            let mut r = ([(header::CONTENT_TYPE, plexus_shell::mime_of(&key))], bytes).into_response();
-            r.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static(IMMUTABLE));
-            r
-        }
-        Ok(Ok(None)) => (StatusCode::NOT_FOUND, "no such file in that version").into_response(),
-        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
-    }
-}
-
-impl UiServe {
-    /// UI-3: the entrypoint (or the placeholder) as a page — under the
-    /// pages' policy (ACCESS-28), its own inline scripts hashed, never kept.
-    fn page(&self, html: String, headers: &axum::http::HeaderMap) -> Response {
-        let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
-        let policy = plexus_shell::page_policy(&self.csp, &plexus_shell::script_hashes(&html), host, self.ws_port);
-        let mut r = axum::response::Html(html).into_response();
-        let h = r.headers_mut();
-        h.insert(header::CACHE_CONTROL, header::HeaderValue::from_static(NO_STORE));
-        if let Ok(v) = header::HeaderValue::from_str(&policy) {
-            h.insert(header::CONTENT_SECURITY_POLICY, v);
-        }
-        r
     }
 }
 

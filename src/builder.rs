@@ -2,8 +2,9 @@ use menger_tickets_api::access::Access;
 // V2-4: `tickets`, and the addresses, the grants its reach reads and the
 // browser's sign-in — `members`, `orgs`, `epics`, `session`.
 use menger_tickets_api::{EpicsActivation, MembersActivation, OrgsActivation, ProviderOffer, SessionActivation, TicketsActivation};
-use menger_ui_service::{Compiler, Signers, UiActivation, UiStore, UI_DB_FILE};
+use plexus_ui_service::{Compiler, Signers, UiActivation, UiStore, UI_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
+use plexus_auth_core::grants::GrantsGeneration;
 use plexus_core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
 use crate::auth_backend::MengerAuth;
@@ -291,7 +292,12 @@ where
     // service takes them. UI-3: `ui` beside them — the UI's versions, over
     // its own file.
     // UI-7: and its pushes compiled in `--ui-compiler`'s module.
-    let ui = UiActivation::new(ui.store, ui.signers, access.clone()).following(Arc::clone(&store)).compiling(ui.compiler);
+    // FRAME-5: the framework's, its caller the gate's (no access layer of
+    // menger's in it).
+    let ui = UiActivation::new(ui.store, ui.signers).compiling(ui.compiler);
+    // FRAME-5: the gate's grants generation moves with the store's count, so
+    // a watch held by the gate (`ui.watch`) hears `members.*` too.
+    let generation = grants_generation(&store);
     let seam = ui.seam().clone();
     let mut hub = DynamicHub::new("menger")
         .register(tickets)
@@ -307,7 +313,7 @@ where
     // activations declare are what a role holds until an admin edits it.
     let book = access.book();
     hub = hub
-        .with_auth(AuthSetup::new(backend, book.clone(), book.clone(), book.clone()))
+        .with_auth(AuthSetup::new(backend, book.clone(), book.clone(), book.clone()).with_generation(generation))
         .with_signed_in_grants(SIGNED_IN_GRANTS);
     if let Some(url) = resource_metadata {
         hub = hub.with_resource_metadata(url);
@@ -316,10 +322,32 @@ where
     // under its path (`tickets.commits.link`).
     book.seed(hub.declared_roles());
     let hub = Arc::new(hub);
-    // UI-7: the ui service calls the tickets service through this hub, as
-    // the server's own caller (its full view, whoever pushes).
+    // UI-7, FRAME-5: the ui service asks the services a manifest names
+    // (`tickets`) through this service, as the server's own caller (its full
+    // view, whoever pushes).
     seam.attach(&hub, access.system_caller());
     Ok(hub)
+}
+
+/// FRAME-5: menger's grants count handed to the gate — a
+/// [`GrantsGeneration`] for the call gate (`AuthSetup::with_generation`)
+/// that moves every time the store's count does (`Store::grants_moved`: a
+/// grant, a revoke, a team or an organization changed, a role's grants
+/// edited, through `members.*` or `auth.*` alike). A watch the gate holds —
+/// the framework's `ui.watch` — is asked again on every move. The gate's own
+/// moves (`auth.logout`) count in it too. The forwarder holds the channel,
+/// never the store, and ends with it.
+fn grants_generation(store: &Arc<Store>) -> GrantsGeneration {
+    let generation = GrantsGeneration::new();
+    let mut moved = store.grants_moved();
+    moved.mark_unchanged();
+    let forward = generation.clone();
+    tokio::spawn(async move {
+        while moved.changed().await.is_ok() {
+            forward.bump();
+        }
+    });
+    generation
 }
 
 /// ACCESS-24 (ACCESS-4 C2): the grants open mode planted — every stored
