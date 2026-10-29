@@ -443,7 +443,7 @@ async function main() {
       pushOnce(v1Tar, v1);
       const { page, seen } = await openPage(browser, server, token);
       pages.push(seen);
-      await page.goto(`${server.origin}/app/`);
+      await page.goto(`${server.origin}/app/#/hello`);
       await eventually("the rows drawn", async () => (await page.locator("[data-slot=main] li[data-id]").count()) > 20);
       const said = () => page.locator("[data-slot=main] .seen").textContent({ timeout: 1000 });
 
