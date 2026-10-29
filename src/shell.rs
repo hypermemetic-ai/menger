@@ -4,7 +4,7 @@
 //! `/vanilla` page and the body frame). Pages come back one at a time, from
 //! the mockups on their tickets. Until then:
 //!
-//! - `/` — [`PLACEHOLDER`], what is running and where its socket is;
+//! - `/` — the live UI's entrypoint, as `/app/` (UI-13); [`PLACEHOLDER`] with no version live;
 //! - `/app/` — the app's build in `frontend/dist` read into a table
 //!   (ACCESS-33: a request path is a key into it, never a path on disk), or
 //!   the "not built" page (200) while there is none;
@@ -329,12 +329,16 @@ struct UiServe {
 }
 
 /// UI-3: `/app/<hash>/<path>` — that file of that version's bundle,
-/// [`IMMUTABLE`]; `/app/` — the entrypoint for the request's session (its
-/// preview, else live), stamped, [`NO_STORE`]; with no version live,
-/// [`PLACEHOLDER`]. Anything else goes on to the shell's own routes.
+/// [`IMMUTABLE`]; `/app/` and `/` (UI-13) — the entrypoint for the request's
+/// session (its preview, else live), stamped, [`NO_STORE`]; with no version
+/// live, [`PLACEHOLDER`]. Anything else goes on to the shell's own routes.
 async fn ui_app(State(ui): State<Arc<UiServe>>, req: Request, next: axum::middleware::Next) -> Response {
     let path = req.uri().path().to_string();
-    if path == "/app" || path == "/app/" {
+    // UI-13 (owner, 2026-10-29: "I need a frontend on test"): `/` is the app
+    // too — the same stamped entrypoint `/app/` serves (every asset it loads
+    // is absolute, `/app/<hash>/…`), so a sign-in that returns to `/` lands
+    // on the app and not on the placeholder.
+    if path == "/" || path == "/app" || path == "/app/" {
         let principal = ui.login.as_ref().and_then(|l| l.session(req.headers())).map(|ctx| ctx.principal().map(|p| p.to_string()).unwrap_or(ctx.user_id));
         let store = ui.store.clone();
         let entry = tokio::task::spawn_blocking(move || store.entry_for(principal.as_deref())).await;
