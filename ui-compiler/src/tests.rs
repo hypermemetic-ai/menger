@@ -217,4 +217,12 @@ fn a_window_event_is_an_event_kind() {
     let t = tree(src);
     assert_eq!(t["tree"][0]["on"], json!({ "window-keydown": "keyed" }));
     refused_at("a window event naming no fn", "<div on:window-keydown={nothing}></div>\n", 1, "nothing");
+    // The component's root element only (UI-4): nested, refused at its line.
+    let nested = "<script>\n  fn keyed(state, ev) { state }\n</script>\n<div>\n  <p on:window-keydown={keyed}>x</p>\n</div>\n";
+    refused_at("a window event below the root", nested, 5, "window-keydown");
+    let in_if = "<script>\n  fn keyed(state, ev) { state }\n</script>\n{#if true}\n  <div on:window-keydown={keyed}></div>\n{/if}\n";
+    refused_at("a window event inside a block", in_if, 5, "window-keydown");
+    // An element's own events stay where they are.
+    let own = "<script>\n  fn keyed(state, ev) { state }\n</script>\n<div>\n  <input on:keydown={keyed}/>\n</div>\n";
+    assert_eq!(tree(own)["tree"][0]["children"][0]["on"], json!({ "keydown": "keyed" }));
 }

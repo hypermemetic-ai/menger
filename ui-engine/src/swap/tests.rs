@@ -292,3 +292,46 @@ fn the_menu_lists_live_components_and_other_versions_newest_first() {
     assert_eq!(menu.components, ["hello-card", "note-card", "page-shell"], "the live bundle's components by name");
     assert_eq!(menu.versions, ["v2", "v1"], "only differing hashes, newest first, live excluded");
 }
+
+/// A component whose `live` reads `state.q` with `debounce_ms: 80`, and a
+/// handler that sets `state.q`: typing runs the snapshot again once, 80 ms
+/// after, with the new params — through eval_params and the wiring.
+#[test]
+fn a_handler_moves_a_lives_params_and_it_re_runs_after_its_debounce() {
+    let (r, wire, clock) = (Recording::new(), FakeWire::new(), ManualClock::new());
+    let app = App::new(&Runtime::new(), r.clone(), wire.clone(), clock.clone());
+    let mut files = Files::default();
+    let typed = "fn typed(state, ev) { state.q = ev.value; state }\n";
+    let palette = json!({
+        "name": "jump-palette", "abi": "engine/1", "props": [], "state": { "q": "" }, "uses": ["tickets.find"],
+        "live": { "found": { "snapshot": "tickets.find", "params": { "query": { "expr": "state.q" }, "limit": 20 }, "changes_params": {}, "key": "id", "on": {}, "debounce_ms": 80 } },
+        "handlers": sha256_hex(typed),
+        "tree": [
+            { "el": "input", "on": { "input": "typed" }, "children": [] },
+            { "el": "p", "children": [ { "text": { "expr": "found.status" } } ] }
+        ]
+    })
+    .to_string();
+    let v1 = manifest("v1", &[("jump-palette", &palette, typed, &["tickets.find"])], &mut files);
+    app.provide(&files);
+    app.load("v1", v1);
+    app.mount(&r.root(), "jump-palette", Map::new()).expect("mounts");
+    assert_eq!(wire.opened_of("tickets.find").len(), 1, "the first snapshot at mount");
+    assert_eq!(wire.opened_of("tickets.find")[0].params, json!({ "query": "", "limit": 20 }));
+    assert!(wire.opened_of("tickets.watch").is_empty(), "a live without changes: no watch");
+    wire.answer(wire.last_of("tickets.find"), [json!({ "type": "summary", "summary": { "id": "T-1" } })]);
+    assert!(r.html(0).contains("<p>live</p>"), "{}", r.html(0));
+
+    let input = r.find_tag("input")[0];
+    r.fire(input, "input", json!({ "value": "kil" }));
+    clock.advance(30);
+    r.fire(input, "input", json!({ "value": "kiln" }));
+    clock.advance(79);
+    assert_eq!(wire.opened_of("tickets.find").len(), 1, "79 ms after the last keystroke: not yet");
+    clock.advance(1);
+    assert_eq!(wire.opened_of("tickets.find").len(), 2, "80 ms after: once");
+    assert_eq!(wire.opened_of("tickets.find")[1].params, json!({ "query": "kiln", "limit": 20 }), "with the new params");
+    assert!(r.html(0).contains("<p>resyncing</p>"), "the old rows kept while it runs: {}", r.html(0));
+    wire.answer(wire.last_of("tickets.find"), []);
+    assert!(r.html(0).contains("<p>live</p>"));
+}

@@ -256,20 +256,33 @@ impl Sub {
     }
 }
 
-/// A snapshot event's row: its one object-valued field; else (UI-10: a
-/// flat event such as `extent`) the event itself less `type`, when it
-/// carries the key; else none (a `page`).
-fn row_of(event: &Value, key: &str) -> Option<Value> {
+/// A snapshot event's row, as the spec's rule for its type makes it from a
+/// change: `upsert:.` — the event itself less `type`; `upsert:<field>` —
+/// that field. With no rule for its type: its one object-valued field;
+/// else (a flat event) the event less `type` when it carries the key; else
+/// none (a `page`).
+fn row_of(event: &Value, spec: &LiveSpec) -> Option<Value> {
     let o = event.as_object()?;
+    let flat = || {
+        let mut flat = o.clone();
+        flat.remove("type");
+        Value::Object(flat)
+    };
+    let kind = o.get("type").and_then(Value::as_str).unwrap_or_default();
+    match spec.on.get(kind) {
+        Some(FoldRule::Upsert(f)) if f == "." => return Some(flat()),
+        Some(FoldRule::Upsert(f)) => {
+            if let Some(row) = o.get(f).filter(|v| v.is_object()) {
+                return Some(row.clone());
+            }
+        }
+        _ => {}
+    }
     let mut objects = o.iter().filter(|(k, v)| k.as_str() != "type" && v.is_object());
     if let Some((_, row)) = objects.next() {
         return objects.next().is_none().then(|| row.clone());
     }
-    o.contains_key(key).then(|| {
-        let mut flat = o.clone();
-        flat.remove("type");
-        Value::Object(flat)
-    })
+    o.contains_key(&spec.key).then(flat)
 }
 
 /// Every `live` subscription of the page.
@@ -383,8 +396,7 @@ impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
         let mut s = sub.borrow_mut();
         match item {
             WireItem::Data(event) => {
-                let key = s.spec.key.clone();
-                if let Some(row) = row_of(&event, &key) {
+                if let Some(row) = row_of(&event, &s.spec) {
                     s.buffer.push(row);
                 }
                 return;

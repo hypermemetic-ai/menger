@@ -413,6 +413,11 @@ impl<'a, 'b> P<'a, 'b> {
                 if on.iter().any(|(e, _)| e == event) {
                     return refuse(aline, format!("{name} twice on <{tag}>"));
                 }
+                // UI-4: a window event is held by the component's root element,
+                // which lives exactly as long as the component.
+                if event.starts_with("window-") && self.stack.len() != 1 {
+                    return refuse(aline, format!("{name} is on the component's root element only, not on <{tag}> inside another element or block"));
+                }
                 self.handlers.push((handler.clone(), aline));
                 let h = self.j.str(handler);
                 on.push((event.to_string(), h));
