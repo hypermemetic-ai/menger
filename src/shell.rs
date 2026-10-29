@@ -81,7 +81,7 @@ pub const PLACEHOLDER: &str = concat!(
     "<body style=\"font: 14px/1.6 monospace; padding: 2rem; max-width: 46rem\">",
     "<h1 style=\"font-size:1.1rem\">menger v2</h1>",
     "<p>No frontend yet — each page is built from the mockups on its ticket.</p>",
-    "<p>The plexus is on port {{WS_PORT}}: <code>synapse -P {{WS_PORT}} menger tickets</code>.</p>",
+    "<p>The lobe is on port {{WS_PORT}}: <code>synapse -P {{WS_PORT}} menger tickets</code>.</p>",
 );
 
 /// APP-64: the app build's files served at the root too, public — what
