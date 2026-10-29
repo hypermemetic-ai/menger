@@ -85,6 +85,9 @@ const GOES: &[&str] = &[
     "scripts/landing-mock.py",
     // DIST-3's publish: the crate with v1's app built by trunk inside it.
     "scripts/publish.sh",
+    // The app's home-screen icons: drawn from web/favicon.svg into
+    // frontend/icons/, both gone with v1 (the landing's icon is committed).
+    "scripts/icons.sh",
     // The diagrams service and the ACCESS-6 spike.
     "diagrams",
     "spike",
@@ -92,6 +95,9 @@ const GOES: &[&str] = &[
     // drives the app and builds it).
     "perf/chat-probe.mjs",
     "perf/magnitude.mjs",
+    // FILTER-15's byte comparison of `find`, `ready_set` and `inputs`: v2
+    // has no inputs, and the probe waits on them for ever.
+    "perf/reads-identical.mjs",
 ];
 
 /// Words that name v1's app, its frames and its services: none is left in

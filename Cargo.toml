@@ -5,12 +5,6 @@
 # out of it — its empty [workspace] table detaches it, so `cargo build` here
 # still never needs the wasm toolchain.
 #
-# COMPILE-4: `diagrams/` (`menger-diagrams`) is a separate service — its own
-# binary, process and hub — that parses mermaid under Node. A member so the
-# workspace test run covers it; menger neither depends on it nor needs Node
-# to build or test (its Node-backed tests skip, saying so, where there is
-# none).
-#
 # SCAFFOLD-5: `plexus-shell/` is the shell and LocalServer lifted out of
 # menger as a crate of their own (published as `plexus-shell`), and
 # `plexus-shell/toy` its worked example — both members so the workspace
@@ -18,8 +12,6 @@
 #
 # SCAFFOLD-9: `plexus-login/` is menger's login lifted out the same way
 # (published as `plexus-login`).
-# v2: `diagrams/` (the mermaid check for bodies the app drew) is out of the
-# workspace with the frontend — its tests read the app's sources.
 # UI-3: `ui-service/` (`menger-ui-service`) — the ui activation and its own
 # file, `ui.db`.
 # UI-5: `ui-compiler/` (`menger-ui-compiler`) — the component compiler,
@@ -46,8 +38,7 @@ keywords = ["ticketing", "planning", "plexus", "rpc", "leptos"]
 categories = ["web-programming::http-server", "development-tools"]
 # DIST-3: what the published crate carries — the server's sources. v2: the
 # frontend (web/, frontend/, the embedding build script) is deleted; tag
-# v0.0.1 holds it. The tests, deploy/, perf/, diagrams/ and spike/ stay in
-# the repository.
+# v0.0.1 holds it. The tests, deploy/ and perf/ stay in the repository.
 include = [
     "/src/**",
     "/README.md",

@@ -2,8 +2,8 @@
 // PERF-12: the concurrency ladder — menger's memory and CPU at 1, 10, …
 // 10^n concurrent signed-in WebSockets, idle, under load and after.
 //
-// Beside PERF-3's magnitude ladder (magnitude.mjs, which grows the store),
-// this one grows the connections. It starts ONE release `menger` on
+// This ladder grows the connections, not the store (V2-9: on v2, whose
+// one watch is the tickets service's). It starts ONE release `menger` on
 // kernel-chosen ports with a temp database (`--auth-provider key --no-rest`,
 // a key of its own as `--admin`, ACCESS-52; --tickets synthetic tickets),
 // with ACCESS-29's connection caps raised on that throwaway alone, and climbs
@@ -12,10 +12,9 @@
 // addresses and over several keys, each key granted viewer on `*` — and,
 // sampling the server's /proc every --sample-ms throughout:
 //
-//   idle   n sockets open, each holding the app's watches (tickets.watch
-//          with revisions, comments.watch, chats.watch), for --idle-secs;
-//   load   a fixed writer (status changes, comments on a ticket, posts in a
-//          chat every key is in) fanned out to every watch, plus a read mix
+//   idle   n sockets open, each holding tickets.watch with revisions, for
+//          --idle-secs;
+//   load   a fixed writer (status changes) fanned out to every watch, plus a read mix
 //          per socket every --read-every-secs, for --load-secs; each write
 //          timed from its send to its arrival on every socket;
 //   after  every socket closed, for --after-secs: the memory floor (a leak
@@ -35,8 +34,7 @@
 // (20) · --load-secs N (30) · --after-secs N (20) · --sample-ms N (250) ·
 // --keys N (8) · --workers N (default: one per 250 sockets, 1..cpus/2) ·
 // --sockets-per-ip N (500) · --inflight N (opens in flight per worker, 64) ·
-// --status-rate R (status changes/s, 4) · --comment-rate R (1) ·
-// --chat-rate R (1) · --read-every-secs S (10; 0 = no reads) · --tickets N
+// --status-rate R (status changes/s, 4) · --read-every-secs S (10; 0 = no reads) · --tickets N
 // (seeded, 1000) · --grace-secs N (10) · --max-p99-ms N (stop past it,
 // 30000) · --bin PATH (default $CARGO_TARGET_DIR/release/menger) · --build
 // (cargo build --release first) · --out DIR · --tmp DIR · --keep-tmp.
@@ -71,7 +69,7 @@ const CLK_TCK = Number(spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).s
 function parseArgs(argv) {
   const o = {
     rungs: [0, 1, 2, 3, 4], idleSecs: 20, loadSecs: 30, afterSecs: 20, sampleMs: 250, keys: 8, workers: null,
-    socketsPerIp: 500, inflight: 64, statusRate: 4, commentRate: 1, chatRate: 1, readEverySecs: 10, tickets: 1000,
+    socketsPerIp: 500, inflight: 64, statusRate: 4, readEverySecs: 10, tickets: 1000,
     graceSecs: 10, maxP99Ms: 30000, bin: null, build: false, out: null, tmp: null, keepTmp: false, smoke: false,
   };
   const num = (v, a) => { const n = Number(v); if (!Number.isFinite(n)) throw new Error(`${a} wants a number, not ${v}`); return n; };
@@ -81,7 +79,7 @@ function parseArgs(argv) {
     const flags = {
       "--idle-secs": "idleSecs", "--load-secs": "loadSecs", "--after-secs": "afterSecs", "--sample-ms": "sampleMs", "--keys": "keys",
       "--workers": "workers", "--sockets-per-ip": "socketsPerIp", "--inflight": "inflight", "--status-rate": "statusRate",
-      "--comment-rate": "commentRate", "--chat-rate": "chatRate", "--read-every-secs": "readEverySecs", "--tickets": "tickets",
+      "--read-every-secs": "readEverySecs", "--tickets": "tickets",
       "--grace-secs": "graceSecs", "--max-p99-ms": "maxP99Ms",
     };
     if (flags[a]) o[flags[a]] = num(next(), a);
@@ -348,7 +346,7 @@ class Sampler {
 // One rung
 
 async function runRung(r, ctx) {
-  const { o, srv, sampler, writer, pool, chatId, commentTicket, tokensFile, plan } = ctx;
+  const { o, srv, sampler, writer, pool, tokensFile, plan } = ctx;
   const n = 10 ** r;
   const workersN = Math.max(1, Math.min(o.workers ?? Math.max(1, Math.floor(os.cpus().length / 2)), Math.ceil(n / (o.workers ? 1 : 250))));
   const res = { rung: r, n, workers: workersN, loadavg_before: loadavg(), mem_available_before: memAvailable() };
@@ -366,8 +364,6 @@ async function runRung(r, ctx) {
   ctx.workers = workers;
   const watches = [
     { method: "tickets.watch", params: { revisions: true } },
-    { method: "comments.watch", params: {} },
-    { method: "chats.watch", params: {} },
   ];
   sampler.mark(r, "open");
   const t0 = clock();
@@ -398,18 +394,9 @@ async function runRung(r, ctx) {
   let seq = 0;
   const writeOnce = async (kind) => {
     seq++;
-    let method, params, key;
-    if (kind === "status") {
-      const t = pool[seq % pool.length];
-      t.status = t.status === "Coding" ? "In Review" : "Coding";
-      method = "tickets.set_status"; params = { id: t.id, status: t.status }; key = `status:${t.id}>${t.status}`;
-    } else if (kind === "comment") {
-      const body = `perf#${r}.${seq}`;
-      method = "comments.add"; params = { anchor: { route: `#/ticket/${commentTicket}`, path: "body", label: "Body", ticket: commentTicket }, body }; key = `comment:${body}`;
-    } else {
-      const body = `perf#${r}.${seq}`;
-      method = "chats.post"; params = { chat: chatId, body }; key = `chat:${body}`;
-    }
+    const tk = pool[seq % pool.length];
+    tk.status = tk.status === "Coding" ? "In Review" : "Coding";
+    const method = "tickets.set_status", params = { id: tk.id, status: tk.status }, key = `status:${tk.id}>${tk.status}`;
     const occurrence = (occurrences.get(key) ?? 0) + 1;
     occurrences.set(key, occurrence);
     const t = clock();
@@ -426,20 +413,20 @@ async function runRung(r, ctx) {
   };
   // The announcement goes before the send, so a worker never hears a write
   // it was not told of; the clock is read just before both.
-  const timers = [["status", o.statusRate], ["comment", o.commentRate], ["chat", o.chatRate]]
+  const timers = [["status", o.statusRate]]
     .filter(([, rate]) => rate > 0)
     .map(([kind, rate]) => setInterval(() => writeOnce(kind), 1000 / rate));
   await sleep(o.loadSecs * 1000);
   for (const t of timers) clearInterval(t);
   res.load = sampler.window(r, "load", 0.25);
   sampler.mark(r, "drain");
-  const stats = await Promise.all(workers.map((w) => w.ask({ cmd: "drain", graceMs: o.graceSecs * 1000, watchKinds: ["tickets", "comments", "chats"] }, "loadStats")));
+  const stats = await Promise.all(workers.map((w) => w.ask({ cmd: "drain", graceMs: o.graceSecs * 1000, watchKinds: ["tickets"] }, "loadStats")));
 
   // Latency: per delivery, and per write until it reached every watcher.
   const live = stats.reduce((a, s) => a + s.live, 0);
   const all = stats.flatMap((s) => s.deliveries);
   const byKind = {};
-  for (const kind of ["status", "comment", "chat"]) {
+  for (const kind of ["status"]) {
     const ds = all.filter((d) => d.kind === kind).map((d) => d.ms);
     const ws = writes.filter((w) => w.kind === kind && !w.error);
     const everyMs = [], short = [];
@@ -481,7 +468,7 @@ async function runRung(r, ctx) {
   res.events_by_type = events;
   res.worker_errors = Object.assign({}, ...stats.map((s) => s.errors));
   res.closed_early = stats.reduce((a, s) => a + s.closed_early, 0);
-  res.write_rate_per_s = o.statusRate + o.commentRate + o.chatRate;
+  res.write_rate_per_s = o.statusRate;
   res.writes = writes.length;
   const peak = procSample(srv.pid);
   res.peak_rss = res.peak_reset ? peak?.hwm : maxOf(sampler.samples.filter((s) => s.rung === r && s.rss).map((s) => s.rss));
@@ -698,11 +685,11 @@ function report(o, run) {
   L.push(`| --max-connections-per-ip | 256 | ${fint(caps.max_connections_per_ip)} |`);
   L.push(`| --max-connections-per-principal | 64 | ${fint(caps.max_connections_per_principal)} |`);
   L.push(`| --idle-timeout-secs | 900 | ${caps.idle_timeout_secs} |`);
-  L.push(`| --max-calls-per-connection | 256 | 256 (3 watches + ≤ a few reads per socket) |`, "");
+  L.push(`| --max-calls-per-connection | 256 | 256 (1 watch + ≤ a few reads per socket) |`, "");
   L.push("## The load", "");
-  L.push(`- Each socket: \`tickets.watch {revisions: true}\`, \`comments.watch\`, \`chats.watch\` — what the app holds with a ticket page open. Clients: ${o.keys} keys (viewer on \`*\`), at most ${fint(o.socketsPerIp)} sockets per 127.0.x.y source address, forked worker processes (one per 250 sockets, up to ${Math.max(1, Math.floor(os.cpus().length / 2))}).`);
+  L.push(`- Each socket: \`tickets.watch {revisions: true}\` — what a v2 page holds. Clients: ${o.keys} keys (viewer on \`*\`), at most ${fint(o.socketsPerIp)} sockets per 127.0.x.y source address, forked worker processes (one per 250 sockets, up to ${Math.max(1, Math.floor(os.cpus().length / 2))}).`);
   L.push(`- Phases: idle ${o.idleSecs} s · load ${o.loadSecs} s · after ${o.afterSecs} s; /proc sampled every ${o.sampleMs} ms. Idle and after are read over each phase's second half, load over its last three quarters.`);
-  L.push(`- Writer (one socket, the operator): ${o.statusRate} status changes/s (Coding ⇄ In Review over ${run.poolSize} tickets — a status_changed carries the whole ticket to every watch), ${o.commentRate} comment/s on ${run.commentTicket}, ${o.chatRate} chat post/s in a chat every key is in. Reads: every socket every ${o.readEverySecs} s, cycling ${run.plan.reads.map((x) => `\`${x.method}\``).join(", ")}.`);
+  L.push(`- Writer (one socket, the operator): ${o.statusRate} status changes/s (Coding ⇄ In Review over ${run.poolSize} tickets — a status_changed carries the whole ticket to every watch). Reads: every socket every ${o.readEverySecs} s, cycling ${run.plan.reads.map((x) => `\`${x.method}\``).join(", ")}.`);
   L.push(`- Store: ${fint(o.tickets)} synthetic tickets (\`--seed-synthetic\`). Server up in ${fms(srvInfo.startup_ms)}; RSS before the first rung ${f1(baseline / MiB)} MiB.`, "");
 
   L.push("## The ladder at a glance", "");
@@ -803,8 +790,8 @@ async function main() {
   try {
     srv = await startServer(o, tmp, caps, operator);
     console.log(`menger up on ws ${srv.ws}, shell ${srv.shell} (pid ${srv.pid}) in ${fms(srv.startup_ms)}; descriptors ${srv.fdNote}`);
-    // Setup, as the operator: grant every key, find the writer's tickets,
-    // open the chat every key is in. Pool tickets start at In Review so each
+    // Setup, as the operator: grant every key, find the writer's tickets.
+    // Pool tickets start at In Review so each
     // write after is a real change.
     const op = await Rpc.open(srv.ws, srv.opToken);
     for (const k of keys) await op.must("members.grant", { principal: k.principal, scope: "*", role: "viewer" });
@@ -813,9 +800,6 @@ async function main() {
     const pool = work.slice(0, Math.min(100, work.length)).map((t) => ({ id: t.id, status: "In Review" }));
     if (pool.length < 2) throw new Error("the seeded store has too few tickets of work for the writer");
     for (const t of pool) await op.must("tickets.set_status", { id: t.id, status: "In Review" });
-    const commentTicket = work[work.length - 1].id;
-    const chat = (await op.must("chats.open", { ticket: commentTicket, others: keys.map((k) => k.principal) })).find((x) => x.chat)?.chat;
-    if (!chat) throw new Error("chats.open answered no chat");
     const tokensFile = path.join(tmp, "tokens");
     const tokens = [];
     for (const [k, key] of keys.entries()) tokens.push((await mintSession(`ws://127.0.0.1:${srv.ws}`, key.keyFile, `perf-client-${k}`)).token);
@@ -826,10 +810,9 @@ async function main() {
         { method: "tickets.get", params: { id: pool[0].id } },
         { method: "tickets.list", params: { summary: true, limit: 50 } },
         { method: "tickets.nav.counts", params: { filter: "ready" } },
-        { method: "chats.list", params: {} },
       ],
     };
-    Object.assign(ctx, { srv, writer: op, pool, chatId: chat.id, commentTicket, tokensFile, plan });
+    Object.assign(ctx, { srv, writer: op, pool, tokensFile, plan });
     sampler = new Sampler(srv, () => ctx.workers ?? [], o.sampleMs);
     ctx.sampler = sampler;
     sampler.start();
@@ -870,7 +853,7 @@ async function main() {
     for (const [f, svg] of Object.entries(charts)) fs.writeFileSync(path.join(o.out, f), svg);
     const date = new Date().toISOString().slice(0, 10);
     const run = {
-      date, spec, caps, options: o, rungs, stop, analysis, baseline, charts, poolSize: pool.length, commentTicket, plan,
+      date, spec, caps, options: o, rungs, stop, analysis, baseline, charts, poolSize: pool.length, plan,
       srvInfo: { startup_ms: srv.startup_ms, fdNote: srv.fdNote, fd_limit: srv.fd_limit }, loadavg_end: loadavg(),
       note: spec.loadavg_start[0] > spec.cpus * 0.1 ? `The machine was not quiet (other work running): read the CPU and latency numbers as an upper bound.` : "",
     };

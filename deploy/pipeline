@@ -52,13 +52,14 @@
 #                                           infra's pin moved, the edge applied, the live page
 #                                           verified, the pin committed; recorded as env `edge`
 #                                           (--check: the gate and infra's dry run, nothing written)
-#   deploy/pipeline media [RELEASE]         landing/media regenerated from a release's own binary
-#                                           (default: what prod runs); the worker commits them
 #
 # Retired by DEPLOY-52 (this machine's test and prod, :4450–4458): install,
 # deploy test, sync, promote, rollback, logs — each says so and exits 2. Their
 # data stays where it was (~/.local/share/menger/tickets.db and backups/,
 # ~/.local/share/menger-test/); deploy/README.md "The local environments, retired".
+# Retired on v2 (V2-9): media — landing/media was captured from v1's app; its
+# regenerator is at tag v0.0.1 until the landing is redone for v2. It says so
+# and exits 2; landing/media stays as committed.
 #
 # DEPLOY-12: remote test and remote prod each tell menger what they did — a
 # deployment record (deploy/record → deployments.record): `started` before it
@@ -336,7 +337,7 @@ checkout() {
   else
     git -C "$dir" checkout --quiet --detach --force "$sha"
   fi
-  git -C "$dir" clean -ffdxq -e /target/ -e /frontend/target/ -e /perf/node_modules/ -e /diagrams/node/node_modules/
+  git -C "$dir" clean -ffdxq -e /target/ -e /frontend/target/ -e /perf/node_modules/
 }
 # run_gate DIR SHORT — the suite: cargo test --workspace and the frontend's tests in
 # DIR, each log a file of its own; red dies through gate_red. GATE_WS / GATE_FE say it.
@@ -380,27 +381,23 @@ build_legacy() {
   for f in "$BUILD/frontend/dist/"*.wasm "$BUILD/frontend/dist/"*.js; do
     [[ -s $f ]] || die "trunk build: $f is empty"
   done
-  (cd "$BUILD/diagrams/node" && npm ci --silent >/dev/null)
 
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
   stage=$RELEASES/$id.tmp
-  mkdir -p "$stage/bin" "$stage/diagrams-node"
+  mkdir -p "$stage/bin"
   for f in $WS_PKGS; do cp "$CARGO_TARGET_DIR/release/$f" "$stage/bin/"; done
   cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
-  [[ " $WS_PKGS " == *" menger-diagrams "* ]] && cp "$REPO/deploy/launch/run-diagrams" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp -r "$BUILD/frontend/dist" "$stage/app"
-  cp -r "$BUILD/diagrams/node/." "$stage/diagrams-node/"
 }
-# release_packages LOG — what the release build builds: menger, and menger-diagrams when the
-# tree's workspace lists it (cargo metadata), never a fixed list; empty when cargo cannot say
+# release_packages LOG — what the release build builds: menger, when the tree's workspace
+# lists it (cargo metadata); empty when cargo cannot say
 WS_PKGS=""
 release_packages() {
   local names
   names=$(cd "$BUILD" && cargo metadata --no-deps --format-version 1 2>>"$1" | jq -r '.packages[].name' 2>>"$1") || names=""
   WS_PKGS=""
   grep -qx menger <<<"$names" && WS_PKGS="menger"
-  grep -qx menger-diagrams <<<"$names" && WS_PKGS+=" menger-diagrams"
   [[ -n $WS_PKGS ]]
 }
 cargo_release() { # LOG — cargo build --release of WS_PKGS; dies red, naming the log
@@ -449,7 +446,6 @@ build_v2() { # V2-7: cargo's steps on this machine (the release, the prebuild, t
   mkdir -p "$stage/bin" "$stage/dist"
   for f in $WS_PKGS; do cp "$CARGO_TARGET_DIR/release/$f" "$stage/bin/"; done
   cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
-  [[ " $WS_PKGS " == *" menger-diagrams "* ]] && cp "$REPO/deploy/launch/run-diagrams" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp "$BUILD/dist/ui.tar" "$stage/dist/"
   [[ -f $BUILD/dist/ui-compiler.wasm ]] && cp "$BUILD/dist/ui-compiler.wasm" "$stage/dist/"
@@ -1160,15 +1156,6 @@ cmd_landing() {
   tell edge succeeded "$rel" "pin-${was:0:7}"
   say "menger.sh serves $short"
 }
-cmd_media() {
-  local rel; rel=$(resolve_release "${1:-$(last_good app-prod)}")
-  step "media from $rel — $(sed -n 's/^subject: *//p' "$RELEASES/$rel/RELEASE" | cut -c1-70)"
-  MENGER_BIN=$RELEASES/$rel/bin/menger MENGER_APP_DIST=$RELEASES/$rel/app PLAYWRIGHT_FROM=$REPO/perf \
-    "$REPO/scripts/landing-media.sh" all || die "scripts/landing-media.sh failed"
-  say "changed under landing/media:"
-  git -C "$REPO" status --short landing/media | sed 's/^/  /' >&2
-  say "commit them, merge, then: deploy/pipeline landing"
-}
 edge_status() {
   [[ -f $INFRA/$INFRA_PIN ]] || return 0
   local pin behind title
@@ -1280,7 +1267,7 @@ cmd_releases() {
 cmd=${1:-}; shift || true
 # CI-6: what a long command says is also kept, in a file of its own (build also keeps each gate's).
 case $cmd in
-  build|smoke|suite|landing|media|image|local|remote)
+  build|smoke|suite|landing|image|local|remote)
     LOG_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
     _l=$(log_path "$cmd${1:+-${1//[^A-Za-z0-9._-]/_}}"); say "log: $_l"
     exec > >(tee -a "$_l"); _tees=$!
@@ -1293,6 +1280,11 @@ case $cmd in
     say "  deploy/pipeline build --no-gate → image <release> → remote test --image … (→ suite <release>) → remote prod"
     say "  the local data stays untouched (~/.local/share/menger/tickets.db, its backups/, ~/.local/share/menger-test/); deploy/README.md \"The local environments, retired\""
     exit 2 ;;
+  media)
+    # V2-9: landing/media was captured from v1's app; v2 has no regenerator yet
+    say "pipeline: 'media' is retired on v2 (V2-9) — landing/media was captured from v1's app; its regenerator is at tag v0.0.1"
+    say "  landing/media stays as committed until the landing is redone for v2"
+    exit 2 ;;
   build)    cmd_build "$@" ;;
   suite)    cmd_suite "$@" ;;
   smoke)    cmd_smoke "$@" ;;
@@ -1300,7 +1292,6 @@ case $cmd in
   releases) cmd_releases ;;
   backfill) cmd_backfill ;;
   landing)  cmd_landing "$@" ;;
-  media)    cmd_media "$@" ;;
   image)    cmd_image "$@" ;;
   local)    cmd_local "$@" ;;
   remote)   cmd_remote "$@" ;;

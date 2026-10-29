@@ -1,5 +1,5 @@
-//! TETHER-9: an archetype's model — CHAT-45's one file, which the chat
-//! bridge and every launcher read (`scripts/chat-bridge/models.mjs`):
+//! TETHER-9: an archetype's model — CHAT-45's one file, which every
+//! launcher reads (v1's chat bridge read it too; it is at tag v0.0.1):
 //! `MENGER_MODEL_<ARCHETYPE>=<model>` lines, read at each run's start (an
 //! edit needs no restart), a line missing the built-in default. substrate
 //! runs Claude Code's three aliases, so a model is `opus`, `sonnet` or
@@ -11,7 +11,7 @@ use plexus_substrate::activations::claudecode::Model;
 
 use crate::vocab::Archetype;
 
-/// The built-in default (models.mjs's `ARCHETYPES`).
+/// The built-in default (CHAT-45's `ARCHETYPES`).
 pub const fn built_in(a: Archetype) -> Model {
     match a {
         Archetype::Architect | Archetype::Builder => Model::Opus,

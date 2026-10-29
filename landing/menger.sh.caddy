@@ -3,7 +3,7 @@
 # Deployed by hypermemetic-infra's Ansible edge role (SCAFFOLD-19), which
 # copies menger's landing/ (index.html, style.css, main.js, favicon.svg,
 # icons/ — APP-64's home-screen icon — guide/ — the reference — and
-# media/ — the app's stills and clips, made by scripts/landing-media.sh) to
+# media/ — the app's stills and clips, made by v1's regenerator at tag v0.0.1) to
 # /srv/menger.sh and this file into the edge's sites/ — replacing the inline
 # placeholder there. Not deployed by hand. The
 # hosted app is app.menger.sh (MENGER-8), a site of its own; nothing here

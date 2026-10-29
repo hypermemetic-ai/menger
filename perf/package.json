@@ -2,14 +2,13 @@
   "name": "menger-perf",
   "private": true,
   "version": "0.1.0",
-  "description": "PERF-3: the magnitude ladder — seeds 10^2..10^6 tickets into temp databases, measures server + browser paths with Playwright, writes the report; PERF-12: the concurrency ladder — 1..10^n signed-in WebSockets, memory and CPU idle, under load and after",
+  "description": "PERF-12: the concurrency ladder — 1..10^n signed-in WebSockets, memory and CPU idle, under load and after; UI-8: the pages' browser rows (Playwright)",
   "type": "module",
   "scripts": {
-    "magnitude": "node magnitude.mjs",
     "concurrency": "node concurrency.mjs",
-    "smoke": "node magnitude.mjs --smoke && node concurrency.mjs --smoke",
-    "smoke:magnitude": "node magnitude.mjs --smoke",
-    "smoke:concurrency": "node concurrency.mjs --smoke"
+    "smoke": "node concurrency.mjs --smoke",
+    "smoke:concurrency": "node concurrency.mjs --smoke",
+    "pages": "node pages-probe.mjs"
   },
   "license": "MIT",
   "dependencies": {
