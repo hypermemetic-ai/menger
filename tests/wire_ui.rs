@@ -164,3 +164,42 @@ async fn a_rollback_to_an_unknown_version_is_refused() {
     refused(&call(&admin, "ui.rollback", json!({ "to": "f".repeat(64) })).await, "unknown_version");
     assert_eq!(live(&admin).await, Some(sha_hex(&support::bundle(1))), "the pointer unchanged");
 }
+
+/// `ui.push`'s params for `bytes` with `manifest`, signed by the test signer.
+fn signed(bytes: &[u8], manifest: &str) -> Value {
+    use base64::Engine;
+    use ed25519_dalek::{Signer, SigningKey};
+    use sha2::Digest;
+    let signature = SigningKey::from_bytes(&UI_SIGNER).sign(&sha2::Sha256::digest(bytes));
+    let b64 = base64::engine::general_purpose::STANDARD;
+    json!({ "bundle": b64.encode(bytes), "manifest": manifest, "signature": b64.encode(signature.to_bytes()) })
+}
+
+#[tokio::test]
+async fn a_bundle_without_an_index_is_refused_in_band() {
+    let (s, _dir) = start().await;
+    let admin = connect(s.port).await;
+    push(&admin, 1).await;
+    let before = versions(&admin).await;
+    // A valid tar holding only an asset — no index.html.
+    let mut b = tar::Builder::new(Vec::new());
+    let mut h = tar::Header::new_gnu();
+    h.set_size(5);
+    h.set_mode(0o644);
+    h.set_cksum();
+    b.append_data(&mut h, "app.js", &b"x();\n"[..]).unwrap();
+    let bytes = b.into_inner().unwrap();
+    refused(&call(&admin, "ui.push", signed(&bytes, "contract: c\nabi: a\n")).await, "bad_bundle");
+    assert_eq!(versions(&admin).await, before, "nothing written");
+}
+
+#[tokio::test]
+async fn a_manifest_without_contract_or_abi_is_refused_in_band() {
+    let (s, _dir) = start().await;
+    let admin = connect(s.port).await;
+    let bytes = support::bundle(1);
+    for manifest in ["contract: c1\n", "abi: a1\n"] {
+        refused(&call(&admin, "ui.push", signed(&bytes, manifest)).await, "bad_manifest");
+        assert!(versions(&admin).await.is_empty(), "nothing written ({manifest:?})");
+    }
+}
