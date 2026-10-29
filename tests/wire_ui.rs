@@ -209,3 +209,23 @@ async fn a_manifest_without_contract_or_abi_is_refused_in_band() {
         assert!(versions(&admin).await.is_empty(), "nothing written ({manifest:?})");
     }
 }
+
+/// V2-7: a deploy's push is a deployer's — the pipeline key holds `deployer`
+/// on test, never admin. Push alone: a rollback and a preview stay admin's.
+#[tokio::test]
+async fn a_deployer_pushes_but_neither_rolls_back_nor_previews() {
+    let (s, _dir) = start().await;
+    let admin = connect(s.port).await;
+    push(&admin, 1).await;
+    let granted = call(&admin, "auth.grant", json!({ "principal": support::principal_of(&EDITOR), "role": "deployer", "scope": "*" })).await;
+    assert!(!granted.is_empty() && granted[0].get("error_kind").is_none(), "deployer on *: {granted:?}");
+
+    let deployer = connect_as(&EDITOR, s.port).await;
+    let evs = call(&deployer, "ui.push", push_params(2, &UI_SIGNER)).await;
+    assert_eq!(evs[0]["type"], "pushed", "a deployer pushes: {evs:?}");
+    assert_eq!(evs[0]["live"], true);
+    let one = sha_hex(&support::bundle(1));
+    forbidden(&call(&deployer, "ui.rollback", json!({ "to": one })).await, "ui.rollback");
+    forbidden(&call(&deployer, "ui.preview", json!({ "version": one })).await, "ui.preview");
+    assert_eq!(versions(&admin).await.len(), 2, "the deployer's push is a row");
+}

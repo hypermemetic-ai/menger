@@ -87,6 +87,8 @@ pub(crate) use crate::push::refusal;
     roles(
         viewer = ["versions", "watch"],
         editor = [viewer],
+        // V2-7: a deploy pushes as a deployer (the pipeline key on test); never admin.
+        deployer = ["push"],
     )
 )]
 impl UiActivation {
