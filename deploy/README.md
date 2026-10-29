@@ -272,7 +272,11 @@ mounted at `/work`; `MENGER_CODEGEN_IMAGE` names another) —
 placeholder page and its `manifest.json` until UI-6) and, when the tree has
 `scripts/ui-compiler-wasm.sh` (UI-5), `dist/ui-compiler.wasm`
 (`ui-compiler-wasm`). The release is `bin/menger`, `bin/run-menger`, `dist/`
-and `RELEASE`, no `app/`. A tree with `frontend/` builds as before. A v2
+and `RELEASE`, no `app/`. A tree that tracks `frontend/` builds as before
+(a `frontend/target/` the build checkout kept untracked is no frontend). The
+release build builds the workspace's own packages (`cargo metadata`):
+`menger`, and `menger-diagrams` (with `bin/run-diagrams`) only where the
+workspace lists `diagrams/` — never a fixed list. A v2
 release's `suite` is `cargo test --workspace` alone.
 
 The image copies `dist/` to `/opt/menger/dist`; `run-menger` passes
@@ -294,7 +298,10 @@ version live in `ui.versions` and reads `/app/` signed in (a session from
 `failed`, the reason (`bad_signature`, …) on stderr and in deployments.log
 — and leaves the version live before it live; nothing calls `ui.rollback`.
 `local` starts its container with the `key` provider, the pipeline's
-principal as `MENGER_ADMINS` and its public key as `MENGER_UI_SIGNERS`.
+principal as `MENGER_ADMINS`, its public key as `MENGER_UI_SIGNERS`, and
+`MENGER_PUBLIC_URL=http://127.0.0.1:<shell port>` — the image binds 0.0.0.0,
+which needs a public URL, and loopback http is allowed (ACCESS-30); the
+smoke's session cookie is then `menger_session_<shell port>`.
 
 ## The image (RUN-10)
 

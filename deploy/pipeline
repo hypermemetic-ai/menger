@@ -371,15 +371,11 @@ codegen() { # LOG CMD… — CMD in the plexus-codegen container, in $BUILD
 build_legacy() {
   step "release build"
   lr=$(log_path build-release); say "log: $lr"
-  (cd "$BUILD" && cargo build --release -p menger -p menger-diagrams > "$lr" 2>&1) \
-    || { red_run; die "release build failed — $lr"; }
+  cargo_release "$lr"
   lr=$(log_path build-trunk); say "log: $lr"
   (cd "$BUILD/frontend" && CARGO_TARGET_DIR=$BUILD/frontend/target trunk build --release >"$lr" 2>&1) || { red_run; die "trunk build failed — $lr"; }
   # What goes into the release was built now, from this commit, and is whole.
   local f
-  for f in "$BUILD/target/release/menger" "$BUILD/target/release/menger-diagrams"; do
-    [[ -s $f ]] || die "release build: $f is missing or empty"
-  done
   compgen -G "$BUILD/frontend/dist/*.wasm" >/dev/null || die "trunk build: no wasm in $BUILD/frontend/dist"
   for f in "$BUILD/frontend/dist/"*.wasm "$BUILD/frontend/dist/"*.js; do
     [[ -s $f ]] || die "trunk build: $f is empty"
@@ -389,11 +385,30 @@ build_legacy() {
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
   stage=$RELEASES/$id.tmp
   mkdir -p "$stage/bin" "$stage/diagrams-node"
-  cp "$BUILD/target/release/menger" "$BUILD/target/release/menger-diagrams" "$stage/bin/"
-  cp "$REPO/deploy/launch/run-menger" "$REPO/deploy/launch/run-diagrams" "$stage/bin/"
+  for f in $WS_PKGS; do cp "$CARGO_TARGET_DIR/release/$f" "$stage/bin/"; done
+  cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
+  [[ " $WS_PKGS " == *" menger-diagrams "* ]] && cp "$REPO/deploy/launch/run-diagrams" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp -r "$BUILD/frontend/dist" "$stage/app"
   cp -r "$BUILD/diagrams/node/." "$stage/diagrams-node/"
+}
+# release_packages LOG — what the release build builds: menger, and menger-diagrams when the
+# tree's workspace lists it (cargo metadata), never a fixed list; empty when cargo cannot say
+WS_PKGS=""
+release_packages() {
+  local names
+  names=$(cd "$BUILD" && cargo metadata --no-deps --format-version 1 2>>"$1" | jq -r '.packages[].name' 2>>"$1") || names=""
+  WS_PKGS=""
+  grep -qx menger <<<"$names" && WS_PKGS="menger"
+  grep -qx menger-diagrams <<<"$names" && WS_PKGS+=" menger-diagrams"
+  [[ -n $WS_PKGS ]]
+}
+cargo_release() { # LOG — cargo build --release of WS_PKGS; dies red, naming the log
+  local lr=$1 p args=()
+  release_packages "$lr" || { red_run; die "release build failed — $lr (cargo metadata names no menger among the workspace's packages)"; }
+  for p in $WS_PKGS; do args+=(-p "$p"); done
+  (cd "$BUILD" && cargo build --release "${args[@]}" >> "$lr" 2>&1) || { red_run; die "release build failed — $lr"; }
+  for p in $WS_PKGS; do [[ -s $CARGO_TARGET_DIR/release/$p ]] || die "release build: $CARGO_TARGET_DIR/release/$p is missing or empty"; done
 }
 V2_STEPS=""
 build_v2() { # V2-7: cargo build on this machine, the bundle (and the compiler module) in the container
@@ -401,8 +416,7 @@ build_v2() { # V2-7: cargo build on this machine, the bundle (and the compiler m
   V2_STEPS="cargo build"
   step "release build"
   lr=$(log_path build-release); say "log: $lr"
-  (cd "$BUILD" && cargo build --release -p menger > "$lr" 2>&1) || { red_run; die "release build failed — $lr"; }
-  [[ -s $CARGO_TARGET_DIR/release/menger ]] || die "release build: $CARGO_TARGET_DIR/release/menger is missing or empty"
+  cargo_release "$lr"
   # UI-6: what the bundle needs cargo for — the engine (wasm32) and the
   # components compiled by UI-5's ui-compiler — on this machine, into
   # dist/ui.d; the container then writes the manifest and the tar.
@@ -430,7 +444,9 @@ build_v2() { # V2-7: cargo build on this machine, the bundle (and the compiler m
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
   stage=$RELEASES/$id.tmp
   mkdir -p "$stage/bin" "$stage/dist"
-  cp "$CARGO_TARGET_DIR/release/menger" "$REPO/deploy/launch/run-menger" "$stage/bin/"
+  for f in $WS_PKGS; do cp "$CARGO_TARGET_DIR/release/$f" "$stage/bin/"; done
+  cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
+  [[ " $WS_PKGS " == *" menger-diagrams "* ]] && cp "$REPO/deploy/launch/run-diagrams" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp "$BUILD/dist/ui.tar" "$stage/dist/"
   [[ -f $BUILD/dist/ui-compiler.wasm ]] && cp "$BUILD/dist/ui-compiler.wasm" "$stage/dist/"
@@ -460,7 +476,9 @@ cmd_build() {
   checkout "$BUILD" "$sha"
   # V2-7: a tree with frontend/ builds as before (trunk, npm); one without it (v2) has no
   # browser toolchain on this machine — its bundle is built in the plexus-codegen container.
-  local legacy=0; [[ -d $BUILD/frontend ]] && legacy=1
+  # A frontend is one the commit tracks: the checkout keeps frontend/target/ untracked across
+  # commits (git clean spares it), so the directory alone says nothing (V2-7's first real run).
+  local legacy=0; [[ -n $(git -C "$BUILD" ls-files -- frontend | head -n 1) ]] && legacy=1
   if [[ $legacy == 1 ]]; then need trunk; need npm; need node; else need docker; fi
   # The build compiles in its own targets, never a shared CARGO_TARGET_DIR: with
   # one set (this machine sets ~/.cache/cargo-target/menger for every
@@ -736,6 +754,7 @@ cmd_local() {
       -v "$LOCAL_VOLUME:/data" \
       -e "MENGER_WS_PORT=$LOCAL_WS_PORT" -e "MENGER_SHELL_PORT=$LOCAL_SHELL_PORT" \
       -e "MENGER_AUTH_PROVIDERS=key=ws://127.0.0.1:$LOCAL_WS_PORT" -e "MENGER_ADMINS=$principal" -e "MENGER_UI_SIGNERS=${principal#key:}" \
+      -e "MENGER_PUBLIC_URL=http://127.0.0.1:$LOCAL_SHELL_PORT" \
       -p "127.0.0.1:$LOCAL_WS_PORT:$LOCAL_WS_PORT" -p "127.0.0.1:$LOCAL_SHELL_PORT:$LOCAL_SHELL_PORT" \
       "$img" >/dev/null \
     || { record app-local run "$rel" "docker run failed"; die "docker run $img failed (is :$LOCAL_WS_PORT or :$LOCAL_SHELL_PORT held by something else?)"; }
