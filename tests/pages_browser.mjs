@@ -7,7 +7,7 @@
 // files under /tmp/claude-1000/, `--auth-provider key` with a key made here
 // as `--admin`, a second as `--ui-signer`), seeded `--seed-synthetic N`
 // (default 100,000), release build (`--debug` for the debug one). Two
-// bundles from scripts/ui-build.sh, signed with ui-sign and pushed over
+// bundles from plexus-ui build, signed with plexus-ui sign and pushed over
 // synapse: v1 is ui/ as it is; v2 the same with one line added to
 // board-rows.svelte (`<p class="board-newer">`), so the two differ in the
 // board alone. v2 is pushed last, so it is live. Chromium from Playwright,
@@ -119,7 +119,7 @@ async function main() {
   if (!flag("--no-build")) build(PROFILE);
   const v1 = bundle(work, "v1");
   const v2 = bundle(work, "v2", {
-    engine: v1.stage,
+    engine: v1.engine,
     edit: (ui) => fs.appendFileSync(path.join(ui, "src", "board-rows.svelte"), '<p class="board-newer">the newer board</p>\n'),
   });
   console.log(`v1 ${v1.version}\nv2 ${v2.version}`);

@@ -2,12 +2,13 @@
 // the pages' probe (perf/pages-probe.mjs) share — UI-6's engine_browser.mjs
 // setup, lifted out so both run it the same way:
 //
-//   build(profile)                 menger, ui-sign and ui-compiler from $CARGO_TARGET_DIR (else ./target)
-//   bundle(work, name, edit?)      scripts/ui-build.sh → <work>/<name>.tar; `edit(dir)` changes a copy of ui/ first
+//   build(profile)                 menger from $CARGO_TARGET_DIR (else ./target), and the plexus-ui tool
+//                                  (scripts/plexus-ui, ../plexus-ui's cli/, FRAME-8)
+//   bundle(work, name, edit?)      plexus-ui build → <work>/<name>.tar; `edit(dir)` changes a copy of ui/ first
 //   new Throwaway(work).start(…)   a menger on OS-assigned ports, its files under the work directory,
 //                                  `--auth-provider key`, an admin key and a ui signer, `--seed-synthetic N`
 //   synapse(server, session, …)    synapse against it, `-j`'s data contents (the error item last)
-//   push(server, session, signer, tar)   signed with ui-sign, pushed through `ui push`
+//   push(server, session, signer, tar)   signed with plexus-ui sign, pushed through `ui push`
 //   playwright()                   Chromium from perf/node_modules (this checkout's, else the main one's)
 //
 // Never removes anything: the work directory's path is printed, and
@@ -69,28 +70,37 @@ export function workDir(prefix) {
   return fs.mkdtempSync(path.join(base, `${prefix}-`));
 }
 
-/** The server, the signer and the compiler, built for `profile`. */
+/** The server, built for `profile`, and the plexus-ui tool. */
 export function build(profile) {
   const p = profile === "release" ? ["--release"] : [];
   const quiet = { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] };
   run("cargo", ["build", ...p, "-p", "menger", "--bin", "menger"], quiet);
-  run("cargo", ["build", ...p, "-p", "menger-ui-service", "--bin", "ui-sign"], quiet);
+  run(TOOL, ["--help"], quiet);
 }
 
-/** ui/ (or a copy `edit` changed) built into `<work>/<name>.tar`; the
- *  engine taken from `engine` (a staging directory) when given. Its hash. */
+/** The plexus-ui tool (FRAME-8): ../plexus-ui's cli/, built into this checkout's target by scripts/plexus-ui. */
+export const TOOL = path.join(REPO, "scripts", "plexus-ui");
+
+/** ui/ (or a copy `edit` changed) built into `<work>/<name>.tar` by
+ *  `plexus-ui build`; the engine taken from `engine` (a directory holding
+ *  engine.js and engine.wasm) when given, else built once into
+ *  `<work>/engine` (`build --prebuild`). Its hash, and its manifest's text. */
 export function bundle(work, name, { edit, engine } = {}) {
   const tar = path.join(work, `${name}.tar`);
-  const argv = ["-o", tar];
+  let ui = path.join(REPO, "ui");
   if (edit) {
-    const ui = path.join(work, `${name}-ui`);
+    ui = path.join(work, `${name}-ui`);
     fs.cpSync(path.join(REPO, "ui"), ui, { recursive: true });
     edit(ui);
-    argv.push("--ui", ui);
   }
-  if (engine) argv.push("--engine", engine);
-  run(path.join(REPO, "scripts", "ui-build.sh"), argv, { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
-  return { tar, stage: tar.replace(/\.tar$/, ".d"), version: run("sha256sum", [tar]).split(" ")[0] };
+  const quiet = { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] };
+  if (!engine) {
+    engine = path.join(work, "engine");
+    if (!fs.existsSync(path.join(engine, "engine.wasm"))) run(TOOL, ["build", "--prebuild", "--engine", engine], quiet);
+  }
+  run(TOOL, ["build", ui, "--engine", engine, "-o", tar], quiet);
+  const manifest = run("tar", ["-xOf", tar, "manifest.json"]);
+  return { tar, engine, manifest, version: run("sha256sum", [tar]).split(" ")[0] };
 }
 
 export class Throwaway {
@@ -158,11 +168,12 @@ export function synapse(server, sessionFile, ...argv) {
 
 /** A bundle pushed: signed over its digest, its manifest.json as built.
  *  The `pushed` event, or what came instead. */
-export function push(server, sessionFile, signerFile, { tar, stage }) {
+export function push(server, sessionFile, signerFile, { tar, manifest }) {
   const stem = tar.replace(/\.tar$/, "");
   fs.writeFileSync(`${stem}.b64`, fs.readFileSync(tar).toString("base64"));
-  fs.writeFileSync(`${stem}.sig`, run(path.join(TARGET, server.profile, "ui-sign"), [signerFile, tar]).trim());
-  const [answer] = synapse(server, sessionFile, "ui", "push", "--bundle", `@${stem}.b64`, "--manifest", `@${stem}.d/manifest.json`, "--signature", `@${stem}.sig`);
+  fs.writeFileSync(`${stem}.sig`, run(TOOL, ["sign", signerFile, tar]).trim());
+  fs.writeFileSync(`${stem}.manifest.json`, manifest);
+  const [answer] = synapse(server, sessionFile, "ui", "push", "--bundle", `@${stem}.b64`, "--manifest", `@${stem}.manifest.json`, "--signature", `@${stem}.sig`);
   return answer;
 }
 

@@ -5,8 +5,9 @@ menger runs in two environments, **test** (https://app-test.menger.sh) and
 image, through hypermemetic-infra ("On the Linode", below). This machine
 builds the releases and their images and runs the suite; it runs no
 environment (DEPLOY-52). Production changes only through this pipeline
-(DEPLOY-1): `deploy/pipeline`, its record `deploy/record`, its executor
-`deploy/runner.mjs`, and the bundle's signer `deploy/ui-sign.mjs`.
+(DEPLOY-1): `deploy/pipeline`, its record `deploy/record` and its executor
+`deploy/runner.mjs`; the bundle is built, signed and pushed by `../plexus-ui`'s
+`plexus-ui` tool (FRAME-8).
 
 What v2 cut from this file is at tag v0.0.1: the deploy page and its → test / → prod buttons, the request webhook, the activation that kept records and requests, the landing's media regenerator and mock, the local smoke's screenshots, and the diagrams service's release and units — read v1 there, never here.
 
@@ -105,12 +106,16 @@ the owner's.
    commit. Red: no release. The runner builds with `--no-gate`: the suite
    runs after the deploy (step 5).
 3. **Release.** A tree with no `frontend/` (v2) has no browser toolchain on
-   this machine:
+   this machine, and needs none — every step runs here, none in a container
+   (FRAME-8):
    - `cargo build --release -p menger` (the workspace's `menger`, read from
-     `cargo metadata`);
-   - `ui-prebuild` — `scripts/ui-build.sh --prebuild` on this machine: the
-     engine (wasm32) and the components the compiler builds, into
-     `dist/ui.d`;
+     `cargo metadata`); a tree with no `ui/src` is refused;
+   - `plexus-ui` — the framework's tool, `cargo build --release
+     --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-cli` from the
+     framework's checkout beside the build checkout (`MENGER_PLEXUS_UI`
+     names one built already);
+   - `ui-prebuild` — `plexus-ui build --prebuild --engine dist/engine`: the
+     engine (wasm32, wasm-bindgen);
    - `contract` (UI-12) — the tickets service's hash of the `menger` just
      built: the binary is started on two free loopback ports in local mode
      (no login provider: it makes its own admin key in a scratch data
@@ -120,20 +125,21 @@ the owner's.
      stopped and the scratch removed — always, a failed build too. A binary
      that exits, does not answer within `MENGER_CONTRACT_WAIT` seconds (60)
      or answers no hash fails the build, named; the log says the hash;
-   - `ui-build` — `scripts/ui-build.sh --contract HASH` in the
-     `plexus-codegen` container (`../dockerfiles/plexus-codegen`, the
-     checkout mounted at `/work`; `MENGER_CODEGEN_IMAGE` names another; no
-     socket to this machine): the manifest, naming that hash as its
-     `contract`, and the tar, `dist/ui.tar`, which must hold `index.html`;
-   - `ui-compiler-wasm` — `scripts/ui-compiler-wasm.sh` on this machine
-     (rustup's `wasm32-unknown-unknown`; the codegen image has no Rust
-     toolchain): `dist/ui-compiler.wasm`, the compiler module.
+   - `ui-build` — `plexus-ui build ui --engine dist/engine --contract HASH
+     --commit menger@<short>`: every component compiled in-process, the
+     manifest naming that hash as its `contract`, and the tar,
+     `dist/ui.tar` (`../plexus-ui/CONTRACT.md`'s bytes), which must hold
+     `index.html`; no socket asked;
+   - `ui-compiler-wasm` — `scripts/ui-compiler-wasm.sh` (rustup's
+     `wasm32-unknown-unknown`): `dist/ui-compiler.wasm`, the compiler
+     module.
 
    The release is `~/.local/share/menger-deploy/releases/<UTC time>-<sha>/`:
 
    ```
    bin/menger                  the binary
    bin/run-menger              its launcher (deploy/launch/run-menger)
+   bin/plexus-ui               the tool that built the bundle, and pushes it (not in the image)
    dist/ui.tar                 the UI's bundle, pushed after the deploy
    dist/ui-compiler.wasm       the compiler module, --ui-compiler
    RELEASE                     release, commit, branch, subject, built, rustc, steps, gate
@@ -187,11 +193,14 @@ by hand, never by a test.
 
 After a deploy is healthy — `remote test`, and `local` — the pipeline
 pushes the release's bundle: `ui.push { bundle, manifest, signature,
-commit }` through `deploy/menger-call.mjs` as the `pipeline` agent — a `deployer`
-on test (the role that holds `ui.push` and nothing else), the admin of
-`local`'s container — its params on stdin. `deploy/ui-sign.mjs` makes them: the tar in base64, the bundle's own
+commit }` by `plexus-ui push` (the release's own `bin/plexus-ui`, else
+`MENGER_PLEXUS_UI`, else `plexus-ui` on PATH) as the `pipeline` agent — a
+`deployer` on test (the role that holds `ui.push` and nothing else), the
+admin of `local`'s container — signed in at the socket's upgrade with the
+pipeline key. The tool makes the params: the tar in base64, the bundle's own
 `manifest.json`, and an Ed25519 signature over the bundle's sha256 with the
-pipeline key's seed, read from `MENGER_DEPLOY_KEY_FILE` (never argv). The
+pipeline key's seed, read from `MENGER_DEPLOY_KEY_FILE` (`--key-file`, never
+the seed in argv). The
 service keeps a version once per hash (the same bytes again are `new:
 false`) and moves its live pointer in the same write. It answers
 `contract_matches` (UI-11): whether the running tickets service is the one

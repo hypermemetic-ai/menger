@@ -4,7 +4,7 @@
 //   node perf/pages-probe.mjs [--seed N] [--runs 5] [--timeout-ms 30000] [--debug] [--no-build] [--headed] [--keep]
 //
 // A throwaway menger seeded N (default 10⁶; release build), the bundle
-// from scripts/ui-build.sh pushed to it (scripts/ui-throwaway.mjs, as
+// from plexus-ui build pushed to it (scripts/ui-throwaway.mjs, as
 // tests/pages_browser.mjs does), then `--runs` cold loads of /app/, each
 // in a fresh browser context signed in by cookie:
 //
