@@ -49,6 +49,11 @@ impl UiSetup {
     /// The store at `path` (`--ui-db-path`), pushes signed by `signers`
     /// (`--ui-signer`).
     pub fn open(path: &Path, signers: Signers) -> anyhow::Result<Self> {
+        // The data directory may not exist yet on a first start (the
+        // tickets store makes it only when it opens, after this): make it.
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
+        }
         let store = UiStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
         tracing::info!("ui:        {}", path.display());
         Ok(Self { store: Arc::new(store), signers })
