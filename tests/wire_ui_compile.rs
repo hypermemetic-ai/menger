@@ -391,8 +391,8 @@ where
     let login = support::Login::new();
     let port = free_port().await;
     let backend = Arc::new(menger::auth_backend::MengerAuth::new(login.access.clone(), vec![], None, BRANDING.app));
-    let signers = menger_ui_service::Signers::parse(&[support::public_hex(&support::UI_SIGNER)]).expect("the test signer");
-    let compiler = menger_ui_service::Compiler::new(&module).expect("the module is taken");
+    let signers = plexus_ui_service::Signers::parse(&[support::public_hex(&support::UI_SIGNER)]).expect("the test signer");
+    let compiler = plexus_ui_service::Compiler::new(&module).expect("the module is taken");
     let ui = menger::UiSetup::open(&dir.join("ui.db"), signers).unwrap().compiling(Some(compiler));
     let hub = menger::build_rpc_ui_over(
         &dir.join("t.db"),

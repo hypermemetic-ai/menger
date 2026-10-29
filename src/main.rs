@@ -521,10 +521,10 @@ async fn run(args: Args) -> anyhow::Result<()> {
     if ui_db_path == db_path {
         anyhow::bail!("--ui-db-path {} is the database file: the ui service keeps a file of its own", ui_db_path.display());
     }
-    let ui = menger::UiSetup::open(&ui_db_path, menger_ui_service::Signers::parse(&args.ui_signer).map_err(anyhow::Error::msg)?)?;
+    let ui = menger::UiSetup::open(&ui_db_path, plexus_ui_service::Signers::parse(&args.ui_signer).map_err(anyhow::Error::msg)?)?;
     // UI-7: refused at start when the module imports anything.
     let compiler = match &args.ui_compiler {
-        Some(path) => Some(menger_ui_service::Compiler::open(path).map_err(|e| anyhow::anyhow!("--ui-compiler {}: {e}", path.display()))?),
+        Some(path) => Some(plexus_ui_service::Compiler::open(path).map_err(|e| anyhow::anyhow!("--ui-compiler {}: {e}", path.display()))?),
         None => None,
     };
     let ui = ui.compiling(compiler);

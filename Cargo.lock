@@ -2068,7 +2068,6 @@ dependencies = [
  "jsonrpsee",
  "jsonwebtoken",
  "menger-tickets-api",
- "menger-ui-service",
  "nostr",
  "plexus-auth-core",
  "plexus-client",
@@ -2078,6 +2077,7 @@ dependencies = [
  "plexus-shell",
  "plexus-transport",
  "plexus-ui-compiler",
+ "plexus-ui-service",
  "rand 0.8.8",
  "reqwest",
  "rusqlite",
@@ -2123,34 +2123,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "menger-ui-service"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "async-trait",
- "base64",
- "ed25519-dalek",
- "futures",
- "jsonrpsee",
- "menger-tickets-api",
- "plexus-client",
- "plexus-core",
- "plexus-macros",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "uuid",
- "wasmtime",
- "wat",
 ]
 
 [[package]]
@@ -2526,6 +2498,34 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "plexus-ui-service"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "axum",
+ "base64",
+ "ed25519-dalek",
+ "futures",
+ "jsonrpsee",
+ "plexus-auth-core",
+ "plexus-client",
+ "plexus-core",
+ "plexus-macros",
+ "plexus-shell",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+ "wasmtime",
 ]
 
 [[package]]

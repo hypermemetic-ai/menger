@@ -282,7 +282,8 @@ async function main() {
   // Build: the server, the signer, and the two bundles (the engine once).
   const cargoProfile = PROFILE === "release" ? ["--release"] : [];
   run("cargo", ["build", ...cargoProfile, "-p", "menger", "--bin", "menger"], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
-  run("cargo", ["build", ...cargoProfile, "-p", "menger-ui-service", "--bin", "ui-sign"], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
+  // FRAME-5: the signer is the framework's (../plexus-ui), built into this target.
+  run("cargo", ["build", ...cargoProfile, "--manifest-path", path.join(REPO, "../plexus-ui/Cargo.toml"), "--target-dir", TARGET, "-p", "plexus-ui-service", "--bin", "ui-sign"], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
   const v1Tar = path.join(work, "v1.tar");
   run(path.join(REPO, "scripts", "ui-build.sh"), ["-o", v1Tar], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
   const ui2 = path.join(work, "ui2");

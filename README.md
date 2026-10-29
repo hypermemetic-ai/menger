@@ -225,15 +225,15 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `epics` | an organization's levels of shortcodes | `tickets-api/src/epics_activation.rs` |
 | `session` | who a connection is, agents' sessions | `tickets-api/src/session_activation.rs` |
 | `auth` | the AUTH protocol's door and roles | plexus-login, over `src/login_access.rs` |
-| `ui` | the UI's versions, live pointer, previews; child `slots` | `ui-service/` |
+| `ui` | the UI's versions, live pointer, previews; child `slots` | the framework's: `../plexus-ui/service` (`plexus-ui-service`, FRAME-5) |
 
 **Service to service.** The ui service reaches the tickets service as a
-client, never through its store: `ui-service/src/seam.rs` holds the running
-process's service and calls `tickets` through plexus-core's
+client, never through its store: its seam (`../plexus-ui/service/src/seam.rs`)
+holds the running process's service and calls each service a component's
+`uses` names (`tickets.list` names `tickets`) through plexus-core's
 `HubTransport::as_(service, caller)` as the server's own caller — the same
-route and gate a socket reaches. A push asks it for the methods a
-component's `uses` names and for its schema hash. The ui service never
-opens the tickets file.
+route and gate a socket reaches. A push asks it for those methods and for
+the services' schema hashes. The ui service never opens the tickets file.
 
 A throwaway's `synapse -P 4460 menger` lists them; `synapse -P 4460 menger
 tickets` lists a service's methods and children; `<method> --help` prints
@@ -603,7 +603,7 @@ OUGHT"}`. `tests/auth_protocol.rs` runs it over the built binary.
 | a title / a filter | `TITLE_MAX` 1 KiB / `FILTER_MAX` 4 KiB (`tickets-api/src/limits.rs`) | `invalid_params` |
 | a body | `--max-body-bytes` (8 MiB) | `body_too_large` |
 | `tickets.list`'s page | 1,000 unless `--limit`, at most 10,000 | page with `page.next` |
-| a ui bundle | `BUNDLE_MAX` 16 MiB (`ui-service/src/vocab.rs`) | `invalid_params` |
+| a ui bundle | `BUNDLE_MAX` 16 MiB (`../plexus-ui/service/src/vocab.rs`) | `invalid_params` |
 
 `perf/flood.mjs` floods a throwaway with upgrades and sign-ins and checks
 its memory settles.
@@ -613,6 +613,19 @@ its memory settles.
 A pushed UI is a row by content hash in the ui service's own file, and
 `/app/` serves whichever row the live pointer names: **the pointer is the
 deploy**.
+
+**The service is the framework's** (FRAME-5): `plexus-ui-service` in
+`../plexus-ui/service`, by sibling path, with no menger type in it. menger
+registers its activation beside `tickets` (`src/builder.rs`), attaches its
+seam to the running service as the server's own caller, and mounts its
+routes (`/`, `/app/`, `/app/<hash>/…`: `plexus_ui_service::routes::UiRoutes`)
+on menger's shell with the login's session, the stamps, the page policy and
+menger's placeholder (`src/shell.rs`). Its caller is the one plexus-core's
+gate admitted, and `ui.watch` follows the gate's grants generation — menger
+hands its store's grants count to the gate (`AuthSetup::with_generation`),
+so a `members.*` grant or revoke reaches an open watch. Its own tests run
+against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
+`tests/ui_serve.rs`, `wire_ui*.rs` hold menger's wiring of it.
 
 - **Its file** is `ui.db` (`--ui-db-path`, `MENGER_UI_DB_PATH`; default
   beside the tickets file, never the same file): `ui_versions`,
@@ -624,13 +637,16 @@ deploy**.
   transaction: every `src/<name>.svelte` is compiled in the compiler module
   (when `--ui-compiler` names one) and compared with the tree the bundle
   claims (filled in when absent);
-  every component's `uses` is looked up in the running tickets service
-  through the seam; the manifest's `contract` is compared with that
-  service's hash (`tickets.schema`'s, which `scripts/ui-build.sh
+  every component's `uses` is looked up in the service it names through the
+  seam (an unmounted service or a missing method: `unknown_method`, naming
+  the `service`); the manifest's `contract` is compared with the hash of the
+  services named — one service, its schema's own hash (menger's bundles name
+  `tickets` alone: `tickets.schema`'s, which `scripts/ui-build.sh
   --contract-from PORT` stamps, or `--contract HASH` as given — UI-12: the
   pipeline's build reads it from the binary it built and passes it so;
   `unknown`, the script's without either flag and never accepted as
-  `--contract`'s value, answers `contract_matches: null`; UI-11). The row and the live pointer move together. The same
+  `--contract`'s value, answers `contract_matches: null`, as a manifest
+  naming no service does; UI-11). The row and the live pointer move together. The same
   bytes pushed again are the same version (`new: false`). Refusals are in
   band, nothing written: `no_signer`, `bad_signature`, `bad_bundle`,
   `bad_manifest`, and the compile and lint refusals naming the component and
@@ -643,12 +659,13 @@ deploy**.
 - **`rollback --to <hash>`** moves the pointer to a kept version;
   **`preview`** serves one to the caller's own sessions; **`versions`**
   lists them; **`watch`** says `live` on each move and `slot_changed` on each
-  section change, held to its caller as `tickets.watch` is.
+  section change, held to its caller by the gate: `watch_closed { reason }`
+  (`signed_out`, `expired`, `revoked`, `refused`) when it no longer stands.
 - **Who may**: viewers and editors `versions`, `watch`, `slots list`; a
   `deployer` `push` (V2-7: a deploy pushes as the pipeline key); `rollback`,
   `preview`, `slots set`, `slots clear` are the admin's.
 - **Signing** a bundle by hand: `ui-sign <seed-file> <bundle>` (a binary of
-  `ui-service`) prints the signature; the pipeline uses `deploy/ui-sign.mjs`.
+  `plexus-ui-service`) prints the signature; the pipeline uses `deploy/ui-sign.mjs`.
 
 ### Sections (UI-9)
 
@@ -734,7 +751,7 @@ no browser toolchain").
 ```sh
 scripts/ui-compiler-wasm.sh                      # dist/ui-compiler.wasm
 scripts/ui-build.sh                              # dist/ui.tar
-cargo run -p menger-ui-service --bin ui-sign -- operator.seed dist/ui.tar   # the signature, base64
+cargo run --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-service --bin ui-sign -- operator.seed dist/ui.tar   # the signature, base64
 ```
 
 `tests/wire_ui.rs`, `tests/wire_ui_compile.rs`, `tests/wire_ui_slots.rs`,
@@ -773,9 +790,9 @@ src/                 the binary: main.rs (flags), builder.rs (the services regis
                      shell.rs, bind.rs, calls.rs, local.rs, first_run.rs, login_access.rs
 tickets-api/         menger-tickets-api: the tickets service — vocabulary, store, filter
                      language, activations (activation/), access (access/)
-ui-service/          menger-ui-service: the ui service, its store, the compiler sandbox, the seam
 ui/                  the UI's source bundle (compiled and drawn by ../plexus-ui's
-                     plexus-ui-compiler and plexus-ui-engine, FRAME-3)
+                     plexus-ui-compiler and plexus-ui-engine, FRAME-3; stored and
+                     served by its plexus-ui-service, FRAME-5)
 tether/              menger's local side, its own workspace (TETHER-7)
 tests/               wire tests over the real socket, browser tests
 deploy/              the pipeline, the image, the runner (deploy/README.md)

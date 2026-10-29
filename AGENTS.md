@@ -66,9 +66,9 @@ edge. README "Run".
 `members` (child `teams`), `orgs`, `epics`, `session`, `auth`, and `ui`
 (child `slots`). A service reaches another as a client, through
 plexus-core's `HubTransport::as_(service, caller)` — the ui service's seam
-(`ui-service/src/seam.rs`) asks `tickets` as the server's own caller,
-through the same route and gate a socket reaches; it never opens the
-tickets file.
+(`../plexus-ui/service/src/seam.rs`) asks each service a component's `uses`
+names (`tickets`) as the server's own caller, through the same route and
+gate a socket reaches; it never opens the tickets file.
 
 **The tickets service** is v1's core and nothing else: the cache
 (`tickets-api/src/store/`), the cells and the lens over Roaring bitmaps, the
@@ -76,13 +76,19 @@ kept tree, the stored derived state (form 16), FTS5 search, the filter
 language. `tickets-api/tests/cut.rs` holds the cut: no module of a service
 that went, no flag for one, and README and this file naming none of them.
 
-**The ui service** (`ui-service/`, UI-3, UI-7, UI-9) keeps the UI's
-versions by content hash in its own file and serves whichever the live
-pointer names at `/app/`:
+**The ui service** (UI-3, UI-7, UI-9) is the framework's (FRAME-5):
+`plexus-ui-service` in `../plexus-ui/service`, by sibling path, with no
+menger type in it — its caller the one plexus-core's gate admitted, its
+`ui.watch` held by the gate's grants generation (menger hands the store's
+count to the gate, `AuthSetup::with_generation` in `src/builder.rs`), its
+routes (`plexus_ui_service::routes::UiRoutes`) mounted on menger's shell
+(`src/shell.rs`) with menger's session, stamps, policy and placeholder. It
+keeps the UI's versions by content hash in its own file and serves
+whichever the live pointer names at `/app/`:
 
 - `ui push` — a bundle (a tar, base64), its manifest and an Ed25519
   signature over the bundle's sha256; compiled in the compiler module
-  (when `--ui-compiler` names one), each component's `uses` linted against the running tickets service, and
+  (when `--ui-compiler` names one), each component's `uses` linted against the service it names (the contract: the hash of the services named), and
   stored and made live in one transaction. `ui rollback --to <hash>`,
   `ui versions`, `ui preview [--version]`, `ui watch`.
 - **Sections**: `ui slots list | set | clear` — what component fills each
@@ -94,7 +100,7 @@ pointer names at `/app/`:
   the trees as given and says `compiled: false`).
 - **Who may**: `versions`, `watch` and `slots list` a viewer's; `push` the
   `deployer`'s (V2-7: the pipeline key); `rollback`, `preview`, `slots set`
-  and `slots clear` the admin's (`ui-service/src/activation.rs`).
+  and `slots clear` the admin's (`../plexus-ui/service/src/activation.rs`).
 
 ```sh
 synapse -P 4460 menger ui slots list --layout board-layout
@@ -195,7 +201,7 @@ PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --data-dir /tmp/
   --ui-compiler dist/ui-compiler.wasm
 synapse -P 4460 _login menger --key builder --as builder
 base64 -w0 dist/ui.tar > dist/ui.b64
-cargo run -p menger-ui-service --bin ui-sign -- ~/.plexus/keys/builder.key dist/ui.tar > dist/ui.sig
+cargo run --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-service --bin ui-sign -- ~/.plexus/keys/builder.key dist/ui.tar > dist/ui.sig
 synapse -P 4460 menger ui push --bundle @dist/ui.b64 --manifest @dist/ui.d/manifest.json --signature @dist/ui.sig
 ```
 
@@ -564,12 +570,13 @@ question.
   each. A clone of menger alone does not build; the sibling checkouts must
   be beside it. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
-- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `ui-service`;
+- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`;
   `tether/` is its own workspace. Four sibling repositories
   hold what menger lifted out, each taken by path like `../plexus-core`:
   `../plexus-shell` and `../plexus-login` (FRAME-4), and `../plexus-ui`'s
-  `plexus-ui-compiler` and `plexus-ui-engine` (FRAME-3: the compiler a
-  dev-dependency, the engine built by `scripts/ui-build.sh`).
+  `plexus-ui-compiler`, `plexus-ui-engine` and `plexus-ui-service` (FRAME-3: the compiler a
+  dev-dependency, the engine built by `scripts/ui-build.sh`; FRAME-5: the
+  service a dependency, `ui-sign` its binary).
 - The `tickets` activation lives ONCE, in `tickets-api/`
   (`menger-tickets-api`, MFE-11): the vocabulary, the store, and
   `activation/mod.rs`'s `#[activation]` on `impl TicketsActivation` (its

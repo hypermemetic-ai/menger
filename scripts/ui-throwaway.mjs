@@ -74,7 +74,8 @@ export function build(profile) {
   const p = profile === "release" ? ["--release"] : [];
   const quiet = { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] };
   run("cargo", ["build", ...p, "-p", "menger", "--bin", "menger"], quiet);
-  run("cargo", ["build", ...p, "-p", "menger-ui-service", "--bin", "ui-sign"], quiet);
+  // FRAME-5: the signer is the framework's (../plexus-ui), built into this target.
+  run("cargo", ["build", ...p, "--manifest-path", path.join(REPO, "../plexus-ui/Cargo.toml"), "--target-dir", TARGET, "-p", "plexus-ui-service", "--bin", "ui-sign"], quiet);
 }
 
 /** ui/ (or a copy `edit` changed) built into `<work>/<name>.tar`; the

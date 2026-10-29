@@ -10,7 +10,7 @@
 //! calls the script may make with what the spawned server answered over the
 //! socket to the same call — `menger hash` the whole service's hash, `menger
 //! tickets schema` the tickets service's schema (its `hash` is what the
-//! push's seam reads, `ui-service/src/seam.rs`) — and refuses any other call
+//! push's seam reads, `../plexus-ui/service/src/seam.rs`) — and refuses any other call
 //! or port, naming it. The bundle it builds is then pushed to that server.
 //! Servers on ports the OS hands out, their files under /tmp/claude-1000.
 //!
@@ -115,7 +115,10 @@ cat "$dir/answers/$key.jsonl"
 }
 
 /// The fixture UI (one component), a stand-in engine and a stand-in
-/// compiler (a tree that uses nothing) under `dir`.
+/// compiler (a tree that uses `tickets.list`: FRAME-5, a manifest naming no
+/// service answers `contract_matches: null`, so the contract it is stamped
+/// with is compared only when it names one — here, `tickets` alone, whose
+/// hash the contract is) under `dir`.
 fn fixture(dir: &Path) {
     write(&dir.join("ui/index.html"), "<!doctype html><title>contract</title>\n");
     write(&dir.join("ui/routes.json"), &json!({ "#/": X }).to_string());
@@ -128,7 +131,7 @@ fn fixture(dir: &Path) {
         r#"#!/usr/bin/env bash
 # the stand-in compiler: <src> -o <dir> → <dir>/<name>.json, <dir>/<name>.rhai
 name=$(basename "$1" .svelte)
-printf '{"name":"%s","uses":[]}\n' "$name" >"$3/$name.json"
+printf '{"name":"%s","uses":["tickets.list"]}\n' "$name" >"$3/$name.json"
 printf '\n' >"$3/$name.rhai"
 "#,
     );
@@ -212,10 +215,18 @@ async fn another_hash_does_not_match() {
     let other = "0".repeat(16);
     assert_ne!(tickets_hash(&admin).await, other);
 
-    let manifest = json_manifest(&other, "engine/1");
-    let evs = call(&admin, "ui.push", signed_params(&support::bundle(1), &manifest, 1)).await;
+    // FRAME-5: a component naming `tickets` — the contract is `tickets`' hash.
+    let mut manifest: Value = serde_json::from_str(&json_manifest(&other, "engine/1")).unwrap();
+    manifest["components"] = json!({ X: { "tree": "t", "handlers": "h", "uses": ["tickets.list"] } });
+    let evs = call(&admin, "ui.push", signed_params(&support::bundle(1), &manifest.to_string(), 1)).await;
     let p = pushed(&evs);
     assert_eq!(p["contract_matches"], false, "another hash is a difference, said: {p}");
+
+    // A manifest naming no service is compared with nothing: null, even
+    // with the tickets service's own hash.
+    let manifest = json_manifest(&tickets_hash(&admin).await, "engine/1");
+    let evs = call(&admin, "ui.push", signed_params(&support::bundle(2), &manifest, 2)).await;
+    assert!(pushed(&evs)["contract_matches"].is_null(), "no service named: null: {evs:?}");
 }
 
 #[tokio::test]
